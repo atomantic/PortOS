@@ -913,7 +913,14 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v60 = per-video/shot layered-template effects; older strict schemas reject the optional record.
   // v61 = handheld camera template additions (`templateEffects.handheld`/`handheldSteps`), which a v60
   // strict template-effects schema rejects. Optional, no backfill: absent is a steady camera.
-  musicVideoProjects: 61,
+  // v62 = the Blender film render style (`composition.mode: 'blender'`). A v61 strict composition
+  // schema rejects the mode and its normalizer falls back to footage. The film's settings and
+  // workspace are install-local (`blender`, stripped from the wire), so nothing else crosses.
+  // v63 = the title card's slide in (`titleCard.slideIn`/`slideSec`/`slidePct`), its own fade out
+  // (`fadeOutSec`) and `steady` (drawn over the film look), which a v62 strict title card schema
+  // rejects with a 400 and its normalizer drops on save. Optional, no backfill: absent, the card
+  // does not slide, fades out over `fadeSec`, and is steady only in the `mtv` look.
+  musicVideoProjects: 63,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

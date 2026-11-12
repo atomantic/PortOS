@@ -206,6 +206,25 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   resumeMusicVideoProduction: vi.fn(),
   stopMusicVideoProduction: vi.fn(),
   cancelMusicVideoProduction: vi.fn(),
+  // Blender film: read only for a project in that render style; a test that opens one supplies the state.
+  getMusicVideoBlender: vi.fn(() => new Promise(() => {})),
+  saveMusicVideoBlenderSettings: vi.fn(),
+  createMusicVideoBlenderWorkspace: vi.fn(),
+  listMusicVideoBlenderFiles: vi.fn(async () => ({ files: [] })),
+  getMusicVideoBlenderFile: vi.fn(),
+  saveMusicVideoBlenderFile: vi.fn(),
+  deleteMusicVideoBlenderFile: vi.fn(),
+  syncMusicVideoBlender: vi.fn(),
+  renderMusicVideoBlender: vi.fn(),
+  cancelMusicVideoBlenderJob: vi.fn(),
+  cancelMusicVideoBlenderJobs: vi.fn(),
+  assembleMusicVideoBlenderCut: vi.fn(),
+  saveMusicVideoBlenderShotNote: vi.fn(),
+  openMusicVideoBlenderShot: vi.fn(),
+  getMusicVideoBlenderLog: vi.fn(),
+  getMusicVideoBlenderUsage: vi.fn(() => new Promise(() => {})),
+  clearMusicVideoBlenderFrames: vi.fn(),
+  musicVideoBlenderMediaUrl: (id, path) => `/api/music-video/${id}/blender/media?path=${encodeURIComponent(path)}`,
 }));
 // Server pushes (production runs, the Cast & Sets check-in) arrive over the
 // socket; tests deliver them through this registry.
@@ -341,13 +360,14 @@ import {
   startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision,
   linkMusicVideoCastAndSetsToCatalog, approveMusicVideoCastAndSets, stopMusicVideoProduction,
   getMusicVideoPublishPlatforms, draftMusicVideoPublishCopy,
-  renderMusicVideoSceneFrame,
+  renderMusicVideoSceneFrame, getMusicVideoBlender,
 } from '../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
 import { importTrackFromYoutube, importTrackFromSuno, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
 import { generateVideo, getVideoGenStatus, getVideoHistoryItem, previewVideoPrompt, trimVideo } from '../services/apiImageVideo.js';
 import { getUniverse } from '../services/apiUniverseBuilder.js';
 import { downloadBlob } from '../lib/downloadBlob.js';
+import { blenderFilmProject, blenderFilmState } from '../test/blenderFilmFixture.js';
 
 const PROJECT_ANALYZED = {
   ...PROJECT_NO_CLIP,
@@ -4163,6 +4183,109 @@ describe('queued look reference saves', () => {
     expect(look.getAllByLabelText('Condition frames')[1]).toBeChecked();
     await act(async () => failures[1]());
     expect(look.getAllByLabelText('Condition frames').map((box) => box.checked)).toEqual([false, false]);
+  });
+});
+
+describe('MusicVideo Blender film render style', () => {
+  const film = blenderFilmProject({
+    scenes: [
+      { sceneId: 'scene-s010', order: 0, prompt: 'The stage wakes up.', startSec: 0, endSec: 4.5, visualLayer: 'code' },
+      { sceneId: 'scene-s020', order: 1, prompt: 'First verse', startSec: 4.5, endSec: 9, visualLayer: 'code' },
+    ],
+  });
+  const openFilm = async (path, { project = film, state = blenderFilmState() } = {}) => {
+    listMusicVideoProjects.mockResolvedValue([project]);
+    getMusicVideoBlender.mockResolvedValueOnce(state);
+    render(<MemoryRouter initialEntries={[path]}>{MV_ROUTES}</MemoryRouter>);
+    await screen.findByRole('heading', { level: 2, name: project.name });
+    await settle();
+  };
+
+  it('shows the final video as out of date as soon as the film says a shot was rendered again, before the record is re-read', async () => {
+    // The record was read while the final still matched its shots; the film state is newer.
+    const rendered = { ...film, renderHistoryId: 'rh-1', status: 'complete', renderDependencyState: { status: 'current', reasons: [] } };
+    await openFilm('/music-video/mv-test/review', { project: rendered, state: blenderFilmState({ finalStale: true }) });
+    expect((await screen.findAllByText(/Final render is out of date/i)).length).toBeGreaterThan(0);
+  });
+
+  it('leads Shots with the live film, then the film panel, counts its finals in the step, and opens a still in the shared lightbox', async () => {
+    await openFilm('/music-video/mv-test/produce');
+    const panel = await screen.findByRole('region', { name: 'Blender film' });
+    expect(await within(panel).findByRole('list', { name: 'Shots' })).toBeTruthy();
+    // One read for the open project; everything after it is pushed, and the live film shares it.
+    expect(getMusicVideoBlender).toHaveBeenCalledTimes(1);
+    expect(getMusicVideoBlender).toHaveBeenCalledWith('mv-test', { silent: true });
+    // The step reads the same state: one of three shots has a current final render.
+    expect(screen.getByText('Final render for every Blender shot (1 of 3)')).toBeTruthy();
+    // The player leads the step as it does for footage: the film's shots, straight from their renders, with no cut assembled.
+    const dock = screen.getByRole('complementary', { name: 'Preview' });
+    expect(within(dock).getByLabelText('Preview source')).toHaveValue('composite');
+    expect(within(dock).getByRole('option', { name: 'Film (live)' })).toBeEnabled();
+    const playing = within(dock).getByLabelText('Film preview').querySelector('video:not([aria-hidden="true"])');
+    expect(playing.getAttribute('src')).toBe('/api/music-video/mv-test/blender/media?path=s010%2Ffinal%2Fshot.mp4');
+    // The film panel (its own shot player and cuts) follows the player, and comes before the scene board.
+    expect(dock.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const board = screen.getByLabelText('Storyboard thumbnails');
+    expect(panel.compareDocumentPosition(board) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(within(panel).getByRole('button', { name: 'Still at 0:02.25' }));
+    const lightbox = await screen.findByRole('dialog', { name: 'Cold open · still at 0:02.25' });
+    expect(lightbox.querySelector('img').getAttribute('src')).toBe('/api/music-video/mv-test/blender/media?path=s010%2Fstills%2Ft000002250.png');
+    // A workspace file is not a gallery record, so it cannot be filed into a collection.
+    expect(within(lightbox).queryByRole('button', { name: 'Add to collection' })).toBeNull();
+  });
+
+  // Uniquely catches the song sounding twice on Shots (the film panel's shot player loops its shot
+  // with the song, and the docked film plays the same song), or a render landing for the selected
+  // shot stopping the film the director is watching.
+  it('plays one player at a time on Shots: the docked film and the film panel\'s shot player take turns', async () => {
+    await openFilm('/music-video/mv-test/produce');
+    const panel = await screen.findByRole('region', { name: 'Blender film' });
+    const dock = screen.getByRole('complementary', { name: 'Preview' });
+    const song = within(dock).getByLabelText('Song for the film preview');
+    const shotPlayer = () => within(panel).getByLabelText('Final render of Cold open');
+    const looping = shotPlayer();
+    song.pause = vi.fn();
+    looping.pause = vi.fn();
+    // The shot player starts by itself when the step opens; nothing else is playing.
+    expect(looping.hasAttribute('autoplay')).toBe(true);
+    fireEvent.play(looping);
+    expect(song.pause).not.toHaveBeenCalled();
+    // A shot's clip under the song is silent and has no say; the song itself takes the turn.
+    fireEvent.play(within(dock).getByLabelText('Film preview').querySelector('video:not([aria-hidden="true"])'));
+    expect(looping.pause).not.toHaveBeenCalled();
+    fireEvent.play(song);
+    expect(looping.pause).toHaveBeenCalledTimes(1);
+    fireEvent.pause(looping);
+
+    // The selected shot is rendered again while the film plays: its new player waits its turn.
+    const rerendered = (finishedAt) => {
+      const state = blenderFilmState();
+      return { ...state, renders: { ...state.renders, s010: { ...state.renders.s010, final: { ...state.renders.s010.final, finishedAt } } } };
+    };
+    getMusicVideoBlender.mockResolvedValueOnce(rerendered('2026-10-02T09:00:00.000Z'));
+    await pushSocket('music-video:blender', { projectId: 'mv-test', kind: 'state' });
+    await waitFor(() => expect(shotPlayer()).not.toBe(looping));
+    expect(shotPlayer().hasAttribute('autoplay')).toBe(false);
+    // Playing the shot is the director's call: the film gives way.
+    fireEvent.play(shotPlayer());
+    expect(song.pause).toHaveBeenCalledTimes(1);
+
+    // With the film stopped, the next render to land plays by itself again.
+    fireEvent.pause(shotPlayer());
+    fireEvent.play(song);
+    fireEvent.pause(song);
+    const waiting = shotPlayer();
+    getMusicVideoBlender.mockResolvedValueOnce(rerendered('2026-10-02T10:00:00.000Z'));
+    await pushSocket('music-video:blender', { projectId: 'mv-test', kind: 'state' });
+    await waitFor(() => expect(shotPlayer()).not.toBe(waiting));
+    expect(shotPlayer().hasAttribute('autoplay')).toBe(true);
+  });
+
+  it('holds the final render on the Final render step until every shot is final-rendered', async () => {
+    await openFilm('/music-video/mv-test/review');
+    expect(await screen.findByText('Render every shot at final quality in Blender film first (1 of 3 ready)')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Render final$/ })).toBeDisabled();
   });
 });
 

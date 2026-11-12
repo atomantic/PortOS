@@ -10,7 +10,7 @@ import { filmLookSchema } from './filmLookValidation.js';
 import { TEMPLATE_EFFECT_CONTROLS } from './musicVideoTemplateEffects.js';
 import { MUSIC_VIDEO_CAMERA_FRAME_ASPECTS } from './musicVideoFilmLook.js';
 import { PRODUCTION_MEDIUMS } from './musicVideoProductionMedium.js';
-import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS, TITLE_CARD_STYLES } from './musicVideoTitleCard.js';
+import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS, TITLE_CARD_SLIDES, TITLE_CARD_STYLES } from './musicVideoTitleCard.js';
 import { STATS_OUTRO_LIMITS, STATS_OUTRO_LINES } from './musicVideoStatsOutro.js';
 import { CREDITS_OUTRO_LAYOUTS, CREDITS_OUTRO_LIMITS } from './musicVideoCreditsOutro.js';
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
@@ -731,7 +731,9 @@ export const musicVideoSongPrepareSchema = z.object({
 // `document` renders a project-owned HTML composition document (its own
 // folder under data/music-video/<projectId>/composition/) seeked over the
 // song; see services/musicVideo/compositionDocument.js and documentRender.js.
-export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code', 'document', 'eidoverse'];
+// `blender` assembles shots rendered by an operator-authored Blender film
+// (services/musicVideo/blender/); its settings live in the install-local `blender` field.
+export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code', 'document', 'eidoverse', 'blender'];
 // #9290: 'scene' cuts once per planned shot; 'intercut' re-cuts on section energy and sung words.
 export const MUSIC_VIDEO_CUTTING_MODES = ['scene', 'intercut'];
 // Shipped starting points a project can copy into its document folder.
@@ -1946,6 +1948,14 @@ export const musicVideoTitleCardSchema = z.object({
   outro: z.boolean().optional(),
   outroStartSec: z.number().min(0).max(TITLE_CARD_LIMITS.outroMax).nullable().optional(),
   outroEndSec: z.number().min(0).max(TITLE_CARD_LIMITS.outroMax + 60).nullable().optional(),
+  // `fadeSec` is the fade in; absent, the fade out takes its value.
+  fadeOutSec: z.number().min(0).max(TITLE_CARD_LIMITS.fadeMax).optional(),
+  // The side the card slides in from as it fades in, how long it takes and how far it travels (% of the frame width).
+  slideIn: z.enum(TITLE_CARD_SLIDES).optional(),
+  slideSec: z.number().min(TITLE_CARD_LIMITS.slideSecMin).max(TITLE_CARD_LIMITS.slideSecMax).optional(),
+  slidePct: z.number().min(TITLE_CARD_LIMITS.slidePctMin).max(TITLE_CARD_LIMITS.slidePctMax).optional(),
+  // Drawn over the film look and shot effects; absent, the `mtv` look is steady and `outline` is not.
+  steady: z.boolean().optional(),
 }).strict();
 
 export const musicVideoProjectCreateSchema = z.object({

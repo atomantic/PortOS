@@ -272,6 +272,13 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       expect(completion().goalFidelity.priorDeliveryHeads).toEqual(earlier.heads);
     });
 
+    it('requests earlier execution reports only for dependency-audit retries', async () => {
+      await finalize({ task: { ...retryTask, metadata: { ...retryTask.metadata, analysisType: 'dependency-updates' } } });
+      expect(priorTaskDeliveryMock.mock.calls.at(-1)[0]).toMatchObject({ includeExecutionReport: true });
+      await finalize({ task: retryTask });
+      expect(priorTaskDeliveryMock.mock.calls.at(-1)[0]).toMatchObject({ includeExecutionReport: false });
+    });
+
     // The detector stays armed: an earlier merge is evidence, never a pass.
     it('still holds the run when the reviewer answers rethink with that evidence', async () => {
       priorTaskDeliveryMock.mockResolvedValueOnce(earlier);

@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
+import { waitForMusicVideoRenderDrain } from '../../test/musicVideoRenderDrain.js';
 
 const h = vi.hoisted(() => {
   const emitter = () => {
@@ -91,6 +92,8 @@ beforeEach(() => {
   h.store.clear();
   look.calls.length = 0;
 });
+
+afterEach(waitForMusicVideoRenderDrain);
 
 describe('excerpt render cancellation', () => {
   it('keeps deferred update admission blocked through the final record write', async () => {
@@ -280,6 +283,28 @@ describe('excerpt range', () => {
 });
 
 
+describe('composed steady title excerpts', () => {
+  it.each([true, false])('draws a card exactly once with steady=%s', async (steady) => {
+    const id = `excerpt-steady-${steady}`;
+    prime(id, { mode: 'composed' });
+    Object.assign(h.store.get(id), { filmLook: { preset: 'vhs' }, titleCard: { enabled: true, title: 'Song', style: 'mtv', steady, startSec: 0, endSec: 4 } });
+    const { jobId } = await startExcerptRender(id, { startSec: 1, endSec: 2 });
+    if (steady) expect(renderTypographyOverlays).not.toHaveBeenCalled();
+    else {
+      expect(renderTypographyOverlays.mock.calls[0][0].cues).toEqual([expect.objectContaining({ titleCard: expect.objectContaining({ title: 'Song' }) })]);
+      h.overlays.resolve([]);
+      await vi.waitFor(() => expect(h.procs).toHaveLength(1));
+    }
+    lastProc().emit('close', 0, null);
+    await vi.waitFor(() => expect(look.calls).toHaveLength(1));
+    expect(look.calls[0]).toMatchObject({ offsetSec: 1, titleCardUntilSec: 4 });
+    expect(look.calls[0].titleCard?.title ?? null).toBe(steady ? 'Song' : null);
+    look.resolve(true);
+    await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
+    expect(terminalFrames(jobId)[0].type).toBe('complete');
+  });
+});
+
 describe('film look finishing pass on a footage excerpt', () => {
   const primeLook = (id) => h.store.set(id, { id, name: 'Test', scenes: [], excerpts: [], composition: null, filmLook: { preset: 'super8', grain: 0.5 } });
   const progressFrames = (jobId) => broadcastSse.mock.calls.filter(([job, frame]) => job.id === jobId && frame.type === 'progress').map(([, frame]) => frame.progress);
@@ -352,5 +377,7 @@ describe('excerpt setup failure after the rendering mark (#11777)', () => {
     const retry = await startExcerptRender(id, { startSec: 0, endSec: 2 }, { revisionId: 'rev-1' });
     expect(retry.jobId).toBeTruthy();
     expect(h.store.get(id).revisions[0].status).toBe('rendering');
+    lastProc().emit('close', 1, null);
+    await vi.waitFor(() => expect(terminalFrames(retry.jobId)).toHaveLength(1));
   });
 });

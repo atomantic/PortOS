@@ -112,6 +112,7 @@ export async function renderStatsOutroClip({ project, outputPath, width, height,
     const look = withFilmLook ? normalizeFilmLook(project?.filmLook) : null;
     const initScripts = look && !isFilmLookNeutral(look) ? [filmLookRuntimeSource(look)] : [];
     page = await openComposition(directory, { signal, ownedBrowser: true, initScripts });
+    await page.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 1 } });
     await encodeComposition(page, { width, height, fps, durationSec }, outputPath, { signal, onProgress });
     page.check();
     await page.close({ verify: true });

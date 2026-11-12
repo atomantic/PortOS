@@ -35,6 +35,28 @@ emission/word-clock parity with the existing numpy Viterbi path. Real Intel hard
 validation remains pending; fake-process and workflow tests verify refusal and
 preservation of saved timings, not Intel inference.
 
+## Check lyric placement
+
+**Check sheet against vocal** checks timed lines as well as uncovered singing.
+It uses whisper.cpp `whisper-cli` with the large-v3-turbo model, attention DTW,
+and flash attention disabled. Endpoint-only STT cannot substitute for this check.
+The model is obtained only when the director starts the check.
+
+Neighbouring lines are checked together, preserving repeated occurrences. A median
+word-start difference over 0.3 seconds flags the line. Missing recognition remains
+unverified, not a pass. **Use the checked times** applies one flagged line, or
+**Use all checked times** applies them together; run the check again afterwards.
+A failed save keeps the offers and restores the previous local times.
+
+An explicit check that finds suspect placement marks those lines suspect and
+returns previously verified timing to provisional. Upgrading alone does not
+change a project's verification. CTC also reports weak per-letter acoustic
+scores instead of treating every placement as a match. Within a line, held word
+tails extend to the next word only when the vocal remains voiced; real pauses
+and other lines are preserved. The regression fixture uses synthetic emissions
+and PCM, not a private recording; model accuracy on a real song still needs
+listening to the playthrough.
+
 ## Automatic lyric overlays
 
 In **Setup → Time and verify**, turn off **Show automatic lyric overlays** for a cinematic video that uses lyrics as timing and story inputs without displaying them. The per-project `lyricOverlayEnabled` boolean is accepted by project creation and update; omitted means legacy behavior. A scoped update containing only `{ "lyricOverlayEnabled": false }` preserves the renderer, aligned cues, shot decisions, selected assets and history. Timing verification still shows the words deliberately. This preference does not prohibit lip-sync or change existing shots.

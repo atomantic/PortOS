@@ -27,7 +27,7 @@ async function frameFormat(page, { width, height, layout }) {
 // which frame, never capture whatever the page last painted.
 async function seekComposition(page, t, frame) {
   try {
-    await page.evaluate(`globalThis.portosComposition.seek(${t})`);
+    return await page.evaluate(`globalThis.portosComposition.seek(${t})`);
   } catch (error) {
     throw new Error(`Composition seek(${t}) failed${frame == null ? '' : ` at frame ${frame}`}: ${error.message}`);
   }
@@ -65,6 +65,9 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   signal?.throwIfAborted();
   const { fps, durationSec, width, height, motionBlur } = contract;
   const numFrames = Math.round(durationSec * fps);
+  // Worker time sums across parallel segments. Encoding overlaps capture;
+  // encodeMs measures pipe back-pressure plus the final drain, not CPU time.
+  const timing = { frames: 0, seekMs: 0, drawMs: 0, captureMs: 0, encodeMs: 0, gpuFrames: 0, svgFrames: 0 };
   // Music-video masters are cut once (`-ss` / `-t`) and muxed whole. Library
   // beds keep the launch-video loop and half-second tail fade.
   const exactAudio = audio?.path ? audio : null;
@@ -151,15 +154,31 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
     // rounded to the microsecond lands up to 1.2e-5 frames early at 24 fps, so
     // every third frame drew its predecessor.
     const at = offsetSec + t;
-    await seekComposition(page, at, Math.round(t * fps));
+    const seekStarted = performance.now();
+    let drawn;
+    let seekElapsed;
+    try { drawn = await seekComposition(page, at, Math.round(t * fps)); }
+    finally { seekElapsed = performance.now() - seekStarted; timing.seekMs += seekElapsed; }
+    // A page may return arbitrary seek results; only finite in-range timing
+    // observations contribute to the encoder's measurements.
+    const drawMs = Number.isFinite(drawn?.drawMs) ? Math.max(0, Math.min(seekElapsed, drawn.drawMs)) : 0;
+    timing.drawMs += drawMs;
+    timing.seekMs -= drawMs;
     page.check();
     report('capture', Math.round(t * fps));
     const captureStarted = performance.now();
-    const { data } = await page.send('Page.captureScreenshot', SCREENSHOT).catch(error => {
-      throw new Error(`Composition capture failed at frame ${Math.round(t * fps)} (song ${+at.toFixed(6)}s) after ${Math.round(performance.now() - captureStarted)}ms: ${error.message}`);
-    });
-    page.check();
-    return Buffer.from(data, 'base64');
+    let bytes;
+    try {
+      const { data } = await page.send('Page.captureScreenshot', SCREENSHOT).catch(error => {
+        throw new Error(`Composition capture failed at frame ${Math.round(t * fps)} (song ${+at.toFixed(6)}s) after ${Math.round(performance.now() - captureStarted)}ms: ${error.message}`);
+      });
+      page.check();
+      bytes = Buffer.from(data, 'base64');
+    } finally { timing.captureMs += performance.now() - captureStarted; }
+    timing.frames++;
+    if (drawn?.path === 'gpu') timing.gpuFrames++;
+    if (drawn?.path === 'svg') timing.svgFrames++;
+    return bytes;
   };
   const capture = async t => {
     let stalled = false;
@@ -180,12 +199,14 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
       }
     }
   };
-  const write = bytes => {
+  const write = async bytes => {
+    const started = performance.now();
     report('encoder-write');
-    return Promise.race([
+    await Promise.race([
       new Promise((resolve, reject) => proc.stdin.write(bytes, error => error ? reject(error) : resolve())),
       encoderStopped,
     ]);
+    timing.encodeMs += performance.now() - started;
   };
   const toRgb = png => sharp(png).removeAlpha().raw().toBuffer();
   // Output frames per sub-frame count: where a shutter render spent its time.
@@ -218,10 +239,12 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
     }
     proc.stdin.end();
     report('encoder-finish');
+    const finishStarted = performance.now();
     await finished;
+    timing.encodeMs += performance.now() - finishStarted;
     page.check();
     const loudness = mastering ? await reportMasteredLoudness({ bin: ffmpeg, outputPath, before: mastering.before, signal, run: runFfmpeg }) : null;
-    return { ...(shutter ? { sampleHistogram: histogram } : {}), ...(loudness ? { loudness } : {}) };
+    return { timing, ...(shutter ? { sampleHistogram: histogram } : {}), ...(loudness ? { loudness } : {}) };
   } catch (error) {
     if (error.code === 'EPIPE' || inputError?.code === 'EPIPE') {
       // A closed pipe often arrives before the process's close event. Preserve
@@ -299,7 +322,7 @@ export async function encodeCompositionSegments(page, contract, outputPath, { op
     const slot = replaceable(page, signal);
     try {
       const result = await encode(page, contract, outputPath, { signal, onProgress, offsetSec, videoFilter: videoFilterAt(offsetSec, durationSec), reopenPage: slot.reopen, onRetry });
-      return pageReplaced ? { ...result, pageReplaced } : result;
+      return { ...result, workers: 1, ...(pageReplaced ? { pageReplaced } : {}) };
     } finally {
       await released(slot);
     }
@@ -314,6 +337,7 @@ export async function encodeCompositionSegments(page, contract, outputPath, { op
   const listPath = `${outputPath}.parts.txt`;
   const done = segments.map(() => 0);
   const histogram = {};
+  const timing = {};
   try {
     signal?.throwIfAborted();
     const results = await Promise.allSettled(segments.map(async ({ start, frames }, i) => {
@@ -330,6 +354,7 @@ export async function encodeCompositionSegments(page, contract, outputPath, { op
             onProgress?.(frame / numFrames, { frame, frames: numFrames });
           },
         });
+        for (const [phase, ms] of Object.entries(result?.timing ?? {})) timing[phase] = (timing[phase] ?? 0) + ms;
         for (const [count, total] of Object.entries(result?.sampleHistogram ?? {})) histogram[count] = (histogram[count] ?? 0) + total;
       } catch (error) {
         controller.abort(error);
@@ -347,7 +372,7 @@ export async function encodeCompositionSegments(page, contract, outputPath, { op
     const joined = await runFfmpeg({ bin: ffmpeg, signal, args: ['-hide_banner', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', listPath,
       '-c', 'copy', '-movflags', '+faststart', '-y', outputPath] });
     if (!joined.ok) throw new Error(`Joining render segments failed: ${joined.reason}`);
-    return { ...(Object.keys(histogram).length ? { sampleHistogram: histogram } : {}), ...(pageReplaced ? { pageReplaced } : {}) };
+    return { timing, workers: segments.length, ...(Object.keys(histogram).length ? { sampleHistogram: histogram } : {}), ...(pageReplaced ? { pageReplaced } : {}) };
   } finally {
     signal?.removeEventListener('abort', relay);
     for (const path of [...parts, listPath]) await rm(path, { force: true }).catch(() => {});

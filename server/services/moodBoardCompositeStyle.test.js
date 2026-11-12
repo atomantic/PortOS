@@ -37,8 +37,26 @@ beforeEach(() => {
 });
 
 describe('composeBoardPrompt', () => {
-  it('runs the picked vision CLI provider with its model and effort instead of swapping to an API provider', async () => {
-    const codex = { id: 'codex', type: 'cli', command: 'codex', enabled: true };
+  it('synthesizes both saved board styles without feeding their pins to the model', async () => {
+    const style = await composeBoardPrompt({
+      sourceBoards: [
+        { name: 'Ink', style: { prompt: 'Ink washes' }, items: [analyzed] },
+        { name: 'Neon', style: { prompt: 'Neon lights' }, items: [] },
+      ], providerId: 'ollama', model: 'qwen',
+    });
+    const sent = promptRunner.runPromptThroughProvider.mock.calls[0][0].prompt;
+    expect(sent).toContain('Ink washes');
+    expect(sent).toContain('Neon lights');
+    expect(sent).toContain('ONE new, coherent visual style');
+    expect(sent).not.toContain(analyzed.analysis.prompt);
+    expect(style.prompt).toBe(JSON.parse(composedText).prompt);
+    promptRunner.runPromptThroughProvider.mockResolvedValueOnce({ text: JSON.stringify({ prompt: 'x'.repeat(8001) }) });
+    await expect(composeBoardPrompt({ sourceBoards: [{ style: { prompt: 'Ink' } }, { style: { prompt: 'Neon' } }] }))
+      .rejects.toMatchObject({ code: 'COMPOSITE_BAD_JSON', status: 502 });
+  });
+
+  it.each(['cli', 'tui'])('runs the picked vision %s provider with its model and effort instead of swapping to an API provider', async (type) => {
+    const codex = { id: 'codex', type, command: 'codex', enabled: true };
     providers.getProviderById.mockResolvedValue(codex);
     promptRunner.runPromptThroughProvider.mockResolvedValue({ text: composedText, model: 'gpt-5.6-luna', provider: codex });
     const style = await composeBoardPrompt({
@@ -92,6 +110,21 @@ describe('composeBoardPrompt', () => {
     expect(style.providerId).toBe('ollama');
     expect(style.model).toBe('qwen');
     expect(style.rationale).toContain('tactile');
+  });
+
+  it('preserves the optical finish at the end of long pin analyses', async () => {
+    const finish = 'Soft defocused edges, halation and misregistered color fringes.';
+    const prompt = `${'An elaborate imaginary landscape with layered architecture. '.repeat(20)}${finish}`;
+    await composeBoardPrompt({
+      board: { id: 'mb-1', style: { prompt: 'OLD_COMPOSITE', negativePrompt: 'OLD_NEGATIVE' }, items: Array.from({ length: 7 }, (_, i) => ({
+        id: `pin-${i}`, type: 'image', analysis: { prompt, negativePrompt: 'harsh digital sharpening' },
+      })) },
+    });
+    const sent = promptRunner.runPromptThroughProvider.mock.calls[0][0].prompt;
+    expect(sent.split(finish)).toHaveLength(8);
+    expect(sent).not.toContain('OLD_COMPOSITE');
+    expect(sent).not.toContain('OLD_NEGATIVE');
+    expect(sent).toContain('harsh digital sharpening');
   });
 
   it('rejects an empty model prompt', async () => {

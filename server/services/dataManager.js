@@ -101,7 +101,7 @@ export const CATEGORIES = {
   // version of a Cast & Sets sheet, animatic, treatment or storyboard, one
   // immutable file each, referenced by the project record. Not deletable from
   // here: a purge would strand those references (delete the artifact instead).
-  'music-video': { label: 'Music Video Development Files', description: 'Versioned development artifacts (check-in sheets, animatics, treatments) and composition documents referenced by Music Video projects', archivable: true, deletable: false },
+  'music-video': { label: 'Music Video Development Files', description: 'Versioned development artifacts (check-in sheets, animatics, treatments), composition documents and Blender film workspaces (scripts and their renders) referenced by Music Video projects', archivable: true, deletable: false },
   'music-video-compositions': { label: 'Music Video Overlay Scratch', description: 'Typography overlay frames for an in-flight composed music-video render — removed when the render ends and swept at boot', archivable: false, deletable: false },
   'music-video-film-look': { label: 'Music Video Film Look Scratch', description: 'A staged link to a finished render for its film look pass — removed when the pass ends', archivable: false, deletable: false },
   'music-video-stats-outro': { label: 'Music Video Outro Scratch', description: 'The cutting room floor outro page (fonts and floor stills) for an in-flight music-video render — removed when the render ends and swept at boot', archivable: false, deletable: false },
@@ -135,7 +135,9 @@ export const CATEGORIES = {
   'image-refs': { label: 'Image References', description: 'Reference images uploaded for multi-reference edits — still served to existing renders', archivable: true, deletable: false },
   'image-to-3d': { label: 'Image to 3D', description: 'Generated GLB meshes — the only copy; records live in Postgres', archivable: false, deletable: false },
   'images': { label: 'Images', description: 'Uploaded and generated images — delete individually; gallery, pipeline, and collection records point at these files', archivable: true, deletable: true, purgeScope: 'items' },
-  'insights': { label: 'Insights', description: 'Derived goal scorecards and insights — rebuilt on the next insights run', archivable: true, deletable: true, purgeScope: 'category' },
+  // Not only derived output: the goal scorecard's hand-authored rule overrides
+  // and its settings live here too, and nothing regenerates them.
+  'insights': { label: 'Insights', description: 'Goal scorecard rule overrides and settings, plus the derived scorecard, themes and narrative', archivable: true, deletable: false },
   // Project-specific jev heads plus the corpora and cached embeddings behind
   // them.
   //
@@ -155,10 +157,9 @@ export const CATEGORIES = {
   'jira-reports': { label: 'Jira Reports', description: 'Generated Jira reports — regenerable from Jira', archivable: true, deletable: true, purgeScope: 'category' },
   'loops': { label: 'Loops', description: 'Output history from scheduled loop runs', archivable: true, deletable: false },
   'lora-datasets': { label: 'LoRA Datasets', description: 'Training images and captions for LoRA runs — uploaded source material, not regenerable', archivable: false, deletable: false },
-  // Measured local-model assessments. Deletable: every record is reproducible by
-  // re-running the assessment, and a stale one (taken before a RAM upgrade or a
-  // backend update) actively misleads the picker.
-  'local-llm': { label: 'Local Model Assessments', description: 'Measured fit and performance results for installed local models — re-runnable, and stale after a hardware or backend change', archivable: true, deletable: true, purgeScope: 'category' },
+  // Measured local-model assessments are reproducible. Preserve jev's shadow
+  // counters, which share this directory but record scheduled observations.
+  'local-llm': { label: 'Local Model Assessments', description: 'Measured fit and performance results for installed local models — re-runnable and stale after a hardware or backend change; jev agreement counters are kept', archivable: true, deletable: true, purgeScope: 'category', purgeFilter: name => name.toLowerCase() !== 'jev-shadow.json' },
   'loras': { label: 'LoRAs', description: 'Trained and downloaded LoRA adapters — included in backups by default; a trained one is not regenerable without hours of GPU retraining', archivable: false, deletable: false },
   'meatspace': { label: 'MeatSpace', description: 'Body metrics, blood tests, eyes', archivable: true, deletable: false },
   'media-collections': { label: 'Media Collections', description: 'Media collection records', archivable: true, deletable: false },
@@ -207,7 +208,7 @@ export const CATEGORIES = {
   'storyboards': { label: 'Storyboards', description: 'Storyboard beats and panels (file mirror of the Postgres store)', archivable: true, deletable: false },
   'storyboard-recipes': { label: 'Storyboard recipes', description: 'Saved panel maker recipes (file mirror of the Postgres store)', archivable: true, deletable: false },
   'supercollider': { label: 'SuperCollider Runtime', description: 'Machine-local readiness evidence for the managed SuperCollider image, in-flight render scratch and 24-hour render previews — re-created by npm run setup:supercollider, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
-  'telegram': { label: 'Telegram', description: 'Telegram bot data', archivable: true, deletable: true, purgeScope: 'category' },
+  'telegram': { label: 'Telegram', description: 'Your answers to Telegram goal check-ins', archivable: true, deletable: false },
   'templates': { label: 'Visual Templates', description: 'Shipped layout assets used as render anchors', archivable: false, deletable: false },
   // Not execution logs: one JSON config per onboard tool, spliced into CoS
   // prompts. Image Gen settings are the only writer, so a purge would drop
@@ -694,9 +695,14 @@ async function purgeCategoryUncached(categoryKey, options) {
     const protectedPaths = categoryKey === 'repos' ? await protectedRepoPaths() : [];
 
     if (wantsItem) {
-      if (categoryKey === 'screenshots' && isPersistentMindScreenshotEntry(options.subPath)) {
-        throw new ServerError('Persistent Mind owns this attachment or upload recovery marker; manage it through Mind', {
-          status: 409, code: 'SCREENSHOT_OWNED_BY_MIND',
+      if (meta.purgeFilter && !meta.purgeFilter(options.subPath)) {
+        if (categoryKey === 'screenshots' && isPersistentMindScreenshotEntry(options.subPath)) {
+          throw new ServerError('Persistent Mind owns this attachment or upload recovery marker; manage it through Mind', {
+            status: 409, code: 'SCREENSHOT_OWNED_BY_MIND',
+          });
+        }
+        throw new ServerError(`"${options.subPath}" is kept by the ${categoryKey} category`, {
+          status: 409, code: 'CATEGORY_ITEM_PROTECTED',
         });
       }
       const resolvedRoot = resolve(dirPath);

@@ -9,7 +9,7 @@
  * `text` being the `Label: url` lines to add.
  */
 import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, pasteText, step } from './browser.js';
-import { markSunoSongMenu } from '../../../lib/sunoPage.js';
+import { SUNO_SONG_MENU_SELECTOR, waitForSunoSongPage, markSunoSongMenu } from '../../../lib/sunoPage.js';
 import { facebookSignedOut, typeFacebookComment } from './facebook.js';
 
 // Suno's caption limit; the new-draft builder enforces the same one.
@@ -49,18 +49,23 @@ const suno = {
   label: 'Suno',
   async prepare(page, row) {
     await step(this.label, 'open the song', () => page.goto(row.url, { waitUntil: 'domcontentloaded', timeout: T }));
-    await page.waitForTimeout(5000);
-    if (!(await page.locator("button[aria-label='More options']").count())) throw loginRequired(this.label, row.url);
+    const manualCaption = () => ({ added: [], leftForYou: [`Open the song's details and add to its caption:\n${row.text}`, 'Save'] });
+    const readiness = await step(this.label, 'wait for the song menu or sign-in page', () => waitForSunoSongPage(page, { timeoutMs: T }).catch(err => {
+      if (err?.name === 'TimeoutError') return null; // Suno UI changes retain the manual-paste fallback.
+      throw err;
+    }));
+    if (readiness === 'signed-out') throw loginRequired(this.label, row.url);
+    if (!readiness) return manualCaption();
     // Suno moves its menus around: a miss leaves the lines for the director to paste, never fails the card.
     const caption = await (async () => {
       const songId = sunoSongIdOf(page.url()) || sunoSongIdOf(row.url);
-      if (!songId || !(await page.evaluate(markSunoSongMenu, songId))) return null;
+      if (!songId || !(await page.evaluate(markSunoSongMenu, { songId, menuSelector: SUNO_SONG_MENU_SELECTOR }))) return null;
       await page.locator('[data-portos-song-menu]').click({ timeout: 15_000 });
-      await page.waitForTimeout(600);
+      await page.locator('[role=menuitem]').first().waitFor({ state: 'visible', timeout: 15_000 });
       const item = (re) => page.locator('[role=menuitem]').filter({ hasText: re }).first();
       if (await item(/^Edit$/).isVisible().catch(() => false)) {
         await item(/^Edit$/).hover();
-        await page.waitForTimeout(600);
+        await item(/Song Details|Edit Details|Details/).waitFor({ state: 'visible', timeout: 15_000 });
       }
       const details = item(/Song Details|Edit Details|Details/);
       if (!(await details.isVisible().catch(() => false))) return null;
@@ -69,7 +74,7 @@ const suno = {
       await field.waitFor({ timeout: 15_000 });
       return field;
     })().catch(() => null);
-    if (!caption) return { added: [], leftForYou: [`Open the song's details and add to its caption:\n${row.text}`, 'Save'] };
+    if (!caption) return manualCaption();
     const current = await caption.inputValue();
     const pending = linesNotIn(row.text, current);
     // Whole lines only, while the caption fits: an overflow link stays for the director.

@@ -12,6 +12,7 @@ const mockGetMoodBoard = vi.fn();
 const mockUpdateMoodBoard = vi.fn();
 const mockAddMoodBoardItem = vi.fn();
 const mockUpdateMoodBoardItem = vi.fn();
+const mockRemoveMoodBoardItem = vi.fn();
 const mockSyncMoodBoardPinterest = vi.fn();
 const mockImportMoodBoardPinterest = vi.fn();
 const mockImportMoodBoardXPost = vi.fn();
@@ -32,7 +33,7 @@ vi.mock('../services/api', () => ({
   updateMoodBoard: (...args) => mockUpdateMoodBoard(...args),
   addMoodBoardItem: (...args) => mockAddMoodBoardItem(...args),
   updateMoodBoardItem: (...args) => mockUpdateMoodBoardItem(...args),
-  removeMoodBoardItem: vi.fn(),
+  removeMoodBoardItem: (...args) => mockRemoveMoodBoardItem(...args),
   linkMoodBoardPinterest: vi.fn(),
   unlinkMoodBoardPinterest: vi.fn(),
   syncMoodBoardPinterest: (...args) => mockSyncMoodBoardPinterest(...args),
@@ -137,6 +138,36 @@ beforeEach(() => {
   mockLocalizeMoodBoardMedia.mockResolvedValue({ board: null, localized: 0, failed: 0 });
   currentId = 'a';
   analysisDelay = null;
+});
+
+describe('MoodBoardDetail item removal', () => {
+  it('keeps confirmation beside the trash control, before a long prompt, and removes only after confirmation', async () => {
+    const prompt = 'Dreamy soft-focus reference. '.repeat(120);
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [
+      { id: 'i1', type: 'image', imageUrl: '/data/images/one.png', caption: prompt },
+    ] });
+    mockRemoveMoodBoardItem.mockResolvedValue({ id: 'a', items: [] });
+    renderPage();
+    const trigger = await screen.findByRole('button', { name: 'Remove item' });
+    fireEvent.click(trigger);
+    const confirmation = screen.getByRole('group', { name: 'Remove this mood board item?' });
+    expect(trigger.parentElement.nextElementSibling).toBe(confirmation);
+    expect(confirmation.nextElementSibling.textContent).toContain(prompt.trim());
+    expect(document.activeElement).toBe(confirmation);
+    expect(mockRemoveMoodBoardItem).not.toHaveBeenCalled();
+    fireEvent.click(within(confirmation).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByText('Remove this item?')).toBeNull();
+    expect(mockRemoveMoodBoardItem).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(trigger);
+    fireEvent.click(trigger);
+    fireEvent.keyDown(screen.getByRole('group', { name: 'Remove this mood board item?' }), { key: 'Escape' });
+    expect(screen.queryByText('Remove this item?')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove', exact: true }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove item' })).toBeNull());
+    expect(mockRemoveMoodBoardItem).toHaveBeenCalledWith('a', 'i1', { silent: true });
+  });
 });
 
 describe('MoodBoardDetail image preview', () => {
@@ -811,6 +842,32 @@ describe('MoodBoardDetail layout', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Save prompt' })).toBeNull());
   });
 
+  it('copies the composed style into the Board prompt only on request and preserves edits on cancel', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', description: 'My direction', items: [], style: { prompt: 'Soft painted light' } });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    const field = screen.getByLabelText('Board prompt');
+    fireEvent.change(field, { target: { value: 'Unsaved direction' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use style as Board prompt' }));
+    expect(field).toHaveValue('Unsaved direction');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel', exact: true }));
+    expect(field).toHaveValue('Unsaved direction');
+    fireEvent.click(screen.getByRole('button', { name: 'Use style as Board prompt' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Replace prompt' }));
+    expect(field).toHaveValue('Soft painted light');
+    expect(mockUpdateMoodBoard).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Save prompt' })).toBeInTheDocument();
+  });
+
+  it('explains why an oversized style cannot be copied into the Board prompt', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', description: '', items: [], style: { prompt: 'x'.repeat(5001) } });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    expect(screen.getByRole('button', { name: 'Use style as Board prompt' })).toBeDisabled();
+    expect(screen.getByText(/Shorten the Style prompt to 5,000/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Board prompt')).toHaveValue('');
+  });
+
   it('remembers the last tool used for the next board', async () => {
     mockGetMoodBoard.mockResolvedValue({ id: 'a', name: 'Board A', items: [] });
     const { unmount } = renderPage();
@@ -993,4 +1050,25 @@ it('accepts a >2048-char data:image URL without input truncation and surfaces se
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Pin to board' })); });
   expect(screen.getByRole('button', { name: 'Preview image' })).toBeInTheDocument();
   expect(input).toHaveValue('');
+});
+
+
+it('offers source navigation for web URLs while leaving non-web provenance as text', async () => {
+  const sources = ['https://x.com/example/status/123', 'https://www.pinterest.com/pin/123/', 'https://www.youtube.com/watch?v=123'];
+  mockGetMoodBoard.mockResolvedValueOnce({
+    id: 'a', name: 'Board A',
+    items: [...sources, null, 'frame:clip.mp4', 'javascript:alert(1)'].map((source, index) => ({
+      id: `source-${index}`, type: 'text', text: 'Reference', source,
+    })),
+  });
+  renderPage();
+  await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+  const links = screen.getAllByRole('link', { name: 'Visit source' });
+  expect(links.map(link => link.getAttribute('href'))).toEqual(sources);
+  for (const link of links) {
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  }
+  expect(screen.getByText('frame:clip.mp4')).toBeInTheDocument();
+  expect(screen.getByText('javascript:alert(1)')).toBeInTheDocument();
 });

@@ -832,12 +832,15 @@ export const extractEvaluationFrames = async (videoPath, jobId, count = 5) => {
   return frameIndices.map((_, i) => `${jobId}-f${i + 1}.jpg`);
 };
 
-// The one H.264 encode profile every re-encoding path here shares. Visually
+// The standard H.264 encode profile re-encoding paths share. Visually
 // lossless to most viewers and plays everywhere — but the reason it's a
 // constant rather than three inlined copies is that clips encoded by DIFFERENT
 // paths get concatenated together (a chained render's trimmed chunks join its
 // untrimmed ones), and a mismatch there shows up as one segment being graded
-// differently from its neighbours. Callers append their own `-c:a`.
+// differently from its neighbours. Callers append their own `-c:a`. The film
+// look finishing pass has one gated WebCodecs exception: it checks encoded
+// quality against this profile and the output's codec/timing before using it;
+// otherwise it falls back to the shared composition encoder.
 export const H264_ENCODE_ARGS = Object.freeze([
   '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', '-preset', 'medium',
 ]);

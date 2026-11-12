@@ -36,31 +36,66 @@ repairing never download weights.
 
 ## Regenerating locks
 
-Edit `scripts/requirements-flux2-cuda.txt` with exact direct pins. Using uv
-0.13.1, run from the repository root (Bash):
+Edit `scripts/requirements-flux2-cuda.txt` with exact direct pins. Use
+hash-verified uv **0.13.7**. The CUDA index is explicit and scoped to **Torch**
+during resolution: its mirrors of unrelated packages can lack publication dates,
+which correctly makes a global multi-index resolve fail the cooldown. Keep all
+other packages on PyPI rather than dropping the cooldown.
+
+Run from the repository root in Bash, setting `UV` to that verified executable:
 
 ```bash
+set -euo pipefail
+CUTOFF=2026-11-05T00:00:00Z  # advance to a UTC date at least seven days old
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+python3 - "$TMP/pyproject.toml" <<'PYPROJECT'
+import json
+import pathlib
+import sys
+
+lines = pathlib.Path("scripts/requirements-flux2-cuda.txt").read_text().splitlines()
+deps = [line for line in lines if line and not line.startswith("#")]
+pathlib.Path(sys.argv[1]).write_text(
+    '[project]\nname="portos-flux2-cuda"\nversion="0.0.0"\n'
+    'requires-python=">=3.11"\ndependencies=' + json.dumps(deps) + '\n'
+    '[tool.uv.sources]\ntorch={index="pytorch"}\n'
+    '[[tool.uv.index]]\nname="pytorch"\n'
+    'url="https://download.pytorch.org/whl/cu126"\nexplicit=true\n'
+)
+PYPROJECT
 for target in windows linux; do
   case "$target" in
     windows) platform=x86_64-pc-windows-msvc ;;
     linux) platform=x86_64-manylinux_2_28 ;;
   esac
   out="scripts/requirements-flux2-cuda-${target}.lock.txt"
-  uv pip compile scripts/requirements-flux2-cuda.txt \
+  cp "$out" "$TMP/$target.lock" # retain unrelated pins during resolution
+  "$UV" --no-config pip compile "$TMP/pyproject.toml" \
     --python-version 3.11 --python-platform "$platform" \
-    --generate-hashes --only-binary :all: \
-    --index-url https://pypi.org/simple \
-    --extra-index-url https://download.pytorch.org/whl/cu126 \
-    --index-strategy unsafe-best-match --emit-index-url \
-    --no-header --annotation-style line --exclude-newer 2026-11-01 \
-    -o "$out"
+    --generate-hashes --only-binary :all: --no-header --no-annotate \
+    --index-url https://pypi.org/simple --emit-index-url \
+    --exclude-newer "$CUTOFF" -o "$TMP/$target.lock"
+  {
+    printf '# FLUX.2 CUDA: CPython 3.11, x86_64 %s, CUDA 12.6.\n' "$target"
+    printf '# uv 0.13.7; exclude-newer %s; regenerate: docs/FLUX2_CUDA.md.\n' "$CUTOFF"
+    # pip-format locks cannot encode uv's named explicit index. Installation
+    # retains the CUDA index, but versions and allowed artifact hashes are fixed.
+    printf '%s\n' '--extra-index-url https://download.pytorch.org/whl/cu126'
+    cat "$TMP/$target.lock"
+  } > "$out"
 done
 ```
 
-Advance the cutoff to a UTC date at least seven days before the update, and
-restore each lock's two-line target/cutoff header after regenerating. The
-multi-index strategy permits current PyPI packages alongside CUDA wheels; see
-[AudioLDM2](./AUDIOLDM2_CUDA.md#regenerating-locks) for why.
+The temporary project derives its pins from the source requirements rather than
+maintaining a second dependency list. `--no-annotate` keeps temporary filesystem
+paths out of the committed locks. Torch's official simple-index entries carry
+SHA-256 values and upload timestamps; verify those against the lock and cutoff.
+The preserved Triton entry also contains official PyTorch build hashes; verify
+those against the CUDA index's `triton/` entries and their upload timestamps.
+They are part of the unchanged native baseline, not new artifacts introduced
+by this refresh. Verify all remaining artifacts against PyPI metadata. Never
+hand-edit generated hashes.
 
 Query OSV for **every resolved package**, including `MAL-` records,
 immediately before merge, using the script in

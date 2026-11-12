@@ -55,6 +55,7 @@ export const EXCLUSIVE_CAPTURE_TESTS = [
   'services/htmlComposition/index.test.js',
   'services/musicVideo/documentRender.browser.test.js',
   'services/musicVideo/documentFilmLook.browser.test.js',
+  'services/musicVideo/documentVignette.browser.test.js',
   'services/musicVideo/documentTemplates/layered/engine.controls.browser.test.js',
   'services/musicVideo/documentTemplates/layered/engine.overlay.browser.test.js',
   'services/musicVideo/documentTemplates/shared/lyricType.browser.test.js',

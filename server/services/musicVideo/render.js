@@ -1143,6 +1143,14 @@ export async function resolveColdOpenClips(project, { layered = false, stillForM
 // map so the existing SSE and cancel routes apply. Code mode never asks a
 // footage model for pixels; a document draws the scenes' selected takes.
 const SEEKED_RENDERERS = Object.freeze({
+  // A Blender film: the final shot videos joined with the song. It is an ffmpeg
+  // join like a footage cut, so the project's film look is a finishing pass.
+  blender: {
+    label: 'Blender film', modelId: 'music-video-blender', filmLookFinish: true,
+    prepare: async (project) => (await import('./blender/finalRender.js')).prepareBlenderFinal(project),
+    encode: async (input) => (await import('./blender/finalRender.js')).encodeBlenderFinal(input),
+    recordFinal: async (input) => (await import('./blender/finalRender.js')).recordBlenderFinal(input),
+  },
   eidoverse: {
     label: 'Eidoverse Video', modelId: 'music-video-eidoverse',
     prepare: async (project) => (await import('./eidoverseRender.js')).prepareEidoverseRender(project),
@@ -1227,15 +1235,25 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
     closeJobAfterDelay(jobs, jobId);
     options.maintenancePermit?.finish();
   };
+  // A renderer that cannot draw the film look in its page gets the footage renders' finishing
+  // pass (filmLookFinish.js), which takes the second half of the progress bar.
+  const finishing = Boolean(renderer.filmLookFinish) && filmLookFinishNeeded(project);
+  const encodeTop = finishing ? 0.5 : 1;
   Promise.resolve().then(async () => {
     await assertCurrentRenderApproval(projectId, project, options);
     if (signal.aborted) throw Object.assign(new Error('Render cancelled'), { code: 'CANCELED' });
     const encoded = await renderer.encode({
-      plan, project, projectId, jobId, audioPath, soundBed, outputPath, signal,
-      onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: fraction }),
+      plan, project, projectId, jobId, audioPath, soundBed, outputPath, signal, lookPass: finishing,
+      onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop * fraction }),
     });
     // The ending (cutting room floor, credits; when on) joins after the song.
     const outroSec = await appendStatsOutro({ project, path: outputPath, jobId, signal, withFilmLook: !!renderer.filmLookInPage });
+    // After the ending, so the look grades it with the rest of the film. `lookPassInputs` is
+    // what the encode left for the pass to draw over the look (a Blender film's steady title card).
+    if (finishing) {
+      await applyFilmLookFinish({ project, path: outputPath, jobId, signal, ...encoded.lookPassInputs,
+        onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop + (1 - encodeTop) * fraction }) });
+    }
     return outroSec > 0 ? { ...encoded, durationSec: encoded.durationSec + outroSec } : encoded;
   }).then(async (encoded) => {
     job.overlayAbort = null;
@@ -1274,6 +1292,12 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
       return poster;
     });
     await retireOldFinals(projectId, jobId);
+    // What a renderer keeps about the final it made, once it is the project's final. The video
+    // is delivered either way, so a failure here is reported and never fails the render.
+    if (settled) {
+      await Promise.resolve().then(() => renderer.recordFinal?.({ projectId, jobId, encoded }))
+        .catch((err) => console.error(`❌ Music-video ${renderer.label} final record failed [${jobId.slice(0, 8)}]: ${err.message}`));
+    }
     await finish(completed, { written: true, settled });
     console.log(`✅ ${renderer.label[0].toUpperCase()}${renderer.label.slice(1)} music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
     broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}`, proof: proof ? `/data/video-thumbnails/${proof}` : null } });
@@ -1338,6 +1362,8 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
     // The stepped medium (#14244) holds the stitched cut; shot looks are already in it.
     const hold = projectFrameHold(project);
     if (hold) await applyFrameHold({ path: outputPath, sections: plan.sections, leadSec, signal, ffmpeg: plan.ffmpeg, ...hold });
+    if (plan.deferredTitleCard) await (await import('./titleCardFinish.js')).applyTitleCardFinish({ project, path: outputPath, jobId, leadSec, songSec: plan.songSec,
+      width: plan.width, height: plan.height, fps: plan.fps, signal, ffmpeg: plan.ffmpeg });
     broadcastSse(job, { type: 'progress', progress: 1 });
     return durationSec;
   }).then(async (durationSec) => {

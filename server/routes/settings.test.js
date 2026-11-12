@@ -194,6 +194,23 @@ describe('Settings routes — operator-action actor (#5594)', () => {
   });
 });
 
+describe('Settings routes — Code Animation checked configuration', () => {
+  beforeEach(() => { store = {}; vi.clearAllMocks(); });
+  // The execution service reads this record to decide whether a restart may re-run the Blender check unasked.
+  it('saves only the exact checked-configuration record, or null to clear it', async () => {
+    const armed = { executable: '/Applications/Example.app/Contents/MacOS/Blender', fingerprint: '1:2:3:4', executionMode: 'trusted-local', engine: 'CYCLES' };
+    for (const invalid of [{ ...armed, executionMode: 'unsupervised' }, { ...armed, extra: true }, { executable: armed.executable }, true]) {
+      const refused = await request(buildApp()).put('/api/settings').send({ codeAnimationExecutionArmed: invalid });
+      expect(refused.status, JSON.stringify(invalid)).toBe(400);
+    }
+    expect(updateSettingsWith).not.toHaveBeenCalled();
+    expect((await request(buildApp()).put('/api/settings').send({ codeAnimationExecutionArmed: armed })).status).toBe(200);
+    expect(store.codeAnimationExecutionArmed).toEqual(armed);
+    expect((await request(buildApp()).put('/api/settings').send({ codeAnimationExecutionArmed: null })).status).toBe(200);
+    expect(store.codeAnimationExecutionArmed).toBeNull();
+  });
+});
+
 describe('Settings routes — untrusted-content policy', () => {
   beforeEach(() => { store = {}; vi.clearAllMocks(); });
   it('ships classifier-required defaults and persists source-specific constraints', async () => {

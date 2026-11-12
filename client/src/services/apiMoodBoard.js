@@ -19,6 +19,12 @@ export const createMoodBoard = (data, options) => request('/mood-boards', {
   ...options,
 });
 
+export const combineMoodBoards = (data, options) => request('/mood-boards/combine', {
+  method: 'POST',
+  body: JSON.stringify(data),
+  ...options,
+});
+
 export const updateMoodBoard = (id, patch, options) => request(`/mood-boards/${encodeURIComponent(id)}`, {
   method: 'PATCH',
   body: JSON.stringify(patch),
@@ -51,10 +57,10 @@ export const removeMoodBoardItem = (id, itemId, options) =>
 
 // Board analyze runs server-side so it survives navigation: start (or join) the
 // job, and read its live state on return. `null` = no run since server start.
-export const startMoodBoardAnalyze = (id, { providerId, model, effort } = {}, options = {}) =>
+export const startMoodBoardAnalyze = (id, { providerId, model, effort, render } = {}, options = {}) =>
   request(`/mood-boards/${encodeURIComponent(id)}/analyze`, {
     method: 'POST',
-    body: JSON.stringify({ providerId, model, effort }),
+    body: JSON.stringify({ providerId, model, effort, render }),
     ...options,
   });
 

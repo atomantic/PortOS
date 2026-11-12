@@ -509,18 +509,28 @@ function dropRetiredBranches(result, retirementReviews) {
  * authority by entering this earlier deterministic dispatch path.
  */
 async function resolveDeliveryHoldReason(app, result, branch, actions) {
-  if (actions.autoMerge === false) return 'auto-merge-disabled';
+  const hold = (reason, extra = {}) => ({ reason, prUrl: branch.openPr?.url, ...extra });
+  if (actions.autoMerge === false) return hold('auto-merge-disabled');
   const { inspectOpenDeliveryRepair } = await import('./repoCleanupObservation.js');
   const delivery = await inspectOpenDeliveryRepair(app.repoPath, branch.branch, branch.openPr?.url, { forgeAccount: app.forgeAccount ?? null })
     .catch(() => ({ reason: 'delivery-evidence-unavailable' }));
-  if (delivery.evidence?.conflicts && actions.resolveConflicts === false) return 'conflict-resolution-disabled';
+  if (delivery.evidence?.conflicts && actions.resolveConflicts === false) return hold('conflict-resolution-disabled');
   const tree = result.worktreeInventory?.find(row => row.branch === branch.branch && row.path === branch.worktreePath);
-  if (!delivery.headSha || tree?.locked !== false) return delivery.reason || 'completed-review-target-unverified';
+  if (!delivery.headSha || tree?.locked !== false) return hold(delivery.reason || 'completed-review-target-unverified');
   const { inspectOrQueueCompletedReview } = await import('./repoCleanupRecovery.js');
   const review = await inspectOrQueueCompletedReview({ repoPath: app.repoPath,
     branch: branch.branch, prUrl: branch.openPr.url, headSha: delivery.headSha, worktreePath: tree.path, forgeAccount: app.forgeAccount ?? null, repairEvidence: delivery.evidence })
     .catch(() => ({ reason: 'completed-review-inspection-unavailable' }));
-  return review?.reason || delivery.reason || 'completed-review-target-unverified';
+  const reason = review?.reason || delivery.reason || 'completed-review-target-unverified';
+  const nextAction = [
+    reason === 'review-owner-ambiguous' ? 'Resolve competing or unverified execution owners before resuming the original review workflow.' : null,
+    reason === 'review-task-missing' ? 'The original owner task is missing. Restore its trusted task record before resuming review; do not recreate its budgets or infer its policy from PR text.' : null,
+    reason === 'review-task-unavailable' ? 'The original owner task could not be read. Restore task-store availability and rerun reconciliation.' : null,
+    delivery.evidence?.conflicts ? 'The published branch conflicts with the default branch.' : null,
+    delivery.evidence?.changesRequested ? 'The pull request has requested changes.' : null,
+    delivery.evidence?.checks?.length ? `Failed checks: ${delivery.evidence.checks.map(check => `${check.name} (${check.conclusion})`).join(', ')}. Inspect their logs before repair or a justified rerun.` : null,
+  ].filter(Boolean).join(' ');
+  return hold(reason, { ...(nextAction && { nextAction }), ...(review?.taskId && { taskId: review.taskId }) });
 }
 
 /**
@@ -535,7 +545,7 @@ async function classifyInFlightDelivery(app, result, actions) {
   const reviewHeldOpen = (result.wip || []).filter(isReviewHeldOpen);
   for (const branch of [...result.inFlight, ...reviewHeldOpen]) {
     if (branch.state !== 'IN_REVIEW' && !reviewHeldOpen.includes(branch)) { cognitiveInFlight.push(branch); continue; }
-    routineDeliveryHolds.push({ branch: branch.branch, reason: await resolveDeliveryHoldReason(app, result, branch, actions) });
+    routineDeliveryHolds.push({ branch: branch.branch, ...await resolveDeliveryHoldReason(app, result, branch, actions) });
   }
   return { cognitiveInFlight, routineDeliveryHolds };
 }

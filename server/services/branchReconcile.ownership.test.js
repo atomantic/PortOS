@@ -1,12 +1,9 @@
 /**
  * Worktree ownership through branch-reconcile's real cleanup boundary (#10270).
  *
- * A checkout freshly cut from the default branch is clean and an ancestor of
- * it, so the merged-branch cleanup used to retire it — and its branch — while
- * the process that created it was still running. These tests drive `reconcile`
- * against a real throwaway repository (no forge is consulted) to pin that only
- * PortOS-managed roots are retired unattended. The Git page's merged-branch
- * action shares those ownership gates; external checkouts need scoped release.
+ * Named, integrated branches can retire from any directory. Real throwaway
+ * repositories exercise both reconciliation and Git-page cleanup, including
+ * preservation of dirty, locked, live-owned and unverified claim checkouts.
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll, onTestFailed, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, utimes, writeFile, appendFile, unlink } from 'fs/promises';
@@ -245,11 +242,13 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect((await execGit(['rev-parse', 'HEAD'], path)).stdout.trim()).toBe(head);
   });
 
-  it('preserves unmanaged and unverified manual checkouts regardless of age', async () => {
+  it('preserves locked, dirty and unverified manual checkouts regardless of location or age', async () => {
     const claudeRoot = join(repo, '.claude', 'worktrees');
     await mkdir(claudeRoot, { recursive: true });
     const fresh = await addTree(join(external, 'release-preparation'), 'release-prep/v9.9.9');
+    await execGit(['worktree', 'lock', '--reason', 'active release preparation', fresh], repo);
     const old = await addTree(join(external, 'old-workspace'), 'old-workspace', { ageMs: 30 * DAY });
+    await writeFile(join(old, 'unfinished.txt'), 'preserve external work\n');
     const staleClaim = await addTree(join(claudeRoot, 'claim-issue-5'), 'claim/issue-5', { ageMs: 30 * DAY });
     const lockedClaim = await addTree(join(claudeRoot, 'claim-issue-6'), 'claim/issue-6', { ageMs: 30 * DAY });
     await execGit(['worktree', 'lock', '--reason', 'await scoped owner release', lockedClaim], repo);
@@ -262,9 +261,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     const reasonFor = (branch) => result.skipped.find((s) => s.branch === branch)?.reason;
     const context = JSON.stringify({ cleaned: result.cleaned, skipped: result.skipped });
 
-    // Unmanaged: held at any age, checkout AND branch intact.
-    expect(reasonFor('release-prep/v9.9.9'), context).toBe('worktree-unmanaged-location');
-    expect(reasonFor('old-workspace'), context).toBe('worktree-unmanaged-location');
+    // Actual ownership/content holds keep external checkouts and branches intact.
+    expect(reasonFor('release-prep/v9.9.9'), context).toBe('worktree-locked');
+    expect(reasonFor('old-workspace'), context).toBe('worktree-dirty');
     expect(existsSync(fresh)).toBe(true);
     expect(existsSync(old)).toBe(true);
 
@@ -283,7 +282,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
       head: expect.any(String), locked: true, lockReason: 'await scoped owner release', managed: true,
     }));
     expect(report.remaining).toContainEqual(expect.objectContaining({
-      branch: 'old-workspace', path: await gitCheckoutPath(old), reason: 'worktree-unmanaged-location', managed: false,
+      branch: 'old-workspace', path: await gitCheckoutPath(old), reason: 'worktree-dirty', managed: false,
     }));
     expect(report.remaining).toContainEqual(expect.objectContaining({
       path: staleClaimPath, branch: 'claim/issue-5', reason: 'claim-completion-unverified',
@@ -498,18 +497,26 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(existsSync(tree)).toBe(false);
   });
 
-  it('keeps an unmanaged checkout held at the operator merged-branch cleanup boundary', async () => {
-    const loose = await addTree(join(external, 'loose'), 'loose-br', { ageMs: 30 * DAY });
-
-    const held = await reconcile(repo, { activeAgentIds: new Set() });
-    expect(held.skipped.find((s) => s.branch === 'loose-br')?.reason).toBe('worktree-unmanaged-location');
-
+  it.each(['reconcile', 'git-page'])('retires a clean external branch and checkout through %s without a PR', async boundary => {
+    const loose = await addTree(join(external, 'loose'), 'feat/external');
+    const dirty = await addTree(join(external, 'fal-image-models'), 'feat/fal-image-model-catalog');
+    await writeFile(join(dirty, 'unfinished.txt'), 'uncommitted feature work\n');
     await addOrigin();
-    const operator = await deleteMergedBranches(repo, { activeAgentIds: new Set() });
-    expect(operator.deleted).toEqual([]);
-    expect(operator.skipped).toContain('loose-br (local: worktree-unmanaged-location)');
-    expect(existsSync(loose)).toBe(true);
-    expect(await branches()).toContain('loose-br');
+    const result = boundary === 'reconcile'
+      ? await reconcile(repo, { activeAgentIds: new Set() })
+      : await deleteMergedBranches(repo, { activeAgentIds: new Set(), onlyBranches: new Set(['feat/external', 'feat/fal-image-model-catalog']) });
+    const cleaned = boundary === 'reconcile' ? result.cleaned : result.deleted.map(row => row.name);
+    expect(cleaned).toContain('feat/external');
+    if (boundary === 'reconcile') {
+      expect(result.skipped).toContainEqual(expect.objectContaining({ branch: 'feat/fal-image-model-catalog', reason: 'worktree-dirty' }));
+    } else {
+      expect(result.skipped).toContain('feat/fal-image-model-catalog (local: worktree-dirty)');
+    }
+    expect(existsSync(dirty)).toBe(true);
+    expect((await execGit(['status', '--porcelain'], dirty)).stdout).toContain('unfinished.txt');
+    expect(await branches()).toContain('feat/fal-image-model-catalog');
+    expect(existsSync(loose)).toBe(false);
+    expect(await branches()).not.toContain('feat/external');
   });
 
   it.each([false, true])('preserves authored files when status is unreadable (throws=%s)', async (throws) => {

@@ -8,9 +8,14 @@ const mocks = vi.hoisted(() => ({
   tryReadFile: vi.fn(),
   atomicWrite: vi.fn(),
   ensureDir: vi.fn(),
+  readSyncCursorState: vi.fn(),
 }));
 
 vi.mock('../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: (...args) => mocks.fetchWithTimeout(...args) }));
+vi.mock('../lib/syncCursorState.js', () => ({
+  readSyncCursorState: (...args) => mocks.readSyncCursorState(...args),
+  readSyncCursorStateForStatus: vi.fn(),
+}));
 vi.mock('./spotifyAuth.js', () => ({
   getAccessToken: (...args) => mocks.getAccessToken(...args),
   getAuthStatus: (...args) => mocks.getAuthStatus(...args),
@@ -38,6 +43,7 @@ beforeEach(() => {
   mocks.getAccessToken.mockResolvedValue('access-token');
   mocks.getSettings.mockResolvedValue({});
   mocks.tryReadFile.mockResolvedValue(null);
+  mocks.readSyncCursorState.mockResolvedValue({ cursorAfter: 0, lastRunAt: null, lastResult: null });
 });
 
 // A minimal recently-played item, shaped like the Spotify Web API response.
@@ -172,9 +178,14 @@ describe('spotifySync pure helpers', () => {
   });
 });
 
-describe('runSync network boundary', () => {
-  it('uses the bounded fetch helper and returns an error result when it times out', async () => {
+describe('runSync failure persistence and error handling', () => {
+  it('uses the bounded fetch helper and returns an error result when it times out, persisting failure state', async () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.readSyncCursorState.mockResolvedValue({
+      cursorAfter: 12345,
+      lastRunAt: '2026-01-01T00:00:00.000Z',
+      lastResult: { ok: true },
+    });
     mocks.fetchWithTimeout.mockRejectedValue(new Error('request timed out'));
 
     const result = await runSync();
@@ -184,8 +195,91 @@ describe('runSync network boundary', () => {
       { headers: { Authorization: 'Bearer access-token' } },
       15_000,
     );
-    expect(result).toEqual({ ok: false, error: 'Spotify API request failed: request timed out' });
+    expect(result).toMatchObject({
+      ok: false,
+      needsAuth: false,
+      error: 'Spotify API request failed: request timed out',
+    });
+    expect(typeof result.failedAt).toBe('string');
+    expect(mocks.atomicWrite).toHaveBeenCalledWith(
+      expect.stringContaining('sync-state.json'),
+      expect.stringContaining('"cursorAfter": 12345'),
+    );
+    const saved = JSON.parse(mocks.atomicWrite.mock.calls.find((call) => call[0].endsWith('sync-state.json'))[1]);
+    expect(saved.cursorAfter).toBe(12345);
+    expect(saved.lastRunAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(saved.lastResult).toMatchObject({
+      ok: false,
+      needsAuth: false,
+      error: 'Spotify API request failed: request timed out',
+    });
     expect(log).toHaveBeenCalledWith(expect.stringContaining('request timed out'));
     log.mockRestore();
+  });
+
+  it('handles auth rejection with invalid_grant by persisting failure with needsAuth: true', async () => {
+    mocks.readSyncCursorState.mockResolvedValue({
+      cursorAfter: 555,
+      lastRunAt: '2026-02-01T00:00:00.000Z',
+    });
+    const authError = new Error('Spotify rejected the saved authorization — reconnect Spotify.');
+    authError.code = 'INVALID_GRANT';
+    authError.context = { isInvalidGrant: true };
+    mocks.getAccessToken.mockRejectedValue(authError);
+
+    const result = await runSync();
+
+    expect(result).toMatchObject({
+      ok: false,
+      needsAuth: true,
+      error: 'Spotify rejected the saved authorization — reconnect Spotify.',
+    });
+    expect(typeof result.failedAt).toBe('string');
+    const saved = JSON.parse(mocks.atomicWrite.mock.calls.find((call) => call[0].endsWith('sync-state.json'))[1]);
+    expect(saved.cursorAfter).toBe(555);
+    expect(saved.lastRunAt).toBe('2026-02-01T00:00:00.000Z');
+    expect(saved.lastResult.needsAuth).toBe(true);
+  });
+
+  it('handles auth timeout with needsAuth: false and underlying message', async () => {
+    mocks.readSyncCursorState.mockResolvedValue({
+      cursorAfter: 777,
+      lastRunAt: null,
+    });
+    mocks.getAccessToken.mockRejectedValue(new Error('ETIMEDOUT'));
+
+    const result = await runSync();
+
+    expect(result).toMatchObject({
+      ok: false,
+      needsAuth: false,
+      error: 'Spotify auth failed: ETIMEDOUT',
+    });
+    const saved = JSON.parse(mocks.atomicWrite.mock.calls.find((call) => call[0].endsWith('sync-state.json'))[1]);
+    expect(saved.cursorAfter).toBe(777);
+    expect(saved.lastResult.needsAuth).toBe(false);
+  });
+
+  it('persists non-2xx API failure to sync-state', async () => {
+    mocks.readSyncCursorState.mockResolvedValue({
+      cursorAfter: 888,
+      lastRunAt: null,
+    });
+    mocks.fetchWithTimeout.mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => 'Internal Server Error',
+    });
+
+    const result = await runSync();
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 500,
+      error: 'Spotify API returned 500',
+    });
+    const saved = JSON.parse(mocks.atomicWrite.mock.calls.find((call) => call[0].endsWith('sync-state.json'))[1]);
+    expect(saved.cursorAfter).toBe(888);
+    expect(saved.lastResult.status).toBe(500);
   });
 });

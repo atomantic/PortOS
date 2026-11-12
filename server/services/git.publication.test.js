@@ -49,6 +49,19 @@ async function checkoutState(dir) {
 }
 
 describe('Git service publication fencing', () => {
+  it('reports protected remote branches separately from their merge status, including a custom default', async () => {
+    const protectedBranches = ['main', 'master', 'dev', 'develop', 'release', 'gh-pages', 'trunk'];
+    await execGit(['push', 'origin', ...protectedBranches.map(name => `HEAD:refs/heads/${name}`), 'HEAD:refs/heads/feature/done'], fixture.repo);
+    await execGit(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk'], fixture.repo);
+
+    const result = await getRemoteBranches(fixture.repo);
+
+    expect(result.defaultBranch).toBe('trunk');
+    expect(result.branches.filter(branch => branch.isProtected).map(branch => branch.name).sort()).toEqual(protectedBranches.sort());
+    expect(result.branches.find(branch => branch.name === 'release')).toMatchObject({ merged: true, isDefault: false, isProtected: true });
+    expect(result.branches.find(branch => branch.name === 'feature/done')).toMatchObject({ merged: true, isDefault: false, isProtected: false });
+  });
+
   it('keeps genuine non-Git prep as a no-op while refusing missing or malformed repositories', async () => {
     const plain = join(fixture.scratch, 'plain');
     await mkdir(plain);

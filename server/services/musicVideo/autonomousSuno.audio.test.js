@@ -41,7 +41,7 @@ function completedExport(bytes) {
   };
   page.getByRole = (_role, { name }) => {
     const button = {
-      evaluate: async () => name === 'M4A',
+      getAttribute: async (attr) => attr === 'aria-pressed' ? String(name === 'M4A') : null,
       click: async () => { if (name instanceof RegExp) page.emit('download', download); },
     };
     return { ...button, first: () => button };

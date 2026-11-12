@@ -28,7 +28,7 @@ import ContinuationDetails from '../videoGen/ContinuationDetails';
 import MediaUsageList from './MediaUsageList';
 import MediaDeleteConfirm from './MediaDeleteConfirm';
 import HostedCopyRow from './HostedCopyRow';
-import { mediaAnnotationKey } from './mediaDetail';
+import { mediaAnnotationKey, mediaRecordRef } from './mediaDetail';
 import { useMediaUsages } from '../../hooks/useMediaUsages';
 import { isLowResVideo } from '../../lib/videoResolution.js';
 
@@ -1179,7 +1179,8 @@ function SettingsPane({
         {isVideo && item.id && item.previewUrl && (
           <SharingDownloadButton itemId={item.id} />
         )}
-        <AddToCollectionMenu item={item} size="md" />
+        {/* A collection holds gallery records; an item with no record (a Blender film still) has nothing to add. */}
+        {mediaRecordRef(item) && <AddToCollectionMenu item={item} size="md" />}
         <PinToMoodBoardMenu item={item} size="md" />
         <a
           href={item.downloadUrl}

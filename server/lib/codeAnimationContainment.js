@@ -36,9 +36,23 @@ export const codeAnimationExecutionToolsSchema = z.object({
     executable: z.string().trim().max(4096).nullable(),
     executionMode: z.enum(['contained', 'trusted-local']).default('contained'),
     engine: z.enum(['CYCLES', 'BLENDER_EEVEE_NEXT']).default('CYCLES'),
-    acknowledgeHostAccess: z.boolean().default(false),
-  }).strict().refine(value => value.executionMode !== 'trusted-local' || value.acknowledgeHostAccess,
-    'Trusted-local Blender requires explicit acknowledgement of host filesystem, network and process access.'),
+    // Retired: saving the mode is the operator's grant. Older clients and
+    // stored slices still carry the field, so it is accepted and dropped.
+    acknowledgeHostAccess: z.boolean().optional(),
+  }).strict().transform(({ acknowledgeHostAccess: _retired, ...blender }) => blender),
+}).strict();
+
+/**
+ * The Blender configuration whose explicit execution check last passed, kept
+ * beside the tools slice as `codeAnimationExecutionArmed`. After a restart the
+ * server re-runs the check itself only while the inspected configuration still
+ * equals this record; saving the tools clears it.
+ */
+export const codeAnimationExecutionArmedSchema = z.object({
+  executable: z.string().min(1).max(4096),
+  fingerprint: z.string().min(1).max(256),
+  executionMode: z.enum(['contained', 'trusted-local']),
+  engine: z.enum(['CYCLES', 'BLENDER_EEVEE_NEXT']),
 }).strict();
 
 /**

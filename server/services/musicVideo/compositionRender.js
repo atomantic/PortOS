@@ -25,9 +25,10 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
-import { buildTypographyDocument, LYRIC_FONT_FILE, overlayWindows } from './composition.js';
+import { buildTypographyDocument, LYRIC_FONT_FILE, TITLE_CARD_MONO_FONT_FILE, overlayWindows } from './composition.js';
 
-const LYRIC_FONT_SOURCE = fileURLToPath(new URL(`./documentTemplates/shared/fonts/${LYRIC_FONT_FILE}`, import.meta.url));
+const sharedFont = (file) => fileURLToPath(new URL(`./documentTemplates/shared/fonts/${file}`, import.meta.url));
+const LYRIC_FONT_SOURCE = sharedFont(LYRIC_FONT_FILE);
 
 export const COMPOSITION_SCRATCH_DIR = 'music-video-compositions';
 
@@ -234,6 +235,7 @@ export async function renderTypographyOverlays({ jobId, cues, style, width, heig
       ? async (dir) => {
         await writeFile(join(dir, 'index.html'), buildTypographyDocument({ cues, style, width, height, durationSec, fps }));
         if (cues.some((c) => c.card || c.titleCard)) await copyFile(LYRIC_FONT_SOURCE, join(dir, LYRIC_FONT_FILE));
+        if (cues.some((c) => c.titleCard?.font === 'mono')) await copyFile(sharedFont(TITLE_CARD_MONO_FONT_FILE), join(dir, TITLE_CARD_MONO_FONT_FILE));
       }
       : (dir) => stageLyricOverlay(dir, lyrics.project, { width, height, fps, durationSec }),
   }));

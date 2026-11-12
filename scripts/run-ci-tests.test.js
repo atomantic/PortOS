@@ -666,6 +666,20 @@ describe('ci.yml shard wiring', () => {
     expect(body.indexOf('npm ci --prefix client')).toBeLessThan(start);
   });
 
+  it('uploads every failed synthetic template comparison without including arbitrary diagnostics', () => {
+    const body = workflowJobs(WORKFLOW).browser;
+    const start = body.indexOf('- name: Retain synthetic template parity pixels and media state');
+    expect(start).toBeGreaterThan(0);
+    const step = body.slice(start, body.indexOf('- name:', start + 1));
+    expect(step).toContain('if: failure()');
+    expect(step).toContain('name: template-parity-diagnostics-${{ matrix.shard }}of${{ strategy.job-total }}');
+    for (const file of ['native.png', 'engine.png', 'parity.json']) {
+      expect(step).toContain('${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/template-parity/case-*/' + file);
+    }
+    expect(step).toContain('retention-days: 7');
+    expect(step).not.toContain('/**');
+  });
+
   it('deduplicates only Linux browser ownership and runs PR browser suites as smoke', () => {
     const jobs = workflowJobs(WORKFLOW);
     expect(jobs.server).toContain('PORTOS_CI_BROWSER_OWNER: unit');

@@ -1273,9 +1273,13 @@ Debian snapshot or an image digest merely to silence a scanner.
 
 The initial entries (#15662) were triaged at package level from the scanned
 image, not advisory by advisory; re-triage an entry when its package version
-changes. Two dispositions are used:
+changes. The [November 11 review](RUNTIME_ADVISORY_TRIAGE.md) records individual
+Kerberos/OpenSSL paths, source-range mismatches and upstream blockers for #15768.
+Two dispositions are used:
 
-- `not-reachable`: the package is not loaded by the long-running process (the
+- `not-reachable`: upstream explicitly excludes the installed version from the
+  advisory (record the source-range evidence), or the package is not loaded by
+  the long-running process (the
   postgres server, or `sclang`/`scsynth`) and is not run by the entrypoint,
   health probe or PortOS. For `pgvector` the container publishes only the
   loopback PostgreSQL port, so there is no shell, login or package-manager entry

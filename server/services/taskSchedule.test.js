@@ -3232,6 +3232,20 @@ describe('taskSchedule', () => {
         expect(record.parkSkipCauses).toBeUndefined()
       })
 
+      it.each(['branches-blocked', 'no-progress', 'drain-cap'])('names every retained branch and its reason when parking for %s', async reason => {
+        const remaining = [
+          { branch: 'fix/one', reason: 'review-task-missing', nextAction: 'Restore trusted task history.' },
+          { branch: 'fix/two', reason: 'actionable' },
+        ];
+        mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true } },
+          executions: { 'task:branch-reconcile': { perApp: { 'app-1': { branchReconcileOutcome: { status: 'running', remaining } } } } },
+        });
+        const record = await parkPerpetual('branch-reconcile', 'app-1', { reason });
+        expect(record.branchReconcileOutcome).toMatchObject({ status: 'incomplete', reason, remaining });
+        expect(emitLog.mock.calls.some(([, message]) => message.includes('retained fix/one: review-task-missing — Restore trusted task history.'))).toBe(true);
+        expect(emitLog.mock.calls.some(([, message]) => message.includes('retained fix/two: actionable'))).toBe(true);
+      });
+
       it('getPerpetualParkInfo reads back the park record (and null when not parked)', async () => {
         const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         mockSchedule({

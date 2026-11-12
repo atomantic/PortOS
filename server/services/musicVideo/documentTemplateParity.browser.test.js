@@ -1,13 +1,14 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { release, tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import express from 'express';
 import sharp from 'sharp';
 import { chromium } from 'playwright-core';
 import { startOwnedBrowserFixture } from '../../test/browserFixture.js';
 import { createOwnedFixtureSetup } from '../../test/ownedFixtureSetup.js';
+import { installTemplateParityDiagnostics } from '../../test/templateParityDiagnostics.js';
 import { browserSuiteCanRun, resolveTestChrome, resolveClientBundler } from '../../lib/browserSuiteGate.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
 import { narrativeFrameState } from '../../lib/musicVideoNarrativeEvents.js';
@@ -27,6 +28,7 @@ const base = (scene = still, extra = {}) => ({ id: 'native-parity-fixture', name
   audioAnalysis: { durationSec: 4, beats: [0.5, 1, 2, 3], downbeats: [1, 3], sections: [{ startSec: 0, endSec: 4, label: 'Verse' }] },
   composition: { mode: 'document', document: { directory: 'fixture' } }, ...extra });
 let dir, server, fixture, native, engine, current, engineData;
+let comparison = 0;
 const errors = [];
 const setup = createOwnedFixtureSetup({ cleanup: async () => {
   const results = await Promise.allSettled([fixture?.close(), server && new Promise((done, reject) => server.close(error => error ? reject(error) : done()))]);
@@ -37,6 +39,29 @@ const setup = createOwnedFixtureSetup({ cleanup: async () => {
 afterAll(() => setup.close());
 
 const dataFor = (project, media = new Map()) => buildDocumentData(project, { media, frame: DOCUMENT_FRAME_SIZES[documentAspect(project)], clock: documentRenderClock(4, 24), songDurationSec: 4 });
+
+async function assertParity({ actual, expected, metadata }) {
+  // The launcher deliberately removes DIAGNOSTICS_DIR from worker envs. Its
+  // per-run report path keeps these artifacts in the attempt the uploader owns.
+  const destination = process.env.PORTOS_CI_DIAGNOSTICS_PATH ? dirname(process.env.PORTOS_CI_DIAGNOSTICS_PATH) : process.env.PORTOS_CI_DIAGNOSTICS_DIR;
+  const a = await sharp(actual).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const b = await sharp(expected).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  let sum = 0, changed = 0;
+  const sameSize = JSON.stringify(a.info) === JSON.stringify(b.info);
+  if (sameSize) for (let i = 0; i < a.data.length; i++) { const delta = Math.abs(a.data[i] - b.data[i]); sum += delta; if (delta > 12) changed++; }
+  const diff = sameSize ? { mean: sum / a.data.length, changed: changed / a.data.length } : { dimensions: { native: a.info, engine: b.info } };
+  if ((!sameSize || diff.mean >= 0.3 || diff.changed >= 0.004) && destination) {
+    const parent = join(destination, 'template-parity');
+    await mkdir(parent, { recursive: true });
+    const output = await mkdtemp(join(parent, 'case-'));
+    await writeFile(join(output, 'native.png'), actual);
+    await writeFile(join(output, 'engine.png'), expected);
+    await writeFile(join(output, 'parity.json'), JSON.stringify({ ...metadata, diff }, null, 2));
+  }
+  expect(a.info).toEqual(b.info);
+  expect(diff.mean, `mean RGB error at ${metadata.t}s`).toBeLessThan(0.3);
+  expect(diff.changed, `RGB samples differing by >12 at ${metadata.t}s`).toBeLessThan(0.004);
+}
 
 describe.skipIf(!canRun)('native composition versus the shipped layered engine', () => {
   beforeAll(() => setup.run(async phase => {
@@ -82,13 +107,16 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
       fixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true, args: ['--force-color-profile=srgb'] } });
       native = await fixture.browser.newPage({ viewport: { width: 640, height: 700 } });
       engine = await fixture.browser.newPage({ viewport: { width: 640, height: 360 } });
-      for (const page of [native, engine]) page.on('pageerror', error => errors.push(error.message));
+      for (const page of [native, engine]) {
+        await page.addInitScript(installTemplateParityDiagnostics);
+        page.on('pageerror', error => errors.push(error.message));
+      }
       await native.goto(`http://127.0.0.1:${server.address().port}`);
       await native.waitForFunction(() => typeof window.show === 'function');
     });
   }), 30000);
 
-  async function compare(project, t, { words = false, reuse = false, clockJump = false, lyricsOff = false } = {}) {
+  async function compare(project, t, { words = false, reuse = false, clockJump = false, lyricsOff = false, beforeCapture } = {}) {
     // Media elements store microseconds; use a frame's centre so rounding a
     // fractional 24fps boundary cannot move the native clock back one frame.
     t = (Math.floor(t * 24 + 1e-6) + 0.5) / 24;
@@ -121,26 +149,22 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     }
     // A late image/video/font load repaints the native surface on its own event.
     await native.waitForFunction(() => [...document.querySelectorAll('figure img')].every(img => img.complete && img.naturalWidth));
+    await beforeCapture?.();
+    const nativeBefore = await native.evaluate(() => window.templateParityState());
     const actual = await native.locator('figure > div').first().screenshot();
+    const nativeAfter = await native.evaluate(() => window.templateParityState());
+    const engineBefore = await engine.evaluate(() => window.templateParityState());
     const expected = await engine.locator('#stage').screenshot();
-    const a = await sharp(actual).removeAlpha().raw().toBuffer({ resolveWithObject: true });
-    const b = await sharp(expected).removeAlpha().raw().toBuffer({ resolveWithObject: true });
-    expect(a.info).toEqual(b.info);
-    let sum = 0, changed = 0;
-    for (let i = 0; i < a.data.length; i++) { const delta = Math.abs(a.data[i] - b.data[i]); sum += delta; if (delta > 12) changed++; }
-    const diff = { mean: sum / a.data.length, changed: changed / a.data.length };
-    if (diff.mean >= 0.3 || diff.changed >= 0.004) {
-      const destination = process.env.PORTOS_CI_DIAGNOSTICS_DIR;
-      if (destination) {
-        const { mkdir } = await import('node:fs/promises');
-        await mkdir(destination, { recursive: true });
-        await writeFile(join(destination, 'native.png'), actual); await writeFile(join(destination, 'engine.png'), expected);
-        await writeFile(join(destination, 'parity.json'), JSON.stringify({ t, diff, native: await native.evaluate(() => ({ clock: document.querySelector('audio').currentTime, frame: document.querySelector('[data-testid="document-template-canvas"]').dataset.songFrame, font: document.fonts.check('900 40px "MV Stencil"') })) }));
-      }
-    }
-    expect(diff.mean, `mean RGB error at ${t}s`).toBeLessThan(0.3);
-    expect(diff.changed, `RGB samples differing by >12 at ${t}s`).toBeLessThan(0.004);
+    const engineAfter = await engine.evaluate(() => window.templateParityState());
+    const capture = { actual, expected, metadata: { case: ++comparison, test: expect.getState().currentTestName, t,
+      diffContext: { reuse, clockJump, words, lyricsOff },
+      scenes: project.scenes.map(({ sceneId, startSec, endSec, visualLayer, videoHistoryId }) => ({ sceneId, startSec, endSec, visualLayer, videoHistoryId })),
+      environment: { platform: process.platform, arch: process.arch, osRelease: release(), node: process.version,
+        browser: fixture.browser.version(), engine: 'Blink', headless: true },
+      native: { before: nativeBefore, after: nativeAfter }, engine: { before: engineBefore, after: engineAfter } } };
+    await assertParity(capture);
     expect(errors).toEqual([]);
+    return capture;
   }
 
   // Each case catches a named omission of the native player, through its rendered surface.
@@ -149,6 +173,53 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     for (const move of ['hold', 'push', 'pan']) await compare(base({ ...still, stillMove: move }), 1.25);
     await compare(base({ ...still, camera: { move: 'dutch-roll', speed: 'fast', onBeat: true } }), 1.25);
     await compare(base({ ...still, visualLayer: 'footage', videoHistoryId: 'clip' }), 1.25);
+  });
+  it('repaints paused footage when presentation follows the seeked paint', async () => {
+    // Pin the observed ordering without sleeps: seeked/readyState can precede
+    // the drawable frame. Release the real compositor callbacks only after the
+    // native canvas has painted that unavailable frame, with no new media event.
+    await native.evaluate(() => {
+      const drawImage = CanvasRenderingContext2D.prototype.drawImage;
+      const requestFrame = HTMLVideoElement.prototype.requestVideoFrameCallback;
+      const held = new Map();
+      window.latePresentation = { released: true, draws: 0, frames: 0 };
+      HTMLVideoElement.prototype.requestVideoFrameCallback = function (callback) {
+        return requestFrame.call(this, (now, metadata) => {
+          if (window.latePresentation.released) callback(now, metadata);
+          else { held.set(callback, () => callback(now, metadata)); window.latePresentation.frames++; }
+        });
+      };
+      CanvasRenderingContext2D.prototype.drawImage = function (source, ...args) {
+        if (source instanceof HTMLVideoElement && !window.latePresentation.released) {
+          if (this.canvas.dataset.testid === 'document-template-canvas') window.latePresentation.draws++;
+          return;
+        }
+        return drawImage.call(this, source, ...args);
+      };
+      window.releasePresentation = () => {
+        window.latePresentation.released = true;
+        for (const callback of held.values()) callback();
+        held.clear();
+      };
+      window.restorePresentation = () => {
+        window.releasePresentation();
+        CanvasRenderingContext2D.prototype.drawImage = drawImage;
+        HTMLVideoElement.prototype.requestVideoFrameCallback = requestFrame;
+      };
+    });
+    try {
+      const value = base({ ...still, visualLayer: 'footage', videoHistoryId: 'clip' });
+      await compare(value, 1.25);
+      await native.evaluate(() => { window.latePresentation.released = false; });
+      await compare(value, 2.25, {
+        reuse: true,
+        beforeCapture: async () => {
+          await native.waitForFunction(() => window.latePresentation.draws > 0 && window.latePresentation.frames > 0
+            && document.querySelector('video')?.dataset.pausedFrame === String(document.querySelector('video')?.currentTime));
+          await native.evaluate(() => window.releasePresentation());
+        },
+      });
+    } finally { await native.evaluate(() => window.restorePresentation()); }
   });
   it('matches the beat punch and the high-energy downbeat glitch under the finish', async () => {
     const value = base(); value.audioAnalysis.sections[0].label = 'Chorus';
@@ -271,5 +342,36 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     value.lyricCues = []; await compare(value, 1.25, { words: true });
     value.treatment = { brief: { aspectRatio: '9:16' } };
     await compare(value, 1.25, { words: true, reuse: true });
+  });
+  it('retains each failed pixel comparison with detached media and capture-time state', async () => {
+    const capture = await compare(base({ ...still, visualLayer: 'footage', videoHistoryId: 'clip' }), 1.25);
+    const destination = join(dir, 'diagnostics-proof');
+    // Exercise the real assertion-failure writer without depending on the
+    // intermittent renderer failure: invert only this captured expected image.
+    const expected = await sharp(capture.expected).negate().png().toBuffer();
+    vi.stubEnv('PORTOS_CI_DIAGNOSTICS_PATH', join(destination, 'run.json'));
+    vi.stubEnv('PORTOS_CI_DIAGNOSTICS_DIR', undefined);
+    try {
+      for (let i = 0; i < 2; i++) await expect(assertParity({ ...capture, expected })).rejects.toThrow('mean RGB error');
+    } finally { vi.unstubAllEnvs(); }
+    const { readdir } = await import('node:fs/promises');
+    const cases = await readdir(join(destination, 'template-parity'));
+    expect(cases).toHaveLength(2);
+    for (const name of cases) {
+      const output = join(destination, 'template-parity', name);
+      expect(await readFile(join(output, 'native.png'))).toEqual(capture.actual);
+      expect(await readFile(join(output, 'engine.png'))).toEqual(expected);
+      const evidence = JSON.parse(await readFile(join(output, 'parity.json'), 'utf8'));
+      expect(evidence.environment.browser).toBe(fixture.browser.version());
+      expect(evidence.diff.mean).toBeGreaterThan(0.3);
+      expect(evidence.native.before.clock.currentTime).toBeCloseTo(capture.metadata.t);
+      expect(evidence.native.after.videos.some(video => video.connected && video.readyState >= 2 && video.events.some(event => event.type === 'seeked'))).toBe(true);
+      expect(evidence.engine.after.videos.some(video => !video.connected && video.readyState >= 2 && video.events.some(event => event.type === 'seeked'))).toBe(true);
+      for (const surface of ['native', 'engine']) {
+        expect(evidence[surface].before.canvases.some(canvas => canvas.sources.some(source => source.tag === 'VIDEO'))).toBe(true);
+        expect(evidence[surface].after.at).toBeGreaterThanOrEqual(evidence[surface].before.at);
+        expect(evidence[surface].after.videos[0]).toHaveProperty('presented');
+      }
+    }
   });
 });

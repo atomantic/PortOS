@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Clapperboard, Play } from 'lucide-react';
 import { getMusicVideoPublishPlatforms } from '../../services/apiMusicVideo.js';
 import {
-  TITLE_CARD_FONT_FACES, TITLE_CARD_LIMITS, TITLE_CARD_MTV_COLORS, normalizeTitleCard, titleCardOutroWindow, titleCardPrefill,
+  TITLE_CARD_FONT_FACES, TITLE_CARD_LIMITS, TITLE_CARD_MTV_COLORS, normalizeTitleCard, titleCardOutroWindow, titleCardPrefill, titleCardSteadySupported,
 } from '../../../../server/lib/musicVideoTitleCard.js';
 
 const POSITIONS = [['lower-left', 'Bottom left'], ['lower-right', 'Bottom right'], ['upper-left', 'Top left'], ['upper-right', 'Top right'], ['lower-center', 'Bottom centre'], ['center', 'Centre']];
@@ -31,8 +31,12 @@ function addSwatchFaces() {
   }
 }
 const LOOKS = [['outline', 'Outlined, like the lyrics'], ['mtv', 'Classic MTV lower third']];
-// Render styles that draw the card: the composition document and a composed cut's typography layer.
-const DRAWN_BY = ['document', 'composed'];
+const SLIDES = [['none', 'Off'], ['left', 'From left'], ['right', 'From right']];
+// Render styles that draw the card: the composition document, a composed cut's typography layer,
+// and a Blender film, which lays it over its cuts, excerpts and final render.
+const DRAWN_BY = ['document', 'composed', 'blender'];
+// A Blender film has no live composite: its card is seen in an assembled cut.
+const WHERE = { blender: 'In cuts and the final render' };
 const inputCls = 'w-full rounded border border-port-border bg-port-bg px-2 py-1 text-sm min-h-[44px] pointer-fine:sm:min-h-0';
 const labelCls = 'mb-0.5 block text-xs text-port-text-muted';
 const clock = (sec) => {
@@ -50,9 +54,12 @@ function lyricDuringCard(project, card) {
 
 /**
  * The MTV-style opening title card (lib/musicVideoTitleCard.js): song title,
- * artist and year in a corner, fading in and out over the opener, outlined like
- * the lyrics or as a classic lower third. Drawn in the docked live preview, the
- * storyboard animatic and the final render (composed or document styles).
+ * artist and year in a corner, fading in (optionally sliding in from a side)
+ * and out over the opener, outlined like the lyrics or as a classic lower
+ * third. Drawn in the docked live preview, the storyboard animatic and the
+ * final render (composed or document styles), and over a Blender film's cuts,
+ * excerpts and final render. Keep steady draws it over the film look instead
+ * of under it; a composed cut cannot, so the control is not offered there.
  * Turning it on fills the song title, the artist named for DistroKid under
  * Where you post, this year and a window that ends before the first sung line.
  * Edits reach the preview at once (`onEditLocal`); leaving a field saves.
@@ -97,19 +104,22 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
   // Turning the end showing on times it from the song's length the first time.
   const setOutro = (outro) => commit(outro && card?.outroStartSec == null ? { outro, ...titleCardOutroWindow(card, songSec) } : { outro });
   const canOutro = card?.outro || card?.outroStartSec != null || !!titleCardOutroWindow(card, songSec);
+  // A card saved with one fade for both ends keeps its fade out while the fade in is edited.
+  const editFadeIn = (fadeSec) => edit(raw?.fadeOutSec == null ? { fadeSec, fadeOutSec: card.fadeOutSec } : { fadeSec });
+  const sliding = card?.slideIn !== 'none';
 
   return (
-    <section aria-label="Opening title card" className="space-y-2 rounded-lg border border-port-border bg-port-card p-2">
+    <section aria-label="Opening title card" className="@container space-y-2 rounded-lg border border-port-border bg-port-card p-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="inline-flex items-center gap-1.5 text-sm font-medium"><Clapperboard size={14} className="text-port-accent" aria-hidden="true" /> Opening title card</h3>
         <label htmlFor="mv-title-card-on" className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted pointer-fine:sm:min-h-0">
-          {on ? `Live in the preview · ${clock(card.startSec)}–${clock(card.endSec)}` : 'Off'}
+          {on ? `${WHERE[project.composition?.mode] || 'Live in the preview'} · ${clock(card.startSec)}–${clock(card.endSec)}` : 'Off'}
           <input id="mv-title-card-on" type="checkbox" checked={on} disabled={starting}
             onChange={(e) => (e.target.checked ? turnOn() : commit({ enabled: false }))} className="h-4 w-4" />
         </label>
       </div>
       {!drawn && on && (
-        <p className="text-xs text-port-text-muted" role="status">This project's render style does not draw the title card; the composed and composition-document styles do.</p>
+        <p className="text-xs text-port-text-muted" role="status">This project's render style does not draw the title card; the composed, composition-document and Blender film styles do.</p>
       )}
       {on && (
         <>
@@ -135,7 +145,7 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
                 onChange={(e) => edit({ extra: e.target.value })} onBlur={() => commit()} className={inputCls} />
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2 @min-[30rem]:grid-cols-4">
             <div>
               <label htmlFor="mv-title-card-start" className={labelCls}>In (s)</label>
               <input id="mv-title-card-start" type="number" min={0} max={TITLE_CARD_LIMITS.startMax} step={0.1} value={field('startSec')}
@@ -147,10 +157,37 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
                 onChange={(e) => edit({ endSec: toNumber(e.target.value) })} onBlur={() => commit()} className={inputCls} />
             </div>
             <div>
-              <label htmlFor="mv-title-card-fade" className={labelCls}>Fade (s)</label>
+              <label htmlFor="mv-title-card-fade" className={labelCls}>Fade in (s)</label>
               <input id="mv-title-card-fade" type="number" min={0} max={TITLE_CARD_LIMITS.fadeMax} step={0.1} value={field('fadeSec')}
-                onChange={(e) => edit({ fadeSec: toNumber(e.target.value) })} onBlur={() => commit()} className={inputCls} />
+                onChange={(e) => editFadeIn(toNumber(e.target.value))} onBlur={() => commit()} className={inputCls} />
             </div>
+            <div>
+              <label htmlFor="mv-title-card-fade-out" className={labelCls}>Fade out (s)</label>
+              <input id="mv-title-card-fade-out" type="number" min={0} max={TITLE_CARD_LIMITS.fadeMax} step={0.1} value={field('fadeOutSec')}
+                onChange={(e) => edit({ fadeOutSec: toNumber(e.target.value) })} onBlur={() => commit()} className={inputCls} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 items-end gap-2 @min-[30rem]:grid-cols-3">
+            <div className={sliding ? 'col-span-2 @min-[30rem]:col-span-1' : ''}>
+              <label htmlFor="mv-title-card-slide" className={labelCls}>Slide in</label>
+              <select id="mv-title-card-slide" value={card.slideIn} onChange={(e) => commit({ slideIn: e.target.value })} className={inputCls}>
+                {SLIDES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </div>
+            {sliding && (
+              <>
+                <div>
+                  <label htmlFor="mv-title-card-slide-sec" className={labelCls}>Slide time (s)</label>
+                  <input id="mv-title-card-slide-sec" type="number" min={TITLE_CARD_LIMITS.slideSecMin} max={TITLE_CARD_LIMITS.slideSecMax} step={0.1} value={field('slideSec')}
+                    onChange={(e) => edit({ slideSec: toNumber(e.target.value) })} onBlur={() => commit()} className={inputCls} />
+                </div>
+                <div>
+                  <label htmlFor="mv-title-card-slide-pct" className={labelCls}>Slide distance (% of frame width)</label>
+                  <input id="mv-title-card-slide-pct" type="number" min={TITLE_CARD_LIMITS.slidePctMin} max={TITLE_CARD_LIMITS.slidePctMax} step={1} value={field('slidePct')}
+                    onChange={(e) => edit({ slidePct: toNumber(e.target.value) })} onBlur={() => commit()} className={inputCls} />
+                </div>
+              </>
+            )}
           </div>
           <div className="space-y-2">
             <label htmlFor="mv-title-card-outro" className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted pointer-fine:sm:min-h-0">
@@ -182,10 +219,21 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
           </div>
           <div>
             <label htmlFor="mv-title-card-look" className={labelCls}>Look</label>
-            <select id="mv-title-card-look" value={card.style} onChange={(e) => commit({ style: e.target.value })} className={inputCls}>
+            {/* Each look brings its own Keep steady: a lower third is a broadcast graphic, outlined type reads like the lyrics. */}
+            <select id="mv-title-card-look" value={card.style} onChange={(e) => commit({ style: e.target.value, steady: e.target.value === 'mtv' })} className={inputCls}>
               {LOOKS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </div>
+          {titleCardSteadySupported(project) && (
+            <div>
+              <label htmlFor="mv-title-card-steady" className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted pointer-fine:sm:min-h-0">
+                <input id="mv-title-card-steady" type="checkbox" checked={card.steady} aria-describedby="mv-title-card-steady-hint"
+                  onChange={(e) => commit({ steady: e.target.checked })} className="h-4 w-4" />
+                Keep steady
+              </label>
+              <p id="mv-title-card-steady-hint" className="text-xs text-port-text-muted">Draws the card over the film look and shot effects, so weave, flicker and grain do not touch it.</p>
+            </div>
+          )}
           <div>
             <label htmlFor="mv-title-card-position" className={labelCls}>Position</label>
             <select id="mv-title-card-position" value={card.position} onChange={(e) => commit({ position: e.target.value })} className={inputCls}>

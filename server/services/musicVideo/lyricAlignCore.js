@@ -245,7 +245,7 @@ function glueContractions(words) {
       prev.endSec = Math.max(prev.endSec, endSec);
       continue;
     }
-    out.push({ text, startSec, endSec });
+    out.push({ text, startSec, endSec, ...(word._id ? { _id: word._id } : {}) });
   }
   return out;
 }
@@ -267,7 +267,7 @@ function recognizedTokens(words) {
     const tokens = lyricTokens(word.text);
     if (tokens.length === 0) continue;
     if (tokens.length === 1) {
-      out.push({ key: tokens[0].key, startSec: word.startSec, endSec: word.endSec });
+      out.push({ key: tokens[0].key, startSec: word.startSec, endSec: word.endSec, ...(word._id ? { _id: word._id } : {}) });
       continue;
     }
     const weights = tokens.map((token) => Math.max(1, token.key.length));
@@ -277,7 +277,7 @@ function recognizedTokens(words) {
     tokens.forEach((token, index) => {
       const dur = span * (weights[index] / total);
       const endSec = index === tokens.length - 1 ? word.endSec : cursor + dur;
-      out.push({ key: token.key, startSec: cursor, endSec });
+      out.push({ key: token.key, startSec: cursor, endSec, ...(word._id ? { _id: `${word._id}:${index}` } : {}) });
       cursor = endSec;
     });
   }
@@ -872,3 +872,145 @@ export {
   wavDurationSec,
   sliceWav,
 };
+
+/** DTW token transitions are word ends, in 10 ms units (not JSON offsets' ms). */
+export function parseWhisperDtwWords(data) {
+  const words = [];
+  let previousEnd = null;
+  for (const segment of data?.transcription || []) {
+    let current = null;
+    for (const token of segment.tokens || []) {
+      if (!token.text?.trim() || SPECIAL_TOKEN.test(token.text.trim())) continue;
+      if (!Number.isFinite(token.t_dtw) || token.t_dtw < 0) {
+        throw new ServerError('Whisper returned no DTW timestamps. Install a whisper.cpp build with DTW support.', { status: 503, code: 'LYRIC_VERIFY_DTW_UNAVAILABLE' });
+      }
+      const endSec = token.t_dtw / 100;
+      if (!current || /^\s/.test(token.text)) {
+        // A first word after a pause keeps its independently recognized onset;
+        // inside a phrase the preceding DTW transition is the word boundary.
+        const onset = Number.isFinite(token.offsets?.from) ? token.offsets.from / 1000 : null;
+        const startSec = previousEnd == null || (onset != null && onset - previousEnd > 0.3) ? onset : previousEnd;
+        current = { text: token.text.trim(), startSec, endSec };
+        words.push(current);
+      } else {
+        current.text += token.text.trim();
+        current.endSec = endSec;
+      }
+      previousEnd = endSec;
+    }
+  }
+  return dropNonLyricWords(words).filter(word => Number.isFinite(word.startSec) && word.endSec > word.startSec);
+}
+
+/** Compare independent recognition with the sheet, preserving repeated occurrences. */
+export function compareLyricPlacement(cues, recognized, { timeBound, usedOccurrences } = {}) {
+  const candidate = (recognized || []).filter(w => Number.isFinite(w.startSec) && Number.isFinite(w.endSec) && w.endSec > w.startSec
+    && (!timeBound || (w.endSec >= timeBound.startSec - 1e-6 && w.startSec <= timeBound.endSec + 1e-6))
+    && (!usedOccurrences || !w._id || !usedOccurrences.has(w._id)));
+  const tokens = cues.flatMap(cue => lyricTokens(cue.text));
+  const matches = dpAlignWords(tokens, candidate);
+  const misplacedCues = [], uncheckedCues = [], checkedCues = [];
+  let cursor = 0;
+  for (const cue of cues) {
+    const expected = lyricTokens(cue.text);
+    const heard = matches.slice(cursor, cursor + expected.length);
+    cursor += expected.length;
+
+    const isMatch = (expectedToken, word) => Boolean(
+      word
+      && wordRatio(expectedToken.key, word.key) >= 0.8
+      && Number.isFinite(word.startSec)
+      && word.endSec > word.startSec
+      && (!timeBound || (word.endSec >= timeBound.startSec - 1e-6 && word.startSec <= timeBound.endSec + 1e-6))
+      && (!usedOccurrences || !word._id || !usedOccurrences.has(word._id))
+    );
+
+    const matchedIndices = [];
+    for (let i = 0; i < expected.length; i++) {
+      if (isMatch(expected[i], heard[i])) matchedIndices.push(i);
+    }
+
+    const hasAllWords = expected.length > 0 && cue.words?.length === expected.length && matchedIndices.length === expected.length;
+    const hasAllButOne = expected.length >= 3 && cue.words?.length === expected.length && matchedIndices.length === expected.length - 1;
+
+    const validCueTiming = cue.words?.every(word => Number.isFinite(word?.startSec) && Number.isFinite(word?.endSec) && word.endSec > word.startSec);
+    if ((!hasAllWords && !hasAllButOne) || !validCueTiming) {
+      uncheckedCues.push({ cueId: cue.id, text: cue.text });
+      continue;
+    }
+
+    const matchedOffsets = matchedIndices.map(i => heard[i].startSec - cue.words[i].startSec).sort((a, b) => a - b);
+
+    if (hasAllButOne) {
+      const spread = matchedOffsets.at(-1) - matchedOffsets[0];
+      if (spread > 0.15 + 1e-9) {
+        uncheckedCues.push({ cueId: cue.id, text: cue.text });
+        continue;
+      }
+    }
+
+    const middle = Math.floor(matchedOffsets.length / 2);
+    const offsetSec = matchedOffsets.length % 2 ? matchedOffsets[middle] : (matchedOffsets[middle - 1] + matchedOffsets[middle]) / 2;
+    const largestOffsetSec = matchedOffsets.reduce((largest, offset) => Math.abs(offset) > Math.abs(largest) ? offset : largest, 0);
+    const isMisplaced = Math.abs(largestOffsetSec) > 0.3 + 1e-9;
+    const reportedOffsetSec = round3(isMisplaced ? largestOffsetSec : offsetSec);
+
+    const matchedWordIds = matchedIndices.map(i => heard[i]._id).filter(Boolean);
+
+    const words = expected.map((tok, index) => {
+      const word = heard[index];
+      if (isMatch(tok, word)) {
+        return { w: tok.w, startSec: round3(word.startSec), endSec: round3(word.endSec), conf: 'matched' };
+      }
+      const orig = cue.words[index];
+      const dur = Number.isFinite(orig?.endSec) && Number.isFinite(orig?.startSec) && orig.endSec > orig.startSec
+        ? orig.endSec - orig.startSec : 0.2;
+      const origStart = Number.isFinite(orig?.startSec) ? orig.startSec : (index > 0 ? heard[index - 1]?.endSec ?? 0 : 0);
+      const startSec = round3(origStart + offsetSec);
+      const endSec = round3(startSec + dur);
+      return { w: tok.w, startSec, endSec, conf: 'interpolated' };
+    });
+
+    const checkedEntry = {
+      cueId: cue.id,
+      text: cue.text,
+      offsetSec: reportedOffsetSec,
+      matchedCount: matchedIndices.length,
+      expectedCount: expected.length,
+      complete: hasAllWords,
+      isMisplaced,
+      matchedWordIds,
+      words,
+    };
+    checkedCues.push(checkedEntry);
+
+    if (isMisplaced) {
+      misplacedCues.push({ cueId: cue.id, text: cue.text, offsetSec: reportedOffsetSec, words });
+    }
+  }
+  return { misplacedCues, uncheckedCues, checkedCues };
+}
+
+/** Fill held-note tails only within a line and only across continuously voiced audio. */
+export function extendVoicedWordEnds(cues, pcm, sampleRate = LYRIC_ALIGN_SAMPLE_RATE) {
+  const hop = Math.max(1, Math.round(sampleRate * 0.01));
+  const voiced = (from, to) => {
+    const start = Math.floor(from * sampleRate), end = Math.ceil(to * sampleRate);
+    if (start < 0 || end > pcm.length || end <= start) return false;
+    // Short consonant closures are normal; a >= 50 ms quiet gap is not a held note.
+    let silent = 0;
+    for (let i = start; i < end; i += hop) {
+      const until = Math.min(end, i + hop);
+      let energy = 0;
+      for (let j = i; j < until; j++) energy += pcm[j] ** 2;
+      silent = Math.sqrt(energy / (until - i)) < SILENT_WORD_RMS ? silent + until - i : 0;
+      if (silent >= sampleRate * 0.05) return false;
+    }
+    return true;
+  };
+  return cues.map(cue => ({ ...cue, ...(cue.words ? { words: cue.words.map((word, i) => {
+    const next = cue.words[i + 1];
+    return next && next.startSec > word.endSec && voiced(word.endSec, next.startSec)
+      ? { ...word, endSec: next.startSec } : word;
+  }) } : {}) }));
+}

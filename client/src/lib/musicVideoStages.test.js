@@ -199,6 +199,31 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveStages(withMode({ mode: 'document' })).current).toBe('produce');
   });
 
+  it('holds Shots open for a Blender film until every shot has a current final render', () => {
+    const film = { productionReadiness: APPROVED, id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, composition: { mode: 'blender' }, scenes: [scene({ referenceImageId: null, videoHistoryId: null })] };
+    // The shot renders are on the server's disk: a record without its count is not done, and needs no footage.
+    expect(deriveStages(film).current).toBe('produce');
+    expect(stageChecklist('produce', film, APPROVED).map((i) => [i.id, i.done])).toEqual([['approve-storyboard', true], ['composition', false]]);
+    expect(stageChecklist('produce', film, APPROVED).at(-1)).toMatchObject({ label: 'Final render for every Blender shot', action: { label: 'Open Blender film', anchor: 'mv-blender-film' } });
+    expect(deriveNextAction(film)).toMatchObject({ id: 'goto-compose', stage: 'produce', label: 'Render the Blender shots' });
+
+    // The server attaches the count to every project read (`blenderShots`).
+    const partial = { ...film, blenderShots: { total: 80, finalReady: 79, ready: false } };
+    expect(deriveStages(partial).current).toBe('produce');
+    expect(stageChecklist('produce', partial, APPROVED).at(-1)).toMatchObject({ label: 'Final render for every Blender shot (79 of 80)', done: false });
+    expect(stepNotes(partial).produce).toBe('To do: Final render for every Blender shot (79 of 80)');
+    expect(stageChecklist('produce', { ...film, blenderShots: { total: 0, finalReady: 0, ready: false } }, APPROVED).at(-1)).toMatchObject({ done: false, detail: 'Sync the shots from the film scripts first.' });
+    const ready = { ...film, blenderShots: { total: 80, finalReady: 80, ready: true } };
+    expect(deriveStages(ready).current).toBe('review');
+    expect(deriveNextAction(ready)).toMatchObject({ id: 'render-final' });
+    expect(stepNotes(ready).produce).toBe('80 of 80 finals done');
+
+    // The server's count is the only reading: a final video rendered earlier does not hide shots
+    // that went out of date since, nor stand in for a count the record does not carry.
+    expect(deriveStages({ ...partial, renderHistoryId: 'rh-1' }).stages.find((s) => s.id === 'produce').state).not.toBe('done');
+    expect(deriveStages({ ...film, renderHistoryId: 'rh-1' }).stages.find((s) => s.id === 'produce').state).not.toBe('done');
+  });
+
   it('treats an approved board with no scenes as missing footage, not vacuously done', () => {
     const empty = { productionReadiness: APPROVED, id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [] };
     expect(deriveStages(empty).current).toBe('produce');
@@ -360,6 +385,11 @@ describe('boardJobEstimate', () => {
     expect(boardJobEstimate({ scenes: [scene()] })).toMatchObject({ jobs: 0, suggestedMaxGenerations: 1 });
   });
 
+  it('does not budget frame or clip generations for mirrored Blender shots (#15785)', () => {
+    const scenes = [scene({ visualLayer: 'code', referenceImageId: null, videoHistoryId: null })];
+    expect(boardJobEstimate({ scenes, composition: { mode: 'blender' } })).toMatchObject({ jobs: 0, unpriced: 0, knownUsd: 0 });
+  });
+
   it('counts no generation for card or code shots in a layered composition (#10297)', () => {
     const scenes = [
       scene({ sceneId: 'a', visualLayer: 'code', referenceImageId: null, videoHistoryId: null }),
@@ -425,6 +455,15 @@ describe('listPreviewSources', () => {
     expect(documentMissing[0]).toMatchObject({ id: 'document', disabled: true, reason: expect.stringMatching(/Attach a composition document/) });
     expect(listPreviewSources({ composition: { mode: 'code' } })[0].reason).toMatch(/code/);
     expect(listPreviewSources({ composition: { mode: 'eidoverse' } })[0].reason).toMatch(/Eidoverse/);
+    // A Blender film plays its shots' renders live once it has synced shots; before that the row says what it waits for.
+    const film = { composition: { mode: 'blender' }, trackId: 't1', scenes: [scene()] };
+    expect(listPreviewSources(film)[0]).toMatchObject({ id: 'composite', disabled: true, reason: expect.stringMatching(/Sync shots from scripts/) });
+    expect(listPreviewSources({ ...film, blenderShots: { total: 0, finalReady: 0, ready: false } })[0]).toMatchObject({ id: 'composite', disabled: true });
+    const synced = listPreviewSources({ ...film, blenderShots: { total: 3, finalReady: 0, ready: false } }, { leadWith: 'storyboard' });
+    expect(synced[0]).toEqual({ id: 'composite', kind: 'composite', label: 'Film (live)' });
+    expect(synced.map((source) => source.id)).toEqual(['composite', 'animatic']);
+    expect(describePreviewSourceChange(synced, listPreviewSources({ ...film, composition: { mode: 'composed' } })))
+      .toBe('Preview drops Film (live) from the Blender shot renders and adds Composition (live) from the selected takes.');
     const fromDocument = listPreviewSources({ composition: { mode: 'document', document: { directory: 'd' } }, trackId: 't1', scenes: [scene()] });
     const toComposed = listPreviewSources({ ...composed });
     expect(describePreviewSourceChange(fromDocument, toComposed)).toBe('Preview drops Composition (live) from the composition document and adds Composition (live) from the selected takes.');
@@ -679,7 +718,7 @@ describe('stageChecklist', () => {
 
   it('gives every open checklist item an action so none is a dead end', () => {
     const stages = ['setup', 'cast-sets', 'board', 'produce', 'compose', 'review', 'publish'];
-    const modes = [undefined, 'composed', 'document', 'eidoverse', 'code'];
+    const modes = [undefined, 'composed', 'document', 'eidoverse', 'code', 'blender'];
     for (const mode of modes) {
       const project = castProject({ composition: mode ? { mode } : undefined, lyricCues: [] });
       for (const stage of stages) {

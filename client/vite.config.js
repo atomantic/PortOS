@@ -18,6 +18,38 @@ const ANALYZE_BUNDLE = process.env.ANALYZE === 'true';
 const CONFIG_DIR = import.meta.dirname;
 const BUILD_OUT_DIR = process.env.PORTOS_CLIENT_BUILD_OUT_DIR || resolve(CONFIG_DIR, 'dist');
 
+function primaryCheckoutDir(configDir) {
+  try {
+    const paths = execFileSync('git', ['rev-parse', '--git-dir', '--git-common-dir'], {
+      cwd: configDir,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5000,
+    }).trim().split('\n');
+    const [gitDir, gitCommonDir] = paths;
+    if (!gitDir || !gitCommonDir) return null;
+    const resolvedGitDir = resolve(configDir, gitDir);
+    const resolvedCommonDir = resolve(configDir, gitCommonDir);
+    if (resolve(resolvedGitDir) === resolve(resolvedCommonDir)) return null;
+    return resolve(resolvedCommonDir, '..');
+  } catch {
+    return null;
+  }
+}
+
+export function resolveApiScheme({ override, configDir, exists = existsSync, getPrimaryDir = primaryCheckoutDir }) {
+  if (override === 'http' || override === 'https') return override;
+
+  const certPath = resolve(configDir, '..', 'data', 'certs', 'cert.pem');
+  if (exists(certPath)) return 'https';
+
+  const primaryDir = getPrimaryDir(configDir);
+  if (primaryDir && resolve(primaryDir) !== resolve(configDir, '..') && exists(resolve(primaryDir, 'data', 'certs', 'cert.pem'))) {
+    return 'https';
+  }
+  return 'http';
+}
+
 const rootPkg = JSON.parse(readFileSync(resolve(CONFIG_DIR, '../package.json'), 'utf-8'));
 
 // Which commit this BUNDLE was built from (#4694). package.json's version cannot
@@ -88,13 +120,10 @@ function buildStamp() {
   };
 }
 
-// Dev proxy target: probe for the self-signed/LE cert under data/certs/. If the
-// server is running HTTPS, the dev proxy must target HTTPS too (or requests
-// through Vite return "socket hang up"). `secure: false` accepts the cert
-// whether it's the trusted LE one or the self-signed fallback.
-const CERT_PATH = resolve(CONFIG_DIR, '..', 'data', 'certs', 'cert.pem');
-const API_SCHEME = existsSync(CERT_PATH) ? 'https' : 'http';
-
+// Dev proxy target: VITE_API_SCHEME can explicitly choose http or https. If
+// unset, probe data/certs/cert.pem here and then in the primary checkout when
+// this is a linked worktree. The server's scheme must match or proxied requests
+// return "socket hang up". `secure: false` accepts LE and self-signed certs.
 // The API sees Vite's loopback connection, not the browser's. Replace
 // caller-supplied provenance, including duplicate headers; unknown socket
 // peers must never become an implicit local caller. `proxyReqWs` covers a
@@ -174,6 +203,7 @@ export default defineConfig(({ command, mode }) => {
 
   const env = loadEnv(mode, process.cwd(), 'VITE_');
   const API_HOST = env.VITE_API_HOST || 'localhost';
+  const API_SCHEME = resolveApiScheme({ override: env.VITE_API_SCHEME, configDir: CONFIG_DIR });
   const API_TARGET = `${API_SCHEME}://${API_HOST}:5555`;
 
   return {

@@ -15,18 +15,30 @@ import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
  * Shots: the scene board, where each shot's still and clip are made, the shot timing tools (folded),
  * the footage tools for making
  * many at once, then the composition over them. A render style that draws its
- * own picture (code, document, Eidoverse) keeps the footage tools folded, since
+ * own picture (code, document, Eidoverse, Blender film) keeps the footage tools folded, since
  * footage is optional there. The approvals sit at the bottom of the page (the
  * storyboard, and the animated proof only while a production run's pilot or
  * open feedback needs it); the autopilot and production runs live in Project
  * settings › Autopilot.
+ *
+ * A Blender film is made in its own panel, so the composition leads the step
+ * there, under the live preview of the film, and the scene board (its shots
+ * mirrored from the film scripts) follows.
  */
 export default function ProduceStage({ board }) {
   const { project, locked, videoSettings, sceneMedia } = board;
-  const footageOptional = FOOTAGE_OPTIONAL_MODES.has(project.composition?.mode || 'concat');
+  const mode = project.composition?.mode || 'concat';
+  const footageOptional = FOOTAGE_OPTIONAL_MODES.has(mode);
   const hasScenes = (project.scenes || []).length > 0;
+  const composition = (
+    <section id="mv-composition" aria-label="Composition" className="min-w-0 space-y-2">
+      <h4 className="text-sm font-medium">Composition</h4>
+      <CompositionPanel board={board} />
+    </section>
+  );
   return (
     <div className="min-w-0 space-y-3">
+      {mode === 'blender' && composition}
       {hasScenes && <ShotSheetPanel board={board} />}
       {hasScenes && <RouteMapsPanel board={board} />}
       <BoardStage board={board} />
@@ -51,10 +63,7 @@ export default function ProduceStage({ board }) {
             {hasScenes && <OvernightRendersPanel project={project} models={videoSettings.models || []} />}
           </StageSection>
       </fieldset>
-      <section id="mv-composition" aria-label="Composition" className="min-w-0 space-y-2">
-        <h4 className="text-sm font-medium">Composition</h4>
-        <CompositionPanel board={board} />
-      </section>
+      {mode !== 'blender' && composition}
     </div>
   );
 }

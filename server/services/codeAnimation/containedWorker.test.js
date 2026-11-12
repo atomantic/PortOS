@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { readdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -112,6 +113,42 @@ worker.on('error', () => process.exit(1));
 
 
 describe.skipIf(!['darwin', 'linux'].includes(process.platform))('explicit trusted-local worker supervision', () => {
+  it('hands each output line to its callback while the worker is still running, and survives a throwing callback', async () => {
+    const root = await workspaceRoot();
+    const lines = [];
+    // The worker only finishes once the callback for its first line has answered
+    // it through the workspace: a callback that waited for exit would hang here.
+    const result = await runTrustedLocalWorker({
+      tool: node(), workspaceRoot: root, entrypoint: 'main.cjs', limits: { wallSeconds: 15 },
+      files: [{ path: 'main.cjs', content: `
+const fs = require('fs');
+const answered = process.env.PORTOS_WORKER_OUTPUT + '/answered';
+process.stdout.write('first\\npart');
+const wait = setInterval(() => {
+  if (!fs.existsSync(answered)) return;
+  clearInterval(wait);
+  console.error('warned');
+  console.error('warned again');
+  console.error('warned last');
+  process.stdout.write('ial line\\r\\nlast');
+}, 20);
+` }],
+      onStdoutLine: (line) => {
+        lines.push(line);
+        if (line === 'first') writeFileSync(join(root, readdirSync(root)[0], 'output', 'answered'), 'yes');
+      },
+      onStderrLine: (() => {
+        const errors = [null, undefined, new Error('a caller bug')];
+        return () => { throw errors.shift(); };
+      })(),
+    });
+    expect(result).toMatchObject({ status: 'completed', processGroupClear: true });
+    // Split on line ends across chunks, CR dropped, and the unterminated tail delivered at exit.
+    expect(lines).toEqual(['first', 'partial line', 'last']);
+    expect(result.stdout).toContain('last');
+    expect(result.stderr).toContain('warned');
+  }, 20000);
+
   it('scrubs credentials and kills the owned parent and child group on cancel', async () => {
     vi.stubEnv('PORTOS_API_TOKEN', 'synthetic-worker-token');
     const root = await workspaceRoot();

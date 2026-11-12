@@ -149,7 +149,7 @@ export function GenerationActions({ project, videoSettings, sceneMedia, onEditSe
   // needs neither frame nor clip, so the counts cover the scenes that use them.
   const mode = project.composition?.mode || 'concat';
   const layered = isLayeredComposition(project);
-  const codeMode = mode === 'code' || mode === 'eidoverse';
+  const codeMode = mode === 'code' || mode === 'eidoverse' || mode === 'blender';
   const frameScenes = scenes.filter((scene) => !isSelfDrawnLayer(sceneVisualLayer(scene, { layered })));
   const footageScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) === 'footage');
   const referenceFrameCount = frameScenes.filter((scene) => scene.referenceImageId).length;
@@ -233,7 +233,7 @@ export function GenerationActions({ project, videoSettings, sceneMedia, onEditSe
   );
 }
 
-/** Footage / composed / code-rendered / composition document. */
+/** Footage / composed / code-rendered / composition document / Eidoverse / Blender film. */
 export function RenderStyleSelect({ project, onRenderStyle }) {
   return (
     <div>
@@ -262,6 +262,14 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
   const eidoverseBlocked = !eidoverseMode ? '' : noAudioOf(project) ? 'Link a track first'
     : !(project.audioAnalysis?.durationSec > 0) ? 'Analyze the master song first'
       : !project.composition?.eidoverseScene?.inlineScript ? 'Save an Eidoverse scene in Shots first' : '';
+  // A Blender film is stitched from its shots' final renders. How many are current is the server's
+  // reading (`project.blenderShots`); on a record that carries none the server's own check decides.
+  const blenderMode = mode === 'blender';
+  const film = blenderMode ? project.blenderShots : null;
+  const blenderBlocked = !blenderMode ? '' : noAudioOf(project) ? 'Link a track first'
+    : !(project.audioAnalysis?.durationSec > 0) ? 'Analyze the master song first'
+      : film && !film.total ? 'Sync the shots from the film scripts in Blender film first'
+        : film && !film.ready ? `Render every shot at final quality in Blender film first (${formatCount(film.finalReady)} of ${formatCount(film.total)} ready)` : '';
   const readySceneCount = scenes.filter((scene) => sceneRenderReady(scene, { layered, scenes })).length;
   const noAudio = noAudioOf(project);
   const codeDuration = Math.max(
@@ -282,6 +290,8 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
     blockerReason = 'Approve the current visual guide and timed storyboard first';
   } else if (eidoverseMode && eidoverseBlocked) {
     blockerReason = eidoverseBlocked;
+  } else if (blenderMode && blenderBlocked) {
+    blockerReason = blenderBlocked;
   } else if (documentMode && documentBlocked) {
     blockerReason = documentBlocked;
   } else if (codeMode && !codeReady) {
@@ -305,7 +315,7 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
     );
   }
 
-  const isDisabled = !readiness?.readyForProduction || renderJob.active || (eidoverseMode ? !!eidoverseBlocked : documentMode ? !!documentBlocked : codeMode ? !codeReady : (sceneCount === 0 || readySceneCount !== sceneCount));
+  const isDisabled = !readiness?.readyForProduction || renderJob.active || (eidoverseMode ? !!eidoverseBlocked : blenderMode ? !!blenderBlocked : documentMode ? !!documentBlocked : codeMode ? !codeReady : (sceneCount === 0 || readySceneCount !== sceneCount));
 
   return (
     <div className="space-y-1">

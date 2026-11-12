@@ -905,6 +905,14 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     // child that dies inside that window would otherwise emit 'close' with no
     // listener, leaving the job running and the GPU lane held forever (#11761).
     takeEarlyExit = bufferChildExit(proc, { bufferOutput: true });
+    // Hold off idle/system sleep for the child's lifetime: a laptop that idles
+    // to sleep mid-render (or mid first-run model download) wakes to an idle
+    // watchdog kill. `-is` without `-d` lets the display sleep, as in video and
+    // LoRA training — a forced-awake display contends with Metal. `-w` releases
+    // the assertion when the child exits, including after a server crash.
+    if (process.platform === 'darwin' && proc.pid) {
+      spawn('caffeinate', ['-is', '-w', String(proc.pid)], { stdio: 'ignore' }).on('error', () => {});
+    }
     activeProcess = proc;
     preparing = null;
     await heavyClaim.handoffTo?.(proc.pid);

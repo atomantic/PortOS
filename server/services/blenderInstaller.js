@@ -193,7 +193,6 @@ export async function startBlenderInstall({ io, acknowledgeBusy = false, deps = 
       const before = (await execution.getCodeAnimationExecution()).tools.blender;
       const select = (path) => execution.setCodeAnimationExecutionTools({ blender: {
         executable: path, executionMode: before.executionMode, engine: before.engine,
-        acknowledgeHostAccess: before.executionMode === 'trusted-local',
       } });
       await select(executable);
       let failure = null;

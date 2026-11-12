@@ -333,7 +333,7 @@ export default function BoardStage({ board }) {
               onMoveStart={board.onMoveSceneStart}
               onMoveEnd={board.onMoveSceneEnd}
               nextEndSec={scenes[idx + 1]?.endSec ?? null}
-              onRepairPerformance={['code', 'document'].includes(project.composition?.mode) ? null : board.onRepairPerformance}
+              onRepairPerformance={['code', 'document', 'blender'].includes(project.composition?.mode) ? null : board.onRepairPerformance}
               repairBusy={board.repairBusy || videoSettings.saving}
               onEditLocal={board.editSceneLocal}
               onSave={board.saveScene}
@@ -365,7 +365,9 @@ export default function BoardStage({ board }) {
               shotNumbers={numbers}
               layered={layered}
               documentComposition={project.composition?.mode === 'document'}
-              manifestOwnsShots={project.composition?.mode === 'document' && project.productionReview?.draft?.storyboardSource === 'document'}
+              // A Blender film's shots are mirrored from its scripts by the sync, so their order is the film's.
+              manifestOwnsShots={project.composition?.mode === 'blender' || (project.composition?.mode === 'document' && project.productionReview?.draft?.storyboardSource === 'document')}
+              shotOrderOwner={project.composition?.mode === 'blender' ? 'the Blender film scripts' : 'the composition document'}
             />
           ))}
         </div>

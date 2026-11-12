@@ -325,10 +325,10 @@ venv_exists() { [[ -x "$1/bin/python3" || -x "$1/Scripts/python.exe" ]]; }
 # execute or upgrade a user-wide PATH copy. This stays lazy for installs that
 # only need pip (and for the Python-free mere.run lane).
 portos_uv() {
-  local tool_dir="${HOME}/.portos/tools/uv-0.13.6" bin banner candidate bootstrap_python=""
+  local tool_dir="${HOME}/.portos/tools/uv-0.13.7" bin banner candidate bootstrap_python=""
   if is_windows; then bin="$tool_dir/Scripts/uv.exe"; else bin="$tool_dir/bin/uv"; fi
   banner="$("$bin" --version 2>/dev/null || true)"
-  if [[ ! "$banner" =~ ^uv\ 0\.13\.6($|[[:space:]]) ]]; then
+  if [[ ! "$banner" =~ ^uv\ 0\.13\.7($|[[:space:]]) ]]; then
     # A runtime may need recovery precisely because PYTHON_BIN is an old or
     # minimal system Python. Select a complete interpreter for this tool only;
     # runtime interpreter selection stays with its lane below.
@@ -342,12 +342,12 @@ portos_uv() {
       echo "❌ PortOS-private uv needs Python 3.8+ with venv and ensurepip. Install Python with venv support or set PYTHON_BIN to a complete Python installation, then retry Repair." >&2
       return 1
     fi
-    echo "📦 Bootstrapping PortOS-private uv 0.13.6..." >&2
+    echo "📦 Bootstrapping PortOS-private uv 0.13.7..." >&2
     "$bootstrap_python" -m venv --clear "$tool_dir" >&2 || return
     "$(venv_python "$tool_dir")" -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary :all: -r "$SCRIPT_DIR/requirements-uv-bootstrap.lock.txt" >&2 || return
     banner="$("$bin" --version 2>/dev/null || true)"
-    if [[ ! "$banner" =~ ^uv\ 0\.13\.6($|[[:space:]]) ]]; then
-      echo "❌ PortOS-private uv did not report the locked version 0.13.6. Retry Repair." >&2
+    if [[ ! "$banner" =~ ^uv\ 0\.13\.7($|[[:space:]]) ]]; then
+      echo "❌ PortOS-private uv did not report the locked version 0.13.7. Retry Repair." >&2
       exit 1
     fi
   fi
@@ -935,7 +935,7 @@ if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
     portos_uv venv --python 3.11 "${MINIMAX_H3_DIR}/.venv"
   fi
   echo "📦 Syncing pinned MiniMax H3 MLX packages..."
-  portos_uv pip sync --require-hashes --python "$MINIMAX_H3_PY" "$MINIMAX_H3_LOCK"
+  portos_uv pip sync --require-hashes --only-binary :all: --python "$MINIMAX_H3_PY" "$MINIMAX_H3_LOCK"
   pin_venv_arm64 "${MINIMAX_H3_DIR}/.venv"
   # --verify-seams is Install/Repair-only strictness: it also asserts the encoder
   # seams generate_minimax_h3.py patches, which the readiness probe deliberately
@@ -1324,14 +1324,19 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
       git clone --progress https://github.com/ace-step/ACE-Step.git "${ACESTEP_DIR}"
     fi
     git_checkout_pin "${ACESTEP_DIR}" "${ACESTEP_PIN}"
-    "$ACESTEP_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-acestep-mlx.lock.txt"
-    "$ACESTEP_PY" -m pip install --no-deps --no-build-isolation "${ACESTEP_DIR}"
+    # docopt/unidic-lite are source-only; mojimoji also builds on newer Python.
+    # Bootstrap their tools from a hash lock, then disable build resolution.
+    portos_uv pip install --require-hashes --no-deps --only-binary :all: --python "$ACESTEP_PY" -r "$SCRIPT_DIR/requirements-acestep-mlx-build.lock.txt"
+    portos_uv pip sync --require-hashes --no-build-isolation --python "$ACESTEP_PY" "$SCRIPT_DIR/requirements-acestep-mlx.lock.txt"
+    portos_uv pip install --no-deps --no-build-isolation --python "$ACESTEP_PY" "${ACESTEP_DIR}"
   else
     # Direct pins: scripts/requirements-acestep-cuda.txt. docopt and unidic-lite
     # publish only (hashed) source distributions, so exactly those two may build.
     # The acestep package is installed from the ACESTEP_PIN checkout with
     # --no-deps, like Apple Silicon: a git SHA cannot satisfy --require-hashes.
-    sync_cuda_lock_venv ACE-Step "$ACESTEP_VENV" requirements-acestep-cuda --no-binary docopt --no-binary unidic-lite
+    # The shared build lock is universal despite its historical mlx filename.
+    # Hash-check isolated build dependencies as well as the source archives.
+    sync_cuda_lock_venv ACE-Step "$ACESTEP_VENV" requirements-acestep-cuda --no-binary docopt --no-binary unidic-lite --preview-features build-dependency-hashes --require-build-hashes --build-constraints "$SCRIPT_DIR/requirements-acestep-mlx-build.lock.txt"
     ACESTEP_PY="$(venv_python "$ACESTEP_VENV")"
     if [[ ! -d "${ACESTEP_DIR}/.git" ]]; then
       echo "📦 Cloning ace-step/ACE-Step..."
@@ -1453,16 +1458,25 @@ if [[ "$INSTALL_MINIMAX_MUSIC3_MLX" == "1" ]]; then
     mkdir -p "${HOME}/.portos"
     reset_universal_venv "$MINIMAX_MUSIC3_MLX_VENV" "$PYTHON_BIN"
     if ! venv_exists "$MINIMAX_MUSIC3_MLX_VENV"; then
+      # Only a fresh/rebuilt venv uses the selected base interpreter.
+      if ! "$PYTHON_BIN" -c "import sys; sys.exit(0 if sys.version_info[:2] >= (3, 12) else 1)"; then
+        echo "❌ MiniMax Music 3 MLX requires Python 3.12+. Re-run with PYTHON_BIN pointing at a supported interpreter." >&2
+        exit 1
+      fi
       echo "📦 Creating MiniMax Music 3 MLX venv at ${MINIMAX_MUSIC3_MLX_VENV}..."
       "$PYTHON_BIN" -m venv "$MINIMAX_MUSIC3_MLX_VENV"
     fi
     MINIMAX_MUSIC3_MLX_PY="$(venv_python "$MINIMAX_MUSIC3_MLX_VENV")"
+    if ! "$MINIMAX_MUSIC3_MLX_PY" -c "import sys; sys.exit(0 if sys.version_info[:2] >= (3, 12) else 1)"; then
+      echo "❌ MiniMax Music 3 MLX's existing venv requires a Python 3.12+ rebuild before Repair." >&2
+      exit 1
+    fi
     echo "📦 Installing MiniMax Music 3 MLX packages into ${MINIMAX_MUSIC3_MLX_VENV}..."
     # Install only from the hash-pinned lock (scripts/requirements-minimax-music3-mlx.lock.txt):
     # no install-time resolution, so a new or compromised transitive release can't
     # land on the next Repair. Direct pins: scripts/requirements-minimax-music3-mlx.txt
     # (mlx-audio 0.5.0, the first release with the MiniMax Music 3 merge).
-    "$MINIMAX_MUSIC3_MLX_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-minimax-music3-mlx.lock.txt"
+    "$MINIMAX_MUSIC3_MLX_PY" -m pip install --require-hashes --no-deps --only-binary :all: -r "$SCRIPT_DIR/requirements-minimax-music3-mlx.lock.txt"
     pin_venv_arm64 "$MINIMAX_MUSIC3_MLX_VENV"
     probe_or_fail \
       "MiniMax Music 3 MLX venv built but 'import mlx; from mlx_audio.music import load' failed." \
@@ -1590,7 +1604,7 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
       echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
       exit 1
     fi
-    "$FLUX2_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-flux2-mlx.lock.txt"
+    "$FLUX2_PY" -m pip install --require-hashes --no-deps --only-binary :all: -r "$SCRIPT_DIR/requirements-flux2-mlx.lock.txt"
   else
     # Direct pins: scripts/requirements-flux2-cuda.txt.
     sync_cuda_lock_venv FLUX.2 "$FLUX2_VENV" requirements-flux2-cuda

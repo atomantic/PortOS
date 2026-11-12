@@ -11,7 +11,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation, Link } from 'react-router';
-import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles, Clapperboard, Paintbrush, Wand2, GalleryHorizontal, Palette, LayoutGrid, X } from 'lucide-react';
+import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles, Clapperboard, Paintbrush, Wand2, GalleryHorizontal, Palette, LayoutGrid, ExternalLink, X } from 'lucide-react';
 import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import LoadFailedState from '../components/ui/LoadFailedState';
@@ -60,6 +60,7 @@ import {
   moodBoardItemHasPrompt,
   moodBoardItemSendLinks,
 } from '../lib/moodBoardAnalysis';
+import { isHttpUrl } from '../utils/urlNormalize';
 import { formatCount, timeAgo } from '../utils/formatters';
 import useMounted from '../hooks/useMounted';
 
@@ -120,8 +121,14 @@ function MoodBoardEditor({ id }) {
   const [loadError, setLoadError] = useState(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [replacePrompt, setReplacePrompt] = useState(false);
   const [savingMeta, setSavingMeta] = useState(false);
   const [confirmingItemId, setConfirmingItemId] = useState(null);
+  const removeItemTriggerRef = useRef(null);
+  const cancelItemRemoval = () => {
+    setConfirmingItemId(null);
+    removeItemTriggerRef.current?.focus();
+  };
 
   // Add-item form.
   const [itemType, setItemType] = useState('image');
@@ -1117,7 +1124,10 @@ function MoodBoardEditor({ id }) {
                         ) : null}
                         <button
                           type="button"
-                          onClick={() => setConfirmingItemId(item.id)}
+                          onClick={(event) => {
+                            removeItemTriggerRef.current = event.currentTarget;
+                            setConfirmingItemId(item.id);
+                          }}
                           title="Remove item"
                           aria-label="Remove item"
                           className="min-h-[44px] min-w-[44px] shrink-0 ml-auto -my-2.5 inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
@@ -1125,6 +1135,23 @@ function MoodBoardEditor({ id }) {
                           <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
                         </button>
                       </div>
+                      {confirmingItemId === item.id ? (
+                        <InlineConfirmRow
+                          question="Remove this item?"
+                          stacked
+                          autoFocus
+                          role="group"
+                          aria-label="Remove this mood board item?"
+                          confirmText="Remove"
+                          onConfirm={() => handleRemoveItem(item.id)}
+                          onCancel={cancelItemRemoval}
+                          onKeyDown={(event) => {
+                            if (event.key !== 'Escape') return;
+                            event.stopPropagation();
+                            cancelItemRemoval();
+                          }}
+                        />
+                      ) : null}
                       <MoodBoardItemTextField
                         key={`${item.id}-${displayText}`}
                         item={item}
@@ -1142,6 +1169,18 @@ function MoodBoardEditor({ id }) {
                         </span>
                       ) : null}
                       <div className="flex flex-wrap items-center justify-end gap-1">
+                        {isHttpUrl(item.source) ? (
+                          <a
+                            href={item.source}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={item.source}
+                            className="min-h-[44px] inline-flex items-center justify-center gap-1 rounded border border-port-border px-2 py-1 text-xs text-gray-400 hover:text-white hover:border-port-accent focus-visible:outline-2 focus-visible:outline-port-accent transition-colors"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+                            Visit source
+                          </a>
+                        ) : null}
                         {/* Keep the frame count with its extraction action when wrapping. */}
                         {videoSrc ? (
                           <span className="inline-flex shrink-0 items-center gap-1 mr-auto">
@@ -1214,15 +1253,6 @@ function MoodBoardEditor({ id }) {
                           </button>
                         ) : null}
                       </div>
-                      {confirmingItemId === item.id ? (
-                        <InlineConfirmRow
-                          question="Remove this item?"
-                          stacked
-                          confirmText="Remove"
-                          onConfirm={() => handleRemoveItem(item.id)}
-                          onCancel={() => setConfirmingItemId(null)}
-                        />
-                      ) : null}
                     </div>
                   </div>
                 );
@@ -1261,6 +1291,27 @@ function MoodBoardEditor({ id }) {
               onChange={(e) => setDescription(e.target.value)}
               className="block w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white focus:border-port-accent outline-none resize-y"
             />
+            <p className="text-xs text-gray-400">Your creative direction. Composing a style updates the separate Style prompt.</p>
+            {board.style?.prompt && board.style.prompt !== description ? (
+              replacePrompt ? (
+                <InlineConfirmRow
+                  question="Replace your current Board prompt with the composed style?"
+                  confirmText="Replace prompt"
+                  onConfirm={() => { setDescription(board.style.prompt); setReplacePrompt(false); }}
+                  onCancel={() => setReplacePrompt(false)}
+                />
+              ) : (
+                <button
+                  type="button"
+                  disabled={board.style.prompt.length > 5000}
+                  onClick={() => description.trim() ? setReplacePrompt(true) : setDescription(board.style.prompt)}
+                  className="min-h-[40px] px-3 py-1.5 text-xs rounded border border-port-border text-port-accent hover:bg-port-bg disabled:opacity-50"
+                >Use style as Board prompt</button>
+              )
+            ) : null}
+            {board.style?.prompt?.length > 5000 ? (
+              <p className="text-xs text-gray-400">Shorten the Style prompt to 5,000 characters or fewer before using it as the Board prompt.</p>
+            ) : null}
             {descriptionDirty || (savingMeta && !nameDirty) ? (
               <div className="flex justify-end">
                 <button

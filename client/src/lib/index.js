@@ -98,6 +98,7 @@ export * from './musicVideoUniverseRefs.js';
 export * from './musicVideoAutomation.js';
 export * from './musicVideoAutonomous.js';
 export * from './musicVideoPreview.js';
+export * from './musicVideoBlender.js';
 export * from './pipelineImageDefaults.js';
 export * from './pipelineIssueStatus.js';
 export * from './reverseOutlineGrid.js';

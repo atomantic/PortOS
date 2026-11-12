@@ -13,10 +13,14 @@ const ID = '12345678-abcd-4abc-8abc-123456789abc';
 // Every request is intercepted. This synthetic page deliberately gives the
 // waveform an offscreen midpoint, as a translated long song strip would have.
 function fixtureHtml(kind, initiallyOn) {
+  const waveform = kind === 'fallback' ? '<canvas id="strip"></canvas>'
+    : kind === 'shadow' ? '<div class="waveform" role="slider" aria-label="Audio window"></div>'
+    : kind === 'missing' ? '<div class="waveform"></div>'
+    : '<div id="strip" data-testid="hook-waveform"></div>';
   return String.raw`<!doctype html><html><head><style>
     body { margin: 0; overflow: hidden; }
     [hidden] { display: none !important; }
-    .waveform { position: absolute; left: -3873px; top: 150px; width: 5550px; height: 80px; background: gray; }
+    .waveform, #strip { position: absolute; left: -3873px; top: 150px; width: 5550px; height: 80px; background: gray; }
     #pill { position: absolute; top: 100px; }
     #songs { position: absolute; top: 300px; }
     #post { position: absolute; top: 400px; }
@@ -25,12 +29,22 @@ function fixtureHtml(kind, initiallyOn) {
     <div id="songs" role="dialog" hidden><textarea placeholder="Search by song name"></textarea>
       <div><a href="/song/${ID}">Synthetic song</a><button id="use">Use</button><button>A</button><button>B</button></div>
     </div>
-    <span id="pill" class="rounded-full font-mono">2:38</span><div class="waveform"></div>
+    <canvas width="20" height="20"></canvas>
+    <span style="position:absolute;top:40px">3:07</span>
+    ${kind === 'missing-window' ? '' : '<span id="pill">2:38</span>'}${waveform}
+    <div style="position:absolute;top:130px"><span><span>0:00</span></span> / <span>0:26</span></div>
+    <span style="position:absolute;top:250px">3:07</span>
     <button id="next">Next</button>
     <section id="post" hidden><textarea placeholder="Add a caption..."></textarea><div id="lyrics"></div><button id="publish">Post</button></section>
     <script>
+      document.querySelector('input[type=file]').onchange = () => {
+        const video = document.createElement('video');
+        Object.defineProperties(video, { readyState: { value: 2 }, videoWidth: { value: 100 }, currentSrc: { value: 'blob:uploaded' } });
+        document.body.append(video);
+      };
       window.windowAt = 158; window.publishClicks = 0; window.points = []; window.dragCount = 0;
-      const strip = document.querySelector('.waveform');
+      window.searchSettled = false; window.usedAfterSearch = false;
+      const strip = document.querySelector('.waveform, #strip');
       let down = null;
       strip.addEventListener('mousedown', event => { down = event.clientX; window.points.push([event.clientX, event.clientY]); });
       document.addEventListener('mouseup', event => {
@@ -41,7 +55,16 @@ function fixtureHtml(kind, initiallyOn) {
         down = null;
       });
       document.getElementById('select').onclick = () => document.getElementById('songs').hidden = false;
-      document.getElementById('use').onclick = () => document.getElementById('songs').hidden = true;
+      document.querySelector('#songs textarea').oninput = async event => {
+        const response = await fetch('/api/search?query=' + encodeURIComponent(event.target.value));
+        await response.json();
+        document.querySelector('#songs a').innerHTML = '<span>Synthetic song</span>';
+        window.searchSettled = true;
+      };
+      document.getElementById('use').onclick = () => {
+        window.usedAfterSearch = window.searchSettled;
+        document.getElementById('songs').hidden = true;
+      };
       document.getElementById('next').onclick = () => document.getElementById('post').hidden = false;
       document.getElementById('publish').onclick = () => window.publishClicks++;
       const kind = '${kind}';
@@ -72,7 +95,8 @@ describe.skipIf(!canRun)('Suno Hook synthetic draft UI in Chrome', () => {
     { kind: 'fallback', initial: true, wanted: false },
     { kind: 'ambiguous', initial: true, wanted: false, problem: /multiple Show Lyrics controls/ },
     { kind: 'missing', initial: true, wanted: false, problem: /no unambiguous Show Lyrics label/ },
-  ])('drags the visible strip and verifies $kind lyrics without posting', async ({ kind, initial, wanted, problem }) => {
+    { kind: 'missing-window', initial: true, wanted: false, problem: /no window label to read/, windowProblem: true },
+  ])('drags the visible strip and verifies $kind lyrics without posting', async ({ kind, initial, wanted, problem, windowProblem }) => {
     const context = await fixture.browser.newContext({ viewport: { width: 1000, height: 700 }, serviceWorkers: 'block' });
     const page = await context.newPage();
     const errors = [], unexpected = [];
@@ -82,21 +106,32 @@ describe.skipIf(!canRun)('Suno Hook synthetic draft UI in Chrome', () => {
       if (route.request().url() === 'https://suno.com/hooks/create' && route.request().resourceType() === 'document') {
         return route.fulfill({ contentType: 'text/html', body: fixtureHtml(kind, initial) });
       }
+      if (route.request().url() === 'https://suno.com/api/search?query=Synthetic%20song' && route.request().resourceType() === 'fetch') {
+        return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ songId: ID }) });
+      }
       unexpected.push(route.request().resourceType());
       return route.abort();
     });
     try {
       const prepare = sunoHookAdapter.prepare(page, { video: { path: video }, songId: ID, title: 'Synthetic song',
-        durationSec: 258, startSec: 20, caption: 'Synthetic caption', showLyrics: wanted });
+        durationSec: 258, startSec: windowProblem ? 187 : 20, caption: 'Synthetic caption', showLyrics: wanted });
       if (problem) await expect(prepare).rejects.toThrow(problem);
       else {
         expect(await prepare).toMatchObject({ showLyrics: wanted, caption: 'Synthetic caption' });
         const control = page.locator('[role=switch],input[type=checkbox]');
         expect(await control.evaluate(el => el.getAttribute('aria-checked') === 'true' || el.checked === true)).toBe(wanted);
       }
-      const state = await page.evaluate(() => ({ at: window.windowAt, points: window.points, drags: window.dragCount, posts: window.publishClicks }));
-      expect(Math.abs(state.at - 20)).toBeLessThanOrEqual(1);
-      expect(state.drags).toBeGreaterThan(1);
+      const state = await page.evaluate(() => ({ at: window.windowAt, points: window.points, drags: window.dragCount, posts: window.publishClicks,
+        usedAfterSearch: window.usedAfterSearch }));
+      expect(state.usedAfterSearch).toBe(true);
+      if (windowProblem) {
+        expect(state.at).toBe(158);
+        expect(state.drags).toBe(0);
+        expect(await page.locator('#post').isVisible()).toBe(false);
+      } else {
+        expect(Math.abs(state.at - 20)).toBeLessThanOrEqual(1);
+        expect(state.drags).toBeGreaterThan(1);
+      }
       expect(state.points.every(([x, y]) => x >= 0 && x < 1000 && y >= 150 && y <= 230)).toBe(true);
       expect(state.posts).toBe(0);
       expect(await page.locator('input[type=file]').evaluate(input => input.files[0].name)).toBe('synthetic.mp4');

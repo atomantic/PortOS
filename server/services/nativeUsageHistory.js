@@ -4,7 +4,7 @@ import { homedir, tmpdir } from 'os';
 import { join } from 'path';
 import { decodeMessage } from '../lib/protobufWire.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
-import { UNKNOWN_MODEL, parseGrokTurns, parseJsonLines, decodeGrokSessionDir, grokEventMs, totalTranscriptTokens } from '../lib/providerTranscriptUsage.js';
+import { UNKNOWN_MODEL, codexServiceTier, parseGrokTurns, parseJsonLines, decodeGrokSessionDir, grokEventMs, totalTranscriptTokens } from '../lib/providerTranscriptUsage.js';
 import { claudeNativeUsageStore } from './claudeCodeTranscriptUsage.js';
 import { readCodexAccountingSources } from './codexUsageSources.js';
 import { createNativeUsageStore } from './nativeUsageDayStore.js';
@@ -28,8 +28,10 @@ import { familyForProvider, familyLabel } from '../lib/providerFamilies.js';
  *            else the conversation's `brain/<id>` transcript
  *
  * Every store keeps the same `input/output/cacheRead/cacheWrite` counters
- * (`input` excludes cache reads, as each tier is priced separately); Grok also
- * keeps the long-context subset, which is priced a second time.
+ * (`input` excludes cache reads, as each tier is priced separately). Grok also
+ * keeps the long-context subset, which is priced a second time. Codex and Grok
+ * keep Fast and Ultrafast subsets (`fast*` / `ultrafast*`), priced from the
+ * published API schedule when the transcript recorded the tier.
  *
  * Scans read local files only — no provider calls, no tokens spent.
  */
@@ -37,6 +39,10 @@ import { familyForProvider, familyLabel } from '../lib/providerFamilies.js';
 const DAY_MS = 86_400_000;
 const BASE_FIELDS = ['messages', 'input', 'output', 'cacheRead', 'cacheWrite'];
 const LONG_FIELDS = ['longInput', 'longOutput', 'longCacheRead', 'longCacheWrite'];
+const SPEED_FIELDS = [
+  'fastInput', 'fastOutput', 'fastCacheRead', 'fastCacheWrite',
+  'ultrafastInput', 'ultrafastOutput', 'ultrafastCacheRead', 'ultrafastCacheWrite',
+];
 const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10);
 const dayStartMs = (day) => Date.parse(`${day}T00:00:00.000Z`);
 const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
@@ -57,6 +63,18 @@ function addBuckets(days, day, model, buckets) {
     add('longOutput', buckets.longTokensOut);
     add('longCacheRead', buckets.longCacheReadTokens);
     add('longCacheWrite', buckets.longCacheWriteTokens);
+  }
+  if ('fastTokensIn' in buckets) {
+    add('fastInput', buckets.fastTokensIn);
+    add('fastOutput', buckets.fastTokensOut);
+    add('fastCacheRead', buckets.fastCacheReadTokens);
+    add('fastCacheWrite', buckets.fastCacheWriteTokens);
+  }
+  if ('ultrafastTokensIn' in buckets) {
+    add('ultrafastInput', buckets.ultrafastTokensIn);
+    add('ultrafastOutput', buckets.ultrafastTokensOut);
+    add('ultrafastCacheRead', buckets.ultrafastCacheReadTokens);
+    add('ultrafastCacheWrite', buckets.ultrafastCacheWriteTokens);
   }
 }
 
@@ -101,10 +119,15 @@ function codexCalls(entries) {
   const calls = [];
   let model = null;
   let previous = null;
+  let tier = 'standard';
   for (const entry of entries) {
     if (entry.type === 'session_meta') { model ??= entry.payload?.model ?? null; continue; }
     // The model a call used is the latest turn context before it.
     if (entry.type === 'turn_context') { model = entry.payload?.model ?? model; continue; }
+    if (entry.payload?.type === 'thread_settings_applied') {
+      tier = codexServiceTier(entry.payload.service_tier ?? entry.payload.thread_settings?.service_tier);
+      continue;
+    }
     if (entry.payload?.type !== 'token_count') continue;
     const total = entry.payload.info?.total_token_usage;
     const last = entry.payload.info?.last_token_usage ?? null;
@@ -117,7 +140,7 @@ function codexCalls(entries) {
     previous = total;
     const ms = Date.parse(entry.timestamp);
     if (!Number.isFinite(ms)) continue;
-    calls.push({ ms, model, usage: last ?? fallback,
+    calls.push({ ms, model, tier, usage: last ?? fallback,
       signature: `${last?.total_tokens ?? ''}:${last?.input_tokens ?? ''}:${last?.output_tokens ?? ''}:${total.total_tokens}` });
   }
   return calls;
@@ -177,11 +200,19 @@ async function scanCodex({ from, home = homedir() }) {
       const cached = call.usage.cached_input_tokens || 0;
       const cacheWrite = call.usage.cache_write_input_tokens || 0;
       // Codex's input includes the cached read and any cache write (two disjoint
-      // parts); each tier is priced on its own.
-      addBuckets(days, dayOf(call.ms), call.model || UNKNOWN_MODEL, {
+      // parts); each tier is priced on its own. A fast or ultrafast call's
+      // whole bucket is that subset; the tier applies to this call only.
+      const buckets = {
         messages: 1, tokensIn: Math.max(0, (call.usage.input_tokens || 0) - cached - cacheWrite), tokensOut: call.usage.output_tokens || 0,
         cacheReadTokens: cached, cacheWriteTokens: cacheWrite,
-      });
+      };
+      if (call.tier === 'fast' || call.tier === 'ultrafast') {
+        buckets[`${call.tier}TokensIn`] = buckets.tokensIn;
+        buckets[`${call.tier}TokensOut`] = buckets.tokensOut;
+        buckets[`${call.tier}CacheReadTokens`] = buckets.cacheReadTokens;
+        buckets[`${call.tier}CacheWriteTokens`] = buckets.cacheWriteTokens;
+      }
+      addBuckets(days, dayOf(call.ms), call.model || UNKNOWN_MODEL, buckets);
     }
   }
   return { days, filesScanned: inventory.coverage.filesInspected };
@@ -333,10 +364,12 @@ async function scanAgy({ from, home = homedir() }) {
 export const NATIVE_USAGE_STORES = Object.freeze({
   claude: claudeNativeUsageStore,
   codex: createNativeUsageStore({
-    family: 'codex', file: join(PATHS.data, 'codex-native-usage.json'), fields: BASE_FIELDS, scan: scanCodex,
+    // 2: Fast/Ultrafast subsets. A stored day without them is rescanned once.
+    family: 'codex', file: join(PATHS.data, 'codex-native-usage.json'), fields: [...BASE_FIELDS, ...SPEED_FIELDS], scan: scanCodex, scanVersion: 2,
   }),
   grok: createNativeUsageStore({
-    family: 'grok', file: join(PATHS.data, 'grok-native-usage.json'), fields: [...BASE_FIELDS, ...LONG_FIELDS], scan: scanGrok,
+    // 2: Grok 4.7 Fast subset, same rescan as Codex.
+    family: 'grok', file: join(PATHS.data, 'grok-native-usage.json'), fields: [...BASE_FIELDS, ...LONG_FIELDS, ...SPEED_FIELDS], scan: scanGrok, scanVersion: 2,
   }),
   agy: createNativeUsageStore({
     // 2: the conversation DB, which dates tokens the transcript never recorded.

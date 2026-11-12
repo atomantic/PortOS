@@ -2,6 +2,7 @@ import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { formatCount, formatDateTime } from '../../../../utils/formatters';
 import { retireBranchReconcileCheckout, reviewBranchReconcileCheckout, refreshBranchReconcileInventory } from '../../../../services/api';
 import useMounted from '../../../../hooks/useMounted';
+import { isHttpUrl } from '../../../../utils/urlNormalize';
 
 const STATUS_LABELS = { drained: 'No remaining work in last scan', incomplete: 'Incomplete', running: 'Sweep running' };
 
@@ -15,6 +16,8 @@ function InventoryEntry({ appId, entry, onRetired }) {
   return (
     <li className="break-words border-t border-port-border pt-2">
       <p className="text-gray-300">{entry.branch || (entry.detached ? 'Detached checkout' : entry.issue ? `Issue #${entry.issue}` : 'Repository scan')}: {entry.reason}</p>
+      {entry.nextAction && <p>{entry.nextAction}</p>}
+      {isHttpUrl(entry.prUrl) && <p><a href={entry.prUrl} target="_blank" rel="noopener noreferrer" className="text-port-accent">Pull request</a></p>}
       {entry.path && <p className="break-all">{entry.path}</p>}
       {(entry.checkoutMissing || entry.branchMissing) && <p>Original checkout or branch no longer exists. It stays unresolved, separate from current local work, until retirement evidence explains it.</p>}
       {entry.head && <p className="break-all">HEAD: {entry.head}</p>}

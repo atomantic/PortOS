@@ -213,6 +213,29 @@ describe('getAccessToken', () => {
     await expect(getAccessToken()).resolves.toBe('fresh');
     expect(mocks.fetchWithTimeout).toHaveBeenCalledTimes(2);
   });
+
+  it('tags a refresh rejected with invalid_grant as an invalid-grant ServerError', async () => {
+    routeReads();
+    mocks.fetchWithTimeout.mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({ error: 'invalid_grant', error_description: 'Refresh token revoked' }),
+    });
+
+    await expect(getAccessToken()).rejects.toMatchObject({
+      message: 'Spotify rejected the saved authorization — reconnect Spotify.',
+      code: 'INVALID_GRANT',
+      status: 400,
+      context: { isInvalidGrant: true },
+    });
+  });
+
+  it('preserves underlying error text and status for network timeout', async () => {
+    routeReads();
+    mocks.fetchWithTimeout.mockRejectedValue(new Error('connection timed out'));
+
+    await expect(getAccessToken()).rejects.toThrow('connection timed out');
+  });
 });
 
 describe('handleCallback', () => {

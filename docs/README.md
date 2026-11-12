@@ -15,6 +15,8 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [LTX25_CUDA.md](./LTX25_CUDA.md) | LTX-2.5 CUDA hash locks, immutable source packaging, regeneration and NVIDIA readiness validation |
 | [WAN22_CUDA.md](./WAN22_CUDA.md) | Wan 2.2 CUDA hash locks, Python/CUDA targets, regeneration, advisory scans and NVIDIA readiness validation |
 | [DEMUCS_RUNTIME.md](./DEMUCS_RUNTIME.md) | Vocal separation hash locks, source-build contract, supported interpreters and validation limits |
+| [RIGGING_RUNTIME.md](./RIGGING_RUNTIME.md) | Blender rigging interpreter artifacts, wheel locks, provisioning and validation limits |
+| [PYTHON_RUNTIME_REFRESH.md](./PYTHON_RUNTIME_REFRESH.md) | Staged Python compatibility updates, Reactor/SoundFile lock evidence and remaining validation |
 | [MINIMAX_MUSIC3_CUDA.md](./MINIMAX_MUSIC3_CUDA.md) | MiniMax Music 3 CUDA hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
 | [AUDIOLDM2_CUDA.md](./AUDIOLDM2_CUDA.md) | AudioLDM2 Windows/Linux hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
 | [MUSCRIPTOR_CUDA.md](./MUSCRIPTOR_CUDA.md) | MuScriptor Windows/Linux hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
@@ -22,6 +24,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [FLUX2_CUDA.md](./FLUX2_CUDA.md) | FLUX.2 / Qwen-Image 2.1 Windows/Linux hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
 | [ACESTEP15_CUDA.md](./ACESTEP15_CUDA.md) | ACE-Step 1.5 Windows/Linux hash locks, pinned-checkout install, regeneration, advisory scans and NVIDIA readiness evidence |
 | [TRELLIS2_METAL.md](./TRELLIS2_METAL.md) | TRELLIS.2 Metal native profile, immutable sources, wheel/build locks, regeneration and Install/Repair validation |
+| [PIXAL3D_CUDA.md](./PIXAL3D_CUDA.md) | Isolated Pixal3D CUDA lock, native Install/Repair, NAF fallback and validation status |
 | [PIXAL3D_MPS.md](./PIXAL3D_MPS.md) | Pixal3D Metal patched Torch environment, hash locks, native Install/Repair and synthetic-image mesh validation |
 | [TRELLIS2_CUDA.md](./TRELLIS2_CUDA.md) | TRELLIS.2 CUDA native profile, Conda artifacts, wheel locks, Install/Repair and GPU validation |
 | [MLX_VIDEO_LOCKS.md](./MLX_VIDEO_LOCKS.md) | Pinned LTX and Wan MLX runtime and build locks, audit inventory and regeneration |
@@ -62,6 +65,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [MODEL-COMPARISON.md](./MODEL-COMPARISON.md) | Sourced provider/model/effort comparisons, cost estimates and CoS research refresh |
 | [THREEJS_MODELS.md](./THREEJS_MODELS.md) | Three.js procedural 3D model generation and trust boundary |
 | [features/music-video-autonomous.md](./features/music-video-autonomous.md) | One-prompt autonomous music videos: brief → lyrics → mood board → Suno song → production, optional checkpoints, and the `music-video-autopilot` scheduled task that turns Brain ideas into videos |
+| [features/music-video-blender.md](./features/music-video-blender.md) | Blender film render style: Python scripts that build every shot in Blender, the workspace and film contract, per-shot renders and staleness, cuts, the final render, and the Trusted local requirement |
 | [features/music-video-frame-capture.md](./features/music-video-frame-capture.md) | Shared paused-video/capture color interpretation, synthetic evidence and browser limits |
 | [features/music-video-photo-sequences.md](./features/music-video-photo-sequences.md) | Ordered existing photos within one still shot, frame/beat cadence, persistence and preview/export timing |
 | [features/music-video-temporal-evidence.md](./features/music-video-temporal-evidence.md) | Performance source provenance, synchronized playback and optional local temporal analyzer protocol |
@@ -77,6 +81,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [UX_DESIGN_AUDIT.md](./UX_DESIGN_AUDIT.md) | Representative UX audit and Jev/Performance pilot content maps |
 | [PAGE_LAYOUT_AUDIT.md](./PAGE_LAYOUT_AUDIT.md) | Routed header/navigation layout inventory, fixes, intentional exceptions, and browser regression coverage |
 | [GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md) | CI and release workflows |
+| [RUNTIME_ADVISORY_TRIAGE.md](./RUNTIME_ADVISORY_TRIAGE.md) | November 2026 runtime advisory paths, evidence and upstream blockers |
 | [VERSIONING.md](./VERSIONING.md) | SemVer + release process (`/do:release`) |
 | [SELF_UPDATE.md](./SELF_UPDATE.md) | Fork-aware self-update flow — release polling, `FORK_SYNC_REQUIRED`, fork sync, running a customized fork, and the unattended idle-gated automatic update |
 | [MANAGED_APP_UPDATES.md](./MANAGED_APP_UPDATES.md) | Safe managed-app update default and the opt-in app lifecycle contract |

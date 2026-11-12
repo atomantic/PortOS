@@ -18,10 +18,10 @@ const savedVideo = { id: 'upload-video', filename: 'upload-video.mp4', thumbnail
 const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
 
 // Every request is contained by this fixture; no live API, catalog or provider.
-async function openBoard(fixture, viewport, containerWidth, items = []) {
+async function openBoard(fixture, viewport, containerWidth, items = [], boardOverrides = {}) {
   const page = await fixture.browser.newPage({ viewport });
   page.setDefaultTimeout(10000);
-  const boards = { a: { id: 'a', name: 'Example A', items: structuredClone(items) }, b: { id: 'b', name: 'Example B', items: [] } };
+  const boards = { a: { id: 'a', name: 'Example A', items: structuredClone(items), ...boardOverrides }, b: { id: 'b', name: 'Example B', items: [] } };
   const state = { calls: [], updates: [], failures: 0, hold: null, release: null, errors: [] };
   page.on('pageerror', error => state.errors.push(error.message));
   await page.route('**/*', async route => {
@@ -49,6 +49,7 @@ async function openBoard(fixture, viewport, containerWidth, items = []) {
       Object.assign(item, patch);
       return route.fulfill({ json: item });
     }
+    if (/^\/mood-boards\/[ab]\/analyze$/.test(path)) return route.fulfill({ json: null });
     const match = path.match(/^\/mood-boards\/([ab])(?:\/(items))?$/);
     if (!match) { state.errors.push(`Unexpected API: ${path}`); return route.abort(); }
     const board = boards[match[1]];
@@ -80,13 +81,26 @@ describe.skipIf(!chrome)('mood board in Chromium', () => {
           name: 'mood-board-upload-fixture', enforce: 'pre',
           resolveId(id, importer) {
             if (id === '/board-fixture.jsx') return '\0board-fixture.jsx';
+            if (importer?.endsWith('/MoodBoardStylePanel.jsx')) {
+              if (id === '../../services/api') return join(root, 'src/services/apiMoodBoard.js');
+              if (id === '../../services/socket') return '\0board-socket';
+              if (id.endsWith('/useVisionModelIds')) return '\0board-vision';
+              if (id.endsWith('/useProviderModels')) return '\0board-providers';
+              if (id.endsWith('/useImageRenderSettings')) return '\0board-render-settings';
+              if (id.endsWith('/useSingleImageRender')) return '\0board-render';
+              if (id.endsWith('/ProviderModelSelector')) return '\0board-empty';
+            }
             if (!importer?.endsWith('/MoodBoardDetail.jsx')) return;
             if (id === '../services/api') return join(root, 'src/services/apiMoodBoard.js');
             if (id === '../services/socket') return '\0board-socket';
-            if (/MoodBoard(Generate|Style|Collage)Panel|Gallery(Image|Video)Picker|VideoFramePicker|MediaLightbox/.test(id)) return '\0board-empty';
+            if (/MoodBoard(Generate|Collage)Panel|Gallery(Image|Video)Picker|VideoFramePicker|MediaLightbox/.test(id)) return '\0board-empty';
             if (id.endsWith('/PromptFromMedia')) return '\0board-prompt';
           },
           load(id) {
+            if (id === '\0board-vision') return 'export default () => ({ idsByProvider: {} });';
+            if (id === '\0board-providers') return 'export default () => ({ providers: [], availableModels: [], loading: false });';
+            if (id === '\0board-render-settings') return 'export default () => ({ imageCfg: {}, backends: [] });';
+            if (id === '\0board-render') return 'export default () => ({ jobId: null });';
             if (id === '\0board-empty') return 'export default () => null;';
             if (id === '\0board-prompt') return 'export const PromptFromMediaModal = () => null;';
             if (id === '\0board-socket') return 'export default { on() {}, off() {} };';
@@ -123,6 +137,50 @@ describe.skipIf(!chrome)('mood board in Chromium', () => {
     });
   }, BROWSER_FIXTURE_STARTUP_MS);
   afterAll(() => fixture?.close());
+
+  it('layers the board poster preview above analyzed tags and restores the board on close', async () => {
+    const item = { id: 'analyzed-pin', type: 'image', imageUrl: '/data/images/pin.png', analysis: { prompt: 'Soft dreamlike scene' } };
+    const { page, state } = await openBoard(fixture, { width: 1440, height: 900 }, undefined, [item], { posterImageRef: 'poster.png' });
+    try {
+      await page.getByRole('tab', { name: 'Style' }).click();
+      await page.getByRole('button', { name: 'Preview board poster' }).click();
+      const dialog = page.getByRole('dialog', { name: 'Board poster' });
+      await dialog.waitFor();
+      const badge = page.getByTestId('item-indicator-analyzed');
+      expect(await badge.evaluate(el => {
+        const rect = el.getBoundingClientRect();
+        return document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)?.closest('[role="presentation"]')?.contains(document.querySelector('[role="dialog"]'));
+      })).toBe(true);
+      await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+      expect(await dialog.count()).toBe(0);
+      expect(await badge.isVisible()).toBe(true);
+      expect(state.errors).toEqual([]);
+    } finally { await page.close(); }
+  });
+
+  it('shows removal beside its trigger above long text at desktop and narrow widths', async () => {
+    const item = { id: 'long-pin', type: 'image', caption: 'Dreamy soft-focus scene. '.repeat(180) };
+    for (const width of [1440, 390]) {
+      const { page, state } = await openBoard(fixture, { width, height: 900 }, undefined, [item]);
+      try {
+        if (width < 896) await page.getByRole('button', { name: 'Close board tools' }).click();
+        const trigger = page.getByRole('button', { name: 'Remove item', exact: true });
+        await trigger.click();
+        const confirmation = page.getByRole('group', { name: 'Remove this mood board item?' });
+        const bounds = await confirmation.boundingBox();
+        const control = await trigger.boundingBox();
+        const prompt = await page.getByLabel('Item caption', { exact: true }).boundingBox();
+        expect(bounds.y).toBeGreaterThanOrEqual(control.y);
+        expect(bounds.y - control.y - control.height).toBeLessThan(20);
+        expect(bounds.y + bounds.height).toBeLessThanOrEqual(prompt.y);
+        expect(bounds.x).toBeGreaterThanOrEqual(0);
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+        await confirmation.getByRole('button', { name: 'Cancel' }).click();
+        expect(await trigger.evaluate(el => document.activeElement === el)).toBe(true);
+        expect(state.errors).toEqual([]);
+      } finally { await page.close(); }
+    }
+  });
 
   it('fits card prompt text as it wraps, changes, and rewraps at a narrower width', async () => {
     const initial = 'Silver lanterns illuminate a winding forest path beneath distant mountains. '.repeat(3).trim();

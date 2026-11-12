@@ -78,6 +78,17 @@ export const moodBoardCreateSchema = z.object({
   description: z.string().max(5000).optional(),
 }).strict();
 
+// Combining synthesizes a new style; analysis of missing source styles is opt-in.
+export const moodBoardCombineSchema = moodBoardCreateSchema.extend({
+  boardIds: z.array(z.string().trim().min(1).max(128)).length(2),
+  providerId: z.string().trim().min(1).max(128),
+  model: z.string().trim().min(1).max(256).optional(),
+  effort: z.string().trim().max(64).optional(),
+  analyzeMissing: z.boolean().optional(),
+}).strict().refine(({ boardIds }) => boardIds[0] !== boardIds[1], {
+  message: 'Choose two different mood boards', path: ['boardIds'],
+});
+
 // Gallery filename for the board's canonical poster. Same traversal rule as
 // the asset manifest (`sanitizeAssetFilename`): separators and `.` / `..`
 // are rejected; an image extension is required so a video ref can't be

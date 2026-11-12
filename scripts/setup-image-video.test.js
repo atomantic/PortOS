@@ -28,11 +28,11 @@ const installFlags = [
 // path for both POSIX and native Windows venv layouts.
 const seedPrivateUv = `
 for layout in bin/uv Scripts/uv.exe; do
-  tool="$HOME/.portos/tools/uv-0.13.6/$layout"
+  tool="$HOME/.portos/tools/uv-0.13.7/$layout"
   mkdir -p "$(dirname "$tool")"
   {
     printf '#!/usr/bin/env bash\\n'
-    printf 'if [[ "$1" == --version ]]; then echo "uv 0.13.6"; exit 0; fi\\n'
+    printf 'if [[ "$1" == --version ]]; then echo "uv 0.13.7"; exit 0; fi\\n'
     declare -f uv
     printf 'uv "$@"\\n'
   } > "$tool"
@@ -696,7 +696,7 @@ describe('uv installs target their own venv, not an inherited one', () => {
     // The tool directory and version probe must track the locked release.
     const version = pin.slice(1).join('.');
     expect(source.match(new RegExp(`uv-${version.replaceAll('.', '\\.')}`, 'g'))).toHaveLength(1);
-    expect(source).toContain('^uv\\ 0\\.13\\.6($|[[:space:]])');
+    expect(source).toContain('^uv\\ 0\\.13\\.7($|[[:space:]])');
   });
 
   it('passes --python to every uv pip install', () => {
@@ -729,7 +729,7 @@ describe('private uv and MLX video lock installation boundary', () => {
       chmodSync(path, 0o755);
     };
     executable(uv, `
-if [[ "$1" == --version ]]; then echo 'uv 0.13.6 (fixture)'; exit 0; fi
+if [[ "$1" == --version ]]; then echo 'uv 0.13.7 (fixture)'; exit 0; fi
 [[ -z "\${UV_PROJECT+x}\${UV_WORKING_DIR+x}\${UV_NO_BUILD_ISOLATION+x}\${UV_NO_VERIFY_HASHES+x}" ]] || exit 98
 [[ "$1" == --no-config ]] || exit 90
 shift
@@ -782,7 +782,7 @@ cp "$PIP_FIXTURE" "\${@: -1}/bin/python3"`);
     const alternatePython = join(home, 'alternate-python');
     writeFileSync(alternatePython, readFileSync(python));
     chmodSync(alternatePython, 0o755);
-    if (privateVersion) executable(join(home, '.portos/tools/uv-0.13.6/bin/uv'), `[[ \"$1\" == --version ]] || echo 'stale execute' >> \"$LOG\"; echo 'uv ${privateVersion}'`);
+    if (privateVersion) executable(join(home, '.portos/tools/uv-0.13.7/bin/uv'), `[[ \"$1\" == --version ]] || echo 'stale execute' >> \"$LOG\"; echo 'uv ${privateVersion}'`);
     const run = (extra = {}) => {
       writeFileSync(log, '');
       return spawnSync(resolveBashBinary(), ['-c', `
@@ -898,7 +898,7 @@ source "$1"
     expect(install.calls()).toBe('');
   });
 
-  it.each(['0.13.3', '0.13.60'])('replaces a private uv reporting %s before using it', (privateVersion) => {
+  it.each(['0.13.3', '0.13.70'])('replaces a private uv reporting %s before using it', (privateVersion) => {
     const install = installer('INSTALL_LTX2', { privateVersion });
     const result = install.run();
     expect(result.status, result.stderr).toBe(0);
@@ -980,8 +980,83 @@ describe('MiniMax H3 MLX hash-pinned lock', () => {
     for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
   });
 
-  it('installs the lock with --require-hashes so nothing resolves at install time', () => {
-    expect(source).toMatch(/pip sync --require-hashes --python "\$MINIMAX_H3_PY" "\$MINIMAX_H3_LOCK"/);
+  it('installs only locked wheels so no source build can resolve floating build dependencies', () => {
+    expect(source).toMatch(/pip sync --require-hashes --only-binary :all: --python "\$MINIMAX_H3_PY" "\$MINIMAX_H3_LOCK"/);
+  });
+});
+
+describe('MiniMax H3 MLX Install/Repair', () => {
+  const section = source.slice(source.indexOf('INSTALL_MINIMAX_H3="${'), source.indexOf('INSTALL_MERERUN="${'));
+  const installer = () => {
+    const home = mkdtempSync(join(tmpdir(), 'portos-h3-mlx-'));
+    tempVenvs.push(home);
+    const log = join(home, 'calls');
+    const stub = join(home, 'python-stub');
+    writeFileSync(log, '');
+    writeFileSync(stub, `#!/bin/bash
+printf 'python %s\\n' "$*" >> "$CALL_LOG"
+exit "\${PROBE_EXIT:-0}"
+`);
+    chmodSync(stub, 0o755);
+    const body = `set -e
+is_apple_silicon() { [[ "$TARGET" == apple ]]; }
+have() { return 0; }
+reset_universal_venv() { :; }
+pin_venv_arm64() { :; }
+probe_or_fail() { shift 2; "$@" || return $?; }
+git_checkout_pin() { printf 'pin %s\\n' "$*" >> "$CALL_LOG"; }
+git() {
+  printf 'git %s\\n' "$*" >> "$CALL_LOG"
+  if [[ "$1" == clone ]]; then mkdir -p "\${@: -1}/.git"; fi
+}
+portos_uv() {
+  printf 'uv %s\\n' "$*" >> "$CALL_LOG"
+  if [[ "$1 $2" == 'python find' ]]; then
+    echo "$STUB"
+  elif [[ "$1" == venv ]]; then
+    mkdir -p "\${@: -1}/bin"
+    cp "$STUB" "\${@: -1}/bin/python3"
+  elif [[ "$1 $2" == 'pip sync' ]]; then
+    [[ "$*" == *'--require-hashes --only-binary :all:'* && "$*" == *requirements-minimax-h3-mlx.lock.txt ]] || return 92
+    return "\${SYNC_EXIT:-0}"
+  else
+    return 93
+  fi
+}
+${section}`;
+    return (extra = {}) => {
+      const result = spawnSync(resolveBashBinary(), ['-c', body], {
+        encoding: 'utf8', env: { ...process.env, HOME: home.replaceAll('\\', '/'), CALL_LOG: log.replaceAll('\\', '/'), STUB: stub.replaceAll('\\', '/'), SCRIPT_DIR: join(REPO_ROOT, 'scripts').replaceAll('\\', '/'), INSTALL_MINIMAX_H3: '1', TARGET: 'apple', ...extra },
+      });
+      return { ...result, calls: readFileSync(log, 'utf8') };
+    };
+  };
+
+  it('applies the complete wheel-only lock for fresh Install and Repair before checking pinned source seams', () => {
+    const run = installer();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = run();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain('MiniMax H3 MLX runtime ready');
+      expect(result.calls.match(/^uv venv /gm)).toHaveLength(1);
+      expect(result.calls.match(/^uv pip sync /gm)).toHaveLength(attempt + 1);
+      expect(result.calls.match(/minimax_h3_runtime_probe.py .* --verify-seams/g)).toHaveLength(attempt + 1);
+      expect(result.calls).not.toMatch(/pip install|--upgrade/);
+    }
+  });
+
+  it.each([{ SYNC_EXIT: '42' }, { PROBE_EXIT: '43' }])('never reports readiness after sync or source probe failure (%j)', (failure) => {
+    const result = installer()(failure);
+    expect(result.status).toBe(Number(failure.SYNC_EXIT ?? failure.PROBE_EXIT));
+    expect(result.stdout).not.toContain('runtime ready');
+    if (failure.SYNC_EXIT) expect(result.calls).not.toContain('minimax_h3_runtime_probe.py');
+  });
+
+  it('refuses unsupported hosts before any source or package operation', () => {
+    const result = installer()({ TARGET: 'linux' });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('requires an Apple-Silicon Mac');
+    expect(result.calls).toBe('');
   });
 });
 
@@ -1131,7 +1206,7 @@ describe('MiniMax H3 CUDA hash-pinned installation', () => {
     executable('python3', 'exit 0');
     executable('ffmpeg', 'exit 0');
     executable('ffprobe', 'exit 0');
-    executable('uv', `if [[ \"$1\" == --version ]]; then echo 'uv 0.13.6'; exit 0; fi\nprintf '%s\\n' "$*" >> "$CALL_LOG"
+    executable('uv', `if [[ \"$1\" == --version ]]; then echo 'uv 0.13.7'; exit 0; fi\nprintf '%s\\n' "$*" >> "$CALL_LOG"
 if [[ "$1" == venv ]]; then
   root="\${@: -1}"
   mkdir -p "$root/$PY_LAYOUT"
@@ -1144,7 +1219,7 @@ else
   exit 42
 fi`);
     for (const layout of ['bin/uv', 'Scripts/uv.exe']) {
-      const tool = join(dir, '.portos/tools/uv-0.13.6', layout);
+      const tool = join(dir, '.portos/tools/uv-0.13.7', layout);
       mkdirSync(dirname(tool), { recursive: true });
       writeFileSync(tool, readFileSync(join(bin, 'uv')));
       chmodSync(tool, 0o755);
@@ -1355,8 +1430,95 @@ describe.each([
 
   it('installs from the lock with --require-hashes and resolves nothing at install time', () => {
     const section = source.slice(source.indexOf(from), source.indexOf(to));
-    expect(section).toContain(`pip install --require-hashes --no-deps -r "$SCRIPT_DIR/${lockName}"`);
+    const binaryOnly = lockName === 'requirements-minimax-music3-mlx.lock.txt' ? ' --only-binary :all:' : '';
+    expect(section).toContain(`pip install --require-hashes --no-deps${binaryOnly} -r "$SCRIPT_DIR/${lockName}"`);
     expect(section).not.toMatch(/pip install --upgrade/);
+  });
+});
+
+describe('MiniMax Music 3 MLX Install/Repair', () => {
+  const section = source.slice(source.indexOf('INSTALL_MINIMAX_MUSIC3_MLX="${'), source.indexOf('INSTALL_MUSCRIPTOR="${'));
+
+  const installer = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'portos-music3-mlx-'));
+    tempVenvs.push(dir);
+    const log = join(dir, 'calls');
+    const python = join(dir, 'python');
+    const venvPython = join(dir, 'venv-python');
+    writeFileSync(python, `#!/bin/bash
+set -eu
+echo "$*" >> "$CALL_LOG"
+if [[ "$*" == *version_info* ]]; then
+  if [[ "$0" == *venv-python ]]; then exit "\${OLD_VENV:-0}"; fi
+  exit "\${OLD_PYTHON:-0}"
+fi
+if [[ "$*" == *'pip install'* ]]; then exit "\${INSTALL_EXIT:-0}"; fi
+if [[ "$*" == *'from mlx_audio.music import load'* ]]; then exit "\${PROBE_EXIT:-0}"; fi
+`);
+    chmodSync(python, 0o755);
+    writeFileSync(venvPython, readFileSync(python));
+    chmodSync(venvPython, 0o755);
+    const body = `set -e
+is_apple_silicon() { [[ "$TARGET" == apple ]]; }
+reset_universal_venv() { :; }
+venv_exists() { [[ "\${REUSE:-0}" == 1 ]]; }
+venv_python() { echo "$VENV_PYTHON"; }
+pin_venv_arm64() { :; }
+probe_or_fail() { shift 2; "$@" || exit 1; }
+${section}`;
+    const run = (extra = {}) => {
+      writeFileSync(log, '');
+      const result = spawnSync(resolveBashBinary(), ['-c', body], {
+        encoding: 'utf8', env: { ...process.env, HOME: dir.replaceAll('\\', '/'), PYTHON_BIN: python.replaceAll('\\', '/'), VENV_PYTHON: venvPython.replaceAll('\\', '/'), SCRIPT_DIR: join(REPO_ROOT, 'scripts').replaceAll('\\', '/'), CALL_LOG: log.replaceAll('\\', '/'), INSTALL_MINIMAX_MUSIC3_MLX: '1', TARGET: 'apple', ...extra },
+      });
+      return { ...result, calls: readFileSync(log, 'utf8') };
+    };
+    return run;
+  };
+
+  it('keeps every source pin in the complete lock and applies it during fresh Install and Repair', () => {
+    const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-minimax-music3-mlx.lock.txt'), 'utf8');
+    const direct = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-minimax-music3-mlx.txt'), 'utf8').split('\n').filter((line) => /^[\w.-]+(?:\[.*?\])?==/.test(line));
+    for (const pin of direct) expect(lock).toContain(`${pin.replace(/\[.*?\]/, '')} \\`);
+    const run = installer();
+    for (const extra of [{}, { REUSE: '1' }]) {
+      const result = run(extra);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.calls).toContain('pip install --require-hashes --no-deps --only-binary :all: -r');
+      expect(result.calls).toContain('from mlx_audio.music import load');
+      expect(result.stdout).toContain('MiniMax Music 3 MLX venv ready');
+      expect(result.calls.includes('-m venv')).toBe(!extra.REUSE);
+    }
+  });
+
+  it('installs nothing on unsupported hosts or Python versions', () => {
+    const run = installer();
+    const host = run({ TARGET: 'linux' });
+    expect(host.status).toBe(0);
+    expect(host.calls).toBe('');
+    const python = run({ OLD_PYTHON: '1' });
+    expect(python.status).toBe(1);
+    expect(python.stderr).toContain('requires Python 3.12+');
+    expect(python.calls).not.toMatch(/-m venv|pip install|from mlx_audio/);
+    const oldVenv = run({ REUSE: '1', OLD_VENV: '1' });
+    expect(oldVenv.status).toBe(1);
+    expect(oldVenv.stderr).toContain('requires a Python 3.12+ rebuild');
+    expect(oldVenv.calls).not.toContain('pip install');
+  });
+
+  it('repairs a supported existing venv even when the selected base interpreter is older', () => {
+    const result = installer()({ REUSE: '1', OLD_PYTHON: '1' });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.calls).toContain('pip install --require-hashes --no-deps --only-binary :all:');
+    expect(result.stdout).toContain('MiniMax Music 3 MLX venv ready');
+    expect(result.calls).not.toContain('-m venv');
+  });
+
+  it.each([{ INSTALL_EXIT: '41' }, { PROBE_EXIT: '42' }])('does not report readiness after installation/probe failure (%j)', (failure) => {
+    const result = installer()(failure);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).not.toContain('venv ready');
+    if (failure.INSTALL_EXIT) expect(result.calls).not.toContain('from mlx_audio.music');
   });
 });
 
@@ -1600,8 +1762,12 @@ describe('FLUX.2 install is hash-pinned on every platform', () => {
   });
 
   it('Apple Silicon installs from the lock with --require-hashes and resolves nothing', () => {
+    const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-flux2-mlx.txt'), 'utf8')
+      .split(/\r?\n/).filter((line) => /^[\w.-]+(\[[\w,-]+\])?==/.test(line))
+      .map((line) => line.replace(/\[[\w,-]+\]/, ''));
+    for (const pin of direct) expect(lock).toContain(`${pin} ;`);
     expect(appleBranch).toContain('if is_apple_silicon; then');
-    expect(appleBranch).toContain('pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-flux2-mlx.lock.txt"');
+    expect(appleBranch).toContain('pip install --require-hashes --no-deps --only-binary :all: -r "$SCRIPT_DIR/requirements-flux2-mlx.lock.txt"');
     expect(appleBranch).not.toMatch(/pip install --upgrade/);
     expect(appleBranch).not.toContain('git+https');
   });
@@ -1734,8 +1900,40 @@ ${section}`;
 
 describe('ACE-Step Apple Silicon install is hash-pinned', () => {
   const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-acestep-mlx.lock.txt'), 'utf8');
-  const section = source.slice(source.indexOf('INSTALL_ACESTEP" == "1"'), source.indexOf('INSTALL_ACESTEP15="${'));
-  const [appleBranch, otherBranch] = section.split(/^  else$/m);
+  const section = source.slice(source.indexOf('if [[ "$INSTALL_ACESTEP" == "1"'), source.indexOf('INSTALL_ACESTEP15="${'));
+  const [, otherBranch] = section.split(/^  else$/m);
+  const runBlock = ({ repair = false, oldPython = false, appleSilicon = true, failure = '' } = {}) => {
+    const dir = mkdtempSync(join(tmpdir(), 'portos-acestep-test-'));
+    tempVenvs.push(dir);
+    const log = join(dir, 'calls.log');
+    const fakePython = join(dir, 'python3');
+    writeFileSync(fakePython, `#!/bin/bash
+echo "py $*" >> "${log}"
+if [[ "$*" == *version_info* ]]; then exit ${oldPython ? 1 : 0}; fi
+`);
+    chmodSync(fakePython, 0o755);
+    if (repair) mkdirSync(join(dir, '.portos', 'acestep', '.git'), { recursive: true });
+    const script = `set -euo pipefail
+INSTALL_ACESTEP=1; PYTHON_BIN="${fakePython}"; SCRIPT_DIR="${join(REPO_ROOT, 'scripts')}"; HOME="${dir}"
+is_apple_silicon() { return ${appleSilicon ? 0 : 1}; }
+is_macos() { return 0; }
+venv_exists() { return ${repair ? 0 : 1}; }
+venv_python() { echo "${fakePython}"; }
+reset_universal_venv() { :; }
+pin_venv_arm64() { :; }
+git() { echo "git $*" >> "${log}"; }
+git_checkout_pin() { echo "git checkout $2" >> "${log}"; }
+portos_uv() {
+  echo "uv $*" >> "${log}"
+  if [[ "${failure}" == bootstrap && "$*" == *requirements-acestep-mlx-build.lock.txt* ]]; then return 41; fi
+  if [[ "${failure}" == sync && "$2" == sync ]]; then return 42; fi
+  return 0
+}
+probe_or_fail() { echo "probe" >> "${log}"; return ${failure === 'probe' ? 43 : 0}; }
+${section}`;
+    const result = spawnSync(resolveBashBinary(), ['-c', script], { encoding: 'utf8' });
+    return { ...result, calls: existsSync(log) ? readFileSync(log, 'utf8') : '' };
+  };
 
   it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
     const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
@@ -1749,15 +1947,52 @@ describe('ACE-Step Apple Silicon install is hash-pinned', () => {
     expect(lock).not.toMatch(/^[a-z][^\n]* @ /im);
   });
 
-  it('Apple Silicon installs from the lock with --require-hashes and resolves nothing', () => {
-    expect(appleBranch).toContain('is_apple_silicon');
-    expect(appleBranch).toContain('pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-acestep-mlx.lock.txt"');
-    expect(appleBranch).toContain('pip install --no-deps --no-build-isolation "${ACESTEP_DIR}"');
-    expect(appleBranch).not.toMatch(/pip install --upgrade/);
+  it('keeps every direct pin and the build bootstrap consistent with the runtime lock', () => {
+    const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-acestep-mlx.txt'), 'utf8');
+    const build = readFileSync(join(REPO_ROOT, 'scripts/requirements-acestep-mlx-build.lock.txt'), 'utf8');
+    for (const [, name, version] of direct.matchAll(/^([\w.-]+)(?:\[[\w,-]+\])?==([^\s]+)/gm)) {
+      expect(lock).toContain(`${name}==${version} ;`);
+    }
+    const blocks = build.split(/\n(?=[a-z][^\n]*==)/i).filter((block) => /^[a-z][^\n]*==/i.test(block));
+    expect(blocks.map((block) => block.split('==')[0])).toEqual(['cython', 'packaging', 'setuptools', 'wheel']);
+    for (const block of blocks) {
+      expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+      const pin = block.split(' \\')[0];
+      if (!pin.startsWith('cython==')) expect(lock).toContain(`${pin} ;`);
+    }
   });
 
-  it('refuses a Python older than the 3.11 floor the lock was compiled for', () => {
-    expect(appleBranch).toContain('sys.version_info[:2] >= (3, 11)');
+  it.each([false, true])('bootstraps hashed build tools before a no-resolution Install/Repair (repair=%s)', (repair) => {
+    const result = runBlock({ repair });
+    expect(result.status, result.stderr).toBe(0);
+    const calls = result.calls.split('\n');
+    const bootstrap = calls.findIndex((line) => line.includes('requirements-acestep-mlx-build.lock.txt'));
+    const sync = calls.findIndex((line) => line.includes('uv pip sync'));
+    expect(bootstrap).toBeGreaterThanOrEqual(0);
+    expect(sync).toBeGreaterThan(bootstrap);
+    expect(calls[bootstrap]).toContain('pip install --require-hashes --no-deps --only-binary :all:');
+    expect(calls[sync]).toContain('pip sync --require-hashes --no-build-isolation');
+    expect(calls[sync]).toContain('requirements-acestep-mlx.lock.txt');
+    expect(result.calls).toContain('pip install --no-deps --no-build-isolation --python');
+    expect(result.calls).not.toMatch(/pip install --upgrade|-m pip install/);
+    expect(result.stdout).toContain('ACE-Step venv ready');
+    expect(result.calls.includes('git clone')).toBe(!repair);
+  });
+
+  it.each(['bootstrap', 'sync', 'probe'])('does not report ready after a failed %s', (failure) => {
+    const result = runBlock({ failure });
+    expect(result.status, result.stderr).toBe({ bootstrap: 41, sync: 42, probe: 43 }[failure]);
+    expect(result.stdout).not.toContain('ACE-Step venv ready');
+    if (failure !== 'probe') expect(result.calls).not.toContain('probe');
+    if (failure === 'bootstrap') expect(result.calls).not.toContain('uv pip sync');
+  });
+
+  it.each([{ oldPython: true }, { appleSilicon: false }])('refuses unsupported Apple hosts/interpreters before installing (%j)', (options) => {
+    const result = runBlock(options);
+    expect(result.status).toBe(1);
+    expect(result.calls).not.toContain('uv pip');
+    expect(result.calls).not.toContain('git clone');
+    expect(result.stderr).toMatch(/Python 3.11\+|Intel macOS is unsupported/);
   });
 
   it('installs nothing on Linux/Windows outside the hash-pinned CUDA locks and the pinned checkout', () => {
@@ -1783,6 +2018,10 @@ describe.each(['windows', 'linux'])('ACE-Step %s Install/Repair', (target) => {
     expect(lock).not.toMatch(/git\+|^[\w.-]+\s*@/m);
     expect(lock).toMatch(/^setuptools==/m);
     expect(lock).toMatch(/^wheel==/m);
+    const build = readFileSync(join(REPO_ROOT, 'scripts/requirements-acestep-mlx-build.lock.txt'), 'utf8');
+    for (const [, name, version] of build.matchAll(/^([\w.-]+)==([^\s]+)/gm)) {
+      if (name !== 'cython') expect(pins).toContain(`${name}==${version}`);
+    }
   });
 
   it('syncs the lock, then installs only the pinned checkout without dependencies, on Install and Repair', () => {
@@ -1796,6 +2035,8 @@ describe.each(['windows', 'linux'])('ACE-Step %s Install/Repair', (target) => {
     for (const sync of syncs) {
       expect(sync).toContain('--require-hashes --only-binary :all: --no-binary docopt --no-binary unidic-lite');
       expect(sync).toContain(`requirements-acestep-cuda-${target}.lock.txt`);
+      expect(sync).toContain('--preview-features build-dependency-hashes --require-build-hashes --build-constraints');
+      expect(sync).toContain('requirements-acestep-mlx-build.lock.txt');
     }
     const checkouts = commands.filter((line) => /^git -C \S+ checkout /.test(line));
     expect(checkouts).toHaveLength(2);

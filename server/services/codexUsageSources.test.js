@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import * as zlib from 'node:zlib';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
+import { parseCodexRollout } from '../lib/providerTranscriptUsage.js';
 
 const { makeProxy, cleanup, tempRoot } = mockPathsDataRoot({ prefix: 'portos-codex-inventory-' });
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
@@ -70,7 +71,41 @@ describe('Codex accounting inventory', () => {
     for (const privateValue of ['SYNTHETIC TRANSCRIPT TEXT', 'session-a', home]) expect(stored).not.toContain(privateValue);
 
     // A runtime without the decoder reports that rather than coasting on the store.
-    expect((await read({ decompress: null })).coverage.issues).toEqual({ unsupported_compression: 1, missing_identity: 1 });
+    expect((await read({ decompress: null })).coverage.issues).toEqual({ unsupported_compression: 1 });
+  });
+
+  it('keeps a Codex service tier and drops the rest of the thread settings', async () => {
+    const secret = 'SECRET-CWD-NOT-FOR-STORE';
+    await source('sessions/tier.jsonl', [
+      line({ type: 'session_meta', payload: { id: 'tier-session', cwd: CWD, model: 'example-model' } }),
+      line({ timestamp: '2026-07-01T00:00:00Z', type: 'event_msg', payload: { type: 'thread_settings_applied', thread_settings: { service_tier: 'priority', cwd: secret, approval_policy: 'never' } } }),
+      line({ timestamp: '2026-07-01T00:00:01Z', type: 'event_msg', payload: { type: 'agent_message', message: secret } }),
+      line({ timestamp: '2026-07-01T00:00:02Z', type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 100, output_tokens: 10, total_tokens: 110 } } } }),
+    ].join('\n'));
+    const inventory = await read();
+    const records = (await Promise.all(inventory.sessions.map((session) => session.loadRecords()))).flat();
+    expect(records).toContainEqual({ timestamp: '2026-07-01T00:00:00Z', payload: { type: 'thread_settings_applied', service_tier: 'priority' } });
+    const stored = (await Promise.all((await readdir(STORE)).map(async (name) => zlib.gunzipSync(await readFile(join(STORE, name))).toString()))).join('\n');
+    expect(stored).toContain('priority');
+    expect(stored).not.toContain(secret);
+    expect(stored).not.toContain('approval_policy');
+  });
+
+  it('projects a missing service tier as standard so an earlier Fast tier does not stick', async () => {
+    await source('sessions/tier-reset.jsonl', [
+      line({ type: 'session_meta', payload: { id: 'tier-reset', cwd: CWD, model: 'example-model' } }),
+      line({ timestamp: '2026-07-01T00:00:00Z', type: 'event_msg', payload: { type: 'thread_settings_applied', thread_settings: { service_tier: 'priority' } } }),
+      line({ timestamp: '2026-07-01T00:00:01Z', type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 100, output_tokens: 10, total_tokens: 110 } } } }),
+      line({ timestamp: '2026-07-01T00:00:02Z', type: 'event_msg', payload: { type: 'thread_settings_applied', thread_settings: { service_tier: null } } }),
+      line({ timestamp: '2026-07-01T00:00:03Z', type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 300, output_tokens: 40, total_tokens: 340 } } } }),
+    ].join('\n'));
+    const records = (await Promise.all((await read()).sessions.map((session) => session.loadRecords()))).flat();
+    expect(records).toContainEqual({ timestamp: '2026-07-01T00:00:02Z', payload: { type: 'thread_settings_applied', service_tier: 'standard' } });
+    const parsed = parseCodexRollout(records);
+    expect(parsed.fastTokensIn).toBe(100);
+    expect(parsed.fastTokensOut).toBe(10);
+    expect(parsed.tokensIn).toBe(300);
+    expect(parsed.tokensOut).toBe(40);
   });
 
   it('still invalidates a changed, deleted or conflicting source after a restart', async () => {

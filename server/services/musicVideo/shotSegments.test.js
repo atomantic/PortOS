@@ -156,6 +156,42 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
     expect(clean.segments[2].path).toBe(clean.segments[2].basePath);
   }, 60000);
 
+  // Protects both stage placement and selective invalidation through the public plan/render boundary.
+  it('draws steady cards only in overlapping song look stages, or after a frame hold', async () => {
+    const titleCard = { title: 'Song', style: 'mtv', startSec: 0, endSec: 0.75 };
+    const input = project({ id: 'steady-title-segments', filmLook: { preset: 'vhs', grain: 0.4 }, titleCard });
+    const original = await planShotSegments(input);
+    const changed = await planShotSegments({ ...input, titleCard: { ...titleCard, title: 'Edited' } });
+    expect(changed.segments.map(s => s.baseKey)).toEqual(original.segments.map(s => s.baseKey));
+    expect(changed.segments[0].lookKey).not.toBe(original.segments[0].lookKey);
+    expect(changed.segments.slice(1).map(s => s.path)).toEqual(original.segments.slice(1).map(s => s.path));
+    expect(original.segments.every(s => s.cues.every(cue => !cue.titleCard))).toBe(true);
+    await renderMissingSegments(original, { concurrency: 1 });
+    expect(applyFilmLookFinish.mock.calls.map(([o]) => [o.offsetSec, o.titleCard?.title])).toEqual([[0, 'Song'], [1, undefined], [2, undefined]]);
+    expect(applyFilmLookFinish.mock.calls[0][0].titleCardUntilSec).toBe(3);
+
+    const moving = await planShotSegments({ ...input, titleCard: { ...titleCard, steady: false } });
+    expect(moving.segments[0].baseKey).not.toBe(original.segments[0].baseKey);
+    expect(moving.segments[0].cues.some(cue => cue.titleCard)).toBe(true);
+    expect(moving.segments.every(s => !s.titleCard)).toBe(true);
+    const neutral = await planShotSegments({ ...input, scenes: input.scenes.map(s => ({ ...s, filmLook: { preset: 'none' } })) });
+    expect(neutral.segments[0].cues.some(cue => cue.titleCard)).toBe(true);
+    const held = await planShotSegments({ ...input, productionMedium: 'stepped' });
+    expect(held.deferredTitleCard).toMatchObject({ title: 'Song' });
+    expect(held.segments.every(s => !s.titleCard && s.cues.every(cue => !cue.titleCard))).toBe(true);
+    const heldNeutral = await planShotSegments({ ...input, filmLook: null, productionMedium: 'stepped' });
+    expect(heldNeutral.segments.every(s => s.cues.every(cue => !cue.titleCard))).toBe(true);
+
+    fixture.coldOpen = { clips: [footage('c', join(media, 'c.mp4'))] };
+    try {
+      const bookended = await planShotSegments({ ...input, creditsOutro: { enabled: true, title: 'Credits' }, titleCard: { ...titleCard, endSec: 30 } });
+      expect(bookended.segments[0].coldOpen).toBe(true);
+      expect(bookended.segments[0].titleCard).toBeUndefined();
+      expect(bookended.outro).toBeTruthy();
+      expect(bookended.outro.titleCard).toBeUndefined();
+    } finally { fixture.coldOpen = null; }
+  }, 60000);
+
   it('keeps each film look to swap back to, plays what is rendered so far, and deletes a look', async () => {
     const lookA = { preset: 'vhs', grain: 0.3 };
     const lookB = { preset: 'super8', grain: 0.6 };

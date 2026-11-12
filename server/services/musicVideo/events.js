@@ -77,4 +77,10 @@ import { EventEmitter } from 'events';
 //   'cover-art'     → { projectId, project } — the release cover art was
 //     composed, or a cover source image was queued, landed or failed; bridged
 //     to `music-video:cover-art`.
+//
+// A Blender film (services/musicVideo/blender/) adds:
+//   'blender' → { projectId, kind: 'job', job } — a sync, shot render or cut job was queued,
+//     advanced (at most four frames a second per job) or ended; or { projectId, kind: 'state' }
+//     — settings, source, the synced manifest, a note or a cut changed outside a job.
+//     Bridged to `music-video:blender`.
 export const musicVideoEvents = new EventEmitter();

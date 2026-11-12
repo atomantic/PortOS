@@ -35,7 +35,8 @@ async function cloneProjectUnqueued(id, options = {}) {
     }
     const clone = logic.cloneProjectRecord(source, {
       ...options,
-      id: `mv-${randomUUID()}`,
+      // The service names the id when it already placed files under it (a Blender film's scripts).
+      id: options.id || `mv-${randomUUID()}`,
       now: new Date().toISOString(),
     });
     await persist(client.query.bind(client), clone);

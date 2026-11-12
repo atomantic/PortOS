@@ -124,6 +124,34 @@ export async function validateCleanupReviewTarget({ target, workspacePath, requi
 
 const lowerLogin = (value) => String(value ?? '').replace(/^@+/, '').toLowerCase();
 
+// Retries of one scheduler dispatch are one owner, not competing claims. Use
+// the persisted budget epoch and ordinal, never recency alone. Inspection still
+// reads every historical completion policy and the current task below.
+function completedRetryOwner(owners, branch) {
+  if (owners.length === 1) return owners[0];
+  const sorted = [...owners].sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
+  const first = sorted[0];
+  const epoch = first?.metadata?.completionTaskDispatch?.spawnBudgetEpoch;
+  const instance = first?.metadata?.instanceId;
+  if (!epoch || !instance || instance === 'unknown' || !first.taskId) return null;
+  let prior;
+  for (const owner of sorted) {
+    const dispatch = owner.metadata?.completionTaskDispatch;
+    const expected = dispatch?.expected;
+    const ordinal = Array.isArray(expected) ? expected.find(row => Array.isArray(row) && row[0] === 'totalSpawnCount')?.[1] : null;
+    if (owner.status !== 'completed' || owner.taskId !== first.taskId
+      || owner.metadata?.instanceId !== instance || dispatch?.taskId !== first.taskId
+      || dispatch.spawnBudgetEpoch !== epoch || !Number.isSafeInteger(ordinal) || ordinal < 1
+      || !Number.isFinite(Date.parse(owner.startedAt)) || !(Date.parse(owner.completedAt) >= Date.parse(owner.startedAt))
+      || (prior && (ordinal !== prior.ordinal + 1 || Date.parse(owner.startedAt) < Date.parse(prior.owner.completedAt)))) return null;
+    // Recovery reservations and attempts belong to the execution that spent
+    // them. Selecting a retry must never create a fresh per-agent allowance.
+    if (owner !== sorted.at(-1) && owner.metadata?.repoCleanupRecoveries?.[branch]) return null;
+    prior = { owner, ordinal };
+  }
+  return prior?.owner ?? null;
+}
+
 /** Non-optional `@login` reviewers of a roster, lower-cased and `@`-free. */
 function requiredForgeLogins(roster) {
   const optional = new Set((roster.optionalReviewers || []).map(lowerLogin));
@@ -162,13 +190,15 @@ export async function inspectCompletedOwnerReview({ agentId = null, repoPath, br
       ...(Array.isArray(m.claimBranches) ? m.claimBranches : []), ...(Array.isArray(m.claimReleasedBranches) ? m.claimReleasedBranches : [])];
   };
   const owners = agents.filter(agent => samePath(agent.metadata?.sourceWorkspace || agent.metadata?.workspacePath, repoPath) && scopes(agent).includes(branch));
-  if (owners.length !== 1 || (agentId && owners[0].id !== agentId)) return held('review-owner-ambiguous');
-  const agent = owners[0];
+  const agent = completedRetryOwner(owners, branch);
+  if (!agent || (agentId && agent.id !== agentId)) return held('review-owner-ambiguous');
   if (agent.status !== 'completed' || !agent.id || !agent.taskId || !Number.isFinite(Date.parse(agent.startedAt))
     || !(Date.parse(agent.completedAt) >= Date.parse(agent.startedAt))) return held('review-owner-not-completed');
   const { getTaskById, getTaskView } = await import('./cosTaskStore.js');
-  const task = await getTaskById(agent.taskId).catch(() => null);
-  if (!task || task.id !== agent.taskId || task.status !== 'completed') return held('review-task-not-completed');
+  const task = await getTaskById(agent.taskId).catch(() => undefined);
+  if (task === undefined) return held('review-task-unavailable');
+  if (!task) return held('review-task-missing');
+  if (task.id !== agent.taskId || task.status !== 'completed') return held('review-task-not-completed');
   const policy = resolvePrCompletion(task.metadata);
   if (agentPrHeldForOperator(agent, task)) return held('review-policy-held');
   const policyHold = await readBranchCompletionHold({ repoPath, branch, prUrl, tip: headSha, agents });

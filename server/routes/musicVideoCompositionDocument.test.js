@@ -453,6 +453,12 @@ describe('music-video composition documents', () => {
     expect((await projects.getProject(project.id)).titleCard).toEqual(saved.body.titleCard);
     expect((await request(app).patch(`/api/music-video/${project.id}`).send({ titleCard: { title: 'x', label: 'y' } })).status).toBe(400);
     expect((await request(app).patch(`/api/music-video/${project.id}`).send({ titleCard: { position: 'sideways' } })).status).toBe(400);
+    // The slide, the separate fade out and steady drawing pass the strict schema and are stored.
+    const moving = await request(app).patch(`/api/music-video/${project.id}`).send({ titleCard: { title: 'Example Song', fadeSec: 1, fadeOutSec: 0.3, slideIn: 'left', slideSec: 1.2, slidePct: 20, steady: true } });
+    expect(moving.status).toBe(200);
+    expect((await projects.getProject(project.id)).titleCard).toMatchObject({ fadeSec: 1, fadeOutSec: 0.3, slideIn: 'left', slideSec: 1.2, slidePct: 20, steady: true });
+    expect((await request(app).patch(`/api/music-video/${project.id}`).send({ titleCard: { slideIn: 'up' } })).status).toBe(400);
+    expect((await request(app).patch(`/api/music-video/${project.id}`).send({ titleCard: { slidePct: 0 } })).status).toBe(400);
     const cleared = await request(app).patch(`/api/music-video/${project.id}`).send({ titleCard: null });
     expect(cleared.status).toBe(200);
     expect(cleared.body.titleCard).toBeNull();

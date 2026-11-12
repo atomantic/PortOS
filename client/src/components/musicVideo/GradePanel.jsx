@@ -8,7 +8,7 @@ const options = MUSIC_VIDEO_GRADE_PRESETS.map((preset) => <option key={preset} v
 /** Explicit render-time looks; no provider calls or changes to generated assets. */
 export default function GradePanel({ project, onSave }) {
   const composition = compositionDraft(project);
-  if (!['composed', 'document'].includes(composition.mode)) return null;
+  if (!['composed', 'document', 'blender'].includes(composition.mode)) return null;
   const grade = composition.grade || { preset: 'neutral', grain: MUSIC_VIDEO_GRADE_DEFAULT_GRAIN, sections: [] };
   const save = (patch) => {
     const update = { composition: { ...composition, grade: { ...grade, ...patch } } };
@@ -25,7 +25,7 @@ export default function GradePanel({ project, onSave }) {
         <button type="button" className="min-h-[44px] text-xs text-port-accent"
           onClick={() => save({ preset: 'neutral', sections: [] })}>Reset grades to neutral</button>
       </div>
-      <p className="text-xs text-port-text-muted">Opt-in color curves and repeatable grain on composed and document exports. Source footage stays unchanged. Render an excerpt to review the grade; the live document preview is ungraded.</p>
+      <p className="text-xs text-port-text-muted">Opt-in color curves and repeatable grain on composed, document, and Blender film exports. Source footage stays unchanged. Render an excerpt to review the grade; live previews are ungraded.</p>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <div>
           <label htmlFor="mv-grade-preset" className="text-xs text-port-text-muted">Default section look</label>

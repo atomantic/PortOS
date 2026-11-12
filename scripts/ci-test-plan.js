@@ -367,6 +367,9 @@ export const ALWAYS_RUN_TESTS = [
   'docs/features/product-surfaces.test.js',
   'scripts/agent-instructions-files.test.js',
   'scripts/doc-code-pointers.test.js',
+  // A newly added shared selector has no import edge to its documentation
+  // inventory. Check that contract before broad suites, including docs-only edits.
+  'server/lib/executionOptions.consumers.test.js',
   // Whole-tree scanner: a new browser suite can adopt the gate with no import
   // edge back to the registry it must join (#10312).
   'scripts/browser-suite-registry.test.js',
@@ -404,6 +407,7 @@ export const ALWAYS_RUN_TESTS = [
   // walkers (#8723): the offending file is never imported by the guard, so
   // impact selection only reaches them when the guard itself changes.
   'server/lib/apiRouteGraph.test.js',
+  'server/lib/apiRouteParity.test.js',
   // Route inventories and write-back scans depend on independently changed files (#13224).
   'server/lib/hostControlRoutes.test.js',
   'server/jsonWritebackConventions.test.js',
@@ -647,6 +651,7 @@ export const LINUX_CONTAINMENT_TESTS = [
   'server/lib/codeAnimationContainment.test.js',
   'server/routes/codeAnimationExecution.test.js',
   'server/services/codeAnimation/containedWorker.test.js',
+  'scripts/ci-install-containment-tools.test.js',
 ];
 // The server Vitest config and its setup files load around every one of those
 // tests; vitestTempRootSetup.js is named by URL, not by an import edge.
@@ -657,7 +662,7 @@ const LINUX_CONTAINMENT_ENTRIES = [
   'scripts/vitestTempRootSetup.js',
 ];
 // The job installs server dependencies from these before running anything.
-export const LINUX_CONTAINMENT_PATH_RE = /^(?:server\/package(?:-lock)?\.json|\.github\/workflows\/ci\.yml)$/;
+export const LINUX_CONTAINMENT_PATH_RE = /^(?:server\/package(?:-lock)?\.json|scripts\/ci-install-containment-tools\.sh|\.github\/workflows\/ci\.yml)$/;
 // The `supercollider-live` job builds docker/supercollider/ through the setup
 // script and runs the opt-in live suite on native amd64 and arm64 runners. The
 // setup script and the live test reach the runtime, render service and the
@@ -867,7 +872,7 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
   // the parity guard a client wrapper stranded by a renamed mount, and the
   // prompt-stage drift test a stale manifest — which is what a scoped plan
   // let merge before this rule existed (#5898).
-  if (changedFiles.some((path) => /^server\/.*\.js$/.test(path) || /^server\/lib\/.*\.generated\.json$/.test(path))) {
+  if (changedFiles.some((path) => /^server\/.*\.js$/.test(path) || /^server\/lib\/.*\.generated\.json$/.test(path) || /^client\/src\/services\/api.*\.js$/.test(path))) {
     add('server/lib/apiRouteGraph.test.js');
     add('server/lib/apiRouteParity.test.js');
     add('scripts/generate-prompt-stage-call-sites.test.js');

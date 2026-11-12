@@ -1,7 +1,7 @@
 import { spawn } from '../lib/childProcess.js';
 import { existsSync } from 'fs';
 import { writeFile, unlink } from 'fs/promises';
-import { join, dirname } from 'path';
+import { join, dirname, resolve as resolvePath } from 'path';
 import { createRequire } from 'module';
 import { randomUUID } from 'crypto';
 import { homedir } from 'os';
@@ -279,13 +279,44 @@ async function spawnPm2Cli(action, name, pm2Home) {
   return { success: true };
 }
 
+// PM2 constructs sockets during import and client construction, before callers
+// can attach error handlers. Reject invalid Unix addresses before either step.
+function preflightSocketPaths(pm2Home = process.env.PM2_HOME || join(homedir(), '.pm2')) {
+  if (IS_WIN) return;
+  const maxBytes = process.platform === 'darwin' ? 103 : 107;
+  for (const [key, filename] of [
+    ['PM2_DAEMON_RPC_PORT', 'rpc.sock'],
+    ['PM2_DAEMON_PUB_PORT', 'pub.sock'],
+    ['PM2_INTERACTOR_RPC_PORT', 'interactor.sock'],
+  ]) {
+    const socketPath = process.env[key] || resolvePath(pm2Home, filename);
+    if (Buffer.byteLength(socketPath) > maxBytes) {
+      throw Object.assign(new Error(`PM2_SOCKET_PATH_TOO_LONG: ${key} exceeds ${maxBytes} bytes`), {
+        code: 'PM2_SOCKET_PATH_TOO_LONG',
+      });
+    }
+  }
+}
+
+// executeRemote (including pm2.list) starts a daemon if its connection vanished.
+// Reads must call the already established RPC without that fallback.
+function readDaemon(client, method) {
+  return new Promise((resolve, reject) => {
+    const rpc = client.Client.client;
+    if (!rpc?.call) { reject(new Error('PM2 daemon connection unavailable')); return; }
+    rpc.call(method, {}, (error, value) => error ? reject(error) : resolve(value));
+  });
+}
+
 /** Each operation owns its native client, including deadline teardown. */
-async function connectAndRun(action, timeoutMs = COMMAND_TIMEOUT_MS, { existingOnly = false } = {}) {
+async function connectAndRun(action, timeoutMs = COMMAND_TIMEOUT_MS, { existingOnly = false, pm2Home = null } = {}) {
   // Importing PM2 constructs its singleton and probes the interactor socket.
   // Merely loading a reconciliation/peer-sync dependency must not contact it.
+  preflightSocketPaths();
+  if (pm2Home) preflightSocketPaths(pm2Home);
   const { default: pm2 } = await import('pm2');
   return new Promise((resolve, reject) => {
-    const client = new pm2.custom();
+    const client = new pm2.custom({ pm2_home: pm2Home || process.env.PM2_HOME || join(homedir(), '.pm2') });
     let settled = false;
     const disconnect = () => new Promise(resolveCleanup => {
       // launchRPC can be left reconnecting to a vanished daemon. Close that
@@ -503,8 +534,8 @@ export const parseJlistStdout = parsePm2JlistStdout;
 
 /**
  * Fetch PM2 process list with TTL caching.
- * Uses the PM2 Node.js API for the default PM2_HOME (no subprocess spawning — avoids
- * visible cmd windows on Windows). Falls back to CLI only for custom PM2_HOME paths.
+ * Uses an existing daemon over the Node.js API for default and custom homes,
+ * without subprocess spawning or starting a missing daemon.
  * @param {string} pm2Home Optional custom PM2_HOME path
  * @returns {Promise<Array|null>} Raw process list from PM2, or null on error
  */
@@ -521,12 +552,8 @@ function fetchJlist(pm2Home = null) {
   const startedAt = performance.now();
   const sample = beginLoadSample();
   // Defer the read until the single-flight entry exists, even for a sync callback.
-  const promise = Promise.resolve().then(() => pm2Home
-    ? execPm2(['jlist'], { env: buildEnv(pm2Home), timeoutMs: JLIST_TIMEOUT_MS })
-      .then(({ stdout }) => parseJlistStdout(stdout))
-    : connectAndRun(client => new Promise((resolve, reject) => {
-      client.list((error, list) => error ? reject(error) : resolve(list));
-    }), JLIST_TIMEOUT_MS)
+  const promise = Promise.resolve().then(() =>
+    connectAndRun(client => readDaemon(client, 'getMonitorData'), JLIST_TIMEOUT_MS, { existingOnly: true, pm2Home })
   ).then(list => {
     if (!Array.isArray(list)) throw new Error('Invalid PM2 process list response');
     logJlistRecovery(pm2Home);
@@ -606,13 +633,7 @@ export async function getProcessesToRestartOnUpdate(names, pm2Home = null) {
 async function callExistingDaemon(method) {
   const rpcPath = process.env.PM2_DAEMON_RPC_PORT || join(process.env.PM2_HOME || join(homedir(), '.pm2'), 'rpc.sock');
   if (!IS_WIN && !existsSync(rpcPath)) return null;
-  return connectAndRun(client => new Promise((resolve, reject) => {
-    // executeRemote() silently calls start() if its connection has disappeared;
-    // use the established RPC directly so a read cannot launch a daemon.
-    const rpc = client.Client.client;
-    if (!rpc?.call) { reject(new Error('PM2 daemon connection unavailable')); return; }
-    rpc.call(method, {}, (error, value) => error ? reject(error) : resolve(value));
-  }), JLIST_TIMEOUT_MS, { existingOnly: true }).catch(() => null);
+  return connectAndRun(client => readDaemon(client, method), JLIST_TIMEOUT_MS, { existingOnly: true }).catch(() => null);
 }
 
 /** Fresh read of an existing daemon; unlike connect(), this cannot start one. */
@@ -631,19 +652,16 @@ export async function getDaemonIdentity() {
 
 /** Internal maintenance inventory: fresh daemon read, no UI cache or env dump. */
 export async function listMaintenanceProcesses() {
-  return connectAndRun(pm2 => new Promise((resolve, reject) => {
-    pm2.list((err, list) => {
-      if (err || !Array.isArray(list)) {
-        reject(new Error('PM2 maintenance inventory unavailable.'));
-        return;
-      }
-      resolve(list.map(proc => ({
-        name: proc?.name, pmId: proc?.pm_id, pid: proc?.pid,
-        status: proc?.pm2_env?.status,
-        cwd: proc?.pm2_env?.pm_cwd, script: proc?.pm2_env?.pm_exec_path,
-      })));
-    });
-  }));
+  return connectAndRun(client => readDaemon(client, 'getMonitorData').then(list => {
+    if (!Array.isArray(list)) throw new Error('PM2 maintenance inventory unavailable.');
+    return list.map(proc => ({
+      name: proc?.name, pmId: proc?.pm_id, pid: proc?.pid,
+      status: proc?.pm2_env?.status,
+      cwd: proc?.pm2_env?.pm_cwd, script: proc?.pm2_env?.pm_exec_path,
+    }));
+  }).catch(error => {
+    throw Object.assign(new Error('PM2 maintenance inventory unavailable.'), { cause: error });
+  }), JLIST_TIMEOUT_MS, { existingOnly: true });
 }
 
 /**

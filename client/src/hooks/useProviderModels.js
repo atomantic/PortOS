@@ -61,9 +61,8 @@ function preferredInitialProvider(providers, activeProviderId, { allowDefault = 
  * @param {function} [options.modelFilter] - `(modelId, provider) => boolean`
  *   predicate applied to each provider's selectable model list (after the
  *   sentinel strip). Use for capability-scoped pickers (e.g. vision-only). When
- *   set, the auto-selected / provider-change model is the first model that
- *   passes the filter rather than the provider's `defaultModel` (which may not
- *   qualify). Omit for the full selectable list.
+ *   set, the auto-selected / provider-change model keeps the provider's
+ *   `defaultModel` when it passes the filter, otherwise the first matching model. Omit for the full selectable list.
  *
  *   A `modelFilter` whose IDENTITY changes is supported and expected: a vision
  *   picker starts on the client-side id regex and widens once the server's
@@ -107,9 +106,9 @@ export default function useProviderModels({ filter, allowDefault = false, presel
   const userPickedModelRef = useRef(false);
 
   // Resolve the model to pin when a provider is (auto-)selected. With a
-  // modelFilter, the provider's defaultModel may not qualify (e.g. a vision
-  // picker on a local backend whose default is a text model), so pick the first
-  // model that passes the filter instead.
+  // modelFilter, keep the configured default when eligible. Fall back to the
+  // first matching model only when the default does not qualify (for example,
+  // a local text-only default in a vision picker).
   const pickInitialModel = useCallback((provider) => {
     const models = filterHardwareCompatibleProviderModels(
       filterSelectableModels(sourceModels(provider, withEffort)),
@@ -126,7 +125,10 @@ export default function useProviderModels({ filter, allowDefault = false, presel
       return models[0] || '';
     }
     const filtered = models.filter((m) => modelFilter(m, provider));
-    return filtered[0] || '';
+    const defaultModel = provider?.defaultModel;
+    return defaultModel && filterSelectableModels([defaultModel]).length
+      && isProviderModelHardwareCompatible(provider, defaultModel) && modelFilter(defaultModel, provider)
+      ? defaultModel : (filtered[0] || '');
   }, [modelFilter, withEffort]);
 
   // `load` must NOT depend on `pickInitialModel` (and so on `modelFilter`): a
@@ -210,6 +212,11 @@ export default function useProviderModels({ filter, allowDefault = false, presel
         currentProvider,
       );
       const filtered = modelFilter ? models.filter((m) => modelFilter(m, currentProvider)) : models;
+      const defaultModel = currentProvider.defaultModel;
+      if (modelFilter && defaultModel && !filtered.includes(defaultModel)
+        && filterSelectableModels([defaultModel]).length
+        && isProviderModelHardwareCompatible(currentProvider, defaultModel)
+        && modelFilter(defaultModel, currentProvider)) filtered.push(defaultModel);
       // Legacy-pin escape hatch (see `withStaleAntigravityPin`): only relevant
       // once the list has been collapsed to base models, so it rides `withEffort`.
       return withEffort ? withStaleAntigravityPin(currentProvider, filtered, selectedModel) : filtered;
@@ -228,8 +235,8 @@ export default function useProviderModels({ filter, allowDefault = false, presel
   useEffect(() => {
     if (!modelFilter || allowDefault || userPickedModelRef.current) return;
     if (!hasSetInitialRef.current || !currentProvider) return;
-    // Still valid under the current filter → nothing to revise.
-    if (selectedModel && availableModels.includes(selectedModel)) return;
+    // A capability result may make the configured default eligible after an
+    // initial fallback. Only explicit user picks are sticky.
     const next = pickInitialModel(currentProvider);
     if (next !== selectedModel) setSelectedModel(next);
   }, [modelFilter, allowDefault, currentProvider, availableModels, selectedModel, pickInitialModel]);

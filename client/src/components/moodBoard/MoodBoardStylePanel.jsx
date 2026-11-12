@@ -21,7 +21,7 @@ import useVisionModelIds from '../../hooks/useVisionModelIds';
 import useImageRenderSettings from '../../hooks/useImageRenderSettings';
 import useSingleImageRender from '../../hooks/useSingleImageRender';
 import { getMoodBoard, getMoodBoardAnalyze, startMoodBoardAnalyze, updateMoodBoard, composeMoodBoardPrompt } from '../../services/api';
-import { isVisionCapableCliProvider, visionLocalModelFilter } from '../../utils/providers';
+import { isVisionCapableCodexTuiProvider, isVisionCapableCliProvider, visionLocalModelFilter } from '../../utils/providers';
 import { formatCount } from '../../utils/formatters';
 import { moodBoardPosterSrc } from '../../lib/moodBoardItemSrc';
 import {
@@ -29,9 +29,10 @@ import {
   boardPosterRenderCfg,
   posterStyleKey,
 } from '../../lib/moodBoardAnalysis';
-import { modeLabel } from '../../lib/imageGenBackends';
+import { modeLabel, IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import { QUEUEABLE_IMAGE_MODES } from '../../../../server/lib/generationModes.js';
 
-const visionProviderFilter = (p) => p.enabled && (p.type === 'api' || isVisionCapableCliProvider(p));
+const visionProviderFilter = (p) => p.enabled && (p.type === 'api' || isVisionCapableCliProvider(p) || isVisionCapableCodexTuiProvider(p));
 
 export default function MoodBoardStylePanel({ board, onBoardChange }) {
   const mountedRef = useMounted();
@@ -56,10 +57,17 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
   // Stays shown while a saved negative prompt is being cleared.
   const negativeShown = negativeOpen || Boolean(negative) || Boolean(savedNegative);
   const [composing, setComposing] = useState(false);
-  const [job, setJob] = useState(null);
-  const jobRunning = job?.status === 'running';
-  const busy = composing || jobRunning;
   const boardId = board?.id;
+  const [startRequest, setStartRequest] = useState(null);
+  const startingRef = useRef(null);
+  const starting = Boolean(boardId && startRequest?.boardId === boardId);
+  const [jobSnapshot, setJob] = useState(null);
+  const job = jobSnapshot?.boardId === boardId ? jobSnapshot : null;
+  const jobRunning = job?.status === 'running';
+  const busy = composing || jobRunning || starting;
+  const boardIdRef = useRef(boardId);
+  boardIdRef.current = boardId;
+  const refreshRef = useRef(0);
   const jobRunningRef = useRef(false);
   jobRunningRef.current = jobRunning;
   const [savingStyle, setSavingStyle] = useState(false);
@@ -90,6 +98,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
 
   const { imageCfg, backends } = useImageRenderSettings({ includeExternal: true });
   const resolvedMode = rendererMode || imageCfg?.mode || '';
+  const canCompleteRender = QUEUEABLE_IMAGE_MODES.includes(resolvedMode);
   const rendererOptions = backends.some((b) => b.id === resolvedMode) || !resolvedMode
     ? backends
     : [{ id: resolvedMode, label: modeLabel(resolvedMode) }, ...backends];
@@ -97,6 +106,16 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
   const styleDirty = prompt.trim() !== savedPrompt.trim()
     || negative.trim() !== savedNegative.trim();
   const canRender = Boolean(board?.id) && Boolean(savedPrompt.trim()) && !styleDirty && !busy;
+  // Existing composition metadata lets a newly added or re-analyzed pin make
+  // the shortcut available again without hiding the individual redo actions.
+  const composedAt = Date.parse(board?.style?.composedAt || '');
+  const hasNewerInput = items.some((item) =>
+    Date.parse(item.createdAt || '') > composedAt
+    || Date.parse(item.analysis?.analyzedAt || '') > composedAt);
+  const complete = Boolean(posterSrc && savedPrompt.trim()) && !styleDirty
+    && plan.pending.length === 0 && plan.skipped === 0 && plan.analyzed >= board?.style?.analyzedItemCount
+    && !hasNewerInput;
+  const showMakeComplete = !complete || (jobRunning && job.makeComplete);
 
   const onPosterComplete = async (filename) => {
     if (!board?.id || !filename) return;
@@ -142,30 +161,34 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
       return null;
     }
     onBoardChange(updated);
-    toast.success('Board style composed from item analyses');
+    toast.success('Style prompt updated from saved pin analyses');
     return updated;
   };
 
   // The analyze run lives on the server, so leaving the page never cancels it.
   // Restore its state on mount and follow the push events while it runs.
   const applyJob = useCallback(async (next) => {
-    if (!mountedRef.current) return;
+    if (!mountedRef.current || boardIdRef.current !== boardId) return;
+    const refresh = ++refreshRef.current;
     setJob(next);
     // Pull in the analyses saved so far, and the composed style once it ends.
     const fresh = await getMoodBoard(boardId, { silent: true }).catch(() => null);
-    if (mountedRef.current && fresh) onBoardChange(fresh);
+    if (mountedRef.current && boardIdRef.current === boardId && refresh === refreshRef.current && fresh) onBoardChange(fresh);
   }, [boardId, mountedRef, onBoardChange]);
 
   useEffect(() => {
     if (!boardId) return undefined;
     let cancelled = false;
-    getMoodBoardAnalyze(boardId, { silent: true })
-      .then((current) => {
-        if (cancelled || !current) return;
-        // A finished run from earlier is only news if it just ended.
-        if (current.status === 'running') applyJob(current);
-      })
-      .catch(() => {});
+    const restore = () => {
+      const refresh = refreshRef.current;
+      getMoodBoardAnalyze(boardId, { silent: true })
+        .then((current) => {
+          if (cancelled || refresh !== refreshRef.current) return;
+          if (current || jobRunningRef.current) applyJob(current);
+        })
+        .catch(() => {});
+    };
+    restore();
     const onEvent = (evt) => {
       if (evt?.boardId !== boardId) return;
       const wasRunning = jobRunningRef.current;
@@ -173,41 +196,53 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
       else {
         applyJob(evt);
         if (wasRunning) {
-          if (evt.status === 'done') toast.success('Board style composed from item analyses');
+          if (evt.status === 'done') toast.success(evt.makeComplete ? 'Board complete: style prompt and main image saved' : 'Style prompt updated from saved pin analyses');
           else toast.error(evt.error || 'Board analysis failed');
         }
       }
     };
     socket.on('mood-board:analyze', onEvent);
+    socket.on('connect', restore);
     return () => {
       cancelled = true;
       socket.off('mood-board:analyze', onEvent);
+      socket.off('connect', restore);
     };
   }, [boardId, applyJob]);
 
   const jobProgress = jobRunning
-    ? (job.phase === 'composing'
+    ? (job.phase === 'rendering' ? 'Creating main board image…' : job.phase === 'composing'
       ? 'Composing board style…'
       : job.total > 0
         ? `Analyzing ${formatCount(Math.min(job.done + 1, job.total))} of ${formatCount(job.total)}`
         : 'Preparing…')
     : '';
 
-  const analyzeBoard = async () => {
-    if (!board?.id || busy) return;
+  const analyzeBoard = async (makeComplete = false) => {
+    if (!boardId || busy || startingRef.current?.boardId === boardId) return;
     if (!selectedProviderId) {
       toast.error('Select a vision-capable provider to analyze the board');
       return;
     }
-    const started = await startMoodBoardAnalyze(board.id, {
+    const request = { boardId };
+    const refresh = refreshRef.current;
+    startingRef.current = request;
+    setStartRequest(request);
+    const started = await startMoodBoardAnalyze(boardId, {
+      ...(makeComplete ? { render: { mode: resolvedMode, ...(resolvedMode === IMAGE_GEN_MODE.LOCAL && imageCfg?.modelId ? { model: imageCfg.modelId } : {}) } } : {}),
       providerId: selectedProviderId,
       model: selectedModel || undefined,
       effort: effort || undefined,
     }, { silent: true }).catch((err) => {
-      toast.error(err?.message || 'Could not start the board analysis');
+      if (mountedRef.current && boardIdRef.current === boardId) toast.error(err?.message || 'Could not start the board analysis');
       return null;
     });
-    if (mountedRef.current && started) setJob(started);
+    if (startingRef.current === request) startingRef.current = null;
+    if (mountedRef.current) {
+      setStartRequest((current) => current === request ? null : current);
+      // Push events and restored state received since kickoff are newer than this response.
+      if (started && boardIdRef.current === boardId && refresh === refreshRef.current) setJob(started);
+    }
   };
 
   const composeOnly = async () => {
@@ -307,11 +342,23 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
         </div>
       ) : null}
 
+      {showMakeComplete ? <div className="space-y-1">
+        <button type="button" onClick={() => analyzeBoard(true)}
+          disabled={busy || Boolean(jobId) || styleDirty || !selectedProviderId || !canCompleteRender || !analyzable}
+          className="min-h-[40px] px-3 py-1.5 text-sm rounded bg-port-success text-white hover:bg-port-success/80 disabled:opacity-50">
+          {jobRunning && job.makeComplete ? jobProgress : 'Make complete'}
+        </button>
+        <p className="text-xs text-gray-400">Analyze missing pins, compose positive and negative style prompts, then create the main board image with the selected poster renderer. Saved analyses are reused; the current image stays until its replacement is ready.</p>
+        {!canCompleteRender ? <p className="text-xs text-port-warning">Choose a queueable backend in Poster renderer below to use Make complete. External API rendering remains available through Generate poster.</p> : null}
+        {styleDirty ? <p className="text-xs text-port-warning">Save your style edits before running Make complete.</p> : null}
+        {job?.makeComplete && job.status === 'failed' ? <p role="alert" className="text-xs text-port-warning">{job.error} Saved analyses are kept. Make complete retries the workflow.</p> : null}
+        {job?.makeComplete && job.status === 'done' ? <p role="status" className="text-xs text-port-success">Board complete: style prompt and main image saved.</p> : null}
+      </div> : null}
       <div className="flex flex-wrap items-center gap-2">
         {showAnalyze ? (
           <button
             type="button"
-            onClick={analyzeBoard}
+            onClick={() => analyzeBoard()}
             disabled={busy || !selectedProviderId}
             className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
           >
@@ -326,13 +373,20 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
             disabled={busy}
             className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-bg border border-port-border text-gray-200 hover:text-white disabled:opacity-50 transition-colors"
           >
-            Compose board style
+            {composing ? 'Composing style prompt…' : 'Compose style prompt'}
           </button>
         ) : null}
         {!showAnalyze && !showCompose ? (
           <p className="text-xs text-gray-500">Pin an image or video to analyze this board.</p>
         ) : null}
       </div>
+
+      {showCompose ? (
+        <p className="text-xs text-gray-400">
+          Combines saved pin analyses into the Style prompt below for posters and renders.
+          It does not re-analyze images or replace your Board prompt.
+        </p>
+      ) : null}
 
       {/* Provider, model and effort fold into one summary line until changed. */}
       <div>
@@ -376,6 +430,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
         <label htmlFor="board-style-prompt" className="block text-xs text-gray-400 mb-1">Style prompt</label>
         <textarea
           id="board-style-prompt"
+          disabled={busy}
           value={prompt}
           rows={5}
           maxLength={8000}
@@ -389,6 +444,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
           <label htmlFor="board-style-negative" className="block text-xs text-gray-400 mb-1">Negative prompt (optional)</label>
           <textarea
             id="board-style-negative"
+            disabled={busy}
             value={negative}
             rows={2}
             maxLength={8000}
@@ -425,7 +481,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
             id="board-poster-renderer"
             value={resolvedMode}
             onChange={(e) => setRendererMode(e.target.value)}
-            disabled={Boolean(jobId) || rendererOptions.length === 0}
+            disabled={busy || Boolean(jobId) || rendererOptions.length === 0}
             className="w-full min-h-[40px] bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
           >
             {rendererOptions.length === 0 ? <option value="">Loading renderers…</option> : null}
@@ -448,6 +504,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
       {posterSrc ? (
         <Modal
           open={previewOpen}
+          usePortal
           onClose={() => setPreviewOpen(false)}
           size="3xl"
           backdropClassName="bg-black/85"

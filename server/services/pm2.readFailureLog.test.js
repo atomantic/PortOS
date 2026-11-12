@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ connect: vi.fn(), list: vi.fn(), disconnect: vi.fn(cb => cb(null)) }));
-vi.mock('pm2', () => ({ default: { custom: function () { return mocks; } } }));
+const mocks = vi.hoisted(() => ({ launchRPC: vi.fn(), list: vi.fn(), disconnect: vi.fn(cb => cb(null)) }));
+vi.mock('pm2', () => ({ default: { custom: function () { return { ...mocks, connect: vi.fn(), Client: { launchRPC: mocks.launchRPC, client: { call: (_method, _data, cb) => mocks.list(cb) } } }; } } }));
 import { clearJlistCache, listProcessesStrict } from './pm2.js';
 
 afterEach(() => {
@@ -18,16 +18,16 @@ describe('PM2 read failure logging (#8431)', () => {
   it('logs a persistent failure once, a changed reason again, and one recovery line', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    mocks.connect.mockImplementation(later((cb) => cb(new Error('connect ECONNREFUSED'))));
+    mocks.launchRPC.mockImplementation(later((cb) => cb(new Error('connect ECONNREFUSED'))));
 
     for (let i = 0; i < 3; i++) expect(await listProcessesStrict()).toBeNull();
     expect(readLines(errorSpy, 'PM2 read failed')).toEqual(['❌ PM2 read failed (home=default): connect ECONNREFUSED']);
 
-    mocks.connect.mockImplementation(later((cb) => cb(new Error('daemon timeout'))));
+    mocks.launchRPC.mockImplementation(later((cb) => cb(new Error('daemon timeout'))));
     await listProcessesStrict();
     expect(readLines(errorSpy, 'PM2 read failed')).toHaveLength(2);
 
-    mocks.connect.mockImplementation(later((cb) => cb(null)));
+    mocks.launchRPC.mockImplementation(later((cb) => cb(null)));
     mocks.list.mockImplementation(later((cb) => cb(null, [])));
     expect(await listProcessesStrict()).toEqual([]);
     clearJlistCache();
@@ -39,7 +39,7 @@ describe('PM2 read failure logging (#8431)', () => {
   it('attributes an RPC timeout to process CPU, GC, host load and context switches', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    mocks.connect.mockImplementation(() => {});
+    mocks.launchRPC.mockImplementation(() => {});
 
     const read = listProcessesStrict();
     await vi.advanceTimersByTimeAsync(15_000);

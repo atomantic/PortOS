@@ -66,6 +66,18 @@ describe.skipIf(!runDb)('mood board DB round-trip', () => {
     // The pool is closed once, by the federation describe's afterAll (runs last).
   });
 
+  it('attaches a complete-board poster only to the style it rendered', async () => {
+    const board = await db.createBoard({ name: 'Poster test', description: 'Preserve direction' });
+    created.push(board.id);
+    const style = { prompt: 'soft ink', negativePrompt: 'sharp edges' };
+    await db.updateBoard(board.id, { style, posterImageRef: 'old.png' });
+    await db.attachBoardPoster(board.id, style, 'new.png');
+    expect(await db.getBoard(board.id)).toMatchObject({ description: 'Preserve direction', posterImageRef: 'new.png' });
+    await db.updateBoard(board.id, { style: { ...style, negativePrompt: 'neon' } });
+    await expect(db.attachBoardPoster(board.id, style, 'stale.png')).rejects.toThrow('Board style changed');
+    expect((await db.getBoard(board.id)).posterImageRef).toBe('new.png');
+  });
+
   it('lists live boards as id + name only', async () => {
     const board = await db.createBoard({ name: 'Named board' });
     created.push(board.id);
@@ -85,6 +97,25 @@ describe.skipIf(!runDb)('mood board DB round-trip', () => {
 
     const list = await db.listBoards();
     expect(list.some((b) => b.id === board.id)).toBe(true);
+  });
+
+  it('persists a complete composite independently from its source boards', async () => {
+    const first = await db.createBoard({ name: 'Ink' });
+    const second = await db.createBoard({ name: 'Neon' });
+    created.push(first.id, second.id);
+    await db.addBoardItem(first.id, { type: 'text', text: 'Brush strokes' });
+    await db.updateBoard(first.id, { style: { prompt: 'Ink washes' } });
+    await db.addBoardItem(second.id, { type: 'image', mediaKey: 'image:composite-fixture.png' });
+    await db.updateBoard(second.id, { style: { prompt: 'Neon light' } });
+    const sources = await Promise.all([db.getBoard(first.id), db.getBoard(second.id)]);
+    const composite = await db.createCompositeBoard({ name: 'Ink neon', style: { prompt: 'Luminous ink washes' } }, sources);
+    created.push(composite.id);
+    expect(await db.getBoard(composite.id)).toEqual(composite);
+    expect(composite.items).toHaveLength(0);
+    expect(composite.style.prompt).toBe('Luminous ink washes');
+    await db.updateBoard(composite.id, { style: { prompt: 'Edited blend' } });
+
+    expect(await Promise.all([db.getBoard(first.id), db.getBoard(second.id)])).toEqual(sources);
   });
 
   it('updates board metadata', async () => {

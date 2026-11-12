@@ -1,0 +1,9 @@
+# Build tools for ACE-Step's docopt/unidic-lite/mojimoji source dependencies and
+# pinned checkout. Install this complete hash lock before the runtime lock and
+# disable build isolation so neither Install nor Repair resolves build tools.
+# Keep shared pins aligned with requirements-acestep-mlx.lock.txt.
+# mojimoji needs Cython when its Python/platform wheel is unavailable.
+setuptools==84.2.1
+wheel==0.48.0
+packaging==26.3
+cython==3.3.1

@@ -11,6 +11,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Plus, Palette, Trash2, ImageIcon, FileText, Film } from 'lucide-react';
+import CombineMoodBoards from '../components/moodBoard/CombineMoodBoards';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
@@ -187,6 +188,7 @@ export default function MoodBoards() {
   const navigate = useNavigate();
   const [boards, setBoards] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [combining, setCombining] = useState(false);
   const [creating, setCreating] = useState(false);
   const [confirmingId, setConfirmingId] = useState(null);
 
@@ -227,17 +229,23 @@ export default function MoodBoards() {
         title="Mood Boards"
         subtitle="Collect visual and textual references for your universes, scenes, and treatments."
         actions={(
-          <button
-            type="button"
-            onClick={handleCreate}
-            disabled={creating}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
-          >
-            <Plus className="w-4 h-4" aria-hidden="true" />
-            New Board
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => setCombining(true)} disabled={loading || boards.length < 2} className="min-h-[44px] px-3 text-sm rounded border border-port-border text-gray-200 disabled:opacity-50">
+              Combine boards
+            </button>
+            <button
+              type="button"
+              onClick={handleCreate}
+              disabled={creating}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
+            >
+              <Plus className="w-4 h-4" aria-hidden="true" />
+              New Board
+            </button>
+          </div>
         )}
       />
+      {combining ? <CombineMoodBoards boards={boards} onClose={() => setCombining(false)} onCreated={board => navigate(`/mood-boards/${board.id}`)} /> : null}
       <div className="flex-1 min-h-0 overflow-auto p-4">
         {loading ? (
           <PageSkeleton header="none" label="Loading mood boards" cards={4} sidebar={false} />

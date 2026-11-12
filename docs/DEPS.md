@@ -172,22 +172,11 @@ An extreme run re-tests every `SKIPPED_INFEASIBLE` row here rather than honoring
 
 ## Override Pins (`overrides`)
 
-Defined in `package.json` (root + server + client + autofixer) — kept current to dodge known upstream advisories:
+The authoritative current override pins are declared in the [`package.json`](../package.json) manifests for [root](../package.json), [server](../server/package.json), [client](../client/package.json), and [autofixer](../autofixer/package.json). The `autofixer/` workspace mirrors only the express-reachable subset (`path-to-regexp`, `body-parser`, and `qs`); adding a pin for a package absent from its tree would read as protection that does not exist. The retired Kokoro dependency tree no longer needs the `tar` or `protobufjs` override pins.
 
-- `ws@8.21.3` (root + server + client)
-- `lodash@4.18.1`, `follow-redirects@1.16.1`, `js-yaml@4.3.2` (root + server)
-- `nanoid@3.3.18`, `socket.io-parser@4.2.7` (server + client)
-- `path-to-regexp@8.4.2`, `body-parser@2.3.0`, `qs@6.16.0` (server + autofixer — the express-reachable subset; `autofixer/` mirrors only these three because a pin for a package absent from the tree reads as protection that does not exist)
-- `engine.io@6.6.9` (server only)
-- `postcss@8.5.27` (server + client)
-- `sharp@0.35.4` (server only)
-- `three@0.186.0` (client only, keeps drei/fiber on one three copy)
+These overrides force-bump transitive dependencies to address known upstream advisories. Check the manifests for the current package and workspace list and exact versions; revisit the overrides if `npm audit` flags new advisories.
 
-The retired Kokoro dependency tree no longer needs the `tar` or `protobufjs` override pins.
-
-These exist purely to force-bump transitive deps; revisit if `npm audit` flags new advisories.
-
-**Keep this list in sync with the manifests** — a stale entry here reads as a pin that exists when it doesn't. `server/dependency-overrides.test.js` guards the pins themselves (cross-manifest version parity, a `MINIMUM_SAFE` floor per remediated advisory, that every workspace shipping a tracked lockfile is in the governed manifest list, that each tracked lockfile actually resolves the pinned version, and that every pin names a package its own workspace lockfile still contains — so a pin outliving its consumer fails rather than lingering as imaginary protection), but it does not read this document. When a floor moves because a *new* advisory covers the version already pinned — as `js-yaml@4.3.0` did under GHSA-5p4m-2wfm-xmqj — bump the pin, the `MINIMUM_SAFE` row, and this list together.
+`server/dependency-overrides.test.js` guards the pins themselves (cross-manifest version parity, a `MINIMUM_SAFE` floor per remediated advisory, that every workspace shipping a tracked lockfile is in the governed manifest list, that each tracked lockfile actually resolves the pinned version, and that every pin names a package its own workspace lockfile still contains — so a pin outliving its consumer fails rather than lingering as imaginary protection), but it does not read this document. When a floor moves because a *new* advisory covers the version already pinned — as `js-yaml@4.3.0` did under GHSA-5p4m-2wfm-xmqj — update the authoritative manifest pin and its `MINIMUM_SAFE` row; this document links readers to those sources.
 
 **Not every compromised package warrants a pin.** A pin only helps when the installed version is *below* the top of its permitted range — otherwise there is nothing to force. The former client tree affected by the August 2026 `keyv` / `flat-cache` / `file-entry-cache` compromise deliberately got **no** pin: each range was already at its ceiling, so a pin would have been a no-op, and that client tree was removed instead. The current server ESLint tree has different versions and ranges; assess it independently. Check headroom (`npm view <pkg>@<major> version`) before adding an entry here.
 

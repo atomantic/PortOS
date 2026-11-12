@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -12,6 +12,11 @@ afterAll(cleanup);
 
 const NOW = Date.parse('2026-07-20T12:00:00.000Z');
 const jsonl = (rows) => rows.map((row) => JSON.stringify(row)).join('\n');
+const speedZero = {
+  fastInput: 0, fastOutput: 0, fastCacheRead: 0, fastCacheWrite: 0,
+  ultrafastInput: 0, ultrafastOutput: 0, ultrafastCacheRead: 0, ultrafastCacheWrite: 0,
+};
+const withSpeed = (counts) => ({ ...counts, ...speedZero });
 const codexTotal = (input, cached, output) => ({ input_tokens: input, cached_input_tokens: cached, output_tokens: output, reasoning_output_tokens: 0, total_tokens: input + output });
 const codexRollout = (id) => jsonl([
   { type: 'session_meta', payload: { id, cwd: '/example/workspace', model: 'example-codex' } },
@@ -35,8 +40,8 @@ const agyDatabase = async (path, steps) => {
   steps.forEach(({ type, at, usage }, idx) => insert.run(idx, type, encodeMessage(AGY_METADATA, { created: { seconds: Date.parse(at) / 1000 }, usage })));
   db.close();
 };
-const grokTurn = (promptId, ms, usage) => ({ params: { sessionId: 'grok-session', _meta: { agentTimestampMs: ms },
-  update: { sessionUpdate: 'turn_completed', prompt_id: promptId, usage: { ...usage, modelUsage: { 'example-grok': {} } } } } });
+const grokTurn = (promptId, ms, usage, model = 'example-grok') => ({ params: { sessionId: 'grok-session', _meta: { agentTimestampMs: ms },
+  update: { sessionUpdate: 'turn_completed', prompt_id: promptId, usage: { ...usage, modelUsage: { [model]: {} } } } } });
 
 let home;
 let history;
@@ -64,8 +69,8 @@ describe('native usage history', () => {
     await write(join(home, '.codex', 'archived_sessions', 'rollout-a.jsonl'), codexRollout('session-a'));
     const result = await history.NATIVE_USAGE_STORES.codex.refresh({ home, force: true, now: NOW });
     expect(result.refreshed).toBe(true);
-    expect(result.days['2026-07-18']['example-codex']).toEqual({ messages: 1, input: 60, output: 10, cacheRead: 40, cacheWrite: 0 });
-    expect(result.days['2026-07-19']['example-codex']).toEqual({ messages: 1, input: 100, output: 15, cacheRead: 100, cacheWrite: 0 });
+    expect(result.days['2026-07-18']['example-codex']).toEqual(withSpeed({ messages: 1, input: 60, output: 10, cacheRead: 40, cacheWrite: 0 }));
+    expect(result.days['2026-07-19']['example-codex']).toEqual(withSpeed({ messages: 1, input: 100, output: 15, cacheRead: 100, cacheWrite: 0 }));
     // First scan read everything: complete from the app's retention floor or its first day.
     expect(result.coverageStart).toBe('2026-07-18');
   });
@@ -90,8 +95,8 @@ describe('native usage history', () => {
     ]));
     const result = await history.NATIVE_USAGE_STORES.codex.refresh({ home, force: true, now: NOW });
     expect(result.days['2026-07-19']).toEqual({
-      'example-codex': { messages: 2, input: 300, output: 30, cacheRead: 0, cacheWrite: 0 },
-      'example-codex-mini': { messages: 1, input: 50, output: 5, cacheRead: 0, cacheWrite: 0 },
+      'example-codex': withSpeed({ messages: 2, input: 300, output: 30, cacheRead: 0, cacheWrite: 0 }),
+      'example-codex-mini': withSpeed({ messages: 1, input: 50, output: 5, cacheRead: 0, cacheWrite: 0 }),
     });
   });
 
@@ -109,7 +114,7 @@ describe('native usage history', () => {
       call('2026-07-20T02:00:00.000Z', codexTotal(250, 0, 25), codexTotal(50, 0, 5)),
     ]));
     const result = await history.NATIVE_USAGE_STORES.codex.refresh({ home, force: true, now: NOW + 60_000 });
-    expect(result.days['2026-07-20']).toEqual({ 'example-codex': { messages: 1, input: 50, output: 5, cacheRead: 0, cacheWrite: 0 } });
+    expect(result.days['2026-07-20']).toEqual({ 'example-codex': withSpeed({ messages: 1, input: 50, output: 5, cacheRead: 0, cacheWrite: 0 }) });
     expect(result.days['2026-07-10']['example-codex']).toMatchObject({ messages: 1, input: 200 });
   });
 
@@ -120,7 +125,24 @@ describe('native usage history', () => {
       { timestamp: '2026-07-19T01:00:00.000Z', type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: usage, last_token_usage: usage } } },
     ]));
     const result = await history.NATIVE_USAGE_STORES.codex.refresh({ home, force: true, now: NOW });
-    expect(result.days['2026-07-19']['example-codex']).toEqual({ messages: 1, input: 100, output: 50, cacheRead: 600, cacheWrite: 300 });
+    expect(result.days['2026-07-19']['example-codex']).toEqual(withSpeed({ messages: 1, input: 100, output: 50, cacheRead: 600, cacheWrite: 300 }));
+  });
+
+  it('attributes a Codex call after thread_settings priority to the fast subset', async () => {
+    const total = (input, output) => ({ input_tokens: input, cached_input_tokens: 0, output_tokens: output, reasoning_output_tokens: 0, total_tokens: input + output });
+    const call = (at, totalUsage, last) => ({ timestamp: at, type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: totalUsage, last_token_usage: last } } });
+    const settings = (at, tier) => ({ timestamp: at, type: 'event_msg', payload: { type: 'thread_settings_applied', thread_settings: { service_tier: tier, cwd: '/example/not-stored' } } });
+    await write(join(home, '.codex', 'sessions', '2026', '07', '19', 'rollout-fast.jsonl'), jsonl([
+      { type: 'session_meta', payload: { id: 'session-fast', model: 'example-codex' } },
+      call('2026-07-19T01:00:00.000Z', total(100, 10), { ...total(100, 10), cached_input_tokens: 0 }),
+      settings('2026-07-19T01:00:30.000Z', 'priority'),
+      call('2026-07-19T02:00:00.000Z', total(150, 15), { input_tokens: 50, cached_input_tokens: 10, output_tokens: 5, reasoning_output_tokens: 0, total_tokens: 55 }),
+    ]));
+    const result = await history.NATIVE_USAGE_STORES.codex.refresh({ home, force: true, now: NOW });
+    expect(result.days['2026-07-19']['example-codex']).toEqual({
+      ...withSpeed({ messages: 2, input: 140, output: 15, cacheRead: 10, cacheWrite: 0 }),
+      fastInput: 40, fastOutput: 5, fastCacheRead: 10,
+    });
   });
 
   it('reads Antigravity usage from the dated conversation DB steps, and the transcript only for a conversation without one', async () => {
@@ -186,7 +208,22 @@ describe('native usage history', () => {
     expect(result.days['2026-07-19']['example-grok']).toEqual({
       messages: 2, input: 250300, output: 55, cacheRead: 200, cacheWrite: 0,
       longInput: 250000, longOutput: 5, longCacheRead: 0, longCacheWrite: 0,
+      ...speedZero,
     });
+  });
+
+  it('keeps a Grok 4.7 fast turn on grok-4.7 with both the long and fast subsets', async () => {
+    await write(join(home, '.grok', 'sessions', encodeURIComponent('/example/workspace'), 'grok-session', 'updates.jsonl'), jsonl([
+      grokTurn('fast-long', Date.parse('2026-07-19T10:00:00Z'), { inputTokens: 250000, cachedReadTokens: 0, outputTokens: 5 }, 'grok-4.7[fast=true]'),
+    ]));
+    const result = await history.NATIVE_USAGE_STORES.grok.refresh({ home, force: true, now: NOW });
+    expect(result.days['2026-07-19']['grok-4.7']).toEqual({
+      messages: 1, input: 250000, output: 5, cacheRead: 0, cacheWrite: 0,
+      longInput: 250000, longOutput: 5, longCacheRead: 0, longCacheWrite: 0,
+      ...speedZero,
+      fastInput: 250000, fastOutput: 5,
+    });
+    expect(result.days['2026-07-19']['grok-4.7[fast=true]']).toBeUndefined();
   });
 
   it('keeps history the app pruned and re-reads only recent days once coverage is known', async () => {
@@ -227,5 +264,31 @@ describe('native usage history', () => {
     const result = await history.NATIVE_USAGE_STORES.codex.refresh({ home, force: true, now: NOW });
     expect(result).toMatchObject({ refreshed: false, coverageStart: null });
     expect(result.incomplete).toBeTruthy();
+  });
+
+  it('publishes Codex coverage beside a decoded non-session file without inventing a cached session', async () => {
+    await write(join(home, '.codex', 'sessions', 'rollout-a.jsonl'), codexRollout('session-a'));
+    await write(join(home, '.codex', 'sessions', 'leftover.jsonl'), jsonl([{ type: 'unrelated', value: 'SYNTHETIC' }]));
+    const { readCodexAccountingSources } = await import('./codexUsageSources.js');
+    const inventory = () => readCodexAccountingSources({ home });
+    expect((await inventory()).coverage).toMatchObject({ complete: true, logicalSessions: 1, issues: {} });
+    const store = history.NATIVE_USAGE_STORES.codex;
+    const result = await store.refresh({ home, force: true, now: NOW });
+    expect(result).toMatchObject({ refreshed: true, coverageStart: '2026-07-18' });
+    expect(JSON.parse(await readFile(store.file, 'utf8'))).toMatchObject({ coverageStart: '2026-07-18', days: result.days });
+    expect((await inventory()).coverage).toMatchObject({ complete: true, logicalSessions: 1, filesCached: 1, issues: {} });
+    expect((await store.refresh({ home, force: true, now: NOW + 60_000 })).days).toEqual(result.days);
+  });
+
+  it('holds Codex coverage when an accounting source has no session identity', async () => {
+    await write(join(home, '.codex', 'sessions', 'rollout-a.jsonl'), codexRollout('session-a'));
+    await write(join(home, '.codex', 'sessions', 'unidentified.jsonl'), jsonl([
+      { timestamp: '2026-07-19T01:00:01.000Z', type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: codexTotal(100, 40, 10) } } },
+    ]));
+    const { readCodexAccountingSources } = await import('./codexUsageSources.js');
+    expect((await readCodexAccountingSources({ home })).coverage).toMatchObject({ complete: false, issues: { missing_identity: 1 } });
+    const store = history.NATIVE_USAGE_STORES.codex;
+    expect(await store.refresh({ home, force: true, now: NOW })).toMatchObject({ refreshed: false, coverageStart: null, incomplete: 'missing_identity' });
+    await expect(readFile(store.file)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

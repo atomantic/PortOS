@@ -10,9 +10,16 @@
  * like a document render), and the render's own audio is copied back
  * untouched. Paid clips are never regenerated to change the feel, and the
  * grain, weave and flicker land on the same song frames the preview shows.
+ * The pass changes only what the look changes: the render plays with its
+ * levels as encoded (stageRender) over a black base (BLACK_BASE).
  * Chrome draws that filter on the CPU (seconds a frame), so the pass first
  * checks a frame of the WebGL2 port (lib/filmLookGpu.js) against it and uses
  * the GPU only when the two match and the GPU is faster.
+ *
+ * A steady title card (lib/musicVideoTitleCard.js) must not be in the picture
+ * this pass filters: the look would weave, flicker and grain it. A renderer
+ * that leaves it out hands it here (`titleCard`), and the card's own runtime
+ * draws it over the look for each frame's song time.
  */
 
 import { copyFile, link, mkdir, rename, rm, writeFile } from 'node:fs/promises';
@@ -21,6 +28,8 @@ import { PATHS } from '../../lib/paths.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { filmLookRuntimeSource, isFilmLookNeutral, normalizeFilmLook } from '../../lib/filmLook.js';
 import { filmLookGpuRuntimeSource } from '../../lib/filmLookGpu.js';
+import { normalizeTitleCard, titleCardVisible, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
+import { admitFilmLookWeb, encodeFilmLookWeb } from './filmLookWebEncoder.js';
 
 export const FILM_LOOK_FINISH_SCRATCH_DIR = 'music-video-film-look';
 
@@ -37,6 +46,12 @@ export const filmLookFinishNeeded = (project) => !isFilmLookNeutral(project?.fil
  * (lib/filmLookGpu.js): the SVG filter comes off, a canvas over the video
  * shows the same picture, and every seek redraws it for its song frame before
  * resolving.
+ *
+ * A title card the pass was handed is drawn by its runtime (a later init
+ * script, wrapping this page's seek) on a canvas in the top layer, over the
+ * SVG filter and the GPU canvas alike, so a page screenshot holds it. The
+ * WebCodecs encoder reads the GPU canvas instead, so it flattens the card onto
+ * that picture itself for the frames the card shows in.
  */
 function filmLookFinishPage({ width, height, fps, durationSec, offsetSec = 0, look, src = 'media/source.mp4' }) {
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Film look</title>
@@ -91,6 +106,62 @@ function filmLookFinishPage({ width, height, fps, durationSec, offsetSec = 0, lo
   let gpu = null;
   const filmLook = () => globalThis.__portosFilmLook;
   globalThis.__portosFilmLookFinish = {
+    async startEncoder() {
+      if (!gpu || typeof VideoEncoder !== 'function') throw new Error('WebCodecs unavailable');
+      const config = { codec: 'avc1.640028', width: WIDTH, height: HEIGHT, framerate: FPS,
+        bitrateMode: 'quantizer', hardwareAcceleration: 'prefer-hardware', avc: { format: 'annexb' }, latencyMode: 'realtime' };
+      const support = await VideoEncoder.isConfigSupported(config);
+      if (!support.supported || support.config.bitrateMode !== 'quantizer') throw new Error('WebCodecs quantizer unavailable');
+      let chunks = [], pendingBytes = 0, failure = null, submitted = 0, emitted = 0, wake = null;
+      const maxPendingBytes = WIDTH * HEIGHT * 16 + 1048576;
+      const encoder = new VideoEncoder({ output(chunk) {
+        if (failure) return;
+        const expected = Math.round(emitted * 1000000 / FPS);
+        if (chunk.timestamp !== expected || (chunk.duration != null && Math.abs(chunk.duration - Math.round(1000000 / FPS)) > 1) || (emitted === 0 && chunk.type !== 'key')) failure = 'WebCodecs reordered frames';
+        else if (pendingBytes + chunk.byteLength > maxPendingBytes) failure = 'WebCodecs output exceeded frame budget';
+        if (failure) { wake?.(); return; }
+        const bytes = new Uint8Array(chunk.byteLength); chunk.copyTo(bytes); chunks.push(bytes); pendingBytes += bytes.length; emitted++;
+
+      }, error(error) { failure = String(error); wake?.(); } });
+      encoder.configure(config);
+      const drain = async () => {
+        if (failure) throw new Error(failure);
+        const blob = new Blob(chunks); chunks = []; pendingBytes = 0;
+        return await new Promise((resolve, reject) => {
+          const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(',')[1]);
+          reader.onerror = () => reject(new Error('WebCodecs output read failed')); reader.readAsDataURL(blob);
+        });
+      };
+      // Frames without the card are read straight from the GPU canvas, exactly as a pass without one reads them.
+      let flat = null;
+      const picture = () => {
+        const card = globalThis.__portosTitleCard && globalThis.__portosTitleCard.layer;
+        if (!card) return canvas;
+        if (!flat) { flat = document.createElement('canvas'); flat.width = WIDTH; flat.height = HEIGHT; }
+        const flatten = flat.getContext('2d', { alpha: false });
+        flatten.drawImage(canvas, 0, 0, WIDTH, HEIGHT);
+        flatten.drawImage(card, 0, 0, WIDTH, HEIGHT);
+        return flat;
+      };
+      this.frameEncoder = {
+        async frame() {
+          const frame = new VideoFrame(picture(), { timestamp: Math.round(submitted * 1000000 / FPS), duration: Math.round(1000000 / FPS) });
+          try { encoder.encode(frame, { keyFrame: submitted === 0, avc: { quantizer: 18 } }); submitted++; }
+          finally { frame.close(); }
+          if (encoder.encodeQueueSize > 3) await new Promise((resolve) => {
+            const done = () => { encoder.removeEventListener('dequeue', done); wake = null; resolve(); };
+            wake = done; encoder.addEventListener('dequeue', done, { once: true });
+            if (failure) done();
+          });
+          return drain();
+        },
+        async finish() {
+          await encoder.flush();
+          if (emitted !== submitted) throw new Error('WebCodecs lost frames');
+          const data = await drain(); encoder.close(); return data;
+        },
+      };
+    },
     gpuInfo() {
       const api = globalThis.__portosFilmLookGpu;
       return { available: Boolean(api && api.available()) };
@@ -113,6 +184,8 @@ function filmLookFinishPage({ width, height, fps, durationSec, offsetSec = 0, lo
       return { on: false };
     },
   };
+  // The title card lays itself out on the render's frame, whatever the viewport is when it first draws.
+  globalThis.PORTOS_MV = { render: { width: WIDTH, height: HEIGHT } };
   globalThis.portosComposition = {
     durationSec: DURATION, fps: FPS, width: WIDTH, height: HEIGHT,
     async seek(t) {
@@ -120,13 +193,18 @@ function filmLookFinishPage({ width, height, fps, durationSec, offsetSec = 0, lo
       const local = Math.max(0, t - OFFSET);
       const target = Math.min((Math.floor(local * FPS + 1e-6) + 0.5) / FPS, Math.max(0, video.duration - 1e-3));
       await seekVideo(target);
+      const drawStarted = performance.now();
       if (gpu) gpu.render(video, LOOK, { frame: Math.max(0, Math.round((Number(t) || 0) * FPS)), width: WIDTH, height: HEIGHT });
+      return { path: gpu ? 'gpu' : 'svg', drawMs: gpu ? performance.now() - drawStarted : 0 };
     },
   };
 })();
 `;
   return { 'index.html': html, 'app.js': js, 'film-gpu.js': filmLookGpuRuntimeSource() };
 }
+
+// The browser suite exercises the same page and encoder used by the pass.
+export const _filmLookFinishTestHooks = Object.freeze({ filmLookFinishPage });
 
 // Full-resolution PSNR (dB) of two same-sized PNG frames, RGB only.
 async function framePsnr(a, b) {
@@ -136,6 +214,44 @@ async function framePsnr(a, b) {
   let sum = 0;
   for (let i = 0; i < x.length; i++) { const d = x[i] - y[i]; sum += d * d; }
   return sum === 0 ? 99 : 10 * Math.log10((255 * 255 * x.length) / sum);
+}
+
+// The look is a filter on the page's root element, and a root filter's output
+// lies over the browser's base color (white), not over the page's own
+// background. The vignette's fall-off is partly transparent, so over white it
+// washes the corners out instead of darkening them. A projected frame falls
+// off to black: so does this page.
+const BLACK_BASE = Object.freeze({ color: Object.freeze({ r: 0, g: 0, b: 0, a: 1 }) });
+
+// Chrome color-manages a BT.709 video to the sRGB screen, which lifts its
+// midtones, and the capture would bake that lift into the render (a look that
+// changes no tone still measured +12/255 at middle gray). Labelled sRGB, the
+// same code values are shown, filtered and captured as they are. Only the label
+// changes: the stream is copied, never re-encoded.
+const SRGB_LABEL = 'h264_metadata=colour_primaries=1:transfer_characteristics=13:matrix_coefficients=1';
+// The label names BT.709 primaries and matrix, so it goes only on a stream that already carries them:
+// the H.264 every PortOS encoder writes. An untagged clip keeps the matrix its decoder picks for it.
+const BT709_H264 = Object.freeze(['codec_name=h264', 'color_primaries=bt709', 'color_space=bt709', 'color_transfer=bt709']);
+
+/**
+ * Stage the finished render at `source` for the page to play: a BT.709 H.264
+ * render labelled sRGB, any other stream as it is (it keeps the browser's own
+ * conversion).
+ */
+async function stageRender({ ffmpeg, runFfmpegProcess, probeVideoCodecSignature, path, source, signal, label }) {
+  const tags = String(await probeVideoCodecSignature(path) || '').split('|');
+  if (BT709_H264.every((tag) => tags.includes(tag))) {
+    const labelled = await runFfmpegProcess({
+      bin: ffmpeg, signal,
+      args: ['-hide_banner', '-loglevel', 'error', '-i', path, '-map', '0:v:0', '-c', 'copy', '-an', '-bsf:v', SRGB_LABEL, '-movflags', '+faststart', '-y', source],
+    });
+    if (labelled.ok) return;
+    signal?.throwIfAborted();
+    console.warn(`⚠️ ${label}: the render could not be labelled sRGB for the pass (${labelled.reason}); its levels follow the browser's conversion`);
+    await rm(source, { force: true });
+  }
+  // A hard link stages it without a copy on the same volume (the browser refuses symlinks); a copy stands in elsewhere.
+  await link(path, source).catch(() => copyFile(path, source));
 }
 
 // The GPU must draw the picture the SVG filter draws before a render trusts it.
@@ -183,6 +299,19 @@ async function chooseFilmLookPath(page, { width, height, fps, frames, offsetSec 
 }
 
 /**
+ * The song times, one per window, at which `card` shows inside a render that
+ * starts at `offsetSec` and holds `durationSec`: the middle of the part of
+ * each window the render (and `untilSec`) holds. Pure.
+ */
+function titleCardCheckTimes(card, { offsetSec, durationSec, untilSec }) {
+  const end = Math.min(offsetSec + durationSec, Number.isFinite(untilSec) ? untilSec : Infinity);
+  return titleCardWindows(card)
+    .map((window) => [Math.max(window.startSec, offsetSec), Math.min(window.endSec, end)])
+    .filter(([from, to]) => to > from)
+    .map(([from, to]) => (from + to) / 2);
+}
+
+/**
  * Re-encode the finished render at `path` through the project's film look, in
  * place. Resolves `true` when the pass ran, `false` when the look is neutral
  * (the file is untouched). `look` (a shot's own look) replaces the project's;
@@ -191,13 +320,18 @@ async function chooseFilmLookPath(page, { width, height, fps, frames, offsetSec 
  * so the grain lands on song frames. The look is drawn on the GPU when
  * `chooseFilmLookPath` finds that safe and faster (`useGpu: false` forces the
  * SVG filter), else by Chrome's SVG filter as the preview draws it.
+ * `titleCard` is a card the render at `path` does NOT hold, drawn here over
+ * the look on song time (always steady, whatever the card says: one under the
+ * look belongs in the picture before this pass); `titleCardUntilSec` is the
+ * song time it stops at, for a render that runs on past its song.
  * Rejects on failure or when `signal` aborts, leaving `path` as it was.
  */
-export async function applyFilmLookFinish({ project, look: lookInput, path, jobId, signal, onProgress, offsetSec = 0, workers, useGpu, label = 'Music-video film look' }) {
+export async function applyFilmLookFinish({ project, look: lookInput, path, jobId, signal, onProgress, offsetSec = 0, workers, useGpu, titleCard = null, titleCardUntilSec = null, label = 'Music-video film look' }) {
+  const started = performance.now();
   const look = normalizeFilmLook(lookInput === undefined ? project?.filmLook : lookInput);
   if (!look || isFilmLookNeutral(look)) return false;
   if (typeof jobId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('Invalid film look job id');
-  const { findFfmpeg, runFfmpegProcess, probeVideoGeometry } = await import('../../lib/ffmpeg.js');
+  const { findFfmpeg, runFfmpegProcess, probeVideoCodecSignature, probeVideoGeometry } = await import('../../lib/ffmpeg.js');
   const { openComposition } = await import('../htmlComposition/browser.js');
   const { encodeComposition, encodeCompositionSegments } = await import('../htmlComposition/encode.js');
   const ffmpeg = await findFfmpeg();
@@ -211,19 +345,28 @@ export async function applyFilmLookFinish({ project, look: lookInput, path, jobI
   const scratch = join(PATHS.data, directory);
   const silent = `${path}.look.silent.mp4`;
   const finished = `${path}.look.mp4`;
+  const given = normalizeTitleCard(titleCard);
+  const card = titleCardVisible(given) ? { ...given, steady: true } : null;
+  // Loaded only for a pass that draws a card: the runtime embeds the bundled faces.
+  const initScripts = [filmLookRuntimeSource(look),
+    ...(card ? [(await import('./titleCardFonts.js')).titleCardRuntime(card, { untilSec: titleCardUntilSec })] : [])];
   let page;
   try {
     await rm(scratch, { recursive: true, force: true });
     await mkdir(join(scratch, 'media'), { recursive: true });
-    // The finished render is large: a hard link stages it without a copy on
-    // the same volume (the browser refuses symlinks); a copy stands in elsewhere.
-    const source = join(scratch, 'media', 'source.mp4');
-    await link(path, source).catch(() => copyFile(path, source));
+    await stageRender({ ffmpeg, runFfmpegProcess, probeVideoCodecSignature, path, source: join(scratch, 'media', 'source.mp4'), signal, label: `${label} [${jobId.slice(0, 8)}]` });
     for (const [name, body] of Object.entries(filmLookFinishPage({ width, height, fps, durationSec, offsetSec, look }))) {
       await writeFile(join(scratch, name), body);
     }
     signal?.throwIfAborted();
-    const openSvgPage = (pageSignal) => openComposition(directory, { signal: pageSignal, streamMedia: true, ownedBrowser: true, initScripts: [filmLookRuntimeSource(look)] });
+    const openSvgPage = async (pageSignal) => {
+      const opened = await openComposition(directory, { signal: pageSignal, streamMedia: true, ownedBrowser: true, initScripts });
+      await opened.send('Emulation.setDefaultBackgroundColorOverride', BLACK_BASE).catch(async (error) => {
+        await opened.close().catch(() => {});
+        throw error;
+      });
+      return opened;
+    };
     page = await openSvgPage(signal);
     const h264 = await page.evaluate(`document.createElement('video').canPlayType('video/mp4; codecs="avc1.640028"')`);
     if (!h264) {
@@ -248,11 +391,41 @@ export async function applyFilmLookFinish({ project, look: lookInput, path, jobI
         return opened;
       }
       : openSvgPage;
-    const encoded = await encodeCompositionSegments(page, { width, height, fps, durationSec }, silent, {
-      openPage, encode: encodeComposition, signal, offsetSec, ...(workers ? { workers } : {}),
-      onProgress: (fraction) => onProgress?.(fraction * 0.95),
+    const contract = { width, height, fps, durationSec };
+    let useWeb = false;
+    if (drawPath.gpu && frames >= 240) {
+      // The check must see the frames the encoder flattens the card onto, not only frames without it.
+      const checkTimes = card ? titleCardCheckTimes(card, { offsetSec, durationSec, untilSec: titleCardUntilSec }) : [];
+      useWeb = await admitFilmLookWeb(page, contract, scratch, { signal, offsetSec, checkTimes }).catch((error) => {
+        signal?.throwIfAborted();
+        console.warn(`⚠️ ${label} [${jobId.slice(0, 8)}]: WebCodecs check declined (${error.message})`);
+        return false;
+      });
+      if (!useWeb) console.log(`🎞️ ${label} [${jobId.slice(0, 8)}]: WebCodecs quality or capability check declined; using PNG`);
+      // A failed check can leave a broken page or encoder. Reopen before the
+      // real pass, preserving the already-selected GPU/SVG decision.
+      await page.close().catch(() => {});
+      page = await openPage(signal);
+    }
+    let progress = 0;
+    const run = encode => encodeCompositionSegments(page, contract, silent, {
+      openPage, encode, signal, offsetSec, ...(workers ? { workers } : {}),
+      onProgress: (fraction) => { progress = Math.max(progress, fraction * 0.95); onProgress?.(progress); },
       onRetry: ({ frame, attempt, segment, error }) => console.warn(`⚠️ ${label} [${jobId.slice(0, 8)}] ${segment == null ? '' : `worker ${segment + 1} `}restarting its browser at song frame ${frame} (retry ${attempt}): ${error.message}`),
     });
+    let encoded;
+    if (useWeb) {
+      try { encoded = await run(encodeFilmLookWeb); }
+      catch (error) {
+        signal?.throwIfAborted();
+        console.warn(`⚠️ ${label} [${jobId.slice(0, 8)}]: WebCodecs pass failed; restarting with PNG (${error.message})`);
+        await page.close().catch(() => {});
+        await rm(silent, { force: true }).catch(() => {});
+        page = await openPage(signal);
+        useWeb = false;
+        encoded = await run(encodeComposition);
+      }
+    } else encoded = await run(encodeComposition);
     // A replaced first page was already closed after its failure.
     if (!encoded?.pageReplaced) {
       page.check();
@@ -272,7 +445,9 @@ export async function applyFilmLookFinish({ project, look: lookInput, path, jobI
     }
     await rename(finished, path);
     onProgress?.(1);
-    console.log(`🎞️ ${label} [${jobId.slice(0, 8)}]: ${look.preset} over ${frames} frames at ${width}×${height}`);
+    const timing = encoded?.timing;
+    const perFrame = key => timing?.frames ? (timing[key] / timing.frames).toFixed(1) : 'unavailable';
+    console.log(`🎞️ ${label} [${jobId.slice(0, 8)}]: ${look.preset}${card ? ' and a steady title card' : ''} over ${frames} frames at ${width}×${height}; wall ${((performance.now() - started) / 1000).toFixed(1)}s; workers ${encoded?.workers ?? 1}; GPU/SVG frames ${timing?.gpuFrames ?? 0}/${timing?.svgFrames ?? 0}; ms/frame seek ${perFrame('seekMs')}, GPU draw submission ${perFrame('drawMs')}, ${useWeb ? 'WebCodecs submission/flush and GPU wait' : 'capture (includes SVG draw/GPU wait)'} ${perFrame('captureMs')}, ${useWeb ? 'encode write/mux' : 'encode write/drain'} ${perFrame('encodeMs')}`);
     return true;
   } finally {
     if (page) await page.close().catch(() => {});

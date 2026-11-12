@@ -32,6 +32,7 @@ describe('isolated FLUX.3 runtime lifecycle', () => {
     await expect(diagnoseFlux3Runtime()).resolves.toEqual({ readiness: 'ready' });
     expect(probe.mock.calls[1][0]).toBe(flux3Python());
     expect(probe.mock.calls[1][1]).toEqual(['-I', '-c', expect.stringContaining('flux3_edit_generate')]);
+    expect(probe.mock.calls[1][1][2]).toContain('sys.version_info >= (3, 12)');
     expect(command).not.toHaveBeenCalled();
   });
 
@@ -47,7 +48,7 @@ describe('isolated FLUX.3 runtime lifecycle', () => {
     const argv = command.mock.calls.map(([bin, args]) => [bin, ...args].join(' ')).join('\n');
     expect(command.mock.calls.every(([bin]) => bin === '/private/tools/uv')).toBe(true);
     expect(argv).toContain('venv --python 3.12 --python-preference only-managed --allow-existing');
-    expect(argv).toContain(`pip sync --require-hashes --reinstall --python ${flux3Python()} ${flux3LockPath()}`);
+    expect(argv).toContain(`pip sync --require-hashes --only-binary :all: --reinstall --python ${flux3Python()} ${flux3LockPath()}`);
     expect(argv).not.toMatch(/snapshot_download|hf download|mflux-generate|--user/);
     expect(command.mock.calls[0][3].env).toMatchObject({ PYTHONNOUSERSITE: '1', PYTHONPATH: undefined, PYTHONHOME: undefined });
     expect(events.at(-1)).toMatchObject({ type: 'complete' });
@@ -70,8 +71,40 @@ describe('isolated FLUX.3 runtime lifecycle', () => {
     await expect(installFlux3Runtime(vi.fn()).promise).rejects.toThrow('Retry the runtime repair');
   });
 
+  it('repairs with the same wheel-only lock and never reports readiness after sync or probe failure', async () => {
+    const events = [];
+    const emit = event => events.push(event);
+    command.mockResolvedValueOnce({ success: true }).mockResolvedValueOnce({ success: false, error: 'no compatible wheel' });
+    await expect(installFlux3Runtime(emit).promise).rejects.toThrow('no compatible wheel');
+    expect(probe).not.toHaveBeenCalled();
+    expect(events.some(event => event.type === 'complete')).toBe(false);
+
+    probe.mockImplementationOnce((_bin, _args, _opts, done) => done(new Error('broken import')));
+    await expect(installFlux3Runtime(emit).promise).rejects.toThrow('broken import');
+    expect(events.some(event => event.type === 'complete')).toBe(false);
+
+    await installFlux3Runtime(emit).promise;
+    expect(events.at(-1)).toMatchObject({ type: 'complete' });
+    const syncCalls = command.mock.calls.filter(([, args]) => args[0] === 'pip');
+    expect(syncCalls).toHaveLength(3);
+    for (const [, args] of syncCalls) expect(args).toEqual([
+      'pip', 'sync', '--require-hashes', '--only-binary', ':all:', '--reinstall', '--python', flux3Python(), flux3LockPath(),
+    ]);
+  });
+
+  it('refuses unsupported hosts before resolving tools or installing packages', async () => {
+    const undo = pinPlatform('linux');
+    try {
+      expect(() => installFlux3Runtime(vi.fn())).toThrow('Apple Silicon Mac');
+      await expect(diagnoseFlux3Runtime()).resolves.toMatchObject({ readiness: 'unavailable' });
+      expect(patchedUv).not.toHaveBeenCalled();
+      expect(command).not.toHaveBeenCalled();
+      expect(probe).not.toHaveBeenCalled();
+    } finally { undo(); }
+  });
+
   it('never falls back to an ambient uv: an unpatched or missing private uv stops the install before any command', async () => {
-    patchedUv.mockResolvedValueOnce({ ok: false, reason: 'No Python found to bootstrap uv 0.13.6.' });
+    patchedUv.mockResolvedValueOnce({ ok: false, reason: 'No Python found to bootstrap uv 0.13.7.' });
     await expect(installFlux3Runtime(vi.fn()).promise).rejects.toThrow('needs a patched uv');
     expect(command).not.toHaveBeenCalled();
   });

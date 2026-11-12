@@ -9,7 +9,7 @@ const revisionOf = (project) => createHash('sha256').update(JSON.stringify(proje
 
 export function previewPacingRecut(project) {
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  if (['code', 'document', 'eidoverse'].includes(project.composition?.mode)) {
+  if (['code', 'document', 'eidoverse', 'blender'].includes(project.composition?.mode)) {
     throw new ServerError('This video renders from a composition source. Edit its shot timing in that source instead of re-cutting board records.', { status: 400, code: 'MUSIC_VIDEO_PACING_COMPOSITION' });
   }
   const minSec = project.pacing?.minShotSec ?? 1;

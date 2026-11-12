@@ -469,6 +469,7 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
         ...(hasSelectedWipes(project) ? [musicVideoWipeRuntime()] : [])],
       previewBridge: true, refuseUnknown: 'empty', lockLoopback: true, onEvent,
     });
+    await page.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 1 } });
     signal?.throwIfAborted();
     await page.send('Emulation.setDeviceMetricsOverride', {
       width: plan.width, height: plan.height, deviceScaleFactor: 1, mobile: false,
@@ -612,8 +613,16 @@ export async function encodeDocumentComposition({
       prepare: (dir) => stageDocumentData(dir, data, media, signal),
     });
     signal?.throwIfAborted();
-    const openPage = (pageSignal) => openComposition(staged.directory, { signal: pageSignal, streamMedia: true, mediaMode: musicVideoMediaMode(project), ownedBrowser: true,
-      initScripts: documentRenderInitScripts(project) });
+    const openPage = async (pageSignal) => {
+      const opened = await openComposition(staged.directory, { signal: pageSignal, streamMedia: true, mediaMode: musicVideoMediaMode(project), ownedBrowser: true,
+        initScripts: documentRenderInitScripts(project) });
+      // Root-filter transparency falls off to the browser canvas, not the page background.
+      await opened.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 1 } }).catch(async error => {
+        await opened.close().catch(() => {});
+        throw error;
+      });
+      return opened;
+    };
     page = await openPage(signal);
     const metadata = await page.evaluate(`(() => {
       const c = globalThis.portosComposition;

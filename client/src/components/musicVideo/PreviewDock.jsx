@@ -9,6 +9,7 @@ import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
 import { sceneShotName } from '../../lib/musicVideoStages.js';
 import { getMusicVideoCompositionPlayback } from '../../services/apiMusicVideo.js';
 import { hashString } from '../../utils/hashString.js';
+import useSoloPlayback from '../../hooks/useSoloPlayback.js';
 
 // Three.js loads only when the greybox previz is the source being watched.
 const PrevizPlayer = lazy(() => import('./PrevizPlayer.jsx'));
@@ -125,9 +126,11 @@ function DocumentPreview({ project, playback, audioUrl, seekRequest, collapsed, 
  * the live composition, then the newest draft, then the storyboard animatic).
  * A source the current render style cannot play stays in the picker, disabled,
  * with its reason. With nothing to play yet it says what makes something
- * playable. `seekRequest` (`{ t, n }`) is the scene-card seek.
+ * playable. `seekRequest` (`{ t, n }`) is the scene-card seek. `blender` is a
+ * Blender film's `useMusicVideoBlender` reading: its live composite plays the
+ * shots' renders from that state, so a render that lands shows without a reload.
  */
-export default function PreviewDock({ project, sources, audioUrl, seekRequest, collapsed, onToggleCollapsed, expanded = false, onToggleExpanded, onEditShot = null, onProject = null }) {
+export default function PreviewDock({ project, sources, audioUrl, seekRequest, collapsed, onToggleCollapsed, expanded = false, onToggleExpanded, onEditShot = null, onProject = null, blender = null }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = searchParams.get('play');
   const playable = sources.filter((entry) => !entry.disabled);
@@ -146,10 +149,19 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
   const SizeIcon = expanded ? Minimize2 : Maximize2;
   const pickerId = `mv-preview-source-${project.id}`;
   const documentPlayback = useDocumentPlayback(project);
+  const film = project.composition?.mode === 'blender';
+  // Whatever source plays here takes turns with any other player on the step that plays the song
+  // (the Blender film panel's shot player). Muted media (a shot's clip under the song) has no say.
+  const dockRef = useRef(null);
+  const solo = useSoloPlayback(() => {
+    for (const media of dockRef.current?.querySelectorAll('audio, video') || []) if (!media.muted) media.pause();
+  });
+  const sounding = (handler) => (event) => { if (!event.target.muted) handler(); };
   return (
     // A flex gap, not space-y: space-y puts a margin under the header row even
     // when everything after it is hidden, so the folded dock sat off-center.
-    <aside aria-label="Preview" className="@container/mv-preview flex min-w-0 flex-col gap-2 rounded-lg border border-port-border bg-port-card p-2">
+    <aside ref={dockRef} aria-label="Preview" className="@container/mv-preview flex min-w-0 flex-col gap-2 rounded-lg border border-port-border bg-port-card p-2"
+      onPlayCapture={sounding(solo.started)} onPauseCapture={sounding(solo.stopped)} onEndedCapture={sounding(solo.stopped)}>
       <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-port-text-muted">
         <MonitorPlay size={14} className="shrink-0 text-port-accent" aria-hidden="true" />
         <span className="text-sm font-medium text-port-text">Preview</span>
@@ -206,7 +218,14 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
       )}
       {/* Folded below xl, the dock is one row: the player and its controls wait for the expand. */}
       {source?.kind === 'document' && <DocumentPreview project={project} playback={documentPlayback} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} onProject={onProject} />}
-      {source?.kind === 'composite' && <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} variant="composite" />}
+      {source?.kind === 'composite' && (film && !blender?.state ? (
+        // The film's renders are not on the project record: the player waits for its state rather than call every shot unrendered.
+        <p role="status" className={`text-xs text-port-text-muted ${collapsed ? 'max-xl:hidden' : ''}`}>
+          {blender?.status === 'error' ? 'The Blender film could not be loaded. Retry it in Blender film on Shots.' : 'Loading the Blender film…'}
+        </p>
+      ) : (
+        <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} variant="composite" blender={film ? blender.state : null} />
+      ))}
       {source?.kind === 'lyrics' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} lyrics shotNav onEditShot={onEditShot} /></div>}
       {source?.kind === 'animatic' && <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} />}
       {source?.kind === 'previz' && <Suspense fallback={<p className="text-xs text-port-text-muted">Loading the greybox previz…</p>}>

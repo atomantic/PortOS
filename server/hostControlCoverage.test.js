@@ -827,6 +827,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/models/performance/task-benchmark/run', CONFIGURED_INFERENCE],
   // /api/mood-boards
   ['POST /api/mood-boards', RECORDS],
+  ['POST /api/mood-boards/combine', RECORDS],
   ['DELETE /api/mood-boards/:id', REMOVES_RECORD],
   ['PATCH /api/mood-boards/:id', RECORDS],
   ['POST /api/mood-boards/:id/backfill-prompts', RECORDS],
@@ -851,6 +852,10 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/music-video/:id/auto-reviews/:runId/stop', REDUCES_EXECUTION],
   ['POST /api/music-video/:id/autonomous/cancel', REDUCES_EXECUTION],
   ['POST /api/music-video/:id/autonomous/stop', REDUCES_EXECUTION],
+  ['POST /api/music-video/:id/blender/cancel', REDUCES_EXECUTION],
+  ['POST /api/music-video/:id/blender/jobs/:jobId/cancel', REDUCES_EXECUTION],
+  ['PUT /api/music-video/:id/blender/settings', 'Saves a Blender film\'s render settings (engine, size, rate, samples, parallel renders) and the values of the options its synced scripts declare (typed data checked against that declaration, like the song and lyrics the scripts already read) on the project record; names no executable, path or script, and starts no film job (its answer is the film state GET /api/music-video/:id/blender reads).'],
+  ['PUT /api/music-video/:id/blender/shots/:shotId/note', RECORDS],
   // Cameos (#14821): record edits over gallery images that already exist; nothing runs.
   ['POST /api/music-video/:id/cameo-links/clear', RECORDS],
   ['POST /api/music-video/:id/cameos', RECORDS],
@@ -1497,7 +1502,6 @@ const VERSION_PROBE = 'Runs an installed tool or interpreter only to check it (`
 const ICLOUD_HEAL = 'Asks iCloud (`brctl download`) to download the evicted file PortOS is already reading; the caller names no path and nothing else runs.';
 const GIT_PROBE = 'Runs a fixed read-only git or gh query (`rev-parse`, `remote get-url`, `status`, `gh api user` or `rate_limit`) and changes no repository or remote state.';
 const KILLS_OWN_CHILD = 'Signals a child process PortOS itself started (its timeout or cancel path); starts nothing.';
-const PM2_LIST = 'Reads `pm2 jlist` through a short-lived cache; starts, stops or changes no process.';
 const STATIC_JSON = 'Loads the checked-in prompt-integrity JSON snapshot with `require`; the path is a constant, not a computed module.';
 const CDP_VERSION = "Reads the managed browser's DevTools `/json/version` endpoint; opens, lists or steers no page.";
 
@@ -1548,7 +1552,6 @@ const REVIEWED_PROCESS_SITES = [
   ['server/services/mediaService.js#listDevices', HOST_QUERY],
   ['server/services/modelAbuseGuard.js#isBasePythonSupported', VERSION_PROBE],
   ['server/services/pipeline/musicGen.js#isEngineHealthy', VERSION_PROBE],
-  ['server/services/pm2.js#fetchJlist', PM2_LIST],
   ['server/services/rigging/runtime.js#probeBlenderModule', VERSION_PROBE],
   ['server/services/taskPromptDefaults/integrityHash.js#readPromptIntegritySnapshot', STATIC_JSON],
   ['server/services/videoGen/runtimes.js#isByovRuntimeCurrent', VERSION_PROBE],
@@ -1575,6 +1578,7 @@ const MOLTBOOK_READ = 'Reads from the Moltbook API with the stored agent key; a 
 const PEER_PAYLOAD = 'Peer endpoint in PEER_API_SURFACE that builds its payload from stored records; the executors the trace reaches come from whole-module namespace imports of the stores it reads.';
 const PEER_ADMIN_READ = 'Describes peer-administration state from stored grants and catalog reviews; the installer and execution adapters the trace reaches run only from the handler-gated execution and catalog-review writes.';
 const SYNC_CATEGORY_TABLE = "Reads sync categories, checksums, a manifest or a snapshot; the trace follows the snapshot category table whole into its applyRemote handlers, whose tombstone apply trashes a peer-deleted video only when a pulled peer snapshot is applied, never from a GET.";
+const BLENDER_RECHECK = "its first read in a server process may re-run PortOS's own execution check (synthetic limit scripts and a fixed Blender test scene, never project code) once, and only for the saved configuration an operator already passed an explicit check with and has not changed since; the caller supplies no path, mode or script, and server boot starts the same run on its own";
 const PEER_RELAY_LISTENER = "Reads stored records through a whole-module instances.js import; the trace reaches probePeer and the socket relay's `peer:sync:event` listener, which trashes a video only when a delete frame from its paired owner arrives, never from this GET.";
 
 // 'METHOD /path' as scanRouteGraph spells it, like REVIEWED_OPEN_MUTATIONS.
@@ -1600,7 +1604,7 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/browser', "Reads the managed browser's status, including its tab list over CDP; a caller without host control gets pages and downloads stripped (#12488)."],
   ['GET /api/browser/logs', PM2_READ],
   ['GET /api/capabilities', PROVIDER_STATUS],
-  ['GET /api/code-animation/execution', 'Reports which containment mechanism the code-animation worker would use, from a fixed Docker or sandbox availability probe; runs no worker.'],
+  ['GET /api/code-animation/execution', `Reports which containment mechanism the code-animation worker would use, from a fixed Docker or sandbox availability probe, and the Blender lane's readiness; ${BLENDER_RECHECK}.`],
   ['GET /api/code-animation/generate/:id', JOB_TABLE],
   ['GET /api/code-review/reviewer-identities', FORGE_READ],
   ['GET /api/cos/actionable-insights', 'Runs the PM2 health sweep (it restarts errored processes) only for a caller with host control, like its gated twin POST /api/cos/health/check; anyone else reads the recorded snapshot. Leftover-branch detection runs read-only git and gh queries.'],
@@ -1661,6 +1665,7 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/models/performance/task-benchmark', TOOLKIT_INJECTED],
   ['GET /api/music-video', JOB_TABLE],
   ['GET /api/music-video/:id', JOB_TABLE],
+  ['GET /api/music-video/:id/blender', `Reads a Blender film's state: the project record, its workspace files and render index, in-memory jobs, and Blender readiness from the Code Animation execution report (a fixed containment-availability probe, as GET /api/code-animation/execution): ${BLENDER_RECHECK}. Runs no film script or render; those start only from the gated sync, render and cut routes.`],
   ['GET /api/music-video/:id/cast-and-sets', "Reads the saved check-in and resolves linked catalog records, media and file availability; deps.catalog shares a test-seam defaults object with the provider runner, but this GET invokes only catalog reads and no provider or queue."],
   ['GET /api/music-video/:id/cast-and-sets/casting-changes', "Rebuilds the Cast & Sets image plan from stored records and the linked Casting records' media to compare reference images; the trace reaches the provider runner through the service's test-seam `deps` defaults, but this read calls only the catalog reads and queues or runs nothing."],
   ['GET /api/music-video/:id/film-looks', MUSIC_VIDEO_PLAN_READ],
@@ -1723,7 +1728,7 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/update/auto', ACTIVE_WORK_READ],
   ['GET /api/update/browser', 'Reads the cached Chrome version observation; fixed read-only process and CDP probes run in the background monitor, not in the request.'],
   ['GET /api/update/status', FORGE_READ],
-  ['GET /api/update/software', 'Aggregates the existing status reads of every managed component (Node/nvm/pm2, cached Chrome observation, harness `--version` checks, Ollama/LM Studio, yt-dlp, Blender configuration, the Docker and code-animation containment probes, conda env paths) with fixed version probes; installs, starts and updates nothing.'],
+  ['GET /api/update/software', `Aggregates the existing status reads of every managed component (Node/nvm/pm2, cached Chrome observation, harness \`--version\` checks, Ollama/LM Studio, yt-dlp, Blender configuration, the Docker and code-animation containment probes, conda env paths) with fixed version probes; installs and updates nothing. The Blender row reads the Code Animation execution report: ${BLENDER_RECHECK}.`],
   ['GET /api/usage', PROVIDER_USAGE],
   ['GET /api/usage/claude-code', PROVIDER_USAGE],
   ['GET /api/usage/providers', PROVIDER_USAGE],

@@ -433,7 +433,8 @@ export async function getGoalsTree() {
   }
 
   // Build tag index (deduplicated per tag)
-  const tagIndex = {};
+  // Null-prototype: user tags like `constructor`/`__proto__` must be plain own keys.
+  const tagIndex = Object.create(null);
   for (const goal of enriched) {
     for (const tag of new Set(goal.tags || [])) {
       if (!tagIndex[tag]) tagIndex[tag] = [];

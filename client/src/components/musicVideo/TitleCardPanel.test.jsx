@@ -74,6 +74,64 @@ describe('TitleCardPanel', () => {
     expect(screen.getByLabelText('Bar')).toBeInTheDocument();
   });
 
+  // Uniquely catches a fade or slide control saving the wrong field, the slide's numbers offered while
+  // nothing slides, and a card saved with one fade having its fade out dragged along with its fade in.
+  it('sets the fade in and the fade out apart, and the slide\'s side, time and distance', () => {
+    const onSave = vi.fn().mockResolvedValue({});
+    render(<Harness initial={{ ...base, titleCard: { enabled: true, title: 'Example Song', startSec: 1, endSec: 5, fadeSec: 0.5 } }} onSave={onSave} />);
+    expect(screen.getByLabelText('Fade in (s)')).toHaveValue(0.5);
+    expect(screen.getByLabelText('Fade out (s)')).toHaveValue(0.5);
+    fireEvent.change(screen.getByLabelText('Fade in (s)'), { target: { value: '2' } });
+    expect(screen.getByLabelText('Fade out (s)')).toHaveValue(0.5);
+    fireEvent.blur(screen.getByLabelText('Fade in (s)'));
+    expect(onSave).toHaveBeenLastCalledWith({ titleCard: expect.objectContaining({ fadeSec: 2, fadeOutSec: 0.5 }) });
+    fireEvent.change(screen.getByLabelText('Fade out (s)'), { target: { value: '1.5' } });
+    fireEvent.blur(screen.getByLabelText('Fade out (s)'));
+    expect(onSave).toHaveBeenLastCalledWith({ titleCard: expect.objectContaining({ fadeSec: 2, fadeOutSec: 1.5 }) });
+
+    expect(screen.getByLabelText('Slide in')).toHaveValue('none');
+    expect(screen.queryByLabelText('Slide time (s)')).toBeNull();
+    expect(screen.queryByLabelText('Slide distance (% of frame width)')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Slide in'), { target: { value: 'left' } });
+    expect(onSave).toHaveBeenLastCalledWith({ titleCard: expect.objectContaining({ slideIn: 'left', slideSec: 0.8, slidePct: 12 }) });
+    fireEvent.change(screen.getByLabelText('Slide time (s)'), { target: { value: '1.2' } });
+    fireEvent.blur(screen.getByLabelText('Slide time (s)'));
+    fireEvent.change(screen.getByLabelText('Slide distance (% of frame width)'), { target: { value: '20' } });
+    fireEvent.blur(screen.getByLabelText('Slide distance (% of frame width)'));
+    expect(onSave).toHaveBeenLastCalledWith({ titleCard: expect.objectContaining({ slideIn: 'left', slideSec: 1.2, slidePct: 20, fadeSec: 2, fadeOutSec: 1.5 }) });
+    fireEvent.change(screen.getByLabelText('Slide in'), { target: { value: 'none' } });
+    expect(screen.queryByLabelText('Slide time (s)')).toBeNull();
+  });
+
+  // Covers the look defaults, explicit overrides and availability on composed cuts.
+  it('keeps the lower third steady and outlined type in the film, lets the director change either, including on a composed cut', () => {
+    const onSave = vi.fn().mockResolvedValue({});
+    const titleCard = { enabled: true, title: 'Example Song', startSec: 1, endSec: 5 };
+    const { unmount } = render(<Harness initial={{ ...base, titleCard }} onSave={onSave} />);
+    const steady = () => screen.getByLabelText('Keep steady');
+    expect(steady()).not.toBeChecked();
+    expect(steady()).toHaveAccessibleDescription('Draws the card over the film look and shot effects, so weave, flicker and grain do not touch it.');
+    fireEvent.change(screen.getByLabelText('Look'), { target: { value: 'mtv' } });
+    expect(onSave).toHaveBeenLastCalledWith({ titleCard: expect.objectContaining({ style: 'mtv', steady: true }) });
+    expect(steady()).toBeChecked();
+    fireEvent.click(steady());
+    expect(onSave).toHaveBeenLastCalledWith({ titleCard: expect.objectContaining({ style: 'mtv', steady: false }) });
+    fireEvent.click(steady());
+    fireEvent.change(screen.getByLabelText('Look'), { target: { value: 'outline' } });
+    expect(onSave).toHaveBeenLastCalledWith({ titleCard: expect.objectContaining({ style: 'outline', steady: false }) });
+    fireEvent.click(steady());
+    expect(onSave).toHaveBeenLastCalledWith({ titleCard: expect.objectContaining({ style: 'outline', steady: true }) });
+    unmount();
+
+    render(<Harness initial={{ ...base, composition: { mode: 'composed' }, titleCard: { ...titleCard, style: 'mtv' } }} onSave={onSave} />);
+    expect(screen.getByLabelText('Keep steady')).toBeChecked();
+    fireEvent.click(screen.getByLabelText('Keep steady'));
+    expect(onSave).toHaveBeenLastCalledWith({ titleCard: expect.objectContaining({ steady: false }) });
+    // The slide and the fades are drawn by the card itself, so a composed cut keeps them.
+    expect(screen.getByLabelText('Slide in')).toBeInTheDocument();
+    expect(screen.getByLabelText('Fade out (s)')).toBeInTheDocument();
+  });
+
   it('optionally shows the card again at the end, timed from the song length', () => {
     const onSave = vi.fn().mockResolvedValue({});
     const card = { enabled: true, title: 'Example Song', startSec: 2, endSec: 6 };
@@ -90,6 +148,16 @@ describe('TitleCardPanel', () => {
     fireEvent.change(screen.getByLabelText('End out (s)'), { target: { value: '198' } });
     fireEvent.blur(screen.getByLabelText('End out (s)'));
     expect(onSave).toHaveBeenLastCalledWith({ titleCard: expect.objectContaining({ outroStartSec: 195, outroEndSec: 198 }) });
+  });
+
+  it('says where a Blender film shows the card, and flags a render style that never draws it', () => {
+    const titleCard = { enabled: true, title: 'Example Song', startSec: 1, endSec: 5 };
+    const { unmount } = render(<Harness initial={{ ...base, composition: { mode: 'blender' }, titleCard }} onSave={vi.fn()} />);
+    expect(screen.getByLabelText(/In cuts and the final render · 0:01–0:05/)).toBeChecked();
+    expect(screen.queryByText(/does not draw the title card/)).toBeNull();
+    unmount();
+    render(<Harness initial={{ ...base, composition: { mode: 'concat' }, titleCard }} onSave={vi.fn()} />);
+    expect(screen.getByText(/does not draw the title card/)).toBeInTheDocument();
   });
 
   it('picks a font from swatches drawn in each face', () => {

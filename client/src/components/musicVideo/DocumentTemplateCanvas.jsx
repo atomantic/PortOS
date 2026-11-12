@@ -39,6 +39,18 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
     ).map(effect => [effect.frame, glitchFrameParams(effect)]));
     const images = new Map();
     let active = true, handle = 0;
+    const videoFrames = new Map();
+    const watchVideo = video => {
+      if (!video?.requestVideoFrameCallback || videoFrames.has(video)) return;
+      videoFrames.set(video, video.requestVideoFrameCallback(() => {
+        videoFrames.delete(video);
+        if (!active || !video.isConnected) return;
+        watchVideo(video);
+        // seeked can precede the drawable frame. Playback has a paint loop,
+        // but a paused composition must repaint when that frame is presented.
+        if (audio.paused) paint();
+      }));
+    };
     const image = id => {
       if (!id) return null;
       let img = images.get(id);
@@ -57,9 +69,10 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
       const selected = resolveSourceTake(original, project.scenes || []);
       const shot = selected ? { ...original, videoHistoryId: selected.videoHistoryId, referenceImageId: selected.referenceImageId || original?.referenceImageId } : original;
       const footage = sceneVisualLayer(shot, { layered: true }) === 'footage' && !!shot?.videoHistoryId;
-      const video = [...(figureRef.current?.querySelectorAll('video[data-document-scene]') || [])].find(v => v.dataset.documentScene === scene.sceneId && v.readyState >= 2 && !v.seeking);
+      const video = [...(figureRef.current?.querySelectorAll('video[data-document-scene]') || [])].find(v => v.dataset.documentScene === scene.sceneId);
+      if (footage) watchVideo(video);
       const sequence = !footage ? scenePhotoSequence(shot, options) : null;
-      let source = footage && video ? video : image(shot?.referenceImageId);
+      let source = footage && video?.readyState >= 2 && !video.seeking ? video : image(shot?.referenceImageId);
       if (sequence?.stacked) {
         const layers = photoSequenceLayers(sequence, t, { fps });
         const loaded = layers.map(layer => image(sequence.imageIds[layer.index]));
@@ -90,6 +103,9 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
     };
     const paint = () => {
       if (!active) return;
+      for (const [video, pending] of videoFrames) if (!video.isConnected) {
+        video.cancelVideoFrameCallback(pending); videoFrames.delete(video);
+      }
       const songTime = audio.currentTime || timeRef.current || 0;
       const t = drawing.state(songTime).t;
       const scene = scenes.filter(s => s.startSec <= t && t < s.endSec).at(-1) || null;
@@ -136,6 +152,8 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
     paint(); if (!audio.paused) start();
     return () => {
       active = false; cancelAnimationFrame(handle); paintRef.current = null;
+      for (const [video, pending] of videoFrames) video.cancelVideoFrameCallback(pending);
+      videoFrames.clear();
       audio.removeEventListener('play', start); audio.removeEventListener('pause', stop); audio.removeEventListener('ended', stop);
       audio.removeEventListener('seeking', onSeek); audio.removeEventListener('seeked', onSeek);
       figure?.removeEventListener('loadeddata', paint, true); figure?.removeEventListener('seeked', paint, true);

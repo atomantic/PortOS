@@ -140,7 +140,7 @@ const frameSpan = (scene) => `fr ${frameAt(scene.startSec)}–${frameAt(scene.en
 // A clip from the storyboard panel (`needsStill: false`) makes its own first frame.
 // Where the shot sits in the cut: move it a slot earlier or later (the song timing and
 // lyric stay with the slot), or delete it after a confirm.
-function SceneOrderActions({ index, isLast, manifestOwnsShots, onMove, onDelete }) {
+function SceneOrderActions({ index, isLast, manifestOwnsShots, shotOrderOwner, onMove, onDelete }) {
   const [confirming, setConfirming] = useState(false);
   return (
     <div className="space-y-1">
@@ -166,7 +166,7 @@ function SceneOrderActions({ index, isLast, manifestOwnsShots, onMove, onDelete 
         ))}
       </div>
       {manifestOwnsShots && (
-        <p className="text-[11px] text-port-text-muted">Shot order comes from the composition document, so it can&apos;t be reordered here.</p>
+        <p className="text-[11px] text-port-text-muted">Shot order comes from {shotOrderOwner}, so it can&apos;t be reordered here.</p>
       )}
     </div>
   );
@@ -189,7 +189,7 @@ export default function SceneCard({
   project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
   onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onCheckTake = null, checkingTakes = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, onHandheldClip = null, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false, manifestOwnsShots = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, onMoveEnd = null, nextEndSec = null, falVideoSettings = null, performanceReview = null, onRepairPerformance, repairBusy = false,
-  onClose = null, locked = false, stepShot = null, footageOptional = false, failedScenes = null, songReview = null,
+  onClose = null, locked = false, stepShot = null, footageOptional = false, failedScenes = null, songReview = null, shotOrderOwner = 'the composition document',
   storyboardId = null, storyboardShot = null, onStoryboardBoard = null, onApplyCameos = null, onVaryWipes = null,
 }) {
   // Keep playback mounted even when this shot shows a still or performance evidence.
@@ -525,7 +525,7 @@ export default function SceneCard({
           <SceneShotCuts timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext} onMergePrevious={onMergePrevious}
             span={sceneHasAuthoredSpan(scene) ? { startSec: scene.startSec, endSec: scene.endSec } : null} />
         )}
-        <SceneOrderActions index={index} isLast={isLast} manifestOwnsShots={manifestOwnsShots}
+        <SceneOrderActions index={index} isLast={isLast} manifestOwnsShots={manifestOwnsShots} shotOrderOwner={shotOrderOwner}
           onMove={onMove} onDelete={onDelete ? () => onDelete(scene.sceneId) : null} />
       </ShotEditorGroup>
       {preMusic && (

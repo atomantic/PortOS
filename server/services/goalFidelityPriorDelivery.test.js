@@ -1,7 +1,7 @@
 /**
  * Real git history, because the guarantee is what the history proves: a retry's
- * reviewer sees an earlier attempt's change only when that attempt's own head
- * reached this run's ancestry through a merge commit.
+ * reviewer sees an earlier attempt's change only with a proven merge or a
+ * server-captured baseline and earlier head on the same retained branch.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -43,9 +43,21 @@ describe('priorTaskDelivery', () => {
     git('checkout', '-q', 'main');
     return head;
   };
-  const delivery = (head, maxChars = 60_000) => priorTaskDelivery({
-    taskId: 'task-1', workspacePath: repo, head, startedAt: START, maxChars,
+  const delivery = (head, maxChars = 60_000, options = {}) => priorTaskDelivery({
+    taskId: 'task-1', workspacePath: repo, head, startedAt: START, maxChars, ...options,
   });
+  const retainedAttempt = head => ({ ...attempt('agent-original', head), metadata: {
+    completedCheckouts: [{ head, branch: 'retained-pr' }],
+    primaryCheckoutBaseline: { head: git('rev-parse', 'main') },
+  } });
+  const mergeRetainedBranch = () => {
+    const head = git('rev-parse', 'HEAD');
+    git('checkout', '-q', 'main');
+    commit('upstream.txt', 'unrelated upstream work');
+    git('merge', '-q', '--no-ff', '-m', 'Merge dependency PR', 'retained-pr');
+    git('checkout', '-q', 'retained-pr');
+    return head;
+  };
 
   beforeEach(() => {
     repo = mkdtempSync(join(tmpdir(), 'portos-prior-delivery-'));
@@ -80,6 +92,79 @@ describe('priorTaskDelivery', () => {
     git('merge', '-q', '--ff-only', 'attempt-1');
     agents.resident = [attempt('agent-1', fastForwarded)];
     expect(await delivery(git('rev-parse', 'HEAD'))).toBeNull();
+  });
+
+  // #15770: two bumps precede the recovery window; the recovery repairs only
+  // Reactor checksums, then merges the continued tip, NOT the earlier tip.
+  it('recovers the full retained PR and reported audit coverage without a refreshed upstream ref', async () => {
+    git('checkout', '-q', '-b', 'retained-pr');
+    commit('server-package.json', 'fix: update minimatch to 11.0.8');
+    const earlierHead = commit('client-package.json', 'fix: update Lucide, Vite, nanoid and private uv');
+    const original = retainedAttempt(earlierHead);
+    original.metadata.taskSummary = 'Paginated alerts: zero open. Complete PR preload: no bots. Four npm audits clean; 451 Python OSV queries clean. Container/native coverage gaps remain tracked.';
+    agents.archived = [original];
+    commit('setup-reactor.js', 'fix: align the five uv release digests');
+    const head = mergeRetainedBranch();
+    const options = { base: earlierHead, includeExecutionReport: true };
+    const result = await delivery(head, 60_000, options);
+    expect(result.heads).toEqual([earlierHead]);
+    expect(result.diff).toContain('diff --git a/server-package.json');
+    expect(result.diff).toContain('diff --git a/client-package.json');
+    expect(result.diff).toContain('diff --git a/setup-reactor.js');
+    expect(result.diff).toContain('# fix: update minimatch');
+    expect(result.diff).toContain(original.metadata.taskSummary);
+    expect(result.diff).toContain('Agent-authored claims; command execution is not independently established');
+    expect(result.diff).not.toContain('upstream.txt');
+    expect((await delivery(head, 60_000, { base: earlierHead })).diff).not.toContain('execution report');
+    const bounded = await delivery(head, result.diff.indexOf('Paginated') + 20, options);
+    expect(bounded.diff.length).toBeLessThanOrEqual(result.diff.indexOf('Paginated') + 20);
+  });
+
+  it('does not borrow an unmerged or later branch head without retained-branch provenance', async () => {
+    git('checkout', '-q', '-b', 'retained-pr');
+    const earlierHead = commit('package.json', 'fix: dependency bump');
+    agents.resident = [attempt('agent-original', earlierHead)];
+    const unmerged = commit('setup-reactor.js', 'fix: checksums');
+    expect(await delivery(unmerged)).toBeNull();
+    mergeRetainedBranch();
+    const later = commit('later.txt', 'later unmerged work');
+    expect(await delivery(later)).toBeNull();
+  });
+
+  it.each(['different branch', 'different window base', 'different task', 'unrelated source baseline'])(
+    'does not restore earlier source with %s', async mismatch => {
+      git('checkout', '-q', '-b', 'retained-pr');
+      const earlierHead = commit('package.json', 'fix: dependency bump');
+      const original = retainedAttempt(earlierHead);
+      agents.resident = [original];
+      const head = commit('setup-reactor.js', 'fix: checksums');
+      let base = earlierHead;
+      if (mismatch === 'different branch') original.metadata.completedCheckouts[0].branch = 'another-pr';
+      if (mismatch === 'different window base') base = original.metadata.primaryCheckoutBaseline.head;
+      if (mismatch === 'different task') original.taskId = 'another-task';
+      if (mismatch === 'unrelated source baseline') original.metadata.primaryCheckoutBaseline.head = branchCommit('unrelated', 'other.txt', 'another branch');
+      if (mismatch === 'unrelated source baseline') git('checkout', '-q', 'retained-pr');
+      expect(await delivery(head, 60_000, { base })).toBeNull();
+    },
+  );
+
+  it('rejects an earlier task head already on the merge first parent', async () => {
+    const upstream = commit('upstream.txt', 'earlier work on main');
+    agents.resident = [attempt('agent-original', upstream)];
+    git('checkout', '-q', '-b', 'retained-pr');
+    commit('setup-reactor.js', 'fix: checksums only');
+    expect(await delivery(mergeRetainedBranch())).toBeNull();
+  });
+
+  it('uses net current source so a continuation cannot resurrect a reverted dependency update', async () => {
+    git('checkout', '-q', '-b', 'retained-pr');
+    const earlierHead = commit('package.json', 'fix: dependency bump');
+    agents.resident = [retainedAttempt(earlierHead)];
+    git('revert', '--no-edit', earlierHead);
+    commit('setup-reactor.js', 'fix: checksums only');
+    const result = await delivery(mergeRetainedBranch(), 60_000, { base: earlierHead });
+    expect(result.diff).toContain('diff --git a/setup-reactor.js');
+    expect(result.diff).not.toContain('diff --git a/package.json');
   });
 
   it('ignores merges that belong to another task or start after this run', async () => {

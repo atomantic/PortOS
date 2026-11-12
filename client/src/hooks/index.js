@@ -85,6 +85,9 @@ export { default as useMusicVideoProduction } from './useMusicVideoProduction.js
 export { default as useAutonomousMusicVideo } from './useAutonomousMusicVideo.js';
 export { default as useMusicVideoRenderJob } from './useMusicVideoRenderJob.js';
 export { default as useMusicVideoShotRenders } from './useMusicVideoShotRenders.js';
+export { default as useMusicVideoBlender } from './useMusicVideoBlender.js';
+export { default as useShotSongSync } from './useShotSongSync.js';
+export { default as useSoloPlayback } from './useSoloPlayback.js';
 export { default as useMusicVideoStatsOutro } from './useMusicVideoStatsOutro.js';
 export { default as useMusicVideoRevisions } from './useMusicVideoRevisions.js';
 export { default as useMusicVideoSceneMedia } from './useMusicVideoSceneMedia.js';

@@ -28,6 +28,23 @@ list is not permission to remove them.
 `no coordinator task eligible; unresolved holds retained` means the inventory
 still contains work, but none can currently be dispatched. Inspect the per-app
 outcome rather than treating the absence of a generated task as successful cleanup.
+Every retained branch is also named with its reason in the run log. Open delivery
+rows link their PR and retain observed conflicts, requested changes and failed
+check names alongside any review-recovery hold, so an ownership hold cannot hide
+the delivery failure. Serial retries with the same task, instance, budget epoch
+and consecutive dispatch ordinals share one review owner; unrelated or overlapping
+executions remain ambiguous. Historical policies and current task budgets still apply.
+
+- `review-task-missing` means the completed owner's task record is unavailable.
+  Restore trusted task history before resuming its configured review; PR text is
+  not a replacement policy and a missing record does not replenish any budget.
+- `retirement-pr-ambiguous` means no unique merged PR could be selected, including
+  branches whose PR was closed without merging. Finish wanted work, or inspect
+  the replacement and use the explicit supersession retirement described below.
+- `retirement-policy-not-legacy-completed` means historical completion evidence
+  does not establish retirement for the current head, for example after rebasing.
+  Verify its current merged delivery and use the scoped checkout release below;
+  that endpoint still enforces live ownership and manual policy holds.
 
 - `retirement-forge-unavailable` means PR evidence could not be read. Restore
   the managed app's forge access and rerun. A missing local commit on the forge
@@ -40,15 +57,19 @@ outcome rather than treating the absence of a generated task as successful clean
 - `retirement-receipt-unverified` means preservation is unproven. An exception
   after retirement starts retains this obligation, including the exact checkout
   identity; it is not downgraded to a failed preview or silently retried as one.
-- `worktree-unmanaged-location` means the checkout sits outside PortOS's
-  managed roots. A checkout that only looks merged because it was cut from the
-  default branch stays there (#10270): another tool may still own it, and
-  ancestry alone is not delivery. When the forge reports that branch's pull
-  request MERGED at the exact observed head and names when that merge happened,
-  reconciliation waits out the shipped hour from the later of that merge and
-  the checkout's age, then retires the checkout and the local branch. A lock,
-  a live owner, a missing merge time, or an unreadable forge still holds it.
-  Do not add external checkouts to a trusted root to clear this.
+- Named merged branches retire through the same checks regardless of checkout
+  location, from both the Git page and `branch-reconcile`. A clean external
+  checkout needs no separate PR, merge timestamp, idle window, or managed-root
+  registration. This is intentional for external tool-created branches too:
+  directory age or an unregistered process is not a cleanup hold. External
+  sessions that need to retain a clean checkout must use `git worktree lock`;
+  the server still honors that lock. The server rechecks the actual holder and current integration
+  evidence before removal. Locks, active owners, protected branches, completion
+  policy and unsaved work still hold it. A dirty checkout is disposable only
+  when the forge proves its PR merged at that exact head, as described below.
+- `worktree-unmanaged-location` still applies to detached checkouts outside
+  managed roots, and superseded branches that have not passed their idle window.
+  This does not block cleanup of a named merged branch.
 - `delivery-head-unverified` requires comparing the current local branch and
   published PR. Preserve local-only changes and establish the current owner
   before continuing delivery; do not reset the checkout to make the heads match.

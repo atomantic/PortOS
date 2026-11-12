@@ -232,6 +232,13 @@ describe('useProviderModels — a modelFilter whose identity changes', () => {
     expect(result.current.availableModels).toEqual(['vlm-b']);
   });
 
+  it('restores the configured default when capability discovery makes it eligible', async () => {
+    const { result, rerender } = await mountFiltered(matchesB, [{ ...LOCAL, defaultModel: 'vlm-c' }]);
+    expect(result.current.selectedModel).toBe('vlm-b');
+    rerender({ filterFn: matchesBandC });
+    await waitFor(() => expect(result.current.selectedModel).toBe('vlm-c'));
+  });
+
   it('does not refetch the provider list for a filter identity change', async () => {
     const { rerender, result } = await mountFiltered(matchesNothing);
     expect(api.getProviders).toHaveBeenCalledTimes(1);

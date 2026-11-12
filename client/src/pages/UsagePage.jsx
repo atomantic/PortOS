@@ -54,10 +54,20 @@ function grokRepairLine(grok) {
   if (!grok) return '';
   const parts = [];
   if (grok.turns) parts.push(`${formatCount(grok.turns)} long-context turn${grok.turns === 1 ? '' : 's'}`);
+  if (grok.fast) parts.push(`${formatCount(grok.fast)} fast turn${grok.fast === 1 ? '' : 's'}`);
   if (grok.images) parts.push(`${formatCount(grok.images)} image${grok.images === 1 ? '' : 's'}`);
   if (grok.videos) parts.push(`${formatCount(grok.videos)} video${grok.videos === 1 ? '' : 's'}`);
   const added = parts.length ? `Added ${joinAnd(parts)}.` : 'Grok usage was already recorded.';
   return grok.note ? `${added} ${grok.note}` : added;
+}
+
+/** What Reconcile now added for Codex speed. Absent until that job finishes. */
+function codexRepairLine(codex) {
+  if (!codex) return '';
+  const added = codex.sessions
+    ? `Added fast-mode premiums for ${formatCount(codex.sessions)} Codex session${codex.sessions === 1 ? '' : 's'}.`
+    : 'Codex speed premiums were already recorded.';
+  return codex.note ? `${added} ${codex.note}` : added;
 }
 
 /** What Reconcile now added to the Antigravity ledger. Absent until that job finishes. */
@@ -760,6 +770,10 @@ function usageExtras(row) {
   if (row.videoSeconds > 0) parts.push(`${formatNumber(row.videoSeconds)}s video`);
   const longTokens = (row.longTokensIn || 0) + (row.longCacheReadTokens || 0) + (row.longCacheWriteTokens || 0);
   if (longTokens > 0) parts.push(`${formatNumber(longTokens)} long-context`);
+  const speedTokens = (prefix) => (row[`${prefix}TokensIn`] || 0) + (row[`${prefix}TokensOut`] || 0)
+    + (row[`${prefix}CacheReadTokens`] || 0) + (row[`${prefix}CacheWriteTokens`] || 0);
+  if (speedTokens('fast') > 0) parts.push(`${formatNumber(speedTokens('fast'))} fast`);
+  if (speedTokens('ultrafast') > 0) parts.push(`${formatNumber(speedTokens('ultrafast'))} ultrafast`);
   return parts.join(' · ');
 }
 
@@ -1131,7 +1145,7 @@ function InternalUsageMetrics({ onBillingSaved }) {
             Reconcile historical usage
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            Re-read saved transcripts, Grok sessions, and Antigravity media to replace older estimates and record media and long-context charges. This changes this machine’s recorded history but makes no provider calls. It cannot repair peer classifications or restore deleted transcripts; use the chart’s coverage details for those gaps.
+            Re-read saved transcripts, Grok sessions, and Antigravity media to replace older estimates and record media, long-context, and speed premiums. This changes this machine’s recorded history but makes no provider calls. It cannot repair peer classifications or restore deleted transcripts; use the chart’s coverage details for those gaps.
           </p>
           {backfill?.status === 'running' && (
             <p className="text-xs text-port-accent mt-1" role="status">
@@ -1145,6 +1159,9 @@ function InternalUsageMetrics({ onBillingSaved }) {
           )}
           {backfill?.grok && (backfill.status === 'complete' || backfill.status === 'error') && (
             <p className="text-xs text-port-success mt-1" role="status">{grokRepairLine(backfill.grok)}</p>
+          )}
+          {backfill?.codex && (backfill.status === 'complete' || backfill.status === 'error') && (
+            <p className="text-xs text-port-success mt-1" role="status">{codexRepairLine(backfill.codex)}</p>
           )}
           {backfill?.agy && (backfill.status === 'complete' || backfill.status === 'error') && (
             <p className="text-xs text-port-success mt-1" role="status">{agyRepairLine(backfill.agy)}</p>
@@ -1238,7 +1255,7 @@ function InternalUsageMetrics({ onBillingSaved }) {
           save, older Antigravity turns without token fields, and local models, approximated from prompt and output text with no
           cache traffic counted — those rows understate real usage.
           {' '}OpenCode-backed runs (including zen) contribute the output tokens from the run&rsquo;s own event stream and stay
-          estimated on input. Rates are as of {report?.pricingAsOf || 'the last update'} and exclude batch and long-context tiers.
+          estimated on input. Rates are as of {report?.pricingAsOf || 'the last update'}. They include Grok prompts at or above 200k tokens and transcript-confirmed Fast or Ultrafast on a published API schedule. Batch discounts, OpenAI long-context tiers, and subscription credit multipliers are not part of this estimate.
           {' '}Rows marked ~ use an approximated rate.
         </p>
       </div>

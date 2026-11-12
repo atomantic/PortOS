@@ -33,10 +33,10 @@ async function harness(transform = (words) => words, {
       expect(options.isCancelled).toEqual(expect.any(Function));
       for (const line of [...scriptLines, 'unstructured output is ignored']) onLine(line);
       if (!scriptSuccess) return { success: false };
-      await writeFile(runDir, JSON.stringify(transform([
+      await writeFile(runDir, JSON.stringify({ lineScores: lines.map(() => -0.5), lines: transform([
         [{ w: 'Hello,', startSec: 0.1, endSec: 0.4 }, { w: 'café!', startSec: 0.4, endSec: 0.8 }],
         [{ w: 'Hello,', startSec: 1.4, endSec: 1.8 }],
-      ])));
+      ]) }));
     }
     return { success: true };
   });
@@ -73,6 +73,24 @@ describe('MMS_FA process contract', () => {
     expect(h.scriptArgs().slice(-2)).toEqual(['--model-dir', join(h.root, 'venv-models')]);
     expect(onProgress).toHaveBeenCalledWith({ stage: 'emissions', percent: 50 });
     await expect(readFile(h.runDir())).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not call weak CTC emissions matched evidence', async () => {
+    const h = await harness();
+    const run = h.run.getMockImplementation();
+    h.run.mockImplementation(async (...args) => {
+      const result = await run(...args);
+      if (args[1].includes('--output')) {
+        const path = args[1][args[1].indexOf('--output') + 1];
+        const payload = JSON.parse(await readFile(path, 'utf8'));
+        payload.lineScores[1] = -4;
+        await writeFile(path, JSON.stringify(payload));
+      }
+      return result;
+    });
+    const result = await h.align();
+    expect(result[0].every(word => word.conf === 'matched')).toBe(true);
+    expect(result[1][0].conf).toBe('interpolated');
   });
 
   it('rebuilds a venv on an incompatible interpreter from a discovered base', async () => {

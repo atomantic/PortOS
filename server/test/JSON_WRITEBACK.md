@@ -1,7 +1,7 @@
 # JSON write-back prevention guard
 
 Run from `server/`: `node_modules/.bin/vitest run jsonWritebackConventions.test.js`.
-The guard parses service source only; it never imports services, reads runtime
+The guard parses server modules to discover wrappers, then checks service source; it never imports services, reads runtime
 records, connects to a database, or requires git history to run.
 
 A direct `readJSONFile` call and `atomicWrite` call with the same normalized
@@ -38,11 +38,20 @@ spread followed by literal strict:true is safe. Mixed strict/non-strict reads of
 one path still require classification. Dynamic strict options require manual
 caller review, including the strict defaults in Ask and POST run storage.
 
-This is deliberately same-expression, same-module syntax matching, not
-whole-program dataflow. It recognizes direct names and named import aliases;
-it does not resolve scopes/shadowing, namespace calls, wrapper functions,
-aliased path variables, equivalent path-building expressions, or different
-parameter names across functions. Same-name locals in unrelated functions can
+The registry also recognizes one hop through a relative import of an exported
+function that directly returns a non-strict read (including an awaited read or
+a top-level local binding returned afterwards). Named/default exports and import
+aliases work. A path parameter maps to the corresponding call argument; a
+module constant uses `<module>#<CONST>`, including when imported under an alias.
+Strict wrappers are omitted. Raw `tryReadFile` wrappers and raw reads passed to
+`safeJSONParse` are non-strict. Registry construction never executes a module,
+and the pre-parse service gate admits registered imports.
+
+This is deliberately same-expression matching with one direct wrapper hop, not
+whole-program dataflow. It does not resolve call scopes/shadowing, namespace
+calls, wrapper chains/re-exports, nested control-flow returns, reassigned local
+bindings, aliased path variables, equivalent path-building expressions, or
+different parameter names across functions. Same-name locals in unrelated functions can
 be false positives. A changed expression can therefore leave this scanner's
 coverage; the stale-entry failure calls attention to existing exceptions that
 move. There is no blanket module exemption and no assertion that 79 modules

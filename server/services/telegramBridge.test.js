@@ -156,6 +156,41 @@ describe('telegramBridge service', () => {
       });
     });
 
+    it('returns false when fetch rejects on getMe (network error)', async () => {
+      seedCredentials();
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch failed')));
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(await init()).toBe(false);
+      expect(getStatus()).toMatchObject({
+        connected: false,
+        botUsername: null,
+        hasBotToken: false,
+        hasChatId: true
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('📱 TG Bridge: network error on getMe — fetch failed')
+      );
+    });
+
+    it('returns false when response json parsing throws', async () => {
+      seedCredentials();
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => { throw new SyntaxError('Unexpected token < in JSON at position 0'); }
+      }));
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(await init()).toBe(false);
+      expect(getStatus()).toMatchObject({
+        connected: false,
+        botUsername: null,
+        hasBotToken: false,
+        hasChatId: true
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('📱 TG Bridge: invalid JSON response on getMe')
+      );
+    });
+
     it('returns true and records the bot username on a valid handshake', async () => {
       seedCredentials();
       vi.stubGlobal('fetch', mockTelegramFetch());
@@ -416,6 +451,36 @@ describe('telegramBridge service', () => {
         fetchSpy.mock.calls.filter(([url]) => url.endsWith('/sendMessage')),
         'an exhausted messages budget must not forward to Telegram'
       ).toHaveLength(0);
+    });
+
+    it('never rejects on forwardNotification when fetch rejects during forwarding', async () => {
+      seedCredentials();
+      const fetchSpy = vi.fn(async (url) => {
+        if (url.endsWith('/getMe')) {
+          return {
+            ok: true,
+            json: async () => ({ ok: true, result: { username: 'portos_test_bot' } })
+          };
+        }
+        if (url.endsWith('/sendMessage')) {
+          throw new Error('fetch failed');
+        }
+        throw new Error(`unexpected telegram URL ${url}`);
+      });
+      vi.stubGlobal('fetch', fetchSpy);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      await init();
+
+      await expect(forwardAdded({
+        type: NOTIFICATION_TYPES.HEALTH_ISSUE,
+        title: 'Connection drop',
+        priority: PRIORITY_LEVELS.HIGH
+      })).resolves.not.toThrow();
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('📱 TG Bridge: network error on sendMessage — fetch failed')
+      );
+      await cleanup();
     });
   });
 });

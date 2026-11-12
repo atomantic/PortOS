@@ -2,9 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { documentSceneVisualLayer, isLayeredComposition, isSelfDrawnLayer, sceneRenderReady, sceneVisualLayer } from './musicVideoLayers.js';
 
 describe('musicVideoLayers', () => {
-  it('treats composed renders and composition documents as layered, concat and code as footage-only', () => {
+  it('treats composed, document and Blender renders as layered, concat and code as footage-only', () => {
     expect(isLayeredComposition({ composition: { mode: 'composed' } })).toBe(true);
     expect(isLayeredComposition({ composition: { mode: 'document' } })).toBe(true);
+    expect(isLayeredComposition({ composition: { mode: 'blender' } })).toBe(true);
     expect(isLayeredComposition({ composition: { mode: 'concat' } })).toBe(false);
     expect(isLayeredComposition({ composition: { mode: 'code' } })).toBe(false);
     expect(isLayeredComposition({})).toBe(false);

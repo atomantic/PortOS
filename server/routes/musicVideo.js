@@ -20,6 +20,7 @@ import { Router } from 'express';
 import storyRoutes from './musicVideoStory.js';
 import festivalPacketRoutes from './musicVideoFestivalPacket.js';
 import researchSeedRoutes from './musicVideoResearchSeed.js';
+import blenderRoutes from './musicVideoBlender.js';
 import { musicVideoColdOpenAudioSchema, musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { presentMusicVideoDependencies } from '../lib/musicVideoDependencies.js';
@@ -324,7 +325,20 @@ async function presentProjectForRead(project) {
     const { withCatalogCheckin } = await import('../services/musicVideo/catalogCheckin.js');
     current = await withCatalogCheckin(current);
   }
-  const presented = presentProjectAutonomousRun(presentProjectCastAndSets(presentMusicVideoDependencies(current)));
+  // A Blender film's Shots step is decided by renders on this machine's disk, which only the server can read.
+  let filmFinalStale = false;
+  if (current?.composition?.mode === 'blender') {
+    const { blenderFilmReadState } = await import('../services/musicVideo/blender/renderIndex.js');
+    const film = await blenderFilmReadState(current);
+    current = { ...current, blenderShots: film.shots };
+    filmFinalStale = film.finalStale === true;
+  }
+  const dependencies = presentMusicVideoDependencies(current);
+  // The final video is joined from shot renders the record does not hold, so its evidence cannot
+  // see a shot that went out of date or was rendered again since: the film's own reading adds that.
+  const presented = presentProjectAutonomousRun(presentProjectCastAndSets(filmFinalStale ? { ...dependencies, renderDependencyState: {
+    status: 'stale', reasons: [...new Set([...(dependencies.renderDependencyState?.reasons || []), 'Blender shots changed or were rendered again after this final was joined'])],
+  } } : dependencies));
   // The track's audio can be replaced in place, so only the server can say the timing predates it (#14793).
   const { projectSongAudioChange } = await import('../services/musicVideo/songAudio.js');
   return { ...presented, productionReadiness: productionReadiness(presented), songAudioChange: await projectSongAudioChange(presented) };
@@ -584,6 +598,7 @@ router.post('/:id/plan', asyncHandler(async (req, res) => {
 router.use('/', storyRoutes);
 router.use('/', festivalPacketRoutes);
 router.use('/', researchSeedRoutes);
+router.use('/', blenderRoutes);
 
 // --- Pre-production treatment (#8980) ---
 // A structured brief, a compiled whole-song arc, per-shot direction keyed to

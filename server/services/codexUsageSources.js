@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { join, relative } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import * as zlib from 'node:zlib';
+import { SPEED_LEDGER_FIELDS } from '../lib/modelPricing.js';
 import { parseCodexRollout } from '../lib/providerTranscriptUsage.js';
 import { fingerprintRecords, readInventorySource, trimInventoryCache, writeInventorySource } from './codexInventoryCache.js';
 
@@ -44,14 +45,17 @@ const BUDGET_STOPS = ['decoded_byte_limit', 'record_limit'];
 // Envelopes that accountingRecord always drops, recognized from the serialized
 // prefix so tool output and images are neither parsed nor held in memory. Any
 // other shape falls through to the strict parse, so unknown lines still fail closed.
-const NON_ACCOUNTING_LINE = /^\{(?:"[a-z_]{1,32}":(?:"[^"]{0,64}"|\d{1,20}),){0,4}"type":"(?:compacted"|(?:response_item|event_msg)","payload":\{"type":"(?!token_count"|agent_message")[^"]{1,64}")/;
+const NON_ACCOUNTING_LINE = /^\{(?:"[a-z_]{1,32}":(?:"[^"]{0,64}"|\d{1,20}),){0,4}"type":"(?:compacted"|(?:response_item|event_msg)","payload":\{"type":"(?!token_count"|agent_message"|thread_settings_applied")[^"]{1,64}")/;
 const LINE_PREFIX_BYTES = 256;
 const isNonAccountingLine = bytes => NON_ACCOUNTING_LINE.test(bytes.latin1Slice(0, Math.min(bytes.length, LINE_PREFIX_BYTES)));
 const PROBLEM_SOURCE_SAMPLE = 5;
 // `cache_write_input_tokens` (a few 0.145-era CLIs only) is a separate part of
 // `input_tokens`, disjoint from the cached read; `total_tokens` stays input + output.
 const COUNTERS = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens', 'reasoning_output_tokens', 'total_tokens'];
-const emptyTotals = () => ({ messages: 0, tokensIn: 0, tokensOut: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
+const emptyTotals = () => ({
+  messages: 0, tokensIn: 0, tokensOut: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+  ...Object.fromEntries(SPEED_LEDGER_FIELDS.map((field) => [field, 0])),
+});
 const problem = code => Object.assign(new Error(code), { code });
 const hash = value => createHash('sha256').update(value).digest('hex');
 const isObject = value => value != null && typeof value === 'object' && !Array.isArray(value);
@@ -91,6 +95,20 @@ function accountingRecord(entry, ids, lineage) {
   if (entry.type === 'turn_context') {
     const model = projectModel(payload?.model);
     return model ? { type: 'turn_context', payload: { model } } : null;
+  }
+  if (payload?.type === 'thread_settings_applied') {
+    // The tier is the only setting accounting may keep. cwd, account ids and
+    // the rest of thread_settings stay in the source file. A missing tier is
+    // a reset to standard: dropping the event would leave an earlier Fast
+    // tier in effect for every later count.
+    const tier = payload.service_tier ?? payload.thread_settings?.service_tier;
+    const timestamp = entry.timestamp;
+    if (typeof timestamp !== 'string' || !Number.isFinite(Date.parse(timestamp))) return null;
+    if (tier == null || tier === '') {
+      return { timestamp, payload: { type: 'thread_settings_applied', service_tier: 'standard' } };
+    }
+    if (typeof tier !== 'string' || !/^[a-z0-9_-]{1,32}$/.test(tier)) return null;
+    return { timestamp, payload: { type: 'thread_settings_applied', service_tier: tier } };
   }
   if (payload?.type !== 'token_count' && payload?.type !== 'agent_message') return null;
   const timestamp = entry.timestamp;
@@ -238,7 +256,8 @@ async function inspectFile(path, state, range, decompress) {
   } finally {
     await handle?.close();
   }
-  if (ids.size !== 1) issues.add(ids.size ? 'conflicting_identity' : 'missing_identity');
+  if (ids.size > 1) issues.add('conflicting_identity');
+  else if (!ids.size && records.length) issues.add('missing_identity');
   return { ids, records, cwd, issues: [...issues], valid: !issues.size, fingerprint: fingerprintRecords(records),
     byModel: issues.size || !range ? {} : parseCodexRollout(records, range).byModel, loadRecords: async () => records };
 }
@@ -275,6 +294,8 @@ async function decodeAndStore(path, revision, info, state, decompress) {
     sourceInventory.delete(path);
     return source;
   }
+  // A decoded non-session has no identity or accounting records to cache.
+  if (!source.ids.size) return source;
   const [id] = source.ids;
   const projection = { revision, id, cwd: source.cwd, fingerprint: source.fingerprint };
   if (await writeInventorySource(hash(path), { ...projection, records: source.records, sourceMtimeMs: info.mtimeMs })) {
@@ -408,7 +429,11 @@ async function scanCodexSources({ from, to, home = homedir(), limits: overrides 
     coverage.resolvedSessions++;
     for (const [model, counts] of Object.entries(session.byModel)) {
       byModel[model] ??= emptyTotals();
-      for (const key of Object.keys(totals)) { byModel[model][key] += counts[key]; totals[key] += counts[key]; }
+      for (const key of Object.keys(totals)) {
+        const amount = counts[key] || 0;
+        byModel[model][key] += amount;
+        totals[key] += amount;
+      }
     }
   }
   const overflow = Object.values(totals).some(value => !Number.isSafeInteger(value));

@@ -241,6 +241,7 @@ export function cloneProjectRecord(source, {
   name,
   includeGeneratedMedia = true,
   variant = 'revision',
+  blenderFilm = false,
 }) {
   // Record metadata is independently editable; only immutable asset bytes are shared.
   source = structuredClone(source);
@@ -337,6 +338,19 @@ export function cloneProjectRecord(source, {
       ...(videoVariant ? { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null } : {}),
     }, approvals: {}, proof: null } : null,
     ...(source.castAndSets ? { castAndSets: { ...source.castAndSets, processId: null, productionRunId: null } } : {}),
+    // A Blender film's settings carry over. When the service copied the film's scripts and synced
+    // manifest into the clone's own workspace (`blenderFilm`), its shots stay mapped to the cloned
+    // scenes; otherwise the workspace, and so the mapping, is the source's own. The director's
+    // notes and the renders they are about stay with the source either way.
+    ...(source.blender ? { blender: {
+      settings: source.blender.settings,
+      ...(blenderFilm && !videoVariant ? {
+        sceneMap: Object.fromEntries(Object.entries(source.blender.sceneMap || {})
+          .filter(([, sceneId]) => sceneIdMap.has(sceneId)).map(([shotId, sceneId]) => [shotId, sceneIdMap.get(sceneId)])),
+        syncedAt: source.blender.syncedAt ?? null,
+        manifestHash: source.blender.manifestHash ?? null,
+      } : {}),
+    } } : {}),
     renderHistoryId: null,
     renderError: null,
     renderDependencies: null,
@@ -1531,6 +1545,8 @@ export function mergeProjectRecord(local, remoteRaw) {
   // candidate files and provenance; an unrelated peer edit must not erase them.
   if (Object.hasOwn(local, 'songRevision')) remote.songRevision = local.songRevision;
   if (Object.hasOwn(local, 'songRevisionHistory')) remote.songRevisionHistory = local.songRevisionHistory;
+  // A Blender film's workspace, and so its settings, scene map and notes, exist only here.
+  if (Object.hasOwn(local, 'blender')) remote.blender = local.blender;
   // The composition document's files live only on this install as well
   // (compositionDocument.js), so its pointer survives a newer remote body.
   if (local.composition?.document || local.composition?.documentDraft) {

@@ -124,12 +124,9 @@ export const SHIPPED_CLAIM_IDLE_MS = 60 * 60 * 1000; // 1 hour
 
 // The idle floor a verified-SUPERSEDED branch's worktree must clear before the
 // reap may take it from OUTSIDE the managed roots (an agent's `/tmp` checkout).
-// Merged cleanup uses the same floor, and only after the forge reports the pull
-// request MERGED at the exact head with a merge time — see retireBranch. The
-// wait is the later of that merge and the checkout's age, so an old directory
-// is not removed in the minute after it merges. Ancestry alone never opens the
-// gate (#10270). Without a clock the hold was permanent, and the coordinator
-// was told the branch would be reaped when nothing would ever lift it.
+// Merged cleanup does not use this location gate: a named branch whose current
+// head is integrated can retire from any directory, subject to the same live
+// ownership, lock, completion-policy and content checks as managed checkouts.
 export const SUPERSEDED_UNMANAGED_IDLE_MS = SHIPPED_CLAIM_IDLE_MS;
 
 /**
@@ -371,7 +368,7 @@ export async function readBranchUnshipped(repoPath, branch, { origin, forgeExec 
  *                         UNLESS it is an abandoned one older than `staleClaimIdleMs`
  *                         (`ageMs` supplied) — those are reaped (see STALE_CLAIM_IDLE_MS,
  *                         and SHIPPED_CLAIM_IDLE_MS for a claim proven shipped)
- * With `roots` (what every retirement passes — see `reconcileWorktreeRoots`), a
+ * With `roots` (detached and superseded retirement — see `reconcileWorktreeRoots`), a
  * worktree outside them is `worktree-unmanaged-location` before any of the above:
  * a directory PortOS never created carries no ownership signal at all.
  *
@@ -404,24 +401,14 @@ function teardownGate({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = 
 }
 
 /**
- * The only places unattended branch reconciliation may retire a worktree from:
- * PortOS's own CoS worktree root (agent and claim checkouts, PortOS's and every
- * managed app's) and the repository's `.claude/worktrees/` — the same two roots
- * `reapMergedWorktrees` confines its unattended pass to.
+ * Managed roots for detached-checkout cleanup and superseded-branch retirement.
+ * Detached checkouts outside these roots stay inventoried; superseded branches
+ * can clear the location hold after SUPERSEDED_UNMANAGED_IDLE_MS. Named merged
+ * branches use their freshly verified holder and integration evidence instead
+ * of a directory allowlist. Locks and live owners always remain protected.
  *
- * Anywhere else is a directory some other process made. A checkout freshly cut
- * from the default branch is clean and an ancestor of it, which is all ancestry
- * can say, and its mtime says when it was created, not whether its owner is
- * finished. Reconcile once deleted a release worktree a minute after a
- * still-running release run created it (#10270). That tree holds, at any age,
- * until the forge reports its pull request MERGED at the exact head and when
- * that happened. The shipped-claim hour then runs from the later of that merge
- * and the checkout's age; a lock, a live owner, or a missing merge time still
- * holds. The Git page shares this gate. The superseded reap carries a recorded
- * verdict and backup and can admit one after SUPERSEDED_UNMANAGED_IDLE_MS.
- *
- * Arbitrary names are accepted INSIDE these roots on purpose: claim trees are
- * `claim-*`, not `agent-*`, and can retire with exact completion evidence.
+ * Arbitrary names are accepted inside these roots: claim checkouts are
+ * `claim-*`, not `agent-*`, and still require exact completion evidence.
  *
  * @param {string} repoPath
  * @returns {Array<{path:string, requireAgentId:boolean}>}
@@ -1074,6 +1061,14 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
   return inputs;
 }
 
+const HOLD_NEXT_ACTIONS = {
+  'retirement-pr-ambiguous': 'No unique merged pull request was found for this branch. Finish its delivery, or compare a closed obsolete branch with its replacement and use scoped supersession retirement.',
+  'retirement-policy-not-legacy-completed': 'The historical completion record does not establish retirement for this checkout’s current head. Verify its current merged delivery and use scoped checkout retirement; live owners and manual handoffs still apply.',
+  'review-owner-ambiguous': 'Resolve competing or unverified execution owners before resuming the original review workflow.',
+  'review-task-missing': 'The original owner task is missing. Restore its trusted task record before resuming review; do not recreate its budgets or infer its policy from PR text.',
+  'review-task-unavailable': 'The original owner task could not be read. Restore task-store availability and rerun reconciliation; an unavailable read does not establish that history is missing.',
+};
+
 /**
  * Summarize every surviving hold when reconciliation has nothing dispatchable.
  * Persist counts and typed causes, with the earliest known hold expiry as the
@@ -1146,6 +1141,9 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
       ...(entry.detached && { detached: true }),
       ...(entry.managed !== undefined && { managed: entry.managed }),
       ...(entry.archiveLimit && { archiveLimit: entry.archiveLimit }),
+      ...(entry.prUrl && { prUrl: entry.prUrl }),
+      ...(entry.taskId && { taskId: entry.taskId }),
+      ...((entry.nextAction || HOLD_NEXT_ACTIONS[entry.cause]) && { nextAction: entry.nextAction || HOLD_NEXT_ACTIONS[entry.cause] }),
       reason: entry.cause,
     })),
     notLaterThan: lifts.length ? new Date(Math.min(...lifts)).toISOString() : null
@@ -1190,11 +1188,8 @@ async function claimIssueUnreserved(target, issue, forgeExec) {
  *   1. `hasBranchMergeEvidence(default)` re-verified true (fail closed).
  *   2. the branch's worktree (if any) has no real uncommitted changes, unless
  *      the forge merged this exact head (those files are disposable).
- *   3. that worktree (if any) is unlocked, and either lives in a managed root
- *      or the forge reports its pull request MERGED at this exact head, with a
- *      readable merge time, and both that merge and the checkout have been idle
- *      for SHIPPED_CLAIM_IDLE_MS. Ancestry alone never admits an external
- *      checkout (#10270). An unreadable forge or merge time keeps the hold.
+ *   3. that worktree (if any) is unlocked and has no live owner. Its directory
+ *      location does not block cleanup of a named, integrated branch.
  *   4. fresh ownership and completion policy permit retirement under the claim
  *      binding lock; a claim checkout has an exact successful run receipt, or
  *      the forge reports its exact head merged and it has idled past
@@ -1359,11 +1354,9 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
  *   copied before removal, so both callers keep the default.
  *
  *   `unmanagedIdleMs` (default none) admits a worktree outside the managed roots
- *   once it has sat idle that long. Merged retirement sets
- *   SHIPPED_CLAIM_IDLE_MS itself when the forge merged this exact head and
- *   reported when. The lookup happens before the ownership lock: a slow forge
- *   read must not stall that queue (#12682). A caller without that proof may
- *   name a window only with its own — see SUPERSEDED_UNMANAGED_IDLE_MS.
+ *   once it has sat idle that long (see SUPERSEDED_UNMANAGED_IDLE_MS).
+ *   Merged retirement instead admits the actual holder of the named branch
+ *   regardless of location after re-proving integration at its current head.
  * @returns {Promise<{ ok: true, prepared?: any } | { ok: false, reason: string, retryAt?: string }>}
  */
 async function retireBranch(repoPath, b, opts) {
@@ -1396,23 +1389,6 @@ async function retireBranch(repoPath, b, opts) {
     if (head && await isWorktreeDirty(b.worktreePath) !== false) {
       const { isMergedPrHead } = await import('./prProbe.js');
       if (await isMergedPrHead(repoPath, b.branch, head)) opts = { ...opts, disposableHead: head };
-    }
-  }
-  // Forge proof for an external checkout, asked outside the ownership lock.
-  // Directory mtime is not "just merged": a checkout cut last week passes the
-  // hour the moment the pull request merges, while a process may still be in it.
-  if (opts.mergedRetirement && opts.unmanagedIdleMs == null && b.worktreePath) {
-    const outsideManagedRoot = worktreeOwnershipReason({
-      path: b.worktreePath, roots: reconcileWorktreeRoots(repoPath), allowLiveClaim: true,
-    }) === 'worktree-unmanaged-location';
-    if (outsideManagedRoot) {
-      const origin = await execGit(['remote', 'get-url', 'origin'], repoPath, { ignoreExitCode: true }).catch(() => null);
-      const head = (await execGit(['rev-parse', '--verify', `refs/heads/${b.branch}`], repoPath).catch(() => null))?.stdout?.trim();
-      if (origin?.exitCode === 0 && origin.stdout?.trim() && head) {
-        const { readMergedPrDelivery } = await import('./prProbe.js');
-        const delivery = await readMergedPrDelivery(repoPath, b.branch, head).catch(() => null);
-        if (delivery?.mergedAt) opts = { ...opts, deliveredHead: head, deliveredMergedAt: delivery.mergedAt };
-      }
     }
   }
   // A merged checkout's archive runs between two ownership critical sections
@@ -1451,7 +1427,7 @@ async function retireBranch(repoPath, b, opts) {
 }
 
 /** Every gate before the archive. Returns `{ result }` to stop, else the context removal needs. */
-async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null, appId = null, disposableHead = null, deliveredHead = null, deliveredMergedAt = null, superseded = false }) {
+async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null, appId = null, disposableHead = null, superseded = false }) {
   const stop = result => ({ result });
   if (PROTECTED_BRANCHES.includes(b.branch)) return stop({ ok: false, reason: 'protected-branch' });
   const defaultBranch = await getDefaultBranch(repoPath, { strict: true }).catch(() => null);
@@ -1487,39 +1463,21 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
     if (holder?.path === repoPath) return stop({ ok: false, reason: 'currently-checked-out' });
     b = { ...b, worktreePath: holder?.path || null, worktreeLocked: holder?.locked || false };
   }
-  let externalDeliveryIdleMs = unmanagedIdleMs;
-  let deliveryAgeMs = b.worktreeAgeMs;
   if (b.worktreePath) {
-    // A forge-merged pull request at this exact head is delivered work. The
-    // checkout's directory is not. Ancestry is not that proof: a release
-    // checkout cut from the default branch looks merged and clean (#10270).
-    // The hour is the later of the checkout's age and the forge merge time, so
-    // an old directory whose pull request just merged is not removed while a
-    // process may still be standing in it. No origin, an unreadable forge, a
-    // missing merge time, or a different head keeps the location hold.
-    const outsideManagedRoot = worktreeOwnershipReason({
-      path: b.worktreePath, roots: reconcileWorktreeRoots(repoPath), allowLiveClaim: true,
-    }) === 'worktree-unmanaged-location';
-    const sinceMerge = Date.parse(deliveredMergedAt || '');
-    if (mergedRetirement && externalDeliveryIdleMs == null && outsideManagedRoot
-      && deliveredHead && deliveredHead === expectedHead && Number.isFinite(sinceMerge)) {
-      externalDeliveryIdleMs = SHIPPED_CLAIM_IDLE_MS;
-      if (Number.isFinite(deliveryAgeMs)) deliveryAgeMs = Math.min(deliveryAgeMs, Math.max(0, Date.now() - sinceMerge));
-    }
-    // Never tear down a worktree outside the managed roots (see
-    // reconcileWorktreeRoots) unless the delivery idle above admitted it, one
-    // that's locked, a RECENT human /claim session, or an active CoS agent
-    // workspace. Passing the age/location gate is only eligibility: manual
-    // claims still require exact completion evidence below.
+    // A named branch's actual holder and current merged head were re-read above.
+    // Location adds no completion evidence: apply the same owner, lock, claim
+    // and content checks to external checkouts as to PortOS-managed checkouts.
+    // External sessions retain a clean checkout with `git worktree lock`; an
+    // arbitrary directory or unregistered process alone is not a cleanup hold.
     const gate = {
       path: b.worktreePath,
       locked: b.worktreeLocked,
       activeAgentIds,
-      ageMs: deliveryAgeMs,
+      ageMs: b.worktreeAgeMs,
       staleClaimIdleMs,
       allowLiveClaim,
-      roots: reconcileWorktreeRoots(repoPath),
-      unmanagedIdleMs: externalDeliveryIdleMs,
+      roots: mergedRetirement ? [] : reconcileWorktreeRoots(repoPath),
+      unmanagedIdleMs,
     };
     let protectedReason = worktreeProtectionReason(gate);
     // The claim gate runs LAST, so `worktree-human-claim` means every other hold

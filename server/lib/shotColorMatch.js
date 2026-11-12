@@ -542,8 +542,9 @@ export function colorMatchGroups(project) {
  * active, so a segment with matching off hashes to the same bytes as before
  * color match existed.
  */
-export function segmentLookHashPayload({ version, baseKey, look, startSec, fps, matchKey = null }) {
-  return { v: version, baseKey, look, startSec, fps, ...(matchKey ? { match: matchKey } : {}) };
+export function segmentLookHashPayload({ version, baseKey, look, startSec, fps, matchKey = null, titleCard = null, titleCardUntilSec = null }) {
+  return { v: version, baseKey, look, startSec, fps, ...(matchKey ? { match: matchKey } : {}),
+    ...(titleCard ? { titleCard, titleCardUntilSec } : {}) };
 }
 
 /** Cache file name for a segment. No match and no look keeps the base name. */

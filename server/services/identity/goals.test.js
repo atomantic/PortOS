@@ -35,7 +35,7 @@ vi.mock('../aiProvider.js', async (importOriginal) => {
 
 const {
   computeGoalVelocity, getGoals, decomposeGoal, generateGoalPhases,
-  acceptGoalPhases, acceptGoalDecomposition, completeMilestoneTask, updateGoalProgress
+  acceptGoalPhases, acceptGoalDecomposition, completeMilestoneTask, updateGoalProgress, getGoalsTree
 } = await import('./goals.js');
 
 describe('computeGoalVelocity', () => {
@@ -292,5 +292,24 @@ describe('updateGoalProgress dates the history point by the user-local day', () 
     expect(h.goalsData.goals[0].progressHistory).toEqual([
       expect.objectContaining({ date: '2026-11-06', value: 20 })
     ]);
+  });
+});
+
+describe('getGoalsTree tag index', () => {
+  it('indexes reserved-looking tags as own keys and dedupes per goal', async () => {
+    h.goalsData = {
+      goals: [
+        { id: 'goal-a', title: 'A', status: 'active', tags: ['constructor', '__proto__', 'plain', 'plain'] },
+        { id: 'goal-b', title: 'B', status: 'active', tags: ['toString', 'constructor'] }
+      ],
+      birthDate: null
+    };
+    const tree = await getGoalsTree();
+    const serialized = JSON.parse(JSON.stringify(tree.tagIndex));
+    expect(Object.keys(serialized).sort()).toEqual(['__proto__', 'constructor', 'plain', 'toString']);
+    expect(serialized.constructor).toEqual(['goal-a', 'goal-b']);
+    expect(serialized.toString).toEqual(['goal-b']);
+    expect(tree.tagIndex['__proto__']).toEqual(['goal-a']);
+    expect(serialized.plain).toEqual(['goal-a']);
   });
 });

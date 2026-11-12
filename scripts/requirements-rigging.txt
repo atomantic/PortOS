@@ -1,0 +1,2 @@
+# Blender module ABI stays on CPython 3.13. Regeneration: docs/RIGGING_RUNTIME.md
+bpy==5.2.3

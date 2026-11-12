@@ -1113,3 +1113,5 @@ export * from './photorealLook.js';
 export * from './imageInputProvenance.js';
 
 export * from './databaseMaintenanceSchema.js';
+export * from './musicVideoBlender.js';
+export * as musicVideoBlenderValidation from './musicVideoBlenderValidation.js';

@@ -3,6 +3,8 @@ import { broadcastSse, attachSseClient, closeJobAfterDelay } from '../../lib/sse
 import { ServerError } from '../../lib/errorHandler.js';
 import { requireProject } from './requireProject.js';
 import { activeLyricVerify as active, getActiveLyricVerifyJobId, getReservedLyricAlignJobId } from './lyricJobRegistry.js';
+import { mutateProjectRecord } from './projects.js';
+import { musicVideoEvents } from './events.js';
 import { verifyLyricSheet, verifyPrerequisites } from './lyricVerify.js';
 
 const fingerprint = project => JSON.stringify([project.trackId, project.uploadedAudioFilename, project.vocalStemFilename, project.vocalStemMasterFilename, project.lyricCues]);
@@ -38,7 +40,24 @@ export async function startLyricVerify(projectId) {
           throw new ServerError('The song or lyrics changed during the check. Run it again.', { status: 409, code: 'LYRIC_VERIFY_CHANGED' });
         }
         if (job.controller.signal.aborted) broadcastSse(job, { type: 'canceled' });
-        else broadcastSse(job, { type: 'complete', result });
+        else {
+          const misplaced = new Set((result.misplacedCues || []).map(cue => cue.cueId));
+          let saved = fresh;
+          if (misplaced.size) {
+            const outcome = await mutateProjectRecord(projectId, current => {
+              if (fingerprint(current) !== fingerprint(project)) throw new ServerError('The song or lyrics changed during the check. Run it again.', { status: 409, code: 'LYRIC_VERIFY_CHANGED' });
+              if (job.controller.signal.aborted) throw Object.assign(new Error('cancelled'), { canceled: true });
+              return { project: { ...current,
+                lyricCues: current.lyricCues.map(cue => misplaced.has(cue.id) ? { ...cue, suspect: true } : cue),
+                ...(current.productionReview?.draft ? { productionReview: { ...current.productionReview,
+                  draft: { ...current.productionReview.draft, timingStatus: 'provisional' }, alignmentBasis: null } } : {}),
+              } };
+            });
+            saved = outcome.project;
+          }
+          broadcastSse(job, { type: 'complete', result, project: saved });
+          if (misplaced.size) musicVideoEvents.emit('dev-artifact', { projectId, artifactId: null, project: saved });
+        }
       }
     } catch (err) {
       if (job.controller.signal.aborted || err?.canceled) broadcastSse(job, { type: 'canceled' });

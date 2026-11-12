@@ -166,7 +166,7 @@ describe('correcting a local claim on a late copy', () => {
   const claimed = (extra = {}) => saveHistory([{ ...videoRow, originInstanceId: 'me', ...extra }]);
   const created = Date.parse(videoRow.createdAt);
 
-  it('keeps a locally imported board image local after a peer copies it and the same source is imported again', async () => {
+  it('refreshes only a known local board image on reimport, preserving foreign and unknown origins', async () => {
     const { localizeImageUrl } = await import('./moodBoard/localize.js');
     vi.useFakeTimers({ toFake: ['Date'] });
     onTestFinished(() => vi.useRealTimers());
@@ -187,6 +187,13 @@ describe('correcting a local claim on a late copy', () => {
     expect(JSON.parse(await readFile(join(PATHS.images, sidecar), 'utf8'))).toMatchObject({
       originInstanceId: 'me', prompt: 'retained description', createdAt: new Date(T + 2 * DAY).toISOString(),
     });
+    // A legacy copy's missing origin must stay available for paired reconciliation.
+    await editImageSidecar(filename, (m) => { delete m.originInstanceId; return true; });
+    vi.setSystemTime(T + 3 * DAY);
+    await localizeImageUrl(source);
+    const unknown = JSON.parse(await readFile(join(PATHS.images, sidecar), 'utf8'));
+    expect(unknown).not.toHaveProperty('originInstanceId');
+    expect(unknown).toMatchObject({ prompt: 'retained description', createdAt: new Date(T + 2 * DAY).toISOString() });
     // A shared copy imported again still belongs to its recorded creator.
     await editImageSidecar(filename, (m) => { m.originInstanceId = 'a'; return true; });
     vi.setSystemTime(T + 3 * DAY);

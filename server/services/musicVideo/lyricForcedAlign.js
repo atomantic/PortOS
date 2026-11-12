@@ -192,7 +192,13 @@ export async function forceAlignLyrics(wav, cues, {
       throw failure('MMS_FA could not align these lyrics. Check that lyrics match the vocal, spell numbers out, and allow the first-use model download.');
     }
     const raw = await readFile(output, 'utf8').catch(() => null);
-    const parsed = raw ? (() => { try { return JSON.parse(raw); } catch { return null; } })() : null;
+    const payload = raw ? (() => { try { return JSON.parse(raw); } catch { return null; } })() : null;
+    const parsed = payload?.lines;
+    const scores = payload?.lineScores;
+    if (!Array.isArray(scores) || scores.length !== lines.length
+      || scores.some((score, index) => lines[index].length && (!Number.isFinite(score) || score > 0))) {
+      throw failure('MMS_FA returned invalid line confidence.');
+    }
     let previousEnd = 0;
     if (!Array.isArray(parsed) || parsed.length !== lines.length || parsed.some((words, i) => !Array.isArray(words)
       || words.length !== lines[i].length || words.some((word, j) => {
@@ -201,9 +207,12 @@ export async function forceAlignLyrics(wav, cues, {
         previousEnd = word?.endSec;
         return invalid;
       }))) throw failure('MMS_FA returned invalid word timings.');
-    return parsed.map((words) => words.map((word) => ({
+    // Synthetic repeated-chorus emissions put the weak, misplaced repeat near
+    // -4 per letter and the clear first repeat above -1. -3 is a conservative
+    // warning, not proof of accuracy: independent DTW verification owns that.
+    return parsed.map((words, index) => words.map((word) => ({
       w: word.w, startSec: Math.round((word.startSec + from) * 1000) / 1000,
-      endSec: Math.round((word.endSec + from) * 1000) / 1000, conf: 'matched',
+      endSec: Math.round((word.endSec + from) * 1000) / 1000, conf: scores[index] < -3 ? 'interpolated' : 'matched',
     })));
   } finally {
     await rm(scratch, { recursive: true, force: true });

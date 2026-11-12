@@ -16,7 +16,7 @@ protobuf==7.36.2
 safetensors==0.8.0
 huggingface-hub[hf_xet]==2.4.0
 diffusers==0.42.1
-sdnq==0.2.8
+sdnq==0.2.9
 peft==0.21.2
 optimum-quanto==0.2.7
 pillow==13.0.0

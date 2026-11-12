@@ -11,6 +11,7 @@ import { composedDrawsLyrics, isLayeredComposition, sceneRenderReady } from './m
 import { latestMusicVideoReviewDraft } from './musicVideoReviewDraft.js';
 import { supersededStillsCheckpoint } from './musicVideoAutonomous.js';
 import { finishedOutsideCovers } from './musicVideoFinishedOutside.js';
+import { blenderShotsReady } from './musicVideoBlender.js';
 
 /**
  * True when the project's word timings came from the full mix but a vocal
@@ -27,7 +28,7 @@ const STAGE_IDS = ['setup', 'board', 'cast-sets', 'produce', 'review', 'publish'
 // Plan comes before Look, so the storyboard gate's art prerequisite does not hold Plan open (mirrors the client's deriveStages).
 const ART_APPROVAL_PROBLEM = /^Review and approve the current art direction/;
 const RESUMABLE_RUN_STATUSES = new Set(['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan']);
-const FOOTAGE_OPTIONAL_MODES = new Set(['code', 'document', 'eidoverse']);
+const FOOTAGE_OPTIONAL_MODES = new Set(['code', 'document', 'eidoverse', 'blender']);
 
 const nonEmptyString = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 const imageSrc = (assetId) => (/^(https?:|data:|blob:)/i.test(assetId) || assetId.startsWith('/') ? assetId : `/data/images/${assetId}`);
@@ -60,6 +61,9 @@ function composeDone(project, mode) {
   if (mode === 'composed') return (composition.textCues || []).length > 0 || composedDrawsLyrics(project);
   if (mode === 'document') return Boolean(composition.document);
   if (mode === 'eidoverse') return Boolean(composition.eidoverseScene?.inlineScript);
+  // A Blender film's shots are done when each has a complete, current final render. The renders
+  // are on this machine's disk, so the server attaches the count at read time (`blenderShots`).
+  if (mode === 'blender') return blenderShotsReady(project.blenderShots);
   if (mode === 'code') return Boolean(composition.codeVideo?.generatedAt || (composition.codeVideo?.sections || []).length > 0);
   return true;
 }

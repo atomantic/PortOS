@@ -289,3 +289,17 @@ describe('naming the shots behind Shot coverage and Shot details', () => {
     expect(productionReadiness(base).storyboard).toMatchObject({ coverage: [], incompleteShots: [] });
   });
 });
+
+
+describe('Blender film legacy clip locks', () => {
+  it('has no video approval stage for mirrored code shots, preserving footage-only modes (#15785)', () => {
+    const shot = { sceneId: 'film-shot', visualLayer: 'code', startSec: 0, endSec: 4 };
+    const locks = { 'film-shot': 'locked' };
+    for (const mode of ['blender', 'composed', 'document']) {
+      expect(clipLocks({ scenes: [shot], composition: { mode } }, locks)).toEqual({ 'film-shot': null });
+    }
+    for (const mode of ['concat', 'code']) {
+      expect(clipLocks({ scenes: [shot], composition: { mode } }, locks)).toEqual({ 'film-shot': 'open' });
+    }
+  });
+});

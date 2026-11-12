@@ -221,7 +221,7 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
       minVramGb: 12,
       linuxHost: true,
       diskGb: 40,
-      python: '3.10',
+      python: '3.11',
     }),
     upstream: 'https://github.com/TencentARC/Pixal3D',
     weightsRepo: 'TencentARC/Pixal3D',
@@ -237,9 +237,7 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
     // then the honest answer is that the runner does not honor a caller's choice.
     // `alphaMode: false` because its runner emits no such flag.
     supportsRenderOptions: Object.freeze({ steps: false, detail: false, alphaMode: false, normalMap: false }),
-    installBlockedReason:
-      'Install and Repair require a locked Pixal3D CUDA profile for the Conda environment, '
-      + 'TRELLIS.2 extensions, MoGe, NATTEN and the remaining Python dependencies.',
+    installNotes: 'Native Linux x86_64 only; CUDA 12.6.3 (nvcc 12.6.85), GCC 11.3, compute capability 8.6 and 12 GiB VRAM. NATTEN build failure uses lower-detail DINO interpolation.',
     // No `gatedRepos`, and that is verified rather than assumed: `inference.py` loads
     // DINOv3 from the ungated `camenduru/dinov3-vitl16-pretrain-lvd1689m` mirror and
     // MoGe from `Ruicheng/moge-2-vitl`, so unlike `trellis2Cuda` nothing here needs

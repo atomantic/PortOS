@@ -54,11 +54,26 @@ describe('read-only Codex preview command and source boundary', () => {
     expect(result.coverage).toMatchObject({ complete: true, filesInspected: 4, logicalSessions: 2, duplicateCopies: 2 });
     const expected = parseCodexRollout(text, { from: Date.parse('2026-07-01T00:00:00Z'), to: Date.parse('2026-07-02T23:59:59.999Z') });
     expect(result.byModel['gpt-test']).toEqual(expected.byModel['gpt-test']);
-    expect(result.totals).toEqual({ messages: 2, tokensIn: 120, tokensOut: 40, cacheReadTokens: 80, cacheWriteTokens: 0 });
+    expect(result.totals).toEqual({
+      messages: 2, tokensIn: 120, tokensOut: 40, cacheReadTokens: 80, cacheWriteTokens: 0,
+      fastTokensIn: 0, fastTokensOut: 0, fastCacheReadTokens: 0, fastCacheWriteTokens: 0,
+      ultrafastTokensIn: 0, ultrafastTokensOut: 0, ultrafastCacheReadTokens: 0, ultrafastCacheWriteTokens: 0,
+    });
     expect(result).toMatchObject({ ledgerOverlap: 'unknown', missingUsage: null });
     const output = JSON.stringify(result);
     for (const privateValue of [home, 'private/example', 'synthetic-session', 'PRIVATE TRANSCRIPT', 'old.jsonl']) expect(output).not.toContain(privateValue);
     expect(await readFile(original, 'utf8')).toBe(text);
+  });
+
+  it('sums a transcript-confirmed Fast tier into the preview', async () => {
+    const fast = [meta('fast-session'),
+      { timestamp: '2026-07-01T00:00:00Z', type: 'event_msg', payload: { type: 'thread_settings_applied', service_tier: 'priority' } },
+      count('2026-07-01T00:00:01Z', 100, 0, 10)];
+    await source('sessions/fast.jsonl', serialize(fast));
+    const result = await preview();
+    expect(result.byModel['gpt-test']).toMatchObject({ tokensIn: 100, tokensOut: 10, fastTokensIn: 100, fastTokensOut: 10 });
+    expect(result.totals.fastTokensIn).toBe(100);
+    expect(result.totals.fastTokensOut).toBe(10);
   });
 
   it('excludes an entire identity for conflicting totals or a malformed copy, regardless of copy order', async () => {
@@ -134,13 +149,14 @@ describe('read-only Codex preview command and source boundary', () => {
   it('logs incomplete reasons and counts only, keeping relative source names on the error for the private notice', async () => {
     await source('sessions/2026/bad.jsonl', '{"truncated":');
     const inventory = await readCodexAccountingSources({ home, cache: false });
+    expect(inventory.coverage.complete).toBe(false);
     let error;
     try { assertCodexInventoryComplete(inventory); } catch (caught) { error = caught; }
     expect(error).toMatchObject({ code: 'CODEX_SOURCES_INCOMPLETE', issues: { malformed: 1 } });
     expect(error.message).toContain('malformed=1');
     expect(error.message).not.toContain('bad.jsonl');
     expect(error.message).not.toContain(home);
-    expect(error.problemSources).toEqual([{ source: join('sessions', '2026', 'bad.jsonl'), issues: ['malformed', 'missing_identity'] }]);
+    expect(error.problemSources).toEqual([{ source: join('sessions', '2026', 'bad.jsonl'), issues: ['malformed'] }]);
   });
 
   it('reports malformed and truncated compressed files and invalidates their identifiable raw copies', async () => {

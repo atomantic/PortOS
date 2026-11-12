@@ -1,6 +1,6 @@
 # Execution options
 
-Execution options are optional, bounded settings independent of model and reasoning effort. Version 1 supports Codex and Grok Build subscription speed: **Inherit/default**, **Standard**, and **Fast**. Existing records gain no tier and retain their prior behavior. Fast may consume more subscription usage or credits; no fixed multiplier is assumed.
+Execution options are optional, bounded settings independent of model and reasoning effort. Version 1 supports Codex and Grok Build subscription speed: **Inherit/default**, **Standard**, and **Fast**. Existing records gain no tier and retain their prior behavior. Fast may consume more subscription usage or credits. The usage page prices a transcript-confirmed tier on the published API schedule (`serviceTierExtra` in `server/lib/modelPricing.js`): Codex Fast is 2× standard for the models that publish it (2.5× for gpt-5.5), Ultrafast is 6× for gpt-6-astra and gpt-6.1-sol, and Grok 4.7 Fast is 2× short-context, stacking with the existing ≥200k extra. Subscription credit multipliers are not that estimate. A requested speed that the transcript does not confirm stays at the standard rate.
 
 ## Selection and persistence
 
@@ -20,7 +20,7 @@ Verified with Codex CLI 0.162.1 and its generated protocol. Native CLI and TUI r
 
 Verified with Grok Build CLI 1.0.70. Native CLI and TUI request speed as a model-id setting, not a separate flag: Fast is `--model <base>[fast=true]` and explicit Standard is `--model <base>[fast=false]`. The base is advertised when `grok models` lists both `<base>` and `<base>-build-fast`. A selected flat id such as `grok-4.7-build-fast` maps back to that base only when the base is in the same listing. Unset speed leaves the chosen model id unchanged, including a flat fast id. Effort stays `--effort` and is not folded into the model id. Models with no fast sibling, the public API provider, gateway routes, and argv that already pins a model, `[fast=`, or `-build-fast` are refused. No `--fast` flag and no Codex `service_tier` setting is sent to grok, and Grok config is never written.
 
-Run metadata records version, requested values, effective values, per-key provenance and confirmation. Current transports prove the request but do not report the effective tier, so effective remains empty and UI says **requested / effective unconfirmed**. Agent/run details and shell session details expose this distinction and the usage caveat; a provider name or requested argv is never evidence of applied Fast.
+Run metadata records version, requested values, effective values, per-key provenance and confirmation. Current transports prove the request but do not report the effective tier, so effective remains empty and UI says **requested / effective unconfirmed**. Agent/run details and shell session details expose this distinction and the usage caveat; a provider name or requested argv is never evidence of applied Fast. The usage estimate reads the tier the transcript actually applied: Codex `thread_settings_applied.service_tier` (`priority` and `fast` are Fast; `ultra` and `ultrafast` are Ultrafast) and a Grok 4.7 model id of `[fast=true]`, `-build-fast`, or `-fast`. A transcript with no marker stays at standard rates. Direct API service tiers are still not inferred from subscription speed.
 
 Official references: [speed configuration](https://learn.chatgpt.com/docs/agent-configuration/speed), [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference). No paid live generation is needed to inspect capabilities.
 
@@ -90,6 +90,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/models/ComparisonResearch.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/models/ProviderFallbacks.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/models/UntrustedContentPolicyPanel.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/moodBoard/CombineMoodBoards.jsx` | Request-local provider reference forwarded unchanged to source analysis and style composition; no recurring configuration is saved |
 | `client/src/components/moodBoard/MoodBoardGeneratePanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/moodBoard/MoodBoardStylePanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/music/ChiptunePanel.jsx` | Shared structured options or saved provider reference |

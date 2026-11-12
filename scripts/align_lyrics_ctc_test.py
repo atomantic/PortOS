@@ -109,6 +109,25 @@ class Viterbi(unittest.TestCase):
                 self.assertEqual(collapse(path), targets)
                 self.assertAlmostEqual(score(path), best, places=9)
 
+    def test_weak_repeated_chorus_lands_on_a_prior_held_note_and_gets_a_low_score(self):
+        lines = [['la', 'na'], ['la', 'na']]
+        targets, slots = targets_for_lines(lines, DICTIONARY)
+        emission = numpy.full((250, len(DICTIONARY)), -10.0)
+        emission[:, DICTIONARY['*']] = 0
+        emission[:, DICTIONARY['-']] = -0.1
+        # First phrase has clear letters. The weak repeat's best CTC letters
+        # are on the prior held vocal, 0.6 s before the true repeated beat.
+        for base, score in [(50, -0.1), (150, -4.0), (180, -4.2)]:
+            for i, letter in enumerate('lana'):
+                emission[base + 5 * i, DICTIONARY[letter]] = score
+        spans = merge_tokens(forced_align(emission, targets))
+        result = word_times(lines, slots, spans, 0.02, emission)
+        self.assertEqual(result['lines'][0][0]['startSec'], 1.0)
+        self.assertEqual(result['lines'][1][0]['startSec'], 3.0)
+        self.assertGreater(3.6 - result['lines'][1][0]['startSec'], 0.3)
+        self.assertGreater(result['lineScores'][0], -3)
+        self.assertLess(result['lineScores'][1], -3)
+
     def test_refuses_a_transcript_longer_than_the_audio(self):
         # A repeated label needs a blank between its two frames.
         with self.assertRaises(ValueError):

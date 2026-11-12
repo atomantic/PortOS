@@ -102,3 +102,32 @@ describe('resolveAlignmentTranscriber', () => {
     expect(ensureModel).not.toHaveBeenCalled();
   });
 });
+
+
+it('requests DTW with matching turbo weights and reads DTW transitions, not legacy offsets', async () => {
+  const ensureModel = vi.fn(async () => '/models/ggml-large-v3-turbo.bin');
+  const runCommand = vi.fn(async (_bin, args) => {
+    await writeFile(`${args[args.indexOf('-of') + 1]}.json`, JSON.stringify({ transcription: [{ tokens: [
+      { text: '[_BEG_]', t_dtw: -1 },
+      { text: ' bright', offsets: { from: 100, to: 300 }, t_dtw: 60 },
+      { text: ' morning', offsets: { from: 300, to: 500 }, t_dtw: 110 },
+      { text: ' river', offsets: { from: 500, to: 700 }, t_dtw: 160 },
+    ] }] }));
+    return { success: true };
+  });
+  const transcriber = await resolveAlignmentTranscriber({ requireDtw: true,
+    which: async name => name === 'whisper-cli' ? '/bin/whisper-cli' : null,
+    voiceConfig: async () => ({ stt: { modelPath: '/models/ggml-large-v2.bin' } }), ensureModel, runCommand });
+  const words = await transcriber.transcribe(encodePcm16Wav(16000 * 8), { startSec: 2, endSec: 5, prompt: 'bright morning river' });
+  expect(ensureModel).toHaveBeenCalledWith({ configuredModelPath: null, onDownloadProgress: null });
+  expect(runCommand.mock.calls[0][1]).toEqual(expect.arrayContaining(['-dtw', 'large.v3.turbo', '-nfa']));
+  expect(words).toEqual([{ text: 'bright', startSec: 2.1, endSec: 2.6 }, { text: 'morning', startSec: 2.6, endSec: 3.1 }, { text: 'river', startSec: 3.1, endSec: 3.6 }]);
+});
+
+it('does not substitute non-DTW endpoint timing for an independent placement check', async () => {
+  const probeEndpoint = vi.fn(async () => true);
+  await expect(resolveAlignmentTranscriber({ requireDtw: true, which: async () => null,
+    voiceConfig: async () => ({ stt: { endpoint: 'http://127.0.0.1:5562' } }), probeEndpoint,
+  })).rejects.toMatchObject({ code: 'LYRIC_VERIFY_DTW_UNAVAILABLE' });
+  expect(probeEndpoint).not.toHaveBeenCalled();
+});

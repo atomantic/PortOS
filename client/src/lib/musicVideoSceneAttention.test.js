@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { parseSceneFilter, sceneAttention, sceneMatchesFilter, sceneMediaKind, selectedFrameReadiness } from './musicVideoSceneAttention.js';
 
+import { isLayeredComposition, sceneRenderReady } from './musicVideoLayers.js';
+
 const ready = { sceneId: 's', order: 0, referenceImageId: 'f.png', videoHistoryId: 'v1', startSec: 0, endSec: 4, takes: [] };
 
 describe('sceneAttention', () => {
@@ -23,6 +25,17 @@ describe('sceneAttention', () => {
   it('never asks a code shot for a frame or clip (#10297)', () => {
     expect(sceneAttention({ sceneId: 's', visualLayer: 'code', startSec: 1, endSec: 3 }, { layered: true })).toEqual([]);
     expect(sceneAttention({ sceneId: 's', visualLayer: 'code' }, { layered: true })).toEqual(['no-span']);
+  });
+
+  it('reads a mirrored Blender shot as code without missing media, while retaining timing checks (#15785)', () => {
+    const shot = { sceneId: 'film-shot', visualLayer: 'code', startSec: 0, endSec: 4, beatAligned: true };
+    const ctx = { layered: isLayeredComposition({ composition: { mode: 'blender' } }), footageOptional: true };
+    const codes = sceneAttention(shot, ctx);
+    expect(codes).toEqual([]);
+    expect(sceneMatchesFilter(codes, 'missing')).toBe(false);
+    expect(sceneMediaKind(shot, ctx)).toBe('code');
+    expect(sceneRenderReady(shot, ctx)).toBe(true);
+    expect(sceneAttention({ ...shot, endSec: null }, ctx)).toEqual(['no-span']);
   });
 
   it('flags a non-looping beat-aligned shot longer than its measured clip', () => {

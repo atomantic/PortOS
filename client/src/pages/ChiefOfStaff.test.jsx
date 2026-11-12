@@ -187,6 +187,26 @@ const renderSettledAt = async (tab) => {
   return result;
 };
 
+const renderSettledEmptyAgentsTab = async () => {
+  // The shell can settle before React.lazy mounts AgentsTab. Mount its resolved
+  // module inside act, then await all three independent reads and their React
+  // commits rather than guessing how many empty microtask flushes they need.
+  await act(async () => { await import('../components/cos/tabs/AgentsTab'); });
+  let result;
+  await act(async () => { result = renderPageAt('agents'); });
+  await waitForPageShell();
+  const mountReads = [api.getCosLearningDurations, api.getCosCompletedAgents, api.getCosPendingAgentFeedback];
+  await waitFor(() => {
+    for (const read of mountReads) expect(read).toHaveBeenCalled();
+  });
+  await act(async () => {
+    await Promise.all(mountReads.flatMap(read => read.mock.results.map(result => result.value)));
+  });
+  expect(screen.getByText('No active agents. Start CoS and add tasks to see agents working.')).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: /Completed Agents/ })).toBeNull();
+  return result;
+};
+
 const renderSettledConfigTab = async () => {
   // The page shell settles before this lazy tab's import. Resolve that import
   // outside DOM-query deadlines so contended transforms cannot time out the
@@ -318,22 +338,19 @@ describe('ChiefOfStaff agent panel on a short viewport (#15237)', () => {
 
   it('starts collapsed in landscape and stays expanded in portrait', async () => {
     stubViewport({ value: true });
-    const { unmount } = await renderSettledAt('agents');
+    const { unmount } = await renderSettledEmptyAgentsTab();
     expect(panelToggle()).toHaveAttribute('aria-expanded', 'false');
     unmount();
 
     stubViewport({ value: false });
-    await renderSettledAt('agents');
+    await renderSettledEmptyAgentsTab();
     expect(panelToggle()).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('collapses on rotation until the user toggles the panel', async () => {
     const short = { value: false };
     const notify = stubViewport(short);
-    await renderSettledAt('agents');
-    // The agents tab resolves its own async work after the shell settles; flush
-    // it inside act so a late update can't land mid-assertion under load.
-    await act(async () => {});
+    await renderSettledEmptyAgentsTab();
     expect(panelToggle()).toHaveAttribute('aria-expanded', 'true');
 
     short.value = true;

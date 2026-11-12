@@ -11,6 +11,7 @@ import { constants, readdirSync, readFileSync } from 'node:fs';
 import { access, lstat, mkdir, open, readFile, readdir, realpath, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { StringDecoder } from 'node:string_decoder';
 import { promisify } from 'node:util';
 import { ServerError } from '../../lib/errorHandler.js';
 import { execFile, spawn } from '../../lib/childProcess.js';
@@ -25,6 +26,7 @@ const execFileAsync = promisify(execFile);
 const WORKSPACE_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SEGMENT = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9_-])?$/i;
 const TAIL_BYTES = 8192;
+const LINE_BYTES = 64 * 1024;
 const active = new Set();
 const swept = new Set();
 
@@ -175,12 +177,47 @@ const tail = () => {
   return { push: (chunk) => { text = (text + chunk.toString('utf8')).slice(-TAIL_BYTES); }, get: () => text };
 };
 
+// Hands a stream to `onLine` one line at a time while the worker runs. A
+// handler is caller code running in a stream callback: a throw there must not
+// take the server down or stop supervision. An unterminated run of output is
+// delivered in LINE_BYTES pieces so a worker cannot grow this buffer.
+const lineFeed = (onLine) => {
+  const decoder = new StringDecoder('utf8');
+  let pending = '';
+  const deliver = (line) => {
+    try { onLine(line); } catch (error) { console.error(`❌ Code Animation worker line handler failed: ${String(error?.message ?? error)}`); }
+  };
+  const drain = () => {
+    let at = pending.indexOf('\n');
+    while (at >= 0) {
+      deliver(pending.slice(0, at).replace(/\r$/, ''));
+      pending = pending.slice(at + 1);
+      at = pending.indexOf('\n');
+    }
+    while (pending.length > LINE_BYTES) {
+      deliver(pending.slice(0, LINE_BYTES));
+      pending = pending.slice(LINE_BYTES);
+    }
+  };
+  return {
+    push: (chunk) => { pending += decoder.write(chunk); drain(); },
+    end: () => {
+      pending += decoder.end();
+      drain();
+      if (pending) deliver(pending);
+      pending = '';
+    },
+  };
+};
+
 /**
  * Run `tool` (`{ executable, argv(entryPath, workspace) }`, chosen by server
  * code from operator configuration, never by a package) over `files` in a new
  * workspace under `workspaceRoot`. `onOutput(outputDir, outputs)` runs only for a
  * completed, valid result, before the workspace is removed. Resolves with the
  * run's evidence; refuses (503) when no enforced mechanism is available.
+ * `onStdoutLine(line)` / `onStderrLine(line)` receive the worker's output as
+ * it is written (progress for a long run); the result still carries the tails.
  */
 export async function runContainedWorker(options) {
   const mechanism = await currentContainmentMechanism(options.seatbeltPath, options.bubblewrapPath);
@@ -204,7 +241,8 @@ export async function runTrustedLocalWorker(options) {
 
 async function runOwnedWorker({
   tool, files = [], entrypoint = null, limits: requested = {}, signal, workspaceRoot,
-  onOutput, tickMs = 1000, seatbeltPath = CODE_ANIMATION_SEATBELT, bubblewrapPath = CODE_ANIMATION_BUBBLEWRAP,
+  onOutput, onStdoutLine = null, onStderrLine = null, tickMs = 1000,
+  seatbeltPath = CODE_ANIMATION_SEATBELT, bubblewrapPath = CODE_ANIMATION_BUBBLEWRAP,
 }, mechanism) {
   const limits = codeAnimationWorkerLimitsSchema.parse(requested);
   if (entrypoint !== null && !files.some((file) => file.path === entrypoint)) {
@@ -252,6 +290,13 @@ async function runOwnedWorker({
     const stderr = tail();
     child.stdout.on('data', stdout.push);
     child.stderr.on('data', stderr.push);
+    const feeds = [[child.stdout, onStdoutLine], [child.stderr, onStderrLine]]
+      .filter(([, onLine]) => typeof onLine === 'function')
+      .map(([stream, onLine]) => {
+        const feed = lineFeed(onLine);
+        stream.on('data', feed.push);
+        return feed;
+      });
     let terminated = null;
     const kill = (reason) => {
       terminated ??= reason;
@@ -282,6 +327,8 @@ async function runOwnedWorker({
     clearTimeout(timer);
     clearInterval(watchdog);
     signal?.removeEventListener('abort', onAbort);
+    // 'close' follows the streams' end, so every byte has been fed by now.
+    for (const feed of feeds) feed.end();
     // Contained workers cannot fork; bwrap also owns its PID namespace and uses
     // die-with-parent. The outer group is still verified empty, and any
     // straggler is killed before the run is reported. Trusted-local code can

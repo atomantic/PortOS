@@ -59,13 +59,27 @@ async function loadChatId() {
 async function apiCall(method, params) {
   if (!botToken) return null;
   const url = `${API_BASE}${botToken}/${method}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-    signal: AbortSignal.timeout(10000)
-  });
-  const data = await res.json();
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+      signal: AbortSignal.timeout(10000)
+    });
+  } catch (err) {
+    console.error(`📱 TG Bridge: network error on ${method} — ${err.message}`);
+    return null;
+  }
+
+  let data;
+  try {
+    data = await res.json();
+  } catch (err) {
+    console.error(`📱 TG Bridge: invalid JSON response on ${method} — ${err.message}`);
+    return null;
+  }
+
   if (!data.ok) {
     console.error(`📱 TG Bridge: API error on ${method} — ${data.description}`);
     return null;

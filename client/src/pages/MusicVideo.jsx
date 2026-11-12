@@ -38,6 +38,7 @@ import {
   refreshMusicVideoSongStyleFromSuno,
   getMusicVideoActiveJobs,
   getMusicVideoProject,
+  musicVideoBlenderMediaUrl,
 } from '../services/apiMusicVideo.js';
 import useFieldDraft from '../hooks/useFieldDraft.js';
 import useMusicVideoYoutubeImport from '../hooks/useMusicVideoYoutubeImport.js';
@@ -54,6 +55,7 @@ import useMusicVideoPublishing from '../hooks/useMusicVideoPublishing.js';
 import useMusicVideoRevisions from '../hooks/useMusicVideoRevisions.js';
 import useMusicVideoAutoReview from '../hooks/useMusicVideoAutoReview.js';
 import useMusicVideoProduction from '../hooks/useMusicVideoProduction.js';
+import useMusicVideoBlender from '../hooks/useMusicVideoBlender.js';
 import useAutonomousMusicVideo from '../hooks/useAutonomousMusicVideo.js';
 import useDrawerTab from '../hooks/useDrawerTab.js';
 import useListResource from '../hooks/useListResource.js';
@@ -112,6 +114,7 @@ import {
 } from '../lib/musicVideoStages.js';
 import { groupMusicVideoProjects } from '../lib/musicVideoProjectList.js';
 import { mergeCameoScenes } from '../lib/musicVideoCameos.js';
+import { blenderStillPreviewItems, summarizeBlenderShots } from '../lib/musicVideoBlender.js';
 import { AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
 
 // Automation first: a new project defaults to autopilot with the free tools.
@@ -905,12 +908,29 @@ function ProjectWorkspace({
   const [importingLyrics, setImportingLyrics] = useState(false);
 
   const productionReview = useMusicVideoProductionReview({ project: selected, replaceProject });
+  // A Blender film's renders live in its workspace, not on the record: one read per open project,
+  // kept current over the socket. Held here so the step list knows how far the shots are and unsaved
+  // edits in its panel survive a change of step.
+  const blenderMode = selected.composition?.mode === 'blender';
+  const blender = useMusicVideoBlender(selectedId, { enabled: blenderMode });
+  const blenderState = blenderMode ? blender.state : null;
+  // What the stage helpers read. The server puts `blenderShots` (how many shots have a current final
+  // render) on the record it answers; the film state on this page is newer than that read, so the
+  // same reading is recomputed from it as renders land.
+  // The same goes for a final video left behind by a shot that changed or was rendered again.
+  const stageProject = useMemo(
+    () => (blenderState ? {
+      ...selected, blenderShots: summarizeBlenderShots(blenderState.manifest?.shots, blenderState.renders),
+      ...(blenderState.finalStale === true ? { renderDependencyState: { status: 'stale', reasons: ['Blender shots changed or were rendered again after this final was joined'] } } : {}),
+    } : selected),
+    [selected, blenderState],
+  );
   // Publish counts every platform the director turned on (#9287), not just any one post.
   const publish = {
     targets: PUBLISH_TARGETS.filter((entry) => publishing.enabledTargets?.includes(entry.target)),
     drafts: publishing.drafts,
   };
-  const progress = deriveStages(selected, productionReview.readiness, publish);
+  const progress = deriveStages(stageProject, productionReview.readiness, publish);
   // Which stage tab is open. The URL is the source of truth; with none (or an
   // unknown one) the tab is the stage the project was in when it was opened,
   // pinned so a stage completing mid-session doesn't move the user off the tab
@@ -1517,12 +1537,14 @@ function ProjectWorkspace({
     }
     // Cast & sets references and their inputs open here too, never as a raw file.
     items.push(...castAndSetsPreviewItems(selected.castAndSets));
+    // A Blender film's stills are workspace files, served by the film's media route.
+    if (blenderState) items.push(...blenderStillPreviewItems(blenderState, (path) => musicVideoBlenderMediaUrl(selected.id, path)));
     // Scenes can reuse the same frame/clip (Make's generation controls surface a
     // "Repetition: N unique frames" badge). Dedupe by key so prev/next and
     // openPreview's .find() land on a single item rather than the first of
     // several identical keys with different prompts.
     return [...new Map(items.map((i) => [i.key, i])).values()];
-  }, [selected, finalVideo.src]);
+  }, [selected, finalVideo.src, blenderState]);
   const [preview, setPreview] = useHydratedPreviewRoute(previewItems);
   const openPreview = useCallback((key) => {
     if (!key) return;
@@ -1602,7 +1624,7 @@ function ProjectWorkspace({
     : selected.uploadedAudioFilename || null;
   const audioUrl = audioFilename ? trackAudioUrl(audioFilename) : null;
   const autopilotRun = selected?.autonomousRun || null;
-  const productionNextAction = selected ? deriveNextAction(selected, {
+  const productionNextAction = selected ? deriveNextAction(stageProject, {
     readiness: productionReview.readiness,
     publish,
     renderActive: renderTargetsSelected,
@@ -1629,7 +1651,7 @@ function ProjectWorkspace({
   // What the server holds that this tab might not be showing (#9940): derived
   // from the saved record, so it survives a reload. Work this tab can see
   // progressing (spinning sections, an attached render) is not flagged.
-  const attentionItems = selected ? deriveAttentionItems(selected, {
+  const attentionItems = selected ? deriveAttentionItems(stageProject, {
     generatingSceneIds: new Set([...Object.keys(sceneMedia.genScenes || {}), ...Object.keys(sceneMedia.genVideoScenes || {})]
       .filter((sceneId) => sceneMedia.genScenes?.[sceneId] || sceneMedia.genVideoScenes?.[sceneId])),
     draftRendering: excerpts.rendering,
@@ -1702,7 +1724,9 @@ function ProjectWorkspace({
     </div>
   ));
   const board = selected ? {
-    project: selected,
+    // Carries the live `blenderShots` for a Blender film, so every panel reads the same step state as the header.
+    project: stageProject,
+    blender: blenderMode ? blender : null,
     reviewDraftState,
     activeSceneId: routeSceneId || null,
     onToggleSceneExpand: handleToggleSceneExpand,
@@ -1859,7 +1883,7 @@ function ProjectWorkspace({
   const StageView = STAGE_VIEWS[activeStage];
   const playerFirst = PLAYER_FIRST_STAGES.has(activeStage);
   const projectStatus = !selected ? null : statusKnown && productionReview.readiness
-    ? describeProjectStatus(selected, { progress, nextAction: productionNextAction, reviewingDraft, reviewDraftState })
+    ? describeProjectStatus(stageProject, { progress, nextAction: productionNextAction, reviewingDraft, reviewDraftState })
     : statusKnown
       ? { headline: `Status unavailable: ${productionReview.readinessError}`, tone: 'warn', needsYouStage: null }
       : { headline: 'Loading status…', tone: 'muted', needsYouStage: null };
@@ -1868,7 +1892,8 @@ function ProjectWorkspace({
   // proof approval (including an already-approved or stale registered proof).
   const proofRequested = activeStage === 'produce' && ['#mv-review-proof', '#mv-review-render'].includes(location.hash);
   const reviewStage = selected ? (proofRequested ? 'proof' : approvalStageFor(activeStage, selected, productionReview.readiness, productionReview.proof.active)) : null;
-  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, leadWith: activeStage === 'review' ? 'drafts' : activeStage === 'produce' ? 'storyboard' : activeStage === 'setup' ? 'lyrics' : activeStage === 'previz' ? 'previz' : 'final' }) : [];
+  // `stageProject`: a Blender film's live composite is offered once the film state lists synced shots.
+  const previewSources = selected ? listPreviewSources(stageProject, { finalVideoSrc: finalVideo.src, leadWith: activeStage === 'review' ? 'drafts' : activeStage === 'produce' ? 'storyboard' : activeStage === 'setup' ? 'lyrics' : activeStage === 'previz' ? 'previz' : 'final' }) : [];
 
   return (
     <>
@@ -1940,8 +1965,8 @@ function ProjectWorkspace({
             onNextAction={runNextAction}
             spend={projectSpend(selected)}
             status={projectStatus}
-            notes={previzRunning ? { ...stepNotes(selected, productionReview.readiness, publish), previz: 'Running…' } : stepNotes(selected, productionReview.readiness, publish)}
-            autopilot={autopilotStatus(selected, productionReview.readiness)}
+            notes={previzRunning ? { ...stepNotes(stageProject, productionReview.readiness, publish), previz: 'Running…' } : stepNotes(stageProject, productionReview.readiness, publish)}
+            autopilot={autopilotStatus(stageProject, productionReview.readiness)}
             onOpenSettings={openHeaderSettings}
             playerFirst={playerFirst}
             previewExpanded={dockExpanded}
@@ -1950,7 +1975,7 @@ function ProjectWorkspace({
             cancelRender={renderTargetsSelected && !renderJob.pending ? { onCancel: renderJob.cancel, cancelling: renderJob.cancelling } : null}
             lead={stageHasChecklist(activeStage) ? (
               <StageChecklist
-                items={stageChecklist(activeStage, selected, productionReview.readiness, publish)}
+                items={stageChecklist(activeStage, stageProject, productionReview.readiness, publish)}
                 onAction={runChecklistAction}
                 busy={castSets.busy || productionReview.busy}
                 onRevert={productionReview.revert}
@@ -1975,7 +2000,7 @@ function ProjectWorkspace({
               <NeedsAttentionBanner
                 // A parked autonomous or production run with nothing to resume, while the
                 // header's Autopilot button reports that run, is that button (which opens it); no second row.
-                items={autopilotStatus(selected).label === 'Autopilot' ? attentionItems
+                items={autopilotStatus(stageProject).label === 'Autopilot' ? attentionItems
                   : attentionItems.filter((item) => !(['autonomous', 'production'].includes(item.kind) && !item.canResume))}
                 busy={revisions.busy || castSets.busy || autoReview.busy || autonomous.busy || production.busy || renderJob.reattaching}
                 actions={{
@@ -2007,6 +2032,7 @@ function ProjectWorkspace({
                 onToggleExpanded={!playerFirst ? () => setDockExpanded((expanded) => !expanded) : undefined}
                 onEditShot={editShot}
                 onProject={replaceProject}
+                blender={blenderMode ? blender : null}
               />,
             )}
           >
