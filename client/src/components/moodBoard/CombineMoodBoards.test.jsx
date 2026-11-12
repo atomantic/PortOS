@@ -14,6 +14,14 @@ vi.mock('../ProviderModelSelector', () => ({ default: () => <div>Model picker</d
 vi.mock('../../services/apiMoodBoard', () => ({ combineMoodBoards: vi.fn() }));
 
 describe('combining mood boards', () => {
+  it('alphabetizes both source pickers without changing the supplied boards', () => {
+    const boards = Object.freeze([{ id: 'z', name: 'Zebra' }, { id: 'b', name: 'birch' }, { id: 'a', name: 'Amber' }]);
+    render(<CombineMoodBoards boards={boards} onClose={vi.fn()} onCreated={vi.fn()} />);
+    for (const label of ['First board', 'Second board']) {
+      expect([...screen.getByLabelText(label).options].map(option => option.text)).toEqual(['Choose a board', 'Amber', 'birch', 'Zebra']);
+    }
+  });
+
   it('requires two distinct sources, keeps failed inputs, and opens the created board after retry', async () => {
     const onCreated = vi.fn();
     combineMoodBoards.mockRejectedValueOnce(new Error('Source board was deleted'))

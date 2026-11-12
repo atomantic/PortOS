@@ -187,6 +187,7 @@ function MoodBoardCard({ board, onDelete, isConfirming, onConfirmDelete, onCance
 export default function MoodBoards() {
   const navigate = useNavigate();
   const [boards, setBoards] = useState([]);
+  const sortedBoards = useMemo(() => [...boards].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })), [boards]);
   const [loading, setLoading] = useState(true);
   const [combining, setCombining] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -259,7 +260,7 @@ export default function MoodBoards() {
           />
         ) : (
           <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {boards.map((board) => (
+            {sortedBoards.map((board) => (
               <MoodBoardCard
                 key={board.id}
                 board={board}
