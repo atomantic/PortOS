@@ -69,6 +69,8 @@ Rules:
 - Output ONLY valid JSON.
 - prompt is the COMPLETE render text, paragraph-style. Start with the subject or scene. Never prefix it with Create, Generate, Make, or Render an image of.
 - No motion language. This prompt is for a still poster.
+- Preserve observed optical qualities such as softness, defocus, bloom, grain and color misregistration. Do not normalize them into a sharper or cleaner look.
+- Negative prompts must not contradict those observed qualities; an avoid such as excessive blur does not mean all softness should be removed.
 - An empty negativePrompt is valid when the analyses share no consistent avoid.`;
 }
 
@@ -99,9 +101,10 @@ export async function composeBoardPrompt({ board, sourceBoards, providerId, mode
     );
   }
 
+  // Pin recomposition must not reinforce its last output; combined boards use source styles.
   const context = sourceBoards
     ? { sourceStyles: sourceBoards.map(source => ({ name: source.name, style: source.style })) }
-    : collectBoardStyleContext(withAnalysesFirst(board));
+    : collectBoardStyleContext(withAnalysesFirst({ ...board, style: null }));
   const fed = sourceBoards ? 0 : context.items.filter((it) => it.analyzedPrompt || it.caption).length;
   if (!sourceBoards && !fed) {
     throw new ServerError(
