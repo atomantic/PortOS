@@ -645,8 +645,10 @@ function filmLookMotionMarkup(settings, { frame = 0, width = 1920, height = 1080
  * its `seek(t)` sets the frame BEFORE the document paints; the document's own
  * paint wait then covers the filter, and a seek stays one paint. The filter sits
  * on the root element, so it covers every layer the document draws.
+ * `opaqueCanvas` flattens active exact finishes on black for standalone preview
+ * hosts without browser canvas-color control. No-look pages retain their alpha.
  */
-export function filmLookRuntimeSource(look = null) {
+export function filmLookRuntimeSource(look = null, { opaqueCanvas = false } = {}) {
   return `(() => {
   const markup = ${filmLookFilterMarkup.toString()};
   const motion = ${filmLookMotionMarkup.toString()};
@@ -746,6 +748,15 @@ export function filmLookRuntimeSource(look = null) {
       (document.body || root).appendChild(host);
     } else if (!host.isConnected) (document.body || root).appendChild(host);
     host.innerHTML = '<defs>' + built.filter + '</defs>';
+    // A standalone preview cannot set the browser canvas color through CDP.
+    // Flatten the finished image over black here, outside all look operations,
+    // rather than changing authored styles or the shared alpha-preserving markup.
+    if (${opaqueCanvas}) {
+      const filter = host.querySelector('filter');
+      const output = filter.lastElementChild.getAttribute('result');
+      filter.insertAdjacentHTML('beforeend', '<feFlood flood-color="#000" result="portos-preview-base"/>'
+        + '<feComposite in="' + output + '" in2="portos-preview-base" operator="over"/>');
+    }
     if (root.style.filter !== built.css) root.style.filter = built.css;
   };
   const api = {
