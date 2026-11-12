@@ -4,7 +4,8 @@ import { blenderShotFrameRange } from '../../lib/musicVideoBlender.js';
 import { readBlenderFilm } from './blender/film.js';
 import { blenderFramesDir, blenderFrameName } from './blender/renderIndex.js';
 
-/** Current lossless song frame, or the master fallback when shot frames were cleared. */
+/** Deliberately use the current clean shot before final-video cards/overlays and encode loss.
+ * Fall back to the master when the current lossless song frame was cleared. */
 export async function publishKitBlenderFrame(project, atSec) {
   const { settings, shots, renders } = await readBlenderFilm(project);
   const frame = Math.floor(atSec * settings.fps);

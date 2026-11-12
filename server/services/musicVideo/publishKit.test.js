@@ -123,8 +123,13 @@ describe('publishing kit build (#9281)', () => {
     const saved = (await projects.getProject(id)).publishKit;
     expect(saved.frames).toHaveLength(12);
     expect(saved.frames).not.toContain(first);
+    const { composeProjectCoverArt } = await import('./coverArt.js');
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current, publishKit: { ...current.publishKit,
+      coverArt: null, youtubeThumbnail: { source: { kind: 'thumbnail', filename: first } },
+    } } }));
+    await composeProjectCoverArt(id, { source: { kind: 'thumbnail', filename: first }, lettering: false });
     expect(existsSync(join(PATHS.videoThumbnails, first))).toBe(true);
-    await projects.mutateProjectRecord(id, current => ({ project: { ...current, publishKit: { ...current.publishKit, coverArt: null } } }));
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current, publishKit: { ...current.publishKit, coverArt: null, youtubeThumbnail: null } } }));
     await kit.releaseKitFiles([first]);
     expect(existsSync(join(PATHS.videoThumbnails, first))).toBe(false);
     const evicted = saved.frames.at(-1);

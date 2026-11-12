@@ -180,6 +180,7 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
       .finally(() => setRequestingImage(false));
   };
 
+  // The API request uses its default error toast; catch only settles this button action.
   const captureFrame = (atSec) => {
     setCapturingFrame(true);
     return captureMusicVideoPublishFrame(projectId, atSec).then(apply).catch(() => null).finally(() => setCapturingFrame(false));
