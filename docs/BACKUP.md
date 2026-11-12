@@ -463,7 +463,7 @@ Rendered frames are the bulk of `renders/` (a long film's final PNG frames run t
 - A finished render keeps its frames until **Clear rendered frames** (the film panel's Settings tab, which also shows what the workspace takes) removes them, or until the shot is rendered again from changed scripts, settings or options, which replaces them.
 - A shot that leaves the film loses its frames at the next sync. Its videos and stills stay (the shot may come back) until frames are cleared.
 
-Clearing never removes a shot video, a poster, a still, a cut or a log. Turning the exclusion off backs up every frame still on disk: clear them first unless you mean to.
+Clearing preserves videos, posters and stills for shots still in the synced film, plus cuts and logs. It deletes the entire render folder of each removed shot, including that shot's videos, posters and stills. Turning the exclusion off backs up every frame still on disk: clear them first unless you mean to.
 
 Deployed LoRA weights in `data/loras/` and their metadata sidecars are included by default, whether trained locally or downloaded. Promoting an earlier checkpoint copies its selected bytes there, so a backup preserves that adapter independently of excluded torch and mflux intermediate checkpoint directories. This deliberately accepts the storage cost of deployed weights. Old `disabledDefaultExcludes` entries for `/loras/*.safetensors` remain harmless; the removed default no longer needs a toggle.
 
