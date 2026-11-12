@@ -149,6 +149,16 @@ export function musicVideoOutroStats(project, { collectionItems = [] } = {}) {
 function statsOutroRows(stats, hidden = []) {
   const n = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
   const s = stats || {};
+  if (s.mode === 'blender') {
+    const off = Array.isArray(hidden) ? hidden : [];
+    return [
+      { key: 'renders', label: 'Shots', value: n(s.shots) },
+      { key: 'renders', label: 'Frames rendered', value: n(s.framesRendered) },
+      { key: 'renders', label: 'Render time (seconds)', value: n(s.renderTimeMs / 1000) },
+      { key: 'images', label: 'Stills rendered', value: n(s.stillsRendered) },
+      { key: 'edits', label: 'Cuts assembled', value: n(s.cutsAssembled) },
+    ].filter((row) => row.value > 0 && !off.includes(row.key));
+  }
   const stills = s.stills || {};
   const clips = s.clips || {};
   const rows = [

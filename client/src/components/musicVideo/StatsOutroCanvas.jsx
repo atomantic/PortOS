@@ -16,7 +16,7 @@ function addOutroFaces() {
 }
 
 // A gallery PNG has a small WebP beside it; the floor never needs the full still.
-const floorSrc = (imageId) => (/\.png$/i.test(imageId)
+const floorSrc = (imageId) => (imageId.startsWith('/api/music-video/') ? imageId : /\.png$/i.test(imageId)
   ? `/data/image-thumbnails/${encodeURIComponent(imageId.replace(/\.png$/i, '.webp'))}`
   : `/data/images/${encodeURIComponent(imageId)}`);
 

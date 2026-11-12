@@ -11,7 +11,7 @@
  * its look in the page, so there the outro page draws it too (`withFilmLook`).
  */
 
-import { copyFile, link, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, link, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PATHS } from '../../lib/paths.js';
@@ -45,6 +45,7 @@ const NO_STATS = Object.freeze({ floorImages: Object.freeze([]) });
  * video history. Read-only.
  */
 export async function getMusicVideoOutroStats(project) {
+  if (project.composition?.mode === 'blender') return getBlenderOutroStats(project);
   const [{ getCollection, musicVideoCollectionId }, { loadHistory }] = await Promise.all([
     import('../mediaCollections.js'), import('../videoGen/history.js'),
   ]);
@@ -53,6 +54,45 @@ export async function getMusicVideoOutroStats(project) {
     .filter((entry) => entry?.id && entry.musicVideo?.projectId === project.id)
     .map((entry) => ({ kind: 'video', ref: entry.id }));
   return musicVideoOutroStats(project, { collectionItems: [...(collection?.items || []), ...stamped] });
+}
+
+/** Film output is regenerable; count only files still present in its workspace. */
+async function getBlenderOutroStats(project) {
+  const { musicVideoFilmOwner } = await import('./blender/owner.js');
+  const { readBlenderJson, blenderShotDir, blenderRendersDir, resolveBlenderMedia } = await import('../film/workspace.js');
+  const owner = musicVideoFilmOwner(project.id);
+  const manifest = await readBlenderJson(join(owner.workspaceDir, 'manifest.json'));
+  const shots = Array.isArray(manifest?.shots) ? manifest.shots : [];
+  const stats = { mode: 'blender', shots: shots.length, framesRendered: 0, renderTimeMs: 0, stillsRendered: 0, cutsAssembled: 0, floorImages: [] };
+  const posters = [];
+  const present = async (path) => resolveBlenderMedia(owner, path).catch(() => null);
+  const imageUrl = (path) => `/api/music-video/${encodeURIComponent(project.id)}/blender/media?path=${encodeURIComponent(path)}`;
+  for (const shot of shots) {
+    const directory = blenderShotDir(owner, shot.id);
+    const final = await readBlenderJson(join(directory, 'final', 'render.json'));
+    if (final?.complete === true && await present(`${shot.id}/final/shot.mp4`)) {
+      stats.framesRendered += Math.max(0, Number.isInteger(final.frameCount) ? final.frameCount : 0);
+      stats.renderTimeMs += Math.max(0, Number.isFinite(final.durationMs) ? final.durationMs : 0);
+    }
+    const names = (await readdir(join(directory, 'stills')).catch(() => [])).sort();
+    for (const name of names.filter((name) => /^t\d{9,}\.png$/.test(name))) {
+      const path = `${shot.id}/stills/${name}`;
+      if (!await present(path)) continue;
+      stats.stillsRendered += 1;
+      const thumb = path.replace(/\.png$/, '.thumb.jpg');
+      stats.floorImages.push(imageUrl(await present(thumb) ? thumb : path));
+    }
+    for (const quality of ['final', 'preview']) {
+      const path = `${shot.id}/${quality}/poster.jpg`;
+      if (await present(path)) { posters.push(imageUrl(path)); break; }
+    }
+  }
+  const cuts = await readBlenderJson(join(blenderRendersDir(owner), 'cuts', 'cuts.json'), []);
+  for (const cut of Array.isArray(cuts) ? cuts : []) {
+    if (/^(preview|final)-[0-9A-Za-z-]+\.mp4$/.test(cut?.file) && await present(`cuts/${cut.file}`)) stats.cutsAssembled += 1;
+  }
+  stats.floorImages = [...stats.floorImages, ...posters].slice(0, 48);
+  return stats;
 }
 
 /** The ending page: a full-frame canvas, its faces, and the script that draws it per seek. Pure. */
@@ -95,11 +135,13 @@ export async function renderStatsOutroClip({ project, outputPath, width, height,
     const imageSrcs = [];
     for (const [i, imageId] of stats.floorImages.entries()) {
       // A gallery PNG has a small WebP beside it; any other still rides as itself, as the animatic shows it.
-      const png = /\.png$/i.test(imageId);
+      const filmPath = stats.mode === 'blender' ? new URL(imageId, 'http://localhost').searchParams.get('path') : null;
+      const filmMedia = filmPath ? await (await import('../film/workspace.js')).resolveBlenderMedia((await import('./blender/owner.js')).musicVideoFilmOwner(project.id), filmPath).catch(() => null) : null;
+      const png = !filmPath && /\.png$/i.test(imageId);
       const thumb = imageId.replace(/\.png$/i, '.webp');
       const ok = png ? await ensureImageThumbnail(thumb).catch(() => false) : /^[^/\\]+\.(jpe?g|webp)$/i.test(imageId);
-      const source = !ok ? null : png ? join(PATHS.imageThumbnails, thumb) : join(PATHS.images, imageId);
-      const name = `floor-${i}${png ? '.webp' : imageId.slice(imageId.lastIndexOf('.')).toLowerCase()}`;
+      const source = filmMedia ? filmMedia.absolute : !ok ? null : png ? join(PATHS.imageThumbnails, thumb) : join(PATHS.images, imageId);
+      const name = `floor-${i}${png ? '.webp' : (filmMedia ? filmMedia.absolute : imageId).slice((filmMedia ? filmMedia.absolute : imageId).lastIndexOf('.')).toLowerCase()}`;
       const target = join(scratch, 'media', name);
       const staged = source && await link(source, target).then(() => true, () => copyFile(source, target).then(() => true, () => false));
       imageSrcs.push(staged ? `media/${name}` : '');
