@@ -63,6 +63,7 @@ data/music-video/<projectId>/blender/
     <shotId>/preview/frames/frame_000123.jpg, shot.mp4, poster.jpg, render.json
     <shotId>/final/frames/frame_000123.png, shot.mp4, poster.jpg, render.json
     <shotId>/stills/t000012345.png, stills.json
+    <shotId>/sheets/sheet-0-95-e3.jpg, sheets.json
     <shotId>/shot.blend          when "Save .blend" is on
     cuts/<quality>-<time>.mp4, cuts.json   the newest 8 per quality
     logs/<jobId>.log                       the newest 60
@@ -360,7 +361,7 @@ changes; a sync, a render and a cut answer with the jobs they queued.
 | `POST /api/music-video/:id/blender/sync` | Start a sync `{ replaceScenes? }` → `202 { job }` |
 | `GET /api/music-video/:id/blender/usage` | What the workspace takes on disk |
 | `POST /api/music-video/:id/blender/frames/clear` | Clear rendered frames → `{ freedBytes, usage }` |
-| `POST /api/music-video/:id/blender/render` | Queue renders `{ quality, shotIds?, times?, force?, onlyStale? }` → `202 { jobs, skipped }` |
+| `POST /api/music-video/:id/blender/render` | Queue renders `{ quality, shotIds?, times?, sheet?, force?, onlyStale? }` → `202 { jobs, skipped }` |
 | `POST /api/music-video/:id/blender/jobs/:jobId/cancel` | Cancel one job |
 | `POST /api/music-video/:id/blender/cancel` | Cancel every job of the project |
 | `POST /api/music-video/:id/blender/cut` | Assemble a cut `{ quality, animatic?, filmLook? }` → `202 { job }` |
@@ -369,7 +370,13 @@ changes; a sync, a render and a cut answer with the jobs they queued.
 | `GET /api/music-video/:id/blender/media` | Serve a file under `renders/` (`?path=s010/preview/shot.mp4`) |
 
 Render selection: without `force`, shots whose render is complete and current are skipped; `onlyStale` renders only
-shots whose existing render is stale (a shot never rendered is not one); stills always render.
+shots whose existing render is stale (a shot never rendered is not one); stills and contact sheets always render.
+
+Contact sheets (`"quality": "sheet"`, with optional `sheet: { every?, columns?, range? }` — `every` 1–24 frames,
+default 3; `columns` 2–12, default 6; `range: [startSec, endSec]` inside the shot) tile at most 96 frames per sheet
+(`sheet-<firstFrame>-<lastFrame>-e<every>.jpg`), reusing existing frames when the shot has a current preview or
+rendering stamped preview-scale frames otherwise. Agents should review motion from contact sheets rendered through
+PortOS rather than relying on stills alone or a separate local runner.
 
 A job is `{ id, kind: "sync" | "render" | "cut", status: "queued" | "running" | "encoding" | "done" | "error" |
 "canceled", shotId?, quality?, frame?, index?, total?, secPerFrame?, queuedAt, startedAt, finishedAt?, error?,

@@ -1,10 +1,10 @@
-import { memo, useRef, useState } from 'react';
-import { Box, Camera, Clapperboard, Film, Square } from 'lucide-react';
+import { memo, useEffect, useRef, useState } from 'react';
+import { Box, Camera, Clapperboard, Film, LayoutGrid, Square } from 'lucide-react';
 import BlenderShotPlayer from './BlenderShotPlayer.jsx';
 import BlenderShotNote from './BlenderShotNote.jsx';
 import BlenderStatusChip from './BlenderStatusChip.jsx';
 import {
-  blenderShotPlayable, blenderShotRenderStatus, blenderShotTiming, blenderStaleReason, blenderStillPreviewKey, isBlenderJobActive,
+  blenderSheetPreviewKey, blenderShotPlayable, blenderShotRenderStatus, blenderShotTiming, blenderStaleReason, blenderStillPreviewKey, isBlenderJobActive,
 } from '../../../lib/musicVideoBlender.js';
 import { useFilmApi } from './FilmApiContext.jsx';
 import { formatTimecode } from '../../../utils/formatters.js';
@@ -34,6 +34,7 @@ function BlenderShotDetail({ blender, shot, audioUrl, blocker, onTime, onOpenPre
   const { state, pending, projectId } = blender;
   const [quality, setQuality] = useState(null);
   const video = useRef(null);
+  const waitingSheetJob = useRef(null);
   const preview = blenderShotRenderStatus(state, shot.id, 'preview');
   const final = blenderShotRenderStatus(state, shot.id, 'final');
   const playable = blenderShotPlayable(state, shot.id, quality);
@@ -41,9 +42,27 @@ function BlenderShotDetail({ blender, shot, audioUrl, blocker, onTime, onOpenPre
   const activeJobs = (state.jobs || []).filter((job) => job.shotId === shot.id && isBlenderJobActive(job));
   const stillStarting = !!pending[`render:${shot.id}:still`];
   const stillRunning = activeJobs.some((job) => job.quality === 'still');
+  const sheetStarting = !!pending[`render:${shot.id}:sheet`];
+  const sheetRunning = activeJobs.some((job) => job.quality === 'sheet');
   const canceling = activeJobs.some((job) => pending[`cancel:${job.id}`]);
 
+  useEffect(() => {
+    const pendingSheet = waitingSheetJob.current;
+    if (!pendingSheet || pendingSheet.shotId !== shot.id) return;
+    const job = (state.jobs || []).find((candidate) => candidate.id === pendingSheet.jobId);
+    if (!job || isBlenderJobActive(job)) return;
+    waitingSheetJob.current = null;
+    if (job.status === 'done' && renders.sheets?.[0]?.file) {
+      onOpenPreview(blenderSheetPreviewKey(shot.id, renders.sheets[0].file));
+    }
+  }, [state.jobs, shot.id, renders.sheets, onOpenPreview]);
+
   const renderShot = (kind, view) => blender.render({ shotIds: [shot.id], quality: kind, ...(view.status === 'done' ? { force: true } : {}) }, shot.id);
+  const renderSheet = async () => {
+    const result = await blender.render({ shotIds: [shot.id], quality: 'sheet' }, shot.id);
+    const jobId = result?.answer?.jobs?.[0]?.id;
+    if (jobId) waitingSheetJob.current = { shotId: shot.id, jobId };
+  };
   // A paused player names the frame; otherwise the server takes the shot's midpoint.
   const renderStill = () => {
     const element = video.current;
@@ -81,6 +100,10 @@ function BlenderShotDetail({ blender, shot, audioUrl, blocker, onTime, onOpenPre
         <button type="button" className={buttonCls} disabled={!!blocker || stillStarting || stillRunning} onClick={renderStill}
           title="Renders the frame the player is paused on, else the shot's midpoint">
           <Camera size={14} aria-hidden="true" /> {stillStarting || stillRunning ? 'Rendering still…' : 'Render still'}
+        </button>
+        <button type="button" className={buttonCls} disabled={!!blocker || sheetStarting || sheetRunning} onClick={renderSheet}
+          title="Tiles frames from the shot into a contact sheet (reuses a current preview when available)">
+          <LayoutGrid size={14} aria-hidden="true" /> {sheetStarting || sheetRunning ? 'Rendering sheet…' : 'Contact sheet'}
         </button>
         <button type="button" className={primaryCls} disabled={!!blocker || WORKING.includes(preview.status) || !!pending[`render:${shot.id}:preview`]}
           onClick={() => renderShot('preview', preview)}>
@@ -145,6 +168,26 @@ function BlenderShotDetail({ blender, shot, audioUrl, blocker, onTime, onOpenPre
                     className="aspect-video w-full bg-black object-cover" />
                   {/* Made from scripts or options that have changed since: the shot no longer looks like this. */}
                   {still.stale && <span className="block px-1 py-0.5 text-left text-[11px] text-port-warning">Out of date</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {renders.sheets?.length > 0 && (
+        <section aria-label="Contact sheets" className="min-w-0 space-y-1">
+          <h5 className="text-xs text-port-text-muted">Contact sheets</h5>
+          <ul className="grid grid-cols-1 gap-1.5 @md:grid-cols-2">
+            {renders.sheets.map((sheet) => (
+              <li key={sheet.file}>
+                <button type="button" onClick={() => onOpenPreview(blenderSheetPreviewKey(shot.id, sheet.file))}
+                  className="block w-full overflow-hidden rounded border border-port-border focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent">
+                  <img src={musicVideoBlenderMediaUrl(projectId, sheet.file)} alt={`Contact sheet frames ${sheet.firstFrame}–${sheet.lastFrame} (every ${sheet.every})`} loading="lazy" decoding="async"
+                    className="w-full bg-black object-contain" />
+                  <span className="flex items-center justify-between gap-2 px-1.5 py-0.5 text-left text-[11px] text-port-text-muted">
+                    <span>Frames {sheet.firstFrame}–{sheet.lastFrame} · every {sheet.every}</span>
+                    {sheet.stale && <span className="text-port-warning">Out of date</span>}
+                  </span>
                 </button>
               </li>
             ))}

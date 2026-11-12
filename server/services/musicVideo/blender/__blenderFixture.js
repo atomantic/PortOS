@@ -32,6 +32,7 @@ export const createFakeBlender = () => {
 
   const frameFile = (job, shot, frame, side = null) => {
     if (job.quality === 'still') return join(job.out, shot.id, 'stills', `t${String(Math.round((frame / job.fps) * 1000)).padStart(9, '0')}.png`);
+    if (job.quality === 'sheet') return join(job.out, shot.id, 'sheets', job.framesDir || '.frames', `frame_${String(frame).padStart(6, '0')}.jpg`);
     const ext = job.quality === 'preview' ? 'jpg' : 'png';
     const name = side ? `handle_${side}_${String(frame).padStart(6, '0')}.${ext}` : `frame_${String(frame).padStart(6, '0')}.${ext}`;
     return join(job.out, shot.id, job.quality, 'frames', name);
@@ -41,9 +42,9 @@ export const createFakeBlender = () => {
     for (const shot of job.shots) {
       const first = Math.round(shot.start * job.fps);
       const end = Math.round(shot.end * job.fps);
-      const inFrames = job.quality === 'still' ? 0 : Math.max(0, Math.round((shot.handles?.in || 0) * job.fps));
-      const outFrames = job.quality === 'still' ? 0 : Math.max(0, Math.round((shot.handles?.out || 0) * job.fps));
-      const targets = job.quality === 'still'
+      const inFrames = job.quality === 'still' || job.quality === 'sheet' ? 0 : Math.max(0, Math.round((shot.handles?.in || 0) * job.fps));
+      const outFrames = job.quality === 'still' || job.quality === 'sheet' ? 0 : Math.max(0, Math.round((shot.handles?.out || 0) * job.fps));
+      const targets = job.quality === 'still' || job.quality === 'sheet'
         ? job.frames.map((frame) => ({ frame, path: frameFile(job, shot, frame) }))
         : [
           ...Array.from({ length: inFrames }, (_, index) => first - inFrames + index).map((frame) => ({ frame, path: frameFile(job, shot, frame, 'in') })),
