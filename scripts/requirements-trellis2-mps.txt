@@ -26,3 +26,8 @@ setuptools==84.2.1
 wheel==0.46.2
 pybind11==3.0.2
 ninja==1.13.0
+# Network/cache compatibility pins, including AnyIO's Python 3.13 typing helper.
+anyio==4.16.0
+fsspec==2026.9.0
+idna==3.20
+typing-extensions==4.16.0

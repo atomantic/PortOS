@@ -60,13 +60,13 @@ This machine-local record is not published or committed.
 
 ## Regeneration and audit
 
-From the repository root, use the PortOS-private patched uv **0.13.6**:
+From the repository root, use the hash-verified uv **0.13.7**:
 
 ```sh
-MACOSX_DEPLOYMENT_TARGET=26.0 ~/.portos/tools/uv-0.13.6/bin/uv --no-config pip compile \
+MACOSX_DEPLOYMENT_TARGET=26.0 uv --no-config pip compile \
   scripts/requirements-trellis2-mps.txt --python-version 3.13 \
   --python-platform aarch64-apple-darwin --generate-hashes --only-binary :all: \
-  --exclude-newer <UTC-cutoff-at-least-seven-days-old> \
+  --exclude-newer <UTC-cutoff-at-least-seven-days-old> --no-header --no-annotate \
   -o scripts/requirements-trellis2-mps.lock.txt
 ```
 
@@ -95,6 +95,12 @@ audit returned **zero matches for 71 queries**: 56 registry pins, six source
 identities and nine commits. Re-audit after any pin change, then repeat native
 Install, Repair and a textured GLB export; registry metadata alone does not
 establish native compatibility.
+
+The 2026-11-12 network/cache refresh uses cutoff **2026-11-05T00:00:00Z**,
+recorded in the profile and regenerated lock. The 56-package closure retains
+all source revisions and native/renderer versions. See the eighteenth slice in
+[the runtime refresh record](./PYTHON_RUNTIME_REFRESH.md) for complete audit
+results, old/new native network-caller checks and unperformed renderer checks.
 
 ## Native validation
 

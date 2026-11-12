@@ -1009,3 +1009,65 @@ export tests plus complete target resolution, not full FastVideo/CUDA installati
 quality evaluation. No weights, provider calls or device inputs were used.
 Other FastVideo/Wan dependencies, coordinated Hub migrations, 3D profile work
 and concrete retained constraints remain under #15769.
+
+## Eighteenth-slice 3D Metal network/cache helpers (2026-11-12)
+
+Pixal3D and TRELLIS.2 Metal update **AnyIO 4.14.2 → 4.16.0**,
+**fsspec 2026.6.0 → 2026.9.0** and **IDNA 3.16 → 3.20**. Pixal also updates
+**charset-normalizer 3.4.7 → 3.5.2**; TRELLIS does not contain that package or
+Requests, and this slice does not introduce either. Both need the companion
+**Typing-Extensions 4.15.0 → 4.16.0**: AnyIO 4.16 requires it on Python below
+3.15, so retaining the old pin makes the Python 3.13 resolve unsatisfiable.
+
+The fixed source revisions, Python 3.13/macOS 26+/Apple Silicon contract,
+Torch/native ABI, renderer stack, Hub **1.16.4**, HTTPX **0.28.1**, Requests
+**2.34.2** where present, and Pixal's intentional CLI-only Pillow 13 override
+are unchanged. Immutable model/pipeline loaders call `hf_hub_download` for
+configuration and weights; their API use remains compatible. No model/source
+or Gradio migration is hidden in this maintenance slice.
+
+Both complete locks were regenerated online with hash-verified **uv 0.13.7**,
+wheels only and cutoff `2026-11-05T00:00:00Z`. TRELLIS's manifest records the
+same cutoff. Existing outputs preserve every unaffected version, marker and
+hash set: **91** Pixal identities and **52** TRELLIS identities. New helper
+releases carry the resolver's complete artifact hashes; the old single-wheel
+hashes for unrelated packages are retained, not rewritten by hand.
+
+| Lock | Registry identities | Hashes |
+| --- | ---: | ---: |
+| Pixal3D MPS | 96 | 271 |
+| TRELLIS.2 MPS | 56 | 60 |
+
+The union contains **97 registry identities / 275 hashes**. Every hash matches
+an unyanked pre-cutoff PyPI artifact. Fresh OSV/MAL checks returned zero findings
+for **120 queries**: all registry identities, **10** distinct source/native
+package identities and **13** immutable commits, with count/error/pagination
+checks. Source identity queries do not turn vendored code into PyPI installs;
+source revisions and archive hashes remain unchanged. This is not a separate
+native-library audit or proof of production generation quality.
+
+Complete hash-only, wheels-only installation plans passed for both profiles.
+Isolated native Apple Silicon CPython **3.13.18** network subclosures were
+constrained to the full profiles: **25 packages** for Pixal and **22** for
+TRELLIS. Both candidates and both previous-lock baselines passed dependency
+checks and real-caller fixtures:
+
+- Frozen Hub downloads synthetic data from loopback, reuses it offline and
+  refuses an offline cache miss. An interrupted body leaves the expected
+  incomplete cache; a subsequent call resumes at the exact byte range and
+  yields the complete expected payload.
+- The real `HfFileSystem` performs read/seek operations through its HTTP
+  backend; fsspec's local simple cache also preserves seek/read behavior.
+- HTTPX synchronous and asynchronous streams return exact bytes. AnyIO
+  cancels a blocked stream, then the same client completes another request.
+- IDNA URL handling accepts Unicode hostnames and rejects invalid labels.
+  Pixal's Requests path also decodes an undeclared UTF-8 response correctly.
+
+**171** focused installer/profile/adapter tests passed. Each fixture uses an
+isolated Hub home/cache, explicit `token=False`, disabled
+telemetry/implicit token lookup and synthetic loopback responses. No model
+weights, live data, credentials, provider calls or devices are used. Native
+renderer setup, Metal builds, full Install/Repair and GLB generation were not
+rerun for this network-only slice. The known Pixal Gradio/Pillow metadata
+mismatch remains intentional; network-subclosure dependency checks do not
+claim that the full Pixal environment has no such mismatch.
