@@ -102,3 +102,8 @@ assets. The textured GLB passed validation with 786,723 vertices and 963,884
 faces. The JIT regression and the typed positive control passed. The actual
 installed inventory matched the audited 106 distributions; `pip check` reported
 only the documented Gradio/Pillow metadata conflict.
+
+The subsequent timm/PLY/Ninja maintenance refresh retains the same native
+profile and source revisions. See [3D Metal timm/PLY/build maintenance](PYTHON_RUNTIME_REFRESH.md#twenty-first-slice-3d-metal-timmplybuild-maintenance-2026-11-12)
+for exact upgrades, complete-lock audits, real CPU/native synthetic boundary
+tests and the limits of that validation.
