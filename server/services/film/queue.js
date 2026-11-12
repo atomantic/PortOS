@@ -23,7 +23,8 @@ import { blenderStillFrames, runBlenderShotRender } from './renderJob.js';
 // owner → queued tasks, by quality then oldest first within that quality.
 // A task is `{ entry, request, concurrency }`.
 const queueByOwner = createKeyCachedQueue();
-const queueProject = (owner, work) => queueByOwner(filmOwnerKey(owner), work);
+export const withBlenderRenderAdmission = (owner, work) => queueByOwner(filmOwnerKey(owner), work);
+const queueProject = withBlenderRenderAdmission;
 const waiting = new Map();
 const running = new Set();
 const QUALITY_PRIORITY = { still: 0, preview: 1, final: 2 };
@@ -156,7 +157,7 @@ async function enqueue(owner, { shotIds = null, quality, times = null, force = f
 }
 
 async function cancelEntry(owner, entry) {
-  if (!isBlenderJobActive(entry)) return false;
+  if (!isBlenderJobActive(entry) || entry.committing) return false;
   if (entry.job.kind === 'render') await removePendingBlenderShots(owner, entry.job.quality, [entry.job.shotId]);
   // The global pump may have started this task while the marker write awaited.
   const tasks = waiting.get(filmOwnerKey(owner)) || [];

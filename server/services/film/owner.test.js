@@ -1,16 +1,17 @@
 /** A no-song owner drives the public engine workflow without a Music Video record. */
-import { afterAll, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { afterAll, beforeEach, expect, it, vi } from 'vitest';
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
 import { createFakeBlender, exampleManifest } from '../musicVideo/blender/__blenderFixture.js';
 import { scaffoldBlenderWorkspace } from './sources.js';
 import { startBlenderSync } from './sync.js';
-import { enqueueBlenderRenders, resumePendingBlenderRenders } from './queue.js';
+import { cancelBlenderJob, enqueueBlenderRenders, resumePendingBlenderRenders } from './queue.js';
 import { startBlenderCut } from './cuts.js';
 import { getBlenderState } from './state.js';
 import { listBlenderJobs, __resetBlenderJobsForTests } from './jobs.js';
+import { clearBlenderFrames, dropBlenderFramesOutside } from './usage.js';
 
 function ROOT() { return lazyTempDataRoot('film-owner-test-'); }
 const runtime = vi.hoisted(() => ({ blender: null, ffmpeg: [] }));
@@ -28,50 +29,136 @@ vi.mock('../../lib/ffmpeg.js', async (load) => ({
   }),
 }));
 afterAll(() => { __resetBlenderJobsForTests(); cleanupTempDataRoots(); });
-
-it('syncs against an independent timeline, renders stills, resumes old batch intent and joins a silent cut', async () => {
+beforeEach(() => {
+  __resetBlenderJobsForTests(); cleanupTempDataRoots();
   runtime.blender = createFakeBlender();
   runtime.blender.control.manifest = exampleManifest();
+});
+
+function createOwner() {
   let record = normalizeBlenderRecord({});
   let durationSec = 6;
   const events = [];
-  const owner = {
+  return { owner: {
     kind: 'standalone-test', id: 'example-film', workspaceDir: join(ROOT(), 'standalone', 'example-film'),
     timeline: async () => ({ durationSec, fps: record.settings.fps }),
     song: async () => null,
     readRecord: async () => record,
     writeRecord: async (change) => { record = { ...record, ...change(record) }; return record; },
     emit: (event) => events.push(event),
-  };
-  const settled = (ids) => vi.waitFor(() => {
-    const jobs = listBlenderJobs({ ...owner }).filter((job) => ids.includes(job.id));
-    expect(jobs).toHaveLength(ids.length);
-    expect(jobs.every((job) => job.status === 'done')).toBe(true);
-  }, { timeout: 20_000, interval: 20 });
+  }, events, setDuration: (value) => { durationSec = value; } };
+}
+const settled = (owner, ids, status = 'done') => vi.waitFor(() => {
+  const jobs = listBlenderJobs({ ...owner }).filter((job) => ids.includes(job.id));
+  expect(jobs).toHaveLength(ids.length);
+  expect(jobs.map((job) => job.status)).toEqual(ids.map(() => status));
+}, { timeout: 20_000, interval: 20 });
+
+it('syncs against an independent timeline, renders stills, resumes old batch intent and joins a silent cut', async () => {
+  const { owner, events, setDuration } = createOwner();
   await scaffoldBlenderWorkspace(owner);
   for (const shot of runtime.blender.control.manifest.shots) {
     writeFileSync(join(owner.workspaceDir, 'src', 'shots', `${shot.id}.py`), '# example shot');
   }
-  await settled([(await startBlenderSync(owner)).job.id]);
+  await settled(owner, [(await startBlenderSync(owner)).job.id]);
   const song = JSON.parse(readFileSync(join(owner.workspaceDir, 'song.json')));
   expect(song).toMatchObject({ durationSec: 6, audio: { master: null, vocalStem: null }, analysis: { beats: [], sections: [], bpm: null }, lyrics: { cues: [], markers: [] } });
   expect((await getBlenderState(owner)).manifest.problems).toEqual([]);
-  durationSec = 7;
+  setDuration(7);
   expect((await getBlenderState(owner)).manifest.problems.length).toBeGreaterThan(0);
-  durationSec = 6;
-  await settled((await enqueueBlenderRenders(owner, { quality: 'still', shotIds: ['s010'], times: [1] })).jobs.map((job) => job.id));
+  setDuration(6);
+  await settled(owner, (await enqueueBlenderRenders(owner, { quality: 'still', shotIds: ['s010'], times: [1] })).jobs.map((job) => job.id));
   expect((await getBlenderState(owner)).renders.s010.stills).toHaveLength(1);
   // Exact pre-extraction on-disk shape: no owner metadata or migration required.
   const pending = join(owner.workspaceDir, 'renders', 'pending.json');
   mkdirSync(join(owner.workspaceDir, 'renders'), { recursive: true });
   writeFileSync(pending, JSON.stringify([{ quality: 'preview', shotIds: ['s010', 's020', 's030'], attempt: 0 }]));
   await resumePendingBlenderRenders([{ ...owner }], 2);
-  await settled(listBlenderJobs(owner).filter((job) => job.quality === 'preview').map((job) => job.id));
+  await settled(owner, listBlenderJobs(owner).filter((job) => job.quality === 'preview').map((job) => job.id));
   expect(existsSync(pending)).toBe(false);
-  await settled([(await startBlenderCut(owner, { quality: 'preview' })).job.id]);
+  await settled(owner, [(await startBlenderCut(owner, { quality: 'preview' })).job.id]);
   const state = await getBlenderState(owner);
   expect(state.cuts[0]).toMatchObject({ durationSec: 6, missing: [], stale: [], filmLook: false });
   expect(runtime.ffmpeg.at(-1)).toContain('-an');
   expect(events.some((event) => event.kind === 'state')).toBe(true);
   expect(listBlenderJobs({ ...owner, kind: 'another-domain' })).toEqual([]);
+});
+
+// These public cleanup operations must never follow authored symlinks outside the workspace.
+it('refuses symlinked frame cleanup without deleting the external target', async () => {
+  const { owner } = createOwner();
+  await scaffoldBlenderWorkspace(owner);
+  await settled(owner, [(await startBlenderSync(owner)).job.id]);
+  const external = join(ROOT(), 'external');
+  const retained = join(external, 'frames', 'keep.png');
+  mkdirSync(join(external, 'frames'), { recursive: true });
+  writeFileSync(retained, 'keep');
+  writeFileSync(join(external, 'render.json'), JSON.stringify({ complete: true }));
+  writeFileSync(join(external, 'shot.mp4'), 'video');
+  const shot = join(owner.workspaceDir, 'renders', 's010');
+  mkdirSync(shot, { recursive: true });
+  symlinkSync(external, join(shot, 'preview'), 'dir');
+  await expect(dropBlenderFramesOutside(owner, [])).rejects.toMatchObject({ code: 'MUSIC_VIDEO_BLENDER_PATH' });
+  await expect(clearBlenderFrames(owner)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_BLENDER_PATH' });
+  expect(readFileSync(retained, 'utf8')).toBe('keep');
+});
+
+it('holds render admission until frame cleanup finishes', async () => {
+  const { owner } = createOwner();
+  await scaffoldBlenderWorkspace(owner);
+  await settled(owner, [(await startBlenderSync(owner)).job.id]);
+  let release;
+  const hold = new Promise((resolve) => { release = resolve; });
+  let entered;
+  const reading = new Promise((resolve) => { entered = resolve; });
+  const read = owner.readRecord;
+  owner.readRecord = async () => { owner.readRecord = read; entered(); await hold; return read(); };
+  const clearing = clearBlenderFrames(owner);
+  await reading;
+  const rendering = enqueueBlenderRenders(owner, { quality: 'still', shotIds: ['s010'] });
+  try {
+    // Enqueue must not even read the record while cleanup owns admission.
+    const laterRead = vi.spyOn(owner, 'readRecord');
+    // Drain admitted work without a clock delay; blocked admission stays pending.
+    await new Promise(setImmediate);
+    expect(laterRead).not.toHaveBeenCalled();
+    expect(listBlenderJobs(owner).some((job) => job.kind === 'render')).toBe(false);
+  } finally { release(); }
+  await clearing;
+  await settled(owner, (await rendering).jobs.map((job) => job.id));
+});
+
+it('accepts cancellation after describe but before commit, and refuses it once commit has started', async () => {
+  const { owner } = createOwner();
+  await scaffoldBlenderWorkspace(owner);
+  const timeline = owner.timeline;
+  let reads = 0;
+  let release;
+  const hold = new Promise((resolve) => { release = resolve; });
+  let entered;
+  const described = new Promise((resolve) => { entered = resolve; });
+  owner.timeline = async () => {
+    reads += 1;
+    // Preparation, silent song, then the returned manifest's coverage check.
+    if (reads === 3) { entered(); await hold; }
+    return timeline();
+  };
+  const first = (await startBlenderSync(owner)).job;
+  await described;
+  expect(await cancelBlenderJob(owner, first.id)).toBe(true);
+  release();
+  await settled(owner, [first.id], 'canceled');
+  expect(existsSync(join(owner.workspaceDir, 'manifest.json'))).toBe(false);
+  owner.timeline = timeline;
+  let releaseCommit;
+  const commitHold = new Promise((resolve) => { releaseCommit = resolve; });
+  let committing;
+  const commitStarted = new Promise((resolve) => { committing = resolve; });
+  owner.onSynced = async (_, { change }) => { committing(); await commitHold; await owner.writeRecord(change); };
+  const second = (await startBlenderSync(owner)).job;
+  await commitStarted;
+  try { expect(await cancelBlenderJob(owner, second.id)).toBe(false); }
+  finally { releaseCommit(); }
+  await settled(owner, [second.id]);
+  expect((await getBlenderState(owner)).manifest.shots).toHaveLength(3);
 });

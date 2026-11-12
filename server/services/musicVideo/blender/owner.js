@@ -2,12 +2,14 @@
 import { join } from 'node:path';
 import { PATHS } from '../../../lib/paths.js';
 import { normalizeBlenderRecord } from '../../../lib/musicVideoBlender.js';
-const requireProject = async (id) => (await import('../requireProject.js')).requireProject(id);
-const mutateProjectRecord = async (...args) => (await import('../projects.js')).mutateProjectRecord(...args);
 import { musicVideoEvents } from '../events.js';
 import { getBlenderSong } from './song.js';
 import { mirrorBlenderScenes, scenesConflict, unmirroredScenes } from './sceneMirror.js';
 import { blenderRefusal } from '../../film/workspace.js';
+
+// Resolve project storage only for record operations; path-only adapters stay cheap.
+const requireProject = async (id) => (await import('../requireProject.js')).requireProject(id);
+const mutateProjectRecord = async (...args) => (await import('../projects.js')).mutateProjectRecord(...args);
 
 export function musicVideoFilmOwner(id) {
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(id)) {

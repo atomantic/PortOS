@@ -16,11 +16,12 @@
 import { lstat, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { MUSIC_VIDEO_BLENDER_SHOT_ID } from '../../lib/musicVideoBlender.js';
-import { blenderRefusal, blenderRendersDir, blenderSrcDir, readBlenderJson } from './workspace.js';
+import { assertInsideWithoutSymlinks, blenderRefusal, blenderRendersDir, blenderSrcDir, blenderWorkspaceDir, readBlenderJson } from './workspace.js';
 import { readBlenderManifest } from './manifest.js';
 import { BLENDER_RENDER_QUALITIES, blenderFramesDir, blenderRenderFile, blenderShotVideo } from './renderIndex.js';
 import { activeBlenderJobs } from './jobs.js';
 import { announceBlenderState } from './record.js';
+import { withBlenderRenderAdmission } from './queue.js';
 
 const isFile = async (path) => (await lstat(path).catch(() => null))?.isFile() === true;
 
@@ -100,7 +101,9 @@ export async function getBlenderDiskUsage(owner) {
  * Remove the frames of every finished render and everything rendered for
  * shots the film no longer lists. Resolves `{ freedBytes, usage }`.
  */
-export async function clearBlenderFrames(owner) {
+export const clearBlenderFrames = (owner) => withBlenderRenderAdmission(owner, () => clearFrames(owner));
+
+async function clearFrames(owner) {
   // A render in flight is writing the frames this would judge: finished ones could go mid-encode.
   if (activeBlenderJobs(owner).some(({ job }) => job.kind === 'render')) {
     throw blenderRefusal('Renders are running for this film. Wait for them to finish, or cancel them, before clearing frames.', 'MUSIC_VIDEO_BLENDER_RENDERS_ACTIVE', 409);
@@ -108,6 +111,7 @@ export async function clearBlenderFrames(owner) {
   const before = await getBlenderDiskUsage(owner);
   const { frames, removedShots } = await clearableFolders(owner);
   for (const folder of [...frames, ...removedShots.map((shotId) => join(blenderRendersDir(owner), shotId))]) {
+    await assertInsideWithoutSymlinks(blenderWorkspaceDir(owner), folder);
     await rm(folder, { recursive: true, force: true });
   }
   const usage = await getBlenderDiskUsage(owner);
@@ -122,6 +126,10 @@ export async function dropBlenderFramesOutside(owner, shotIds) {
   const kept = new Set(shotIds);
   for (const shotId of await renderedShotIds(owner)) {
     if (kept.has(shotId)) continue;
-    for (const quality of BLENDER_RENDER_QUALITIES) await rm(blenderFramesDir(owner, shotId, quality), { recursive: true, force: true });
+    for (const quality of BLENDER_RENDER_QUALITIES) {
+      const frames = blenderFramesDir(owner, shotId, quality);
+      await assertInsideWithoutSymlinks(blenderWorkspaceDir(owner), frames);
+      await rm(frames, { recursive: true, force: true });
+    }
   }
 }

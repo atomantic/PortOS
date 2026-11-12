@@ -100,6 +100,9 @@ async function prepareBlenderSync(owner, { replaceScenes = false }) {
         notes: Object.fromEntries(Object.entries(blender.notes).filter(([shotId]) => shotIds.has(shotId))),
       };
     };
+    if (entry.abort.signal.aborted) throw blenderRefusal('The sync was canceled', 'MUSIC_VIDEO_BLENDER_SYNC_CANCELED', 409);
+    // Cancellation is accepted until commit starts; afterward the sync completes normally.
+    entry.committing = true;
     // The owner commits its mirror and record together before replacing the manifest.
     if (owner.onSynced) await owner.onSynced(manifest, { replaceScenes, change });
     else await owner.writeRecord(change);
