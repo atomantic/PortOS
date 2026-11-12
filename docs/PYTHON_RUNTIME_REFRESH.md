@@ -830,10 +830,13 @@ returns 4,800 samples for a 4,800-frame stereo 48 kHz WAV requested at 16 kHz,
 not the expected 1,600. It resamples the channel axis before downmixing.
 Explicit `axis=0` works in both mlx-audio versions. H3 generation does not call
 this helper, so it is neither a candidate regression nor an H3 render blocker.
-The precise correction and caller regression acceptance criteria are
-[tracked under #15769](https://github.com/atomantic/PortOS/issues/15769#issuecomment-6819203959)
-for the subsequent mlx-vlm caller/source migration; this slice does not claim
-that generic stereo conversion is correct.
+The [original reproduction](https://github.com/atomantic/PortOS/issues/15769#issuecomment-6819203959)
+remains valid, but final caller inspection found no supported PortOS path
+into this helper. H3 borrows VLM text/vision methods and weight sanitization;
+the shipped legacy video package borrows Gemma text-model/cache classes,
+not its audio loader. This is an upstream-only limitation, not outstanding
+PortOS migration work. Reassess it if a future feature adopts the helper;
+generic stereo conversion is not claimed correct.
 
 No production weights, provider calls, H3 rendering or quality evaluation ran.
 Optional mlx-audio server/model families were not enabled to inflate coverage.
@@ -944,9 +947,10 @@ the previous complete lock on Python 3.11:
 The preceding tiny Qwen model/structured-output and audio-IO/DSP caller probes
 also passed against both updated interpreters. **187** focused installer,
 profile and H3 source-probe tests passed. No production model weights, provider
-calls, H3 rendering or quality evaluation ran. The already tracked generic
-VLM stereo-resampling defect is unchanged. H3's remaining original candidate
-is the coordinated Hub/Transformers migration; other profile-specific updates
+calls, H3 rendering or quality evaluation ran. The generic VLM stereo-resampling
+defect is unchanged; its final upstream-only disposition is recorded in the
+fourteenth-slice section. H3's remaining original candidate is the coordinated
+Hub/Transformers migration; other profile-specific updates
 and concrete upstream constraints remain under #15769.
 
 ## Seventeenth-slice FastVideo/Wan video-export helper (2026-11-12)
@@ -2388,3 +2392,131 @@ caller probes from the combined locks, using each profile's exact NumPy
 artifact. Historical baseline/upgrade evidence remains applicable because
 the installer, pip version and OpenCV inputs are unchanged. This does not
 claim a full model or renderer installation.
+
+## Forty-second-slice 3D Metal retained OpenGL helper migration (2026-11-12)
+
+Both profiles advance **ModernGL 5.12.0 → 5.13.0** and **Glcontext
+3.0.0 → 3.1.0**, retaining NumPy 2.2.6, Torch and every native/model/source
+revision. TRELLIS's already-present Glcontext dependency is made explicit
+in the source recipe to select this bounded update; no new dependency or
+immutable-source patch is introduced.
+
+Reachability was checked before interpreting optional-helper failures.
+PortOS launches Pixal's pinned `generate_mps.py` and TRELLIS's `generate.py`
+through its runner. Their export routes use native o-voxel/mtldiffrast Metal
+or existing geometry/KDTree/xatlas fallbacks, not utils3d's NumPy OpenGL
+rasterizer. A full pinned-tree reference scan found these GL helper calls
+only within utils3d's own dispatch exports and tests. This update therefore
+has retained-library native coverage, not a claim that the generation CLI
+uses an EGL renderer or that its Metal baking quality has been certified.
+
+Native CPython 3.13.18 baseline/candidate probes use exact-hash three-package
+subclosures and real macOS standalone OpenGL 4.1 contexts. Three independent
+create/render/read/release cycles compile GLSL330 shaders, rasterize overlapping
+triangles and verify depth occlusion, center depth 0.25, color and coverage.
+A real sampled 2×2 texture produces the expected four color quadrants on
+readback. Invalid shader source and an unknown backend are refused. The
+actual immutable TRELLIS utils3d GLSL330 raster and texture helpers also run,
+with explicit transform, checking interpolated attributes, depth and texture
+pixels. Candidate tests are repeated after reinstalling TRELLIS's distinct
+retained NumPy artifact. No mock context, software-only substitute or shader
+version rewrite stands in for the native tests.
+
+Two unchanged optional-path negative cases remain explicit:
+
+- Pixal's utils3d revision `3fab839f0be9931dac7c8488eb0e1600c236e183`
+  embeds GLSL430 shaders. Actual raster invocation fails with `version '430'
+  is not supported` on the native GL4.1 context in both baseline and candidate.
+- TRELLIS's utils3d revision `9a4eb15e4021b67b12c460c7057d642626897ec8`
+  has `np.eye(4, np.float32)` in its omitted-transform branch. That branch
+  raises `TypeError` in both states; the supported explicit-transform argument
+  works, and its internal depth-warp caller already supplies that argument.
+
+Neither case was found reachable from the supported frozen PortOS generation
+CLI, and neither demonstrates a regression from this package update. They
+are not relabeled as passing, patched in immutable sources or turned into a
+generic platform-validation task. GLSL430 support, full renderer installation,
+model inference and production output quality are expressly outside this proof.
+All fixture geometry/textures are synthetic and network connections are rejected.
+
+Complete locks were regenerated with verified uv 0.13.7 for CPython 3.13/
+macOS 26+ ARM64 and cutoff **2026-11-05T00:00:00Z**. All 97 unrelated Pixal
+and 54 unrelated TRELLIS identities, markers and hash sets remain unchanged.
+Complete generated artifact sets produce 99 entries/1407 hashes for Pixal,
+56/583 for TRELLIS and 100 registry identities/1411 hashes in their union.
+Each hash matches an official unyanked artifact predating the cutoff. Fresh
+OSV/MAL checks cover the union, 10 source-package identities and 13 immutable
+source commits (123 queries), with no matches. Both full profile installation
+dry plans and 171 focused installer/profile/adapter tests pass.
+
+The serial combined candidate retains preceding web/date/Pandas/model,
+geometry and OpenCV updates. Complete locks were regenerated with only the
+GL helper pair differing from that base. Both exact three-package artifact
+variants reran real native context/raster/depth/texture/lifecycle probes and
+the unchanged optional negative cases. Historical baseline evidence remains
+applicable; no broader renderer or model installation is inferred.
+
+
+## Final original-audit reconciliation and managed-profile audit
+
+The final serial candidate accounts for every original #15769 audit row:
+unconstrained candidates have been updated, while the following older pins
+retain specific source, API or interpreter constraints. This covers Reactor,
+audio/lyric/classifier profiles, MLX and CUDA media runtimes, both 3D lanes,
+and their retained web, rendering, packaging and build dependencies. Earlier
+slice-specific statements of remaining work are historical. This reconciliation
+does not claim that queued pull requests have merged or that #15769 is closed.
+
+- NetworkX 3.7, ContourPy 1.4, PyAV 19 and Librosa 1 require Python 3.12+.
+  Fixed Python 3.11 profiles retain compatible versions; existing universal
+  locks already select newer versions on their eligible Python branches.
+- ACE-Step revision `1bee4c9f5b43e30995f8d4d33b3919197ce1bd68` explicitly pins
+  Librosa 0.11 in its `requirements.txt`, read by `setup.py`. Its retained
+  py3langid 0.3 is additionally required by `from_pickled_model`, removed in
+  0.4. These need source/API migrations, not a blind pin override.
+- ACE-Step and shared mflux-video retain fsspec 2026.7 because datasets 5.1
+  requires `fsspec[http]<=2026.7.0`. SymPy 1.14 requires `mpmath<1.4` in the
+  affected Torch/model closures.
+- mflux 0.24 (including FLUX.3 and shared video), the frozen Laya source and
+  Wan MLX's frozen MLX-Gen source require Hub below 2. MTPLX 2.12.2 requires
+  MLX 0.32.2, `mlx-lm<0.32` and `transformers<5.17`; the latter retains Hub 1.
+- LTX MLX's candidate mlx-lm 0.32.2 requires MLX at least 0.32.2, beyond the
+  frozen LTX-2.3/2.5 baselines of 0.31.1/0.32.0. LTX CUDA's frozen source
+  requires Transformers below 5.15 and `uv-build>=0.9.8,<0.10`, retaining
+  Hub 1 and uv-build 0.9.30. MLX-Gen requires `uv-build>=0.7.19,<0.8`;
+  the LTX workspace README also retains the documented Hatchling `<1.32` cap.
+- Pixal's refreshed Gradio requires `safehttpx<0.2` and `tomlkit<0.15`, so
+  0.1.7 and 0.14 remain. Its CLI-only Pillow 13 override remains intentional;
+  the refreshed Gradio still declares Pillow below 13.
+
+The final read-only managed-profile audit uses main
+`5946f8d4bcef61c8f88ce301079d4167d1ffa62a` plus **only the two final Pixal/TRELLIS
+Metal locks** from `e062f2c8f0ed4901367be48b182b632d3407a91a`. It does not audit
+that older branch base as a substitute for current main. Across **53 locks**,
+**369 registry identities** and **6,635 registry artifact hashes**, registry
+hash/yank checks passed. **476 OSV/MAL queries** returned no findings or
+pagination tokens: 396 PyPI identities, 47 Conda/bootstrap artifacts, 31 source
+commits and two supplemental model revisions. Official hash/date/channel
+checks verified all **47 Conda/bootstrap artifacts**. All **24 source archive
+hashes**, plus the separately pinned direct utils3d wheel, were verified.
+
+Two pre-existing cooldown exceptions remain explicit rather than hidden by
+that clean advisory result:
+
+- LTX CUDA `cuda-bindings==13.5.0`, retained from #15454, has 28 artifacts
+  newer than the fixed `2026-11-05T00:00:00Z` cutoff. All reached seven elapsed
+  days by **2026-11-12T12:06:49.872494Z**; this does not satisfy the older
+  fixed midnight cutoff.
+- TRELLIS Metal's `trellis2-apple` revision
+  `c873bde81ebe1e56535c6caddb4b21267364a923`, retained from the autorelease-pool
+  leak repair in #15708, has commit date **2026-11-09T16:25:19Z** and reaches
+  seven days on **2026-11-16T16:25:19Z**. Preserve the repair and disclose its
+  exception; do not claim that every source satisfies the registry cutoff.
+
+OSV's Conda/source coverage is incomplete, and commit dates are not release
+signatures or provenance guarantees. These checks are not exhaustive security
+certification. The final audit did not download or validate model weights or
+repeat full GPU/runtime execution; prior bounded native tests keep their stated
+limits. Node/npm, container/OS images, system toolchains and live advisory alerts
+are outside this managed Python/native-profile pass. Unmanaged installation
+workflows require their separate reconciliation; this audit does not certify them.
