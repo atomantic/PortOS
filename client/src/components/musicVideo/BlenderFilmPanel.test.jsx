@@ -556,6 +556,29 @@ describe('BlenderFilmPanel: files', () => {
     expect(saveMusicVideoBlenderFile).not.toHaveBeenCalled();
   });
 
+  it('keeps an open file and its draft usable after a failed refresh and retries the read in place', async () => {
+    listMusicVideoBlenderFiles.mockResolvedValue({ files });
+    getMusicVideoBlenderFile.mockResolvedValue({ path: 'film.py', content: source });
+    await renderPanel('?btab=files&bfile=film.py');
+    const editor = await screen.findByLabelText('src/film.py');
+    await waitFor(() => expect(editor).toHaveValue(source));
+    fireEvent.change(editor, { target: { value: `${source}# my draft\n` } });
+    listMusicVideoBlenderFiles.mockResolvedValue({ files: files.map(file => ({ ...file, mtime: '2026-10-01T10:00:00.000Z' })) });
+    getMusicVideoBlenderFile.mockRejectedValueOnce(new Error('disk unavailable'));
+    await push('music-video:blender', { projectId: 'mv-test', kind: 'state' });
+    expect(await screen.findByRole('alert')).toHaveTextContent('disk unavailable');
+    expect(screen.getByLabelText('src/film.py')).toHaveValue(`${source}# my draft\n`);
+    expect(screen.getByLabelText('src/film.py')).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+    getMusicVideoBlenderFile.mockResolvedValueOnce({ path: 'film.py', content: `${source}# disk changed\n` });
+    fireEvent.click(screen.getByRole('button', { name: /Retry/ }));
+    await waitFor(() => expect(getMusicVideoBlenderFile).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(screen.getByLabelText('src/film.py')).toHaveValue(`${source}# my draft\n`);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(screen.getByLabelText('src/film.py')).toHaveValue(`${source}# disk changed\n`);
+  });
+
   it('says a failed list read failed instead of showing an empty workspace', async () => {
     listMusicVideoBlenderFiles.mockRejectedValue(new Error('disk unavailable'));
     await renderPanel('?btab=files');
