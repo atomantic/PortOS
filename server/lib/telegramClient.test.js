@@ -389,4 +389,19 @@ describe('createTelegramBot — apiCall methods', () => {
 
     await expect(bot.getMe()).rejects.toThrow('Unauthorized: invalid token');
   });
+
+  it('carries Telegram error_code on the thrown error', async () => {
+    global.fetch = vi.fn(async () => jsonRes({ ok: false, error_code: 401, description: 'Unauthorized' }));
+    const bot = createTelegramBot('tok');
+
+    let caught;
+    try {
+      await bot.getMe();
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught.message).toBe('Unauthorized');
+    expect(caught.error_code).toBe(401);
+  });
 });
