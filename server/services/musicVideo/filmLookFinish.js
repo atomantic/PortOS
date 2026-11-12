@@ -23,6 +23,7 @@ import { PATHS } from '../../lib/paths.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { filmLookRuntimeSource, isFilmLookNeutral, normalizeFilmLook } from '../../lib/filmLook.js';
 import { filmLookGpuRuntimeSource } from '../../lib/filmLookGpu.js';
+import { admitFilmLookWeb, encodeFilmLookWeb } from './filmLookWebEncoder.js';
 
 export const FILM_LOOK_FINISH_SCRATCH_DIR = 'music-video-film-look';
 
@@ -93,6 +94,51 @@ function filmLookFinishPage({ width, height, fps, durationSec, offsetSec = 0, lo
   let gpu = null;
   const filmLook = () => globalThis.__portosFilmLook;
   globalThis.__portosFilmLookFinish = {
+    async startEncoder() {
+      if (!gpu || typeof VideoEncoder !== 'function') throw new Error('WebCodecs unavailable');
+      const config = { codec: 'avc1.640028', width: WIDTH, height: HEIGHT, framerate: FPS,
+        bitrateMode: 'quantizer', hardwareAcceleration: 'prefer-hardware', avc: { format: 'annexb' }, latencyMode: 'realtime' };
+      const support = await VideoEncoder.isConfigSupported(config);
+      if (!support.supported || support.config.bitrateMode !== 'quantizer') throw new Error('WebCodecs quantizer unavailable');
+      let chunks = [], pendingBytes = 0, failure = null, submitted = 0, emitted = 0, wake = null;
+      const maxPendingBytes = WIDTH * HEIGHT * 16 + 1048576;
+      const encoder = new VideoEncoder({ output(chunk) {
+        if (failure) return;
+        const expected = Math.round(emitted * 1000000 / FPS);
+        if (chunk.timestamp !== expected || (chunk.duration != null && Math.abs(chunk.duration - Math.round(1000000 / FPS)) > 1) || (emitted === 0 && chunk.type !== 'key')) failure = 'WebCodecs reordered frames';
+        else if (pendingBytes + chunk.byteLength > maxPendingBytes) failure = 'WebCodecs output exceeded frame budget';
+        if (failure) { wake?.(); return; }
+        const bytes = new Uint8Array(chunk.byteLength); chunk.copyTo(bytes); chunks.push(bytes); pendingBytes += bytes.length; emitted++;
+
+      }, error(error) { failure = String(error); wake?.(); } });
+      encoder.configure(config);
+      const drain = async () => {
+        if (failure) throw new Error(failure);
+        const blob = new Blob(chunks); chunks = []; pendingBytes = 0;
+        return await new Promise((resolve, reject) => {
+          const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(',')[1]);
+          reader.onerror = () => reject(new Error('WebCodecs output read failed')); reader.readAsDataURL(blob);
+        });
+      };
+      this.frameEncoder = {
+        async frame() {
+          const frame = new VideoFrame(canvas, { timestamp: Math.round(submitted * 1000000 / FPS), duration: Math.round(1000000 / FPS) });
+          try { encoder.encode(frame, { keyFrame: submitted === 0, avc: { quantizer: 18 } }); submitted++; }
+          finally { frame.close(); }
+          if (encoder.encodeQueueSize > 3) await new Promise((resolve) => {
+            const done = () => { encoder.removeEventListener('dequeue', done); wake = null; resolve(); };
+            wake = done; encoder.addEventListener('dequeue', done, { once: true });
+            if (failure) done();
+          });
+          return drain();
+        },
+        async finish() {
+          await encoder.flush();
+          if (emitted !== submitted) throw new Error('WebCodecs lost frames');
+          const data = await drain(); encoder.close(); return data;
+        },
+      };
+    },
     gpuInfo() {
       const api = globalThis.__portosFilmLookGpu;
       return { available: Boolean(api && api.available()) };
@@ -131,6 +177,9 @@ function filmLookFinishPage({ width, height, fps, durationSec, offsetSec = 0, lo
 `;
   return { 'index.html': html, 'app.js': js, 'film-gpu.js': filmLookGpuRuntimeSource() };
 }
+
+// The browser suite exercises the same page and encoder used by the pass.
+export const _filmLookFinishTestHooks = Object.freeze({ filmLookFinishPage });
 
 // Full-resolution PSNR (dB) of two same-sized PNG frames, RGB only.
 async function framePsnr(a, b) {
@@ -295,11 +344,39 @@ export async function applyFilmLookFinish({ project, look: lookInput, path, jobI
         return opened;
       }
       : openSvgPage;
-    const encoded = await encodeCompositionSegments(page, { width, height, fps, durationSec }, silent, {
-      openPage, encode: encodeComposition, signal, offsetSec, ...(workers ? { workers } : {}),
-      onProgress: (fraction) => onProgress?.(fraction * 0.95),
+    const contract = { width, height, fps, durationSec };
+    let useWeb = false;
+    if (drawPath.gpu && frames >= 240) {
+      useWeb = await admitFilmLookWeb(page, contract, scratch, { signal, offsetSec }).catch((error) => {
+        signal?.throwIfAborted();
+        console.warn(`⚠️ ${label} [${jobId.slice(0, 8)}]: WebCodecs check declined (${error.message})`);
+        return false;
+      });
+      if (!useWeb) console.log(`🎞️ ${label} [${jobId.slice(0, 8)}]: WebCodecs quality or capability check declined; using PNG`);
+      // A failed check can leave a broken page or encoder. Reopen before the
+      // real pass, preserving the already-selected GPU/SVG decision.
+      await page.close().catch(() => {});
+      page = await openPage(signal);
+    }
+    let progress = 0;
+    const run = encode => encodeCompositionSegments(page, contract, silent, {
+      openPage, encode, signal, offsetSec, ...(workers ? { workers } : {}),
+      onProgress: (fraction) => { progress = Math.max(progress, fraction * 0.95); onProgress?.(progress); },
       onRetry: ({ frame, attempt, segment, error }) => console.warn(`⚠️ ${label} [${jobId.slice(0, 8)}] ${segment == null ? '' : `worker ${segment + 1} `}restarting its browser at song frame ${frame} (retry ${attempt}): ${error.message}`),
     });
+    let encoded;
+    if (useWeb) {
+      try { encoded = await run(encodeFilmLookWeb); }
+      catch (error) {
+        signal?.throwIfAborted();
+        console.warn(`⚠️ ${label} [${jobId.slice(0, 8)}]: WebCodecs pass failed; restarting with PNG (${error.message})`);
+        await page.close().catch(() => {});
+        await rm(silent, { force: true }).catch(() => {});
+        page = await openPage(signal);
+        useWeb = false;
+        encoded = await run(encodeComposition);
+      }
+    } else encoded = await run(encodeComposition);
     // A replaced first page was already closed after its failure.
     if (!encoded?.pageReplaced) {
       page.check();
@@ -321,7 +398,7 @@ export async function applyFilmLookFinish({ project, look: lookInput, path, jobI
     onProgress?.(1);
     const timing = encoded?.timing;
     const perFrame = key => timing?.frames ? (timing[key] / timing.frames).toFixed(1) : 'unavailable';
-    console.log(`🎞️ ${label} [${jobId.slice(0, 8)}]: ${look.preset} over ${frames} frames at ${width}×${height}; wall ${((performance.now() - started) / 1000).toFixed(1)}s; workers ${encoded?.workers ?? 1}; GPU/SVG frames ${timing?.gpuFrames ?? 0}/${timing?.svgFrames ?? 0}; ms/frame seek ${perFrame('seekMs')}, GPU draw submission ${perFrame('drawMs')}, capture (includes SVG draw/GPU wait) ${perFrame('captureMs')}, encode write/drain ${perFrame('encodeMs')}`);
+    console.log(`🎞️ ${label} [${jobId.slice(0, 8)}]: ${look.preset} over ${frames} frames at ${width}×${height}; wall ${((performance.now() - started) / 1000).toFixed(1)}s; workers ${encoded?.workers ?? 1}; GPU/SVG frames ${timing?.gpuFrames ?? 0}/${timing?.svgFrames ?? 0}; ms/frame seek ${perFrame('seekMs')}, GPU draw submission ${perFrame('drawMs')}, ${useWeb ? 'WebCodecs submission/flush and GPU wait' : 'capture (includes SVG draw/GPU wait)'} ${perFrame('captureMs')}, ${useWeb ? 'encode write/mux' : 'encode write/drain'} ${perFrame('encodeMs')}`);
     return true;
   } finally {
     if (page) await page.close().catch(() => {});
