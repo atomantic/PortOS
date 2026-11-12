@@ -147,3 +147,8 @@ pins, validating real isolated/offline hash installs and synthetic native
 source/editable builds.
 See [3D Metal packaging and installer tooling](PYTHON_RUNTIME_REFRESH.md#3d-metal-packaging-and-installer-tooling)
 for exact scope, full-lock audits and the limits of installer-only coverage.
+
+The standalone pybind11 3.1.0 refresh leaves Torch's already-vendored 3.1.0
+headers and native source revisions unchanged. See
+[TRELLIS retained pybind11 tooling](PYTHON_RUNTIME_REFRESH.md#trellis-metal-retained-pybind11-build-tooling)
+for header ownership, native CPU build probes and their limits.
