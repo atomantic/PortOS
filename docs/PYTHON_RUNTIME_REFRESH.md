@@ -473,3 +473,51 @@ inference or an audio-quality evaluation. Production ACE-Step generation and
 MPS behavior remain unverified. This slice does not add target support, alter
 CUDA pins, download production weights, or resolve Pixal3D CUDA #15710. Remaining
 profile and isolated-major migrations continue under #15769.
+
+## Ninth-slice FLUX.3 network/cache dependencies (2026-11-12)
+
+The isolated FLUX.3 Apple Silicon profile updates **AnyIO 4.15.1 → 4.16.0**,
+**FileLock 4.2.6 → 4.2.7** and **Platformdirs 4.14.2 → 4.14.3**. The other
+**54** locked entries retain their versions, markers and hashes, including
+mflux 0.24.0, MLX/MLX-Metal 0.32.4 and the Transformers/Hub pair. Direct source
+pins and model identifiers are unchanged. Older pins not assessed here remain
+part of the staged investigation, not certified compatibility exceptions.
+
+The versioned release notes describe
+[AnyIO socket/cancellation fixes](https://github.com/agronholm/anyio/blob/4.16.0/docs/versionhistory.rst),
+[FileLock soft-lease recovery](https://github.com/tox-dev/filelock/blob/4.2.7/docs/changelog.rst)
+and [Platformdirs XDG whitespace preservation](https://github.com/tox-dev/platformdirs/blob/4.14.3/docs/changelog.rst).
+The pinned HTTPcore backend uses AnyIO TCP/stream/timeout APIs; Hub uses the
+FileLock/SoftFileLock context-manager API; mflux's defaults call
+`platformdirs.user_cache_dir(appname="mflux")`. These APIs remain available,
+and the three releases' Python floors are within this profile's existing
+Python 3.12 baseline. No caller adaptation is required by the checks below.
+The Platformdirs fix is Linux-specific; its adoption here keeps the patch
+baseline current and does not add a Linux FLUX.3 target.
+
+The complete **57-package** lock was regenerated with SHA-256-verified
+**uv 0.13.7**, wheels only and cutoff `2026-11-05T00:00:00Z`, preserving the
+existing output and upgrading only the selected versions. All **1,328 hashes**
+match non-yanked pre-cutoff PyPI artifacts. OSV querybatch, including `MAL-`
+records, returned zero findings across the full closure; complete responses,
+errors and pagination were checked. Bundled native libraries are not separately
+audited. The selected wheels were hash-verified against live PyPI metadata.
+
+Install/Repair now requires wheels, preventing a hashed source archive from
+resolving unpinned build dependencies. The readiness probe now requires
+Python **3.12+**, matching the installer's existing managed Python 3.12 and
+the locked NumPy requirement. Failure tests cover package sync and probe
+errors without false readiness, successful subsequent Repair, and unsupported
+host refusal before tool resolution. Existing cancellation, isolated environment,
+source/lock parity and all-package readiness checks remain in place.
+
+Fresh scratch Apple Silicon CPython **3.12.11** and **3.13.18** environments
+installed the complete lock with hashes and wheels only and passed dependency
+checks. Both actual FLUX.3 generation/edit CLI imports, all locked-version probes,
+basic MLX evaluation, mflux default/overridden cache paths, concurrent Hub loopback
+fixture downloads/offline cache reuse and real async HTTP timeout/recovery passed.
+These establish dependency/API compatibility, not production FLUX.3 inference,
+image quality or model-level MPS behavior. No model weights, provider calls or
+paid generation were started. Other profiles, isolated majors and earlier
+unverified inference remain under #15769; CUDA profiles and Pixal3D #15710 are
+unchanged.

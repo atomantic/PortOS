@@ -25,7 +25,7 @@ function flux3LockedPins() {
   return lockedPins;
 }
 const probeScript = () => `import importlib.metadata as m, platform, sys
-assert platform.machine() == 'arm64' and sys.version_info >= (3, 11)
+assert platform.machine() == 'arm64' and sys.version_info >= (3, 12)
 for name, version in ${JSON.stringify(flux3LockedPins())}:
  assert m.version(name) == version, f"{name}=={version}"
 from mflux.models.flux3.cli.flux3_generate import main
@@ -89,7 +89,7 @@ export function installFlux3Runtime(emit) {
       await command(['venv', '--python', '3.12', '--python-preference', 'only-managed', '--allow-existing', flux3Venv()]);
       const mflux = flux3LockedPins().find(([name]) => name === 'mflux')?.[1];
       emit({ type: 'stage', stage: 'install', message: `Installing hash-locked mflux ${mflux} and MLX dependencies.` });
-      await command(['pip', 'sync', '--require-hashes', '--reinstall', '--python', flux3Python(), flux3LockPath()]);
+      await command(['pip', 'sync', '--require-hashes', '--only-binary', ':all:', '--reinstall', '--python', flux3Python(), flux3LockPath()]);
       emit({ type: 'stage', stage: 'verify', message: 'Checking both FLUX.3 CLI modules without loading weights.' });
       await probe();
       if (cancelled) throw new Error('FLUX.3 installation cancelled.');
