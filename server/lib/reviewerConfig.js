@@ -850,7 +850,8 @@ export function normalizeReviewerEffort(raw, reviewer, model = null, catalog = [
  * an empty override.
  */
 export function normalizeReviewerEfforts(map, models = {}, catalogs = {}) {
-  return keyedReviewerPinNormalizer((value, reviewer) => normalizeReviewerEffort(value, reviewer, models[reviewer], catalogs[reviewer]))(map);
+  const normalizedModels = normalizeReviewerModels(models) || {};
+  return keyedReviewerPinNormalizer((value, reviewer) => normalizeReviewerEffort(value, reviewer, normalizedModels[reviewer], catalogs[reviewer]))(map);
 }
 
 // Storage has no provider I/O. Retain the known agy tier until execution can

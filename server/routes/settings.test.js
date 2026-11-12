@@ -189,6 +189,9 @@ describe('Settings routes — configured reviewer pins', () => {
         expect(text).toContain('agy --model gemini-4-hydrogen --effort xhigh');
         expect(buildReviewWithArgs(options.reviewers, options)).toContain('antigravity[gemini-4-hydrogen]~effort=xhigh');
       }
+      expect(buildReviewWithArgs(['gemini'], {
+        reviewerModels: { gemini: 'gemini-4-hydrogen' }, reviewerEfforts: { gemini: 'xhigh' }, providers: reviewerProviders.current,
+      })).toContain('antigravity[gemini-4-hydrogen]~effort=xhigh');
       // A stale explicit tier must not erase a valid baked-in legacy selection.
       reviewerProviders.current[0].models = ['gemini-4-hydrogen-low'];
       const legacy = await resolveReviewLoopOptions({
