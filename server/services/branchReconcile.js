@@ -1467,6 +1467,8 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
     // A named branch's actual holder and current merged head were re-read above.
     // Location adds no completion evidence: apply the same owner, lock, claim
     // and content checks to external checkouts as to PortOS-managed checkouts.
+    // External sessions retain a clean checkout with `git worktree lock`; an
+    // arbitrary directory or unregistered process alone is not a cleanup hold.
     const gate = {
       path: b.worktreePath,
       locked: b.worktreeLocked,

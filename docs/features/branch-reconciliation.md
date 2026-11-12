@@ -60,7 +60,10 @@ executions remain ambiguous. Historical policies and current task budgets still 
 - Named merged branches retire through the same checks regardless of checkout
   location, from both the Git page and `branch-reconcile`. A clean external
   checkout needs no separate PR, merge timestamp, idle window, or managed-root
-  registration. The server rechecks the actual holder and current integration
+  registration. This is intentional for external tool-created branches too:
+  directory age or an unregistered process is not a cleanup hold. External
+  sessions that need to retain a clean checkout must use `git worktree lock`;
+  the server still honors that lock. The server rechecks the actual holder and current integration
   evidence before removal. Locks, active owners, protected branches, completion
   policy and unsaved work still hold it. A dirty checkout is disposable only
   when the forge proves its PR merged at that exact head, as described below.
