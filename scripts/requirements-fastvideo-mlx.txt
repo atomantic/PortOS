@@ -30,7 +30,7 @@ tqdm==4.70.1
 scipy>=1.14.1
 opencv-python>=4.10.0.84
 imageio>=2.36.0
-imageio-ffmpeg>=0.5.1
+imageio-ffmpeg==0.8.1
 einops
 loguru
 aiohttp

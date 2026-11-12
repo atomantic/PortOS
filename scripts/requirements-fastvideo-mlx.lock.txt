@@ -12,16 +12,16 @@
 # Regenerate after editing requirements-fastvideo-mlx.txt, from the repo root,
 # with a cooldown so brand-new releases are not adopted the day they publish.
 # Set CUTOFF to a UTC date at least seven days before each regeneration.
-# Last regenerated with uv 0.13.7 and CUTOFF=2026-11-04T00:00:00Z:
+# Last regenerated with uv 0.13.7 and CUTOFF=2026-11-05T00:00:00Z:
 #   LOCK="$PWD/scripts/requirements-fastvideo-mlx.lock.txt"; TMP="$(mktemp -d)"
 #   cp scripts/requirements-fastvideo-mlx.txt "$LOCK" "$TMP/"
 #   printf '[project]\nname = "fastvideo-lock"\nversion = "0"\n[tool.uv]\nenvironments = ["sys_platform == '"'"'darwin'"'"' and platform_machine == '"'"'arm64'"'"'"]\n' > "$TMP/pyproject.toml"
 #   (cd "$TMP" && uv pip compile requirements-fastvideo-mlx.txt --universal --python-version 3.11 \
-#     --generate-hashes --no-header --annotation-style line \
-#     --exclude-newer "$CUTOFF" --upgrade-package timm -o requirements-fastvideo-mlx.lock.txt)
+#     --generate-hashes --only-binary :all: --no-header --annotation-style line \
+#     --exclude-newer "$CUTOFF" -o requirements-fastvideo-mlx.lock.txt)
 #   cp "$TMP/requirements-fastvideo-mlx.lock.txt" "$LOCK"
 # then check the result against OSV (including MAL- malicious-package records).
-# OSV querybatch (including MAL records), 2026-11-11: all 85 distributions, 0 matches.
+# OSV querybatch (including MAL records), 2026-11-12: all 85 distributions, 0 matches.
 accelerate==1.15.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:5654f8c5eaa0d4fa68b33e287a97765da6849bf6d51dcac874e73fbbddfb6134 \
     --hash=sha256:97eacca0b73e45cb867dbf8c5d5d4dc32219544300e0c8992c7334dc2ef33cec
@@ -686,15 +686,15 @@ imageio==2.38.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:36d23eb7423d2fb63f637098758edb3d2df3687f7125e0a5ce8596572022dcf9 \
     --hash=sha256:6769f1f01c4dd46448307863a787c9a22fa4dbe11c0c88f525c6e410fdfd7983
     # via -r requirements-fastvideo-mlx.txt
-imageio-ffmpeg==0.8.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
-    --hash=sha256:0385d9bab7dc7d7141af7d0f160059e05f0d874116faf9ce91f6fcfd66e938f2 \
-    --hash=sha256:3c1fdef145531268307c7e995a86b95a460dbb33b406dd34bc7488645d54040b \
-    --hash=sha256:478a7fbcaeb69b6caceb901cde5768e80d05de6b7f75fd57ae9fe93801de7ba0 \
-    --hash=sha256:543c8c5d316fc48575dfb5d44adba84a473d9c5a0e482b7fac5988f24a9cb17b \
-    --hash=sha256:8108995ecb08351b8a4c6f5575cc05d83d79bc9bb1ace236ca09d40e7fa0cdea \
-    --hash=sha256:9c195547e08f7f154505ec74ad0bbfdecf43b714c13202d766d7e514ce5ea366 \
-    --hash=sha256:9dc65cb8650afdb5b8d6a8c251dbcb6c230a07b041e39326e03cb62bab3e992f \
-    --hash=sha256:c6f71602aa2de990eb964b25923ffc4c248af868449a062d17ecd7f841d458fd
+imageio-ffmpeg==0.8.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
+    --hash=sha256:050d6850601c3b3890bd2b28306f3b842b3daea390a561101174375a1c460bda \
+    --hash=sha256:0b7079e63dc34f97e43db5a5b7b9efb85edc1c6623313e0a4a17ebc7c2ce7a51 \
+    --hash=sha256:4f1213a47d9c3e819d5953671bc45d133a7d3a00c40a2934a9b1356933bee4e9 \
+    --hash=sha256:5636d691e36e5274b13fe38182b1f627b2e35dcecc63944012c2470f9484fc45 \
+    --hash=sha256:9538a10e598257263b5de1a1c1b86e7603417bc219245b1e279b452e5e48cc20 \
+    --hash=sha256:9e5162fa482c3c45a6703b2223947d15c37730e63b048d64937fa80243aa5a0c \
+    --hash=sha256:f27ca4cb85e2d4946deedbce1a81245dfd942a2bcf94b53676fb3956aa95bf1b \
+    --hash=sha256:fad3176f859b25869e60a8ed79957d4e3ed74a97a95e5f0cdcb91455f6c6d00e
     # via -r requirements-fastvideo-mlx.txt
 importlib-metadata==10.1.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:82b04047fa09792c1a8cfeddfe08bec79e4b13c29c8469b0d3949860f61017e8 \

@@ -11,6 +11,6 @@ hf-xet==1.8.0
 sentencepiece==0.2.2
 ftfy==6.3.1
 imageio==2.38.1
-imageio-ffmpeg==0.7.0
+imageio-ffmpeg==0.8.1
 av==18.1.0
 pillow==13.0.0
