@@ -112,3 +112,8 @@ The CLI/text helper refresh retains Hub 1.16.4 and its Typer <0.26 constraint.
 See [3D Metal CLI/text helpers](PYTHON_RUNTIME_REFRESH.md#twenty-fourth-slice-3d-metal-cli-and-text-helpers-2026-11-12)
 for the four compatible upgrades, complete-lock audits and synthetic caller
 validation, which does not certify model inference or rendering.
+
+The Pixal-only plotting refresh retains NumPy 2.2.6 and all native renderer
+pins. See [Pixal Metal plotting-stack maintenance](PYTHON_RUNTIME_REFRESH.md#pixal-metal-plotting-stack-maintenance)
+for exact versions, complete-lock audit and CPU Agg/font/contour validation;
+these tests do not certify model inference or GLB rendering.
