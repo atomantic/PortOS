@@ -1234,6 +1234,19 @@ explicitly attaches/analyzes `{source:'track',trackId}` or
 Films appear in `GET /api/code-animation/projects` with `kind:'film'`; older
 package records read as `kind:'package'`.
 
+`POST /api/code-animation/films/:id/promote` (host control) accepts exactly one of
+`{trackId,name?}` or `{uploadedAudioFilename,name?}`. Uploaded audio here is a
+Music-library filename, as on Music Video projects. It returns `201` with
+`{project,sourceProject,needsAnalysis:true,needsSync:true,coverageDurationSec,coverageProblems,nextSteps}`.
+The new Blender-mode Music Video owns a copy of `src/`, render settings, film
+option values and the shot manifest, marked **not synced**. Renders, cuts and
+notes stay with the source. No analysis, provider call or job starts. When the
+track has a stored duration, coverage problems compare the copied shots to it;
+this is provisional until song analysis and sync. Otherwise the answer asks for
+analysis before coverage can be checked. Each call makes an independent project;
+`sourceProject.promotedTo` names the latest copy, and `project.sourceFilm` records
+`{kind:'code-animation',projectId}` without entering Music Video's version tree.
+
 `/api/code-animation/films/:id/blender/*` uses the same owner-resolving router as
 Music Video: state, settings, workspace, source files, sync, usage, frame cleanup,
 render, cancel, cut, shot notes/open and media. Native-process/source-write routes

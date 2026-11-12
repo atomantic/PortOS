@@ -16,3 +16,8 @@ export const filmAudioSchema = z.union([
   z.object({ source: z.literal('upload'), filename: z.string().min(1).max(256).regex(/^[^/\\]+$/) }).strict(),
   z.object({ source: z.literal('none') }).strict(),
 ]);
+
+export const promoteFilmSchema = z.union([
+  z.object({ trackId: z.string().min(1).max(128), name: z.string().trim().min(1).max(200).optional() }).strict(),
+  z.object({ uploadedAudioFilename: z.string().min(1).max(256).regex(/^[^/\\]+$/), name: z.string().trim().min(1).max(200).optional() }).strict(),
+]);
