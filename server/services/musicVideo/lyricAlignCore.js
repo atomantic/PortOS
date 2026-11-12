@@ -933,7 +933,8 @@ export function compareLyricPlacement(cues, recognized, { timeBound, usedOccurre
     const hasAllWords = expected.length > 0 && cue.words?.length === expected.length && matchedIndices.length === expected.length;
     const hasAllButOne = expected.length >= 3 && cue.words?.length === expected.length && matchedIndices.length === expected.length - 1;
 
-    if (!hasAllWords && !hasAllButOne) {
+    const validCueTiming = cue.words?.every(word => Number.isFinite(word?.startSec) && Number.isFinite(word?.endSec) && word.endSec > word.startSec);
+    if ((!hasAllWords && !hasAllButOne) || !validCueTiming) {
       uncheckedCues.push({ cueId: cue.id, text: cue.text });
       continue;
     }
@@ -950,7 +951,9 @@ export function compareLyricPlacement(cues, recognized, { timeBound, usedOccurre
 
     const middle = Math.floor(matchedOffsets.length / 2);
     const offsetSec = matchedOffsets.length % 2 ? matchedOffsets[middle] : (matchedOffsets[middle - 1] + matchedOffsets[middle]) / 2;
-    const isMisplaced = Math.abs(offsetSec) > 0.3 + 1e-9;
+    const largestOffsetSec = matchedOffsets.reduce((largest, offset) => Math.abs(offset) > Math.abs(largest) ? offset : largest, 0);
+    const isMisplaced = Math.abs(largestOffsetSec) > 0.3 + 1e-9;
+    const reportedOffsetSec = round3(isMisplaced ? largestOffsetSec : offsetSec);
 
     const matchedWordIds = matchedIndices.map(i => heard[i]._id).filter(Boolean);
 
@@ -971,7 +974,7 @@ export function compareLyricPlacement(cues, recognized, { timeBound, usedOccurre
     const checkedEntry = {
       cueId: cue.id,
       text: cue.text,
-      offsetSec: round3(offsetSec),
+      offsetSec: reportedOffsetSec,
       matchedCount: matchedIndices.length,
       expectedCount: expected.length,
       complete: hasAllWords,
@@ -982,7 +985,7 @@ export function compareLyricPlacement(cues, recognized, { timeBound, usedOccurre
     checkedCues.push(checkedEntry);
 
     if (isMisplaced) {
-      misplacedCues.push({ cueId: cue.id, text: cue.text, offsetSec: round3(offsetSec), words });
+      misplacedCues.push({ cueId: cue.id, text: cue.text, offsetSec: reportedOffsetSec, words });
     }
   }
   return { misplacedCues, uncheckedCues, checkedCues };
