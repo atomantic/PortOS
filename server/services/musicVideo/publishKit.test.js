@@ -110,6 +110,52 @@ describe('publishing kit build (#9281)', () => {
     expect(await ffmpegService.probeVideoStreamInfo(join(PATHS.videos, social.filename))).toMatchObject({ width, height });
   });
 
+  it.skipIf(!ffmpeg)('keeps full-size selected frames, caps the persisted list, and retains composed sources until released', { timeout: 120000 }, async () => {
+    const id = await renderedProject();
+    await expect(kit.capturePublishKitFrame(id, 36)).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    const first = (await kit.capturePublishKitFrame(id, 2)).project.publishKit.frames[0];
+    const sharp = (await import('sharp')).default;
+    expect(await sharp(join(PATHS.videoThumbnails, first)).metadata()).toMatchObject({ width: 320, height: 180 });
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current, publishKit: { ...current.publishKit,
+      coverArt: { source: { kind: 'thumbnail', filename: first } },
+    } } }));
+    for (let i = 0; i < 12; i++) await kit.capturePublishKitFrame(id, i + 1);
+    const saved = (await projects.getProject(id)).publishKit;
+    expect(saved.frames).toHaveLength(12);
+    expect(saved.frames).not.toContain(first);
+    expect(existsSync(join(PATHS.videoThumbnails, first))).toBe(true);
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current, publishKit: { ...current.publishKit, coverArt: null } } }));
+    await kit.releaseKitFiles([first]);
+    expect(existsSync(join(PATHS.videoThumbnails, first))).toBe(false);
+    const evicted = saved.frames.at(-1);
+    await kit.capturePublishKitFrame(id, 3);
+    expect(existsSync(join(PATHS.videoThumbnails, evicted))).toBe(false);
+  });
+
+  it.skipIf(!ffmpeg)('copies the current Blender song frame losslessly and falls back to the master for stale or cleared frames', { timeout: 120000 }, async () => {
+    const id = await renderedProject();
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current, composition: { mode: 'blender' } } }));
+    const film = await import('./blender/film.js');
+    const { blenderFramesDir, blenderFrameName } = await import('./blender/renderIndex.js');
+    const directory = blenderFramesDir(id, 'shot-1', 'final');
+    await mkdir(directory, { recursive: true });
+    const original = join(directory, blenderFrameName(48, 'final'));
+    const sharp = (await import('sharp')).default;
+    await sharp({ create: { width: 640, height: 360, channels: 3, background: '#ff0000' } }).png().toFile(original);
+    const state = { settings: { fps: 24 }, shots: [{ id: 'shot-1', start: 0, end: 12 }], renders: { 'shot-1': { final: { complete: true, stale: false } } } };
+    const read = vi.spyOn(film, 'readBlenderFilm').mockResolvedValue(state);
+    try {
+      const clean = (await kit.capturePublishKitFrame(id, 2)).project.publishKit.frames[0];
+      expect(await readFile(join(PATHS.videoThumbnails, clean))).toEqual(await readFile(original));
+      state.renders['shot-1'].final.stale = true;
+      const fallback = (await kit.capturePublishKitFrame(id, 2)).project.publishKit.frames[0];
+      expect(await sharp(join(PATHS.videoThumbnails, fallback)).metadata()).toMatchObject({ width: 320, height: 180 });
+      state.renders['shot-1'].final.stale = false;
+      const cleared = (await kit.capturePublishKitFrame(id, 3)).project.publishKit.frames[0];
+      expect(await sharp(join(PATHS.videoThumbnails, cleared)).metadata()).toMatchObject({ width: 320, height: 180 });
+    } finally { read.mockRestore(); }
+  });
+
   it('refuses to build before there is a final render', async () => {
     const { id } = await projects.createProject({ name: 'Unrendered' });
     await expect(kit.startPublishKitBuild(id)).rejects.toMatchObject({ status: 409, code: 'NO_FINAL_RENDER' });
@@ -222,6 +268,7 @@ describe('publishing kit build (#9281)', () => {
     const vertical = first.exports.find((e) => e.kind === 'vertical-9x16');
     const probed = await runFfmpegProcess({ bin: ffmpeg, args: ['-hide_banner', '-i', join(PATHS.videos, vertical.filename), '-f', 'null', '-'] });
     expect(probed.ok).toBe(true);
+    expect(await ffmpegService.probeVideoStreamInfo(join(PATHS.videoThumbnails, first.thumbnails[0]))).toMatchObject({ width: 320, height: 180 });
     expect(first.thumbnails).toHaveLength(3); // the best frame of each shot
     expect(first.thumbnail).toBe(first.thumbnails[0]);
     expect(await readFile(join(PATHS.videos, first.captionsFilename), 'utf8')).toContain('the chorus line');
@@ -508,6 +555,18 @@ describe('thumbnail frames', () => {
     const spread = frames.thumbnailCandidates(many, 40, 10);
     expect(spread).toHaveLength(10);
     expect(spread[spread.length - 1].t).toBeGreaterThan(30);
+  });
+
+  it('excludes title and outro windows even when lyrics cover every clean span', () => {
+    const candidates = frames.thumbnailCandidates({
+      scenes: [scene(0, 4, 'Opener'), scene(4, 12, 'Middle'), scene(12, 20, 'Outro')],
+      titleCard: { enabled: true, title: 'Song', startSec: 0, endSec: 4, outro: true, outroStartSec: 12, outroEndSec: 20 },
+      lyricCues: [cue('sung', 0, 20)],
+    }, 20);
+    expect(candidates).toHaveLength(2);
+    expect(candidates.every(c => c.t > 4 && c.t < 12 && c.lyric)).toBe(true);
+    const noShots = frames.thumbnailCandidates({ titleCard: { enabled: true, title: 'Song', startSec: 0, endSec: 8 } }, 10);
+    expect(noShots.every(c => c.t >= 8)).toBe(true);
   });
 
   it('keeps the best frame of each shot, best first, favoring the singer and frames with no lyric', () => {

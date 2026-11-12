@@ -769,6 +769,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music-video/:id/cold-open/audio',
   'POST /api/music-video/:id/excerpt',
   'POST /api/music-video/:id/publish-kit/build',
+  'POST /api/music-video/:id/publish-kit/frame',
   'POST /api/music-video/:id/dcp/readiness',
   'POST /api/music-video/:id/dcp/build',
   'POST /api/music-video/dcp/:jobId/cancel',

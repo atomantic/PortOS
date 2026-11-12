@@ -93,7 +93,7 @@ const writeCoverArt = (projectId, update) => mutateProjectRecord(projectId, (cur
 export function sourcePath(project, source) {
   const name = basename(String(source?.filename || ''));
   if (source?.kind === 'thumbnail') {
-    if (!(projectPublishKit(project).thumbnails || []).includes(name)) throw coverError(422, 'VALIDATION_ERROR', 'That thumbnail is not one this kit built');
+    if (![...(projectPublishKit(project).thumbnails || []), ...(projectPublishKit(project).frames || []), ...[projectPublishKit(project).coverArt?.source].filter(s => s?.kind === 'thumbnail').map(s => s.filename)].includes(name)) throw coverError(422, 'VALIDATION_ERROR', 'That thumbnail is not one this kit built');
     const path = safeUnder(PATHS.videoThumbnails, name);
     if (path) return path;
   } else if (source?.kind === 'image') {
@@ -155,7 +155,7 @@ export async function composeProjectCoverArt(projectId, { source = null, title, 
   const out = await withBackupAssetPublication(() => writeCoverArt(projectId, () => ({
     ...next, filename, composedAt: new Date().toISOString(), lastError: null,
   })));
-  if (art.filename && art.filename !== filename) await releaseKitFiles([art.filename], [filename]);
+  if (art.filename && art.filename !== filename) await releaseKitFiles([art.filename, ...(art.source?.kind === 'thumbnail' ? [art.source.filename] : [])], [filename]);
   console.log(`🖼️ Music Video cover art ${String(projectId).slice(3, 11)} ← ${next.source.filename}`);
   publish(projectId, out.project);
   return { project: out.project };

@@ -1284,6 +1284,8 @@ export const musicVideoPromotionPlanSchema = z.object({
   audience: z.string().trim().max(1000).optional(),
   days: z.number().int().min(1).max(30).optional(),
 }).strict();
+export const musicVideoPublishFrameSchema = z.object({ atSec: z.number().finite().min(0) }).strict();
+
 export const musicVideoPublishThumbnailSchema = z.object({ filename: z.string().min(1).max(300) }).strict();
 
 // Release cover art: a source (a kit thumbnail or a gallery image) composed
