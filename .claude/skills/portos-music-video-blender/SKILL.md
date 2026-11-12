@@ -65,6 +65,8 @@ Rules that keep a film renderable:
   compositor is `scene.compositing_node_group`), `Action.fcurves` is gone, and materials and worlds already have
   node trees. Build meshes with `bmesh` and `bpy.data`, not `bpy.ops`, where you can.
 - Use `portos_film.music` (`beats`, `downbeats`, `sections`, `nearest_beat`, `beats_between`, `pulse`,
+  `bar_time(song, bar, beat=0.0)`, `bar_at(song, t)`, `phrases(song, bars=4)`,
+  `onsets(song, band="low", min_gap=0.12, sensitivity=1.5)`, `swell(song, band, t, window=2.0)`,
   `envelope(song, "low"|"mid"|"high"|"rms", t)`, `cue_words`, `words_between`) and `portos_film.timing` (`ease`,
   `clamp`, `remap`, `stepped` for on-twos holds). They read `song.json`; do not parse audio yourself.
 - Lyrics are not drawn for you. Typography is part of the film.
