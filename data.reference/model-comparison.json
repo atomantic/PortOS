@@ -60855,6 +60855,134 @@
       "tokensPerSecond": null,
       "quota": null,
       "notes": "Retrieved 2026-11-12. Official API model code is gemini-4-hydrogen; the effort-suffixed model is a harness alias, not a separately priced API SKU. Thinking levels low/medium/high/xhigh (default high): https://aistudio.google.com/docs/thinking#thinking-levels . GA release: https://aistudio.google.com/docs/changelog#11-12-2026 . Rates are first-party API references, not gateway prices, Antigravity subscription allowances, or per-task costs. No attributable Hydrogen Intelligence Index v5.0.1 or historical v4.3.2 scores/task costs found at https://artificialanalysis.ai/leaderboards/models ; no Hydrogen result found at https://epoch.ai/models/search or https://epoch.ai/eci . Direct model-card and AA Hydrogen model URLs were inaccessible during research. No benchmark overlap or documented numerical predecessor comparison supports a PortOS quality estimate; quality, task costs, latency, throughput and quota remain null. No inference benchmarks run. Free, Batch/Flex, Priority and Contributor tiers are separate from this Standard paid-tier reference."
+    },
+    {
+      "id": "aa-web-v5.0.1-gemini-4-hydrogen-low",
+      "provider": "Google",
+      "model": "gemini-4-hydrogen",
+      "effort": "low",
+      "configuration": "Google Gemini 4 Hydrogen; thinking_level=low; Artificial Analysis public evaluation",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 26.8936694361562,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-hydrogen-low",
+          "retrievedAt": "2026-11-12T18:50:41.393Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact intelligenceIndex value from the public model page payload, not the rounded headline score."
+        }
+      },
+      "costPerTask": {
+        "value": 0.2922227000200506,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-hydrogen-low",
+          "retrievedAt": "2026-11-12T18:50:41.393Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per benchmark task from intelligenceIndexCostPerTask.cost.total in the public model page payload. Includes input, cache read/write, and reasoning/answer output charges using the evaluation weights; not a quote for a PortOS task or subscription quota."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Retrieved 2026-11-12. Public Artificial Analysis benchmark evidence for the exact thinking level. Complements the earlier official API token-price observations. Scores and task costs apply to v5.0.1 only; no historical v4.3.2 task costs, latency, throughput, or Antigravity quota are inferred. No inference benchmarks run by PortOS."
+    },
+    {
+      "id": "aa-web-v5.0.1-gemini-4-hydrogen-medium",
+      "provider": "Google",
+      "model": "gemini-4-hydrogen",
+      "effort": "medium",
+      "configuration": "Google Gemini 4 Hydrogen; thinking_level=medium; Artificial Analysis public evaluation",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 41.2329566992579,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-hydrogen-medium",
+          "retrievedAt": "2026-11-12T18:50:41.393Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact intelligenceIndex value from the public model page payload, not the rounded headline score."
+        }
+      },
+      "costPerTask": {
+        "value": 0.7979866055252406,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-hydrogen-medium",
+          "retrievedAt": "2026-11-12T18:50:41.393Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per benchmark task from intelligenceIndexCostPerTask.cost.total in the public model page payload. Includes input, cache read/write, and reasoning/answer output charges using the evaluation weights; not a quote for a PortOS task or subscription quota."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Retrieved 2026-11-12. Public Artificial Analysis benchmark evidence for the exact thinking level. Complements the earlier official API token-price observations. Scores and task costs apply to v5.0.1 only; no historical v4.3.2 task costs, latency, throughput, or Antigravity quota are inferred. No inference benchmarks run by PortOS."
+    },
+    {
+      "id": "aa-web-v5.0.1-gemini-4-hydrogen-high",
+      "provider": "Google",
+      "model": "gemini-4-hydrogen",
+      "effort": "high",
+      "configuration": "Google Gemini 4 Hydrogen; thinking_level=high; Artificial Analysis public evaluation",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 50.7870826951304,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-hydrogen-high",
+          "retrievedAt": "2026-11-12T18:50:41.393Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact intelligenceIndex value from the public model page payload, not the rounded headline score."
+        }
+      },
+      "costPerTask": {
+        "value": 1.8733140062520008,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-hydrogen-high",
+          "retrievedAt": "2026-11-12T18:50:41.393Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per benchmark task from intelligenceIndexCostPerTask.cost.total in the public model page payload. Includes input, cache read/write, and reasoning/answer output charges using the evaluation weights; not a quote for a PortOS task or subscription quota."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Retrieved 2026-11-12. Public Artificial Analysis benchmark evidence for the exact thinking level. Complements the earlier official API token-price observations. Scores and task costs apply to v5.0.1 only; no historical v4.3.2 task costs, latency, throughput, or Antigravity quota are inferred. No inference benchmarks run by PortOS."
+    },
+    {
+      "id": "aa-web-v5.0.1-gemini-4-hydrogen-xhigh",
+      "provider": "Google",
+      "model": "gemini-4-hydrogen",
+      "effort": "xhigh",
+      "configuration": "Google Gemini 4 Hydrogen; thinking_level=xhigh; Artificial Analysis public evaluation",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 53.9192287317542,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:50:41.393Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact intelligenceIndex value from the public model page payload, not the rounded headline score."
+        }
+      },
+      "costPerTask": {
+        "value": 3.1601590757006157,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:50:41.393Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per benchmark task from intelligenceIndexCostPerTask.cost.total in the public model page payload. Includes input, cache read/write, and reasoning/answer output charges using the evaluation weights; not a quote for a PortOS task or subscription quota."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Retrieved 2026-11-12. Public Artificial Analysis benchmark evidence for the exact thinking level. Complements the earlier official API token-price observations. Scores and task costs apply to v5.0.1 only; no historical v4.3.2 task costs, latency, throughput, or Antigravity quota are inferred. No inference benchmarks run by PortOS."
     }
   ]
 }
