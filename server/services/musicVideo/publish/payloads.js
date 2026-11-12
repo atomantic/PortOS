@@ -313,7 +313,7 @@ const BUILDERS = {
     const songId = song.match(SUNO_SONG_URL)?.[1]?.toLowerCase();
     if (!songId) throw missing('Give the Suno song URL the Hook plays (suno.com/song/… or a suno.com/s/… share link)');
     const cut = pickVerticalCut(project, options);
-    const caption = text(kit.copy?.tiktok?.caption) || text(kit.copy?.shorts?.description).slice(0, 300);
+    const caption = text(kit.copy?.sunoHook?.caption) || text(kit.copy?.tiktok?.caption) || text(kit.copy?.shorts?.description).slice(0, 300);
     const duration = Number(project?.audioAnalysis?.durationSec);
     if (!Number.isFinite(duration) || duration <= 0) throw missing('Analyze the song audio first so the Suno Hook window can be checked against its duration');
     const startSec = Math.max(0, Number(cut.startSec) || 0);

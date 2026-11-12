@@ -67,6 +67,17 @@ describe('PublishKitPanel copy per platform (#9287)', () => {
     expect(screen.queryByText('Reddit', { selector: 'legend' })).toBeNull();
   });
 
+  it('lets a Hook-only release save its caption', () => {
+    render(<PublishKitPanel project={project} publishKit={kitHook} enabledTargets={['sunoHook']} />);
+    expandAll();
+    expect(screen.getByText('Suno Hook', { selector: 'legend' })).toBeInTheDocument();
+    const caption = screen.getByLabelText('Caption');
+    fireEvent.change(caption, { target: { value: 'My Hook' } });
+    fireEvent.blur(caption);
+    expect(kitHook.saveCopy).toHaveBeenCalledWith({ sunoHook: { caption: 'My Hook' } });
+    expect(screen.queryByText('TikTok', { selector: 'legend' })).toBeNull();
+  });
+
   it('shows no platform copy and holds the draft while the saved platforms are unknown', () => {
     render(<PublishKitPanel project={project} publishKit={kitHook} enabledTargets={null} />);
     expandAll();

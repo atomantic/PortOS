@@ -111,7 +111,7 @@ export function buildSrt(project) {
 
 // ---- per-platform copy (one user-triggered LLM call) ----
 
-export const PUBLISH_PLATFORMS = Object.freeze(['youtube', 'shorts', 'x', 'linkedin', 'facebook', 'tiktok', 'instagram', 'reddit', 'stackerNews', 'substack']);
+export const PUBLISH_PLATFORMS = Object.freeze(['youtube', 'shorts', 'x', 'linkedin', 'facebook', 'tiktok', 'instagram', 'sunoHook', 'reddit', 'stackerNews', 'substack']);
 // Each platform's own title ceiling; the parser clips rather than rejecting.
 const LIMITS = { youtubeTitle: 100, shortsTitle: 100, xHook: 280, linkedinPost: 3000, facebookPost: 63206, redditTitle: 300, stackerNewsTitle: 80, substackTitle: 100, substackSubtitle: 250, caption: 2200 };
 
@@ -143,6 +143,7 @@ function copySpecs({ include, length }) {
     x: `"x":{"hook":"<=280 chars, ${short ? 'one or two sentences' : 'one surprising claim'}, no links","story":"${short ? 'empty string' : 'the making-of as a long post'}"}`,
     linkedin: `"linkedin":{"post":"${short ? '1-2 sentences' : '2-4 short sentences'}, no links${tags ? ', may end with 2-3 hashtags' : ''}"}`,
     facebook: `"facebook":{"post":"${short ? '1-2 sentences' : '2-4 short sentences'}, no links"}`,
+    sunoHook: `"sunoHook":{"caption":"<=300 chars, 1-2 sentences${tags ? ' + hashtags' : ''}"}`,
     tiktok: `"tiktok":{"caption":"1-2 sentences${tags ? ' + 4-6 hashtags' : ''}"}`,
     instagram: `"instagram":{"caption":"1-2 sentences${tags ? ' + 4-6 hashtags' : ''}"}`,
     reddit: `"reddit":{"title":"<=300 chars","body":"${body('markdown: what it is and how it was made')}"}`,
@@ -248,6 +249,7 @@ export function parsePublishCopy(text, platforms = PUBLISH_PLATFORMS, { hashtags
     linkedin: () => ({ post: str(v('linkedin').post, LIMITS.linkedinPost) }),
     facebook: () => ({ post: str(v('facebook').post, LIMITS.facebookPost) }),
     tiktok: () => ({ caption: str(v('tiktok').caption, LIMITS.caption) }),
+    sunoHook: () => ({ caption: str(v('sunoHook').caption, 300) }),
     instagram: () => ({ caption: str(v('instagram').caption, LIMITS.caption) }),
     reddit: () => ({ title: str(v('reddit').title, LIMITS.redditTitle), body: str(v('reddit').body, 40000) }),
     stackerNews: () => ({ title: str(v('stackerNews').title, LIMITS.stackerNewsTitle), body: str(v('stackerNews').body, 40000) }),
