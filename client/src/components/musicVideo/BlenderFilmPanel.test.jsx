@@ -239,7 +239,7 @@ describe('BlenderFilmPanel: shots', () => {
     getMusicVideoBlender.mockResolvedValue(finished);
     await push('music-video:blender', { projectId: 'mv-test', kind: 'state' });
     await waitFor(() => expect(board.openPreview).toHaveBeenCalledWith('blender-sheet:s010:s010/sheets/sheet-0-105-e3.jpg'));
-    fireEvent.click(within(within(detail('s010')).getByRole('region', { name: 'Contact sheets' })).getByRole('button'));
+    fireEvent.click(within(within(detail('s010')).getByRole('region', { name: 'Contact sheets' })).getByRole('button', { name: /Frames 0–105/ }));
     expect(board.openPreview).toHaveBeenLastCalledWith('blender-sheet:s010:s010/sheets/sheet-0-105-e3.jpg');
   });
 

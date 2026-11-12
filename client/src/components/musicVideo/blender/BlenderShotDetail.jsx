@@ -101,10 +101,6 @@ function BlenderShotDetail({ blender, shot, audioUrl, blocker, onTime, onOpenPre
           title="Renders the frame the player is paused on, else the shot's midpoint">
           <Camera size={14} aria-hidden="true" /> {stillStarting || stillRunning ? 'Rendering still…' : 'Render still'}
         </button>
-        <button type="button" className={buttonCls} disabled={!!blocker || sheetStarting || sheetRunning} onClick={renderSheet}
-          title="Tiles frames from the shot into a contact sheet (reuses a current preview when available)">
-          <LayoutGrid size={14} aria-hidden="true" /> {sheetStarting || sheetRunning ? 'Rendering sheet…' : 'Contact sheet'}
-        </button>
         <button type="button" className={primaryCls} disabled={!!blocker || WORKING.includes(preview.status) || !!pending[`render:${shot.id}:preview`]}
           onClick={() => renderShot('preview', preview)}>
           <Clapperboard size={14} aria-hidden="true" /> {pending[`render:${shot.id}:preview`] ? 'Queuing…' : renderLabel('Preview', preview)}
@@ -174,9 +170,15 @@ function BlenderShotDetail({ blender, shot, audioUrl, blocker, onTime, onOpenPre
           </ul>
         </section>
       )}
-      {renders.sheets?.length > 0 && (
-        <section aria-label="Contact sheets" className="min-w-0 space-y-1">
+      <section aria-label="Contact sheets" className="min-w-0 space-y-1.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h5 className="text-xs text-port-text-muted">Contact sheets</h5>
+          <button type="button" className={buttonCls} disabled={!!blocker || sheetStarting || sheetRunning} onClick={renderSheet}
+            title="Tiles frames from the shot into a contact sheet (reuses a current preview when available)">
+            <LayoutGrid size={14} aria-hidden="true" /> {sheetStarting || sheetRunning ? 'Rendering sheet…' : 'Contact sheet'}
+          </button>
+        </div>
+        {renders.sheets?.length > 0 && (
           <ul className="grid grid-cols-1 gap-1.5 @md:grid-cols-2">
             {renders.sheets.map((sheet) => (
               <li key={sheet.file}>
@@ -192,8 +194,8 @@ function BlenderShotDetail({ blender, shot, audioUrl, blocker, onTime, onOpenPre
               </li>
             ))}
           </ul>
-        </section>
-      )}
+        )}
+      </section>
     </section>
   );
 }
