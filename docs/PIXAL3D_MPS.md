@@ -114,21 +114,25 @@ for the four compatible upgrades, complete-lock audits and synthetic caller
 validation, which does not certify model inference or rendering.
 
 The Pixal-only plotting refresh retains NumPy 2.2.6 and all native renderer
-pins. See [Pixal Metal plotting-stack maintenance](PYTHON_RUNTIME_REFRESH.md#pixal-metal-plotting-stack-maintenance)
+pins. See [Pixal Metal plotting-stack maintenance](PYTHON_RUNTIME_REFRESH.md#twenty-eighth-slice-pixal-metal-plotting-maintenance-2026-11-12)
 for exact versions, complete-lock audit and CPU Agg/font/contour validation;
 these tests do not certify model inference or GLB rendering.
 
 The retained ImageIO FFmpeg backend refresh includes an ARM64 bundled FFmpeg
-7.1 → 9.0 transition. See [Pixal Metal retained video-export backend](PYTHON_RUNTIME_REFRESH.md#pixal-metal-retained-video-export-backend)
+7.1 → 9.0 transition. See [Pixal Metal retained video-export backend](PYTHON_RUNTIME_REFRESH.md#twenty-ninth-slice-pixal-metal-retained-video-export-migration-2026-11-12)
 for real synthetic export/decode checks, binary platform floors and the
 limits of package-advisory and retained-library coverage.
 
 The packaging-tool refresh preserves native source revisions and other build
 pins, validating real isolated/offline hash installs and synthetic native
 source/editable builds.
-See [3D Metal packaging and installer tooling](PYTHON_RUNTIME_REFRESH.md#3d-metal-packaging-and-installer-tooling)
+See [3D Metal packaging and installer tooling](PYTHON_RUNTIME_REFRESH.md#thirtieth-slice-3d-metal-packaging-and-installer-maintenance-2026-11-12)
 for exact scope, full-lock audits and the limits of installer-only coverage.
 
 The retained Kornia 0.9.0/Kornia-RS 0.2.0 refresh preserves OpenCV and native
-source pins. See [Kornia/native image helper evidence](PYTHON_RUNTIME_REFRESH.md#3d-metal-retained-kornia-and-native-image-helpers)
+source pins. See [Kornia/native image helper evidence](PYTHON_RUNTIME_REFRESH.md#thirty-fifth-slice-3d-metal-retained-kornia-and-image-helper-migration-2026-11-12)
 for synthetic CPU coverage and its application/runtime limits.
+
+The mesh-library refresh keeps native source/model pins fixed while updating
+Fast-Simplification, Trimesh and NetworkX. See [mesh/export compatibility evidence](PYTHON_RUNTIME_REFRESH.md#fortieth-slice-3d-metal-mesh-simplification-and-export-migration-2026-11-12)
+for actual synthetic caller tests and the excluded native baking/inference scope.
