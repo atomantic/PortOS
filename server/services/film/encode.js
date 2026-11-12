@@ -44,11 +44,27 @@ function blenderShotEncodeArgs({ pattern, startFrame, frameCount, fps, quality, 
   ];
 }
 
-const stackPair = (bottom, top, blend, out) => (
-  blend
-    ? `[${bottom}][${top}]blend=all_mode=${blend}:shortest=1[${out}]`
-    : `[${bottom}][${top}]overlay=format=auto:shortest=1[${out}]`
-);
+/**
+ * Lay `top` on `bottom`. `normal` (no blend) is an alpha overlay. A blend mode
+ * mixes the colors, then the result is overlaid with the layer's own alpha:
+ * ffmpeg's blend filter does not treat alpha as coverage, so a transparent
+ * pixel would otherwise recolor the plate. Labels may each be read once.
+ */
+const stackPair = (bottom, top, blend, out, serial) => {
+  if (!blend) return `[${bottom}][${top}]overlay=format=auto:shortest=1[${out}]`;
+  const base = `b${serial}`;
+  const again = `d${serial}`;
+  const color = `c${serial}`;
+  const mask = `k${serial}`;
+  return [
+    `[${bottom}]split[${base}][${again}]`,
+    `[${top}]split[${color}][${mask}]`,
+    `[${mask}]alphaextract[${mask}a]`,
+    `[${base}][${color}]blend=all_mode=${blend}:shortest=1[x${serial}]`,
+    `[x${serial}][${mask}a]alphamerge[y${serial}]`,
+    `[${again}][y${serial}]overlay=format=auto:shortest=1[${out}]`,
+  ].join(';');
+};
 
 /**
  * filter_complex that paints `layers` ({ place, blend }, in declaration order,
@@ -69,18 +85,18 @@ function blenderLayerFilter(layers, tagFilter = null) {
     for (const layer of unders.slice(1)) {
       const out = `u${serial}`;
       serial += 1;
-      parts.push(stackPair(current, `in${layer.input}`, layer.blend, out));
+      parts.push(stackPair(current, `in${layer.input}`, layer.blend, out, serial));
       current = out;
     }
     const plate = `plate${serial}`;
     serial += 1;
-    parts.push(stackPair(current, 'in0', null, plate));
+    parts.push(stackPair(current, 'in0', null, plate, serial));
     current = plate;
   }
   for (const layer of overs) {
     const out = `o${serial}`;
     serial += 1;
-    parts.push(stackPair(current, `in${layer.input}`, layer.blend, out));
+    parts.push(stackPair(current, `in${layer.input}`, layer.blend, out, serial));
     current = out;
   }
   parts.push(`[${current}]${[RANGE, tagFilter].filter(Boolean).join(',')}[out]`);

@@ -1,6 +1,6 @@
 /** Code shots and code layers render beside Blender shots, and a code-only film needs no Blender. */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -60,11 +60,14 @@ beforeEach(() => {
 
 const SETTINGS = { width: 320, height: 180, fps: 12, previewScale: 1, previewSamples: 1, finalSamples: 1, concurrency: 1 };
 
-function createOwner(durationSec) {
+function createOwner(durationSec, { cutEffects = null } = {}) {
   let record = normalizeBlenderRecord({ settings: SETTINGS });
   return {
     kind: 'standalone-test', id: 'example-film', workspaceDir: join(ROOT(), 'standalone', 'example-film'),
-    timeline: async () => ({ durationSec, fps: record.settings.fps }),
+    timeline: async () => ({
+      durationSec, fps: record.settings.fps,
+      ...(cutEffects ? { cutEffects: () => cutEffects } : {}),
+    }),
     song: async () => null,
     readRecord: async () => record,
     writeRecord: async (change) => { record = { ...record, ...change(record) }; return record; },
@@ -87,12 +90,18 @@ const mixedManifest = () => ({
   shots: [
     { id: 's010', start: 0, end: 0.5, deps: ['film.py'] },
     { id: 's020', start: 0.5, end: 1, renderer: 'code', entry: 'code/s020.js', deps: ['film.py'] },
-    { id: 's030', start: 1, end: 1.5, deps: ['film.py'], layers: [
+    { id: 's030', start: 1, end: 1.5, deps: ['film.py'], handles: { out: 1 / 12 }, layers: [
       { entry: 'code/under.js', place: 'under', blend: 'multiply' },
       { entry: 'code/fx.js', place: 'over', blend: 'screen' },
     ] },
+    { id: 's040', start: 1.5, end: 2, deps: ['film.py'], handles: { in: 1 / 12 } },
   ],
 });
+
+// One frame on each side of the cut between the layered shot and the shot after it.
+const LAYER_DISSOLVE = [{
+  style: 'dissolve', index: 2, cutFrame: 18, startFrame: 17, endFrame: 19, needOutFrames: 1, needInFrames: 1,
+}];
 
 function writeCode(owner) {
   const src = join(owner.workspaceDir, 'src', 'code');
@@ -135,7 +144,7 @@ describe('describeNeedsBlender', () => {
 });
 
 it('renders a Blender shot, a code shot and a code layer, then marks only the edited layer stale', async () => {
-  const owner = createOwner(1.5);
+  const owner = createOwner(2, { cutEffects: LAYER_DISSOLVE });
   runtime.blender.control.manifest = mixedManifest();
   runtime.blender.control.imports = ['film.py'];
   runtime.blender.control.imageFrames = true;
@@ -143,7 +152,7 @@ it('renders a Blender shot, a code shot and a code layer, then marks only the ed
   writeCode(owner);
   await settled(owner, [(await startBlenderSync(owner)).job.id]);
   const synced = await getBlenderState(owner);
-  expect(synced.manifest.shots.map((shot) => shot.renderer || 'blender')).toEqual(['blender', 'code', 'blender']);
+  expect(synced.manifest.shots.map((shot) => shot.renderer || 'blender')).toEqual(['blender', 'code', 'blender', 'blender']);
   expect(synced.manifest.shots[1]).toMatchObject({ entry: 'code/s020.js' });
   expect(synced.manifest.shots[2].layers).toEqual([
     { entry: 'code/under.js', place: 'under', blend: 'multiply' },
@@ -165,6 +174,18 @@ it('renders a Blender shot, a code shot and a code layer, then marks only the ed
   }
   await settled(owner, [(await startBlenderCut(owner, { quality: 'preview' })).job.id]);
   expect((await getBlenderState(owner)).cuts[0]).toMatchObject({ missing: [], stale: [] });
+  const cutGraph = runtime.ffmpeg.find((args) => args.some((arg) => String(arg).includes(join('s030', 'preview', 'handles', 'handle_out_%06d.png'))));
+  expect(cutGraph).toBeTruthy();
+
+  const layeredStill = join(owner.workspaceDir, 'renders', 's030', 'stills', 't000001250.png');
+  const stillOnce = readFileSync(layeredStill);
+  await settled(owner, (await enqueueBlenderRenders(owner, { quality: 'still', shotIds: ['s030'], times: [1.25] })).jobs.map((job) => job.id));
+  expect(readFileSync(layeredStill).equals(stillOnce)).toBe(true);
+  const codeStill = join(owner.workspaceDir, 'renders', 's020', 'stills', 't000000750.png');
+  const codeOnce = readFileSync(codeStill);
+  writeFileSync(codeStill, 'stale-pixels');
+  await settled(owner, (await enqueueBlenderRenders(owner, { quality: 'still', shotIds: ['s020'], times: [0.75] })).jobs.map((job) => job.id));
+  expect(readFileSync(codeStill).equals(codeOnce)).toBe(true);
 
   const renders = runtime.blender.control.jobs.filter((job) => job.mode === 'render');
   expect(renders.some((job) => job.shots.some((shot) => shot.id === 's020'))).toBe(false);
@@ -173,8 +194,14 @@ it('renders a Blender shot, a code shot and a code layer, then marks only the ed
   const graph = layered?.find((arg) => String(arg).includes('blend=all_mode=screen'));
   expect(String(graph)).toContain('[in1][in0]overlay=format=auto:shortest=1');
   expect(String(graph)).toContain('blend=all_mode=screen:shortest=1');
+  expect(String(graph)).toContain('alphaextract');
+  expect(String(graph)).toContain('alphamerge');
   expect(layered?.some((arg) => String(arg).includes(join('layers', '0')))).toBe(true);
   expect(layered?.some((arg) => String(arg).includes(join('layers', '1')))).toBe(true);
+  for (const quality of ['preview', 'final']) {
+    const handle = join(owner.workspaceDir, 'renders', 's030', quality, 'handles', 'handle_out_000018.png');
+    expect(statSync(handle).size, quality).toBeGreaterThan(0);
+  }
   expect(runtime.opened.length).toBeGreaterThan(0);
   expect(runtime.opened.every((call) => call.options.ownedBrowser === true && call.options.isolation === 'legacy' && call.options.mediaMode === 'code-only')).toBe(true);
 

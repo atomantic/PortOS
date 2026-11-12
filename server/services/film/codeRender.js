@@ -3,8 +3,8 @@
  *
  * The module runs in the composition browser sandbox: no host access and no
  * network. Pixels come back as raw RGBA and are encoded here with fixed
- * settings, so the same song time writes the same file. A frame that is
- * already on disk is left in place (a resumed render).
+ * settings, so the same song time writes the same file. A resumed preview
+ * or final leaves an existing frame in place. A still always rewrites it.
  */
 import { copyFile, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -66,6 +66,7 @@ async function stageThree(stage) {
  */
 export async function renderFilmCodeFrames({
   owner, jobId, entry, space = 'canvas', song, width, height, alpha = false, paths, frames, signal, onFrame = () => {},
+  reuseExisting = true,
 }) {
   const stage = blenderScratchDir(owner, `code-${jobId}`);
   await rm(stage, { recursive: true, force: true });
@@ -104,7 +105,7 @@ export async function renderFilmCodeFrames({
     for (const [index, frame] of frames.entries()) {
       signal?.throwIfAborted();
       const started = Date.now();
-      const existing = await lstat(frame.file).catch(() => null);
+      const existing = reuseExisting ? await lstat(frame.file).catch(() => null) : null;
       if (existing?.isFile() && existing.size > 0) {
         onFrame({ frame: frame.frame, index: index + 1, total: frames.length, skipped: true, sec: 0 });
         continue;

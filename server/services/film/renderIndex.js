@@ -29,6 +29,10 @@ export const blenderShotPoster = (owner, shotId, quality) => join(blenderShotDir
 export const blenderFramesDir = (owner, shotId, quality) => join(blenderShotDir(owner, shotId, quality), 'frames');
 /** Code layers of one shot: `layers/<index>/` beside `frames/`, PNG with alpha. */
 export const blenderLayersRoot = (owner, shotId, quality) => join(blenderShotDir(owner, shotId, quality), 'layers');
+/** Handle frames with code layers already painted on, so a cut reads the same picture as the shot. */
+export const blenderCompositedHandlesDir = (owner, shotId, quality) => join(blenderShotDir(owner, shotId, quality), 'handles');
+export const blenderCompositedHandleName = (side, frame) => `handle_${side}_${String(frame).padStart(6, '0')}.png`;
+export const blenderCompositedHandlePattern = (side) => `handle_${side}_%06d.png`;
 export const blenderLayerFramesDir = (owner, shotId, quality, index) => join(blenderLayersRoot(owner, shotId, quality), String(index));
 export const blenderFrameName = (frame, quality) => `frame_${String(frame).padStart(6, '0')}.${frameExtension(quality)}`;
 export const blenderHandleFrameName = (side, frame, quality) => `handle_${side}_${String(frame).padStart(6, '0')}.${frameExtension(quality)}`;

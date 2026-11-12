@@ -18,7 +18,7 @@ import { dirname, join } from 'node:path';
 import { MUSIC_VIDEO_BLENDER_SHOT_ID } from '../../lib/musicVideoBlender.js';
 import { assertInsideWithoutSymlinks, blenderRefusal, blenderRendersDir, blenderSrcDir, blenderWorkspaceDir, readBlenderJson } from './workspace.js';
 import { readBlenderManifest } from './manifest.js';
-import { BLENDER_RENDER_QUALITIES, blenderFramesDir, blenderLayersRoot, blenderRenderFile, blenderShotVideo } from './renderIndex.js';
+import { BLENDER_RENDER_QUALITIES, blenderCompositedHandlesDir, blenderFramesDir, blenderLayersRoot, blenderRenderFile, blenderShotVideo } from './renderIndex.js';
 import { activeBlenderJobs } from './jobs.js';
 import { announceBlenderState } from './record.js';
 import { withBlenderRenderAdmission } from './queue.js';
@@ -93,8 +93,9 @@ export async function getBlenderDiskUsage(owner) {
     for (const quality of BLENDER_RENDER_QUALITIES) {
       const held = await measure(blenderFramesDir(owner, shotId, quality));
       const layers = await measure(blenderLayersRoot(owner, shotId, quality));
-      frames.bytes += held.bytes + layers.bytes;
-      frames.files += held.files + layers.files;
+      const handles = await measure(blenderCompositedHandlesDir(owner, shotId, quality));
+      frames.bytes += held.bytes + layers.bytes + handles.bytes;
+      frames.files += held.files + layers.files + handles.files;
     }
   }
   let clearableBytes = 0;
@@ -153,6 +154,9 @@ export async function dropBlenderFramesOutside(owner, shotIds) {
       const layers = blenderLayersRoot(owner, shotId, quality);
       await assertInsideWithoutSymlinks(blenderWorkspaceDir(owner), layers);
       await rm(layers, { recursive: true, force: true });
+      const handles = blenderCompositedHandlesDir(owner, shotId, quality);
+      await assertInsideWithoutSymlinks(blenderWorkspaceDir(owner), handles);
+      await rm(handles, { recursive: true, force: true });
     }
   }
 }

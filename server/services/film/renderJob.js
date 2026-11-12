@@ -22,7 +22,7 @@ import { compositeFilmStill, renderFilmCodeFrames } from './codeRender.js';
 import { updateBlenderJob } from './jobs.js';
 import { openBlenderJobLog } from './logs.js';
 import {
-  blenderFilmOptions, blenderFrameName, blenderFramePattern, blenderFramesDir, blenderHandleFrameName, blenderLayerFrameName,
+  blenderCompositedHandleName, blenderCompositedHandlesDir, blenderFilmOptions, blenderFrameName, blenderFramePattern, blenderFramesDir, blenderHandleFrameName, blenderLayerFrameName,
   blenderLayerFramePattern, blenderLayerFramesDir, blenderLayerHandleFrameName, blenderLayersRoot, blenderRenderFile, blenderShotPoster,
   blenderShotVideo, blenderStillThumbnail, blenderStillsFile, countBlenderFrames, countBlenderHandleFrames,
 } from './renderIndex.js';
@@ -66,6 +66,26 @@ const platePath = (owner, shotId, quality, fps, frame) => {
 
 const layerPath = (directory, frame) => join(directory, frame.side
   ? blenderLayerHandleFrameName(frame.side, frame.frame) : blenderLayerFrameName(frame.frame));
+
+/** Paint each layer's handle onto the plate handle. Cuts read these, not the bare plates. */
+async function compositeHandleFrames(owner, shot, fps, quality, layers) {
+  const handles = blenderShotHandleRanges(shot, fps);
+  const frames = [];
+  for (let frame = handles.in.startFrame; frame < handles.in.endFrame; frame += 1) frames.push({ frame, side: 'in' });
+  for (let frame = handles.out.startFrame; frame < handles.out.endFrame; frame += 1) frames.push({ frame, side: 'out' });
+  const dest = blenderCompositedHandlesDir(owner, shot.id, quality);
+  await rm(dest, { recursive: true, force: true });
+  if (!frames.length) return;
+  await mkdir(dest, { recursive: true });
+  for (const item of frames) {
+    const plate = join(blenderFramesDir(owner, shot.id, quality), blenderHandleFrameName(item.side, item.frame, quality));
+    const output = join(dest, blenderCompositedHandleName(item.side, item.frame));
+    await compositeFilmStill(plate, layers.map((layer, index) => ({
+      file: join(blenderLayerFramesDir(owner, shot.id, quality, index), blenderLayerHandleFrameName(item.side, item.frame)),
+      place: layer.place, blend: layer.blend,
+    })), output);
+  }
+}
 
 async function dropHandleFramesOutside(directory, handleRanges) {
   const names = await readdir(directory).catch(() => []);
@@ -179,6 +199,7 @@ export async function runBlenderShotRender(entry, { owner, shotId, quality, forc
       if (!resume) {
         await rm(framesDir, { recursive: true, force: true });
         await rm(layersRoot, { recursive: true, force: true });
+        await rm(blenderCompositedHandlesDir(owner, shotId, quality), { recursive: true, force: true });
       } else if (handlesChanged) {
         await dropHandleFramesOutside(framesDir, handleRanges);
         for (let index = 0; index < layers.length; index += 1) {
@@ -215,6 +236,9 @@ export async function runBlenderShotRender(entry, { owner, shotId, quality, forc
         await renderFilmCodeFrames({
           owner, jobId: entry.job.id, entry: codeEntry, space, song, width: frame.width, height: frame.height, alpha,
           paths: closures.get(codeEntry) || [codeEntry], frames: listed, signal, onFrame: noteFrame,
+          // A still is one picture of this request. Reusing the file would keep a
+          // plate from before this module, or a plate that already has its layers.
+          reuseExisting: quality !== 'still',
         });
       } catch (error) {
         if (signal.aborted || error?.name === 'AbortError') throw jobFailure('Canceled', { canceled: true });
@@ -280,6 +304,11 @@ export async function runBlenderShotRender(entry, { owner, shotId, quality, forc
     }
     const expected = (range.frameCount + handleRanges.in.frameCount + handleRanges.out.frameCount) * (1 + layers.length);
     if (missing > 0) throw jobFailure(`The shot finished, but ${missing} of ${expected} frames are missing`);
+    if (layers.length) {
+      await compositeHandleFrames(owner, shot, settings.fps, quality, layers).catch((error) => {
+        throw jobFailure(error.message || 'The code layer could not be composited');
+      });
+    }
     updateBlenderJob(entry, { status: 'encoding' });
     const framesDir = blenderFramesDir(owner, shotId, quality);
     await encodeBlenderShot({
