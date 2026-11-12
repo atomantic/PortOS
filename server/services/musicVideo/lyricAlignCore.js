@@ -903,31 +903,86 @@ export function parseWhisperDtwWords(data) {
 }
 
 /** Compare independent recognition with the sheet, preserving repeated occurrences. */
-export function compareLyricPlacement(cues, recognized) {
+export function compareLyricPlacement(cues, recognized, { timeBound } = {}) {
+  const candidate = timeBound
+    ? (recognized || []).filter(w => Number.isFinite(w.startSec) && Number.isFinite(w.endSec) && w.endSec > w.startSec
+        && w.endSec >= timeBound.startSec - 1e-6 && w.startSec <= timeBound.endSec + 1e-6)
+    : (recognized || []);
   const tokens = cues.flatMap(cue => lyricTokens(cue.text));
-  const matches = dpAlignWords(tokens, recognized);
-  const misplacedCues = [], uncheckedCues = [];
+  const matches = dpAlignWords(tokens, candidate);
+  const misplacedCues = [], uncheckedCues = [], checkedCues = [];
   let cursor = 0;
   for (const cue of cues) {
     const expected = lyricTokens(cue.text);
     const heard = matches.slice(cursor, cursor + expected.length);
     cursor += expected.length;
-    // Never offer interpolated guesses as checked times. Letter similarity
-    // tolerates a spelling slip, but every word must have acoustic evidence.
-    const complete = expected.length > 0 && cue.words?.length === expected.length && heard.every((word, i) => word
-      && wordRatio(expected[i].key, word.key) >= 0.8 && Number.isFinite(word.startSec) && word.endSec > word.startSec);
-    if (!complete) {
+
+    const isMatch = (expectedToken, word) => Boolean(
+      word
+      && wordRatio(expectedToken.key, word.key) >= 0.8
+      && Number.isFinite(word.startSec)
+      && word.endSec > word.startSec
+      && (!timeBound || (word.endSec >= timeBound.startSec - 1e-6 && word.startSec <= timeBound.endSec + 1e-6))
+    );
+
+    const matchedIndices = [];
+    for (let i = 0; i < expected.length; i++) {
+      if (isMatch(expected[i], heard[i])) matchedIndices.push(i);
+    }
+
+    const hasAllWords = expected.length > 0 && cue.words?.length === expected.length && matchedIndices.length === expected.length;
+    const hasAllButOne = expected.length >= 3 && cue.words?.length === expected.length && matchedIndices.length === expected.length - 1;
+
+    if (!hasAllWords && !hasAllButOne) {
       uncheckedCues.push({ cueId: cue.id, text: cue.text });
       continue;
     }
-    const offsets = heard.map((word, i) => word.startSec - cue.words[i].startSec).sort((a, b) => a - b);
-    const middle = Math.floor(offsets.length / 2);
-    const offsetSec = offsets.length % 2 ? offsets[middle] : (offsets[middle - 1] + offsets[middle]) / 2;
-    if (Math.abs(offsetSec) <= 0.3 + 1e-9) continue;
-    misplacedCues.push({ cueId: cue.id, text: cue.text, offsetSec: round3(offsetSec),
-      words: heard.map((word, index) => ({ w: expected[index].w, startSec: round3(word.startSec), endSec: round3(word.endSec), conf: 'matched' })) });
+
+    const matchedOffsets = matchedIndices.map(i => heard[i].startSec - cue.words[i].startSec).sort((a, b) => a - b);
+
+    if (hasAllButOne) {
+      const spread = matchedOffsets.at(-1) - matchedOffsets[0];
+      if (spread > 0.15 + 1e-9) {
+        uncheckedCues.push({ cueId: cue.id, text: cue.text });
+        continue;
+      }
+    }
+
+    const middle = Math.floor(matchedOffsets.length / 2);
+    const offsetSec = matchedOffsets.length % 2 ? matchedOffsets[middle] : (matchedOffsets[middle - 1] + matchedOffsets[middle]) / 2;
+    const isMisplaced = Math.abs(offsetSec) > 0.3 + 1e-9;
+
+    const words = expected.map((tok, index) => {
+      const word = heard[index];
+      if (isMatch(tok, word)) {
+        return { w: tok.w, startSec: round3(word.startSec), endSec: round3(word.endSec), conf: 'matched' };
+      }
+      const orig = cue.words[index];
+      const dur = Number.isFinite(orig?.endSec) && Number.isFinite(orig?.startSec) && orig.endSec > orig.startSec
+        ? orig.endSec - orig.startSec : 0.2;
+      const origStart = Number.isFinite(orig?.startSec) ? orig.startSec : (index > 0 ? heard[index - 1]?.endSec ?? 0 : 0);
+      const startSec = round3(origStart + offsetSec);
+      const endSec = round3(startSec + dur);
+      return { w: tok.w, startSec, endSec, conf: 'interpolated' };
+    });
+
+    const checkedEntry = {
+      cueId: cue.id,
+      text: cue.text,
+      offsetSec: round3(offsetSec),
+      matchedCount: matchedIndices.length,
+      expectedCount: expected.length,
+      complete: hasAllWords,
+      isMisplaced,
+      words,
+    };
+    checkedCues.push(checkedEntry);
+
+    if (isMisplaced) {
+      misplacedCues.push({ cueId: cue.id, text: cue.text, offsetSec: round3(offsetSec), words });
+    }
   }
-  return { misplacedCues, uncheckedCues };
+  return { misplacedCues, uncheckedCues, checkedCues };
 }
 
 /** Fill held-note tails only within a line and only across continuously voiced audio. */

@@ -4,8 +4,23 @@ import { decodeSourceToWav } from './lyricAlign.js';
 import { compareLyricPlacement, detectVocalPhrases, extendVoicedWordEnds, findSilentWords, mergeTranscripts, vocalPcm, wavDurationSec } from './lyricAlignCore.js';
 import { resolveVocalStemPath, vocalStemMasterChanged } from './vocalStem.js';
 import { resolveMasterAudioPath } from './render.js';
+import { lyricTokens } from './timedText.js';
 
 const validWords = cue => (cue.words || []).filter(word => Number.isFinite(word.startSec) && Number.isFinite(word.endSec) && word.endSec > word.startSec);
+
+function isBetterMatch(candidate, current) {
+  if (!candidate) return false;
+  if (!current) return true;
+  if (candidate.complete !== current.complete) return candidate.complete;
+  if (candidate.isMisplaced !== current.isMisplaced) return !candidate.isMisplaced;
+  if (Math.abs(candidate.offsetSec - current.offsetSec) > 0.05) {
+    return Math.abs(candidate.offsetSec) < Math.abs(current.offsetSec);
+  }
+  if (candidate.matchedCount !== current.matchedCount) {
+    return candidate.matchedCount > current.matchedCount;
+  }
+  return false;
+}
 
 export async function verifyPrerequisites(project, { resolveStem = resolveVocalStemPath, resolveMaster = resolveMasterAudioPath } = {}) {
   let stem;
@@ -71,6 +86,7 @@ export async function verifyLyricSheet(project, stemPath, { onProgress = () => {
   onProgress({ stage: 'loading-model' });
   const transcriber = await resolveTranscriber(download => onProgress({ stage: 'downloading-model', percent: download.percent }));
   try {
+    const cueRetries = new Map();
     for (const [index, window] of windows.entries()) {
       checkCancel();
       onProgress({ stage: 'checking-placement', current: index + 1, total: windows.length });
@@ -79,9 +95,64 @@ export async function verifyLyricSheet(project, stemPath, { onProgress = () => {
         prompt: window.cues.map(cue => cue.text).join('\n'), isCancelled, signal,
       });
       checkCancel();
-      const placement = compareLyricPlacement(window.cues, heard);
-      misplacedCues.push(...placement.misplacedCues.map(cue => ({ ...cue, words: extendVoicedWordEnds([cue], pcm)[0].words })));
-      uncheckedCues.push(...placement.uncheckedCues);
+      window.heard = heard;
+      const expectedWordCount = window.cues.reduce((sum, cue) => sum + lyricTokens(cue.text).length, 0);
+      if (heard.length < expectedWordCount / 2) {
+        for (const cue of window.cues) {
+          checkCancel();
+          const words = validWords(cue);
+          const retryHeard = await transcriber.transcribe(wav, {
+            startSec: Math.max(0, words[0].startSec - 1.5),
+            endSec: Math.min(wavDurationSec(wav), words.at(-1).endSec + 1.5),
+            prompt: cue.text, isCancelled, signal,
+          });
+          checkCancel();
+          cueRetries.set(cue.id, retryHeard);
+        }
+      }
+    }
+    for (const [windowIndex, window] of windows.entries()) {
+      const ownBound = { startSec: Math.max(0, window.startSec - 1.5), endSec: Math.min(wavDurationSec(wav), window.endSec + 1.5) };
+      const ownPlacement = compareLyricPlacement(window.cues, window.heard || [], { timeBound: ownBound });
+
+      for (const cue of window.cues) {
+        const words = validWords(cue);
+        const lineBound = { startSec: Math.max(0, words[0].startSec - 1.5), endSec: Math.min(wavDurationSec(wav), words.at(-1).endSec + 1.5) };
+        let bestMatch = ownPlacement.checkedCues?.find(c => c.cueId === cue.id) || null;
+
+        if (cueRetries.has(cue.id)) {
+          const retryPlacement = compareLyricPlacement([cue], cueRetries.get(cue.id), { timeBound: lineBound });
+          const retryMatch = retryPlacement.checkedCues?.[0] || null;
+          if (isBetterMatch(retryMatch, bestMatch)) bestMatch = retryMatch;
+        }
+
+        if (windowIndex > 0) {
+          const leftWindow = windows[windowIndex - 1];
+          if (leftWindow.endSec + 1.5 >= window.startSec - 1.5 && leftWindow.heard?.length) {
+            const leftPlacement = compareLyricPlacement([cue], leftWindow.heard, { timeBound: lineBound });
+            const leftMatch = leftPlacement.checkedCues?.[0] || null;
+            if (isBetterMatch(leftMatch, bestMatch)) bestMatch = leftMatch;
+          }
+        }
+
+        if (windowIndex < windows.length - 1) {
+          const rightWindow = windows[windowIndex + 1];
+          if (rightWindow.startSec - 1.5 <= window.endSec + 1.5 && rightWindow.heard?.length) {
+            const rightPlacement = compareLyricPlacement([cue], rightWindow.heard, { timeBound: lineBound });
+            const rightMatch = rightPlacement.checkedCues?.[0] || null;
+            if (isBetterMatch(rightMatch, bestMatch)) bestMatch = rightMatch;
+          }
+        }
+
+        if (bestMatch) {
+          if (bestMatch.isMisplaced) {
+            const [voiced] = extendVoicedWordEnds([{ ...bestMatch, words: bestMatch.words }], pcm);
+            misplacedCues.push({ cueId: cue.id, text: cue.text, offsetSec: bestMatch.offsetSec, words: voiced.words });
+          }
+        } else {
+          uncheckedCues.push({ cueId: cue.id, text: cue.text });
+        }
+      }
     }
     for (const [index, region] of regions.entries()) {
       checkCancel();

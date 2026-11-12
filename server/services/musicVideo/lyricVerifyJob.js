@@ -41,14 +41,14 @@ export async function startLyricVerify(projectId) {
         }
         if (job.controller.signal.aborted) broadcastSse(job, { type: 'canceled' });
         else {
-          const flagged = new Set([...(result.misplacedCues || []), ...(result.uncheckedCues || [])].map(cue => cue.cueId));
+          const misplaced = new Set((result.misplacedCues || []).map(cue => cue.cueId));
           let saved = fresh;
-          if (flagged.size) {
+          if (misplaced.size) {
             const outcome = await mutateProjectRecord(projectId, current => {
               if (fingerprint(current) !== fingerprint(project)) throw new ServerError('The song or lyrics changed during the check. Run it again.', { status: 409, code: 'LYRIC_VERIFY_CHANGED' });
               if (job.controller.signal.aborted) throw Object.assign(new Error('cancelled'), { canceled: true });
               return { project: { ...current,
-                lyricCues: current.lyricCues.map(cue => flagged.has(cue.id) ? { ...cue, suspect: true } : cue),
+                lyricCues: current.lyricCues.map(cue => misplaced.has(cue.id) ? { ...cue, suspect: true } : cue),
                 ...(current.productionReview?.draft ? { productionReview: { ...current.productionReview,
                   draft: { ...current.productionReview.draft, timingStatus: 'provisional' }, alignmentBasis: null } } : {}),
               } };
@@ -56,7 +56,7 @@ export async function startLyricVerify(projectId) {
             saved = outcome.project;
           }
           broadcastSse(job, { type: 'complete', result, project: saved });
-          if (flagged.size) musicVideoEvents.emit('dev-artifact', { projectId, artifactId: null, project: saved });
+          if (misplaced.size) musicVideoEvents.emit('dev-artifact', { projectId, artifactId: null, project: saved });
         }
       }
     } catch (err) {
