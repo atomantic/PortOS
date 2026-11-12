@@ -199,6 +199,35 @@ describe('BlenderFilmPanel: shots', () => {
     await act(async () => {});
   });
 
+  it('holds a bulk confirmation when a film refresh makes rendering unavailable', async () => {
+    const shots = Array.from({ length: 12 }, (_, index) => blenderShot(`s${String((index + 1) * 10).padStart(3, '0')}`, index, index + 1));
+    const state = blenderFilmState({ manifest: { title: 'Example Film', syncedAt: null, fps: 24, srcChanged: false, problems: [], shots }, renders: {}, notes: {} });
+    getMusicVideoBlender.mockResolvedValue(state);
+    await renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Render previews (12)' }));
+    expect(screen.getByRole('button', { name: 'Render' })).toBeEnabled();
+    getMusicVideoBlender.mockResolvedValue({ ...state, tool: { ...state.tool, ready: false } });
+    await push('music-video:blender', { projectId: 'mv-test', kind: 'state' });
+    expect(screen.queryByRole('button', { name: 'Render' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Render previews (12)' })).toBeDisabled();
+    expect(renderMusicVideoBlender).not.toHaveBeenCalled();
+  });
+
+  it('renders the paused first frame and clamps a near-end position to the shot last frame', async () => {
+    renderMusicVideoBlender.mockResolvedValue({ jobs: [] });
+    await renderPanel();
+    const video = detail('s010').querySelector('video');
+    Object.defineProperty(video, 'paused', { configurable: true, value: true });
+    video.currentTime = 0;
+    fireEvent.click(within(detail('s010')).getByRole('button', { name: 'Render still' }));
+    await waitFor(() => expect(renderMusicVideoBlender).toHaveBeenCalledWith('mv-test', { shotIds: ['s010'], quality: 'still', times: [0] }, { silent: true }));
+    await waitFor(() => expect(within(detail('s010')).getByRole('button', { name: 'Render still' })).toBeEnabled());
+    video.currentTime = 4.499;
+    fireEvent.click(within(detail('s010')).getByRole('button', { name: 'Render still' }));
+    expect(renderMusicVideoBlender).toHaveBeenLastCalledWith('mv-test', { shotIds: ['s010'], quality: 'still', times: [107 / 24] }, { silent: true });
+    await act(async () => {});
+  });
+
   it('saves a director note only on Save, sending only what changed', async () => {
     saveMusicVideoBlenderShotNote.mockResolvedValue({ ok: true });
     await renderPanel();
