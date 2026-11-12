@@ -1920,3 +1920,42 @@ MLX; these checks validate the actual plotting statements, not full module
 imports, model inference or native device execution. No production weights,
 providers, live instance data or audio/image generation quality are involved.
 All 176 focused installer, lock-profile and FLUX runtime tests pass.
+
+## Thirty-fourth-slice TRELLIS Metal retained Pybind11 maintenance (2026-11-12)
+
+TRELLIS alone advances **pybind11 3.0.2 → 3.1.0**. Pixal has no standalone
+pybind11 pin and is unchanged. Torch 2.15.0, NumPy 2.2.6, all other registry
+identities, source revisions and renderer/build settings remain frozen.
+This is a 3.0-to-3.1 maintenance update, not the earlier 2-to-3 ABI transition.
+Pybind11 3.1's new Python minimum is 3.9, below this profile's CPython 3.13 floor.
+
+Hash-verified immutable mtlmesh, mtlgemm and o-voxel build recipes obtain
+headers from Torch's include paths; mtlbvh and mtldiffrast likewise use
+Torch's include/library paths in their Setuptools extension recipes. Their bindings include `torch/extension.h`. No installed
+pybind11-header consumer was found in these retained native build callers.
+Frozen Torch already vendors pybind11 **3.1.0**, with identical header bytes
+and include order before and after this change. Updating the separately
+installed package therefore does not upgrade those renderer bindings.
+
+Native CPython 3.13.18 baseline/candidate tests install exact-hash 16-package
+subclosures. Real CMake modules built against each installed pybind11 release
+exercise NumPy 2.2.6 strided-buffer mutation, buffer shape/item size, wrong
+dtype and read-only rejection, and C++ exception translation. Strict-mode
+numeric conversion is intentionally different: 3.1 accepts integers for
+`float` and integers/floats for `complex`, matching upstream's PEP 484 change;
+3.0.2 rejects those same inputs. Separate native modules compiled using only
+Torch's actual include paths confirm its unchanged 3.1 behavior. CMake's
+Apple link command uses `-undefined dynamic_lookup` and produces an importable
+module. These are retained-library/build-boundary probes, not full upstream
+Metal extension builds, renderer execution or a claim of ABI certification.
+
+The complete TRELLIS lock was regenerated with verified uv 0.13.7 for
+CPython 3.13/macOS 26+ ARM64 and cutoff **2026-11-05T00:00:00Z**. All 55
+unrelated TRELLIS identities, markers and hash sets remain unchanged; Pixal
+is byte-identical. TRELLIS has 56 entries/364 hashes and Pixal 96/909;
+the union has 97 registry identities/913 hashes. All hashes match official,
+unyanked artifacts predating the cutoff. Fresh OSV/MAL checks cover those
+identities, 10 source-package identities and 13 source commits (120 queries),
+with no matches. Both complete profile installation dry plans and 171 focused
+installer/profile/adapter tests passed. No weights, live providers, GPU
+workload, complete runtime installation or production GLB claim is involved.
