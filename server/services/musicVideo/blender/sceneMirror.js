@@ -15,8 +15,9 @@ import { normalizeBlenderRecord } from '../../../lib/musicVideoBlender.js';
 import { normalizePreMusic } from '../../../lib/musicVideoColdOpen.js';
 import { addScenes, applySceneUpdate, removeScene } from '../projectsLogic.js';
 import { carryShotLocks } from '../productionReview.js';
+// The music-video manifest barrel imports owner, which imports this module.
+import { blenderLeadShots } from '../../film/manifest.js';
 import { blenderRefusal } from '../../film/workspace.js';
-import { blenderLeadShots } from './manifest.js';
 
 const clip = (text, max) => (typeof text === 'string' && text.trim() ? text.trim().slice(0, max) : null);
 
