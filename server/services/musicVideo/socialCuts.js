@@ -73,12 +73,18 @@ function scoreWindow(ctx, startSec, endSec) {
   return { score, reasons, label: inside[0]?.text?.slice(0, 80) || null };
 }
 
+// A Suno Hook plays a window of this length from where its cut opens, so the cut must open
+// at least this long before the song ends (at 0:00 for a shorter song).
+const SUNO_HOOK_WINDOW_SEC = 60;
+export const latestSunoHookStartSec = (durationSec) => Math.max(0, durationSec - SUNO_HOOK_WINDOW_SEC);
+
 /**
  * Up to `count` non-overlapping `{ startSec, endSec, score, label, reasons }`
  * windows, best first. Windows open just before a sung line and close just after
  * one; a song without lyric timing falls back to evenly spaced windows.
+ * `latestStartSec` keeps only windows that open by that song time.
  */
-export function suggestSocialCuts(project, { count = 3, minSec = 15, maxSec = 30 } = {}) {
+export function suggestSocialCuts(project, { count = 3, minSec = 15, maxSec = 30, latestStartSec = null } = {}) {
   const duration = songLength(project);
   if (!(duration > 0)) return [];
   const lo = Math.min(minSec, maxSec);
@@ -115,11 +121,32 @@ export function suggestSocialCuts(project, { count = 3, minSec = 15, maxSec = 30
     }
   }
   candidates.sort((a, b) => b.score - a.score || a.startSec - b.startSec);
+  // Compared as reported (rounded), so a window this returns is one the caller's own check accepts.
+  const opensInTime = (c) => finite(latestStartSec) == null || round3(c.startSec) <= latestStartSec;
   const picked = [];
-  for (const c of candidates) {
+  for (const c of candidates.filter(opensInTime)) {
     if (picked.length >= count) break;
     if (picked.some((p) => overlap(p.startSec, p.endSec, c.startSec, c.endSec) > 0)) continue;
     picked.push(c);
   }
   return picked.map((c) => ({ startSec: round3(c.startSec), endSec: round3(c.endSec), score: round3(c.score), label: c.label, reasons: c.reasons }));
+}
+
+const KIT_CUT_BOUNDS = Object.freeze({ minSec: 25, maxSec: 45 });
+
+/**
+ * The windows the publishing kit cuts: the song's best hook for the teaser and,
+ * normally, the vertical cut too. For a director who posts Suno Hooks
+ * (`sunoHook`) the vertical cut is the best hook a Hook can play, since the
+ * kit's vertical cut is the only one a fixed-frame render (a Blender film) has.
+ * With no such window the best hook stands.
+ */
+export function kitCutWindows(project, { sunoHook = false } = {}) {
+  const [teaser = null] = suggestSocialCuts(project, { count: 1, ...KIT_CUT_BOUNDS });
+  const duration = finite(project?.audioAnalysis?.durationSec);
+  if (!teaser || !sunoHook || !(duration > 0)) return { teaser, vertical: teaser };
+  const latestStartSec = latestSunoHookStartSec(duration);
+  if (teaser.startSec <= latestStartSec) return { teaser, vertical: teaser };
+  const [playable = teaser] = suggestSocialCuts(project, { count: 1, ...KIT_CUT_BOUNDS, latestStartSec });
+  return { teaser, vertical: playable };
 }

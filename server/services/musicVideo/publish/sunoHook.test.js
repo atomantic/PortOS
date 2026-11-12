@@ -33,10 +33,16 @@ describe('Suno Hook payload', () => {
   } });
   it('uses the actual fractional duration and restricts shorter songs to zero', () => {
     expect(buildPublishPayload('sunoHook', fitted(258.75, 198.75)).startSec).toBe(198.75);
-    expect(() => buildPublishPayload('sunoHook', fitted(258.75, 198.76))).toThrow(/earlier 9:16 cut/);
+    // The kit's own cut is replaced by a rebuild, which cuts a window a Hook can play.
+    expect(() => buildPublishPayload('sunoHook', fitted(258.75, 198.76))).toThrow(/Rebuild the publishing kit/);
     expect(buildPublishPayload('sunoHook', fitted(40, 0))).toMatchObject({ durationSec: 40, startSec: 0 });
-    expect(() => buildPublishPayload('sunoHook', fitted(40, 1))).toThrow(/earlier 9:16 cut/);
+    expect(() => buildPublishPayload('sunoHook', fitted(40, 1))).toThrow(/Rebuild the publishing kit/);
     expect(() => buildPublishPayload('sunoHook', fitted(null, 0))).toThrow(/Analyze the song audio/);
+  });
+  it('does not send the director to a rebuild that could not cut a playable window', () => {
+    // Under a minute only 0:00 can open a Hook, and this song's first sung line is later than that.
+    const late = { ...fitted(40, 5), lyricCues: [5, 12, 20, 30].map((startSec) => ({ text: 'example line', startSec, endSec: startSec + 4 })) };
+    expect(() => buildPublishPayload('sunoHook', late)).toThrow(/Choose or render an earlier 9:16 cut/);
   });
   it('rejects a late default cut but keeps an explicitly selected earlier video and audio together', () => {
     const p = project();
