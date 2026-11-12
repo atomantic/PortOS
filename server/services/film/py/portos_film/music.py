@@ -43,7 +43,17 @@ def bar_time(song, bar, beat=0.0):
     if not grid:
         return 0.0
     length = _bar_length(song)
-    return float(grid[0]) + (bar - 1) * length + beat * (length / 4.0)
+    index = int(bar) - 1
+    if index < 0:
+        start = float(grid[0]) + index * length
+        bar_length = length
+    elif index < len(grid):
+        start = float(grid[index])
+        bar_length = float(grid[index + 1] - grid[index]) if index + 1 < len(grid) else length
+    else:
+        start = float(grid[-1]) + (index - len(grid) + 1) * length
+        bar_length = length
+    return start + beat * (bar_length / 4.0)
 
 
 def bar_at(song, t):
@@ -52,9 +62,19 @@ def bar_at(song, t):
     if not grid:
         return 1, 0.0
     length = _bar_length(song)
-    offset = (float(t) - float(grid[0])) / length
-    bar_offset = int(offset // 1)
-    return bar_offset + 1, (offset - bar_offset) * 4.0
+    time = float(t)
+    if time < grid[0]:
+        offset = (time - float(grid[0])) / length
+        bar_offset = int(offset // 1)
+        return bar_offset + 1, (offset - bar_offset) * 4.0
+    if time >= grid[-1]:
+        offset = (time - float(grid[-1])) / length
+        bar_offset = int(offset // 1)
+        return len(grid) + bar_offset, (offset - bar_offset) * 4.0
+    index = bisect_right(grid, time) - 1
+    start = float(grid[index])
+    bar_length = float(grid[index + 1] - grid[index])
+    return index + 1, max(0.0, min(4.0, (time - start) / bar_length * 4.0))
 
 
 def phrases(song, bars=4):
@@ -65,14 +85,16 @@ def phrases(song, bars=4):
     duration = (song or {}).get("durationSec")
     if duration is None:
         duration = grid[-1] + _bar_length(song)
-    span = _bar_length(song) * bars
     result = []
+    span = int(bars)
+    start_bar = 1
     start = float(grid[0])
     while start < duration:
-        end = min(start + span, duration)
+        end = min(bar_time(song, start_bar + span), duration)
         if end > start:
             result.append((start, end))
-        start += span
+        start_bar += span
+        start = bar_time(song, start_bar)
     return result
 
 
@@ -174,9 +196,10 @@ def onsets(song, band="low", min_gap=0.12, sensitivity=1.5):
     mad = median([abs(value - center) for value in rises])
     threshold = center + max(0.0, sensitivity) * mad
     peaks = []
-    for index in range(1, len(rises) - 1):
-        value = rises[index]
-        if value > threshold and value >= rises[index - 1] and value > rises[index + 1]:
+    for index, value in enumerate(rises):
+        if (value > threshold
+                and (index == 0 or value >= rises[index - 1])
+                and (index + 1 == len(rises) or value > rises[index + 1])):
             peaks.append((value, (index + 1) / rate))
     selected = []
     for _, time in sorted(peaks, key=lambda peak: (-peak[0], peak[1])):

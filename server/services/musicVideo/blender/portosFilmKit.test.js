@@ -29,7 +29,7 @@ const song = {
 const instrumental = {
   durationSec: 18,
   analysis: {
-    beats: [1, 2, 3, 4, 5, 6, 7, 8, 9], downbeats: [1, 5, 9, 13],
+    beats: [1, 2, 3, 4, 5, 6, 7, 8, 9], downbeats: [1, 5, 9.2, 13],
     features: { envelopes: { fps: 10, low: [0, 0.1, 0.8, 0.8, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 1.6, 1.6] } },
   },
 };
@@ -42,6 +42,8 @@ song = json.loads(sys.argv[2])
 empty = {}
 r = lambda value: round(value, 4)
 instrumental = json.loads(sys.argv[3])
+edge_song = {"analysis": {"features": {"envelopes": {"fps": 10, "low": [0, 1, 1, 0, 0, 1]}}}}
+flat_song = {"analysis": {"features": {"envelopes": {"fps": 10, "low": [0, 0, 0, 0, 0]}}}}
 print(json.dumps({
     "beats_between": music.beats_between(song, 1.5, 3.5),
     "nearest": [music.nearest_beat(song, 2.4), music.nearest_beat(song, 2.6), music.nearest_beat(song, 99), music.nearest_beat(empty, 1)],
@@ -53,10 +55,12 @@ print(json.dumps({
     "words": [[w["w"], w["cue"]] for w in music.words_between(song, 12.5, 13.8)],
     "cue_words": [len(music.cue_words(song, 0)), music.cue_words(song, 1), music.cue_words(song, 9)],
     "instrumental": {
-        "bar_time": [music.bar_time(instrumental, 1), music.bar_time(instrumental, 2, 2), music.bar_time(instrumental, 0), music.bar_time(empty, 1)],
-        "bar_at": [list(map(r, music.bar_at(instrumental, 1))), list(map(r, music.bar_at(instrumental, 0))), list(map(r, music.bar_at(instrumental, 17))), list(music.bar_at(empty, 9))],
+        "bar_time": [music.bar_time(instrumental, 1), music.bar_time(instrumental, 2, 2), music.bar_time(instrumental, 0), music.bar_time(instrumental, 3), music.bar_time(empty, 1)],
+        "bar_at": [list(map(r, music.bar_at(instrumental, 1))), list(map(r, music.bar_at(instrumental, 0))), list(map(r, music.bar_at(instrumental, 9.2))), list(map(r, music.bar_at(instrumental, 17))), list(music.bar_at(empty, 9))],
         "phrases": music.phrases(instrumental, 2), "no_phrases": music.phrases(empty),
-        "onsets": list(map(r, music.onsets(instrumental, min_gap=0.12))), "no_onsets": music.onsets(empty),
+        "onsets": list(map(r, music.onsets(instrumental, min_gap=0.12))),
+        "edge_onsets": list(map(r, music.onsets(edge_song))),
+        "flat_onsets": music.onsets(flat_song), "no_onsets": music.onsets(empty),
         "swell": [r(music.swell(instrumental, "low", 0.3, window=0.2)), music.swell(empty, "low", 0)],
     },
     "clamp": [timing.clamp(1.5), timing.clamp(-2), timing.clamp(5, 0, 10)],
@@ -81,10 +85,10 @@ describe.skipIf(!python)('portos_film kit', () => {
       words: [['An', 0], ['example', 0]],
       cue_words: [3, [], []],
       instrumental: {
-        bar_time: [1, 7, -3, 0],
-        bar_at: [[1, 0], [0, 3], [5, 0], [1, 0]],
-        phrases: [[1, 9], [9, 17], [17, 18]], no_phrases: [],
-        onsets: [0.2, 0.4, 1], no_onsets: [], swell: [0.8333, 0],
+        bar_time: [1, 7.1, -3, 9.2, 0],
+        bar_at: [[1, 0], [0, 3], [3, 0], [5, 0], [1, 0]],
+        phrases: [[1, 9.2], [9.2, 17], [17, 18]], no_phrases: [],
+        onsets: [0.2, 0.4, 1], edge_onsets: [0.1, 0.5], flat_onsets: [], no_onsets: [], swell: [0.8333, 0],
       },
       clamp: [1, 0, 5],
       remap: [50, 100, 150, 0],
