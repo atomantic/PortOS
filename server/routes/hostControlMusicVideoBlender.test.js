@@ -4,6 +4,8 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
+vi.mock('../lib/paths.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-mv-blender-host-') }));
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-mv-blender-host-') }));
 afterAll(cleanupTempDataRoots);
@@ -42,19 +44,19 @@ vi.mock('../services/settings.js', () => ({
 }));
 vi.mock('../services/musicVideo/requireProject.js', () => ({ requireProject: vi.fn(async (id) => ({ id, scenes: [] })) }));
 vi.mock('../services/musicVideo/blender/state.js', async (importOriginal) => ({ ...await importOriginal(), getBlenderState: vi.fn(async () => ({ settings: {} })) }));
-vi.mock('../services/musicVideo/blender/song.js', async (importOriginal) => ({ ...await importOriginal(), writeBlenderSong: vi.fn(async () => ({})) }));
-vi.mock('../services/musicVideo/blender/sources.js', async (importOriginal) => ({
+vi.mock('../services/film/song.js', async (importOriginal) => ({ ...await importOriginal(), writeBlenderSong: vi.fn(async () => ({})) }));
+vi.mock('../services/film/sources.js', async (importOriginal) => ({
   ...await importOriginal(),
   scaffoldBlenderWorkspace: sink.scaffoldBlenderWorkspace, writeBlenderFile: sink.writeBlenderFile, deleteBlenderFile: sink.deleteBlenderFile,
 }));
-vi.mock('../services/musicVideo/blender/sync.js', async (importOriginal) => ({ ...await importOriginal(), startBlenderSync: sink.startBlenderSync }));
-vi.mock('../services/musicVideo/blender/usage.js', async (importOriginal) => ({ ...await importOriginal(), clearBlenderFrames: sink.clearBlenderFrames }));
-vi.mock('../services/musicVideo/blender/queue.js', async (importOriginal) => ({
+vi.mock('../services/film/sync.js', async (importOriginal) => ({ ...await importOriginal(), startBlenderSync: sink.startBlenderSync }));
+vi.mock('../services/film/usage.js', async (importOriginal) => ({ ...await importOriginal(), clearBlenderFrames: sink.clearBlenderFrames }));
+vi.mock('../services/film/queue.js', async (importOriginal) => ({
   ...await importOriginal(), enqueueBlenderRenders: sink.enqueueBlenderRenders, cancelBlenderProjectJobs: open.cancelBlenderProjectJobs,
 }));
 vi.mock('../services/musicVideo/blender/cuts.js', async (importOriginal) => ({ ...await importOriginal(), startBlenderCut: sink.startBlenderCut }));
-vi.mock('../services/musicVideo/blender/open.js', async (importOriginal) => ({ ...await importOriginal(), openBlenderShot: sink.openBlenderShot }));
-vi.mock('../services/musicVideo/blender/record.js', async (importOriginal) => ({
+vi.mock('../services/film/open.js', async (importOriginal) => ({ ...await importOriginal(), openBlenderShot: sink.openBlenderShot }));
+vi.mock('../services/film/record.js', async (importOriginal) => ({
   ...await importOriginal(), saveBlenderSettings: open.saveBlenderSettings, saveBlenderShotNote: open.saveBlenderShotNote,
 }));
 

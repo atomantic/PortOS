@@ -114,8 +114,14 @@ export function parseRouteModule(filePath, repoRoot = DEFAULT_REPO_ROOT) {
   const moduleKey = toModuleKey(relative(repoRoot, filePath));
   const routerIds = new Set([...source.matchAll(ROUTER_DECL_RE)].map((match) => match[1]));
   const imports = parseImports(source, filePath);
+  // A shared route factory can be instantiated with an owner adapter before mounting.
+  // Follow its imported source just like a router import; route-free factories add no paths.
+  for (const match of source.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)\s*\(/g)) {
+    const factory = imports.get(match[2]);
+    if (factory) imports.set(match[1], factory);
+  }
   const defaultExport = source.match(DEFAULT_EXPORT_RE)?.[1] || null;
-  const rootChild = resolveComposedRouter(source.match(RETURN_COMPOSED_ROUTER_RE)?.[1] || '', repoRoot);
+  const rootChild = imports.get(defaultExport) || resolveComposedRouter(source.match(RETURN_COMPOSED_ROUTER_RE)?.[1] || '', repoRoot);
   const routes = [];
   const mounts = [];
 

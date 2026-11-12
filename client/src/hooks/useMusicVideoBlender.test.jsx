@@ -17,6 +17,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   deleteMusicVideoBlenderFile: vi.fn(),
   syncMusicVideoBlender: vi.fn(),
   renderMusicVideoBlender: vi.fn(),
+  clearMusicVideoBlenderFrames: vi.fn(),
   cancelMusicVideoBlenderJob: vi.fn(),
   cancelMusicVideoBlenderJobs: vi.fn(),
   assembleMusicVideoBlenderCut: vi.fn(),

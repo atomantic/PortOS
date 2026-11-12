@@ -102,6 +102,16 @@ async function reconcileProjection(project, notify = true) {
 export async function getProductionAcceptance(projectId) {
   return queueAcceptance(projectId, async () => {
     const project = await reconcileProjection(await getProductionProject(projectId));
+    if (project.kind === 'film') {
+      const { codeAnimationFilmOwner } = await import('./films.js');
+      const { readBlenderFilm } = await import('../film/film.js');
+      const { blenderFinalsSignature } = await import('../film/renderIndex.js');
+      const film = await readBlenderFilm(await codeAnimationFilmOwner(projectId));
+      const accepted = project.acceptedOutput;
+      const fresh = accepted && !film.problems.length && film.shots.every(shot => film.renders[shot.id]?.final?.complete && !film.renders[shot.id].final.stale)
+        && accepted.signature === blenderFinalsSignature(film.shots, film.renders);
+      return { accepted: accepted ? { ...accepted, fresh: !!fresh } : null, runs: [], acceptanceProjection: null };
+    }
     const { items } = await store.pageProjectHistory(projectId, { limit: RECENT_RUNS, offset: 0 });
     const runs = items.filter(item => item.data?.kind === STAGE_RUN_KIND);
     const frozen = project.acceptedOutput ?? null;
@@ -126,7 +136,7 @@ export async function listAcceptedAssets(page) {
         projectId: id, title: project.title, videoId: accepted.videoId, filename: accepted.filename, path: accepted.path, format: accepted.format,
         sourceHash: accepted.sourceHash, audioHash: accepted.audioHash, renderHash: accepted.renderHash, acceptedAt: accepted.acceptedAt,
         acceptanceProjection: project.acceptanceProjection ?? null,
-        packageUrl: `/api/code-animation/projects/${id}/revisions/${accepted.revisionId}/package`,
+        packageUrl: project.kind === 'film' ? null : `/api/code-animation/projects/${id}/revisions/${accepted.revisionId}/package`,
       };
     }))),
     nextCursor,

@@ -32,7 +32,7 @@ export default function BlenderWorkspace({ blender, lead = null }) {
             <FolderPlus size={14} aria-hidden="true" /> {pending.workspace ? 'Creating…' : 'Create starter workspace'}
           </button>
         )}
-        <button type="button" className={buttonCls} onClick={() => copyToClipboard(blenderAgentBrief({ projectId, state }), 'Agent brief copied')}>
+        <button type="button" className={buttonCls} onClick={() => copyToClipboard(blenderAgentBrief({ projectId, state, standalone: !!state.timeline }), 'Agent brief copied')}>
           <ClipboardCopy size={14} aria-hidden="true" /> Copy agent brief
         </button>
       </div>

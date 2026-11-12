@@ -4,7 +4,7 @@ import { ArrowRight, Scissors, Square } from 'lucide-react';
 import Pill from '../../ui/Pill';
 import ProgressBar from '../../ui/ProgressBar';
 import { blenderFilmSummary, blenderJobPercent, isBlenderJobActive } from '../../../lib/musicVideoBlender.js';
-import { musicVideoBlenderMediaUrl } from '../../../services/apiMusicVideo.js';
+import { useFilmApi } from './FilmApiContext.jsx';
 import { formatCount, formatDateTime, formatDurationSec, timeAgo } from '../../../utils/formatters.js';
 import { buttonCls, noticeCls, primaryCls } from './blenderStyles.js';
 
@@ -50,7 +50,8 @@ function cutSummary(cut) {
  * is `?bcut=<id>`, the newest by default. The finished video itself is
  * rendered from the Final render step.
  */
-export default function BlenderCutTab({ blender, onGoToFinalRender }) {
+export default function BlenderCutTab({ blender, onGoToFinalRender, standalone = false }) {
+  const { musicVideoBlenderMediaUrl } = useFilmApi();
   const { state, pending } = blender;
   const [searchParams, setSearchParams] = useSearchParams();
   const [animatic, setAnimatic] = useState(false);
@@ -67,7 +68,7 @@ export default function BlenderCutTab({ blender, onGoToFinalRender }) {
     next.set(BLENDER_CUT_PARAM, id);
     return next;
   }, { replace: true });
-  const assemble = (quality) => blender.assembleCut({ quality, ...(animatic ? { animatic: true } : {}), ...(filmLook ? { filmLook: true } : {}) });
+  const assemble = (quality) => blender.assembleCut({ quality, ...(!standalone && animatic ? { animatic: true } : {}), ...(!standalone && filmLook ? { filmLook: true } : {}) });
 
   return (
     <div className="@container min-w-0 space-y-3">
@@ -82,14 +83,14 @@ export default function BlenderCutTab({ blender, onGoToFinalRender }) {
               </button>
             );
           })}
-          <label htmlFor="mv-blender-cut-animatic" className="inline-flex min-h-[44px] items-center gap-1.5 text-xs pointer-fine:sm:min-h-0">
+          {!standalone && <><label htmlFor="mv-blender-cut-animatic" className="inline-flex min-h-[44px] items-center gap-1.5 text-xs pointer-fine:sm:min-h-0">
             <input id="mv-blender-cut-animatic" type="checkbox" checked={animatic} onChange={(event) => setAnimatic(event.target.checked)} />
             Also publish as review draft
           </label>
           <label htmlFor="mv-blender-cut-filmlook" className="inline-flex min-h-[44px] items-center gap-1.5 text-xs pointer-fine:sm:min-h-0">
             <input id="mv-blender-cut-filmlook" type="checkbox" checked={filmLook} onChange={(event) => setFilmLook(event.target.checked)} />
             Apply film look (slower)
-          </label>
+          </label></>}
         </div>
         <p className="text-xs text-port-text-muted">
           {shots.length
@@ -149,7 +150,7 @@ export default function BlenderCutTab({ blender, onGoToFinalRender }) {
         <p className="text-xs text-port-text-muted">No cut yet. Film (live) in the preview already plays the shots against the song; assemble a cut for a file to review or publish as the review draft.</p>
       )}
 
-      <div className="flex min-w-0 flex-wrap items-center gap-2 border-t border-port-border pt-2 text-xs text-port-text-muted">
+      {!standalone && <div className="flex min-w-0 flex-wrap items-center gap-2 border-t border-port-border pt-2 text-xs text-port-text-muted">
         <span className="min-w-0">
           A cut is a work in progress. The finished video is rendered from Final render once every shot has a current final render
           ({formatCount(progress.finalReady)} of {formatCount(progress.total)} ready) and the storyboard is approved.
@@ -157,7 +158,8 @@ export default function BlenderCutTab({ blender, onGoToFinalRender }) {
         <button type="button" className={buttonCls} onClick={onGoToFinalRender}>
           Go to Final render <ArrowRight size={14} aria-hidden="true" />
         </button>
-      </div>
+      </div>}
+      {standalone && <p className="text-xs text-port-text-muted">Assemble final accepts the complete current film into Media History. Every shot must have a current final render covering the timeline.</p>}
     </div>
   );
 }

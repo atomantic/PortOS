@@ -780,6 +780,15 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // the file routes), the sync and shot renders that run it, the ffmpeg cut assembly,
   // opening a saved scene in the Blender application, and clearing rendered frames (hours of
   // GPU work deleted from the host). Settings, notes, cancels and reads stay open.
+  'POST /api/code-animation/films/:id/audio',
+  'POST /api/code-animation/films/:id/blender/workspace',
+  'PUT /api/code-animation/films/:id/blender/file',
+  'DELETE /api/code-animation/films/:id/blender/file',
+  'POST /api/code-animation/films/:id/blender/sync',
+  'POST /api/code-animation/films/:id/blender/render',
+  'POST /api/code-animation/films/:id/blender/cut',
+  'POST /api/code-animation/films/:id/blender/frames/clear',
+  'POST /api/code-animation/films/:id/blender/shots/:shotId/open',
   'POST /api/music-video/:id/blender/workspace',
   'PUT /api/music-video/:id/blender/file',
   'DELETE /api/music-video/:id/blender/file',

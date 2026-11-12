@@ -1223,3 +1223,23 @@ entries using their existing image prompts. It accepts no body and returns
 called. The normal instance authentication gate applies; missing universes return
 404. Migration 422 applies this repair once across live universes on upgrade;
 this endpoint remains available for explicit agent or operator repairs afterward.
+
+### Code Animation Film projects
+
+`POST /api/code-animation/films` creates a silent Production film from
+`{title,timeline:{durationSec,fps}}`; duration is 1–3,600 seconds.
+`PATCH /films/:id` updates title or a silent timeline, and `POST /films/:id/audio`
+explicitly attaches/analyzes `{source:'track',trackId}` or
+`{source:'upload',filename}`; `{source:'none'}` removes audio. No provider is used.
+Films appear in `GET /api/code-animation/projects` with `kind:'film'`; older
+package records read as `kind:'package'`.
+
+`/api/code-animation/films/:id/blender/*` uses the same owner-resolving router as
+Music Video: state, settings, workspace, source files, sync, usage, frame cleanup,
+render, cancel, cut, shot notes/open and media. Native-process/source-write routes
+retain host-control authorization and Blender's Trusted local requirement.
+A final cut requires complete current final shots and becomes the accepted
+Media History output. `animatic` and `filmLook` finishing are Music Video only.
+State adds `timeline`, `audio`, `audioUrl`, `acceptedOutput` and `finalStale`;
+job/state events use `code-animation:film`. See the
+[API-only walkthrough](CODE_ANIMATION_PACKAGES.md#film-projects).

@@ -1010,3 +1010,8 @@ function setupFableLoomRunForwarding() {
     broadcastToSet(fableLoomSubscribers, 'fableloom:production:run', run);
   });
 }
+
+/** Film jobs share the Production subscription, with their own event shape. */
+export function emitCodeAnimationFilm(projectId, event) {
+  broadcastToSet(codeAnimationSubscribers, 'code-animation:film', { projectId, ...event });
+}

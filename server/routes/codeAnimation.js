@@ -22,6 +22,7 @@
  */
 
 import { Router } from 'express';
+import codeAnimationFilms from './codeAnimationFilms.js';
 import { soundAssetSchema, stageProductionSoundAsset } from '../services/codeAnimation/soundAssets.js';
 import { ensureCodeAnimationSoundtrackTrack, startCodeAnimationSoundtrack } from '../services/codeAnimation/soundtrack.js';
 import { preflightProductionProject } from '../services/codeAnimation/preflight.js';
@@ -66,6 +67,7 @@ import {
 } from '../services/codeAnimation/prompt.js';
 
 const router = Router();
+router.use('/films', codeAnimationFilms);
 const L = CODE_ANIMATION_LIMITS;
 
 // An upload basename as POST /api/uploads returns it — never a path.

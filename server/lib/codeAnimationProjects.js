@@ -31,6 +31,7 @@ const referenceIntentSchema = z.object({
 }).strict();
 
 export const codeAnimationProjectSchema = z.object({
+  kind: z.literal('package').default('package'),
   manifest: codeAnimationManifestSchema,
   budgets: codeAnimationBudgetsSchema.prefault({}),
   localSettings: localSettingsSchema.prefault({}),

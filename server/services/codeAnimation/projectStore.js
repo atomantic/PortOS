@@ -9,7 +9,7 @@ const columns = `id, title, data, accepted_revision_id AS "acceptedRevisionId",
 const present = row => {
   if (!row) return null;
   const { data, ...metadata } = row;
-  return { ...data, ...metadata };
+  return { kind: 'package', ...data, ...metadata };
 };
 const missing = () => new ServerError('Production project not found', { status: 404, code: 'NOT_FOUND' });
 
@@ -55,7 +55,7 @@ function decodePageCursor(cursor) {
 
 export async function createProjectRecord(id, settings) {
   const { rows } = await query(`INSERT INTO code_animation_projects (id, title, data)
-    VALUES ($1, $2, $3) RETURNING ${columns}`, [id, settings.manifest.title, settings]);
+    VALUES ($1, $2, $3) RETURNING ${columns}`, [id, settings.manifest?.title ?? settings.title, settings]);
   return present(rows[0]);
 }
 
@@ -73,7 +73,7 @@ export async function pageProjectRecords({ limit, cursor }) {
     after = rows[0];
   }
   const [page, count] = await Promise.all([
-    query(`SELECT id, title, accepted_revision_id AS "acceptedRevisionId",
+    query(`SELECT id, title, COALESCE(data->>'kind', 'package') AS kind, accepted_revision_id AS "acceptedRevisionId",
       candidate_revision_id AS "candidateRevisionId", created_at AS "createdAt", created_at::text AS "cursorCreatedAt",
       updated_at AS "updatedAt" FROM code_animation_projects
       WHERE ($1::timestamptz IS NULL OR (created_at, id) < ($1::timestamptz, $2::text))
@@ -92,6 +92,7 @@ export async function patchProjectRecord(id, patch) {
     const { rows } = await client.query(`SELECT ${columns} FROM code_animation_projects WHERE id = $1 FOR UPDATE`, [id]);
     if (!rows[0]) throw missing();
     const stored = rows[0].data;
+    if (stored.kind === 'film') throw new ServerError('Use the Film project routes to change this project', { status: 409, code: 'FILM_PROJECT' });
     // Nested objects merge field by field: a partial PATCH names only the fields it changes.
     const settings = {
       ...stored, ...patch,
@@ -106,7 +107,7 @@ export async function patchProjectRecord(id, patch) {
       }
     }
     const result = await client.query(`UPDATE code_animation_projects SET title = $2, data = $3, updated_at = NOW()
-      WHERE id = $1 RETURNING ${columns}`, [id, settings.manifest.title, settings]);
+      WHERE id = $1 RETURNING ${columns}`, [id, settings.manifest?.title ?? settings.title, settings]);
     return present(result.rows[0]);
   });
 }
@@ -315,4 +316,17 @@ export async function pageAcceptedOutputs({ limit, cursor }) {
     items: page.map(({ cursorAcceptedAt: _cursorAcceptedAt, ...item }) => item),
     nextCursor: rows.length > limit ? Buffer.from(JSON.stringify([last.cursorAcceptedAt, last.id])).toString('base64url') : null,
   };
+}
+
+/** Film settings/notes and acceptance share one row lock so overlapping saves merge. */
+export async function mutateFilmProject(id, change) {
+  return withTransaction(async client => {
+    const { rows } = await client.query(`SELECT ${columns} FROM code_animation_projects WHERE id = $1 FOR UPDATE`, [id]);
+    const project = present(rows[0]);
+    if (!project || project.kind !== 'film') throw missing();
+    const data = { ...rows[0].data, ...await change(project) };
+    const saved = await client.query(`UPDATE code_animation_projects SET title = $2, data = $3, updated_at = NOW()
+      WHERE id = $1 RETURNING ${columns}`, [id, data.title, data]);
+    return present(saved.rows[0]);
+  });
 }

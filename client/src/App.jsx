@@ -636,6 +636,7 @@ export default function App() {
           <Route path="code-animation/drafts/:draftId" element={<CodeAnimation />} />
           <Route path="code-animation/:jobId" element={<CodeAnimation />} />
           <Route path="code-animation/production" element={<CodeAnimation />} />
+          <Route path="code-animation/production/films/:filmId/:tab?/:shotId?" element={<CodeAnimation />} />
           <Route path="code-animation/production/:projectId" element={<CodeAnimation />} />
           <Route path="mood-boards" element={<MoodBoards />} />
           <Route path="mood-boards/:id" element={<MoodBoardDetail />} />

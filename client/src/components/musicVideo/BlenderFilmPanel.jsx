@@ -1,3 +1,5 @@
+import * as musicVideoApi from '../../services/apiMusicVideo.js';
+import { FilmApiContext } from './blender/FilmApiContext.jsx';
 import { Activity, Clapperboard, FileCode, RefreshCw, Scissors, SlidersHorizontal } from 'lucide-react';
 import TabPills from '../ui/TabPills';
 import Pill from '../ui/Pill';
@@ -33,9 +35,11 @@ const TABS = [
  * the same state. The open tab is `?btab=`. Its state is `board.blender`
  * (`useMusicVideoBlender`), read once and pushed over the socket.
  */
-export default function BlenderFilmPanel({ board }) {
+export default function BlenderFilmPanel({ board, api, tab: selectedTab, onTabChange, shotId, onShotChange, standalone = false }) {
   const { project, blender, audioUrl } = board;
-  const [tab, setTab] = useDrawerTab(BLENDER_TAB_PARAM, 'shots', BLENDER_TAB_IDS);
+  const [queryTab, setQueryTab] = useDrawerTab(BLENDER_TAB_PARAM, 'shots', BLENDER_TAB_IDS);
+  const tab = selectedTab ?? queryTab;
+  const setTab = onTabChange ?? setQueryTab;
   if (!blender) return null;
   const { state, status, error } = blender;
   const activeJobs = (state?.jobs || []).filter(isBlenderJobActive).length;
@@ -44,7 +48,7 @@ export default function BlenderFilmPanel({ board }) {
   const tabs = TABS.map((entry) => (entry.id === 'jobs' ? { ...entry, count: activeJobs } : entry));
 
   return (
-    <section id={BLENDER_FILM_ANCHOR} tabIndex={-1} aria-label="Blender film" className="min-w-0 space-y-2 rounded-lg border border-port-border bg-port-card p-3 focus:outline-none">
+    <FilmApiContext.Provider value={api || musicVideoApi}><section id={BLENDER_FILM_ANCHOR} tabIndex={-1} aria-label="Blender film" className="min-w-0 space-y-2 rounded-lg border border-port-border bg-port-card p-3 focus:outline-none">
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
         <h3 className="text-sm font-medium">Blender film</h3>
         {/* The tabs share the title row: on a laptop every row above the shot player counts. */}
@@ -85,19 +89,19 @@ export default function BlenderFilmPanel({ board }) {
         <>
           <div role="tabpanel" aria-label={`Blender film: ${TABS.find((entry) => entry.id === tab)?.label}`} className="min-w-0">
             {tab === 'shots' && (
-              <BlenderShotsTab blender={blender} project={project} audioUrl={audioUrl} onOpenPreview={board.openPreview} onOpenTab={setTab} />
+              <BlenderShotsTab blender={blender} project={project} audioUrl={audioUrl} onOpenPreview={board.openPreview} onOpenTab={setTab} selectedShotId={shotId} onShotChange={onShotChange} />
             )}
-            {tab === 'cut' && <BlenderCutTab blender={blender} onGoToFinalRender={() => board.goToStage('review', 'mv-final-video')} />}
+            {tab === 'cut' && <BlenderCutTab standalone={standalone} blender={blender} onGoToFinalRender={() => board.goToStage('review', 'mv-final-video')} />}
             {tab === 'settings' && <BlenderSettingsTab blender={blender} />}
             {tab === 'files' && <BlenderFilesTab blender={blender} />}
             {tab === 'jobs' && <BlenderJobsTab blender={blender} />}
           </div>
-          <p className="flex min-w-0 flex-wrap items-center gap-x-2 border-t border-port-border pt-2 text-xs text-port-text-muted">
+          {!standalone && <p className="flex min-w-0 flex-wrap items-center gap-x-2 border-t border-port-border pt-2 text-xs text-port-text-muted">
             <span className="min-w-0">Grain, gate weave, halation and tape effects are applied when the final renders. To see them over the shots now, turn on Film look in the Film (live) preview — set them in Film look.</span>
             <button type="button" className={buttonCls} onClick={() => board.goToStage('produce', FILM_LOOK_ANCHOR)}>Open Film look</button>
-          </p>
+          </p>}
         </>
       )}
-    </section>
+    </section></FilmApiContext.Provider>
   );
 }

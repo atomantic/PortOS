@@ -273,7 +273,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'admitted',
     modules: [
       'services/codeAnimation/index.js', 'services/codeAnimation/projects.js', 'services/codeAnimation/stages.js',
-      'services/codeAnimation/sound.js', 'services/codeAnimation/blenderRender.js',
+      'services/codeAnimation/sound.js', 'services/codeAnimation/blenderRender.js', 'services/codeAnimation/filmCut.js',
     ],
   },
   {

@@ -309,6 +309,12 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/code-animation/:id/soundtrack/track', RECORDS],
   ['DELETE /api/code-animation/jobs/:id', REMOVES_RECORD],
   ['POST /api/code-animation/packages/validate', READ_OVER_POST],
+  ['POST /api/code-animation/films', RECORDS],
+  ['PATCH /api/code-animation/films/:id', RECORDS],
+  ['POST /api/code-animation/films/:id/blender/cancel', REDUCES_EXECUTION],
+  ['POST /api/code-animation/films/:id/blender/jobs/:jobId/cancel', REDUCES_EXECUTION],
+  ['PUT /api/code-animation/films/:id/blender/settings', 'Typed render settings and declared film-option values only; no executable, source or process dispatch, matching Music Video film settings.'],
+  ['PUT /api/code-animation/films/:id/blender/shots/:shotId/note', RECORDS],
   ['POST /api/code-animation/projects', RECORDS],
   ['PATCH /api/code-animation/projects/:id', RECORDS],
   ['POST /api/code-animation/projects/:id/accept', RECORDS],
@@ -1582,7 +1588,15 @@ const BLENDER_RECHECK = "its first read in a server process may re-run PortOS's 
 const PEER_RELAY_LISTENER = "Reads stored records through a whole-module instances.js import; the trace reaches probePeer and the socket relay's `peer:sync:event` listener, which trashes a video only when a delete frame from its paired owner arrives, never from this GET.";
 
 // 'METHOD /path' as scanRouteGraph spells it, like REVIEWED_OPEN_MUTATIONS.
+// Shared route factories inject a trusted owner resolver: these bindings only read
+// the owning record. Source/media/usage reads never invoke authored film code.
+const FILM_OWNER_READ = 'Shared film router resolves its trusted owner through the Code Animation PostgreSQL record or Music Video requireProject; then reads workspace source/media/usage only. The injected resolver is not request-selected and runs no authored source or render.';
 const REVIEWED_PROCESS_GETS = [
+  ['GET /api/code-animation/films/:id/blender', `Shared film state resolves a PostgreSQL owner and reads its workspace/render index; the existing fixed execution readiness recheck is the only process work: ${BLENDER_RECHECK}. No authored film code runs.`],
+  ...['/file', '/files', '/media', '/usage'].flatMap(suffix => [
+    [`GET /api/code-animation/films/:id/blender${suffix}`, FILM_OWNER_READ],
+    [`GET /api/music-video/:id/blender${suffix}`, FILM_OWNER_READ],
+  ]),
   ['GET /api/agent-context/manifest', TOOL_CATALOG],
   ['GET /api/agents/tools/feed', MOLTBOOK_READ],
   ['GET /api/agents/tools/post/:postId', MOLTBOOK_READ],

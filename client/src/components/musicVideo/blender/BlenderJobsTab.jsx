@@ -7,7 +7,7 @@ import { useTimeTick } from '../../../hooks/useTimeTick.js';
 import {
   BLENDER_JOB_PARAM, BLENDER_JOB_STATUS_LABELS, blenderJobPercent, blenderJobTitle, isBlenderJobActive, sortBlenderJobs,
 } from '../../../lib/musicVideoBlender.js';
-import { getMusicVideoBlenderLog } from '../../../services/apiMusicVideo.js';
+import { useFilmApi } from './FilmApiContext.jsx';
 import { formatCount, formatDurationMs } from '../../../utils/formatters.js';
 import { buttonCls } from './blenderStyles.js';
 
@@ -27,6 +27,7 @@ function JobElapsed({ job }) {
 
 // The job's log file, read through the media route. Re-read when the job changes state and on Refresh; never on a timer.
 function JobLog({ projectId, job }) {
+  const { getMusicVideoBlenderLog } = useFilmApi();
   const [log, setLog] = useState({ text: '', status: 'loading', error: null });
   const [reload, setReload] = useState(0);
   const { id, logFile, status } = job;

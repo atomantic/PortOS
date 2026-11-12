@@ -2,11 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import { useVisibilityEvent } from './useVisibilityEvent.js';
-import {
-  assembleMusicVideoBlenderCut, cancelMusicVideoBlenderJob, cancelMusicVideoBlenderJobs, clearMusicVideoBlenderFrames, createMusicVideoBlenderWorkspace,
-  deleteMusicVideoBlenderFile, getMusicVideoBlender, openMusicVideoBlenderShot, renderMusicVideoBlender,
-  saveMusicVideoBlenderFile, saveMusicVideoBlenderSettings, saveMusicVideoBlenderShotNote, syncMusicVideoBlender,
-} from '../services/apiMusicVideo.js';
+import * as musicVideoApi from '../services/apiMusicVideo.js';
 import {
   blenderOptionChanges, blenderOptionFields, blenderRenderBlocker, blenderShotRenderBlocker, changedBlenderSettings, mergeBlenderJob,
 } from '../lib/musicVideoBlender.js';
@@ -42,7 +38,12 @@ const without = (map, key) => {
  *
  * Actions resolve to `{ ok, answer, error }`; a failure is toasted here.
  */
-export default function useMusicVideoBlender(projectId, { enabled = true } = {}) {
+export default function useMusicVideoBlender(projectId, { enabled = true, api = musicVideoApi, socketChannel = 'music-video:blender' } = {}) {
+  const {
+  assembleMusicVideoBlenderCut, cancelMusicVideoBlenderJob, cancelMusicVideoBlenderJobs, clearMusicVideoBlenderFrames, createMusicVideoBlenderWorkspace,
+  deleteMusicVideoBlenderFile, getMusicVideoBlender, openMusicVideoBlenderShot, renderMusicVideoBlender,
+  saveMusicVideoBlenderFile, saveMusicVideoBlenderSettings, saveMusicVideoBlenderShotNote, syncMusicVideoBlender,
+} = api;
   const [state, setState] = useState(null);
   const [status, setStatus] = useState(enabled && projectId ? 'loading' : 'idle');
   const [error, setError] = useState(null);
@@ -152,14 +153,14 @@ export default function useMusicVideoBlender(projectId, { enabled = true } = {})
       setFilesRevision((revision) => revision + 1);
       read.current();
     };
-    socket.on('music-video:blender', onMessage);
+    socket.on(socketChannel, onMessage);
     socket.on('connect', onConnect);
     return () => {
       generation.current += 1;
-      socket.off('music-video:blender', onMessage);
+      socket.off(socketChannel, onMessage);
       socket.off('connect', onConnect);
     };
-  }, [projectId, enabled]);
+  }, [projectId, enabled, api, socketChannel]);
 
   // Scripts edited on disk raise no event: staleness is recomputed when the director comes back.
   useVisibilityEvent((visibility) => { if (visibility === 'visible') read.current(); });

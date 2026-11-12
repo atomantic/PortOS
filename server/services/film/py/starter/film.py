@@ -16,6 +16,8 @@ sets them under Film options in PortOS, and every call reads them. This film
 declares one, `palette`, which repaints the whole set.
 """
 
+import math
+
 from portos_film import music
 
 from kit import look, stage as stage_kit
@@ -43,7 +45,7 @@ current = {}
 def _cuts(song, fps):
     """Two cut times that split the song in three, moved onto a section start when one is near."""
     duration = float(song.get("durationSec") or 0.0)
-    end = int(duration * fps) / fps
+    end = math.ceil(duration * fps - 1e-9) / fps
     starts = [section["startSec"] for section in music.sections(song) if 1.0 < section.get("startSec", 0.0) < end - 1.0]
     cuts = []
     for third in (end / 3.0, end * 2.0 / 3.0):
