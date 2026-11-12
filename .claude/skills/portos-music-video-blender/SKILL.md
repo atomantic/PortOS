@@ -57,7 +57,10 @@ Rules that keep a film renderable:
   the compositor are yours.
 - Make every frame a pure function of song time. Renders stop and resume on any frame, and shots render in
   parallel processes, so nothing may depend on an earlier frame or shot. Bake or avoid live simulation.
-- Frame numbers are song frames: frame `f` is `f / fps` seconds into the song.
+- Frame numbers are song frames: frame `f` is `f / fps` seconds into the song. In `describe`, use
+  `ctx.frame_to_seconds(f)` for exact boundaries. The `start` and `end` passed to `build_shot` and `frame` are
+  exactly on that grid: the first frame's `t` equals `shot["start"]`, so `stepped(t - shot["start"], ctx.fps)`
+  starts on the first pose. The manifest keeps six-decimal times for display and stale comparisons.
 - Target Blender 5: the EEVEE engine id is `BLENDER_EEVEE` (use `ctx.engine`), `scene.node_tree` is gone (the
   compositor is `scene.compositing_node_group`), `Action.fcurves` is gone, and materials and worlds already have
   node trees. Build meshes with `bmesh` and `bpy.data`, not `bpy.ops`, where you can.
@@ -65,7 +68,8 @@ Rules that keep a film renderable:
   `envelope(song, "low"|"mid"|"high"|"rms", t)`, `cue_words`, `words_between`) and `portos_film.timing` (`ease`,
   `clamp`, `remap`, `stepped` for on-twos holds). They read `song.json`; do not parse audio yourself.
 - Lyrics are not drawn for you. Typography is part of the film.
-- PortOS hands `build_shot` and `frame` the shot exactly as `describe` returned it. Do not rely on a key you
+- PortOS hands `build_shot` and `frame` the shot from `describe`, with `start` and `end` restored to the exact
+  frame grid. Do not rely on a key you
   dropped from `describe`, and load anything a shot needs from `ctx` (the song above all) before any code path
   that looks a shot up without one: a process-wide cache primed without `ctx.song` has no lyrics. A film that
   renders in your own runner can still fail here, so render one still through PortOS before queueing a batch.

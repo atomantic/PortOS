@@ -234,6 +234,11 @@ def render_frame(scene, path):
 def render_shot(job, film, song, shot):
     quality = job["quality"]
     fps = job["fps"]
+    first = half_up(shot["start"] * fps)
+    end = half_up(shot["end"] * fps)
+    # Manifest times use six decimals for storage/comparison. Films need the
+    # same exact grid as frame / fps, or shot-relative stepped poses can lag.
+    shot = {**shot, "start": first / fps, "end": end / fps}
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scene = bpy.context.scene
     ctx = make_context(job, song, quality, shot)
@@ -245,8 +250,7 @@ def render_shot(job, film, song, shot):
     else:
         scene.eevee.taa_render_samples = ctx.samples
     apply_frame_settings(scene, ctx)
-    first = half_up(shot["start"] * fps)
-    last = half_up(shot["end"] * fps) - 1
+    last = end - 1
     scene.frame_start = first
     scene.frame_end = max(first, last)
     frames = job.get("frames") if quality == "still" else list(range(first, last + 1))
