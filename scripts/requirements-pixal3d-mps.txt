@@ -40,8 +40,8 @@ imageio-ffmpeg==0.8.1
 importlib-metadata==10.1.0
 jinja2==3.1.6
 kiwisolver==1.5.1
-kornia==0.8.2
-kornia-rs==0.1.14
+kornia==0.9.0
+kornia-rs==0.2.0
 markdown-it-py==4.2.0
 markupsafe==3.0.4
 matplotlib==3.11.2
