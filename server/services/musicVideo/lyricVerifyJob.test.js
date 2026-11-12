@@ -28,6 +28,17 @@ describe('placement verification persistence', () => {
     expect(state.project.lyricCues[0].suspect).toBe(true);
     expect(state.project.productionReview).toMatchObject({ draft: { timingStatus: 'provisional', timingNotes: 'Listened' }, alignmentBasis: null });
   });
+  it('leaves verified timing, alignmentBasis, and cues unchanged when check returns unchecked lines only', async () => {
+    expect(state.project.productionReview.draft.timingStatus).toBe('verified');
+    expect(state.project.productionReview.alignmentBasis).toBe('prior');
+    verifyLyricSheet.mockResolvedValue({ passed: false, misplacedCues: [], uncheckedCues: [{ cueId: 'c', text: 'bright morning' }] });
+    await startLyricVerify('p');
+    await vi.waitFor(() => expect(broadcastSse).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ type: 'complete' })));
+    expect(mutateProjectRecord).not.toHaveBeenCalled();
+    expect(state.project.lyricCues[0].suspect).toBeUndefined();
+    expect(state.project.productionReview.draft.timingStatus).toBe('verified');
+    expect(state.project.productionReview.alignmentBasis).toBe('prior');
+  });
   it('does not overwrite an edit made between the final read and the write lock', async () => {
     verifyLyricSheet.mockResolvedValue({ misplacedCues: [{ cueId: 'c' }] });
     mutateProjectRecord.mockImplementationOnce(async (_id, transform) => {

@@ -4,8 +4,23 @@ import { decodeSourceToWav } from './lyricAlign.js';
 import { compareLyricPlacement, detectVocalPhrases, extendVoicedWordEnds, findSilentWords, mergeTranscripts, vocalPcm, wavDurationSec } from './lyricAlignCore.js';
 import { resolveVocalStemPath, vocalStemMasterChanged } from './vocalStem.js';
 import { resolveMasterAudioPath } from './render.js';
+import { lyricTokens } from './timedText.js';
 
 const validWords = cue => (cue.words || []).filter(word => Number.isFinite(word.startSec) && Number.isFinite(word.endSec) && word.endSec > word.startSec);
+
+function isBetterMatch(candidate, current) {
+  if (!candidate) return false;
+  if (!current) return true;
+  if (candidate.complete !== current.complete) return candidate.complete;
+  if (candidate.isMisplaced !== current.isMisplaced) return !candidate.isMisplaced;
+  if (Math.abs(candidate.offsetSec - current.offsetSec) > 0.05) {
+    return Math.abs(candidate.offsetSec) < Math.abs(current.offsetSec);
+  }
+  if (candidate.matchedCount !== current.matchedCount) {
+    return candidate.matchedCount > current.matchedCount;
+  }
+  return false;
+}
 
 export async function verifyPrerequisites(project, { resolveStem = resolveVocalStemPath, resolveMaster = resolveMasterAudioPath } = {}) {
   let stem;
@@ -71,6 +86,7 @@ export async function verifyLyricSheet(project, stemPath, { onProgress = () => {
   onProgress({ stage: 'loading-model' });
   const transcriber = await resolveTranscriber(download => onProgress({ stage: 'downloading-model', percent: download.percent }));
   try {
+    const cueRetries = new Map();
     for (const [index, window] of windows.entries()) {
       checkCancel();
       onProgress({ stage: 'checking-placement', current: index + 1, total: windows.length });
@@ -79,9 +95,76 @@ export async function verifyLyricSheet(project, stemPath, { onProgress = () => {
         prompt: window.cues.map(cue => cue.text).join('\n'), isCancelled, signal,
       });
       checkCancel();
-      const placement = compareLyricPlacement(window.cues, heard);
-      misplacedCues.push(...placement.misplacedCues.map(cue => ({ ...cue, words: extendVoicedWordEnds([cue], pcm)[0].words })));
-      uncheckedCues.push(...placement.uncheckedCues);
+      for (const [wIdx, w] of heard.entries()) w._id = `win:${index}:${wIdx}`;
+      window.heard = heard;
+      const expectedWordCount = window.cues.reduce((sum, cue) => sum + lyricTokens(cue.text).length, 0);
+      if (heard.length < expectedWordCount / 2) {
+        for (const cue of window.cues) {
+          checkCancel();
+          const words = validWords(cue);
+          const retryHeard = await transcriber.transcribe(wav, {
+            startSec: Math.max(0, words[0].startSec - 1.5),
+            endSec: Math.min(wavDurationSec(wav), words.at(-1).endSec + 1.5),
+            prompt: cue.text, isCancelled, signal,
+          });
+          checkCancel();
+          for (const [rIdx, w] of retryHeard.entries()) w._id = `retry:${cue.id}:${rIdx}`;
+          cueRetries.set(cue.id, retryHeard);
+        }
+      }
+    }
+    const usedWordIds = new Set();
+    const claimedSpans = [];
+    const overlapsClaimed = match => (match?.words || []).some(w => w.conf === 'matched'
+      && claimedSpans.some(([start, end]) => w.startSec < end - 0.05 && w.endSec > start + 0.05));
+    const isAvailableMatch = match => Boolean(match && !overlapsClaimed(match) && !match.matchedWordIds.some(id => usedWordIds.has(id)));
+
+    for (const [windowIndex, window] of windows.entries()) {
+      const ownBound = { startSec: Math.max(0, window.startSec - 1.5), endSec: Math.min(wavDurationSec(wav), window.endSec + 1.5) };
+      const ownPlacement = compareLyricPlacement(window.cues, window.heard || [], { timeBound: ownBound, usedOccurrences: usedWordIds });
+      const leftWindow = windowIndex > 0 ? windows[windowIndex - 1] : null;
+      const leftPlacement = leftWindow && leftWindow.endSec + 1.5 >= window.startSec - 1.5 && leftWindow.heard?.length
+        ? compareLyricPlacement(window.cues, leftWindow.heard, { timeBound: ownBound, usedOccurrences: usedWordIds }) : null;
+      const rightWindow = windowIndex < windows.length - 1 ? windows[windowIndex + 1] : null;
+      const rightPlacement = rightWindow && rightWindow.startSec - 1.5 <= window.endSec + 1.5 && rightWindow.heard?.length
+        ? compareLyricPlacement(window.cues, rightWindow.heard, { timeBound: ownBound, usedOccurrences: usedWordIds }) : null;
+
+      for (const cue of window.cues) {
+        const words = validWords(cue);
+        const lineBound = { startSec: Math.max(0, words[0].startSec - 1.5), endSec: Math.min(wavDurationSec(wav), words.at(-1).endSec + 1.5) };
+        const ownMatch = ownPlacement.checkedCues?.find(c => c.cueId === cue.id) || null;
+        let bestMatch = isAvailableMatch(ownMatch) ? ownMatch : null;
+
+        if (cueRetries.has(cue.id)) {
+          const retryPlacement = compareLyricPlacement([cue], cueRetries.get(cue.id), { timeBound: lineBound, usedOccurrences: usedWordIds });
+          const retryMatch = retryPlacement.checkedCues?.[0] || null;
+          if (isAvailableMatch(retryMatch) && isBetterMatch(retryMatch, bestMatch)) bestMatch = retryMatch;
+        }
+
+        if (leftPlacement) {
+          const leftMatch = leftPlacement.checkedCues?.find(c => c.cueId === cue.id) || null;
+          if (isAvailableMatch(leftMatch) && isBetterMatch(leftMatch, bestMatch)) bestMatch = leftMatch;
+        }
+
+        if (rightPlacement) {
+          const rightMatch = rightPlacement.checkedCues?.find(c => c.cueId === cue.id) || null;
+          if (isAvailableMatch(rightMatch) && isBetterMatch(rightMatch, bestMatch)) bestMatch = rightMatch;
+        }
+
+        if (bestMatch) {
+          for (const id of bestMatch.matchedWordIds || []) usedWordIds.add(id);
+          const matchedTimes = (bestMatch.words || []).filter(w => w.conf === 'matched');
+          if (matchedTimes.length) {
+            claimedSpans.push([matchedTimes[0].startSec, matchedTimes.at(-1).endSec]);
+          }
+          if (bestMatch.isMisplaced) {
+            const [voiced] = extendVoicedWordEnds([{ ...bestMatch, words: bestMatch.words }], pcm);
+            misplacedCues.push({ cueId: cue.id, text: cue.text, offsetSec: bestMatch.offsetSec, words: voiced.words });
+          }
+        } else {
+          uncheckedCues.push({ cueId: cue.id, text: cue.text });
+        }
+      }
     }
     for (const [index, region] of regions.entries()) {
       checkCancel();
