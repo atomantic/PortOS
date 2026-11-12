@@ -131,17 +131,6 @@ export async function isMergedPrHead(sourceWorkspace, branchName, head) {
 }
 
 /**
- * The forge merge time for `branchName` at exactly `head`, or null. A merged
- * pull request with no readable merge time is null: directory age cannot stand
- * in for "this just merged." Callers that only need the boolean use
- * `isMergedPrHead`, which still answers true without a timestamp.
- */
-export async function readMergedPrDelivery(sourceWorkspace, branchName, head) {
-  const probe = await probeMergedHead(sourceWorkspace, branchName, head);
-  return probe && Number.isFinite(Date.parse(probe.mergedAt || '')) ? { mergedAt: probe.mergedAt } : null;
-}
-
-/**
  * Read ONE change request's state, by its forge-native number.
  *
  * The truth `probePrForBranch` cannot give a caller that already knows WHICH
