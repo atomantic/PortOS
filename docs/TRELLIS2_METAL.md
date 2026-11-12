@@ -164,3 +164,7 @@ for actual synthetic caller tests and the excluded native baking/inference scope
 The OpenCV 5 refresh preserves native source/model and NumPy/Torch pins.
 See [OpenCV image-operation evidence](PYTHON_RUNTIME_REFRESH.md#forty-first-slice-3d-metal-opencv-image-operation-migration-2026-11-12)
 for actual wheel ownership, synthetic caller tests and observed resize behavior.
+
+The retained ModernGL/Glcontext refresh does not change the Metal renderer.
+See [native OpenGL helper evidence](PYTHON_RUNTIME_REFRESH.md#forty-second-slice-3d-metal-retained-opengl-helper-migration-2026-11-12)
+for real offscreen tests and unchanged optional utils3d limitations.
