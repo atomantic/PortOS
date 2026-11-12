@@ -131,7 +131,13 @@ Helpers a film may import (`portos_film`, standard library only):
 
 - `portos_film.music`: `beats(song)`, `downbeats(song)`, `sections(song)`, `section_at(song, t)`,
   `nearest_beat(song, t)`, `beats_between(song, a, b)`, `beat_phase(song, t)`, `pulse(song, t)`,
-  `cue_words(song, cue_index)`, `words_between(song, a, b)`, `envelope(song, band, t)`.
+  `bar_time(song, bar, beat=0.0)`, `bar_at(song, t)`, `phrases(song, bars=4)`,
+  `onsets(song, band="low", min_gap=0.12, sensitivity=1.5)`, `swell(song, band, t, window=2.0)`,
+  `cue_words(song, cue_index)`, `words_between(song, a, b)`, `envelope(song, band, t)`. Bar numbers are 1-based
+  from the first downbeat; bar lookup and timing extrapolate using the median tracked bar length. Phrases span
+  consecutive groups of bars through song end. Onsets are spaced peaks in positive envelope changes; `swell`
+  averages the envelope around a time. Missing analysis returns empty lists, `(1, 0.0)` for `bar_at` and `0.0`
+  for scalar helpers.
 - `portos_film.timing`: `clamp`, `remap`, `ease`, `stepped(t, fps, on=2)` (hold poses on twos).
 
 ### Film options

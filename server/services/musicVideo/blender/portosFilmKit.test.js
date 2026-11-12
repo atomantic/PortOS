@@ -26,6 +26,14 @@ const song = {
   ] },
 };
 
+const instrumental = {
+  durationSec: 18,
+  analysis: {
+    beats: [1, 2, 3, 4, 5, 6, 7, 8, 9], downbeats: [1, 5, 9, 13],
+    features: { envelopes: { fps: 10, low: [0, 0.1, 0.8, 0.8, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 1.6, 1.6] } },
+  },
+};
+
 const SCRIPT = `
 import json, sys
 sys.path.insert(0, sys.argv[1])
@@ -33,6 +41,7 @@ from portos_film import music, timing
 song = json.loads(sys.argv[2])
 empty = {}
 r = lambda value: round(value, 4)
+instrumental = json.loads(sys.argv[3])
 print(json.dumps({
     "beats_between": music.beats_between(song, 1.5, 3.5),
     "nearest": [music.nearest_beat(song, 2.4), music.nearest_beat(song, 2.6), music.nearest_beat(song, 99), music.nearest_beat(empty, 1)],
@@ -43,6 +52,13 @@ print(json.dumps({
     "section": [music.section_at(song, 2.4)["label"], music.section_at(song, 2.5)["label"], music.section_at(song, 30)],
     "words": [[w["w"], w["cue"]] for w in music.words_between(song, 12.5, 13.8)],
     "cue_words": [len(music.cue_words(song, 0)), music.cue_words(song, 1), music.cue_words(song, 9)],
+    "instrumental": {
+        "bar_time": [music.bar_time(instrumental, 1), music.bar_time(instrumental, 2, 2), music.bar_time(instrumental, 0), music.bar_time(empty, 1)],
+        "bar_at": [list(map(r, music.bar_at(instrumental, 1))), list(map(r, music.bar_at(instrumental, 0))), list(map(r, music.bar_at(instrumental, 17))), list(music.bar_at(empty, 9))],
+        "phrases": music.phrases(instrumental, 2), "no_phrases": music.phrases(empty),
+        "onsets": list(map(r, music.onsets(instrumental, min_gap=0.12))), "no_onsets": music.onsets(empty),
+        "swell": [r(music.swell(instrumental, "low", 0.3, window=0.2)), music.swell(empty, "low", 0)],
+    },
     "clamp": [timing.clamp(1.5), timing.clamp(-2), timing.clamp(5, 0, 10)],
     "remap": [timing.remap(5, 0, 10, 0, 100), timing.remap(15, 0, 10, 0, 100), timing.remap(15, 0, 10, 0, 100, clamped=False), timing.remap(1, 3, 3)],
     "ease": [timing.ease(0.5), r(timing.ease(0.25, "in", 2)), r(timing.ease(0.25, "out", 2)), timing.ease(0.25, "linear"), timing.ease(2), r(timing.ease(0.5, "smooth"))],
@@ -52,7 +68,7 @@ print(json.dumps({
 
 describe.skipIf(!python)('portos_film kit', () => {
   it('reads beats, sections, envelopes and timed words off the song, and eases and steps time', () => {
-    const out = JSON.parse(execFileSync(python, ['-c', SCRIPT, PY_DIR, JSON.stringify(song)], { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS }));
+    const out = JSON.parse(execFileSync(python, ['-c', SCRIPT, PY_DIR, JSON.stringify(song), JSON.stringify(instrumental)], { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS }));
     expect(out).toEqual({
       beats_between: [2, 3],
       nearest: [2, 3, 4, null],
@@ -64,6 +80,12 @@ describe.skipIf(!python)('portos_film kit', () => {
       section: ['Intro', 'Chorus', null],
       words: [['An', 0], ['example', 0]],
       cue_words: [3, [], []],
+      instrumental: {
+        bar_time: [1, 7, -3, 0],
+        bar_at: [[1, 0], [0, 3], [5, 0], [1, 0]],
+        phrases: [[1, 9], [9, 17], [17, 18]], no_phrases: [],
+        onsets: [0.2, 0.4, 1], no_onsets: [], swell: [0.8333, 0],
+      },
       clamp: [1, 0, 5],
       remap: [50, 100, 150, 0],
       ease: [0.5, 0.0625, 0.4375, 0.25, 1, 0.5],

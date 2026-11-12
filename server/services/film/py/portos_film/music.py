@@ -6,6 +6,8 @@ the song. Standard library only, so a film can use these outside Blender too.
 """
 
 from bisect import bisect_left, bisect_right
+from math import ceil, floor
+from statistics import median
 
 
 def _analysis(song):
@@ -20,6 +22,58 @@ def beats(song):
 def downbeats(song):
     """Bar-start times in seconds."""
     return list(_analysis(song).get("downbeats") or [])
+
+
+def _bar_length(song):
+    grid = downbeats(song)
+    lengths = [b - a for a, b in zip(grid, grid[1:]) if b > a]
+    if lengths:
+        return float(median(lengths))
+    beat_grid = beats(song)
+    beat_lengths = [b - a for a, b in zip(beat_grid, beat_grid[1:]) if b > a]
+    if beat_lengths:
+        return float(median(beat_lengths) * 4)
+    bpm = (_analysis(song).get("bpm") or 0)
+    return 240.0 / bpm if bpm > 0 else 2.0
+
+
+def bar_time(song, bar, beat=0.0):
+    """Song time at a 1-based bar and beat offset, extrapolating the bar grid."""
+    grid = downbeats(song)
+    if not grid:
+        return 0.0
+    length = _bar_length(song)
+    return float(grid[0]) + (bar - 1) * length + beat * (length / 4.0)
+
+
+def bar_at(song, t):
+    """Return ``(1-based bar, beat offset)`` at ``t``; an absent grid is bar 1."""
+    grid = downbeats(song)
+    if not grid:
+        return 1, 0.0
+    length = _bar_length(song)
+    offset = (float(t) - float(grid[0])) / length
+    bar_offset = int(offset // 1)
+    return bar_offset + 1, (offset - bar_offset) * 4.0
+
+
+def phrases(song, bars=4):
+    """Consecutive ``bars``-bar time ranges from the first downbeat to song end."""
+    grid = downbeats(song)
+    if not grid or bars <= 0:
+        return []
+    duration = (song or {}).get("durationSec")
+    if duration is None:
+        duration = grid[-1] + _bar_length(song)
+    span = _bar_length(song) * bars
+    result = []
+    start = float(grid[0])
+    while start < duration:
+        end = min(start + span, duration)
+        if end > start:
+            result.append((start, end))
+        start += span
+    return result
 
 
 def sections(song):
@@ -106,3 +160,40 @@ def envelope(song, band, t):
         return float(values[-1])
     mix = position - index
     return float(values[index]) * (1.0 - mix) + float(values[index + 1]) * mix
+
+
+def onsets(song, band="low", min_gap=0.12, sensitivity=1.5):
+    """Times of spaced local peaks in positive envelope change above median + sensitivity*MAD."""
+    env = ((_analysis(song).get("features") or {}).get("envelopes") or {})
+    values = env.get(band) or []
+    rate = env.get("fps") or 0
+    if len(values) < 3 or rate <= 0:
+        return []
+    rises = [max(0.0, float(b) - float(a)) for a, b in zip(values, values[1:])]
+    center = median(rises)
+    mad = median([abs(value - center) for value in rises])
+    threshold = center + max(0.0, sensitivity) * mad
+    peaks = []
+    for index in range(1, len(rises) - 1):
+        value = rises[index]
+        if value > threshold and value >= rises[index - 1] and value > rises[index + 1]:
+            peaks.append((value, (index + 1) / rate))
+    selected = []
+    for _, time in sorted(peaks, key=lambda peak: (-peak[0], peak[1])):
+        if all(abs(time - kept) >= max(0.0, min_gap) for kept in selected):
+            selected.append(time)
+    return sorted(selected)
+
+
+def swell(song, band, t, window=2.0):
+    """Mean band envelope in a window centred on ``t``; empty analysis returns zero."""
+    env = ((_analysis(song).get("features") or {}).get("envelopes") or {})
+    values = env.get(band) or []
+    rate = env.get("fps") or 0
+    if not values or rate <= 0 or window <= 0:
+        return 0.0
+    first = max(0, ceil((t - window / 2) * rate - 1e-9))
+    last = min(len(values), floor((t + window / 2) * rate + 1e-9) + 1)
+    if first >= last:
+        return 0.0
+    return sum(float(value) for value in values[first:last]) / (last - first)
