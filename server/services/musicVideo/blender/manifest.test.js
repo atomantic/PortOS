@@ -29,6 +29,7 @@ describe('validateBlenderManifest', () => {
     expect(check([shot('s010', 0, 10 + 1 / 24)]).errors.join(' ')).toContain('after the song ends');
     // The film still tiles such a song: the fraction of a frame past its end is not a gap.
     expect(blenderFilmProblems({ fps: 24, shots: ending(3877).manifest.shots }, between)).toEqual([]);
+    expect(blenderFilmProblems({ fps: 24, shots: ending(3876).manifest.shots }, between).join(' ')).toContain('No shot covers the song after');
   });
 
   it('stores the options a film declares in their declared order, keeping only the fields each type has', () => {
@@ -105,9 +106,13 @@ describe('validateBlenderManifest', () => {
 describe('blenderFilmProblems', () => {
   const synced = (shots, fps = 24) => ({ fps, shots });
 
-  it('is empty for a film that tiles the song within a frame at each end', () => {
-    expect(blenderFilmProblems(synced([shot('s010', 1 / 24, 5), shot('s020', 5, 10 - 1 / 24)]), song)).toEqual([]);
+  it('requires every song frame, including a one-frame gap at either end', () => {
+    expect(blenderFilmProblems(synced([shot('s010', 0, 5), shot('s020', 5, 10)]), song)).toEqual([]);
+    expect(blenderFilmProblems(synced([shot('s010', 1 / 24, 10)]), song).join(' ')).toContain('first 0.042 s');
+    expect(blenderFilmProblems(synced([shot('s010', 0, 10 - 1 / 24)]), song).join(' ')).toContain('after 9.958 s');
+    expect(blenderFilmProblems(synced([shot('s010', 0, 9.96)], 25), { durationSec: 10, fps: 25 }).join(' ')).toContain('after 9.96 s');
   });
+
 
   it('names a late start, a gap between shots and an early end', () => {
     expect(blenderFilmProblems(synced([shot('s010', 1, 4), shot('s020', 5, 8)]), song)).toEqual([
