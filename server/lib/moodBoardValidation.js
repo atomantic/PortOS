@@ -78,9 +78,13 @@ export const moodBoardCreateSchema = z.object({
   description: z.string().max(5000).optional(),
 }).strict();
 
-// A composite is a new snapshot; originals remain independently editable.
+// Combining synthesizes a new style; analysis of missing source styles is opt-in.
 export const moodBoardCombineSchema = moodBoardCreateSchema.extend({
   boardIds: z.array(z.string().trim().min(1).max(128)).length(2),
+  providerId: z.string().trim().min(1).max(128),
+  model: z.string().trim().min(1).max(256).optional(),
+  effort: z.string().trim().max(64).optional(),
+  analyzeMissing: z.boolean().optional(),
 }).strict().refine(({ boardIds }) => boardIds[0] !== boardIds[1], {
   message: 'Choose two different mood boards', path: ['boardIds'],
 });

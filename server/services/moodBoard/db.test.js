@@ -96,13 +96,13 @@ describe.skipIf(!runDb)('mood board DB round-trip', () => {
     await db.addBoardItem(second.id, { type: 'image', mediaKey: 'image:composite-fixture.png' });
     await db.updateBoard(second.id, { style: { prompt: 'Neon light' } });
     const sources = await Promise.all([db.getBoard(first.id), db.getBoard(second.id)]);
-    const composite = await db.createCompositeBoard({ name: 'Ink neon' }, sources);
+    const composite = await db.createCompositeBoard({ name: 'Ink neon', style: { prompt: 'Luminous ink washes' } }, sources);
     created.push(composite.id);
     expect(await db.getBoard(composite.id)).toEqual(composite);
-    expect(composite.items).toHaveLength(2);
-    expect(composite.style.prompt).toBe('Ink:\nInk washes\n\nNeon:\nNeon light');
+    expect(composite.items).toHaveLength(0);
+    expect(composite.style.prompt).toBe('Luminous ink washes');
     await db.updateBoard(composite.id, { style: { prompt: 'Edited blend' } });
-    await db.removeBoardItem(composite.id, composite.items[0].id);
+
     expect(await Promise.all([db.getBoard(first.id), db.getBoard(second.id)])).toEqual(sources);
   });
 
