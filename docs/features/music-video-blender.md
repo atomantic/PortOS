@@ -81,6 +81,11 @@ Shot rules:
 - Shots are listed in time order and never overlap. `0 <= start < end <=` the song's length. A song rarely ends on
   a frame boundary, so the last shot may end on the boundary just after it (the picture then covers the whole song).
 - `start` and `end` fall on a frame boundary (within 0.001 s; they are snapped). At most 400 shots.
+  In `describe`, use `ctx.frame_to_seconds(f)` to express exact boundaries. PortOS passes `build_shot` and `frame`
+  a shot whose `start` and `end` are exactly `frame / fps`, using the same grid as `ctx.frame_to_seconds` and
+  each frame's song time `t`. The first frame's `t` equals `shot["start"]` exactly, so shot-relative holds such as
+  `stepped(t - shot["start"], ctx.fps)` start on the first pose. `manifest.json` still stores six-decimal times
+  for display and comparison; restoring exact times for the film does not mark existing renders stale.
 - `summary`, `action`, `staging`, `camera` and `transition` are optional text, up to 4,000 characters each.
 - `deps` lists the files and folders under `src/` the shot is built from. Without it, the shot depends on all of `src/`.
 

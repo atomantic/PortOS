@@ -97,3 +97,93 @@ print(json.dumps(workspace_imports(root)))
       .toEqual(['a.py', 'cached.py', 'shots/z.py']);
   }, PY_TEST_TIMEOUT_MS);
 });
+
+// Exercise describe -> saved manifest -> render with the real driver and film
+// callbacks. Only Blender's scene/render API is doubled; no Blender install is needed.
+describe.skipIf(!python)('Blender driver frame grid', () => {
+  it('restores exact film-facing boundaries without changing stored manifest times', () => {
+    const script = `
+import contextlib, io, json, os, runpy, sys, tempfile
+from types import SimpleNamespace
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+driver_path = os.path.join(sys.argv[1], "portos_blender_driver.py")
+scene = SimpleNamespace(
+    render=SimpleNamespace(image_settings=SimpleNamespace()),
+    eevee=SimpleNamespace(), frame_set=lambda frame: None,
+)
+def render(**kwargs):
+    with open(scene.render.filepath, "wb") as handle:
+        handle.write(b"frame")
+sys.modules["bpy"] = SimpleNamespace(
+    app=SimpleNamespace(version=(5, 0, 0)), context=SimpleNamespace(scene=scene),
+    ops=SimpleNamespace(wm=SimpleNamespace(read_factory_settings=lambda **kwargs: None),
+                        render=SimpleNamespace(render=render)),
+)
+film_source = """
+from portos_film.timing import stepped
+built = 0
+posed = 0
+def describe(ctx):
+    return {"shots": [
+        {"id": "s%d" % residue,
+         "start": ctx.frame_to_seconds(29 * ctx.fps + residue * (ctx.fps + 1)),
+         "end": ctx.frame_to_seconds(29 * ctx.fps + residue * (ctx.fps + 1) + 4)}
+        for residue in range(ctx.fps)
+    ]}
+def build_shot(ctx, shot):
+    global built
+    first = ctx.seconds_to_frame(shot["start"])
+    end = ctx.seconds_to_frame(shot["end"])
+    assert ctx.shot is shot
+    assert shot["start"] == ctx.frame_to_seconds(first), (ctx.fps, first, shot["start"])
+    assert shot["end"] == ctx.frame_to_seconds(end)
+    built += 1
+def frame(ctx, shot, t, frame):
+    global posed
+    first = ctx.seconds_to_frame(shot["start"])
+    assert t >= shot["start"]
+    assert stepped(t - shot["start"], ctx.fps) == stepped((frame - first) / ctx.fps, ctx.fps)
+    if frame == first:
+        assert t == shot["start"]
+        assert stepped(t - shot["start"], ctx.fps) == 0
+    posed += 1
+"""
+with tempfile.TemporaryDirectory() as root:
+    with open(os.path.join(root, "film.py"), "w", encoding="utf-8") as handle:
+        handle.write(film_source)
+    with open(os.path.join(root, "song.json"), "w", encoding="utf-8") as handle:
+        json.dump({}, handle)
+    for fps in (24, 30):
+        job = {"mode": "describe", "fps": fps, "width": 640, "height": 360,
+               "src": root, "workspace": root, "out": os.path.join(root, "renders")}
+        job_path = os.path.join(root, "job.json")
+        with open(job_path, "w", encoding="utf-8") as handle:
+            json.dump(job, handle)
+        sys.argv = [driver_path, "--", job_path]
+        with contextlib.redirect_stdout(io.StringIO()):
+            driver = runpy.run_path(driver_path)
+        manifest_path = os.path.join(root, "manifest.json")
+        with open(manifest_path, "rb") as handle:
+            stored = handle.read()
+        shots = json.loads(stored)["shots"]
+        for residue, shot in enumerate(shots):
+            first = 29 * fps + residue * (fps + 1)
+            assert shot["start"] == round(first / fps, 6)
+            assert shot["end"] == round((first + 4) / fps, 6)
+        original = json.dumps(shots)
+        film = sys.modules["film"]
+        job["quality"] = "preview"
+        with contextlib.redirect_stdout(io.StringIO()):
+            for shot in shots:
+                driver["render_shot"](job, film, {}, shot)
+        assert film.built == fps
+        assert film.posed == fps * 4
+        assert json.dumps(shots) == original
+        with open(manifest_path, "rb") as handle:
+            assert handle.read() == stored
+print("ok")
+`;
+    expect(execFileSync(python, ['-c', script, PY_DIR], { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS }).trim()).toBe('ok');
+  }, PY_TEST_TIMEOUT_MS);
+});
