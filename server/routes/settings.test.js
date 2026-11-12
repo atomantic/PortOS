@@ -189,6 +189,14 @@ describe('Settings routes — configured reviewer pins', () => {
         expect(text).toContain('agy --model gemini-4-hydrogen --effort xhigh');
         expect(buildReviewWithArgs(options.reviewers, options)).toContain('antigravity[gemini-4-hydrogen]~effort=xhigh');
       }
+      // A stale explicit tier must not erase a valid baked-in legacy selection.
+      reviewerProviders.current[0].models = ['gemini-4-hydrogen-low'];
+      const legacy = await resolveReviewLoopOptions({
+        reviewerModels: { antigravity: 'gemini-4-hydrogen-low' }, reviewerEfforts: { antigravity: 'xhigh' },
+      });
+      expect(legacy.reviewerEfforts).toEqual({ antigravity: 'low' });
+      expect(buildReviewLoopFollowUpSection(reviewPolicyToLoopMetadata({ ...legacy, forgeReviewerUsernames: [] })))
+        .toContain('agy --model gemini-4-hydrogen --effort low');
       for (const [model, models, effort] of [
         ['', catalog, 'xhigh'], // CLI owns the default: keep the conservative ladder.
         ['unknown-model', [], 'xhigh'],

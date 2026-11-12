@@ -1058,7 +1058,7 @@ export function pairReviewerModelsAndEfforts(reviewerModels, reviewerEfforts, ca
   const { base, effort } = splitAntigravityModel(models.antigravity);
   if (effort && base) {
     models.antigravity = base;
-    if (!normalizeStoredReviewerEffort(efforts.antigravity, 'antigravity')) efforts.antigravity = effort;
+    if (!normalizeReviewerEffort(efforts.antigravity, 'antigravity', base, catalogs.antigravity)) efforts.antigravity = effort;
   }
   return { reviewerModels: models, reviewerEfforts: normalizeReviewerEfforts(efforts, models, catalogs) || {} };
 }
