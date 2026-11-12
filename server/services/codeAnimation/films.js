@@ -33,7 +33,8 @@ export async function createFilmProject(input) {
 
 export async function patchFilmProject(id, input) {
   const patch = validateRequest(patchFilmSchema, input);
-  const project = await store.mutateFilmProject(id, current => {
+  const mutate = patch.timeline ? mutateFilmWithSong : store.mutateFilmProject;
+  const project = await mutate(id, current => {
     if (patch.timeline && current.film.audio?.filename) throw blenderRefusal('Remove the soundtrack before changing the timeline; audio sets its length', 'FILM_AUDIO_TIMELINE', 409);
     return { ...(patch.title ? { title: patch.title } : {}), film: { ...current.film,
       ...(patch.timeline ? { timeline: patch.timeline, settings: { ...current.film.settings, fps: patch.timeline.fps } } : {}) } };
@@ -67,27 +68,10 @@ export async function attachFilmAudio(id, input) {
       }
       audio = { filename, source: attachment.source };
     }
-    const owner = await codeAnimationFilmOwner(id);
-    const { writeBlenderSong } = await import('../film/song.js');
-    const { assertInsideWithoutSymlinks } = await import('../film/workspace.js');
-    await assertInsideWithoutSymlinks(owner.workspaceDir, join(owner.workspaceDir, 'song.json'));
-    let wroteSong = false;
-    let project;
-    try {
-      project = await store.mutateFilmProject(id, async current => {
-        const film = { ...current.film, audio, analysis,
-          timeline: { ...current.film.timeline, ...(analysis ? { durationSec: analysis.durationSec } : {}) } };
-        await writeBlenderSong(filmSnapshotOwner(owner, { ...current, film }), film.settings);
-        wroteSong = true;
-        return { film };
-      });
-    } catch (error) {
-      // song.json is derived context; restore it if the database could not commit.
-      if (wroteSong) await writeBlenderSong(owner, (await requireFilmProject(id)).film.settings);
-      throw error;
-    }
+    const project = await mutateFilmWithSong(id, current => ({ film: { ...current.film, audio, analysis,
+      timeline: { ...current.film.timeline, ...(analysis ? { durationSec: analysis.durationSec } : {}) } } }));
     emitCodeAnimationChanged(id);
-    owner.emit({ kind: 'state' });
+    emitCodeAnimationFilm(id, { kind: 'state' });
     return project;
   });
 }
@@ -147,4 +131,26 @@ export function filmSnapshotOwner(owner, project) {
   return { ...owner, readRecord: async () => project.film,
     timeline: async () => ({ ...project.film.timeline, fps: project.film.settings.fps }),
     song: async () => filmSong(project) };
+}
+
+/** Write derived Python context before committing a timeline or soundtrack change. */
+async function mutateFilmWithSong(id, change) {
+  const owner = await codeAnimationFilmOwner(id);
+  const { writeBlenderSong } = await import('../film/song.js');
+  const { assertInsideWithoutSymlinks } = await import('../film/workspace.js');
+  await assertInsideWithoutSymlinks(owner.workspaceDir, join(owner.workspaceDir, 'song.json'));
+  let wroteSong = false;
+  try {
+    return await store.mutateFilmProject(id, async current => {
+      const patch = await change(current);
+      const candidate = { ...current, ...patch };
+      await writeBlenderSong(filmSnapshotOwner(owner, candidate), candidate.film.settings);
+      wroteSong = true;
+      return patch;
+    });
+  } catch (error) {
+    // song.json is derived context; restore it if the database could not commit.
+    if (wroteSong) await writeBlenderSong(owner, (await requireFilmProject(id)).film.settings);
+    throw error;
+  }
 }

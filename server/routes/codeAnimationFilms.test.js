@@ -169,3 +169,17 @@ it('refuses to accept a final whose soundtrack changed during assembly', async (
   expect(state.projects.get(id).acceptedOutput).toEqual(accepted);
   expect(state.history).toHaveLength(1);
 });
+
+
+it('refreshes silent song context with timeline edits and refuses an unwritable context without saving', async () => {
+  await create(); await scaffoldAndSync();
+  const songPath = join(ROOT(), 'code-animation', 'films', id, 'song.json');
+  const changed = await request(app).patch(base()).send({ timeline: { durationSec: 12, fps: 30 } });
+  expect(changed.status).toBe(200);
+  expect(JSON.parse(readFileSync(songPath))).toMatchObject({ durationSec: 12, fps: 30, audio: { master: null } });
+  const original = structuredClone(state.projects.get(id));
+  unlinkSync(songPath); symlinkSync(join(ROOT(), 'elsewhere.json'), songPath);
+  const refused = await request(app).patch(base()).send({ timeline: { durationSec: 15, fps: 24 } });
+  expect(refused.status).toBe(400);
+  expect(state.projects.get(id)).toEqual(original);
+});
