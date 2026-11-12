@@ -15,6 +15,7 @@
  * would close a load-order cycle.
  */
 
+import { ServerError } from '../../lib/errorHandler.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import * as store from './db.js';
 import { localizeImageUrl } from './localize.js';
@@ -91,6 +92,16 @@ function announceNewBoard(id) {
 
 export async function createBoard(input) {
   const board = await store.createBoard(input);
+  announceNewBoard(board.id);
+  return board;
+}
+
+export async function combineBoards(input) {
+  const boards = await Promise.all(input.boardIds.map(id => store.getBoard(id)));
+  if (boards.some(board => !board)) {
+    throw new ServerError('A source mood board no longer exists', { status: 404, code: 'NOT_FOUND' });
+  }
+  const board = await store.createCompositeBoard(input, boards);
   announceNewBoard(board.id);
   return board;
 }

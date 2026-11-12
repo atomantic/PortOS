@@ -827,6 +827,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/models/performance/task-benchmark/run', CONFIGURED_INFERENCE],
   // /api/mood-boards
   ['POST /api/mood-boards', RECORDS],
+  ['POST /api/mood-boards/combine', RECORDS],
   ['DELETE /api/mood-boards/:id', REMOVES_RECORD],
   ['PATCH /api/mood-boards/:id', RECORDS],
   ['POST /api/mood-boards/:id/backfill-prompts', RECORDS],

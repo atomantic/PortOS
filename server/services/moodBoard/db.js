@@ -47,6 +47,7 @@ import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
   withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
+import { buildCompositeBoardRecord } from './compositeRecord.js';
 import { toPgJson } from '../../lib/pgJson.js';
 
 // `data` JSONB is the whole record; name/created_at/updated_at mirror into
@@ -130,6 +131,12 @@ export async function createBoard(input) {
   const board = buildBoardRecord(input, { id });
   await persist(query, board);
   console.log(`🎨 Created mood board: ${id} (${input.name})`);
+  return board;
+}
+
+export async function createCompositeBoard(input, boards) {
+  const board = buildCompositeBoardRecord(input, boards, { id: `mb-${randomUUID()}` });
+  await persist(query, board);
   return board;
 }
 
