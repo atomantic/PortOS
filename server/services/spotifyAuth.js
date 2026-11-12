@@ -160,10 +160,17 @@ async function requestToken(params) {
   }, TOKEN_TIMEOUT_MS);
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new ServerError(
-      `Spotify token request failed: ${json.error_description || json.error || res.status}`,
-      { status: 400 },
-    );
+    const errorBody = json.error_description || json.error || res.status;
+    const isInvalidGrant = json.error === 'invalid_grant'
+      || (typeof errorBody === 'string' && errorBody.toLowerCase().includes('invalid_grant'));
+    const message = isInvalidGrant
+      ? 'Spotify rejected the saved authorization — reconnect Spotify.'
+      : `Spotify token request failed: ${errorBody}`;
+    throw new ServerError(message, {
+      status: 400,
+      code: isInvalidGrant ? 'INVALID_GRANT' : undefined,
+      context: { isInvalidGrant },
+    });
   }
   return json;
 }

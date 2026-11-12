@@ -169,16 +169,47 @@ export async function runSync() {
 }
 
 async function doRunSync() {
-  const accessToken = await getAccessToken().catch((err) => {
-    console.error(`❌ Spotify sync auth failed: ${err?.message || err}`);
-    return null;
-  });
-  if (!accessToken) {
-    return { ok: false, needsAuth: true, error: 'Spotify not connected — authorize in Brain → Spotify.' };
+  const state = await readSyncState();
+  const started = Date.now();
+
+  const fail = async (lastResult) => {
+    await writeSyncState({
+      cursorAfter: state.cursorAfter,
+      lastRunAt: state.lastRunAt,
+      lastResult,
+    });
+    return lastResult;
+  };
+
+  let accessToken = null;
+  try {
+    accessToken = await getAccessToken();
+  } catch (err) {
+    const reason = err?.message || String(err);
+    console.error(`❌ Spotify sync auth failed: ${reason}`);
+    const isInvalidGrant = err?.code === 'INVALID_GRANT'
+      || err?.context?.isInvalidGrant === true
+      || (typeof reason === 'string' && reason.toLowerCase().includes('invalid_grant'))
+      || (typeof reason === 'string' && reason.includes('Spotify rejected the saved authorization'));
+    return fail({
+      ok: false,
+      needsAuth: isInvalidGrant,
+      error: isInvalidGrant
+        ? 'Spotify rejected the saved authorization — reconnect Spotify.'
+        : `Spotify auth failed: ${reason}`,
+      failedAt: new Date().toISOString(),
+    });
   }
 
-  const started = Date.now();
-  const state = await readSyncState();
+  if (!accessToken) {
+    return fail({
+      ok: false,
+      needsAuth: true,
+      error: 'Spotify not connected — authorize in Brain → Spotify.',
+      failedAt: new Date().toISOString(),
+    });
+  }
+
   const url = new URL(RECENTLY_PLAYED_URL);
   url.searchParams.set('limit', String(SCAN_LIMIT));
   if (state.cursorAfter) url.searchParams.set('after', String(state.cursorAfter));
@@ -193,12 +224,22 @@ async function doRunSync() {
   } catch (err) {
     const reason = err?.message || String(err);
     console.error(`❌ Spotify recently-played fetch failed: ${reason}`);
-    return { ok: false, error: `Spotify API request failed: ${reason}` };
+    return fail({
+      ok: false,
+      needsAuth: false,
+      error: `Spotify API request failed: ${reason}`,
+      failedAt: new Date().toISOString(),
+    });
   }
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     console.error(`❌ Spotify recently-played fetch failed: ${res.status} ${body.slice(0, 200)}`);
-    return { ok: false, status: res.status, error: `Spotify API returned ${res.status}` };
+    return fail({
+      ok: false,
+      status: res.status,
+      error: `Spotify API returned ${res.status}`,
+      failedAt: new Date().toISOString(),
+    });
   }
   const payload = await res.json().catch(() => null);
   const items = Array.isArray(payload?.items) ? payload.items : [];

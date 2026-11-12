@@ -118,7 +118,9 @@ export function SpotifyTab() {
       toast.success(`Synced: ${result.recorded} listen(s)${result.hasMore ? ' — more history remains, run again' : ''}`);
       setStatus((prev) => ({ ...(prev || {}), state: { ...(prev?.state || {}), cursorAfter: result.cursorAfter, lastResult: result, lastRunAt: new Date().toISOString() } }));
     } else {
-      toast.error(result?.needsAuth ? 'Connect Spotify first' : (result?.error || 'Sync failed'));
+      const authMessage = auth?.hasTokens ? (result?.error || 'Connect Spotify first') : 'Connect Spotify first';
+      toast.error(result?.needsAuth ? authMessage : (result?.error || 'Sync failed'));
+      setStatus((prev) => ({ ...(prev || {}), state: { ...(prev?.state || {}), lastResult: result } }));
     }
   };
 
@@ -306,8 +308,29 @@ export function SpotifyTab() {
       </div>
 
       {(lastResult || status?.state?.cursorAfter > 0) && (
-        <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
+        <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6 space-y-3">
           <h3 className="text-sm font-semibold text-white mb-2">Last sync</h3>
+          {lastResult?.ok === false && (
+            <div role="alert" className="rounded-lg border border-port-error/40 bg-port-error/10 p-3 text-sm text-gray-200 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-start gap-2">
+                <AlertCircle size={16} className="text-port-error shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-port-error font-medium">Sync failed{lastResult.failedAt ? ` (${formatDateTime(lastResult.failedAt)})` : ''}</p>
+                  <p className="text-xs text-gray-300 mt-0.5">{lastResult.error || 'Unknown sync error'}</p>
+                </div>
+              </div>
+              {lastResult.needsAuth && (
+                <button
+                  type="button"
+                  onClick={handleConnect}
+                  disabled={connecting || !auth?.hasCredentials}
+                  className="px-3 py-1.5 text-xs rounded bg-port-accent/20 hover:bg-port-accent/30 text-port-accent transition-colors disabled:opacity-40"
+                >
+                  {auth?.hasTokens ? 'Reconnect Spotify' : 'Connect Spotify'}
+                </button>
+              )}
+            </div>
+          )}
           <dl className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
             <div><dt className="text-gray-500 text-xs uppercase">Listens recorded</dt><dd className="text-gray-200">{lastResult?.recorded ?? '—'}</dd></div>
             <div><dt className="text-gray-500 text-xs uppercase">Scanned</dt><dd className="text-gray-200">{lastResult?.scanned ?? '—'}</dd></div>
