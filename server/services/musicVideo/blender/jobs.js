@@ -19,6 +19,8 @@ const TERMINAL = new Set(['done', 'error', 'canceled']);
 
 // job id → { projectId, job, abort, lastSent, timer }
 const entries = new Map();
+// Reserve before sync preparation awaits; queued jobs take over the slot afterward.
+const preparingSyncs = new Set();
 
 const send = (entry) => {
   entry.lastSent = Date.now();
@@ -90,6 +92,16 @@ export const blenderJobEntry = (projectId, jobId) => {
 /** Every job entry of a project that has not finished, oldest first. */
 export const activeBlenderJobs = (projectId) => [...entries.values()].filter((entry) => entry.projectId === projectId && isBlenderJobActive(entry));
 
+/** Whether sync preparation or its background job owns this project's shot list. */
+export const hasBlenderSync = (projectId) => preparingSyncs.has(projectId) || activeBlenderJobs(projectId).some(({ job }) => job.kind === 'sync');
+
+/** Atomically reserve preparation; the caller releases on both success and refusal. */
+export function reserveBlenderSync(projectId) {
+  if (hasBlenderSync(projectId)) return null;
+  preparingSyncs.add(projectId);
+  return () => preparingSyncs.delete(projectId);
+}
+
 /** What the panel lists: active jobs and the last finished ones, oldest first. */
 export const listBlenderJobs = (projectId) => [...entries.values()].filter((entry) => entry.projectId === projectId).map((entry) => ({ ...entry.job }));
 
@@ -97,4 +109,5 @@ export const listBlenderJobs = (projectId) => [...entries.values()].filter((entr
 export function __resetBlenderJobsForTests() {
   for (const entry of entries.values()) clearTimeout(entry.timer);
   entries.clear();
+  preparingSyncs.clear();
 }

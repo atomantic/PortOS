@@ -60,6 +60,7 @@ describe('syntax scanner regression contracts', () => {
         export const raw = async path => { const bytes = await tryReadFile(path); return safeJSONParse(bytes ?? '{}', {}); };
       `],
       ['stores/raw.js', `export default async path => tryReadFile(path);`],
+      ['stores/default.js', `export default async path => safeJSONParse(await tryReadFile(path), {});`],
       ['stores/b.js', `import { load } from './a.js'; export const twoHops = path => load(null, path);`],
     ]));
     const source = `
@@ -77,13 +78,36 @@ describe('syntax scanner regression contracts', () => {
     `;
     expect(mayReadJsonFile(source, registry)).toBe(true);
     expect(mayReadJsonFile(source)).toBe(false);
-    const defaultImport = "import { default as load } from '../stores/raw.js'; load(P); atomicWrite(P, {});";
+    const defaultImport = "import { default as load } from '../stores/default.js'; load(P); atomicWrite(P, {});";
     expect(mayReadJsonFile(defaultImport, registry)).toBe(true);
     expect(scanJsonWriteback(defaultImport, { module: 'services/writer.js', registry }).candidates).toEqual(['P']);
-    expect(mayReadJsonFile("import load from '../stores/raw.js'; load(P); atomicWrite(P, {});", registry)).toBe(true);
+    expect(mayReadJsonFile("import load from '../stores/default.js'; load(P); atomicWrite(P, {});", registry)).toBe(true);
     expect(scanJsonWriteback(source, { module: 'services/writer.js', registry })).toEqual({
-      candidates: ['BYTES', 'PATH', 'RAW', 'stores/a.js#STORE'], strict: [],
+      candidates: ['PATH', 'RAW', 'stores/a.js#STORE'], strict: [],
     });
+  });
+
+  it('follows conditional wrapper returns without borrowing nested callback returns or raw text reads', () => {
+    const registry = buildJsonReadWrapperRegistry(new Map([
+      ['stores/conditional.js', `
+        export async function load(path, enabled) {
+          if (enabled) { return await readJSONFile(path, {}); }
+          return {};
+        }
+        export function callbacks(path) {
+          const load = () => { return readJSONFile(path, {}); };
+          return load;
+        }
+        export const raw = path => tryReadFile(path);
+      `],
+    ]));
+    const source = `
+      import { load, callbacks, raw } from '../stores/conditional.js';
+      load(JSON, true); atomicWrite(JSON, {});
+      callbacks(CALLBACK); atomicWrite(CALLBACK, {});
+      raw(TEXT); atomicWrite(TEXT, 'raw text');
+    `;
+    expect(scanJsonWriteback(source, { module: 'services/writer.js', registry }).candidates).toEqual(['JSON']);
   });
 
   it('finds new pairs with nested arguments, comments and quote/whitespace differences', () => {

@@ -241,18 +241,22 @@ async function forkBlenderFilm(backend, sourceId) {
 
 export async function cloneProject(id, options = {}) {
   const backend = await selectBackend();
+  const cloneOptions = { ...options };
+  delete cloneOptions.id;
+  delete cloneOptions.blenderFilm;
   // A footage adaptation leaves the film behind: its shots become footage.
-  const film = options.variant === 'video-generation' ? null : await forkBlenderFilm(backend, id);
-  const project = await backend.cloneProject(id, { ...options, ...(film ? { id: film.id, blenderFilm: true } : {}) })
-    .catch(async (error) => {
-      await film?.discard();
-      throw error;
-    });
-  if (film) {
-    // The copied song.json names the source project; the fork's own is written from its record.
-    const [{ writeBlenderSong }, { normalizeBlenderRecord }] = await Promise.all([import('./blender/song.js'), import('../../lib/musicVideoBlender.js')]);
-    await writeBlenderSong(project, normalizeBlenderRecord(project.blender).settings)
-      .catch((error) => console.error(`❌ Blender film fork ${project.id.slice(0, 11)}: song.json was not rewritten: ${error.message}`));
+  const film = cloneOptions.variant === 'video-generation' ? null : await forkBlenderFilm(backend, id);
+  let project = null;
+  try {
+    project = await backend.cloneProject(id, { ...cloneOptions, id: film?.id ?? `mv-${randomUUID()}`, blenderFilm: Boolean(film) });
+    if (film) {
+      // The copied song.json names the source project; publish the fork only after its own is written.
+      const [{ writeBlenderSong }, { normalizeBlenderRecord }] = await Promise.all([import('./blender/song.js'), import('../../lib/musicVideoBlender.js')]);
+      await writeBlenderSong(project, normalizeBlenderRecord(project.blender).settings);
+    }
+  } catch (error) {
+    await Promise.all([project ? backend.deleteProject(project.id) : null, film?.discard()]);
+    throw error;
   }
   announceNewProject(project.id);
   queueProjectCatalogLinkSync(project.id);

@@ -1353,3 +1353,117 @@ tokens/telemetry. No production weights, model inference, live providers or
 camera/audio streams were used. This establishes helper/API compatibility, not
 video/audio quality or a fresh source-build smoke test. Remaining model-library,
 Hub and native compatibility constraints stay separate under #15769.
+
+## Twenty-fourth-slice 3D Metal CLI and text helpers (2026-11-12)
+
+Both Metal profiles advance **Click 8.4.1 → 8.5.0**, **MarkupSafe 3.0.3 →
+3.0.4**, **Pygments 2.20.0 → 2.21.0** and **Regex 2026.5.9 → 2026.9.29**.
+**Typer stays at 0.25.1**: the frozen Hub 1.16.4 requires
+`typer>=0.20.0,<0.26.0`, and full resolution rejects Typer 0.27.3. Advancing
+Typer requires a separately tested Hub migration, not a metadata override.
+No native source revision, renderer pin or Pixal CLI-only Pillow override
+changes here. The generator commands use argparse, not Click or Typer; the
+latter are exercised through their actual retained Hub CLI consumer.
+
+Both complete locks were regenerated with hash-verified uv 0.13.7, CPython
+3.13/macOS 26+ ARM64, binary-only artifacts and seven-day cutoff
+**2026-11-05T00:00:00Z**. All 92 Pixal and 52 TRELLIS companion versions,
+markers and hash sets remain unchanged. New versions have complete generated
+artifact hash sets, including other platforms: Pixal has 96 entries/572
+hashes; TRELLIS has 56 entries/361 hashes. The union contains 97 registry
+identities/575 hashes. Every hash matches an official unyanked artifact
+uploaded before the cutoff. Fresh OSV/MAL queries covered all registry
+identities, 10 source-package identities and 13 immutable commits (120
+queries), with no matches.
+
+Baseline and candidate native CPython 3.13.18 tests use exact-hash
+**35-package subclosures**, not complete runtime installs. Unmodified pinned
+Pixal/TRELLIS generator scripts handle help and invalid arguments without
+entering inference; Pixal's real parser also accepts synthetic configuration
+and a Unicode output name. Frozen Hub CLI help, subcommand help and invalid
+option handling exercise Typer/Click. Transformers 5.10.1's actual chat
+renderer exercises escaped Unicode, JSON, assistant spans and sandbox
+rejection; its Blenderbot tokenizer and Whisper text normalizer exercise
+Regex with synthetic Unicode text. Rich syntax, Markdown and traceback
+renderers exercise Pygments. These retained-library seams do not imply a
+Blenderbot, Whisper or chat-template path in 3D inference. No pretrained
+weights, external requests, model inference or devices were used; caches
+were temporary, implicit tokens/telemetry/update checks disabled, and network
+connections rejected.
+
+Both profile artifact variants were tested separately while reusing two
+environments: the baseline differs in NumPy and Regex wheel hashes, and the
+candidate differs only in its preserved NumPy hash. Full profile resolution
+and wheel installation dry plans passed, as did the five focused
+installer/profile/runner test files (171 tests). Full renderer installation,
+Metal inference, model-backed background removal and GLB quality remain
+outside this bounded helper refresh.
+
+The combined state with the preceding timm/PLY/Ninja maintenance slice was
+resolved again: complete regenerated locks were byte-identical, and only
+these four helper identities differ from that merged base. A bounded
+39-package candidate subclosure includes all three maintenance packages;
+both profiles' exact NumPy artifact variants passed the actual helper
+probes again, plus real timm CPU model/preprocessing, pinned upstream PLY
+roundtrips and Torch/Ninja compile/incremental/failure probes. Candidate
+metadata checks passed. Original immutable baseline evidence remains
+applicable; the combined candidate's tokenizer, normalization and template
+outputs match it exactly. This is still not a complete renderer install.
+
+## Twenty-fifth-slice MuScriptor published API and Hub 2 transport (2026-11-12)
+
+The pinned MuScriptor 0.4.0 runner called `transcribe_to_midi`, which does not
+exist in that release. Its published example and implementation use
+`transcribe_and_postprocess(audio)`, returning `(midi_bytes, beat_grid)`.
+The adapter now unpacks that tuple before the existing empty-output check,
+MIDI write and `RESULT` reporting. Model-size loading, stages and shared error
+translation are unchanged. Four public CLI regressions cover successful MIDI
+bytes rather than the tuple/grid, empty output, transcription failure and
+missing-input refusal. The old nonexistent-method call fails the success
+contract without loading any production weights.
+
+Both source inputs and all three complete locks move Hub 0.36.2 → 2.4.0,
+adding HTTPX2/HTTPCore2 2.16.0 and Truststore 0.10.5. MuScriptor still requires
+HTTPX 0.28.1, so its original HTTPCore/Certifi closure remains. Requests,
+charset-normalizer and urllib3 had only the old Hub as consumer and are
+removed. MuScriptor's immutable downloader uses Hub and stdlib urllib, not
+Requests; its model/download modules and Beat This/TorchAudio callers do not
+import Requests. All surviving companion versions, markers and hash sets,
+including Torch/audio/native dependencies, are unchanged.
+
+Verified uv 0.13.7 regenerated the universal Apple Silicon lock and both
+Python 3.11 CUDA target locks with the November 5 UTC cutoff. The MLX lock has
+60 version/marker entries; Linux/Windows have 77/58. The complete union has
+81 identities and 1,281 artifact hashes, all unyanked and pre-cutoff. The
+82-query OSV/MAL audit includes CUDA-local and public base versions and
+returned no findings. CUDA resolution scopes only Torch to its official
+index; preserved Triton build hashes were verified there too. Documented
+recipes reproduce the resolved locks exactly. Both CUDA target dry-sync
+plans passed with the unchanged hash-constrained installation policy.
+
+Fresh complete hashed native Apple Silicon environments passed installation
+and dependency checks for the old Python 3.11.18 baseline and new Python
+3.11.18/3.12.11 candidates. All three exercised the actual pinned
+`TranscriptionModel.transcribe_and_postprocess` and MIDI serialization methods
+through PortOS's real entry point, with a synthetic note-event iterator in
+place of neural inference and beat detection disabled only in the fixture.
+They produced identical 83-byte MIDI with a C4 note-on/note-off pair, matching
+stage, model-size and result-byte-count contracts. This validates the actual
+published tuple API and MIDI writer, not transcription accuracy.
+
+The immutable MuScriptor downloader ran against a synthetic loopback Hub in
+all three environments: required model-file and optional companion downloads,
+local paths, cache/offline hits and misses, exact interrupted-download Range
+resume, gated/not-found/401 errors through `ModelDownloadError` and PortOS's
+shared error translator. Real Hub snapshot symlinks and a sparse synthetic
+50 MiB blob exercised the cache heuristic without allocating or downloading
+model weights. Both candidates passed default Truststore TLS checks:
+untrusted/wrong-CA refusals before HTTP and verified HTTPS/Hub access with an
+ephemeral fixture CA. No OS trust changes or private keys remain. Caches and
+tokens were isolated and fixtures rejected Authorization headers.
+
+All 186 focused CLI/service/installer/profile tests passed without skips.
+Independent review, final committed-tree pregate and hosted CI remain merge
+requirements. No production weights, neural transcription, beat-detector
+inference, GPU/CUDA execution or live public-chain/proxy compatibility is
+claimed. The optional beat detector remains unchanged by this migration.

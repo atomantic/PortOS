@@ -78,4 +78,16 @@ describe('useShotSongSync', () => {
     rerender(<Player enabled={false} />);
     expect(audio.paused).toBe(true);
   });
+
+  it('keeps the song at the native video playback rate, including a rate chosen while paused', async () => {
+    const { video, audio, fire } = mount();
+    video.playbackRate = 0.5;
+    fire('ratechange');
+    expect(audio.playbackRate).toBe(0.5);
+    await act(async () => video.play());
+    expect(audio.playbackRate).toBe(0.5);
+    video.playbackRate = 1.5;
+    fire('ratechange');
+    expect(audio.playbackRate).toBe(1.5);
+  });
 });

@@ -73,6 +73,23 @@ describe('board analyze job', () => {
 
 
 describe('Make complete workflow', () => {
+  it('refuses to silently join an analysis-only job when a poster was requested, then permits retry', async () => {
+    const board = { id: 'complete-overlap', items: [{ id: 'saved', type: 'image', analysis: { prompt: 'ink' } }] };
+    let release;
+    backfill.mockReturnValueOnce(new Promise(resolve => { release = () => resolve(board); }));
+    getBoard.mockResolvedValue(board);
+    completePoster.mockResolvedValue(undefined);
+    startAnalyzeJob(board.id, { providerId: 'vision' });
+    expect(() => startAnalyzeJob(board.id, { providerId: 'vision', render: { mode: 'local' } })).toThrow(/already running/);
+    expect(getAnalyzeJob(board.id)).toMatchObject({ status: 'running', makeComplete: false });
+    release();
+    await waitTerminal(board.id);
+    backfill.mockResolvedValue(board);
+    startAnalyzeJob(board.id, { providerId: 'vision', render: { mode: 'local' } });
+    expect(await waitTerminal(board.id)).toMatchObject({ status: 'done', makeComplete: true });
+    expect(completePoster).toHaveBeenCalledTimes(1);
+  });
+
   it('reuses saved analyses, composes both prompts and completes the main image without a client', async () => {
     const items = [{ id: 'saved', type: 'image', analysis: { prompt: 'soft focus', negativePrompt: 'crisp edges' } }];
     const board = { id: 'complete-saved', items, description: 'Keep creative direction' };

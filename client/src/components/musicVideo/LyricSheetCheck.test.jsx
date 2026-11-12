@@ -117,3 +117,16 @@ it('discards timing offers when the sheet changes and does not claim unrecognize
   expect(screen.queryByRole('button', { name: 'Use all checked times' })).toBeNull();
   expect(save).not.toHaveBeenCalled();
 });
+
+it('refuses a completed check after cue metadata changed instead of replacing the current cues', () => {
+  const edit = vi.fn();
+  const props = { project: placedProject, audioFilename: 'song.wav', onEditLocal: edit, onSave: vi.fn() };
+  const { rerender } = render(<LyricSheetCheck {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Check sheet against vocal' }));
+  const changed = { ...placedProject, lyricCues: placedProject.lyricCues.map(line => ({ ...line, silentWords: ['first'], suspect: true, matched: 0 })) };
+  rerender(<LyricSheetCheck {...props} project={changed} />);
+  act(() => options.onComplete({ result: placementReport, project: placedProject }));
+  expect(edit).not.toHaveBeenCalled();
+  expect(screen.getByRole('alert')).toHaveTextContent('The song or lyrics changed during the check. Run it again.');
+  expect(screen.queryByRole('button', { name: 'Use all checked times' })).toBeNull();
+});

@@ -16,7 +16,7 @@ import { readBlenderManifest } from './manifest.js';
 import { readBlenderRenders } from './renderIndex.js';
 import { requireBlenderFilmTool } from './driver.js';
 import { requireFfmpeg } from './encode.js';
-import { activeBlenderJobs, blenderJobEntry, createBlenderJob, isBlenderJobActive, updateBlenderJob } from './jobs.js';
+import { activeBlenderJobs, blenderJobEntry, createBlenderJob, hasBlenderSync, isBlenderJobActive, updateBlenderJob } from './jobs.js';
 import { announceBlenderState } from './record.js';
 import { blenderStillFrames, runBlenderShotRender } from './renderJob.js';
 
@@ -58,9 +58,20 @@ function start(task) {
 
 function pump() {
   for (const [projectId, tasks] of waiting) {
-    while (tasks.length && running.size < tasks[0].concurrency) start(tasks.shift());
+    // Same-shot stills share both image names and stills.json. Keep distinct
+    // requests, but let each finish its index write before the next one starts.
+    while (tasks.length) {
+      const next = tasks.findIndex((task) => running.size < task.concurrency && !(task.request.quality === 'still' && [...running].some((active) =>
+        active.request.quality === 'still' && active.request.projectId === projectId && active.request.shotId === task.request.shotId)));
+      if (next < 0) break;
+      start(tasks.splice(next, 1)[0]);
+    }
     if (!tasks.length) waiting.delete(projectId);
   }
+}
+
+function assertNotSyncing(projectId) {
+  if (hasBlenderSync(projectId)) throw blenderRefusal('A sync is running for this film. Wait for it to finish before rendering shots.', 'MUSIC_VIDEO_BLENDER_SYNC_IN_PROGRESS', 409);
 }
 
 const unknownShots = (ids) => blenderRefusal(`Not in the synced film: ${ids.join(', ')}. Sync shots from scripts first.`, 'NOT_FOUND', 404, { shotIds: ids });
@@ -78,6 +89,7 @@ export function enqueueBlenderRenders(projectId, options) {
 }
 
 async function enqueue(projectId, { shotIds = null, quality, times = null, force = false, onlyStale = false }) {
+  assertNotSyncing(projectId);
   const project = await requireProject(projectId);
   await requireBlenderFilmTool();
   if (quality !== 'still') await requireFfmpeg();
@@ -93,7 +105,9 @@ async function enqueue(projectId, { shotIds = null, quality, times = null, force
   if (missing.length) throw unknownShots(missing);
   const shots = shotIds ? [...new Set(shotIds)].map((id) => known.get(id)) : manifest.shots;
   const still = quality === 'still';
-  const renders = still ? null : await readBlenderRenders(projectId, manifest, { settings, shots });
+  const renders = still ? null : await readBlenderRenders(projectId, manifest, { project, settings, shots });
+  // A sync may have reserved its slot while the project and renders were read.
+  assertNotSyncing(projectId);
   const active = new Map(activeBlenderJobs(projectId).filter(({ job }) => job.kind === 'render' && job.quality !== 'still')
     .map((entry) => [`${entry.job.shotId}:${entry.job.quality}`, entry]));
   const jobs = [];
@@ -117,6 +131,13 @@ async function enqueue(projectId, { shotIds = null, quality, times = null, force
       .filter((id) => !skipped.includes(id));
     await writePendingBlenderRenders(projectId, [...entries.filter((entry) => entry.quality !== quality),
       { quality, shotIds: pendingIds, attempt: prior?.attempt || 0 }]);
+    // Sync admission is independent of our queue and may change during this write.
+    try {
+      assertNotSyncing(projectId);
+    } catch (error) {
+      await writePendingBlenderRenders(projectId, entries);
+      throw error;
+    }
   }
   for (const shot of selected) {
     const entry = createBlenderJob(projectId, { kind: 'render', shotId: shot.id, quality });

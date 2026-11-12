@@ -128,6 +128,8 @@ const wait = setInterval(() => {
   if (!fs.existsSync(answered)) return;
   clearInterval(wait);
   console.error('warned');
+  console.error('warned again');
+  console.error('warned last');
   process.stdout.write('ial line\\r\\nlast');
 }, 20);
 ` }],
@@ -135,7 +137,10 @@ const wait = setInterval(() => {
         lines.push(line);
         if (line === 'first') writeFileSync(join(root, readdirSync(root)[0], 'output', 'answered'), 'yes');
       },
-      onStderrLine: () => { throw new Error('a caller bug'); },
+      onStderrLine: (() => {
+        const errors = [null, undefined, new Error('a caller bug')];
+        return () => { throw errors.shift(); };
+      })(),
     });
     expect(result).toMatchObject({ status: 'completed', processGroupClear: true });
     // Split on line ends across chunks, CR dropped, and the unterminated tail delivered at exit.

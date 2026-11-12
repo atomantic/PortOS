@@ -28,7 +28,7 @@ export const MUSIC_VIDEO_BLENDER_MAX_OPTIONS = 24;
 export const MUSIC_VIDEO_BLENDER_MAX_CHOICES = 32;
 export const MUSIC_VIDEO_BLENDER_OPTION_TEXT_MAX = 2000;
 // Why a render is out of date, in the order the UI names them.
-export const MUSIC_VIDEO_BLENDER_STALE_REASONS = Object.freeze(['source', 'timing', 'settings', 'options']);
+export const MUSIC_VIDEO_BLENDER_STALE_REASONS = Object.freeze(['source', 'timing', 'settings', 'options', 'song']);
 
 export const MUSIC_VIDEO_BLENDER_SETTING_LIMITS = Object.freeze({
   width: { min: 320, max: 7680 },

@@ -10,7 +10,8 @@
  *     a re-render replaces them (renderJob.js removes frames it cannot resume);
  *   - a shot that left the film loses its frames at the next sync, and
  *     everything else it rendered when the frames are cleared.
- * Clearing never removes a shot video, a still, a poster, a cut or a log.
+ * Clearing preserves videos, stills and posters for shots still in the film,
+ * plus every cut and log. Removed shots lose their whole render folder.
  */
 import { lstat, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';

@@ -37,6 +37,12 @@ const parseClock = (text) => {
 };
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 
+function searchResultContainsSong(value, songId) {
+  if (!value || typeof value !== 'object') return false;
+  if (!Array.isArray(value) && typeof value.id === 'string' && value.id.toLowerCase() === songId.toLowerCase()) return true;
+  return Object.values(value).some(entry => searchResultContainsSong(entry, songId));
+}
+
 async function selectSong(page, payload) {
   // A restored draft shows Replace Song and keeps a hidden Select Song; only a visible one can be clicked.
   await page.locator('button:visible').filter({ hasText: /Replace Song|Select Song/ }).first().click({ timeout: T });
@@ -51,19 +57,39 @@ async function selectSong(page, payload) {
     }));
   const beforeSearch = JSON.stringify((await readRows()).map(({ text, html }) => [text, html]));
   const activeRequests = new Set();
-  let sawSearchRequest = false;
+  const searchRequests = new Set();
+  const successfulSearchRequests = new Set();
+  let searchFailure = null;
+  let sawLoading = false;
+  let responseContainsSong = false;
   const normalizedTitle = String(payload.title || '').trim().replace(/\s+/g, ' ').toLowerCase();
   const encodedTitle = encodeURIComponent(String(payload.title || '').trim()).toLowerCase();
   const onRequest = (request) => {
     if (!['fetch', 'xhr'].includes(request.resourceType())) return;
     const requestText = `${request.url()} ${request.postData() || ''}`.replace(/\+/g, ' ').toLowerCase();
-    if (requestText.includes(normalizedTitle) || requestText.includes(encodedTitle)) sawSearchRequest = true;
+    if (requestText.includes(normalizedTitle) || requestText.includes(encodedTitle)) searchRequests.add(request);
     activeRequests.add(request);
   };
   const onRequestDone = (request) => activeRequests.delete(request);
+  const onResponse = (response) => {
+    const request = response.request();
+    if (!searchRequests.has(request)) return;
+    if (response.ok()) {
+      successfulSearchRequests.add(request);
+      if (payload.songId) void response.json().then(result => {
+        if (searchResultContainsSong(result, payload.songId)) responseContainsSong = true;
+      }).catch(() => {});
+    }
+    else searchFailure = `Suno search failed (HTTP ${response.status()})`;
+  };
+  const onRequestFailed = (request) => {
+    activeRequests.delete(request);
+    if (searchRequests.has(request)) searchFailure = 'Suno search request failed';
+  };
   page.on('request', onRequest);
+  page.on('response', onResponse);
   page.on('requestfinished', onRequestDone);
-  page.on('requestfailed', onRequestDone);
+  page.on('requestfailed', onRequestFailed);
   const deadline = Date.now() + SONG_RESULTS_WAIT_MS;
   let previous = beforeSearch;
   let stablePolls = 0;
@@ -75,15 +101,23 @@ async function selectSong(page, payload) {
       rows = await readRows();
       const snapshot = JSON.stringify(rows.map(({ text, html }) => [text, html]));
       const loading = await page.locator('[role=dialog] [aria-busy="true"], [role=dialog] [role=progressbar]').count();
-      stablePolls = searchValue === payload.title && sawSearchRequest && activeRequests.size === 0 && loading === 0 && snapshot === previous ? stablePolls + 1 : 0;
+      if (searchFailure) throw new Error(searchFailure);
+      if (loading && searchRequests.size) sawLoading = true;
+      const searchSucceeded = searchRequests.size > 0 && successfulSearchRequests.size === searchRequests.size;
+      // Identical results need no DOM change: the response and the selected row
+      // must both identify this exact song. Title/length alone cannot prove that.
+      const confirmedSongRow = responseContainsSong && rows.some(row => row.html.toLowerCase().includes(payload.songId.toLowerCase()));
+      const resultsVerified = snapshot !== beforeSearch || sawLoading || confirmedSongRow;
+      stablePolls = searchValue === payload.title && searchSucceeded && resultsVerified && activeRequests.size === 0 && loading === 0 && snapshot === previous ? stablePolls + 1 : 0;
       if (stablePolls >= SONG_RESULTS_STABLE_POLLS) break;
       previous = snapshot;
       await page.waitForTimeout(SONG_RESULTS_POLL_MS);
     }
   } finally {
     page.off('request', onRequest);
+    page.off('response', onResponse);
     page.off('requestfinished', onRequestDone);
-    page.off('requestfailed', onRequestDone);
+    page.off('requestfailed', onRequestFailed);
   }
   if (stablePolls < SONG_RESULTS_STABLE_POLLS) throw new Error(`${rows.length} rows match "${payload.title}" and Suno search did not complete and settle within ${SONG_RESULTS_WAIT_MS} ms`);
   const index = pickSongRow(rows, payload);

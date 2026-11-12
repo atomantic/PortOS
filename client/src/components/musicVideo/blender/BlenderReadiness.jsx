@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ProductionContainment from '../../codeAnimation/ProductionContainment';
 import { buttonCls } from './blenderStyles.js';
 
@@ -14,7 +14,9 @@ const signature = (ready, mode) => `${ready ? 'ready' : 'blocked'}:${mode || ''}
 export default function BlenderReadiness({ blender }) {
   const tool = blender.state.tool || {};
   const contained = !!tool.executionMode && tool.executionMode !== 'trusted-local';
-  const reported = useRef(signature(tool.ready, tool.executionMode));
+  const toolSignature = signature(tool.ready, tool.executionMode);
+  const reported = useRef(toolSignature);
+  useEffect(() => { reported.current = toolSignature; }, [toolSignature]);
   const [openRequest, setOpenRequest] = useState(0);
   const starting = Object.keys(blender.pending).some((key) => key === 'sync' || key.startsWith('render:'));
   // The setup component reports its own reading; refresh only when it differs from the last one seen here.

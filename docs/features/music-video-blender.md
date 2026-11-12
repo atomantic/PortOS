@@ -72,7 +72,10 @@ def describe(ctx) -> dict:
     }
 
 def build_shot(ctx, shot) -> None:        # build the scene for this shot: objects, lights, camera
+    pass
+
 def frame(ctx, shot, t, frame) -> None:   # optional: pose everything for song time t before each frame
+    pass
 ```
 
 Shot rules:
@@ -215,19 +218,23 @@ There are three ways to watch, from the quickest to the most exact.
   they were when it was assembled; the live preview always plays the current ones.
 
 A render is **stale** (out of date) when the files in its shot's `deps`, the shot's times, the settings it used
-(engine, size, frame rate, scale, samples) or a film option have changed since; the panel says which
-(`staleReasons`: `source`, `timing`, `settings`, `options`). Stale renders still play. A render that was cancelled
-or interrupted keeps its finished frames and resumes them, unless it went stale.
+(engine, size, frame rate, scale, samples), a film option, or the song context it received
+(title, audio paths, analysis and lyrics) have changed since; the panel says which
+(`staleReasons`: `source`, `timing`, `settings`, `options`, `song`). Stale renders still play. A render that was cancelled
+or interrupted keeps its finished frames and resumes them, unless it went stale. Older render and still
+metadata without a song-context hash reads as stale; re-rendering records the context without rewriting older metadata.
 
 Rendering many shots at once takes a scope: **Missing or out of date** (the default: every shot without a
 complete, current render), **Out of date only** (renders that exist and went stale; a shot never rendered is left
 out), or **Every shot** (re-renders current ones too).
 
-Jobs run one shot at a time per Blender process, in the order queued. Preview and final batches are remembered
-on this machine in `renders/pending.json` and resume 15 seconds after a restart, skipping completed shots and
-reusing partial frames. Automatic recovery stops after two restarts, or if the tool is unavailable or the film
-needs syncing; the server logs the project and remaining shot count. Cancel removes pending work. Stills are
-not resumed. Completed, failed and canceled shots are removed from the marker; an empty batch leaves no marker.
+Jobs run one shot at a time per Blender process, in the order queued. Still requests for the same shot run
+one after another so their images and index stay together. Syncing shots is refused while renders are active;
+new renders are refused until syncing finishes. Preview and final batches are remembered on this machine in
+`renders/pending.json` and resume 15 seconds after a restart, skipping completed shots and reusing partial
+frames. Automatic recovery stops after two restarts, or if the tool is unavailable or the film needs syncing;
+the server logs the project and remaining shot count. Cancel removes pending work. Stills are not resumed.
+Completed, failed and canceled shots are removed from the marker; an empty batch leaves no marker.
 
 ### What the pipeline still requires
 
@@ -236,7 +243,9 @@ verify the lyric timing (or mark the song instrumental), and approve the storybo
 Board, so each shot needs `action` (or `summary`), `staging` and a transition, and the shots must cover the song.
 
 The final render is refused with `409 MUSIC_VIDEO_BLENDER_SHOTS_NOT_READY` (listing `missing` and `stale` shots)
-until every shot has a complete, current final render and the shots cover the song. Once it is made, the final
+until every shot has a complete, current final render and the shots cover every song frame, starting at frame
+zero and ending on the frame boundary at or just after the song ends. A song shortened since sync requires a
+new shot sync when the old list extends past that boundary. Once it is made, the final
 video reads as out of date (the Final render step reopens) as soon as a shot goes stale or is rendered again: it
 was joined from the shot videos as they were. Excerpts and proofs cut their
 window from the best video each shot has: a current final, else its preview fitted to the final size.

@@ -136,3 +136,8 @@ The subsequent timm/PLY/Ninja maintenance refresh retains the same native
 profile and source revisions. See [3D Metal timm/PLY/build maintenance](PYTHON_RUNTIME_REFRESH.md#twenty-first-slice-3d-metal-timmplybuild-maintenance-2026-11-12)
 for exact upgrades, complete-lock audits, real CPU/native synthetic boundary
 tests and the limits of that validation.
+
+The CLI/text helper refresh retains Hub 1.16.4 and its Typer <0.26 constraint.
+See [3D Metal CLI/text helpers](PYTHON_RUNTIME_REFRESH.md#twenty-fourth-slice-3d-metal-cli-and-text-helpers-2026-11-12)
+for the four compatible upgrades, complete-lock audits and synthetic caller
+validation, which does not certify model inference or rendering.

@@ -445,3 +445,39 @@ it('retains unstarted batch intent after a transient project-store failure, then
     log.mockRestore();
   }
 });
+
+
+it('refuses a sync that wins admission during the pending write without leaving unaccepted render intent', async () => {
+  const fileCore = await import('../../lib/fileCore.js');
+  const write = fileCore.atomicWrite;
+  let releaseWrite;
+  let releaseSync;
+  let entered = false;
+  const heldWrite = new Promise((resolve) => { releaseWrite = resolve; });
+  blender.fake.control.describeHold = new Promise((resolve) => { releaseSync = resolve; });
+  const spy = vi.spyOn(fileCore, 'atomicWrite').mockImplementation(async (path, ...args) => {
+    if (path === pendingPath() && !entered) {
+      entered = true;
+      await heldWrite;
+    }
+    return write(path, ...args);
+  });
+  try {
+    const enqueue = enqueueBlenderRenders(id, { quality: 'final', shotIds: ['s010'] });
+    const refused = expect(enqueue).rejects.toMatchObject({ code: 'MUSIC_VIDEO_BLENDER_SYNC_IN_PROGRESS' });
+    await vi.waitFor(() => expect(entered).toBe(true), WAIT);
+    await startBlenderSync(id);
+    releaseWrite();
+    await refused;
+    expect(existsSync(pendingPath())).toBe(false);
+    expect(listBlenderJobs(id).filter((job) => job.kind === 'render')).toHaveLength(0);
+    await cancelBlenderProjectJobs(id);
+    releaseSync();
+    await vi.waitFor(() => expect(listBlenderJobs(id).filter((job) => !['done', 'error', 'canceled'].includes(job.status))).toHaveLength(0), WAIT);
+  } finally {
+    releaseWrite();
+    releaseSync();
+    blender.fake.control.describeHold = null;
+    spy.mockRestore();
+  }
+});
