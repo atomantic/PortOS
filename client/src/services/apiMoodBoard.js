@@ -19,6 +19,12 @@ export const createMoodBoard = (data, options) => request('/mood-boards', {
   ...options,
 });
 
+export const combineMoodBoards = (data, options) => request('/mood-boards/combine', {
+  method: 'POST',
+  body: JSON.stringify(data),
+  ...options,
+});
+
 export const updateMoodBoard = (id, patch, options) => request(`/mood-boards/${encodeURIComponent(id)}`, {
   method: 'PATCH',
   body: JSON.stringify(patch),

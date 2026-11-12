@@ -78,6 +78,13 @@ export const moodBoardCreateSchema = z.object({
   description: z.string().max(5000).optional(),
 }).strict();
 
+// A composite is a new snapshot; originals remain independently editable.
+export const moodBoardCombineSchema = moodBoardCreateSchema.extend({
+  boardIds: z.array(z.string().trim().min(1).max(128)).length(2),
+}).strict().refine(({ boardIds }) => boardIds[0] !== boardIds[1], {
+  message: 'Choose two different mood boards', path: ['boardIds'],
+});
+
 // Gallery filename for the board's canonical poster. Same traversal rule as
 // the asset manifest (`sanitizeAssetFilename`): separators and `.` / `..`
 // are rejected; an image extension is required so a video ref can't be

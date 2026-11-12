@@ -25,6 +25,7 @@ import {
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
+import { moodBoardCombineSchema } from '../lib/moodBoardValidation.js';
 import { influencesSchema, lockedSchema } from './universeBuilder/shared.js';
 import { synthesizeBoardStyle } from '../services/moodBoardStyleSynthesis.js';
 import { composeBoardPrompt } from '../services/moodBoardCompositeStyle.js';
@@ -35,6 +36,7 @@ import {
   listBoardNames,
   getBoard,
   createBoard,
+  combineBoards,
   updateBoard,
   deleteBoard,
   addBoardItem,
@@ -91,6 +93,11 @@ router.post('/', asyncHandler(async (req, res) => {
   const data = validateRequest(moodBoardCreateSchema, req.body);
   const board = await createBoard(data);
   res.status(201).json(board);
+}));
+
+router.post('/combine', asyncHandler(async (req, res) => {
+  const input = validateRequest(moodBoardCombineSchema, req.body ?? {});
+  res.status(201).json(await combineBoards(input));
 }));
 
 router.patch('/:id', asyncHandler(async (req, res) => {

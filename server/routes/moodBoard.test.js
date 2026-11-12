@@ -10,6 +10,7 @@ vi.mock('../services/moodBoard/index.js', () => ({
   listBoardNames: vi.fn(async () => []),
   getBoard: vi.fn(),
   createBoard: vi.fn(),
+  combineBoards: vi.fn(),
   updateBoard: vi.fn(),
   deleteBoard: vi.fn(),
   addBoardItem: vi.fn(),
@@ -60,6 +61,20 @@ describe('mood-board routes', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual([{ id: 'mb-1', name: 'A' }]);
     expect(svc.getBoard).not.toHaveBeenCalled();
+  });
+
+  it('creates a composite from exactly two distinct boards with validated input', async () => {
+    svc.combineBoards.mockResolvedValueOnce({ id: 'mb-composite', name: 'New style' });
+    const res = await request(makeApp()).post('/api/mood-boards/combine')
+      .send({ name: 'New style', boardIds: ['mb-a', 'mb-b'] });
+    expect(res.status).toBe(201);
+    expect(res.body.id).toBe('mb-composite');
+    expect(svc.combineBoards).toHaveBeenCalledWith({ name: 'New style', boardIds: ['mb-a', 'mb-b'] });
+    for (const boardIds of [['mb-a', 'mb-a'], ['mb-a'], ['mb-a', 'mb-b', 'mb-c'], [42, 'mb-b']]) {
+      const invalid = await request(makeApp()).post('/api/mood-boards/combine').send({ name: 'New style', boardIds });
+      expect(invalid.status).toBe(400);
+    }
+    expect(svc.combineBoards).toHaveBeenCalledTimes(1);
   });
 
   describe('GET /', () => {

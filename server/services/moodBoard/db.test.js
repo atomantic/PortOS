@@ -87,6 +87,25 @@ describe.skipIf(!runDb)('mood board DB round-trip', () => {
     expect(list.some((b) => b.id === board.id)).toBe(true);
   });
 
+  it('persists a complete composite independently from its source boards', async () => {
+    const first = await db.createBoard({ name: 'Ink' });
+    const second = await db.createBoard({ name: 'Neon' });
+    created.push(first.id, second.id);
+    await db.addBoardItem(first.id, { type: 'text', text: 'Brush strokes' });
+    await db.updateBoard(first.id, { style: { prompt: 'Ink washes' } });
+    await db.addBoardItem(second.id, { type: 'image', mediaKey: 'image:composite-fixture.png' });
+    await db.updateBoard(second.id, { style: { prompt: 'Neon light' } });
+    const sources = await Promise.all([db.getBoard(first.id), db.getBoard(second.id)]);
+    const composite = await db.createCompositeBoard({ name: 'Ink neon' }, sources);
+    created.push(composite.id);
+    expect(await db.getBoard(composite.id)).toEqual(composite);
+    expect(composite.items).toHaveLength(2);
+    expect(composite.style.prompt).toBe('Ink:\nInk washes\n\nNeon:\nNeon light');
+    await db.updateBoard(composite.id, { style: { prompt: 'Edited blend' } });
+    await db.removeBoardItem(composite.id, composite.items[0].id);
+    expect(await Promise.all([db.getBoard(first.id), db.getBoard(second.id)])).toEqual(sources);
+  });
+
   it('updates board metadata', async () => {
     const board = await db.createBoard({ name: 'Rename me' });
     created.push(board.id);
