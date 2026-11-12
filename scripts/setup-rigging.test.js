@@ -7,6 +7,7 @@ import { RIGGING_RUNTIME, RIGGING_INSTALL_COMMAND, resolveRiggingPython } from '
 
 const scripts = fileURLToPath(new URL('.', import.meta.url));
 const profile = JSON.parse(readFileSync(`${scripts}rigging-profile.json`, 'utf8'));
+const python = resolveTestPython();
 
 // Uniquely exercises the provisioning boundary: real file downloads/hash checks,
 // offline explicit Conda input, hash-only pip install, and the final real-import command.
@@ -65,12 +66,12 @@ with tempfile.TemporaryDirectory() as temporary:
     print(json.dumps(result))
 `;
 const provision = (target) => {
-  const stdout = execFileSync(resolveTestPython(), ['-c', fixture, scripts, target], { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS });
+  const stdout = execFileSync(python, ['-c', fixture, scripts, target], { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS });
   return JSON.parse(stdout.trim().split('\n').at(-1));
 };
 
 describe('reviewed rigging provisioning', () => {
-  it.each(['macos', 'rosetta', 'linux'])('installs only the complete reviewed closure on %s', (target) => {
+  it.skipIf(!python).each(['macos', 'rosetta', 'linux'])('installs only the complete reviewed closure on %s', (target) => {
     const result = provision(target);
     expect(result.ok).toBe(true);
     const creation = result.calls.find((args) => args.includes('create'));
@@ -83,7 +84,7 @@ describe('reviewed rigging provisioning', () => {
     expect(result.calls.at(-1).at(-1)).toContain('(3, 13, 18)');
   });
 
-  it.each(['unsupported', 'musl', 'intel', 'existing', 'tamper', 'unregistered'])('refuses %s before creating or installing an environment', (target) => {
+  it.skipIf(!python).each(['unsupported', 'musl', 'intel', 'existing', 'tamper', 'unregistered'])('refuses %s before creating or installing an environment', (target) => {
     const result = provision(target);
     expect(result.ok).toBe(false);
     expect(result.reason).toMatch(/No reviewed|already exists|File exists|SHA-256 mismatch/);
@@ -91,7 +92,7 @@ describe('reviewed rigging provisioning', () => {
     if (target === 'unregistered') expect(result.preserved).toBe(true);
   });
 
-  it('removes only the environment this invocation created when package installation fails', () => {
+  it.skipIf(!python)('removes only the environment this invocation created when package installation fails', () => {
     const result = provision('install-failed');
     expect(result.ok).toBe(false);
     expect(result.prefixExists).toBe(false);
@@ -119,7 +120,7 @@ describe('reviewed rigging provisioning', () => {
   });
 });
 
-it('audits the entire registry inventory and refuses MAL findings or incomplete OSV results', () => {
+it.skipIf(!python)('audits the entire registry inventory and refuses MAL findings or incomplete OSV results', () => {
   const audit = String.raw`
 import contextlib, importlib.util, io, json, sys
 spec = importlib.util.spec_from_file_location('audit', sys.argv[1] + 'audit-rigging.py')
@@ -156,5 +157,5 @@ for mode in ['clean', 'malware', 'incomplete', 'paginated-malware', 'pagination-
         assert mode in ['incomplete', 'pagination-error'] and 'unresolved' in str(error)
 print('ok')
 `;
-  expect(execFileSync(resolveTestPython(), ['-c', audit, scripts], { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS }).trim()).toBe('ok');
+  expect(execFileSync(python, ['-c', audit, scripts], { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS }).trim()).toBe('ok');
 });
