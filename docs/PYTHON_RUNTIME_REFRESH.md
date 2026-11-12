@@ -840,3 +840,59 @@ Optional mlx-audio server/model families were not enabled to inflate coverage.
 H3's remaining original candidates are its five smaller helper packages and
 coordinated Hub/Transformers migration. Music3's separate mlx-audio upgrade and
 the other profile/native-major migrations remain under #15769.
+
+## Fifteenth-slice Music3 MLX audio library (2026-11-12)
+
+The Music3 Apple Silicon profile updates **mlx-audio 0.5.0 → 0.6.4**.
+Its new core requirements add **Jinja2 3.1.6**, **MarkupSafe 3.0.4** and
+**SentencePiece 0.2.2** to the complete lock. All **34** existing companion
+versions, markers and hash sets are preserved, including MLX/MLX-Metal
+**0.32.4**, Transformers **5.15.0** and Hub **1.28.0**. The profile keeps its
+Python **3.12+** floor and changes neither CUDA nor the PortOS sidecar.
+
+[mlx-audio 0.6.4 metadata](https://pypi.org/pypi/mlx-audio/0.6.4/json) requires
+MLX 0.32.4, Jinja2, SentencePiece and Transformers with its `chat-template`
+extra; the selected closure satisfies these requirements. MarkupSafe is Jinja2's
+transitive requirement. The 12 Python files in the MiniMax Music3 model package
+are byte-identical between the hash-verified 0.5.0 and 0.6.4 wheels, as is its
+music-loader wrapper. Shared loading/registry infrastructure changed, so actual
+checkpoint loading and generation were still exercised rather than inferred
+from the unchanged model files.
+
+The complete **38-package / 846-hash** lock was regenerated using verified
+**uv 0.13.7**, Python 3.12, wheels only and seven-day cutoff
+`2026-11-05T00:00:00Z`, retaining the existing output to preserve unrelated pins.
+Every hash matches an unyanked pre-cutoff PyPI artifact. Complete OSV/MAL
+responses returned zero findings with count/error/pagination checks; bundled
+native libraries are not separately audited. The header records the actual
+regeneration command instead of retaining the preceding AnyIO/FileLock upgrade
+flags. Install/Repair retains hashes, `--no-deps` and wheels-only enforcement.
+
+Fresh native Apple Silicon CPython **3.12.11** and **3.13.18** environments
+installed the complete closure with those restrictions and passed dependency
+checks. Both passed an offline, real-caller probe:
+
+- A tiny random-weight checkpoint was created by the **old** library, then
+  loaded strictly through the new public `mlx_audio.music.load` path. Its config
+  and safetensors weights were local synthetic fixtures, not model downloads.
+- The actual Music3 model performed two-step generation on Metal with finite
+  channels-last stereo output at **44.1 kHz** and coherent result metadata.
+  Missing text/lyrics, invalid duration and invalid step count were rejected.
+- The unmodified `generate_minimax_music3_mlx.py` executable loaded that same
+  checkpoint, generated audio, oriented/resampled it and wrote a real two-channel
+  PCM16 **32 kHz WAV**. Its `STAGE` messages and `RESULT` duration/sample rate
+  matched the file. A supplied revision also passed through the real local-path
+  loader without a Hub request.
+
+The same fixture/probe passed against the previous complete lock on Python
+3.12. Tiny architecture dimensions intentionally produce abbreviated waveforms;
+these checks prove loading/tensor/sidecar compatibility, not requested-duration
+accuracy or production music quality. **172** focused installer/profile/sidecar
+tests passed with an explicit NumPy-capable test interpreter, so none of the
+three sidecar tests were skipped for a missing prerequisite.
+
+No production weights, provider calls or full-song quality evaluation ran.
+Optional speech servers/model families were not installed. Music3's remaining
+original migration candidate is Hub **1.28 → 2.4**, which must be coordinated
+with the pinned Transformers **5.15** upper bound; H3 helpers, other profiles
+and their concrete constraints remain tracked under #15769.
