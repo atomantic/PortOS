@@ -117,3 +117,8 @@ The Pixal-only plotting refresh retains NumPy 2.2.6 and all native renderer
 pins. See [Pixal Metal plotting-stack maintenance](PYTHON_RUNTIME_REFRESH.md#pixal-metal-plotting-stack-maintenance)
 for exact versions, complete-lock audit and CPU Agg/font/contour validation;
 these tests do not certify model inference or GLB rendering.
+
+The retained ImageIO FFmpeg backend refresh includes an ARM64 bundled FFmpeg
+7.1 → 9.0 transition. See [Pixal Metal retained video-export backend](PYTHON_RUNTIME_REFRESH.md#pixal-metal-retained-video-export-backend)
+for real synthetic export/decode checks, binary platform floors and the
+limits of package-advisory and retained-library coverage.
