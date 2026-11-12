@@ -13,6 +13,22 @@ import { blenderScratchDir, blenderSrcDir } from './workspace.js';
 
 const importsThree = (source) => /(?:\bfrom\s*|\bimport\s+)['"]three(?:\/[^'"]*)?['"]/.test(source);
 
+/** The file `rel` names under `src`, or a refusal. A symlink in any component can point outside the film. */
+async function codeModuleFile(src, rel) {
+  if (typeof rel !== 'string' || rel.split('/').some((part) => !part || part === '.' || part === '..')) {
+    throw new Error(`Code import leaves the film source: ${rel}`);
+  }
+  let current = src;
+  for (const part of rel.split('/')) {
+    current = join(current, part);
+    const stat = await lstat(current).catch(() => null);
+    if (stat?.isSymbolicLink()) throw new Error(`Code import leaves the film source: ${rel}`);
+    if (!stat) throw new Error(`Missing code module ${rel}`);
+  }
+  if (!(await lstat(current)).isFile()) throw new Error(`Missing code module ${rel}`);
+  return current;
+}
+
 /** Encode one RGBA frame. Preview plates flatten onto black; layers keep alpha. */
 async function encodeFilmPixels(rgba, { width, height, alpha }) {
   if (rgba.length !== width * height * 4) throw new Error(`The code frame is ${rgba.length} bytes, not ${width}×${height} pixels`);
@@ -76,11 +92,7 @@ export async function renderFilmCodeFrames({
   let page = null;
   try {
     for (const rel of paths || [entry]) {
-      if (typeof rel !== 'string' || rel.split('/').some((part) => !part || part === '.' || part === '..')) {
-        throw new Error(`Code import leaves the film source: ${rel}`);
-      }
-      const absolute = join(src, ...rel.split('/'));
-      if (!(await lstat(absolute).catch(() => null))?.isFile()) throw new Error(`Missing code module ${rel}`);
+      const absolute = await codeModuleFile(src, rel);
       const target = join(stage, ...rel.split('/'));
       await mkdir(dirname(target), { recursive: true });
       await copyFile(absolute, target);
@@ -115,7 +127,10 @@ export async function renderFilmCodeFrames({
       if (typeof encoded !== 'string' || !encoded) throw new Error(`Shot frame ${frame.frame} returned no pixels`);
       const bytes = await encodeFilmPixels(Buffer.from(encoded, 'base64'), { width, height, alpha: alpha === true });
       await mkdir(dirname(frame.file), { recursive: true });
-      await writeFile(frame.file, bytes);
+      // A truncated final name would be resumed as a finished frame. Rename only after the write completes.
+      const partial = `${frame.file}.part`;
+      await writeFile(partial, bytes);
+      await rename(partial, frame.file);
       onFrame({ frame: frame.frame, index: index + 1, total: frames.length, skipped: false, sec: (Date.now() - started) / 1000 });
     }
   } finally {

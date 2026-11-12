@@ -152,7 +152,7 @@ export function render(ctx, env) {
 
 PortOS renders the module in the composition browser sandbox: no host access and no network. Bare `three` is supplied by PortOS and is not part of the shot hash. The module and the relative files it statically imports are. Editing one of those files marks only the shots that reach it stale. Preview frames are JPEG flattened on black; final frames and layers are PNG (layers keep alpha), under `renders/<shot>/<quality>/frames/` and `renders/<shot>/<quality>/layers/<n>/`. Layers are composited when the shot video is encoded, and onto stills. A blend mode mixes the colors, then the layer's alpha covers the plate, so a transparent pixel leaves the plate unchanged. Handle frames a dissolve or beat toggle reads are composited the same way into `renders/<shot>/<quality>/handles/`. A Blender plate is opaque, so an `under` layer does not show through it; use `over`, or a code shot whose final frame has alpha. Stills are rendered again on every request, so a new module never keeps an older plate.
 
-A film of only code shots never starts Blender. `describe(ctx)` still lives in `src/film.py`, and it does not have to define `build_shot`.
+A film of only code shots never starts Blender. `describe(ctx)` still lives in `src/film.py`, and it does not have to define `build_shot`. An import of `bpy`, `bmesh` or `mathutils` anywhere in the film's import closure, including inside a function or a branch, still uses the Blender driver.
 
 `ctx` carries: `song` (the contents of `song.json`), `options` (the film's options, below), `fps`, `width` and `height` (already scaled), `scale`, `samples`,
 `quality` (`still`, `preview`, `final` or `describe`), `engine` (Blender's own engine id), `workspace`, `src`,

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
 import { createFakeBlender } from '../musicVideo/blender/__blenderFixture.js';
+import { renderFilmCodeFrames } from './codeRender.js';
 import { describeNeedsBlender } from './describeRun.js';
 import { __resetBlenderJobsForTests, listBlenderJobs } from './jobs.js';
 import { enqueueBlenderRenders } from './queue.js';
@@ -132,6 +133,10 @@ describe('describeNeedsBlender', () => {
     try {
       writeFileSync(join(src, 'film.py'), '# import bpy\nimport math\ndef describe(ctx):\n    return {"shots": []}\n');
       expect(await describeNeedsBlender({ workspaceDir: root })).toBe(false);
+      writeFileSync(join(src, 'film.py'), 'note = "import bpy"\nimport math\n');
+      expect(await describeNeedsBlender({ workspaceDir: root })).toBe(false);
+      writeFileSync(join(src, 'film.py'), 'import math\ndef ready():\n    if True:\n        import bpy\n');
+      expect(await describeNeedsBlender({ workspaceDir: root })).toBe(true);
       mkdirSync(join(src, 'shots'));
       writeFileSync(join(src, 'film.py'), 'import shots.hero\n');
       writeFileSync(join(src, 'shots', 'hero.py'), 'import bpy\n');
@@ -141,6 +146,25 @@ describe('describeNeedsBlender', () => {
       rmSync(src, { recursive: true, force: true });
     }
   });
+});
+
+it('does not stage a code module through a symlinked directory', async () => {
+  const owner = createOwner(1);
+  const outside = mkdtempSync(join(tmpdir(), 'portos-code-outside-'));
+  try {
+    mkdirSync(join(owner.workspaceDir, 'src'), { recursive: true });
+    writeFileSync(join(outside, 's010.js'), 'export function render() {}\n');
+    symlinkSync(outside, join(owner.workspaceDir, 'src', 'code'));
+    const frame = join(owner.workspaceDir, 'renders', 'frame.png');
+    mkdirSync(join(owner.workspaceDir, 'renders'), { recursive: true });
+    await expect(renderFilmCodeFrames({
+      owner, jobId: 'symlink', entry: 'code/s010.js', song: null, width: 2, height: 2,
+      paths: ['code/s010.js'], frames: [{ frame: 0, t: 0, localT: 0, file: frame }],
+    })).rejects.toThrow(/leaves the film source/);
+    expect(runtime.opened).toEqual([]);
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
 });
 
 it('renders a Blender shot, a code shot and a code layer, then marks only the edited layer stale', async () => {

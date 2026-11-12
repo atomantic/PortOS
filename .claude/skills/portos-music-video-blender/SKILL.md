@@ -59,7 +59,7 @@ of song time. The module and its static imports join that shot's stale hash; bar
 hashed. Preview plates are JPEG on black; finals and layers are PNG with the layer's alpha, composited at encode.
 A blend uses that alpha as coverage. Dissolves and beat toggles read the same composite from `renders/<shot>/<quality>/handles/`.
 A Blender plate is opaque, so an `under` layer stays hidden on it. A film that does not import `bpy`, `bmesh` or
-`mathutils` syncs with system Python and renders with no Blender; `describe` is still required, `build_shot` is not.
+`mathutils`, including an import nested in a function or a branch, syncs with system Python and renders with no Blender; `describe` is still required, `build_shot` is not.
 Code runs in the browser sandbox with no host access. Full contract: the feature doc.
 
 **Film options.** To let the director choose something without editing code (a look, a palette, a debug overlay),

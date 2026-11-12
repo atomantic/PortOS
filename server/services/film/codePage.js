@@ -28,8 +28,15 @@ try {
   const render = mod.render;
   globalThis.portosFilm.frame = async (spec) => {
     const env = { t: spec.t, localT: spec.localT, frame: spec.frame, song: specSong, width: spec.width, height: spec.height };
-    if (canvas.width !== spec.width) canvas.width = spec.width;
-    if (canvas.height !== spec.height) canvas.height = spec.height;
+    if (space === 'canvas') {
+      // Assigning the size, even unchanged, clears the bitmap and the 2D state.
+      // A clip or transform from an earlier frame must not change this one.
+      canvas.width = spec.width;
+      canvas.height = spec.height;
+    } else if (canvas.width !== spec.width || canvas.height !== spec.height) {
+      canvas.width = spec.width;
+      canvas.height = spec.height;
+    }
     if (space === 'three') {
       if (!webgl) {
         webgl = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: false, preserveDrawingBuffer: true });

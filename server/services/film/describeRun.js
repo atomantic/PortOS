@@ -17,108 +17,39 @@ import { blenderRefusal, blenderScratchDir, blenderSrcDir } from './workspace.js
 
 const PY_DIR = fileURLToPath(new URL('./py/', import.meta.url));
 const DESCRIBE_SCRIPT = join(PY_DIR, 'portos_film_describe.py');
-const HOST_MODULES = new Set(['bpy', 'bmesh', 'mathutils']);
+const SCAN_SCRIPT = join(PY_DIR, 'portos_film_import_scan.py');
 const MANIFEST_MAX_BYTES = 4 * 1024 * 1024;
 
-const stripComment = (line) => {
-  let quote = null;
-  for (let index = 0; index < line.length; index += 1) {
-    const char = line[index];
-    if (quote) {
-      if (char === quote && line[index - 1] !== '\\') quote = null;
-      continue;
-    }
-    if (char === '"' || char === "'") { quote = char; continue; }
-    if (char === '#') return line.slice(0, index);
-  }
-  return line;
-};
-
-/** Logical lines, so an import split across parentheses is still one import. */
-function logicalLines(text) {
-  const lines = [];
-  let buffer = '';
-  let depth = 0;
-  for (const raw of String(text).split('\n')) {
-    const line = stripComment(raw).replace(/\\\s*$/, ' ');
-    buffer = buffer ? `${buffer} ${line}` : line;
-    depth += (line.match(/\(/g) || []).length - (line.match(/\)/g) || []).length;
-    if (depth <= 0) {
-      if (buffer.trim()) lines.push(buffer.trim());
-      buffer = '';
-      depth = 0;
-    }
-  }
-  if (buffer.trim()) lines.push(buffer.trim());
-  return lines;
-}
-
-function importTargets(line) {
-  const from = line.match(/^from\s+(\.+)?([\w.]*)\s+import\s+(.+)$/);
-  if (from) {
-    const names = from[3].replace(/[()]/g, ' ').split(',')
-      .map((part) => part.trim().split(/\s+as\s+/i)[0].trim())
-      .filter((name) => name && name !== '*');
-    return { dots: (from[1] || '').length, base: from[2] || '', names };
-  }
-  const imported = line.match(/^import\s+(.+)$/);
-  if (!imported) return null;
-  const names = imported[1].split(',').map((part) => part.trim().split(/\s+as\s+/i)[0].trim()).filter(Boolean);
-  return { dots: 0, base: '', names };
-}
-
-function moduleRoots(currentRel, parsed) {
-  if (parsed.dots || parsed.base) {
-    const dir = currentRel.split('/').slice(0, -1);
-    for (let step = 1; step < parsed.dots; step += 1) dir.pop();
-    const root = [...(parsed.dots ? dir : []), ...(parsed.base ? parsed.base.split('.') : [])];
-    const roots = [root];
-    for (const name of parsed.names) if (/^[A-Za-z_]\w*$/.test(name)) roots.push([...root, name]);
-    return roots;
-  }
-  return parsed.names.map((name) => name.split('.').filter(Boolean));
-}
-
-async function pythonFileExists(src, parts) {
-  if (!parts.length) return null;
-  const rel = parts.join('/');
-  for (const candidate of [`${rel}.py`, `${rel}/__init__.py`]) {
-    const absolute = join(src, ...candidate.split('/'));
-    if ((await lstat(absolute).catch(() => null))?.isFile()) return candidate;
-  }
-  return null;
-}
-
 /**
- * True when `srcDir`'s film.py (and the local modules it imports) touches
- * Blender. A missing film does not. `portos_film` is the shipped helper kit
- * and is not followed into src/.
+ * `blender`, `python`, or null when the scan could not be read. The scanner
+ * parses the film; it does not run it. Null stays on the Blender gate.
  */
-async function pythonFilmNeedsBlender(srcDir) {
-  const pending = ['film.py'];
-  const seen = new Set();
-  while (pending.length) {
-    const rel = pending.shift();
-    if (seen.has(rel)) continue;
-    seen.add(rel);
-    const text = await readFile(join(srcDir, ...rel.split('/')), 'utf8').catch(() => null);
-    if (text == null) continue;
-    for (const line of logicalLines(text)) {
-      const parsed = importTargets(line);
-      if (!parsed) continue;
-      for (const parts of moduleRoots(rel, parsed)) {
-        const root = parts[0];
-        if (!root || root === 'portos_film') continue;
-        if (HOST_MODULES.has(root)) return true;
-        // Follow the package prefix too: `from kit import look` runs kit/__init__.py.
-        for (let length = 1; length <= parts.length; length += 1) {
-          const file = await pythonFileExists(srcDir, parts.slice(0, length));
-          if (file && !seen.has(file)) pending.push(file);
-        }
-      }
+function scanFilmImports(python, src) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (answer) => { if (!settled) { settled = true; resolve(answer); } };
+    const chunks = [];
+    let child;
+    try {
+      const cwd = dirname(SCAN_SCRIPT);
+      const env = withSpawnCwdEnv(withoutServerSecretsEnv(process.env), cwd);
+      env.PYTHONNOUSERSITE = '1';
+      env.PYTHONDONTWRITEBYTECODE = '1';
+      child = spawn(python, [SCAN_SCRIPT, src], safeChildProcessOptions({
+        cwd, env, stdio: ['ignore', 'pipe', 'pipe'],
+      }));
+    } catch {
+      finish(null);
+      return;
     }
-  }
-  return false;
+    child.stdout.on('data', (chunk) => { if (chunks.length < 8) chunks.push(chunk); });
+    child.stderr.on('data', () => {});
+    child.on('error', () => finish(null));
+    child.on('close', (code) => {
+      const answer = Buffer.concat(chunks).toString('utf8').trim();
+      finish(code === 0 && (answer === 'blender' || answer === 'python') ? answer : null);
+    });
+  });
 }
 
 /**
@@ -129,7 +60,10 @@ async function pythonFilmNeedsBlender(srcDir) {
 export async function describeNeedsBlender(owner) {
   const src = blenderSrcDir(owner);
   if (!(await lstat(join(src, 'film.py')).catch(() => null))?.isFile()) return true;
-  return pythonFilmNeedsBlender(src);
+  const python = (await whichFirst('python3')) || (await whichFirst('python'));
+  // No interpreter, or a scan that cannot show the film is code-only, stays on the Blender gate.
+  if (!python) return true;
+  return await scanFilmImports(python, src) !== 'python';
 }
 
 /** Python 3, or a 503 naming what is missing. Checked before the sync job starts. */
