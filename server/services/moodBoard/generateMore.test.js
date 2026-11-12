@@ -102,6 +102,32 @@ describe('generate more workflow', () => {
     expect(sentInput.promptAdditions[1].text).not.toContain('rainy harbor');
   });
 
+  it('uses the complete shared style instead of reference subjects and keeps varied subjects through the image queue', async () => {
+    const id = mocks.board.id;
+    const style = `${'Soft luminous grain. '.repeat(130)}Dreamlike spatial distortion, hazy edges.`;
+    mocks.board.style = { prompt: style, negativePrompt: 'clinical sharpness' };
+    mocks.board.items[0].analysis = { prompt: 'A silver lighthouse overlooking a harbor' };
+    mocks.run.mockResolvedValueOnce({ text: JSON.stringify({ prompts: ['An empty street facade with floating windows', 'A person on a park bench beneath an impossible shadow'] }) });
+    await startGenerateJob(id, input({ direction: 'quiet urban moments' }));
+    const state = await settled(id);
+    const sent = state.sentInput.sentPrompt;
+    expect(sent).toContain(style);
+    expect(sent).toContain('clinical sharpness');
+    expect(sent).not.toContain('silver lighthouse');
+    expect(sent).not.toContain(reference.caption);
+    expect(sent).toContain('different subject families');
+    expect(sent).toContain('Honor an explicit requested subject or theme in direction');
+    expect(sent).toContain('quiet urban moments');
+    expect(mocks.enqueue.mock.calls.map(([job]) => job.params.prompt)).toEqual([
+      expect.stringContaining('empty street facade'), expect.stringContaining('person on a park bench'),
+    ]);
+    for (const [job] of mocks.enqueue.mock.calls) {
+      expect(job.params.prompt).toContain(style);
+      expect(job.params.prompt).toContain('keep the subject above');
+      expect(job.params.negativePrompt).toBe('clinical sharpness');
+    }
+  });
+
   it('inherits the configured cloud image model independently of the selected prompt-writing model', async () => {
     mocks.settings = { imageGen: { mode: 'codex', codex: { enabled: true, model: 'example-image-model', effort: 'medium' } } };
     const id = mocks.board.id;

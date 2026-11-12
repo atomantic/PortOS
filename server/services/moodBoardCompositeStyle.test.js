@@ -48,6 +48,8 @@ describe('composeBoardPrompt', () => {
     expect(sent).toContain('Ink washes');
     expect(sent).toContain('Neon lights');
     expect(sent).toContain('ONE new, coherent visual style');
+    expect(sent).toContain('subject-independent visual style');
+    expect(sent).toContain('Remove subject definitions even from older source styles');
     expect(sent).not.toContain(analyzed.analysis.prompt);
     expect(style.prompt).toBe(JSON.parse(composedText).prompt);
     promptRunner.runPromptThroughProvider.mockResolvedValueOnce({ text: JSON.stringify({ prompt: 'x'.repeat(8001) }) });
@@ -104,6 +106,10 @@ describe('composeBoardPrompt', () => {
     expect(sent).toContain('granular ink wash');
     expect(sent).toContain('analyzedPrompt');
     expect(sent).toContain('Dusty painted sci-fi.');
+    expect(sent).toContain('HOW the images look from WHAT they depict');
+    expect(sent).toContain('abstract, non-narrative study');
+    expect(sent).toContain('Start with the visual treatment, not a subject or scene');
+    expect(sent).not.toContain('Start with the subject or scene');
     expect(style.prompt.startsWith('a weathered foundry')).toBe(true);
     expect(style.negativePrompt).toBe('gloss, neon, plastic');
     expect(style.analyzedItemCount).toBe(1);
