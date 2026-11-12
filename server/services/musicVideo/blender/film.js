@@ -14,7 +14,7 @@ export async function readBlenderFilm(project) {
   const { settings } = normalizeBlenderRecord(project.blender);
   const manifest = await readBlenderManifest(project.id);
   const shots = manifest?.shots || [];
-  const renders = shots.length ? await readBlenderRenders(project.id, manifest, { settings }) : {};
+  const renders = shots.length ? await readBlenderRenders(project.id, manifest, { project, settings }) : {};
   const problems = manifest ? blenderFilmProblems(manifest, { fps: settings.fps, durationSec: project.audioAnalysis?.durationSec }) : ['Sync shots from scripts first.'];
   return { projectId: project.id, settings, manifest, shots, renders, problems };
 }
