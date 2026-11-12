@@ -3,6 +3,7 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawn } from '../../lib/childProcess.js';
 import { resolveCondaEnvPython } from '../../lib/condaEnv.js';
 import { rewriteGlbMaterialsOpaque } from './glbMaterials.js';
@@ -13,7 +14,7 @@ import {
 } from './trellis2.js';
 import { isCudaOomError } from './trellis2Cuda.js';
 import {
-  textMatcher, runGenerateSubprocess, probePythonModules,
+  textMatcher, runGenerateSubprocess, probePythonModules, runInstallSteps,
 } from './laneRunner.js';
 import { validateRenderOptions } from './renderOptions.js';
 
@@ -32,22 +33,32 @@ export function pixal3dRoot(base = join(HOME, '.portos')) {
 }
 
 /** Where Pixal3D itself is cloned — the code this lane actually runs. */
-function pixal3dRepoDir(base) {
-  return join(pixal3dRoot(base), 'Pixal3D');
+function pixal3dRepoDir(base, exists = existsSync) {
+  const root = pixal3dRoot(base);
+  return exists(join(root, '.conda'))
+    ? join(root, '.conda', 'portos-source', 'Pixal3D')
+    : join(root, 'Pixal3D');
 }
 
 /** Upstream's shipped entrypoint. */
-function pixal3dInferenceScript(base) {
-  return join(pixal3dRepoDir(base), 'inference.py');
+function pixal3dInferenceScript(base, exists = existsSync) {
+  return join(pixal3dRepoDir(base, exists), 'inference.py');
 }
 
 /**
- * The conda Python for this lane, or null when its env doesn't exist. A one-line
- * wrapper over the shared resolver so the env name lives in exactly one place.
- * @param {{exists?: (p: string) => boolean, env?: object}} [opts]
+ * Prefer the completed private profile; untouched legacy environments remain usable.
+ * Incomplete Repair must not fall back to the legacy interpreter.
+ * @param {{base?: string, exists?: (p: string) => boolean, env?: object}} [opts]
  * @returns {string|null}
  */
-export function pixal3dPython({ exists = existsSync, env } = {}) {
+export function pixal3dPython({ base, exists = existsSync, env } = {}) {
+  const root = pixal3dRoot(base);
+  const prefix = join(root, '.conda');
+  if (exists(join(root, 'portos-installing'))) return null;
+  if (exists(prefix)) {
+    const python = join(prefix, 'bin', 'python');
+    return exists(python) && exists(join(prefix, 'portos-profile.json')) ? python : null;
+  }
   return resolveCondaEnvPython(PIXAL3D_CONDA_ENV, { exists, env });
 }
 
@@ -59,8 +70,22 @@ export function pixal3dPython({ exists = existsSync, env } = {}) {
  * @returns {boolean}
  */
 export function isPixal3dCudaInstalled({ base, exists = existsSync, env } = {}) {
-  if (!pixal3dPython({ exists, env })) return false;
-  return exists(pixal3dInferenceScript(base));
+  if (!pixal3dPython({ base, exists, env })) return false;
+  return exists(pixal3dInferenceScript(base, exists));
+}
+
+/** Rebuild only this lane's private environment, preserving downloaded model assets. */
+export function installPixal3dCuda({ base, onEvent, env, spawnImpl = spawn } = {}) {
+  const script = fileURLToPath(new URL('../../../scripts/setup-pixal3d-cuda.py', import.meta.url));
+  return runInstallSteps({
+    steps: [{ stage: 'bootstrap', command: 'python3', args: [script, pixal3dRoot(base)] }],
+    label: LABEL,
+    codePrefix: CODE_PREFIX,
+    isTransient: () => false,
+    onEvent,
+    env,
+    spawnImpl,
+  });
 }
 
 export const PIXAL3D_STANDARD_MODE_MIN_VRAM_GB = 36;
@@ -125,6 +150,7 @@ export function buildPixal3dGenerateArgs({
   outputPath,
   base,
   python,
+  exists = existsSync,
   resolution = PIXAL3D_RES_FLOOR,
   lowVram = true,
   steps = null,
@@ -139,14 +165,14 @@ export function buildPixal3dGenerateArgs({
   // Both are range-checked at the same boundary as the other lanes; only seed is emitted.
   validateRenderOptions('buildPixal3dGenerateArgs', { steps, seed });
   const args = [
-    pixal3dInferenceScript(base),
+    pixal3dInferenceScript(base, exists),
     '--image', imagePath,
     '--resolution', String(resolution),
   ];
   if (outputPath) args.push('--output', outputPath);
   if (lowVram) args.push('--low_vram');
   if (seed !== null) args.push('--seed', String(seed));
-  return { command: python || pixal3dPython({}) || 'python', args };
+  return { command: python || pixal3dPython({ base, exists }) || 'python', args };
 }
 
 /**
@@ -215,8 +241,8 @@ export const PIXAL3D_INCOMPLETE_INSTALL_HELP = 'Pixal3D is installed but not eve
   + 'CUDA extension built, so renders will fail in the mesh exporter.';
 
 export const PIXAL3D_NAF_FALLBACK_HELP = 'Pixal3D is installed, but NATTEN is missing, '
-  + 'so its NAF refinement step falls back to DINO projection features — slower, and '
-  + 'geometry and texture detail are lower.';
+  + 'so its NAF refinement step uses interpolated DINO projection features with lower '
+  + 'geometry and texture detail.';
 
 /**
  * Probe which of the env's modules resolve, for the install-state card. The spawn and
@@ -237,12 +263,13 @@ export const PIXAL3D_NAF_FALLBACK_HELP = 'Pixal3D is installed, but NATTEN is mi
  * @returns {Promise<{naf: 'available'|'unavailable'|'unknown', missing: string[], help?: string}>}
  */
 export async function probePixal3dModules({
+  base,
   execFileImpl,
   exists = existsSync,
   env,
 } = {}) {
   const modules = await probePythonModules({
-    python: pixal3dPython({ exists, env }),
+    python: pixal3dPython({ base, exists, env }),
     modules: [...PIXAL3D_REQUIRED_MODULES, ...PIXAL3D_NAF_MODULES],
     execFileImpl,
   });
@@ -328,8 +355,8 @@ export function runPixal3dCudaGenerate({
   postprocessGlb = rewriteGlbMaterialsOpaque,
 } = {}) {
   // Resolve the interpreter once and reuse it as the "is the env there?" answer.
-  const python = pixal3dPython({ exists, env });
-  if (!python || !exists(pixal3dInferenceScript(base))) {
+  const python = pixal3dPython({ base, exists, env });
+  if (!python || !exists(pixal3dInferenceScript(base, exists))) {
     const err = new Error(`${LABEL} is not installed — install it before generating.`);
     err.code = `${CODE_PREFIX}_NOT_INSTALLED`;
     return { promise: Promise.reject(err), kill: () => {} };
@@ -340,6 +367,7 @@ export function runPixal3dCudaGenerate({
     outputPath,
     base,
     python,
+    exists,
     resolution: resolution ?? budget.resolution,
     lowVram: lowVram ?? budget.lowVram,
     steps,
@@ -348,7 +376,7 @@ export function runPixal3dCudaGenerate({
   return runGenerateSubprocess({
     command,
     args,
-    cwd: pixal3dRepoDir(base),
+    cwd: pixal3dRepoDir(base, exists),
     env,
     label: LABEL,
     codePrefix: CODE_PREFIX,

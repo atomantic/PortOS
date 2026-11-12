@@ -24,6 +24,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [FLUX2_CUDA.md](./FLUX2_CUDA.md) | FLUX.2 / Qwen-Image 2.1 Windows/Linux hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
 | [ACESTEP15_CUDA.md](./ACESTEP15_CUDA.md) | ACE-Step 1.5 Windows/Linux hash locks, pinned-checkout install, regeneration, advisory scans and NVIDIA readiness evidence |
 | [TRELLIS2_METAL.md](./TRELLIS2_METAL.md) | TRELLIS.2 Metal native profile, immutable sources, wheel/build locks, regeneration and Install/Repair validation |
+| [PIXAL3D_CUDA.md](./PIXAL3D_CUDA.md) | Isolated Pixal3D CUDA lock, native Install/Repair, NAF fallback and validation status |
 | [PIXAL3D_MPS.md](./PIXAL3D_MPS.md) | Pixal3D Metal patched Torch environment, hash locks, native Install/Repair and synthetic-image mesh validation |
 | [TRELLIS2_CUDA.md](./TRELLIS2_CUDA.md) | TRELLIS.2 CUDA native profile, Conda artifacts, wheel locks, Install/Repair and GPU validation |
 | [MLX_VIDEO_LOCKS.md](./MLX_VIDEO_LOCKS.md) | Pinned LTX and Wan MLX runtime and build locks, audit inventory and regeneration |

@@ -80,6 +80,36 @@ describe('isPixal3dCudaInstalled', () => {
   });
 });
 
+describe('private Pixal3D CUDA profile', () => {
+  const prefix = join(ROOT, '.conda');
+  const python = join(prefix, 'bin', 'python');
+  const record = join(prefix, 'portos-profile.json');
+  const repo = join(prefix, 'portos-source', 'Pixal3D');
+  const entrypoint = join(repo, 'inference.py');
+
+  it('uses the completed private source and interpreter for rendering', async () => {
+    const child = makeChild();
+    const spawnImpl = vi.fn(() => child);
+    const exists = existsFor(prefix, python, record, entrypoint, CONDA_PY, INFERENCE);
+    expect(isPixal3dCudaInstalled({ base: BASE, exists, env: CONDA_ENV })).toBe(true);
+    const run = runPixal3dCudaGenerate({ base: BASE, exists, env: CONDA_ENV,
+      imagePath: '/tmp/image.png', outputPath: '/tmp/output.glb', spawnImpl,
+      postprocessGlb: vi.fn() });
+    expect(spawnImpl.mock.calls[0][0]).toBe(python);
+    expect(spawnImpl.mock.calls[0][1][0]).toBe(entrypoint);
+    expect(spawnImpl.mock.calls[0][2].cwd).toBe(repo);
+    child.emit('close', 0);
+    await run.promise;
+  });
+
+  it('does not fall back to a legacy environment after interrupted Repair', () => {
+    for (const paths of [[prefix, python], [join(ROOT, 'portos-installing')]]) {
+      expect(isPixal3dCudaInstalled({ base: BASE, env: CONDA_ENV,
+        exists: existsFor(...paths, CONDA_PY, INFERENCE, entrypoint) })).toBe(false);
+    }
+  });
+});
+
 describe('selectPixal3dRenderBudget', () => {
   it('gives a big card standard mode at full resolution', () => {
     expect(selectPixal3dRenderBudget(PIXAL3D_STANDARD_MODE_MIN_VRAM_GB)).toEqual({ lowVram: false, resolution: 1536 });

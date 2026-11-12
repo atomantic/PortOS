@@ -26,7 +26,7 @@ describe('pixal3dCuda degraded-state projection', () => {
     expect(state.fields.degraded).toEqual({
       label: 'incomplete install',
       help: expect.stringContaining('renders will fail in the mesh exporter'),
-      repairable: false,
+      repairable: true,
       detail: 'Missing: o_voxel',
     });
     // The culprit belongs to `detail` alone — repeating it in the remedy prose is the
@@ -63,7 +63,7 @@ describe('pixal3dCuda degraded-state projection', () => {
     });
     const state = await describeState();
     expect(state.fields.degraded).toEqual({
-      label: 'NAF fallback', help: PIXAL3D_NAF_FALLBACK_HELP, repairable: false,
+      label: 'NAF fallback', help: PIXAL3D_NAF_FALLBACK_HELP, repairable: true,
     });
   });
 

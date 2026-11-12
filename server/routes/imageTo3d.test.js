@@ -210,27 +210,10 @@ describe('image-to-3D install profile preflight', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it.each([
-    ['pixal3dCuda', isPixal3dCudaInstalled, /Pixal3D CUDA.*MoGe, NATTEN/],
-  ])('reports the unresolved %s profile for fresh Install and Repair', async (id, installed, missing) => {
-    const app = makeApp();
+    ['trellis2Cuda', isTrellis2CudaInstalled, 'trellis2-cuda'],
+    ['pixal3dCuda', isPixal3dCudaInstalled, 'pixal3d'],
+  ])('runs the owned %s setup for Install and Repair and refuses a non-Linux host', async (id, installed, root) => {
     const path = `/api/image-to-3d/targets/${id}/install`;
-    const status = await request(app).get(path);
-    expect(status.status).toBe(200);
-    expect(status.body.target).toMatchObject({
-      id, available: true, installed: false, installBlockedReason: expect.stringMatching(missing),
-    });
-    const error = { type: 'error', stage: 'preflight', message: status.body.target.installBlockedReason };
-    const fresh = await request(app).post(path);
-    expect(sseFrames(fresh.text)).toEqual([error]);
-    installed.mockReturnValueOnce(true);
-    const repair = await request(app).post(`${path}?repair=1`);
-    expect(sseFrames(repair.text)).toEqual([error]);
-    expect(hfChildEnv).not.toHaveBeenCalled();
-    expect(spawn).not.toHaveBeenCalled();
-  });
-
-  it('runs the owned CUDA setup for Install and Repair and refuses a non-Linux host', async () => {
-    const path = '/api/image-to-3d/targets/trellis2Cuda/install';
     spawn.mockImplementation(() => {
       const child = new EventEmitter();
       child.stdout = new EventEmitter();
@@ -244,14 +227,14 @@ describe('image-to-3D install profile preflight', () => {
     expect(status.body.target.installNotes).toContain('12.6.85');
     const fresh = await request(makeApp()).post(path);
     expect(sseFrames(fresh.text).at(-1).type).toBe('complete');
-    isTrellis2CudaInstalled.mockReturnValueOnce(true);
+    installed.mockReturnValueOnce(true);
     const repair = await request(makeApp()).post(`${path}?repair=1`);
     expect(sseFrames(repair.text).at(-1).type).toBe('complete');
     expect(spawn).toHaveBeenCalledTimes(2);
     for (const [command, args] of spawn.mock.calls) {
       expect(command).toBe('python3');
-      expect(args[0]).toMatch(/setup-trellis2-cuda\.py$/);
-      expect(args[1]).toMatch(/trellis2-cuda$/);
+      expect(args[0]).toMatch(new RegExp(`setup-${id === 'trellis2Cuda' ? 'trellis2' : 'pixal3d'}-cuda\\.py$`));
+      expect(args[1].endsWith(root)).toBe(true);
     }
     spawn.mockClear();
     targets.detectHostCapabilities.mockReturnValueOnce({ cuda: true, cudaVramGb: 24, linuxHost: false });
