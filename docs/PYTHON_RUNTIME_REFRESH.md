@@ -1135,3 +1135,66 @@ tests passed with the supported NumPy-capable interpreter. No production weights
 provider calls or full-song quality evaluation ran. This completes Music3 MLX's
 original dependency candidates; H3's separate coordinated migration and the
 other profile-specific work remain under #15769.
+
+## Twentieth-slice H3 MLX Hub/Transformers migration (2026-11-12)
+
+H3's Apple Silicon profile moves **Hugging Face Hub 1.27.0 → 2.4.0** with
+**Transformers 5.14.1 → 5.22.1** and required **Tokenizers 0.22.2 → 0.23.3**.
+**HTTPX2 2.16.0 / HTTPCore2 2.16.0** replace HTTPX 0.28.1 / HTTPCore 1.0.9,
+and **Truststore 0.10.5** supplies the new transport's native trust context.
+**Requests 2.34.2 / Certifi 2026.10.23 remain** for mlx-vlm's separate HTTP
+consumer. Source and metadata inspection found no remaining runtime consumer
+requiring old HTTPX; Starlette's test client prefers HTTPX2.
+
+All **51** companion versions, markers and hash sets are unchanged, including
+mlx-vlm **0.6.10**, mlx-lm **0.32.2**, mlx-audio **0.6.4** and MLX/Metal
+**0.32.4**. Python **3.11+**, the immutable H3 source revision and the deliberate
+absence of Torch/Torchvision are unchanged. The old Transformers pin excludes
+Hub 2; the replacement permits it and requires the newer Tokenizers line.
+Transformers' Hub HTTP alias now selects HTTPX2 exceptions. No PortOS adapter
+change was required.
+
+The complete **57-package / 1,309-hash** lock was regenerated with verified
+**uv 0.13.7**, wheels only and cutoff `2026-11-05T00:00:00Z`. Every hash matches
+an unyanked pre-cutoff PyPI artifact. Complete OSV/MAL responses returned zero
+findings with count/error/pagination checks. Install/Repair retains hash checks,
+wheels only and `--no-deps`; bundled native libraries are not separately audited.
+Fresh complete native Python **3.11.18** and **3.12.11** candidate installs and
+a Python 3.11 old-lock baseline passed dependency checks.
+
+Old/new native comparisons exercised actual callers rather than imports alone:
+
+- H3's local Qwen2 tokenizer and PortOS's PIL-backed image-processor binding
+  processed synthetic text and one/two keyframes without Torch/Torchvision.
+  Token IDs, modality tags, image grids and pixel bytes matched across versions;
+  malformed prompt, image and processor configuration inputs were refused.
+  The actual H3 constructor strictly loaded tiny synthetic Qwen3-VL language
+  weights and encoded text. Strict source-seam checks passed and the pinned
+  source stayed byte-identical. Image coverage is preprocessing/request assembly,
+  not vision-model forward or full-video generation.
+- Tiny actual VLM text-model forward, cached decoding and embedding adapter
+  checks passed, as did structured JSON schema token masks, consumption, EOS,
+  reset, clone and batching. Synthetic local vocabulary and random tiny weights
+  test API/tensor compatibility, not production checkpoint quality.
+- The actual mlx-vlm web app's lifespan, schemas, transcription parser,
+  streaming/disconnection and nonrecording telemetry behavior passed with local
+  fixtures. Transformers chat-template escaping, assistant spans and sandbox
+  refusal, plus the VLM typed Unicode tool parser, remained compatible.
+- PortOS's actual cache-only H3 snapshot resolver preserved lexical snapshot
+  roots and nested paths, reused cached files without requests, and refused
+  missing files with the expected typed cause. H3's upstream runtime loads local
+  paths, so revision/pattern filtering, exact-byte interruption/resume and typed
+  HTTP-error tests exercised Hub APIs directly, not an invented H3 downloader.
+
+Both candidate interpreters also exercised the default HTTPX2 Truststore
+context with certificate/hostname verification enabled. Untrusted and wrong-CA
+loopback TLS handshakes failed with certificate-verification errors; an explicit
+ephemeral fixture CA permitted HTTPS and actual Hub HEAD/GET downloads. No OS
+trust store changed. This proves local fixture trust behavior, not live public
+Hub chains or proxy compatibility.
+
+**301** focused installer/profile/runner/cache/source-seam tests passed without
+skips. Hub fixtures isolated caches and disabled telemetry/implicit tokens; no
+production weights, live providers, camera/audio streams or full-video quality
+evaluation were used. Other profile-specific dependency work and retained
+compatibility constraints remain under #15769.
