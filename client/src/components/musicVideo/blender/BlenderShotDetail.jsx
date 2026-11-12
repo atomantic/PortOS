@@ -6,7 +6,7 @@ import BlenderStatusChip from './BlenderStatusChip.jsx';
 import {
   blenderShotPlayable, blenderShotRenderStatus, blenderShotTiming, blenderStaleReason, blenderStillPreviewKey, isBlenderJobActive,
 } from '../../../lib/musicVideoBlender.js';
-import { musicVideoBlenderMediaUrl } from '../../../services/apiMusicVideo.js';
+import { useFilmApi } from './FilmApiContext.jsx';
 import { formatTimecode } from '../../../utils/formatters.js';
 import { buttonCls, noticeCls, primaryCls } from './blenderStyles.js';
 
@@ -30,6 +30,7 @@ const renderLabel = (noun, view) => {
  * `blocker` is why a render cannot start (`{ message, tab }`, null when it can).
  */
 function BlenderShotDetail({ blender, shot, audioUrl, blocker, onTime, onOpenPreview, onOpenTab }) {
+  const { musicVideoBlenderMediaUrl } = useFilmApi();
   const { state, pending, projectId } = blender;
   const [quality, setQuality] = useState(null);
   const video = useRef(null);

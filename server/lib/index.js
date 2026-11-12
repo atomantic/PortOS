@@ -1115,3 +1115,4 @@ export * from './imageInputProvenance.js';
 export * from './databaseMaintenanceSchema.js';
 export * from './musicVideoBlender.js';
 export * as musicVideoBlenderValidation from './musicVideoBlenderValidation.js';
+export * as codeAnimationFilms from './codeAnimationFilms.js';

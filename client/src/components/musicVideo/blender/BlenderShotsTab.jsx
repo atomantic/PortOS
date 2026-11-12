@@ -20,11 +20,11 @@ export const BLENDER_SHOT_PARAM = 'bshot';
  * falls back to the first one and says so. Before there are shots it offers
  * the one next step: a starter workspace, a sync, or Blender setup.
  */
-export default function BlenderShotsTab({ blender, project, audioUrl, onOpenPreview, onOpenTab }) {
+export default function BlenderShotsTab({ blender, project, audioUrl, onOpenPreview, onOpenTab, selectedShotId, onShotChange }) {
   const { state } = blender;
   const [searchParams, setSearchParams] = useSearchParams();
   const shots = state.manifest?.shots || [];
-  const requested = searchParams.get(BLENDER_SHOT_PARAM);
+  const requested = selectedShotId ?? searchParams.get(BLENDER_SHOT_PARAM);
   const shot = shots.find((entry) => entry.id === requested) || shots[0] || null;
   const shotId = shot?.id || null;
   const [playhead, setPlayhead] = useState(null);
@@ -37,12 +37,13 @@ export default function BlenderShotsTab({ blender, project, audioUrl, onOpenPrev
   useEffect(() => { setPlayhead(null); }, [shotId]);
 
   const select = useCallback((id) => {
+    if (onShotChange) { onShotChange(id); return; }
     setSearchParams((previous) => {
       const next = new URLSearchParams(previous);
       next.set(BLENDER_SHOT_PARAM, id);
       return next;
     }, { replace: true });
-  }, [setSearchParams]);
+  }, [setSearchParams, onShotChange]);
   // Stacked (a phone), the detail sits under the list: bring it into view when a row picks a shot.
   const selectFromList = useCallback((id) => {
     select(id);

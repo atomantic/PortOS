@@ -1,5 +1,7 @@
+import * as filmApi from '../../services/apiCodeAnimationFilm.js';
+import ProductionFilm from './ProductionFilm.jsx';
 import { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { Link, Navigate, useNavigate, useParams } from 'react-router';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { useSocketSubscription } from '../../hooks/useSocketSubscription';
@@ -23,6 +25,11 @@ const EVENTS = ['code-animation:changed'];
 const buttonClass = 'rounded border border-port-border px-3 py-2 text-sm hover:border-port-accent disabled:opacity-50';
 
 export default function ProductionProjects() {
+  const { filmId } = useParams();
+  return filmId ? <ProductionFilm key={filmId} /> : <PackageProjects />;
+}
+
+function PackageProjects() {
   const { projectId = '' } = useParams();
   const navigate = useNavigate();
   const [dirty, setDirty] = useState(false);
@@ -97,7 +104,13 @@ export default function ProductionProjects() {
     event.preventDefault();
     title.focus();
   };
+  if (project?.kind === 'film') return <Navigate to={`/code-animation/production/films/${project.id}/shots`} replace />;
   const starter = <>
+    <button type="button" className={buttonClass} disabled={busy} onClick={() => act(async () => {
+      const film = await filmApi.createFilm({ title: 'Untitled film', timeline: { durationSec: 60, fps: 24 } }, { silent: true });
+      navigate(`/code-animation/production/films/${film.id}/shots`);
+    })}>Create Film project</button>
+    <p className="text-xs text-gray-400">Film: multi-shot Blender projects up to one hour, optional soundtrack, Trusted local execution. Package: portable shorts up to 180 seconds with contained execution.</p>
     <button type="button" className={buttonClass} disabled={busy} onClick={createBlenderStarter}>Create painterly Blender starter</button>
     <p className="text-xs text-gray-400">Creates a 10-second 1080p24 Blender scene; no render or AI call starts.</p>
   </>;
@@ -120,9 +133,9 @@ export default function ProductionProjects() {
       </div> : <>
         {starter}
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-          {projects.items.map(item => <Link key={item.id} to={`/code-animation/production/${item.id}`} className="min-w-0 rounded border border-port-border p-3 hover:border-port-accent" aria-current={item.id === projectId ? 'page' : undefined}>
+          {projects.items.map(item => <Link key={item.id} to={item.kind === 'film' ? `/code-animation/production/films/${item.id}/shots` : `/code-animation/production/${item.id}`}  className="min-w-0 rounded border border-port-border p-3 hover:border-port-accent" aria-current={item.id === projectId ? 'page' : undefined}>
             <span className="block truncate font-medium">{item.title || 'Untitled production'}</span>
-            <span className="text-xs text-gray-400">{item.acceptedRevisionId ? 'Accepted source' : 'No accepted source'} · {timeAgo(item.createdAt)}</span>
+            <span className="text-xs text-gray-400">{item.kind === 'film' ? 'Film' : item.acceptedRevisionId ? 'Accepted source' : 'No accepted source'} · {timeAgo(item.createdAt)}</span>
           </Link>)}
         </div>
         <InfiniteScrollFooter hasMore={projects.hasMore} loading={projects.loading} error={projects.error} onLoadMore={projects.loadMore} autoLoad={false} label="Load older projects" />

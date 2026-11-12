@@ -209,6 +209,8 @@ describe('mounted route graph', () => {
   it('pins representative nested, aliased, toolkit, and public routes', () => {
     const operations = new Set(getApiRouteCatalog().routes.map((route) => `${route.method} ${route.path}`));
     for (const operation of [
+      'POST /api/code-animation/films/:id/blender/render',
+      'POST /api/music-video/:id/blender/render',
       'POST /api/brain/songbook/import/url',
       'GET /api/providers/readiness',
       'DELETE /api/providers/:id',

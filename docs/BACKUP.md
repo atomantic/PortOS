@@ -829,3 +829,10 @@ registry back over the restored one. If the reload cannot read the file, edits s
 refused with `MEDIA_MODELS_UNAVAILABLE` until a later restore reconciles it or
 PortOS restarts. Dry runs and unrelated selective restores do not acquire this
 boundary.
+
+Code Animation [Film projects](CODE_ANIMATION_PACKAGES.md#film-projects) use the
+same split: authored `data/code-animation/films/<id>/src/`, `manifest.json` and
+`song.json` are backed up alongside the Production PostgreSQL record. The
+anchored, overridable `/code-animation/films/*/renders/` exclusion omits
+regenerable output. An accepted final is copied to `data/videos/` and remains
+covered by media backup even when workspace renders are excluded.

@@ -40,7 +40,7 @@ export async function getProductionHistory(id, page) {
 
 export async function importProductionPackage(projectId, input) {
   const pkg = validateRequest(codeAnimationPackageSchema, input);
-  await getProductionProject(projectId);
+  if ((await getProductionProject(projectId)).kind === 'film') throw new ServerError('Film projects use their authored workspace rather than source packages', { status: 409, code: 'FILM_PROJECT' });
   const runId = randomUUID();
   const revisionId = randomUUID();
   const totalBytes = summarizeCodeAnimationPackage(pkg).totalBytes;

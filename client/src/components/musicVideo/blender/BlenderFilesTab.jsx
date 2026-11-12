@@ -4,7 +4,7 @@ import { FilePlus, Save, Trash2 } from 'lucide-react';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import ListLoadError from '../../ui/ListLoadError';
 import useListResource from '../../../hooks/useListResource.js';
-import { getMusicVideoBlenderFile, listMusicVideoBlenderFiles } from '../../../services/apiMusicVideo.js';
+import { useFilmApi } from './FilmApiContext.jsx';
 import { BLENDER_SOURCE_PATH as SOURCE_PATH, BLENDER_TEXT_EXTENSIONS as TEXT_EXTENSIONS } from '../../../lib/musicVideoBlender.js';
 import { formatBytes, formatCount } from '../../../utils/formatters.js';
 import { buttonCls, inputCls, labelCls, primaryCls } from './blenderStyles.js';
@@ -31,6 +31,7 @@ const newPathProblem = (path, files) => {
  * syncs and renders until saved or discarded.
  */
 export default function BlenderFilesTab({ blender }) {
+  const { getMusicVideoBlenderFile, listMusicVideoBlenderFiles } = useFilmApi();
   const { projectId, pending, fileDrafts, filesRevision } = blender;
   const [searchParams, setSearchParams] = useSearchParams();
   const fetchFiles = useCallback(

@@ -1509,3 +1509,24 @@ claims when a source moves to an archive or becomes compressed. This is additive
 key compatibility, not a rewrite or migration of historical usage totals.
 Interactive scans still atomically commit their watermark with their counts;
 incomplete source coverage leaves that watermark unchanged.
+
+### Code Animation Film projects
+
+Production's existing `code_animation_projects` table also holds `kind: 'film'`;
+absent `kind` reads as `package`, preserving existing rows without a rewrite or
+seed. This is an additive JSONB variant, with no new table or on-disk migration.
+Film data is `db-primary`: title, `film.settings` (including `options`), director
+notes, `{durationSec,fps}` timeline, optional audio filename/source and locally
+computed analysis, plus the accepted-output pointer. Row locks serialize film
+updates; no provider is called on creation, reads or attachment analysis.
+The record remains machine-local and never federates. Search/listing uses the
+existing Production index; binary media stays on disk.
+
+The workspace `data/code-animation/films/<projectId>/src/` is operator-authored
+`file-primary` source. `manifest.json` and `song.json` are derived engine context.
+Normal backups include these files and the PostgreSQL record; the anchored
+`/code-animation/films/*/renders/` filter excludes regenerable frames, videos,
+cuts and logs. Accepted finals are copied into `data/videos/` and indexed in
+Media History, so normal media backup preserves them independently of render
+retention. Referenced Music-library/uploaded audio stays in its existing asset
+store and backup policy. See [Film projects](CODE_ANIMATION_PACKAGES.md#film-projects).

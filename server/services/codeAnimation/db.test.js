@@ -32,7 +32,7 @@ vi.mock('fs/promises', async importOriginal => {
     },
   };
 });
-vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
+vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn(), emitCodeAnimationFilm: vi.fn() }));
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { request } from '../../lib/testHelper.js';
@@ -78,6 +78,21 @@ const imported = async (id, value = pkg()) => {
 };
 
 describe.skipIf(!ready)('Production persisted public boundary', () => {
+  it('persists film rows beside legacy packages and merges overlapping film settings without losing timeline data', async () => {
+    const film = await post('/films', { title: 'Standalone film', timeline: { durationSec: 240, fps: 24 } });
+    expect(film.status).toBe(201); ids.push(film.body.id);
+    const { codeAnimationFilmOwner } = await import('./films.js');
+    const owner = await codeAnimationFilmOwner(film.body.id);
+    await Promise.all([owner.writeRecord(() => ({ notes: { s010: { text: 'Warm light' } } })),
+      patch(`/films/${film.body.id}`, { title: 'Renamed film' })]);
+    const reopened = (await get(`/projects/${film.body.id}`)).body;
+    expect(reopened).toMatchObject({ kind: 'film', title: 'Renamed film', film: { timeline: { durationSec: 240, fps: 24 }, notes: { s010: { text: 'Warm light' } } } });
+    expect((await get('/projects')).body.items).toEqual(expect.arrayContaining([expect.objectContaining({ id: film.body.id, kind: 'film' })]));
+    expect((await patch(`/projects/${film.body.id}`, { budgets: { timeSeconds: 10 } })).status).toBe(409);
+    const legacy = await create();
+    await query("UPDATE code_animation_projects SET data = data - 'kind' WHERE id = $1", [legacy.id]);
+    expect((await get(`/projects/${legacy.id}`)).body.kind).toBe('package');
+  });
   it('reopens settings and execution provenance, pages history and exports immutable accepted source separately from new candidates', async () => {
     const project = await create({ referenceIntent: { universeId: 'example-universe', moodBoardId: null, notes: 'Warm light' } });
     const limits = { iterations: 3, timeSeconds: 123, tokens: 4321, renderSeconds: 45, diskBytes: 123456 };

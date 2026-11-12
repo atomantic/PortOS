@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import Pill from '../../ui/Pill';
 import BlenderStatusChip from './BlenderStatusChip.jsx';
 import { BLENDER_NOTE_STATUSES, blenderShotRenderStatus, blenderShotThumbPath, blenderShotTiming } from '../../../lib/musicVideoBlender.js';
-import { musicVideoBlenderMediaUrl } from '../../../services/apiMusicVideo.js';
+import { useFilmApi } from './FilmApiContext.jsx';
 
 const NOTE_LABELS = Object.fromEntries(BLENDER_NOTE_STATUSES);
 const NOTE_TONES = { todo: 'muted', wip: 'accent', review: 'warning', approved: 'success' };
@@ -22,6 +22,7 @@ function ShotThumb({ src }) {
  * selected row scrolls into view when the timeline or a key moved it.
  */
 function BlenderShotList({ projectId, state, selectedId, onSelect, noteDrafts = {} }) {
+  const { musicVideoBlenderMediaUrl } = useFilmApi();
   const shots = state.manifest?.shots || [];
   const listRef = useRef(null);
   const rows = useRef(new Map());

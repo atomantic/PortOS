@@ -427,9 +427,9 @@ const engineLabel = (id) => BLENDER_ENGINES.find((engine) => engine.id === id)?.
  * workspace is, the film contract, the review loop and the routes. Built from
  * the state on screen; nothing is fetched.
  */
-export function blenderAgentBrief({ projectId, state }) {
+export function blenderAgentBrief({ projectId, state, standalone = false }) {
   const settings = state?.settings || {};
-  const base = `/api/music-video/${projectId}/blender`;
+  const base = standalone ? `/api/code-animation/films/${projectId}/blender` : `/api/music-video/${projectId}/blender`;
   // Where this machine keeps it; the data-relative label only when the server did not say.
   const workspace = state?.workspace?.path || state?.workspace?.dir || `data/music-video/${projectId}/blender`;
   const shots = state?.manifest?.shots || [];
@@ -442,7 +442,7 @@ export function blenderAgentBrief({ projectId, state }) {
     ? `Film options now: ${options.map((option) => `${option.key}=${JSON.stringify(option.value)}`).join(', ')}.`
     : 'Film options: none declared.';
   return [
-    'You are authoring a Blender film for a PortOS music video.',
+    standalone ? 'You are authoring a standalone PortOS Code Animation film, with an optional soundtrack.' : 'You are authoring a Blender film for a PortOS music video.',
     '',
     `Skill: ${BLENDER_SKILL_NAME} (read it first: it holds the full contract and the review loop).`,
     `Project id: ${projectId}`,
@@ -469,7 +469,7 @@ export function blenderAgentBrief({ projectId, state }) {
     `Now: ${stateLine}`,
     '',
     'Review loop: edit src/ -> sync -> stills -> preview shots -> preview cut -> director notes -> finals -> final render.',
-    'The final render still needs the art guide, verified lyric timing and an approved storyboard.',
+    standalone ? 'Assemble a final cut after every final shot is current and covers the full timeline; it becomes the accepted Media History output.' : 'The final render still needs the art guide, verified lyric timing and an approved storyboard.',
     '',
     `Routes (base ${base}; from a terminal session use node scripts/portos-api.js):`,
     '  GET    (base)                 the full state: settings, tool, workspace, manifest, renders, cuts, jobs, notes',
@@ -489,7 +489,7 @@ export function blenderAgentBrief({ projectId, state }) {
     '  POST   /shots/<shotId>/open   open the saved .blend in Blender',
     '  GET    /media?path=<p>        a file under renders/ (mp4, png, jpg, log)',
     '  GET    /usage                 what the workspace takes on disk;  POST /frames/clear  remove the frames of finished renders (their videos stay)',
-    "Progress is pushed on the Socket.IO channel music-video:blender as { projectId, kind: 'job' | 'state', job? }.",
+    `Progress is pushed on the Socket.IO channel ${standalone ? 'code-animation:film' : 'music-video:blender'} as { projectId, kind: 'job' | 'state', job? }.`,
     'Rendering needs Blender set to Trusted local in PortOS; in contained mode every run route answers 409.',
   ].join('\n');
 }
