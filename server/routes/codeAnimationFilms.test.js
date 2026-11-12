@@ -1,7 +1,7 @@
 /** HTTP workflows through the real film engine; only storage and native processes are doubled. */
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
 import express from 'express';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -9,7 +9,7 @@ import { request } from '../lib/testHelper.js';
 import { createFakeBlender, exampleManifest } from '../services/musicVideo/blender/__blenderFixture.js';
 
 function ROOT() { return lazyTempDataRoot('code-film-route-'); }
-const state = vi.hoisted(() => ({ projects: new Map(), history: [], blender: null, ffmpeg: [] }));
+const state = vi.hoisted(() => ({ projects: new Map(), history: [], blender: null, ffmpeg: [], beforeFfmpeg: null }));
 vi.mock('../lib/paths.js', async load => makePathsProxy(await load(), { dataRoot: ROOT }));
 vi.mock('../services/codeAnimation/projectStore.js', () => ({
   getProjectRecord: vi.fn(async id => structuredClone(state.projects.get(id) || null)),
@@ -29,7 +29,7 @@ vi.mock('../services/codeAnimation/execution.js', () => ({
 }));
 vi.mock('../lib/ffmpeg.js', async load => ({
   ...await load(), findFfmpeg: vi.fn(async () => '/opt/example/ffmpeg'), bt709TagFilter: vi.fn(async () => null),
-  runFfmpegProcess: vi.fn(async ({ args }) => { state.ffmpeg.push(args); writeFileSync(args.at(-1), 'video'); return { ok: true }; }),
+  runFfmpegProcess: vi.fn(async ({ args }) => { state.ffmpeg.push(args); await state.beforeFfmpeg?.(); writeFileSync(args.at(-1), 'video'); return { ok: true }; }),
   generateThumbnail: vi.fn(async (_path, id) => `${id}.jpg`),
 }));
 vi.mock('../services/musicVideo/audioAnalysis.js', () => ({ analyzeAudioFile: vi.fn(async () => ({
@@ -67,7 +67,7 @@ const settled = jobs => vi.waitFor(() => {
 
 beforeEach(() => {
   cleanupTempDataRoots(); __resetBlenderJobsForTests(); vi.clearAllMocks();
-  state.projects.clear(); state.history = []; state.ffmpeg = [];
+  state.projects.clear(); state.history = []; state.ffmpeg = []; state.beforeFfmpeg = null;
   state.blender = createFakeBlender(); state.blender.control.manifest = exampleManifest();
 });
 afterAll(() => { __resetBlenderJobsForTests(); cleanupTempDataRoots(); });
@@ -138,4 +138,34 @@ it('preserves host-control refusal and the same contained-Blender explanation', 
     const response = await post(api(suffix), body);
     expect(response.status).toBe(409); expect(response.body.error).toContain(BLENDER_NEEDS_TRUSTED_LOCAL);
   }
+});
+
+
+it('keeps the saved soundtrack unchanged when song context cannot be written', async () => {
+  await create(); await scaffoldAndSync();
+  const songPath = join(ROOT(), 'code-animation', 'films', id, 'song.json');
+  const original = structuredClone(state.projects.get(id));
+  unlinkSync(songPath); symlinkSync(join(ROOT(), 'elsewhere.json'), songPath);
+  mkdirSync(join(ROOT(), 'music'), { recursive: true }); writeFileSync(join(ROOT(), 'music', 'example.wav'), 'audio');
+  const response = await post(`${base()}/audio`, { source: 'track', trackId: 'track' });
+  expect(response.status).toBeGreaterThanOrEqual(400);
+  expect(state.projects.get(id)).toEqual(original);
+  expect(existsSync(join(ROOT(), 'elsewhere.json'))).toBe(false);
+});
+
+it('refuses to accept a final whose soundtrack changed during assembly', async () => {
+  await create(); await scaffoldAndSync();
+  const finals = await post(api('/render'), { quality: 'final' }); await settled(finals.body.jobs);
+  const first = await post(api('/cut'), { quality: 'final' }); await settled([first.body.job]);
+  const accepted = structuredClone(state.projects.get(id).acceptedOutput);
+  mkdirSync(join(ROOT(), 'music'), { recursive: true }); writeFileSync(join(ROOT(), 'music', 'example.wav'), 'audio');
+  state.beforeFfmpeg = async () => {
+    state.beforeFfmpeg = null;
+    expect((await post(`${base()}/audio`, { source: 'track', trackId: 'track' })).status).toBe(200);
+  };
+  const final = await post(api('/cut'), { quality: 'final' });
+  expect(final.status).toBe(202);
+  await vi.waitFor(() => expect(listBlenderJobs(owner()).find(job => job.id === final.body.job.id)?.status).toBe('error'));
+  expect(state.projects.get(id).acceptedOutput).toEqual(accepted);
+  expect(state.history).toHaveLength(1);
 });

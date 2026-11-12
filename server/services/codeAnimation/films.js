@@ -67,13 +67,25 @@ export async function attachFilmAudio(id, input) {
       }
       audio = { filename, source: attachment.source };
     }
-    const project = await store.mutateFilmProject(id, current => ({ film: { ...current.film, audio, analysis,
-      timeline: { ...current.film.timeline, ...(analysis ? { durationSec: analysis.durationSec } : {}) } } }));
     const owner = await codeAnimationFilmOwner(id);
     const { writeBlenderSong } = await import('../film/song.js');
     const { assertInsideWithoutSymlinks } = await import('../film/workspace.js');
     await assertInsideWithoutSymlinks(owner.workspaceDir, join(owner.workspaceDir, 'song.json'));
-    await writeBlenderSong(owner, project.film.settings);
+    let wroteSong = false;
+    let project;
+    try {
+      project = await store.mutateFilmProject(id, async current => {
+        const film = { ...current.film, audio, analysis,
+          timeline: { ...current.film.timeline, ...(analysis ? { durationSec: analysis.durationSec } : {}) } };
+        await writeBlenderSong(filmSnapshotOwner(owner, { ...current, film }), film.settings);
+        wroteSong = true;
+        return { film };
+      });
+    } catch (error) {
+      // song.json is derived context; restore it if the database could not commit.
+      if (wroteSong) await writeBlenderSong(owner, (await requireFilmProject(id)).film.settings);
+      throw error;
+    }
     emitCodeAnimationChanged(id);
     owner.emit({ kind: 'state' });
     return project;
@@ -100,15 +112,7 @@ export async function codeAnimationFilmOwner(id) {
       emitCodeAnimationChanged(id);
       return project.film;
     },
-    async song() {
-      const project = await requireFilmProject(id);
-      const { film } = project;
-      if (!film.audio?.filename) return null;
-      const master = audioIn(film.audio.source, film.audio.filename);
-      if (!master) throw blenderRefusal('Attached audio file is missing; attach it again or remove the soundtrack', 'AUDIO_MISSING', 404);
-      return { projectId: id, title: project.title, durationSec: film.timeline.durationSec, fps: film.settings.fps,
-        audio: { master, vocalStem: null }, analysis: film.analysis, lyrics: { cues: [], markers: [] } };
-    },
+    async song() { return filmSong(await requireFilmProject(id)); },
     emit(event) { emitCodeAnimationFilm(id, event); },
   };
 }
@@ -127,4 +131,20 @@ export async function getFilmState(owner) {
   return { ...state, finalStale, timeline: project.film.timeline, audio,
     audioUrl: audio?.filename ? `/data/${audio.source === 'upload' ? 'uploads' : 'music'}/${encodeURIComponent(audio.filename)}` : null,
     acceptedOutput: project.acceptedOutput || null };
+}
+
+function filmSong(project) {
+  const { film } = project;
+  if (!film.audio?.filename) return null;
+  const master = audioIn(film.audio.source, film.audio.filename);
+  if (!master) throw blenderRefusal('Attached audio file is missing; attach it again or remove the soundtrack', 'AUDIO_MISSING', 404);
+  return { projectId: project.id, title: project.title, durationSec: film.timeline.durationSec, fps: film.settings.fps,
+    audio: { master, vocalStem: null }, analysis: film.analysis, lyrics: { cues: [], markers: [] } };
+}
+
+/** Bind all readers to one persisted revision for assembly and final publication checks. */
+export function filmSnapshotOwner(owner, project) {
+  return { ...owner, readRecord: async () => project.film,
+    timeline: async () => ({ ...project.film.timeline, fps: project.film.settings.fps }),
+    song: async () => filmSong(project) };
 }

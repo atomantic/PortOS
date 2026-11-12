@@ -10,7 +10,8 @@ import { mutateVideoHistory } from '../videoGen/history.js';
 import { planBlenderFinal, readBlenderFilm } from '../film/film.js';
 import { startBlenderCut } from '../film/cuts.js';
 import { blenderRefusal } from '../film/workspace.js';
-import { requireFilmProject } from './films.js';
+import { requireFilmProject, filmSnapshotOwner } from './films.js';
+import { getBlenderSong } from '../film/song.js';
 import { mutateFilmProject } from './projectStore.js';
 import { emitCodeAnimationChanged } from '../socket.js';
 
@@ -20,7 +21,7 @@ const digestFile = async (path) => {
   return digest.digest('hex');
 };
 
-async function publishFilm(owner, output, plan, signal) {
+async function publishFilm(owner, output, plan, song, signal) {
   const project = await requireFilmProject(owner.id);
   const videoId = randomUUID();
   const filename = `film-${videoId}.mp4`;
@@ -39,14 +40,22 @@ async function publishFilm(owner, output, plan, signal) {
     signal?.throwIfAborted();
     await withBackupAssetPublication(async () => {
       signal?.throwIfAborted();
-      await mutateVideoHistory(history => {
-        history.unshift({ id: videoId, filename, thumbnail, modelId: 'code-animation-film', prompt: project.title,
-          ...accepted.format, durationSec: plan.durationSec, createdAt: accepted.acceptedAt, codeAnimation: { projectId: owner.id, kind: 'film' } });
-        return history;
+      await mutateFilmProject(owner.id, async current => {
+        const snapshot = filmSnapshotOwner(owner, current);
+        const currentPlan = planBlenderFinal(await readBlenderFilm(snapshot));
+        const currentSong = await getBlenderSong(snapshot, current.film.settings);
+        if (JSON.stringify(currentPlan) !== JSON.stringify(plan) || JSON.stringify(currentSong) !== JSON.stringify(song)) {
+          throw blenderRefusal('Film inputs changed during assembly; assemble the final again', 'FILM_INPUTS_CHANGED', 409);
+        }
+        await mutateVideoHistory(history => {
+          history.unshift({ id: videoId, filename, thumbnail, modelId: 'code-animation-film', prompt: project.title,
+            ...accepted.format, durationSec: plan.durationSec, createdAt: accepted.acceptedAt, codeAnimation: { projectId: owner.id, kind: 'film' } });
+          return history;
+        });
+        // History now owns the file even if the subsequent project commit fails.
+        committed = true;
+        return { acceptedOutput: accepted };
       });
-      // The file is now referenced by history even if the subsequent project write fails.
-      committed = true;
-      await mutateFilmProject(owner.id, () => ({ acceptedOutput: accepted }));
     });
     emitCodeAnimationChanged(owner.id);
   } finally {
@@ -59,16 +68,23 @@ async function publishFilm(owner, output, plan, signal) {
 
 export async function startFilmCut(owner, input) {
   if (input.animatic || input.filmLook) throw blenderRefusal('Review drafts and film look finishing belong to Music Video', 'VALIDATION_ERROR');
-  const song = await owner.song();
   let finalPlan;
+  let finalSong;
   let finalSignal;
-  if (input.quality === 'final') finalPlan = planBlenderFinal(await readBlenderFilm(owner));
-  return startBlenderCut(owner, { quality: input.quality, audioPath: song?.audio.master || null,
-    finish: input.quality === 'final' ? async ({ film, assemble, signal }) => {
-      finalSignal = signal;
-      finalPlan = planBlenderFinal(film);
-      return assemble();
-    } : null,
-    afterCut: input.quality === 'final' ? output => publishFilm(owner, output, finalPlan, finalSignal) : null,
+  if (input.quality === 'final') planBlenderFinal(await readBlenderFilm(owner));
+  return startBlenderCut(owner, { quality: input.quality,
+    finish: async ({ assemble, signal }) => {
+      const project = await requireFilmProject(owner.id);
+      const snapshot = filmSnapshotOwner(owner, project);
+      const song = await getBlenderSong(snapshot, project.film.settings);
+      if (input.quality === 'final') {
+        finalSignal = signal;
+        finalPlan = planBlenderFinal(await readBlenderFilm(snapshot));
+        finalSong = song;
+      }
+      return assemble({ ...(finalPlan ? { segments: finalPlan.segments, width: finalPlan.width, height: finalPlan.height, fps: finalPlan.fps } : {}),
+        audio: song.audio.master ? { path: song.audio.master, startSec: 0 } : null });
+    },
+    afterCut: input.quality === 'final' ? output => publishFilm(owner, output, finalPlan, finalSong, finalSignal) : null,
   });
 }
