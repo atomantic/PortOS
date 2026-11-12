@@ -131,6 +131,12 @@ describe('composeBoardPrompt', () => {
     expect(sent).not.toContain('OLD_COMPOSITE');
     expect(sent).not.toContain('OLD_NEGATIVE');
     expect(sent).toContain('harsh digital sharpening');
+    expect(sent).toContain('Lead with what makes these references look different');
+    expect(sent).toContain('including their stated strength and distribution');
+    expect(sent).toContain('Do not downgrade conspicuous whole-frame effects');
+    expect(sent).toContain('do not substitute one for another');
+    expect(sent).toContain('Resolve conflicting per-item negatives against the positive visual evidence');
+    expect(sent).toContain('Drop subject-specific exclusions');
   });
 
   it('rejects an empty model prompt', async () => {

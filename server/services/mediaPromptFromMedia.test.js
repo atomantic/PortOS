@@ -169,6 +169,12 @@ describe('promptFromMedia', () => {
       screenshots: ['/mock/images/still.png'],
       source: 'media-prompt-from-media',
     }));
+    const sent = promptRunner.runPromptThroughProvider.mock.calls[0][0].prompt;
+    expect(sent).toContain('state their visible strength and distribution');
+    expect(sent).toContain('whole-frame versus localized');
+    expect(sent).toContain('Distinguish the depicted surface from the image reproduction');
+    expect(sent).toContain('Negative prompts must preserve intentional visible characteristics');
+    expect(sent).toContain('dark-area coverage and contrast behavior');
     expect(result.imagePrompt).toContain('wizard');
     expect(result.videoPrompt).toContain('dollies');
     expect(result.mediaKind).toBe('image');
