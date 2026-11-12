@@ -129,6 +129,8 @@ export const CLAUDE_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhi
 export const CODEX_EFFORT_LEVELS = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 export const CODEX_ULTRA_EFFORT_LEVELS = Object.freeze([...CODEX_EFFORT_LEVELS, 'ultra']);
 export const ANTIGRAVITY_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh']);
+// Preserve older CLI defaults when no concrete catalog/model proves xhigh support.
+const ANTIGRAVITY_FALLBACK_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']);
 // OpenCode forwards this narrow OpenAI-compatible ladder as `reasoningEffort`
 // to whichever local backend it is wired to (Ollama, llama.cpp, MTPLX,
 // OrcaRouter). Keep it separate from vendor-CLI-only levels.
@@ -285,7 +287,7 @@ export function antigravityBaseModels(models) {
  *                        (`claude-sonnet-4-6`): agy has no effort knob for it.
  *   - `null`           — the model is UNKNOWN (blank, the configured-default
  *                        sentinel, or an empty catalog), so the caller should
- *                        fall back to the full ladder rather than assume none.
+ *                        fall back to the legacy ladder rather than assume none.
  *                        The sentinel case matters: it is the shipped agy
  *                        `defaultModel`, and reporting `[]` for it would hide
  *                        the effort control on every freshly-opened picker.
@@ -549,8 +551,8 @@ export function foldCursorEffortIntoModel(model, effort) {
  * offers (agy rejects `gemini-3.1-pro --effort medium`), read off
  * `provider.models`. It ALSO narrows the OpenCode ladder for a model whose
  * upstream vendor rejects a rung (NVIDIA NIM 400s Kimi K3 on `medium` — see
- * `opencodeEffortLevelsForModel`). Omit it — or leave the catalog empty — to get the full
- * harness ladder. Returns null for an Antigravity model the catalog
+ * `opencodeEffortLevelsForModel`). Omit it — or leave the catalog empty — to retain the
+ * legacy Antigravity ladder (xhigh requires an advertised model tier). Returns null for an Antigravity model the catalog
  * says has no tiers at all (`claude-sonnet-4-6`), so no `--effort` is emitted.
  *
  * A ladder here does NOT imply an `--effort` flag: cursor advertises levels but
@@ -573,7 +575,7 @@ export function effortLevelsForProvider(provider, model = null) {
   if (harness === 'codex' || isCodexProvider(provider)) return codexEffortLevelsForModel(model);
   if (harness === 'antigravity' || isAntigravityProvider(provider)) {
     const perModel = model ? antigravityModelEffortLevels(model, provider.models) : null;
-    if (perModel === null) return ANTIGRAVITY_EFFORT_LEVELS;
+    if (perModel === null) return ANTIGRAVITY_FALLBACK_EFFORT_LEVELS;
     return perModel.length ? perModel : null;
   }
   if (harness === 'pi' || commandBasename(provider.command) === 'pi') return PI_EFFORT_LEVELS;

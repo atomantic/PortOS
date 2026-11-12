@@ -634,12 +634,12 @@ it('keeps a saved TUI pin visible with a reason under a CLI/API-only caller poli
       expect(options).toEqual(['', 'low', 'high']);
     });
 
-    it('still offers the full ladder on the configured-default sentinel', () => {
+    it('preserves the legacy ladder on the configured-default sentinel', () => {
       // The sentinel is the shipped agy defaultModel, so the picker auto-selects
       // it — the effort control must not hide until a model is chosen.
       renderEffort({ selectedModel: 'antigravity-configured-default' });
       const options = [...screen.getByLabelText('Thinking effort').querySelectorAll('option')].map((o) => o.value);
-      expect(options).toEqual(['', 'low', 'medium', 'high', 'xhigh']);
+      expect(options).toEqual(['', 'low', 'medium', 'high']);
     });
 
     it('hides itself (label and all) for an Antigravity model with no tiers', () => {

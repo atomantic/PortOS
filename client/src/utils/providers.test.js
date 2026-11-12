@@ -74,7 +74,6 @@ import {
   CODEX_EFFORT_LEVELS,
   CURSOR_EFFORT_LEVELS,
   GROK_EFFORT_LEVELS,
-  ANTIGRAVITY_EFFORT_LEVELS,
   isConfiguredDefaultModel,
   configuredDefaultIn,
   isLocalEndpoint,
@@ -158,9 +157,9 @@ describe('resolveCliEffort', () => {
 // published-field fallback, so pin both sides together here.
 describe('effortLevelsForProvider', () => {
   const CASES = [
-    ['antigravity CLI', { id: 'antigravity-cli', command: 'agy' }, ANTIGRAVITY_EFFORT_LEVELS],
-    ['antigravity TUI', { id: 'antigravity-tui' }, ANTIGRAVITY_EFFORT_LEVELS],
-    ['path-configured agy', { id: 'custom', command: '/Users/x/.local/bin/agy' }, ANTIGRAVITY_EFFORT_LEVELS],
+    ['antigravity CLI', { id: 'antigravity-cli', command: 'agy' }, ['low', 'medium', 'high']],
+    ['antigravity TUI', { id: 'antigravity-tui' }, ['low', 'medium', 'high']],
+    ['path-configured agy', { id: 'custom', command: '/Users/x/.local/bin/agy' }, ['low', 'medium', 'high']],
     ['claude code', { id: 'claude-code', command: 'claude' }, CLAUDE_EFFORT_LEVELS],
     ['codex', { id: 'codex', command: 'codex' }, CODEX_EFFORT_LEVELS],
     ['OpenCode Ollama', { id: 'opencode-ollama', command: 'opencode', ollamaBacked: true }, ['low', 'medium', 'high']],

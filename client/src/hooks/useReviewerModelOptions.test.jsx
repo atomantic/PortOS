@@ -242,6 +242,15 @@ describe('useReviewerModelOptions', () => {
       expect(await levelsFor('antigravity', 'gemini-3.6-flash')).toEqual(['low', 'high']);
     });
 
+    it('offers xhigh only for a Hydrogen pin whose catalog advertises it', async () => {
+      getProviders.mockResolvedValue({ providers: [{
+        id: 'antigravity-cli',
+        models: ['low', 'medium', 'high', 'xhigh'].map(level => `gemini-4-hydrogen-${level}`),
+      }] });
+      expect(await levelsFor('antigravity', 'gemini-4-hydrogen-xhigh')).toEqual(['low', 'medium', 'high', 'xhigh']);
+      expect(await levelsFor('antigravity', 'antigravity-configured-default')).toEqual(['low', 'medium', 'high']);
+    });
+
     it('narrows through a legacy effort-suffixed pin', async () => {
       expect(await levelsFor('antigravity', 'gemini-3.1-pro-high')).toEqual(['high']);
     });
@@ -254,14 +263,14 @@ describe('useReviewerModelOptions', () => {
       expect(await levelsFor('antigravity', 'claude-sonnet-4-6')).toEqual([]);
     });
 
-    it('falls back to the full ladder for an unset model or the configured default', async () => {
-      expect(await levelsFor('antigravity', '')).toEqual(['low', 'medium', 'high', 'xhigh']);
-      expect(await levelsFor('antigravity', 'antigravity-configured-default')).toEqual(['low', 'medium', 'high', 'xhigh']);
+    it('preserves the legacy fallback for an unset model or the configured default', async () => {
+      expect(await levelsFor('antigravity', '')).toEqual(['low', 'medium', 'high']);
+      expect(await levelsFor('antigravity', 'antigravity-configured-default')).toEqual(['low', 'medium', 'high']);
     });
 
-    it('falls back to the full ladder when the catalog never loaded', async () => {
+    it('preserves the legacy fallback when the catalog never loaded', async () => {
       getProviders.mockRejectedValue(new Error('offline'));
-      expect(await levelsFor('antigravity', 'gemini-3.1-pro')).toEqual(['low', 'medium', 'high', 'xhigh']);
+      expect(await levelsFor('antigravity', 'gemini-3.1-pro')).toEqual(['low', 'medium', 'high']);
     });
 
     it('leaves every other reviewer on its static ladder', async () => {

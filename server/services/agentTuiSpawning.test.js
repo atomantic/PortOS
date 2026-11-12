@@ -629,7 +629,7 @@ describe('agent TUI spawning', () => {
     expect(agy.args).toEqual(['--dangerously-skip-permissions', '--effort', 'high']);
 
     const clamped = buildTuiSpawnConfig({ id: 'antigravity-tui', command: 'agy', type: 'tui', args: [] }, null, { effort: 'max' });
-    expect(clamped.args).toEqual(['--dangerously-skip-permissions', '--effort', 'xhigh']);
+    expect(clamped.args).toEqual(['--dangerously-skip-permissions', '--effort', 'high']);
   });
 
   it('preserves a saved Hydrogen xhigh selection when spawning the Antigravity TUI', () => {

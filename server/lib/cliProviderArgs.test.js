@@ -314,6 +314,13 @@ describe('cliProviderArgs', () => {
       })).toEqual(['--model', 'gemini-4-hydrogen', '--effort', 'xhigh', '--dangerously-skip-permissions', '--print']);
     });
 
+    it('preserves the legacy effort cap when Antigravity owns the configured default', () => {
+      expect(buildCliArgs({
+        id: 'antigravity-cli', command: 'agy', defaultModel: 'antigravity-configured-default', effort: 'xhigh',
+        models: ['low', 'medium', 'high', 'xhigh'].map(level => `gemini-4-hydrogen-${level}`),
+      })).toEqual(['--effort', 'high', '--dangerously-skip-permissions', '--print']);
+    });
+
     it('clamps an Antigravity effort the selected model does not offer', () => {
       // agy errors on `--model gemini-3.1-pro --effort medium`.
       expect(buildCliArgs({
