@@ -1,9 +1,10 @@
 # ACE-Step universal build tools shared by Apple Silicon and CUDA, hash-pinned.
 # Generated with uv 0.13.7; choose a fresh cutoff at least seven days old:
+#   LOCK_CUTOFF=$(node -p 'new Date(Date.now() - 7 * 86400000).toISOString()')
 #   uv --no-config pip compile scripts/requirements-acestep-mlx-build.txt \
 #     --universal --python-version 3.11 --generate-hashes --no-header \
 #     --annotation-style line --only-binary :all: \
-#     --exclude-newer 2026-11-05T00:00:00Z \
+#     --exclude-newer "$LOCK_CUTOFF" \
 #     -o scripts/requirements-acestep-mlx-build.lock.txt
 # Restore this header after compilation. Audit the entire closure with OSV/MAL.
 cython==3.3.1 \
