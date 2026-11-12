@@ -18,6 +18,8 @@ import { filterSelectableModels } from './providerModels.js';
 import { commandBasename, isOllamaBackedProvider } from './providerTypes.js';
 import { isEmbeddingModel, isToolUseModel, isVisionModel } from '../../../server/lib/localModelHeuristics.js';
 
+export { isVisionCapableCodexTuiProvider } from '../../../server/lib/codex.js';
+
 export { isEmbeddingModel, isToolUseModel, isVisionModel } from '../../../server/lib/localModelHeuristics.js';
 
 /**

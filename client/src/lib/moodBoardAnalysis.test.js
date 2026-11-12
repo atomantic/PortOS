@@ -51,9 +51,10 @@ describe('boardAnalyzePlan', () => {
       { id: 'c', type: 'image', imageUrl: 'https://example.com/c.png' },
       { id: 'd', type: 'text', text: 'a note' },
       { id: 'e', type: 'image', mediaKey: 'image:e.png', caption: 'caption prompt' },
+      { id: 'f', type: 'image', mediaKey: 'image:f.png', prompt: 'original generation prompt' },
     ]);
-    expect(plan.analyzed).toBe(2);
-    expect(plan.pending.map((it) => it.id)).toEqual(['b']);
+    expect(plan.analyzed).toBe(1);
+    expect(plan.pending.map((it) => it.id)).toEqual(['b', 'e', 'f']);
     expect(plan.skipped).toBe(1);
   });
 

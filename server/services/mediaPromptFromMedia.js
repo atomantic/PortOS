@@ -1,3 +1,4 @@
+import { isVisionCapableCodexTuiProvider } from '../lib/codex.js';
 /**
  * Reverse-engineer an image-gen and/or video-gen prompt from a still or clip.
  *
@@ -168,7 +169,7 @@ function assertVisionProvider(provider) {
       { status: 400, code: 'PROVIDER_DISABLED' },
     );
   }
-  if (provider.type === 'api') return 'api';
+  if (provider.type === 'api' || isVisionCapableCodexTuiProvider(provider)) return 'runner';
   if (isVisionCapableCliProvider(provider)) return 'cli';
   throw new ServerError(
     `Provider "${provider.name || provider.id}" cannot read images. Pick a vision-capable API model (Ollama/LM Studio VLM, gpt-4o, grok, …) or a vision CLI (Claude Code, Codex).`,

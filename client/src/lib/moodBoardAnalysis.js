@@ -77,7 +77,7 @@ export function moodBoardItemHasPrompt(item) {
 
 /**
  * Split a board's items into the ones prompt-from-media can still read and
- * the ones that already carry a prompt. External URL pins can't be read, so
+ * the ones that already carry a saved visual analysis. External URL pins can't be read, so
  * they count as skipped rather than pending.
  */
 export function boardAnalyzePlan(items) {
@@ -86,7 +86,7 @@ export function boardAnalyzePlan(items) {
   let analyzed = 0;
   let skipped = 0;
   for (const item of list) {
-    if (moodBoardItemHasPrompt(item)) {
+    if (isMoodBoardItemAnalyzed(item)) {
       analyzed += 1;
       continue;
     }

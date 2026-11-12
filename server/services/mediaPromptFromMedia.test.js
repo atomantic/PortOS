@@ -175,6 +175,17 @@ describe('promptFromMedia', () => {
     expect(result.providerId).toBe('openai');
   });
 
+  it('sends configured Codex TUI images through the image-aware runner without substituting a CLI', async () => {
+    const provider = { id: 'example-codex-tui', type: 'tui', command: '/bin/codex', enabled: true };
+    providers.getProviderById.mockResolvedValue(provider);
+    promptRunner.runPromptThroughProvider.mockResolvedValue({ text: JSON_BOTH, model: 'preferred-model', provider });
+    const result = await promptFromMedia({ sourceKind: 'image', filename: 'still.png', targets: ['image'], providerId: provider.id, model: 'preferred-model' });
+    expect(promptRunner.runPromptThroughProvider).toHaveBeenCalledWith(expect.objectContaining({ provider, model: 'preferred-model', screenshots: ['/mock/images/still.png'] }));
+    expect(visionCli.describeImagesFromPaths).not.toHaveBeenCalled();
+    expect(result.providerId).toBe(provider.id);
+    expect(result.imagePrompt).toContain('wizard');
+  });
+
   // reactor.inc rejects an over-length prompt outright, so a vivid analysis of
   // a clip is unrenderable, not merely long, once it passes the cap.
   it('clamps a video prompt that overshoots the caller cap and reports the trim', async () => {

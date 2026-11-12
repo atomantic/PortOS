@@ -203,3 +203,43 @@ it('recovers a completion missed while disconnected', async () => {
   await waitFor(() => expect(screen.getByRole('button', { name: 'Make complete' })).not.toBeDisabled());
   expect(onBoardChange).toHaveBeenCalledWith(expect.objectContaining({ posterImageRef: 'complete.png' }));
 });
+
+
+it('hides Make complete for a completed board and restores it for missing or newer work', () => {
+  const complete = { ...analyzedBoard, posterImageRef: 'poster.png' };
+  const { rerender } = render(<MoodBoardStylePanel board={complete} onBoardChange={vi.fn()} />);
+  expect(screen.queryByRole('button', { name: 'Make complete' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Regenerate poster' })).toBeEnabled();
+  expect(screen.getByRole('button', { name: 'Compose style prompt' })).toBeEnabled();
+
+  for (const board of [
+    { ...complete, posterImageRef: null },
+    { ...complete, items: [{ id: 'caption-only', type: 'image', mediaKey: 'image:caption.png', caption: 'generation prompt' }] },
+    { ...complete, style: null },
+    { ...complete, items: [...complete.items, { id: 'new', type: 'image', mediaKey: 'image:new.png' }] },
+    { ...complete, items: complete.items.map(item => ({ ...item, analysis: { ...item.analysis, analyzedAt: '2026-08-15T00:00:00.000Z' } })) },
+    { ...complete, items: [] },
+  ]) {
+    rerender(<MoodBoardStylePanel board={board} onBoardChange={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Make complete' })).toBeInTheDocument();
+  }
+  rerender(<MoodBoardStylePanel board={complete} onBoardChange={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText('Style prompt'), { target: { value: 'edited style' } });
+  expect(screen.getByRole('button', { name: 'Make complete' })).toBeDisabled();
+});
+
+it('keeps an active completion visible even when previous outputs exist', async () => {
+  mockGetJob.mockResolvedValue({ boardId: 'mb-1', makeComplete: true, status: 'running', phase: 'rendering', total: 1, done: 1 });
+  render(<MoodBoardStylePanel board={{ ...analyzedBoard, posterImageRef: 'previous.png' }} onBoardChange={vi.fn()} />);
+  expect(await screen.findByRole('button', { name: 'Creating main board image…' })).toBeDisabled();
+});
+
+it('treats a budget-sampled composed board as complete', () => {
+  render(<MoodBoardStylePanel board={{ ...analyzedBoard, posterImageRef: 'poster.png', items: [...analyzedBoard.items, { ...analyzedBoard.items[0], id: 'b' }] }} onBoardChange={vi.fn()} />);
+  expect(screen.queryByRole('button', { name: 'Make complete' })).toBeNull();
+});
+
+it('does not call a board with unreadable unanalyzed pins complete', () => {
+  render(<MoodBoardStylePanel board={{ ...analyzedBoard, posterImageRef: 'poster.png', items: [...analyzedBoard.items, { id: 'unavailable', type: 'image', source: 'https://example.com/image.png' }] }} onBoardChange={vi.fn()} />);
+  expect(screen.getByRole('button', { name: 'Make complete' })).toBeTruthy();
+});

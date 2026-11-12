@@ -1,7 +1,7 @@
 /**
  * Board-level "analyze pins" job.
  *
- * Runs prompt-from-media over every pin that has no prompt yet, then composes
+ * Runs prompt-from-media over every pin that has no visual analysis yet, then composes
  * the board style — on the SERVER, so navigating away from the board page (or
  * closing the tab) doesn't abandon a long vision run. The page reads the live
  * state from `getAnalyzeJob` on mount and follows `mood-board:analyze` events.
@@ -16,18 +16,15 @@ import { isNonBlankStr as hasText } from '../../lib/textUtils.js';
 import { promptFromMedia } from '../mediaPromptFromMedia.js';
 import { composeBoardPrompt } from '../moodBoardCompositeStyle.js';
 import { boardItemLocalImage } from './logic.js';
-import { moodBoardItemCaption } from './styleContext.js';
 import { getBoard, updateBoard, updateBoardItem, backfillGalleryPrompts } from './index.js';
 
 const jobs = new Map();
 const completions = new Map();
 
-// A gallery pin's caption is its generation prompt; an imported pin's caption
-// is not a prompt at all, so that pin still gets analyzed.
-function itemHasPrompt(item) {
-  if (hasText(item?.analysis?.prompt) || hasText(item?.prompt)) return true;
-  const galleryKey = typeof item?.mediaKey === 'string' && /^(image|video):/.test(item.mediaKey);
-  return galleryKey && Boolean(moodBoardItemCaption(item));
+// A generation prompt describes intended output, not what is visible in the
+// resulting image. Only a saved visual analysis can skip the vision step.
+function itemIsAnalyzed(item) {
+  return hasText(item?.analysis?.prompt);
 }
 
 // `{ kind, filename }` for an item prompt-from-media can read, else null.
@@ -63,7 +60,7 @@ function analysisFromResult(item, result) {
 
 function pendingItems(board) {
   return (Array.isArray(board?.items) ? board.items : [])
-    .filter((it) => (it?.type === 'image' || it?.type === 'video') && !itemHasPrompt(it) && analysisSource(it));
+    .filter((it) => (it?.type === 'image' || it?.type === 'video') && !itemIsAnalyzed(it) && analysisSource(it));
 }
 
 function publish(job) {
@@ -84,7 +81,7 @@ async function run(job, { providerId, model, effort, render }) {
   if (poster) await poster.preparePoster(render);
   const filled = await backfillGalleryPrompts(boardId);
   if (!filled) throw new Error('Mood board not found');
-  const unavailable = (filled.items || []).filter((item) => (item.type === 'image' || item.type === 'video') && !itemHasPrompt(item) && !analysisSource(item));
+  const unavailable = (filled.items || []).filter((item) => (item.type === 'image' || item.type === 'video') && !itemIsAnalyzed(item) && !analysisSource(item));
   if (render && unavailable.length) throw new Error('Some pins could not be imported. Import or remove those pins before making the board complete.');
   const pending = pendingItems(filled);
   update(job, { phase: 'analyzing', total: pending.length, done: 0 });
@@ -113,7 +110,7 @@ async function run(job, { providerId, model, effort, render }) {
 
   if (render && failures) throw new Error(`${failures} pin analyses failed. Retry Make complete; saved analyses will be reused.`);
   const board = await getBoard(boardId);
-  const analyzedCount = (board?.items || []).filter(itemHasPrompt).length;
+  const analyzedCount = (board?.items || []).filter(itemIsAnalyzed).length;
   if (analyzedCount < 1) {
     update(job, { status: 'failed', phase: null, error: 'No item could be analyzed, so the board style was not composed', finishedAt: new Date().toISOString() });
     return;
