@@ -183,7 +183,7 @@ function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImage
 }
 
 export default function SceneCard({
-  scene, index, shotName = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null, videoJobs = null,
+  scene, posterSrc, index, shotName = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null, videoJobs = null,
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
@@ -631,7 +631,7 @@ export default function SceneCard({
       {/* The drawer's header: it stays put while the editor scrolls, and sits outside the
           locked fieldset so stepping between shots and closing always work. */}
       <header className="port-opaque-surface sticky top-0 z-10 -mx-4 -mt-4 mb-3 flex flex-wrap items-center gap-3 border-b border-port-border px-4 py-2">
-        <ScenePoster scene={scene} scenes={project?.scenes} iconSize={14} className="aspect-video w-20 shrink-0 rounded border border-port-border max-sm:hidden" />
+        <ScenePoster src={posterSrc} scene={scene} scenes={project?.scenes} iconSize={14} className="aspect-video w-20 shrink-0 rounded border border-port-border max-sm:hidden" />
         <div className="min-w-0 flex-1">
           <h2 id={`scene-${scene.sceneId}-title`} tabIndex={-1} data-shot-heading className="truncate text-base font-medium text-white focus:outline-hidden">
             {shotName || sceneShotName(scene)}
@@ -774,7 +774,7 @@ export default function SceneCard({
           {/* Until the clip exists its still stands in, so the player is never an empty box. */}
           {!clipPlayback.clipId && layer === 'footage' && (
             <div className="relative" data-testid="clip-placeholder">
-              <ScenePoster scene={scene} scenes={project?.scenes} className="aspect-video w-full rounded border border-port-border" />
+              <ScenePoster src={posterSrc} scene={scene} scenes={project?.scenes} className="aspect-video w-full rounded border border-port-border" />
               <span className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">{(scene.referenceImageId || sourceWindow?.referenceImageId) ? 'Still · no clip yet' : 'No clip yet'}</span>
             </div>
           )}

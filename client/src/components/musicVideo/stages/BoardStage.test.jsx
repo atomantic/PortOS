@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import BoardStage from './BoardStage.jsx';
+import { blenderFilmState } from '../../../test/blenderFilmFixture.js';
 
 vi.mock('../../../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: () => ({}) }));
@@ -278,4 +279,21 @@ describe('Board pacing beat review', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clear the map filter' }));
     expect(screen.getByText(/Shot 2/)).toBeInTheDocument();
   });
+});
+
+// Regression: mirrored code shots have no generated image/video IDs; their renders live in Blender state.
+it('shows Blender film thumbnails using the scene map and updates after a render', () => {
+  const scenes = [1, 2, 3].map(n => scene(n, { referenceImageId: null, videoHistoryId: null, visualLayer: 'code' }));
+  const state = blenderFilmState();
+  const b = board(scenes, { project: { id: 'p', scenes, composition: { mode: 'blender' }, blender: { sceneMap: { s010: 's2', s020: 's1', s030: 's3' } } }, blender: { state } });
+  const view = renderBoard(b);
+  const thumb = n => screen.getByRole('button', { name: `Open Shot ${n} · Part ${n}` });
+  expect(thumb(1).querySelector('img')).toHaveAttribute('src', '/api/music-video/p/blender/media?path=s020%2Fpreview%2Fposter.jpg');
+  expect(thumb(2).querySelector('img')).toHaveAttribute('src', '/api/music-video/p/blender/media?path=s010%2Fpreview%2Fposter.jpg');
+  expect(thumb(3).querySelector('img')).toBeNull();
+  const updated = { ...state, renders: { ...state.renders, s030: { final: { poster: 's030/final/poster.jpg' } } } };
+  view.rerender(<MemoryRouter><BoardStage board={{ ...b, blender: { state: updated } }} /></MemoryRouter>);
+  expect(thumb(3).querySelector('img')).toHaveAttribute('src', '/api/music-video/p/blender/media?path=s030%2Ffinal%2Fposter.jpg');
+  fireEvent.error(thumb(3).querySelector('img'));
+  expect(thumb(3).querySelector('img')).toBeNull();
 });

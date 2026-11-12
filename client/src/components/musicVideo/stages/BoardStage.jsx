@@ -12,6 +12,8 @@ import { SHOT_SHEET_MAP_BARS, shotSheetMapRows, shotSheetRows } from '../../../.
 import EndingCard, { EndingThumbnail } from '../EndingCard.jsx';
 import CreditsEndingCard, { CreditsThumbnail } from '../CreditsEndingCard.jsx';
 import ScenePoster from '../ScenePoster.jsx';
+import { blenderShotThumbPath } from '../../../lib/musicVideoBlender.js';
+import { musicVideoBlenderMediaUrl } from '../../../services/apiMusicVideo.js';
 import SharedTakeOffers from '../SharedTakeOffers.jsx';
 import { sceneActiveEndImageId } from '../../../../../server/lib/musicVideoEndFrame.js';
 import ShotEffectsCard, { SceneEffectBadges } from '../ShotEffectsCard.jsx';
@@ -71,6 +73,15 @@ function useLinkedStoryboard(storyboardId) {
 export default function BoardStage({ board }) {
   const { project, locked, sceneMedia, videoSettings, takes, activeSceneId, onToggleSceneExpand } = board;
   const scenes = project.scenes || [];
+  const blenderPosters = new Map();
+  if (project.composition?.mode === 'blender') {
+    const state = board.blender?.state;
+    for (const shot of state?.manifest?.shots || []) {
+      const sceneId = project.blender?.sceneMap?.[shot.id] || shot.sceneId;
+      const path = blenderShotThumbPath(state, shot);
+      if (sceneId && path) blenderPosters.set(sceneId, musicVideoBlenderMediaUrl(project.id, path));
+    }
+  }
   const catalog = useCatalogCastSetsCheckin(project, board.applyCatalogCheckin, board.applyShotReferenceRepair);
   const [storyboard, setStoryboard] = useLinkedStoryboard(project.storyboardId);
   // Until the board is read, a fitted shot shows no panel state rather than a false "deleted".
@@ -251,7 +262,7 @@ export default function BoardStage({ board }) {
               Object.values(effectsById.get(scene.sceneId)).some((list) => list.length) && `scene-effects-${scene.sceneId}`].filter(Boolean).join(' ') || undefined}
             className={`min-w-0 rounded border p-2 text-left ${activeSceneId === scene.sceneId ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-card'}`}>
             <span className="relative block">
-              <ScenePoster scene={scene} scenes={scenes} className="aspect-video w-full rounded" />
+              <ScenePoster src={blenderPosters.get(scene.sceneId)} scene={scene} scenes={scenes} className="aspect-video w-full rounded" />
               <SceneMediaBadges scene={scene} layered={layered} scenes={scenes} />
               <SceneEffectBadges sceneId={scene.sceneId} effects={effectsById.get(scene.sceneId)} />
             </span>
@@ -292,6 +303,7 @@ export default function BoardStage({ board }) {
           )}
           {scenes.map((scene, idx) => scene.sceneId !== activeSceneId ? null : (
             <SceneCard
+              posterSrc={blenderPosters.get(activeSceneId)}
               key={scene.sceneId}
               scene={scene}
               project={project}
