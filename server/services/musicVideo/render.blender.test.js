@@ -422,3 +422,26 @@ it('still settles jobs when a full disk prevents clearing pending intent, so ret
     errorLog.mockRestore();
   }
 });
+
+
+it('retains unstarted batch intent after a transient project-store failure, then resumes it within the retry bound', async () => {
+  mkdirSync(join(pendingPath(), '..'), { recursive: true });
+  writeFileSync(pendingPath(), JSON.stringify([{ quality: 'preview', shotIds: ['s010'], attempt: 0 }]));
+  const read = vi.spyOn(projects, 'getProject').mockRejectedValueOnce(new Error('database temporarily unavailable'));
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    await resumePendingBlenderRenders([id], 2);
+    expect(pending()).toEqual([{ quality: 'preview', shotIds: ['s010'], attempt: 1 }]);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('retained 1 preview shot(s) after an unexpected failure'));
+    expect(blender.fake.control.jobs).toHaveLength(1); // initial sync only
+    read.mockRestore();
+    ended.length = 0;
+    await resumePendingBlenderRenders([id], 2);
+    await vi.waitFor(() => expect(ended.filter((job) => job.kind === 'render')).toHaveLength(1), WAIT);
+    expect(ended[0].status).toBe('done');
+    expect(existsSync(pendingPath())).toBe(false);
+  } finally {
+    read.mockRestore();
+    log.mockRestore();
+  }
+});

@@ -190,6 +190,13 @@ export async function resumePendingBlenderRenders(projectIds, maxAttempts) {
           const { jobs } = await enqueue(projectId, { shotIds, quality: batch.quality });
           console.log(`🎬 Blender boot recovery: ${projectId} resumed ${jobs.length} ${batch.quality} shot(s)`);
         } catch (error) {
+          // A readiness/sync refusal needs operator action. An unexpected DB or
+          // filesystem failure must not erase the user's unstarted work.
+          const refused = (error.status >= 400 && error.status < 500) || error.code === 'FFMPEG_MISSING';
+          if (!refused) {
+            console.error(`❌ Blender boot recovery: ${projectId} retained ${shotIds.length} ${batch.quality} shot(s) after an unexpected failure: ${error.message}`);
+            continue;
+          }
           await removePendingBlenderShots(projectId, batch.quality, shotIds);
           console.log(`⏭️ Blender boot recovery: ${projectId} stopped ${shotIds.length} ${batch.quality} shot(s): ${error.message}`);
         }
