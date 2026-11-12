@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { canonicalSnapshotChecksum as hash } from '../../lib/snapshotChecksum.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
+import { normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
 
 import { isNonBlankStr as text } from '../../lib/textUtils.js';
 import { cameraMovementFromText, getCameraMovement, shotCameraLabel } from '../../lib/cameraMovements.js';
@@ -620,8 +621,13 @@ function shotSourceProblems(project, review, draft, scenes, documentShots, stale
 }
 
 const FRAME = 1 / 24;
+// A Blender film is cut on its own frame grid and must cover the frame holding the song's last sample
+// (blender/manifest.js), so its last shot ends up to one film frame after the song. Mirrored shot times
+// are rounded to six decimals.
+const pastSongSlack = (project) => (project.composition?.mode === 'blender'
+  ? 1 / normalizeBlenderRecord(project.blender).settings.fps + 1e-6 : 0);
 // Each place the shots leave the song uncovered or covered twice, on the shot where it happens, so the checklist can name it.
-function storyboardCoverage(timedScenes, duration) {
+function storyboardCoverage(timedScenes, duration, pastSlack = 0) {
   if (!timedScenes.length) return [];
   const coverage = [];
   const [first, last] = [timedScenes[0], timedScenes.at(-1)];
@@ -632,7 +638,7 @@ function storyboardCoverage(timedScenes, duration) {
     coverage.push({ sceneId: s.sceneId, issue: s.startSec > prev.endSec ? 'gap' : 'overlap',
       startSec: Math.min(s.startSec, prev.endSec), endSec: Math.max(s.startSec, prev.endSec) });
   });
-  if (Math.abs(last.endSec - duration) > FRAME) coverage.push({ sceneId: last.sceneId, issue: last.endSec > duration ? 'past-end' : 'early-end',
+  if (duration - last.endSec > FRAME || last.endSec - duration > Math.max(FRAME, pastSlack)) coverage.push({ sceneId: last.sceneId, issue: last.endSec > duration ? 'past-end' : 'early-end',
     startSec: Math.min(last.endSec, duration), endSec: Math.max(last.endSec, duration) });
   return coverage;
 }
@@ -667,10 +673,11 @@ function shotProblems(project, draft, scenes, { documentShots, cues, duration })
   const problems = [];
   const incompleteShots = [];
   const lyricAnchors = [];
+  const songEnd = duration + pastSongSlack(project);
   for (const scene of scenes) {
     const shot = documentShots ? scene : draft.storyboard?.find(s => s.sceneId === scene.sceneId) || boardShotFromScene(project, scene);
     const missing = !(Number.isFinite(scene.startSec) && scene.endSec > scene.startSec) ? ['timing']
-      : scene.endSec > duration ? ['an end inside the song'] : [];
+      : scene.endSec > songEnd ? ['an end inside the song'] : [];
     missing.push(...(documentShots ? DOCUMENT_SHOT_FIELDS : BOARD_SHOT_FIELDS).filter(key => !text(shot?.[key])));
     if (missing.length) {
       problems.push(`Complete timing, action, staging, camera and transition for ${scene.label || 'each shot'}.`);
@@ -737,7 +744,7 @@ export function productionReadiness(project) {
   boardProblems.push(...shotSourceProblems(project, review, draft, scenes, documentShots, staleRows));
   if (!scenes.length) boardProblems.push('Create a timed shot storyboard.');
   const timedScenes = scenes.filter(s => Number.isFinite(s.startSec) && s.endSec > s.startSec).sort((a, b) => a.startSec - b.startSec);
-  const coverage = storyboardCoverage(timedScenes, duration);
+  const coverage = storyboardCoverage(timedScenes, duration, pastSongSlack(project));
   if (coverage.length) boardProblems.push('Storyboard shots must cover the master without unintended gaps or overlaps.');
   const shots = shotProblems(project, draft, scenes, { documentShots, cues, duration });
   boardProblems.push(...shots.problems);
