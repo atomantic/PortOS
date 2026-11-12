@@ -28,10 +28,12 @@ function timedLyrics(project) {
     .join('\n');
 }
 
-/** The posted links as `{ platform: url }`, http(s) only. */
+/** The posted links as `{ platform: url }`, http(s) only, excluding skipped platforms. */
 export function postedLinks(project) {
+  const skipped = new Set(Array.isArray(project?.publishKit?.skippedTargets) ? project.publishKit.skippedTargets : []);
   const posts = project?.publishKit?.posts && typeof project.publishKit.posts === 'object' ? project.publishKit.posts : {};
   return Object.fromEntries(Object.entries(posts)
+    .filter(([platform]) => !skipped.has(platform))
     .map(([platform, post]) => [platform, typeof post?.url === 'string' ? post.url.trim() : ''])
     .filter(([, url]) => /^https?:\/\//i.test(url)));
 }
@@ -42,6 +44,7 @@ export function postedLinks(project) {
  * schedule. Only given facts may be claimed.
  */
 export function buildPromotionPlanPrompt(project, { goal = '', audience = '', days = 7, cuts = [], timezone = 'UTC' } = {}) {
+  const skipped = new Set(Array.isArray(project?.publishKit?.skippedTargets) ? project.publishKit.skippedTargets : []);
   const links = postedLinks(project);
   const copy = project?.publishKit?.copy && typeof project.publishKit.copy === 'object' ? project.publishKit.copy : {};
   const facts = [
@@ -51,6 +54,7 @@ export function buildPromotionPlanPrompt(project, { goal = '', audience = '', da
     cuts.length ? `Suggested clip windows from the video:\n${cuts.map((c) => `- ${clock(c.startSec)}–${clock(c.endSec)}${c.label ? ` (${c.label})` : ''}`).join('\n')}` : null,
   ].filter(Boolean).join('\n\n');
   const copyText = Object.entries(copy)
+    .filter(([platform]) => !skipped.has(platform))
     .map(([platform, fields]) => `${platform}: ${Object.values(fields || {}).filter((v) => typeof v === 'string' && v.trim()).join(' / ')}`)
     .filter((line) => line.length > 3)
     .join('\n');

@@ -37,8 +37,9 @@ export const crossLinksEnabled = (kit) => kitOf(kit).crossLinks !== false;
 
 /** `[{ target, label, url }]` for every linkable post except `exclude`. */
 export function releaseLinks(kit, { exclude = [], songUrl } = {}) {
+  const skipped = Array.isArray(kitOf(kit).skippedTargets) ? kitOf(kit).skippedTargets : [];
   return Object.keys(CROSS_LINK_LABELS)
-    .filter((target) => !exclude.includes(target))
+    .filter((target) => !exclude.includes(target) && !skipped.includes(target))
     .map((target) => ({ target, label: CROSS_LINK_LABELS[target], url: releaseLinkUrl(kit, target, { songUrl }) }))
     .filter((link) => link.url);
 }
@@ -73,8 +74,10 @@ export function carriedLinks(kit, target) {
  * adds them (`Label: url` lines). `[{ target, url, missing, text }]`.
  */
 export function crossLinkBackfill(kit) {
-  const posts = kitOf(kit).posts || {};
-  return CROSS_LINK_EDIT_TARGETS.filter((target) => str(posts[target]?.url)).map((target) => {
+  const k = kitOf(kit);
+  const posts = k.posts || {};
+  const skipped = Array.isArray(k.skippedTargets) ? k.skippedTargets : [];
+  return CROSS_LINK_EDIT_TARGETS.filter((target) => !skipped.includes(target) && str(posts[target]?.url)).map((target) => {
     const exclude = [target, ...carriedLinks(kit, target)];
     const missing = releaseLinks(kit, { exclude });
     return { target, url: str(posts[target].url), missing, text: missing.map((l) => `${l.label}: ${l.url}`).join('\n') };

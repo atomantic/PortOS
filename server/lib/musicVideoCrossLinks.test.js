@@ -3,7 +3,7 @@
  * what its draft always linked, counted only when that link existed first.
  */
 import { describe, expect, it } from 'vitest';
-import { carriedLinks, crossLinkBackfill, dropCarriedLink } from './musicVideoCrossLinks.js';
+import { carriedLinks, crossLinkBackfill, dropCarriedLink, releaseLinks } from './musicVideoCrossLinks.js';
 
 const song = 'https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc';
 
@@ -50,5 +50,18 @@ describe('cross-links between release posts', () => {
     expect(crossLinkBackfill(kit).find((r) => r.target === 'stackerNews').missing).toEqual([]);
     const dropped = { posts: dropCarriedLink(kit, kit.posts, 'youtube') };
     expect(crossLinkBackfill(dropped).find((r) => r.target === 'stackerNews').missing.map((l) => l.url)).toEqual(['https://youtu.be/new']);
+  });
+
+  it('excludes skippedTargets from releaseLinks and crossLinkBackfill', () => {
+    const kit = {
+      skippedTargets: ['linkedin', 'stackerNews'],
+      posts: {
+        youtube: { url: 'https://youtu.be/v1', postedAt: '2026-01-01T00:00:00Z' },
+        linkedin: { url: 'https://linkedin.com/posts/1', postedAt: '2026-01-02T00:00:00Z' },
+        stackerNews: { url: 'https://stacker.news/items/7', postedAt: '2026-01-03T00:00:00Z', links: [] },
+      },
+    };
+    expect(releaseLinks(kit).map((l) => l.target)).toEqual(['youtube']);
+    expect(crossLinkBackfill(kit).map((r) => r.target)).toEqual(['youtube']);
   });
 });

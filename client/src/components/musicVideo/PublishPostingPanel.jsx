@@ -606,6 +606,12 @@ function TargetRow({ project, kit, entry, publishing, excerpts }) {
             {busy === 'prepare' ? 'Filling…' : (draft ? 'Fill again' : 'Fill draft')}
           </button>
         )}
+        {publishing.setTargetSkipped && (
+          <button type="button" onClick={() => publishing.setTargetSkipped(target, true)} disabled={!!busy}
+            className="text-xs text-port-text-muted hover:text-port-text disabled:opacity-50 px-1.5 py-1 min-h-[44px] pointer-fine:sm:min-h-0">
+            Skip for this release
+          </button>
+        )}
       </div>
       {open && <div id={idFor('body')} className="space-y-2">
       {posted && (
@@ -680,6 +686,25 @@ export default function PublishPostingPanel({ project, publishing, excerpts = nu
       <ul className="space-y-2">
         {targets.map((entry) => <TargetRow key={`${project.id}-${entry.target}`} project={project} kit={kit} entry={entry} publishing={publishing} excerpts={excerpts} />)}
       </ul>
+      {(() => {
+        const skippedSet = new Set(publishing.skippedTargets || kit.skippedTargets || []);
+        const skippedEntries = PUBLISH_TARGETS.filter(({ target }) => skippedSet.has(target) && publishing.platforms?.[target]?.enabled !== false);
+        if (!skippedEntries.length) return null;
+        return (
+          <p className="text-xs text-port-text-muted pt-1">
+            Skipped for this release:{' '}
+            {skippedEntries.map(({ target, label }, i) => (
+              <span key={target}>
+                {i > 0 && ', '}
+                {label}
+                {publishing.setTargetSkipped && (
+                  <> (<button type="button" onClick={() => publishing.setTargetSkipped(target, false)} className="text-port-accent hover:underline">Undo</button>)</>
+                )}
+              </span>
+            ))}
+          </p>
+        );
+      })()}
     </PublishCard>
   );
 }

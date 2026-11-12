@@ -1264,6 +1264,8 @@ export const musicVideoPublishCopyPatchSchema = z.object({
   // What the director typed or picked on each platform's Publish row, saved as edited so a
   // reload or another tab shows it again. Replaces that platform's saved answers.
   postOptions: z.lazy(() => musicVideoPublishPostOptionsSchema).optional(),
+  // Platforms skipped for this release only (without changing install-wide settings).
+  skippedTargets: z.array(z.lazy(() => musicVideoPublishTargetSchema)).max(20).optional(),
 }).strict();
 export const musicVideoPublishCopyDraftSchema = z.object({
   providerId: z.string().max(200).nullable().optional(),
