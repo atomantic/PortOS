@@ -15,7 +15,7 @@ import { assertRenderCleanupIdle } from './renderCleanupActivity.js';
  */
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
-import { unlink, writeFile } from 'fs/promises';
+import { copyFile, unlink, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -61,7 +61,7 @@ export const getActivePublishKitBuild = (projectId) => {
 };
 
 /** The final render's file (the YouTube master), or a 409 naming what's missing. */
-async function finalRenderFile(project) {
+export async function finalRenderFile(project) {
   if (!project.renderHistoryId) throw kitError(409, 'NO_FINAL_RENDER', 'Render the final video before building the publishing kit');
   const resolved = await resolveRenderVideoFile(project.renderHistoryId);
   if (!resolved) throw kitError(409, 'NO_FINAL_RENDER', 'The final render file is missing — render the final video again');
@@ -77,13 +77,13 @@ export async function releaseKitFiles(filenames, keep = []) {
     const kit = projectPublishKit(p);
     // A made YouTube thumbnail (and each A/B variant) also holds the kit frame it was made from,
     // so a rebuild leaves it there to re-set in new lettering.
-    const made = [kit.youtubeThumbnail, ...(Array.isArray(kit.youtubeThumbnailTests) ? kit.youtubeThumbnailTests : [])].filter(Boolean);
+    const made = [kit.coverArt, kit.youtubeThumbnail, ...(Array.isArray(kit.youtubeThumbnailTests) ? kit.youtubeThumbnailTests : [])].filter(Boolean);
     const madeFrom = made.map((t) => (t.source?.kind === 'thumbnail' ? t.source.filename : null));
-    for (const f of [...(kit.exports || []).map((e) => e.filename), ...(kit.thumbnails || []), kit.captionsFilename, kit.coverArt?.filename, ...made.map((t) => t.filename), ...madeFrom]) if (f) referenced.add(f);
+    for (const f of [...(kit.exports || []).map((e) => e.filename), ...(kit.thumbnails || []), ...(kit.frames || []), kit.captionsFilename, kit.coverArt?.filename, ...made.map((t) => t.filename), ...madeFrom]) if (f) referenced.add(f);
   }
   for (const name of filenames) {
     if (referenced.has(name)) continue;
-    const root = name.endsWith('.jpg') ? PATHS.videoThumbnails : PATHS.videos;
+    const root = /\.(jpg|png)$/.test(name) ? PATHS.videoThumbnails : PATHS.videos;
     const path = safeUnder(root, name);
     if (path) await unlink(path).catch(() => {});
   }
@@ -193,12 +193,12 @@ async function beginPublishKitBuild(projectId, jobId) {
       step();
     }
     // Cut every candidate, keep the best frame of each shot, and drop the rest.
-    // A thumbnail fills the 16:9 frame: a master of another shape is cropped, never boxed in black bars.
+    // Keep the master dimensions; the cover and YouTube composers apply their own crops.
     const scored = [];
     for (const [i, c] of candidates.entries()) {
       const name = `${stem}-thumb-${i + 1}.jpg`;
       const path = join(PATHS.videoThumbnails, name);
-      const result = await runFfmpegProcess({ bin: ffmpeg, signal: job.abort.signal, args: ['-hide_banner', '-loglevel', 'error', '-ss', String(c.t), '-i', masterPath, '-frames:v', '1', '-vf', 'scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720', '-q:v', '2', '-y', path] });
+      const result = await runFfmpegProcess({ bin: ffmpeg, signal: job.abort.signal, args: ['-hide_banner', '-loglevel', 'error', '-ss', String(c.t), '-i', masterPath, '-frames:v', '1', '-q:v', '2', '-y', path] });
       if (result.ok) scored.push({ ...c, name, score: await scoreThumbnailFrame(path).catch(() => NaN) });
       step();
     }
@@ -252,6 +252,37 @@ export function cancelPublishKitBuild(jobId) {
   if (!job || job.status !== 'running') return false;
   job.abort.abort();
   return true;
+}
+
+/** Capture a director-selected moment without changing the master or calling a provider. */
+export async function capturePublishKitFrame(projectId, atSec) {
+  assertRenderCleanupIdle(projectId);
+  const project = await requireProject(projectId);
+  const { entry, path: masterPath } = await finalRenderFile(project);
+  const { findFfmpeg, runFfmpegProcess, probeVideoDuration } = await import('../../lib/ffmpeg.js');
+  const duration = Number(entry.durationSec) > 0 ? Number(entry.durationSec) : await probeVideoDuration(masterPath);
+  if (!Number.isFinite(atSec) || atSec < 0 || atSec >= duration) throw kitError(422, 'VALIDATION_ERROR', 'Choose a time inside the final video');
+  const filename = `music-video-${projectId.slice(3, 11)}-frame-${randomUUID()}.png`;
+  await ensureDir(PATHS.videoThumbnails);
+  const output = join(PATHS.videoThumbnails, filename);
+  const rendered = project.composition?.mode === 'blender'
+    ? await (await import('./publishKitBlenderFrame.js')).publishKitBlenderFrame(project, atSec) : null;
+  const write = async () => {
+    if (rendered) return copyFile(rendered, output);
+    const bin = await findFfmpeg();
+    if (!bin) throw kitError(500, 'FFMPEG_MISSING', 'ffmpeg not found on PATH');
+    const result = await runFfmpegProcess({ bin, args: ['-hide_banner', '-loglevel', 'error', '-ss', String(atSec), '-i', masterPath, '-frames:v', '1', '-y', output] });
+    if (!result.ok || !existsSync(output)) throw kitError(500, 'FRAME_CAPTURE_FAILED', 'The video frame could not be captured');
+  };
+  const dropped = [];
+  const result = await write().then(() => withBackupAssetPublication(() => mutateProjectRecord(projectId, current => {
+    const kit = projectPublishKit(current);
+    const frames = [filename, ...(kit.frames || [])];
+    dropped.push(...frames.slice(12));
+    return { project: { ...current, publishKit: { ...kit, frames: frames.slice(0, 12) } } };
+  }))).catch(async error => { await unlink(output).catch(() => {}); throw error; });
+  await releaseKitFiles(dropped);
+  return result;
 }
 
 /** Choose the thumbnail the release uses (one the build cut). */

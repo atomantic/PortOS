@@ -1,3 +1,5 @@
+import { normalizeTitleCard, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
+
 /**
  * Music Video — choosing the video frames worth a YouTube thumbnail.
  *
@@ -31,6 +33,7 @@ function longestLyricFreeStretch(from, to, cues) {
  * candidate names its shot, so the pick can keep to one frame per shot.
  */
 export function thumbnailCandidates(project, durationSec, max = THUMBNAIL_CANDIDATES) {
+  const cards = titleCardWindows(normalizeTitleCard(project.titleCard));
   const cues = (project.lyricCues || []).filter((c) => Number.isFinite(c?.startSec) && Number.isFinite(c?.endSec) && c.endSec > c.startSec);
   const shots = (project.scenes || [])
     .filter((s) => Number.isFinite(s?.startSec) && Number.isFinite(s?.endSec) && s.endSec > s.startSec && s.startSec < durationSec)
@@ -41,10 +44,12 @@ export function thumbnailCandidates(project, durationSec, max = THUMBNAIL_CANDID
   const all = pool.flatMap((shot) => {
     const len = shot.to - shot.from;
     const middle = { from: shot.from + len * 0.15, to: shot.to - len * 0.15 };
-    const free = longestLyricFreeStretch(middle.from, middle.to, cues);
-    const span = free && free.to - free.from >= 0.25 ? free : middle;
-    const lyric = span === middle && cues.some((c) => c.endSec > middle.from && c.startSec < middle.to);
-    return [0.35, 0.7].map((f) => ({ t: round(span.from + (span.to - span.from) * f), shot: shot.key, performance: shot.performance, lyric }));
+    const clean = longestLyricFreeStretch(middle.from, middle.to, cards);
+    if (!clean) return [];
+    const free = longestLyricFreeStretch(clean.from, clean.to, [...cues, ...cards]);
+    const span = free && free.to - free.from >= 0.25 ? free : clean;
+    const lyric = span === clean && cues.some((c) => c.endSec > middle.from && c.startSec < middle.to);
+    return [0.35, 0.7].map((f) => ({ t: Math.max(span.from, Math.min(span.to - 0.000001, round(span.from + (span.to - span.from) * f))), shot: shot.key, performance: shot.performance, lyric }));
   });
   if (all.length <= max) return all;
   return Array.from({ length: max }, (_, i) => all[Math.floor((i * all.length) / max)]);

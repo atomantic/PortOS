@@ -923,3 +923,6 @@ export const getMusicVideoBlenderLog = (id, path, options = {}) =>
 export const verifyMusicVideoLyrics = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/verify`, { method: 'POST', body: '{}', ...options });
 export const musicVideoLyricVerifyEventsUrl = jobId => `/api/music-video/lyrics/verify/${encodeURIComponent(jobId)}/events`;
 export const cancelMusicVideoLyricVerify = (jobId, options = {}) => request(`/music-video/lyrics/verify/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });
+
+export const captureMusicVideoPublishFrame = (id, atSec, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/frame`, { method: 'POST', body: JSON.stringify({ atSec }), ...options });

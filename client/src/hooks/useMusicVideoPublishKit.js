@@ -5,6 +5,7 @@ import {
   getMusicVideoProject,
   buildMusicVideoDcp, musicVideoDcpEventsUrl, cancelMusicVideoDcp,
   buildMusicVideoPublishKit,
+  captureMusicVideoPublishFrame,
   musicVideoPublishKitEventsUrl,
   cancelMusicVideoPublishKit,
   draftMusicVideoPublishCopy,
@@ -32,6 +33,7 @@ const readPercent = (frame) => (Number.isFinite(frame.progress) ? frame.progress
  */
 export default function useMusicVideoPublishKit({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
+  const [capturingFrame, setCapturingFrame] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [composing, setComposing] = useState(false);
@@ -178,7 +180,15 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
       .finally(() => setRequestingImage(false));
   };
 
+  // The API request uses its default error toast; catch only settles this button action.
+  const captureFrame = (atSec) => {
+    setCapturingFrame(true);
+    return captureMusicVideoPublishFrame(projectId, atSec).then(apply).catch(() => null).finally(() => setCapturingFrame(false));
+  };
+
   return {
+    captureFrame,
+    capturingFrame,
     dcp: { active: dcpJob.active, stage: dcpJob.stage, build: input => dcpJob.start(input, projectId), cancel: dcpJob.cancel },
     building: job.active,
     progress: job.active ? job.percent : 0,
