@@ -52,6 +52,13 @@ reports that incompatibility to `pip check`. PortOS never starts Gradio; MoGe's
 model imports and the image-to-GLB path are the compatibility boundary. Do not
 reuse this lock for the fork's web demo or silently remove this override.
 
+The 2026-11-12 network/cache refresh uses uv **0.13.7** with cutoff
+**2026-11-05T00:00:00Z** and preserves the native source/ABI and Pillow override.
+Its complete registry closure remains 96 identities; only the network helpers
+and AnyIO's required Typing-Extensions companion change. See the eighteenth
+slice in [the runtime refresh record](./PYTHON_RUNTIME_REFRESH.md) for complete
+artifact/advisory results, real network-caller checks and native-render limits.
+
 ## JIT advisory boundary
 
 [GHSA-rrmf-rvhw-rf47](https://github.com/advisories/GHSA-rrmf-rvhw-rf47)

@@ -5,7 +5,7 @@
   "torchvision": "0.29.2",
   "minimumMacOS": 26,
   "minimumXcode": 26,
-  "registryCutoff": "2026-11-04T00:00:00Z",
+  "registryCutoff": "2026-11-05T00:00:00Z",
   "sources": [
     {
       "name": "trellis-mac",
