@@ -239,7 +239,8 @@ describe.skipIf(process.platform === 'win32')('scanner committed snapshot bounda
     } } });
     expect(await lstat(join(root, 'launched.json')).catch(() => null)).toBeNull();
     const corrected = await manager.start('agent-fixture', { prompt: 'Corrected input', paths: ['.'] });
-    expect(corrected.evidence).toMatchObject({ status: 'completed', preflight: result.evidence.preflight });
+    const completion = { status: corrected.evidence.status, exitCode: corrected.evidence.exitCode, cleanup: corrected.evidence.cleanup };
+    expect(corrected.evidence, JSON.stringify(completion)).toMatchObject({ status: 'completed', preflight: result.evidence.preflight });
     expect(await manager.start('agent-fixture', { prompt: 'Again', paths: ['.'] })).toEqual(corrected);
   });
 

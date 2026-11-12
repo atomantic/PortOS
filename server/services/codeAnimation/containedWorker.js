@@ -185,7 +185,7 @@ const lineFeed = (onLine) => {
   const decoder = new StringDecoder('utf8');
   let pending = '';
   const deliver = (line) => {
-    try { onLine(line); } catch (error) { console.error(`❌ Code Animation worker line handler failed: ${error.message}`); }
+    try { onLine(line); } catch (error) { console.error(`❌ Code Animation worker line handler failed: ${String(error?.message ?? error)}`); }
   };
   const drain = () => {
     let at = pending.indexOf('\n');

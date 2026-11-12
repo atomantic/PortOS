@@ -60,9 +60,12 @@ async function songAudioPaths(project) {
   return { master, vocalStem };
 }
 
+/** The exact song context a job receives, without writing the workspace. */
+export const getBlenderSong = async (project, settings) => buildBlenderSong(project, { fps: settings.fps, audio: await songAudioPaths(project) });
+
 /** Build song.json for `project` and write it to the workspace. Returns the song. */
 export async function writeBlenderSong(project, settings) {
-  const song = buildBlenderSong(project, { fps: settings.fps, audio: await songAudioPaths(project) });
+  const song = await getBlenderSong(project, settings);
   await atomicWrite(blenderSongFile(project.id), song);
   return song;
 }

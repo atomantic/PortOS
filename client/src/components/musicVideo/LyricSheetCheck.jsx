@@ -5,7 +5,7 @@ import { formatTimecode } from '../../utils/formatters.js';
 
 const sheetSignature = (project, cues = project.lyricCues || []) => JSON.stringify([project.id, project.trackId,
   project.uploadedAudioFilename, project.vocalStemFilename, project.vocalStemMasterFilename,
-  cues.map(({ id, text, startSec, endSec, words }) => ({ id, text, startSec, endSec, words }))]);
+  cues]);
 const actionClass = 'min-h-[44px] rounded border border-port-border px-2 text-port-accent disabled:opacity-50';
 
 export default function LyricSheetCheck({ project, audioFilename, aligning, onEditLocal, onSave }) {

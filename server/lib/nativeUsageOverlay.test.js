@@ -98,6 +98,19 @@ describe('overlayNativeUsage', () => {
     expect(out['2026-06-01'].byProvider.codex.fastTokensIn).toBeUndefined();
   });
 
+  it('corrects equal pre-coverage Fast attribution to Ultrafast while retaining estimates', () => {
+    const speed = { fastTokensIn: 100 };
+    const ledger = { '2026-06-01': { byProvider: { codex: {
+      ...counts(120, 0, speed), source: 'mixed', estimated: counts(20, 0),
+      byModel: { 'model-c': { ...counts(120, 0, speed), source: 'mixed', estimated: counts(20, 0) } },
+    } } } };
+    const out = overlayNativeUsage(ledger, { stores: { codex: store({
+      '2026-06-01': { 'model-c': native(100, 0, { ultrafastInput: 100 }) },
+    }) }, providers });
+    expect(out['2026-06-01'].byProvider.codex).toMatchObject({ tokensIn: 120, fastTokensIn: 0, ultrafastTokensIn: 100 });
+    expect(out['2026-06-01'].byProvider.codex.byModel['model-c']).toMatchObject({ tokensIn: 120, fastTokensIn: 0, ultrafastTokensIn: 100 });
+  });
+
   it('keeps the ledger after the last refresh, and ignores a store with no history', () => {
     const ledger = { '2026-07-25': { byProvider: { 'claude-code': { name: 'Claude Code', ...counts(10, 10), source: 'measured', byModel: {} } } } };
     const later = overlayNativeUsage(ledger, { stores: { claude: store({ '2026-07-10': { 'model-a': native(1, 1) } }) }, providers });

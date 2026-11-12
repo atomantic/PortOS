@@ -58,6 +58,7 @@ function fixtureHtml(kind, initiallyOn) {
       document.querySelector('#songs textarea').oninput = async event => {
         const response = await fetch('/api/search?query=' + encodeURIComponent(event.target.value));
         await response.json();
+        document.querySelector('#songs a').innerHTML = '<span>Synthetic song</span>';
         window.searchSettled = true;
       };
       document.getElementById('use').onclick = () => {

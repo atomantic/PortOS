@@ -107,7 +107,7 @@ export function validateBlenderManifest(raw, { durationSec, fps }) {
 
   // A song rarely ends on a frame boundary. The last shot may run to the boundary just after it,
   // so the picture covers the whole song instead of ending a fraction of a frame early.
-  const songEnd = Math.ceil(durationSec * fps - GRID_TOLERANCE_SEC) / fps;
+  const songEnd = Math.ceil(durationSec * fps - 1e-9) / fps;
   const seen = new Set();
   const shots = [];
   let previous = null;
@@ -152,18 +152,19 @@ export function validateBlenderManifest(raw, { durationSec, fps }) {
   return { manifest: { title: typeof raw.title === 'string' ? raw.title.trim().slice(0, 200) : '', shots, options }, errors };
 }
 
-// Where the shots leave the song uncovered. Empty when the film tiles the song (within one frame at each end).
+// Where the shots leave song frames uncovered, or extend past the current song.
 function coverageProblems(shots, { durationSec, fps }) {
   if (!shots.length) return ['The film lists no shots.'];
-  const frame = 1 / fps;
+  const songEnd = Math.ceil(durationSec * fps - 1e-9) / fps;
   const problems = [];
-  if (shots[0].start > frame + 1e-9) problems.push(`No shot covers the first ${seconds(shots[0].start)} of the song (shot ${shots[0].id} starts there).`);
+  if (Math.round(shots[0].start * fps) > 0) problems.push(`No shot covers the first ${seconds(shots[0].start)} of the song (shot ${shots[0].id} starts there).`);
   for (let index = 1; index < shots.length; index += 1) {
     const gap = shots[index].start - shots[index - 1].end;
     if (gap > 1e-9) problems.push(`No shot covers ${seconds(shots[index - 1].end)} to ${seconds(shots[index].start)} (between ${shots[index - 1].id} and ${shots[index].id}).`);
   }
   const last = shots[shots.length - 1];
-  if (durationSec - last.end > frame + 1e-9) problems.push(`No shot covers the song after ${seconds(last.end)} (it runs to ${seconds(durationSec)}).`);
+  if (Math.round(last.end * fps) < Math.round(songEnd * fps)) problems.push(`No shot covers the song after ${seconds(last.end)} (it runs to ${seconds(durationSec)}).`);
+  if (Math.round(last.end * fps) > Math.round(songEnd * fps)) problems.push(`The last shot ends at ${seconds(last.end)}, after the current song ends (${seconds(durationSec)}). Sync shots from scripts again.`);
   return problems;
 }
 

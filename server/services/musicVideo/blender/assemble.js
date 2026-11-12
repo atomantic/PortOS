@@ -30,9 +30,9 @@ function blenderBlackSegmentArgs({ frames, width, height, fps, quality, tagFilte
  */
 function blenderConformSegmentArgs({ source, offsetFrames, frames, width, height, fps, quality, tagFilter = null, output }) {
   const chain = [
-    `trim=start_frame=${offsetFrames}:end_frame=${offsetFrames + frames}`, 'setpts=PTS-STARTPTS',
+    `fps=${fps}`, `trim=start_frame=${offsetFrames}:end_frame=${offsetFrames + frames}`, 'setpts=PTS-STARTPTS',
     `scale=${width}:${height}:force_original_aspect_ratio=decrease:flags=lanczos`,
-    `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`, 'setsar=1', `fps=${fps}`, `tpad=stop_mode=clone:stop=${frames}`, tagFilter,
+    `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`, 'setsar=1', `tpad=stop_mode=clone:stop=${frames}`, tagFilter,
   ].filter(Boolean).join(',');
   return [...QUIET, '-i', source, '-vf', chain, '-frames:v', String(frames), ...blenderVideoEncodeArgs({ fps, quality }), '-y', output];
 }

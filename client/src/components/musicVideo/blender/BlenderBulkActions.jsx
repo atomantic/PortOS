@@ -21,10 +21,12 @@ function BlenderBulkActions({ blender, blocked = false }) {
   const plans = { preview: blenderBulkPlan(state, 'preview', scope), final: blenderBulkPlan(state, 'final', scope) };
   const activeJobs = (state.jobs || []).filter(isBlenderJobActive).length;
   const start = (quality) => {
+    if (blocked || pending[`render:bulk:${quality}`] || plans[quality].shotIds.length === 0) return;
     setConfirming(null);
     blender.render(plans[quality].body, 'bulk');
   };
   const request = (quality) => {
+    if (blocked || pending[`render:bulk:${quality}`] || plans[quality].shotIds.length === 0) return;
     if (plans[quality].shotIds.length > BLENDER_BULK_CONFIRM_ABOVE) setConfirming(quality);
     else start(quality);
   };
@@ -59,7 +61,7 @@ function BlenderBulkActions({ blender, blocked = false }) {
           </button>
         )}
       </div>
-      {confirming && (
+      {confirming && !blocked && !pending[`render:bulk:${confirming}`] && confirmCount > 0 && (
         <InlineConfirmRow
           tone="warning"
           aria-label={`Confirm rendering ${confirmCount} ${QUALITY_NOUNS[confirming]}`}

@@ -13,13 +13,14 @@
 # Regenerate after editing requirements-acestep-mlx.txt, from the repo root,
 # with uv 0.13.7 and a fresh seven-day cutoff. Keep the existing output so
 # unrelated pins are reused; restore this header after --no-header compilation:
+#   LOCK_CUTOFF=$(node -p 'new Date(Date.now() - 7 * 86400000).toISOString()')
 #   LOCK="$PWD/scripts/requirements-acestep-mlx.lock.txt"; TMP="$(mktemp -d)"
 #   cp scripts/requirements-acestep-mlx.txt "$TMP/"
 #   printf '[project]\nname = "acestep-lock"\nversion = "0"\n[tool.uv]\nenvironments = ["sys_platform == '"'"'darwin'"'"' and platform_machine == '"'"'arm64'"'"'"]\n' > "$TMP/pyproject.toml"
 #   (cd "$TMP" && uv pip compile requirements-acestep-mlx.txt --universal --python-version 3.11 \
 #     --generate-hashes --no-header --annotation-style line \
 #     --upgrade-package pypinyin==0.55.0 --upgrade-package filelock==4.2.7 \
-#     --exclude-newer 2026-11-05T00:00:00Z -o "$LOCK")
+#     --exclude-newer "$LOCK_CUTOFF" -o "$LOCK")
 # then check the result against OSV (including MAL- malicious-package records).
 absl-py==2.5.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:286e71c82c1a38e75bbcf185f9b37d0305ad7786535107cb49bf4df9ff2e1f95 \

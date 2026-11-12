@@ -47,8 +47,12 @@ function BlenderShotDetail({ blender, shot, audioUrl, blocker, onTime, onOpenPre
   const renderStill = () => {
     const element = video.current;
     const fps = state.settings?.fps;
-    const paused = element && element.paused && element.currentTime > 0 && fps > 0;
-    const at = paused ? Math.round((shot.start + element.currentTime) * fps) / fps : null;
+    const paused = element && element.paused && Number.isFinite(element.currentTime) && element.currentTime >= 0 && fps > 0;
+    // Synced shot boundaries are on the frame grid; round their floating-point representation.
+    const firstFrame = Math.round(shot.start * fps);
+    const lastFrame = Math.round(shot.end * fps) - 1;
+    const frame = paused ? Math.max(firstFrame, Math.min(lastFrame, Math.round((shot.start + element.currentTime) * fps))) : null;
+    const at = frame == null ? null : frame / fps;
     const times = at != null && at >= shot.start && at < shot.end ? [at] : null;
     blender.render({ shotIds: [shot.id], quality: 'still', ...(times ? { times } : {}) }, shot.id);
   };
