@@ -1,7 +1,7 @@
-/** Pixel contracts at the document encoder, ending encoder and preview shell. */
+/** Pixel contracts at the document encoder, ending encoder and isolated live preview. */
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { browserSuiteCanRun, resolveTestChrome } from '../../lib/browserSuiteGate.js';
@@ -25,10 +25,8 @@ vi.mock('../htmlComposition/browser.js', async original => {
 });
 const { PATHS } = await import('../../lib/paths.js');
 const { findFfmpeg } = await import('../../lib/ffmpeg.js');
-const { encodeDocumentComposition } = await import('./documentRender.js');
+const { encodeDocumentComposition, openIsolatedDocumentPreview } = await import('./documentRender.js');
 const { renderStatsOutroClip } = await import('./statsOutro.js');
-const { buildDocumentPreview } = await import('./documentPreview.js');
-const { openComposition } = await import('../htmlComposition/browser.js');
 const ffmpeg = await findFfmpeg();
 const canRun = browserSuiteCanRun('document vignette', { Chrome: chrome, ffmpeg }, { onUnavailable: cleanupTempDataRoots });
 const W = 1280, H = 720;
@@ -39,7 +37,7 @@ const pixel = (raw, x, y) => raw[y * W + x];
 describe.skipIf(!canRun)('opaque document film-look canvas with Chrome and ffmpeg', () => {
   afterAll(cleanupTempDataRoots);
   it('darkens document and ending corners, preserves a no-vignette look, and keeps the preview opaque', async () => {
-    const directory = 'vignette-document';
+    const directory = 'music-video/mv-vignette/composition/doc-vignette';
     const dir = join(PATHS.data, directory);
     await mkdir(dir, { recursive: true });
     const html = `<!doctype html><html><head></head><body style="margin:0"><canvas id="stage" width="${W}" height="${H}"></canvas><script>window.portosComposition={width:${W},height:${H},fps:12,durationSec:1,seek:()=>{const c=document.getElementById('stage').getContext('2d');c.fillStyle='#808080';c.fillRect(0,0,${W},${H});}};</script></body></html>`;
@@ -65,17 +63,14 @@ describe.skipIf(!canRun)('opaque document film-look canvas with Chrome and ffmpe
     const outro = frame(ending);
     // The unlit floor is already dark; a white browser base used to wash its corners above 100.
     for (const [x, y] of corners) expect(pixel(outro, x, y)).toBeLessThan(25);
-    const preview = await buildDocumentPreview(project, { files: new Map([['index.html', { abs: join(dir, 'index.html'), size: Buffer.byteLength(html) }]]) });
-    // Exercise the actual shell from the staged document files.
-    expect(preview).not.toBeNull();
-    await writeFile(join(dir, 'index.html'), preview.html);
-    const page = await openComposition(directory, { ownedBrowser: true });
+    const preview = await openIsolatedDocumentPreview({ project, jobId: 'live-preview' });
+    const page = preview.page;
     try {
       await page.send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false });
       await page.evaluate('portosComposition.seek(0)');
       const { data } = await page.send('Page.captureScreenshot', { format: 'png' });
       const raw = await sharp(Buffer.from(data, 'base64')).removeAlpha().raw().toBuffer();
       for (const [x, y] of corners) expect(raw[(y * W + x) * 3]).toBeLessThan(raw[(H / 2 * W + W / 2) * 3] - 25);
-    } finally { await page.close(); }
+    } finally { await page.close(); await rm(preview.scratchRoot, { recursive: true, force: true }); }
   }, 120000);
 });
