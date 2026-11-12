@@ -592,7 +592,7 @@ function autonomousNextAction(auto) {
 // Publish: build the kit, then one platform at a time, never "publish everything": the next platform
 // not yet posted, so a click can't repeat a post that already went out.
 function publishNextAction(project, publish) {
-  if (!project.publishKit?.builtAt) return { id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Build the publishing kit', shortLabel: 'Kit' };
+  if (!project.publishKit?.builtAt) return { id: 'build-publish-kit', kind: 'run', stage: 'publish', label: 'Build the publishing kit', shortLabel: 'Build kit' };
   const { rows, total, posted } = publishPlatformProgress(project, publish);
   const next = rows.find((row) => row.state !== 'posted');
   return next
@@ -1248,7 +1248,7 @@ function publishChecklist({ project, publish }) {
   const items = [
     { id: 'kit', label: 'Kit built from the current render', done: kitCurrent,
       detail: kit.builtAt && !kitCurrent ? 'The final render changed since the kit was built; rebuild it.' : null,
-      action: kitCurrent ? null : { label: 'Build the kit', anchor: PUBLISH_ANCHOR } },
+      action: kitCurrent ? null : { label: 'Build the kit', run: 'build-publish-kit', anchor: PUBLISH_ANCHOR, disabled: !project.renderHistoryId, reason: !project.renderHistoryId ? 'Render the final video first' : undefined } },
     { id: 'copy', label: 'Copy drafted', done: !!(kit.copyDraftedAt || kit.copy), action: kit.copyDraftedAt || kit.copy ? null : { label: 'Draft the copy', anchor: PUBLISH_ANCHOR } },
   ];
   const openPublishing = progress.done ? null : { label: 'Open publishing', anchor: PUBLISH_ANCHOR };
