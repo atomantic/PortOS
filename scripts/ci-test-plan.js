@@ -367,6 +367,9 @@ export const ALWAYS_RUN_TESTS = [
   'docs/features/product-surfaces.test.js',
   'scripts/agent-instructions-files.test.js',
   'scripts/doc-code-pointers.test.js',
+  // A newly added shared selector has no import edge to its documentation
+  // inventory. Check that contract before broad suites, including docs-only edits.
+  'server/lib/executionOptions.consumers.test.js',
   // Whole-tree scanner: a new browser suite can adopt the gate with no import
   // edge back to the registry it must join (#10312).
   'scripts/browser-suite-registry.test.js',

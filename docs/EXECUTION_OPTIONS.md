@@ -90,6 +90,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/models/ComparisonResearch.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/models/ProviderFallbacks.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/models/UntrustedContentPolicyPanel.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/moodBoard/CombineMoodBoards.jsx` | Request-local provider reference forwarded unchanged to source analysis and style composition; no recurring configuration is saved |
 | `client/src/components/moodBoard/MoodBoardGeneratePanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/moodBoard/MoodBoardStylePanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/music/ChiptunePanel.jsx` | Shared structured options or saved provider reference |
