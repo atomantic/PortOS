@@ -277,7 +277,7 @@ describe('StoryboardAnimatic lyrics', () => {
     globalThis.localStorage.setItem(PREVIEW_FILM_LOOK_KEY, 'on');
     try {
       const card = { enabled: true, title: 'Example Song', style: 'mtv', startSec: 2, endSec: 8 };
-      const project = { ...lyricProject, filmLook: { preset: 'super8', grain: 0.5 }, titleCard: card };
+      const project = { ...lyricProject, composition: { ...lyricProject.composition, mode: 'composed' }, filmLook: { preset: 'super8', grain: 0.5 }, titleCard: card };
       const { container, rerender } = render(<StoryboardAnimatic project={project} audioUrl="/song.mp3" />);
       await act(async () => {});
       const words = screen.getByTestId('animatic-lyrics');

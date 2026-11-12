@@ -41,6 +41,7 @@ import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from '.
 import { encodeDocumentComposition, prepareDocumentRender } from './documentRender.js';
 import { composedLyricWindows, projectTypographyPlan } from './composition.js';
 import { renderTypographyOverlays, removeCompositionScratch } from './compositionRender.js';
+import { normalizeTitleCard, titleCardSteady } from '../../lib/musicVideoTitleCard.js';
 import { applyFilmLookFinish, filmLookFinishNeeded } from './filmLookFinish.js';
 import { startExcerptOnProject, applyExcerptPatch } from './excerpt.js';
 import { markRevisionRendering, settleRevisionRender } from './revision.js';
@@ -361,6 +362,8 @@ async function beginExcerptRender({ projectId, stored, project, startSec, endSec
     // The record and revision are already marked rendering, so a throw before
     // the job takes ownership (e.g. the filter-graph temp write) must settle them,
     // or the revision would refuse to resume until a restart (#11777).
+    const card = normalizeTitleCard(project.titleCard);
+    const passCard = composed && filmLookFinishNeeded(project) && titleCardSteady(card) ? card : null;
     let cues; let style; let lyricWindows; let composition; let totalDuration; let graphPath; let plainEncode; let job;
     try {
       // Only the cue/card windows overlapping the window are worth capturing —
@@ -368,7 +371,7 @@ async function beginExcerptRender({ projectId, stored, project, startSec, endSec
       const planned = projectTypographyPlan(project, clips, probe.sections, probe.totalDuration);
       style = planned.style;
       const allCues = composed ? planned.cues : [];
-      cues = allCues.filter((c) => c.startSec < endClamped && c.endSec > startSec);
+      cues = allCues.filter((c) => (!passCard || !c.titleCard) && c.startSec < endClamped && c.endSec > startSec);
       lyricWindows = (composed ? composedLyricWindows(project, endClamped) : [])
         .filter((w) => w.endSec > startSec).map((w) => ({ ...w, startSec: Math.max(w.startSec, startSec) }));
       composition = cues.length > 0 || lyricWindows.length > 0 ? project.composition : null;
@@ -508,6 +511,7 @@ async function beginExcerptRender({ projectId, stored, project, startSec, endSec
               const { signal: finishSignal } = job.overlayAbort;
               try {
                 await applyFilmLookFinish({ project, path: outputPath, jobId, offsetSec: startSec, signal: finishSignal, label: 'Music-video excerpt film look',
+                  titleCard: passCard, titleCardUntilSec: probe.totalDuration,
                   onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop + (1 - encodeTop) * fraction }) });
               } catch (err) {
                 await settleFailure(finishSignal.aborted, finishSignal.aborted ? 'Render cancelled' : `Film look pass failed: ${err.message}`);

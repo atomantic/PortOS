@@ -72,9 +72,8 @@ describe('fades, slide and steady', () => {
     expect(titleCardSteady(normalizeTitleCard({ title: 'Example Song', steady: true }))).toBe(true);
     expect(titleCardSteady(normalizeTitleCard({ title: 'Example Song', steady: true, enabled: false }))).toBe(false);
     expect(titleCardSteady(normalizeTitleCard({ steady: true }))).toBe(false);
-    // A composed cut bakes its card under the film look pass, so it has no steady drawing to offer.
     expect(['document', 'blender', 'code', undefined].map((mode) => titleCardSteadySupported({ composition: { mode } }))).toEqual([true, true, true, true]);
-    expect(titleCardSteadySupported({ composition: { mode: 'composed' } })).toBe(false);
+    expect(titleCardSteadySupported({ composition: { mode: 'composed' } })).toBe(true);
   });
 
   // Uniquely catches the fade out following the fade in, or either fade outrunning half a short window.

@@ -103,10 +103,8 @@ describe('TitleCardPanel', () => {
     expect(screen.queryByLabelText('Slide time (s)')).toBeNull();
   });
 
-  // Uniquely catches Keep steady offered where it does nothing (a composed cut bakes its card under the
-  // film look), a look change that leaves the other look's steadiness behind, and the director's own
-  // choice not being saved.
-  it('keeps the lower third steady and outlined type in the film, lets the director change either, and offers neither on a composed cut', () => {
+  // Covers the look defaults, explicit overrides and availability on composed cuts.
+  it('keeps the lower third steady and outlined type in the film, lets the director change either, including on a composed cut', () => {
     const onSave = vi.fn().mockResolvedValue({});
     const titleCard = { enabled: true, title: 'Example Song', startSec: 1, endSec: 5 };
     const { unmount } = render(<Harness initial={{ ...base, titleCard }} onSave={onSave} />);
@@ -126,7 +124,9 @@ describe('TitleCardPanel', () => {
     unmount();
 
     render(<Harness initial={{ ...base, composition: { mode: 'composed' }, titleCard: { ...titleCard, style: 'mtv' } }} onSave={onSave} />);
-    expect(screen.queryByLabelText('Keep steady')).toBeNull();
+    expect(screen.getByLabelText('Keep steady')).toBeChecked();
+    fireEvent.click(screen.getByLabelText('Keep steady'));
+    expect(onSave).toHaveBeenLastCalledWith({ titleCard: expect.objectContaining({ steady: false }) });
     // The slide and the fades are drawn by the card itself, so a composed cut keeps them.
     expect(screen.getByLabelText('Slide in')).toBeInTheDocument();
     expect(screen.getByLabelText('Fade out (s)')).toBeInTheDocument();
