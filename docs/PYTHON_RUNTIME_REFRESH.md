@@ -2520,3 +2520,87 @@ repeat full GPU/runtime execution; prior bounded native tests keep their stated
 limits. Node/npm, container/OS images, system toolchains and live advisory alerts
 are outside this managed Python/native-profile pass. Unmanaged installation
 workflows require their separate reconciliation; this audit does not certify them.
+
+
+## Cooled patch follow-on after the staged refresh (2026-11-12, #15910)
+
+This bounded follow-on updates Filelock to **4.2.9** in FastVideo MLX
+(previously 4.2.1), MiniMax H3 MLX, ACE-Step CUDA and Pixal Metal
+(previously 4.2.7), and Typing-Inspection **0.4.4 → 0.4.5** where present.
+Shared mflux-video separately advances **mlx-vlm 0.7.11 → 0.7.12** and the
+two transitive patch dependencies. Both ACE-Step CUDA target locks are included.
+Other profiles retain their existing resolutions; they were included in the
+complete-lock advisory screen below rather than silently refreshed.
+
+Upstream evidence and inspected consumers:
+
+- [Filelock changelog](https://github.com/tox-dev/filelock/blob/4.2.9/docs/changelog.rst):
+  the intervening releases include lock protocol/lease fixes, read/write lock
+  argument validation and descriptor-lock documentation. The real Hub 2.4.0
+  cache caller uses ordinary `FileLock`, its timeout/release API and a
+  `SoftFileLock` fallback, not a mixed-version read/write or lease protocol.
+  Filelock remains dependency-free and requires Python 3.11+.
+- [Typing-Inspection 0.4.5](https://github.com/pydantic/typing-inspection/releases/tag/v0.4.5)
+  optimizes literal inspection and expands chained type aliases. Hash-verified
+  wheel source confirms that bounded change; its Typing-Extensions floor stays
+  4.15, satisfied by retained 4.16. Real Pydantic model validation, JSON
+  round-tripping, literal schema enumeration and invalid-literal refusal pass.
+  A chained alias rejected by 0.4.4 expands correctly under 0.4.5.
+- [MLX-VLM 0.7.12](https://github.com/Neywa-Labs/mlx-vlm/releases/tag/v0.7.12)
+  includes generation, cache and additional-model fixes. Wheel metadata leaves
+  the complete dependency requirements unchanged, including MLX >=0.32.4.
+  The locked `mlx-video-with-audio==0.1.37` LTX text encoder imports
+  `Gemma3Model`, `TextConfig`, `KVCache` and `RotatingKVCache`. The Gemma3
+  module files are identical across these patches; shared base/cache changes
+  were inspected and exercised below. PortOS does not start the upstream VLM
+  HTTP server. MiniMax's separate 0.6.10 PIL/no-Torch processor contract stays
+  unchanged; this patch is not that minor migration.
+
+All six complete locks were regenerated, never patched by hand, with a private
+uv **0.13.7** bootstrapped using `requirements-uv-bootstrap.lock.txt` and
+**2026-11-05T00:00:00Z** cutoff. Existing output locks retain unrelated
+resolutions; targeted `--upgrade-package` arguments select the two transitive
+patches. Universal ARM macOS locks use the temporary project's environment
+restriction as documented (do not add `--no-config` to that invocation).
+This host required a temporary loopback CONNECT relay to the official PyPI and
+PyTorch hosts because uv's direct connections failed; TLS/artifact verification
+and the cutoff remained enabled. No installer or machine configuration changed.
+
+A parsed before/after comparison confirms that every unrelated identity,
+Python/platform marker and artifact hash set is unchanged. In particular,
+Pydantic **2.14.2 / pydantic-core 2.50.2**, native Torch/CUDA, Pixal NumPy
+**2.2.6**, source revisions and shared mflux/MLX/Pillow direct-pin parity remain
+intact. The affected union contains **240 identities / 5,044 hashes**. Every
+registry hash matches an official non-yanked artifact older than the cutoff;
+retained CUDA Torch and Triton hashes match the official PyTorch index and its
+upload dates. New candidate wheels were downloaded and SHA-256 verified before
+source inspection. Fresh OSV/MAL querybatch screening reports no matches or
+pagination tokens for all **240 affected identities** and, separately, all
+**370 identities across 53 complete locks**. Advisory coverage is not a security
+certification of native code or model assets.
+
+Bounded validation on native Apple Silicon, CPython **3.13.18**:
+
+- Exact-hash ten-package baseline/candidate subclosures use real MLX 0.32.4,
+  its Metal library, NumPy, Pillow, Filelock, Typing-Inspection and Pydantic.
+  The inspected Hub `WeakFileLock` definition executes against synthetic cache
+  paths: acquisition, subprocess exclusion/timeout, release/reacquisition and
+  immediate timeout refusal pass for Filelock 4.2.1, 4.2.7 and 4.2.9.
+- The actual shared-video `LanguageModel` class constructs the actual MLX-VLM
+  Gemma3 model from a tiny random configuration. Native forward/hidden states,
+  attention-mask handling, mixed rotating/full cache prefill and a
+  subsequent token pass for both versions. Candidate hidden-state arrays
+  exactly equal the seeded baseline. This loads the real Gemma/base/cache
+  modules while bypassing unrelated package initializer exports; it is not a
+  full-package import or production checkpoint-loading claim. Hub and encoder
+  definitions are isolated from their hash-verified wheels; no tensor/model
+  implementation is mocked.
+- Installer/Repair routing, setup shell contracts, FastVideo and LTX runners,
+  MiniMax runtime probes and Pixal adapter tests pass: **7 files / 357 tests**.
+  No adapter pin copies require changes: those callers consume the affected
+  source/complete-lock contracts. Full supported-target installation dry plans
+  validate selection separately; they are not CUDA execution evidence.
+
+No model weights, user records, provider calls, full native runtime installation,
+video inference, model-quality evaluation or Windows/Linux CUDA hardware run is
+included. Existing explicit ABI/interpreter/source constraints are preserved.

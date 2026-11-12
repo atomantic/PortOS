@@ -7,7 +7,7 @@
 # installed with `uv pip install --no-deps --no-build-isolation -e ~/.portos/fastvideo`
 # after the lock sync. Dependencies match the MLX video generation runtime stack
 # with OSV-clean pins (Pillow 13.0.0, torch 2.15.0, accelerate 1.15.0, diffusers 0.42.1,
-# filelock 4.2.1, mlx 0.32.4).
+# filelock 4.2.9, mlx 0.32.4).
 torch==2.15.0
 torchvision==0.29.2
 torchaudio==2.11.1
@@ -18,7 +18,7 @@ timm==1.0.31
 mlx==0.32.4
 mlx-metal==0.32.4
 pillow==13.0.0
-filelock==4.2.1
+filelock==4.2.9
 # Upstream's <0.23 guard addressed a CLIP RobertaProcessing keyword mismatch.
 # Transformers 5.22.1 uses positional arguments; validated with actual CLIP
 # load/save, offsets and attention masks (see PYTHON_RUNTIME_REFRESH.md).
