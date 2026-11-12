@@ -167,7 +167,7 @@ export const BLENDER_JOB_STATUS_LABELS = {
 
 // The server's `staleReasons`, in the director's words.
 const STALE_REASON_TEXT = {
-  source: 'its scripts changed', timing: 'the shot moved on the song', settings: 'the render settings changed', options: 'a film option changed',
+  source: 'its scripts changed', timing: 'the shot moved on the song', settings: 'the render settings changed', options: 'a film option changed', song: 'the song context changed',
 };
 
 /** Why a render is out of date: "its scripts changed and a film option changed". */
@@ -185,6 +185,7 @@ const STATUS_VIEW = {
   stale: { text: 'stale', tone: 'warning' },
   partial: { text: 'partial', tone: 'warning' },
   failed: { text: 'failed', tone: 'error' },
+  canceled: { text: 'canceled', tone: 'muted' },
 };
 
 /**
@@ -207,12 +208,13 @@ export function blenderShotRenderStatus(state, shotId, quality) {
   if (render?.complete) {
     return render.stale ? view('stale', { detail: `Out of date: ${blenderStaleReason(render)}.` }) : view('done');
   }
-  const failed = jobs.find((entry) => entry.status === 'error');
-  if (failed) return view('failed', { job: failed, detail: failed.error || 'The render failed.' });
+  const latest = jobs.filter(isBlenderJobTerminal).reduce((last, entry) => !last || jobTime(entry) >= jobTime(last) ? entry : last, null);
+  if (latest?.status === 'error') return view('failed', { job: latest, detail: latest.error || 'The render failed.' });
   if (render) {
     const got = render.partialFrames ?? 0;
     return view('partial', { detail: render.frames > 0 ? `${formatCount(got)} of ${formatCount(render.frames)} frames rendered.` : 'The render did not finish.' });
   }
+  if (latest?.status === 'canceled') return view('canceled', { job: latest, detail: 'The render was canceled.' });
   return view('none');
 }
 

@@ -29,6 +29,17 @@ describe('blenderShotRenderStatus', () => {
     const state = blenderFilmState({ renders: { s030: { final: { file: 's030/final/shot.mp4', frames: 72, complete: false, stale: false, partialFrames: 30 }, stills: [] } } });
     expect(blenderShotRenderStatus(state, 's030', 'final')).toMatchObject({ status: 'partial', detail: '30 of 72 frames rendered.' });
   });
+
+  it('reports the latest attempt instead of carrying an earlier failure over a canceled retry', () => {
+    const failed = job({ status: 'error', error: 'old failure', finishedAt: '2026-10-01T10:00:00.000Z' });
+    const canceled = job({ id: 'retry', status: 'canceled', finishedAt: '2026-10-01T10:01:00.000Z' });
+    const state = blenderFilmState({ jobs: [failed, canceled], renders: { s030: { preview: { frames: 72, complete: false, partialFrames: 30 } } } });
+    expect(blenderShotRenderStatus(state, 's030', 'preview')).toMatchObject({ status: 'partial', detail: '30 of 72 frames rendered.' });
+    state.renders = {};
+    expect(blenderShotRenderStatus(state, 's030', 'preview')).toMatchObject({ status: 'canceled', job: canceled });
+    state.jobs.push({ ...failed, id: 'latest', finishedAt: '2026-10-01T10:02:00.000Z' });
+    expect(blenderShotRenderStatus(state, 's030', 'preview')).toMatchObject({ status: 'failed', detail: 'old failure' });
+  });
 });
 
 describe('blenderStaleReason', () => {
@@ -36,6 +47,7 @@ describe('blenderStaleReason', () => {
     expect(blenderStaleReason({ staleReasons: ['settings'] })).toBe('the render settings changed');
     expect(blenderStaleReason({ staleReasons: ['source', 'options'] })).toBe('its scripts changed and a film option changed');
     expect(blenderStaleReason({ staleReasons: ['timing'] })).toBe('the shot moved on the song');
+    expect(blenderStaleReason({ staleReasons: ['song'] })).toBe('the song context changed');
     expect(blenderStaleReason({ stale: true })).toBe('its scripts or settings changed');
   });
 });
