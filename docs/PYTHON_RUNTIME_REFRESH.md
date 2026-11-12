@@ -1467,3 +1467,78 @@ Independent review, final committed-tree pregate and hosted CI remain merge
 requirements. No production weights, neural transcription, beat-detector
 inference, GPU/CUDA execution or live public-chain/proxy compatibility is
 claimed. The optional beat detector remains unchanged by this migration.
+
+## Twenty-sixth-slice Guard Hub migration and JEV device parity (2026-11-12)
+
+Prompt Guard and JEV advance together from Transformers 5.16.1 and Hub
+1.30.0 to Transformers 5.22.1 and Hub 2.4.0. Both canonical adapter pin
+lists and the shared input/lock agree. Torch 2.14.1, Tokenizers 0.23.3,
+Safetensors 0.8.0, model revisions, thresholds and screening policy are
+unchanged. Transformers' actual Hub utility now imports Hub's HTTPX alias;
+the exercised classifier/tokenizer/download paths have no independent old
+HTTPX consumer. HTTPX/HTTPCore/Certifi are therefore replaced by
+HTTPX2/HTTPCore2 2.16.0 and Truststore 0.10.5, not retained as unused
+transport dependencies.
+
+The complete universal lock was regenerated with verified uv 0.13.7 and the
+November 5 UTC cutoff. Its 56 identities and 718 hashes were checked against
+official PyPI metadata: unyanked, released before the cutoff, and no OSV/MAL
+findings. All 51 surviving companion entries retain their complete hash sets
+and platform markers. Eight hash-constrained dry-sync plans passed for
+Python 3.11 and 3.12 on Apple Silicon macOS 14, Linux x86_64/aarch64 with
+glibc 2.28, and Windows AMD64. These are the existing Torch wheel minima,
+not newly expanded platform support; they are resolution checks, not native
+Windows/Linux execution.
+
+Full isolated native Apple Silicon environments installed the old Python
+3.11.18 closure and candidate Python 3.11.18/3.12.11 closures with hashes and
+passed dependency checks. Identical tiny synthetic saved models exercised
+actual Transformers classes, not replacement forward methods:
+
+- DeBERTa-v2 sequence classification and its Unigram tokenizer through the
+  real Prompt Guard CLI, including 1,200 tokens across three overlapping
+  windows, special-token handling, labels and finite scores. A separate
+  constant-benign synthetic fixture exercises the existing Node normalizer's
+  acceptance path; it does not change or calibrate the production canary.
+- Qwen3.5 sequence classification with both linear and full-attention layers,
+  a real Qwen2 byte-level tokenizer, the pinned model's NLI template and
+  contradiction/entailment/neutral mapping. Actual JEV scoring, pooled
+  hidden states and the loopback HTTP scorer preserve token IDs, output
+  shapes, ordering and normalized probabilities. CPU baseline/candidate
+  maximum absolute numeric difference was below 1.8e-7.
+- Empty/malformed/oversized requests, missing model/weight files, unsupported
+  tokenizer format, invalid labels, incomplete chunk coverage and invalid
+  scores remain refused. JEV rejects oversized pairs rather than truncating,
+  and rejects invalid/missing trained heads. Its plain NLI template is not a
+  chat template; the actual tokenizer refuses implicit chat formatting.
+
+This exposed and fixes an existing JEV MPS defect: `load_encoder` moved the
+model to MPS, but `score_pairs` left both inputs on CPU. The old runtime
+reproduced `Passed CPU tensor to MPS op` with the tiny Qwen3.5 model. Both
+inputs now follow the selected device, exactly like `pool_pair`. A public
+scorer regression rejects either CPU input when the model selects MPS.
+Actual baseline and both candidate native MPS executions then returned
+identical scores. No threshold, model or fail-closed policy was changed.
+
+The immutable public JEV config/tokenizer metadata at its existing revision
+was inspected. Prompt Guard metadata is gated and returned 401; no
+credentials or production weights were used. Its synthetic DeBERTa fixture
+therefore verifies the repository-declared architecture/token contract,
+not the gated production artifact or real screening quality. Install's
+production canary and pinned model files remain unchanged and mandatory.
+
+Both closures also exercised the actual shared `hf_download_repo.py` CLI
+against an isolated synthetic Hub: pinned revisions, single-file mode without
+enumeration, filtering, UI progress/completion markers, typed gated/401/missing
+errors and exact interrupted-download Range resume. Transformers' actual
+cached-file path preserves offline cache reads and missing-file refusal.
+Both candidates passed default Truststore TLS verification with untrusted
+certificate/wrong-CA rejection before HTTP and successful fixture-CA HTTPS.
+No OS trust settings changed; temporary private keys were removed. These
+fixtures disable telemetry and ambient credentials and do not establish live
+provider, public-chain or proxy compatibility.
+
+All 132 focused runner/profile/security-service tests passed without skips.
+Independent review, final committed-tree pregate and exact-head hosted CI
+remain required before merge. Synthetic models establish API compatibility,
+not production screening accuracy or policy calibration.
