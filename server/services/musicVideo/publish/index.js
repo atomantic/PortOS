@@ -16,7 +16,7 @@ import { safeUnder } from '../../../lib/ffmpeg.js';
 import { mutateProjectRecord } from '../projects.js';
 import { requireProject } from '../requireProject.js';
 import { buildPublishPayload, publishPreviewParts, publishSongUrl } from './payloads.js';
-import { canonicalizeSunoUrl, isSunoShareLink } from '../../sunoShareLink.js';
+import { canonicalizeSunoUrl, isSunoShareLink, readSunoSongTitle } from '../../sunoShareLink.js';
 import { browserOperationInProgress, connectPortosBrowser, serializeBrowserOperation as serialize } from './browser.js';
 import { assertAccount, assertPlatformEnabled, getPublishPlatforms, normalizePost } from './platforms.js';
 import { youtubeAdapter, shortsAdapter } from './youtube.js';
@@ -200,6 +200,14 @@ async function withSongPage(target, project, options, deps) {
   return { ...options, songUrl };
 }
 
+// A Hook finds its song in Suno's picker by name, and a song renamed on Suno keeps only its id:
+// search for the title Suno shows now. The project's name stands when the page gives none.
+async function withSunoTitle(target, payload, deps) {
+  if (target !== 'sunoHook' || !payload.songId) return payload;
+  const title = await (deps.readSongTitle || readSunoSongTitle)(payload.songId).catch(() => '');
+  return title ? { ...payload, title } : payload;
+}
+
 /** The release audio a distributor uploads: the project's own source song. */
 async function withAudio(target, payload, project, deps) {
   if (target !== 'distrokid') return payload;
@@ -235,6 +243,7 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
   let payload = resolveFiles(buildPublishPayload(target, project, resolved));
   payload = await withAudio(target, payload, project, deps);
   payload = await withCovers(target, payload, deps);
+  payload = await withSunoTitle(target, payload, deps);
   for (const draft of [...drafts.values()]) if (draft.projectId === projectId && draft.target === target) await closeDraft(draft, deps);
   // The PortOS Browser fills one post at a time (X can hold it for minutes while its
   // upload finishes): say what this fill waits on, then what it is doing.

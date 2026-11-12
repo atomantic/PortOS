@@ -18,17 +18,15 @@ import { ServerError } from '../lib/errorHandler.js';
 import { shortId } from '../lib/fileUtils.js';
 import { findFfmpeg, probeVideoDuration, runFfmpegProcess } from '../lib/ffmpeg.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
-import { fetchPublicBinary, fetchPublicText } from '../lib/safeUrlFetch.js';
+import { fetchPublicBinary } from '../lib/safeUrlFetch.js';
 import {
   isSunoSongUrl, normalizeSunoSongId, sunoCdnAudioUrl, sunoCdnVideoUrl, parseSunoSongPage, SUNO_URL_INVALID_MESSAGE,
 } from '../lib/sunoSong.js';
-import { resolveSunoSongId, SUNO_FETCH_HEADERS as HEADERS } from './sunoShareLink.js';
+import { fetchSunoSongPage, resolveSunoSongId, SUNO_FETCH_HEADERS as HEADERS } from './sunoShareLink.js';
 import { importUploadedTrack, MUSIC_UPLOAD_MAX_BYTES } from './pipeline/musicLibrary.js';
 import { createTrack, listTracks, updateTrack } from './tracks/index.js';
 import { RENDER_SOURCES, selectRenderPatch } from './tracks/logic.js';
 
-const PAGE_TIMEOUT_MS = 20_000;
-const PAGE_MAX_BYTES = 5 * 1024 * 1024;
 const AUDIO_TIMEOUT_MS = 5 * 60 * 1000;
 // The song's video carries a picture track too, so it may run well past the audio cap.
 const VIDEO_MAX_BYTES = 250 * 1024 * 1024;
@@ -118,11 +116,6 @@ async function exportThroughBrowser(songId, outPath, signal) {
   return html;
 }
 
-// Read the song's page the way an anonymous visitor sees it; null when Suno won't serve it.
-const fetchSongPage = (songId) => fetchPublicText(`https://suno.com/song/${songId}`, {
-  timeoutMs: PAGE_TIMEOUT_MS, headers: HEADERS, maxBytes: PAGE_MAX_BYTES, throwOnUnsafe: false,
-}).catch(() => null);
-
 // Prefer the signed-in page's style when it states the excluded styles.
 const mergeStyle = (song, signedIn) => (signedIn.excludedStylesKnown
   ? signedIn.style || song.style : song.style || signedIn.style);
@@ -166,7 +159,7 @@ async function withSignedInStyle(song, songId, signal) {
 export async function readSunoSongStyle(url) {
   if (!isSunoSongUrl(url)) throw new ServerError(SUNO_URL_INVALID_MESSAGE, { status: 400, code: 'SUNO_URL_INVALID' });
   const songId = await resolveSunoSongId(url.trim());
-  const song = await withSignedInStyle(parseSunoSongPage(await fetchSongPage(songId) || '', songId), songId);
+  const song = await withSignedInStyle(parseSunoSongPage(await fetchSunoSongPage(songId) || '', songId), songId);
   if (!song.style) throw new ServerError('Suno shows no style for that song', { status: 404, code: 'SUNO_STYLE_NOT_FOUND' });
   return { style: song.style, excludedStylesKnown: song.excludedStylesKnown };
 }
@@ -285,7 +278,7 @@ export async function startSunoImport(url) {
           return;
         }
         // The page only adds metadata; a page Suno won't serve still imports the audio.
-        const html = await fetchSongPage(songId);
+        const html = await fetchSunoSongPage(songId);
         if (abortIfCanceled()) return;
 
         broadcastSse(job, { type: 'progress', percent: 20, stage: 'downloading' });
