@@ -60699,6 +60699,162 @@
       "tokensPerSecond": null,
       "quota": null,
       "notes": "OpenRouter routed price, not the model creator first-party price. Cached-token, audio and per-request charges are not represented by this schema; free routes remain subject to upstream limits and terms."
+    },
+    {
+      "id": "google-gemini-4-hydrogen-low-official-api-pricing-v1-standard",
+      "provider": "Google",
+      "model": "gemini-4-hydrogen-low",
+      "effort": "low",
+      "configuration": "Google Gemini Developer API standard paid tier; gemini-4-hydrogen with thinking_level=low; API reference for the effort-suffixed harness alias",
+      "billing": "api",
+      "benchmark": "Official API pricing v1",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Official Gemini Developer API Standard paid-tier price in USD per 1M uncached input tokens for gemini-4-hydrogen; same published rate across thinking levels. API reference, not a measured harness charge or subscription allowance."
+        }
+      },
+      "outputPerMillion": {
+        "value": 7.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Official Gemini Developer API Standard paid-tier price in USD per 1M output tokens, including thinking tokens, for gemini-4-hydrogen. API reference; effort changes consumption, not the published token rate."
+        }
+      },
+      "reasoningPerMillion": {
+        "value": 7.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Google includes thinking tokens in the $7.50 per 1M output-token rate. This is the same output charge, not an additional reasoning surcharge."
+        }
+      },
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Retrieved 2026-11-12. Official API model code is gemini-4-hydrogen; the effort-suffixed model is a harness alias, not a separately priced API SKU. Thinking levels low/medium/high/xhigh (default high): https://aistudio.google.com/docs/thinking#thinking-levels . GA release: https://aistudio.google.com/docs/changelog#11-12-2026 . Rates are first-party API references, not gateway prices, Antigravity subscription allowances, or per-task costs. No attributable Hydrogen Intelligence Index v5.0.1 or historical v4.3.2 scores/task costs found at https://artificialanalysis.ai/leaderboards/models ; no Hydrogen result found at https://epoch.ai/models/search or https://epoch.ai/eci . Direct model-card and AA Hydrogen model URLs were inaccessible during research. No benchmark overlap or documented numerical predecessor comparison supports a PortOS quality estimate; quality, task costs, latency, throughput and quota remain null. No inference benchmarks run. Free, Batch/Flex, Priority and Contributor tiers are separate from this Standard paid-tier reference."
+    },
+    {
+      "id": "google-gemini-4-hydrogen-medium-official-api-pricing-v1-standard",
+      "provider": "Google",
+      "model": "gemini-4-hydrogen-medium",
+      "effort": "medium",
+      "configuration": "Google Gemini Developer API standard paid tier; gemini-4-hydrogen with thinking_level=medium; API reference for the effort-suffixed harness alias",
+      "billing": "api",
+      "benchmark": "Official API pricing v1",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Official Gemini Developer API Standard paid-tier price in USD per 1M uncached input tokens for gemini-4-hydrogen; same published rate across thinking levels. API reference, not a measured harness charge or subscription allowance."
+        }
+      },
+      "outputPerMillion": {
+        "value": 7.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Official Gemini Developer API Standard paid-tier price in USD per 1M output tokens, including thinking tokens, for gemini-4-hydrogen. API reference; effort changes consumption, not the published token rate."
+        }
+      },
+      "reasoningPerMillion": {
+        "value": 7.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Google includes thinking tokens in the $7.50 per 1M output-token rate. This is the same output charge, not an additional reasoning surcharge."
+        }
+      },
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Retrieved 2026-11-12. Official API model code is gemini-4-hydrogen; the effort-suffixed model is a harness alias, not a separately priced API SKU. Thinking levels low/medium/high/xhigh (default high): https://aistudio.google.com/docs/thinking#thinking-levels . GA release: https://aistudio.google.com/docs/changelog#11-12-2026 . Rates are first-party API references, not gateway prices, Antigravity subscription allowances, or per-task costs. No attributable Hydrogen Intelligence Index v5.0.1 or historical v4.3.2 scores/task costs found at https://artificialanalysis.ai/leaderboards/models ; no Hydrogen result found at https://epoch.ai/models/search or https://epoch.ai/eci . Direct model-card and AA Hydrogen model URLs were inaccessible during research. No benchmark overlap or documented numerical predecessor comparison supports a PortOS quality estimate; quality, task costs, latency, throughput and quota remain null. No inference benchmarks run. Free, Batch/Flex, Priority and Contributor tiers are separate from this Standard paid-tier reference."
+    },
+    {
+      "id": "google-gemini-4-hydrogen-high-official-api-pricing-v1-standard",
+      "provider": "Google",
+      "model": "gemini-4-hydrogen-high",
+      "effort": "high",
+      "configuration": "Google Gemini Developer API standard paid tier; gemini-4-hydrogen with thinking_level=high; API reference for the effort-suffixed harness alias",
+      "billing": "api",
+      "benchmark": "Official API pricing v1",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Official Gemini Developer API Standard paid-tier price in USD per 1M uncached input tokens for gemini-4-hydrogen; same published rate across thinking levels. API reference, not a measured harness charge or subscription allowance."
+        }
+      },
+      "outputPerMillion": {
+        "value": 7.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Official Gemini Developer API Standard paid-tier price in USD per 1M output tokens, including thinking tokens, for gemini-4-hydrogen. API reference; effort changes consumption, not the published token rate."
+        }
+      },
+      "reasoningPerMillion": {
+        "value": 7.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Google includes thinking tokens in the $7.50 per 1M output-token rate. This is the same output charge, not an additional reasoning surcharge."
+        }
+      },
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Retrieved 2026-11-12. Official API model code is gemini-4-hydrogen; the effort-suffixed model is a harness alias, not a separately priced API SKU. Thinking levels low/medium/high/xhigh (default high): https://aistudio.google.com/docs/thinking#thinking-levels . GA release: https://aistudio.google.com/docs/changelog#11-12-2026 . Rates are first-party API references, not gateway prices, Antigravity subscription allowances, or per-task costs. No attributable Hydrogen Intelligence Index v5.0.1 or historical v4.3.2 scores/task costs found at https://artificialanalysis.ai/leaderboards/models ; no Hydrogen result found at https://epoch.ai/models/search or https://epoch.ai/eci . Direct model-card and AA Hydrogen model URLs were inaccessible during research. No benchmark overlap or documented numerical predecessor comparison supports a PortOS quality estimate; quality, task costs, latency, throughput and quota remain null. No inference benchmarks run. Free, Batch/Flex, Priority and Contributor tiers are separate from this Standard paid-tier reference."
+    },
+    {
+      "id": "google-gemini-4-hydrogen-xhigh-official-api-pricing-v1-standard",
+      "provider": "Google",
+      "model": "gemini-4-hydrogen-xhigh",
+      "effort": "xhigh",
+      "configuration": "Google Gemini Developer API standard paid tier; gemini-4-hydrogen with thinking_level=xhigh; API reference for the effort-suffixed harness alias",
+      "billing": "api",
+      "benchmark": "Official API pricing v1",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Official Gemini Developer API Standard paid-tier price in USD per 1M uncached input tokens for gemini-4-hydrogen; same published rate across thinking levels. API reference, not a measured harness charge or subscription allowance."
+        }
+      },
+      "outputPerMillion": {
+        "value": 7.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Official Gemini Developer API Standard paid-tier price in USD per 1M output tokens, including thinking tokens, for gemini-4-hydrogen. API reference; effort changes consumption, not the published token rate."
+        }
+      },
+      "reasoningPerMillion": {
+        "value": 7.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Google includes thinking tokens in the $7.50 per 1M output-token rate. This is the same output charge, not an additional reasoning surcharge."
+        }
+      },
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Retrieved 2026-11-12. Official API model code is gemini-4-hydrogen; the effort-suffixed model is a harness alias, not a separately priced API SKU. Thinking levels low/medium/high/xhigh (default high): https://aistudio.google.com/docs/thinking#thinking-levels . GA release: https://aistudio.google.com/docs/changelog#11-12-2026 . Rates are first-party API references, not gateway prices, Antigravity subscription allowances, or per-task costs. No attributable Hydrogen Intelligence Index v5.0.1 or historical v4.3.2 scores/task costs found at https://artificialanalysis.ai/leaderboards/models ; no Hydrogen result found at https://epoch.ai/models/search or https://epoch.ai/eci . Direct model-card and AA Hydrogen model URLs were inaccessible during research. No benchmark overlap or documented numerical predecessor comparison supports a PortOS quality estimate; quality, task costs, latency, throughput and quota remain null. No inference benchmarks run. Free, Batch/Flex, Priority and Contributor tiers are separate from this Standard paid-tier reference."
     }
   ]
 }
