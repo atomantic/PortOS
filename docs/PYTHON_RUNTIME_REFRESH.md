@@ -763,3 +763,80 @@ ran. Test-only parser/schema/streaming fixtures do not claim full model-serving
 behavior. Remaining H3 work includes its MLX audio/language-model libraries,
 Hub migration and untouched helper packages; the broader profile/major migration
 matrix remains under #15769.
+
+## Fourteenth-slice H3 model-library closure (2026-11-12)
+
+The H3 Apple Silicon profile updates **mlx-audio 0.4.7 → 0.6.4**,
+**mlx-lm 0.31.3 → 0.32.2** and **llguidance 1.7.6 → 1.9.1** together.
+The other **53** package versions, markers and hash sets are unchanged, with no
+new packages. In particular, MLX/MLX-Metal **0.32.4**, mlx-vlm **0.6.10**,
+Transformers **5.14.1**, Hub **1.27.0** and the immutable H3 source stay fixed.
+
+The pinned H3 pipeline, audio VAE and text encoder do not directly import these
+three libraries. Their relevant callers are in the required mlx-vlm closure:
+its text-only model adapter, structured-output logits processor, audio IO and
+feature extraction. This is dependency/caller maintenance, not a replacement
+of H3's native video/audio architecture.
+
+Compatibility review used the old and new hash-verified wheel sources and
+published metadata:
+
+- [mlx-audio 0.6.4](https://pypi.org/pypi/mlx-audio/0.6.4/json) requires the
+  already selected MLX 0.32.4 and Transformers with its `chat-template` extra.
+  Existing Jinja2/SentencePiece pins satisfy the added core requirements.
+  Audio format detection, FFmpeg decoding and model-loading internals changed;
+  required read/write, resampling and DSP entry points remain available.
+  The extracted whole-array resampler retains its filter math.
+- [mlx-lm 0.32.2](https://pypi.org/pypi/mlx-lm/0.32.2/json) raises its Python
+  floor to 3.11, matching this runtime. Its MLX/Transformers requirements fit
+  the frozen closure. The `_get_classes(config)` entry used by VLM's text-only
+  adapter remains compatible.
+- [llguidance 1.9.1](https://pypi.org/pypi/llguidance/1.9.1/json) retains the
+  Python 3.10 floor and the HF/NumPy integration APIs used by VLM. Its native
+  matcher, token-mask and JSON compiler were exercised rather than inferred
+  solely from unchanged Python wrappers.
+
+The complete **56-package / 1,229-hash** lock was regenerated using verified
+**uv 0.13.7**, wheels only and cutoff `2026-11-05T00:00:00Z`. Every hash matches
+an unyanked pre-cutoff PyPI artifact; complete OSV/MAL responses returned zero
+findings with error/count/pagination checks. Bundled native libraries are not
+separately audited. Exact source-to-lock pin parity remains enforced.
+
+Fresh native Apple Silicon CPython **3.11.18** and **3.12.11** installations
+passed dependency checks and the shipped H3 probe with `--verify-seams`.
+Real-caller tests on both interpreters covered:
+
+- A tiny random-weight Qwen2 model through VLM's actual mlx-lm adapter: finite
+  forward output, cached-versus-full decoding, token embeddings and image-input
+  refusal. This uses local synthetic weights, not a downloaded model.
+- A locally constructed byte-level tokenizer through VLM's JSON-schema logits
+  processor and the real llguidance/Metal mask: allowed and disallowed tokens,
+  token consumption, EOS, clone/reset and batch handling.
+- WAV path/bytes round trips without input-array mutation; mono rate conversion
+  through the actual VLM loader; explicit-axis stereo resampling for NumPy and
+  MLX inputs; Ogg Vorbis and M4A path/bytes decoding through installed FFmpeg;
+  and real Inkling log-mel feature extraction with unequal-length audio clips.
+- The real VLM/Uvicorn loopback app's lifespan, validation, auth/CORS, actual
+  multipart WAV parser, streaming completion and disconnect cleanup, repeating
+  the thirteenth-slice compatibility probe against the new model closure.
+
+The tiny model, grammar and audio fixtures also passed against the previous
+complete lock on Python 3.11. **187** focused installer/profile/source-probe
+tests passed without weakening existing assertions.
+
+A deliberately checked stereo case exposed a **pre-existing mlx-vlm 0.6.10
+caller defect**, reproduced under both old and new locks: `utils.load_audio`
+returns 4,800 samples for a 4,800-frame stereo 48 kHz WAV requested at 16 kHz,
+not the expected 1,600. It resamples the channel axis before downmixing.
+Explicit `axis=0` works in both mlx-audio versions. H3 generation does not call
+this helper, so it is neither a candidate regression nor an H3 render blocker.
+The precise correction and caller regression acceptance criteria are
+[tracked under #15769](https://github.com/atomantic/PortOS/issues/15769#issuecomment-6819203959)
+for the subsequent mlx-vlm caller/source migration; this slice does not claim
+that generic stereo conversion is correct.
+
+No production weights, provider calls, H3 rendering or quality evaluation ran.
+Optional mlx-audio server/model families were not enabled to inflate coverage.
+H3's remaining original candidates are its five smaller helper packages and
+coordinated Hub/Transformers migration. Music3's separate mlx-audio upgrade and
+the other profile/native-major migrations remain under #15769.

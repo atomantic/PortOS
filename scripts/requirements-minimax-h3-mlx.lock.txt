@@ -399,24 +399,28 @@ jinja2==3.1.6 \
     --hash=sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67
     # via
     #   -r scripts/requirements-minimax-h3-mlx.txt
+    #   mlx-audio
     #   mlx-lm
-llguidance==1.7.6 \
-    --hash=sha256:0444020249cde1292f13acf786e35c245fd3572d466877d2734824a9026e55aa \
-    --hash=sha256:0fda51daa7951217ca164f735e96a1929d9aefb804a0b28ee43b16173e1c7325 \
-    --hash=sha256:1158cfce353d331859054aad80a5543167da8b45e01c18f93272027a155df449 \
-    --hash=sha256:30be5939340f008b5093286f0bbbb9804f58e292ecca5f8b144823d43ff5068b \
-    --hash=sha256:4e4f2a489c1c3943bb1b3c206b45794153cb6954f45cd3de8e02198319ddc6b1 \
-    --hash=sha256:7def42f7866239b3b940982ed1dcae6b142c212fbd68b57107c1560d778f94f8 \
-    --hash=sha256:9c54c899db8cb4b4fba128a7d844730066576c70d806c95ada92b2bd2d6ab498 \
-    --hash=sha256:ace7e81cd31950a87186356ab24bd7f75fbc10a05ca9d9f7f8748f931963f763 \
-    --hash=sha256:c88787845b94d301d91c4e9ad27eac9d05c334a1ba2c7ff29cca66f26d5b5c3c \
-    --hash=sha256:ceec951d29a74309984e3be0fe7f5f56c1362434cd937abd517b259a60908b1e \
-    --hash=sha256:d0e1f5402bbc2688bc790d56995f0263978b55771493fceddc09b805dacc83b6 \
-    --hash=sha256:db7febbe412ed2015501904646750071d7e00e6df7f85c4b956ad4f206fd2df7 \
-    --hash=sha256:e70fa25ed550c2b50c2fd70baa9e2808b4ecb859d01e453bd5459aff62ba38c3 \
-    --hash=sha256:e9f68206e0f3f89aceabb90aa1f8ed570db22fb7cb1fd9ebf96fa7727a65af55 \
-    --hash=sha256:eabf4572c8731734c0444c353b9ea06bc5c156986d2ff0a4ec0499159271381f \
-    --hash=sha256:ef907a562d91f32e13cb3131ee5e1574b9ba5beac5bceedd795f8316a16d94d6
+    #   transformers
+llguidance==1.9.1 \
+    --hash=sha256:0ab9d2681c0fcb4389f3c1c79697f1e724771d74d366bb5a22edae155252dfed \
+    --hash=sha256:151a615f3d871fc096984b705daa211faccc78ed2f9e3a2a80e57283e16e2898 \
+    --hash=sha256:2d7aa419d8b63a528347f73ee57185b4172c8bb09287e5ef9eefe3eb6d709356 \
+    --hash=sha256:31b75c9f6e09d000d062ef7e4eb3bcb3759fc1eda5619be50fdd8a830b0e8bdf \
+    --hash=sha256:34ad7bdff67219c7bf43ff60eb7b1d97232092fe7a40715ae330f894def04f82 \
+    --hash=sha256:367da91f0db6b494e1d4916e6ab3e3db3eb73f178fda6be32681c026af99f775 \
+    --hash=sha256:3ba1b37585d07f50bb73e06dca6d45c88c9d5801789c071c8ff784c9dbcc5c46 \
+    --hash=sha256:6216861eaeef0f96251d7a9ed1c26a228a4c7879c5f062092691f8f17087ae4e \
+    --hash=sha256:8aaa55958adb4871016700e9140543ccbd9d6b5136d0a1756a114af706cc50c1 \
+    --hash=sha256:8b29903d5108cefc715e013381c7474846e9b0edb5e2534000f5e3a3d870a293 \
+    --hash=sha256:96b52f9d3eccb1d6c1ee4454c3424e8da5171c879e33c294a68e6c731fec25dc \
+    --hash=sha256:9892220b2698f58193ef54a886e5f3d5eb2a60d510db49ca4c492b46ebb786fd \
+    --hash=sha256:a5dcbdd38bc75f149ed349525f3884160de80900952147a4b7ef40a5b1a4a1a1 \
+    --hash=sha256:a942487cd6221b793df3a11450881a6c9d25a45460a900c56d99b682633c45fe \
+    --hash=sha256:cc7d1024c3df780a5eb14d30744539e8a1aa6d94c5dabf7605c82c0567d45a51 \
+    --hash=sha256:dd5c87df5e60a7d8f54f46bfd5e11abb10f93636712ace09a8c1d2a0c4aeade0 \
+    --hash=sha256:dfac6021d9c4c5ef16b3a1d336c05ca5e8208ff30dec29d1c63ebcafbee3a346 \
+    --hash=sha256:f824a817a841563d5b068a0dd22563e5f063cdbda382cf3f6e18c1c68c45db38
     # via
     #   -r scripts/requirements-minimax-h3-mlx.txt
     #   mlx-vlm
@@ -629,18 +633,17 @@ mlx==0.32.4 \
     #   mlx-audio
     #   mlx-lm
     #   mlx-vlm
-mlx-audio==0.4.7 \
-    --hash=sha256:bfd2ee61342ca58ba15b4cef20ff7910600788cb7c604c8bffd32a45a3d62c98 \
-    --hash=sha256:e7580e5ee740ca182e93b764d778b8c834d4e07bf91835cbaaafef196e2e058c
+mlx-audio==0.6.4 \
+    --hash=sha256:092dee1f010846cee76b164a988ad9802e45d4c79771d65d55ceb9de246fab4b \
+    --hash=sha256:ec5379833fb0d4aacf2cfd681ee3a35f9ca4c0fdbac47022d6e934572763f7c1
     # via
     #   -r scripts/requirements-minimax-h3-mlx.txt
     #   mlx-vlm
-mlx-lm==0.31.3 \
-    --hash=sha256:61eb0e3ba09444f77f874aff295401d7ccd20b39495cbbce0c782a15474ce733 \
-    --hash=sha256:758cfddf1180053b7613db76fad3d246a331a2a905808e1164a275621fc983b8
+mlx-lm==0.32.2 \
+    --hash=sha256:1af8a92f6a141c3e2bf5b0369ac4464203a8e2189c47b9e40d3e921e5b3a1fe9 \
+    --hash=sha256:5c0991248cfff5872503d74f466d2532dd8cb7fb3670cb9be7a06d7305dadc04
     # via
     #   -r scripts/requirements-minimax-h3-mlx.txt
-    #   mlx-audio
     #   mlx-vlm
 mlx-metal==0.32.4 \
     --hash=sha256:514df92d41a286895d2564b4b18f4da45096bd7a4a0c47e1042f345ad5a7f936 \
@@ -1383,6 +1386,7 @@ sentencepiece==0.2.2 \
     --hash=sha256:fd523c4992041faa5c2b3cde62253d11a96c30d73a34afe48a486e8e2254cd1c
     # via
     #   -r scripts/requirements-minimax-h3-mlx.txt
+    #   mlx-audio
     #   mlx-lm
 shellingham==1.5.4 \
     --hash=sha256:7ecfff8f2fd72616f7481040475a65b2bf8af90a56c89140852d1120324e8686 \
