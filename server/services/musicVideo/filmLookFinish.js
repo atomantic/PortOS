@@ -29,12 +29,33 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { filmLookRuntimeSource, isFilmLookNeutral, normalizeFilmLook } from '../../lib/filmLook.js';
 import { filmLookGpuRuntimeSource } from '../../lib/filmLookGpu.js';
 import { normalizeTitleCard, titleCardVisible, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
+import { shotCamera, shotFilmLook } from '../../lib/musicVideoFilmLook.js';
 import { admitFilmLookWeb, encodeFilmLookWeb } from './filmLookWebEncoder.js';
 
 export const FILM_LOOK_FINISH_SCRATCH_DIR = 'music-video-film-look';
 
 /** Whether a footage render of `project` gets the finishing pass. */
-export const filmLookFinishNeeded = (project) => !isFilmLookNeutral(project?.filmLook);
+export const filmLookFinishNeeded = (project, { shotLooks = false } = {}) => !isFilmLookNeutral(project?.filmLook)
+  || (shotLooks && (project?.scenes || []).some(scene => shotFilmLook(project, scene)));
+
+// Select on output frames, as the document preview does: latest-starting shot
+// wins and gaps/endings use the project look. Consecutive equal looks share a pass.
+function filmLookWindows(project, { fps, frames, offsetSec }) {
+  const scenes = (project?.scenes || []).filter(scene => Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec) && scene.endSec > scene.startSec)
+    .slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).sort((a, b) => a.startSec - b.startSec);
+  const boundary = sec => Math.max(0, Math.min(frames, Math.ceil((sec - offsetSec) * fps - 1e-6)));
+  const edges = [...new Set([0, frames, ...scenes.flatMap(scene => [boundary(scene.startSec), boundary(scene.endSec)])])].sort((a, b) => a - b);
+  const windows = [];
+  for (let i = 0; i < edges.length - 1; i++) {
+    const start = edges[i], end = edges[i + 1], time = offsetSec + start / fps;
+    const scene = scenes.findLast(candidate => candidate.startSec <= time + 1e-7);
+    const look = shotFilmLook(project, scene && time < scene.endSec - 1e-7 ? scene : null);
+    const previous = windows.at(-1);
+    if (previous && JSON.stringify(previous.look) === JSON.stringify(look)) previous.end = end;
+    else windows.push({ start, end, look });
+  }
+  return windows;
+}
 
 /**
  * The page the pass captures: the finished render full-frame, `seek(t)` on
@@ -53,7 +74,7 @@ export const filmLookFinishNeeded = (project) => !isFilmLookNeutral(project?.fil
  * WebCodecs encoder reads the GPU canvas instead, so it flattens the card onto
  * that picture itself for the frames the card shows in.
  */
-function filmLookFinishPage({ width, height, fps, durationSec, offsetSec = 0, look, src = 'media/source.mp4' }) {
+function filmLookFinishPage({ width, height, fps, durationSec, offsetSec = 0, sourceOffsetSec = offsetSec, look, src = 'media/source.mp4' }) {
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Film look</title>
 <style>html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden;background:#000}video{display:block;width:${width}px;height:${height}px;object-fit:fill}#film{display:none;position:fixed;left:0;top:0;width:${width}px;height:${height}px;z-index:1}</style>
 </head><body><video id="source" src="${src}" muted playsinline preload="auto"></video><canvas id="film" width="${width}" height="${height}"></canvas><script src="film-gpu.js"></script><script src="app.js"></script></body></html>\n`;
@@ -190,7 +211,7 @@ function filmLookFinishPage({ width, height, fps, durationSec, offsetSec = 0, lo
     durationSec: DURATION, fps: FPS, width: WIDTH, height: HEIGHT,
     async seek(t) {
       await loaded;
-      const local = Math.max(0, t - OFFSET);
+      const local = Math.max(0, t - ${sourceOffsetSec === offsetSec ? 'OFFSET' : sourceOffsetSec});
       const target = Math.min((Math.floor(local * FPS + 1e-6) + 0.5) / FPS, Math.max(0, video.duration - 1e-3));
       await seekVideo(target);
       const drawStarted = performance.now();
@@ -326,17 +347,57 @@ function titleCardCheckTimes(card, { offsetSec, durationSec, untilSec }) {
  * song time it stops at, for a render that runs on past its song.
  * Rejects on failure or when `signal` aborts, leaving `path` as it was.
  */
-export async function applyFilmLookFinish({ project, look: lookInput, path, jobId, signal, onProgress, offsetSec = 0, workers, useGpu, titleCard = null, titleCardUntilSec = null, label = 'Music-video film look' }) {
+export async function applyFilmLookFinish(options) {
+  const { project, shotLooks = false, look, path, jobId, signal, onProgress, offsetSec = 0 } = options;
+  const pinned = (project?.scenes || []).some(scene => scene.filmLook != null || shotCamera(project, scene)?.filmLook != null);
+  if (!shotLooks || look !== undefined || !pinned) return finishFilmLookWindow(options);
+  if (!filmLookFinishNeeded(project, { shotLooks: true })) return false;
+  if (typeof jobId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('Invalid film look job id');
+  const { findFfmpeg, probeVideoGeometry, runFfmpegProcess } = await import('../../lib/ffmpeg.js');
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
+  const geometry = await probeVideoGeometry(path);
+  if (!geometry) throw new ServerError('The rendered video could not be measured for its film look pass', { status: 500, code: 'FILM_LOOK_FINISH_PROBE' });
+  const frames = Math.max(1, geometry.numFrames || Math.round(geometry.durationSec * geometry.fps));
+  const windows = filmLookWindows(project, { fps: geometry.fps, frames, offsetSec });
+  // A pinned look equal to the base still costs only one browser pass.
+  if (windows.length === 1) return finishFilmLookWindow({ ...options, look: windows[0].look });
+  const parts = windows.map((_, i) => `${path}.look-window-${i}.mp4`);
+  const list = `${path}.look-windows.txt`, silent = `${path}.look-joined.mp4`, finished = `${path}.look-finished.mp4`;
+  try {
+    for (const [i, window] of windows.entries()) {
+      signal?.throwIfAborted();
+      await finishFilmLookWindow({ ...options, look: window.look, path: parts[i], sourcePath: path,
+        jobId: `${jobId}-window-${i}`, sourceOffsetSec: offsetSec, offsetSec: offsetSec + window.start / geometry.fps,
+        // All windows use one codec configuration for a stream-copy join.
+        windowGeometry: { ...geometry, numFrames: window.end - window.start }, windowOnly: true, allowWeb: false,
+        onProgress: fraction => onProgress?.((window.start + fraction * (window.end - window.start)) / frames * 0.95) });
+    }
+    await writeFile(list, parts.map(part => `file '${part.replaceAll("'", "'\\''")}'`).join('\n'));
+    const joined = await runFfmpegProcess({ bin: ffmpeg, signal, args: ['-hide_banner', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', '-y', silent] });
+    if (!joined.ok) throw new ServerError(`Film look join failed: ${joined.reason}`, { status: 500, code: 'FILM_LOOK_FINISH_MUX' });
+    const mux = await runFfmpegProcess({ bin: ffmpeg, signal, args: ['-hide_banner', '-loglevel', 'error', '-i', silent, '-i', path, '-map', '0:v:0', '-map', '1:a?', '-c', 'copy', '-movflags', '+faststart', '-y', finished] });
+    if (!mux.ok) throw new ServerError(`Film look mux failed: ${mux.reason}`, { status: 500, code: 'FILM_LOOK_FINISH_MUX' });
+    signal?.throwIfAborted();
+    await rename(finished, path);
+    onProgress?.(1);
+    return true;
+  } finally {
+    for (const temporary of [...parts, list, silent, finished]) await rm(temporary, { force: true }).catch(() => {});
+  }
+}
+
+async function finishFilmLookWindow({ project, look: lookInput, path, jobId, signal, onProgress, offsetSec = 0, sourceOffsetSec = offsetSec, sourcePath = path, windowGeometry = null, windowOnly = false, allowWeb = true, workers, useGpu, titleCard = null, titleCardUntilSec = null, label = 'Music-video film look' }) {
   const started = performance.now();
   const look = normalizeFilmLook(lookInput === undefined ? project?.filmLook : lookInput);
-  if (!look || isFilmLookNeutral(look)) return false;
+  if ((!look || isFilmLookNeutral(look)) && !windowOnly && !titleCardVisible(normalizeTitleCard(titleCard))) return false;
   if (typeof jobId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('Invalid film look job id');
   const { findFfmpeg, runFfmpegProcess, probeVideoCodecSignature, probeVideoGeometry } = await import('../../lib/ffmpeg.js');
   const { openComposition } = await import('../htmlComposition/browser.js');
   const { encodeComposition, encodeCompositionSegments } = await import('../htmlComposition/encode.js');
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
-  const geometry = await probeVideoGeometry(path);
+  const geometry = windowGeometry || await probeVideoGeometry(sourcePath);
   if (!geometry) throw new ServerError('The rendered video could not be measured for its film look pass', { status: 500, code: 'FILM_LOOK_FINISH_PROBE' });
   const { width, height, fps } = geometry;
   const frames = Math.max(1, geometry.numFrames || Math.round(geometry.durationSec * fps));
@@ -354,8 +415,8 @@ export async function applyFilmLookFinish({ project, look: lookInput, path, jobI
   try {
     await rm(scratch, { recursive: true, force: true });
     await mkdir(join(scratch, 'media'), { recursive: true });
-    await stageRender({ ffmpeg, runFfmpegProcess, probeVideoCodecSignature, path, source: join(scratch, 'media', 'source.mp4'), signal, label: `${label} [${jobId.slice(0, 8)}]` });
-    for (const [name, body] of Object.entries(filmLookFinishPage({ width, height, fps, durationSec, offsetSec, look }))) {
+    await stageRender({ ffmpeg, runFfmpegProcess, probeVideoCodecSignature, path: sourcePath, source: join(scratch, 'media', 'source.mp4'), signal, label: `${label} [${jobId.slice(0, 8)}]` });
+    for (const [name, body] of Object.entries(filmLookFinishPage({ width, height, fps, durationSec, offsetSec, sourceOffsetSec, look }))) {
       await writeFile(join(scratch, name), body);
     }
     signal?.throwIfAborted();
@@ -393,7 +454,7 @@ export async function applyFilmLookFinish({ project, look: lookInput, path, jobI
       : openSvgPage;
     const contract = { width, height, fps, durationSec };
     let useWeb = false;
-    if (drawPath.gpu && frames >= 240) {
+    if (allowWeb && drawPath.gpu && frames >= 240) {
       // The check must see the frames the encoder flattens the card onto, not only frames without it.
       const checkTimes = card ? titleCardCheckTimes(card, { offsetSec, durationSec, untilSec: titleCardUntilSec }) : [];
       useWeb = await admitFilmLookWeb(page, contract, scratch, { signal, offsetSec, checkTimes }).catch((error) => {
@@ -433,6 +494,11 @@ export async function applyFilmLookFinish({ project, look: lookInput, path, jobI
     }
     page = null;
     signal?.throwIfAborted();
+    if (windowOnly) {
+      await rename(silent, path);
+      onProgress?.(1);
+      return true;
+    }
     // The pass changes pixels only: the render's audio (master, sound bed, an
     // excerpt's trim) is copied back untouched.
     const mux = await runFfmpegProcess({
@@ -447,7 +513,7 @@ export async function applyFilmLookFinish({ project, look: lookInput, path, jobI
     onProgress?.(1);
     const timing = encoded?.timing;
     const perFrame = key => timing?.frames ? (timing[key] / timing.frames).toFixed(1) : 'unavailable';
-    console.log(`🎞️ ${label} [${jobId.slice(0, 8)}]: ${look.preset}${card ? ' and a steady title card' : ''} over ${frames} frames at ${width}×${height}; wall ${((performance.now() - started) / 1000).toFixed(1)}s; workers ${encoded?.workers ?? 1}; GPU/SVG frames ${timing?.gpuFrames ?? 0}/${timing?.svgFrames ?? 0}; ms/frame seek ${perFrame('seekMs')}, GPU draw submission ${perFrame('drawMs')}, ${useWeb ? 'WebCodecs submission/flush and GPU wait' : 'capture (includes SVG draw/GPU wait)'} ${perFrame('captureMs')}, ${useWeb ? 'encode write/mux' : 'encode write/drain'} ${perFrame('encodeMs')}`);
+    console.log(`🎞️ ${label} [${jobId.slice(0, 8)}]: ${look?.preset ?? 'none'}${card ? ' and a steady title card' : ''} over ${frames} frames at ${width}×${height}; wall ${((performance.now() - started) / 1000).toFixed(1)}s; workers ${encoded?.workers ?? 1}; GPU/SVG frames ${timing?.gpuFrames ?? 0}/${timing?.svgFrames ?? 0}; ms/frame seek ${perFrame('seekMs')}, GPU draw submission ${perFrame('drawMs')}, ${useWeb ? 'WebCodecs submission/flush and GPU wait' : 'capture (includes SVG draw/GPU wait)'} ${perFrame('captureMs')}, ${useWeb ? 'encode write/mux' : 'encode write/drain'} ${perFrame('encodeMs')}`);
     return true;
   } finally {
     if (page) await page.close().catch(() => {});

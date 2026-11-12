@@ -29,7 +29,7 @@ async function publishReviewDraft(projectId, cutPath) {
 async function filmLookPass(project, wanted) {
   if (!wanted) return { finishNeeded: false, lookPass: null };
   const { applyFilmLookFinish, filmLookFinishNeeded } = await import('../filmLookFinish.js');
-  return { finishNeeded: filmLookFinishNeeded(project), lookPass: applyFilmLookFinish };
+  return { finishNeeded: filmLookFinishNeeded(project, { shotLooks: true }), lookPass: applyFilmLookFinish };
 }
 
 export async function startBlenderCut(projectId, { quality, animatic = false, filmLook = false }) {
@@ -54,7 +54,7 @@ export async function startBlenderCut(projectId, { quality, animatic = false, fi
       if (finishNeeded) {
         updateBlenderJob(entry, { status: 'encoding' });
         log.write(card.bake ? 'PortOS: film look pass' : 'PortOS: film look pass, with the steady title card over it');
-        await lookPass({ project, path: output, jobId: entry.job.id, signal, label: 'Blender cut film look', ...card.pass, onProgress: progress(0.5, 1) })
+        await lookPass({ project, shotLooks: true, path: output, jobId: entry.job.id, signal, label: 'Blender cut film look', ...card.pass, onProgress: progress(0.5, 1) })
           .catch(async (error) => { await rm(output, { force: true }); throw error; });
       }
 
