@@ -25,6 +25,17 @@ describe('MoodBoards index', () => {
     deleteMoodBoard.mockResolvedValue({ success: true });
   });
 
+  it('lists boards alphabetically regardless of API order and name case', async () => {
+    listMoodBoards.mockResolvedValue(Object.freeze([
+      { id: 'z', name: 'Zebra', items: [] },
+      { id: 'b', name: 'birch', items: [] },
+      { id: 'a', name: 'Amber', items: [] },
+    ]));
+    await renderPage();
+    expect(screen.getAllByRole('button', { name: /^Delete / }).map(button => button.getAttribute('aria-label')))
+      .toEqual(['Delete Amber', 'Delete birch', 'Delete Zebra']);
+  });
+
   it('offers a call to action with an accessible name when no boards exist', async () => {
     listMoodBoards.mockResolvedValue([]);
     await renderPage();
