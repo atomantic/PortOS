@@ -1705,3 +1705,57 @@ subclosure includes both plotting and export consumers. Real export/decode
 and failure probes, plus the preceding Agg/font/contour and immutable Pixal
 debug-plot probes, passed together on native Python 3.13. The original
 baseline remains unchanged; no full renderer installation is implied.
+
+## Thirtieth-slice 3D Metal packaging and installer maintenance (2026-11-12)
+
+Both profiles advance **pip 26.2.2 → 26.3** and **wheel 0.46.2 → 0.48.0**.
+Pixal also advances the retained **importlib-metadata 9.0.0 → 10.1.0** and
+**zipp 4.1.0 → 4.1.2** backports. Setuptools 84.2.1, Pybind11 3.0.2 where
+present, every native source/model pin and Pixal's intentional CLI-only
+Pillow override remain unchanged. Wheel's `packaging>=24` requirement is
+satisfied by retained Packaging 26.2; no companion expansion is needed.
+
+Both complete locks were regenerated with hash-verified uv 0.13.7,
+CPython 3.13/macOS 26+ ARM64, binary-only artifacts and seven-day cutoff
+**2026-11-05T00:00:00Z**. All 92 unrelated Pixal and 54 unrelated TRELLIS
+identities, markers and hash sets are unchanged. New releases carry complete
+generated artifact hashes: Pixal has 96 entries/909 hashes, TRELLIS has
+56 entries/363 hashes, and their union has 97 identities/912 hashes.
+Every hash matches an official unyanked artifact uploaded before the cutoff.
+Fresh OSV/MAL queries cover the union, 10 source-package identities and 13
+immutable source commits (120 queries), with no matches. No additional
+security claim is inferred from an unverified release-note advisory link.
+
+Native CPython 3.13.18 baseline/candidate tests use exact-hash six-package
+subclosures. A synthetic C extension is actually compiled into a wheel with
+retained Setuptools, installed with each real installer's isolated/non-isolated
+hash/no-dependency/binary-only flags, imported and invoked. Wrong hashes are
+rejected. No-isolation source and editable installs, console entry points,
+metadata consistency and a missing build-backend refusal are exercised
+with `--no-index`, no dependency fallback and temporary fixture sources.
+Wheel CLI unpack/pack round-trips are read through `WheelFile` to validate
+RECORD hashes. Directory and ZIP metadata/entry-point discovery, Unicode ZIP
+reads and scoped recursive/nonrecursive globs exercise the backports.
+The four packaging/build identities shared with TRELLIS have identical
+artifact sets; the two metadata backports remain Pixal-only.
+
+These are installer/package-tool boundaries, not a fresh build of every
+Metal extension. Pip 26.3 changes import handling during installation and
+backend-error reporting; those behaviors are why real install/build tests
+are required. Importlib-metadata 10 changes provider adaptation/discovery,
+but frozen Diffusers 0.38 uses stdlib `importlib.metadata` on Python 3.13:
+backport tests are explicitly retained-library coverage, not a claimed
+Diffusers backport path. Complete profile resolution and native wheel
+installation dry plans passed, together with five focused installer/profile/
+adapter files (171 tests). No production runtime, model weights, live
+providers, GPU workload or full renderer certification is implied.
+
+The combined candidate preserves the preceding plotting and FFmpeg export
+updates exactly. Both full locks were regenerated; only the intended
+packaging identities differ from that combined base. A bounded 51-package
+candidate subclosure reran the native packaging/install/archive/metadata
+probe together with the real synthetic export/decode/failure and Agg/font/
+contour/debug-plot probes. All passed with the combined versions; complete
+profile plans and the 171 focused tests also passed. Earlier baseline
+results remain applicable. These checks still do not certify a full Metal
+extension rebuild or production inference.

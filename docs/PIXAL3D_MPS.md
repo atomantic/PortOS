@@ -122,3 +122,9 @@ The retained ImageIO FFmpeg backend refresh includes an ARM64 bundled FFmpeg
 7.1 → 9.0 transition. See [Pixal Metal retained video-export backend](PYTHON_RUNTIME_REFRESH.md#pixal-metal-retained-video-export-backend)
 for real synthetic export/decode checks, binary platform floors and the
 limits of package-advisory and retained-library coverage.
+
+The packaging-tool refresh preserves native source revisions and other build
+pins, validating real isolated/offline hash installs and synthetic native
+source/editable builds.
+See [3D Metal packaging and installer tooling](PYTHON_RUNTIME_REFRESH.md#3d-metal-packaging-and-installer-tooling)
+for exact scope, full-lock audits and the limits of installer-only coverage.
