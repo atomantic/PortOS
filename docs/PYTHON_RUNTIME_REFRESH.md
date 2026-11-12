@@ -333,10 +333,12 @@ Install/Repair now requires wheels as well as hashes and `--no-deps`, preventing
 hashed source archives from fetching unlocked build dependencies. The existing
 [NumPy 2.5.4](https://pypi.org/pypi/numpy/2.5.4/json) and
 [SciPy 1.18.1](https://pypi.org/pypi/scipy/1.18.1/json) pins already require
-Python **3.12+**. The installer now checks both the selected base and an existing
-venv before installing; older interpreters receive an explicit requirement or
-rebuild diagnostic. This clarifies the frozen baseline, without downgrading its
-closure or adding a Python 3.11 support target.
+Python **3.12+**. The installer checks the selected base when creating or
+rebuilding a venv, and the actual venv interpreter before installing. A supported
+existing venv can be repaired even when the selected base is older; incompatible
+interpreters receive an explicit requirement or rebuild diagnostic. This clarifies
+the frozen baseline, without downgrading its closure or adding a Python 3.11
+support target.
 
 Verification on Apple Silicon:
 

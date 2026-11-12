@@ -1369,26 +1369,32 @@ describe('MiniMax Music 3 MLX Install/Repair', () => {
     tempVenvs.push(dir);
     const log = join(dir, 'calls');
     const python = join(dir, 'python');
+    const venvPython = join(dir, 'venv-python');
     writeFileSync(python, `#!/bin/bash
 set -eu
 echo "$*" >> "$CALL_LOG"
-if [[ "$*" == *version_info* ]]; then exit "\${OLD_PYTHON:-0}"; fi
+if [[ "$*" == *version_info* ]]; then
+  if [[ "$0" == *venv-python ]]; then exit "\${OLD_VENV:-0}"; fi
+  exit "\${OLD_PYTHON:-0}"
+fi
 if [[ "$*" == *'pip install'* ]]; then exit "\${INSTALL_EXIT:-0}"; fi
 if [[ "$*" == *'from mlx_audio.music import load'* ]]; then exit "\${PROBE_EXIT:-0}"; fi
 `);
     chmodSync(python, 0o755);
+    writeFileSync(venvPython, readFileSync(python));
+    chmodSync(venvPython, 0o755);
     const body = `set -e
 is_apple_silicon() { [[ "$TARGET" == apple ]]; }
 reset_universal_venv() { :; }
 venv_exists() { [[ "\${REUSE:-0}" == 1 ]]; }
-venv_python() { echo "$PYTHON_BIN"; }
+venv_python() { echo "$VENV_PYTHON"; }
 pin_venv_arm64() { :; }
 probe_or_fail() { shift 2; "$@" || exit 1; }
 ${section}`;
     const run = (extra = {}) => {
       writeFileSync(log, '');
       const result = spawnSync(resolveBashBinary(), ['-c', body], {
-        encoding: 'utf8', env: { ...process.env, HOME: dir.replaceAll('\\', '/'), PYTHON_BIN: python.replaceAll('\\', '/'), SCRIPT_DIR: join(REPO_ROOT, 'scripts').replaceAll('\\', '/'), CALL_LOG: log.replaceAll('\\', '/'), INSTALL_MINIMAX_MUSIC3_MLX: '1', TARGET: 'apple', ...extra },
+        encoding: 'utf8', env: { ...process.env, HOME: dir.replaceAll('\\', '/'), PYTHON_BIN: python.replaceAll('\\', '/'), VENV_PYTHON: venvPython.replaceAll('\\', '/'), SCRIPT_DIR: join(REPO_ROOT, 'scripts').replaceAll('\\', '/'), CALL_LOG: log.replaceAll('\\', '/'), INSTALL_MINIMAX_MUSIC3_MLX: '1', TARGET: 'apple', ...extra },
       });
       return { ...result, calls: readFileSync(log, 'utf8') };
     };
@@ -1419,6 +1425,18 @@ ${section}`;
     expect(python.status).toBe(1);
     expect(python.stderr).toContain('requires Python 3.12+');
     expect(python.calls).not.toMatch(/-m venv|pip install|from mlx_audio/);
+    const oldVenv = run({ REUSE: '1', OLD_VENV: '1' });
+    expect(oldVenv.status).toBe(1);
+    expect(oldVenv.stderr).toContain('requires a Python 3.12+ rebuild');
+    expect(oldVenv.calls).not.toContain('pip install');
+  });
+
+  it('repairs a supported existing venv even when the selected base interpreter is older', () => {
+    const result = installer()({ REUSE: '1', OLD_PYTHON: '1' });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.calls).toContain('pip install --require-hashes --no-deps --only-binary :all:');
+    expect(result.stdout).toContain('MiniMax Music 3 MLX venv ready');
+    expect(result.calls).not.toContain('-m venv');
   });
 
   it.each([{ INSTALL_EXIT: '41' }, { PROBE_EXIT: '42' }])('does not report readiness after installation/probe failure (%j)', (failure) => {

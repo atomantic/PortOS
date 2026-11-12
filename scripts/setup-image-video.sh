@@ -1450,14 +1450,14 @@ if [[ "$INSTALL_MINIMAX_MUSIC3_MLX" == "1" ]]; then
     echo "⚠️ INSTALL_MINIMAX_MUSIC3_MLX=1 is macOS / Apple-Silicon only. Skipping." >&2
   else
     MINIMAX_MUSIC3_MLX_VENV="${HOME}/.portos/venv-minimax-music3-mlx"
-    # The frozen NumPy/SciPy closure requires Python 3.12+.
-    if ! "$PYTHON_BIN" -c "import sys; sys.exit(0 if sys.version_info[:2] >= (3, 12) else 1)"; then
-      echo "❌ MiniMax Music 3 MLX requires Python 3.12+. Re-run with PYTHON_BIN pointing at a supported interpreter." >&2
-      exit 1
-    fi
     mkdir -p "${HOME}/.portos"
     reset_universal_venv "$MINIMAX_MUSIC3_MLX_VENV" "$PYTHON_BIN"
     if ! venv_exists "$MINIMAX_MUSIC3_MLX_VENV"; then
+      # Only a fresh/rebuilt venv uses the selected base interpreter.
+      if ! "$PYTHON_BIN" -c "import sys; sys.exit(0 if sys.version_info[:2] >= (3, 12) else 1)"; then
+        echo "❌ MiniMax Music 3 MLX requires Python 3.12+. Re-run with PYTHON_BIN pointing at a supported interpreter." >&2
+        exit 1
+      fi
       echo "📦 Creating MiniMax Music 3 MLX venv at ${MINIMAX_MUSIC3_MLX_VENV}..."
       "$PYTHON_BIN" -m venv "$MINIMAX_MUSIC3_MLX_VENV"
     fi
