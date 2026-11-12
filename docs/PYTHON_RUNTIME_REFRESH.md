@@ -948,3 +948,64 @@ calls, H3 rendering or quality evaluation ran. The already tracked generic
 VLM stereo-resampling defect is unchanged. H3's remaining original candidate
 is the coordinated Hub/Transformers migration; other profile-specific updates
 and concrete upstream constraints remain under #15769.
+
+## Seventeenth-slice FastVideo/Wan video-export helper (2026-11-12)
+
+FastVideo MLX updates **imageio-ffmpeg 0.8.0 → 0.8.1**; Wan 2.2 CUDA updates
+**0.7.0 → 0.8.1** on Windows and Linux. Both direct inputs now pin the selected
+helper exactly. Every other package version, marker and hash set is preserved:
+**84** FastVideo identities, **68** Wan Linux and **50** Wan Windows. The
+FastVideo source revision, Python/MLX stack, Wan Torch/CUDA stack and both
+profiles' Diffusers/ImageIO versions are unchanged.
+
+Hash-verified old/new helper sources retain byte-identical `_io.py` and
+`_utils.py` implementations. Version 0.8.1 corrects Windows binary selection to
+follow the interpreter architecture rather than the host CPU. Wan's change is
+not merely a Python patch: bundled FFmpeg moves from **7.0.2 on Linux / 7.1 on
+Windows x64 to 9.0.2**. Its Linux bundle requires glibc 2.28+ and kernel 4.18+. The glibc floor
+is already the profile's documented manylinux_2_28 target and the floor of its
+unchanged Torch wheel.
+FastVideo's Apple Silicon bundle remains **FFmpeg 9.0**; platform-specific
+FFmpeg versions are not interchangeable test claims.
+
+The complete locks were regenerated with verified **uv 0.13.7**, wheels only
+and cutoff `2026-11-05T00:00:00Z`, retaining existing outputs to prevent
+unrelated upgrades. Wan's documented recipe now scopes the official CUDA index
+to Torch/Torchvision; other packages resolve on dated PyPI artifacts instead
+of undated CUDA mirrors. Installation keeps its prior indexes and exact hash
+restrictions. Temporary-project annotations are omitted from those two locks.
+
+| Lock | Package-version identities | Hashes |
+| --- | ---: | ---: |
+| FastVideo MLX, universal Python 3.11+ | 85 | 2,305 |
+| Wan CUDA Linux, Python 3.11 | 69 | 1,086 |
+| Wan CUDA Windows, Python 3.11 | 51 | 989 |
+
+The union contains **111 identities / 2,482 hashes**. All hashes match
+unyanked pre-cutoff PyPI or official CUDA-index artifacts. Complete OSV/MAL
+responses were clean for **113** queries, including the public base versions
+of CUDA-local Torch/Torchvision, with count/error/pagination checks. This is a
+package advisory audit, not a separate audit of FFmpeg's bundled libraries.
+
+All complete hash-locked wheel sync plans passed: Wan's two target platforms
+and FastVideo on Python 3.11/3.12. Isolated native Apple Silicon export-helper
+subclosures, constrained to the full profile's pins, passed dependency checks
+and real media subprocess tests:
+
+- Diffusers **0.42.0** (Wan) and **0.42.1** (FastVideo) `export_to_video`, with
+  synthetic float and PIL frame inputs, used the wheel's bundled FFmpeg rather
+  than an ambient executable. Readback verified H.264, frame count, dimensions,
+  frame rate, duration and bounded pixel error.
+- FastVideo's ImageIO v3 `libx264` postprocessing path also wrote/read correctly.
+- An explicit bundled-executable override worked; a missing executable refused
+  rather than silently falling back. Invalid media bytes were rejected.
+- Candidate tests covered Python **3.11.18** and FastVideo's distinct NumPy
+  branch on **3.12.11**. Both previous helper/profile subclosures passed the
+  same fixtures on 3.11. The Mac baseline used FFmpeg **7.1** for helper 0.7;
+  candidates used **9.0**, not the unexecuted Windows/Linux 9.0.2 binaries.
+
+**169** focused installer/profile contract tests passed. These are actual native
+export tests plus complete target resolution, not full FastVideo/CUDA installations, model generation, GPU execution or production
+quality evaluation. No weights, provider calls or device inputs were used.
+Other FastVideo/Wan dependencies, coordinated Hub migrations, 3D profile work
+and concrete retained constraints remain under #15769.
