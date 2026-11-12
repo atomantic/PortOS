@@ -75,7 +75,7 @@ describe.skipIf(!canRun)('opaque document film-look canvas with Chrome and ffmpe
       expect(await page.evaluate(() => ({ filter: document.documentElement.style.filter, background: getComputedStyle(document.body).backgroundColor, seek: typeof portosComposition.seek })))
         .toEqual({ filter: '', background: 'rgba(0, 0, 0, 0)', seek: 'function' });
       const transparent = await sharp(await page.screenshot({ omitBackground: true })).ensureAlpha().raw().toBuffer();
-      expect(transparent[(3 * W + 3) * 4 + 3]).toBe(0);
+      expect(transparent[((H - 4) * W + W - 4) * 4 + 3]).toBe(0);
     } finally { await browser.close(); }
   }, 60000);
   it('darkens document and ending corners, preserves a no-vignette look, and keeps the preview opaque', async () => {
