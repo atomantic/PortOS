@@ -131,3 +131,8 @@ confirmed the Metal baker and no KDTree fallback.
 The exported GLB passed finite, nonempty indexed-triangle and embedded-PBR-texture
 checks: **295,589 vertices, 497,752 faces, two embedded texture images**. Its
 SHA-256 was `4e58d25d992aecfc9630e131d5c7e006cbfde2cf97e6ff6c9d868ff675b5a4ef`.
+
+The subsequent timm/PLY/Ninja maintenance refresh retains the same native
+profile and source revisions. See [3D Metal timm/PLY/build maintenance](PYTHON_RUNTIME_REFRESH.md#twenty-first-slice-3d-metal-timmplybuild-maintenance-2026-11-12)
+for exact upgrades, complete-lock audits, real CPU/native synthetic boundary
+tests and the limits of that validation.

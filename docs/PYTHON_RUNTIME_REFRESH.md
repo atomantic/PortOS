@@ -1198,3 +1198,43 @@ skips. Hub fixtures isolated caches and disabled telemetry/implicit tokens; no
 production weights, live providers, camera/audio streams or full-video quality
 evaluation were used. Other profile-specific dependency work and retained
 compatibility constraints remain under #15769.
+
+## Twenty-first-slice 3D Metal timm/PLY/build maintenance (2026-11-12)
+
+The Pixal3D and TRELLIS.2 Metal profiles advance **timm 1.0.27 → 1.0.31**,
+**plyfile 1.1.3 → 1.1.5**, and **Ninja 1.13.0 → 1.13.2**. Both complete locks
+were regenerated with hash-verified uv 0.13.7, CPython 3.13/macOS 26+ ARM64,
+`--only-binary :all:` and the seven-day cutoff **2026-11-05T00:00:00Z**.
+All 93 Pixal and 53 TRELLIS companion versions, markers and hash sets are
+unchanged. New versions carry the resolver's complete artifact hash sets:
+Pixal has 96 entries/291 hashes; TRELLIS has 56 entries/80 hashes. The union
+contains 97 registry identities/295 hashes, all matched to official unyanked
+artifacts uploaded before the cutoff. Fresh OSV queries, including MAL,
+covered that union, 10 source-package identities and 13 immutable source
+commits (120 queries): no matches. Source revisions, source hashes, Torch,
+Torchvision, other native renderer/build pins and Pixal's intentional CLI-only
+Pillow 13/Gradio metadata override remain unchanged.
+
+The immutable Pixal and TRELLIS Python trees have no direct timm import:
+timm remains a retained upstream dependency, not a newly claimed inference
+path. Its real CPU ResNet18 classifier, feature extraction, feature-only
+backbone and image preprocessing were exercised with synthetic images and
+`pretrained=False`. PLY tests execute the actual pinned Pixal and TRELLIS
+Apple `o_voxel/io/ply.py` codecs, round-tripping coordinates, byte colors and
+float attributes through memory and file paths, and rejecting truncation.
+The native sources use Torch `BuildExtension`; Ninja was tested through
+Torch 2.15's real `cpp_extension.load` with a tiny synthetic C++ extension:
+compile/link/import, repeated load, Ninja no-work detection, and propagation
+of an intentional compiler failure. No model weights or external requests
+were permitted; caches were temporary and Hub offline/telemetry-disabled.
+
+These are native CPython 3.13.18 **36-package subclosure** tests, not complete
+runtime installs. Baseline and candidate passed for both profiles. The
+subclosures share 35 identical artifact sets; NumPy 2.2.6 intentionally has
+different existing macOS wheel hashes in the profiles, so both were installed
+and exercised separately, reusing the two environments. Complete profile
+resolution and native wheel installation dry plans passed, as did the five
+focused installer/profile/adapter test files (171 tests). Full native renderer
+builds, Metal inference, model-backed background removal and GLB rendering
+were not run or certified by this maintenance slice. Existing hardware and
+native validation requirements remain in force.
