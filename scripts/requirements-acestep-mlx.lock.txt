@@ -2,20 +2,24 @@
 # ~/.portos/venv-acestep on Apple Silicon (arm64 macOS). Do not edit by hand.
 #
 # scripts/setup-image-video.sh (INSTALL_ACESTEP=1) installs this with
-# `pip install --require-hashes --no-deps -r`, so every transitive package is
+# `uv pip sync --require-hashes --no-build-isolation`, after a hash-locked
+# build bootstrap for docopt/unidic-lite and Python-dependent mojimoji builds.
+# Every transitive package is
 # version- and hash-pinned and a tampered or substituted distribution fails the install.
 # The lock is universal across CPython 3.11+ (per-Python versions carry
 # environment markers; 3.10 is excluded because filelock's security fix needs 3.11),
-# restricted to arm64 macOS wheels.
+# restricted to arm64 macOS. Source builds use only the locked build tools.
 #
 # Regenerate after editing requirements-acestep-mlx.txt, from the repo root,
-# with a cooldown so brand-new releases are not adopted the day they publish:
+# with uv 0.13.7 and a fresh seven-day cutoff. Keep the existing output so
+# unrelated pins are reused; restore this header after --no-header compilation:
 #   LOCK="$PWD/scripts/requirements-acestep-mlx.lock.txt"; TMP="$(mktemp -d)"
 #   cp scripts/requirements-acestep-mlx.txt "$TMP/"
 #   printf '[project]\nname = "acestep-lock"\nversion = "0"\n[tool.uv]\nenvironments = ["sys_platform == '"'"'darwin'"'"' and platform_machine == '"'"'arm64'"'"'"]\n' > "$TMP/pyproject.toml"
 #   (cd "$TMP" && uv pip compile requirements-acestep-mlx.txt --universal --python-version 3.11 \
 #     --generate-hashes --no-header --annotation-style line \
-#     --exclude-newer <UTC date at least 7 days ago> -o "$LOCK")
+#     --upgrade-package pypinyin==0.55.0 --upgrade-package filelock==4.2.7 \
+#     --exclude-newer 2026-11-05T00:00:00Z -o "$LOCK")
 # then check the result against OSV (including MAL- malicious-package records).
 absl-py==2.5.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:286e71c82c1a38e75bbcf185f9b37d0305ad7786535107cb49bf4df9ff2e1f95 \
@@ -881,9 +885,9 @@ dill==0.4.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
 docopt==0.6.2 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:49b3a825280bd66b3aa83585ef59c4a8c82f2c8a522dbe754a8bc8d08c85c491
     # via num2words
-filelock==4.2.6 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
-    --hash=sha256:ee7af8ede36dcaf12e1016d9f7c3a63ecd5497d46f85dab21b8c779b8f944e97 \
-    --hash=sha256:fd7d4fca497bf3e3d0945a13261f8e684f2aef12ce7cf76aef26e13bf7388b88
+filelock==4.2.7 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
+    --hash=sha256:31f6f7e3a8b6f0bd89114d30c5d5218ea1cfb63e5c4aa695b7559314a209bc7f \
+    --hash=sha256:d08972bbca2b8767ee552aff877b091dd111ffb1d22de7de885766ea7d719d5e
     # via datasets, diffusers, huggingface-hub, torch, -r requirements-acestep-mlx.txt
 fonttools==4.68.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:039142b75a068c93f8596ef68787f82c74940b9153d24c224ab31e750eb083a2 \
@@ -2806,9 +2810,9 @@ pyparsing==3.3.3 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:928ae7e20211f3b6f3915a72f06a0cfd29ab9d24279dd6346b6b1a7146397d36 \
     --hash=sha256:ece8c00a69cf01b45d0b1dedabb469c90d8caf996d4fda40f147627a122849a4
     # via matplotlib
-pypinyin==0.53.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
-    --hash=sha256:a2d39ddc2bd31b55897bbb10d2e11a0c4d399988a97c00ad489c151afd9b106d \
-    --hash=sha256:a906768919da3c31771f2c5e0e5a759214dc38d0087e15e6ff67649e03df8097
+pypinyin==0.55.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
+    --hash=sha256:b5711b3a0c6f76e67408ec6b2e3c4987a3a806b7c528076e7c7b86fcf0eaa66b \
+    --hash=sha256:d53b1e8ad2cdb815fb2cb604ed3123372f5a28c6f447571244aca36fc62a286f
     # via -r requirements-acestep-mlx.txt
 python-dateutil==4.0.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:a5e246f79eb80475e691bf93862cead98decd8a498cf53ba0516fcdc0f50dc1c \

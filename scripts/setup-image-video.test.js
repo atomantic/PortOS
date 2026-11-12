@@ -1825,8 +1825,40 @@ ${section}`;
 
 describe('ACE-Step Apple Silicon install is hash-pinned', () => {
   const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-acestep-mlx.lock.txt'), 'utf8');
-  const section = source.slice(source.indexOf('INSTALL_ACESTEP" == "1"'), source.indexOf('INSTALL_ACESTEP15="${'));
-  const [appleBranch, otherBranch] = section.split(/^  else$/m);
+  const section = source.slice(source.indexOf('if [[ "$INSTALL_ACESTEP" == "1"'), source.indexOf('INSTALL_ACESTEP15="${'));
+  const [, otherBranch] = section.split(/^  else$/m);
+  const runBlock = ({ repair = false, oldPython = false, appleSilicon = true, failure = '' } = {}) => {
+    const dir = mkdtempSync(join(tmpdir(), 'portos-acestep-test-'));
+    tempVenvs.push(dir);
+    const log = join(dir, 'calls.log');
+    const fakePython = join(dir, 'python3');
+    writeFileSync(fakePython, `#!/bin/bash
+echo "py $*" >> "${log}"
+if [[ "$*" == *version_info* ]]; then exit ${oldPython ? 1 : 0}; fi
+`);
+    chmodSync(fakePython, 0o755);
+    if (repair) mkdirSync(join(dir, '.portos', 'acestep', '.git'), { recursive: true });
+    const script = `set -euo pipefail
+INSTALL_ACESTEP=1; PYTHON_BIN="${fakePython}"; SCRIPT_DIR="${join(REPO_ROOT, 'scripts')}"; HOME="${dir}"
+is_apple_silicon() { return ${appleSilicon ? 0 : 1}; }
+is_macos() { return 0; }
+venv_exists() { return ${repair ? 0 : 1}; }
+venv_python() { echo "${fakePython}"; }
+reset_universal_venv() { :; }
+pin_venv_arm64() { :; }
+git() { echo "git $*" >> "${log}"; }
+git_checkout_pin() { echo "git checkout $2" >> "${log}"; }
+portos_uv() {
+  echo "uv $*" >> "${log}"
+  if [[ "${failure}" == bootstrap && "$*" == *requirements-acestep-mlx-build.lock.txt* ]]; then return 41; fi
+  if [[ "${failure}" == sync && "$2" == sync ]]; then return 42; fi
+  return 0
+}
+probe_or_fail() { echo "probe" >> "${log}"; return ${failure === 'probe' ? 43 : 0}; }
+${section}`;
+    const result = spawnSync(resolveBashBinary(), ['-c', script], { encoding: 'utf8' });
+    return { ...result, calls: existsSync(log) ? readFileSync(log, 'utf8') : '' };
+  };
 
   it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
     const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
@@ -1840,15 +1872,52 @@ describe('ACE-Step Apple Silicon install is hash-pinned', () => {
     expect(lock).not.toMatch(/^[a-z][^\n]* @ /im);
   });
 
-  it('Apple Silicon installs from the lock with --require-hashes and resolves nothing', () => {
-    expect(appleBranch).toContain('is_apple_silicon');
-    expect(appleBranch).toContain('pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-acestep-mlx.lock.txt"');
-    expect(appleBranch).toContain('pip install --no-deps --no-build-isolation "${ACESTEP_DIR}"');
-    expect(appleBranch).not.toMatch(/pip install --upgrade/);
+  it('keeps every direct pin and the build bootstrap consistent with the runtime lock', () => {
+    const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-acestep-mlx.txt'), 'utf8');
+    const build = readFileSync(join(REPO_ROOT, 'scripts/requirements-acestep-mlx-build.lock.txt'), 'utf8');
+    for (const [, name, version] of direct.matchAll(/^([\w.-]+)(?:\[[\w,-]+\])?==([^\s]+)/gm)) {
+      expect(lock).toContain(`${name}==${version} ;`);
+    }
+    const blocks = build.split(/\n(?=[a-z][^\n]*==)/i).filter((block) => /^[a-z][^\n]*==/i.test(block));
+    expect(blocks.map((block) => block.split('==')[0])).toEqual(['cython', 'packaging', 'setuptools', 'wheel']);
+    for (const block of blocks) {
+      expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+      const pin = block.split(' \\')[0];
+      if (!pin.startsWith('cython==')) expect(lock).toContain(`${pin} ;`);
+    }
   });
 
-  it('refuses a Python older than the 3.11 floor the lock was compiled for', () => {
-    expect(appleBranch).toContain('sys.version_info[:2] >= (3, 11)');
+  it.each([false, true])('bootstraps hashed build tools before a no-resolution Install/Repair (repair=%s)', (repair) => {
+    const result = runBlock({ repair });
+    expect(result.status, result.stderr).toBe(0);
+    const calls = result.calls.split('\n');
+    const bootstrap = calls.findIndex((line) => line.includes('requirements-acestep-mlx-build.lock.txt'));
+    const sync = calls.findIndex((line) => line.includes('uv pip sync'));
+    expect(bootstrap).toBeGreaterThanOrEqual(0);
+    expect(sync).toBeGreaterThan(bootstrap);
+    expect(calls[bootstrap]).toContain('pip install --require-hashes --no-deps --only-binary :all:');
+    expect(calls[sync]).toContain('pip sync --require-hashes --no-build-isolation');
+    expect(calls[sync]).toContain('requirements-acestep-mlx.lock.txt');
+    expect(result.calls).toContain('pip install --no-deps --no-build-isolation --python');
+    expect(result.calls).not.toMatch(/pip install --upgrade|-m pip install/);
+    expect(result.stdout).toContain('ACE-Step venv ready');
+    expect(result.calls.includes('git clone')).toBe(!repair);
+  });
+
+  it.each(['bootstrap', 'sync', 'probe'])('does not report ready after a failed %s', (failure) => {
+    const result = runBlock({ failure });
+    expect(result.status, result.stderr).toBe({ bootstrap: 41, sync: 42, probe: 43 }[failure]);
+    expect(result.stdout).not.toContain('ACE-Step venv ready');
+    if (failure !== 'probe') expect(result.calls).not.toContain('probe');
+    if (failure === 'bootstrap') expect(result.calls).not.toContain('uv pip sync');
+  });
+
+  it.each([{ oldPython: true }, { appleSilicon: false }])('refuses unsupported Apple hosts/interpreters before installing (%j)', (options) => {
+    const result = runBlock(options);
+    expect(result.status).toBe(1);
+    expect(result.calls).not.toContain('uv pip');
+    expect(result.calls).not.toContain('git clone');
+    expect(result.stderr).toMatch(/Python 3.11\+|Intel macOS is unsupported/);
   });
 
   it('installs nothing on Linux/Windows outside the hash-pinned CUDA locks and the pinned checkout', () => {

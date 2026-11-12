@@ -1324,8 +1324,11 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
       git clone --progress https://github.com/ace-step/ACE-Step.git "${ACESTEP_DIR}"
     fi
     git_checkout_pin "${ACESTEP_DIR}" "${ACESTEP_PIN}"
-    "$ACESTEP_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-acestep-mlx.lock.txt"
-    "$ACESTEP_PY" -m pip install --no-deps --no-build-isolation "${ACESTEP_DIR}"
+    # docopt/unidic-lite are source-only; mojimoji also builds on newer Python.
+    # Bootstrap their tools from a hash lock, then disable build resolution.
+    portos_uv pip install --require-hashes --no-deps --only-binary :all: --python "$ACESTEP_PY" -r "$SCRIPT_DIR/requirements-acestep-mlx-build.lock.txt"
+    portos_uv pip sync --require-hashes --no-build-isolation --python "$ACESTEP_PY" "$SCRIPT_DIR/requirements-acestep-mlx.lock.txt"
+    portos_uv pip install --no-deps --no-build-isolation --python "$ACESTEP_PY" "${ACESTEP_DIR}"
   else
     # Direct pins: scripts/requirements-acestep-cuda.txt. docopt and unidic-lite
     # publish only (hashed) source distributions, so exactly those two may build.

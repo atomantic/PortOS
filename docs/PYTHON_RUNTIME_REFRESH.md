@@ -413,3 +413,63 @@ and quality; other pending profiles, isolated major migrations and prior
 independent target acceptance. No production weights, provider session or paid
 generation was started. CUDA profiles and immutable native sources are unchanged;
 Pixal3D CUDA remains unresolved under #15710.
+
+
+## Eighth-slice ACE-Step lyric and cache dependencies (2026-11-12)
+
+The ACE-Step Apple Silicon profile updates **pypinyin 0.53.0 → 0.55.0**
+and **FileLock 4.2.6 → 4.2.7**. All other **139** lock entries retain their
+versions, markers and hashes. The immutable ACE-Step revision remains
+`1bee4c9f5b43e30995f8d4d33b3919197ce1bd68`; CUDA profiles are unchanged.
+
+[pypinyin's versioned release notes](https://github.com/mozillazg/python-pinyin/blob/v0.55.0/CHANGELOG.rst)
+describe corrected phrase segmentation and updated pronunciation dictionaries.
+Its Python requirement and dependencies are unchanged. The pinned ACE-Step
+[`chinese_transliterate` caller](https://github.com/ace-step/ACE-Step/blob/1bee4c9f5b43e30995f8d4d33b3919197ce1bd68/acestep/models/lyrics_utils/lyric_tokenizer.py)
+uses `pinyin`, `Style.TONE3`, `heteronym=False` and
+`neutral_tone_with_five=True`; those APIs remain available. This deliberately
+overrides upstream's older exact pypinyin requirement after the bounded tokenizer
+checks below. Dictionary changes are intentional, not a claim of byte-identical
+pronunciation for every phrase. FileLock's retained context-manager API is used
+by the locked Hugging Face Hub client; its
+[4.2.7 patch](https://github.com/tox-dev/filelock/releases/tag/4.2.7)
+fixes a soft-lease case. Both downloaded wheels matched their PyPI SHA-256 values
+and predate the seven-day cutoff.
+
+**py3langid remains 0.3.0 for a concrete API constraint.** The pinned
+[`LangSegment` constructor](https://github.com/ace-step/ACE-Step/blob/1bee4c9f5b43e30995f8d4d33b3919197ce1bd68/acestep/language_segmentation/LangSegment.py)
+calls `LanguageIdentifier.from_pickled_model`. The 0.4.0 wheel removes that
+method and changes its bundled model format to NPZ/XZ. Substituting 0.4.0
+reproduces `AttributeError` before segmentation. A coordinated source/model
+migration is required; unrelated older pins remain pending investigation.
+
+The complete **141-entry** runtime lock was regenerated with SHA-256-verified
+**uv 0.13.7**, reusing the existing output and upgrading only the two selected
+packages. Its header records `--exclude-newer 2026-11-05T00:00:00Z` and the
+regeneration command. All **3,845 hashes** match non-yanked, pre-cutoff PyPI
+artifacts. OSV querybatch, including `MAL-` records, returned zero findings for
+the full closure, with complete non-error responses and pagination checked.
+
+Install/Repair now bootstraps **Cython 3.3.1**, **setuptools 84.2.1**,
+**wheel 0.48.0** and **packaging 26.3** from a separate complete hash lock,
+then syncs the runtime and installs the pinned checkout with build isolation
+disabled. This prevents build-tool resolution for source-only docopt/unidic-lite
+and mojimoji's newer-Python source builds. Wheels remain preferred when available;
+the Python 3.11+ contract is unchanged. The build lock's **45 hashes** also match
+non-yanked pre-cutoff artifacts, and its four identities have zero OSV/MAL findings.
+Shared build/runtime versions agree; Cython is only needed during bootstrap.
+
+Fresh scratch Apple Silicon CPython **3.11.17** and **3.13.16** environments
+installed the complete runtime lock and passed dependency checks. The actual
+pinned lyric tokenizer produced valid vocabulary IDs and expected tone-numbered
+Chinese strings; the retained language segmenter handled a mixed English/Chinese
+fixture. The real Hub client completed concurrent loopback downloads of one
+synthetic fixture and reused its offline cache. Installer regression tests cover
+fresh Install, Repair, source/build parity, unsupported host/interpreter refusal,
+and build/sync/probe failures that must never report readiness.
+
+These are native dependency and tokenizer/cache checks, not production music
+inference or an audio-quality evaluation. Production ACE-Step generation and
+MPS behavior remain unverified. This slice does not add target support, alter
+CUDA pins, download production weights, or resolve Pixal3D CUDA #15710. Remaining
+profile and isolated-major migrations continue under #15769.
