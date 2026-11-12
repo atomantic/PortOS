@@ -20,6 +20,7 @@ import { moodBoardItemCaption } from './styleContext.js';
 import { getBoard, updateBoard, updateBoardItem, backfillGalleryPrompts } from './index.js';
 
 const jobs = new Map();
+const completions = new Map();
 
 // A gallery pin's caption is its generation prompt; an imported pin's caption
 // is not a prompt at all, so that pin still gets analyzed.
@@ -139,9 +140,21 @@ export function startAnalyzeJob(boardId, { providerId, model, effort } = {}) {
   };
   jobs.set(boardId, job);
   publish(job);
-  run(job, { providerId, model, effort }).catch((err) => {
+  const completion = run(job, { providerId, model, effort }).catch((err) => {
     console.error(`❌ mood-board ${boardId} analyze failed: ${err.message}`);
     update(job, { status: 'failed', phase: null, error: err.message, finishedAt: new Date().toISOString() });
   });
+  completions.set(boardId, completion);
   return { ...job };
+}
+
+// Reuse the same per-board job when a combine request needs a source style.
+export async function analyzeBoardForCombine(boardId, options) {
+  startAnalyzeJob(boardId, options);
+  await completions.get(boardId);
+  const job = getAnalyzeJob(boardId);
+  if (job.status !== 'done') {
+    throw new Error(job.error || 'The source board style could not be composed. Retry before combining.');
+  }
+  return getBoard(boardId);
 }

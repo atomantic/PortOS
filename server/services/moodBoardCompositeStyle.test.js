@@ -37,6 +37,24 @@ beforeEach(() => {
 });
 
 describe('composeBoardPrompt', () => {
+  it('synthesizes both saved board styles without feeding their pins to the model', async () => {
+    const style = await composeBoardPrompt({
+      sourceBoards: [
+        { name: 'Ink', style: { prompt: 'Ink washes' }, items: [analyzed] },
+        { name: 'Neon', style: { prompt: 'Neon lights' }, items: [] },
+      ], providerId: 'ollama', model: 'qwen',
+    });
+    const sent = promptRunner.runPromptThroughProvider.mock.calls[0][0].prompt;
+    expect(sent).toContain('Ink washes');
+    expect(sent).toContain('Neon lights');
+    expect(sent).toContain('ONE new, coherent visual style');
+    expect(sent).not.toContain(analyzed.analysis.prompt);
+    expect(style.prompt).toBe(JSON.parse(composedText).prompt);
+    promptRunner.runPromptThroughProvider.mockResolvedValueOnce({ text: JSON.stringify({ prompt: 'x'.repeat(8001) }) });
+    await expect(composeBoardPrompt({ sourceBoards: [{ style: { prompt: 'Ink' } }, { style: { prompt: 'Neon' } }] }))
+      .rejects.toMatchObject({ code: 'COMPOSITE_BAD_JSON', status: 502 });
+  });
+
   it('runs the picked vision CLI provider with its model and effort instead of swapping to an API provider', async () => {
     const codex = { id: 'codex', type: 'cli', command: 'codex', enabled: true };
     providers.getProviderById.mockResolvedValue(codex);
