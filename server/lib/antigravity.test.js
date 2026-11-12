@@ -104,7 +104,7 @@ describe('ensureAntigravityPrintArgs', () => {
 
   it('clamps an out-of-range effort to agy\'s top level', () => {
     expect(ensureAntigravityPrintArgs([], { effort: 'max' }))
-      .toEqual(['--effort', 'high', '--dangerously-skip-permissions', '--print']);
+      .toEqual(['--effort', 'xhigh', '--dangerously-skip-permissions', '--print']);
   });
 
   it('drops a dangling --model rather than emitting it twice', () => {

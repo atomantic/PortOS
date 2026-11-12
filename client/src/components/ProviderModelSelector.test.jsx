@@ -14,6 +14,7 @@ import { providerModeSelectionPolicy } from '../utils/providers.js';
 import { __resetToolUseModelIdsCache } from '../hooks/useToolUseModelIds.js';
 import { __resetProviderCatalogCache } from '../hooks/useProviderCatalog.js';
 import SHIPPED_PROVIDERS from '../../../data.reference/providers.json';
+import { selectableModelsForProvider } from '../utils/providerModels.js';
 import { COMPOSE_OPTION_VALUE } from '../utils/providerSelection.js';
 
 // The preset-first select ends in a "Custom combination…" action entry
@@ -609,6 +610,23 @@ it('keeps a saved TUI pin visible with a reason under a CLI/API-only caller poli
       expect(options).toEqual(['', 'low', 'medium', 'high']);
     });
 
+    it('offers one Hydrogen model with a separately selectable saved xhigh effort', () => {
+      const provider = { ...AGY[0], models: [...AGY[0].models, ...['low', 'medium', 'high', 'xhigh'].map(level => `gemini-4-hydrogen-${level}`)] };
+      const onEffortChange = vi.fn();
+      renderEffort({
+        providers: [provider], selectedModel: 'gemini-4-hydrogen', effort: 'xhigh', onEffortChange,
+        availableModels: selectableModelsForProvider(provider, provider.models),
+      });
+      const modelOptions = [...screen.getAllByRole('combobox')[1].querySelectorAll('option')].map(option => option.value);
+      expect(modelOptions.filter(model => model.startsWith('gemini-4-hydrogen'))).toEqual(['gemini-4-hydrogen']);
+      const effortSelect = screen.getByLabelText('Thinking effort');
+      expect([...effortSelect.options].map(option => option.value)).toEqual(['', 'low', 'medium', 'high', 'xhigh']);
+      expect(effortSelect.value).toBe('xhigh');
+      fireEvent.change(effortSelect, { target: { value: 'high' } });
+      fireEvent.change(effortSelect, { target: { value: 'xhigh' } });
+      expect(onEffortChange).toHaveBeenLastCalledWith('xhigh');
+    });
+
     it('narrows the options to the tiers the selected Antigravity model offers', () => {
       // agy rejects `--model gemini-3.1-pro --effort medium`.
       renderEffort({ selectedModel: 'gemini-3.1-pro' });
@@ -621,7 +639,7 @@ it('keeps a saved TUI pin visible with a reason under a CLI/API-only caller poli
       // it — the effort control must not hide until a model is chosen.
       renderEffort({ selectedModel: 'antigravity-configured-default' });
       const options = [...screen.getByLabelText('Thinking effort').querySelectorAll('option')].map((o) => o.value);
-      expect(options).toEqual(['', 'low', 'medium', 'high']);
+      expect(options).toEqual(['', 'low', 'medium', 'high', 'xhigh']);
     });
 
     it('hides itself (label and all) for an Antigravity model with no tiers', () => {

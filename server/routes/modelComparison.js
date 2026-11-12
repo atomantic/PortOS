@@ -3,7 +3,7 @@ import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest, modelComparisonImportSchema } from '../lib/validation.js';
 import { getPublicModelComparison, importModelComparison } from '../services/modelComparison.js';
 import { getSelectableProviders } from '../services/providers.js';
-import { effortLevelsForProvider, filterSelectableModels } from '../lib/providerModels.js';
+import { antigravityBaseModels, effortLevelsForProvider, filterSelectableModels, isAntigravityProvider } from '../lib/providerModels.js';
 import { localRuntimeKind } from '../lib/modelPinMembership.js';
 import { gatewayIdForProvider } from '../lib/providerGateways.js';
 import { buildModelComparisonComposite, CURRENT_COMPARISON_ANCHOR } from '../lib/modelComparisonComposite.js';
@@ -15,7 +15,7 @@ export function createModelComparisonRoutes(providerService = { getSelectablePro
     const inventory = result.providers.filter(provider => provider.enabled !== false).map(provider => ({
       id: provider.id, name: provider.name, gateway: gatewayIdForProvider(provider) || null,
       localInference: provider.servicePlan === 'local' || (!provider.servicePlan && !gatewayIdForProvider(provider) && Boolean(localRuntimeKind(provider))),
-      models: filterSelectableModels(provider.models).filter(model => typeof model === 'string' && model).map(model => ({
+      models: filterSelectableModels(isAntigravityProvider(provider) ? antigravityBaseModels(provider.models) : provider.models).filter(model => typeof model === 'string' && model).map(model => ({
         model, efforts: effortLevelsForProvider(provider, model) || [],
       })),
     }));

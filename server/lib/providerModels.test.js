@@ -340,6 +340,16 @@ describe('providerModels', () => {
     });
   });
 
+  it('normalizes Hydrogen xhigh aliases while keeping older catalogs restricted', () => {
+    const models = [...AGY_CATALOG, ...['low', 'medium', 'high', 'xhigh'].map(level => `gemini-4-hydrogen-${level}`)];
+    const provider = { harnessId: 'antigravity', models };
+    expect(splitAntigravityModel('gemini-4-hydrogen-xhigh')).toEqual({ base: 'gemini-4-hydrogen', effort: 'xhigh' });
+    expect(antigravityBaseModels(models).filter(model => model.startsWith('gemini-4-hydrogen'))).toEqual(['gemini-4-hydrogen']);
+    expect(effortLevelsForProvider(provider, 'gemini-4-hydrogen')).toEqual(['low', 'medium', 'high', 'xhigh']);
+    expect(resolveCliEffort('xhigh', provider, 'gemini-4-hydrogen')).toBe('xhigh');
+    expect(resolveCliEffort('xhigh', provider, 'gemini-3.1-pro')).toBe('high');
+  });
+
   describe('splitAntigravityModel', () => {
     it('splits an effort-suffixed id into base + tier', () => {
       expect(splitAntigravityModel('gemini-3.6-flash-high')).toEqual({ base: 'gemini-3.6-flash', effort: 'high' });
@@ -643,15 +653,13 @@ describe('providerModels', () => {
       expect(resolveCliEffort('ultra', { id: 'claude-code', command: 'claude' })).toBe('max');
     });
 
-    // agy tops out at `high`, so an effort saved against claude/codex must clamp
-    // DOWN to the nearest supported level rather than vanish when the user
-    // switches the task's provider to Antigravity.
+    // Saved efforts survive a provider switch by clamping to its supported ladder.
     it('clamps down to agy\'s narrower ladder', () => {
       const agy = { id: 'antigravity-cli', command: 'agy' };
       expect(resolveCliEffort('medium', agy)).toBe('medium');
-      expect(resolveCliEffort('xhigh', agy)).toBe('high');
-      expect(resolveCliEffort('max', agy)).toBe('high');
-      expect(resolveCliEffort('ultra', agy)).toBe('high');
+      expect(resolveCliEffort('xhigh', agy)).toBe('xhigh');
+      expect(resolveCliEffort('max', agy)).toBe('xhigh');
+      expect(resolveCliEffort('ultra', agy)).toBe('xhigh');
       expect(resolveCliEffort('minimal', agy)).toBe('low');
     });
 

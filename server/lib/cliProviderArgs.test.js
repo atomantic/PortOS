@@ -303,6 +303,17 @@ describe('cliProviderArgs', () => {
       })).toEqual(['--model', 'gemini-3.6-flash', '--effort', 'high', '--dangerously-skip-permissions', '--print']);
     });
 
+    it.each([
+      { defaultModel: 'gemini-4-hydrogen', effort: 'xhigh' },
+      { defaultModel: 'gemini-4-hydrogen-xhigh' },
+    ])('dispatches saved Hydrogen xhigh selections through the supported CLI flags: %j', (selection) => {
+      expect(buildCliArgs({
+        id: 'antigravity-cli', command: 'agy',
+        models: ['low', 'medium', 'high', 'xhigh'].map(level => `gemini-4-hydrogen-${level}`),
+        ...selection,
+      })).toEqual(['--model', 'gemini-4-hydrogen', '--effort', 'xhigh', '--dangerously-skip-permissions', '--print']);
+    });
+
     it('clamps an Antigravity effort the selected model does not offer', () => {
       // agy errors on `--model gemini-3.1-pro --effort medium`.
       expect(buildCliArgs({

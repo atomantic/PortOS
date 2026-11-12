@@ -255,13 +255,13 @@ describe('useReviewerModelOptions', () => {
     });
 
     it('falls back to the full ladder for an unset model or the configured default', async () => {
-      expect(await levelsFor('antigravity', '')).toEqual(['low', 'medium', 'high']);
-      expect(await levelsFor('antigravity', 'antigravity-configured-default')).toEqual(['low', 'medium', 'high']);
+      expect(await levelsFor('antigravity', '')).toEqual(['low', 'medium', 'high', 'xhigh']);
+      expect(await levelsFor('antigravity', 'antigravity-configured-default')).toEqual(['low', 'medium', 'high', 'xhigh']);
     });
 
     it('falls back to the full ladder when the catalog never loaded', async () => {
       getProviders.mockRejectedValue(new Error('offline'));
-      expect(await levelsFor('antigravity', 'gemini-3.1-pro')).toEqual(['low', 'medium', 'high']);
+      expect(await levelsFor('antigravity', 'gemini-3.1-pro')).toEqual(['low', 'medium', 'high', 'xhigh']);
     });
 
     it('leaves every other reviewer on its static ladder', async () => {
