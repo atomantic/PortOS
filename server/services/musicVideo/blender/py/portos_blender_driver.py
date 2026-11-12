@@ -94,6 +94,29 @@ def load_film(src):
     return film
 
 
+def workspace_imports(src):
+    """Imported source paths only; real paths exclude modules outside src/."""
+    root = os.path.realpath(src)
+    paths = set()
+    for module in list(sys.modules.values()):
+        file = getattr(module, "__file__", None)
+        if not isinstance(file, str):
+            continue
+        path = os.path.realpath(file)
+        if path.endswith((".pyc", ".pyo")):
+            try:
+                path = importlib.util.source_from_cache(path)
+            except ValueError:
+                path = path[:-1]
+        try:
+            inside = os.path.commonpath([root, path]) == root
+        except ValueError:  # Different drives on Windows.
+            inside = False
+        if path.endswith(".py") and inside:
+            paths.add(os.path.relpath(path, root).replace(os.sep, "/"))
+    return sorted(paths)
+
+
 def blender_engine(engine):
     # PortOS keeps Blender 4's id for EEVEE; Blender 5 named it BLENDER_EEVEE again.
     if engine != "BLENDER_EEVEE_NEXT":
@@ -262,7 +285,7 @@ def render_shot(job, film, song, shot):
         os.makedirs(os.path.dirname(blend), exist_ok=True)
         bpy.ops.wm.save_as_mainfile(filepath=blend, check_existing=False, copy=True)
         emit("blend", shot=shot["id"], path=blend)
-    emit("done", shot=shot["id"], sec=round(time.time() - started, 3))
+    emit("done", shot=shot["id"], sec=round(time.time() - started, 3), imports=workspace_imports(job["src"]))
 
 
 def main():

@@ -12,6 +12,8 @@ describe('parseBlenderDriverLine', () => {
     expect(parseBlenderDriverLine(line({ event: 'frame', shot: 's010', frame: 0, index: 1, total: 2, skipped: true }))).toMatchObject({ frame: 0, sec: 0, skipped: true });
     expect(parseBlenderDriverLine(line({ event: 'built', shot: 's010', sec: 1.2 }))).toEqual({ event: 'built', shot: 's010', sec: 1.2 });
     expect(parseBlenderDriverLine(line({ event: 'done', shot: 's010', sec: 44 }))).toEqual({ event: 'done', shot: 's010', sec: 44 });
+    expect(parseBlenderDriverLine(line({ event: 'done', shot: 's010', sec: 44, imports: ['z.py', '../outside.py', '/outside.py', 'C:/outside.py', 'z.py', 'a.py', null, 'data.json'] })))
+      .toEqual({ event: 'done', shot: 's010', sec: 44, imports: ['a.py', 'z.py'] });
     expect(parseBlenderDriverLine(line({ event: 'blend', shot: 's010', path: '/example/shot.blend' }))).toEqual({ event: 'blend', shot: 's010', path: '/example/shot.blend' });
     expect(parseBlenderDriverLine(line({ event: 'manifest', path: '/example/manifest.json' }))).toEqual({ event: 'manifest', shot: null, path: '/example/manifest.json' });
     expect(parseBlenderDriverLine(line({ event: 'error', message: 'NameError: example', traceback: 'Traceback…' })))

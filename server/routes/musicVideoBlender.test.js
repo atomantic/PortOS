@@ -410,8 +410,53 @@ describe('Blender film shot renders', () => {
     expect(offGrid.body.error).toContain('frame rate changed from 24 to 30');
   });
 
+  it('tracks imported helpers from the job snapshot, including stills and finals, but preserves legacy records', async () => {
+    await scaffold();
+    await writeSource('shots/shared.py', '# original helper\n');
+    await writeSource('shots/unused.py', '# unused\n');
+    await syncFilm();
+    blender.fake.control.imports = ['film.py', 'shots/s010.py', 'shots/shared.py'];
+    await renderAll('preview', { shotIds: ['s010'] });
+    await renderAll('final', { shotIds: ['s010'] });
+    await renderAll('still', { shotIds: ['s010'] });
+    const metadata = join(workspace(), 'renders/s010/preview/render.json');
+    const recorded = JSON.parse(readFileSync(metadata, 'utf8'));
+    expect(Object.keys(recorded.imports)).toEqual(blender.fake.control.imports);
+    await writeSource('shots/unused.py', '# unused changed\n');
+    expect((await state()).renders.s010.preview.stale).toBe(false);
+    await writeSource('shots/shared.py', '# changed helper!\n');
+    const changed = (await state()).renders.s010;
+    expect(changed.preview.staleReasons).toEqual(['source']);
+    expect(changed.final.staleReasons).toEqual(['source']);
+    expect(changed.stills[0].stale).toBe(true);
+    delete recorded.imports;
+    writeFileSync(metadata, JSON.stringify(recorded));
+    expect((await state()).renders.s010.preview.stale).toBe(false);
+    await writeSource('shots/shared.py', '# original helper\n');
+    expect((await state()).renders.s010.final.stale).toBe(false);
+    expect((await state()).renders.s010.stills[0].stale).toBe(false);
+    expect((await request(app).delete(api('/file?path=shots/shared.py'))).status).toBe(200);
+    expect((await state()).renders.s010.final.staleReasons).toEqual(['source']);
+
+    await writeSource('shots/shared.py', '# original helper\n');
+    let release;
+    blender.fake.control.hold = new Promise((resolve) => { release = resolve; });
+    events.length = 0;
+    await request(app).post(api('/render')).send({ quality: 'preview', shotIds: ['s010'], force: true });
+    await vi.waitFor(() => expect(events.some((event) => event.job?.index === 1)).toBe(true), WAIT);
+    await writeSource('shots/shared.py', '# edited during render\n');
+    blender.fake.control.hold = null;
+    release();
+    await settled();
+    expect((await state()).renders.s010.preview.staleReasons).toEqual(['source']);
+    await writeSource('shots/shared.py', '# original helper\n');
+    expect((await state()).renders.s010.preview.stale).toBe(false);
+    expect(await renderAll('preview', { shotIds: ['s010'] })).toEqual({ jobs: [], skipped: ['s010'] });
+  });
+
   it('keeps the finished frames of a cancelled render and resumes them, and drops queued jobs on cancel all', async () => {
     await scaffold();
+    await writeSource('shots/lazy.py', '# imported by a reused frame callback\n');
     await syncFilm();
     await request(app).put(api('/settings')).send({ concurrency: 1 });
     let release;
@@ -446,6 +491,29 @@ describe('Blender film shot renders', () => {
     await renderAll('final', { shotIds: ['s010'] });
     expect(blender.fake.control.jobs[0]).toMatchObject({ quality: 'final', resume: true, scale: 1, samples: 64 });
     expect((await state()).renders.s010.final).toMatchObject({ complete: true, stale: false, frames: 48 });
+    // The resumed driver's imports omit callbacks for frames it reused. Keep their snapshot dependencies.
+    await writeSource('shots/lazy.py', '# changed lazy import\n');
+    expect((await state()).renders.s010.final.staleReasons).toEqual(['source']);
+  });
+
+  it('restarts interrupted frames when a source outside declared dependencies changes', async () => {
+    await scaffold();
+    await writeSource('shots/shared.py', '# original\n');
+    await syncFilm();
+    let release;
+    blender.fake.control.hold = new Promise((resolve) => { release = resolve; });
+    events.length = 0;
+    const queued = await request(app).post(api('/render')).send({ quality: 'final', shotIds: ['s010'] });
+    await vi.waitFor(() => expect(events.some((event) => event.job?.index === 1)).toBe(true), WAIT);
+    await request(app).post(api(`/jobs/${queued.body.jobs[0].id}/cancel`)).send({});
+    await settled();
+    await writeSource('shots/shared.py', '# changed\n');
+    expect((await state()).renders.s010.final.staleReasons).toEqual(['source']);
+    blender.fake.control.hold = null;
+    release();
+    blender.fake.control.jobs.length = 0;
+    await renderAll('final', { shotIds: ['s010'] });
+    expect(blender.fake.control.jobs[0].resume).toBe(false);
   });
 
   it('reports the Shots step on project reads from the final renders on disk, without storing it', async () => {

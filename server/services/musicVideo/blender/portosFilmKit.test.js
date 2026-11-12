@@ -72,3 +72,28 @@ describe.skipIf(!python)('portos_film kit', () => {
     });
   }, PY_TEST_TIMEOUT_MS);
 });
+
+// Extract the collector without executing the Blender-only entrypoint.
+describe.skipIf(!python)('Blender driver imports', () => {
+  it('collects sorted relative workspace sources, excluding other modules and bytecode paths', () => {
+    const script = `
+import ast, importlib.util, json, os, sys
+from types import SimpleNamespace
+root = os.path.realpath("example-src")
+with open(os.path.join(sys.argv[1], "portos_blender_driver.py"), encoding="utf-8") as handle:
+    tree = ast.parse(handle.read())
+function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "workspace_imports")
+exec(compile(ast.Module(body=[function], type_ignores=[]), "collector", "exec"))
+sys.modules["example_z"] = SimpleNamespace(__file__=os.path.join(root, "shots", "z.py"))
+sys.modules["example_a"] = SimpleNamespace(__file__=os.path.join(root, "a.py"))
+sys.modules["example_cached"] = SimpleNamespace(__file__=importlib.util.cache_from_source(os.path.join(root, "cached.py")))
+sys.modules["example_duplicate"] = sys.modules["example_a"]
+sys.modules["example_outside"] = SimpleNamespace(__file__=os.path.join(root + "-other", "outside.py"))
+sys.modules["example_native"] = SimpleNamespace(__file__=os.path.join(root, "native.so"))
+sys.modules["example_namespace"] = SimpleNamespace(__file__=None)
+print(json.dumps(workspace_imports(root)))
+`;
+    expect(JSON.parse(execFileSync(python, ['-c', script, PY_DIR], { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS })))
+      .toEqual(['a.py', 'cached.py', 'shots/z.py']);
+  }, PY_TEST_TIMEOUT_MS);
+});
