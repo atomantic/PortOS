@@ -12,7 +12,7 @@ import {
   blenderEffectiveOptions, blenderShotFrameRange, normalizeBlenderRecord, summarizeBlenderShots,
 } from '../../../lib/musicVideoBlender.js';
 import { blenderMediaPath, blenderShotDir, readBlenderJson } from './workspace.js';
-import { BLENDER_NO_OPTIONS_HASH, blenderOptionsHash, blenderSettingsHash, blenderShotHash, hashBlenderSources } from './hashing.js';
+import { BLENDER_NO_OPTIONS_HASH, blenderImportsChanged, blenderOptionsHash, blenderSettingsHash, blenderShotHash, hashBlenderSources } from './hashing.js';
 import { readBlenderManifest } from './manifest.js';
 
 export const BLENDER_RENDER_QUALITIES = Object.freeze(['preview', 'final']);
@@ -46,12 +46,13 @@ export async function countBlenderFrames(projectId, shotId, quality, { startFram
  * shot's dependency files; a shot that moved on the song is `timing` (its
  * source may have changed as well: the one hash covers both).
  */
-function staleReasons(meta, range, { fps, shotHash, settingsHash, optionsHash }) {
+function staleReasons(meta, range, { fps, shotHash, settingsHash, optionsHash, files }) {
   const reasons = [];
   if (meta.srcHash !== shotHash) {
     const moved = meta.fps === fps && Number.isInteger(meta.startFrame) && (meta.startFrame !== range.startFrame || meta.endFrame !== range.endFrame);
     reasons.push(moved ? 'timing' : 'source');
   }
+  if (blenderImportsChanged(meta.imports, files) && !reasons.includes('source')) reasons.push('source');
   if (meta.settingsHash !== settingsHash) reasons.push('settings');
   if ((meta.optionsHash ?? BLENDER_NO_OPTIONS_HASH) !== optionsHash) reasons.push('options');
   return reasons;
@@ -93,7 +94,7 @@ async function readQuality(projectId, shot, quality, current) {
   };
 }
 
-async function readStills(projectId, shot, { shotHash, optionsHash }) {
+async function readStills(projectId, shot, { shotHash, optionsHash, files }) {
   const listed = await readBlenderJson(blenderStillsFile(projectId, shot.id), []);
   const stills = [];
   for (const still of Array.isArray(listed) ? listed : []) {
@@ -104,7 +105,7 @@ async function readStills(projectId, shot, { shotHash, optionsHash }) {
     stills.push({
       ...(await isFile(thumbnail) ? { thumbnail: blenderMediaPath(projectId, thumbnail) } : {}),
       file: blenderMediaPath(projectId, absolute), timeSec: still.timeSec, createdAt: still.createdAt || null,
-      stale: still.srcHash !== shotHash || (still.optionsHash ?? BLENDER_NO_OPTIONS_HASH) !== optionsHash,
+      stale: still.srcHash !== shotHash || blenderImportsChanged(still.imports, files) || (still.optionsHash ?? BLENDER_NO_OPTIONS_HASH) !== optionsHash,
     });
   }
   // Newest first: the first still is the shot's freshest picture.
@@ -129,9 +130,9 @@ export async function readBlenderRenders(projectId, manifest, { settings, source
   const renders = {};
   for (const shot of shots) {
     const shotHash = blenderShotHash(shot, files);
-    const entry = { stills: finalsOnly ? [] : await readStills(projectId, shot, { shotHash, optionsHash }) };
+    const entry = { stills: finalsOnly ? [] : await readStills(projectId, shot, { shotHash, optionsHash, files }) };
     for (const quality of qualities) {
-      const render = await readQuality(projectId, shot, quality, { fps: settings.fps, shotHash, settingsHash: settingsHashes[quality], optionsHash });
+      const render = await readQuality(projectId, shot, quality, { fps: settings.fps, shotHash, settingsHash: settingsHashes[quality], optionsHash, files });
       if (render) entry[quality] = render;
     }
     const blend = join(blenderShotDir(projectId, shot.id), 'shot.blend');

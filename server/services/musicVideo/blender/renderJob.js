@@ -15,7 +15,7 @@ import { blenderRenderFrame, blenderShotFrameRange, normalizeBlenderRecord } fro
 import { requireProject } from '../requireProject.js';
 import { blenderShotDir, readBlenderJson } from './workspace.js';
 import { readBlenderManifest } from './manifest.js';
-import { BLENDER_NO_OPTIONS_HASH, blenderOptionsHash, blenderSettingsHash, blenderShotHash, hashBlenderSources } from './hashing.js';
+import { BLENDER_NO_OPTIONS_HASH, blenderImportHashes, blenderImportsChanged, blenderOptionsHash, blenderSettingsHash, blenderShotHash, hashBlenderSources } from './hashing.js';
 import { writeBlenderSong } from './song.js';
 import { blenderJobBase, requireBlenderFilmTool, runBlenderDriver } from './driver.js';
 import { encodeBlenderPoster, encodeBlenderShot } from './encode.js';
@@ -42,12 +42,12 @@ export function blenderStillFrames(shot, fps, times = null) {
   return [...new Set(frames)].sort((a, b) => a - b);
 }
 
-async function recordStills(projectId, shot, frames, { fps, srcHash, optionsHash }) {
+async function recordStills(projectId, shot, frames, { fps, srcHash, optionsHash, imports }) {
   const directory = blenderShotDir(projectId, shot.id, 'stills');
   const file = blenderStillsFile(projectId, shot.id);
   const listed = await readBlenderJson(file, []);
   const createdAt = new Date().toISOString();
-  const fresh = frames.map((frame) => ({ file: blenderStillName(frame, fps), timeSec: Number((frame / fps).toFixed(6)), frame, srcHash, optionsHash, createdAt }));
+  const fresh = frames.map((frame) => ({ file: blenderStillName(frame, fps), timeSec: Number((frame / fps).toFixed(6)), frame, srcHash, optionsHash, imports, createdAt }));
   const { default: sharp } = await import('sharp');
   for (const still of fresh) {
     const source = join(directory, still.file);
@@ -81,7 +81,8 @@ export async function runBlenderShotRender(entry, { projectId, shotId, quality, 
     const shot = manifest?.shots.find((candidate) => candidate.id === shotId);
     if (!shot) throw jobFailure('This shot is no longer in the synced film. Sync shots from scripts and render again.');
     if (manifest.fps !== settings.fps) throw jobFailure(`The frame rate changed from ${manifest.fps} to ${settings.fps} since the last sync. Sync shots from scripts and render again.`);
-    const srcHash = blenderShotHash(shot, (await hashBlenderSources(projectId)).files);
+    const { files } = await hashBlenderSources(projectId);
+    const srcHash = blenderShotHash(shot, files);
     const options = blenderFilmOptions(manifest, settings);
     const optionsHash = blenderOptionsHash(options);
     const song = await writeBlenderSong(project, settings);
@@ -93,15 +94,20 @@ export async function runBlenderShotRender(entry, { projectId, shotId, quality, 
     if (still && !stillFrames.length) throw jobFailure('None of the requested times fall inside this shot');
     let resume = false;
     let meta = null;
+    let resumedImports = null;
     if (!still) {
       const previous = await readBlenderJson(blenderRenderFile(projectId, shotId, quality));
       // Frames built from other source, settings or options are another picture: start clean.
       resume = !force && previous?.complete !== true && previous?.srcHash === srcHash && previous?.settingsHash === settingsHash
+        && !blenderImportsChanged(previous?.imports, files)
         && (previous?.optionsHash ?? BLENDER_NO_OPTIONS_HASH) === optionsHash;
+      resumedImports = resume ? previous.imports : null;
       const framesDir = blenderFramesDir(projectId, shotId, quality);
       if (!resume) await rm(framesDir, { recursive: true, force: true });
       await mkdir(framesDir, { recursive: true });
       meta = {
+        // Until done reports actual imports, partial frames conservatively depend on the snapshot.
+        imports: Object.fromEntries(files),
         shotId, quality, srcHash, settingsHash, optionsHash, options, ...range, width: frame.width, height: frame.height, fps: settings.fps,
         samples: frame.samples, engine: settings.engine, blenderVersion: tool.version, device: null,
         startedAt: new Date(started).toISOString(), finishedAt: null, durationMs: null, complete: false,
@@ -127,13 +133,20 @@ export async function runBlenderShotRender(entry, { projectId, shotId, quality, 
         });
       },
     });
+    // Reused frames may have imported modules in callbacks skipped by this run.
+    const imports = Array.isArray(result.events.done?.imports)
+      ? { ...resumedImports, ...blenderImportHashes(result.events.done.imports, files) } : null;
+    if (meta && imports) {
+      meta.imports = imports;
+      await atomicWrite(blenderRenderFile(projectId, shotId, quality), meta);
+    }
     if (result.canceled || signal.aborted) throw jobFailure('Canceled', { canceled: true });
     if (!result.ok) {
       log.write(result.traceback || result.error);
       throw jobFailure(result.error);
     }
     if (still) {
-      await recordStills(projectId, shot, stillFrames, { fps: settings.fps, srcHash, optionsHash });
+      await recordStills(projectId, shot, stillFrames, { fps: settings.fps, srcHash, optionsHash, ...(imports ? { imports } : {}) });
       return;
     }
     const present = await countBlenderFrames(projectId, shotId, quality, range);

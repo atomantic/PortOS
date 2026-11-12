@@ -9,6 +9,9 @@ export const BLENDER_DRIVER_PREFIX = 'PORTOS_BLENDER ';
 const EVENTS = new Set(['start', 'built', 'frame', 'blend', 'done', 'manifest', 'error']);
 const text = (value, max) => (typeof value === 'string' ? value.slice(0, max) : null);
 const count = (value) => (Number.isInteger(value) && value >= 0 ? value : null);
+const sourcePath = (path) => typeof path === 'string' && path.endsWith('.py')
+  && !path.startsWith('/') && !path.includes('\\') && !path.includes(':')
+  && !path.split('/').some((part) => !part || part === '.' || part === '..');
 const duration = (value) => (Number.isFinite(value) && value >= 0 ? value : null);
 
 /** The driver event on `line`, or null when the line is ordinary log text. */
@@ -29,8 +32,11 @@ export function parseBlenderDriverLine(line) {
       return { event: 'frame', shot, frame, index, total, sec: duration(raw.sec) ?? 0, skipped: raw.skipped === true };
     }
     case 'built':
-    case 'done':
       return { event: raw.event, shot, sec: duration(raw.sec) };
+    case 'done':
+      return { event: raw.event, shot, sec: duration(raw.sec),
+        ...(Array.isArray(raw.imports) ? { imports: [...new Set(raw.imports.filter(sourcePath))].sort() } : {}),
+      };
     case 'blend':
     case 'manifest':
       return { event: raw.event, shot, path: text(raw.path, 4096) };

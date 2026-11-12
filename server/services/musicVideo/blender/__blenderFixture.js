@@ -17,6 +17,7 @@ export const createFakeBlender = () => {
     // What describe() returns; `describeError` makes it raise instead, and
     // `describeHold` is a promise it waits on first (a describe that hangs).
     manifest: null,
+    imports: null,
     describeError: null,
     describeHold: null,
     executionMode: 'trusted-local',
@@ -60,7 +61,7 @@ export const createFakeBlender = () => {
         writeFileSync(join(job.out, shot.id, 'shot.blend'), 'blend');
         onStdoutLine(line({ event: 'blend', shot: shot.id, path: join(job.out, shot.id, 'shot.blend') }));
       }
-      onStdoutLine(line({ event: 'done', shot: shot.id, sec: 1 }));
+      onStdoutLine(line({ event: 'done', shot: shot.id, sec: 1, imports: control.imports ?? ['film.py', `shots/${shot.id}.py`] }));
     }
     return { status: 'completed', reason: null };
   };

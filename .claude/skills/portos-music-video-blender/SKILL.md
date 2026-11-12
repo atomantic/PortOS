@@ -36,8 +36,8 @@ def frame(ctx, shot, t, frame):       # optional: pose everything for song time 
 ```
 
 Each shot: `id` (letters, digits, `_`, `-`; unique), `label`, `start`, `end` (seconds on the song, on the frame
-grid, in order, no overlap), and for the storyboard `summary`, `action`, `staging`, `camera`, `transition`. List
-`deps` (files and folders under `src/`) so editing one shot does not make every other render stale.
+grid, in order, no overlap), and for the storyboard `summary`, `action`, `staging`, `camera`, `transition`.
+Imported source files are tracked automatically; use `deps` (files and folders under `src/`) to add data and assets.
 
 `ctx`: `song`, `options`, `fps`, `width`, `height`, `scale`, `samples`, `quality`, `engine`, `workspace`, `src`,
 `out_dir`, `shot`, `log()`, `seconds_to_frame()`, `frame_to_seconds()`.

@@ -69,3 +69,11 @@ export const BLENDER_NO_OPTIONS_HASH = blenderOptionsHash({});
 
 /** Hash of a manifest's shot list: what the last sync produced. */
 export const blenderManifestHash = (shots) => sha(JSON.stringify(shots));
+
+/** Older renders have no import record and retain their declared-dependency contract. */
+export function blenderImportsChanged(imports, files) {
+  return imports != null && Object.entries(imports).some(([path, hash]) => files.get(path) !== hash);
+}
+
+/** Missing-at-start imports stay stale even if created while Blender is running. */
+export const blenderImportHashes = (paths, files) => Object.fromEntries(paths.map((path) => [path, files.get(path) ?? null]));
