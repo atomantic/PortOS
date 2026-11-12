@@ -896,3 +896,55 @@ Optional speech servers/model families were not installed. Music3's remaining
 original migration candidate is Hub **1.28 → 2.4**, which must be coordinated
 with the pinned Transformers **5.15** upper bound; H3 helpers, other profiles
 and their concrete constraints remain tracked under #15769.
+
+## Sixteenth-slice H3 MLX helpers (2026-11-12)
+
+The H3 Apple Silicon profile updates **MarkupSafe 3.0.3 → 3.0.4**,
+**Pycparser 3.0 → 3.12**, **Pygments 2.20.0 → 2.21.0**,
+**Regex 2026.7.19 → 2026.9.29** and **SoundDevice 0.5.5 → 0.5.6**.
+All **51** companion versions, markers and hash sets remain unchanged. This
+preserves Python 3.11+, the immutable H3 source, MLX/Metal 0.32.4,
+Transformers 5.14.1, Hub 1.27.0 and the preceding model-library slice.
+
+The immutable H3 source does not directly import these helpers. Their callers
+are in its required library closure. Published metadata and hash-verified old
+and new wheel sources were inspected: Pycparser's new Python 3.11 floor fits
+H3 and CFFI 2.1.1 accepts it. Pycparser adds C11 fixes and optional C23 support;
+CFFI still constructs its parser with the default legacy dialect. Regex updates
+Unicode tables and native matching internals while retaining the consumed
+Python API. Jinja2, Rich and Transformers accept the updated dependencies.
+SoundDevice's Python change corrects Windows ARM library selection; its
+generated CFFI declarations remain identical. Its macOS native library load
+was still exercised, without opening an audio stream.
+
+The complete **56-package / 1,307-hash** lock was regenerated with verified
+**uv 0.13.7**, wheels only and seven-day cutoff `2026-11-05T00:00:00Z`.
+Every recorded hash matches an unyanked pre-cutoff PyPI artifact. Complete
+OSV/MAL responses returned zero findings with count/error/pagination checks;
+bundled native libraries are not separately audited. Source-to-lock parity
+and Install/Repair's hash and wheels-only restrictions remain unchanged.
+
+Fresh native Apple Silicon CPython **3.11.18** and **3.12.11** environments
+installed the complete lock, passed dependency checks and the shipped strict
+H3 source-seam probe. Both passed these real-caller checks, also run against
+the previous complete lock on Python 3.11:
+
+- Transformers/Jinja chat rendering with Unicode and HTML escaping, JSON
+  serialization, assistant-span tracking and sandbox attribute-traversal refusal.
+- VLM's Qwen tool parser with multiline Unicode and typed integer, boolean and
+  JSON-object arguments, plus malformed-input refusal.
+- Rich syntax, Markdown code-fence and syntax-error traceback rendering.
+- CFFI declaration parsing for structs, enums and function pointers, an actual
+  native callback/libc call and malformed-declaration refusal. SoundDevice uses
+  precompiled bindings, so this is a separate Pycparser/CFFI compatibility check,
+  not a claim that H3 generation parses C declarations.
+- SoundDevice import and native PortAudio version query, without device
+  enumeration, playback, recording or stream creation.
+
+The preceding tiny Qwen model/structured-output and audio-IO/DSP caller probes
+also passed against both updated interpreters. **187** focused installer,
+profile and H3 source-probe tests passed. No production model weights, provider
+calls, H3 rendering or quality evaluation ran. The already tracked generic
+VLM stereo-resampling defect is unchanged. H3's remaining original candidate
+is the coordinated Hub/Transformers migration; other profile-specific updates
+and concrete upstream constraints remain under #15769.
