@@ -1334,7 +1334,9 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
     # publish only (hashed) source distributions, so exactly those two may build.
     # The acestep package is installed from the ACESTEP_PIN checkout with
     # --no-deps, like Apple Silicon: a git SHA cannot satisfy --require-hashes.
-    sync_cuda_lock_venv ACE-Step "$ACESTEP_VENV" requirements-acestep-cuda --no-binary docopt --no-binary unidic-lite
+    # The shared build lock is universal despite its historical mlx filename.
+    # Hash-check isolated build dependencies as well as the source archives.
+    sync_cuda_lock_venv ACE-Step "$ACESTEP_VENV" requirements-acestep-cuda --no-binary docopt --no-binary unidic-lite --preview-features build-dependency-hashes --require-build-hashes --build-constraints "$SCRIPT_DIR/requirements-acestep-mlx-build.lock.txt"
     ACESTEP_PY="$(venv_python "$ACESTEP_VENV")"
     if [[ ! -d "${ACESTEP_DIR}/.git" ]]; then
       echo "📦 Cloning ace-step/ACE-Step..."
