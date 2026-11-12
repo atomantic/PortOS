@@ -416,6 +416,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
         <label htmlFor="board-style-prompt" className="block text-xs text-gray-400 mb-1">Style prompt</label>
         <textarea
           id="board-style-prompt"
+          disabled={busy}
           value={prompt}
           rows={5}
           maxLength={8000}
@@ -429,6 +430,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
           <label htmlFor="board-style-negative" className="block text-xs text-gray-400 mb-1">Negative prompt (optional)</label>
           <textarea
             id="board-style-negative"
+            disabled={busy}
             value={negative}
             rows={2}
             maxLength={8000}
