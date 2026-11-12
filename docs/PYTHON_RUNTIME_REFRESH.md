@@ -361,3 +361,55 @@ isolated major migration and previously recorded target-specific check. No
 production weights, provider session or paid generation was started. This
 Apple Silicon-only slice changes no CUDA profile or platform support and leaves
 Pixal3D CUDA unresolved under #15710.
+
+## Seventh-slice Music3 network/cache dependencies (2026-11-12)
+
+The MiniMax Music 3 Apple Silicon lock updates **AnyIO 4.15.1 → 4.16.0**
+and **FileLock 4.2.6 → 4.2.7**. All other **33** package versions, markers
+and hashes are unchanged, including the model library, MLX/MLX-Metal,
+Transformers and Hugging Face Hub. These are transitive dependencies of the
+frozen Hub/HTTPX stack; direct source requirements and adapter pins do not
+change. Untouched older versions remain pending compatibility work.
+
+[AnyIO 4.16.0](https://pypi.org/pypi/anyio/4.16.0/json) keeps the same dependency
+requirements and Python 3.10 floor. Its
+[release notes](https://anyio.readthedocs.io/en/stable/versionhistory.html)
+include socket and cancellation fixes. [FileLock 4.2.7](https://pypi.org/pypi/filelock/4.2.7/json)
+keeps no runtime dependencies and a Python 3.11 floor, within Music3's existing
+3.12+ contract. Its [patch notes](https://github.com/tox-dev/filelock/releases/tag/4.2.7)
+fix a soft-lease case; the pinned Hub uses the existing `FileLock`/`SoftFileLock`
+context-manager API. HTTPX's pinned HTTPcore backend uses AnyIO TCP, TLS,
+timeout and stream APIs, which remain available. No caller adaptation is required
+by the bounded checks below. The two downloaded universal wheels matched PyPI
+SHA-256 values and were published on November 1 and November 2, respectively.
+
+The complete **35-package** lock was regenerated online with SHA-256-verified
+**uv 0.13.7**, wheels only and a freshly computed seven-day cutoff,
+`--exclude-newer 2026-11-05T00:00:00Z`. Its header records the command, reusing
+the existing lock and upgrading only the two selected versions. All **636
+hashes** match non-yanked pre-cutoff PyPI artifacts. OSV querybatch, including
+`MAL-` records, returned zero findings across the complete closure; bundled
+native libraries are not separately audited.
+
+Fresh scratch Apple Silicon CPython **3.12.11** and **3.13.18** environments
+on macOS **26.6.2** installed the entire lock with hashes and wheels only and
+passed `uv pip check`. On both, the real Hub client downloaded a synthetic fixture from a loopback HTTP
+server and reused its offline cache; its real async client completed a loopback
+request, rejected a stalled response with `ReadTimeout`, then completed another
+request. The Music3 loader imported and basic MLX tensors evaluated. These are
+native dependency/API checks, not model inference. Existing installer tests
+exercise fresh Install, Repair reuse, host/Python refusal and failed-install/probe
+readiness gating; sidecar and profile contracts also pass.
+
+The same investigation deliberately retains MTPLX's MLX **0.32.2** baseline:
+[MTPLX 2.12.2's published requirements](https://pypi.org/pypi/mtplx/2.12.2/json)
+pin `mlx==0.32.2` on Apple Silicon, `mlx-lm>=0.31,<0.32` and
+`transformers>=5.10.0,<5.17,!=5.13.0`. Its current 0.31.3/5.16.1 pair satisfies
+those constraints. Moving these versions requires a coordinated MTPLX update;
+this slice changes no MTPLX source or lock.
+
+Remaining under #15769: production Music3 weight loading, full-song rendering
+and quality; other pending profiles, isolated major migrations and prior
+independent target acceptance. No production weights, provider session or paid
+generation was started. CUDA profiles and immutable native sources are unchanged;
+Pixal3D CUDA remains unresolved under #15710.
