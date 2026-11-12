@@ -31,7 +31,9 @@ export async function cleanupSecurityScanGroup(owner, { processes = snapshot, ma
   // group or an ambiguous observation is left untouched and shown unconfirmed.
   const proven = leader ? timeMatches && leader.command.includes(owner.outputDir)
     : (await Promise.all(members.map(p => marked(p.pid, owner.marker).catch(() => false)))).every(Boolean);
-  if (!proven) return false;
+  // A member can exit while its marker is read. Only a freshly empty group
+  // confirms cleanup here; an unproven live group must never be signaled.
+  if (!proven) return !(await processes()).some(p => p.pgid === owner.pid && !p.state.startsWith('Z'));
   try { signal(owner.pid, signalName); } catch (err) { if (err.code !== 'ESRCH') throw err; }
   // A sent signal is not evidence of cleanup. Confirm quiescence separately.
   const deadline = Date.now() + 1000;
