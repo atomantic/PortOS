@@ -26,9 +26,15 @@ const MAX_DRAGS = 20;
 const WAVEFORM = '[data-portos-hook-waveform]';
 // The readout belongs immediately above the window, not elsewhere on the page.
 const WINDOW_READOUT_GAP_PX = 48;
-const SONG_RESULTS_WAIT_MS = 10_000;
 const SONG_RESULTS_POLL_MS = 250;
+// One search gets this many polls (10 s) to answer and settle.
+const SONG_RESULTS_POLLS = 40;
 const SONG_RESULTS_STABLE_POLLS = 3;
+// Suno limits searches (HTTP 429) right after other work on the account. A failed search is
+// left this many polls (3 s) for the page's own retry, then the title is typed again.
+const SEARCH_FAILED_GRACE_POLLS = 12;
+const SEARCH_TRIES = 3;
+const SEARCH_RETRY_WAIT_MS = { min: 2_000, max: 15_000 };
 
 const fmtClock = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 const parseClock = (text) => {
@@ -58,10 +64,25 @@ async function selectSong(page, payload) {
   const beforeSearch = JSON.stringify((await readRows()).map(({ text, html }) => [text, html]));
   const activeRequests = new Set();
   const searchRequests = new Set();
-  const successfulSearchRequests = new Set();
-  let searchFailure = null;
+  // A failed search stops blocking once the same request succeeds: the page retries on its own,
+  // and typing the title again repeats it. A failure nothing repeats (another call that carries
+  // the title) keeps blocking unless the song is identified outright.
+  const failedSearches = new Map();
+  let successfulSearches = 0;
+  let lastFailure = null;
   let sawLoading = false;
   let responseContainsSong = false;
+  const searchKey = (request) => `${request.method?.() || 'GET'} ${request.url()} ${request.postData() || ''}`;
+  // Named in a failure so the log says which call was refused; the query (the song title) is left out.
+  const endpoint = (request) => {
+    if (!URL.canParse(request.url(), CREATE_URL)) return 'Suno';
+    const url = new URL(request.url(), CREATE_URL);
+    return `${url.host}${url.pathname}`;
+  };
+  const failed = (request, failure) => {
+    lastFailure = failure;
+    failedSearches.set(searchKey(request), failure);
+  };
   const normalizedTitle = String(payload.title || '').trim().replace(/\s+/g, ' ').toLowerCase();
   const encodedTitle = encodeURIComponent(String(payload.title || '').trim()).toLowerCase();
   const onRequest = (request) => {
@@ -75,42 +96,65 @@ async function selectSong(page, payload) {
     const request = response.request();
     if (!searchRequests.has(request)) return;
     if (response.ok()) {
-      successfulSearchRequests.add(request);
+      successfulSearches += 1;
+      failedSearches.delete(searchKey(request));
       if (payload.songId) void response.json().then(result => {
         if (searchResultContainsSong(result, payload.songId)) responseContainsSong = true;
       }).catch(() => {});
+      return;
     }
-    else searchFailure = `Suno search failed (HTTP ${response.status()})`;
+    const retryAfterSec = Number(response.headers?.()?.['retry-after']);
+    failed(request, {
+      status: response.status(),
+      reason: `Suno search failed (HTTP ${response.status()} from ${endpoint(request)})`,
+      waitMs: Number.isFinite(retryAfterSec) && retryAfterSec > 0 ? retryAfterSec * 1000 : 0,
+    });
   };
   const onRequestFailed = (request) => {
     activeRequests.delete(request);
-    if (searchRequests.has(request)) searchFailure = 'Suno search request failed';
+    if (searchRequests.has(request)) failed(request, { status: null, reason: `Suno search request failed (${endpoint(request)})`, waitMs: 0 });
   };
   page.on('request', onRequest);
   page.on('response', onResponse);
   page.on('requestfinished', onRequestDone);
   page.on('requestfailed', onRequestFailed);
-  const deadline = Date.now() + SONG_RESULTS_WAIT_MS;
   let previous = beforeSearch;
   let stablePolls = 0;
+  let failedPolls = 0;
+  let polls = 0;
+  let tries = 1;
   let rows = [];
   try {
     await search.fill(payload.title, { timeout: T });
-    while (Date.now() < deadline) {
+    for (;;) {
       const searchValue = await search.inputValue();
       rows = await readRows();
       const snapshot = JSON.stringify(rows.map(({ text, html }) => [text, html]));
       const loading = await page.locator('[role=dialog] [aria-busy="true"], [role=dialog] [role=progressbar]').count();
-      if (searchFailure) throw new Error(searchFailure);
       if (loading && searchRequests.size) sawLoading = true;
-      const searchSucceeded = searchRequests.size > 0 && successfulSearchRequests.size === searchRequests.size;
+      const idle = activeRequests.size === 0 && loading === 0;
       // Identical results need no DOM change: the response and the selected row
       // must both identify this exact song. Title/length alone cannot prove that.
       const confirmedSongRow = responseContainsSong && rows.some(row => row.html.toLowerCase().includes(payload.songId.toLowerCase()));
+      const searchSucceeded = confirmedSongRow || (successfulSearches > 0 && failedSearches.size === 0);
       const resultsVerified = snapshot !== beforeSearch || sawLoading || confirmedSongRow;
-      stablePolls = searchValue === payload.title && searchSucceeded && resultsVerified && activeRequests.size === 0 && loading === 0 && snapshot === previous ? stablePolls + 1 : 0;
+      stablePolls = searchValue === payload.title && searchSucceeded && resultsVerified && idle && snapshot === previous ? stablePolls + 1 : 0;
       if (stablePolls >= SONG_RESULTS_STABLE_POLLS) break;
       previous = snapshot;
+      polls += 1;
+      failedPolls = failedSearches.size && idle ? failedPolls + 1 : 0;
+      if (failedPolls >= SEARCH_FAILED_GRACE_POLLS) {
+        if (tries >= SEARCH_TRIES) break;
+        // Stale rows are never picked after a failed search: wait as Suno asks, then search again.
+        await page.waitForTimeout(clamp(lastFailure.waitMs || SEARCH_RETRY_WAIT_MS.min * tries, SEARCH_RETRY_WAIT_MS.min, SEARCH_RETRY_WAIT_MS.max));
+        tries += 1;
+        polls = 0;
+        failedPolls = 0;
+        await search.fill('', { timeout: T });
+        await search.fill(payload.title, { timeout: T });
+        continue;
+      }
+      if (polls >= SONG_RESULTS_POLLS) break;
       await page.waitForTimeout(SONG_RESULTS_POLL_MS);
     }
   } finally {
@@ -119,7 +163,13 @@ async function selectSong(page, payload) {
     page.off('requestfinished', onRequestDone);
     page.off('requestfailed', onRequestFailed);
   }
-  if (stablePolls < SONG_RESULTS_STABLE_POLLS) throw new Error(`${rows.length} rows match "${payload.title}" and Suno search did not complete and settle within ${SONG_RESULTS_WAIT_MS} ms`);
+  if (stablePolls < SONG_RESULTS_STABLE_POLLS) {
+    if (failedSearches.size) {
+      const limited = lastFailure.status === 429 ? '. Suno is limiting requests: wait a minute, then Fill again' : '';
+      throw new Error(`${lastFailure.reason} on each of ${tries} ${tries === 1 ? 'try' : 'tries'}${limited}`);
+    }
+    throw new Error(`${rows.length} rows match "${payload.title}" and Suno search did not complete and settle within ${SONG_RESULTS_POLLS * SONG_RESULTS_POLL_MS} ms`);
+  }
   const index = pickSongRow(rows, payload);
   if (index < 0) throw new Error(`${rows.length} rows match "${payload.title}" and none could be told apart by id or length`);
   await page.locator('[role=dialog] button').filter({ hasText: /^Use$/ }).nth(index).click({ timeout: T });

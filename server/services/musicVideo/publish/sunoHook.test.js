@@ -82,8 +82,8 @@ describe('pickSongRow', () => {
 // window pill, a window that opens at Suno's own suggestion, and a waveform where 22.2 px of drag
 // moves the window one second (dragging right moves it earlier). `stuckAt` stops the window there.
 const fmt = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
-function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = false, delayedSongResults = false, failedSearch = false, searchStatus = 200, appliedAfterPoll = 1, ambiguousReadout = false, noWindowReadout = false, waveformKind = 'identified', ambiguousWaveform = false } = {}) {
-  const state = { windowAt, clicked: [], drags: 0, lyrics: true, songRows: [{ text: 'Night Drive 3:42', html: '' }], songPolls: 0 };
+function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = false, delayedSongResults = false, failedSearch = false, searchStatus = 200, searchStatuses = [searchStatus], pageRetries = false, otherCall = null, songIdInRows = false, appliedAfterPoll = 1, ambiguousReadout = false, noWindowReadout = false, waveformKind = 'identified', ambiguousWaveform = false } = {}) {
+  const state = { windowAt, clicked: [], drags: 0, lyrics: true, songRows: [{ text: 'Night Drive 3:42', html: '' }], songPolls: 0, typed: 0, searches: 0, searchDue: false, appliedAt: null };
   const rect = (bottom) => ({ left: 100, right: 200, bottom });
   const leaf = (text, bottom, parentText = text) => ({ children: [], textContent: text,
     getClientRects: () => [rect(bottom)], getBoundingClientRect: () => rect(bottom),
@@ -115,7 +115,8 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
     filter: (o) => locator(sel, o.hasText, index),
     count: async () => sel.includes('aria-busy') || sel.includes('progressbar') ? 0 : 1,
     waitFor: async () => {},
-    fill: async () => {},
+    // Typing in the song search is what makes the page search.
+    fill: async (value) => { if (sel.includes('Search by song name') && value) { state.typed += 1; state.searchDue = true; } },
     inputValue: async () => 'Night Drive',
     setInputFiles: async () => {},
     evaluateAll: async () => [],
@@ -148,16 +149,29 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
         }
       } else if (!delayedSongResults && ms === 250) {
         state.songPolls += 1;
-        if (state.songPolls === 1) {
+        if (state.searchDue) {
+          state.searchDue = false;
+          const status = searchStatuses[Math.min(state.searches, searchStatuses.length - 1)];
+          state.searches += 1;
           const request = { resourceType: () => 'fetch', url: () => '/api/search?q=Night%20Drive', postData: () => null };
           emitPageEvent('request', request);
           if (failedSearch) emitPageEvent('requestfailed', request);
           else {
-            emitPageEvent('response', { request: () => request, ok: () => searchStatus === 200, status: () => searchStatus, json: async () => ({ clips: [{ id: ID }] }) });
+            emitPageEvent('response', { request: () => request, ok: () => status === 200, status: () => status, headers: () => (status === 429 ? { 'retry-after': '1' } : {}), json: async () => ({ clips: [{ id: ID }] }) });
             emitPageEvent('requestfinished', request);
+            if (status === 200) state.appliedAt = state.songPolls + appliedAfterPoll - 1;
+            // A page that retries a refused search does it without the box being typed in again.
+            else if (pageRetries) state.searchDue = true;
+          }
+          // Another call that carries the title (not the search) and is refused.
+          if (otherCall && state.searches === 1) {
+            const other = { resourceType: () => 'fetch', url: () => '/telemetry', postData: () => '{"query":"Night Drive"}' };
+            emitPageEvent('request', other);
+            emitPageEvent('response', { request: () => other, ok: () => false, status: () => otherCall, headers: () => ({}), json: async () => ({}) });
+            emitPageEvent('requestfinished', other);
           }
         }
-        if (!failedSearch && searchStatus === 200 && state.songPolls === appliedAfterPoll) state.songRows = [{ text: 'Night Drive 3:42', html: '<span>Search result</span>' }];
+        if (state.songPolls === state.appliedAt) state.songRows = [{ text: 'Night Drive 3:42', html: songIdInRows ? `<a href="/song/${ID}">` : '<span>Search result</span>' }];
       }
     },
     locator: (sel) => locator(sel),
@@ -262,6 +276,35 @@ describe('Suno Hook fill (#10860)', () => {
     await expect(sunoHookAdapter.prepare(page, hookPayload())).rejects.toThrow(/Suno search.*fail/i);
     expect(page.state.clicked).not.toContain('[role=dialog] button[0]');
     expect(page.state.clicked).not.toContain('Next');
+  });
+
+  it.each([
+    { pageRetries: true, typed: 1 },
+    { pageRetries: false, typed: 2 },
+  ])('gets past a search Suno limited (HTTP 429), whether the page retries it ($pageRetries) or the title has to be typed again', async ({ pageRetries, typed }) => {
+    const page = hookPage({ searchStatuses: [429, 200], pageRetries });
+    await sunoHookAdapter.prepare(page, hookPayload());
+    expect(page.state.typed).toBe(typed);
+    expect(page.state.clicked).toContain('[role=dialog] button[0]');
+  });
+
+  it('stops after three limited searches and says to wait, naming the call Suno refused', async () => {
+    const page = hookPage({ searchStatus: 429 });
+    await expect(sunoHookAdapter.prepare(page, hookPayload())).rejects.toThrow(
+      'Suno Hook: select the song (Suno search failed (HTTP 429 from suno.com/api/search) on each of 3 tries. Suno is limiting requests: wait a minute, then Fill again)');
+    expect(page.state.typed).toBe(3);
+    expect(page.state.clicked).not.toContain('[role=dialog] button[0]');
+  });
+
+  it('lets a refused call that is not the search block the pick only while the song is not identified outright', async () => {
+    const identified = hookPage({ otherCall: 429, songIdInRows: true });
+    await sunoHookAdapter.prepare(identified, hookPayload());
+    expect(identified.state.typed).toBe(1);
+    expect(identified.state.clicked).toContain('[role=dialog] button[0]');
+
+    const unidentified = hookPage({ otherCall: 429 });
+    await expect(sunoHookAdapter.prepare(unidentified, hookPayload())).rejects.toThrow(/HTTP 429 from suno\.com\/telemetry/);
+    expect(unidentified.state.clicked).not.toContain('[role=dialog] button[0]');
   });
 
   it('waits for successful search results to be applied before selecting a matching old row', async () => {
