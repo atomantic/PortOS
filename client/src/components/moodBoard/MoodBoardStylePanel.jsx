@@ -455,6 +455,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
       {posterSrc ? (
         <Modal
           open={previewOpen}
+          usePortal
           onClose={() => setPreviewOpen(false)}
           size="3xl"
           backdropClassName="bg-black/85"

@@ -124,6 +124,11 @@ function MoodBoardEditor({ id }) {
   const [replacePrompt, setReplacePrompt] = useState(false);
   const [savingMeta, setSavingMeta] = useState(false);
   const [confirmingItemId, setConfirmingItemId] = useState(null);
+  const removeItemTriggerRef = useRef(null);
+  const cancelItemRemoval = () => {
+    setConfirmingItemId(null);
+    removeItemTriggerRef.current?.focus();
+  };
 
   // Add-item form.
   const [itemType, setItemType] = useState('image');
@@ -1119,7 +1124,10 @@ function MoodBoardEditor({ id }) {
                         ) : null}
                         <button
                           type="button"
-                          onClick={() => setConfirmingItemId(item.id)}
+                          onClick={(event) => {
+                            removeItemTriggerRef.current = event.currentTarget;
+                            setConfirmingItemId(item.id);
+                          }}
                           title="Remove item"
                           aria-label="Remove item"
                           className="min-h-[44px] min-w-[44px] shrink-0 ml-auto -my-2.5 inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
@@ -1127,6 +1135,23 @@ function MoodBoardEditor({ id }) {
                           <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
                         </button>
                       </div>
+                      {confirmingItemId === item.id ? (
+                        <InlineConfirmRow
+                          question="Remove this item?"
+                          stacked
+                          autoFocus
+                          role="group"
+                          aria-label="Remove this mood board item?"
+                          confirmText="Remove"
+                          onConfirm={() => handleRemoveItem(item.id)}
+                          onCancel={cancelItemRemoval}
+                          onKeyDown={(event) => {
+                            if (event.key !== 'Escape') return;
+                            event.stopPropagation();
+                            cancelItemRemoval();
+                          }}
+                        />
+                      ) : null}
                       <MoodBoardItemTextField
                         key={`${item.id}-${displayText}`}
                         item={item}
@@ -1228,15 +1253,6 @@ function MoodBoardEditor({ id }) {
                           </button>
                         ) : null}
                       </div>
-                      {confirmingItemId === item.id ? (
-                        <InlineConfirmRow
-                          question="Remove this item?"
-                          stacked
-                          confirmText="Remove"
-                          onConfirm={() => handleRemoveItem(item.id)}
-                          onCancel={() => setConfirmingItemId(null)}
-                        />
-                      ) : null}
                     </div>
                   </div>
                 );
