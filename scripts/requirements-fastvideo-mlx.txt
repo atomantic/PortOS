@@ -19,9 +19,14 @@ mlx==0.32.4
 mlx-metal==0.32.4
 pillow==13.0.0
 filelock==4.2.1
-tokenizers==0.22.2
-transformers==5.15.1
-huggingface-hub[hf_xet]==1.33.0
+# Upstream's <0.23 guard addressed a CLIP RobertaProcessing keyword mismatch.
+# Transformers 5.22.1 uses positional arguments; validated with actual CLIP
+# load/save, offsets and attention masks (see PYTHON_RUNTIME_REFRESH.md).
+tokenizers==0.23.3
+transformers==5.22.1
+huggingface-hub[hf_xet]==2.4.0
+# Independent FastVideo media-policy/streaming clients still import HTTPX 0.x.
+httpx==0.28.1
 safetensors==0.8.0
 sentencepiece==0.2.2
 protobuf==7.36.2
