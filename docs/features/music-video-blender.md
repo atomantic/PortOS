@@ -291,7 +291,9 @@ window from the best video each shot has: a current final, else its preview fitt
 
 ### Finishing
 
-- **Film look.** The project's film look (grain, gate weave, halation, VHS looks) is applied to the final render
+- **Film look.** Each shot uses its own film look, then its camera's look, then the project's look. An explicit
+  **Clean** overrides those inherited looks. Consecutive shots with the same look share a finishing window;
+  films without shot overrides keep a single pass. The film look (grain, gate weave, halation, VHS looks) is applied to the final render
   and to excerpts as a finishing pass, as it is for footage. For a cut, tick **Film look** (off by default: the
   pass is slow).
 - **Grade and shot effects.** The project's color grade, `fade-black` cut effects, and the timed effects set on each

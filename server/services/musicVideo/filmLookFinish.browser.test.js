@@ -82,6 +82,31 @@ const TITLE_CARD = { title: 'Example Song', artist: 'Example Artist', style: 'ou
 describe.skipIf(!canRun)('film look finishing pass with real Chrome and ffmpeg', () => {
   afterAll(cleanupTempDataRoots);
 
+  // Rendered boundary regression: the second shot alone changes, surrounding
+  // frames retain the base look, and every window paints the steady card above it.
+  it('applies a middle shot look without changing its neighbours or moving the steady card', async () => {
+    await mkdir(PATHS.data, { recursive: true });
+    const baseline = join(PATHS.data, 'three-shots-base.mp4');
+    const overridden = join(PATHS.data, 'three-shots-override.mp4');
+    barField(baseline, 0.5);
+    barField(overridden, 0.5);
+    const filmLook = { version: 2, vignette: 0.2 };
+    const scenes = [{ startSec: 0, endSec: 4 / 24 }, { startSec: 4 / 24, endSec: 8 / 24,
+      filmLook: { version: 2, vignette: 0.95, weave: 0.8 } }, { startSec: 8 / 24, endSec: 0.5 }];
+    const titleCard = { ...TITLE_CARD, startSec: 0, endSec: 1 };
+    await applyFilmLookFinish({ project: { filmLook }, path: baseline, jobId: 'three-base', titleCard, useGpu: false, workers: 1 });
+    await applyFilmLookFinish({ project: { filmLook, scenes }, shotLooks: true, path: overridden, jobId: 'three-override', titleCard, useGpu: false, workers: 1 });
+    expect((await probeVideoGeometry(overridden)).numFrames).toBe(12);
+    for (const n of [2, 6, 10]) {
+      const reference = yuvFrame(baseline, n), actual = yuvFrame(overridden, n);
+      const difference = Math.abs(fieldLevels(reference)[0] - fieldLevels(actual)[0]);
+      if (n === 6) expect(difference).toBeGreaterThan(5);
+      else expect(difference).toBeLessThan(2);
+      expect(cardBox(actual).count).toBeGreaterThan(100);
+      expectSameBox(cardBox(actual), cardBox(reference));
+    }
+  }, 120000);
+
   it('darkens the corners of a finished render for a vignette and leaves its middle at the level it was encoded at', async () => {
     await mkdir(PATHS.data, { recursive: true });
     const path = join(PATHS.data, 'flat-gray.mp4');

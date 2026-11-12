@@ -1237,7 +1237,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   };
   // A renderer that cannot draw the film look in its page gets the footage renders' finishing
   // pass (filmLookFinish.js), which takes the second half of the progress bar.
-  const finishing = Boolean(renderer.filmLookFinish) && filmLookFinishNeeded(project);
+  const finishing = Boolean(renderer.filmLookFinish) && filmLookFinishNeeded(project, { shotLooks: true });
   const encodeTop = finishing ? 0.5 : 1;
   Promise.resolve().then(async () => {
     await assertCurrentRenderApproval(projectId, project, options);
@@ -1251,7 +1251,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
     // After the ending, so the look grades it with the rest of the film. `lookPassInputs` is
     // what the encode left for the pass to draw over the look (a Blender film's steady title card).
     if (finishing) {
-      await applyFilmLookFinish({ project, path: outputPath, jobId, signal, ...encoded.lookPassInputs,
+      await applyFilmLookFinish({ project, shotLooks: true, path: outputPath, jobId, signal, ...encoded.lookPassInputs,
         onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop + (1 - encodeTop) * fraction }) });
     }
     return outroSec > 0 ? { ...encoded, durationSec: encoded.durationSec + outroSec } : encoded;
