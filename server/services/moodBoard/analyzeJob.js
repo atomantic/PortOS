@@ -77,10 +77,15 @@ function update(job, patch) {
   publish(job);
 }
 
-async function run(job, { providerId, model, effort }) {
+async function run(job, { providerId, model, effort, render }) {
   const { boardId } = job;
+  // Validate the selected backend before spending vision/composition calls.
+  const poster = render ? await import('./completePoster.js') : null;
+  if (poster) await poster.preparePoster(render);
   const filled = await backfillGalleryPrompts(boardId);
   if (!filled) throw new Error('Mood board not found');
+  const unavailable = (filled.items || []).filter((item) => (item.type === 'image' || item.type === 'video') && !itemHasPrompt(item) && !analysisSource(item));
+  if (render && unavailable.length) throw new Error('Some pins could not be imported. Import or remove those pins before making the board complete.');
   const pending = pendingItems(filled);
   update(job, { phase: 'analyzing', total: pending.length, done: 0 });
 
@@ -106,6 +111,7 @@ async function run(job, { providerId, model, effort }) {
     update(job, { done: job.done + 1, failures });
   }
 
+  if (render && failures) throw new Error(`${failures} pin analyses failed. Retry Make complete; saved analyses will be reused.`);
   const board = await getBoard(boardId);
   const analyzedCount = (board?.items || []).filter(itemHasPrompt).length;
   if (analyzedCount < 1) {
@@ -115,6 +121,10 @@ async function run(job, { providerId, model, effort }) {
   update(job, { phase: 'composing' });
   const style = await composeBoardPrompt({ board, providerId, model, effort });
   await updateBoard(boardId, { style });
+  if (poster) {
+    update(job, { phase: 'rendering' });
+    await poster.completePoster(boardId, style, render, (posterJobId) => update(job, { posterJobId }));
+  }
   update(job, { status: 'done', phase: null, finishedAt: new Date().toISOString() });
 }
 
@@ -124,13 +134,15 @@ export function getAnalyzeJob(boardId) {
 }
 
 /** Start (or join, when one is already running) the analyze job for a board. */
-export function startAnalyzeJob(boardId, { providerId, model, effort } = {}) {
+export function startAnalyzeJob(boardId, { providerId, model, effort, render } = {}) {
   const existing = jobs.get(boardId);
   if (existing?.status === 'running') return { ...existing };
   const job = {
     boardId,
     status: 'running',
     phase: 'preparing',
+    makeComplete: Boolean(render),
+    posterJobId: null,
     total: 0,
     done: 0,
     failures: 0,
@@ -140,7 +152,7 @@ export function startAnalyzeJob(boardId, { providerId, model, effort } = {}) {
   };
   jobs.set(boardId, job);
   publish(job);
-  const completion = run(job, { providerId, model, effort }).catch((err) => {
+  const completion = run(job, { providerId, model, effort, render }).catch((err) => {
     console.error(`❌ mood-board ${boardId} analyze failed: ${err.message}`);
     update(job, { status: 'failed', phase: null, error: err.message, finishedAt: new Date().toISOString() });
   });

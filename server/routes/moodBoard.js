@@ -176,6 +176,7 @@ router.post('/:id/backfill-prompts', asyncHandler(async (req, res) => {
 // `mood-board:analyze` socket event and GET restores it on return.
 const analyzeSchema = composePromptSchema.extend({
   providerId: z.string().trim().min(1).max(128),
+  render: moodBoardItemRenderSchema.optional(),
 }).strict();
 router.post('/:id/analyze', asyncHandler(async (req, res) => {
   const body = validateRequest(analyzeSchema, req.body ?? {});
