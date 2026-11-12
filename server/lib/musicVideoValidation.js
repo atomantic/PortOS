@@ -2511,6 +2511,7 @@ export const musicVideoAudioAnalysisSchema = z.object({
   bpm: z.number().nullable(),
   beats: z.array(z.number()),
   downbeats: z.array(z.number()),
+  downbeatSource: z.enum(['onsets', 'structure']).optional(),
   // Compact normalized loudness envelope for the director timeline. Optional
   // so cached analyses from older installs remain readable.
   waveform: z.array(z.number().min(0).max(1)).max(1024).optional(),

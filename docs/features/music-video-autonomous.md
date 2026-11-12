@@ -280,3 +280,18 @@ Implementation: `server/services/musicVideo/catalogCheckin.js` resolves and
 validates sources; `server/lib/musicVideoCatalogCheckinValidation.js` validates
 approval requests. `CatalogLookReferences.jsx` presents live catalog media;
 `useCatalogCastSetsCheckin.js` refreshes approval state on catalog events.
+
+### Downbeat phase in song analysis
+
+Offline analysis scores the four phases of a 4/4 bar by onset strength. A clear
+structural vote can correct a loud beat-3 backbeat: section starts within a
+quarter beat vote with the energy change between adjacent sections, and the
+first sustained low-band entry after a quiet intro also votes. At least two
+agreeing section boundaries or a clear sustained entry must form a decisive
+majority; weak or conflicting evidence keeps the onset-only phase. No provider
+calls are involved. `audioAnalysis.downbeatSource` records `onsets` or `structure`
+(the latter when structure changes the onset-only choice). Manual tempo keeps
+the director's first-downbeat offset and does not use this vote.
+
+Existing stored analyses remain unchanged until the song is analyzed again.
+Older analyses can omit `downbeatSource`.
