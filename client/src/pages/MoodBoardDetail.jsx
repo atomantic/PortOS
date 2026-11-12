@@ -121,6 +121,7 @@ function MoodBoardEditor({ id }) {
   const [loadError, setLoadError] = useState(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [replacePrompt, setReplacePrompt] = useState(false);
   const [savingMeta, setSavingMeta] = useState(false);
   const [confirmingItemId, setConfirmingItemId] = useState(null);
 
@@ -1274,6 +1275,27 @@ function MoodBoardEditor({ id }) {
               onChange={(e) => setDescription(e.target.value)}
               className="block w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white focus:border-port-accent outline-none resize-y"
             />
+            <p className="text-xs text-gray-400">Your creative direction. Composing a style updates the separate Style prompt.</p>
+            {board.style?.prompt && board.style.prompt !== description ? (
+              replacePrompt ? (
+                <InlineConfirmRow
+                  question="Replace your current Board prompt with the composed style?"
+                  confirmText="Replace prompt"
+                  onConfirm={() => { setDescription(board.style.prompt); setReplacePrompt(false); }}
+                  onCancel={() => setReplacePrompt(false)}
+                />
+              ) : (
+                <button
+                  type="button"
+                  disabled={board.style.prompt.length > 5000}
+                  onClick={() => description.trim() ? setReplacePrompt(true) : setDescription(board.style.prompt)}
+                  className="min-h-[40px] px-3 py-1.5 text-xs rounded border border-port-border text-port-accent hover:bg-port-bg disabled:opacity-50"
+                >Use style as Board prompt</button>
+              )
+            ) : null}
+            {board.style?.prompt?.length > 5000 ? (
+              <p className="text-xs text-gray-400">Shorten the Style prompt to 5,000 characters or fewer before using it as the Board prompt.</p>
+            ) : null}
             {descriptionDirty || (savingMeta && !nameDirty) ? (
               <div className="flex justify-end">
                 <button

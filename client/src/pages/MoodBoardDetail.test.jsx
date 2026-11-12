@@ -811,6 +811,32 @@ describe('MoodBoardDetail layout', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Save prompt' })).toBeNull());
   });
 
+  it('copies the composed style into the Board prompt only on request and preserves edits on cancel', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', description: 'My direction', items: [], style: { prompt: 'Soft painted light' } });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    const field = screen.getByLabelText('Board prompt');
+    fireEvent.change(field, { target: { value: 'Unsaved direction' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use style as Board prompt' }));
+    expect(field).toHaveValue('Unsaved direction');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel', exact: true }));
+    expect(field).toHaveValue('Unsaved direction');
+    fireEvent.click(screen.getByRole('button', { name: 'Use style as Board prompt' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Replace prompt' }));
+    expect(field).toHaveValue('Soft painted light');
+    expect(mockUpdateMoodBoard).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Save prompt' })).toBeInTheDocument();
+  });
+
+  it('explains why an oversized style cannot be copied into the Board prompt', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', description: '', items: [], style: { prompt: 'x'.repeat(5001) } });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    expect(screen.getByRole('button', { name: 'Use style as Board prompt' })).toBeDisabled();
+    expect(screen.getByText(/Shorten the Style prompt to 5,000/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Board prompt')).toHaveValue('');
+  });
+
   it('remembers the last tool used for the next board', async () => {
     mockGetMoodBoard.mockResolvedValue({ id: 'a', name: 'Board A', items: [] });
     const { unmount } = renderPage();

@@ -142,7 +142,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
       return null;
     }
     onBoardChange(updated);
-    toast.success('Board style composed from item analyses');
+    toast.success('Style prompt updated from saved pin analyses');
     return updated;
   };
 
@@ -173,7 +173,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
       else {
         applyJob(evt);
         if (wasRunning) {
-          if (evt.status === 'done') toast.success('Board style composed from item analyses');
+          if (evt.status === 'done') toast.success('Style prompt updated from saved pin analyses');
           else toast.error(evt.error || 'Board analysis failed');
         }
       }
@@ -326,13 +326,20 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
             disabled={busy}
             className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-bg border border-port-border text-gray-200 hover:text-white disabled:opacity-50 transition-colors"
           >
-            Compose board style
+            {composing ? 'Composing style prompt…' : 'Compose style prompt'}
           </button>
         ) : null}
         {!showAnalyze && !showCompose ? (
           <p className="text-xs text-gray-500">Pin an image or video to analyze this board.</p>
         ) : null}
       </div>
+
+      {showCompose ? (
+        <p className="text-xs text-gray-400">
+          Combines saved pin analyses into the Style prompt below for posters and renders.
+          It does not re-analyze images or replace your Board prompt.
+        </p>
+      ) : null}
 
       {/* Provider, model and effort fold into one summary line until changed. */}
       <div>

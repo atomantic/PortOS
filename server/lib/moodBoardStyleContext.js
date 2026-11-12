@@ -12,14 +12,17 @@ import { trimTo } from './textUtils.js';
 // stay well inside a chat-completion window. Items are taken in board order
 // (the user's curation order); fragments beyond either cap are dropped and
 // the count is reported in the result so the UI can say so. The aggregate
-// character budget is the load-bearing one — 60 items can each carry four
-// 600-char fields, far past what a small local model's window fits — and it
+// character budget is the load-bearing one — full analyses from 60 items
+// can far exceed a small local model's window — and it
 // is a FIXED conservative budget (≈6k tokens) rather than model-aware:
 // provider window metadata isn't reliably known here, and a proposal
 // synthesized from the first N curated items beats a request the model
 // truncates or rejects.
 const CONTEXT_ITEMS_MAX = 60;
 const CONTEXT_FIELD_MAX = 600;
+// Render analyses put lens, texture and finish after the subject; keep the
+// complete prompt and sample whole pins under the shared total budget.
+const ANALYZED_PROMPT_MAX = 8000;
 const CONTEXT_TOTAL_CHARS_MAX = 24000;
 
 const EXTERNAL_SOURCE = /^(?:https?:|frame:)/i;
@@ -62,7 +65,7 @@ export function collectBoardStyleContext(board) {
     }
     const analysis = it.analysis;
     if (analysis && typeof analysis === 'object' && typeof analysis.prompt === 'string' && analysis.prompt.trim()) {
-      entry.analyzedPrompt = trimTo(analysis.prompt, CONTEXT_FIELD_MAX);
+      entry.analyzedPrompt = trimTo(analysis.prompt, ANALYZED_PROMPT_MAX);
       if (typeof analysis.negativePrompt === 'string' && analysis.negativePrompt.trim()) {
         entry.analyzedNegative = trimTo(analysis.negativePrompt, CONTEXT_FIELD_MAX);
       }

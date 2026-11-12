@@ -94,6 +94,21 @@ describe('composeBoardPrompt', () => {
     expect(style.rationale).toContain('tactile');
   });
 
+  it('preserves the optical finish at the end of long pin analyses', async () => {
+    const finish = 'Soft defocused edges, halation and misregistered color fringes.';
+    const prompt = `${'An elaborate imaginary landscape with layered architecture. '.repeat(20)}${finish}`;
+    await composeBoardPrompt({
+      board: { id: 'mb-1', style: { prompt: 'OLD_COMPOSITE', negativePrompt: 'OLD_NEGATIVE' }, items: Array.from({ length: 7 }, (_, i) => ({
+        id: `pin-${i}`, type: 'image', analysis: { prompt, negativePrompt: 'harsh digital sharpening' },
+      })) },
+    });
+    const sent = promptRunner.runPromptThroughProvider.mock.calls[0][0].prompt;
+    expect(sent.split(finish)).toHaveLength(8);
+    expect(sent).not.toContain('OLD_COMPOSITE');
+    expect(sent).not.toContain('OLD_NEGATIVE');
+    expect(sent).toContain('harsh digital sharpening');
+  });
+
   it('rejects an empty model prompt', async () => {
     promptRunner.runPromptThroughProvider.mockResolvedValueOnce({ text: '{"prompt":"   ","negativePrompt":""}', model: 'qwen' });
     await expect(composeBoardPrompt({

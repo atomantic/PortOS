@@ -98,7 +98,7 @@ describe('MoodBoardStylePanel', () => {
     const onBoardChange = vi.fn();
     render(<MoodBoardStylePanel board={analyzedBoard} onBoardChange={onBoardChange} />);
     expect(screen.queryByRole('button', { name: /^Analyze/ })).toBeNull();
-    await userEvent.click(screen.getByRole('button', { name: 'Compose board style' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Compose style prompt' }));
     await waitFor(() => expect(mockCompose).toHaveBeenCalledWith('mb-1', { providerId: 'vision-1', model: 'vlm' }, { silent: true }));
     expect(mockStart).not.toHaveBeenCalled();
     expect(onBoardChange).toHaveBeenCalledWith(expect.objectContaining({
@@ -109,7 +109,7 @@ describe('MoodBoardStylePanel', () => {
   it('starts the server-side analyze job and shows its progress', async () => {
     const board = { id: 'mb-1', items: [{ id: 'b', type: 'image', mediaKey: 'image:b.png' }] };
     render(<MoodBoardStylePanel board={board} onBoardChange={vi.fn()} />);
-    expect(screen.queryByRole('button', { name: 'Compose board style' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Compose style prompt' })).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Analyze 1 new' }));
     expect(mockStart).toHaveBeenCalledWith('mb-1', { providerId: 'vision-1', model: 'vlm' }, { silent: true });
     await act(async () => {
