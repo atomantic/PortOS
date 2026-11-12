@@ -21,7 +21,7 @@ const HANDLE_FRAME_NAME = /^handle_(in|out)_(m)?(\d{6,})\.(?:jpg|png)$/;
 const frameExtension = (quality) => (quality === 'preview' ? 'jpg' : 'png');
 
 /** `frame_%06d` cannot name a negative frame (the sign eats a pad slot and resume misses the file). */
-export function blenderFrameToken(frame) {
+function blenderFrameToken(frame) {
   const index = Math.trunc(frame);
   return index < 0 ? `m${String(-index).padStart(6, '0')}` : String(index).padStart(6, '0');
 }
@@ -32,7 +32,7 @@ function signedFrame(marker, digits) {
   return marker ? -index : index;
 }
 
-export function blenderFrameNumber(name) {
+function blenderFrameNumber(name) {
   const match = FRAME_NAME.exec(name);
   return match ? signedFrame(match[1], match[2]) : null;
 }
