@@ -72,6 +72,7 @@ import {
 } from './trellis2Cuda.js';
 import {
   isPixal3dCudaInstalled,
+  installPixal3dCuda,
   runPixal3dCudaGenerate,
   probePixal3dModules,
   PIXAL3D_INCOMPLETE_INSTALL_HELP,
@@ -145,6 +146,7 @@ export const TARGET_ADAPTERS = Object.freeze({
   }),
   pixal3dCuda: Object.freeze({
     isInstalled: isPixal3dCudaInstalled,
+    install: installPixal3dCuda,
     // Nothing Pixal3D pulls is GATED (see its descriptor), but the download still goes
     // through Hugging Face, so the same resolved token is passed for rate-limit
     // headroom on a ~24 GB weight fetch.
@@ -167,11 +169,11 @@ export const TARGET_ADAPTERS = Object.freeze({
         ? describeDegradedInstall({
           label: 'incomplete install',
           help: PIXAL3D_INCOMPLETE_INSTALL_HELP,
-          repairable: false,
+          repairable: true,
           missing: incomplete,
         })
         : nafFallback
-          ? describeDegradedInstall({ label: 'NAF fallback', help: probe.help, repairable: false })
+          ? describeDegradedInstall({ label: 'NAF fallback', help: probe.help, repairable: true })
           : null;
       return {
         fields: {

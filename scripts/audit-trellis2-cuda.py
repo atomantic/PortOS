@@ -8,10 +8,10 @@ from urllib.request import Request, urlopen
 SCRIPTS = Path(__file__).resolve().parent
 
 
-def main():
-    profile = json.loads((SCRIPTS / 'trellis2-cuda-profile.json').read_text())
+def main(profile_name='trellis2-cuda-profile.json', lock_names=None, extra_pins=()):
+    profile = json.loads((SCRIPTS / profile_name).read_text())
     pins = set()
-    for lock in ['requirements-trellis2-cuda.lock.txt', 'requirements-trellis2-cuda-build.lock.txt']:
+    for lock in lock_names or ['requirements-trellis2-cuda.lock.txt', 'requirements-trellis2-cuda-build.lock.txt']:
         pins.update(re.findall(r'^([\w.-]+)==([^\s;\\]+)', (SCRIPTS / lock).read_text(), re.M))
     # CUDA-flavored Torch wheels are direct URLs; query the upstream package version too.
     pins.update({('torch', profile['torch'].split('+')[0]), ('torchvision', profile['torchvision'].split('+')[0]),
@@ -19,6 +19,7 @@ def main():
                  ('nvdiffrec-render', '0.0.0'), ('cumesh', '0.0.1'), ('flex-gemm', '1.0.0'), ('o-voxel', '0.0.1')})
     pins.update((item['name'], item['version']) for item in profile['condaArtifacts']
                 if item['name'] in {'pip', 'setuptools', 'packaging', 'wheel'})
+    pins.update(extra_pins)
     pins.update(profile['setuptoolsVendoredIdentities'].items())
     queries = [{'package': {'ecosystem': 'PyPI', 'name': name}, 'version': version} for name, version in sorted(pins)]
     for item in profile['condaArtifacts']:

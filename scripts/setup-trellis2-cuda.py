@@ -30,7 +30,9 @@ def output(args):
 def preflight(profile, cuda):
     # Refuse before creating directories, fetching artifacts or modifying an install.
     if sys.platform != 'linux' or platform.machine() != 'x86_64':
-        raise SystemExit('TRELLIS.2 CUDA requires Linux x86_64 (including WSL2).')
+        raise SystemExit(profile.get('label', 'TRELLIS.2 CUDA') + ' requires Linux x86_64.')
+    if profile.get('nativeLinux') and 'microsoft' in platform.release().lower():
+        raise SystemExit('Pixal3D CUDA requires native Linux; its NAF pipeline is not supported under WSL2.')
     if not hasattr(tarfile, 'data_filter'):
         raise SystemExit('Update the bootstrap Python to a security-patched build with tarfile.data_filter.')
     libc, version = platform.libc_ver()
@@ -48,7 +50,8 @@ def preflight(profile, cuda):
                   '--format=csv,noheader,nounits']).splitlines()[0]
     capability, memory, driver = [part.strip() for part in gpu.split(',')]
     if capability not in profile['computeCapabilities'] or int(memory) < profile['minimumVramMiB']:
-        raise SystemExit('This profile requires compute capability 8.6 and at least 24 GiB VRAM.')
+        raise SystemExit('This profile requires compute capability ' + ', '.join(profile['computeCapabilities'])
+                         + ' and at least ' + str(profile['minimumVramMiB'] // 1024) + ' GiB VRAM.')
     return {'cuda': nvcc, 'gcc': compiler, 'glibc': version,
             'computeCapability': capability, 'vramMiB': int(memory), 'driver': driver}
 
@@ -144,8 +147,9 @@ print(json.dumps({d.metadata['Name']: d.version for d in metadata.distributions(
 """
 
 
-def install(root, cuda):
-    profile = json.loads((SCRIPTS / 'trellis2-cuda-profile.json').read_text())
+def install(root, cuda, *, profile=None, locks=None, packages=None, runtime_patch=None,
+            build_patch=None, verify=None, optional_packages=()):
+    profile = profile or json.loads((SCRIPTS / 'trellis2-cuda-profile.json').read_text())
     cuda = Path(cuda).resolve()
     toolchain = preflight(profile, cuda)
     root = Path(root).resolve()
@@ -185,7 +189,7 @@ def install(root, cuda):
          '--prefix', prefix, '--file', explicit], env=env)
     python = prefix / 'bin/python'
     env['PATH'] = str(prefix / 'bin') + os.pathsep + str(cuda / 'bin') + os.pathsep + '/usr/bin:/bin'
-    locks = ['requirements-trellis2-cuda.lock.txt', 'requirements-trellis2-cuda-build.lock.txt']
+    locks = locks or ['requirements-trellis2-cuda.lock.txt', 'requirements-trellis2-cuda-build.lock.txt']
     for name in locks:
         run([python, '-m', 'pip', '--isolated', 'install', '--disable-pip-version-check',
              '--force-reinstall', '--require-hashes', '--no-deps', '--only-binary', ':all:',
@@ -201,24 +205,35 @@ def install(root, cuda):
         destination = source_root / item['destination']
         destination.parent.mkdir(parents=True, exist_ok=True)
         unpack(archive, destination)
-    patch_runtime(source_root, profile)
-    packages = ['utils3d', 'flash-attention', 'nvdiffrast', 'nvdiffrec', 'CuMesh', 'FlexGEMM', '../o-voxel']
+    (runtime_patch or patch_runtime)(source_root, profile)
+    packages = packages or ['utils3d', 'flash-attention', 'nvdiffrast', 'nvdiffrec', 'CuMesh', 'FlexGEMM', '../o-voxel']
     for package in packages:
         directory = source_root / 'deps' / package
-        patch_build(directory, package, profile)
+        (build_patch or patch_build)(directory, package, profile)
         print('[setup] Building ' + package, flush=True)
         run([python, '-m', 'pip', '--isolated', 'install', '--disable-pip-version-check',
              '--no-index', '--no-deps', '--no-build-isolation', '--no-cache-dir', directory],
             cwd=directory, env=env)
+    for package in optional_packages:
+        directory = source_root / 'deps' / package
+        (build_patch or patch_build)(directory, package, profile)
+        try:
+            run([python, '-m', 'pip', '--isolated', 'install', '--disable-pip-version-check',
+                 '--no-index', '--no-deps', '--no-build-isolation', '--no-cache-dir', directory],
+                cwd=directory, env=env)
+        except subprocess.CalledProcessError:
+            # An optional native build must not leave a half-working module discoverable.
+            run([python, '-m', 'pip', '--isolated', 'uninstall', '--yes', package], env=env)
+            print('[setup] ' + package + ' did not build; using the documented degraded path.', flush=True)
     env['PYTHONPATH'] = str(source_root)
-    inventory = json.loads(run([python, '-c', VERIFY], env=env, capture_output=True).stdout.splitlines()[-1])
+    inventory = json.loads(run([python, '-c', verify or VERIFY], env=env, capture_output=True).stdout.splitlines()[-1])
     run([python, '-m', 'pip', '--isolated', 'check'], env=env)
     record = {**profile, 'toolchain': toolchain, 'installed': inventory,
               'wheelHeaderDirectories': [path.relative_to(prefix).as_posix() for path in headers],
               'lockSha256': {name: digest(SCRIPTS / name) for name in locks}}
     (prefix / 'portos-profile.json').write_text(json.dumps(record, indent=2) + '\n')
     installing.unlink()
-    print('[setup] TRELLIS.2 CUDA native imports and locked profile verified.', flush=True)
+    print('[setup] ' + profile.get('label', 'TRELLIS.2 CUDA') + ' native imports and locked profile verified.', flush=True)
 
 
 def main():

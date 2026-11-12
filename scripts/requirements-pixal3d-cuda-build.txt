@@ -1,0 +1,3 @@
+-r requirements-trellis2-cuda-build.txt
+-c requirements-trellis2-cuda-build.lock.txt
+cmake

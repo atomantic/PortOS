@@ -1,0 +1,8 @@
+# CLI runtime for the pinned Pixal3D, MoGe and NAF sources.
+-r requirements-trellis2-cuda.txt
+-c requirements-trellis2-cuda.lock.txt
+diffusers
+accelerate
+click
+matplotlib
+utils3d @ https://github.com/LDYang694/Storages/releases/download/20260430/utils3d-0.0.2-py3-none-any.whl#sha256=ff63440827d6933807dd06c8a5a2db7e51fd5f33c7f3dddcc766a80e0f419252
