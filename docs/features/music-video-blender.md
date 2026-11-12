@@ -223,8 +223,11 @@ Rendering many shots at once takes a scope: **Missing or out of date** (the defa
 complete, current render), **Out of date only** (renders that exist and went stale; a shot never rendered is left
 out), or **Every shot** (re-renders current ones too).
 
-Jobs run one shot at a time per Blender process, in the order queued. A PortOS restart forgets queued jobs; the
-frames already rendered stay.
+Jobs run one shot at a time per Blender process, in the order queued. Preview and final batches are remembered
+on this machine in `renders/pending.json` and resume 15 seconds after a restart, skipping completed shots and
+reusing partial frames. Automatic recovery stops after two restarts, or if the tool is unavailable or the film
+needs syncing; the server logs the project and remaining shot count. Cancel removes pending work. Stills are
+not resumed. Completed, failed and canceled shots are removed from the marker; an empty batch leaves no marker.
 
 ### What the pipeline still requires
 

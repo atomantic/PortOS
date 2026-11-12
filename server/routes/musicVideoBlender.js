@@ -114,12 +114,12 @@ router.post('/:id/blender/render', asyncHandler(async (req, res) => {
 
 router.post('/:id/blender/jobs/:jobId/cancel', asyncHandler(async (req, res) => {
   const { cancelBlenderJob } = await import('../services/musicVideo/blender/queue.js');
-  res.json({ ok: cancelBlenderJob(req.params.id, req.params.jobId) });
+  res.json({ ok: await cancelBlenderJob(req.params.id, req.params.jobId) });
 }));
 
 router.post('/:id/blender/cancel', asyncHandler(async (req, res) => {
   const { cancelBlenderProjectJobs } = await import('../services/musicVideo/blender/queue.js');
-  res.json({ ok: cancelBlenderProjectJobs(req.params.id) });
+  res.json({ ok: await cancelBlenderProjectJobs(req.params.id) });
 }));
 
 router.post('/:id/blender/cut', asyncHandler(async (req, res) => {

@@ -1739,7 +1739,8 @@ export async function recoverStuckMusicVideoRenders() {
     console.warn(`⚠️ Music Video recovery: could not remove partial shot segments: ${err.message}`);
   });
   const instanceId = await ensureInstanceId();
-  const stuck = (await listProjects()).filter((p) => p?.status === 'rendering'
+  const projects = await listProjects();
+  const stuck = projects.filter((p) => p?.status === 'rendering'
     && !projectRenders.has(p.id) && isLocalRenderMark(p.renderingOn, instanceId));
   // Filenames the video history references, loaded on first need: a render
   // whose history append landed but whose 'complete' write failed still names
@@ -1777,7 +1778,8 @@ export async function recoverStuckMusicVideoRenders() {
     if (partialPath) await unlink(partialPath).catch(() => {});
   }
   if (stuck.length > 0) console.log(`🎬 Music Video boot recovery: demoted ${recovered}/${stuck.length} stuck render(s)`);
-  if (resumes.length > 0) scheduleRenderResumes(resumes);
+  const blenderProjectIds = projects.filter((project) => project.composition?.mode === 'blender').map((project) => project.id);
+  if (resumes.length || blenderProjectIds.length) scheduleRenderResumes(resumes, blenderProjectIds);
 }
 
 // A shot-by-shot final render the user started is started again after a
@@ -1787,10 +1789,12 @@ export async function recoverStuckMusicVideoRenders() {
 const MAX_RENDER_RESUMES = 2;
 const RENDER_RESUME_DELAY_MS = 15_000;
 
-function scheduleRenderResumes(resumes) {
+function scheduleRenderResumes(resumes, projectIds) {
   // After boot settles (maintenance admission, the media lane): the render
   // admits like any other.
   setTimeout(async () => {
+    if (projectIds.length) await import('./blender/queue.js').then(({ resumePendingBlenderRenders }) => resumePendingBlenderRenders(projectIds, MAX_RENDER_RESUMES))
+      .catch((err) => console.error(`❌ Blender boot recovery could not start: ${err.message}`));
     for (const { projectId, attempt } of resumes) {
       try {
         const { jobId } = await renderMusicVideo(projectId, { resumable: true, resumeAttempt: attempt });
