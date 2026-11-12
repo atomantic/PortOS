@@ -1647,7 +1647,9 @@ function ProjectWorkspace({
     : reviewDraft
       ? { id: 'review-imported', kind: 'goto', stage: 'review', label: 'Review imported draft', shortLabel: 'Review draft' }
       : { id: 'review-files', kind: 'open', label: 'Choose review file', shortLabel: 'Choose file' }
-    : productionNextAction;
+    : productionNextAction?.id === 'build-publish-kit' && publishKit.building
+      ? { ...productionNextAction, disabled: true, label: 'Building publishing kit…' }
+      : productionNextAction;
   // What the server holds that this tab might not be showing (#9940): derived
   // from the saved record, so it survives a reload. Work this tab can see
   // progressing (spinning sections, an attached render) is not flagged.
@@ -1675,7 +1677,12 @@ function ProjectWorkspace({
   // "Keep approved" on a stale approval: the Cast & Sets check-in is re-stamped on its
   // current inputs; a production approval is given again on the current revision.
   const keepApproval = (stage) => (stage === 'castAndSets' ? castSets.reconfirm() : productionReview.approve(stage));
+  const buildPublishKit = () => {
+    goToStage('publish', 'mv-publish-kit');
+    if (selected.renderHistoryId && !publishKit.building && !creativeSetupPending && !styleReferencesPending && compositionSavePending === 0) publishKit.build();
+  };
   const runChecklistAction = (action) => {
+    if (action.run === 'build-publish-kit') { buildPublishKit(); return; }
     if (action.run === 'start-cast-sets') { castSets.start(); return; }
     if (action.run === 'resume-cast-sets') { castSets.resume(); return; }
     if (action.run === 'prepare-art') { productionReview.prepare(); return; }
@@ -1692,6 +1699,7 @@ function ProjectWorkspace({
     if (nextAction.id === 'review-imported') { openArtifact(reviewDraft.artifactId); return; }
     if (nextAction.id === 'review-files') { setSettingsTab('files'); return; }
     if (nextAction.id === 'review-autonomous') { setSettingsTab('autopilot'); return; }
+    if (nextAction.id === 'build-publish-kit') { buildPublishKit(); return; }
     if (nextAction.kind === 'goto') { goToStage(nextAction.stage, nextAction.anchor); return; }
     switch (nextAction.id) {
       case 'kickoff': handleKickoff(); break;
@@ -1977,7 +1985,7 @@ function ProjectWorkspace({
               <StageChecklist
                 items={stageChecklist(activeStage, stageProject, productionReview.readiness, publish)}
                 onAction={runChecklistAction}
-                busy={castSets.busy || productionReview.busy}
+                busy={castSets.busy || productionReview.busy || publishKit.building}
                 onRevert={productionReview.revert}
                 headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
               />

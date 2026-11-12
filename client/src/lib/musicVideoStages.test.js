@@ -134,7 +134,7 @@ describe('deriveStages / deriveNextAction', () => {
     const finished = { ...ready, renderHistoryId: 'rh-1' };
     expect(stateOf(finished)).toEqual({ setup: 'done', story: 'todo', 'cast-sets': 'done', board: 'done', previz: 'todo', produce: 'done', review: 'done', publish: 'active' });
     // #9281: a rendered project moves on to the release.
-    expect(deriveNextAction(finished)).toMatchObject({ id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Build the publishing kit' });
+    expect(deriveNextAction(finished)).toMatchObject({ id: 'build-publish-kit', kind: 'run', stage: 'publish', label: 'Build the publishing kit' });
     // With the kit built, the header names one platform at a time: the next one not yet posted.
     const kitBuilt = { ...finished, publishKit: { builtAt: '2026-01-01T00:00:00.000Z', posts: { youtube: { url: 'https://example.com/v' } } } };
     const publish = { targets: [{ target: 'youtube', label: 'YouTube' }, { target: 'distrokid', label: 'Spotify (via DistroKid)' }] };

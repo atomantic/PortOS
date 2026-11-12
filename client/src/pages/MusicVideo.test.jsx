@@ -359,7 +359,7 @@ import {
   updateMusicVideoExcerptNote, deleteMusicVideoExcerptNote, getMusicVideoProject, getMusicVideoActiveRender, getMusicVideoActiveJobs,
   startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision,
   linkMusicVideoCastAndSetsToCatalog, approveMusicVideoCastAndSets, stopMusicVideoProduction,
-  getMusicVideoPublishPlatforms, draftMusicVideoPublishCopy,
+  getMusicVideoPublishPlatforms, draftMusicVideoPublishCopy, buildMusicVideoPublishKit,
   renderMusicVideoSceneFrame, getMusicVideoBlender,
 } from '../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
@@ -3495,12 +3495,23 @@ describe('MusicVideo stage tabs (#9243)', () => {
       expect(within(banner).getByText('Production needs you')).toBeTruthy();
     });
 
+    it('starts the kit from the publish checklist with one click and prevents duplicate builds', async () => {
+      await openProject({ ...PROJECT_WITH_CLIP, renderHistoryId: 'rh-9' }, 'publish');
+      expect(buildMusicVideoPublishKit).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Build the kit' }));
+      await waitFor(() => expect(buildMusicVideoPublishKit).toHaveBeenCalledTimes(1));
+      expect(buildMusicVideoPublishKit).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { silent: true });
+      expect(screen.getByRole('button', { name: 'Build the kit' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /Build publishing kit/ })).toBeDisabled();
+    });
+
     it('takes a finished project on to its release (#9281)', async () => {
       await openProject({ ...PROJECT_WITH_CLIP, audioAnalysis: PROJECT_ANALYZED.audioAnalysis, renderHistoryId: 'rh-9' }, 'produce');
       fireEvent.click(screen.getByRole('button', { name: 'Build the publishing kit' }));
       await waitFor(() => expect(selectedTab()).toHaveTextContent(/^Publish/));
       expect(screen.getByRole('region', { name: 'Release assets' })).toBeTruthy();
-      expect(screen.getByRole('button', { name: /Build publishing kit/ })).not.toBeDisabled();
+      await waitFor(() => expect(buildMusicVideoPublishKit).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { silent: true }));
+      expect(screen.getByRole('button', { name: /Build publishing kit/ })).toBeDisabled();
     });
   });
 
