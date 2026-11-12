@@ -2129,3 +2129,50 @@ UI; browser display and missing-date UI semantics were not tested.
 All 34 focused Pixal installer, runtime and lock-profile tests pass. No native
 geometry, model weights, generation quality, live instance data or external
 provider calls are involved. Pandas 3 remains a separate migration.
+
+## Thirty-eighth-slice Pixal Metal Pandas migration (2026-11-12)
+
+This separate slice updates only Pandas 2.3.3 → 3.1.1. Python 3.13, NumPy 2.2.6,
+the reviewed dateutil/Pytz/TZData family, Gradio 6.31.0/client 2.7.2 and every
+native/model/source pin remain unchanged. Pandas 3.1.1 permits NumPy >=2.0.2 on
+this interpreter. Gradio allows Pandas >=1,<4; Pytz remains installed for its
+independent Gradio consumer despite Pandas 3 dropping that base dependency.
+
+Use verified uv 0.13.7, cutoff `2026-11-05T00:00:00Z`, and the existing full
+Python 3.13 / arm64 / macOS 26 compilation recipe and Pillow override. Change
+only the direct Pandas pin, compile to a scratch lock, verify the complete
+resolved package set and replace only the Pandas block in the prior lock.
+All 95 companion blocks remain byte-identical. The final 96-distribution wheel
+lock has 1,225 hashes. Official artifact/yank/cooldown checks and all 110 OSV/MAL
+queries (96 registry identities, ten retained source identities and four Git
+commits) are clean. The full dependency-aware hash-required target plan passes
+with the unchanged, hashed Pillow override. All 34 focused Pixal installer,
+runtime and lock-profile tests pass.
+
+Exact hash-installed native Python 3.13 plot/data and retained-web subclosures
+compare against the prior timezone candidate environments without mutating them.
+Actual frozen Pixal `StandardDatasetBase` metadata assembly and
+`StructuredLatent` filtering run in explicit AST isolation: object/list roots,
+base aesthetic-score assignment, first-source precedence, concatenation/indexing,
+skip lists, missing-token filtering and Unicode/JSON/CSV records retain the same
+instances and statistics. Inferred text changes from `object` to Pandas' `str`
+dtype; a standalone Series write no longer mutates its parent under Copy-on-Write.
+The exercised source paths need no adaptation. These are metadata tests, not
+full training imports, tensor/device execution or model-generation validation.
+
+Actual Gradio tests cover queue grouping/percentiles/missing values, dataframe
+CSV/date preprocessing, response JSON, native line-plot dtype detection,
+Matplotlib serialization and cache hashing. Copy equality and invalidation on
+value/column/index changes pass. Response serialization preserves the verified
+`NaT` → `"NaT"` and missing-number → null behavior; unsupported direct Pydantic
+JSON helpers are not treated as a serving contract. Copy-on-Write isolation is
+also checked with the option explicitly enabled on the baseline and the default
+on Pandas 3. The only web dependency-check conflict remains the documented
+Gradio/Pillow 13 mismatch; no compatibility workaround or source patch is added.
+
+The date probes explicitly record another intentional API change: Pandas 3
+raises built-in `ValueError` for ambiguous/nonexistent `tz_localize` inputs,
+rather than Pandas 2's Pytz exception classes. Both versions refuse those inputs;
+explicit disambiguation and shift-forward behavior are tested separately.
+Frozen Pixal has no `tz_localize` calls or catches for those Pytz exceptions,
+so no source adaptation is required for this difference.
