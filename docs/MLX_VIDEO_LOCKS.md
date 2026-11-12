@@ -173,3 +173,31 @@ existing explicit companion in this bounded update. All unchanged blocks must
 remain byte-identical. Audit every resulting artifact and OSV/MAL response,
 then repeat full hashed native installs and the actual helper-consumer checks
 documented in [the runtime refresh record](PYTHON_RUNTIME_REFRESH.md).
+
+### Coordinated LTX Hub transport refresh (2026-11-12)
+
+This refresh applies only to LTX-2.3 and LTX-2.5, not Wan. The immutable
+MLX-Gen source requires `huggingface-hub>=1.1.6,<2.0`; changing that source
+contract is a separate migration. Both LTX sources permit Hub 2 with their
+existing mlx-lm versions. Keep every source, MLX/Metal, model-library and build
+pin unchanged.
+
+Reuse the verified LTX project-input extraction and compile command above,
+including the explicit Click input. Before writing the complete companion
+constraints, replace the bounded helper-update block with:
+
+```python
+for name in ("httpx", "httpcore", "certifi"):
+    pins.pop(name, None)
+pins.update({"huggingface-hub": "2.4.0", "transformers": "5.22.1",
+             "hf-xet": "1.6.0", "httpx2": "2.16.0",
+             "httpcore2": "2.16.0", "truststore": "0.10.5"})
+```
+
+Tokenizers remains 0.23.3. Hub 2.4 requires hf-xet `>=1.6,<2`, so the previous
+1.4.2 pin cannot be retained. No remaining LTX inference dependency or inspected
+source consumer requires the old HTTPX/HTTPCore/Certifi closure. Keep the
+verified uv 0.13.7 and November 5 cutoff, audit every artifact, and confirm all
+30 unchanged companion blocks per profile are byte-identical. Validation must
+exercise the frozen Gemma source/loaders and the native Xet transfer boundary;
+an HTTP-only fixture or import check does not prove Xet transfers.

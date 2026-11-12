@@ -1542,3 +1542,72 @@ All 132 focused runner/profile/security-service tests passed without skips.
 Independent review, final committed-tree pregate and exact-head hosted CI
 remain required before merge. Synthetic models establish API compatibility,
 not production screening accuracy or policy calibration.
+
+## Twenty-seventh-slice LTX MLX Hub transport migration (2026-11-12)
+
+LTX-2.3 and LTX-2.5 move **Hugging Face Hub 1.7.1 → 2.4.0** together with
+**Transformers 5.17.0 → 5.22.1**. Tokenizers stays **0.23.3**. Hub 2.4 requires
+**hf-xet 1.4.2 → 1.6.0**; keeping 1.4.2 makes the solve unsatisfiable. The
+transport replaces HTTPX 0.28.1 / HTTPCore 1.0.9 / Certifi with **HTTPX2 2.16.0 /
+HTTPCore2 2.16.0 / Truststore 0.10.5**. No remaining selected LTX dependency or
+inspected source consumer needs the old transport.
+
+The frozen source revisions, build locks and **30 companion package blocks per
+profile** are unchanged, including MLX/Metal **0.31.1 / 0.32.0** and mlx-lm
+**0.31.1 / 0.31.3** respectively. **Wan is not migrated**: its immutable MLX-Gen
+revision `2452f0c12edcc8886eebf15772205ce9c417a618` explicitly requires
+`huggingface-hub>=1.1.6,<2.0`. That source constraint must be addressed separately,
+not bypassed by overriding a dependency lock.
+
+Both complete 36-package locks were compiled from the verified source dependency
+arrays with exact companion constraints, verified **uv 0.13.7**, wheels only and
+cutoff `2026-11-05T00:00:00Z`. LTX-2.3 has **670 hashes** and LTX-2.5 **678**.
+All hashes match unyanked pre-cutoff artifacts; complete OSV/MAL responses for
+**39 distinct package/version pairs** returned zero findings with count/error/
+pagination checks. Unchanged blocks retain their exact markers and hash sets.
+All four baseline/candidate native Python **3.11.18** environments installed the
+full hashed registry lock and passed dependency checks. Xet's old/new arm64
+wheels both support macOS 11+ and Python 3.11; bundled native libraries are not
+separately vulnerability-audited.
+
+Real frozen-source comparisons passed without Torch or model-library upgrades:
+
+- Actual Gemma source loading through mlx-lm, tokenizer/left-padding behavior,
+  all-layer hidden states, cached model forward and short enhancement generation
+  used local synthetic tiny Gemma3/Gemma4 checkpoints. Old/new IDs, masks, hidden
+  states and logits matched exactly. The Gemma4 fixture explicitly overrides
+  expected test dimensions, then checks architecture refusal; it does not certify
+  production dimensions or quality.
+- PortOS's oversized-prompt refusal and source-lifecycle digest checks passed;
+  source Python hashes remained unchanged. No sampler, audio or video generation
+  was tested or changed.
+- Actual model and LoRA source resolvers exercised local bypass and remote
+  snapshot selection. Empty LoRA repositories were refused. The orchestration
+  resolver rejected ambiguous files, while the legacy resolver preserved its
+  existing warning/first-file behavior.
+- Direct Hub fixtures covered revision/pattern filtering, matching-pattern
+  offline cache reuse, misses, exact-byte interruption/resume and typed errors.
+  Hub 2 additionally refuses unfiltered offline access to an incomplete filtered
+  snapshot; the source resolvers use unfiltered downloads and are unaffected.
+- Candidate HTTPX2 defaults used Truststore with certificate/hostname checks.
+  Wrong/untrusted local CAs failed verification; an explicitly loaded ephemeral
+  fixture CA permitted HTTPS and actual Hub downloads without OS trust changes.
+
+Xet was tested separately from HTTP fallback. Unmodified `hf_hub_download`
+entered Hub's Xet path and the actual native Rust extension, reconstructed a
+nonempty local CAS fixture through a ranged xorb fetch and produced the exact
+23 bytes in all four environments. Old Xet used v1 reconstruction and the new
+version used v2. Native CAS refusal propagated without silent HTTP fallback or
+a falsely completed cache entry, including the new v2-to-v1 refusal fallback.
+These are real native transfer/API tests, not mocked extension calls. Fixture
+hash identifiers are synthetic, so this does **not** validate cryptographic
+integrity handling. Attempts using a small public documentation image stopped
+before transfer because of connectivity failures; no live public CAS/TLS claim
+is made. Hub's wrapper accommodates the changed Xet download/session API.
+
+**298** focused installer/profile/LTX runner tests passed without skips. All
+fixtures isolated caches and disabled implicit tokens/telemetry; no account
+credentials, external uploads, production weights, live providers or device
+inputs were used. Full video/audio quality and source-build validation remain
+outside this transport slice. The exact regeneration recipe and retained Wan
+constraint are recorded in [MLX_VIDEO_LOCKS.md](MLX_VIDEO_LOCKS.md).
