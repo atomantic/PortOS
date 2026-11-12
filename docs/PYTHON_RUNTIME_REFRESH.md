@@ -2176,3 +2176,88 @@ rather than Pandas 2's Pytz exception classes. Both versions refuse those inputs
 explicit disambiguation and shift-forward behavior are tested separately.
 Frozen Pixal has no `tz_localize` calls or catches for those Pytz exceptions,
 so no source adaptation is required for this difference.
+
+## Thirty-ninth-slice coordinated 3D Metal model and Hub transport (2026-11-12)
+
+Pixal3D and TRELLIS.2 advance Hugging Face Hub 1.16.4 to 2.4.0,
+Transformers 5.10.1 to 5.22.1, Tokenizers 0.22.2 to 0.23.3 and Typer
+0.25.1 to 0.27.3. Pixal also advances Diffusers 0.38.0 to 0.42.1 because
+its previous Hub upper bound excludes Hub 2. Both closures add HTTPX2 and
+HTTPCore2 2.16.0 with Truststore 0.10.5, and advance native hf-xet 1.5.0
+only to Hub's minimum required 1.6.0. Pixal retains independent HTTPX,
+HTTPCore, Certifi and Requests consumers. TRELLIS removes its now-orphaned
+HTTPX, HTTPCore and Certifi; its installed source/runtime has no independent
+consumer of those packages. No source/model revisions, Torch, NumPy,
+renderer/native pins or installer behavior change. The explicit Pixal
+Pillow 13 CLI-only override remains unchanged.
+
+The complete Pixal lock contains 99 identities and 1,274 hashes; TRELLIS
+contains 56 identities and 458 hashes. All 90 and 48 respective surviving
+companion versions, markers and complete artifact sets are unchanged.
+Every hash maps to an official, unyanked artifact before the November 5
+cutoff. The union contains 100 registry identities and 1,278 hashes;
+123 OSV/MAL queries covering those identities, ten source-package identities
+and thirteen source commits returned no findings. Both documented recipes
+reproduce their complete lock bodies and both macOS 26 arm64/Python 3.13
+hash-required dry-sync plans pass.
+
+Native Python 3.13.18 tests use exact full-lock artifact blocks in bounded
+baseline/candidate subclosures: Pixal 46/47 packages and TRELLIS 40/40.
+All four dependency checks pass. These are not full renderer installations.
+Offline synthetic fixtures exercise actual installed APIs and immutable
+source callers:
+
+- Tiny saved DINOv3 checkpoints through Pixal's actual projected feature
+  extractor and projection-grid functions, and TRELLIS's actual extractor
+  with its existing pinned Metal patch. CPU/MPS outputs, shapes and refusals
+  pass, with zero baseline/candidate numerical difference.
+- Actual image preprocessing and FlowEuler sampler bodies with a synthetic
+  vector field, plus Pixal's
+  real Diffusers AutoencoderKL loading and CPU/MPS encode/decode using a
+  tiny shared random checkpoint. Unrelated distributed-training imports
+  are excluded when selecting isolated source definitions, not replaced
+  DINO or autoencoder forwards.
+- Both actual BiRefNet wrapper classes, including the existing TRELLIS
+  Metal device patch, load an authored local dynamic segmentation model
+  through AutoModelForImageSegmentation. Real normalization, forward,
+  sigmoid and alpha compositing produce identical baseline/candidate
+  pixels on CPU/MPS; missing model loading refuses. The synthetic one-layer
+  model does not validate production BiRefNet remote code or weights.
+- Real CLIP tokenizer Unicode, offsets, masks, padding and save/reload
+  equality, plus tiny shared-checkpoint CLIPTextModel CPU/MPS numerical
+  parity. This is API compatibility evidence, not execution of upstream
+  CUDA-only text-training mixins or a claim of Metal text training.
+- Actual source model/pipeline loading with synthetic safetensors/configs,
+  local cache loading and malformed configuration refusal; the PortOS Hub
+  downloader's filtering, progress markers, resume/cache and typed errors.
+- Actual old/new native Xet nonempty CAS reconstruction and missing-object
+  refusal, without HTTP fallback. The CAS fixture uses synthetic hashes and
+  does not establish content-integrity verification. Candidate default Truststore verifies
+  a fixture CA and rejects untrusted/wrong-CA TLS. No system trust changes.
+- The installed `hf` help/download help/invalid-command boundary and a
+  real Typer Unicode command, rather than relying on private CLI types.
+
+A separate 54-package exact candidate web subclosure reruns real Gradio,
+FastAPI, Uvicorn and client request/file/queue/stream/refusal probes, including
+immutable Pixal configuration/progress/preprocessing handlers with a synthetic
+model double. Its dependency check has only the existing Gradio/Pillow
+metadata exception. Analytics are disabled and non-loopback sockets refused.
+All 195 focused installer, profile, Pixal/TRELLIS service and runner tests
+pass without memo skips. No production weights, user data, live providers,
+complete image-to-GLB inference or screening-quality claims are involved.
+Independent review and final committed-tree pregate are required before
+publication; exact-head hosted checks remain required before merging.
+
+The combined candidate retains the reviewed Pandas 3.1.1 and date/timezone
+slices exactly. Every model/transport upgrade block remains identical to
+this slice's original reviewed candidate; the complete TRELLIS input and
+lock are unchanged. Full recipes, supported-target plans and the union audit
+were repeated on the combined locks. A fresh 79-package exact-hash Pixal
+model/web/plot subclosure exercises their shared imports together, with only
+the same documented Gradio/Pillow metadata exception. Actual DINO, VAE,
+segmentation and tokenizer outputs exactly match the prior reviewed candidate.
+The downloader/cache/error, Gradio request/client/file/stream/refusal and
+Pandas/date/plot/source-metadata probes were rerun against the combined
+versions. This adds affected-boundary integration evidence, not a full
+native renderer claim; unchanged TRELLIS/native-Xet/TLS evidence remains
+applicable through exact package/source/artifact equality.
