@@ -829,6 +829,7 @@ describe('MoodBoardDetail layout', () => {
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
     const tools = screen.getByRole('complementary', { name: 'Board tools' });
+    fireEvent.click(screen.getByText('Board prompt', { selector: 'summary' }));
     const field = screen.getByLabelText('Board prompt');
     expect(tools).toContainElement(field);
     expect(field.tagName).toBe('TEXTAREA');
@@ -846,6 +847,7 @@ describe('MoodBoardDetail layout', () => {
     mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', description: 'My direction', items: [], style: { prompt: 'Soft painted light' } });
     renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    fireEvent.click(screen.getByText('Board prompt', { selector: 'summary' }));
     const field = screen.getByLabelText('Board prompt');
     fireEvent.change(field, { target: { value: 'Unsaved direction' } });
     fireEvent.click(screen.getByRole('button', { name: 'Use style as Board prompt' }));
@@ -863,6 +865,7 @@ describe('MoodBoardDetail layout', () => {
     mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', description: '', items: [], style: { prompt: 'x'.repeat(5001) } });
     renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+    fireEvent.click(screen.getByText('Board prompt', { selector: 'summary' }));
     expect(screen.getByRole('button', { name: 'Use style as Board prompt' })).toBeDisabled();
     expect(screen.getByText(/Shorten the Style prompt to 5,000/)).toBeInTheDocument();
     expect(screen.getByLabelText('Board prompt')).toHaveValue('');
