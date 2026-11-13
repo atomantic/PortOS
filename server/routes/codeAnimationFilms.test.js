@@ -1,7 +1,7 @@
 /** HTTP workflows through the real film engine; only storage and native processes are doubled. */
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
 import express from 'express';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, symlinkSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -22,6 +22,9 @@ vi.mock('../services/codeAnimation/projectStore.js', () => ({
   }),
 }));
 vi.mock('../services/socket.js', () => ({ emitCodeAnimationChanged: vi.fn(), emitCodeAnimationFilm: vi.fn() }));
+vi.mock('../services/musicVideo/catalogLinks.js', () => ({ queueProjectCatalogLinkSync: vi.fn() }));
+vi.mock('../services/musicVideo/shotSegments.js', () => ({ removeProjectSegments: vi.fn(async () => {}) }));
+vi.mock('../services/sharing/recordEvents.js', () => ({ emitRecordUpdated: vi.fn(), emitRecordDeleted: vi.fn(), autoSubscribeRecordToAllPeers: vi.fn(async () => {}) }));
 vi.mock('../services/videoGen/history.js', () => ({ mutateVideoHistory: vi.fn(async change => { state.history = change(state.history); }) }));
 vi.mock('../services/codeAnimation/execution.js', () => ({
   getCodeAnimationExecution: (...args) => state.blender.getCodeAnimationExecution(...args),
@@ -41,6 +44,9 @@ vi.mock('../services/promptRunner.js', () => ({ runPromptThroughProvider: vi.fn(
 vi.mock('../services/auth.js', async load => ({ ...await load(), isAuthEnabled: vi.fn(async () => false), verifyRequestSession: vi.fn(async () => false) }));
 
 import routes from './codeAnimationFilms.js';
+import musicVideoBlenderRoutes from './musicVideoBlender.js';
+import { getTrack } from '../services/tracks/index.js';
+import { mutateFilmProject } from '../services/codeAnimation/projectStore.js';
 import { authGate, hostControlRouteGate, hostControlBodyGate } from '../services/authGate.js';
 import { listBlenderJobs, __resetBlenderJobsForTests } from '../services/film/jobs.js';
 import { runPromptThroughProvider } from '../services/promptRunner.js';
@@ -51,7 +57,8 @@ const appFor = (address = '127.0.0.1') => {
   const app = express();
   app.use((req, _res, next) => { Object.defineProperty(req.socket, 'remoteAddress', { value: address }); next(); });
   app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
-  app.use('/api/code-animation/films', routes); app.use(errorMiddleware);
+  app.use('/api/code-animation/films', routes);
+  app.use('/api/music-video', musicVideoBlenderRoutes); app.use(errorMiddleware);
   return app;
 };
 const app = appFor();
@@ -66,7 +73,10 @@ const settled = jobs => vi.waitFor(() => {
 }, { timeout: 20000, interval: 20 });
 
 beforeEach(() => {
-  cleanupTempDataRoots(); __resetBlenderJobsForTests(); vi.clearAllMocks();
+  __resetBlenderJobsForTests(); vi.clearAllMocks();
+  // The real Music Video file store captures its root at import time. Keep that
+  // root stable across cases so later writes cannot recreate a removed old root.
+  for (const entry of readdirSync(ROOT())) rmSync(join(ROOT(), entry), { recursive: true, force: true });
   state.projects.clear(); state.history = []; state.ffmpeg = []; state.beforeFfmpeg = null;
   state.blender = createFakeBlender(); state.blender.control.manifest = exampleManifest();
 });
@@ -181,5 +191,92 @@ it('refreshes silent song context with timeline edits and refuses an unwritable 
   unlinkSync(songPath); symlinkSync(join(ROOT(), 'elsewhere.json'), songPath);
   const refused = await request(app).patch(base()).send({ timeline: { durationSec: 15, fps: 24 } });
   expect(refused.status).toBe(400);
+  expect(state.projects.get(id)).toEqual(original);
+});
+
+// Catches cross-store promotion reusing source timing/output or sharing mutable source files.
+it('promotes twice with independent sources/options, unsynced song timing and no new work, while the source still renders', async () => {
+  await create(); await scaffoldAndSync();
+  mkdirSync(join(ROOT(), 'music'), { recursive: true }); writeFileSync(join(ROOT(), 'music', 'example.wav'), 'audio');
+  getTrack.mockResolvedValue({ id: 'track', audioFilename: 'example.wav', durationSec: 9 });
+  const sourceDir = join(ROOT(), 'code-animation', 'films', id);
+  mkdirSync(join(sourceDir, 'renders', 'cuts'), { recursive: true });
+  writeFileSync(join(sourceDir, 'renders', 'cuts', 'preview-source.mp4'), 'source output');
+  const manifestPath = join(sourceDir, 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestPath));
+  manifest.options = [{ key: 'color', type: 'text', default: 'blue', label: 'Color' }];
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  expect((await request(app).put(api('/settings')).send({ options: { color: 'red' } })).status).toBe(200);
+  expect((await request(app).put(api('/shots/s010/note')).send({ text: 'Source note' })).status).toBe(200);
+  const original = structuredClone(state.projects.get(id));
+  const songBefore = readFileSync(join(sourceDir, 'song.json'), 'utf8');
+  const jobsBefore = [...state.blender.control.jobs];
+  const first = await post(`${base()}/promote`, { trackId: 'track', name: 'Song version' });
+  expect(first.status, JSON.stringify(first.body)).toBe(201);
+  expect(first.body).toMatchObject({ needsAnalysis: true, needsSync: true, coverageDurationSec: 9,
+    project: { name: 'Song version', trackId: 'track', composition: { mode: 'blender' }, audioAnalysis: null, scenes: [],
+      sourceFilm: { kind: 'code-animation', projectId: id }, blender: { syncedAt: null, notes: {}, sceneMap: {}, settings: { options: { color: 'red' } } } } });
+  expect(first.body.coverageProblems.join(' ')).toContain('after 6 s');
+  const second = await post(`${base()}/promote`, { uploadedAudioFilename: 'example.wav' });
+  expect(second.status, JSON.stringify(second.body)).toBe(201);
+  expect(second.body.project.id).not.toBe(first.body.project.id);
+  expect(second.body.project).toMatchObject({ name: original.title, uploadedAudioFilename: 'example.wav', audioAnalysis: null });
+  expect(second.body.coverageProblems.join(' ')).toContain('Analyze the song');
+  const targetDir = join(ROOT(), 'music-video', first.body.project.id, 'blender');
+  const secondDir = join(ROOT(), 'music-video', second.body.project.id, 'blender');
+  expect(existsSync(join(targetDir, 'renders'))).toBe(false);
+  expect(readFileSync(join(targetDir, 'src', 'film.py'), 'utf8')).toBe(readFileSync(join(sourceDir, 'src', 'film.py'), 'utf8'));
+  expect(JSON.parse(readFileSync(join(targetDir, 'manifest.json')))).toEqual({ ...manifest, syncedAt: null });
+  expect(JSON.parse(readFileSync(join(targetDir, 'song.json')))).toMatchObject({ projectId: first.body.project.id, durationSec: 0 });
+  const targetApi = `/api/music-video/${first.body.project.id}/blender`;
+  const targetState = (await request(app).get(targetApi)).body;
+  expect(targetState).toMatchObject({ manifest: { syncedAt: null }, jobs: [], cuts: [], renders: {}, notes: {} });
+  expect(targetState.manifest.problems.join(' ')).toContain('has not been synced');
+  expect((await post(`${targetApi}/render`, { quality: 'still' })).body.code).toBe('MUSIC_VIDEO_BLENDER_NOT_SYNCED');
+  expect(state.blender.control.jobs).toEqual(jobsBefore);
+  expect(analyzeAudioFile).not.toHaveBeenCalled(); expect(runPromptThroughProvider).not.toHaveBeenCalled();
+  writeFileSync(join(targetDir, 'src', 'film.py'), '# target edit');
+  expect(readFileSync(join(secondDir, 'src', 'film.py'), 'utf8')).not.toBe('# target edit');
+  expect(state.projects.get(id)).toEqual({ ...original, promotedTo: second.body.project.id });
+  expect(readFileSync(join(sourceDir, 'song.json'), 'utf8')).toBe(songBefore);
+  expect(JSON.parse(readFileSync(manifestPath))).toEqual(manifest);
+  // After analysis the normal sync replaces the copied inventory and maps the new Board.
+  const { setProjectAnalysis } = await import('../services/musicVideo/projects.js');
+  await setProjectAnalysis(first.body.project.id, { durationSec: 6, bpm: 120, beats: [], downbeats: [], sections: [] });
+  const synced = await post(`${targetApi}/sync`);
+  expect(synced.status).toBe(202);
+  await vi.waitFor(() => expect(listBlenderJobs({ kind: 'music-video', id: first.body.project.id }).find(job => job.id === synced.body.job.id)?.status).toBe('done'));
+  const current = (await request(app).get(targetApi)).body;
+  expect(current.manifest.syncedAt).toBeTruthy();
+  expect(current.manifest.shots.every(shot => shot.sceneId)).toBe(true);
+  const rendered = await post(api('/render'), { quality: 'still', shotIds: ['s010'] });
+  expect(rendered.status).toBe(202); await settled(rendered.body.jobs);
+});
+
+it('removes an incomplete promotion when source lineage cannot be saved', async () => {
+  await create(); await scaffoldAndSync();
+  mkdirSync(join(ROOT(), 'music'), { recursive: true }); writeFileSync(join(ROOT(), 'music', 'example.wav'), 'audio');
+  const original = structuredClone(state.projects.get(id));
+  mutateFilmProject.mockRejectedValueOnce(new Error('Synthetic lineage write failure'));
+  const response = await post(`${base()}/promote`, { uploadedAudioFilename: 'example.wav' });
+  expect(response.status).toBe(500);
+  const { listProjects } = await import('../services/musicVideo/projects.js');
+  expect(await listProjects()).toEqual([]);
+  const targets = readdirSync(join(ROOT(), 'music-video'));
+  expect(targets.every(target => !existsSync(join(ROOT(), 'music-video', target, 'blender')))).toBe(true);
+  expect(state.projects.get(id)).toEqual(original);
+});
+
+it('refuses invalid, missing-audio and unauthorized promotions without changing the source', async () => {
+  await create(); await scaffoldAndSync();
+  const original = structuredClone(state.projects.get(id));
+  for (const input of [{}, { trackId: 'track', uploadedAudioFilename: 'example.wav' }, { uploadedAudioFilename: '../example.wav' }]) {
+    expect((await post(`${base()}/promote`, input)).status).toBe(400);
+  }
+  expect((await post(`${base()}/promote`, { trackId: 'track' })).body.code).toBe('AUDIO_MISSING');
+  getTrack.mockResolvedValueOnce(null);
+  expect((await post(`${base()}/promote`, { trackId: 'missing' })).status).toBe(404);
+  const remote = await request(appFor('192.0.2.10')).post(`${base()}/promote`).send({ trackId: 'track' });
+  expect([remote.status, remote.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
   expect(state.projects.get(id)).toEqual(original);
 });

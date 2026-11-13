@@ -108,8 +108,14 @@ Rules that keep a film renderable:
    Read the state until that job is `done`. An `error` job carries `error`, `problems` (every refused shot or
    option) and `logFile`. A `409 MUSIC_VIDEO_BLENDER_SCENES_CONFLICT` means the Board has shots the film did not
    make: ask the director before sending `{ "replaceScenes": true }`.
-2. **Stills**: `POST /api/music-video/:id/blender/render` with `{ "quality": "still", "shotIds": [...] }` (or `times`
-   in song seconds). Look at the image before going further: lit, framed, the subject readable.
+2. **Stills & Contact sheets**:
+   - Stills: `POST /api/music-video/:id/blender/render` with `{ "quality": "still", "shotIds": [...] }` (or `times`
+     in song seconds). Look at the image before going further: lit, framed, the subject readable.
+   - Contact sheets (motion review): `POST /api/music-video/:id/blender/render` with
+     `{ "quality": "sheet", "shotIds": [...], "sheet": { "every": 3, "columns": 6, "range": [startSec, endSec] } }`.
+     Always review motion from contact sheets rendered through PortOS (stills alone cannot establish motion, and a
+     separate local runner does not pass PortOS's exact shot timing); when a current preview exists, PortOS tiles its
+     frames without re-rendering.
 3. **Previews**: `{ "quality": "preview" }` renders every shot that has no current preview, so send it again after
    each edit: it takes the shots that went stale and any not rendered yet, and skips the rest (`skipped`).
    `"onlyStale": true` narrows it to renders that exist and went stale; `"force": true` re-renders current ones.

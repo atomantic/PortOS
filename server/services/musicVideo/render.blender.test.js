@@ -169,6 +169,23 @@ it('runs the project film look as a finishing pass on a Blender final and its ex
   expect(applyFilmLookFinish.mock.calls[1][0]).toMatchObject({ offsetSec: 1, jobId: excerptId });
 });
 
+// A neutral project must still schedule finishing when only a mirrored shot has a look.
+it('finishes shot-only looks for Blender cuts, finals and excerpts', async () => {
+  await renderShots('final');
+  await projects.mutateProjectRecord(id, current => ({ project: { ...current, filmLook: null,
+    scenes: current.scenes.map((scene, index) => index === 1 ? { ...scene, filmLook: { version: 2, vignette: 0.7 } } : scene) } }));
+  const { startBlenderCut } = await import('./blender/cuts.js');
+  const cut = await startBlenderCut(id, { quality: 'final', filmLook: true });
+  await vi.waitFor(() => expect(ended.some(job => job.id === cut.job.id && job.status === 'done')).toBe(true), WAIT);
+  expect(applyFilmLookFinish).toHaveBeenCalledTimes(1);
+  const { jobId } = await renderMusicVideo(id);
+  await finished(jobId);
+  const { excerptId } = await startExcerptRender(id, { startSec: 1, endSec: 3 });
+  await excerptDone(excerptId);
+  expect(applyFilmLookFinish).toHaveBeenCalledTimes(3);
+  for (const [options] of applyFilmLookFinish.mock.calls) expect(options).toMatchObject({ shotLooks: true, project: { filmLook: null } });
+});
+
 // The mtv card here is steady, but no film look pass follows a neutral look: the join is the only place to draw it.
 it('lays the project title card over a Blender final and over the part of it an excerpt holds', async () => {
   await renderShots('final');

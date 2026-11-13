@@ -10,7 +10,7 @@ import { filmOwnerKey } from './owner.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { readPendingBlenderRenders, writePendingBlenderRenders, removePendingBlenderShots } from './pending.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
-import { blenderRenderWanted, normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
+import { blenderRenderWanted, normalizeBlenderRecord, normalizeBlenderSheetOptions } from '../../lib/musicVideoBlender.js';
 import { blenderRefusal } from './workspace.js';
 import { readBlenderManifest } from './manifest.js';
 import { readBlenderRenders } from './renderIndex.js';
@@ -18,7 +18,7 @@ import { requireBlenderFilmTool } from './driver.js';
 import { requireFfmpeg } from './encode.js';
 import { activeBlenderJobs, blenderJobEntry, createBlenderJob, hasBlenderSync, isBlenderJobActive, updateBlenderJob } from './jobs.js';
 import { announceBlenderState } from './record.js';
-import { blenderStillFrames, runBlenderShotRender } from './renderJob.js';
+import { blenderSheetFrames, blenderStillFrames, runBlenderShotRender } from './renderJob.js';
 
 // owner → queued tasks, by quality then oldest first within that quality.
 // A task is `{ entry, request, concurrency }`.
@@ -27,7 +27,8 @@ export const withBlenderRenderAdmission = (owner, work) => queueByOwner(filmOwne
 const queueProject = withBlenderRenderAdmission;
 const waiting = new Map();
 const running = new Set();
-const QUALITY_PRIORITY = { still: 0, preview: 1, final: 2 };
+const QUALITY_PRIORITY = { still: 0, sheet: 0, preview: 1, final: 2 };
+const isInspectionQuality = (quality) => quality === 'still' || quality === 'sheet';
 
 async function settle(task, error) {
   const { entry, request } = task;
@@ -63,8 +64,8 @@ function pump() {
     // Same-shot stills share both image names and stills.json. Keep distinct
     // requests, but let each finish its index write before the next one starts.
     while (tasks.length) {
-      const next = tasks.findIndex((task) => running.size < task.concurrency && !(task.request.quality === 'still' && [...running].some((active) =>
-        active.request.quality === 'still' && filmOwnerKey(active.request.owner) === owner && active.request.shotId === task.request.shotId)));
+      const next = tasks.findIndex((task) => running.size < task.concurrency && !(isInspectionQuality(task.request.quality) && [...running].some((active) =>
+        active.request.quality === task.request.quality && filmOwnerKey(active.request.owner) === owner && active.request.shotId === task.request.shotId)));
       if (next < 0) break;
       start(tasks.splice(next, 1)[0]);
     }
@@ -90,14 +91,14 @@ export function enqueueBlenderRenders(owner, options) {
   return queueProject(owner, () => enqueue(owner, options));
 }
 
-async function enqueue(owner, { shotIds = null, quality, times = null, force = false, onlyStale = false }) {
+async function enqueue(owner, { shotIds = null, quality, times = null, sheet = null, force = false, onlyStale = false }) {
   assertNotSyncing(owner);
 
   await requireBlenderFilmTool();
   if (quality !== 'still') await requireFfmpeg();
   const { settings } = normalizeBlenderRecord(await owner.readRecord());
   const manifest = await readBlenderManifest(owner);
-  if (!manifest?.shots.length) throw blenderRefusal('Sync shots from scripts before rendering', 'MUSIC_VIDEO_BLENDER_NOT_SYNCED', 409);
+  if (!manifest?.shots.length || manifest.syncedAt === null) throw blenderRefusal('Sync shots from scripts before rendering', 'MUSIC_VIDEO_BLENDER_NOT_SYNCED', 409);
   // The shots sit on the frame grid they were synced at; at another rate their edges would overlap or gap.
   if (manifest.fps !== settings.fps) {
     throw blenderRefusal(`The frame rate changed from ${manifest.fps} to ${settings.fps} since the last sync. Sync shots from scripts again before rendering.`, 'MUSIC_VIDEO_BLENDER_NOT_SYNCED', 409);
@@ -106,18 +107,21 @@ async function enqueue(owner, { shotIds = null, quality, times = null, force = f
   const missing = (shotIds || []).filter((id) => !known.has(id));
   if (missing.length) throw unknownShots(missing);
   const shots = shotIds ? [...new Set(shotIds)].map((id) => known.get(id)) : manifest.shots;
-  const still = quality === 'still';
-  const renders = still ? null : await readBlenderRenders(owner, manifest, { settings, shots });
+  const inspection = isInspectionQuality(quality);
+  const sheetOptions = quality === 'sheet' ? normalizeBlenderSheetOptions(sheet) : null;
+  const renders = inspection ? null : await readBlenderRenders(owner, manifest, { settings, shots });
   // A sync may have reserved its slot while the project and renders were read.
   assertNotSyncing(owner);
-  const active = new Map(activeBlenderJobs(owner).filter(({ job }) => job.kind === 'render' && job.quality !== 'still')
+  const active = new Map(activeBlenderJobs(owner).filter(({ job }) => job.kind === 'render' && !isInspectionQuality(job.quality))
     .map((entry) => [`${entry.job.shotId}:${entry.job.quality}`, entry]));
   const jobs = [];
   const skipped = [];
   const selected = [];
   for (const shot of shots) {
-    if (still) {
+    if (quality === 'still') {
       if (!blenderStillFrames(shot, settings.fps, times).length) { skipped.push(shot.id); continue; }
+    } else if (quality === 'sheet') {
+      if (!blenderSheetFrames(shot, settings.fps, sheetOptions).length) { skipped.push(shot.id); continue; }
     } else {
       const existing = active.get(`${shot.id}:${quality}`);
       if (existing) { jobs.push({ ...existing.job }); continue; }
@@ -126,7 +130,7 @@ async function enqueue(owner, { shotIds = null, quality, times = null, force = f
     selected.push(shot);
   }
   // Persist before exposing jobs or allowing the pump to start them.
-  if (!still) {
+  if (!inspection) {
     const entries = await readPendingBlenderRenders(owner);
     const prior = entries.find((entry) => entry.quality === quality);
     const pendingIds = [...new Set([...(prior?.shotIds || []), ...selected.map((shot) => shot.id), ...jobs.map((job) => job.shotId)])]
@@ -144,14 +148,19 @@ async function enqueue(owner, { shotIds = null, quality, times = null, force = f
   for (const shot of selected) {
     const entry = createBlenderJob(owner, { kind: 'render', shotId: shot.id, quality });
     const tasks = waiting.get(filmOwnerKey(owner)) || [];
-    const task = { entry, concurrency: settings.concurrency, request: { owner, shotId: shot.id, quality, force, times } };
+    const task = { entry, concurrency: settings.concurrency, request: { owner, shotId: shot.id, quality, force, times, sheet: sheetOptions } };
     const priority = QUALITY_PRIORITY[quality];
     const insertAt = tasks.findIndex((queued) => QUALITY_PRIORITY[queued.request.quality] > priority);
     tasks.splice(insertAt === -1 ? tasks.length : insertAt, 0, task);
     waiting.set(filmOwnerKey(owner), tasks);
     jobs.push({ ...entry.job });
   }
-  if (still && !jobs.length) throw blenderRefusal('None of the requested times fall inside the selected shots', 'VALIDATION_ERROR');
+  if (inspection && !jobs.length) {
+    throw blenderRefusal(
+      quality === 'sheet' ? 'None of the requested range falls inside the selected shots' : 'None of the requested times fall inside the selected shots',
+      'VALIDATION_ERROR',
+    );
+  }
   pump();
   return { jobs, skipped };
 }

@@ -8,24 +8,29 @@
  * made from; the next job resumes them only when the shot's source and the
  * render settings and song context are unchanged, and starts clean otherwise.
  */
-import { mkdir, readdir, rm } from 'node:fs/promises';
+import { lstat, mkdir, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomicWrite } from '../../lib/fileCore.js';
-import { blenderRenderFrame, blenderShotFrameRange, blenderShotHandleRanges, normalizeBlenderHandles, normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
+import {
+  MUSIC_VIDEO_BLENDER_SHEET_LIMITS, blenderRenderFrame, blenderShotFrameRange, blenderShotHandleRanges,
+  normalizeBlenderHandles, normalizeBlenderRecord, normalizeBlenderSheetOptions,
+} from '../../lib/musicVideoBlender.js';
 import { blenderShotDir, readBlenderJson } from './workspace.js';
 import { readBlenderManifest } from './manifest.js';
 import { BLENDER_NO_OPTIONS_HASH, blenderImportHashes, blenderImportsChanged, blenderOptionsHash, blenderSettingsHash, blenderShotHash, blenderSongHash, hashBlenderSources } from './hashing.js';
 import { writeBlenderSong } from './song.js';
 import { blenderJobBase, requireBlenderFilmTool, runBlenderDriver } from './driver.js';
-import { encodeBlenderPoster, encodeBlenderShot } from './encode.js';
+import { encodeBlenderPoster, encodeBlenderSheet, encodeBlenderShot } from './encode.js';
 import { updateBlenderJob } from './jobs.js';
 import { openBlenderJobLog } from './logs.js';
 import {
-  blenderFilmOptions, blenderFrameName, blenderFramePattern, blenderFramesDir, blenderHandleFrameParts, blenderRenderFile, blenderShotPoster, blenderShotVideo,
-  blenderStillThumbnail, blenderStillsFile, countBlenderFrames, countBlenderHandleFrames,
+  blenderFilmOptions, blenderFrameName, blenderFramePattern, blenderFramesDir, blenderHandleFrameParts, blenderRenderFile,
+  blenderSheetName, blenderSheetsFile, blenderShotPoster, blenderShotVideo, blenderStillThumbnail, blenderStillsFile,
+  countBlenderFrames, countBlenderHandleFrames, isBlenderRenderCurrent,
 } from './renderIndex.js';
 
 const STILLS_KEPT = 24;
+const SHEETS_KEPT = 24;
 
 /** A failure the job reports as its error; `canceled` marks an aborted run. */
 const jobFailure = (message, { canceled = false } = {}) => Object.assign(new Error(message), { canceled });
@@ -43,6 +48,59 @@ export function blenderStillFrames(shot, fps, times = null) {
   if (!Array.isArray(times)) return [startFrame + Math.floor((endFrame - startFrame) / 2)];
   const frames = times.map((time) => Math.round(time * fps)).filter((frame) => frame >= startFrame && frame < endFrame);
   return [...new Set(frames)].sort((a, b) => a - b);
+}
+
+/** The absolute frames a contact-sheet job tiles for `shot`. */
+export function blenderSheetFrames(shot, fps, sheet = null) {
+  const { startFrame, endFrame } = blenderShotFrameRange(shot, fps);
+  const { every, range } = normalizeBlenderSheetOptions(sheet);
+  let fromFrame = startFrame;
+  let toFrame = endFrame;
+  if (range) {
+    const [startSec, endSec] = range;
+    const rangeStart = Math.round(startSec * fps);
+    const rangeEnd = startSec === endSec ? rangeStart + 1 : Math.round(endSec * fps);
+    fromFrame = Math.max(startFrame, rangeStart);
+    toFrame = Math.min(endFrame, rangeEnd);
+  }
+  const frames = [];
+  for (let frame = fromFrame; frame < toFrame; frame += every) frames.push(frame);
+  return frames;
+}
+
+const chunkArray = (items, size) => {
+  const chunks = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
+};
+
+async function recordSheets(owner, shot, frameChunks, { every, columns, fps, fromPreview, srcHash, optionsHash, songHash, imports }) {
+  const directory = blenderShotDir(owner, shot.id, 'sheets');
+  const file = blenderSheetsFile(owner, shot.id);
+  const listed = await readBlenderJson(file, []);
+  const createdAt = new Date().toISOString();
+  const fresh = frameChunks.map((chunk) => ({
+    file: blenderSheetName(chunk[0], chunk.at(-1), every),
+    firstFrame: chunk[0],
+    lastFrame: chunk.at(-1),
+    every,
+    columns,
+    tiles: chunk.length,
+    startSec: Number((chunk[0] / fps).toFixed(6)),
+    endSec: Number((chunk.at(-1) / fps).toFixed(6)),
+    fromPreview,
+    srcHash,
+    optionsHash,
+    songHash,
+    imports,
+    createdAt,
+  }));
+  const names = new Set(fresh.map((sheet) => sheet.file));
+  const kept = [...fresh, ...(Array.isArray(listed) ? listed : []).filter((sheet) => typeof sheet?.file === 'string' && !names.has(sheet.file))];
+  for (const dropped of kept.slice(SHEETS_KEPT)) {
+    await rm(join(directory, dropped.file), { force: true });
+  }
+  await atomicWrite(file, kept.slice(0, SHEETS_KEPT));
 }
 
 async function recordStills(owner, shot, frames, { fps, srcHash, optionsHash, songHash, imports }) {
@@ -65,20 +123,99 @@ async function recordStills(owner, shot, frames, { fps, srcHash, optionsHash, so
   await atomicWrite(file, kept.slice(0, STILLS_KEPT));
 }
 
+async function runContactSheet({ entry, owner, shot, settings, options, song, files, srcHash, optionsHash, songHash, sheet, log, signal }) {
+  const sheetOpts = normalizeBlenderSheetOptions(sheet);
+  const sheetFrames = blenderSheetFrames(shot, settings.fps, sheetOpts);
+  if (!sheetFrames.length) throw jobFailure('None of the requested range falls inside this shot');
+
+  const previewSettingsHash = blenderSettingsHash(settings, 'preview');
+  const previewMeta = await isBlenderRenderCurrent(owner, shot, 'preview', {
+    fps: settings.fps, shotHash: srcHash, settingsHash: previewSettingsHash, optionsHash, songHash, files,
+  });
+  const previewFramesDir = blenderFramesDir(owner, shot.id, 'preview');
+  const previewFramePaths = previewMeta ? sheetFrames.map((f) => join(previewFramesDir, blenderFrameName(f, 'preview'))) : null;
+  const hasAllPreviewFrames = previewFramePaths
+    ? (await Promise.all(previewFramePaths.map((path) => lstat(path).then((info) => info.isFile(), () => false)))).every(Boolean)
+    : false;
+
+  const sheetsDir = blenderShotDir(owner, shot.id, 'sheets');
+  const scratchName = `.frames-${entry.job.id}`;
+  const scratchDir = join(sheetsDir, scratchName);
+  let framePaths = previewFramePaths;
+  let imports = previewMeta?.imports || null;
+
+  try {
+    if (hasAllPreviewFrames) {
+      log.write(`PortOS: contact sheet of shot ${shot.id} from existing preview frames (${sheetFrames.length} frames, step ${sheetOpts.every})`);
+    } else {
+      const tool = await requireBlenderFilmTool();
+      const frame = blenderRenderFrame(settings, 'sheet');
+      await mkdir(scratchDir, { recursive: true });
+      log.write(`PortOS: contact sheet of shot ${shot.id} (${sheetFrames.length} frames, step ${sheetOpts.every})`);
+      let rendered = 0;
+      let renderedSec = 0;
+      const result = await runBlenderDriver({
+        tool, song, signal,
+        job: {
+          ...blenderJobBase(owner, { settings, options }), mode: 'render', quality: 'sheet',
+          scale: frame.scale, samples: frame.samples, resume: false, saveBlend: false,
+          shots: [shot], frames: sheetFrames, framesDir: scratchName,
+        },
+        onLog: log.write,
+        onEvent: (event) => {
+          if (event.event !== 'frame') return;
+          if (!event.skipped) { rendered += 1; renderedSec += event.sec; }
+          updateBlenderJob(entry, {
+            frame: event.frame, index: event.index, total: event.total,
+            ...(rendered ? { secPerFrame: Number((renderedSec / rendered).toFixed(3)) } : {}),
+          });
+        },
+      });
+      imports = Array.isArray(result.events.done?.imports) ? blenderImportHashes(result.events.done.imports, files) : null;
+      if (result.canceled || signal.aborted) throw jobFailure('Canceled', { canceled: true });
+      if (!result.ok) {
+        log.write(result.traceback || result.error);
+        throw jobFailure(result.error);
+      }
+      framePaths = sheetFrames.map((f) => join(scratchDir, blenderFrameName(f, 'sheet')));
+    }
+
+    await mkdir(sheetsDir, { recursive: true });
+    updateBlenderJob(entry, { status: 'encoding' });
+    const frameChunks = chunkArray(sheetFrames, MUSIC_VIDEO_BLENDER_SHEET_LIMITS.maxTiles);
+    const pathChunks = chunkArray(framePaths, MUSIC_VIDEO_BLENDER_SHEET_LIMITS.maxTiles);
+    for (let index = 0; index < frameChunks.length; index += 1) {
+      const chunkFrames = frameChunks[index];
+      const output = join(sheetsDir, blenderSheetName(chunkFrames[0], chunkFrames.at(-1), sheetOpts.every));
+      const listFile = join(sheetsDir, `.concat-${entry.job.id}-${index}.txt`);
+      try {
+        await encodeBlenderSheet({ frames: pathChunks[index], columns: sheetOpts.columns, listFile, output, signal });
+      } finally {
+        await rm(listFile, { force: true });
+      }
+    }
+    if (signal.aborted) throw jobFailure('Canceled', { canceled: true });
+    await recordSheets(owner, shot, frameChunks, {
+      every: sheetOpts.every, columns: sheetOpts.columns, fps: settings.fps,
+      fromPreview: hasAllPreviewFrames, srcHash, optionsHash, songHash, ...(imports ? { imports } : {}),
+    });
+  } finally {
+    await rm(scratchDir, { recursive: true, force: true });
+  }
+}
+
 /**
- * Run the render `request` (`{ owner, shotId, quality, force, times }`)
+ * Run the render `request` (`{ owner, shotId, quality, force, times, sheet }`)
  * for the job `entry`. Resolves when the shot is rendered and, for preview and
  * final, encoded; rejects with the reason otherwise.
  */
-export async function runBlenderShotRender(entry, { owner, shotId, quality, force = false, times = null }) {
+export async function runBlenderShotRender(entry, { owner, shotId, quality, force = false, times = null, sheet = null }) {
   const { signal } = entry.abort;
   const log = await openBlenderJobLog(owner, entry.job.id);
   updateBlenderJob(entry, { status: 'running', logFile: log.file });
   const started = Date.now();
   const finish = async (work) => work().finally(() => log.close());
   return finish(async () => {
-    const tool = await requireBlenderFilmTool();
-
     const { settings } = normalizeBlenderRecord(await owner.readRecord());
     const manifest = await readBlenderManifest(owner);
     const shot = manifest?.shots.find((candidate) => candidate.id === shotId);
@@ -90,6 +227,10 @@ export async function runBlenderShotRender(entry, { owner, shotId, quality, forc
     const optionsHash = blenderOptionsHash(options);
     const song = await writeBlenderSong(owner, settings);
     const songHash = blenderSongHash(song);
+    if (quality === 'sheet') {
+      return runContactSheet({ entry, owner, shot, settings, options, song, files, srcHash, optionsHash, songHash, sheet, log, signal });
+    }
+    const tool = await requireBlenderFilmTool();
     const still = quality === 'still';
     const frame = blenderRenderFrame(settings, quality);
     const range = blenderShotFrameRange(shot, settings.fps);

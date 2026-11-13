@@ -285,7 +285,8 @@ function handleProblems(shots, cutEffects, fps) {
  * handles it needs. Empty means the film is ready to join.
  */
 export function blenderFilmProblems(manifest, { fps, durationSec, cutEffects = [] }) {
-  const stale = manifest.fps === fps ? [] : [`The frame rate changed from ${manifest.fps} to ${fps} since the last sync. Sync shots from scripts again.`];
+  const stale = manifest.syncedAt === null ? ['Sync shots from scripts: this film has not been synced to this project yet.'] : [];
+  if (manifest.fps !== fps) stale.push(`The frame rate changed from ${manifest.fps} to ${fps} since the last sync. Sync shots from scripts again.`);
   if (!(durationSec > 0)) return [...stale, 'Analyze the song: the film cannot be checked against it yet.'];
   const coverage = coverageProblems(manifest.shots, { durationSec, fps });
   const handles = manifest.fps === fps ? handleProblems(manifest.shots, cutEffects, fps) : [];

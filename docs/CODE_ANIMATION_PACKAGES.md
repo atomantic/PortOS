@@ -413,6 +413,27 @@ the final MP4 into Media History and records it as the project's accepted output
 a failed attempt retains the previous accepted output. Title cards, film look,
 timed finishing effects and the ending remain Music Video features.
 
+**Send to Music Video** opens a library-track picker and creates a new
+Blender-mode Music Video, with a link to open it. It copies the film's source,
+synced shot inventory, settings and option values, leaving renders, cuts and
+notes behind. The original remains renderable; sending again creates another
+independent copy. The source records the latest copy in `promotedTo`; the target
+records `sourceFilm: {kind:'code-animation',projectId}`.
+
+Sending starts no jobs. Analyze the song in Music Video, then **Sync shots from
+scripts** to bind its shots to that song. The copied manifest reads **Not synced
+yet**, and renders wait for a sync. The response reports provisional gaps or
+shots past the song end when the library track has a stored duration; otherwise
+analysis is required to check coverage. Adjust `describe(ctx)` for the analyzed
+length before rendering.
+
+The API is `POST /api/code-animation/films/:id/promote` with `{trackId,name?}` or
+`{uploadedAudioFilename,name?}` (exactly one audio source; uploaded filenames
+refer to `data/music/`, as for Music Video). Its `201` answer holds `project`,
+`sourceProject`, `needsAnalysis`, `needsSync`, `coverageDurationSec`,
+`coverageProblems` and `nextSteps`. It requires host-control authority, copies
+no analysis from the standalone film, and never changes its timeline or audio.
+
 The shared Shots, Files, Cut, Jobs and Settings panel lives at
 `/code-animation/production/films/:id/:tab?/:shotId?`. Film settings and notes
 are machine-local Production records. The workspace is

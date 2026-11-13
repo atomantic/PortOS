@@ -17,7 +17,7 @@ export const deleteMusicVideoBlenderFile = (id, path, options = {}) =>
 // Starts the film's describe step as a background job → 202 { job }; when it ends the shots are
 // mirrored to storyboard scenes. 409 MUSIC_VIDEO_BLENDER_SCENES_CONFLICT asks for `replaceScenes: true`.
 export const syncMusicVideoBlender = (id, body = {}, options = {}) => request(`${blenderPath(id)}/sync`, blenderJson('POST', body, options));
-// Body: { shotIds?, quality: 'still' | 'preview' | 'final', times?, force?, onlyStale? } → 202 { jobs, skipped }.
+// Body: { shotIds?, quality: 'still' | 'sheet' | 'preview' | 'final', times?, sheet?, force?, onlyStale? } → 202 { jobs, skipped }.
 export const renderMusicVideoBlender = (id, body, options = {}) => request(`${blenderPath(id)}/render`, blenderJson('POST', body, options));
 // What the workspace takes on disk: { sourceBytes, rendersBytes, frameBytes, frameFiles, clearableBytes, removedShots }.
 export const getMusicVideoBlenderUsage = (id, options = {}) => request(`${blenderPath(id)}/usage`, options);
@@ -42,3 +42,4 @@ export const getMusicVideoBlenderLog = (id, path, options = {}) =>
 export const createFilm = (input, options) => request('/code-animation/films', { method: 'POST', body: JSON.stringify(input), ...options });
 export const patchFilm = (id, input, options) => request(`/code-animation/films/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input), ...options });
 export const attachAudio = (id, input, options) => request(`/code-animation/films/${encodeURIComponent(id)}/audio`, { method: 'POST', body: JSON.stringify(input), ...options });
+export const promoteFilm = (id, input, options = {}) => request(`/code-animation/films/${encodeURIComponent(id)}/promote`, { method: 'POST', body: JSON.stringify(input), ...options });

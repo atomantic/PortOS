@@ -37,7 +37,7 @@ export async function writePendingBlenderRenders(owner, entries) {
 }
 
 export async function removePendingBlenderShots(owner, quality, shotIds) {
-  if (quality === 'still') return;
+  if (quality === 'still' || quality === 'sheet') return;
   const removed = new Set(shotIds);
   const entries = await readPendingBlenderRenders(owner);
   await writePendingBlenderRenders(owner, entries.map((entry) => entry.quality === quality

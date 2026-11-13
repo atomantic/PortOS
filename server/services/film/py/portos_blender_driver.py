@@ -207,7 +207,7 @@ def apply_output_format(scene, quality):
     settings = scene.render.image_settings
     if hasattr(settings, "media_type"):
         settings.media_type = "IMAGE"
-    if quality == "preview":
+    if quality in ("preview", "sheet"):
         settings.file_format = "JPEG"
         settings.quality = 90
     else:
@@ -223,12 +223,32 @@ def frame_token(frame):
     return ("m%06d" % -frame) if frame < 0 else ("%06d" % frame)
 
 
+def apply_render_stamp(scene, frame, fps, height):
+    r = scene.render
+    r.use_stamp = True
+    for attr in (
+        "use_stamp_date", "use_stamp_time", "use_stamp_render_time", "use_stamp_frame",
+        "use_stamp_frame_range", "use_stamp_memory", "use_stamp_hostname", "use_stamp_camera",
+        "use_stamp_lens", "use_stamp_scene", "use_stamp_strip_meta", "use_stamp_marker",
+        "use_stamp_sequencer_strip", "use_stamp_filename", "use_stamp_labels",
+    ):
+        if hasattr(r, attr):
+            setattr(r, attr, False)
+    r.use_stamp_note = True
+    r.stamp_note_text = "f%d  %.2fs" % (frame, frame / fps)
+    r.stamp_font_size = max(16, round(height / 24))
+    r.stamp_foreground = (1.0, 1.0, 1.0, 1.0)
+    r.stamp_background = (0.0, 0.0, 0.0, 0.75)
+
+
 def frame_file(job, shot, frame, quality):
     shot_dir = os.path.join(job["out"], shot["id"])
     if quality == "still":
         ms = half_up(frame / job["fps"] * 1000)
         name = ("tm%09d.png" % -ms) if ms < 0 else ("t%09d.png" % ms)
         return os.path.join(shot_dir, "stills", name)
+    if quality == "sheet":
+        return os.path.join(shot_dir, "sheets", job.get("framesDir") or ".frames", "frame_%s.jpg" % frame_token(frame))
     extension = "jpg" if quality == "preview" else "png"
     return os.path.join(shot_dir, quality, "frames", "frame_%s.%s" % (frame_token(frame), extension))
 
@@ -261,7 +281,7 @@ def render_shot(job, film, song, shot):
     shot = {**shot, "start": first / fps, "end": end / fps}
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scene = bpy.context.scene
-    ctx = make_context(job, song, quality, shot)
+    ctx = make_context(job, song, "preview" if quality == "sheet" else quality, shot)
     scene.render.engine = ctx.engine
     device = "GPU"
     if ctx.engine == "CYCLES":
@@ -272,11 +292,11 @@ def render_shot(job, film, song, shot):
     apply_frame_settings(scene, ctx)
     last = end - 1
     handles = shot.get("handles") if isinstance(shot.get("handles"), dict) else {}
-    in_frames = 0 if quality == "still" else max(0, half_up(float(handles.get("in") or 0) * fps))
-    out_frames = 0 if quality == "still" else max(0, half_up(float(handles.get("out") or 0) * fps))
+    in_frames = 0 if quality in ("still", "sheet") else max(0, half_up(float(handles.get("in") or 0) * fps))
+    out_frames = 0 if quality in ("still", "sheet") else max(0, half_up(float(handles.get("out") or 0) * fps))
     scene.frame_start = first - in_frames
     scene.frame_end = max(scene.frame_start, last + out_frames)
-    if quality == "still":
+    if quality in ("still", "sheet"):
         targets = [(frame, frame_file(job, shot, frame, quality)) for frame in (job.get("frames") or [])]
     else:
         targets = (
@@ -297,7 +317,7 @@ def render_shot(job, film, song, shot):
     apply_frame_settings(scene, ctx)
     apply_output_format(scene, quality)
     pose = getattr(film, "frame", None)
-    resume = bool(job.get("resume")) and quality != "still"
+    resume = bool(job.get("resume")) and quality not in ("still", "sheet")
     for index, (frame, path) in enumerate(targets, start=1):
         if os.getppid() == 1:
             raise RuntimeError("PortOS stopped while this shot was rendering")
@@ -309,6 +329,8 @@ def render_shot(job, film, song, shot):
         scene.frame_set(frame)
         if callable(pose):
             pose(ctx, shot, frame / fps, frame)
+        if quality == "sheet":
+            apply_render_stamp(scene, frame, fps, ctx.height)
         render_frame(scene, path)
         emit("frame", shot=shot["id"], frame=frame, index=index, total=len(targets),
              sec=round(time.time() - frame_started, 3), skipped=False)
