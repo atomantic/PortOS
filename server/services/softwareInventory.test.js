@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { __testing, getInstalledBlenderCandidates, getSoftwareInventory } from './softwareInventory.js';
 
-const { blenderRow, browserRow, condaRows, harnessRows, localLlmRows, nodeRows, readBlenderVersion, ytDlpRow } = __testing;
+const { blenderRow, browserRow, postgresRow, condaRows, harnessRows, localLlmRows, nodeRows, readBlenderVersion, ytDlpRow } = __testing;
 
 const runtime = (overrides = {}) => ({
   node: { version: 'v26.12.1', inSupportedRange: true, securityBaseline: { compliant: true }, pinned: '/x/node' },
@@ -73,6 +73,31 @@ describe('runtime rows', () => {
   it('offers a pm2 sync that says whether it restarts PortOS', () => {
     const [, , pm2] = nodeRows(runtime({ pm2: { ...runtime().pm2, daemon: { pm2Version: '7.0.0' }, daemonStale: true } }));
     expect(pm2).toMatchObject({ state: 'attention', version: '7.0.0', latest: '7.1.0', action: { kind: 'pm2-sync', restarts: true } });
+  });
+});
+
+describe('PostgreSQL row', () => {
+  const now = Date.parse('2026-11-13T00:00:00Z');
+  const pg = (overrides = {}) => ({ version: '17.12', major: 17, build: 'Homebrew', mode: 'native',
+    line: { latestMinor: '12', eolDate: '2029-11-08', supported: true }, releasesError: null, ...overrides });
+
+  it('flags a lagging patch release with the update command for how the server is installed', () => {
+    expect(postgresRow(pg(), now)).toMatchObject({ state: 'current', version: '17.12', latest: '17.12', home: { path: '/settings/database' } });
+    const native = postgresRow(pg({ version: '17.11' }), now);
+    expect(native).toMatchObject({ state: 'update', latest: '17.12', action: null });
+    expect(native.summary).toContain('brew upgrade postgresql@17 pgvector');
+    expect(postgresRow(pg({ version: '17.9', mode: 'docker' }), now).summary).toContain('npm run setup:db');
+  });
+
+  it('warns a year before end of life and treats an ended line as a security risk', () => {
+    const ending = postgresRow(pg({ version: '15.20', major: 15, line: { latestMinor: '20', eolDate: '2027-11-11', supported: true } }), now);
+    expect(ending.state).toBe('attention');
+    expect(ending.summary).toMatch(/end of life on 2027-11-11.*dump and restore/);
+    expect(postgresRow(pg({ version: '14.25', major: 14, line: { latestMinor: '25', eolDate: '2026-11-12', supported: true } }), now).state).toBe('security');
+  });
+
+  it('keeps the running version when the release index is unavailable', () => {
+    expect(postgresRow(pg({ line: null, releasesError: 'HTTP 503' }), now)).toMatchObject({ state: 'unknown', version: '17.12', summary: 'HTTP 503' });
   });
 });
 
