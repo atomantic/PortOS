@@ -1352,6 +1352,12 @@ archive excludes this control subtree; it never excludes repository payload
 because it is ignored or untracked. Admission metadata is not part of the
 portable repository or peer synchronization.
 
+Cleanup-only recovery completion uses live checkout-path and local-branch absence,
+not `schedule.json` retirement receipts. Existing or unreadable paths/refs keep the
+recovery unresolved; these completion checks never delete anything. Historical
+receipt bookkeeping still used by retirement and release synchronization remains
+in `branchReconcileOutcome` until its separate removal.
+
 Initialized-checkout finalization receipts keep a compact, uncapped
 `branchReconcileOutcome.retirementReceiptIdentities` map alongside the bounded
 recent-retirements display list. Its keys hash the exact archive path and release

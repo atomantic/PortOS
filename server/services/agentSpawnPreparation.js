@@ -1,5 +1,5 @@
 import { settleMergedReviewFollowUpBeforeSpawn } from './reviewFollowUpCompletion.js';
-import { isRetirementOnlyRecovery, settleRetirementRecoveryBeforeSpawn } from './retirementRecoveryCompletion.js';
+import { isCleanupOnlyRecovery, settleCleanupBeforeSpawn } from './cleanupOnlyCompletion.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { loadState } from './cosState.js';
 import { hasActiveTaskOwner } from './agentState.js';
@@ -145,7 +145,7 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
     await context.cleanupOnError('task state unavailable');
     return null;
   }
-  if (isRetirementOnlyRecovery(task) && await settleRetirementRecoveryBeforeSpawn(task)) {
+  if (isCleanupOnlyRecovery(task) && await settleCleanupBeforeSpawn(task)) {
     await context.cleanupOnError('retirement dispatch settled or changed');
     return null;
   }
