@@ -2,7 +2,8 @@
 
 Prints ``blender`` when ``film.py`` or a local module it imports names
 ``bpy``, ``bmesh`` or ``mathutils``, including an import nested in a function
-or a branch. Prints ``python`` otherwise. A file that cannot be parsed, or a
+or a branch and literal ``importlib.import_module`` / ``__import__`` calls.
+Prints ``python`` otherwise. A file that cannot be parsed, or a
 path that leaves ``src/``, counts as ``blender``: the absence of those modules
 was not shown. ``portos_film`` is the shipped helper kit and is not followed.
 """
@@ -45,7 +46,29 @@ def _local_file(src: Path, parts: list[str]) -> str | None:
 def _imported(current_rel: str, tree: ast.AST) -> list[list[str]]:
     directory = current_rel.split("/")[:-1]
     found: list[list[str]] = []
+    importlib_names = {
+        alias.asname or alias.name
+        for node in ast.walk(tree) if isinstance(node, ast.Import)
+        for alias in node.names if alias.name == "importlib"
+    }
+    import_module_names = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "importlib" and not node.level
+        for alias in node.names if alias.name == "import_module"
+    }
     for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and node.args:
+            target = node.func
+            dynamic_import = (
+                isinstance(target, ast.Name) and target.id in {"__import__", *import_module_names}
+                or isinstance(target, ast.Attribute) and target.attr == "import_module"
+                and isinstance(target.value, ast.Name) and target.value.id in importlib_names
+            )
+            name = node.args[0]
+            if dynamic_import and isinstance(name, ast.Constant) and isinstance(name.value, str):
+                found.append([part for part in name.value.split(".") if part])
+            continue
         if isinstance(node, ast.Import):
             for alias in node.names:
                 found.append([part for part in alias.name.split(".") if part])

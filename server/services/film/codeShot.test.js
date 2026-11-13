@@ -141,6 +141,12 @@ describe('describeNeedsBlender', () => {
       writeFileSync(join(src, 'film.py'), 'import shots.hero\n');
       writeFileSync(join(src, 'shots', 'hero.py'), 'import bpy\n');
       expect(await describeNeedsBlender({ workspaceDir: root })).toBe(true);
+      writeFileSync(join(src, 'film.py'), "import importlib\nbpy = importlib.import_module('bpy')\n");
+      expect(await describeNeedsBlender({ workspaceDir: root })).toBe(true);
+      writeFileSync(join(src, 'film.py'), "from importlib import import_module as load\nload('shots.hero')\n");
+      expect(await describeNeedsBlender({ workspaceDir: root })).toBe(true);
+      writeFileSync(join(src, 'film.py'), "import importlib as modules\nmodules.import_module('math')\n");
+      expect(await describeNeedsBlender({ workspaceDir: root })).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(src, { recursive: true, force: true });
