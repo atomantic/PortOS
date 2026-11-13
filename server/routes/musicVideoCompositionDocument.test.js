@@ -5,7 +5,7 @@
  * file bridge, and the refusals (traversal, symlinks, reserved names).
  */
 
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -23,6 +23,22 @@ import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/m
 const ROOT = () => lazyTempDataRoot('mv-composition-document-route-test-');
 vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: ROOT }));
 vi.mock('../services/settings.js', () => ({ settingsEvents: new EventEmitter(), getSettings: vi.fn(async () => ({})) }));
+// Imports schedule a real overlay check. Own its full promise before replacing
+// project fixtures; the pixel/browser contract lives in overlayTextService.browser.test.js.
+const overlayChecks = vi.hoisted(() => ({ pending: [], probe: vi.fn() }));
+vi.mock('../services/musicVideo/documentRender.js', async (original) => ({ ...await original(), probeDocumentText: overlayChecks.probe }));
+vi.mock('../services/musicVideo/overlayTextService.js', async (original) => {
+  const service = await original();
+  return { ...service, checkOverlayTextInBackground(projectId) {
+    const done = service.checkOverlayTextInBackground(projectId);
+    overlayChecks.pending.push(done);
+    return done;
+  } };
+});
+const settleOverlayChecks = async () => {
+  await Promise.all(overlayChecks.pending.splice(0));
+};
+
 const auth = vi.hoisted(() => ({ enabled: false }));
 vi.mock('../services/auth.js', async (original) => ({
   ...await original(), isAuthEnabled: vi.fn(async () => auth.enabled),
@@ -85,15 +101,48 @@ const versionsOf = (projectId) => {
 
 let project;
 beforeEach(async () => {
+  overlayChecks.probe.mockReset().mockResolvedValue({ samples: 0, frame: { width: 1280, height: 720 }, scenes: [] });
   auth.enabled = false;
   rmSync(join(ROOT(), 'music-video-projects.json'), { force: true });
   rmSync(join(ROOT(), 'music-video'), { recursive: true, force: true });
   rmSync(join(ROOT(), 'compositions'), { recursive: true, force: true });
   project = await projects.createProject({ name: 'Example Video' });
 });
+afterEach(settleOverlayChecks);
 afterAll(cleanupTempDataRoots);
 
 describe('music-video composition documents', () => {
+  // Uniquely catches an import's background probe outliving its test/fixture owner.
+  it('returns a background check settlement handle that includes probe cleanup', async () => {
+    await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, audioAnalysis: { durationSec: 1 } } }));
+    const entered = Promise.withResolvers();
+    const cleanup = Promise.withResolvers();
+    overlayChecks.probe.mockImplementationOnce(async () => {
+      entered.resolve();
+      await cleanup.promise;
+      return { samples: 0, frame: { width: 1280, height: 720 }, scenes: [] };
+    });
+    try {
+      const imported = await uploadZip(project.id, createZip(Object.entries(FILES).map(([name, data]) => ({ name, data }))));
+      expect(imported.status).toBe(201);
+      await entered.promise;
+      expect((await projects.getProject(project.id)).productionReview.textCheck.status).toBe('running');
+      expect(overlayChecks.pending).toHaveLength(1);
+      const done = overlayChecks.pending[0];
+      expect(done).toBeInstanceOf(Promise);
+      let settled = false;
+      done.then(() => { settled = true; });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      cleanup.resolve();
+      await settleOverlayChecks();
+      expect(settled).toBe(true);
+      expect((await projects.getProject(project.id)).productionReview.textCheck.status).toBe('complete');
+    } finally {
+      cleanup.resolve();
+    }
+  });
+
   it('requires host authority before copying a caller-named folder and preserves authorized imports', async () => {
     const source = join(ROOT(), 'compositions', 'example-source');
     await mkdir(source, { recursive: true });
