@@ -156,6 +156,18 @@ describe('reviewQueue.buildQueue', () => {
     expect(newer.triageOperations.map((operation) => operation.id)).toEqual(['snooze']);
   });
 
+  it('allows dismissing a harness update without claiming installation and resurfaces a new version', async () => {
+    const alert = { id: 'harness:example', title: 'Example CLI update', revision: '1.0.0:1.1.0', required: false, operations: [] };
+    runtimeUpdateReview.getRuntimeUpdateReviewSnapshot.mockReturnValue({ items: [alert], incomplete: false });
+    const first = (await buildQueue()).items.find(item => item.source === 'updates');
+    expect(first.triageOperations.map(operation => operation.id)).toEqual(['snooze', 'dismiss']);
+    const dismissal = { ...queueActionIdentity(first), dismissed: true };
+    expect(applyQueueTriage([first], [dismissal])).toEqual([]);
+    runtimeUpdateReview.getRuntimeUpdateReviewSnapshot.mockReturnValue({ items: [{ ...alert, revision: '1.0.0:1.2.0' }], incomplete: false });
+    const newer = (await buildQueue()).items.find(item => item.source === 'updates');
+    expect(applyQueueTriage([newer], [dismissal])).toHaveLength(1);
+  });
+
   it('counts only actionable runtime updates when checks are unverified', async () => {
     const { __testing: { createRuntimeUpdateReviewMonitor } } = await vi.importActual('./runtimeUpdateReview.js');
     const monitor = createRuntimeUpdateReviewMonitor({
