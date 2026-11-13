@@ -273,4 +273,13 @@ describe('blenderAgentBrief', () => {
     const empty = blenderAgentBrief({ projectId: 'mv-test', state: blenderFilmState({ manifest: null, workspace: { exists: false, dir: 'data/music-video/mv-test/blender', hasFilm: false, files: 0 } }) });
     expect(empty).toContain('No src/film.py yet');
   });
+
+  it('directs standalone authoring to its film workspace and permits the supported lead-in timing', () => {
+    const brief = blenderAgentBrief({ projectId: 'film-test', standalone: true, state: { settings: {} } });
+    expect(brief).toContain('Workspace on this machine: data/code-animation/films/film-test');
+    expect(brief).toContain('/api/code-animation/films/film-test/blender');
+    expect(brief).toContain('negative-time lead-in shots form one contiguous run ending exactly at 0 s');
+    expect(brief).toContain('whole lead-in is at most 120 s');
+    expect(brief).not.toContain('0 <= start');
+  });
 });
