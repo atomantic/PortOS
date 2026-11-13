@@ -16,6 +16,7 @@ const UPDATE_HOME = { path: `/apps/${PORTOS_APP_ID}/update`, label: 'PortOS upda
 const HOMES = Object.freeze({
   update: UPDATE_HOME,
   browser: { path: '/browser', label: 'Browser' },
+  database: { path: '/settings/database', label: 'Database' },
   harnesses: { path: '/ai/harnesses', label: 'Harnesses' },
   localLlm: { path: '/models/llms-runtimes', label: 'Model runtimes' },
   ytdlp: { path: '/devtools/video-download', label: 'Video download' },
@@ -113,6 +114,36 @@ function browserRow(status, arch = process.arch) {
     installed: status?.installedVersion ? true : null, version: status?.runningVersion || null,
     latest: published || status?.installedVersion || null, state, summary,
   });
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const EOL_WARNING_DAYS = 365;
+
+function postgresUpdateHow({ mode, major, build }) {
+  if (mode === 'docker') return 'The pinned image arrives with a PortOS update; then run `npm run setup:db`, which recreates the container on the existing volume.';
+  if (/homebrew/i.test(build || '')) return `Run \`brew upgrade postgresql@${major} pgvector && brew services restart postgresql@${major}\`.`;
+  return `Update the system PostgreSQL ${major} package and pgvector together, then restart the server.`;
+}
+
+/** A minor release keeps the on-disk format; a new major needs a dump and restore (docs/STORAGE.md). */
+function postgresRow(status, now = Date.now()) {
+  const { version, major, line, releasesError } = status;
+  const base = { id: 'postgresql', name: 'PostgreSQL', group: 'Runtime', home: HOMES.database, installed: version ? true : null, version };
+  if (!version) return entry({ ...base, state: 'unknown', summary: 'The server version could not be read.' });
+  if (!line) return entry({ ...base, state: 'unknown', summary: releasesError });
+  const latest = `${major}.${line.latestMinor}`;
+  const behind = versionBehind(version, latest);
+  const eolMs = Date.parse(line.eolDate);
+  const ended = !line.supported || eolMs <= now;
+  const endingSoon = !ended && eolMs - now <= EOL_WARNING_DAYS * DAY_MS;
+  const majorUpgrade = 'Moving to a newer major needs a dump and restore; see docs/STORAGE.md.';
+  const summary = [
+    ended ? `PostgreSQL ${major} reached end of life on ${line.eolDate} and gets no more security fixes. ${majorUpgrade}`
+      : endingSoon ? `PostgreSQL ${major} reaches end of life on ${line.eolDate}. ${majorUpgrade}`
+        : `Supported until ${line.eolDate}.`,
+    behind && `${latest} carries this line's latest security and bug fixes; a minor update needs no data migration. ${postgresUpdateHow(status)}`,
+  ].filter(Boolean).join(' ');
+  return entry({ ...base, latest, state: ended ? 'security' : behind ? 'update' : endingSoon ? 'attention' : 'current', summary });
 }
 
 /** Who supplies a Homebrew copy, and the upstream release Homebrew has not published yet. */
@@ -279,6 +310,8 @@ function condaRows({ resolve = resolveCondaEnvPython, platform = process.platfor
 const COLLECTORS = [
   { id: 'node', name: 'Node.js', group: 'Runtime', home: HOMES.update,
     read: async () => nodeRows(await (await import('./nodeRuntime.js')).getNodeRuntimeStatus()) },
+  { id: 'postgresql', name: 'PostgreSQL', group: 'Runtime', home: HOMES.database,
+    read: async ({ fresh }) => [postgresRow(await (await import('./postgresRuntime.js')).getPostgresRuntimeStatus({ fresh }))] },
   { id: 'browser', name: 'PortOS Browser (Chrome)', group: 'Browser', home: HOMES.browser,
     read: async () => [browserRow((await import('./runtimeUpdateReview.js')).getBrowserUpdateSnapshot())] },
   { id: 'harnesses', name: 'Agent harnesses', group: 'Agent harnesses', home: HOMES.harnesses,
@@ -310,4 +343,4 @@ export async function getSoftwareInventory({ fresh = false, collectors = COLLECT
   return { components, groups: SOFTWARE_GROUPS, checkedAt: new Date().toISOString() };
 }
 
-export const __testing = { nodeRows, browserRow, harnessRows, localLlmRows, ytDlpRow, readBlenderVersion, blenderRow, condaRows };
+export const __testing = { nodeRows, browserRow, postgresRow, harnessRows, localLlmRows, ytDlpRow, readBlenderVersion, blenderRow, condaRows };

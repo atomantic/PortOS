@@ -719,6 +719,13 @@ The escape hatch is **guarded from bitrot by the test suite** (tests boot with `
 
 **Compose receives the resolved values.** PortOS and PM2 read `.env` literally (matching surrounding quotes removed; no inline comments, no `$` expansion), but `docker-compose.yml` interpolates its `PGUSER`/`PGDATABASE`/`PGPASSWORD`/`PGPORT_DOCKER` with Docker's own `.env` grammar, which treats ` #` as a comment and expands `$`. So `npm run setup:db` and `scripts/db.sh` put the already-resolved values in the environment of every `docker compose` subprocess (process environment outranks Compose's `.env`), and the container is provisioned with exactly what PortOS connects with. They travel in the child environment only — never argv or logs. If you run `docker compose` yourself, Compose applies its own grammar to `.env`: wrap a password containing ` #` or `$` in single quotes (`PGPASSWORD='pa$$word'` — in Compose, single quotes are literal), or export the variables first.
 
+### PostgreSQL version updates
+
+**Settings › Software** lists the running server's version with the latest patch release and end-of-life date of its major line, read from [postgresql.org's release index](https://www.postgresql.org/versions.json). The row shows an update when a newer patch release exists, needs attention within a year of end of life, and shows a security state once the line is past end of life.
+
+- **Patch (minor) releases need no data migration.** A minor release keeps the on-disk format. Native Homebrew: `brew upgrade postgresql@NN pgvector && brew services restart postgresql@NN`. Upgrade pgvector with the server, because C extensions must be rebuilt alongside it. Docker: a dependency-update PR refreshes the pinned digest (step 6 above); after updating PortOS, `npm run setup:db` recreates the container on the existing volume. Upgrade the client tools (`psql`, `pg_dump`, `pg_restore`) of any other installed `postgresql@NN` kegs too. Read the release's "Updating" notes for any REINDEX it asks for.
+- **A new major cannot open an older data directory.** `PINNED_DB_MAJOR` in `scripts/lib/dbImage.js` fixes the Docker image's major, and `scripts/dbImageDigestPin.test.js` fails if a digest refresh moves the tag. Changing the major must ship a dump/restore path for existing volumes in the same change. Native installs move by taking a backup that includes the database dump ([Backup & Restore](./BACKUP.md)), installing the new major, then restoring that dump into it.
+
 ### Moving between Docker and native
 
 Use **Settings → Database** for coordinated backend migration, including
