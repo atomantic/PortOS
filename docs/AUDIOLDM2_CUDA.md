@@ -18,7 +18,7 @@ outside the lock. No pip/bootstrap upgrades run on this path.
 
 The stack uses torch 2.14.1+cu126 (the build the other cu126 runtimes share),
 diffusers 0.42.1, transformers 5.22.1, huggingface-hub 2.4.0 with hf-xet,
-sentencepiece 0.2.2, accelerate 1.15.0, numpy 2.4.6 and scipy 1.17.1, matching
+sentencepiece 0.2.3, accelerate 1.15.0, numpy 2.4.6 and scipy 1.17.1, matching
 the Apple Silicon lock's direct pins. The CUDA torch build also runs on a host
 without an NVIDIA GPU, so AudioLDM2 keeps its CPU fallback; the readiness probe
 imports the pipeline and does not require a CUDA device. A different
@@ -30,32 +30,18 @@ never download weights or generate audio.
 
 ## Regenerating locks
 
-Edit `scripts/requirements-audioldm2-cuda.txt` with exact direct pins. Using uv
-0.13.1, run from the repository root (Bash):
+Edit `scripts/requirements-audioldm2-cuda.txt` with exact direct pins. Use
+hash-verified uv 0.13.7 and the [scoped-index recipe](./WAN22_CUDA.md#regenerating-locks),
+substituting the AudioLDM2 source/output names and scoping only Torch to the
+CUDA index (AudioLDM2 has no Torchvision dependency). Keep CPython 3.11 and
+both x86_64 target platforms. Preserve the existing output pins, markers and
+unrelated hash blocks; advance the cutoff to at least seven days ago.
 
-```bash
-for target in windows linux; do
-  case "$target" in
-    windows) platform=x86_64-pc-windows-msvc ;;
-    linux) platform=x86_64-manylinux_2_28 ;;
-  esac
-  uv pip compile scripts/requirements-audioldm2-cuda.txt \
-    --python-version 3.11 --python-platform "$platform" \
-    --generate-hashes --only-binary :all: \
-    --index-url https://pypi.org/simple \
-    --extra-index-url https://download.pytorch.org/whl/cu126 \
-    --index-strategy unsafe-best-match --emit-index-url \
-    --no-header --annotation-style line --exclude-newer 2026-11-01 \
-    -o "scripts/requirements-audioldm2-cuda-${target}.lock.txt"
-done
-```
-
-Advance the cutoff to a UTC date at least seven days before the update. The
-multi-index strategy permits current PyPI packages alongside CUDA wheels: the
-PyTorch index also mirrors older non-torch packages. Installation still requires
-the exact committed versions and SHA-256 hashes. See uv's
-[index resolution rules](https://docs.astral.sh/uv/pip/compatibility/#packages-that-exist-on-multiple-indexes).
-Keep each lock's target/cutoff header when regenerating.
+Do not resolve ordinary PyPI packages from the CUDA mirror: some entries have
+no upload date and fail cooldown validation. The
+[bounded #15988 procedure](./PYTHON_RUNTIME_REFRESH.md#newly-cooled-follow-on-2026-11-13-15988)
+describes complete-closure constraints and selective generated-block transfer.
+Installation retains its existing indexes and exact hash restrictions.
 
 Query OSV for **every resolved package**, including `MAL-` records, immediately
 before merge. This standard-library Python check normalizes CUDA local build

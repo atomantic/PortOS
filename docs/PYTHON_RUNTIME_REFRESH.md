@@ -2604,3 +2604,107 @@ Bounded validation on native Apple Silicon, CPython **3.13.18**:
 No model weights, user records, provider calls, full native runtime installation,
 video inference, model-quality evaluation or Windows/Linux CUDA hardware run is
 included. Existing explicit ABI/interpreter/source constraints are preserved.
+
+## Newly cooled follow-on (2026-11-13, #15988)
+
+This refresh advances **SentencePiece 0.2.2 → 0.2.3** in the twelve direct
+MLX/CUDA source recipes that pinned 0.2.2 and their seventeen complete locks;
+**Reactor SDK 1.13.0 → 1.14.0** in its source/lock; and the inseparable
+**Pydantic 2.14.2 / Core 2.50.2 → 2.14.3 / 2.50.4** pair in MiniMax H3 MLX
+and Pixal Metal. Transitive-only SentencePiece/Pydantic entries in other
+profiles retain their existing resolutions. No native/model source, interpreter,
+Torch/CUDA/MLX pin, platform marker or unrelated artifact allowlist changes.
+
+Source/API review:
+
+- [SentencePiece 0.2.3](https://github.com/google/sentencepiece/releases/tag/v0.2.3)
+  adds an independent Lite/FlatBuffers runtime and training algorithms; these
+  profiles continue loading existing Protobuf models through the full processor.
+  Python now requires 3.10+, within the affected profiles' 3.11+ floors. Its
+  wrapper preserves encode options when pickled, accepts legacy model-only
+  pickle state, and repairs empty-batch decoding and normalizer flags. The
+  retained Transformers 5.22.1 SentencePiece conversion/backend code was
+  inspected; no switch to Lite or retraining of user tokenizers is introduced.
+- [Reactor 1.14.0 changelog](https://github.com/reactor-team/reactor-client-sdks/blob/python-v1.14.0/sdks/python/CHANGELOG.md)
+  moves reactor-webrtc 0.24.2 → 0.26.0 on the same libwebrtc revision, raises
+  the default data-channel message ceiling, and fixes reconnect/stepped-frame
+  handling. The inspected wheel preserves the streamed constructor/JWT,
+  callback/track, command, upload and disconnect APIs used by
+  `scripts/reactor-render.py`. Its ctypes ABI declarations are unchanged and
+  the native Apple Silicon library loads and passes its ABI check. There are
+  still seven wheels and no default runtime dependencies; the audio-device
+  extra remains absent. No provider connection or paid call was made.
+- [Pydantic 2.14.3](https://github.com/pydantic/pydantic/releases/tag/v2.14.3)
+  requires exactly Core 2.50.4. The release includes schema/serialization
+  optimizations, GC fixes and validation/copy fixes. Inspected Gradio 6.31.0
+  `Model3D` uses `FileData`; image/prediction data models and MLX-VLM 0.6.10's
+  retained request schemas use the same BaseModel/Field/validator interfaces.
+  No application API adaptation is needed by the exercised contracts. H3's
+  generation runner does not start the optional VLM HTTP server.
+
+All nineteen complete closures were resolved with a fresh **hash-verified uv
+0.13.7** and **2026-11-06T00:00:00Z** cutoff. Extract each existing
+`name==version` requirement with its marker into scratch constraints, substituting
+only the selected versions; use the target/header commands and arm64 macOS
+universal environment restrictions already documented above. Check the entire
+resolved package/version/marker set before transferring the newly generated
+changed-package blocks into the original lock. Preserve companion hash blocks
+and provenance comments, as in the thirty-second slice's bounded recipe.
+Never compose artifact hashes by hand. The header's bounded-regeneration line
+records this run; older commands/dates below it describe the prior baseline.
+
+For CUDA temporary projects, use an **explicit named CUDA index** for Torch
+(and Wan's Torchvision), plus any retained CUDA-local package such as
+`torchcodec==0.17.0+cu126`. Resolve other packages from PyPI. The older
+AudioLDM2/ACE-Step 1.5 multi-index recipes can select undated PyTorch mirrors of
+ordinary PyPI packages and then fail the exclusion cutoff (observed for Pillow).
+The scoped-index recipe avoids that failure without weakening the cutoff or
+changing installer indexes. The complete emitted lock still carries the
+existing CUDA extra-index URL and exact allowed hashes.
+
+Parsed before/after checks preserve every unrelated identity, marker and hash
+set. Across the affected union, **269 identities / 5,313 distinct artifact
+hashes** match official, non-yanked pre-cutoff PyPI or PyTorch-index artifacts.
+Fresh OSV/MAL querybatch requests cover **271 identities**, including base
+versions of CUDA-local packages; response counts, errors and pagination tokens
+are checked, with zero findings. This does not certify bundled native libraries
+or model assets. All nineteen full-profile hash-required installation dry plans
+pass for their declared targets; these plans select artifacts without installing
+or executing those full runtimes.
+
+Native offline probes run on Apple Silicon, **CPython 3.13.18**, against fresh
+seven-package baseline/candidate hash-installed subclosures, both passing
+`uv pip check`. `scripts/cooled_runtime_probe.py` performs:
+
+- Real SentencePiece BPE/unigram training on a tiny synthetic corpus under
+  0.2.2, then identical encoding/decoding (Unicode, whitespace, byte fallback,
+  empty text and BOS/EOS) under 0.2.3 using the same serialized models. Model
+  bytes and legacy pickles reload; candidate pickles retain encode options;
+  corrupt models are refused. No production tokenizer/model is downloaded.
+- Real Reactor native-library loading, client construction, message/raw-frame
+  callback dispatch, track selection, command/upload signatures, pre-connect
+  refusal and no-session disconnect. Callback inputs are synthetic; no WebRTC
+  transport, live stream or provider session is exercised.
+- Actual inspected VLM and Gradio model/helper definitions with real Pydantic:
+  schema limits/literals, file metadata context, JSON serialization/round-trip,
+  extra fields and invalid-input refusal. Definitions are extracted by AST to
+  avoid heavyweight package initializers; only FileData's documentation decorator
+  is omitted. This is not a full Gradio server or model inference test.
+
+Run the opt-in probes in those isolated environments, never an application's
+installed runtime. First run `sentencepiece --fixtures <scratch> --baseline`
+with 0.2.2; then use the same scratch directory with 0.2.3 and no `--baseline`.
+Every subcommand enforces its exact baseline/candidate versions; pass
+`--baseline` only in the baseline environment. The `reactor` subcommand needs
+only the locked SDK. `pydantic` takes `--vlm`,
+`--gradio`, and `--client` paths to the package directories from the inspected,
+hash-verified wheels. Python socket connections are refused by the probes;
+Reactor's native connect API is never invoked.
+
+Retained PyAV 18 on Python 3.11, SymPy's `mpmath<1.4`, Pixal Gradio's
+`safehttpx<0.2`/`tomlkit<0.15`, and ACE-Step's py3langid 0.3 caller constraint
+are unchanged. The Pydantic probes also pass after reinstalling Pixal's distinct retained
+Annotated-Types 0.7.0 artifact (H3 uses 0.8.0). Seven focused installer,
+profile, Reactor capture, H3 readiness and Pixal adapter files pass **222 tests**.
+No full GPU runtime installation, CUDA/Windows execution, weights, generation,
+production records or output-quality evaluation is claimed.

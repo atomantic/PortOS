@@ -35,33 +35,23 @@ during install.
 
 ## Regenerating locks
 
-Edit `scripts/requirements-acestep15-cuda.txt`. Using uv 0.13.1, run from the
-repository root (Bash):
+Edit `scripts/requirements-acestep15-cuda.txt`, then use hash-verified uv
+0.13.7 and the [scoped-index recipe](./WAN22_CUDA.md#regenerating-locks),
+substituting ACE-Step 1.5's source/output names. Scope Torch and retained
+CUDA-local packages (currently Torchcodec) to the explicit CUDA index;
+Torchvision/TorchAudio stay on PyPI. Preserve CPython 3.11, both x86_64 target
+platforms, existing output pins, markers and unrelated hash blocks. Do not
+remove the old output before resolving. Advance the cutoff to at least seven
+days ago and restore each target/cutoff header.
 
-```bash
-for target in windows linux; do
-  case "$target" in
-    windows) platform=x86_64-pc-windows-msvc ;;
-    linux) platform=x86_64-manylinux_2_28 ;;
-  esac
-  out="scripts/requirements-acestep15-cuda-${target}.lock.txt"
-  rm -f "$out"
-  uv pip compile scripts/requirements-acestep15-cuda.txt \
-    --python-version 3.11 --python-platform "$platform" \
-    --generate-hashes --only-binary :all: \
-    --index-url https://pypi.org/simple \
-    --extra-index-url https://download.pytorch.org/whl/cu126 \
-    --index-strategy unsafe-best-match --emit-index-url \
-    --no-header --annotation-style line --exclude-newer 2026-11-01 \
-    -o "$out"
-done
-```
-
-Advance the cutoff to a UTC date at least seven days before the update, and
-restore each lock's two-line target/cutoff header (see the existing locks). See
-[AudioLDM2](./AUDIOLDM2_CUDA.md#regenerating-locks) for the multi-index
-rationale and the OSV query (including `MAL-` records) to run against
-`requirements-acestep15-cuda-{target}.lock.txt` immediately before merge.
+Ordinary PyPI packages on the CUDA mirror can lack upload dates and fail
+cooldown validation. The
+[bounded #15988 procedure](./PYTHON_RUNTIME_REFRESH.md#newly-cooled-follow-on-2026-11-13-15988)
+describes complete-closure constraints and selective generated-block transfer.
+Query OSV for every resolved package, including `MAL-`, using
+[AudioLDM2's audit](./AUDIOLDM2_CUDA.md#regenerating-locks) with the ACE-Step
+1.5 lock paths. Check response counts, errors and pagination; any unreadable
+result or advisory blocks publication.
 
 ## Fresh install and readiness evidence
 

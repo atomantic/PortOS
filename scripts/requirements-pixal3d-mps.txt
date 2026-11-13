@@ -61,8 +61,8 @@ pillow==13.0.0
 pip==26.3
 plyfile==1.1.5
 psutil==7.2.2
-pydantic==2.14.2
-pydantic-core==2.50.2
+pydantic==2.14.3
+pydantic-core==2.50.4
 pydub==0.25.1
 pygments==2.21.0
 pymeshlab==2025.7.post1
