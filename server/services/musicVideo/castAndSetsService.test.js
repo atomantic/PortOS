@@ -15,6 +15,7 @@ import { join } from 'path';
 import { request } from '../../lib/testHelper.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
 import { musicVideoCatalogReferenceId, musicVideoConditioningReferences, musicVideoLinkedReferenceId } from '../../lib/musicVideoConditioning.js';
+import { MOOD_BOARD_LOOK_LABEL, musicVideoCreativeContext, musicVideoDirectorLook } from '../../lib/musicVideoCreativeContext.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
 
 const ROOT = () => lazyTempDataRoot('mv-cast-sets-test-');
@@ -3076,6 +3077,41 @@ describe('rebuilding a catalog stage guide (#15086)', () => {
     const refused = await request(app).patch(`/api/music-video/${legacy.id}/cast-and-sets/direction-text`).send({ look: 'x' });
     expect(refused.status).toBe(409);
     expect(refused.body.code || refused.body.error?.code).toBe('CAST_SETS_NOT_CATALOG');
+    expect(runPrompt).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  // Uniquely catches a catalog-first check-in (with no generated direction yet) refusing to save a director look (#15967).
+  it('creates a text-only direction on a catalog-first check-in and uses its look in creative context', async () => {
+    await useCatalog();
+    const project = await seed({
+      concept: {
+        prompt: 'A nocturnal ferry crossing',
+        style: '16mm grain',
+        moodBoardStyle: 'Warm sepia afternoon light',
+        subjects: [{ id: 'keeper', kind: 'character', role: 'protagonist', name: 'Keeper', ingredientId: 'chr-keeper' }],
+      },
+    });
+    const started = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/catalog`).send({});
+    expect(started.status).toBe(200);
+    expect(started.body.stage.direction).toBeUndefined();
+    const beforeCheckin = started.body.project.castAndSets.catalogCheckin;
+
+    const empty = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction-text`).send({ look: '   ' });
+    expect(empty.status).toBe(422);
+    expect(empty.body.code || empty.body.error?.code).toBe('CAST_SETS_NO_EDITS');
+
+    const look = 'Night palette: deep blue-black with cyan and pink light.';
+    const saved = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction-text`).send({ look });
+    expect(saved.status).toBe(200);
+    expect(saved.body.stage.direction).toEqual({ look });
+    expect(saved.body.project.castAndSets.catalogCheckin.basis).toBe(beforeCheckin.basis);
+    expect(saved.body.project.castAndSets.catalogCheckin.items).toEqual(beforeCheckin.items);
+
+    const context = musicVideoCreativeContext(saved.body.project.concept, { look: musicVideoDirectorLook(saved.body.project) });
+    expect(context).toContain(look);
+    expect(context).not.toContain(MOOD_BOARD_LOOK_LABEL);
+    expect(context).not.toContain('Warm sepia afternoon light');
     expect(runPrompt).not.toHaveBeenCalled();
     expect(enqueue).not.toHaveBeenCalled();
   });

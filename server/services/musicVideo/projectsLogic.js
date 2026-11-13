@@ -1,4 +1,5 @@
 import { festivalPacketSchema } from '../../lib/musicVideoFestivalPacket.js';
+import { normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
 import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 
 /**
@@ -120,7 +121,7 @@ function normalizeVisualSpec(patch, base = null) {
 }
 
 /** Build a fresh project record from validated create input. */
-export function buildProjectRecord(input, { id, now }) {
+export function buildProjectRecord(input, { id, now, blender, sourceFilm }) {
   const productionPolicy = normalizeMusicVideoProductionPolicy(input.productionPolicy || (input.mediaMode ? { strategy: 'code-first', maxGeneratedVideoPercent: input.mediaMode === 'code-images-video' ? 100 : 0 } : null));
   const {
     name, mode = 'director', trackId = null,
@@ -135,6 +136,9 @@ export function buildProjectRecord(input, { id, now }) {
     version: 1,
     parentProjectId: null,
     rootProjectId: null,
+    // Cross-domain lineage is distinct from Music Video's own version tree.
+    ...(sourceFilm ? { sourceFilm } : {}),
+    ...(blender ? { blender: normalizeBlenderRecord(blender) } : {}),
     status: 'draft',
     mode,
     createdAt: now,
@@ -885,14 +889,18 @@ function linkSceneCameo(project, before, after) {
  */
 export function applySceneUpdate(project, sceneId, patch) {
   const parsed = parseSceneOrThrow(musicVideoSceneUpdateSchema, patch);
-  // A shot's own look is stored complete; null returns it to the video's look.
-  const planned = 'shotSheet' in parsed ? { ...parsed, shotSheet: normalizeShotSheet(parsed.shotSheet) } : parsed;
-  const looked = 'filmLook' in planned ? { ...planned, filmLook: planned.filmLook ? normalizeFilmLook(planned.filmLook) : null } : planned;
-  const finished = 'templateEffects' in looked ? { ...looked, templateEffects: normalizeTemplateEffects(looked.templateEffects) } : looked;
-  const data = 'preMusic' in finished ? { ...finished, preMusic: normalizePreMusic(finished.preMusic) } : finished;
   const scenes = project.scenes || [];
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
+  // Done is an independent marker. Its small patch must not replace another
+  // tab's current direction, while full sheet rewrites and null still replace.
+  const checkedOnly = parsed.shotSheet && Object.keys(parsed.shotSheet).length === 1 && typeof parsed.shotSheet.checked === 'boolean';
+  const sheet = checkedOnly ? { ...scenes[idx].shotSheet, checked: parsed.shotSheet.checked } : parsed.shotSheet;
+  // A shot's own look is stored complete; null returns it to the video's look.
+  const planned = 'shotSheet' in parsed ? { ...parsed, shotSheet: normalizeShotSheet(sheet) } : parsed;
+  const looked = 'filmLook' in planned ? { ...planned, filmLook: planned.filmLook ? normalizeFilmLook(planned.filmLook) : null } : planned;
+  const finished = 'templateEffects' in looked ? { ...looked, templateEffects: normalizeTemplateEffects(looked.templateEffects) } : looked;
+  const data = 'preMusic' in finished ? { ...finished, preMusic: normalizePreMusic(finished.preMusic) } : finished;
   const patched = 'codeClip' in data ? { ...scenes[idx], ...data } : keepCodeClipWithItsClip(scenes[idx], { ...scenes[idx], ...data });
   const kept = keepAnchorOnItsWord(scenes[idx], patched, project.lyricCues);
   // A shot turning into a still takes the nearest move to its planned camera (#10589) unless

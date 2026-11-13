@@ -1581,3 +1581,26 @@ describe('shot prompt save-on-blur', () => {
     expect(onSave).toHaveBeenCalledWith('s1', { prompt: 'typed prompt' });
   });
 });
+
+// Catches a separate completion flag, lost sheet details, duplicate saves, and a failed save showing Done.
+it('saves the shared Done marker and rolls back failed saves without losing other details', async () => {
+  let settle;
+  const onSave = vi.fn(() => new Promise(resolve => { settle = resolve; }));
+  function Harness({ locked = false }) {
+    const [scene, setScene] = useState({ sceneId: 's1', label: 'Shot 1', startSec: 0, endSec: 3, takes: [], shotSheet: { location: 'Park', checked: false } });
+    return <SceneCard scene={scene} index={0} locked={locked} onEditLocal={(_id, patch) => setScene(current => ({ ...current, ...patch }))} onSave={onSave} onSetDone={(id, checked) => onSave(id, { shotSheet: { ...scene.shotSheet, checked } }).then(saved => { if (saved) setScene(current => ({ ...current, shotSheet: { ...current.shotSheet, checked } })); return saved; })} />;
+  }
+  const { rerender } = render(<Harness />);
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Done' }));
+  expect(onSave).toHaveBeenCalledWith('s1', { shotSheet: { location: 'Park', checked: true } });
+  expect(screen.getByRole('checkbox', { name: 'Saving…' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Saving…' }));
+  expect(onSave).toHaveBeenCalledTimes(1);
+  await act(async () => settle(true));
+  expect(screen.getByRole('checkbox', { name: 'Done' })).toBeChecked();
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Done' }));
+  await act(async () => settle(false));
+  expect(screen.getByRole('checkbox', { name: 'Done' })).toBeChecked();
+  rerender(<Harness locked />);
+  expect(screen.getByRole('checkbox', { name: 'Done' })).toBeDisabled();
+});

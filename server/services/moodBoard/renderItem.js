@@ -43,11 +43,12 @@ function buildItemRenderPrompt(board, item) {
   const text = String(item?.text || '').trim();
   const style = isNonBlankStr(board?.style?.prompt) ? board.style.prompt.trim() : '';
   const subject = `Mood board reference image: ${text}`;
+  const styleBlock = style && `Visual style (aesthetic only; keep the subject above, do not copy any subject or scene described here): ${style}`;
   return {
-    prompt: style ? `${subject}\n\nVisual style: ${style}` : subject,
+    prompt: style ? `${subject}\n\n${styleBlock}` : subject,
     promptAdditions: [
       promptAddition('mood-board-note', 'Mood board reference', 'Mood board reference image: [note]'),
-      promptAddition('board-style', 'Board style', style && `Visual style: ${style}`),
+      promptAddition('board-style', 'Board style', styleBlock),
     ].filter(Boolean),
   };
 }

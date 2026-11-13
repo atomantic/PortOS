@@ -1109,11 +1109,12 @@ const textList = (items, max, cap) => items.map((x) => String(x).trim().slice(0,
  * keep the stored value. Returns `{ direction, changed }`.
  */
 export function applyCastAndSetsDirectionTextEdits(previous, edits = {}) {
-  const direction = { ...previous };
+  const base = previous || {};
+  const direction = { ...base };
   const changed = [];
   if (typeof edits.look === 'string') direction.look = edits.look.trim().slice(0, 500);
   if (edits.protagonist) {
-    const protagonist = { ...(previous.protagonist || {}) };
+    const protagonist = { ...(base.protagonist || {}) };
     if (typeof edits.protagonist.signature === 'string') protagonist.signature = edits.protagonist.signature.trim().slice(0, TEXT);
     if (Array.isArray(edits.protagonist.rules)) protagonist.rules = textList(edits.protagonist.rules, 300, CAST_SETS_LIMITS.rules);
     if (Array.isArray(edits.protagonist.expressions)) protagonist.expressions = textList(edits.protagonist.expressions, 300, CAST_SETS_LIMITS.expressions);
@@ -1123,7 +1124,7 @@ export function applyCastAndSetsDirectionTextEdits(previous, edits = {}) {
     direction.props = normalizeProps(edits.props.map((p) => pickText(p, { id: 64, name: SHORT, owner: SHORT, description: TEXT })));
   }
   if (edits.overlayConcept) {
-    const overlay = { ...(previous.overlayConcept || {}) };
+    const overlay = { ...(base.overlayConcept || {}) };
     if (typeof edits.overlayConcept.summary === 'string') overlay.summary = edits.overlayConcept.summary.trim().slice(0, TEXT);
     if (Array.isArray(edits.overlayConcept.elements)) {
       overlay.elements = edits.overlayConcept.elements.map((el) => pickText(el, { name: SHORT, description: TEXT }))
@@ -1131,12 +1132,12 @@ export function applyCastAndSetsDirectionTextEdits(previous, edits = {}) {
     }
     direction.overlayConcept = overlay;
   }
-  if (differs(previous.look, direction.look)) changed.push('look');
+  if (differs(base.look || '', direction.look || '')) changed.push('look');
   for (const key of ['signature', 'rules', 'expressions']) {
-    if (differs(previous.protagonist?.[key] || (key === 'signature' ? '' : []), direction.protagonist?.[key] || (key === 'signature' ? '' : []))) changed.push(key);
+    if (differs(base.protagonist?.[key] || (key === 'signature' ? '' : []), direction.protagonist?.[key] || (key === 'signature' ? '' : []))) changed.push(key);
   }
-  if (differs(previous.props || [], direction.props || [])) changed.push('props');
-  if (differs(previous.overlayConcept || {}, direction.overlayConcept || {})) changed.push('overlay concept');
+  if (differs(base.props || [], direction.props || [])) changed.push('props');
+  if (differs(base.overlayConcept || {}, direction.overlayConcept || {})) changed.push('overlay concept');
   return { direction, changed };
 }
 

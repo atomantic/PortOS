@@ -109,7 +109,7 @@ export function __analyzeBeatGridPcm(samples, sampleRate, { hop = ONSET_HOP } = 
   const roundedBpm = bpm == null ? null : Number(bpm.toFixed(2));
   const emit = (t) => Number(Math.min(durationSec, t + FFT_SIZE / 2 / sampleRate).toFixed(3));
   const beats = frameBeats.map(emit);
-  const downbeats = pickDownbeats(frameBeats, onset, fps).map(emit);
+  const downbeats = pickDownbeats(frameBeats, onset, fps).downbeats.map(emit);
   const hits = pickHits(onset, fps, durationSec);
   return {
     bpm: roundedBpm,

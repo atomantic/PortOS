@@ -5747,6 +5747,37 @@ describe('peerSync', () => {
     });
   });
 
+  describe('applyIncomingPush — mood-board media hosting', () => {
+    const record = {
+      id: 'mb-hosted', name: 'Hosted board', posterImageRef: 'board-poster.png', collageImageRef: 'board-collage.png',
+      items: [{ type: 'image', imageUrl: '/data/images/board-pin.png' }, { type: 'video', mediaKey: 'video:board-clip.mp4' }],
+      updatedAt: '2026-05-23T00:00:00.000Z',
+    };
+    const assets = ['board-poster.png', 'board-collage.png', 'board-pin.png', 'board-clip.mp4'].map(filename => ({
+      kind: filename.endsWith('.mp4') ? 'video' : 'image', filename, sha256: 'a'.repeat(64),
+    }));
+
+    it('keeps absent poster, collage and pinned media on a host-mode peer without admitting unrelated files', async () => {
+      vi.mocked(getPeers).mockResolvedValue([{ id: 'p-host', instanceId: 'peer-host', name: 'Host', mediaSyncMode: 'host' }]);
+      const result = await applyIncomingPush({ kind: 'moodBoard', record, sourceInstanceId: 'peer-host',
+        assetManifest: [...assets, { kind: 'image', filename: 'unrelated.png', sha256: 'b'.repeat(64) }],
+      });
+      expect(result.missingAssets).toEqual([]);
+      const { resolveMediaLocations, listHostedEntries } = await import('../peerHostedMedia.js');
+      const locations = await resolveMediaLocations(assets.map(({ kind, filename }) => ({ kind, ref: filename })));
+      expect(locations).toHaveLength(4);
+      for (const location of locations) expect(location).toMatchObject({ location: 'remote', hostPeerId: 'peer-host' });
+      expect(await listHostedEntries()).not.toHaveProperty('image:unrelated.png');
+      expect(peerFetch).not.toHaveBeenCalledWith(expect.stringContaining('/data/'), expect.anything(), expect.anything());
+    });
+
+    it('retains normal copying for a copy-mode peer', async () => {
+      vi.mocked(getPeers).mockResolvedValue([{ id: 'p-copy', instanceId: 'peer-copy', name: 'Copy', mediaSyncMode: 'copy' }]);
+      const result = await applyIncomingPush({ kind: 'moodBoard', record, sourceInstanceId: 'peer-copy', assetManifest: assets });
+      expect(result.missingAssets).toEqual(assets);
+    });
+  });
+
   describe('applyIncomingPush — mediaCollection', () => {
     it('applies an incoming mediaCollection push into local collections', async () => {
       // Use the real mergeMediaCollectionsFromSync via importActual so the

@@ -21,6 +21,18 @@ import { getActiveAgents } from './agentManagement.js';
 import { getGoals } from './identity.js';
 
 const HEALTH_CHECK_INTERVAL_MS = 30_000;
+const RECONNECT_CEILING_MS = 5 * 60 * 1000;
+
+/**
+ * Classify whether a getMe error indicates the token was rejected by the API
+ * (e.g. 401 Unauthorized, 404 Not Found) versus a transient network failure.
+ */
+function isTokenRejection(err) {
+  if (!err) return false;
+  if (err.error_code === 401 || err.error_code === 404 || err.status === 401 || err.status === 404) return true;
+  const msg = String(err.message || err.description || '');
+  return /\b(unauthorized|not found)\b/i.test(msg) || /\b(401|404)\b/.test(msg);
+}
 
 // Module-level state
 let bot = null;
@@ -85,6 +97,10 @@ function cleanExpiredCheckins() {
 export async function init(sendTestMessage = false, { fromReconnect = false } = {}) {
   await cleanup();
 
+  if (!fromReconnect) {
+    reconnectionAttempts = 0;
+  }
+
   const settings = await getSettings();
   // The MCP bridge owns the token while selected; a stray timer must not start a second poller.
   if (settings.telegram?.method === 'mcp-bridge') {
@@ -107,17 +123,21 @@ export async function init(sendTestMessage = false, { fromReconnect = false } = 
   bot = createTelegramBot(token, { polling: true });
 
   // Validate token
-  const me = await bot.getMe().catch(async err => {
-    console.error(`📱 Telegram: invalid token — ${err.message}`);
-    // Polling starts at construction; stop it before dropping the failed bot.
+  let me;
+  try {
+    me = await bot.getMe();
+  } catch (err) {
+    if (isTokenRejection(err)) {
+      console.error(`📱 Telegram: invalid token — ${err.message}`);
+      await cleanup();
+      return;
+    }
+    console.error(`📱 Telegram: connection failed — ${err.message}`);
     await cleanup();
-    return null;
-  });
-
-  if (!me) {
-    if (fromReconnect) await reconnect();
+    await reconnect();
     return;
   }
+
   reconnectionAttempts = 0;
 
   botUsername = me.username;
@@ -244,18 +264,14 @@ export async function cleanup() {
 }
 
 /**
- * Reconnect with exponential backoff
+ * Reconnect with backoff capped at 5 minutes
  */
 async function reconnect() {
   // One outage arms one timer; cleanup() can only cancel the timer it can see.
   if (reconnectionTimeout) return;
-  if (reconnectionAttempts >= 10) {
-    console.error('📱 Telegram: max reconnection attempts reached');
-    return;
-  }
   reconnectionAttempts++;
-  const delay = 5000 * reconnectionAttempts;
-  console.log(`📱 Telegram: reconnecting in ${delay / 1000}s (attempt ${reconnectionAttempts}/10)`);
+  const delay = Math.min(5000 * reconnectionAttempts, RECONNECT_CEILING_MS);
+  console.log(`📱 Telegram: reconnecting in ${delay / 1000}s (attempt ${reconnectionAttempts})`);
 
   reconnectionTimeout = setTimeout(async () => {
     reconnectionTimeout = null;

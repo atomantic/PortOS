@@ -288,6 +288,20 @@ describe('naming the shots behind Shot coverage and Shot details', () => {
     expect(storyboard.incompleteShots).toEqual([{ sceneId: 's3', missing: ['an end inside the song', 'action'] }]);
     expect(productionReadiness(base).storyboard).toMatchObject({ coverage: [], incompleteShots: [] });
   });
+
+  // Uniquely catches the storyboard refusing the last frame the Blender film check requires: such a film passed neither.
+  it('accepts a Blender film whose last shot ends on the frame holding the end of an off-grid song', () => {
+    const base = project();
+    const board = (durationSec, endSec, film = {}) => productionReadiness({ ...base, ...film, audioAnalysis: { durationSec },
+      scenes: [base.scenes[0], { ...base.scenes[1], endSec }] }).storyboard;
+    const film = (durationSec, endSec, fps = 24) => board(durationSec, endSec, { composition: { mode: 'blender' }, blender: { settings: { fps } } });
+    // 8.03 s is 192.72 frames at 24 fps and 96.36 at 12: the film ends on frame 193 or 97.
+    expect(film(8.03, 8.041667)).toMatchObject({ coverage: [], incompleteShots: [] });
+    expect(film(8.03, 8.083333, 12)).toMatchObject({ coverage: [], incompleteShots: [] });
+    // One frame further is past the song, and a Board shot keeps its strict end.
+    expect(film(8.03, 8.083333).incompleteShots).toEqual([{ sceneId: 's2', missing: ['an end inside the song'] }]);
+    expect(board(8.03, 8.041667).incompleteShots).toEqual([{ sceneId: 's2', missing: ['an end inside the song'] }]);
+  });
 });
 
 

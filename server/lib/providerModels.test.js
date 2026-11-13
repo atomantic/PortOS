@@ -256,10 +256,10 @@ describe('providerModels', () => {
       expect(effortLevelsForProvider({ id: 'grok', type: 'api' })).toBeNull();
     });
 
-    it('returns the narrower agy ladder for antigravity ids and the agy command', () => {
-      expect(effortLevelsForProvider({ id: 'antigravity-cli', command: 'agy' })).toBe(ANTIGRAVITY_EFFORT_LEVELS);
-      expect(effortLevelsForProvider({ id: 'antigravity-tui' })).toBe(ANTIGRAVITY_EFFORT_LEVELS);
-      expect(effortLevelsForProvider({ id: 'custom', command: '/Users/x/.local/bin/agy' })).toBe(ANTIGRAVITY_EFFORT_LEVELS);
+    it('preserves the legacy agy fallback ladder for antigravity ids and the agy command', () => {
+      expect(effortLevelsForProvider({ id: 'antigravity-cli', command: 'agy' })).toEqual(['low', 'medium', 'high']);
+      expect(effortLevelsForProvider({ id: 'antigravity-tui' })).toEqual(['low', 'medium', 'high']);
+      expect(effortLevelsForProvider({ id: 'custom', command: '/Users/x/.local/bin/agy' })).toEqual(['low', 'medium', 'high']);
     });
 
     it('offers the OpenAI-compatible ladder only for Ollama-backed OpenCode', () => {
@@ -309,11 +309,11 @@ describe('providerModels', () => {
       expect(effortLevelsForProvider(agy, 'claude-sonnet-4-6')).toBeNull();
     });
 
-    it('falls back to the full agy ladder when the catalog is unknown', () => {
+    it('keeps xhigh out of the fallback ladder when the catalog is unknown', () => {
       expect(effortLevelsForProvider({ id: 'antigravity-cli', command: 'agy' }, 'gemini-3.1-pro'))
-        .toBe(ANTIGRAVITY_EFFORT_LEVELS);
+        .toEqual(['low', 'medium', 'high']);
       expect(effortLevelsForProvider({ id: 'antigravity-cli', command: 'agy', models: [] }, 'gemini-3.1-pro'))
-        .toBe(ANTIGRAVITY_EFFORT_LEVELS);
+        .toEqual(['low', 'medium', 'high']);
     });
 
     it('drops `minimal` from the picker for the gpt-6 family, which rejects it', () => {
@@ -338,6 +338,17 @@ describe('providerModels', () => {
       expect(effortLevelsForProvider({ id: 'claude-code', command: 'claude' }, 'claude-opus-5-high'))
         .toBe(CLAUDE_EFFORT_LEVELS);
     });
+  });
+
+  it('normalizes Hydrogen xhigh aliases while keeping older catalogs restricted', () => {
+    const models = [...AGY_CATALOG, ...['low', 'medium', 'high', 'xhigh'].map(level => `gemini-4-hydrogen-${level}`)];
+    const provider = { harnessId: 'antigravity', models };
+    expect(splitAntigravityModel('gemini-4-hydrogen-xhigh')).toEqual({ base: 'gemini-4-hydrogen', effort: 'xhigh' });
+    expect(antigravityBaseModels(models).filter(model => model.startsWith('gemini-4-hydrogen'))).toEqual(['gemini-4-hydrogen']);
+    expect(effortLevelsForProvider(provider, 'gemini-4-hydrogen')).toEqual(['low', 'medium', 'high', 'xhigh']);
+    expect(resolveCliEffort('xhigh', provider, 'gemini-4-hydrogen')).toBe('xhigh');
+    expect(resolveCliEffort('xhigh', provider, 'gemini-3.1-pro')).toBe('high');
+    expect(resolveCliEffort('xhigh', provider, ANTIGRAVITY_CONFIGURED_DEFAULT)).toBe('high');
   });
 
   describe('splitAntigravityModel', () => {
@@ -403,7 +414,7 @@ describe('providerModels', () => {
       expect(effortLevelsForProvider(
         { id: 'antigravity-cli', command: 'agy', models: AGY_CATALOG },
         ANTIGRAVITY_CONFIGURED_DEFAULT,
-      )).toBe(ANTIGRAVITY_EFFORT_LEVELS);
+      )).toEqual(['low', 'medium', 'high']);
     });
   });
 
@@ -643,9 +654,7 @@ describe('providerModels', () => {
       expect(resolveCliEffort('ultra', { id: 'claude-code', command: 'claude' })).toBe('max');
     });
 
-    // agy tops out at `high`, so an effort saved against claude/codex must clamp
-    // DOWN to the nearest supported level rather than vanish when the user
-    // switches the task's provider to Antigravity.
+    // Saved efforts survive a provider switch by clamping to its supported ladder.
     it('clamps down to agy\'s narrower ladder', () => {
       const agy = { id: 'antigravity-cli', command: 'agy' };
       expect(resolveCliEffort('medium', agy)).toBe('medium');

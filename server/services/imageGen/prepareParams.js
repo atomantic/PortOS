@@ -57,6 +57,7 @@ import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/syste
 import { usesFlux3, usesMossSwift, usesMinimaxH3Image } from '../../lib/imageRuntimeRemedies.js';
 import { usesDiffusersRunner } from '../../lib/runners.js';
 import { promptAddition } from '../../lib/modelInput.js';
+import { QUICK_EDIT_PREFIX, QUICK_EDIT_PREFIX_WITH_REFERENCES } from '../../lib/quickEditPrompt.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../../lib/imageGenCapabilities.js';
 import { reviewedReferenceDigest } from './reviewedReference.js';
 
@@ -149,7 +150,7 @@ function withQuickEditInstruction(data) {
   // Named references after the first are pictures to draw from (a place, a
   // prop, a face), never images to edit.
   const extraReferences = Math.max(0, (data.referenceImageFiles?.length || 0) - 1);
-  const prefix = extraReferences ? 'Edit the first reference image: ' : 'Edit the reference image: ';
+  const prefix = extraReferences ? QUICK_EDIT_PREFIX_WITH_REFERENCES : QUICK_EDIT_PREFIX;
   const referencesLine = extraReferences ? '. Use the other reference images only as visual references for this change' : '';
   const preservation = '. Keep everything else exactly as it is: composition, framing, subject, lighting, color and film look.';
   return { ...data, authoredPrompt, prompt: `${prefix}${authoredPrompt}${referencesLine}${preservation}`,

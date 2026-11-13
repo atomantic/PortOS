@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   blenderAgentBrief, blenderBulkPlan, blenderFilmSummary, blenderJobPercent, blenderOptionChanges, blenderOptionFields, blenderRenderBlocker,
   blenderSceneClips, blenderSettingsProblems, blenderShotClip, blenderShotPlayable, blenderShotRenderBlocker, blenderShotRenderStatus, blenderShotStage, blenderShotThumbPath,
-  blenderStaleReason, blenderStillPreviewItems, blenderSyncJob, changedBlenderSettings, mergeBlenderJob, sortBlenderJobs,
+  blenderShotTiming, blenderStaleReason, blenderStillPreviewItems, blenderSyncJob, changedBlenderSettings, mergeBlenderJob, sortBlenderJobs,
 } from './musicVideoBlender.js';
 import { blenderFilmState } from '../test/blenderFilmFixture.js';
 
@@ -241,6 +241,13 @@ describe('blenderRenderBlocker', () => {
   });
 });
 
+describe('blenderShotTiming', () => {
+  it('shows a lead-in before 0 and keeps a song shot on the unsigned clock', () => {
+    expect(blenderShotTiming({ id: 's000', start: -6, end: 0, frames: 144 })).toBe('-0:06.00–0:00.00 · 6s · 144 frames');
+    expect(blenderShotTiming({ id: 's010', start: 0, end: 2, frames: 48 })).toBe('0:00.00–0:02.00 · 2s · 48 frames');
+  });
+});
+
 describe('blenderStillPreviewItems', () => {
   it('builds lightbox items that carry no gallery filename', () => {
     const items = blenderStillPreviewItems(blenderFilmState(), (path) => `/media/${path}`);
@@ -265,5 +272,14 @@ describe('blenderAgentBrief', () => {
     expect(blenderAgentBrief({ projectId: 'mv-test', state: withOptions })).toContain('Film options now: palette="neon".');
     const empty = blenderAgentBrief({ projectId: 'mv-test', state: blenderFilmState({ manifest: null, workspace: { exists: false, dir: 'data/music-video/mv-test/blender', hasFilm: false, files: 0 } }) });
     expect(empty).toContain('No src/film.py yet');
+  });
+
+  it('directs standalone authoring to its film workspace and permits the supported lead-in timing', () => {
+    const brief = blenderAgentBrief({ projectId: 'film-test', standalone: true, state: { settings: {} } });
+    expect(brief).toContain('Workspace on this machine: data/code-animation/films/film-test');
+    expect(brief).toContain('/api/code-animation/films/film-test/blender');
+    expect(brief).toContain('negative-time lead-in shots form one contiguous run ending exactly at 0 s');
+    expect(brief).toContain('whole lead-in is at most 120 s');
+    expect(brief).not.toContain('0 <= start');
   });
 });

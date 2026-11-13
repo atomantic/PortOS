@@ -71,6 +71,7 @@ import {
   musicVideoPublishCopyDraftSchema,
   musicVideoPromotionPlanSchema,
   musicVideoPublishThumbnailSchema,
+  musicVideoPublishFrameSchema,
   musicVideoCoverArtComposeSchema,
   musicVideoYoutubeThumbnailComposeSchema,
   musicVideoYoutubeThumbnailPaintSchema,
@@ -1264,6 +1265,18 @@ router.get('/:id/dcp/:artifactId/report', asyncHandler(async (req, res) => {
 // --- Publishing kit (#9281) ---
 // Platform encodes, thumbnails, captions and chapters from the final render
 // (an SSE job), plus per-platform copy: one user-triggered draft, then edits.
+router.get('/:id/publish-kit/video', asyncHandler(async (req, res) => {
+  const { finalRenderFile } = await import('../services/musicVideo/publishKit.js');
+  const { path } = await finalRenderFile(await requireProject(req.params.id));
+  res.sendFile(path);
+}));
+router.post('/:id/publish-kit/frame', asyncHandler(async (req, res) => {
+  const { atSec } = validateRequest(musicVideoPublishFrameSchema, req.body ?? {});
+  const { capturePublishKitFrame } = await import('../services/musicVideo/publishKit.js');
+  const { project } = await capturePublishKitFrame(req.params.id, atSec);
+  res.json({ project });
+}));
+
 router.post('/:id/publish-kit/build', asyncHandler(async (req, res) => {
   res.json(await startPublishKitBuild(req.params.id));
 }));
@@ -2146,7 +2159,7 @@ router.patch('/:id/scenes/:sceneId/takes/:takeId/color-match', asyncHandler(asyn
 
 router.patch('/:id/scenes/:sceneId/takes/:takeId', asyncHandler(async (req, res) => {
   const review = validateRequest(musicVideoTakeReviewSchema, req.body);
-  if (review.acknowledgeRenderQuality) review.reviewer = req.portosAuthContext.enabled ? await requireProductionReviewer(req) : { kind: 'local', label: 'Local operator' };
+  if (review.acknowledgeRenderQuality || review.confirmFrame) review.reviewer = req.portosAuthContext.enabled ? await requireProductionReviewer(req) : { kind: 'local', label: 'Local operator' };
   res.json(await reviewSceneTake(req.params.id, req.params.sceneId, req.params.takeId, review));
 }));
 

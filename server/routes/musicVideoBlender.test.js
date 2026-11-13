@@ -7,14 +7,18 @@
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { request } from '../lib/testHelper.js';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { promisify } from 'node:util';
+import { execFile } from '../lib/childProcess.js';
+import { PY_SUBPROCESS_TIMEOUT_MS, PY_TEST_TIMEOUT_MS, request, resolveTestPython } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { createFakeBlender, exampleManifest } from '../services/musicVideo/blender/__blenderFixture.js';
 
 const ROOT = () => lazyTempDataRoot('mv-blender-route-test-');
+const python = resolveTestPython();
+const execFileAsync = promisify(execFile);
 const blender = vi.hoisted(() => ({ fake: null, ffmpeg: [], posterHold: null }));
 
 vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: ROOT }));
@@ -52,6 +56,7 @@ const projects = await import('../services/musicVideo/projects.js');
 const { musicVideoEvents } = await import('../services/musicVideo/events.js');
 const { __resetBlenderJobsForTests } = await import('../services/musicVideo/blender/jobs.js');
 const { resolveBlenderMedia } = await import('../services/musicVideo/blender/workspace.js');
+const { blenderSongHash } = await import('../services/musicVideo/blender/hashing.js');
 const { prepareBlenderFinal } = await import('../services/musicVideo/blender/finalRender.js');
 const { launchDetached } = await import('../lib/launchDetached.js');
 const { applyFilmLookFinish } = await import('../services/musicVideo/filmLookFinish.js');
@@ -604,13 +609,17 @@ describe('Blender film shot renders', () => {
     const recorded = JSON.parse(readFileSync(metadata, 'utf8'));
     const index = JSON.parse(readFileSync(join(workspace(), 'renders/s010/stills/stills.json'), 'utf8'));
     expect(index[0].songHash).toBe(recorded.songHash);
-    // Old output stays playable, but missing evidence cannot establish currency.
+    // A legacy render (without songHash) keeps its pre-update contract and is not stale for song.
     delete recorded.songHash;
     writeFileSync(metadata, JSON.stringify(recorded));
     const legacy = readFileSync(metadata, 'utf8');
-    expect((await state()).renders.s010.preview).toMatchObject({ complete: true, stale: true, staleReasons: ['song'] });
+    expect((await state()).renders.s010.preview).toMatchObject({ complete: true, stale: false, staleReasons: [] });
     expect(readFileSync(metadata, 'utf8')).toBe(legacy);
-    await renderAll('preview', { shotIds: ['s010'] });
+    delete index[0].songHash;
+    writeFileSync(join(workspace(), 'renders/s010/stills/stills.json'), JSON.stringify(index));
+    expect((await state()).renders.s010.stills[0].stale).toBe(false);
+    await renderAll('preview', { shotIds: ['s010'], force: true });
+    await renderAll('still', { shotIds: ['s010'] });
     const original = await projects.getProject(project.id);
     for (const change of [
       { name: 'A new title' },
@@ -646,6 +655,88 @@ describe('Blender film shot renders', () => {
     expect(blender.fake.control.jobs[0].resume).toBe(false);
     expect((await state()).renders.s010.final.stale).toBe(false);
   });
+
+  it.skipIf(!python)('renders concurrent shots from their own staged song even when the shared song changes before a driver starts', async () => {
+    await scaffold();
+    // The import keeps this harness on the Blender driver. bpy itself is stubbed in the worker below.
+    await writeSource('film.py', `import bpy
+import json, os
+
+def describe(ctx):
+    return {"shots": []}
+
+def build_shot(ctx, shot):
+    with open(os.path.join(ctx.out_dir, shot["id"], "consumed-song.json"), "w", encoding="utf-8") as handle:
+        json.dump(ctx.song, handle)
+`);
+    await syncFilm();
+    // Run the real staged Python driver, doubling only bpy's scene/render API.
+    // Holding shot 1 before driver startup lets shot 2 overwrite the author-facing song.json first.
+    const bootstrap = `import runpy, sys
+from types import SimpleNamespace
+scene = SimpleNamespace(render=SimpleNamespace(image_settings=SimpleNamespace()),
+                        eevee=SimpleNamespace(), frame_set=lambda frame: None)
+def render(**kwargs):
+    with open(scene.render.filepath, "wb") as handle:
+        handle.write(b"frame")
+sys.modules["bpy"] = SimpleNamespace(
+    app=SimpleNamespace(version=(5, 0, 0)), context=SimpleNamespace(scene=scene),
+    ops=SimpleNamespace(wm=SimpleNamespace(read_factory_settings=lambda **kwargs: None),
+                        render=SimpleNamespace(render=render)),
+)
+driver, job_path = sys.argv[1:]
+sys.argv = [driver, "--", job_path]
+runpy.run_path(driver, run_name="__main__")
+`;
+    let release;
+    const hold = new Promise((resolve) => { release = resolve; });
+    let staged;
+    const firstStaged = new Promise((resolve) => { staged = resolve; });
+    const resolveTool = blender.fake.resolveBlenderTool;
+    blender.fake.resolveBlenderTool = async () => ({ ...await resolveTool(), worker: async ({ files, entrypoint, onStdoutLine }) => {
+      const job = JSON.parse(String(files.find((file) => file.path === 'job.json').content));
+      const directory = mkdtempSync(join(ROOT(), 'blender-song-job-'));
+      try {
+        for (const file of files) {
+          const target = join(directory, file.path);
+          mkdirSync(dirname(target), { recursive: true });
+          writeFileSync(target, file.content);
+        }
+        if (job.shots[0].id === 's010') { staged(); await hold; }
+        const { stdout } = await execFileAsync(python, ['-c', bootstrap, join(directory, entrypoint), join(directory, 'job.json')], { timeout: PY_SUBPROCESS_TIMEOUT_MS });
+        for (const line of stdout.trim().split('\n')) onStdoutLine(line);
+        return { status: 'completed', exitCode: 0, signal: null, reason: null };
+      } finally { rmSync(directory, { recursive: true, force: true }); }
+    } });
+    events.length = 0;
+    let jobs = 1;
+    try {
+      const first = await request(app).post(api('/render')).send({ quality: 'preview', shotIds: ['s010'] });
+      expect(first.status).toBe(202);
+      await firstStaged;
+      await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, name: 'Changed during render',
+        audioAnalysis: { ...current.audioAnalysis, beats: [0.25, 0.75] },
+      } }));
+      const second = await request(app).post(api('/render')).send({ quality: 'preview', shotIds: ['s020'] });
+      expect(second.status).toBe(202);
+      jobs = 2;
+      await vi.waitFor(() => expect(events.some((event) => event.job?.id === second.body.jobs[0].id && event.job.status === 'done')).toBe(true), WAIT);
+      expect(JSON.parse(readFileSync(join(workspace(), 'song.json'), 'utf8')).title).toBe('Changed during render');
+    } finally {
+      release();
+      await settled(jobs);
+    }
+    const consumed = (shotId) => JSON.parse(readFileSync(join(workspace(), 'renders', shotId, 'consumed-song.json'), 'utf8'));
+    expect(consumed('s010')).toMatchObject({ title: 'Example Film', analysis: { beats: [0.5, 1, 1.5] } });
+    expect(consumed('s020')).toMatchObject({ title: 'Changed during render', analysis: { beats: [0.25, 0.75] } });
+    for (const shotId of ['s010', 's020']) {
+      const meta = JSON.parse(readFileSync(join(workspace(), 'renders', shotId, 'preview/render.json'), 'utf8'));
+      expect(meta).toMatchObject({ complete: true, songHash: blenderSongHash(consumed(shotId)) });
+    }
+    const renders = (await state()).renders;
+    expect(renders.s010.preview.staleReasons).toEqual(['song']);
+    expect(renders.s020.preview.stale).toBe(false);
+  }, PY_TEST_TIMEOUT_MS);
 
   it('serializes concurrent still requests for a shot through their image and index writes', async () => {
     await scaffold();
@@ -740,6 +831,80 @@ describe('Blender film shot renders', () => {
     expect(stills.s030.stills.map((still) => still.timeSec)).toEqual([4.25]);
     expect((await request(app).post(api('/render')).send({ quality: 'still', times: [99] })).status).toBe(400);
     expect((await request(app).post(api('/render')).send({ quality: 'preview', times: [1] })).status).toBe(400);
+  });
+
+  it('renders contact sheets from Blender when uncached, reuses current preview frames without starting Blender, splits >96 tiles, and marks sheets stale on source edit', async () => {
+    await scaffold();
+    await syncFilm();
+    blender.ffmpeg.length = 0;
+
+    // 1. Shot with no preview renders needed frames once at preview scale/samples and tiles them.
+    const cold = await renderAll('sheet', { shotIds: ['s010'], sheet: { every: 6, columns: 4, range: [0, 1] } });
+    expect(cold.jobs).toHaveLength(1);
+    const coldJob = blender.fake.control.jobs.at(-1);
+    expect(coldJob).toMatchObject({ quality: 'sheet', scale: 0.5, samples: 16, frames: [0, 6, 12, 18] });
+    expect(blender.ffmpeg.at(-1)).toEqual(expect.arrayContaining(['-f', 'concat', '-safe', '0', '-vf', expect.stringContaining('tile=4x1:')]));
+    const afterCold = await state();
+    expect(afterCold.renders.s010.sheets).toEqual([
+      expect.objectContaining({
+        file: 's010/sheets/sheet-0-18-e6.jpg',
+        firstFrame: 0,
+        lastFrame: 18,
+        every: 6,
+        columns: 4,
+        tiles: 4,
+        fromPreview: false,
+        stale: false,
+      }),
+    ]);
+    // Temporary scratch frames are cleaned up after tiling.
+    expect(readdirSync(join(workspace(), 'renders', 's010', 'sheets')).filter((name) => name.startsWith('.'))).toEqual([]);
+    const served = await request(app).get(api(`/media?path=${encodeURIComponent('s010/sheets/sheet-0-18-e6.jpg')}`));
+    expect(served.status).toBe(200);
+    expect(served.headers['content-type']).toMatch(/image\/jpeg/);
+
+    // 2. Shot with a current preview tiles its existing frames without starting Blender.
+    await renderAll('preview', { shotIds: ['s020'] });
+    const jobsBeforeWarm = blender.fake.control.jobs.length;
+    blender.ffmpeg.length = 0;
+    await renderAll('sheet', { shotIds: ['s020'], sheet: { every: 12, columns: 3 } });
+    expect(blender.fake.control.jobs).toHaveLength(jobsBeforeWarm);
+    expect(blender.ffmpeg.at(-1)).toEqual(expect.arrayContaining(['-f', 'concat', '-safe', '0', '-vf', expect.stringContaining('tile=3x2:')]));
+    const afterWarm = await state();
+    expect(afterWarm.renders.s020.sheets[0]).toMatchObject({
+      file: 's020/sheets/sheet-48-84-e12.jpg',
+      firstFrame: 48,
+      lastFrame: 84,
+      every: 12,
+      tiles: 4,
+      fromPreview: true,
+      stale: false,
+    });
+
+    // 3. A source change marks the shot's sheets stale.
+    await request(app).put(api('/file')).send({ path: 'shots/s020.py', content: '# changed\n' });
+    expect((await state()).renders.s020.sheets[0].stale).toBe(true);
+
+    // 4. A 300-frame shot at every: 1 yields four sheets (96 + 96 + 96 + 12).
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, audioAnalysis: { ...current.audioAnalysis, durationSec: 13 } } }));
+    await syncFilm({
+      title: 'Long Shot',
+      shots: [{ id: 's010', label: 'Long', start: 0, end: 12.5, deps: ['shots/s010.py'] }],
+    }, { replaceScenes: true });
+    await renderAll('sheet', { shotIds: ['s010'], sheet: { every: 1 } });
+    const longSheets = (await state()).renders.s010.sheets.filter((s) => s.every === 1);
+    expect(longSheets.map((s) => [s.firstFrame, s.lastFrame, s.tiles])).toEqual([
+      [0, 95, 96],
+      [96, 191, 96],
+      [192, 287, 96],
+      [288, 299, 12],
+    ]);
+
+    // 5. Validation rejects sheet options on other qualities and out-of-range values.
+    expect((await request(app).post(api('/render')).send({ quality: 'preview', sheet: { every: 3 } })).status).toBe(400);
+    expect((await request(app).post(api('/render')).send({ quality: 'sheet', sheet: { every: 0 } })).status).toBe(400);
+    expect((await request(app).post(api('/render')).send({ quality: 'sheet', sheet: { columns: 1 } })).status).toBe(400);
+    expect((await request(app).post(api('/render')).send({ quality: 'sheet', sheet: { range: [5, 2] } })).status).toBe(400);
   });
 });
 
@@ -1062,5 +1227,59 @@ describe('Blender film fork', () => {
     expect(footage.body.composition.mode).toBe('composed');
     expect((await projects.getProject(footage.body.id)).blender).not.toHaveProperty('sceneMap');
     expect(existsSync(join(ROOT(), 'music-video', footage.body.id, 'blender'))).toBe(false);
+  });
+});
+
+describe('Blender film handles and dissolves', () => {
+  it('flags missing dissolve handles in problems, blocks final with 409, and resumes existing frames when only handles change', async () => {
+    await scaffold();
+    await syncFilm();
+    await renderAll('final');
+    const current = await projects.getProject(project.id);
+    const s010SceneId = current.blender.sceneMap.s010;
+    await projects.updateProject(project.id, {
+      scenes: current.scenes.map((scene) => (scene.sceneId === s010SceneId ? { ...scene, cutEffect: { style: 'dissolve', enabled: true, overlapSec: 0.5 } } : scene)),
+    });
+
+    const missing = await state();
+    expect(missing.manifest.problems).toEqual([
+      'Shot s010 needs 0.25 s of out handle for its dissolve',
+      'Shot s020 needs 0.25 s of in handle for its dissolve',
+    ]);
+    await expect(prepareBlenderFinal(await projects.getProject(project.id))).rejects.toMatchObject({
+      status: 409,
+      code: 'MUSIC_VIDEO_BLENDER_SHOTS_NOT_READY',
+      context: { problems: missing.manifest.problems },
+    });
+
+    // Adding handles marks only s010 and s020 stale with `handles`, never touching unrelated s030.
+    const withHandles = exampleManifest();
+    withHandles.shots[0].handles = { out: 0.25 };
+    withHandles.shots[1].handles = { in: 0.25 };
+    await syncFilm(withHandles);
+    const staleState = await state();
+    expect(staleState.manifest.problems).toEqual([]);
+    expect(staleState.renders.s010.final).toMatchObject({ stale: true, staleReasons: ['handles'] });
+    expect(staleState.renders.s020.final).toMatchObject({ stale: true, staleReasons: ['handles'] });
+    expect(staleState.renders.s030.final).toMatchObject({ stale: false, staleReasons: [] });
+
+    // Re-rendering resumes existing shot frames and writes only the 6 missing handle frames per shot.
+    const untouchedBefore = statSync(join(workspace(), 'renders', 's010', 'final', 'frames', 'frame_000000.png')).mtimeMs;
+    blender.fake.control.jobs.length = 0;
+    events.length = 0;
+    await request(app).post(api('/render')).send({ quality: 'final' });
+    await settled(2);
+    expect(blender.fake.control.jobs.map((job) => [job.shots[0].id, job.resume]).sort()).toEqual([['s010', true], ['s020', true]]);
+    expect(statSync(join(workspace(), 'renders', 's010', 'final', 'frames', 'frame_000000.png')).mtimeMs).toBe(untouchedBefore);
+    const s010Frames = readdirSync(join(workspace(), 'renders', 's010', 'final', 'frames'));
+    expect(s010Frames.filter((name) => name.startsWith('handle_out_'))).toHaveLength(6);
+
+    // Clearing finished frames removes shot frame PNGs while retaining handles so final assembly still sees them.
+    const cleared = await request(app).post(api('/frames/clear')).send({});
+    expect(cleared.status, JSON.stringify(cleared.body)).toBe(200);
+    expect(readdirSync(join(workspace(), 'renders', 's010', 'final', 'frames')).every((name) => name.startsWith('handle_out_'))).toBe(true);
+
+    const ready = await prepareBlenderFinal(await projects.getProject(project.id));
+    expect(ready.segments.some((segment) => segment.transition?.style === 'dissolve')).toBe(true);
   });
 });

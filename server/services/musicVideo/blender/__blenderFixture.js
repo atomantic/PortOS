@@ -11,6 +11,11 @@ import { dirname, join } from 'node:path';
 import { ServerError } from '../../../lib/errorHandler.js';
 
 const line = (event) => `PORTOS_BLENDER ${JSON.stringify(event)}`;
+// Half-up, then even: the same pixel size the driver and the code renderer use.
+const evenPixels = (value) => {
+  const rounded = Math.floor(Number(value) + 0.5);
+  return Math.max(2, rounded - (rounded % 2));
+};
 
 export const createFakeBlender = () => {
   const control = {
@@ -28,34 +33,60 @@ export const createFakeBlender = () => {
     hold: null,
     running: 0,
     peak: 0,
+    // Preview and final frames are text unless this is set. Layered shots composite those frames, so they need real pixels.
+    imageFrames: false,
   };
 
-  const frameFile = (job, shot, frame) => {
-    if (job.quality === 'still') return join(job.out, shot.id, 'stills', `t${String(Math.round((frame / job.fps) * 1000)).padStart(9, '0')}.png`);
-    return join(job.out, shot.id, job.quality, 'frames', `frame_${String(frame).padStart(6, '0')}.${job.quality === 'preview' ? 'jpg' : 'png'}`);
+  // Same tokens as portos_blender_driver.frame_token / the still name. A negative frame is `m`, not `-`.
+  const frameToken = (frame) => (frame < 0 ? `m${String(-frame).padStart(6, '0')}` : String(frame).padStart(6, '0'));
+  const frameFile = (job, shot, frame, side = null) => {
+    if (job.quality === 'still') {
+      const ms = Math.round((frame / job.fps) * 1000);
+      const name = ms < 0 ? `tm${String(-ms).padStart(9, '0')}.png` : `t${String(ms).padStart(9, '0')}.png`;
+      return join(job.out, shot.id, 'stills', name);
+    }
+    if (job.quality === 'sheet') return join(job.out, shot.id, 'sheets', job.framesDir || '.frames', `frame_${frameToken(frame)}.jpg`);
+    const ext = job.quality === 'preview' ? 'jpg' : 'png';
+    const name = side ? `handle_${side}_${frameToken(frame)}.${ext}` : `frame_${frameToken(frame)}.${ext}`;
+    return join(job.out, shot.id, job.quality, 'frames', name);
   };
 
   const render = async (job, { onStdoutLine, signal }) => {
     for (const shot of job.shots) {
       const first = Math.round(shot.start * job.fps);
-      const frames = job.quality === 'still' ? job.frames : Array.from({ length: Math.round(shot.end * job.fps) - first }, (_, index) => first + index);
-      onStdoutLine(line({ event: 'start', shot: shot.id, frames: frames.length, blender: '5.2.3', engine: 'BLENDER_EEVEE', device: 'GPU' }));
+      const end = Math.round(shot.end * job.fps);
+      const inFrames = job.quality === 'still' || job.quality === 'sheet' ? 0 : Math.max(0, Math.round((shot.handles?.in || 0) * job.fps));
+      const outFrames = job.quality === 'still' || job.quality === 'sheet' ? 0 : Math.max(0, Math.round((shot.handles?.out || 0) * job.fps));
+      const targets = job.quality === 'still' || job.quality === 'sheet'
+        ? job.frames.map((frame) => ({ frame, path: frameFile(job, shot, frame) }))
+        : [
+          ...Array.from({ length: inFrames }, (_, index) => first - inFrames + index).map((frame) => ({ frame, path: frameFile(job, shot, frame, 'in') })),
+          ...Array.from({ length: end - first }, (_, index) => first + index).map((frame) => ({ frame, path: frameFile(job, shot, frame) })),
+          ...Array.from({ length: outFrames }, (_, index) => end + index).map((frame) => ({ frame, path: frameFile(job, shot, frame, 'out') })),
+        ];
+      onStdoutLine(line({ event: 'start', shot: shot.id, frames: targets.length, blender: '5.2.3', engine: 'BLENDER_EEVEE', device: 'GPU' }));
       onStdoutLine('00:01.000  render           | free-form Blender output');
-      for (const [index, frame] of frames.entries()) {
+      for (const [index, { frame, path }] of targets.entries()) {
         if (index === 1 && control.hold) {
           await Promise.race([control.hold, new Promise((resolve) => signal?.addEventListener('abort', resolve, { once: true }))]);
         }
         if (signal?.aborted) return { status: 'terminated', reason: 'canceled' };
-        const path = frameFile(job, shot, frame);
         const skipped = Boolean(job.resume) && existsSync(path) && statSync(path).size > 0;
         if (!skipped) {
           mkdirSync(dirname(path), { recursive: true });
-          if (job.quality === 'still') {
+          if (job.quality === 'still' || control.imageFrames) {
             const { default: sharp } = await import('sharp');
-            await sharp({ create: { width: 1920, height: 1080, channels: 3, background: '#346789' } }).png().toFile(path);
+            // Stills stay 1080p unless the test composites them (`imageFrames`),
+            // where the plate has to match the code layer's frame size.
+            const matchFrame = job.quality !== 'still' || control.imageFrames;
+            const width = matchFrame ? evenPixels(job.width * (job.scale ?? 1)) : 1920;
+            const height = matchFrame ? evenPixels(job.height * (job.scale ?? 1)) : 1080;
+            const image = sharp({ create: { width, height, channels: 3, background: '#346789' } });
+            if (path.endsWith('.jpg')) await image.jpeg().toFile(path);
+            else await image.png().toFile(path);
           } else writeFileSync(path, `frame ${frame}`);
         }
-        onStdoutLine(line({ event: 'frame', shot: shot.id, frame, index: index + 1, total: frames.length, sec: skipped ? 0 : 0.25, skipped }));
+        onStdoutLine(line({ event: 'frame', shot: shot.id, frame, index: index + 1, total: targets.length, sec: skipped ? 0 : 0.25, skipped }));
       }
       if (job.saveBlend) {
         writeFileSync(join(job.out, shot.id, 'shot.blend'), 'blend');

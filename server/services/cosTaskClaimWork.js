@@ -257,7 +257,7 @@ export async function buildClaimWorkTask(app, {
     + (composed ? '' : appendTargetWorkItemBlock(promptTaskType, targetRef, issueExcludeLabelsBlock))
     + appendPrefetchedIssueContext(promptTaskType, targetRef, issueContext)
     + appendClaimOverrideContext(overrideContext)
-    + appendReviewerEffortBlock(reviewersList, promptReviewerEfforts, promptReviewerModels)
+    + appendReviewerEffortBlock(reviewersList, promptReviewerEfforts, promptReviewerModels, claimReviewers.reviewerCatalogs)
     + appendReviewerMaxRoundsBlock(reviewersList, promptReviewerMaxRounds, claimReviewers.usernames)
     + buildLocalReviewerInstructions(reviewersList, promptReviewerModels, promptReviewerEfforts, {
       claimCommentGate: promptTaskType === 'claim-issue',
@@ -314,7 +314,7 @@ async function resolveClaimReviewerPrompt(app) {
   return {
     csv,
     taskMetadata: reviewerConfigMetadata(config),
-    effortBlock: appendReviewerEffortBlock(list, reviewerEfforts, reviewerModels) + appendReviewerMaxRoundsBlock(list, reviewerMaxRounds, config.usernames),
+    effortBlock: appendReviewerEffortBlock(list, reviewerEfforts, reviewerModels, config.reviewerCatalogs) + appendReviewerMaxRoundsBlock(list, reviewerMaxRounds, config.usernames),
     localReviewerBlock: reviewerIdentityNotice + buildLocalReviewerInstructions(list, reviewerModels, reviewerEfforts, { enforceIsolation: true }),
   };
 }

@@ -4,6 +4,7 @@ import { getModelComparison } from '../../services/apiModelComparison';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage';
 import { formatCount, formatUsd, formatPercent } from '../../utils/formatters';
 import ComparisonResearch from './ComparisonResearch';
+import MetricEvidence from './ComparisonMetricEvidence';
 import ComparisonValueGuide from './ComparisonValueGuide';
 
 const STORAGE = 'portos-composite-comparison-v1';
@@ -42,14 +43,6 @@ const PRICES = [
 ];
 const buttonClass = 'rounded-lg border border-port-border px-3 py-2 text-xs disabled:opacity-50';
 const valueText = (metric, money = false) => metric ? `${metric.estimated ? '≈ ' : ''}${money ? formatUsd(metric.value, { maximumFractionDigits: 4 }) : formatCount(metric.value, { maximumFractionDigits: 1 })}` : 'Needs research';
-
-function MetricEvidence({ metric }) {
-  if (!metric) return <span>Needs research</span>;
-  return <details><summary className="cursor-pointer">{metric.sources.length ? <>{metric.estimated ? 'Estimated' : 'Sourced'} · {formatCount(metric.sources.length)} references</> : 'Configured cost'}</summary>
-    <p className="my-2 max-w-xl whitespace-normal text-port-text-muted">{metric.method}</p>
-    <ul className="space-y-1">{metric.sources.map(source => <li key={source.url + source.retrievedAt}><a className="text-port-accent underline break-all" href={source.url} target="_blank" rel="noreferrer">{new URL(source.url).hostname}</a> · {source.retrievedAt.slice(0, 10)}<p className="max-w-xl whitespace-normal text-port-text-muted">{source.methodology}</p></li>)}</ul>
-  </details>;
-}
 
 function ComparisonTooltip({ active, payload, priceId }) {
   const row = payload?.[0]?.payload;
@@ -258,7 +251,7 @@ export default function ModelComparison() {
             return <Scatter isAnimationActive={false} key={key} name={key} data={points} fill={color} line={points.length > 1 ? { strokeDasharray: '4 4', strokeWidth: 2 } : false}>{plotted.length <= 30 && <LabelList className="hidden @xl:block" dataKey="label" position="top" fontSize={11} fill="rgb(var(--port-text))" />}</Scatter>;
           })}
         </ScatterChart></ResponsiveContainer>
-      </div> : <p className="p-10 text-center text-sm text-port-text-muted">{loading ? 'Loading comparison…' : 'No points match these choices. Select models and efforts, change the cost axis, or research missing evidence.'}</p>}
+      </div> : <p className="p-10 text-center text-sm text-port-text-muted">{loading ? 'Loading comparison…' : 'No points match these choices. Plotting requires both an intelligence score and the selected cost metric. Available token prices appear in the effort value guide below even when benchmark results are missing.'}</p>}
       <div className="flex flex-wrap gap-3 text-xs" aria-label="Chart legend">{[...new Set(plotted.map(row => row.model))].map(model => {
         const info = modelProvider.get(model);
         const color = info ? (providerColorMap.get(info.providerId) || getProviderColor(info.providerId, info.provider, 0)) : COLORS[0];

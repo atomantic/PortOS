@@ -17,6 +17,11 @@
 #     --generate-hashes --no-header --annotation-style line \
 #     --exclude-newer <UTC date at least 7 days ago> -o "$LOCK")
 # then check the result against OSV (including MAL- malicious-package records).
+# The bounded AnyIO refresh uses uv 0.13.7 and cutoff 2026-11-05T00:00:00Z;
+# preserve all other versions, markers and hash blocks. See the bounded Wan/ACE
+# helper section in docs/PYTHON_RUNTIME_REFRESH.md for the selective recipe.
+# For the bounded dateutil 4 refresh, constrain all companion versions and
+# preserve their existing hash blocks; see docs/PYTHON_RUNTIME_REFRESH.md.
 absl-py==2.5.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:286e71c82c1a38e75bbcf185f9b37d0305ad7786535107cb49bf4df9ff2e1f95 \
     --hash=sha256:721200f2f0e9960f2ca9dc3a2a706b201f5f75d812c158f059cbbe29eeafbdb8
@@ -200,9 +205,9 @@ annotated-doc==0.0.5 ; platform_machine == 'arm64' and sys_platform == 'darwin' 
     --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101 \
     --hash=sha256:c7e58ce09192557605d8bbd92836d7e1d520ac9580096042c0bfd197efacf1bb
     # via typer
-anyio==4.15.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
-    --hash=sha256:6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101 \
-    --hash=sha256:9f28306018cbd6d329e64a36d58256edff76dd996fe423bc957326e578b82a94
+anyio==4.16.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
+    --hash=sha256:59bb03251907983d1603d27c3087ddb1e93299ea2163adcdba37899a4fb12ffb \
+    --hash=sha256:c66ae634e0b8228396b801741beb3294326d4b6102f7bba4041c0dfb58c29026
     # via httpx2
 attrs==26.1.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309 \
@@ -2217,9 +2222,9 @@ pyparsing==3.3.3 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:928ae7e20211f3b6f3915a72f06a0cfd29ab9d24279dd6346b6b1a7146397d36 \
     --hash=sha256:ece8c00a69cf01b45d0b1dedabb469c90d8caf996d4fda40f147627a122849a4
     # via matplotlib
-python-dateutil==3.0.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
-    --hash=sha256:3c79630202e4152c6add678446984236efe4f57e84d8e892aab0637bab82e9fd \
-    --hash=sha256:7ebcb3c29a92f3ceafe79a7a48a5c45677e9e004bbeec5742ac0bbb00560b7a2
+python-dateutil==4.0.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
+    --hash=sha256:a5e246f79eb80475e691bf93862cead98decd8a498cf53ba0516fcdc0f50dc1c \
+    --hash=sha256:d7295ff14fdc0f92f662100bfb6c551d160ca090f2939f1ec5b9794265c03f06
     # via matplotlib
 pytorch-lightning==2.6.6 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:52c52b20522dd3d3feb3bb3aae2dbe3f291e8e836d4111a74cfd72e9df018834 \
@@ -2767,7 +2772,7 @@ shellingham==1.5.4 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
 six==1.17.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
     --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
-    # via python-dateutil, pytorch-wavelets
+    # via pytorch-wavelets
 soundfile==0.14.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:0a6ae43c50c71b4e020cc55382925cb89451c1ed1a0c3d0f5d802da269226849 \
     --hash=sha256:19be05428da76ed61a4cad29b8e4bcf43a3e5c100089d2ec81dc961eed1b0dd4 \

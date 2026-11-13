@@ -167,7 +167,7 @@ export const BLENDER_JOB_STATUS_LABELS = {
 
 // The server's `staleReasons`, in the director's words.
 const STALE_REASON_TEXT = {
-  source: 'its scripts changed', timing: 'the shot moved on the song', settings: 'the render settings changed', options: 'a film option changed', song: 'the song context changed',
+  source: 'its scripts changed', timing: 'the shot moved on the song', handles: 'its handles changed', settings: 'the render settings changed', options: 'a film option changed', song: 'the song context changed',
 };
 
 /** Why a render is out of date: "its scripts changed and a film option changed". */
@@ -288,11 +288,13 @@ export function blenderShotStage(state, shotId) {
 
 const stillKey = (shotId, file) => `blender-still:${shotId}:${file}`;
 export const blenderStillPreviewKey = stillKey;
+const sheetKey = (shotId, file) => `blender-sheet:${shotId}:${file}`;
+export const blenderSheetPreviewKey = sheetKey;
 
 /**
- * Lightbox items for every rendered still, in shot order. They are files in
- * the Blender workspace, not gallery images, so they carry no `filename`.
- * `mediaUrl(path)` builds the URL the still is served from.
+ * Lightbox items for every rendered still and contact sheet, in shot order.
+ * They are files in the Blender workspace, not gallery images, so they carry
+ * no `filename`. `mediaUrl(path)` builds the URL the file is served from.
  */
 export function blenderStillPreviewItems(state, mediaUrl) {
   const items = [];
@@ -302,6 +304,12 @@ export function blenderStillPreviewItems(state, mediaUrl) {
       const url = mediaUrl(still.file);
       const caption = `${shot.label || shot.id} · still at ${formatTimecode(still.timeSec ?? shot.start ?? 0)}`;
       items.push({ kind: 'image', key: stillKey(shot.id, still.file), previewUrl: url, thumbnailUrl: url, downloadUrl: url, prompt: caption, label: caption });
+    }
+    for (const sheet of state?.renders?.[shot.id]?.sheets || []) {
+      if (!sheet?.file) continue;
+      const url = mediaUrl(sheet.file);
+      const caption = `${shot.label || shot.id} · contact sheet (frames ${sheet.firstFrame}–${sheet.lastFrame}, every ${sheet.every})`;
+      items.push({ kind: 'image', key: sheetKey(shot.id, sheet.file), previewUrl: url, thumbnailUrl: url, downloadUrl: url, prompt: caption, label: caption });
     }
   }
   return items;
@@ -369,10 +377,18 @@ export function blenderSongDuration(project, state) {
   return Math.max(0, ...(state?.manifest?.shots || []).map((shot) => shot.end || 0));
 }
 
+/** A lead-in starts below 0. The shared formatter draws every negative as 0:00.00. */
+function signedTimecode(seconds) {
+  if (!Number.isFinite(seconds) || seconds >= 0) return formatTimecode(Number.isFinite(seconds) ? seconds : 0);
+  return `-${formatTimecode(-seconds)}`;
+}
+
 /** "0:04.50–0:09.00 · 4.5s · 108 frames" */
 export function blenderShotTiming(shot) {
-  const seconds = Math.max(0, (shot.end || 0) - (shot.start || 0));
-  const parts = [`${formatTimecode(shot.start || 0)}–${formatTimecode(shot.end || 0)}`, `${Number(seconds.toFixed(2))}s`];
+  const start = Number.isFinite(shot.start) ? shot.start : 0;
+  const end = Number.isFinite(shot.end) ? shot.end : 0;
+  const seconds = Math.max(0, end - start);
+  const parts = [`${signedTimecode(start)}–${signedTimecode(end)}`, `${Number(seconds.toFixed(2))}s`];
   if (Number.isFinite(shot.frames)) parts.push(`${formatCount(shot.frames)} ${shot.frames === 1 ? 'frame' : 'frames'}`);
   return parts.join(' · ');
 }
@@ -427,11 +443,11 @@ const engineLabel = (id) => BLENDER_ENGINES.find((engine) => engine.id === id)?.
  * workspace is, the film contract, the review loop and the routes. Built from
  * the state on screen; nothing is fetched.
  */
-export function blenderAgentBrief({ projectId, state }) {
+export function blenderAgentBrief({ projectId, state, standalone = false }) {
   const settings = state?.settings || {};
-  const base = `/api/music-video/${projectId}/blender`;
+  const base = standalone ? `/api/code-animation/films/${projectId}/blender` : `/api/music-video/${projectId}/blender`;
   // Where this machine keeps it; the data-relative label only when the server did not say.
-  const workspace = state?.workspace?.path || state?.workspace?.dir || `data/music-video/${projectId}/blender`;
+  const workspace = state?.workspace?.path || state?.workspace?.dir || (standalone ? `data/code-animation/films/${projectId}` : `data/music-video/${projectId}/blender`);
   const shots = state?.manifest?.shots || [];
   const summary = blenderFilmSummary(state);
   const stateLine = shots.length
@@ -442,7 +458,7 @@ export function blenderAgentBrief({ projectId, state }) {
     ? `Film options now: ${options.map((option) => `${option.key}=${JSON.stringify(option.value)}`).join(', ')}.`
     : 'Film options: none declared.';
   return [
-    'You are authoring a Blender film for a PortOS music video.',
+    standalone ? 'You are authoring a standalone PortOS Code Animation film, with an optional soundtrack.' : 'You are authoring a Blender film for a PortOS music video.',
     '',
     `Skill: ${BLENDER_SKILL_NAME} (read it first: it holds the full contract and the review loop).`,
     `Project id: ${projectId}`,
@@ -453,8 +469,10 @@ export function blenderAgentBrief({ projectId, state }) {
     '  renders/         PortOS output, regenerable: never edit it',
     '',
     'Film contract (Python inside Blender 5 or later), in src/film.py:',
-    '  describe(ctx) -> {"title": str, "shots": [{"id", "label", "start", "end", "set", "summary", "action", "staging", "camera", "transition", "deps"}], "options"?: [...]}',
-    '    Shots in time order, not overlapping, 0 <= start < end <= song duration, every boundary on the frame grid (k / fps), at most 400 shots.',
+    '  describe(ctx) -> {"title": str, "shots": [{"id", "label", "start", "end", "handles"?: {"in", "out"}, "set", "summary", "action", "staging", "camera", "transition", "deps"}], "options"?: [...]}',
+    '    Shots in time order, not overlapping, start < end <= song duration, every boundary on the frame grid (k / fps), at most 400 shots.',
+    '    Song shots start at 0 or later. Optional negative-time lead-in shots form one contiguous run ending exactly at 0 s; each lasts 0.5..120 s, and the whole lead-in is at most 120 s. No shot crosses 0.',
+    '    "handles" (optional, 0..4 s each on the frame grid) renders [start - in, start) and [end, end + out) for dissolves and beat toggles; shots with handles must stay valid over those times.',
     '    Shot ids match [a-z0-9][a-z0-9_-]{0,39}. "deps" lists the files or folders under src/ a shot reads; a change there marks its renders out of date.',
     '    "options" (at most 24) is what the director can set in PortOS: {"key", "label", "type": "choice"|"boolean"|"number"|"text", "default", "help"?, "choices"?: [{"value","label"}], "min"?, "max"?, "step"?}.',
     '  build_shot(ctx, shot) -> None       build the bpy scene for one shot: objects, lights, camera',
@@ -469,7 +487,7 @@ export function blenderAgentBrief({ projectId, state }) {
     `Now: ${stateLine}`,
     '',
     'Review loop: edit src/ -> sync -> stills -> preview shots -> preview cut -> director notes -> finals -> final render.',
-    'The final render still needs the art guide, verified lyric timing and an approved storyboard.',
+    standalone ? 'Assemble a final cut after every final shot is current and covers the full timeline; it becomes the accepted Media History output.' : 'The final render still needs the art guide, verified lyric timing and an approved storyboard.',
     '',
     `Routes (base ${base}; from a terminal session use node scripts/portos-api.js):`,
     '  GET    (base)                 the full state: settings, tool, workspace, manifest, renders, cuts, jobs, notes',
@@ -489,7 +507,7 @@ export function blenderAgentBrief({ projectId, state }) {
     '  POST   /shots/<shotId>/open   open the saved .blend in Blender',
     '  GET    /media?path=<p>        a file under renders/ (mp4, png, jpg, log)',
     '  GET    /usage                 what the workspace takes on disk;  POST /frames/clear  remove the frames of finished renders (their videos stay)',
-    "Progress is pushed on the Socket.IO channel music-video:blender as { projectId, kind: 'job' | 'state', job? }.",
+    `Progress is pushed on the Socket.IO channel ${standalone ? 'code-animation:film' : 'music-video:blender'} as { projectId, kind: 'job' | 'state', job? }.`,
     'Rendering needs Blender set to Trusted local in PortOS; in contained mode every run route answers 409.',
   ].join('\n');
 }

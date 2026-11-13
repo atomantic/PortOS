@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
-import { getMusicVideoBlenderUsage } from '../../../services/apiMusicVideo.js';
+import { useFilmApi } from './FilmApiContext.jsx';
 import { isBlenderJobActive } from '../../../lib/musicVideoBlender.js';
 import { formatBytes, formatCount } from '../../../utils/formatters.js';
 import { buttonCls } from './blenderStyles.js';
@@ -16,6 +16,7 @@ import { buttonCls } from './blenderStyles.js';
  * a job ends or frames are cleared (`blender.usageRevision`); never on a timer.
  */
 export default function BlenderDiskUse({ blender }) {
+  const { getMusicVideoBlenderUsage } = useFilmApi();
   const { projectId, usageRevision, pending, state } = blender;
   const [usage, setUsage] = useState({ status: 'loading', value: null, error: null });
   const [confirming, setConfirming] = useState(false);

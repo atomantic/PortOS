@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { createMusicVideoGlitchPainter } from '../../lib/musicVideoGlitchCanvas.js';
-import { drawFigurePicture } from './animaticPicture.js';
+import { drawFigurePicture, figureClipSettling } from './animaticPicture.js';
 import {
   blockBox, edgeGlows, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, transitionFrameAt, transitionGlitchFrames,
 } from '../../lib/musicVideoTransitions.js';
@@ -48,6 +48,8 @@ export default function TransitionGlitch({ scenes, figureRef, audioRef, time, en
     const canvas = canvasRef.current;
     if (!canvas) return;
     const hit = transitionFrameAt(glitches, Math.floor(t * fps + 1e-6));
+    // Mid-seek the clip cannot be copied; keep the last glitch frame rather than paint the shot's still.
+    if (hit && figureClipSettling(figureRef.current)) return;
     const shown = !!hit && paintGlitch(canvas, figureRef.current, hit.params, hit.frame);
     canvas.style.visibility = shown ? 'visible' : 'hidden';
   }, [glitches, fps, figureRef]);

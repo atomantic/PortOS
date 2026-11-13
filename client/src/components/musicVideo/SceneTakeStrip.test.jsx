@@ -84,3 +84,17 @@ it('keeps camera-bound verdict badges current against the project camera rule', 
   rerender(<SceneTakeStrip scene={selected} project={{ cameras: [{ ...project.cameras[0], rule: 'Stay behind the subject' }] }} kind="image" />);
   expect(screen.queryByText('Checked')).toBeNull();
 });
+
+// Uniquely catches a stale selected frame offering no way to keep it, the confirmation reaching the wrong take,
+// or an unselected stale frame offering it.
+it('offers Still matches on the selected frame made for an earlier version of the shot', () => {
+  const stale = { status: 'stale', reasons: ['Frame prompt changed'] };
+  const shot = { ...scene, takes: [take('t1', 'a.png', { dependencyState: stale }), take('t2', 'b.png', { dependencyState: stale })] };
+  const onReview = vi.fn();
+  render(<SceneTakeStrip scene={shot} kind="image" onReview={onReview} />);
+  expect(screen.getByText('Made for an earlier version of this shot: Frame prompt changed')).toBeInTheDocument();
+  const buttons = screen.getAllByRole('button', { name: 'Still matches' });
+  expect(buttons).toHaveLength(1);
+  fireEvent.click(buttons[0]);
+  expect(onReview).toHaveBeenCalledWith(shot.takes[0], { confirmFrame: true });
+});

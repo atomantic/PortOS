@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { blenderFilmProblems, validateBlenderManifest } from './manifest.js';
+import { blenderFilmProblems, blenderLeadSec, blenderSongEndSec, validateBlenderManifest } from './manifest.js';
+import { blenderFrameName } from '../../film/renderIndex.js';
+import { blenderStillName } from '../../film/renderJob.js';
 
 const song = { durationSec: 10, fps: 24 };
 const shot = (id, start, end, extra = {}) => ({ id, start, end, ...extra });
@@ -84,17 +86,89 @@ describe('validateBlenderManifest', () => {
     ['a boundary off the frame grid', () => check([shot('s010', 0, 1.02)]), 'frame boundary'],
     ['a shot that ends before it starts', () => check([shot('s010', 2, 1)]), '0 <= start < end'],
     ['a zero-length shot', () => check([shot('s010', 1, 1)]), '0 <= start < end'],
-    ['a negative start', () => check([shot('s010', -1, 1)]), '0 <= start < end'],
+    ['a shot that overlaps frame 0', () => check([shot('s010', -1, 1)]), 'Shot s010: overlaps frame 0'],
     ['a shot past the end of the song', () => check([shot('s010', 0, 10.5)]), 'after the song ends'],
     ['overlapping shots', () => check([shot('s010', 0, 5), shot('s020', 4, 8)]), 'before shot s010 ends'],
     ['shots out of time order', () => check([shot('s020', 5, 8), shot('s010', 0, 5)]), 'before shot s020 ends'],
     ['text longer than the film contract allows', () => check([shot('s010', 0, 1, { action: 'x'.repeat(4001) })]), '"action" must be text'],
     ['a dependency outside src/', () => check([shot('s010', 0, 1, { deps: ['../secrets'] })]), '"deps" must list'],
     ['an absolute dependency', () => check([shot('s010', 0, 1, { deps: ['/etc/passwd'] })]), '"deps" must list'],
+    ['negative handle seconds', () => check([shot('s010', 1, 2, { handles: { in: -0.25 } })]), '"handles.in" must be between 0 and 4'],
+    ['handles longer than 4 seconds', () => check([shot('s010', 1, 2, { handles: { out: 4.5 } })]), '"handles.out" must be between 0 and 4'],
+    ['handles off the frame grid', () => check([shot('s010', 1, 2, { handles: { out: 0.27 } })]), 'handles.out must fall on a frame boundary'],
+    ['an in handle that starts before 0 s', () => check([shot('s010', 0.25, 2, { handles: { in: 0.5 } })]), 'starts before 0 s'],
+    ['unknown handle keys', () => check([shot('s010', 1, 2, { handles: { left: 0.25 } })]), 'may only declare "in" and "out"'],
   ])('refuses %s', (_name, run, reason) => {
     const { manifest, errors } = run();
     expect(manifest).toBeNull();
     expect(errors.join(' ')).toContain(reason);
+  });
+
+  it('accepts a lead-in that ends at 0 and stays inside 120 s, and names a broken one', () => {
+    const songAfter = [shot('s010', 0, 10)];
+    const accepted = check([shot('s000', -6, 0), ...songAfter]);
+    expect(accepted.errors).toEqual([]);
+    expect(accepted.manifest.shots.map(({ id, start, end }) => ({ id, start, end }))).toEqual([
+      { id: 's000', start: -6, end: 0 }, { id: 's010', start: 0, end: 10 },
+    ]);
+    expect(accepted.manifest).not.toHaveProperty('leadSec');
+    expect(blenderLeadSec(accepted.manifest.shots)).toBe(6);
+    expect(blenderSongEndSec(accepted.manifest.shots)).toBe(10);
+    expect(check([shot('s000', -120, 0), ...songAfter]).errors).toEqual([]);
+    expect(check([shot('s000', -0.5, 0), ...songAfter]).errors).toEqual([]);
+    expect(check([shot('s000', -2, 0, { handles: { in: 1 } }), ...songAfter]).manifest.shots[0].handles).toEqual({ in: 1, out: 0 });
+    expect(check([shot('s000', -6, -1), ...songAfter]).errors.join(' ')).toContain('Shot s000: ends at -1 s; a lead-in must end exactly at 0 s');
+    expect(check([shot('s000', -6, -2), shot('s001', -1, 0), ...songAfter]).errors.join(' ')).toContain('Shot s001: leaves a gap after shot s000');
+    expect(check([shot('s000', -0.25, 0), ...songAfter]).errors.join(' ')).toContain('Shot s000: a lead-in shot is 0.25 s');
+    expect(check([shot('s000', -121, 0), ...songAfter]).errors.join(' ')).toContain('Shot s000: a lead-in shot is 121 s');
+    const over = check([shot('s000', -121, -71), shot('s001', -71, -21), shot('s002', -21, 0), ...songAfter]);
+    expect(over.errors.join(' ')).toContain('Shot s002: the lead-in runs');
+    expect(blenderFrameName(-144, 'final')).toBe('frame_m000144.png');
+    expect(blenderFrameName(0, 'final')).toBe('frame_000000.png');
+    expect(blenderFrameName(48, 'preview')).toBe('frame_000048.jpg');
+    expect(blenderStillName(-144, 24)).toBe('tm000006000.png');
+    expect(blenderStillName(72, 24)).toBe('t000003000.png');
+  });
+
+  it('stores a code shot and a code layer, and leaves a Blender shot unchanged', () => {
+    const { manifest, errors } = check([
+      shot('s010', 0, 4),
+      shot('s020', 4, 7, { renderer: 'code', entry: 'code/s020.js', space: 'canvas' }),
+      shot('s030', 7, 10, { renderer: 'code', entry: 'code/s030.js', space: 'three', layers: [{ entry: 'code/fx.js' }] }),
+    ]);
+    expect(errors).toEqual([]);
+    expect(manifest.shots[0]).toEqual({ id: 's010', label: 's010', start: 0, end: 4 });
+    expect(manifest.shots[1]).toEqual({ id: 's020', label: 's020', start: 4, end: 7, renderer: 'code', entry: 'code/s020.js' });
+    expect(manifest.shots[2]).toMatchObject({
+      renderer: 'code', entry: 'code/s030.js', space: 'three',
+      layers: [{ entry: 'code/fx.js', place: 'over', blend: 'normal' }],
+    });
+  });
+
+  it.each([
+    ['an unknown renderer', { renderer: 'paint' }, '"renderer" must be blender or code'],
+    ['a code shot with no module', { renderer: 'code' }, '"entry" must be a .js or .mjs file under src/'],
+    ['an entry on a Blender shot', { entry: 'code/s010.js' }, '"entry" and "space" belong on a code shot'],
+    ['a space on a Blender shot', { space: 'three' }, '"entry" and "space" belong on a code shot'],
+    ['an unknown space', { renderer: 'code', entry: 'code/s010.js', space: 'webgl' }, '"space" must be canvas or three'],
+    ['more than 8 layers', { layers: Array.from({ length: 9 }, (_, index) => ({ entry: `code/l${index}.js` })) }, '"layers" must list at most 8'],
+    ['a layer outside src/', { layers: [{ entry: '../fx.js' }] }, '"entry" must be a .js or .mjs file under src/'],
+    ['an unknown place', { layers: [{ entry: 'code/fx.js', place: 'behind' }] }, '"place" must be over or under'],
+    ['an unknown blend', { layers: [{ entry: 'code/fx.js', blend: 'xor' }] }, '"blend" must be normal, screen, add or multiply'],
+  ])('refuses %s', (_name, extra, reason) => {
+    const { manifest, errors } = check([shot('s010', 0, 1, extra)]);
+    expect(manifest).toBeNull();
+    expect(errors.join(' ')).toContain(reason);
+  });
+
+  it('normalizes valid frame-grid handles and omits empty ones', () => {
+    const { manifest, errors } = check([
+      shot('s010', 0, 1, { handles: { in: 0, out: 0 } }),
+      shot('s020', 1, 2, { handles: { in: 0.25, out: 0.5 } }),
+    ]);
+    expect(errors).toEqual([]);
+    expect(manifest.shots[0].handles).toBeUndefined();
+    expect(manifest.shots[1].handles).toEqual({ in: 0.25, out: 0.5 });
   });
 
   it('reports every broken shot, not just the first, so one sync shows the whole list of fixes', () => {
@@ -120,11 +194,24 @@ describe('blenderFilmProblems', () => {
       'No shot covers 4 s to 5 s (between s010 and s020).',
       'No shot covers the song after 8 s (it runs to 10 s).',
     ]);
+    expect(blenderFilmProblems(synced([shot('s000', -6, 0), shot('s010', 0, 10)]), song)).toEqual([]);
+    expect(blenderFilmProblems(synced([shot('s000', -6, 0), shot('s010', 1, 10)]), song).join(' ')).toContain('No shot covers 0 s to 1 s');
   });
 
   it('asks for a new sync after a frame-rate change, and for an analysis before the song can be checked', () => {
     const film = synced([shot('s010', 0, 10)]);
     expect(blenderFilmProblems(film, { ...song, fps: 30 })).toEqual(['The frame rate changed from 24 to 30 since the last sync. Sync shots from scripts again.']);
     expect(blenderFilmProblems(film, { fps: 24, durationSec: undefined })).toEqual(['Analyze the song: the film cannot be checked against it yet.']);
+  });
+
+  it('names missing in and out handles required by dissolves and accepts sufficient handles', () => {
+    const shots = [shot('s010', 0, 2), shot('s020', 2, 5), shot('s030', 5, 10)];
+    const cutEffects = [{ style: 'dissolve', index: 1, cutFrame: 120, needOutFrames: 6, needInFrames: 6 }];
+    expect(blenderFilmProblems(synced(shots), { ...song, cutEffects })).toEqual([
+      'Shot s020 needs 0.25 s of out handle for its dissolve',
+      'Shot s030 needs 0.25 s of in handle for its dissolve',
+    ]);
+    const withHandles = [shot('s010', 0, 2), shot('s020', 2, 5, { handles: { out: 0.25 } }), shot('s030', 5, 10, { handles: { in: 0.25 } })];
+    expect(blenderFilmProblems(synced(withHandles), { ...song, cutEffects })).toEqual([]);
   });
 });

@@ -36,11 +36,42 @@ def frame(ctx, shot, t, frame):       # optional: pose everything for song time 
 ```
 
 Each shot: `id` (letters, digits, `_`, `-`; unique), `label`, `start`, `end` (seconds on the song, on the frame
-grid, in order, no overlap), and for the storyboard `summary`, `action`, `staging`, `camera`, `transition`.
+grid, in order, no overlap), optional `handles: {"in": sec, "out": sec}` (each 0–4 s on the frame grid; on a song
+shot `handles.in <= start`), and for the storyboard `summary`, `action`, `staging`, `camera`, `transition`.
+
+A lead-in is shots with `start < 0` that form one contiguous run ending exactly at 0, each 0.5–120 s and at most
+120 s together (`{"id": "s000", "start": -6.0, "end": 0.0}`). A gap, a shot that crosses 0, or a longer run is
+refused at sync and the message names the shot. `build_shot` and `frame` get that negative `t` and song frame.
+`ctx.seconds_to_frame` and `ctx.frame_to_seconds` accept them. Before 0, `portos_film.music` answers no beat
+(`nearest_beat` is `None`, ranges are empty, `pulse` is `0.0`, `bar_at` is `(0, 0.0)`); time 0 is unchanged.
+Frame files use an `m` prefix (`frame_m000144.png`, `handle_in_m000024.png`) and stills `tm` (`tm000006000.png`).
+Sync mirrors each lead-in shot to a Board scene marked before the song, of the shot's length. Edit its sound with
+the Board's cold-open controls; the film supplies the picture only. The cut, the live preview and the final play
+the lead-in first, then the song, so they run longer by the lead-in and the song starts at that offset. The title
+card and timed effects stay on the song clock.
 Imported source files are tracked automatically; use `deps` (files and folders under `src/`) to add data and assets.
+
+**Handles & cut effects.** Assembled cuts, excerpts and the final draw `fade-black` inside each shot's own frames,
+`beat-toggle` using the incoming shot's `in` handle, and `dissolve` centred on the cut by blending the outgoing `out`
+handle with the incoming `in` handle (wipes stay undrawn). A shot declaring `handles` gets extra frames rendered for
+`[start - in, start)` and `[end, end + out)` by calling `frame()` for those times (so the scene must be valid slightly
+outside `[start, end)`); changing only handles marks the shot stale (`handles`) and resumes existing frames. Missing
+handles for a dissolve or beat toggle block the final render (`409`).
 
 `ctx`: `song`, `options`, `fps`, `width`, `height`, `scale`, `samples`, `quality`, `engine`, `workspace`, `src`,
 `out_dir`, `shot`, `log()`, `seconds_to_frame()`, `frame_to_seconds()`.
+
+**Code shots and layers.** A shot may set `"renderer": "code"` and `"entry": "code/s020.js"` instead of drawing in
+Blender. A Blender shot may add up to eight `"layers": [{"entry", "place": "over"|"under", "blend": "normal"|"screen"|"add"|"multiply"}]`.
+The entry is an ES module under `src/` exporting `render(ctx, env)`. `env` is `{ t, localT, frame, song, width, height }`
+(`localT` is negative inside an in-handle). `ctx` is Canvas 2D, or `{ THREE, scene, camera, renderer }` when the shot
+sets `"space": "three"` (canvas is the default and is omitted). Layers are canvas only. Every frame is a pure function
+of song time. The module and its static imports join that shot's stale hash; bare `three` is host-provided and is not
+hashed. Preview plates are JPEG on black; finals and layers are PNG with the layer's alpha, composited at encode.
+A blend uses that alpha as coverage. Dissolves and beat toggles read the same composite from `renders/<shot>/<quality>/handles/`.
+A Blender plate is opaque, so an `under` layer stays hidden on it. A film that does not import `bpy`, `bmesh` or
+`mathutils`, including an import nested in a function or a branch, syncs with system Python and renders with no Blender; `describe` is still required, `build_shot` is not.
+Code runs in the browser sandbox with no host access. Full contract: the feature doc.
 
 **Film options.** To let the director choose something without editing code (a look, a palette, a debug overlay),
 declare it in `describe`'s `options` (at most 24): `{"key", "label", "type": "choice" | "boolean" | "number" |
@@ -57,14 +88,17 @@ Rules that keep a film renderable:
   the compositor are yours.
 - Make every frame a pure function of song time. Renders stop and resume on any frame, and shots render in
   parallel processes, so nothing may depend on an earlier frame or shot. Bake or avoid live simulation.
-- Frame numbers are song frames: frame `f` is `f / fps` seconds into the song. In `describe`, use
-  `ctx.frame_to_seconds(f)` for exact boundaries. The `start` and `end` passed to `build_shot` and `frame` are
-  exactly on that grid: the first frame's `t` equals `shot["start"]`, so `stepped(t - shot["start"], ctx.fps)`
-  starts on the first pose. The manifest keeps six-decimal times for display and stale comparisons.
+- Frame numbers are song frames: frame `f` is `f / fps` seconds into the song, and a lead-in frame is negative.
+  In `describe`, use `ctx.frame_to_seconds(f)` for exact boundaries. The `start` and `end` passed to `build_shot`
+  and `frame` are exactly on that grid: the first frame's `t` equals `shot["start"]`, so
+  `stepped(t - shot["start"], ctx.fps)` starts on the first pose. The manifest keeps six-decimal times for display
+  and stale comparisons.
 - Target Blender 5: the EEVEE engine id is `BLENDER_EEVEE` (use `ctx.engine`), `scene.node_tree` is gone (the
   compositor is `scene.compositing_node_group`), `Action.fcurves` is gone, and materials and worlds already have
   node trees. Build meshes with `bmesh` and `bpy.data`, not `bpy.ops`, where you can.
 - Use `portos_film.music` (`beats`, `downbeats`, `sections`, `nearest_beat`, `beats_between`, `pulse`,
+  `bar_time(song, bar, beat=0.0)`, `bar_at(song, t)`, `phrases(song, bars=4)`,
+  `onsets(song, band="low", min_gap=0.12, sensitivity=1.5)`, `swell(song, band, t, window=2.0)`,
   `envelope(song, "low"|"mid"|"high"|"rms", t)`, `cue_words`, `words_between`) and `portos_film.timing` (`ease`,
   `clamp`, `remap`, `stepped` for on-twos holds). They read `song.json`; do not parse audio yourself.
 - Lyrics are not drawn for you. Typography is part of the film.
@@ -86,8 +120,14 @@ Rules that keep a film renderable:
    Read the state until that job is `done`. An `error` job carries `error`, `problems` (every refused shot or
    option) and `logFile`. A `409 MUSIC_VIDEO_BLENDER_SCENES_CONFLICT` means the Board has shots the film did not
    make: ask the director before sending `{ "replaceScenes": true }`.
-2. **Stills**: `POST /api/music-video/:id/blender/render` with `{ "quality": "still", "shotIds": [...] }` (or `times`
-   in song seconds). Look at the image before going further: lit, framed, the subject readable.
+2. **Stills & Contact sheets**:
+   - Stills: `POST /api/music-video/:id/blender/render` with `{ "quality": "still", "shotIds": [...] }` (or `times`
+     in song seconds). Look at the image before going further: lit, framed, the subject readable.
+   - Contact sheets (motion review): `POST /api/music-video/:id/blender/render` with
+     `{ "quality": "sheet", "shotIds": [...], "sheet": { "every": 3, "columns": 6, "range": [startSec, endSec] } }`.
+     Always review motion from contact sheets rendered through PortOS (stills alone cannot establish motion, and a
+     separate local runner does not pass PortOS's exact shot timing). A current preview is tiled as it stands; a code
+     shot with no current preview draws its own frames, and a code layer is painted onto the tiles. Neither needs Blender.
 3. **Previews**: `{ "quality": "preview" }` renders every shot that has no current preview, so send it again after
    each edit: it takes the shots that went stale and any not rendered yet, and skips the rest (`skipped`).
    `"onlyStale": true` narrows it to renders that exist and went stale; `"force": true` re-renders current ones.
@@ -100,8 +140,8 @@ Rules that keep a film renderable:
 
 Jobs run in the background. Watch `jobs` in the state; a failed job's `logFile` (read it with
 `GET /api/music-video/:id/blender/media`) holds the Python traceback. Renders are **stale** when a shot's `deps`,
-times, the render settings or a film option changed (`staleReasons` says which); re-sync after changing the shot
-list, the options a film declares, or the frame rate (renders are refused until then).
+a code module it imports, times, the render settings or a film option changed (`staleReasons` says which); re-sync
+after changing the shot list, the options a film declares, or the frame rate (renders are refused until then).
 
 Rendered frames are large. `GET /api/music-video/:id/blender/usage` says what the workspace takes;
 `POST /api/music-video/:id/blender/frames/clear` removes the frames of finished renders (their videos stay). Clear

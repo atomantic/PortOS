@@ -48,6 +48,8 @@ describe('composeBoardPrompt', () => {
     expect(sent).toContain('Ink washes');
     expect(sent).toContain('Neon lights');
     expect(sent).toContain('ONE new, coherent visual style');
+    expect(sent).toContain('subject-independent visual style');
+    expect(sent).toContain('Remove subject definitions even from older source styles');
     expect(sent).not.toContain(analyzed.analysis.prompt);
     expect(style.prompt).toBe(JSON.parse(composedText).prompt);
     promptRunner.runPromptThroughProvider.mockResolvedValueOnce({ text: JSON.stringify({ prompt: 'x'.repeat(8001) }) });
@@ -104,6 +106,10 @@ describe('composeBoardPrompt', () => {
     expect(sent).toContain('granular ink wash');
     expect(sent).toContain('analyzedPrompt');
     expect(sent).toContain('Dusty painted sci-fi.');
+    expect(sent).toContain('HOW the images look from WHAT they depict');
+    expect(sent).toContain('abstract, non-narrative study');
+    expect(sent).toContain('Start with the visual treatment, not a subject or scene');
+    expect(sent).not.toContain('Start with the subject or scene');
     expect(style.prompt.startsWith('a weathered foundry')).toBe(true);
     expect(style.negativePrompt).toBe('gloss, neon, plastic');
     expect(style.analyzedItemCount).toBe(1);
@@ -125,6 +131,15 @@ describe('composeBoardPrompt', () => {
     expect(sent).not.toContain('OLD_COMPOSITE');
     expect(sent).not.toContain('OLD_NEGATIVE');
     expect(sent).toContain('harsh digital sharpening');
+    expect(sent).toContain('Lead with what makes these references look different');
+    expect(sent).toContain('including their stated strength and distribution');
+    expect(sent).toContain('Do not downgrade conspicuous whole-frame effects');
+    expect(sent).toContain('do not substitute one for another');
+    expect(sent).toContain('Resolve conflicting per-item negatives against the positive visual evidence');
+    expect(sent).toContain('Drop subject-specific exclusions');
+    expect(sent).toContain('Keep local or minority details subordinate');
+    expect(sent).toContain('must not become an all-over finish');
+    expect(sent).toContain('Optical diffusion is not faded color');
   });
 
   it('rejects an empty model prompt', async () => {

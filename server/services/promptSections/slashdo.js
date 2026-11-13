@@ -74,7 +74,8 @@ function resolveSlashdoReviewContract(task, { codeReviewDefaults = null, default
     optionalReviewers: resolvedOptional,
     reviewerMaxRounds: resolvedMaxRounds,
     reviewerModels: resolvedModels,
-    reviewerEfforts: resolvedEfforts
+    reviewerEfforts: resolvedEfforts,
+    reviewerCatalogs
   } = resolveReviewerConfig(task.metadata, codeReviewDefaults, defaultReviewers);
 
   // A resolved lone `copilot` with no usernames is ambiguous on older task
@@ -109,7 +110,7 @@ function resolveSlashdoReviewContract(task, { codeReviewDefaults = null, default
     : unreachableReviewerIncludes({ reviewers: resolvedReviewers, usernames: resolvedUsernames });
 
   const reviewWith = skipIncludes.length
-    ? buildReviewersCsv(resolvedReviewers, resolvedUsernames, resolvedOptional, resolvedMaxRounds, resolvedModels, resolvedEfforts)
+    ? buildReviewersCsv(resolvedReviewers, resolvedUsernames, resolvedOptional, resolvedMaxRounds, resolvedModels, resolvedEfforts, [], reviewerCatalogs)
     : '';
   // Gated on the PIN, not on pruning. When `reviewWith` is emitted, each token
   // carries `~effort=<level>` and slashdo's loop applies it — the note would only
@@ -117,7 +118,7 @@ function resolveSlashdoReviewContract(task, { codeReviewDefaults = null, default
   // resolves reviewers itself and the note is the pin's only route to the CLI it
   // spawns (the `/do:pr` completion step further down is a different invocation
   // entirely, and for a slashdo-backed task usually isn't reached).
-  const reviewerEffortNote = buildReviewerEffortNote(resolvedReviewers, resolvedEfforts, { reviewWith, reviewerModels: resolvedModels });
+  const reviewerEffortNote = buildReviewerEffortNote(resolvedReviewers, resolvedEfforts, { reviewWith, reviewerModels: resolvedModels, reviewerCatalogs });
   return { skipIncludes, reviewWith, reviewerEffortNote, explicitReviewWith: false };
 }
 

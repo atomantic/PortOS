@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight, X } from 'lucide-react';
+import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight, CheckCircle2, X } from 'lucide-react';
 import Drawer from '../../Drawer';
 import ContactSheetButton from '../ContactSheetButton.jsx';
 import PacingRecutPanel from '../PacingRecutPanel.jsx';
@@ -12,6 +12,8 @@ import { SHOT_SHEET_MAP_BARS, shotSheetMapRows, shotSheetRows } from '../../../.
 import EndingCard, { EndingThumbnail } from '../EndingCard.jsx';
 import CreditsEndingCard, { CreditsThumbnail } from '../CreditsEndingCard.jsx';
 import ScenePoster from '../ScenePoster.jsx';
+import { blenderShotThumbPath } from '../../../lib/musicVideoBlender.js';
+import { musicVideoBlenderMediaUrl } from '../../../services/apiMusicVideo.js';
 import SharedTakeOffers from '../SharedTakeOffers.jsx';
 import { sceneActiveEndImageId } from '../../../../../server/lib/musicVideoEndFrame.js';
 import ShotEffectsCard, { SceneEffectBadges } from '../ShotEffectsCard.jsx';
@@ -71,6 +73,15 @@ function useLinkedStoryboard(storyboardId) {
 export default function BoardStage({ board }) {
   const { project, locked, sceneMedia, videoSettings, takes, activeSceneId, onToggleSceneExpand } = board;
   const scenes = project.scenes || [];
+  const blenderPosters = new Map();
+  if (project.composition?.mode === 'blender') {
+    const state = board.blender?.state;
+    for (const shot of state?.manifest?.shots || []) {
+      const sceneId = project.blender?.sceneMap?.[shot.id] || shot.sceneId;
+      const path = blenderShotThumbPath(state, shot);
+      if (sceneId && path) blenderPosters.set(sceneId, musicVideoBlenderMediaUrl(project.id, path));
+    }
+  }
   const catalog = useCatalogCastSetsCheckin(project, board.applyCatalogCheckin, board.applyShotReferenceRepair);
   const [storyboard, setStoryboard] = useLinkedStoryboard(project.storyboardId);
   // Until the board is read, a fitted shot shows no panel state rather than a false "deleted".
@@ -248,14 +259,16 @@ export default function BoardStage({ board }) {
             onClick={() => { board.seekToScene?.(scene); onToggleSceneExpand?.(scene.sceneId, true); }}
             aria-label={`Open ${shotName(scene)}`}
             aria-describedby={[(sceneMediaKind(scene, { layered }) || sceneActiveEndImageId(scene)) && `scene-media-${scene.sceneId}`,
+              scene.shotSheet?.checked && `scene-done-${scene.sceneId}`,
               Object.values(effectsById.get(scene.sceneId)).some((list) => list.length) && `scene-effects-${scene.sceneId}`].filter(Boolean).join(' ') || undefined}
-            className={`min-w-0 rounded border p-2 text-left ${activeSceneId === scene.sceneId ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-card'}`}>
+            className={`min-w-0 rounded border p-2 text-left ${scene.shotSheet?.checked ? 'border-port-success bg-port-success/10' : 'border-port-border bg-port-card'} ${activeSceneId === scene.sceneId ? 'ring-2 ring-port-accent' : ''}`}>
             <span className="relative block">
-              <ScenePoster scene={scene} scenes={scenes} className="aspect-video w-full rounded" />
+              <ScenePoster src={blenderPosters.get(scene.sceneId)} scene={scene} scenes={scenes} className="aspect-video w-full rounded" />
               <SceneMediaBadges scene={scene} layered={layered} scenes={scenes} />
               <SceneEffectBadges sceneId={scene.sceneId} effects={effectsById.get(scene.sceneId)} />
             </span>
             <span className="mt-1 block truncate text-sm">{shotName(scene)}</span>
+            {scene.shotSheet?.checked && <span id={`scene-done-${scene.sceneId}`} className="flex items-center gap-1 text-xs font-medium text-port-success"><CheckCircle2 size={12} aria-hidden="true" />Done</span>}
             {/* Run time first, then where it sits in the song. */}
             <span className="block text-xs text-port-text-muted">
               {Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec) && <span className="font-medium text-port-text">{(scene.endSec - scene.startSec).toFixed(2)}s · </span>}
@@ -292,6 +305,7 @@ export default function BoardStage({ board }) {
           )}
           {scenes.map((scene, idx) => scene.sceneId !== activeSceneId ? null : (
             <SceneCard
+              posterSrc={blenderPosters.get(activeSceneId)}
               key={scene.sceneId}
               scene={scene}
               project={project}
@@ -324,6 +338,7 @@ export default function BoardStage({ board }) {
               videoModels={videoSettings.models}
               defaultVideoModel={videoSettings.defaultModel}
               canContinueShot={board.canContinueShot}
+              onSetDone={board.setSceneDone}
               onMove={board.moveScene}
               onDelete={board.onDeleteScene}
               onSplit={board.onSplitScene}

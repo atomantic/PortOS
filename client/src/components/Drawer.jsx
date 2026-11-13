@@ -37,9 +37,6 @@ import { useEscLayer } from './ui/Modal';
 // viewport. Portaling is unconditional rather than an opt-in flag so no call
 // site has to remember it; React still routes events and context through the
 // React tree, so nesting a Drawer deep in a page keeps working unchanged.
-// A caller sitting inside a page-scoped CSS theming root whose rules are written
-// as descendant selectors (e.g. `.openworld-themed` in `index.css`) must pass
-// that class as `portalClassName`, since the portal leaves that ancestor behind.
 
 // Desktop width brackets. Mobile is always `w-full`. `lg`/`xl` intentionally use
 // more of the viewport (via extra breakpoints) so wide config forms can lay out
@@ -66,7 +63,6 @@ export default function Drawer({
   closeOnEsc = true,
   closeOnBackdrop = true,
   closeLabel = 'Close settings',
-  portalClassName = '',  // re-applies a page-scoped theming class inside the portal
   headerActions = null,  // buttons beside Close (e.g. previous / next record)
   showHeader = true,     // false: the child draws its own header, Close included (the shot editor)
 }) {
@@ -172,7 +168,7 @@ export default function Drawer({
   if (typeof document === 'undefined') return overlay;
 
   return createPortal(
-    portalClassName ? <div className={portalClassName}>{overlay}</div> : overlay,
+    overlay,
     document.body
   );
 }

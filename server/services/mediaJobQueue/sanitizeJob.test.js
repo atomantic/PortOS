@@ -75,6 +75,10 @@ describe('sanitizeJob', () => {
     } } });
     expect(remote.requestedInputImages).toEqual([{ role: 'referenceImages', filename: 'reference.webp' }]);
     expect(JSON.stringify(remote)).not.toContain('/private');
+    expect(sanitizeJob({ kind: 'image', params: {} })).not.toHaveProperty('referenceImageFilenames');
+    const recorded = sanitizeJob({ kind: 'image', status: 'failed', referenceImageFilenames: ['/private/cast.png', 'set.webp', '../bad.txt', null], params: {} });
+    expect(recorded.referenceImageFilenames).toEqual(['cast.png', 'set.webp']);
+    expect(JSON.stringify(recorded)).not.toContain('/private');
   });
 
   it('projects cancellation only while the job is still active', () => {

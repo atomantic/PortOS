@@ -166,6 +166,11 @@ def describe(job, film, song):
         if isinstance(shot, dict):
             for key in ("start", "end"):
                 shot[key] = snap_to_grid(shot.get(key), job["fps"])
+            handles = shot.get("handles")
+            if isinstance(handles, dict):
+                for side in ("in", "out"):
+                    if handles.get(side) is not None:
+                        handles[side] = snap_to_grid(handles.get(side), job["fps"])
     target = job.get("manifestOut") or os.path.join(os.environ.get("PORTOS_WORKER_OUTPUT", job["workspace"]), "manifest.json")
     with open(target, "w", encoding="utf-8") as handle:
         json.dump(manifest, handle)
@@ -202,7 +207,7 @@ def apply_output_format(scene, quality):
     settings = scene.render.image_settings
     if hasattr(settings, "media_type"):
         settings.media_type = "IMAGE"
-    if quality == "preview":
+    if quality in ("preview", "sheet"):
         settings.file_format = "JPEG"
         settings.quality = 90
     else:
@@ -213,12 +218,45 @@ def apply_output_format(scene, quality):
     scene.render.use_overwrite = True
 
 
+def frame_token(frame):
+    """`%06d` of a negative frame is `-00144`, which the server's resume scan does not see."""
+    return ("m%06d" % -frame) if frame < 0 else ("%06d" % frame)
+
+
+def apply_render_stamp(scene, frame, fps, height):
+    r = scene.render
+    r.use_stamp = True
+    for attr in (
+        "use_stamp_date", "use_stamp_time", "use_stamp_render_time", "use_stamp_frame",
+        "use_stamp_frame_range", "use_stamp_memory", "use_stamp_hostname", "use_stamp_camera",
+        "use_stamp_lens", "use_stamp_scene", "use_stamp_strip_meta", "use_stamp_marker",
+        "use_stamp_sequencer_strip", "use_stamp_filename", "use_stamp_labels",
+    ):
+        if hasattr(r, attr):
+            setattr(r, attr, False)
+    r.use_stamp_note = True
+    r.stamp_note_text = "f%d  %.2fs" % (frame, frame / fps)
+    r.stamp_font_size = max(16, round(height / 24))
+    r.stamp_foreground = (1.0, 1.0, 1.0, 1.0)
+    r.stamp_background = (0.0, 0.0, 0.0, 0.75)
+
+
 def frame_file(job, shot, frame, quality):
     shot_dir = os.path.join(job["out"], shot["id"])
     if quality == "still":
-        return os.path.join(shot_dir, "stills", "t%09d.png" % half_up(frame / job["fps"] * 1000))
+        ms = half_up(frame / job["fps"] * 1000)
+        name = ("tm%09d.png" % -ms) if ms < 0 else ("t%09d.png" % ms)
+        return os.path.join(shot_dir, "stills", name)
+    if quality == "sheet":
+        return os.path.join(shot_dir, "sheets", job.get("framesDir") or ".frames", "frame_%s.jpg" % frame_token(frame))
     extension = "jpg" if quality == "preview" else "png"
-    return os.path.join(shot_dir, quality, "frames", "frame_%06d.%s" % (frame, extension))
+    return os.path.join(shot_dir, quality, "frames", "frame_%s.%s" % (frame_token(frame), extension))
+
+
+def handle_frame_file(job, shot, side, frame, quality):
+    shot_dir = os.path.join(job["out"], shot["id"])
+    extension = "jpg" if quality == "preview" else "png"
+    return os.path.join(shot_dir, quality, "frames", "handle_%s_%s.%s" % (side, frame_token(frame), extension))
 
 
 def render_frame(scene, path):
@@ -228,6 +266,8 @@ def render_frame(scene, path):
     partial = stem + ".part" + extension
     scene.render.filepath = partial
     bpy.ops.render.render(write_still=True)
+    if not os.path.isfile(partial):
+        raise KeyboardInterrupt("Render interrupted before the frame was written")
     os.replace(partial, path)
 
 
@@ -241,7 +281,7 @@ def render_shot(job, film, song, shot):
     shot = {**shot, "start": first / fps, "end": end / fps}
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scene = bpy.context.scene
-    ctx = make_context(job, song, quality, shot)
+    ctx = make_context(job, song, "preview" if quality == "sheet" else quality, shot)
     scene.render.engine = ctx.engine
     device = "GPU"
     if ctx.engine == "CYCLES":
@@ -251,13 +291,23 @@ def render_shot(job, film, song, shot):
         scene.eevee.taa_render_samples = ctx.samples
     apply_frame_settings(scene, ctx)
     last = end - 1
-    scene.frame_start = first
-    scene.frame_end = max(first, last)
-    frames = job.get("frames") if quality == "still" else list(range(first, last + 1))
-    if not frames:
+    handles = shot.get("handles") if isinstance(shot.get("handles"), dict) else {}
+    in_frames = 0 if quality in ("still", "sheet") else max(0, half_up(float(handles.get("in") or 0) * fps))
+    out_frames = 0 if quality in ("still", "sheet") else max(0, half_up(float(handles.get("out") or 0) * fps))
+    scene.frame_start = first - in_frames
+    scene.frame_end = max(scene.frame_start, last + out_frames)
+    if quality in ("still", "sheet"):
+        targets = [(frame, frame_file(job, shot, frame, quality)) for frame in (job.get("frames") or [])]
+    else:
+        targets = (
+            [(frame, handle_frame_file(job, shot, "in", frame, quality)) for frame in range(first - in_frames, first)]
+            + [(frame, frame_file(job, shot, frame, quality)) for frame in range(first, last + 1)]
+            + [(frame, handle_frame_file(job, shot, "out", frame, quality)) for frame in range(end, end + out_frames)]
+        )
+    if not targets:
         raise RuntimeError("Shot %s has no frames to render" % shot["id"])
 
-    emit("start", shot=shot["id"], frames=len(frames), blender=blender_version(), engine=ctx.engine, device=device)
+    emit("start", shot=shot["id"], frames=len(targets), blender=blender_version(), engine=ctx.engine, device=device)
     started = time.time()
     film.build_shot(ctx, shot)
     emit("built", shot=shot["id"], sec=round(time.time() - started, 3))
@@ -267,21 +317,22 @@ def render_shot(job, film, song, shot):
     apply_frame_settings(scene, ctx)
     apply_output_format(scene, quality)
     pose = getattr(film, "frame", None)
-    resume = bool(job.get("resume")) and quality != "still"
-    for index, frame in enumerate(frames, start=1):
+    resume = bool(job.get("resume")) and quality not in ("still", "sheet")
+    for index, (frame, path) in enumerate(targets, start=1):
         if os.getppid() == 1:
             raise RuntimeError("PortOS stopped while this shot was rendering")
-        path = frame_file(job, shot, frame, quality)
         if resume and os.path.isfile(path) and os.path.getsize(path) > 0:
-            emit("frame", shot=shot["id"], frame=frame, index=index, total=len(frames), sec=0, skipped=True)
+            emit("frame", shot=shot["id"], frame=frame, index=index, total=len(targets), sec=0, skipped=True)
             continue
         os.makedirs(os.path.dirname(path), exist_ok=True)
         frame_started = time.time()
         scene.frame_set(frame)
         if callable(pose):
             pose(ctx, shot, frame / fps, frame)
+        if quality == "sheet":
+            apply_render_stamp(scene, frame, fps, ctx.height)
         render_frame(scene, path)
-        emit("frame", shot=shot["id"], frame=frame, index=index, total=len(frames),
+        emit("frame", shot=shot["id"], frame=frame, index=index, total=len(targets),
              sec=round(time.time() - frame_started, 3), skipped=False)
 
     if job.get("saveBlend"):
@@ -314,6 +365,9 @@ def main():
 
 try:
     main()
+except KeyboardInterrupt:
+    print("Render canceled", flush=True)
+    sys.exit(130)
 except BaseException as error:  # noqa: B902 - SystemExit from a film is reported too
     emit("error", message="%s: %s" % (type(error).__name__, error), traceback=traceback.format_exc())
     sys.stdout.flush()

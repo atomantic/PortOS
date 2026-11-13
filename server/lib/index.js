@@ -6,12 +6,14 @@
 // `server/lib/README.md` for the human-readable catalog.
 //
 // MAINTENANCE RULE: any new module added to server/lib/ MUST be re-exported
-// here AND get a one-line entry in README.md. The same rule applies to
-// client/src/lib/, client/src/hooks/, and client/src/services/. See
-// AGENTS.md "Module organization" for the full convention.
-
-// === Validation (Zod schemas + validators) ===
-// Domain-prefixed validators are namespace-exported so generic names that
+// here AND get one row in README.md's alphabetical module table. The same
+// rule applies to client/src/lib/, client/src/hooks/, and client/src/services/.
+// See AGENTS.md "Module organization" for the full convention.
+//
+// Line order here carries no grouping or meaning; the README table is the
+// catalog.
+//
+// Namespace exports: domain-prefixed validators are namespace-exported so generic names that
 // collide across domains (e.g. `settingsUpdateInputSchema` exists in both
 // brain and digital-twin) can be disambiguated as `brainValidation.X` /
 // `digitalTwinValidation.X`. The catch-all `validation.js` stays flat — its
@@ -125,7 +127,6 @@ export * from './threejsModelPlayerSource.js';
 export * from './threejsModelRig.js';
 export * from './threejsTransform.js';
 
-// === Story & narrative ===
 export * as catalogBulkParsers from './catalogBulkParsers.js';
 export * from './catalogChunking.js';
 export * from './catalogSourceKinds.js';
@@ -215,7 +216,6 @@ export * from './universeVisualStyle.js';
 export * from './writersRoomPresets.js';
 export * from './writersRoomStylePresets.js';
 
-// === Prompt & AI (toolkit lives in aiToolkit/ — see its own index.js) ===
 export * from './llmText.js';
 export * from './aiToolkitState.js';
 export * from './ansiStrip.js';
@@ -305,6 +305,7 @@ export * from './promptPartials.js';
 export * from './promptSectionRenderer.js';
 export * from './promptSystemStages.js';
 export * from './promptTemplate.js';
+export * from './quickEditPrompt.js';
 export * from './credentialBootstrap.js';
 export * from './providerCooldown.js';
 export * from './providerModels.js';
@@ -366,7 +367,6 @@ export * from './tuiHandshake.js';
 export * from './tuiShellLaunch.js';
 export * from './tuiUsageScrape.js';
 
-// === File & I/O ===
 export * from './borderKey.js';
 export * from './boundedStateMap.js';
 export * from './collectionStore.js';
@@ -432,7 +432,6 @@ export * from './zipArchive.js';
 export * from './zipStream.js';
 export * from './zipWriter.js';
 
-// === Process execution ===
 export * from './fullDiskAccess.js';
 export * from './agentGuard/index.js';
 export * from './agentFinalVerdict.js';
@@ -525,7 +524,6 @@ export * from './youtubeUrl.js';
 export * from './youtubeUrlAssert.js';
 export * from './ytdlp.js';
 
-// === Networking ===
 export * from './abortTimeout.js';
 export * from './connectivity.js';
 export * from './fetchWithTimeout.js';
@@ -559,7 +557,6 @@ export * from './tailcatValidation.js';
 export * from './tailcatVersion.js';
 export * from './xPostMedia.js';
 
-// === Search & indexing ===
 export * from './bm25.js';
 export * from './memoryLinkTypes.js';
 export * from './memoryQuery.js';
@@ -567,7 +564,6 @@ export * from './memoryStats.js';
 export * from './rrfRanking.js';
 export * from './vectorMath.js';
 
-// === Extraction & parsing ===
 export * from './clientApiPaths.js';
 export * from './htmlToText.js';
 export * from './jsonExtract.js';
@@ -596,12 +592,10 @@ export * from './worktreeNodeModules.js';
 export * from './worktreeOwnership.js';
 export * from './xmlEntities.js';
 
-// === Curated static data ===
 export * from './curatedGenomeMarkers.js';
 export * as songCraftParts from './songCraftParts.js';
 export * from './songCraftRef.js';
 
-// === Domain utilities ===
 export * from './appIdentity.js';
 export * from './appResolver.js';
 export * from './autonomousJobIntervals.js';
@@ -734,7 +728,6 @@ export * from './tempPathGuard.js';
 export * from './textUtils.js';
 export * from './vaultCrypto.js';
 
-// === Model & config ===
 export * from './backupAssetOwners.js';
 export * from './backupConfig.js';
 export * from './backupSnapshotBoundary.js';
@@ -761,7 +754,6 @@ export * from './tribeCadence.js';
 export * from './tribeMatch.js';
 export * from './viteAllowedHosts.js';
 
-// === General utilities ===
 export * from './apiAccessPolicy.js';
 export * from './apiCatalog.js';
 export * from './apiRouteGraph.js';
@@ -848,7 +840,6 @@ export * from './eidoverseProxyRoutes.js';
 export * from './workspaceRoots.js';
 export * from './zodCompat.js';
 
-// === Test support (consumed by *.test.js files) ===
 export * from './gitTestRepo.js';
 export * from './mockPathsDataRoot.js';
 export * from './settingsTestUtil.js';
@@ -1115,3 +1106,4 @@ export * from './imageInputProvenance.js';
 export * from './databaseMaintenanceSchema.js';
 export * from './musicVideoBlender.js';
 export * as musicVideoBlenderValidation from './musicVideoBlenderValidation.js';
+export * as codeAnimationFilms from './codeAnimationFilms.js';

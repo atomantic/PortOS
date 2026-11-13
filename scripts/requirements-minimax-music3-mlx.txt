@@ -6,10 +6,10 @@
 #
 # mlx-audio 0.5.0 is the first release containing the MiniMax Music 3 merge
 # (Blaizzy/mlx-audio@784b29e2, which earlier installs took from git); a git source
-# cannot be hash-pinned. transformers and huggingface-hub stay on the versions
-# this runtime was validated with.
-mlx-audio==0.5.0
+# cannot be hash-pinned. Transformers/Hub are coordinated with the validated
+# tokenizer and transport closure in the generated lock.
+mlx-audio==0.6.4
 mlx==0.32.4
 mlx-metal==0.32.4
-transformers==5.15.0
-huggingface-hub[hf_xet]==1.28.0
+transformers==5.22.1
+huggingface-hub[hf_xet]==2.4.0

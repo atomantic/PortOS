@@ -67,7 +67,9 @@ sys.modules["transformers"] = SimpleNamespace(
 # A tensor double that still compares equal to the plain list the assertions
 # above use, but carries the device move the trained-head path performs.
 class Tensor(list):
-    def to(self, *_args):
+    device = "cpu"
+    def to(self, device):
+        self.device = device
         return self
 
 sys.modules["torch"] = SimpleNamespace(
@@ -128,6 +130,23 @@ print(json.dumps({"scores": scores, "encoded": encoded, "device": state["device"
     expect(raw.device).toBe('cpu');
     expect(normalizeJevScores(
       { schemaVersion: 1, complete: true, scores: raw.scores },
+      { hypotheses: ['first', 'second'] },
+    ).ok).toBe(true);
+  });
+
+  it('places both scorer inputs on the selected encoder device', () => {
+    const result = JSON.parse(run(`
+state["device"] = "mps"
+original_model = state["model"]
+def device_model(**inputs):
+    assert {tensor.device for tensor in inputs.values()} == {"mps"}
+    return original_model(**inputs)
+state["model"] = device_model
+scores = helper["score_pairs"](state, "A premise.", ["first", "second"])
+print(json.dumps({"scores": scores}))
+`));
+    expect(normalizeJevScores(
+      { schemaVersion: 1, complete: true, scores: result.scores },
       { hypotheses: ['first', 'second'] },
     ).ok).toBe(true);
   });

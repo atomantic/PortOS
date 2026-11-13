@@ -93,7 +93,10 @@ const writeCoverArt = (projectId, update) => mutateProjectRecord(projectId, (cur
 export function sourcePath(project, source) {
   const name = basename(String(source?.filename || ''));
   if (source?.kind === 'thumbnail') {
-    if (!(projectPublishKit(project).thumbnails || []).includes(name)) throw coverError(422, 'VALIDATION_ERROR', 'That thumbnail is not one this kit built');
+    const kit = projectPublishKit(project);
+    const held = [kit.coverArt, kit.youtubeThumbnail, ...(kit.youtubeThumbnailTests || [])]
+      .filter(asset => asset?.source?.kind === 'thumbnail').map(asset => asset.source.filename);
+    if (![...(kit.thumbnails || []), ...(kit.frames || []), ...held].includes(name)) throw coverError(422, 'VALIDATION_ERROR', 'That thumbnail is not one this kit built');
     const path = safeUnder(PATHS.videoThumbnails, name);
     if (path) return path;
   } else if (source?.kind === 'image') {
@@ -107,6 +110,22 @@ export function sourcePath(project, source) {
 async function defaultTag() {
   const platforms = await deps.getPlatforms().catch(() => null);
   return trimTo(platforms?.distrokid?.account, 24) || '';
+}
+
+/**
+ * The design a song's lettering is set in, or null for the plain look. A song
+ * with no design of its own takes the artist's saved style and keeps it as its
+ * design, so the Lettering preview and every later re-set show what was
+ * rendered. `tag` is the artist on the cover (default: the last cover's, else
+ * the DistroKid account).
+ */
+export async function songCoverDesign(projectId, art, { tag } = {}) {
+  if (art.design) return art.design;
+  const style = await deps.artistStyle(tag ?? art.tag ?? await defaultTag()).catch(() => null);
+  if (!style?.design) return null;
+  await writeCoverArt(projectId, (current) => (current.design ? {} : { design: style.design }));
+  console.log(`🖼️ Music Video cover art ${String(projectId).slice(3, 11)}: lettering starts from the artist style (${style.name})`);
+  return style.design;
 }
 
 /**
@@ -133,12 +152,13 @@ export async function composeProjectCoverArt(projectId, { source = null, title, 
   const fonts = await deps.fonts();
   await deps.registerFonts(fonts);
   const filename = `cover-${String(projectId).slice(3, 11)}-${randomUUID().slice(0, 8)}.jpg`;
-  await deps.compose({ ...next, design: art.design || null, fonts, source: path, out: safeUnder(PATHS.videoThumbnails, filename) });
+  const design = next.lettering ? await songCoverDesign(projectId, art, { tag: next.tag }) : art.design || null;
+  await deps.compose({ ...next, design, fonts, source: path, out: safeUnder(PATHS.videoThumbnails, filename) });
   // The JPEG is written in place; the row that first names it commits under a backup lease (#9982).
   const out = await withBackupAssetPublication(() => writeCoverArt(projectId, () => ({
     ...next, filename, composedAt: new Date().toISOString(), lastError: null,
   })));
-  if (art.filename && art.filename !== filename) await releaseKitFiles([art.filename], [filename]);
+  if (art.filename && art.filename !== filename) await releaseKitFiles([art.filename, ...(art.source?.kind === 'thumbnail' ? [art.source.filename] : [])], [filename]);
   console.log(`🖼️ Music Video cover art ${String(projectId).slice(3, 11)} ← ${next.source.filename}`);
   publish(projectId, out.project);
   return { project: out.project };

@@ -1,3 +1,4 @@
+import PublishFramePicker from './PublishFramePicker.jsx';
 import { useEffect, useState } from 'react';
 import { Download, Image as ImageIcon, Images, Sparkles } from 'lucide-react';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
@@ -17,6 +18,7 @@ export function coverArtSources(project) {
     seen.add(`${kind}:${filename}`);
     out.push({ kind, filename, label, src: kind === 'thumbnail' ? `/data/video-thumbnails/${encodeURIComponent(filename)}` : `/data/images/${encodeURIComponent(filename)}` });
   };
+  (kit.frames || []).forEach((f, i) => add('thumbnail', f, `Taken frame ${i + 1}`));
   // An image picked from history or uploaded is in none of the lists below.
   if (kit.coverArt?.source?.kind === 'image') add('image', kit.coverArt.source.filename, 'Current cover image');
   for (const f of kit.coverArt?.generated || []) add('image', f, 'Cover image');
@@ -71,6 +73,7 @@ export default function CoverArtPanel({ project, publishKit }) {
   return (
     <PublishCard projectId={project?.id} cardId="cover" label="Cover art" icon={ImageIcon}
       summary={art.filename ? 'Set' : 'Not set yet'} defaultOpen={!art.filename}>
+      <PublishFramePicker project={project} publishKit={publishKit} cardId="cover" />
       <p className="text-port-text-muted">The square cover DistroKid sends to Spotify, Apple Music and the other stores, and Suno shows. Pick an image, and the title and artist are set on it, or use a finished cover as it is.</p>
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="w-full sm:w-48 shrink-0 space-y-1">

@@ -479,10 +479,11 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // may start passing `reviewWith` and mute itself.
     // The models ride along because cursor's effort is a variant of its model id
     // rather than a flag — without them a cursor pin would have no invocation to
-    // name (see `reviewerModelArg`).
-    expect(CLAIM_SRC).toContain('appendReviewerEffortBlock(reviewersList, promptReviewerEfforts, promptReviewerModels)');
-    expect(CLAIM_SRC).toContain('appendReviewerEffortBlock(list, reviewerEfforts, reviewerModels)');
-    expect(PRESTEP_SRC).toContain('appendReviewerEffortBlock(promptReviewers, promptReviewerEfforts, promptReviewerModels)');
+    // name (see `reviewerModelArg`). Catalogs also ride along so Antigravity
+    // can validate model-specific tiers before rendering the effort flag.
+    expect(CLAIM_SRC).toContain('appendReviewerEffortBlock(reviewersList, promptReviewerEfforts, promptReviewerModels, claimReviewers.reviewerCatalogs)');
+    expect(CLAIM_SRC).toContain('appendReviewerEffortBlock(list, reviewerEfforts, reviewerModels, config.reviewerCatalogs)');
+    expect(PRESTEP_SRC).toContain('appendReviewerEffortBlock(promptReviewers, promptReviewerEfforts, promptReviewerModels, claimReviewers.reviewerCatalogs)');
     expect(LAYER_SRC).not.toMatch(/buildReviewerEffortNote\([^)]*reviewWith/);
   });
 

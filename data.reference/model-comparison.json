@@ -59335,39 +59335,53 @@
         "value": 30.8468119957291,
         "source": {
           "url": "https://artificialanalysis.ai/models/gemini-3-8-flash",
-          "retrievedAt": "2026-11-09T20:02:37.258Z",
-          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact intelligenceIndex from the public model payload embedded at https://artificialanalysis.ai/models/gemini-4-argon; exact model and reasoning effort, AA evaluation harness."
         }
       },
       "costPerTask": {
         "value": 7.766006178152514,
         "source": {
           "url": "https://artificialanalysis.ai/models/gemini-3-8-flash",
-          "retrievedAt": "2026-11-09T20:02:37.258Z",
-          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task; public payload intelligenceIndexCostPerTask.cost.total, including input, cache read/write and reasoning/answer tokens. Publisher uses Google API rates $0.75/M input and $3.75/M output."
         }
       },
       "inputPerMillion": {
         "value": 0.75,
         "source": {
           "url": "https://artificialanalysis.ai/models/gemini-3-8-flash",
-          "retrievedAt": "2026-11-09T20:02:37.258Z",
-          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "AA published first-party Google API reference, USD per 1M uncached input tokens; not a subscription allowance or gateway tariff."
         }
       },
       "outputPerMillion": {
         "value": 3.75,
         "source": {
           "url": "https://artificialanalysis.ai/models/gemini-3-8-flash",
-          "retrievedAt": "2026-11-09T20:02:37.258Z",
-          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "AA published first-party Google API reference, USD per 1M output tokens; not a subscription allowance or gateway tariff."
         }
       },
       "reasoningPerMillion": null,
-      "responseSeconds": null,
-      "tokensPerSecond": null,
+      "responseSeconds": {
+        "value": 53.74854384290177,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Artificial Analysis public payload endToEndTime: mean end-to-end seconds for single-request workloads; not time per Intelligence Index task or time to first token."
+        }
+      },
+      "tokensPerSecond": {
+        "value": 111.19766054340022,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Artificial Analysis public payload headline.outputSpeed, output tokens per second on Google API; distinct from full reasoning-task completion time."
+        }
+      },
       "quota": null,
-      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+      "notes": "Exact public v5.0.1 payload collected at https://artificialanalysis.ai/models/gemini-4-argon on 2026-11-12. Google API reference evidence; no claim about subscription consumption. Task cost applies only to this exact effort and v5.0.1 workload. Historical v4.3.2 rows and their retrieval dates are retained separately."
     },
     {
       "id": "aa-web-v5.0.1-gemini-4-carbon",
@@ -60699,6 +60713,683 @@
       "tokensPerSecond": null,
       "quota": null,
       "notes": "OpenRouter routed price, not the model creator first-party price. Cached-token, audio and per-request charges are not represented by this schema; free routes remain subject to upstream limits and terms."
+    },
+    {
+      "id": "google-gemini-4-hydrogen-low-official-api-pricing-v1-standard",
+      "provider": "Google",
+      "model": "gemini-4-hydrogen-low",
+      "effort": "low",
+      "configuration": "Google Gemini Developer API standard paid tier; gemini-4-hydrogen with thinking_level=low; API reference for the effort-suffixed harness alias",
+      "billing": "api",
+      "benchmark": "Official API pricing v1",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Official Gemini Developer API Standard paid-tier price in USD per 1M uncached input tokens for gemini-4-hydrogen; same published rate across thinking levels. API reference, not a measured harness charge or subscription allowance."
+        }
+      },
+      "outputPerMillion": {
+        "value": 7.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Official Gemini Developer API Standard paid-tier price in USD per 1M output tokens, including thinking tokens, for gemini-4-hydrogen. API reference; effort changes consumption, not the published token rate."
+        }
+      },
+      "reasoningPerMillion": {
+        "value": 7.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Google includes thinking tokens in the $7.50 per 1M output-token rate. This is the same output charge, not an additional reasoning surcharge."
+        }
+      },
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Retrieved 2026-11-12. Official API model code is gemini-4-hydrogen; the effort-suffixed model is a harness alias, not a separately priced API SKU. Thinking levels low/medium/high/xhigh (default high): https://aistudio.google.com/docs/thinking#thinking-levels . GA release: https://aistudio.google.com/docs/changelog#11-12-2026 . Rates are first-party API references, not gateway prices, Antigravity subscription allowances, or per-task costs. No attributable Hydrogen Intelligence Index v5.0.1 or historical v4.3.2 scores/task costs found at https://artificialanalysis.ai/leaderboards/models ; no Hydrogen result found at https://epoch.ai/models/search or https://epoch.ai/eci . Direct model-card and AA Hydrogen model URLs were inaccessible during research. No benchmark overlap or documented numerical predecessor comparison supports a PortOS quality estimate; quality, task costs, latency, throughput and quota remain null. No inference benchmarks run. Free, Batch/Flex, Priority and Contributor tiers are separate from this Standard paid-tier reference."
+    },
+    {
+      "id": "google-gemini-4-hydrogen-medium-official-api-pricing-v1-standard",
+      "provider": "Google",
+      "model": "gemini-4-hydrogen-medium",
+      "effort": "medium",
+      "configuration": "Google Gemini Developer API standard paid tier; gemini-4-hydrogen with thinking_level=medium; API reference for the effort-suffixed harness alias",
+      "billing": "api",
+      "benchmark": "Official API pricing v1",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Official Gemini Developer API Standard paid-tier price in USD per 1M uncached input tokens for gemini-4-hydrogen; same published rate across thinking levels. API reference, not a measured harness charge or subscription allowance."
+        }
+      },
+      "outputPerMillion": {
+        "value": 7.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Official Gemini Developer API Standard paid-tier price in USD per 1M output tokens, including thinking tokens, for gemini-4-hydrogen. API reference; effort changes consumption, not the published token rate."
+        }
+      },
+      "reasoningPerMillion": {
+        "value": 7.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Google includes thinking tokens in the $7.50 per 1M output-token rate. This is the same output charge, not an additional reasoning surcharge."
+        }
+      },
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Retrieved 2026-11-12. Official API model code is gemini-4-hydrogen; the effort-suffixed model is a harness alias, not a separately priced API SKU. Thinking levels low/medium/high/xhigh (default high): https://aistudio.google.com/docs/thinking#thinking-levels . GA release: https://aistudio.google.com/docs/changelog#11-12-2026 . Rates are first-party API references, not gateway prices, Antigravity subscription allowances, or per-task costs. No attributable Hydrogen Intelligence Index v5.0.1 or historical v4.3.2 scores/task costs found at https://artificialanalysis.ai/leaderboards/models ; no Hydrogen result found at https://epoch.ai/models/search or https://epoch.ai/eci . Direct model-card and AA Hydrogen model URLs were inaccessible during research. No benchmark overlap or documented numerical predecessor comparison supports a PortOS quality estimate; quality, task costs, latency, throughput and quota remain null. No inference benchmarks run. Free, Batch/Flex, Priority and Contributor tiers are separate from this Standard paid-tier reference."
+    },
+    {
+      "id": "google-gemini-4-hydrogen-high-official-api-pricing-v1-standard",
+      "provider": "Google",
+      "model": "gemini-4-hydrogen-high",
+      "effort": "high",
+      "configuration": "Google Gemini Developer API standard paid tier; gemini-4-hydrogen with thinking_level=high; API reference for the effort-suffixed harness alias",
+      "billing": "api",
+      "benchmark": "Official API pricing v1",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Official Gemini Developer API Standard paid-tier price in USD per 1M uncached input tokens for gemini-4-hydrogen; same published rate across thinking levels. API reference, not a measured harness charge or subscription allowance."
+        }
+      },
+      "outputPerMillion": {
+        "value": 7.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Official Gemini Developer API Standard paid-tier price in USD per 1M output tokens, including thinking tokens, for gemini-4-hydrogen. API reference; effort changes consumption, not the published token rate."
+        }
+      },
+      "reasoningPerMillion": {
+        "value": 7.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Google includes thinking tokens in the $7.50 per 1M output-token rate. This is the same output charge, not an additional reasoning surcharge."
+        }
+      },
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Retrieved 2026-11-12. Official API model code is gemini-4-hydrogen; the effort-suffixed model is a harness alias, not a separately priced API SKU. Thinking levels low/medium/high/xhigh (default high): https://aistudio.google.com/docs/thinking#thinking-levels . GA release: https://aistudio.google.com/docs/changelog#11-12-2026 . Rates are first-party API references, not gateway prices, Antigravity subscription allowances, or per-task costs. No attributable Hydrogen Intelligence Index v5.0.1 or historical v4.3.2 scores/task costs found at https://artificialanalysis.ai/leaderboards/models ; no Hydrogen result found at https://epoch.ai/models/search or https://epoch.ai/eci . Direct model-card and AA Hydrogen model URLs were inaccessible during research. No benchmark overlap or documented numerical predecessor comparison supports a PortOS quality estimate; quality, task costs, latency, throughput and quota remain null. No inference benchmarks run. Free, Batch/Flex, Priority and Contributor tiers are separate from this Standard paid-tier reference."
+    },
+    {
+      "id": "google-gemini-4-hydrogen-xhigh-official-api-pricing-v1-standard",
+      "provider": "Google",
+      "model": "gemini-4-hydrogen-xhigh",
+      "effort": "xhigh",
+      "configuration": "Google Gemini Developer API standard paid tier; gemini-4-hydrogen with thinking_level=xhigh; API reference for the effort-suffixed harness alias",
+      "billing": "api",
+      "benchmark": "Official API pricing v1",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Official Gemini Developer API Standard paid-tier price in USD per 1M uncached input tokens for gemini-4-hydrogen; same published rate across thinking levels. API reference, not a measured harness charge or subscription allowance."
+        }
+      },
+      "outputPerMillion": {
+        "value": 7.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Official Gemini Developer API Standard paid-tier price in USD per 1M output tokens, including thinking tokens, for gemini-4-hydrogen. API reference; effort changes consumption, not the published token rate."
+        }
+      },
+      "reasoningPerMillion": {
+        "value": 7.5,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:09:00.353Z",
+          "methodology": "Google includes thinking tokens in the $7.50 per 1M output-token rate. This is the same output charge, not an additional reasoning surcharge."
+        }
+      },
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Retrieved 2026-11-12. Official API model code is gemini-4-hydrogen; the effort-suffixed model is a harness alias, not a separately priced API SKU. Thinking levels low/medium/high/xhigh (default high): https://aistudio.google.com/docs/thinking#thinking-levels . GA release: https://aistudio.google.com/docs/changelog#11-12-2026 . Rates are first-party API references, not gateway prices, Antigravity subscription allowances, or per-task costs. No attributable Hydrogen Intelligence Index v5.0.1 or historical v4.3.2 scores/task costs found at https://artificialanalysis.ai/leaderboards/models ; no Hydrogen result found at https://epoch.ai/models/search or https://epoch.ai/eci . Direct model-card and AA Hydrogen model URLs were inaccessible during research. No benchmark overlap or documented numerical predecessor comparison supports a PortOS quality estimate; quality, task costs, latency, throughput and quota remain null. No inference benchmarks run. Free, Batch/Flex, Priority and Contributor tiers are separate from this Standard paid-tier reference."
+    },
+    {
+      "id": "aa-web-v5.0.1-gemini-4-hydrogen-low",
+      "provider": "Google",
+      "model": "gemini-4-hydrogen",
+      "effort": "low",
+      "configuration": "Google Gemini 4 Hydrogen; thinking_level=low; Artificial Analysis public evaluation",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 26.8936694361562,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-hydrogen-low",
+          "retrievedAt": "2026-11-12T18:50:41.393Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact intelligenceIndex value from the public model page payload, not the rounded headline score."
+        }
+      },
+      "costPerTask": {
+        "value": 0.2922227000200506,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-hydrogen-low",
+          "retrievedAt": "2026-11-12T18:50:41.393Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per benchmark task from intelligenceIndexCostPerTask.cost.total in the public model page payload. Includes input, cache read/write, and reasoning/answer output charges using the evaluation weights; not a quote for a PortOS task or subscription quota."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Retrieved 2026-11-12. Public Artificial Analysis benchmark evidence for the exact thinking level. Complements the earlier official API token-price observations. Scores and task costs apply to v5.0.1 only; no historical v4.3.2 task costs, latency, throughput, or Antigravity quota are inferred. No inference benchmarks run by PortOS."
+    },
+    {
+      "id": "aa-web-v5.0.1-gemini-4-hydrogen-medium",
+      "provider": "Google",
+      "model": "gemini-4-hydrogen",
+      "effort": "medium",
+      "configuration": "Google Gemini 4 Hydrogen; thinking_level=medium; Artificial Analysis public evaluation",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 41.2329566992579,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-hydrogen-medium",
+          "retrievedAt": "2026-11-12T18:50:41.393Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact intelligenceIndex value from the public model page payload, not the rounded headline score."
+        }
+      },
+      "costPerTask": {
+        "value": 0.7979866055252406,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-hydrogen-medium",
+          "retrievedAt": "2026-11-12T18:50:41.393Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per benchmark task from intelligenceIndexCostPerTask.cost.total in the public model page payload. Includes input, cache read/write, and reasoning/answer output charges using the evaluation weights; not a quote for a PortOS task or subscription quota."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Retrieved 2026-11-12. Public Artificial Analysis benchmark evidence for the exact thinking level. Complements the earlier official API token-price observations. Scores and task costs apply to v5.0.1 only; no historical v4.3.2 task costs, latency, throughput, or Antigravity quota are inferred. No inference benchmarks run by PortOS."
+    },
+    {
+      "id": "aa-web-v5.0.1-gemini-4-hydrogen-high",
+      "provider": "Google",
+      "model": "gemini-4-hydrogen",
+      "effort": "high",
+      "configuration": "Google Gemini 4 Hydrogen; thinking_level=high; Artificial Analysis public evaluation",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 50.7870826951304,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-hydrogen-high",
+          "retrievedAt": "2026-11-12T18:50:41.393Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact intelligenceIndex value from the public model page payload, not the rounded headline score."
+        }
+      },
+      "costPerTask": {
+        "value": 1.8733140062520008,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-hydrogen-high",
+          "retrievedAt": "2026-11-12T18:50:41.393Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per benchmark task from intelligenceIndexCostPerTask.cost.total in the public model page payload. Includes input, cache read/write, and reasoning/answer output charges using the evaluation weights; not a quote for a PortOS task or subscription quota."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Retrieved 2026-11-12. Public Artificial Analysis benchmark evidence for the exact thinking level. Complements the earlier official API token-price observations. Scores and task costs apply to v5.0.1 only; no historical v4.3.2 task costs, latency, throughput, or Antigravity quota are inferred. No inference benchmarks run by PortOS."
+    },
+    {
+      "id": "aa-web-v5.0.1-gemini-4-hydrogen-xhigh",
+      "provider": "Google",
+      "model": "gemini-4-hydrogen",
+      "effort": "xhigh",
+      "configuration": "Google Gemini 4 Hydrogen; thinking_level=xhigh; Artificial Analysis public evaluation",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 53.9192287317542,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:50:41.393Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact intelligenceIndex value from the public model page payload, not the rounded headline score."
+        }
+      },
+      "costPerTask": {
+        "value": 3.1601590757006157,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-hydrogen",
+          "retrievedAt": "2026-11-12T18:50:41.393Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per benchmark task from intelligenceIndexCostPerTask.cost.total in the public model page payload. Includes input, cache read/write, and reasoning/answer output charges using the evaluation weights; not a quote for a PortOS task or subscription quota."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Retrieved 2026-11-12. Public Artificial Analysis benchmark evidence for the exact thinking level. Complements the earlier official API token-price observations. Scores and task costs apply to v5.0.1 only; no historical v4.3.2 task costs, latency, throughput, or Antigravity quota are inferred. No inference benchmarks run by PortOS."
+    },
+    {
+      "id": "aa-web-v5.0.1-gemini-4-argon",
+      "provider": "Google",
+      "model": "gemini-4-argon",
+      "effort": "high",
+      "configuration": "High",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 50.4121935905389,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-argon",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact intelligenceIndex from the public model payload embedded at https://artificialanalysis.ai/models/gemini-4-argon; exact model and reasoning effort, AA evaluation harness."
+        }
+      },
+      "costPerTask": {
+        "value": 9.946608711550533,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-argon",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task; public payload intelligenceIndexCostPerTask.cost.total, including input, cache read/write and reasoning/answer tokens. Publisher uses $4/M input, $20/M output and $0.20/M cache-hit rates, not Google's current introductory tariff."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": {
+        "value": 118.18762428535616,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-argon",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Artificial Analysis public payload endToEndTime: mean end-to-end seconds for single-request workloads; not time per Intelligence Index task or time to first token."
+        }
+      },
+      "tokensPerSecond": {
+        "value": 64.2004122838638,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-argon",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Artificial Analysis public payload headline.outputSpeed, output tokens per second on Google API; distinct from full reasoning-task completion time."
+        }
+      },
+      "quota": null,
+      "notes": "Exact public v5.0.1 payload collected at https://artificialanalysis.ai/models/gemini-4-argon on 2026-11-12. AA task cost uses its published $4/$20 reference tariff and cache accounting; do not interpret it as current introductory billing or rescale it. Google current pricing: https://aistudio.google.com/docs/pricing#gemini-4-argon. Low/medium AA scores and task costs were not found; no unsupported effort estimate is supplied. Historical v4.3.2 rows and their retrieval dates are retained separately."
+    },
+    {
+      "id": "aa-web-v5.0.1-gemini-3-8-flash-medium",
+      "provider": "Google",
+      "model": "gemini-3.8-flash",
+      "effort": "medium",
+      "configuration": "Medium",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 30.078569475636,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash-medium",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact intelligenceIndex from the public model payload embedded at https://artificialanalysis.ai/models/gemini-4-argon; exact model and reasoning effort, AA evaluation harness."
+        }
+      },
+      "costPerTask": {
+        "value": 6.258586089480771,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash-medium",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task; public payload intelligenceIndexCostPerTask.cost.total, including input, cache read/write and reasoning/answer tokens. Publisher uses Google API rates $0.75/M input and $3.75/M output."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.75,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash-medium",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "AA published first-party Google API reference, USD per 1M uncached input tokens; not a subscription allowance or gateway tariff."
+        }
+      },
+      "outputPerMillion": {
+        "value": 3.75,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash-medium",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "AA published first-party Google API reference, USD per 1M output tokens; not a subscription allowance or gateway tariff."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": {
+        "value": 41.02956124507895,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash-medium",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Artificial Analysis public payload endToEndTime: mean end-to-end seconds for single-request workloads; not time per Intelligence Index task or time to first token."
+        }
+      },
+      "tokensPerSecond": {
+        "value": 105.9143632061484,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash-medium",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Artificial Analysis public payload headline.outputSpeed, output tokens per second on Google API; distinct from full reasoning-task completion time."
+        }
+      },
+      "quota": null,
+      "notes": "Exact public v5.0.1 payload collected at https://artificialanalysis.ai/models/gemini-4-argon on 2026-11-12. Google API reference evidence; no claim about subscription consumption. Task cost applies only to this exact effort and v5.0.1 workload. Historical v4.3.2 rows and their retrieval dates are retained separately."
+    },
+    {
+      "id": "aa-web-v5.0.1-gemini-3-8-flash-low",
+      "provider": "Google",
+      "model": "gemini-3.8-flash",
+      "effort": "low",
+      "configuration": "Low",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 22.548302237854,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash-low",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact intelligenceIndex from the public model payload embedded at https://artificialanalysis.ai/models/gemini-4-argon; exact model and reasoning effort, AA evaluation harness."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.75,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash-low",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "AA published first-party Google API reference, USD per 1M uncached input tokens; not a subscription allowance or gateway tariff."
+        }
+      },
+      "outputPerMillion": {
+        "value": 3.75,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash-low",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "AA published first-party Google API reference, USD per 1M output tokens; not a subscription allowance or gateway tariff."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": {
+        "value": 24.76666788292985,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash-low",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Artificial Analysis public payload endToEndTime: mean end-to-end seconds for single-request workloads; not time per Intelligence Index task or time to first token."
+        }
+      },
+      "tokensPerSecond": {
+        "value": 101.843733886231,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash-low",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Artificial Analysis public payload headline.outputSpeed, output tokens per second on Google API; distinct from full reasoning-task completion time."
+        }
+      },
+      "quota": null,
+      "notes": "Exact public v5.0.1 payload collected at https://artificialanalysis.ai/models/gemini-4-argon on 2026-11-12. Google API reference evidence; no claim about subscription consumption. AA publishes no v5.0.1 task cost/token workload for low, so costPerTask stays null. Historical v4.3.2 rows and their retrieval dates are retained separately."
+    },
+    {
+      "id": "google-gemini-4-argon-low-official-pricing-v2026-11-12-standard",
+      "provider": "Google",
+      "model": "gemini-4-argon",
+      "effort": "low",
+      "configuration": "Gemini API standard tier; low thinking; uncached input / output including thinking; introductory tariff",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-11-12)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-argon",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Google Gemini API standard uncached input list price in USD per 1M tokens, introductory tariff through 2026-11-30; applies across low/medium/high thinking. No effort-based rate multiplier."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-argon",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Google Gemini API standard output list price in USD per 1M tokens including thinking, introductory tariff through 2026-11-30; applies across low/medium/high thinking."
+        }
+      },
+      "reasoningPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-argon",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Google explicitly includes thinking tokens in output billing at $10/1M through 2026-11-30; this is the same output rate, not a separate surcharge."
+        }
+      },
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "First-party Google standard API reference for all supported thinking levels; not gateway pricing or a subscription allowance. Current introductory tariff through 2026-11-30; thereafter input/output rates become $4/$20 per 1M tokens. Cache, batch/flex, priority, grounding and other charges are separate. Thinking is included in output billing, not an additional charge. Supported efforts: https://aistudio.google.com/docs/models/gemini-4-argon. No exact low/medium AA v5.0.1 or v4.3.2 score/task cost found; quality remains null in these price observations."
+    },
+    {
+      "id": "google-gemini-4-argon-medium-official-pricing-v2026-11-12-standard",
+      "provider": "Google",
+      "model": "gemini-4-argon",
+      "effort": "medium",
+      "configuration": "Gemini API standard tier; medium thinking; uncached input / output including thinking; introductory tariff",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-11-12)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-argon",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Google Gemini API standard uncached input list price in USD per 1M tokens, introductory tariff through 2026-11-30; applies across low/medium/high thinking. No effort-based rate multiplier."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-argon",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Google Gemini API standard output list price in USD per 1M tokens including thinking, introductory tariff through 2026-11-30; applies across low/medium/high thinking."
+        }
+      },
+      "reasoningPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-argon",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Google explicitly includes thinking tokens in output billing at $10/1M through 2026-11-30; this is the same output rate, not a separate surcharge."
+        }
+      },
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "First-party Google standard API reference for all supported thinking levels; not gateway pricing or a subscription allowance. Current introductory tariff through 2026-11-30; thereafter input/output rates become $4/$20 per 1M tokens. Cache, batch/flex, priority, grounding and other charges are separate. Thinking is included in output billing, not an additional charge. Supported efforts: https://aistudio.google.com/docs/models/gemini-4-argon. No exact low/medium AA v5.0.1 or v4.3.2 score/task cost found; quality remains null in these price observations."
+    },
+    {
+      "id": "google-gemini-4-argon-high-official-pricing-v2026-11-12-standard",
+      "provider": "Google",
+      "model": "gemini-4-argon",
+      "effort": "high",
+      "configuration": "Gemini API standard tier; high thinking; uncached input / output including thinking; introductory tariff",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-11-12)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-argon",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Google Gemini API standard uncached input list price in USD per 1M tokens, introductory tariff through 2026-11-30; applies across low/medium/high thinking. No effort-based rate multiplier."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-argon",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Google Gemini API standard output list price in USD per 1M tokens including thinking, introductory tariff through 2026-11-30; applies across low/medium/high thinking."
+        }
+      },
+      "reasoningPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-argon",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Google explicitly includes thinking tokens in output billing at $10/1M through 2026-11-30; this is the same output rate, not a separate surcharge."
+        }
+      },
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "First-party Google standard API reference for all supported thinking levels; not gateway pricing or a subscription allowance. Current introductory tariff through 2026-11-30; thereafter input/output rates become $4/$20 per 1M tokens. Cache, batch/flex, priority, grounding and other charges are separate. Thinking is included in output billing, not an additional charge. Supported efforts: https://aistudio.google.com/docs/models/gemini-4-argon. No exact low/medium AA v5.0.1 or v4.3.2 score/task cost found; quality remains null in these price observations."
+    },
+    {
+      "id": "google-gemini-3.8-flash-low-official-pricing-v2026-11-12-standard",
+      "provider": "Google",
+      "model": "gemini-3.8-flash",
+      "effort": "low",
+      "configuration": "Gemini API standard tier; low thinking; uncached input / output including thinking; introductory tariff",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-11-12)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.75,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-3.8-flash",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Google Gemini API standard uncached input list price in USD per 1M tokens, introductory tariff through 2026-12-31; applies across low/medium/high thinking. No effort-based rate multiplier."
+        }
+      },
+      "outputPerMillion": {
+        "value": 3.75,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-3.8-flash",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Google Gemini API standard output list price in USD per 1M tokens including thinking, introductory tariff through 2026-12-31; applies across low/medium/high thinking."
+        }
+      },
+      "reasoningPerMillion": {
+        "value": 3.75,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-3.8-flash",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Google explicitly includes thinking tokens in output billing at $3.75/1M through 2026-12-31; this is the same output rate, not a separate surcharge."
+        }
+      },
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "First-party Google standard API reference for all supported thinking levels; not gateway pricing or a subscription allowance. Current introductory tariff through 2026-12-31; thereafter input/output rates become $1.5/$7.5 per 1M tokens. Cache, batch/flex, priority, grounding and other charges are separate. Thinking is included in output billing, not an additional charge. Supported efforts: https://aistudio.google.com/docs/models/gemini-3.8-flash. Low-effort AA task cost remains unpublished; historical index evidence is retained without relabeling."
+    },
+    {
+      "id": "google-gemini-3.8-flash-medium-official-pricing-v2026-11-12-standard",
+      "provider": "Google",
+      "model": "gemini-3.8-flash",
+      "effort": "medium",
+      "configuration": "Gemini API standard tier; medium thinking; uncached input / output including thinking; introductory tariff",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-11-12)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.75,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-3.8-flash",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Google Gemini API standard uncached input list price in USD per 1M tokens, introductory tariff through 2026-12-31; applies across low/medium/high thinking. No effort-based rate multiplier."
+        }
+      },
+      "outputPerMillion": {
+        "value": 3.75,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-3.8-flash",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Google Gemini API standard output list price in USD per 1M tokens including thinking, introductory tariff through 2026-12-31; applies across low/medium/high thinking."
+        }
+      },
+      "reasoningPerMillion": {
+        "value": 3.75,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-3.8-flash",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Google explicitly includes thinking tokens in output billing at $3.75/1M through 2026-12-31; this is the same output rate, not a separate surcharge."
+        }
+      },
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "First-party Google standard API reference for all supported thinking levels; not gateway pricing or a subscription allowance. Current introductory tariff through 2026-12-31; thereafter input/output rates become $1.5/$7.5 per 1M tokens. Cache, batch/flex, priority, grounding and other charges are separate. Thinking is included in output billing, not an additional charge. Supported efforts: https://aistudio.google.com/docs/models/gemini-3.8-flash. Low-effort AA task cost remains unpublished; historical index evidence is retained without relabeling."
+    },
+    {
+      "id": "google-gemini-3.8-flash-high-official-pricing-v2026-11-12-standard",
+      "provider": "Google",
+      "model": "gemini-3.8-flash",
+      "effort": "high",
+      "configuration": "Gemini API standard tier; high thinking; uncached input / output including thinking; introductory tariff",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-11-12)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.75,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-3.8-flash",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Google Gemini API standard uncached input list price in USD per 1M tokens, introductory tariff through 2026-12-31; applies across low/medium/high thinking. No effort-based rate multiplier."
+        }
+      },
+      "outputPerMillion": {
+        "value": 3.75,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-3.8-flash",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Google Gemini API standard output list price in USD per 1M tokens including thinking, introductory tariff through 2026-12-31; applies across low/medium/high thinking."
+        }
+      },
+      "reasoningPerMillion": {
+        "value": 3.75,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-3.8-flash",
+          "retrievedAt": "2026-11-12T20:50:04.185Z",
+          "methodology": "Google explicitly includes thinking tokens in output billing at $3.75/1M through 2026-12-31; this is the same output rate, not a separate surcharge."
+        }
+      },
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "First-party Google standard API reference for all supported thinking levels; not gateway pricing or a subscription allowance. Current introductory tariff through 2026-12-31; thereafter input/output rates become $1.5/$7.5 per 1M tokens. Cache, batch/flex, priority, grounding and other charges are separate. Thinking is included in output billing, not an additional charge. Supported efforts: https://aistudio.google.com/docs/models/gemini-3.8-flash. Low-effort AA task cost remains unpublished; historical index evidence is retained without relabeling."
     }
   ]
 }

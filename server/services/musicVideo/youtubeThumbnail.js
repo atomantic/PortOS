@@ -7,7 +7,8 @@
  * over it by code in the song's cover lettering, laid out for a feed (large,
  * to one side, clear of the duration badge; lib/musicVideoCoverOverlay.js).
  * The YouTube post uploads it in place of a bare frame. No AI call: the
- * lettering is the cover's design, and a new design re-sets this too.
+ * lettering is the cover's design (the artist's saved style for a song with
+ * none of its own), and a new design re-sets this too.
  *
  *   youtubeThumbnail: { filename, source: { kind, filename }, title,
  *                       focusX, focusY, lettering, composedAt }
@@ -37,7 +38,7 @@ import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { composeYoutubeThumbnail } from './coverArtCompose.js';
 import { listCoverFonts, registerCoverFonts } from './coverFonts.js';
-import { defaultImageRoute, projectCoverArt, sourcePath } from './coverArt.js';
+import { defaultImageRoute, projectCoverArt, songCoverDesign, sourcePath } from './coverArt.js';
 import { promptAddition } from '../../lib/modelInput.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { musicVideoEvents } from './events.js';
@@ -108,13 +109,14 @@ export async function composeProjectYoutubeThumbnail(projectId, { source = null,
   const fonts = await listCoverFonts();
   await registerCoverFonts(fonts);
   const filename = `youtube-thumb-${String(projectId).slice(3, 11)}-${randomUUID().slice(0, 8)}.jpg`;
-  await composeYoutubeThumbnail({ ...next, design: art.design || null, fonts, source: path, out: safeUnder(PATHS.videoThumbnails, filename) });
+  const design = next.lettering ? await songCoverDesign(projectId, art) : art.design || null;
+  await composeYoutubeThumbnail({ ...next, design, fonts, source: path, out: safeUnder(PATHS.videoThumbnails, filename) });
   // The JPEG is written in place; the row that first names it commits under a backup lease (#9982).
   const out = await withBackupAssetPublication(() => mutateProjectRecord(projectId, (current) => {
     const kit = projectPublishKit(current);
     return { project: { ...current, publishKit: { ...kit, youtubeThumbnail: { ...projectYoutubeThumbnail(current), ...next, filename, composedAt: new Date().toISOString(), lastError: null } } } };
   }));
-  if (thumb.filename && thumb.filename !== filename) await releaseKitFiles([thumb.filename], [filename]);
+  if (thumb.filename && thumb.filename !== filename) await releaseKitFiles([thumb.filename, ...(thumb.source?.kind === 'thumbnail' ? [thumb.source.filename] : [])], [filename]);
   console.log(`🖼️ Music Video YouTube thumbnail ${String(projectId).slice(3, 11)} ← ${next.source.filename}`);
   musicVideoEvents.emit('cover-art', { projectId, project: out.project });
   return { project: out.project };
@@ -131,14 +133,15 @@ export async function recomposeYoutubeThumbnail(projectId) {
 /** Stop using the made thumbnail: the YouTube post goes back to the best video frame. */
 export async function clearProjectYoutubeThumbnail(projectId) {
   const project = await requireProject(projectId);
-  const old = projectYoutubeThumbnail(project).filename;
+  const previous = projectYoutubeThumbnail(project);
+  const old = previous.filename;
   const out = await mutateProjectRecord(projectId, (current) => {
     const { youtubeThumbnail, ...kit } = projectPublishKit(current);
     // Painted images stay pickable; only the made thumbnail goes.
     const generated = Array.isArray(youtubeThumbnail?.generated) ? youtubeThumbnail.generated : [];
     return { project: { ...current, publishKit: generated.length ? { ...kit, youtubeThumbnail: { generated } } : kit } };
   });
-  if (old) await releaseKitFiles([old]);
+  if (old) await releaseKitFiles([old, ...(previous.source?.kind === 'thumbnail' ? [previous.source.filename] : [])]);
   musicVideoEvents.emit('cover-art', { projectId, project: out.project });
   return { project: out.project };
 }
@@ -167,15 +170,15 @@ export async function addYoutubeThumbnailTest(projectId) {
 /** Drop a variant from the test set (its file goes once nothing names it). */
 export async function removeYoutubeThumbnailTest(projectId, filename) {
   await requireProject(projectId);
-  let held = false;
+  let held = null;
   const out = await mutateProjectRecord(projectId, (current) => {
     const kit = projectPublishKit(current);
     const tests = testsOf(current);
-    held = tests.some((t) => t.filename === filename);
+    held = tests.find((t) => t.filename === filename);
     return { project: { ...current, publishKit: { ...kit, youtubeThumbnailTests: tests.filter((t) => t.filename !== filename) } } };
   });
   // Only a file this set held: the name comes from the request, and the folder holds other renders' images too.
-  if (held) await releaseKitFiles([filename]);
+  if (held) await releaseKitFiles([filename, ...(held.source?.kind === 'thumbnail' ? [held.source.filename] : [])]);
   musicVideoEvents.emit('cover-art', { projectId, project: out.project });
   return { project: out.project };
 }

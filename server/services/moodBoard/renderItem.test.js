@@ -62,7 +62,7 @@ describe('renderBoardItem', () => {
     enqueue.mockResolvedValueOnce({ jobId: 'job-2' });
     await renderBoardItem('mb-1', 'n1');
     const { params } = enqueue.mock.calls[0][0];
-    expect(params.prompt).toBe(`Mood board reference image: ${long}\n\nVisual style: neon chiaroscuro`);
+    expect(params.prompt).toBe(`Mood board reference image: ${long}\n\nVisual style (aesthetic only; keep the subject above, do not copy any subject or scene described here): neon chiaroscuro`);
     expect(params.promptAdditions.map((item) => item.label)).toEqual(['Mood board reference', 'Board style', 'Board avoid (negative prompt)']);
   });
 

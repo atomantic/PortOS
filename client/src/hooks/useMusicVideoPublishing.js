@@ -168,8 +168,34 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
   // Fill a posted platform's edit (or a reply under it) with the links it lacks; errors stay with the caller.
   const prepareCrossLinks = (target) => prepareMusicVideoCrossLinkEdit(projectId, target, { silent: true });
 
-  // null until the saved choice is known, so consumers never treat "unknown" as "none on".
-  const enabledTargets = platforms ? Object.entries(platforms).filter(([, p]) => p?.enabled).map(([t]) => t) : null;
+  const skippedTargets = Array.isArray(project?.publishKit?.skippedTargets) ? project.publishKit.skippedTargets : [];
+  const skippedSet = new Set(skippedTargets);
+  // Each request replaces the list, so compose rapid row changes from the last
+  // saved answer instead of the render that both clicks happened to retain.
+  scope.skipWrites ||= { tail: Promise.resolve(), pending: 0, targets: skippedTargets };
+  const skipWrites = scope.skipWrites;
+  if (!skipWrites.pending) skipWrites.targets = skippedTargets;
 
-  return { drafts, progress, draftsError: draftsError?.scope === scope ? draftsError.error : null, retryDrafts, busy, errors, prepare, preview, discard, platforms, platformsError, retryPlatforms: loadPlatforms, history, enabledTargets, setPlatform, savePostOptions, recordPost, removePost, setCrossLinks, prepareCrossLinks };
+  const setTargetSkipped = (target, skip) => {
+    if (!projectId) return Promise.resolve(false);
+    skipWrites.pending += 1;
+    const run = skipWrites.tail.then(() => {
+      const current = skipWrites.targets;
+      const next = skip ? [...new Set([...current, target])] : current.filter((t) => t !== target);
+      return updateMusicVideoPublishCopy(projectId, { skippedTargets: next }).then((res) => {
+        skipWrites.targets = Array.isArray(res?.project?.publishKit?.skippedTargets) ? res.project.publishKit.skippedTargets : next;
+        if (res?.project?.id === projectId && selection.current === scope) replaceProjectRef.current?.(res.project);
+        return true;
+      }).catch(() => false);
+    });
+    skipWrites.tail = run;
+    return run.finally(() => { skipWrites.pending -= 1; });
+  };
+
+  // null until the saved choice is known, so consumers never treat "unknown" as "none on".
+  const enabledTargets = platforms
+    ? Object.entries(platforms).filter(([t, p]) => p?.enabled && !skippedSet.has(t)).map(([t]) => t)
+    : null;
+
+  return { drafts, progress, draftsError: draftsError?.scope === scope ? draftsError.error : null, retryDrafts, busy, errors, prepare, preview, discard, platforms, platformsError, retryPlatforms: loadPlatforms, history, enabledTargets, skippedTargets, setTargetSkipped, setPlatform, savePostOptions, recordPost, removePost, setCrossLinks, prepareCrossLinks };
 }

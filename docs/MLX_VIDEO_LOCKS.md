@@ -118,3 +118,100 @@ for Wan. Set the UTC cutoff at least seven days in the past and choose the
 packages to upgrade from the new audit. Review the updated native pins and
 build constraints, query OSV for every output pin, and repeat fresh Install,
 Repair and model smoke checks.
+
+### Bounded shared-helper refresh (2026-11-12)
+
+Keep the source revisions and upstream lock digests above unchanged. This refresh
+uses verified **uv 0.13.7** and cutoff `2026-11-05T00:00:00Z`. Start from each
+existing PortOS inference lock rather than reintroducing the upstream vulnerable
+pins. Preserve all other profile pins with constraints, including the native
+MLX/Metal, AV, Torch, model-library and Hub versions.
+
+Set `runtime` to `ltx23`, `ltx25` or `wan22`, `source` to its verified checkout,
+`lock` to its PortOS inference lock, and `inputs`/`constraints` to scratch files.
+This derives the real upstream dependency inputs and freezes companion versions:
+
+```bash
+python3.11 - "$runtime" "$source" "$lock" "$inputs" "$constraints" <<'PY'
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+runtime, source, lock, inputs, constraints = sys.argv[1:]
+source = Path(source)
+projects = ([source / "pyproject.toml"] if runtime == "wan22" else [
+    source / "packages" / package / "pyproject.toml"
+    for package in ("ltx-core-mlx", "ltx-pipelines-mlx")
+])
+deps = [dependency for project in projects
+        for dependency in tomllib.loads(project.read_text())["project"]["dependencies"]
+        if dependency != "ltx-core-mlx"]
+pins = dict(re.findall(r"^([\w.-]+)==([^\s\\]+)", Path(lock).read_text(), re.M))
+pins.update({"anyio": "4.16.0", "markupsafe": "3.0.4",
+             "regex": "2026.9.29", "typing-extensions": "4.16.0"})
+if runtime != "wan22":
+    pins.update({"click": "8.5.0", "typer": "0.27.3"})
+    deps.append("click==8.5.0")  # Retain the existing explicit CLI companion.
+Path(inputs).write_text("\n".join(deps) + "\n")
+Path(constraints).write_text("\n".join(f"{name}=={version}"
+                                     for name, version in sorted(pins.items())) + "\n")
+PY
+MACOSX_DEPLOYMENT_TARGET=14.0 uv --no-config pip compile "$inputs" \
+  -c "$constraints" --python-version 3.11 \
+  --python-platform aarch64-apple-darwin --generate-hashes \
+  --only-binary :all: --no-header --no-annotate \
+  --exclude-newer 2026-11-05T00:00:00Z -o "$lock"
+```
+
+Restore the three-line PortOS header with the new uv/cutoff. Review exact
+package, marker and hash-set differences: only AnyIO, MarkupSafe, Regex and
+Typing-Extensions change in Wan; LTX additionally changes Click and Typer.
+AnyIO 4.16 requires Typing-Extensions 4.16 on Python below 3.15. Typer 0.27 no
+longer requires the separate Click distribution; LTX deliberately retains its
+existing explicit companion in this bounded update. All unchanged blocks must
+remain byte-identical. Audit every resulting artifact and OSV/MAL response,
+then repeat full hashed native installs and the actual helper-consumer checks
+documented in [the runtime refresh record](PYTHON_RUNTIME_REFRESH.md).
+
+### Coordinated LTX Hub transport refresh (2026-11-12)
+
+This refresh applies only to LTX-2.3 and LTX-2.5, not Wan. The immutable
+MLX-Gen source requires `huggingface-hub>=1.1.6,<2.0`; changing that source
+contract is a separate migration. Both LTX sources permit Hub 2 with their
+existing mlx-lm versions. Keep every source, MLX/Metal, model-library and build
+pin unchanged.
+
+Reuse the verified LTX project-input extraction and compile command above,
+including the explicit Click input. Before writing the complete companion
+constraints, replace the bounded helper-update block with:
+
+```python
+for name in ("httpx", "httpcore", "certifi"):
+    pins.pop(name, None)
+pins.update({"huggingface-hub": "2.4.0", "transformers": "5.22.1",
+             "hf-xet": "1.6.0", "httpx2": "2.16.0",
+             "httpcore2": "2.16.0", "truststore": "0.10.5"})
+```
+
+Tokenizers remains 0.23.3. Hub 2.4 requires hf-xet `>=1.6,<2`, so the previous
+1.4.2 pin cannot be retained. No remaining LTX inference dependency or inspected
+source consumer requires the old HTTPX/HTTPCore/Certifi closure. Keep the
+verified uv 0.13.7 and November 5 cutoff, audit every artifact, and confirm all
+30 unchanged companion blocks per profile are byte-identical. Validation must
+exercise the frozen Gemma source/loaders and the native Xet transfer boundary;
+an HTTP-only fixture or import check does not prove Xet transfers.
+
+### Wan decoding and font helpers (2026-11-12)
+
+The later bounded Wan refresh changes only `charset-normalizer` to `3.5.2` and
+`fonttools` to `4.68.0`. Use the same immutable Wan source, verified uv 0.13.7,
+CPython 3.11 Apple Silicon target and November 5 cutoff as above. Derive inputs
+from its `project.dependencies`; constrain every existing package version,
+changing only these two constraints. Compile the complete closure into a scratch
+lock with the command above, then replace only the two target package blocks in
+the existing lock. Preserve every unrelated block byte-for-byte, including its
+existing artifact allowlist. A fresh resolver may add other-platform hashes to
+unchanged packages; that is not part of this update. Validate the complete final
+lock's artifact hashes, release cutoff and OSV/MAL results, plus a full target
+install plan and native hashed installs of the affected helper subclosures.

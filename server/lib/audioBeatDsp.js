@@ -468,25 +468,96 @@ export function trackBeatGrid(onset, fps, tempo) {
 }
 
 /**
- * Pick downbeats assuming 4/4: of the four candidate beat phases, choose the
- * one whose beats carry the most onset strength (downbeats are typically the
- * loudest). Returns the subset of `beats` on that phase.
+ * Pick a 4/4 phase from onset strength, with an optional structural vote.
+ * Times in sections/features describe centred audio; timeOffsetSec translates
+ * the tracker's frame-start beat times into that same coordinate system.
+ * Weak or conflicting structure leaves the original onset-only phase intact.
  */
-export function pickDownbeats(beats, onset, fps) {
-  if (beats.length === 0) return [];
-  const beatsPerBar = 4;
-  let bestPhase = 0;
-  let bestSum = -Infinity;
-  for (let phase = 0; phase < beatsPerBar; phase++) {
-    let sum = 0;
-    for (let i = phase; i < beats.length; i += beatsPerBar) {
-      sum += onset[Math.round(beats[i] * fps)] || 0;
+export function pickDownbeats(beats, onset, fps, { sections = [], features = null, timeOffsetSec = 0 } = {}) {
+  const scores = [0, 0, 0, 0];
+  for (let i = 0; i < beats.length; i++) scores[i % 4] += onset[Math.round(beats[i] * fps)] || 0;
+  const strongest = (values) => values.indexOf(Math.max(...values));
+  const onsetPhase = strongest(scores);
+  let phase = onsetPhase;
+  let source = 'onsets';
+  if (beats.length >= 8) {
+    const intervals = beats.slice(1).map((t, i) => t - beats[i]).sort((a, b) => a - b);
+    const period = intervals[Math.floor(intervals.length / 2)];
+    const votes = [0, 0, 0, 0];
+    const counts = [0, 0, 0, 0];
+    const vote = (time, weight) => {
+      let nearest = 0;
+      for (let i = 1; i < beats.length; i++) {
+        if (Math.abs(beats[i] + timeOffsetSec - time) < Math.abs(beats[nearest] + timeOffsetSec - time)) nearest = i;
+      }
+      if (Math.abs(beats[nearest] + timeOffsetSec - time) > period / 4) return null;
+      votes[nearest % 4] += weight;
+      counts[nearest % 4] += 1;
+      return nearest % 4;
+    };
+    // Ignore the artificial section at t=0 and small loudness differences.
+    for (let i = 1; i < sections.length; i++) {
+      const change = Math.abs(sections[i].energy - sections[i - 1].energy);
+      if (change >= 0.1) vote(sections[i].startSec, change);
     }
-    if (sum > bestSum) { bestSum = sum; bestPhase = phase; }
+    const entry = sustainedLowEntry(features, period);
+    const entryPhase = entry == null ? null : vote(entry, 1);
+    const total = votes.reduce((sum, value) => sum + value, 0);
+    const structuralPhase = strongest(votes);
+    const runnerUp = Math.max(...votes.filter((_, i) => i !== structuralPhase));
+    // Two agreeing boundaries or a clear drum entry, with a decisive majority,
+    // can outweigh a loud backbeat. Normalize both signals so song length and
+    // input gain cannot drown out the structural evidence.
+    if ((counts[structuralPhase] >= 2 || entryPhase === structuralPhase)
+      && total >= 0.3 && votes[structuralPhase] / total >= 0.65
+      && (votes[structuralPhase] - runnerUp) / total >= 0.4) {
+      const maxOnset = Math.max(...scores) || 1;
+      const combined = scores.map((score, i) => score / maxOnset + 2 * votes[i] / total);
+      phase = strongest(combined);
+      if (phase !== onsetPhase) source = 'structure';
+    }
   }
-  const downbeats = [];
-  for (let i = bestPhase; i < beats.length; i += beatsPerBar) downbeats.push(beats[i]);
-  return downbeats;
+  return { downbeats: beats.filter((_, i) => i % 4 === phase), source };
+}
+
+// A low-band attack is an entry only after a genuinely quiet leading stretch,
+// and only if percussion continues for a bar. An isolated intro thump cannot
+// rotate the whole song. All evidence comes from the existing feature track.
+function sustainedLowEntry(features, period) {
+  const low = features?.envelopes?.low;
+  const rms = features?.envelopes?.rms;
+  const fps = features?.envelopes?.fps;
+  const onsets = features?.onsets?.low;
+  if (!low?.length || !rms?.length || !(fps > 0) || !onsets?.length) return null;
+  const prefix = (values) => {
+    const sums = new Float64Array(values.length + 1);
+    for (let i = 0; i < values.length; i++) sums[i + 1] = sums[i] + values[i];
+    return sums;
+  };
+  const lowSums = prefix(low);
+  const rmsSums = prefix(rms);
+  const mean = (sums, start, end) => {
+    const first = Math.max(0, Math.ceil(start * fps));
+    const last = Math.min(sums.length - 1, Math.floor(end * fps));
+    return last > first ? (sums[last] - sums[first]) / (last - first) : 0;
+  };
+  for (let i = 0; i < onsets.length; i++) {
+    const time = onsets[i];
+    if (time < Math.max(2, 4 * period)) continue;
+    const end = time + 4 * period;
+    if (end * fps >= low.length) break;
+    const following = [];
+    for (let j = i; j < onsets.length && onsets[j] < end; j++) following.push(onsets[j]);
+    if (following.length < 3 || following.at(-1) < time + 2 * period
+      || following.some((t, j) => j > 0 && t - following[j - 1] > 2 * period)) continue;
+    const afterLow = mean(lowSums, time, end);
+    const afterRms = mean(rmsSums, time, end);
+    // Leave a quarter-beat around the attack out of the quiet measurement.
+    if (afterLow >= 0.1 && afterRms >= 0.1
+      && mean(lowSums, 0, time - period / 4) < afterLow * 0.15
+      && mean(rmsSums, 0, time - period / 4) < afterRms * 0.3) return time;
+  }
+  return null;
 }
 
 

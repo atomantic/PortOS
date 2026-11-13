@@ -1228,6 +1228,16 @@ function ProjectWorkspace({
       .catch((err) => { toast.error(err?.message || 'Failed to save scene'); return false; });
   };
 
+  const setSceneDone = (sceneId, checked) => {
+    const scene = selected.scenes?.find((entry) => entry.sceneId === sceneId);
+    if (!scene) return Promise.resolve(false);
+    return saveScene(sceneId, { shotSheet: { checked } }).then((saved) => {
+      if (saved) patchProject(selected.id, (project) => ({ scenes: project.scenes?.map((entry) => entry.sceneId === sceneId
+        ? { ...entry, shotSheet: { ...entry.shotSheet, checked } } : entry) }));
+      return saved;
+    });
+  };
+
   // Project-level concept/style (issue #3168) — optimistic-local + silent-PATCH on
   // commit, same as commitSceneTiming below. Sends only the changed sub-field;
   // the server merges it into the existing concept (applyProjectPatch), so a
@@ -1642,12 +1652,17 @@ function ProjectWorkspace({
   const reviewingDraft = activeStage === 'review' && !!latestMusicVideoReviewDraft(selected) && !selected?.renderHistoryId;
   const reviewDraftState = useMusicVideoReviewDraft(selected, { enabled: reviewingDraft });
   const reviewDraft = reviewDraftState.draft;
+  const publishBuildBlockedReason = creativeSetupPending ? 'Save or cancel the creative setup before building the publishing kit.'
+    : styleReferencesPending ? 'Save or cancel the style references before building the publishing kit.'
+      : compositionSavePending > 0 ? 'Saving composition…' : null;
   const nextAction = reviewingDraft ? reviewDraftState.checking
     ? { id: 'review-imported', kind: 'goto', stage: 'review', label: 'Checking review draft', disabled: true, reason: 'Checking exact-version media availability' }
     : reviewDraft
       ? { id: 'review-imported', kind: 'goto', stage: 'review', label: 'Review imported draft', shortLabel: 'Review draft' }
       : { id: 'review-files', kind: 'open', label: 'Choose review file', shortLabel: 'Choose file' }
-    : productionNextAction;
+    : productionNextAction?.id === 'build-publish-kit' && (publishKit.building || publishBuildBlockedReason)
+      ? { ...productionNextAction, disabled: true, ...(publishKit.building ? { label: 'Building publishing kit…' } : { reason: publishBuildBlockedReason }) }
+      : productionNextAction;
   // What the server holds that this tab might not be showing (#9940): derived
   // from the saved record, so it survives a reload. Work this tab can see
   // progressing (spinning sections, an attached render) is not flagged.
@@ -1675,7 +1690,13 @@ function ProjectWorkspace({
   // "Keep approved" on a stale approval: the Cast & Sets check-in is re-stamped on its
   // current inputs; a production approval is given again on the current revision.
   const keepApproval = (stage) => (stage === 'castAndSets' ? castSets.reconfirm() : productionReview.approve(stage));
+  const buildPublishKit = () => {
+    if (!selected.renderHistoryId || publishKit.building || publishBuildBlockedReason) return;
+    goToStage('publish', 'mv-publish-kit');
+    publishKit.build();
+  };
   const runChecklistAction = (action) => {
+    if (action.run === 'build-publish-kit') { buildPublishKit(); return; }
     if (action.run === 'start-cast-sets') { castSets.start(); return; }
     if (action.run === 'resume-cast-sets') { castSets.resume(); return; }
     if (action.run === 'prepare-art') { productionReview.prepare(); return; }
@@ -1692,6 +1713,7 @@ function ProjectWorkspace({
     if (nextAction.id === 'review-imported') { openArtifact(reviewDraft.artifactId); return; }
     if (nextAction.id === 'review-files') { setSettingsTab('files'); return; }
     if (nextAction.id === 'review-autonomous') { setSettingsTab('autopilot'); return; }
+    if (nextAction.id === 'build-publish-kit') { buildPublishKit(); return; }
     if (nextAction.kind === 'goto') { goToStage(nextAction.stage, nextAction.anchor); return; }
     switch (nextAction.id) {
       case 'kickoff': handleKickoff(); break;
@@ -1865,6 +1887,7 @@ function ProjectWorkspace({
     }),
     editSceneLocal,
     saveScene,
+    setSceneDone,
     moveScene,
     commitSceneTiming,
     approveCastAndSets,
@@ -1975,9 +1998,10 @@ function ProjectWorkspace({
             cancelRender={renderTargetsSelected && !renderJob.pending ? { onCancel: renderJob.cancel, cancelling: renderJob.cancelling } : null}
             lead={stageHasChecklist(activeStage) ? (
               <StageChecklist
-                items={stageChecklist(activeStage, stageProject, productionReview.readiness, publish)}
+                items={stageChecklist(activeStage, stageProject, productionReview.readiness, publish).map((item) => publishBuildBlockedReason && item.action?.run === 'build-publish-kit'
+                  ? { ...item, detail: publishBuildBlockedReason, action: { ...item.action, disabled: true, reason: publishBuildBlockedReason } } : item)}
                 onAction={runChecklistAction}
-                busy={castSets.busy || productionReview.busy}
+                busy={castSets.busy || productionReview.busy || publishKit.building}
                 onRevert={productionReview.revert}
                 headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
               />

@@ -19,7 +19,7 @@ const { PATHS } = await import('../../lib/paths.js');
 const projects = await import('./projects.js');
 const { musicVideoEvents } = await import('./events.js');
 const cover = await import('./coverArt.js');
-const { composeCoverArt } = await import('./coverArtCompose.js');
+const { composeCoverArt, normalizeCoverDesign } = await import('./coverArtCompose.js');
 
 afterAll(() => cleanupTempDataRoots());
 
@@ -242,6 +242,37 @@ describe('release cover art', () => {
     await cover.designCoverArt(id, { direction: 'warmer' });
     expect(artistStyle).not.toHaveBeenCalled();
     expect(runPrompt.mock.calls.at(-1)[0].prompt).not.toContain("The artist's saved style");
+  });
+
+  it("sets a song with no design of its own in the artist's saved style, and keeps that as the song's design", async () => {
+    const { id, thumb } = await projectWithThumbnail();
+    const design = normalizeCoverDesign({ layout: 'top-left', typeface: 'condensed', titleColor: '#aabbcc' });
+    const artistStyle = vi.fn(async () => ({ key: 'example artist', name: 'Example Artist', design }));
+    cover.__setCoverArtDepsForTests({ ...depsFor(), artistStyle });
+    const { project } = await cover.composeProjectCoverArt(id, { source: { kind: 'thumbnail', filename: thumb } });
+    expect(artistStyle).toHaveBeenCalledWith('Example Artist');
+    expect(compose.mock.calls[0][0].design).toEqual(design);
+    expect(project.publishKit.coverArt.design).toEqual(design);
+
+    // It is the song's own from then on: the style is not read again.
+    artistStyle.mockClear();
+    await cover.composeProjectCoverArt(id, { title: 'Example Retitle' });
+    expect(artistStyle).not.toHaveBeenCalled();
+    expect(compose.mock.calls[1][0].design).toEqual(design);
+  });
+
+  it('keeps the plain look for an artist with no saved style, and never reads a style for a cover used bare', async () => {
+    const { id, thumb } = await projectWithThumbnail();
+    const artistStyle = vi.fn(async () => null);
+    cover.__setCoverArtDepsForTests({ ...depsFor(), artistStyle });
+    const plain = (await cover.composeProjectCoverArt(id, { source: { kind: 'thumbnail', filename: thumb } })).project.publishKit.coverArt;
+    expect(compose.mock.calls[0][0].design).toBeNull();
+    expect(plain.design).toBeUndefined();
+
+    artistStyle.mockClear();
+    const bare = (await cover.composeProjectCoverArt(id, { lettering: false })).project.publishKit.coverArt;
+    expect(artistStyle).not.toHaveBeenCalled();
+    expect(bare.design).toBeUndefined();
   });
 
   it("queues on the install's own default image generator, never a fixed one", async () => {

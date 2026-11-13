@@ -12,23 +12,28 @@
  */
 import { sungLyricTextWithin } from '../../../lib/musicVideoLyricAnchors.js';
 import { normalizeBlenderRecord } from '../../../lib/musicVideoBlender.js';
+import { normalizePreMusic } from '../../../lib/musicVideoColdOpen.js';
 import { addScenes, applySceneUpdate, removeScene } from '../projectsLogic.js';
 import { carryShotLocks } from '../productionReview.js';
-import { blenderRefusal } from './workspace.js';
+// The music-video manifest barrel imports owner, which imports this module.
+import { blenderLeadShots } from '../../film/manifest.js';
+import { blenderRefusal } from '../../film/workspace.js';
 
 const clip = (text, max) => (typeof text === 'string' && text.trim() ? text.trim().slice(0, max) : null);
 
-/** What a Board scene shows for `shot`. */
-function blenderSceneFields(shot) {
+/** What a Board scene shows for `shot`. A lead-in has no song span: the Board stores it as a cold open of the shot's length. */
+function blenderSceneFields(shot, scene) {
+  const lead = shot.start < 0;
   return {
     label: clip(shot.label, 120) || shot.id,
-    startSec: shot.start,
-    endSec: shot.end,
+    startSec: lead ? null : shot.start,
+    endSec: lead ? null : shot.end,
     visualIntent: clip(shot.action, 2000) || clip(shot.summary, 2000),
     prompt: clip(shot.summary, 8000) || '',
     framePrompt: clip(shot.staging, 8000),
     visualLayer: 'code',
     beatAligned: true,
+    ...(lead ? { preMusic: normalizePreMusic({ ...(scene?.preMusic || {}), durationSec: Number((shot.end - shot.start).toFixed(6)) }) } : {}),
   };
 }
 
@@ -61,23 +66,41 @@ export function mirrorBlenderScenes(project, shots, { replaceScenes = false } = 
   const mapped = new Map(prior.filter(([shotId]) => wanted.has(shotId)));
   const sceneMap = {};
   for (const shot of shots) {
-    const fields = blenderSceneFields(shot);
     const sceneId = mapped.get(shot.id);
+    const scene = sceneId ? next.scenes.find((candidate) => candidate.sceneId === sceneId) : null;
+    const fields = blenderSceneFields(shot, scene);
     if (!sceneId) {
-      const timed = (next.lyricCues || []).some((cue) => typeof cue?.startSec === 'number');
-      const added = addScenes(next, [{ ...fields, lyricText: timed ? sungLyricTextWithin(next.lyricCues, shot.start, shot.end) : null }]);
+      const lyricText = shot.start < 0 ? null
+        : ((next.lyricCues || []).some((cue) => typeof cue?.startSec === 'number') ? sungLyricTextWithin(next.lyricCues, shot.start, shot.end) : null);
+      const added = addScenes(next, [{ ...fields, lyricText }]);
       next = carryShotLocks(next, added.project);
       sceneMap[shot.id] = added.scenes[0].sceneId;
       continue;
     }
     // Only what changed is patched, so a sync that changes nothing leaves the approvals alone.
-    const scene = next.scenes.find((candidate) => candidate.sceneId === sceneId);
-    const patch = Object.fromEntries(Object.entries(fields).filter(([key, value]) => (scene[key] ?? null) !== (value ?? null)));
+    // preMusic is compared normalized: a shallow compare would rewrite the cold open on every sync.
+    const patch = {};
+    for (const [key, value] of Object.entries(fields)) {
+      if (key === 'preMusic') {
+        if (JSON.stringify(normalizePreMusic(scene.preMusic)) !== JSON.stringify(value)) patch.preMusic = value;
+        continue;
+      }
+      if ((scene[key] ?? null) !== (value ?? null)) patch[key] = value;
+    }
+    if (shot.start < 0) {
+      if (scene.lyricText) patch.lyricText = null;
+    } else if (scene.preMusic) patch.preMusic = null;
     if (Object.keys(patch).length) next = applySceneUpdate(next, sceneId, patch).project;
     sceneMap[shot.id] = sceneId;
   }
-  // The Board runs in song order, each scene keeping its own time.
-  const ordered = [...next.scenes].sort((a, b) => (a.startSec ?? Infinity) - (b.startSec ?? Infinity));
+  // Lead-in scenes have no song time, so they sort ahead of the song. With no lead-in this is song order.
+  const leadOrder = new Map(blenderLeadShots(shots).map((shot, index) => [sceneMap[shot.id], index]));
+  const ordered = [...next.scenes].sort((a, b) => {
+    const ai = leadOrder.get(a.sceneId);
+    const bi = leadOrder.get(b.sceneId);
+    if (ai != null || bi != null) return (ai ?? Infinity) - (bi ?? Infinity);
+    return (a.startSec ?? Infinity) - (b.startSec ?? Infinity);
+  });
   if (ordered.some((scene, index) => scene !== next.scenes[index] || scene.order !== index)) {
     next = { ...next, scenes: ordered.map((scene, index) => (scene.order === index ? scene : { ...scene, order: index })) };
   }

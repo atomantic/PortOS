@@ -250,3 +250,32 @@ it('plots local Ornith and Qwen Coder with zero API charges and sourced quality 
   }
   expect(result.body.observations.find(row => row.id === 'ornith-publisher-20261001-35b-swebench-verified').quality.value).toBe(75.6);
 });
+
+it('loads shipped Hydrogen effort scores and workload costs for an existing Antigravity install', async () => {
+  await writeFile(join(dir, 'model-comparison.json'), JSON.stringify({ schemaVersion: 1, observations: [observation] }));
+  const hydrogenApp = express();
+  hydrogenApp.use('/comparison', createModelComparisonRoutes({ getSelectableProviders: async () => ({ providers: [
+    { id: 'antigravity', name: 'Antigravity', command: 'agy', models: ['gemini-4-hydrogen-low', 'gemini-4-hydrogen-medium', 'gemini-4-hydrogen-high', 'gemini-4-hydrogen-xhigh'] },
+  ] }) }));
+  hydrogenApp.use(errorMiddleware);
+  const result = await request(hydrogenApp).get('/comparison');
+  expect(result.status).toBe(200);
+  expect(result.body.inventory[0].models).toEqual([{ model: 'gemini-4-hydrogen', efforts: ['low', 'medium', 'high', 'xhigh'] }]);
+  expect(result.body.currentComposite.rows.map(row => row.effort)).toEqual(['low', 'medium', 'high', 'xhigh']);
+  const expected = [
+    ['low', 26.8936694361562, 0.2922227000200506],
+    ['medium', 41.2329566992579, 0.7979866055252406],
+    ['high', 50.7870826951304, 1.8733140062520008],
+    ['xhigh', 53.9192287317542, 3.1601590757006157],
+  ];
+  for (const [effort, score, cost] of expected) {
+    const row = result.body.currentComposite.rows.find(candidate => candidate.effort === effort);
+    expect(row.comparisonModel).toBe('gemini-4-hydrogen');
+    expect(row.quality).toMatchObject({ value: score, estimated: false });
+    expect(row.costPerTask).toMatchObject({ value: cost, estimated: false });
+    expect(row.inputPerMillion).toMatchObject({ value: 1.5, estimated: false });
+    expect(row.outputPerMillion).toMatchObject({ value: 7.5, estimated: false });
+    expect(result.body.currentComposite.sources[row.costPerTask.sourceIds[0]].url).toMatch(/^https:\/\/artificialanalysis.ai\/models\/gemini-4-hydrogen/);
+  }
+  expect(result.body.composite.rows.every(row => row.costPerTask === null)).toBe(true);
+});

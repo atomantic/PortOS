@@ -1,3 +1,4 @@
+import PublishFramePicker from './PublishFramePicker.jsx';
 import { useEffect, useMemo, useState } from 'react';
 import { Brush, Download, FlaskConical, Images, MonitorPlay, RotateCcw, X } from 'lucide-react';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
@@ -30,6 +31,7 @@ export function thumbnailSources(project) {
     seen.add(`${kind}:${filename}`);
     out.push({ kind, filename, label, src: srcFor(kind, filename) });
   };
+  (kit.frames || []).forEach((f, i) => add('thumbnail', f, `Taken frame ${i + 1}`));
   // An image picked from history or uploaded is in none of the lists below.
   const current = kit.youtubeThumbnail?.source;
   (kit.youtubeThumbnail?.generated || []).forEach((f, i) => add('image', f, `Painted ${i + 1}`));
@@ -128,6 +130,7 @@ export default function YoutubeThumbnailPanel({ project, publishKit }) {
     <PublishCard projectId={project?.id} cardId="youtube-thumbnail" label="YouTube thumbnail" icon={MonitorPlay}
       summary={thumb.filename ? 'Made' : (kit.thumbnail ? 'Best video frame' : 'Not set yet')} defaultOpen={!thumb.filename}>
       <p className="text-port-text-muted">Tap an image to make the thumbnail. The title is set large in the cover's lettering, away from the corner where YouTube shows the length.</p>
+      <PublishFramePicker project={project} publishKit={publishKit} cardId="youtube" />
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="w-full sm:w-80 shrink-0 space-y-1">
           <div className="relative w-full aspect-video overflow-hidden rounded border border-port-border bg-port-bg">
@@ -178,7 +181,7 @@ export default function YoutubeThumbnailPanel({ project, publishKit }) {
               {busy ? 'Making the thumbnail…' : thumb.filename ? 'Apply to the thumbnail' : 'Make the thumbnail'}
             </button>
           )}
-          {lettering && !art.design && <p className="text-port-text-muted">Set in the plain look until the cover has a design (Cover art › Lettering).</p>}
+          {lettering && !art.design && <p className="text-port-text-muted">Set in your saved artist style, or the plain look when there is none, until the song has its own design (Cover art › Lettering).</p>}
         </div>
       </div>
 

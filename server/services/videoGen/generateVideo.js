@@ -99,7 +99,7 @@ export {
   DEFAULT_NUM_FRAMES,
 } from './renderArgs.js';
 export { attachSseClient, cancel } from './jobState.js';
-export { loadHistory, saveHistory, mutateVideoHistory, getHistoryItem };
+export { loadHistory, saveHistory, mutateVideoHistory, getHistoryItem, buildLocalVideoJobRecord };
 
 
 // Catalog comes from data/media-models.json (see server/lib/mediaModels.js).

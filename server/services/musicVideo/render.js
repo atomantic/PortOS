@@ -1237,7 +1237,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   };
   // A renderer that cannot draw the film look in its page gets the footage renders' finishing
   // pass (filmLookFinish.js), which takes the second half of the progress bar.
-  const finishing = Boolean(renderer.filmLookFinish) && filmLookFinishNeeded(project);
+  const finishing = Boolean(renderer.filmLookFinish) && filmLookFinishNeeded(project, { shotLooks: true });
   const encodeTop = finishing ? 0.5 : 1;
   Promise.resolve().then(async () => {
     await assertCurrentRenderApproval(projectId, project, options);
@@ -1251,7 +1251,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
     // After the ending, so the look grades it with the rest of the film. `lookPassInputs` is
     // what the encode left for the pass to draw over the look (a Blender film's steady title card).
     if (finishing) {
-      await applyFilmLookFinish({ project, path: outputPath, jobId, signal, ...encoded.lookPassInputs,
+      await applyFilmLookFinish({ project, shotLooks: true, path: outputPath, jobId, signal, ...encoded.lookPassInputs,
         onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop + (1 - encodeTop) * fraction }) });
     }
     return outroSec > 0 ? { ...encoded, durationSec: encoded.durationSec + outroSec } : encoded;
@@ -1268,7 +1268,9 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
     } catch (err) {
       console.warn(`⚠️ Music-video ${renderer.label} proof sheet failed [${jobId.slice(0, 8)}]: ${err.message}`);
     }
-    const atSec = typeof project.composition?.posterSec === 'number' ? project.composition.posterSec : (encoded.boundaryTimes[0] || 0);
+    const atSec = typeof project.composition?.posterSec === 'number'
+      ? project.composition.posterSec + (encoded.leadSec || 0)
+      : (encoded.boundaryTimes[0] || 0);
     const completed = { status: 'complete', extra: { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) } };
     // The encoder wrote the MP4 in place; the poster, the history entry naming
     // it and the project row naming that entry publish under one lease (#9982).
@@ -1448,9 +1450,23 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
   let handedOff = false;
   try {
     const seeked = seekedRendererFor(project);
-    if (seeked && coldOpenScenes(project).length) {
-      throw new ServerError(`${nameShots(project, coldOpenScenes(project).map((scene) => scene.sceneId))}: a cold open before the song plays in a footage render. Switch the render style to composed or footage, or move ${coldOpenScenes(project).length === 1 ? 'the shot' : 'the shots'} back onto the song`,
-        { status: 422, code: 'PRE_MUSIC_NEEDS_FOOTAGE' });
+    const cold = coldOpenScenes(project);
+    if (seeked && cold.length) {
+      let allowed = new Set();
+      if (project.composition?.mode === 'blender') {
+        const [{ readBlenderManifest }, { normalizeBlenderRecord }] = await Promise.all([
+          import('./blender/manifest.js'),
+          import('../../lib/musicVideoBlender.js'),
+        ]);
+        const manifest = await readBlenderManifest(project.id);
+        const sceneMap = normalizeBlenderRecord(project.blender).sceneMap || {};
+        allowed = new Set((manifest?.shots || []).filter((shot) => shot.start < 0).map((shot) => sceneMap[shot.id]).filter(Boolean));
+      }
+      const stray = cold.filter((scene) => !allowed.has(scene.sceneId));
+      if (stray.length) {
+        throw new ServerError(`${nameShots(project, stray.map((scene) => scene.sceneId))}: a cold open before the song plays in a footage render. Switch the render style to composed or footage, or move ${stray.length === 1 ? 'the shot' : 'the shots'} back onto the song`,
+          { status: 422, code: 'PRE_MUSIC_NEEDS_FOOTAGE' });
+      }
     }
     if (seeked) {
       return await renderSeekedMode(projectId, project, () => { handedOff = true; }, seeked, { ...options, maintenancePermit: permit });
@@ -1739,7 +1755,8 @@ export async function recoverStuckMusicVideoRenders() {
     console.warn(`⚠️ Music Video recovery: could not remove partial shot segments: ${err.message}`);
   });
   const instanceId = await ensureInstanceId();
-  const stuck = (await listProjects()).filter((p) => p?.status === 'rendering'
+  const projects = await listProjects();
+  const stuck = projects.filter((p) => p?.status === 'rendering'
     && !projectRenders.has(p.id) && isLocalRenderMark(p.renderingOn, instanceId));
   // Filenames the video history references, loaded on first need: a render
   // whose history append landed but whose 'complete' write failed still names
@@ -1777,7 +1794,8 @@ export async function recoverStuckMusicVideoRenders() {
     if (partialPath) await unlink(partialPath).catch(() => {});
   }
   if (stuck.length > 0) console.log(`🎬 Music Video boot recovery: demoted ${recovered}/${stuck.length} stuck render(s)`);
-  if (resumes.length > 0) scheduleRenderResumes(resumes);
+  const blenderProjectIds = projects.filter((project) => project.composition?.mode === 'blender').map((project) => project.id);
+  if (resumes.length || blenderProjectIds.length) scheduleRenderResumes(resumes, blenderProjectIds);
 }
 
 // A shot-by-shot final render the user started is started again after a
@@ -1787,10 +1805,12 @@ export async function recoverStuckMusicVideoRenders() {
 const MAX_RENDER_RESUMES = 2;
 const RENDER_RESUME_DELAY_MS = 15_000;
 
-function scheduleRenderResumes(resumes) {
+function scheduleRenderResumes(resumes, projectIds) {
   // After boot settles (maintenance admission, the media lane): the render
   // admits like any other.
   setTimeout(async () => {
+    if (projectIds.length) await import('./blender/queue.js').then(({ resumePendingBlenderRenders }) => resumePendingBlenderRenders(projectIds, MAX_RENDER_RESUMES))
+      .catch((err) => console.error(`❌ Blender boot recovery could not start: ${err.message}`));
     for (const { projectId, attempt } of resumes) {
       try {
         const { jobId } = await renderMusicVideo(projectId, { resumable: true, resumeAttempt: attempt });

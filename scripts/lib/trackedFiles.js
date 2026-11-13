@@ -10,11 +10,21 @@ export function existingPaths(cwd, paths) {
   return paths.filter(path => lstatSync(join(cwd, path), { throwIfNoEntry: false }) !== undefined);
 }
 
-/** Git-tracked paths that are still present, with NUL-safe inventory parsing. */
-export function trackedFiles(cwd, pathspecs = []) {
+function gitFiles(cwd, pathspecs, includeUntracked) {
   const args = ['ls-files', '--cached', '--deduplicate', '-z'];
+  if (includeUntracked) args.push('--others', '--exclude-standard');
   const paths = execFileSync('git', [...args, '--', ...pathspecs], {
     cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true,
   }).split('\0').filter(Boolean);
   return existingPaths(cwd, paths);
+}
+
+/** Git-tracked paths that are still present, with NUL-safe inventory parsing. */
+export function trackedFiles(cwd, pathspecs = []) {
+  return gitFiles(cwd, pathspecs, false);
+}
+
+/** Present tracked paths plus non-ignored untracked paths for working-tree scans. */
+export function workingTreeFiles(cwd, pathspecs = []) {
+  return gitFiles(cwd, pathspecs, true);
 }

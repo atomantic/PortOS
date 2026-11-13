@@ -20,7 +20,7 @@
 #     --generate-hashes --only-binary :all: --index-url https://pypi.org/simple --no-header --annotation-style line \
 #     --exclude-newer <UTC date at least 7 days ago> -o "$LOCK")
 # then check the result against OSV (including MAL- malicious-package records).
-# exclude-newer 2026-11-04T00:00:00Z
+# exclude-newer 2026-11-05T00:00:00Z
 annotated-doc==0.0.5 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
     --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101 \
     --hash=sha256:c7e58ce09192557605d8bbd92836d7e1d520ac9580096042c0bfd197efacf1bb
@@ -28,11 +28,7 @@ annotated-doc==0.0.5 ; (platform_machine == 'arm64' and sys_platform == 'darwin'
 anyio==4.16.0 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
     --hash=sha256:59bb03251907983d1603d27c3087ddb1e93299ea2163adcdba37899a4fb12ffb \
     --hash=sha256:c66ae634e0b8228396b801741beb3294326d4b6102f7bba4041c0dfb58c29026
-    # via httpx
-certifi==2026.10.23 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
-    --hash=sha256:a9895e6e2758b371e0545e321a3a8fd1fcfd9829ada8824a936dfb16aaaf36cd \
-    --hash=sha256:e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1
-    # via httpcore, httpx
+    # via httpx2
 click==8.5.0 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
     --hash=sha256:255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360 \
     --hash=sha256:ba0d2089de75ea0310e2dde03160e6ca10009947fb95a182f9b54021bb272e34
@@ -91,7 +87,7 @@ fsspec==2026.9.0 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or
 h11==0.16.0 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
     --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
-    # via httpcore
+    # via httpcore2
 hf-xet==1.8.0 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
     --hash=sha256:07a06d7481702616726c2d8578cfb00052a5b3f21beed6a674592bc837a10330 \
     --hash=sha256:10ed23b51dacf7917d64f335c25048deb470efa755e9989b218fc0531386138e \
@@ -111,22 +107,22 @@ hf-xet==1.8.0 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (p
     --hash=sha256:e00d8f60170cd3dd55d98306e41dbaf28b27ff1bcfefbfa84279d197221be83e \
     --hash=sha256:f42940869572dc2b05dfe06f4cc398c6291503e086ddc4eddfb7a6ab9409ad01
     # via huggingface-hub
-httpcore==1.0.9 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
-    --hash=sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55 \
-    --hash=sha256:6e34463af53fd2ab5d807f399a9b45ea31c3dfa2276f15a2c3f00afff6e176e8
-    # via httpx
-httpx==0.28.1 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
-    --hash=sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc \
-    --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
+httpcore2==2.16.0 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
+    --hash=sha256:5c4358319f2602d984ad93182c9fee5160f22e9da7babdda870a5e7c4e2dc34f \
+    --hash=sha256:c72cd0413563b17e1cd8354677dff887466f8ec2551679759e93126534428643
+    # via httpx2
+httpx2==2.16.0 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
+    --hash=sha256:0d54c98128e8f2ff7fbbde0fca8c359e5f032edeaaaac443cdb7f31f685bcd7f \
+    --hash=sha256:fd2c5d7909e8d86fe92d53020c310ca0e4e431b838c207c5754b9bbf0308d49a
     # via huggingface-hub
-huggingface-hub==1.30.0 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
-    --hash=sha256:96ae0a8e99a234374a6fe43e989ebd21c04640b91ab2927e7e5773ba1131ca59 \
-    --hash=sha256:e6a6120bc8c8e2723d03648434ee247088cceb55ba7067e7d34d692cad5fdb57
+huggingface-hub==2.4.0 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
+    --hash=sha256:13a6158b9e3393d9d3f248ce99074d50c2a0a1449fb9d8e2f710751e2084c188 \
+    --hash=sha256:42ecfd93ede47bdd333daebbf66a32d7bfe2e18752754fe4d2d4f98a0179d801
     # via tokenizers, transformers, -r requirements-guard-runtime.txt
 idna==3.20 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
     --hash=sha256:a7db850025b95ded1eae8a46181a1a6c56c92c96f0e2b005d9ff8dc0210cab44 \
     --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
-    # via anyio, httpx
+    # via anyio, httpx2
 jinja2==3.1.6 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
     --hash=sha256:0137fb05990d35f1275a587e9aee6d56da821fc83491a0fb838183be43f66d6d \
     --hash=sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67
@@ -825,9 +821,9 @@ tqdm==4.70.1 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (pl
     --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73 \
     --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4
     # via huggingface-hub, transformers
-transformers==5.16.1 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
-    --hash=sha256:17b0eac726ddc55e84ac58946063e0c6d37fd000c456b581f050ea0f4e822869 \
-    --hash=sha256:2f2d5b98a5ad3718713653734298fa620754ed683702a635ebb587df3ed29c7e
+transformers==5.22.1 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
+    --hash=sha256:bed9fd76d6f43b4a1a9fc5d0c565ace7c77edbd029784f8cbcdf772cb5e924d8 \
+    --hash=sha256:c940b4bf98de4f568723895f330ba1460a398bd83061b93b70238c3fe32e4389
     # via -r requirements-guard-runtime.txt
 triton==3.8.0 ; (python_full_version < '3.15' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.15' and platform_machine == 'x86_64' and sys_platform == 'linux') \
     --hash=sha256:1b84e7d512490ba529111260fa6f7cad8b254a6bb5fbdf41d5ef9a5e57f52d0a \
@@ -843,6 +839,10 @@ triton==3.8.0 ; (python_full_version < '3.15' and platform_machine == 'aarch64' 
     --hash=sha256:b7004666652f500ed854a86988e4b3d69d247188b5d2092b5df1e44f4a954099 \
     --hash=sha256:e91ffa46d095b252248297292dd22bcbacd53a125a0c2eefbbbf74925a320bc3
     # via torch
+truststore==0.10.5 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
+    --hash=sha256:30d36967ccaded5cbb38d602c433f53600036c79d502f4533a49b60a03bbefcd \
+    --hash=sha256:9aaaedaefaf06d8b206278cf8b5012bc897f485a874503501e12d776df78951c
+    # via httpcore2, httpx2
 typer==0.27.3 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
     --hash=sha256:d0396f770a560ab1b0a8504e13b5f254b728cedb05c61cf0359e944e50ce8901 \
     --hash=sha256:e50022f28b82a86313e54501317a1db64bf8f8d036ff8cfe5ca7e47675454aff
@@ -850,4 +850,4 @@ typer==0.27.3 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (p
 typing-extensions==4.16.0 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
     --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 \
     --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
-    # via anyio, huggingface-hub, torch
+    # via anyio, httpx2, huggingface-hub, torch

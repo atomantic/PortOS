@@ -162,6 +162,7 @@ describe('dataManager purge scope (#3327)', () => {
   // rules and check-in answers). Each entry records why it is protected; the
   // table is the audit trail, not an inference.
   const USER_STATE_CATEGORIES = {
+    'code-animation': 'authored Blender film scripts and assets referenced by Production projects',
     models: 'authored GLB layouts referenced by catalog places',
     messages: 'drafts, the delivery_unknown send audit, triage rules and account config',
     review: 'Review Hub todos, pending CoS action requests and security assessment reports',

@@ -393,3 +393,72 @@ is distinct from procedural/file sound: a stage request requires explicit
 `audioBudgetUsd`. No provider audio adapter is available yet, so even consented
 requests fail before provider dispatch; stage externally produced bytes as a
 portable file instead. There are no startup audio calls or automatic resumes.
+
+## Film projects
+
+**Code Animation > Production > Create Film project** opens the multi-shot
+Blender lane. A Film has a 1–3,600 second timeline, optionally driven by a
+Music-library track or an uploaded soundtrack. Attaching audio explicitly runs
+local beat, downbeat, section and envelope analysis; it calls no AI provider.
+Without audio the timeline and cuts are silent. Creation starts no analysis or
+render. Package projects remain the portable short lane with their existing
+180-second, 2 MiB per-file and 8 MiB total limits.
+
+Films use the [shared Blender film contract](features/music-video-blender.md):
+create the starter workspace, edit `src/film.py`, sync the shot list, render
+stills and previews, inspect the live film or assemble a preview cut, then render
+final shots. **Assemble final cut** requires every final to be current and the
+shots to cover the entire timeline, including the audio's final frame. It copies
+the final MP4 into Media History and records it as the project's accepted output;
+a failed attempt retains the previous accepted output. Title cards, film look,
+timed finishing effects and the ending remain Music Video features.
+
+**Send to Music Video** opens a library-track picker and creates a new
+Blender-mode Music Video, with a link to open it. It copies the film's source,
+synced shot inventory, settings and option values, leaving renders, cuts and
+notes behind. The original remains renderable; sending again creates another
+independent copy. The source records the latest copy in `promotedTo`; the target
+records `sourceFilm: {kind:'code-animation',projectId}`.
+
+Sending starts no jobs. Analyze the song in Music Video, then **Sync shots from
+scripts** to bind its shots to that song. The copied manifest reads **Not synced
+yet**, and renders wait for a sync. The response reports provisional gaps or
+shots past the song end when the library track has a stored duration; otherwise
+analysis is required to check coverage. Adjust `describe(ctx)` for the analyzed
+length before rendering.
+
+The API is `POST /api/code-animation/films/:id/promote` with `{trackId,name?}` or
+`{uploadedAudioFilename,name?}` (exactly one audio source; uploaded filenames
+refer to `data/music/`, as for Music Video). Its `201` answer holds `project`,
+`sourceProject`, `needsAnalysis`, `needsSync`, `coverageDurationSec`,
+`coverageProblems` and `nextSteps`. It requires host-control authority, copies
+no analysis from the standalone film, and never changes its timeline or audio.
+
+The shared Shots, Files, Cut, Jobs and Settings panel lives at
+`/code-animation/production/films/:id/:tab?/:shotId?`. Film settings and notes
+are machine-local Production records. The workspace is
+`data/code-animation/films/<id>/`: `src/`, `manifest.json`, `song.json`, and
+regenerable `renders/`. Blender requires **Trusted local** execution; the same
+host-control gate as Music Video protects source writes and native processes.
+
+API-only workflow (use `node scripts/portos-api.js` for authenticated requests):
+
+1. `POST /api/code-animation/films` with
+   `{"title":"My film","timeline":{"durationSec":240,"fps":24}}`.
+2. Optional: `POST /api/code-animation/films/:id/audio` with
+   `{"source":"track","trackId":"..."}` or
+   `{"source":"upload","filename":"..."}` (from `POST /api/uploads`).
+   `{"source":"none"}` removes audio, retaining the timeline length.
+3. Under `/api/code-animation/films/:id/blender`, `POST /workspace` with
+   `{"template":"starter"}`, then `POST /sync` with `{}`. Read the state until
+   the returned job finishes. The source-file, render, cut, note and media routes
+   mirror Music Video's Blender routes.
+4. `POST /render` with `{"quality":"still"}`, then `{"quality":"preview"}`;
+   `POST /cut` with `{"quality":"preview"}` produces a review file.
+5. `POST /render` with `{"quality":"final"}`, wait for all jobs, then
+   `POST /cut` with `{"quality":"final"}`. The state reports `acceptedOutput`
+   when complete and `finalStale` if later edits/renders supersede it.
+
+`PATCH /api/code-animation/films/:id` changes the title or silent timeline.
+The shared `/blender/settings` route owns render settings and film options.
+Progress arrives on `code-animation:film` after subscribing to `code-animation`.

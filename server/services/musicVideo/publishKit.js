@@ -15,7 +15,7 @@ import { assertRenderCleanupIdle } from './renderCleanupActivity.js';
  */
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
-import { unlink, writeFile } from 'fs/promises';
+import { copyFile, unlink, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -24,7 +24,7 @@ import { safeUnder, edgeFadeFilter } from '../../lib/ffmpeg.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { listProjects, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
-import { suggestSocialCuts } from './socialCuts.js';
+import { kitCutWindows } from './socialCuts.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, normalizeCopyOptions, PUBLISH_PLATFORMS } from './publishKitText.js';
@@ -61,7 +61,7 @@ export const getActivePublishKitBuild = (projectId) => {
 };
 
 /** The final render's file (the YouTube master), or a 409 naming what's missing. */
-async function finalRenderFile(project) {
+export async function finalRenderFile(project) {
   if (!project.renderHistoryId) throw kitError(409, 'NO_FINAL_RENDER', 'Render the final video before building the publishing kit');
   const resolved = await resolveRenderVideoFile(project.renderHistoryId);
   if (!resolved) throw kitError(409, 'NO_FINAL_RENDER', 'The final render file is missing — render the final video again');
@@ -77,13 +77,13 @@ export async function releaseKitFiles(filenames, keep = []) {
     const kit = projectPublishKit(p);
     // A made YouTube thumbnail (and each A/B variant) also holds the kit frame it was made from,
     // so a rebuild leaves it there to re-set in new lettering.
-    const made = [kit.youtubeThumbnail, ...(Array.isArray(kit.youtubeThumbnailTests) ? kit.youtubeThumbnailTests : [])].filter(Boolean);
+    const made = [kit.coverArt, kit.youtubeThumbnail, ...(Array.isArray(kit.youtubeThumbnailTests) ? kit.youtubeThumbnailTests : [])].filter(Boolean);
     const madeFrom = made.map((t) => (t.source?.kind === 'thumbnail' ? t.source.filename : null));
-    for (const f of [...(kit.exports || []).map((e) => e.filename), ...(kit.thumbnails || []), kit.captionsFilename, kit.coverArt?.filename, ...made.map((t) => t.filename), ...madeFrom]) if (f) referenced.add(f);
+    for (const f of [...(kit.exports || []).map((e) => e.filename), ...(kit.thumbnails || []), ...(kit.frames || []), kit.captionsFilename, kit.coverArt?.filename, ...made.map((t) => t.filename), ...madeFrom]) if (f) referenced.add(f);
   }
   for (const name of filenames) {
     if (referenced.has(name)) continue;
-    const root = name.endsWith('.jpg') ? PATHS.videoThumbnails : PATHS.videos;
+    const root = /\.(jpg|png)$/.test(name) ? PATHS.videoThumbnails : PATHS.videos;
     const path = safeUnder(root, name);
     if (path) await unlink(path).catch(() => {});
   }
@@ -125,7 +125,9 @@ async function beginPublishKitBuild(projectId, jobId) {
     await ensureDir(PATHS.videoThumbnails);
     const durationSec = Number(entry.durationSec) > 0 ? Number(entry.durationSec) : await probeVideoDuration(masterPath);
     const stem = `music-video-${projectId.slice(3, 11)}-${Date.now()}`;
-    const [teaser] = suggestSocialCuts(project, { count: 1, minSec: 25, maxSec: 45 });
+    // The vertical cut follows the teaser's hook unless the director posts Suno Hooks and that hook opens too late for one.
+    const platforms = await (await import('./publish/platforms.js')).getPublishPlatforms().catch(() => null);
+    const { teaser, vertical } = kitCutWindows(project, { sunoHook: platforms?.sunoHook?.enabled === true });
     const encodes = [
       { kind: 'x-1080p', label: 'X / social up to 1080p (12 Mbps)', filename: `${stem}-x-1080p.mp4`,
         args: ['-i', masterPath, '-vf', "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease", ...X_VIDEO_ARGS, ...AUDIO_ARGS] },
@@ -137,14 +139,14 @@ async function beginPublishKitBuild(projectId, jobId) {
       // #10150: Shorts/TikTok/Reels need 9:16. A composition that lays itself out at 9:16
       // (portosComposition.formats) renders the window natively; otherwise the 16:9 master's whole
       // frame is fitted over a blurred fill of itself (#10377) — a center-crop dropped off-center text.
-      ...(teaser && musicVideoAspect(project) === '16:9' ? [{ kind: 'vertical-9x16', label: `Vertical 9:16 ${Math.round(teaser.endSec - teaser.startSec)}s`, filename: `${stem}-vertical.mp4`, window: teaser,
+      ...(vertical && musicVideoAspect(project) === '16:9' ? [{ kind: 'vertical-9x16', label: `Vertical 9:16 ${Math.round(vertical.endSec - vertical.startSec)}s`, filename: `${stem}-vertical.mp4`, window: vertical,
         layout: 'fit',
         native: async (outputPath, onProgress) => (await import('./excerptRender.js')).renderSeekedWindow(project, {
-          startSec: teaser.startSec, endSec: teaser.endSec, aspect: '9:16', fade: true, outputPath, jobId: `${jobId}-vertical`, signal: job.abort.signal, onProgress,
+          startSec: vertical.startSec, endSec: vertical.endSec, aspect: '9:16', fade: true, outputPath, jobId: `${jobId}-vertical`, signal: job.abort.signal, onProgress,
         }),
-        args: ['-ss', String(teaser.startSec), '-t', String(teaser.endSec - teaser.startSec), '-i', masterPath,
+        args: ['-ss', String(vertical.startSec), '-t', String(vertical.endSec - vertical.startSec), '-i', masterPath,
           '-vf', VERTICAL_FIT_FILTER, ...X_VIDEO_ARGS,
-          '-af', `asetpts=PTS-STARTPTS${edgeFadeFilter(teaser.endSec - teaser.startSec)}`, ...AUDIO_ARGS] }] : []),
+          '-af', `asetpts=PTS-STARTPTS${edgeFadeFilter(vertical.endSec - vertical.startSec)}`, ...AUDIO_ARGS] }] : []),
     ];
     const candidates = thumbnailCandidates(project, durationSec);
     const total = encodes.length + candidates.length;
@@ -191,12 +193,12 @@ async function beginPublishKitBuild(projectId, jobId) {
       step();
     }
     // Cut every candidate, keep the best frame of each shot, and drop the rest.
-    // A thumbnail fills the 16:9 frame: a master of another shape is cropped, never boxed in black bars.
+    // Keep the master dimensions; the cover and YouTube composers apply their own crops.
     const scored = [];
     for (const [i, c] of candidates.entries()) {
       const name = `${stem}-thumb-${i + 1}.jpg`;
       const path = join(PATHS.videoThumbnails, name);
-      const result = await runFfmpegProcess({ bin: ffmpeg, signal: job.abort.signal, args: ['-hide_banner', '-loglevel', 'error', '-ss', String(c.t), '-i', masterPath, '-frames:v', '1', '-vf', 'scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720', '-q:v', '2', '-y', path] });
+      const result = await runFfmpegProcess({ bin: ffmpeg, signal: job.abort.signal, args: ['-hide_banner', '-loglevel', 'error', '-ss', String(c.t), '-i', masterPath, '-frames:v', '1', '-q:v', '2', '-y', path] });
       if (result.ok) scored.push({ ...c, name, score: await scoreThumbnailFrame(path).catch(() => NaN) });
       step();
     }
@@ -250,6 +252,37 @@ export function cancelPublishKitBuild(jobId) {
   if (!job || job.status !== 'running') return false;
   job.abort.abort();
   return true;
+}
+
+/** Capture a director-selected moment without changing the master or calling a provider. */
+export async function capturePublishKitFrame(projectId, atSec) {
+  assertRenderCleanupIdle(projectId);
+  const project = await requireProject(projectId);
+  const { entry, path: masterPath } = await finalRenderFile(project);
+  const { findFfmpeg, runFfmpegProcess, probeVideoDuration } = await import('../../lib/ffmpeg.js');
+  const duration = Number(entry.durationSec) > 0 ? Number(entry.durationSec) : await probeVideoDuration(masterPath);
+  if (!Number.isFinite(atSec) || atSec < 0 || atSec >= duration) throw kitError(422, 'VALIDATION_ERROR', 'Choose a time inside the final video');
+  const filename = `music-video-${projectId.slice(3, 11)}-frame-${randomUUID()}.png`;
+  await ensureDir(PATHS.videoThumbnails);
+  const output = join(PATHS.videoThumbnails, filename);
+  const rendered = project.composition?.mode === 'blender'
+    ? await (await import('./publishKitBlenderFrame.js')).publishKitBlenderFrame(project, atSec) : null;
+  const write = async () => {
+    if (rendered) return copyFile(rendered, output);
+    const bin = await findFfmpeg();
+    if (!bin) throw kitError(500, 'FFMPEG_MISSING', 'ffmpeg not found on PATH');
+    const result = await runFfmpegProcess({ bin, args: ['-hide_banner', '-loglevel', 'error', '-ss', String(atSec), '-i', masterPath, '-frames:v', '1', '-y', output] });
+    if (!result.ok || !existsSync(output)) throw kitError(500, 'FRAME_CAPTURE_FAILED', 'The video frame could not be captured');
+  };
+  const dropped = [];
+  const result = await write().then(() => withBackupAssetPublication(() => mutateProjectRecord(projectId, current => {
+    const kit = projectPublishKit(current);
+    const frames = [filename, ...(kit.frames || [])];
+    dropped.push(...frames.slice(12));
+    return { project: { ...current, publishKit: { ...kit, frames: frames.slice(0, 12) } } };
+  }))).catch(async error => { await unlink(output).catch(() => {}); throw error; });
+  await releaseKitFiles(dropped);
+  return result;
 }
 
 /** Choose the thumbnail the release uses (one the build cut). */
@@ -307,6 +340,10 @@ export async function updatePublishKitCopy(projectId, patch, deps = {}) {
         ...(patch.draftOptions.length ? { length: patch.draftOptions.length } : {}),
       };
     }
+    if (Array.isArray(patch?.skippedTargets)) {
+      const unique = [...new Set(patch.skippedTargets)];
+      if (unique.length) next.skippedTargets = unique; else delete next.skippedTargets;
+    }
     return { project: { ...current, publishKit: next } };
   });
 }
@@ -343,8 +380,9 @@ export async function draftPublishKitCopy(projectId, { providerId = null, model 
   }
   const { getPublishPlatforms, publishHistory } = await import('./publish/platforms.js');
   const enabled = deps.platforms || await getPublishPlatforms();
-  // Only where the director posts (#9287); Suno's caption reuses the YouTube description.
-  const platforms = PUBLISH_PLATFORMS.filter((p) => enabled[p]?.enabled || (p === 'youtube' && enabled.suno?.enabled));
+  // Only where the director posts (#9287), minus any skipped for this release; Suno's caption reuses the YouTube description.
+  const skipped = new Set(projectPublishKit(project).skippedTargets || []);
+  const platforms = PUBLISH_PLATFORMS.filter((p) => !skipped.has(p) && (enabled[p]?.enabled || (p === 'youtube' && enabled.suno?.enabled && !skipped.has('suno'))));
   if (!platforms.length) throw kitError(409, 'PUBLISH_NO_PLATFORMS', 'Turn on at least one platform under "Where you post" before drafting copy');
   const history = deps.history || await publishHistory().catch(() => ({}));
   const lessons = Object.entries(history).flatMap(([platform, h]) => (h?.notes || []).map((n) => ({ platform, ...n })));

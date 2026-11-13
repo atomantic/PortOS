@@ -107,7 +107,7 @@ describe.skipIf(!ffmpeg)('alignLipsyncLead (real ffmpeg)', () => {
 
   it('reports a silent render without touching it', async () => {
     const clip = await makeClip('silent.mp4', { lead: 2, audio: false });
-    expect(await alignLipsyncLead({ videoPath: clip })).toEqual({ shiftFrames: 0, lag: null, peakScore: null, reason: 'no-audio' });
+    expect(await alignLipsyncLead({ videoPath: clip })).toEqual({ shiftFrames: 0, lag: null, peakScore: null, reason: 'output-muted' });
   });
 
   // A read-only directory makes the hold's encode fail; root ignores the mode bits.

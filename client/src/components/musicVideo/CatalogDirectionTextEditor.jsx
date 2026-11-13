@@ -6,15 +6,18 @@ const buttonClass = 'flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[
 // Caps mirror musicVideoCastAndSetsDirectionTextEditSchema / CAST_SETS_LIMITS.
 const MAX = { rules: 6, expressions: 8, props: 6, elements: 4 };
 
-const draftFrom = (direction) => ({
-  look: direction.look || '',
-  signature: direction.protagonist?.signature || '',
-  rules: (direction.protagonist?.rules || []).join('\n'),
-  expressions: (direction.protagonist?.expressions || []).join('\n'),
-  props: (direction.props || []).map(({ id, name = '', owner = '', description = '' }) => ({ id, name, owner, description })),
-  summary: direction.overlayConcept?.summary || '',
-  elements: (direction.overlayConcept?.elements || []).map(({ name = '', description = '' }) => ({ name, description })),
-});
+const draftFrom = (direction = {}) => {
+  const d = direction || {};
+  return {
+    look: d.look || '',
+    signature: d.protagonist?.signature || '',
+    rules: (d.protagonist?.rules || []).join('\n'),
+    expressions: (d.protagonist?.expressions || []).join('\n'),
+    props: (d.props || []).map(({ id, name = '', owner = '', description = '' }) => ({ id, name, owner, description })),
+    summary: d.overlayConcept?.summary || '',
+    elements: (d.overlayConcept?.elements || []).map(({ name = '', description = '' }) => ({ name, description })),
+  };
+};
 
 const lines = (text) => text.split('\n').map((line) => line.trim()).filter(Boolean);
 const complete = (items) => items.filter((item) => item.name.trim() && item.description.trim());

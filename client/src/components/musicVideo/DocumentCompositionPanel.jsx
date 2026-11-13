@@ -148,6 +148,7 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
   const [confirming, setConfirming] = useState(null);
   const confirmTimerRef = useRef(null);
   const [folder, setFolder] = useState('');
+  const [template, setTemplate] = useState('layered');
   const [candidate, setCandidate] = useState(null);
   const [selectedSection, setSelectedSection] = useState('');
   const [eventPending, setEventPending] = useState(false);
@@ -192,7 +193,7 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
     setConfirming(null);
     action();
   };
-  const startTemplate = confirmFirst('template', () => run('template', () => startMusicVideoCompositionTemplate(project.id, 'layered', { silent: true }), 'Layered template copied into this project'));
+  const startTemplate = confirmFirst('template', () => run('template', () => startMusicVideoCompositionTemplate(project.id, template, { silent: true }), `${template === 'cel' ? 'Cel' : 'Layered'} template copied into this project`));
   const importZip = (file) => file && run('zip', () => importMusicVideoCompositionZip(project.id, file, { silent: true }), 'Composition document imported');
   const importFolder = () => folder.trim() && run('folder', () => importMusicVideoCompositionDirectory(project.id, folder.trim(), { silent: true }), 'Composition document imported');
   const exportZip = () => run('export', async () => {
@@ -246,8 +247,16 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
 
       <StageSection id="mv-doc-source" title="Document source" summary={docSummary}>
         <div className="flex flex-wrap items-end gap-2">
+          <div>
+            <label htmlFor="mv-doc-template" className="block text-xs text-port-text-muted mb-0.5">Template</label>
+            <select id="mv-doc-template" value={template} disabled={!!busy} className={inputCls}
+              onChange={(event) => { setTemplate(event.target.value); setConfirming(null); }}>
+              <option value="layered">Layered — footage and stills</option>
+              <option value="cel">Cel — drawn characters</option>
+            </select>
+          </div>
           <button type="button" className={buttonCls} disabled={!!busy} onClick={startTemplate}
-            title="Copy PortOS's layered template (scene media, camera moves, grain, HUD, kinetic lyrics) into this project">
+            title={template === 'cel' ? 'Copy a drawn-character template with a posable figure, beat-locked walk and painted stage' : "Copy PortOS's layered template (scene media, camera moves, grain, HUD, kinetic lyrics) into this project"}>
             <LayoutTemplate size={14} /> {busy === 'template' ? 'Copying…' : confirming === 'template' ? 'Click again to replace' : doc ? 'Replace with template' : 'Start from template'}
           </button>
           <FilePickerButton accept=".zip,application/zip" onChange={(e) => importZip(e.target.files?.[0])} disabled={!!busy}

@@ -175,7 +175,7 @@ def main():
     model = _load_model(TranscriptionModel, args.model)
 
     log_stage("transcribe", os.path.basename(args.audio))
-    midi_bytes = model.transcribe_to_midi(args.audio)
+    midi_bytes, _beat_grid = model.transcribe_and_postprocess(args.audio)
     if not midi_bytes:
         print("ERROR: muscriptor returned no MIDI data", file=sys.stderr, flush=True)
         return 1

@@ -7,8 +7,8 @@ import { z } from 'zod';
 import {
   MUSIC_VIDEO_BLENDER_ENGINES, MUSIC_VIDEO_BLENDER_MAX_OPTIONS, MUSIC_VIDEO_BLENDER_NOTE_STATUSES, MUSIC_VIDEO_BLENDER_OPTION_KEY,
   MUSIC_VIDEO_BLENDER_OPTION_TEXT_MAX, MUSIC_VIDEO_BLENDER_QUALITIES,
-  MUSIC_VIDEO_BLENDER_SETTING_LIMITS as LIMITS, MUSIC_VIDEO_BLENDER_SHOT_ID, MUSIC_VIDEO_BLENDER_SOURCE_PATH,
-  MUSIC_VIDEO_BLENDER_TEXT_MAX_BYTES,
+  MUSIC_VIDEO_BLENDER_SETTING_LIMITS as LIMITS, MUSIC_VIDEO_BLENDER_SHEET_LIMITS as SHEET_LIMITS,
+  MUSIC_VIDEO_BLENDER_SHOT_ID, MUSIC_VIDEO_BLENDER_SOURCE_PATH, MUSIC_VIDEO_BLENDER_TEXT_MAX_BYTES,
 } from './musicVideoBlender.js';
 
 const whole = ({ min, max }) => z.number().int().min(min).max(max);
@@ -54,14 +54,26 @@ export const musicVideoBlenderSyncSchema = z.object({
 
 const shotId = z.string().regex(MUSIC_VIDEO_BLENDER_SHOT_ID, 'Invalid shot id');
 
+const sheetOptions = z.object({
+  every: whole(SHEET_LIMITS.every).optional(),
+  columns: whole(SHEET_LIMITS.columns).optional(),
+  range: z.tuple([z.number().min(0).max(36000), z.number().min(0).max(36000)])
+    .refine(([start, end]) => start <= end, 'range start must be at or before end')
+    .optional(),
+}).strict();
+
 export const musicVideoBlenderRenderSchema = z.object({
   shotIds: z.array(shotId).min(1).max(400).optional(),
   quality: z.enum(MUSIC_VIDEO_BLENDER_QUALITIES),
   // Stills only: song seconds. Omitted, each shot renders its midpoint.
   times: z.array(z.number().min(0).max(36000)).min(1).max(24).optional(),
+  // Contact sheets only: frame step, grid columns, optional [startSec, endSec] inside the shot.
+  sheet: sheetOptions.optional(),
   force: z.boolean().optional(),
   onlyStale: z.boolean().optional(),
-}).strict().refine((input) => input.times == null || input.quality === 'still', { message: 'times applies to stills only', path: ['times'] });
+}).strict()
+  .refine((input) => input.times == null || input.quality === 'still', { message: 'times applies to stills only', path: ['times'] })
+  .refine((input) => input.sheet == null || input.quality === 'sheet', { message: 'sheet applies to contact sheets only', path: ['sheet'] });
 
 export const musicVideoBlenderCutSchema = z.object({
   quality: z.enum(['preview', 'final']),

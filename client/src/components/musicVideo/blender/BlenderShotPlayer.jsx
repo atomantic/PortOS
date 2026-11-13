@@ -3,7 +3,7 @@ import { useEffect } from 'react';
 import useShotSongSync from '../../../hooks/useShotSongSync.js';
 import useSoloPlayback from '../../../hooks/useSoloPlayback.js';
 import { useLocalStorageBool } from '../../../hooks/useLocalStorageBool.js';
-import { musicVideoBlenderMediaUrl } from '../../../services/apiMusicVideo.js';
+import { useFilmApi } from './FilmApiContext.jsx';
 import { buttonCls } from './blenderStyles.js';
 
 const WITH_SONG_KEY = 'portos.musicVideo.blender.withSong';
@@ -21,6 +21,7 @@ const QUALITY_LABELS = { preview: 'Preview', final: 'Final' };
  * itself (a new shot, a render that just landed) while the preview is playing.
  */
 export default function BlenderShotPlayer({ projectId, shot, playable, audioUrl, aspect = null, onQuality, onTime, videoHandle }) {
+  const { musicVideoBlenderMediaUrl } = useFilmApi();
   const [withSong, , toggleSong] = useLocalStorageBool(WITH_SONG_KEY, true);
   // A re-render writes the same file again: the finish time makes the element load the new one.
   const sourceKey = playable ? `${playable.render.file}:${playable.render.finishedAt || ''}` : null;

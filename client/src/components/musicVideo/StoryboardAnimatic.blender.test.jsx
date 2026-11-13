@@ -370,4 +370,18 @@ describe('StoryboardAnimatic Blender film effects', () => {
     unmount();
     expect(clip.getAttribute('src')).toBeNull();
   });
+
+  // Uniquely catches the live film preview ignoring dissolve labels or attempting a footage blend.
+  it('keeps hard cutting when a scene sets a dissolve and labels it drawn in cuts', async () => {
+    const dissolved = scenes.map((scene) => (scene.sceneId === 'board-1' ? { ...scene, cutEffect: { style: 'dissolve', enabled: true, overlapSec: 0.5 } } : scene));
+    render(player(film({ scenes: dissolved }), blenderFilmState()));
+    await act(async () => {});
+    expect(screen.getByText('Dissolve (drawn in cuts)')).toBeTruthy();
+    // Moving onto the cut still plays the hard cut directly without mounting a fade/toggle overlay.
+    at(4.4);
+    expect(screen.getByLabelText('Clip for First verse').getAttribute('aria-hidden')).toBe('true');
+    at(4.5);
+    expect(screen.getByLabelText('Clip for First verse').getAttribute('aria-hidden')).toBeNull();
+    expect(screen.queryByText('Dissolve (drawn in cuts)')).toBeNull();
+  });
 });

@@ -16,6 +16,7 @@ import { dirname, join } from 'path';
 import { removeByMetadata } from './notifications.js';
 import * as repository from './cosTaskRepository.js';
 const actualRepository = await vi.importActual('./cosTaskRepository.js');
+import { resolveReviewerConfig, buildReviewerEffortNote } from '../lib/reviewerConfig.js';
 import { planListSave } from '../lib/cosTaskRows.js';
 
 vi.mock('./prWatcher.js', () => ({ persistPrWatcherState: vi.fn(async () => ({})) }));
@@ -515,6 +516,20 @@ describe('cosTaskStore.getUserTasks / getCosTasks', () => {
     const result = await getUserTasks();
     expect(result.tasks).toEqual([]);
     expect(result.type).toBe('user');
+  });
+
+  it('preserves a legacy Hydrogen xhigh pin across task writes and dispatch resolution', async () => {
+    const metadata = { reviewers: ['antigravity'], reviewerModels: { antigravity: 'gemini-4-hydrogen' }, reviewerEfforts: { antigravity: 'xhigh' } };
+    const task = await addTask({ description: 'Hydrogen reviewer persistence regression', metadata }, 'user');
+    __resetTaskCache();
+    const persisted = await getTaskById(task.id);
+    expect(persisted.metadata).toMatchObject(metadata);
+    await updateTask(task.id, { metadata: { retryCount: 1 } }, 'user');
+    __resetTaskCache();
+    const retried = await getTaskById(task.id);
+    const config = resolveReviewerConfig(retried.metadata, { reviewerCatalogs: { antigravity: ['gemini-4-hydrogen-xhigh'] } });
+    expect(config.reviewerEfforts).toEqual({ antigravity: 'xhigh' });
+    expect(buildReviewerEffortNote(config.reviewers, config.reviewerEfforts, config)).toContain('agy --effort xhigh');
   });
 
   it('returns an added user task in stored form', async () => {

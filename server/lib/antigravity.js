@@ -87,7 +87,7 @@ export const ANTIGRAVITY_PRINT_FLAGS = ['--print', '-p', '--prompt'];
  * Append `--model <id>` / `--effort <level>` to an agy argv when the caller has
  * a per-run override and the provider args don't already pin one. `agy --help`
  * documents both as session-scoped flags ("Model for the current CLI session",
- * "Reasoning effort for the current CLI session (low|medium|high)"), so PortOS
+ * "Reasoning effort for the current CLI session (low|medium|high|xhigh|max)"), so PortOS
  * threads the task's model/effort selection through exactly like it does for
  * claude. Configured-default sentinels resolve to null → no `--model`, i.e. agy
  * keeps using whatever model its own config selects.

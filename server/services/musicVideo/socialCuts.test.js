@@ -4,7 +4,7 @@
  * with no lyric timing (or shorter than a cut) still gets a usable window.
  */
 import { describe, expect, it } from 'vitest';
-import { suggestSocialCuts } from './socialCuts.js';
+import { kitCutWindows, latestSunoHookStartSec, suggestSocialCuts } from './socialCuts.js';
 
 const line = (text, startSec, endSec) => ({ id: `lc-${startSec}`, text, startSec, endSec });
 const scene = (startSec, endSec, shotMode, sectionLabel) => ({ sceneId: `mvs-${startSec}`, startSec, endSec, shotMode, sectionLabel });
@@ -54,5 +54,42 @@ describe('suggestSocialCuts (#9280)', () => {
   it('offers the whole song when it is shorter than a cut, and nothing without a duration', () => {
     expect(suggestSocialCuts({ audioAnalysis: { durationSec: 9 } })).toEqual([{ startSec: 0, endSec: 9, score: 1, label: null, reasons: ['whole song'] }]);
     expect(suggestSocialCuts({})).toEqual([]);
+  });
+});
+
+// 150 s song with the same chorus twice; `loudest` says which one the waveform favors.
+const twoChoruses = (loudest) => ({
+  name: 'Example Song',
+  audioAnalysis: { durationSec: 150, waveform: Array.from({ length: 150 }, (_, i) => (i >= loudest && i < loudest + 30 ? 0.9 : (i >= 30 && i < 60) || (i >= 110 && i < 140) ? 0.5 : 0.2)) },
+  scenes: [scene(0, 30, 'cutaway', 'Verse 1'), scene(30, 60, 'performance', 'Chorus 1'), scene(60, 110, 'cutaway', 'Verse 2'), scene(110, 140, 'performance', 'Chorus 2'), scene(140, 150, 'cutaway', 'Outro')],
+  lyricCues: [
+    ...Array.from({ length: 6 }, (_, i) => line(`verse line ${i}`, i * 5, i * 5 + 4)),
+    ...[30, 110].flatMap((at) => Array.from({ length: 6 }, (_, i) => line(i === 1 ? 'this is my example song' : `chorus line ${i}`, at + i * 5, at + i * 5 + 4))),
+  ],
+});
+
+describe('kitCutWindows (the windows the publishing kit cuts)', () => {
+  it('cuts the vertical from the best hook a Suno Hook can play when the best one opens in the last minute', () => {
+    const song = twoChoruses(110);
+    const plain = kitCutWindows(song);
+    expect(plain.teaser.startSec).toBeGreaterThan(latestSunoHookStartSec(150));
+    expect(plain.vertical).toEqual(plain.teaser);
+
+    const hooks = kitCutWindows(song, { sunoHook: true });
+    expect(hooks.teaser).toEqual(plain.teaser);
+    expect(hooks.vertical.startSec).toBeLessThanOrEqual(90);
+    expect(hooks.vertical.reasons).toEqual(expect.arrayContaining(['chorus', 'sings the title']));
+  });
+
+  it('keeps the best hook when it already opens in time, and when no window could', () => {
+    const early = kitCutWindows(twoChoruses(30), { sunoHook: true });
+    expect(early.teaser.startSec).toBeLessThanOrEqual(90);
+    expect(early.vertical).toEqual(early.teaser);
+
+    // Under a minute only 0:00 can open a Hook, and this song's first sung line is later than that.
+    const short = { audioAnalysis: { durationSec: 40 }, lyricCues: [5, 12, 20, 30].map((at) => line('example line', at, at + 4)) };
+    const none = kitCutWindows(short, { sunoHook: true });
+    expect(none.teaser.startSec).toBeGreaterThan(0);
+    expect(none.vertical).toEqual(none.teaser);
   });
 });

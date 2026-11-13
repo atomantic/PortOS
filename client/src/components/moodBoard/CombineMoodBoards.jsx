@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import Modal from '../ui/Modal';
 import ProviderModelSelector from '../ProviderModelSelector';
 import useProviderModels from '../../hooks/useProviderModels';
@@ -10,6 +10,7 @@ import { combineMoodBoards } from '../../services/apiMoodBoard';
 const visionProviderFilter = provider => provider.enabled && (provider.type === 'api' || isVisionCapableCliProvider(provider) || isVisionCapableCodexTuiProvider(provider));
 
 export default function CombineMoodBoards({ boards, onClose, onCreated }) {
+  const sortedBoards = useMemo(() => [...boards].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })), [boards]);
   const [firstId, setFirstId] = useState('');
   const [secondId, setSecondId] = useState('');
   const [name, setName] = useState('Composite board');
@@ -46,14 +47,14 @@ export default function CombineMoodBoards({ boards, onClose, onCreated }) {
             <label htmlFor="combine-first-board" className="block text-sm text-gray-400 mb-1">First board</label>
             <select id="combine-first-board" value={firstId} onChange={event => setFirstId(event.target.value)} disabled={busy} required className={fieldClass}>
               <option value="">Choose a board</option>
-              {boards.map(board => <option key={board.id} value={board.id} disabled={board.id === secondId}>{board.name}</option>)}
+              {sortedBoards.map(board => <option key={board.id} value={board.id} disabled={board.id === secondId}>{board.name}</option>)}
             </select>
           </div>
           <div>
             <label htmlFor="combine-second-board" className="block text-sm text-gray-400 mb-1">Second board</label>
             <select id="combine-second-board" value={secondId} onChange={event => setSecondId(event.target.value)} disabled={busy} required className={fieldClass}>
               <option value="">Choose a board</option>
-              {boards.map(board => <option key={board.id} value={board.id} disabled={board.id === firstId}>{board.name}</option>)}
+              {sortedBoards.map(board => <option key={board.id} value={board.id} disabled={board.id === firstId}>{board.name}</option>)}
             </select>
           </div>
         </div>

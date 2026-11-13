@@ -117,6 +117,12 @@ vi.mock('../services/tracks/index.js', () => ({
   getTrack: vi.fn(),
 }));
 
+const prepareSourceAudioWindow = vi.hoisted(() => vi.fn());
+vi.mock('../services/federatedMedia/sourceAudio.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  prepareSourceAudioWindow,
+}));
+
 vi.mock('../lib/pythonSetup.js', () => ({
   checkPackages: vi.fn(async () => ({ installed: ['mflux', 'mlx'], missing: [], missingPip: [] })),
   isAllowedPython: vi.fn(() => true),
@@ -266,20 +272,23 @@ vi.mock('../services/userActions.js', () => ({ recordUserAction }));
 const pendingUpload = { current: null };
 const setPendingUpload = (...files) => { pendingUpload.current = files.flat(); };
 
-vi.mock('../lib/multipart.js', () => ({
-  optionalUpload: () => (_req, _res, next) => next(),
-  optionalUploadFields: () => (_req, _res, next) => next(),
-  // Bypass the streaming parser. If a test set a pending upload via
-  // setPendingUpload(), inject it under req.files keyed by fieldname so the
-  // route exercises the upload-staging path; otherwise pass through.
-  uploadFields: () => (req, _res, next) => {
+vi.mock('../lib/multipart.js', () => {
+  const withPendingUpload = () => (req, _res, next) => {
     if (pendingUpload.current) {
       req.files = Object.fromEntries(pendingUpload.current.map((f) => [f.fieldname, f]));
       pendingUpload.current = null;
     }
     next();
-  },
-}));
+  };
+  return {
+    optionalUpload: () => (_req, _res, next) => next(),
+    // Bypass the streaming parser. If a test set a pending upload via
+    // setPendingUpload(), inject it under req.files keyed by fieldname so the
+    // route exercises the upload-staging path; otherwise pass through.
+    optionalUploadFields: withPendingUpload,
+    uploadFields: withPendingUpload,
+  };
+});
 
 const fsMock = vi.hoisted(() => ({
   unlink: vi.fn(async () => {}),
@@ -428,6 +437,7 @@ describe('videoGen routes', () => {
     runtimeProbes.isByovRuntimeReady.mockResolvedValue(false);
     runtimeProbes.isByovRuntimeCurrent.mockResolvedValue(false);
     probeVideoDuration.mockResolvedValue(41.041281);
+    prepareSourceAudioWindow.mockReset();
   });
 
   describe('GET /status', () => {
@@ -1696,6 +1706,44 @@ describe('videoGen routes', () => {
       expect(r.body.error).toMatch(/tiling/i);
     });
 
+    it('queues a JSON request with a gallery sourceImageFile (#15963)', async () => {
+      const r = await request(app)
+        .post('/api/video-gen/')
+        .set('Content-Type', 'application/json')
+        .send({
+          backend: 'local',
+          mode: 'image',
+          sourceImageFile: 'gallery-frame.png',
+          prompt: 'a slow blink',
+          width: 1024,
+          height: 576,
+          numFrames: 49,
+          fps: 24,
+        });
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual(expect.objectContaining({
+        jobId: 'mock-video-job',
+        status: 'queued',
+      }));
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({
+          prompt: 'a slow blink',
+          sourceImagePath: '/mock/images/gallery-frame.png',
+        }),
+      }));
+    });
+
+    it('returns 400 validation error rather than INVALID_CONTENT_TYPE for invalid JSON body (#15963)', async () => {
+      const r = await request(app)
+        .post('/api/video-gen/')
+        .set('Content-Type', 'application/json')
+        .send({ width: 99999 });
+      expect(r.status).toBe(400);
+      expect(r.body.code).not.toBe('INVALID_CONTENT_TYPE');
+      expect(r.body.error).toMatch(/prompt|width/i);
+    });
+
     it('accepts empty-string numerics as undefined (multipart preprocess fix)', async () => {
       const r = await request(app).post('/api/video-gen/').send({
         prompt: 'a cat',
@@ -2570,13 +2618,25 @@ describe('videoGen routes', () => {
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
-    it('stages project audio and forwards the scene song offset for music-video a2v', async () => {
-      getMusicVideoProject.mockResolvedValue({
+    it.each([{ defaultFrames: undefined, numFrames: 121 }, { defaultFrames: 81, numFrames: 81 }])('stages the exact project audio window with the omitted $numFrames-frame runtime default', async ({ defaultFrames, numFrames }) => {
+      videoGenService.listVideoModels.mockReturnValueOnce([{
+        id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2', supportedModes: ['text', 'image', 'fflf'], defaultFrames,
+      }]);
+      const endSec = 42.5 + (numFrames - 1) / 24;
+      const project = {
         id: 'mv-example',
         trackId: 'track-example',
-        scenes: [{ sceneId: 'scene-example' }],
-      });
+        scenes: [{ sceneId: 'scene-example', startSec: 42.5, endSec }],
+      };
+      getMusicVideoProject.mockResolvedValue(project);
       getTrack.mockResolvedValue({ id: 'track-example', audioFilename: 'example-song.wav' });
+      const audioFilePath = join('/mock/uploads', 'mv-source-audio-00000000-0000-0000-0000-000000000001.wav');
+      const audioConditioning = {
+        sourceSha256: 'a'.repeat(64), clipSha256: 'b'.repeat(64),
+        sampleRate: 48000, channels: 2,
+        startSample: 42.5 * 48000, endSample: Math.round(endSec * 48000), sampleCount: Math.round((numFrames - 1) / 24 * 48000),
+      };
+      prepareSourceAudioWindow.mockResolvedValueOnce({ audioFilePath, audioConditioning });
 
       const r = await request(app).post('/api/video-gen/').send({
         prompt: 'rain pulses with the percussion; no performers',
@@ -2588,20 +2648,44 @@ describe('videoGen routes', () => {
       });
 
       expect(r.status).toBe(200);
+      expect(prepareSourceAudioWindow).toHaveBeenCalledExactlyOnceWith({
+        project, scene: { startSec: 42.5, endSec }, numFrames, fps: 24,
+      });
       expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
         kind: 'video',
         params: expect.objectContaining({
           mode: 'a2v',
+          numFrames,
           sourceImagePath: '/mock/images/reference.png',
-          audioStartSec: 42.5,
+          audioStartSec: 0,
+          audioConditioning,
           disableAudio: true,
-          audioFilePath: expect.stringMatching(/[\\/]mock[\\/]uploads[\\/]video-audio-.*\.wav$/),
-          uploadedTempPaths: expect.arrayContaining([
-            expect.stringMatching(/[\\/]mock[\\/]uploads[\\/]video-audio-.*\.wav$/),
-          ]),
+          audioFilePath,
+          uploadedTempPaths: expect.arrayContaining([audioFilePath]),
           musicVideo: { projectId: 'mv-example', sceneId: 'scene-example' },
         }),
       }));
+    });
+
+    it('keeps long project audio on the local full-song path without claiming exact PCM provenance', async () => {
+      getMusicVideoProject.mockResolvedValue({
+        id: 'mv-example', trackId: 'track-example', scenes: [{ sceneId: 'scene-example' }],
+      });
+      getTrack.mockResolvedValue({ id: 'track-example', audioFilename: 'example-song.wav' });
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'rain pulses with the percussion; no performers',
+        mode: 'a2v', sourceImageFile: 'reference.png', audioStartSec: 42.5, fps: 1, numFrames: 62,
+        musicVideo: { projectId: 'mv-example', sceneId: 'scene-example' },
+      });
+      expect(r.status).toBe(200);
+      expect(prepareSourceAudioWindow).not.toHaveBeenCalled();
+      const { params } = mediaJobQueue.enqueueJob.mock.calls[0][0];
+      expect(params).toMatchObject({ audioStartSec: 42.5, fps: 1, numFrames: 62,
+        audioFilePath: expect.stringMatching(/[\\/]mock[\\/]uploads[\\/]video-audio-.*\.wav$/),
+        uploadedTempPaths: expect.arrayContaining([params.audioFilePath]),
+      });
+      expect(params).not.toHaveProperty('audioConditioning');
+      expect(copyFile).toHaveBeenCalledWith(join('/mock/music', 'example-song.wav'), params.audioFilePath);
     });
 
     // a2v on a runtime without audio conditioning would fail inside the worker.

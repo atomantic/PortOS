@@ -508,9 +508,9 @@ function framesExpr(frames) {
  * The ffmpeg filter chain (comma-joined, one stream in and one out) that paints
  * `glitches` on a `width`x`height` yuv420p stream counting frames from 0, or null
  * when there are none. Each filter is enabled only on its frames, so every other
- * frame passes through untouched and the stream keeps its length. A smeared band
- * splits off a strip and lays it back with internal `smr…` labels, so the chain
- * appears once in a filter graph.
+ * frame passes through untouched and the stream keeps its length. Smeared bands
+ * are cut from one split of the incoming stream with internal `smr…` labels, so
+ * the chain appears once in a filter graph.
  */
 export function musicVideoTransitionFilter(glitches, { width, height }) {
   if (!Array.isArray(glitches) || glitches.length === 0) return null;
@@ -520,12 +520,48 @@ export function musicVideoTransitionFilter(glitches, { width, height }) {
     if (!groups.has(key)) groups.set(key, { params: glitchFrameParams(g), frames: [] });
     groups.get(key).frames.push(g.frame);
   }
+  const ordered = [...groups.values()];
+  const byFrame = new Map();
+  ordered.forEach((group, i) => {
+    for (const frame of new Set(group.frames)) {
+      if (!byFrame.has(frame)) byFrame.set(frame, []);
+      byFrame.get(frame).push(i);
+    }
+  });
+  if (ordered.some(({ params }) => params.smears?.length) && [...byFrame.values()].some((ids) => ids.length > 1)) {
+    // Independent frame lanes retain stacking order without nesting every unrelated rewind's splits.
+    // A lane contains only effects that actually coincide, rather than the whole edit's smear bands.
+    const lanes = new Map();
+    for (const [frame, ids] of byFrame) {
+      const key = ids.join(',');
+      if (!lanes.has(key)) lanes.set(key, { ids, frames: [] });
+      lanes.get(key).frames.push(frame);
+    }
+    const branches = [];
+    const overlays = [];
+    for (const { ids, frames } of lanes.values()) {
+      const id = `gl${branches.length}`;
+      const lane = transitionGroupFilter(ids.map((i) => ({ ...ordered[i], frames })), { width, height }, true).replaceAll('smr', `${id}smr`);
+      branches.push(`[${id}s]${lane}[${id}c]`);
+      overlays.push(`null[${id}m];[${id}m][${id}c]overlay=enable='${framesExpr(frames)}'`);
+    }
+    return `split=${branches.length + 1}[glbase]${branches.map((_, i) => `[gl${i}s]`).join('')};${branches.join(';')};[glbase]${overlays.join(',')}`;
+  }
+  return transitionGroupFilter(ordered, { width, height });
+}
+
+function transitionGroupFilter(groups, { width, height }, sequentialSmears = false) {
   const chain = [];
-  let smearId = 0;
+  // Each smeared band's own branch off the shared split. Splitting the running stream once per band nests every
+  // split inside the previous band's overlay, and ffmpeg's cost then grows exponentially with the number of bands:
+  // twenty (a film with a few rewinds) rendered at under 0.03x and stalled a whole excerpt.
+  const branches = [];
   const rows = (fraction) => Math.max(0, Math.min(height, even(fraction * height)));
-  for (const { params: p, frames } of groups.values()) {
+  for (const { params: p, frames } of groups) {
     const enable = `:enable='${framesExpr(frames)}'`;
-    const add = (filter) => { if (filter) chain.push(`${filter}${enable}`); };
+    // This group's frame edits so far, which a band's branch replays before cutting the band out.
+    const before = [];
+    const add = (filter) => { if (filter) { chain.push(`${filter}${enable}`); before.push(`${filter}${enable}`); } };
     if (p.roll) add(roll(p.roll * height, width, height));
     if (p.shift) add(slip(p.shift * width, 0, height, width));
     for (const tear of p.tears || []) {
@@ -539,9 +575,15 @@ export function musicVideoTransitionFilter(glitches, { width, height }) {
       if (h < 2) continue;
       add(slip(sm.shift * width, y, h, width));
       const sigma = Math.max(0.5, Math.round((sm.blur || 0) * width * 10) / 10);
-      const id = `smr${smearId++}`;
-      chain.push(`split[${id}a][${id}b];[${id}b]crop=w=${width}:h=${h}:x=0:y=${y},gblur=sigma=${num(sigma)}:sigmaV=0.5${enable}[${id}c];`
-        + `[${id}a][${id}c]overlay=x=0:y=${y}${enable}`);
+      const id = `smr${branches.length}`;
+      if (sequentialSmears) {
+        branches.push(null);
+        chain.push(`split[${id}a][${id}b];[${id}b]crop=w=${width}:h=${h}:x=0:y=${y},gblur=sigma=${num(sigma)}:sigmaV=0.5${enable}[${id}c];`
+          + `[${id}a][${id}c]overlay=x=0:y=${y}${enable}`);
+        continue;
+      }
+      branches.push(`[${id}s]${[...before, `crop=w=${width}:h=${h}:x=0:y=${y}`, `gblur=sigma=${num(sigma)}:sigmaV=0.5${enable}`].join(',')}[${id}c]`);
+      chain.push(`null[${id}m];[${id}m][${id}c]overlay=x=0:y=${y}${enable}`);
     }
     for (const sw of p.swaps || []) {
       const box = blockBox(sw.x1, sw.y1, sw.w, sw.h, width, height);
@@ -572,7 +614,10 @@ export function musicVideoTransitionFilter(glitches, { width, height }) {
     }
     if (p.noise) add(`noise=alls=${Math.min(100, Math.round(p.noise * 60))}:allf=t`);
   }
-  return chain.length ? chain.join(',') : null;
+  if (!chain.length) return null;
+  if (!branches.length || sequentialSmears) return chain.join(',');
+  const outs = branches.map((_, k) => `[smr${k}s]`).join('');
+  return `split=${branches.length + 1}[smrbase]${outs};${branches.join(';')};[smrbase]${chain.join(',')}`;
 }
 
 /**

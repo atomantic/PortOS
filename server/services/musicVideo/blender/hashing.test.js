@@ -36,6 +36,26 @@ describe('blenderShotHash', () => {
     expect(hash({ deps: ['film.py', 'shots/s099.py'] }, { ...tree, 'shots/s099.py': 'h1' })).not.toBe(waiting);
     expect(hash({ deps: ['film.py'] })).not.toBe(waiting);
   });
+
+  it('keeps a Blender shot on the historical hash when a closure map is passed', () => {
+    expect(blenderShotHash(shot, files(tree), { closures: new Map() })).toBe(hash());
+  });
+
+  it('adds a code module and its import closure, and only the shot that uses them', () => {
+    const source = { ...tree, 'code/s020.js': 'aa', 'code/fx.js': 'bb', 'code/dot.js': 'cc' };
+    const closures = new Map([
+      ['code/s020.js', ['code/s020.js']],
+      ['code/fx.js', ['code/fx.js', 'code/dot.js']],
+    ]);
+    const codeShot = { id: 's020', start: 2, end: 4, renderer: 'code', entry: 'code/s020.js', deps: ['film.py'] };
+    const layered = { ...shot, layers: [{ entry: 'code/fx.js', place: 'over', blend: 'screen' }] };
+    const plain = { id: 's010', start: 0, end: 2, deps: ['film.py'] };
+    expect(blenderShotHash(codeShot, files(source), { closures })).not.toBe(blenderShotHash(codeShot, files({ ...source, 'code/s020.js': 'zz' }), { closures }));
+    const layerHash = blenderShotHash(layered, files(source), { closures });
+    expect(blenderShotHash(layered, files({ ...source, 'code/dot.js': 'dd' }), { closures })).not.toBe(layerHash);
+    expect(blenderShotHash(plain, files(source), { closures })).toBe(blenderShotHash(plain, files({ ...source, 'code/dot.js': 'dd' }), { closures }));
+    expect(blenderShotHash(codeShot, files(source), { closures })).toBe(blenderShotHash(codeShot, files({ ...source, 'code/dot.js': 'dd' }), { closures }));
+  });
 });
 
 describe('blenderSettingsHash', () => {

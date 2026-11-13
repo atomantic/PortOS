@@ -138,6 +138,22 @@ describe.skipIf(!chrome)('mood board in Chromium', () => {
   }, BROWSER_FIXTURE_STARTUP_MS);
   afterAll(() => fixture?.close());
 
+  it('starts the board prompt collapsed and preserves edits across collapse and expand', async () => {
+    const { page } = await openBoard(fixture, { width: 1440, height: 1000 }, 1400, [], { description: 'Original direction' });
+    const summary = page.locator('summary').filter({ hasText: /^Board prompt$/ });
+    const field = page.getByLabel('Board prompt', { exact: true });
+    await expect.poll(() => field.isVisible()).toBe(false);
+    await summary.click();
+    await field.fill('Unsaved direction');
+    await summary.click();
+    await expect.poll(() => field.isVisible()).toBe(false);
+    await summary.focus();
+    await page.keyboard.press('Enter');
+    expect(await field.inputValue()).toBe('Unsaved direction');
+    expect(await field.isVisible()).toBe(true);
+    await page.close();
+  });
+
   it('layers the board poster preview above analyzed tags and restores the board on close', async () => {
     const item = { id: 'analyzed-pin', type: 'image', imageUrl: '/data/images/pin.png', analysis: { prompt: 'Soft dreamlike scene' } };
     const { page, state } = await openBoard(fixture, { width: 1440, height: 900 }, undefined, [item], { posterImageRef: 'poster.png' });

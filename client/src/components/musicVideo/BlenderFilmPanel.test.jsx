@@ -228,6 +228,21 @@ describe('BlenderFilmPanel: shots', () => {
     await act(async () => {});
   });
 
+  it('requests a contact sheet from shot detail and opens it when clicked or finished', async () => {
+    renderMusicVideoBlender.mockResolvedValue({ jobs: [{ id: 'job-sheet-1', kind: 'render', shotId: 's010', quality: 'sheet', status: 'queued' }] });
+    await renderPanel();
+    fireEvent.click(within(detail('s010')).getByRole('button', { name: 'Contact sheet' }));
+    await waitFor(() => expect(renderMusicVideoBlender).toHaveBeenCalledWith('mv-test', { shotIds: ['s010'], quality: 'sheet' }, { silent: true }));
+    const finished = blenderFilmState();
+    finished.jobs.push({ id: 'job-sheet-1', kind: 'render', shotId: 's010', quality: 'sheet', status: 'done' });
+    finished.renders.s010.sheets = [{ file: 's010/sheets/sheet-0-105-e3.jpg', firstFrame: 0, lastFrame: 105, every: 3, tiles: 36, stale: false }];
+    getMusicVideoBlender.mockResolvedValue(finished);
+    await push('music-video:blender', { projectId: 'mv-test', kind: 'state' });
+    await waitFor(() => expect(board.openPreview).toHaveBeenCalledWith('blender-sheet:s010:s010/sheets/sheet-0-105-e3.jpg'));
+    fireEvent.click(within(within(detail('s010')).getByRole('region', { name: 'Contact sheets' })).getByRole('button', { name: /Frames 0–105/ }));
+    expect(board.openPreview).toHaveBeenLastCalledWith('blender-sheet:s010:s010/sheets/sheet-0-105-e3.jpg');
+  });
+
   it('saves a director note only on Save, sending only what changed', async () => {
     saveMusicVideoBlenderShotNote.mockResolvedValue({ ok: true });
     await renderPanel();
@@ -298,7 +313,7 @@ describe('BlenderFilmPanel: settings', () => {
     const before = getMusicVideoBlender.mock.calls.length;
     fireEvent.click(screen.getByRole('button', { name: 'Report ready Blender' }));
     await waitFor(() => expect(getMusicVideoBlender).toHaveBeenCalledTimes(before + 1));
-    expect(screen.getByText('Blender 5.2.3 ready')).toBeInTheDocument();
+    expect(await screen.findByText('Blender 5.2.3 ready')).toBeInTheDocument();
   });
 
   it('saves only the changed settings and holds renders until the save lands', async () => {

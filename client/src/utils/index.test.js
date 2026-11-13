@@ -34,14 +34,17 @@ describe('client/src/utils/ barrel', () => {
     }
   });
 
-  it('every non-test .js file has a backtick-wrapped README row', () => {
-    // Require the documented-row form (`module`) rather than a bare substring,
-    // so a name appearing only in prose — or as a substring of a longer name —
-    // can't satisfy the catalog-coverage guard.
-    for (const f of sourceFiles) {
-      const base = f.replace(/\.js$/, '');
-      expect(README_SRC, `missing README row for ${f}`).toContain('`' + base + '`');
-    }
+  it('lists every source file exactly once in the alphabetical module table', () => {
+    const section = README_SRC.split(/^## Modules$/m)[1]?.split(/^## /m)[0] ?? '';
+    const table = section.match(/\|[^\n]+\|\n\|[-| ]+\|\n(?:\|[^\n]+\|\n)+/)?.[0] ?? '';
+    const rows = [...table.matchAll(/^\| `([^`]+)` \|/gm)].map((m) => m[1]);
+    expect(section.match(/^\| `[^`]+` \|/gm) ?? [], 'rows must be in the contiguous module table').toHaveLength(rows.length);
+    const files = sourceFiles.map((f) => f.replace(/\.jsx?$/, ''));
+    expect(files.filter((f) => !rows.includes(f)), 'missing README rows').toEqual([]);
+    expect(rows.filter((f, i) => rows.indexOf(f) !== i), 'duplicate README rows').toEqual([]);
+    expect(rows.filter((f) => !files.includes(f)), 'stale README rows').toEqual([]);
+    const sorted = [...rows].sort((a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0));
+    expect(rows, 'README rows must be in case-insensitive code-point order').toEqual(sorted);
   });
 
   it('no two flat export-* modules share an identifier', () => {

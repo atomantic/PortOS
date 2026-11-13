@@ -32,14 +32,23 @@ describe('server/lib/ barrel', () => {
     }
   });
 
-  it('every non-test source file has a README row', () => {
-    // Forces the catalog parity: a new helper must also get a one-line
-    // README entry. Looser match (filename anywhere in the README) so the
-    // table format can evolve without breaking this guard.
-    for (const f of sourceFiles) {
-      const base = f.replace(/\.jsx?$/, '');
-      expect(README_SRC, `missing README entry for ${f}`).toContain(base);
-    }
+  it('lists every source file exactly once in the alphabetical module table', () => {
+    // The README's `## Modules` table is the catalog: one row per module, in
+    // alphabetical order, so a new row has exactly one correct place (and
+    // concurrent additions stop colliding at the same insertion point).
+    const section = README_SRC.split(/^## Modules$/m)[1]?.split(/^## /m)[0] ?? '';
+    const rows = [...section.matchAll(/^\| `([^`]+)` \|/gm)].map((m) => m[1]);
+    const missing = sourceFiles.filter((f) => !rows.includes(f));
+    expect(missing, 'add a `| `<file>` | <purpose> |` row to the README module table').toEqual([]);
+    const duplicated = rows.filter((f, i) => rows.indexOf(f) !== i);
+    expect(duplicated, 'merge duplicate README module rows').toEqual([]);
+    const stale = rows.filter((f) => !sourceFiles.includes(f));
+    expect(stale, 'remove README module rows for files that no longer exist').toEqual([]);
+    // Plain case-insensitive code-point order: no locale, so every machine agrees.
+    const key = (f) => f.toLowerCase();
+    const sorted = [...rows].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+    const firstOutOfPlace = rows.findIndex((f, i) => f !== sorted[i]);
+    expect(firstOutOfPlace, `README module row out of alphabetical order: ${rows[firstOutOfPlace]} (belongs where ${sorted[firstOutOfPlace]} is)`).toBe(-1);
   });
 
   it('has no export-name collisions across flat-`export *` modules', async () => {

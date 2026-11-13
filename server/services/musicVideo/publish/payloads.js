@@ -9,7 +9,7 @@ import { ServerError } from '../../../lib/errorHandler.js';
 import { chaptersText } from '../publishKitText.js';
 import { musicVideoDependencyChanges } from '../../../lib/musicVideoDependencies.js';
 import { suggestDistrokidGenres } from '../../../lib/distrokidGenres.js';
-import { suggestSocialCuts } from '../socialCuts.js';
+import { kitCutWindows, latestSunoHookStartSec, suggestSocialCuts } from '../socialCuts.js';
 import { crossLinkLines, crossLinksEnabled, releaseLinkUrl, releaseLinks } from '../../../lib/musicVideoCrossLinks.js';
 
 const TITLE_LIMITS = { youtube: 100, shorts: 100, reddit: 300, stackerNews: 80, substack: 100 };
@@ -313,14 +313,18 @@ const BUILDERS = {
     const songId = song.match(SUNO_SONG_URL)?.[1]?.toLowerCase();
     if (!songId) throw missing('Give the Suno song URL the Hook plays (suno.com/song/… or a suno.com/s/… share link)');
     const cut = pickVerticalCut(project, options);
-    const caption = text(kit.copy?.tiktok?.caption) || text(kit.copy?.shorts?.description).slice(0, 300);
+    const caption = text(kit.copy?.sunoHook?.caption) || text(kit.copy?.tiktok?.caption) || text(kit.copy?.shorts?.description).slice(0, 300);
     const duration = Number(project?.audioAnalysis?.durationSec);
     if (!Number.isFinite(duration) || duration <= 0) throw missing('Analyze the song audio first so the Suno Hook window can be checked against its duration');
     const startSec = Math.max(0, Number(cut.startSec) || 0);
-    const latestStart = Math.max(0, duration - 60);
+    const latestStart = latestSunoHookStartSec(duration);
     // Keep the rendered video and its audio together. A 60-second window must
     // fit; for shorter songs, only zero is eligible. Never shift only the audio.
-    if (startSec > latestStart) throw missing(`This cut starts at ${clock(startSec)}, after the latest Suno Hook window start ${clock(latestStart)}. Choose or render an earlier 9:16 cut`);
+    if (startSec > latestStart) {
+      // A kit built before Suno Hook was turned on (or before the kit chose its cut for one) may hold a late window a rebuild replaces.
+      const rebuild = cut.id === 'kit-vertical' && kitCutWindows(project, { sunoHook: true }).vertical?.startSec <= latestStart;
+      throw missing(`This cut starts at ${clock(startSec)}, after the latest Suno Hook window start ${clock(latestStart)}. ${rebuild ? 'Rebuild the publishing kit: it cuts a window a Hook can play' : 'Choose or render an earlier 9:16 cut'}`);
+    }
     return {
       video: { dir: 'videos', name: cut.filename }, songUrl: song, songId, title: text(project?.name),
       durationSec: duration,

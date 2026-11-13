@@ -19,6 +19,16 @@ describe('Suno Hook payload', () => {
     const p = buildPublishPayload('sunoHook', project());
     expect(p).toMatchObject({ songId: ID, title: 'Night Drive', durationSec: 187, startSec: 42, caption: 'Hook caption', showLyrics: false, video: { dir: 'videos', name: 'cut.mp4' } });
   });
+  it('prefers Hook copy while retaining legacy caption fallbacks', () => {
+    const p = project();
+    p.publishKit.copy.sunoHook = { caption: 'Own caption' };
+    p.publishKit.copy.shorts = { description: 'Shorts caption' };
+    expect(buildPublishPayload('sunoHook', p).caption).toBe('Own caption');
+    delete p.publishKit.copy.sunoHook;
+    expect(buildPublishPayload('sunoHook', p).caption).toBe('Hook caption');
+    delete p.publishKit.copy.tiktok;
+    expect(buildPublishPayload('sunoHook', p).caption).toBe('Shorts caption');
+  });
   it('says whether the cut it posts is native 9:16 or the fitted master', () => {
     expect(buildPublishPayload('sunoHook', project()).cutLayout).toBe('native');
     const fitted = project({ excerpts: [], renderHistoryId: 'r1', publishKit: {
@@ -33,10 +43,16 @@ describe('Suno Hook payload', () => {
   } });
   it('uses the actual fractional duration and restricts shorter songs to zero', () => {
     expect(buildPublishPayload('sunoHook', fitted(258.75, 198.75)).startSec).toBe(198.75);
-    expect(() => buildPublishPayload('sunoHook', fitted(258.75, 198.76))).toThrow(/earlier 9:16 cut/);
+    // The kit's own cut is replaced by a rebuild, which cuts a window a Hook can play.
+    expect(() => buildPublishPayload('sunoHook', fitted(258.75, 198.76))).toThrow(/Rebuild the publishing kit/);
     expect(buildPublishPayload('sunoHook', fitted(40, 0))).toMatchObject({ durationSec: 40, startSec: 0 });
-    expect(() => buildPublishPayload('sunoHook', fitted(40, 1))).toThrow(/earlier 9:16 cut/);
+    expect(() => buildPublishPayload('sunoHook', fitted(40, 1))).toThrow(/Rebuild the publishing kit/);
     expect(() => buildPublishPayload('sunoHook', fitted(null, 0))).toThrow(/Analyze the song audio/);
+  });
+  it('does not send the director to a rebuild that could not cut a playable window', () => {
+    // Under a minute only 0:00 can open a Hook, and this song's first sung line is later than that.
+    const late = { ...fitted(40, 5), lyricCues: [5, 12, 20, 30].map((startSec) => ({ text: 'example line', startSec, endSec: startSec + 4 })) };
+    expect(() => buildPublishPayload('sunoHook', late)).toThrow(/Choose or render an earlier 9:16 cut/);
   });
   it('rejects a late default cut but keeps an explicitly selected earlier video and audio together', () => {
     const p = project();
@@ -76,9 +92,11 @@ describe('pickSongRow', () => {
 // window pill, a window that opens at Suno's own suggestion, and a waveform where 22.2 px of drag
 // moves the window one second (dragging right moves it earlier). `stuckAt` stops the window there.
 const fmt = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
-function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = false, delayedSongResults = false, failedSearch = false, searchStatus = 200, appliedAfterPoll = 1, ambiguousReadout = false, noWindowReadout = false, waveformKind = 'identified', ambiguousWaveform = false } = {}) {
-  const state = { windowAt, clicked: [], drags: 0, lyrics: true, songRows: [{ text: 'Night Drive 3:42', html: '' }], songPolls: 0 };
-  const rect = (bottom) => ({ left: 100, right: 200, bottom });
+const fmtMs = (sec) => `${Math.floor(sec / 60)}:${(sec % 60).toFixed(3).padStart(6, '0')}`;
+function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = false, delayedSongResults = false, failedSearch = false, searchStatus = 200, searchStatuses = [searchStatus], pageRetries = false, otherCall = null, songIdInRows = false, readoutBottom = 390, hoverTimes = false, cutSec = 26, nextDisabled = false, appliedAfterPoll = 1, ambiguousReadout = false, noWindowReadout = false, waveformKind = 'identified', ambiguousWaveform = false } = {}) {
+  const state = { windowAt, clicked: [], drags: 0, lyrics: true, songRows: [{ text: 'Night Drive 3:42', html: '' }], songPolls: 0, typed: 0, searches: 0, searchDue: false, appliedAt: null };
+  // A label is 26 px tall, like Suno's window pill.
+  const rect = (bottom) => ({ left: 100, right: 200, top: bottom - 26, bottom });
   const leaf = (text, bottom, parentText = text) => ({ children: [], textContent: text,
     getClientRects: () => [rect(bottom)], getBoundingClientRect: () => rect(bottom),
     parentElement: { textContent: parentText, querySelector: () => null } });
@@ -88,15 +106,18 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
   const dom = {
     'body *': () => [
       leaf('0:00', 399, '0:00 / 0:26'),
-      ...(noWindowReadout ? [] : [leaf(fmt(state.windowAt), 390)]),
+      ...(noWindowReadout ? [] : [leaf(fmt(state.windowAt), readoutBottom)]),
       leaf('3:42', ambiguousReadout ? 390 : 250), leaf('3:42', 500),
+      // The 2026-11 editor shows the song time under the pointer; the window box is centred on the pill (x = 150).
+      ...(hoverTimes && page.lastX != null ? [leaf(fmtMs(state.windowAt + cutSec / 2 + (page.lastX - 150) / pxPerSec), 470)] : []),
     ],
+    video: () => (hoverTimes ? [{ duration: cutSec }] : []),
     '[data-testid*="waveform" i]': () => waveformKind === 'identified' ? [waveform] : [],
     '[class*=waveform]': () => waveformKind === 'legacy' ? [waveform] : [],
     '[role="slider"]': () => waveformKind === 'slider' ? [waveform] : [],
     canvas: () => waveformKind === 'canvas' ? (ambiguousWaveform ? [waveform, { ...waveform }] : [waveform]) : [],
     '[role=dialog] button': () => state.songRows.map(({ text, html }) => ({ innerText: 'Use', innerHTML: html, parentElement: { innerText: `${text}\nUse`, innerHTML: html, querySelectorAll: () => [1] } })),
-    'button,[role=button]': () => [{ offsetParent: {}, innerText: 'Next', click: () => state.clicked.push('Next') }],
+    'button,[role=button]': () => [{ offsetParent: {}, innerText: 'Next', disabled: nextDisabled, click: () => state.clicked.push('Next') }],
     'span,div,label': () => [{ children: [], textContent: 'Show Lyrics', parentElement: { querySelector: () => ({ getAttribute: () => 'true', click: () => state.clicked.push('Show Lyrics') }) } }],
   };
   const visibleSongButton = restored ? 'Replace Song' : 'Select Song';
@@ -109,7 +130,8 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
     filter: (o) => locator(sel, o.hasText, index),
     count: async () => sel.includes('aria-busy') || sel.includes('progressbar') ? 0 : 1,
     waitFor: async () => {},
-    fill: async () => {},
+    // Typing in the song search is what makes the page search.
+    fill: async (value) => { if (sel.includes('Search by song name') && value) { state.typed += 1; state.searchDue = true; } },
     inputValue: async () => 'Night Drive',
     setInputFiles: async () => {},
     evaluateAll: async () => [],
@@ -136,22 +158,35 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
           state.songRows = [{ text: 'Other Song 3:07', html: '' }];
         }
         if (state.songPolls === 2) {
-          emitPageEvent('response', { request: () => state.songRowsRequest, ok: () => true, status: () => 200 });
+          emitPageEvent('response', { request: () => state.songRowsRequest, ok: () => true, status: () => 200, json: async () => ({ clips: [{ id: ID }] }) });
           emitPageEvent('requestfinished', state.songRowsRequest);
           state.songRows = [{ text: 'Night Drive 3:42', html: '' }, { text: 'Night Drive 3:07', html: '' }];
         }
       } else if (!delayedSongResults && ms === 250) {
         state.songPolls += 1;
-        if (state.songPolls === 1) {
+        if (state.searchDue) {
+          state.searchDue = false;
+          const status = searchStatuses[Math.min(state.searches, searchStatuses.length - 1)];
+          state.searches += 1;
           const request = { resourceType: () => 'fetch', url: () => '/api/search?q=Night%20Drive', postData: () => null };
           emitPageEvent('request', request);
           if (failedSearch) emitPageEvent('requestfailed', request);
           else {
-            emitPageEvent('response', { request: () => request, ok: () => searchStatus === 200, status: () => searchStatus });
+            emitPageEvent('response', { request: () => request, ok: () => status === 200, status: () => status, headers: () => (status === 429 ? { 'retry-after': '1' } : {}), json: async () => ({ clips: [{ id: ID }] }) });
             emitPageEvent('requestfinished', request);
+            if (status === 200) state.appliedAt = state.songPolls + appliedAfterPoll - 1;
+            // A page that retries a refused search does it without the box being typed in again.
+            else if (pageRetries) state.searchDue = true;
+          }
+          // Another call that carries the title (not the search) and is refused.
+          if (otherCall && state.searches === 1) {
+            const other = { resourceType: () => 'fetch', url: () => '/telemetry', postData: () => '{"query":"Night Drive"}' };
+            emitPageEvent('request', other);
+            emitPageEvent('response', { request: () => other, ok: () => false, status: () => otherCall, headers: () => ({}), json: async () => ({}) });
+            emitPageEvent('requestfinished', other);
           }
         }
-        if (!failedSearch && searchStatus === 200 && state.songPolls === appliedAfterPoll) state.songRows = [{ text: 'Night Drive 3:42', html: '<span>Search result</span>' }];
+        if (state.songPolls === state.appliedAt) state.songRows = [{ text: 'Night Drive 3:42', html: songIdInRows ? `<a href="/song/${ID}">` : '<span>Search result</span>' }];
       }
     },
     locator: (sel) => locator(sel),
@@ -210,6 +245,33 @@ describe('Suno Hook fill (#10860)', () => {
     expect(await sunoHookAdapter.prepare(page, hookPayload())).toMatchObject({ windowStart: 20 });
   });
 
+  it("reads a window pill that straddles the waveform's top edge, as Suno draws it", async () => {
+    // The waveform's top is at 400; the pill's bottom sits two pixels below it.
+    const page = hookPage({ windowAt: 80, readoutBottom: 402 });
+    const summary = await sunoHookAdapter.prepare(page, hookPayload({ startSec: 35 }));
+    expect(Math.abs(summary.windowStart - 35)).toBeLessThanOrEqual(1);
+    expect(page.state.drags).toBeGreaterThan(0);
+  });
+
+  it('sets the window from the hover time to a tenth of a second where the page shows one', async () => {
+    const page = hookPage({ windowAt: 80.78, hoverTimes: true });
+    const summary = await sunoHookAdapter.prepare(page, hookPayload({ startSec: 35.41 }));
+    expect(Math.abs(summary.windowStart - 35.41)).toBeLessThanOrEqual(0.1);
+    expect(Math.abs(page.state.windowAt - 35.41)).toBeLessThanOrEqual(0.1);
+
+    // A window that will not go where the cut starts is refused at that precision too.
+    const stuck = hookPage({ windowAt: 80.78, hoverTimes: true, stuckAt: 60 });
+    await expect(sunoHookAdapter.prepare(stuck, hookPayload({ startSec: 35.41 })))
+      .rejects.toThrow('Suno Hook: set the audio window (the window starts at 1:00.00, wanted 0:35.41)');
+    expect(stuck.state.clicked).not.toContain('Next');
+  });
+
+  it('waits for Next instead of clicking it while Suno is still processing the upload', async () => {
+    const page = hookPage({ windowAt: 20, nextDisabled: true });
+    await expect(sunoHookAdapter.prepare(page, hookPayload())).rejects.toThrow(/open the Post Hook dialog/);
+    expect(page.state.clicked).not.toContain('Next');
+  });
+
   it('refuses a missing window readout even when another timestamp matches the requested start', async () => {
     const page = hookPage({ noWindowReadout: true });
     await expect(sunoHookAdapter.prepare(page, hookPayload({ startSec: 222 }))).rejects.toThrow('no window label to read');
@@ -256,6 +318,35 @@ describe('Suno Hook fill (#10860)', () => {
     await expect(sunoHookAdapter.prepare(page, hookPayload())).rejects.toThrow(/Suno search.*fail/i);
     expect(page.state.clicked).not.toContain('[role=dialog] button[0]');
     expect(page.state.clicked).not.toContain('Next');
+  });
+
+  it.each([
+    { pageRetries: true, typed: 1 },
+    { pageRetries: false, typed: 2 },
+  ])('gets past a search Suno limited (HTTP 429), whether the page retries it ($pageRetries) or the title has to be typed again', async ({ pageRetries, typed }) => {
+    const page = hookPage({ searchStatuses: [429, 200], pageRetries });
+    await sunoHookAdapter.prepare(page, hookPayload());
+    expect(page.state.typed).toBe(typed);
+    expect(page.state.clicked).toContain('[role=dialog] button[0]');
+  });
+
+  it('stops after three limited searches and says to wait, naming the call Suno refused', async () => {
+    const page = hookPage({ searchStatus: 429 });
+    await expect(sunoHookAdapter.prepare(page, hookPayload())).rejects.toThrow(
+      'Suno Hook: select the song (Suno search failed (HTTP 429 from suno.com/api/search) on each of 3 tries. Suno is limiting requests: wait a minute, then Fill again)');
+    expect(page.state.typed).toBe(3);
+    expect(page.state.clicked).not.toContain('[role=dialog] button[0]');
+  });
+
+  it('lets a refused call that is not the search block the pick only while the song is not identified outright', async () => {
+    const identified = hookPage({ otherCall: 429, songIdInRows: true });
+    await sunoHookAdapter.prepare(identified, hookPayload());
+    expect(identified.state.typed).toBe(1);
+    expect(identified.state.clicked).toContain('[role=dialog] button[0]');
+
+    const unidentified = hookPage({ otherCall: 429 });
+    await expect(sunoHookAdapter.prepare(unidentified, hookPayload())).rejects.toThrow(/HTTP 429 from suno\.com\/telemetry/);
+    expect(unidentified.state.clicked).not.toContain('[role=dialog] button[0]');
   });
 
   it('waits for successful search results to be applied before selecting a matching old row', async () => {

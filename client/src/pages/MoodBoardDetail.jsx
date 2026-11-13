@@ -1280,7 +1280,8 @@ function MoodBoardEditor({ id }) {
         >
           {/* The board-wide prompt is long prose, so it gets a real multi-line
               field beside the tools rather than a line in the header. */}
-          <div className="bg-port-card border border-port-border rounded-md p-3 space-y-2">
+          <details className="bg-port-card border border-port-border rounded-md p-3 space-y-2">
+            <summary className="cursor-pointer rounded border border-port-border px-3 py-2 text-sm text-gray-300 hover:bg-port-bg focus-visible:outline focus-visible:outline-port-accent">Board prompt</summary>
             <label htmlFor="board-description" className="block text-xs text-gray-400">Board prompt</label>
             <textarea
               id="board-description"
@@ -1324,7 +1325,7 @@ function MoodBoardEditor({ id }) {
                 </button>
               </div>
             ) : null}
-          </div>
+          </details>
           <div className="flex items-center gap-1">
             <TabPills
               variant="pills"

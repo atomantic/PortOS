@@ -628,12 +628,15 @@ export const musicVideoPoolUseSchema = z.object({
   }
 });
 
-// Review a take: reject/restore it and/or leave a note for regeneration.
+// Review a take: reject/restore it, leave a note for regeneration, acknowledge a rendering defect or confirm a frame.
 export const musicVideoTakeReviewSchema = z.object({
   acknowledgeRenderQuality: z.object({ basis: z.string().min(1), note: z.string().min(1).max(1000) }).strict().optional(),
+  // The selected frame still matches the shot's current prompt (#15982).
+  confirmFrame: z.literal(true).optional(),
   status: z.enum(MUSIC_VIDEO_TAKE_STATUSES).optional(),
   note: z.string().max(1000).nullable().optional(),
-}).strict().refine((r) => r.status !== undefined || r.note !== undefined || r.acknowledgeRenderQuality !== undefined, { message: 'status, note or acknowledgement is required' });
+}).strict().refine((r) => r.status !== undefined || r.note !== undefined || r.acknowledgeRenderQuality !== undefined || r.confirmFrame !== undefined,
+  { message: 'status, note, acknowledgement or frame confirmation is required' });
 
 const colorMatchNumber = (key) => z.number().min(COLOR_MATCH_LIMITS[key][0]).max(COLOR_MATCH_LIMITS[key][1]);
 
@@ -737,7 +740,7 @@ export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code', 'doc
 // #9290: 'scene' cuts once per planned shot; 'intercut' re-cuts on section energy and sung words.
 export const MUSIC_VIDEO_CUTTING_MODES = ['scene', 'intercut'];
 // Shipped starting points a project can copy into its document folder.
-export const MUSIC_VIDEO_DOCUMENT_TEMPLATES = ['layered'];
+export const MUSIC_VIDEO_DOCUMENT_TEMPLATES = ['layered', 'cel'];
 export const MUSIC_VIDEO_DOCUMENT_SOURCES = ['zip', 'directory', 'template', 'generated'];
 // One immutable document version: data/music-video/<projectId>/composition/<versionId>.
 export const MUSIC_VIDEO_DOCUMENT_DIRECTORY = /^music-video\/[A-Za-z0-9_-]{1,100}\/composition\/[A-Za-z0-9_-]{1,100}$/;
@@ -1240,6 +1243,7 @@ export const musicVideoPublishCopyPatchSchema = z.object({
   linkedin: z.object({ post: kitText(3000) }).partial().strict().optional(),
   facebook: z.object({ post: kitText(63206) }).partial().strict().optional(),
   tiktok: z.object({ caption: kitText(2200) }).partial().strict().optional(),
+  sunoHook: z.object({ caption: kitText(300) }).partial().strict().optional(),
   instagram: z.object({ caption: kitText(2200) }).partial().strict().optional(),
   reddit: z.object({ title: kitText(300), body: kitText(40000) }).partial().strict().optional(),
   stackerNews: z.object({ title: kitText(80), body: kitText(40000) }).partial().strict().optional(),
@@ -1264,6 +1268,8 @@ export const musicVideoPublishCopyPatchSchema = z.object({
   // What the director typed or picked on each platform's Publish row, saved as edited so a
   // reload or another tab shows it again. Replaces that platform's saved answers.
   postOptions: z.lazy(() => musicVideoPublishPostOptionsSchema).optional(),
+  // Platforms skipped for this release only (without changing install-wide settings).
+  skippedTargets: z.array(z.lazy(() => musicVideoPublishTargetSchema)).max(20).optional(),
 }).strict();
 export const musicVideoPublishCopyDraftSchema = z.object({
   providerId: z.string().max(200).nullable().optional(),
@@ -1284,6 +1290,8 @@ export const musicVideoPromotionPlanSchema = z.object({
   audience: z.string().trim().max(1000).optional(),
   days: z.number().int().min(1).max(30).optional(),
 }).strict();
+export const musicVideoPublishFrameSchema = z.object({ atSec: z.number().finite().min(0) }).strict();
+
 export const musicVideoPublishThumbnailSchema = z.object({ filename: z.string().min(1).max(300) }).strict();
 
 // Release cover art: a source (a kit thumbnail or a gallery image) composed
@@ -2511,6 +2519,7 @@ export const musicVideoAudioAnalysisSchema = z.object({
   bpm: z.number().nullable(),
   beats: z.array(z.number()),
   downbeats: z.array(z.number()),
+  downbeatSource: z.enum(['onsets', 'structure']).optional(),
   // Compact normalized loudness envelope for the director timeline. Optional
   // so cached analyses from older installs remain readable.
   waveform: z.array(z.number().min(0).max(1)).max(1024).optional(),

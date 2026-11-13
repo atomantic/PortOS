@@ -141,9 +141,10 @@ def score_pairs(state, premise: str, hypotheses):
             # the diff, and nothing downstream could tell the difference.
             if len(token_ids) > state["window"]:
                 raise JevError("jev-premise-too-large")
+            device = state.get("device", "cpu")
             model_inputs = {
-                "input_ids": torch.tensor([token_ids]),
-                "attention_mask": torch.tensor([[1] * len(token_ids)]),
+                "input_ids": torch.tensor([token_ids]).to(device),
+                "attention_mask": torch.tensor([[1] * len(token_ids)]).to(device),
             }
             probabilities = torch.softmax(model(**model_inputs).logits[0], dim=-1)
             scores.append({

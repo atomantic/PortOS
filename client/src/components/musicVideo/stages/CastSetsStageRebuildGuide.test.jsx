@@ -74,4 +74,18 @@ describe('catalog Cast & Sets guide rebuild', () => {
     expect(editDirectionText).toHaveBeenCalledWith({ look: 'Clean daylight', protagonist: { rules: ['Always wears the scarf'] }, props: [] });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Edit direction text' })).toBeTruthy());
   });
+
+  // Uniquely catches a catalog-first check-in hiding the direction text editor when no generated direction exists yet (#15967).
+  it('shows the look editor for a catalog check-in with no direction yet', async () => {
+    const editDirectionText = vi.fn(async () => ({ project: {} }));
+    const stage = board({ project: { id: 'mv-example', castAndSets: { source: 'catalog', status: 'review' }, concept: {} },
+      castSets: { busy: false, rebuildCatalogGuide: vi.fn(), editDirectionText } });
+    render(<CastSetsStage board={stage} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit direction text' }));
+    const look = 'Night palette: deep blue-black with cyan and pink light.';
+    fireEvent.change(screen.getByLabelText('Look'), { target: { value: look } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save direction text' }));
+    expect(editDirectionText).toHaveBeenCalledWith({ look });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit direction text' })).toBeTruthy());
+  });
 });

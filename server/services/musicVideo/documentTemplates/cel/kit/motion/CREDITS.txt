@@ -1,0 +1,9 @@
+Walk cycle: CMU subject 07, trial 01.
+Motion data from the CMU Graphics Lab Motion Capture Database:
+http://mocap.cs.cmu.edu/
+Created with funding from NSF EIA-0196217.
+
+The database permits copying, modification and redistribution, including use
+in commercial products; the motion data itself may not be directly resold.
+Terms: http://mocap.cs.cmu.edu/faqs.php
+This file contains joint-position samples derived from the original motion.

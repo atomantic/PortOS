@@ -6,6 +6,31 @@ cuts against the song, and joins the final video. The scripts are the source of 
 
 Pick it as the project's render style (`composition.mode: "blender"`, shown as "Blender film").
 
+## Shared engine and ownership
+
+`server/services/film/` owns the workspace, Python driver and starter kit, sync,
+render queue, resume, render index, stills, previews and cut joining. It imports
+no Music Video services. Every engine call receives a film owner with `kind`,
+`id`, `workspaceDir`, `timeline()`, `song()`, `readRecord()`, `writeRecord(change)`
+and `emit(event)`. Record changes are functional patches; the owner serializes
+them against its freshest record. `onSynced(manifest, { change, replaceScenes })`
+can commit that patch and the owner's shot mirror atomically; without a mirror,
+the engine writes the patch itself. Optional `beforeSync` checks owner conflicts
+before starting Blender, and `workspaceLabel` controls the displayed path.
+
+Music Video's `blender/owner.js` supplies the existing project record, song
+projection, Board mirroring and `music-video:blender` events. Its API adapters
+keep the routes, state and errors unchanged. `sceneMirror.js`, `titleCard.js`,
+`finishFilter.js` and `finalRender.js` remain in Music Video; its cut wrapper
+adds finishing and private review drafts around the shared join. No standalone
+film endpoint is exposed by this extraction.
+
+A no-song owner returns `null` from `song()`: `song.json` then has empty analysis,
+lyrics and audio paths, while coverage uses `timeline().durationSec`. The join
+can write a silent cut. Music Video still requires its song for a cut. Existing
+workspaces stay at `data/music-video/<projectId>/blender`; render metadata and
+`renders/pending.json` retain their format and resume without a migration.
+
 ## What you need
 
 - **Blender 4.2 or newer**, selected and checked under Blender execution (Code Animation › Production, or the film
@@ -18,8 +43,10 @@ Pick it as the project's render style (`composition.mode: "blender"`, shown as "
   After a PortOS restart the same check runs again by itself while those three are unchanged, so the film is ready
   without another click (the first read after a restart can take a few seconds). Change the Blender, the mode or the
   engine, or replace the Blender app, and the next check is yours to run.
-- **ffmpeg**, to turn frames into video.
+- **ffmpeg**, to turn frames into video. A still of a code shot does not need it.
 - The song analyzed (the shot list is checked against its length).
+
+A film whose scripts do not import `bpy`, `bmesh` or `mathutils` syncs with system Python and renders in the browser sandbox. It does not need Blender installed, but syncing runs the authored Python on this host and requires Trusted local mode. Rendering its code shots stays in the browser sandbox. A film that imports any of those — the starter does — stays on the Blender driver, and every Blender shot still needs the tool. A code layer on a Blender shot needs both.
 
 **A film is your own code running with your account's access to this machine.** It can read and write files, use
 the network and start programs. Only run source you trust. The routes that write the source, run it, assemble
@@ -36,25 +63,29 @@ data/music-video/<projectId>/blender/
   song.json       the song, rewritten before every job
   renders/        everything PortOS renders (safe to delete; re-rendered on demand)
     <shotId>/preview/frames/frame_000123.jpg, shot.mp4, poster.jpg, render.json
+    <shotId>/preview/layers/<n>/frame_000123.png   a code layer, PNG with alpha
     <shotId>/final/frames/frame_000123.png, shot.mp4, poster.jpg, render.json
     <shotId>/stills/t000012345.png, stills.json
+    <shotId>/sheets/sheet-0-95-e3.jpg, sheets.json
     <shotId>/shot.blend          when "Save .blend" is on
     cuts/<quality>-<time>.mp4, cuts.json   the newest 8 per quality
     logs/<jobId>.log                       the newest 60
 ```
 
 Frame files are named by their frame number on the song, stills by their song time in milliseconds.
+A frame before the song uses an `m` prefix (`frame_m000144.png`, `handle_in_m000024.png`, `tm000006000.png`) so the name still sorts and a resumed render finds the file. Frames at and after 0 keep `frame_000000.png` and `t000000000.png`.
 
 Edit `src/` with any editor, with a coding agent, or in the panel's Files tab. The API reads and writes text files
-(`.py .json .txt .md`, up to 2 MiB); images, HDRIs, fonts, audio, models and `.blend` files are placed in the folder
+(`.py .js .mjs .json .txt .md`, up to 2 MiB); images, HDRIs, fonts, audio, models and `.blend` files are placed in the folder
 and only listed. A file sits at most five folders below `src/`, and symbolic links are not followed.
+A workspace with more than 5,000 supported source files is refused explicitly; it is never partially hashed or copied.
 
 **Create starter workspace** copies a small complete film into `src/`: a stage, three figures and lights that follow
 the song's beats and loudness, in three shots. Use it as a template.
 
 ## The film contract
 
-`src/film.py` defines three functions. PortOS calls them inside Blender.
+`src/film.py` defines `describe`, and a Blender film also defines `build_shot` and `frame`. PortOS calls a Blender film inside Blender. A film that does not import Blender only needs `describe`, which runs in system Python.
 
 ```python
 def describe(ctx) -> dict:
@@ -62,6 +93,7 @@ def describe(ctx) -> dict:
         "title": "Example Film",
         "shots": [
             {"id": "s010", "label": "Cold open", "start": 0.0, "end": 4.5,   # seconds on the song
+             "handles": {"in": 0.0, "out": 0.5},                              # optional 0..4 s handles
              "set": "stage", "summary": "one line", "action": "...", "staging": "...",
              "camera": "...", "transition": "Cut", "deps": ["film.py", "shots/s010.py", "kit"]},
         ],
@@ -81,8 +113,16 @@ def frame(ctx, shot, t, frame) -> None:   # optional: pose everything for song t
 Shot rules:
 
 - `id`: 1 to 40 letters, digits, `_` or `-`, starting with a letter or digit. Unique, ignoring case.
-- Shots are listed in time order and never overlap. `0 <= start < end <=` the song's length. A song rarely ends on
-  a frame boundary, so the last shot may end on the boundary just after it (the picture then covers the whole song).
+- Shots are listed in time order and never overlap. A shot on the song has `0 <= start < end <=` the song's length.
+  A song rarely ends on a frame boundary, so the last shot may end on the boundary just after it (the picture then covers the whole song).
+- A lead-in is a contiguous run of shots that ends exactly at 0 (`{"id": "s000", "start": -6.0, "end": 0.0}`).
+  Each shot is 0.5–120 s, and the whole run is at most 120 s. A gap, a shot that crosses 0, or a longer run is
+  refused at sync and the message names the shot. `build_shot` and `frame` receive that negative `t` and song frame.
+  Sync mirrors each lead-in shot to a Board scene marked before the song, of the shot's length. Its sound is the
+  Board's cold-open sound (silence, an effect, or a library track); the film supplies the picture only. The cut,
+  the live preview and the final play the lead-in first, then the song, so a 6 s lead-in makes them 6 s longer and
+  the song starts at 6 s. The title card and timed effects stay on the song clock. A cold-open Board scene that is
+  not one of these shots still cannot render in a seeked style.
 - `start` and `end` fall on a frame boundary (within 0.001 s; they are snapped). At most 400 shots.
   In `describe`, use `ctx.frame_to_seconds(f)` to express exact boundaries. PortOS passes `build_shot` and `frame`
   a shot whose `start` and `end` are exactly `frame / fps`, using the same grid as `ctx.frame_to_seconds` and
@@ -90,13 +130,45 @@ Shot rules:
   `stepped(t - shot["start"], ctx.fps)` start on the first pose. `manifest.json` still stores six-decimal times
   for display and comparison; restoring exact times for the film does not mark existing renders stale.
 - `summary`, `action`, `staging`, `camera` and `transition` are optional text, up to 4,000 characters each.
+- `handles` (optional): `{"in": seconds, "out": seconds}` — each 0 to 4 s on the frame grid. On a song shot, `in <= start` (the handle cannot reach before 0). A lead-in handle may. PortOS
+  renders `[start - in, start)` into `handle_in_<frame>.<ext>` and `[end, end + out)` into `handle_out_<frame>.<ext>`
+  under `frames/` by calling `frame()` for those song times. A shot with handles must build a scene valid slightly
+  outside its own `[start, end)` range. Handle frames are NOT part of `shot.mp4`, resume with the shot, mark only
+  that shot stale (`handles`) when changed, and stay on disk when shot frames are cleared (`Clear rendered frames`)
+  until the shot re-renders or leaves the film.
 - `deps` lists the files and folders under `src/` the shot is built from. Without it, the shot depends on all of `src/`.
+
+### Code shots and code layers
+
+A shot can draw itself, or a layer of itself, in code instead of Blender. Omit `renderer` (or set `"blender"`) for today's shot. A code shot sets `"renderer": "code"` and `"entry"`. A Blender shot can carry up to eight `layers`. `"entry"` and `"space"` belong only on a code shot.
+
+```python
+{"id": "s010", "start": 0.0, "end": 4.5}                                          # Blender, the default
+{"id": "s020", "start": 4.5, "end": 9.0, "renderer": "code", "entry": "code/s020.js"}
+{"id": "s030", "start": 9.0, "end": 14.0,
+ "layers": [{"entry": "code/s030_fx.js", "place": "over", "blend": "screen"}]}   # a code layer on a Blender shot
+```
+
+`entry` is a `.js` or `.mjs` file under `src/`. It is an ES module exporting `render(ctx, env)`. `env.t` is absolute song time, `env.localT` is time since the shot began (negative inside an in-handle), `env.frame` is the song frame, `env.song` is `song.json`, and `env.width` and `env.height` are the frame size. Every frame is a pure function of song time, so a render can stop and resume on any frame.
+
+`ctx` is a Canvas 2D context. Set `"space": "three"` on the shot and `ctx` is `{ THREE, scene, camera, renderer }`: a fresh scene and camera each frame, one WebGL renderer for the shot. Canvas is the default and is omitted when stored. A layer is always canvas; it has no `space`. `place` is `over` (the default) or `under`. `blend` is `normal` (the default), `screen`, `add` or `multiply`.
+
+```javascript
+export function render(ctx, env) {
+  ctx.fillStyle = '#112233';
+  ctx.fillRect(0, 0, env.width, env.height);
+}
+```
+
+PortOS renders the module in the composition browser sandbox: no host access and no network. Bare `three` is supplied by PortOS and is not part of the shot hash. The module and the relative files it statically imports are. Editing one of those files marks only the shots that reach it stale. Preview frames are JPEG flattened on black; final frames and layers are PNG (layers keep alpha), under `renders/<shot>/<quality>/frames/` and `renders/<shot>/<quality>/layers/<n>/`. Layers are composited when the shot video is encoded, and onto stills. A blend mode mixes the colors, then the layer's alpha covers the plate, so a transparent pixel leaves the plate unchanged. Handle frames a dissolve or beat toggle reads are composited the same way into `renders/<shot>/<quality>/handles/`. A Blender plate is opaque, so an `under` layer does not show through it; use `over`, or a code shot whose final frame has alpha. Stills are rendered again on every request, so a new module never keeps an older plate.
+
+A film of only code shots never starts Blender. `describe(ctx)` still lives in `src/film.py`, and it does not have to define `build_shot`. An import of `bpy`, `bmesh` or `mathutils` anywhere in the film's import closure, including inside a function or a branch, still uses the Blender driver.
 
 `ctx` carries: `song` (the contents of `song.json`), `options` (the film's options, below), `fps`, `width` and `height` (already scaled), `scale`, `samples`,
 `quality` (`still`, `preview`, `final` or `describe`), `engine` (Blender's own engine id), `workspace`, `src`,
 `out_dir`, `shot`, `log(message)`, `seconds_to_frame(t)` and `frame_to_seconds(f)`.
 
-For each shot PortOS starts from an empty scene, sets the engine, size, frame rate and samples, calls
+For each Blender shot PortOS starts from an empty scene, sets the engine, size, frame rate and samples, calls
 `build_shot`, then for each frame sets the frame, calls `frame` and renders. The film is free to set the look,
 color management and compositor in `build_shot`. Every frame should depend only on song time, so a render can stop
 and resume anywhere.
@@ -105,7 +177,15 @@ Helpers a film may import (`portos_film`, standard library only):
 
 - `portos_film.music`: `beats(song)`, `downbeats(song)`, `sections(song)`, `section_at(song, t)`,
   `nearest_beat(song, t)`, `beats_between(song, a, b)`, `beat_phase(song, t)`, `pulse(song, t)`,
-  `cue_words(song, cue_index)`, `words_between(song, a, b)`, `envelope(song, band, t)`.
+  `bar_time(song, bar, beat=0.0)`, `bar_at(song, t)`, `phrases(song, bars=4)`,
+  `onsets(song, band="low", min_gap=0.12, sensitivity=1.5)`, `swell(song, band, t, window=2.0)`,
+  `cue_words(song, cue_index)`, `words_between(song, a, b)`, `envelope(song, band, t)`. Bar numbers are 1-based
+  from the first downbeat; bar lookup and timing extrapolate using the median tracked bar length. Phrases span
+  consecutive groups of bars through song end. Onsets are spaced peaks in positive envelope changes; `swell`
+  averages the envelope around a time. Missing analysis returns empty lists, `(1, 0.0)` for `bar_at` and `0.0`
+  for scalar helpers. Before song time 0 those helpers answer no beat: `nearest_beat` is `None`, ranges are empty,
+  `pulse`, `envelope` and `swell` are `0.0`, `section_at` is `None`, and `bar_at` is `(0, 0.0)`. Song time 0 is unchanged.
+  `ctx.seconds_to_frame` and `ctx.frame_to_seconds` accept a negative time or frame.
 - `portos_film.timing`: `clamp`, `remap`, `ease`, `stepped(t, fps, on=2)` (hold poses on twos).
 
 ### Film options
@@ -230,8 +310,11 @@ out), or **Every shot** (re-renders current ones too).
 
 Jobs run one shot at a time per Blender process, in the order queued. Still requests for the same shot run
 one after another so their images and index stay together. Syncing shots is refused while renders are active;
-new renders are refused until syncing finishes. A PortOS restart forgets queued jobs; the frames already
-rendered stay.
+new renders are refused until syncing finishes. Preview and final batches are remembered on this machine in
+`renders/pending.json` and resume 15 seconds after a restart, skipping completed shots and reusing partial
+frames. Automatic recovery stops after two restarts, or if the tool is unavailable or the film needs syncing;
+the server logs the project and remaining shot count. Cancel removes pending work. Stills are not resumed.
+Completed, failed and canceled shots are removed from the marker; an empty batch leaves no marker.
 
 ### What the pipeline still requires
 
@@ -249,12 +332,20 @@ window from the best video each shot has: a current final, else its preview fitt
 
 ### Finishing
 
-- **Film look.** The project's film look (grain, gate weave, halation, VHS looks) is applied to the final render
+- **Film look.** Each shot uses its own film look, then its camera's look, then the project's look. An explicit
+  **Clean** overrides those inherited looks. Consecutive shots with the same look share a finishing window;
+  films without shot overrides keep a single pass. The film look (grain, gate weave, halation, VHS looks) is applied to the final render
   and to excerpts as a finishing pass, as it is for footage. For a cut, tick **Film look** (off by default: the
   pass is slow).
-- **Grade and shot effects.** The project's color grade, and the timed effects set on each mirrored Board scene
-  (glitches, gate jumps, shutter blinks, light leaks, on a cut or at a moment), are painted when shots are joined.
-  Wipes between shots are not drawn.
+- **Grade and shot effects.** The project's color grade, `fade-black` cut effects, and the timed effects set on each
+  mirrored Board scene (glitches, gate jumps, shutter blinks, light leaks, on a cut or at a moment), are painted when
+  shots are joined. `fade-black` fades inside each shot's own frames (no handles required). A `dissolve` of length `D`
+  is drawn in cuts, excerpts and the final centred on the cut by blending the outgoing shot's `out` handle with the
+  incoming shot's `in` handle across `D` (preserving film length and sync); `beat-toggle` uses the incoming shot's `in`
+  handle on beat flips before the cut. When a scene requests a dissolve or beat toggle whose shot lacks the needed
+  handle, the film's `problems` list names it (`Shot s020 needs 0.25 s of out handle for its dissolve`) and the final
+  render refuses with `409 MUSIC_VIDEO_BLENDER_SHOTS_NOT_READY` rather than hard-cutting silently. Live preview keeps
+  drawing a hard cut and labels it (`Dissolve (drawn in cuts)`). Wipes between shots stay undrawn.
 - **Title card.** The project's opening title card (the MTV-style credit block set on the Look step: artist, title,
   year, and optionally again at the end, with its fades and its slide in) is drawn over the film in every cut,
   excerpt and final render. Leave room for it in the corner it sits in, and keep the film's own type out of its
@@ -312,7 +403,7 @@ changes; a sync, a render and a cut answer with the jobs they queued.
 | `POST /api/music-video/:id/blender/sync` | Start a sync `{ replaceScenes? }` → `202 { job }` |
 | `GET /api/music-video/:id/blender/usage` | What the workspace takes on disk |
 | `POST /api/music-video/:id/blender/frames/clear` | Clear rendered frames → `{ freedBytes, usage }` |
-| `POST /api/music-video/:id/blender/render` | Queue renders `{ quality, shotIds?, times?, force?, onlyStale? }` → `202 { jobs, skipped }` |
+| `POST /api/music-video/:id/blender/render` | Queue renders `{ quality, shotIds?, times?, sheet?, force?, onlyStale? }` → `202 { jobs, skipped }` |
 | `POST /api/music-video/:id/blender/jobs/:jobId/cancel` | Cancel one job |
 | `POST /api/music-video/:id/blender/cancel` | Cancel every job of the project |
 | `POST /api/music-video/:id/blender/cut` | Assemble a cut `{ quality, animatic?, filmLook? }` → `202 { job }` |
@@ -321,7 +412,14 @@ changes; a sync, a render and a cut answer with the jobs they queued.
 | `GET /api/music-video/:id/blender/media` | Serve a file under `renders/` (`?path=s010/preview/shot.mp4`) |
 
 Render selection: without `force`, shots whose render is complete and current are skipped; `onlyStale` renders only
-shots whose existing render is stale (a shot never rendered is not one); stills always render.
+shots whose existing render is stale (a shot never rendered is not one); stills and contact sheets always render.
+
+Contact sheets (`"quality": "sheet"`, with optional `sheet: { every?, columns?, range? }` — `every` 1–24 frames,
+default 3; `columns` 2–12, default 6; `range: [startSec, endSec]` inside the shot) tile at most 96 frames per sheet
+(`sheet-<firstFrame>-<lastFrame>-e<every>.jpg`), reusing existing frames when the shot has a current preview or
+rendering stamped preview-scale frames otherwise. A code shot draws those frames itself, with no Blender. A code
+layer is painted onto each tile, including a sheet taken from a current preview. Agents should review motion from
+contact sheets rendered through PortOS rather than relying on stills alone or a separate local runner.
 
 A job is `{ id, kind: "sync" | "render" | "cut", status: "queued" | "running" | "encoding" | "done" | "error" |
 "canceled", shotId?, quality?, frame?, index?, total?, secPerFrame?, queuedAt, startedAt, finishedAt?, error?,

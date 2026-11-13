@@ -1314,3 +1314,185 @@ it('cancels during preparation before starting a render', async () => {
   expect(spawnCalls).toHaveLength(0);
   expect(codex.cancel(jobId)).toBe(false);
 });
+
+describe('codex provider — reference readability and missing-reference retry', () => {
+  const itPosix = process.platform === 'win32' || process.getuid?.() === 0 ? it.skip : it;
+  const stageRef = async (name) => {
+    await mkdir(FAKE_IMAGES_DIR, { recursive: true });
+    const filePath = join(FAKE_IMAGES_DIR, name);
+    await writeFile(filePath, 'synthetic reference');
+    return filePath;
+  };
+
+  it('fails fast before spawning with the missing filename when a reference file is absent', async () => {
+    await stageRef('cast.png');
+    await expect(codex.generateImage({
+      prompt: 'scene frame',
+      referenceImagePaths: ['cast.png', 'missing-set.png'],
+    })).rejects.toMatchObject({
+      code: 'IMAGE_INPUT_UNAVAILABLE',
+      message: expect.stringContaining('missing-set.png'),
+    });
+    expect(spawnCalls).toHaveLength(0);
+  });
+
+  itPosix('fails fast before spawning with the filename when a reference file is unreadable', async () => {
+    await stageRef('cast.png');
+    const setPath = await stageRef('unreadable-set.png');
+    const { chmod } = await import('fs/promises');
+    await chmod(setPath, 0o000);
+    try {
+      await expect(codex.generateImage({
+        prompt: 'scene frame',
+        referenceImagePaths: ['cast.png', 'unreadable-set.png'],
+      })).rejects.toMatchObject({
+        code: 'IMAGE_INPUT_UNAVAILABLE',
+        message: expect.stringContaining('unreadable-set.png'),
+      });
+      expect(spawnCalls).toHaveLength(0);
+    } finally {
+      await chmod(setPath, 0o644).catch(() => {});
+    }
+  });
+
+  it('records referenceImageFilenames on the job descriptor, active job, and events', async () => {
+    await stageRef('cast.png');
+    await stageRef('set.png');
+    const started = vi.fn();
+    const failed = vi.fn();
+    imageGenEvents.on('started', started);
+    imageGenEvents.on('failed', failed);
+
+    const job = await codex.generateImage({
+      prompt: 'scene frame',
+      referenceImagePaths: ['cast.png', 'set.png'],
+    });
+    expect(job.referenceImageFilenames).toEqual(['cast.png', 'set.png']);
+    expect(codex.getActiveJob().referenceImageFilenames).toEqual(['cast.png', 'set.png']);
+    expect(started).toHaveBeenCalledWith(expect.objectContaining({
+      generationId: job.jobId,
+      referenceImageFilenames: ['cast.png', 'set.png'],
+    }));
+
+    spawnCalls[0].child.exitCode = 1;
+    spawnCalls[0].child.emit('close', 1, null);
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+    expect(failed.mock.calls[0][0].referenceImageFilenames).toEqual(['cast.png', 'set.png']);
+  });
+
+  it('retries once and logs the job id when the reply reports a missing reference while references are readable', async () => {
+    await stageRef('cast.png');
+    await stageRef('set.png');
+    const retrySessionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const firstSessionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const codexDir = join(TEST_HOME, '.codex', 'generated_images', retrySessionId);
+    await mkdir(codexDir, { recursive: true });
+    const fakePng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x01]);
+    await writeFile(join(codexDir, 'exec-retry.png'), fakePng);
+
+    const completed = vi.fn();
+    const failed = vi.fn();
+    imageGenEvents.on('completed', completed);
+    imageGenEvents.on('failed', failed);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const job = await codex.generateImage({
+        prompt: 'scene frame',
+        jobId: 'job-retry-once-0001',
+        referenceImagePaths: ['cast.png', 'set.png'],
+      });
+      expect(spawnCalls).toHaveLength(1);
+      const firstChild = spawnCalls[0].child;
+      firstChild.stderr.emit('data', Buffer.from(`session id: ${firstSessionId}\n`));
+      firstChild.stdout.emit('data', Buffer.from('Image generation failed because the set reference path could not be found. I did not generate an image.\n'));
+      firstChild.exitCode = 0;
+      firstChild.emit('close', 0, null);
+
+      await vi.waitFor(() => expect(spawnCalls).toHaveLength(2));
+      expect(failed).not.toHaveBeenCalled();
+      expect(spawnCalls[1].args).toEqual(spawnCalls[0].args);
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(job.jobId));
+
+      const retryChild = spawnCalls[1].child;
+      retryChild.stderr.emit('data', Buffer.from(`session id: ${retrySessionId}\n`));
+      retryChild.exitCode = 0;
+      retryChild.emit('close', 0, null);
+
+      await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(1));
+      expect(completed.mock.calls[0][0].referenceImageFilenames).toEqual(['cast.png', 'set.png']);
+      expect(failed).not.toHaveBeenCalled();
+      expect(await readFile(join(FAKE_IMAGES_DIR, job.filename))).toEqual(fakePng);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('fails with the model reason on a second missing-reference reply without retrying again', async () => {
+    await stageRef('cast.png');
+    await stageRef('set.png');
+    const failed = vi.fn();
+    imageGenEvents.on('failed', failed);
+
+    await codex.generateImage({
+      prompt: 'scene frame',
+      referenceImagePaths: ['cast.png', 'set.png'],
+    });
+    const first = spawnCalls[0].child;
+    first.stderr.emit('data', Buffer.from('session id: 11111111-1111-4111-8111-111111111112\n'));
+    first.stdout.emit('data', Buffer.from('Image generation failed because the set reference path could not be found. I did not generate an image.\n'));
+    first.exitCode = 0;
+    first.emit('close', 0, null);
+
+    await vi.waitFor(() => expect(spawnCalls).toHaveLength(2));
+    const second = spawnCalls[1].child;
+    second.stderr.emit('data', Buffer.from('session id: 11111111-1111-4111-8111-111111111113\n'));
+    second.stdout.emit('data', Buffer.from('Image generation failed because the set reference path could not be found. I did not generate an image.\n'));
+    second.exitCode = 0;
+    second.emit('close', 0, null);
+
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+    expect(spawnCalls).toHaveLength(2);
+    expect(failed.mock.calls[0][0].error).toContain('reference path could not be found');
+  });
+
+  it('does not retry if a reference disappeared before the retry starts and names the missing file', async () => {
+    await stageRef('cast.png');
+    const setPath = await stageRef('vanished-set.png');
+    const failed = vi.fn();
+    imageGenEvents.on('failed', failed);
+
+    await codex.generateImage({
+      prompt: 'scene frame',
+      referenceImagePaths: ['cast.png', 'vanished-set.png'],
+    });
+    await rm(setPath);
+    const first = spawnCalls[0].child;
+    first.stderr.emit('data', Buffer.from('session id: 11111111-1111-4111-8111-111111111114\n'));
+    first.stdout.emit('data', Buffer.from('Image generation failed because the set reference path could not be found.\n'));
+    first.exitCode = 0;
+    first.emit('close', 0, null);
+
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+    expect(spawnCalls).toHaveLength(1);
+    expect(failed.mock.calls[0][0].error).toContain('vanished-set.png');
+  });
+
+  it('does not retry on an unrelated no-image reply even when references are attached', async () => {
+    await stageRef('cast.png');
+    const failed = vi.fn();
+    imageGenEvents.on('failed', failed);
+
+    await codex.generateImage({
+      prompt: 'scene frame',
+      referenceImagePaths: ['cast.png'],
+    });
+    const first = spawnCalls[0].child;
+    first.stderr.emit('data', Buffer.from('session id: 11111111-1111-4111-8111-111111111115\n'));
+    first.stdout.emit('data', Buffer.from('I cannot generate that image due to content policy.\n'));
+    first.exitCode = 0;
+    first.emit('close', 0, null);
+
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+    expect(spawnCalls).toHaveLength(1);
+  });
+});

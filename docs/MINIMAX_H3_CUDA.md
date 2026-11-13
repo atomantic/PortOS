@@ -26,30 +26,72 @@ own index policy.
 
 ## Regenerating locks
 
-Edit `scripts/requirements-minimax-h3-cuda.txt` with exact direct pins, then use
-uv 0.10.6 from the repository root (Bash):
+Edit `scripts/requirements-minimax-h3-cuda.txt` with exact direct pins. Use the
+verified uv 0.13.7 bootstrap (`requirements-uv-bootstrap.lock.txt`), setting `UV`
+to that executable. The explicit named CUDA index avoids routing unrelated
+packages through PyTorch mirrors, which can lack timestamps required by the
+cooldown. All other packages resolve from PyPI.
 
 ```bash
+set -euo pipefail
+CUTOFF=2026-11-05T00:00:00Z  # advance to a UTC date at least seven days old
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
 for target in windows linux; do
   case "$target" in
     windows) platform=x86_64-pc-windows-msvc ;;
     linux) platform=x86_64-manylinux_2_28 ;;
   esac
-  uv pip compile scripts/requirements-minimax-h3-cuda.txt \
+  python3 - "$TMP/pyproject.toml" "$target" <<'PYPROJECT'
+import json
+import pathlib
+import sys
+
+lines = pathlib.Path("scripts/requirements-minimax-h3-cuda.txt").read_text().splitlines()
+deps = [line for line in lines if line and not line.startswith("#")]
+sources = 'torch={index="pytorch"}\n'
+sources += 'torchvision={index="pytorch"}\n'
+if sys.argv[2] == "linux":
+    sources += 'torchao={index="pytorch"}\n'
+pathlib.Path(sys.argv[1]).write_text(
+    '[project]\nname="portos-minimax-h3-cuda"\nversion="0.0.0"\n'
+    'requires-python=">=3.11"\ndependencies=' + json.dumps(deps) + '\n'
+    '[tool.uv.sources]\n' + sources +
+    '[[tool.uv.index]]\nname="pytorch"\n'
+    'url="https://download.pytorch.org/whl/cu126"\nexplicit=true\n'
+)
+PYPROJECT
+  out="scripts/requirements-minimax-h3-cuda-${target}.lock.txt"
+  cp "$out" "$TMP/$target.lock" # retain unrelated pins during resolution
+  "$UV" --no-config pip compile "$TMP/pyproject.toml" \
     --python-version 3.11 --python-platform "$platform" \
-    --generate-hashes --only-binary :all: \
-    --index-url https://pypi.org/simple \
-    --extra-index-url https://download.pytorch.org/whl/cu126 \
-    --index-strategy unsafe-best-match --emit-index-url \
-    --no-header --annotation-style line --exclude-newer 2026-11-01 \
-    -o "scripts/requirements-minimax-h3-cuda-${target}.lock.txt"
+    --generate-hashes --only-binary :all: --no-header --no-annotate \
+    --index-url https://pypi.org/simple --emit-index-url \
+    --exclude-newer "$CUTOFF" -o "$TMP/$target.lock"
+  {
+    printf '# MiniMax H3 CUDA: CPython 3.11, x86_64 %s, CUDA 12.6.\n' "$target"
+    printf '# uv 0.13.7; exclude-newer %s; regenerate: docs/MINIMAX_H3_CUDA.md.\n' "$CUTOFF"
+    printf '%s\n' '--extra-index-url https://download.pytorch.org/whl/cu126'
+    cat "$TMP/$target.lock"
+  } > "$out"
 done
 ```
 
-Advance the cutoff to a UTC date at least seven days before the update. Keep
-the target/cutoff headers when regenerating. The multi-index strategy allows
-current PyPI packages alongside CUDA wheels; all installed artifacts must still
-match the committed hashes. Never hand-edit resolved package versions/hashes.
+The temporary project derives its pins from the source requirements. Existing
+lock output preserves unrelated versions and hash sets; `--no-annotate` avoids
+temporary paths in the result. The pip-format lock retains the installation
+index, but every accepted artifact remains constrained by its SHA-256 hash.
+Verify official CUDA-index artifact hashes and upload dates, including retained
+Triton build hashes, and verify all other artifacts against PyPI. Never drop
+the cutoff or hand-edit generated hashes.
+
+This changes regeneration only. Install/Repair retains its existing
+`--index-strategy unsafe-best-match` with complete `--require-hashes` locks;
+that flag does not permit packages or artifacts outside the committed set.
+
+Only Linux TorchAO is routed to the CUDA index: preserve `0.18.0+cu126` and
+its existing hash there. Windows retains PyPI `0.18.0` and its two hashes.
+Torch/Torchvision keep their existing official CUDA artifacts on both targets.
 
 ## Advisory checks and checkpoint containment
 

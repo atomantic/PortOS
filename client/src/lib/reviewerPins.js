@@ -1,11 +1,10 @@
 import {
   CLAUDE_EFFORT_LEVELS,
   CODEX_EFFORT_LEVELS,
-  ANTIGRAVITY_EFFORT_LEVELS,
   CURSOR_EFFORT_LEVELS,
   GROK_EFFORT_LEVELS
 } from '../utils/providers';
-import { codexEffortLevelsForModel } from '../../../server/lib/providerModels.js';
+import { codexEffortLevelsForModel, effortLevelsForProvider, antigravityModelEffortLevels } from '../../../server/lib/providerModels.js';
 
 /**
  * Client mirrors of the reviewer vocabulary in `server/lib/reviewerConfig.js` —
@@ -77,7 +76,7 @@ export const DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER = 'rethink';
 export const REVIEWER_EFFORT_LEVELS = Object.freeze({
   claude: CLAUDE_EFFORT_LEVELS,
   codex: CODEX_EFFORT_LEVELS,
-  antigravity: ANTIGRAVITY_EFFORT_LEVELS,
+  antigravity: effortLevelsForProvider({ harnessId: 'antigravity' }),
   cursor: CURSOR_EFFORT_LEVELS,
   pi: ['low', 'medium', 'high', 'xhigh', 'max'],
   grok: GROK_EFFORT_LEVELS,
@@ -112,7 +111,7 @@ export const normalizeReviewerSlug = (reviewer) => {
 // For `codex` reviewers, the ladder is gated on the pinned model. Pass the model
 // id to get the server-owned tier set for that model; omit it to get the default
 // static ladder.
-export const reviewerEffortLevels = (reviewer, model = null) => {
+export const reviewerEffortLevels = (reviewer, model = null, catalog = []) => {
   const slug = normalizeReviewerSlug(reviewer);
   if (!slug) return null;
 
@@ -120,6 +119,7 @@ export const reviewerEffortLevels = (reviewer, model = null) => {
 
   // For codex, use the server's model-gated ladder so the picker and CLI stay
   // aligned as supported model families change.
+  if (slug === 'antigravity') return antigravityModelEffortLevels(model, catalog) ?? base;
   if (slug === 'codex' && model && base) {
     return codexEffortLevelsForModel(model);
   }

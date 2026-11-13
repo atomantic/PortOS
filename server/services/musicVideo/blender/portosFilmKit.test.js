@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from '../../../lib/childProcess.js';
 import { PY_SUBPROCESS_TIMEOUT_MS, PY_TEST_TIMEOUT_MS, resolveTestPython } from '../../../lib/testHelper.js';
 
-const PY_DIR = fileURLToPath(new URL('./py/', import.meta.url));
+const PY_DIR = fileURLToPath(new URL('../../film/py/', import.meta.url));
 const python = resolveTestPython();
 
 const song = {
@@ -26,6 +26,14 @@ const song = {
   ] },
 };
 
+const instrumental = {
+  durationSec: 18,
+  analysis: {
+    beats: [1, 2, 3, 4, 5, 6, 7, 8, 9], downbeats: [1, 5, 9.2, 13],
+    features: { envelopes: { fps: 10, low: [0, 0.1, 0.8, 0.8, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 1.6, 1.6] } },
+  },
+};
+
 const SCRIPT = `
 import json, sys
 sys.path.insert(0, sys.argv[1])
@@ -33,42 +41,74 @@ from portos_film import music, timing
 song = json.loads(sys.argv[2])
 empty = {}
 r = lambda value: round(value, 4)
+instrumental = json.loads(sys.argv[3])
+edge_song = {"analysis": {"features": {"envelopes": {"fps": 10, "low": [0, 1, 1, 0, 0, 1]}}}}
+flat_song = {"analysis": {"features": {"envelopes": {"fps": 10, "low": [0, 0, 0, 0, 0]}}}}
 print(json.dumps({
     "beats_between": music.beats_between(song, 1.5, 3.5),
     "nearest": [music.nearest_beat(song, 2.4), music.nearest_beat(song, 2.6), music.nearest_beat(song, 99), music.nearest_beat(empty, 1)],
     "phase": [list(music.beat_phase(song, 2.5)), list(music.beat_phase(song, 0.5)), list(music.beat_phase(empty, 3))],
     "pulse": [r(music.pulse(song, 2.0, decay=2)), r(music.pulse(song, 2.5, decay=2)), music.pulse(empty, 2.0)],
+    "before_first_beat": [music.pulse(song, 0), music.pulse(song, 0.5), music.pulse(song, 0.999)],
     "envelope": [r(music.envelope(song, "low", 0.25)), r(music.envelope(song, "low", 0.5)), r(music.envelope(song, "low", 10)),
                  music.envelope(song, "mid", 1), r(music.envelope(song, "high", 3)), music.envelope(song, "nope", 1), music.envelope(empty, "low", 1)],
     "section": [music.section_at(song, 2.4)["label"], music.section_at(song, 2.5)["label"], music.section_at(song, 30)],
     "words": [[w["w"], w["cue"]] for w in music.words_between(song, 12.5, 13.8)],
     "cue_words": [len(music.cue_words(song, 0)), music.cue_words(song, 1), music.cue_words(song, 9)],
+    "instrumental": {
+        "bar_time": [music.bar_time(instrumental, 1), music.bar_time(instrumental, 2, 2), music.bar_time(instrumental, 0), music.bar_time(instrumental, 3), music.bar_time(empty, 1)],
+        "bar_at": [list(map(r, music.bar_at(instrumental, 1))), list(map(r, music.bar_at(instrumental, 0))), list(map(r, music.bar_at(instrumental, 9.2))), list(map(r, music.bar_at(instrumental, 17))), list(music.bar_at(empty, 9))],
+        "phrases": music.phrases(instrumental, 2), "invalid_phrases": [music.phrases(instrumental, 0), music.phrases(instrumental, 0.5), music.phrases(instrumental, "2")], "no_phrases": music.phrases(empty),
+        "onsets": list(map(r, music.onsets(instrumental, min_gap=0.12))),
+        "edge_onsets": list(map(r, music.onsets(edge_song))),
+        "flat_onsets": music.onsets(flat_song), "no_onsets": music.onsets(empty),
+        "swell": [r(music.swell(instrumental, "low", 0.3, window=0.2)), music.swell(empty, "low", 0)],
+    },
     "clamp": [timing.clamp(1.5), timing.clamp(-2), timing.clamp(5, 0, 10)],
     "remap": [timing.remap(5, 0, 10, 0, 100), timing.remap(15, 0, 10, 0, 100), timing.remap(15, 0, 10, 0, 100, clamped=False), timing.remap(1, 3, 3)],
     "ease": [timing.ease(0.5), r(timing.ease(0.25, "in", 2)), r(timing.ease(0.25, "out", 2)), timing.ease(0.25, "linear"), timing.ease(2), r(timing.ease(0.5, "smooth"))],
     "stepped": [r(timing.stepped(0.99, 24, 2)), r(timing.stepped(1.0, 24, 2)), r(timing.stepped(0.99, 24, 1))],
+    "before": {
+        "nearest": music.nearest_beat(song, -1),
+        "beats": music.beats_between(song, -2, -0.1),
+        "phase": list(music.beat_phase(song, -1)),
+        "pulse": music.pulse(song, -1),
+        "section": music.section_at(song, -1),
+        "envelope": music.envelope(song, "low", -1),
+        "swell": music.swell(song, "low", -1),
+        "bar": list(music.bar_at(song, -1)),
+        "words": music.words_between(song, -2, -0.5),
+    },
 }))
 `;
 
 describe.skipIf(!python)('portos_film kit', () => {
   it('reads beats, sections, envelopes and timed words off the song, and eases and steps time', () => {
-    const out = JSON.parse(execFileSync(python, ['-c', SCRIPT, PY_DIR, JSON.stringify(song)], { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS }));
+    const out = JSON.parse(execFileSync(python, ['-c', SCRIPT, PY_DIR, JSON.stringify(song), JSON.stringify(instrumental)], { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS }));
     expect(out).toEqual({
       beats_between: [2, 3],
       nearest: [2, 3, 4, null],
       // (last beat index, how far to the next); before the first beat and without a grid it is the start of beat 0.
       phase: [[1, 0.5], [0, 0], [0, 0]],
       pulse: [1, 0.25, 0],
+      before_first_beat: [0, 0, 0],
       // Interpolated between analysis frames, held at the last one, and 0 for a band that is missing or empty.
       envelope: [0.5, 1, 0.5, 0, 0.4, 0, 0],
       section: ['Intro', 'Chorus', null],
       words: [['An', 0], ['example', 0]],
       cue_words: [3, [], []],
+      instrumental: {
+        bar_time: [1, 7.1, -3, 9.2, 0],
+        bar_at: [[1, 0], [0, 3], [3, 0], [5, 0], [1, 0]],
+        phrases: [[1, 9.2], [9.2, 17], [17, 18]], invalid_phrases: [[], [], []], no_phrases: [],
+        onsets: [0.2, 0.4, 1], edge_onsets: [0.1, 0.5], flat_onsets: [], no_onsets: [], swell: [0.8333, 0],
+      },
       clamp: [1, 0, 5],
       remap: [50, 100, 150, 0],
       ease: [0.5, 0.0625, 0.4375, 0.25, 1, 0.5],
       // On twos at 24 fps a pose holds for 1/12 s.
       stepped: [0.9167, 1, 0.9583],
+      before: { nearest: null, beats: [], phase: [0, 0], pulse: 0, section: null, envelope: 0, swell: 0, bar: [0, 0], words: [] },
     });
   }, PY_TEST_TIMEOUT_MS);
 });
@@ -182,6 +222,73 @@ with tempfile.TemporaryDirectory() as root:
         assert json.dumps(shots) == original
         with open(manifest_path, "rb") as handle:
             assert handle.read() == stored
+print("ok")
+`;
+    expect(execFileSync(python, ['-c', script, PY_DIR], { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS }).trim()).toBe('ok');
+  }, PY_TEST_TIMEOUT_MS);
+
+  it('renders handle frames outside [start, end) via frame() and skips existing frames on resume', () => {
+    const script = `
+import contextlib, io, json, os, runpy, sys, tempfile
+from types import SimpleNamespace
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+driver_path = os.path.join(sys.argv[1], "portos_blender_driver.py")
+scene = SimpleNamespace(
+    render=SimpleNamespace(image_settings=SimpleNamespace()),
+    eevee=SimpleNamespace(), frame_set=lambda frame: None,
+)
+def render(**kwargs):
+    with open(scene.render.filepath, "wb") as handle:
+        handle.write(b"frame")
+sys.modules["bpy"] = SimpleNamespace(
+    app=SimpleNamespace(version=(5, 0, 0)), context=SimpleNamespace(scene=scene),
+    ops=SimpleNamespace(wm=SimpleNamespace(read_factory_settings=lambda **kwargs: None),
+                        render=SimpleNamespace(render=render)),
+)
+film_source = """
+posed = []
+def describe(ctx):
+    return {"shots": [{"id": "s020", "start": 1.0, "end": 1.25, "handles": {"in": 0.125, "out": 0.125}}]}
+def build_shot(ctx, shot):
+    pass
+def frame(ctx, shot, t, frame):
+    posed.append((round(t, 6), frame))
+"""
+with tempfile.TemporaryDirectory() as root:
+    with open(os.path.join(root, "film.py"), "w", encoding="utf-8") as handle:
+        handle.write(film_source)
+    with open(os.path.join(root, "song.json"), "w", encoding="utf-8") as handle:
+        json.dump({}, handle)
+    job = {"mode": "describe", "fps": 24, "width": 320, "height": 180,
+           "src": root, "workspace": root, "out": os.path.join(root, "renders")}
+    job_path = os.path.join(root, "job.json")
+    with open(job_path, "w", encoding="utf-8") as handle:
+        json.dump(job, handle)
+    sys.argv = [driver_path, "--", job_path]
+    with contextlib.redirect_stdout(io.StringIO()):
+        driver = runpy.run_path(driver_path)
+    film = sys.modules["film"]
+    shot = {"id": "s020", "start": 1.0, "end": 1.25, "handles": {"in": 0.125, "out": 0.125}}
+    job["quality"] = "final"
+    with contextlib.redirect_stdout(io.StringIO()):
+        driver["render_shot"](job, film, {}, shot)
+    frames_dir = os.path.join(root, "renders", "s020", "final", "frames")
+    assert sorted(os.listdir(frames_dir)) == [
+        "frame_000024.png", "frame_000025.png", "frame_000026.png",
+        "frame_000027.png", "frame_000028.png", "frame_000029.png",
+        "handle_in_000021.png", "handle_in_000022.png", "handle_in_000023.png",
+        "handle_out_000030.png", "handle_out_000031.png", "handle_out_000032.png",
+    ]
+    assert film.posed == [
+        (round(f / 24, 6), f) for f in range(21, 33)
+    ]
+    film.posed.clear()
+    shot_grown = {"id": "s020", "start": 1.0, "end": 1.25, "handles": {"in": 0.125, "out": 0.25}}
+    job["resume"] = True
+    with contextlib.redirect_stdout(io.StringIO()):
+        driver["render_shot"](job, film, {}, shot_grown)
+    assert film.posed == [(round(f / 24, 6), f) for f in (33, 34, 35)]
 print("ok")
 `;
     expect(execFileSync(python, ['-c', script, PY_DIR], { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS }).trim()).toBe('ok');

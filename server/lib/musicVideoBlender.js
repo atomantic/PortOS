@@ -8,14 +8,25 @@
 // PortOS engine ids. `BLENDER_EEVEE_NEXT` is EEVEE on every supported Blender
 // (the driver maps it to Blender 5's `BLENDER_EEVEE`).
 export const MUSIC_VIDEO_BLENDER_ENGINES = Object.freeze(['BLENDER_EEVEE_NEXT', 'CYCLES']);
-export const MUSIC_VIDEO_BLENDER_QUALITIES = Object.freeze(['still', 'preview', 'final']);
+export const MUSIC_VIDEO_BLENDER_QUALITIES = Object.freeze(['still', 'sheet', 'preview', 'final']);
+export const MUSIC_VIDEO_BLENDER_SHEET_LIMITS = Object.freeze({
+  every: { min: 1, max: 24, default: 3 },
+  columns: { min: 2, max: 12, default: 6 },
+  maxTiles: 96,
+});
 export const MUSIC_VIDEO_BLENDER_NOTE_STATUSES = Object.freeze(['todo', 'wip', 'review', 'approved']);
 export const MUSIC_VIDEO_BLENDER_MAX_SHOTS = 400;
 
 // A shot id names a folder under renders/; a source path names a file under src/.
 export const MUSIC_VIDEO_BLENDER_SHOT_ID = /^[a-z0-9][a-z0-9_-]{0,39}$/i;
 export const MUSIC_VIDEO_BLENDER_SOURCE_PATH = /^[A-Za-z0-9_][A-Za-z0-9_.-]*(\/[A-Za-z0-9_][A-Za-z0-9_.-]*){0,5}$/;
-export const MUSIC_VIDEO_BLENDER_TEXT_EXTENSIONS = Object.freeze(['py', 'json', 'txt', 'md']);
+export const MUSIC_VIDEO_BLENDER_TEXT_EXTENSIONS = Object.freeze(['py', 'js', 'mjs', 'json', 'txt', 'md']);
+// A shot draws in Blender unless it says `code`. A code module is an ES module under src/.
+export const MUSIC_VIDEO_BLENDER_RENDERERS = Object.freeze(['blender', 'code']);
+export const MUSIC_VIDEO_BLENDER_CODE_SPACES = Object.freeze(['canvas', 'three']);
+export const MUSIC_VIDEO_BLENDER_LAYER_PLACES = Object.freeze(['over', 'under']);
+export const MUSIC_VIDEO_BLENDER_LAYER_BLENDS = Object.freeze(['normal', 'screen', 'add', 'multiply']);
+export const MUSIC_VIDEO_BLENDER_MAX_LAYERS = 8;
 export const MUSIC_VIDEO_BLENDER_SOURCE_EXTENSIONS = Object.freeze([
   ...MUSIC_VIDEO_BLENDER_TEXT_EXTENSIONS, 'png', 'jpg', 'jpeg', 'webp', 'exr', 'hdr', 'ttf', 'otf', 'wav', 'mp4', 'glb', 'obj', 'blend',
 ]);
@@ -27,8 +38,9 @@ export const MUSIC_VIDEO_BLENDER_OPTION_TYPES = Object.freeze(['choice', 'boolea
 export const MUSIC_VIDEO_BLENDER_MAX_OPTIONS = 24;
 export const MUSIC_VIDEO_BLENDER_MAX_CHOICES = 32;
 export const MUSIC_VIDEO_BLENDER_OPTION_TEXT_MAX = 2000;
+export const MUSIC_VIDEO_BLENDER_MAX_HANDLE_SEC = 4;
 // Why a render is out of date, in the order the UI names them.
-export const MUSIC_VIDEO_BLENDER_STALE_REASONS = Object.freeze(['source', 'timing', 'settings', 'options', 'song']);
+export const MUSIC_VIDEO_BLENDER_STALE_REASONS = Object.freeze(['source', 'timing', 'handles', 'settings', 'options', 'song']);
 
 export const MUSIC_VIDEO_BLENDER_SETTING_LIMITS = Object.freeze({
   width: { min: 320, max: 7680 },
@@ -155,17 +167,32 @@ const evenPixels = (value) => {
   return Math.max(2, rounded - (rounded % 2));
 };
 
+/** Normalized `{ every, columns, range }` contact-sheet options. */
+export function normalizeBlenderSheetOptions(sheet) {
+  const raw = plainObject(sheet);
+  const { every, columns } = MUSIC_VIDEO_BLENDER_SHEET_LIMITS;
+  const range = Array.isArray(raw.range) && raw.range.length === 2
+    && Number.isFinite(raw.range[0]) && Number.isFinite(raw.range[1]) && raw.range[0] <= raw.range[1]
+    ? [raw.range[0], raw.range[1]] : null;
+  return {
+    every: inRange(raw.every, every, true) ? raw.every : every.default,
+    columns: inRange(raw.columns, columns, true) ? raw.columns : columns.default,
+    range,
+  };
+}
+
 /**
- * What one quality renders at: preview frames are scaled and use the preview
- * samples; finals and stills are full size with the final samples.
+ * What one quality renders at: preview and contact-sheet frames are scaled
+ * and use the preview samples; finals and stills are full size with the final samples.
  */
 export function blenderRenderFrame(settings, quality) {
-  const scale = quality === 'preview' ? settings.previewScale : 1;
+  const previewLike = quality === 'preview' || quality === 'sheet';
+  const scale = previewLike ? settings.previewScale : 1;
   return {
     scale,
     width: evenPixels(settings.width * scale),
     height: evenPixels(settings.height * scale),
-    samples: quality === 'preview' ? settings.previewSamples : settings.finalSamples,
+    samples: previewLike ? settings.previewSamples : settings.finalSamples,
   };
 }
 
@@ -174,6 +201,30 @@ export function blenderShotFrameRange(shot, fps) {
   const startFrame = Math.round(shot.start * fps);
   const endFrame = Math.round(shot.end * fps);
   return { startFrame, endFrame, frameCount: Math.max(0, endFrame - startFrame) };
+}
+
+/** Normalized `{ in, out }` handle seconds declared on a shot (defaulting missing sides to 0). */
+export function normalizeBlenderHandles(handles) {
+  return {
+    in: Math.max(0, Number(handles?.in) || 0),
+    out: Math.max(0, Number(handles?.out) || 0),
+  };
+}
+
+/**
+ * A shot's handle frame ranges on `fps`:
+ * - `in`: `[startFrame - inFrames, startFrame)` before the shot starts
+ * - `out`: `[endFrame, endFrame + outFrames)` after the shot ends
+ */
+export function blenderShotHandleRanges(shot, fps) {
+  const { startFrame, endFrame } = blenderShotFrameRange(shot, fps);
+  const handles = normalizeBlenderHandles(shot?.handles);
+  const inFrames = Math.round(handles.in * fps);
+  const outFrames = Math.round(handles.out * fps);
+  return {
+    in: { startFrame: startFrame - inFrames, endFrame: startFrame, frameCount: inFrames },
+    out: { startFrame: endFrame, endFrame: endFrame + outFrames, frameCount: outFrames },
+  };
 }
 
 /** `'text'` (editable through the API), `'binary'` (listed only), or null for a path src/ may not hold. */

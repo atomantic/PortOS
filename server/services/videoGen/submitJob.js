@@ -489,7 +489,8 @@ const submitLocalLane = async ({ body, prepared, localPerformanceParams, enqueue
     audioFilePath: prepared.audioFilePath,
     audioStartSec: body.audioStartSec,
     ...(prepared.audio ? { audioConditioning: prepared.audio.audioConditioning,
-      shotInstruction: { version: 1, shotMode: 'cutaway', songInterval: prepared.audio.songInterval, audioConditioning: prepared.audio.audioConditioning } } : {}),
+      shotInstruction: { version: 1, shotMode: 'cutaway', songInterval: prepared.audio.songInterval, audioConditioning: prepared.audio.audioConditioning } }
+      : prepared.audioConditioning ? { audioConditioning: prepared.audioConditioning } : {}),
     uploadedTempPath: prepared.uploadedTempPath,
     uploadedTempPaths: prepared.uploadedTempPaths,
     lastImagePath: prepared.lastImagePath,

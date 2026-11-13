@@ -359,7 +359,7 @@ import {
   updateMusicVideoExcerptNote, deleteMusicVideoExcerptNote, getMusicVideoProject, getMusicVideoActiveRender, getMusicVideoActiveJobs,
   startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision,
   linkMusicVideoCastAndSetsToCatalog, approveMusicVideoCastAndSets, stopMusicVideoProduction,
-  getMusicVideoPublishPlatforms, draftMusicVideoPublishCopy,
+  getMusicVideoPublishPlatforms, draftMusicVideoPublishCopy, buildMusicVideoPublishKit,
   renderMusicVideoSceneFrame, getMusicVideoBlender,
 } from '../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
@@ -3495,12 +3495,37 @@ describe('MusicVideo stage tabs (#9243)', () => {
       expect(within(banner).getByText('Production needs you')).toBeTruthy();
     });
 
+    it('starts the kit from the publish checklist with one click and prevents duplicate builds', async () => {
+      await openProject({ ...PROJECT_WITH_CLIP, renderHistoryId: 'rh-9' }, 'publish');
+      expect(buildMusicVideoPublishKit).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Build the kit' }));
+      await waitFor(() => expect(buildMusicVideoPublishKit).toHaveBeenCalledTimes(1));
+      expect(buildMusicVideoPublishKit).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { silent: true });
+      expect(screen.getByRole('button', { name: 'Build the kit' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /Build publishing kit/ })).toBeDisabled();
+    });
+
+    it('keeps the build shortcut disabled while creative setup is being edited, then runs after Cancel', async () => {
+      await openProject({ ...PROJECT_WITH_CLIP, audioAnalysis: PROJECT_ANALYZED.audioAnalysis, renderHistoryId: 'rh-9' }, 'story');
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Set up creative direction' })); });
+      const build = screen.getByRole('button', { name: 'Build the publishing kit' });
+      expect(build).toBeDisabled();
+      expect(build).toHaveAttribute('title', 'Save or cancel the creative setup before building the publishing kit.');
+      fireEvent.click(build);
+      expect(buildMusicVideoPublishKit).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel', exact: true }));
+      fireEvent.click(screen.getByRole('button', { name: 'Build the publishing kit' }));
+      await waitFor(() => expect(buildMusicVideoPublishKit).toHaveBeenCalledTimes(1));
+      expect(selectedTab()).toHaveTextContent(/^Publish/);
+    });
+
     it('takes a finished project on to its release (#9281)', async () => {
       await openProject({ ...PROJECT_WITH_CLIP, audioAnalysis: PROJECT_ANALYZED.audioAnalysis, renderHistoryId: 'rh-9' }, 'produce');
       fireEvent.click(screen.getByRole('button', { name: 'Build the publishing kit' }));
       await waitFor(() => expect(selectedTab()).toHaveTextContent(/^Publish/));
       expect(screen.getByRole('region', { name: 'Release assets' })).toBeTruthy();
-      expect(screen.getByRole('button', { name: /Build publishing kit/ })).not.toBeDisabled();
+      await waitFor(() => expect(buildMusicVideoPublishKit).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { silent: true }));
+      expect(screen.getByRole('button', { name: /Build publishing kit/ })).toBeDisabled();
     });
   });
 
@@ -4322,4 +4347,28 @@ describe('Code video storyboard approval gating on Produce stage (#15723)', () =
     await waitFor(() => expect(unapprovedBtn).toBeDisabled());
     expect(await screen.findByText('Approve the storyboard first')).toBeTruthy();
   });
+});
+
+it('shares Done between editor, board and sheet, and accepts remote changes after a failed save', async () => {
+  const project = { ...PROJECT_WITH_CLIP, scenes: [{ ...PROJECT_WITH_CLIP.scenes[0], label: 'Shot 1', shotSheet: { location: 'Park', checked: false } }] };
+  let settle;
+  updateMusicVideoScene.mockImplementationOnce(() => new Promise(resolve => { settle = resolve; }));
+  await openProject(project, 'produce');
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Done', exact: true }));
+  expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-1', project.scenes[0].sceneId, { shotSheet: { checked: true } }, { silent: true });
+  await act(async () => settle({}));
+  expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).toBeChecked();
+  expect(within(screen.getByLabelText('Storyboard thumbnails')).getByRole('button', { name: 'Open Shot 1' })).toHaveClass('border-port-success');
+  fireEvent.click(screen.getByRole('button', { name: 'Close shot' }));
+  fireEvent.click(screen.getByText('Shot sheet'));
+  expect(screen.getByRole('checkbox', { name: 'Shot 1 done' })).toBeChecked();
+  fireEvent.click(screen.getAllByRole('button', { name: 'Open Shot 1' }).find(button => button.closest('tr')));
+  updateMusicVideoScene.mockRejectedValueOnce(new Error('Save unavailable'));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Done', exact: true }));
+  await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).not.toBeDisabled());
+  expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).toBeChecked();
+  getMusicVideoProject.mockResolvedValue({ ...project, scenes: [{ ...project.scenes[0], shotSheet: { location: 'Station', checked: false } }] });
+  await pushSocket('music-video:project:changed', { id: project.id });
+  await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).not.toBeChecked());
+  expect(screen.getByRole('combobox', { name: 'Location' })).toHaveValue('Station');
 });

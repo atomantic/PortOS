@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cel garden composition</title>
+<style>
+html, body { margin: 0; height: 100%; background: #202c2a; overflow: hidden; }
+#stage { display: block; width: 100vw; height: 100vh; object-fit: contain; }
+</style>
+</head>
+<body>
+<canvas id="stage" aria-label="A drawn figure walking through a terraced garden"></canvas>
+<script src="portos-mv.js"></script><!-- portos-allow-hidden-content: render-time song and frame data -->
+<script type="module" src="main.js"></script><!-- portos-allow-hidden-content: deterministic cel template entry point -->
+</body>
+</html>

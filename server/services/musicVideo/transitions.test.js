@@ -157,6 +157,43 @@ describe.skipIf(!ffmpeg)('a VHS glitch on a cut in the final render', () => {
   });
 });
 
+// Uniquely catches smeared bands nesting each split inside the previous band's overlay: ffmpeg's cost then grows
+// exponentially with the bands, and a film with a few rewinds at different strengths never finishes rendering.
+describe.skipIf(!ffmpeg)('rewinds at several strengths in one render', () => {
+  it('stacks coincident bands on the picture produced by the preceding effect', () => {
+    const effects = [
+      { frame: 2, style: 'camera-flash', index: 1 },
+      { frame: 2, style: 'vhs-rewind', index: 2, strength: 1 },
+      { frame: 2, style: 'vhs-rewind', index: 3, strength: 0.5 },
+    ];
+    const render = (chain) => run(['-f', 'lavfi', '-i', `testsrc2=s=${W}x${H}:r=${FPS}:d=0.5`,
+      '-filter_complex', `[0:v]format=yuv420p,${chain}[v]`, '-map', '[v]', '-f', 'rawvideo', '-pix_fmt', 'yuv420p', '-']);
+    const sequential = effects.map((effect, i) => musicVideoTransitionFilter([effect], { width: W, height: H }).replaceAll('smr', `effect${i}smr`)).join(',');
+    expect(render(musicVideoTransitionFilter(effects, { width: W, height: H }))).toEqual(render(sequential));
+  });
+
+  it('finish within the budget and repaint only their own frames', () => {
+    const [w, h] = [320, 180];
+    const rewind = (start, strength) => MUSIC_VIDEO_TRANSITION_STYLES['vhs-rewind'].frames.map((_, index) => ({ frame: start + index, style: 'vhs-rewind', index, strength }));
+    const glitches = [...rewind(2, 1), ...rewind(12, 0.5), ...rewind(22, 0.25)];
+    const chain = musicVideoTransitionFilter(glitches, { width: w, height: h });
+    expect(chain.match(/overlay=/g).length).toBeGreaterThanOrEqual(20);
+    const output = join(dir, 'rewinds.mp4');
+    run(['-f', 'lavfi', '-i', `color=0x2050a0:s=${w}x${h}:r=${FPS}:d=3`, '-filter_complex', `[0:v]format=yuv420p,${chain}[v]`,
+      '-map', '[v]', '-pix_fmt', 'yuv420p', '-y', output]);
+    const raw = run(['-i', output, '-f', 'rawvideo', '-pix_fmt', 'gray', '-']);
+    const size = w * h;
+    const changed = Array.from({ length: raw.length / size }, (_, f) => {
+      const px = raw.subarray(f * size, (f + 1) * size);
+      const mean = px.reduce((sum, v) => sum + v, 0) / size;
+      return Math.sqrt(px.reduce((sum, v) => sum + (v - mean) ** 2, 0) / size) > 4 ? f : null;
+    }).filter((f) => f != null);
+    expect(raw.length / size).toBe(3 * FPS);
+    expect(changed.every((f) => glitches.some((g) => g.frame === f))).toBe(true);
+    expect(changed).toEqual(expect.arrayContaining([2, 3, 4, 5, 6, 7, 8, 9]));
+  });
+});
+
 // Uniquely catches a wipe moving its cut or adding time, landing on other
 // frames in a shot segment than in the whole-film render, or a glitch stacking on it.
 describe.skipIf(!ffmpeg)('a wipe on a cut in the final render', () => {
