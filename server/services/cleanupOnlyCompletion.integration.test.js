@@ -153,7 +153,7 @@ describe('cleanup-only recovery public completion flow', () => {
     }));
   });
 
-  it.each(['checkout', 'local-ref', 'unreadable-checkout', 'unreadable-ref', 'review-hold', 'missing-app', 'unreadable-app', 'parent-handoff', 'parent-review-hold', 'missing-parent'])('keeps %s unresolved despite a success summary', async fault => {
+  it.each(['checkout', 'local-ref', 'unreadable-checkout', 'unreadable-ref', 'review-hold', 'missing-app', 'unreadable-app', 'parent-handoff', 'parent-review-hold', 'missing-parent', 'parent-task-mismatch'])('keeps %s unresolved despite a success summary', async fault => {
     await retire();
     if (fault === 'checkout') await mkdir(release.path);
     if (fault === 'local-ref') await execGit(['branch', release.branch, originalHead], repo);
@@ -161,6 +161,7 @@ describe('cleanup-only recovery public completion flow', () => {
     if (fault === 'unreadable-ref') readLocalBranchPresence.mockResolvedValue(null);
     if (fault === 'parent-handoff') store.parent.metadata.prCompletionPolicy = 'leave-open';
     if (fault === 'parent-review-hold') store.parent.metadata.reviewLoopLeaveOpen = true;
+    if (fault === 'parent-task-mismatch') store.parent.taskId = 'unrelated-task';
     if (fault === 'missing-parent') store.parent = null;
     if (fault === 'review-hold') store.task.metadata.reviewLoopLeaveOpen = true;
     if (fault === 'unreadable-app') getAppById.mockRejectedValue(new Error('unreadable'));

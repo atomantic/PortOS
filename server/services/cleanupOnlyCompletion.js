@@ -43,7 +43,7 @@ async function verifyCurrentCleanup(input) {
   const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const parentId = task.metadata.recoveryOrigin.parentAgentId;
   const parent = parentId ? await getAgentRecord(parentId) : null;
-  if (!parent || parent.id !== parentId) return unverified('cleanup-parent-unavailable');
+  if (!parent || parent.id !== parentId || parent.taskId !== task.metadata.recoveryOrigin.parentTaskId) return unverified('cleanup-parent-unavailable');
   if (agentPrHeldForOperator(parent, parent)) return unverified('cleanup-parent-human-handoff');
   const { getAppById } = await import('./apps.js');
   const app = await getAppById(target.appId);
