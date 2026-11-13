@@ -3281,6 +3281,28 @@ describe('Codex lane', () => {
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
   });
 
+  it('records referenceImageFilenames handed to a Codex run on the queue job record across failures', async () => {
+    stubs.generateImageCodex.mockResolvedValue({
+      jobId: 'codex-ref-job',
+      referenceImageFilenames: ['cast.png', 'set.png'],
+    });
+
+    const job = await mediaJobQueue.enqueueJob({
+      kind: 'image',
+      params: { prompt: 'codex refs test', mode: 'codex', referenceImagePaths: ['/tmp/cast.png', '/tmp/set.png'] },
+    });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.referenceImageFilenames?.length === 2);
+    expect(mediaJobQueue.getJob(job.jobId).referenceImageFilenames).toEqual(['cast.png', 'set.png']);
+
+    imageGenEvents.emit('failed', {
+      generationId: job.jobId,
+      error: 'Codex did not produce an image.',
+      referenceImageFilenames: ['cast.png', 'set.png'],
+    });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+    expect(mediaJobQueue.getJob(job.jobId).referenceImageFilenames).toEqual(['cast.png', 'set.png']);
+  });
+
   it('Codex job and a GPU video job run concurrently — both dispatch functions are called', async () => {
     // Both stubs hang indefinitely so neither completes before we assert.
     stubs.generateVideo.mockImplementation(() => new Promise(() => {}));

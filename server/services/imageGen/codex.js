@@ -30,8 +30,8 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 
 import { spawn } from '../../lib/childProcess.js';
 import { bufferedSpawn, prepareCliSpawn, killProcessTree } from '../../lib/bufferedSpawn.js';
-import { readFile, readdir, stat, mkdtemp } from 'fs/promises';
-import { existsSync } from 'fs';
+import { access, readFile, readdir, stat, mkdtemp } from 'fs/promises';
+import { constants as fsConstants, existsSync } from 'fs';
 import { basename, join, isAbsolute, resolve, sep } from 'path';
 import { tmpdir } from 'os';
 import { codexHomeDir } from '../../lib/codexUserConfig.js';
@@ -66,6 +66,33 @@ import { CLI_IMAGE_INPUT_PROVENANCE } from '../../lib/imageInputProvenance.js';
 import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
 import { agentInstructionsAddition, carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
+import { stripAnsi } from '../../lib/ansiStrip.js';
+
+const MAX_MISSING_REF_RETRIES = 1;
+const MISSING_REF_TARGET_RE = /\b(reference(?:\s+(?:image|file|path))?|referenced_image_paths?|attached\s+(?:image|file|reference)|input\s+(?:image|file)|image\s+path|file\s+path)\b/i;
+const MISSING_REF_PROBLEM_RE = /\b(?:could\s+not|couldn['’]?t|cannot|can\s+not|can['’]?t|unable\s+to|failed\s+to)\s+(?:be\s+)?(?:find|found|locate|located|read|access|open)\b|\b(?:not\s+(?:be\s+)?found|missing|does\s+not\s+exist|doesn['’]t\s+exist|no\s+such\s+file|unreadable|inaccessible|enoent)\b/i;
+
+function isMissingReferenceReply(stdoutTail = '') {
+  const clean = stripAnsi(String(stdoutTail));
+  if (!clean.trim()) return false;
+  return (MISSING_REF_TARGET_RE.test(clean) && MISSING_REF_PROBLEM_RE.test(clean))
+    || /\bno\s+such\s+file\b|\benoent\b/i.test(clean);
+}
+
+async function assertReadableInputImages(paths) {
+  for (const filePath of paths) {
+    try {
+      const info = await stat(filePath);
+      if (!info.isFile()) throw new Error('Not a file');
+      await access(filePath, fsConstants.R_OK);
+    } catch {
+      throw new ServerError(`Codex reference image is missing or unreadable: ${basename(filePath)}`, {
+        status: 400,
+        code: 'IMAGE_INPUT_UNAVAILABLE',
+      });
+    }
+  }
+}
 
 // 20 minutes — built-in `image_gen` typically returns in 30–90s, but with the
 // parallel codex lane several renders share OpenAI throughput and a single
@@ -151,6 +178,8 @@ export const cancel = (jobId) => {
   if (pending) return pending;
   const proc = activeProcs.get(jobId);
   if (!proc) return false;
+  const job = jobs.get(jobId);
+  if (job) job.canceled = true;
   sigtermWithEscalation(jobId, proc);
   return true;
 };
@@ -371,6 +400,7 @@ async function generateImagePrepared({
   const scratchDir = await mkdtemp(join(tmpdir(), 'portos-codex-image-'));
   try {
     await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
+    await assertReadableInputImages(inputImages.paths);
   } catch (error) {
     await removeScratchDirectory(scratchDir);
     throw error;
@@ -380,7 +410,12 @@ async function generateImagePrepared({
     jobs.set(jobId, job);
 
     console.log(`🎨 Generating image [${jobId.slice(0, 8)}] codex`);
-    imageGenEvents.emit('started', { generationId: jobId, totalSteps: 1 });
+    imageGenEvents.emit('started', {
+      generationId: jobId,
+      totalSteps: 1,
+      initImageFilename: meta.initImageFilename,
+      referenceImageFilenames: meta.referenceImageFilenames,
+    });
     activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0, currentImage: null });
     broadcastSse(job, { type: 'status', message: 'Spawning codex…' });
   } catch (err) {
@@ -394,11 +429,15 @@ async function generateImagePrepared({
   // child runs out-of-band so the HTTP response can ship while the client
   // attaches to the per-job SSE stream (mirrors local.js). runCodex settles
   // every launch failure through the job's own failure finalizer.
-  runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA, denoise, scratchDir });
+  runCodex(job, jobId, bin, args, outputPath, filename, meta, {
+    cleanC2PA, denoise, scratchDir, inputPaths: inputImages.paths,
+  });
 
   return {
     jobId, filename, path: `/data/images/${filename}`, generationId: jobId,
     mode: IMAGE_GEN_MODE.CODEX, model: effectiveModel,
+    initImageFilename: meta.initImageFilename,
+    referenceImageFilenames: meta.referenceImageFilenames,
     // Async callers gate UI state on `status`; without 'running' they flip
     // to 'done' before the PNG lands. SSE / socket 'completed' fires later.
     status: 'running',
@@ -434,9 +473,9 @@ function removeScratchDirectory(scratchDir) {
 // child exists (Node rejects an invalid argv/bin synchronously) settles the job
 // here, and a setup failure after spawn terminates the child and leaves the
 // close handler to settle once it has physically exited.
-function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA = false, denoise = false, scratchDir } = {}) {
+function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA = false, denoise = false, scratchDir, inputPaths = [], attempt = 0 } = {}) {
   const removeScratch = () => removeScratchDirectory(scratchDir);
-  if (preparations.take(jobId)) {
+  if ((attempt === 0 && preparations.take(jobId)) || job.canceled) {
     void removeScratch();
     return finalizeJobFailure.canceled(job, jobId);
   }
@@ -501,6 +540,7 @@ function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA
   });
 
   proc.on('close', async (code, signal) => {
+    let retrying = false;
     await withBackupAssetPublication(async () => {
       clearTimeout(timeoutTimer);
       // Don't clear activeProcess yet — the post-exit handler still does
@@ -529,6 +569,24 @@ function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA
         // poll for a few seconds in case there's a flush lag on slow disks.
         const harvested = await harvestGeneratedImage(sessionId, meta.prompt, harvestTimeoutMs);
         if (!harvested) {
+          if (attempt < MAX_MISSING_REF_RETRIES && inputPaths.length > 0 && !job.canceled && isMissingReferenceReply(stdoutTail)) {
+            try {
+              await assertReadableInputImages(inputPaths);
+            } catch (readErr) {
+              return finalizeJobFailure(job, jobId, proc, readErr.message);
+            }
+            if (job.canceled) {
+              return finalizeJobFailure.canceled(job, jobId, proc);
+            }
+            console.log(`🔄 Retrying codex image generation [${jobId}] after missing-reference reply while references are readable`);
+            broadcastSse(job, { type: 'status', message: 'Retrying codex after missing-reference reply…' });
+            imageGenEvents.emit('activity', { generationId: jobId });
+            retrying = true;
+            runCodex(job, jobId, bin, args, outputPath, filename, meta, {
+              cleanC2PA, denoise, scratchDir, inputPaths, attempt: attempt + 1,
+            });
+            return;
+          }
           return finalizeJobFailure(job, jobId, proc, await noImageSessionReason(sessionId, stdoutTail));
         }
         if (harvested.unmatchedImages) {
@@ -579,7 +637,15 @@ function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA
         dispatchTerminalEvent(
           jobId,
           () => broadcastSse(job, { type: 'complete', result }),
-          () => imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.CODEX, generationId: jobId, inputProcessSettled: true, path: `/data/images/${filename}`, filename }),
+          () => imageGenEvents.emit('completed', {
+            mode: IMAGE_GEN_MODE.CODEX,
+            generationId: jobId,
+            inputProcessSettled: true,
+            path: `/data/images/${filename}`,
+            filename,
+            initImageFilename: meta.initImageFilename,
+            referenceImageFilenames: meta.referenceImageFilenames,
+          }),
         );
         closeJobAfterDelay(jobs, jobId);
       } catch (err) {
@@ -593,7 +659,9 @@ function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA
       // EventEmitter does not await this listener, so settle the job here too.
       clearTimeout(timeoutTimer);
       finalizeJobFailure(job, jobId, proc, `Codex publication admission failed: ${err?.message || err}`);
-    }).finally(removeScratch);
+    }).finally(() => {
+      if (!retrying) return removeScratch();
+    });
   });
 
   // Post-spawn setup. The error/close owners above are already installed, so a
@@ -639,7 +707,16 @@ const finalizeJobFailure = createJobFailureFinalizer({
   activeSlots: activeProcs,
   label: 'codex image generation',
   events: imageGenEvents,
-  failedPayload: (jobId, reason, proc) => ({ mode: IMAGE_GEN_MODE.CODEX, generationId: jobId, error: reason, inputProcessSettled: !proc || !proc.pid || typeof proc.exitCode === 'number' || typeof proc.signalCode === 'string' }),
+  failedPayload: (jobId, reason, proc) => {
+    const job = jobs.get(jobId);
+    return {
+      mode: IMAGE_GEN_MODE.CODEX,
+      generationId: jobId,
+      error: reason,
+      ...(job ? { initImageFilename: job.initImageFilename, referenceImageFilenames: job.referenceImageFilenames } : {}),
+      inputProcessSettled: !proc || !proc.pid || typeof proc.exitCode === 'number' || typeof proc.signalCode === 'string',
+    };
+  },
 });
 
 // Codex has used both `ig_*.png` and `exec-*.png`; the per-session directory is

@@ -52,6 +52,13 @@ const executionProvenance = (value) => {
   };
 };
 
+const SAFE_IMAGE_FILENAME_RE = /^[^\x00-\x1f?#]+\.(?:png|jpe?g|webp|gif)$/i;
+const safeImageFilename = (value) => {
+  if (typeof value !== 'string') return null;
+  const filename = value.split(/[\\/]/).pop();
+  return filename && SAFE_IMAGE_FILENAME_RE.test(filename) ? filename : null;
+};
+
 // A history row must retain usable reference evidence without exposing worker paths.
 // Missing old inputs mean unknown provenance, not a confirmed text-only render.
 const referenceInputs = (params, routed) => {
@@ -62,10 +69,9 @@ const referenceInputs = (params, routed) => {
       ...(Array.isArray(params?.reviewedReferenceRequest?.referenceImagePaths || params?.referenceImagePaths) ? (params?.reviewedReferenceRequest?.referenceImagePaths || params.referenceImagePaths).map(path => ({ role: 'referenceImages', path })) : []),
     ];
   return inputs.flatMap(input => {
-    if (!['initImage', 'referenceImages'].includes(input?.role) || typeof input?.path !== 'string') return [];
-    const filename = input.path.split(/[\\/]/).pop();
-    if (!filename || !/^[^\x00-\x1f?#]+\.(?:png|jpe?g|webp|gif)$/i.test(filename)) return [];
-    return [{ role: input.role, filename }];
+    if (!['initImage', 'referenceImages'].includes(input?.role)) return [];
+    const filename = safeImageFilename(input?.path);
+    return filename ? [{ role: input.role, filename }] : [];
   });
 };
 
@@ -120,8 +126,12 @@ export function sanitizeJob(job) {
     if (typeof remoteModelId === 'string' && remoteModelId) safeParams.modelId = remoteModelId;
   }
   const requestedInputImages = job.kind === 'image' ? referenceInputs(job.params, routed) : [];
+  const referenceImageFilenames = job.kind === 'image' && Array.isArray(job.referenceImageFilenames)
+    ? job.referenceImageFilenames.map(safeImageFilename).filter(Boolean)
+    : null;
   return {
     ...(requestedInputImages.length ? { requestedInputImages } : {}),
+    ...(referenceImageFilenames ? { referenceImageFilenames } : {}),
     id: job.id,
     kind: job.kind,
     // Where this job renders. Job metadata, not a render input, so it rides on
