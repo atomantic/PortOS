@@ -154,6 +154,39 @@ describe.skipIf(!chrome)('mood board in Chromium', () => {
     await page.close();
   });
 
+  it('collapses item prompts independently and preserves edits and source URLs', async () => {
+    const items = [
+      { id: 'analyzed', type: 'image', analysis: { prompt: 'Dreamy grain' }, source: 'https://example.com/reference?id=1' },
+      { id: 'generated', type: 'image', prompt: 'Soft light', source: 'HTTP://example.com/other' },
+    ];
+    const { page, boards, state } = await openBoard(fixture, { width: 390, height: 844 }, undefined, items);
+    try {
+      await page.getByRole('button', { name: 'Close board tools' }).click();
+      const summaries = page.locator('summary').filter({ hasText: /^Prompt text$/ });
+      const analyzed = page.getByLabel('Analyzed prompt', { exact: true });
+      const generated = page.getByLabel('Item prompt', { exact: true });
+      expect(await analyzed.isVisible()).toBe(false);
+      expect(await generated.isVisible()).toBe(false);
+      expect(await page.getByText('example.com/reference?id=1', { exact: true }).count()).toBe(1);
+      expect(await page.getByText('example.com/other', { exact: true }).count()).toBe(1);
+      expect(await page.getByRole('link', { name: 'Visit source' }).first().getAttribute('href')).toBe(items[0].source);
+      await summaries.first().focus();
+      await page.keyboard.press('Enter');
+      await analyzed.fill('Dreamy fuzzy texture');
+      await summaries.first().click();
+      await vi.waitFor(() => expect(state.updates).toHaveLength(1));
+      expect(await analyzed.isVisible()).toBe(false);
+      await summaries.first().focus();
+      await page.keyboard.press('Space');
+      expect(await analyzed.inputValue()).toBe('Dreamy fuzzy texture');
+      expect(await analyzed.isVisible()).toBe(true);
+      expect(await generated.isVisible()).toBe(false);
+      expect(boards.a.items[0].source).toBe(items[0].source);
+      expect(state.updates[0].patch).not.toHaveProperty('source');
+      expect(state.errors).toEqual([]);
+    } finally { await page.close(); }
+  });
+
   it('layers the board poster preview above analyzed tags and restores the board on close', async () => {
     const item = { id: 'analyzed-pin', type: 'image', imageUrl: '/data/images/pin.png', analysis: { prompt: 'Soft dreamlike scene' } };
     const { page, state } = await openBoard(fixture, { width: 1440, height: 900 }, undefined, [item], { posterImageRef: 'poster.png' });
@@ -203,6 +236,7 @@ describe.skipIf(!chrome)('mood board in Chromium', () => {
     const item = { id: 'prompt-pin', type: 'image', prompt: initial, caption: initial };
     const { page, boards, state } = await openBoard(fixture, { width: 1440, height: 900 }, undefined, [item]);
     try {
+      await page.locator('summary').filter({ hasText: /^Prompt text$/ }).click();
       const field = page.getByLabel('Item prompt', { exact: true });
       const dimensions = () => field.evaluate(el => ({
         height: el.getBoundingClientRect().height,
