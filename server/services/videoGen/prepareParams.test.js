@@ -59,6 +59,7 @@ vi.mock('../../lib/fileUtils.js', () => ({
   unlinkGuarded: unlinkMock,
   copyFileGuarded: copyFileMock,
   assertFileNotMediaManifest: assertManifestMock,
+  sha256File: vi.fn(async () => 'a'.repeat(64)),
 }));
 
 vi.mock('fs', () => ({ existsSync: vi.fn(() => true) }));
