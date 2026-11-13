@@ -46,6 +46,32 @@ PortOS packages installed Three.js, license, local fonts, validated author funct
 
 Code-only autopilot preserves text direction and defaults to this document authoring path, retaining explicitly saved legacy Code choices. It never requests image guides or an image/video provider. Code-rendered prototypes and visual planning remain required by the production review workflow; skipping raster moodboard assets is not approval to skip art direction.
 
+## Cel template for drawn-character films
+
+For a hand-authored drawn film, choose **Compose → Document → Document source →
+Cel — drawn characters**, then **Start from template**, or call
+`POST /api/music-video/:id/composition/document/template` with `{ "template": "cel" }`.
+It imports an editable original figure and garden scene with a wide beat-locked
+walk and a close rack-focus shot; no selected image/video or provider call is
+needed. Fork or export first when replacing an existing document that must remain
+independently editable.
+
+The local static modules in `documentTemplates/cel/` supply cached painted
+planes and optical finish (`kit/stage.js`), true-depth cel forms and ink
+(`cel.js`, `solid.js`, `core.js`), a posable figure with two-bone IK, skirt and
+trailing hair (`figure.js`, `head.js`, `skeleton.js`), authored walk on twos with
+planted feet (`walk.js`), joint-path retargeting (`mocap.js`), and beat/bar timing
+with a chosen anchor (`song.js`). The optional captured `kit/motion/walk.js`
+retains its CMU source credit and terms beside it in `CREDITS.txt`; keep these
+when reusing that motion. The default example uses the authored gait.
+
+Customize the figure, palette, painted scenery and shot schedule in the copied
+files. Keep every pose and effect a pure function of absolute song time; seek
+backwards as well as forwards. Inspect the figure's silhouettes, cloth, feet,
+parallax and focus through motion, not just one still. The template's valid
+preview/excerpt is a technical starting point, not approval of a film's art or
+choreography. See `docs/HTML_COMPOSITIONS.md` for the import/render contract.
+
 ## Toon worlds
 
 Use the shared `toonWorld.js` kit for cel worlds. Import it at the document root

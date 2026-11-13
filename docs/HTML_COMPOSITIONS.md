@@ -521,14 +521,15 @@ ordinary layer under the look.
 
 A Music Video project can own its whole edit as a composition document: set
 the render style to **Composition document** (`composition.mode: "document"`)
-and start from the shipped `layered` template, import a `.zip`, or copy a
+and start from the shipped `layered` or `cel` template, import a `.zip`, or copy a
 folder that already sits inside `data/`. Each import is an immutable version
 folder under `data/music-video/<projectId>/composition/`; imports refuse
 symlinks, special files, traversal names and the reserved names below
 (`server/services/musicVideo/compositionDocument.js`). Routes, all under
 `/api/music-video/:id/composition/document`: `GET` (manifest), `POST /zip`
 (multipart `file`), `POST /directory` (`{ directory }`), `POST /template`
-(`{ template: "layered" }`), `GET /export` (zip), `GET /preview`,
+(`{ template: "layered" }` or `{ template: "cel" }`; omitted means `layered`),
+`GET /export` (zip), `GET /preview`,
 `GET /playback` (`{ native, reason?, data? }`: whether the document is the unmodified
 shipped template),
 `GET /file?path=` (one document file, served inert), `DELETE` (detach).
@@ -635,6 +636,91 @@ Plex Sans Condensed, Big Shoulders Stencil Display, Archivo) are SIL Open Font
 License; the licenses ship beside them. Once copied into a project the files
 are the project's to edit — project-specific cards belong there, not in the
 template.
+
+### Cel template: drawn-character films
+
+In **Compose → Document → Document source**, choose **Cel — drawn characters**
+and **Start from template**, or send `{ "template": "cel" }` to the template
+endpoint. This is an editable code-rendered starting scene, not an LLM call:
+it needs no selected stills or footage to preview or render an excerpt. It uses
+the same immutable import, sandbox and `portosComposition.seek(t)` contract.
+
+The template lives in `server/services/musicVideo/documentTemplates/cel/`:
+
+- `main.js` composes an original garden scene with a wide walking shot and a
+  close shot with rack focus. Replace these example shots with the film's own
+  direction; template rendering does not approve a production's art or proof.
+- `kit/stage.js` caches painted planes and combines layer parallax/blur with
+  one optical finish: bloom, color misregistration, diffusion and seeded grain.
+- `kit/cel.js`, `solid.js` and `core.js` draw true-depth posed forms with flat
+  paint, a shadow tone, cast shadows and silhouette/color/depth-step ink.
+- `kit/figure.js`, `head.js` and `skeleton.js` provide a posable original figure,
+  two-bone IK, a skirt draped over the legs, trailing hair and surface-attached
+  face/fold details. Palette and geometry are editable source, not a fixed
+  character asset.
+- `kit/walk.js` supplies the default authored beat-locked gait. The pose is
+  held on twos while planted feet remain attached to the ground.
+  `kit/mocap.js` retargets captured or authored joint paths to the skeleton;
+  the optional captured walk in `kit/motion/walk.js` retains its CMU Graphics
+  Lab source credit and terms in the adjacent `CREDITS.txt`.
+- `kit/song.js` maps absolute song time to beats and bars with a chosen bar
+  anchor: `makeSong(mv, { anchorSec, beatsPerBar: 4 })` returns
+  `beatAt(t)`, `beatTime(beat)`, `barAt(t)` and `barTime(bar, beatWithinBar)`.
+  Bars start at 1; the default anchor is the first downbeat, then the first
+  beat. Edit the anchor and shot schedule rather than integrating time from
+  a previous frame.
+
+#### Authoring motion with the cel kit
+
+To replace the default authored gait with the bundled captured walk, keep the
+absolute-time drawing hold but feed the returned skeleton to `buildFigure`:
+
+```js
+import capturedWalk from './kit/motion/walk.js';
+import { walkOn } from './kit/mocap.js';
+import { buildFigure } from './kit/figure.js';
+
+const beat = song.beatAt(timeSec);
+const heldTime = Math.floor(timeSec * fps / 2) * 2 / fps;
+const heldBeat = song.beatAt(heldTime);
+const { sk } = walkOn(capturedWalk, beat, heldBeat, {
+  heading: Math.PI / 2, origin: [-2, 0], beatsPerCycle: 2,
+});
+const figure = buildFigure(sk);
+```
+
+`walkOn` uses clip travel and foot-plant weights to keep the held pose's stance
+foot fixed while its root travels. For a non-walking joint-path clip, sample the
+rows directly and retarget them. `sampleRow` interpolates a fractional frame;
+`false` for the third (`loop`) argument holds the first/last frame outside
+the clip. Looping clips include a duplicate terminal row.
+
+```js
+import { sampleRow, retarget } from './kit/mocap.js';
+const row = sampleRow(capturedWalk, timeSec * capturedWalk.n / capturedWalk.seconds);
+const skeleton = retarget(row, capturedWalk, { yaw: 0.4, at: [0, 0, 0] });
+```
+
+Joint rows use the ordered names in the clip's `joints` array, XYZ per joint,
+followed by head-forward, head-up and four hand-axis vectors. Metadata supplies
+source leg/arm lengths, ankle height and resting foot angle so retargeting fits
+the example figure instead of stretching its bones.
+
+For an authored reach rather than a captured clip, `ik2` provides a two-bone
+chain. Its target and bend pole are in world coordinates/directions, and lengths
+are metres. Targets beyond reach are clamped while preserving both bone lengths:
+
+```js
+import { ik2 } from './kit/skeleton.js';
+const shoulder = [0.15, 1.4, 0];
+const target = [0.35, 1.15, 0.25];
+const { mid: elbow, end: wrist } = ik2(shoulder, target, 0.262, 0.232, [0, -1, -0.3]);
+```
+
+All imports are static and local. Seek backwards and out of order when testing
+edits; do not add wall clocks, unseeded randomness, network loads or incremental
+physics. The shared Three.js `toonWorld.js` below is a separate geometry-world
+kit, not a dependency of this painted-stage cel template.
 
 ### Shared kinetic lyric type (`lyricType.js`)
 

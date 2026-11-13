@@ -549,6 +549,27 @@ describe('music-video composition documents', () => {
     expect(versionsOf(project.id)).toHaveLength(1);
   });
 
+  // The new template must survive the real importer/module bundler, not merely its enum.
+  it('imports the cel module tree without tests and builds a sandboxed preview', async () => {
+    const created = await request(app).post(`/api/music-video/${project.id}/composition/document/template`).send({ template: 'cel' });
+    expect(created.status).toBe(201);
+    expect(created.body.document.source).toEqual({ kind: 'template', name: 'cel' });
+    expect((await projects.getProject(project.id)).composition.document).toEqual(created.body.document);
+    const dir = join(ROOT(), created.body.document.directory);
+    for (const name of ['index.html', 'main.js', 'kit/figure.js', 'kit/stage.js', 'kit/song.js', 'kit/walk.js']) {
+      expect(existsSync(join(dir, name)), name).toBe(true);
+    }
+    const manifest = await request(app).get(`/api/music-video/${project.id}/composition/document`);
+    expect(manifest.status).toBe(200);
+    expect(manifest.body.files.some(({ path }) => /\.test\.[cm]?js$/.test(path))).toBe(false);
+    const preview = await request(app).get(`/api/music-video/${project.id}/composition/document/preview`);
+    expect(preview.status).toBe(200);
+    expect(preview.body.html).toContain("default-src 'none'");
+    expect(preview.body.html).toContain('window.PORTOS_MV = ');
+    expect(preview.body.html).toContain('portosComposition');
+    expect(preview.body).toMatchObject({ width: 1920, height: 1080, fps: 24 });
+  });
+
   it('starts from the shipped layered template, and a re-import prunes the version nothing points at', async () => {
     const first = await request(app).post(`/api/music-video/${project.id}/composition/document/template`).send({});
     expect(first.status).toBe(201);

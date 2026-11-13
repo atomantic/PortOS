@@ -123,6 +123,57 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     } finally { await closeFixture(); }
   }, 35000);
 
+  // #15950: exercise the shipped module graph through preview's sandbox and
+  // the real excerpt encoder, not a hand-built canvas fixture.
+  it('previews cel animation at three song times and renders a no-edit excerpt', async () => {
+    const created = await projects.createProject({ name: 'Cel template proof' });
+    await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 16, bpm: 120, beats: Array.from({ length: 33 }, (_, i) => i / 2), sections: [] },
+    } }));
+    await importDocumentTemplate(created.id, 'cel');
+    const project = await projects.getProject(created.id);
+    const preview = await buildDocumentPreview(project);
+    const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    try {
+      await page.setContent(preview.html);
+      await page.waitForFunction(() => globalThis.portosComposition);
+      const frames = [];
+      for (const t of [0.5, 3, 13, 0.5]) {
+        frames.push(await page.evaluate(async time => {
+          await globalThis.portosComposition.seek(time);
+          const source = document.getElementById('stage');
+          const sample = document.createElement('canvas'); sample.width = 64; sample.height = 36;
+          const context = sample.getContext('2d'); context.drawImage(source, 0, 0, 64, 36);
+          const bytes = [...context.getImageData(0, 0, 64, 36).data];
+          return { width: source.width, height: source.height, bytes };
+        }, t));
+        if (process.env.PORTOS_CEL_PROOF_DIR) {
+          await mkdir(process.env.PORTOS_CEL_PROOF_DIR, { recursive: true });
+          await page.screenshot({ path: join(process.env.PORTOS_CEL_PROOF_DIR, `cel-${t}.png`) });
+        }
+      }
+      expect(errors).toEqual([]);
+      expect(frames[0]).toEqual(frames[3]);
+      expect(new Set(frames.slice(0, 3).map(frame => JSON.stringify(frame.bytes))).size).toBe(3);
+      for (const frame of frames) {
+        expect(frame.width).toBe(1920); expect(frame.height).toBe(1080);
+        expect(new Set(frame.bytes.filter((_, i) => i % 4 !== 3)).size).toBeGreaterThan(32);
+      }
+    } finally { await page.close(); }
+    await mkdir(PATHS.music, { recursive: true });
+    await mkdir(PATHS.videos, { recursive: true });
+    const audio = join(PATHS.music, 'cel-proof.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=16', audio]);
+    const output = join(PATHS.videos, 'cel-proof.mp4');
+    await encodeDocumentComposition({ project, plan: await prepareDocumentRender(project), jobId: 'cel-proof',
+      audioPath: audio, outputPath: output, windowStart: 3, windowEnd: 3.125 });
+    const pixels = execFileSync(ffmpeg, ['-v', 'error', '-i', output, '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    expect(pixels.length).toBe(3 * 64 * 36 * 3);
+    expect(new Set(pixels).size).toBeGreaterThan(32);
+  }, 90000);
+
   // Five solid photos as one still shot: the encoded full render and a
   // mid-shot excerpt, plus a live preview page whose `pixel(frame, x, y)` reads
   // the Canvas at frame centre offsets (fractions of the frame, 64x36 readback).
