@@ -72,3 +72,40 @@ it('authorizes audio during the Play gesture while keeping the lead-in silent an
   expect(element.currentTime).toBeCloseTo(0.5, 1);
   expect(screen.getByRole('button', { name: 'Pause film' })).toBeTruthy();
 });
+
+it.each(['resolve', 'reject'])('keeps replacement audio playing when an old silent start later %ss', async (settlement) => {
+  vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1));
+  vi.stubGlobal('cancelAnimationFrame', vi.fn());
+  const state = { settings: { fps: 24 }, manifest: { shots: [{ id: 'lead', start: -1, end: 0 }, { id: 'song', start: 0, end: 2 }] }, renders: {} };
+  const props = { state, durationSec: 2, mediaUrl: path => `/film?path=${path}` };
+  const view = render(<FilmLivePreview {...props} audioUrl="/old-song.wav" />);
+  const element = view.container.querySelector('audio');
+  let paused = true;
+  let settle;
+  const oldPlay = new Promise((resolve, reject) => { settle = settlement === 'resolve' ? resolve : () => reject(new Error('Old source canceled')); });
+  Object.defineProperty(element, 'paused', { get: () => paused });
+  element.pause = vi.fn(() => { paused = true; });
+  element.play = vi.fn().mockImplementationOnce(() => { paused = false; return oldPlay; })
+    .mockImplementation(() => { paused = false; return Promise.resolve(); });
+
+  fireEvent.click(screen.getByRole('button', { name: 'Play film' }));
+  expect(element.volume).toBe(0);
+  view.rerender(<FilmLivePreview {...props} audioUrl="/new-song.wav" />);
+  expect(view.container.querySelector('audio')).toBe(element);
+  expect(element.volume).toBe(1);
+  fireEvent.change(screen.getByLabelText('Film time'), { target: { value: '1.5' } });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Play film' })); });
+  expect(element.paused).toBe(false);
+  expect(element.currentTime).toBe(0.5);
+  element.currentTime = 0.75;
+  element.volume = 0.65;
+  const pauses = element.pause.mock.calls.length;
+
+  await act(async () => { settle(); });
+  expect(element.getAttribute('src')).toBe('/new-song.wav');
+  expect(element.pause).toHaveBeenCalledTimes(pauses);
+  expect(element.paused).toBe(false);
+  expect(element.currentTime).toBe(0.75);
+  expect(element.volume).toBe(0.65);
+  expect(screen.getByRole('button', { name: 'Pause film' })).toBeTruthy();
+});

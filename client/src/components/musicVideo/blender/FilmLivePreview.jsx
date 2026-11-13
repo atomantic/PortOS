@@ -13,6 +13,7 @@ export default function FilmLivePreview({ state, durationSec, audioUrl, mediaUrl
   const audio = useRef(null);
   const clock = useRef(0);
   const playRequest = useRef(0);
+  const silentStart = useRef(null);
   const starts = (state?.manifest?.shots || []).map(item => item.start).filter(value => Number.isFinite(value));
   const leadSec = starts.length ? Math.max(0, -Math.min(0, Math.min(...starts))) : 0;
   const totalSec = leadSec + (Number(durationSec) || 0);
@@ -23,7 +24,16 @@ export default function FilmLivePreview({ state, durationSec, audioUrl, mediaUrl
 
   useEffect(() => {
     setStarting(false);
-    return () => { playRequest.current += 1; };
+    return () => {
+      playRequest.current += 1;
+      // React can reuse the audio element for another source. Restore its
+      // temporary volume before that source starts its own playback request.
+      if (silentStart.current) {
+        silentStart.current.element.pause();
+        silentStart.current.element.volume = silentStart.current.volume;
+        silentStart.current = null;
+      }
+    };
   }, [audioUrl]);
 
   useEffect(() => {
@@ -88,21 +98,24 @@ export default function FilmLivePreview({ state, durationSec, audioUrl, mediaUrl
     const element = audio.current;
     if (!element) { setPlaying(true); return; }
     const request = ++playRequest.current;
+    const isCurrent = () => playRequest.current === request && audio.current === element && element.getAttribute('src') === audioUrl;
     const beforeSong = clock.current < leadSec;
     const volume = element.volume;
     element.currentTime = Math.max(0, clock.current - leadSec);
     // Start this media element during the click so browsers grant it playback.
     // The silent start is paused only once play resolves; the song remains at 0
     // until the timeline reaches it, without depending on a later user gesture.
-    if (beforeSong) element.volume = 0;
+    if (beforeSong) { silentStart.current = { element, volume }; element.volume = 0; }
     setStarting(true);
     element.play().then(() => {
-      if (beforeSong) { element.pause(); element.currentTime = 0; element.volume = volume; }
-      if (playRequest.current === request && audio.current === element) setPlaying(true);
+      if (!isCurrent()) return;
+      if (beforeSong) { element.pause(); element.currentTime = 0; element.volume = volume; silentStart.current = null; }
+      setPlaying(true);
     }).catch(() => {
-      if (beforeSong) element.volume = volume;
-      if (playRequest.current === request) setPlaying(false);
-    }).finally(() => { if (playRequest.current === request) setStarting(false); });
+      if (!isCurrent()) return;
+      if (beforeSong) { element.volume = volume; silentStart.current = null; }
+      setPlaying(false);
+    }).finally(() => { if (isCurrent()) setStarting(false); });
   };
   return <section aria-label="Film live preview" className="space-y-2 rounded-lg border border-port-border p-3">
     <h3 className="text-sm font-medium">Film (live)</h3>
