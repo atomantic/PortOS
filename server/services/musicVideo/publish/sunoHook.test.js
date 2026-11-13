@@ -92,9 +92,11 @@ describe('pickSongRow', () => {
 // window pill, a window that opens at Suno's own suggestion, and a waveform where 22.2 px of drag
 // moves the window one second (dragging right moves it earlier). `stuckAt` stops the window there.
 const fmt = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
-function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = false, delayedSongResults = false, failedSearch = false, searchStatus = 200, searchStatuses = [searchStatus], pageRetries = false, otherCall = null, songIdInRows = false, appliedAfterPoll = 1, ambiguousReadout = false, noWindowReadout = false, waveformKind = 'identified', ambiguousWaveform = false } = {}) {
+const fmtMs = (sec) => `${Math.floor(sec / 60)}:${(sec % 60).toFixed(3).padStart(6, '0')}`;
+function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = false, delayedSongResults = false, failedSearch = false, searchStatus = 200, searchStatuses = [searchStatus], pageRetries = false, otherCall = null, songIdInRows = false, readoutBottom = 390, hoverTimes = false, cutSec = 26, nextDisabled = false, appliedAfterPoll = 1, ambiguousReadout = false, noWindowReadout = false, waveformKind = 'identified', ambiguousWaveform = false } = {}) {
   const state = { windowAt, clicked: [], drags: 0, lyrics: true, songRows: [{ text: 'Night Drive 3:42', html: '' }], songPolls: 0, typed: 0, searches: 0, searchDue: false, appliedAt: null };
-  const rect = (bottom) => ({ left: 100, right: 200, bottom });
+  // A label is 26 px tall, like Suno's window pill.
+  const rect = (bottom) => ({ left: 100, right: 200, top: bottom - 26, bottom });
   const leaf = (text, bottom, parentText = text) => ({ children: [], textContent: text,
     getClientRects: () => [rect(bottom)], getBoundingClientRect: () => rect(bottom),
     parentElement: { textContent: parentText, querySelector: () => null } });
@@ -104,15 +106,18 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
   const dom = {
     'body *': () => [
       leaf('0:00', 399, '0:00 / 0:26'),
-      ...(noWindowReadout ? [] : [leaf(fmt(state.windowAt), 390)]),
+      ...(noWindowReadout ? [] : [leaf(fmt(state.windowAt), readoutBottom)]),
       leaf('3:42', ambiguousReadout ? 390 : 250), leaf('3:42', 500),
+      // The 2026-11 editor shows the song time under the pointer; the window box is centred on the pill (x = 150).
+      ...(hoverTimes && page.lastX != null ? [leaf(fmtMs(state.windowAt + cutSec / 2 + (page.lastX - 150) / pxPerSec), 470)] : []),
     ],
+    video: () => (hoverTimes ? [{ duration: cutSec }] : []),
     '[data-testid*="waveform" i]': () => waveformKind === 'identified' ? [waveform] : [],
     '[class*=waveform]': () => waveformKind === 'legacy' ? [waveform] : [],
     '[role="slider"]': () => waveformKind === 'slider' ? [waveform] : [],
     canvas: () => waveformKind === 'canvas' ? (ambiguousWaveform ? [waveform, { ...waveform }] : [waveform]) : [],
     '[role=dialog] button': () => state.songRows.map(({ text, html }) => ({ innerText: 'Use', innerHTML: html, parentElement: { innerText: `${text}\nUse`, innerHTML: html, querySelectorAll: () => [1] } })),
-    'button,[role=button]': () => [{ offsetParent: {}, innerText: 'Next', click: () => state.clicked.push('Next') }],
+    'button,[role=button]': () => [{ offsetParent: {}, innerText: 'Next', disabled: nextDisabled, click: () => state.clicked.push('Next') }],
     'span,div,label': () => [{ children: [], textContent: 'Show Lyrics', parentElement: { querySelector: () => ({ getAttribute: () => 'true', click: () => state.clicked.push('Show Lyrics') }) } }],
   };
   const visibleSongButton = restored ? 'Replace Song' : 'Select Song';
@@ -238,6 +243,33 @@ describe('Suno Hook fill (#10860)', () => {
   it.each(['slider', 'canvas', 'legacy'])('finds the window through the %s compatibility path', async (waveformKind) => {
     const page = hookPage({ windowAt: 20, waveformKind });
     expect(await sunoHookAdapter.prepare(page, hookPayload())).toMatchObject({ windowStart: 20 });
+  });
+
+  it("reads a window pill that straddles the waveform's top edge, as Suno draws it", async () => {
+    // The waveform's top is at 400; the pill's bottom sits two pixels below it.
+    const page = hookPage({ windowAt: 80, readoutBottom: 402 });
+    const summary = await sunoHookAdapter.prepare(page, hookPayload({ startSec: 35 }));
+    expect(Math.abs(summary.windowStart - 35)).toBeLessThanOrEqual(1);
+    expect(page.state.drags).toBeGreaterThan(0);
+  });
+
+  it('sets the window from the hover time to a tenth of a second where the page shows one', async () => {
+    const page = hookPage({ windowAt: 80.78, hoverTimes: true });
+    const summary = await sunoHookAdapter.prepare(page, hookPayload({ startSec: 35.41 }));
+    expect(Math.abs(summary.windowStart - 35.41)).toBeLessThanOrEqual(0.1);
+    expect(Math.abs(page.state.windowAt - 35.41)).toBeLessThanOrEqual(0.1);
+
+    // A window that will not go where the cut starts is refused at that precision too.
+    const stuck = hookPage({ windowAt: 80.78, hoverTimes: true, stuckAt: 60 });
+    await expect(sunoHookAdapter.prepare(stuck, hookPayload({ startSec: 35.41 })))
+      .rejects.toThrow('Suno Hook: set the audio window (the window starts at 1:00.00, wanted 0:35.41)');
+    expect(stuck.state.clicked).not.toContain('Next');
+  });
+
+  it('waits for Next instead of clicking it while Suno is still processing the upload', async () => {
+    const page = hookPage({ windowAt: 20, nextDisabled: true });
+    await expect(sunoHookAdapter.prepare(page, hookPayload())).rejects.toThrow(/open the Post Hook dialog/);
+    expect(page.state.clicked).not.toContain('Next');
   });
 
   it('refuses a missing window readout even when another timestamp matches the requested start', async () => {

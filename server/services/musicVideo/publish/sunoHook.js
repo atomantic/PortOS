@@ -9,7 +9,9 @@
  * above the box; the player clock ("0:00 / 0:26") beside it is not. So the
  * window is set by read, drag, re-read: each drag is sized from the gap at the
  * current px-per-second estimate, recalibrated from what the drag moved, and
- * the fill fails rather than post the wrong stretch (#10860).
+ * the fill fails rather than post the wrong stretch (#10860). The pill shows
+ * whole seconds (and start plus elapsed while the preview plays), so where the
+ * page shows a hover time under the waveform the window is set from that.
  */
 import { SUNO_LEGACY_CLASSES } from '../sunoControls.js';
 import { pickSongRow } from '../../../lib/sunoSongPicker.js';
@@ -21,10 +23,18 @@ const label = 'Suno Hook';
 const WAVEFORM_PX_PER_SEC = 22.2;
 // The page's readout is a rounded m:ss, so a one-second miss is the finest check it can support.
 const READBACK_TOLERANCE_SEC = 1;
+// Hovering the waveform shows the song time under the pointer to the millisecond (2026-11
+// editor), which lets the window be set and checked far finer than the pill's whole seconds.
+const EXACT_TOLERANCE_SEC = 0.1;
+const EXACT_STEP_SEC = 0.03;
+const HOVER_SPAN_PX = 150;
+const HOVER_TRIES = 6;
+const HOVER_SETTLE_MS = 200;
 // One drag stays on the waveform, so a window far from the target takes several.
 const MAX_DRAGS = 20;
 const WAVEFORM = '[data-portos-hook-waveform]';
-// The readout belongs immediately above the window, not elsewhere on the page.
+// The readout belongs immediately above the window, not elsewhere on the page. Suno's pill
+// straddles the window's top edge by a few pixels, so "above" is judged by the pill's middle.
 const WINDOW_READOUT_GAP_PX = 48;
 const SONG_RESULTS_POLL_MS = 250;
 // One search gets this many polls (10 s) to answer and settle.
@@ -198,7 +208,7 @@ function markHookWaveform({ legacyWaveformSelector, maxReadoutGap }) {
     const box = el.getBoundingClientRect();
     return box.width >= 160 && box.height >= 24 && clocks.some((clock) => {
       const label = clock.getBoundingClientRect();
-      return label.bottom <= box.top && box.top - label.bottom <= maxReadoutGap && label.right >= box.left && label.left <= box.right;
+      return (label.top + label.bottom) / 2 <= box.top && box.top - label.bottom <= maxReadoutGap && label.right >= box.left && label.left <= box.right;
     });
   });
   const candidates = identified.length ? identified : sliders.length ? sliders : legacy.length ? legacy : canvases;
@@ -209,18 +219,18 @@ function markHookWaveform({ legacyWaveformSelector, maxReadoutGap }) {
   return true;
 }
 
-/** The closest visible m:ss readout above this waveform, excluding player clocks. */
-function pickWindowStart(labels, box) {
+/** The closest visible m:ss readout above this waveform, excluding player clocks (null when ambiguous). */
+function pickWindowPill(labels, box) {
   const candidates = labels.filter((entry) => /^\d+:\d{2}$/.test(entry.text)
     && !entry.playerClock
-    && entry.bottom <= box.y && box.y - entry.bottom <= WINDOW_READOUT_GAP_PX && entry.right >= box.x && entry.left <= box.x + box.width)
+    && (entry.top + entry.bottom) / 2 <= box.y && box.y - entry.bottom <= WINDOW_READOUT_GAP_PX && entry.right >= box.x && entry.left <= box.x + box.width)
     .sort((a, b) => b.bottom - a.bottom);
   if (!candidates.length || candidates[1]?.bottom === candidates[0].bottom) return null;
-  return parseClock(candidates[0].text);
+  return candidates[0];
 }
 
-/** The window's start as the page reports it, in seconds (null when ambiguous). */
-async function readWindowStart(page) {
+/** The window's pill as the page shows it: its whole seconds and where its centre is (null when ambiguous). */
+async function readWindowPill(page) {
   const box = await page.locator(WAVEFORM).boundingBox();
   if (!box) return null;
   const labels = await page.evaluate(() => [...document.querySelectorAll('body *')]
@@ -237,20 +247,61 @@ async function readWindowStart(page) {
       }
       const rect = el.getBoundingClientRect();
       return { text: el.textContent.trim(), playerClock,
-        left: rect.left, right: rect.right, bottom: rect.bottom };
+        left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
     }));
-  return pickWindowStart(labels, box);
+  const pill = pickWindowPill(labels, box);
+  return pill ? { seconds: parseClock(pill.text), cx: (pill.left + pill.right) / 2 } : null;
+}
+
+/** The window's start as the pill reports it, in whole seconds (null when ambiguous). */
+const readWindowStart = async (page) => (await readWindowPill(page))?.seconds ?? null;
+
+/** The song time Suno shows under the pointer at (x, y) on the waveform, in seconds (null when it shows none). */
+async function hoverSongTime(page, x, y) {
+  for (let attempt = 0; attempt < HOVER_TRIES; attempt += 1) {
+    // The label appears a beat after the pointer moves, and only for a move it sees.
+    await page.mouse.move(x - 4 - attempt, y - 2);
+    await page.mouse.move(x, y, { steps: 4 });
+    await page.waitForTimeout(HOVER_SETTLE_MS);
+    const text = await page.evaluate(() => [...document.querySelectorAll('body *')]
+      .find((el) => el.children.length === 0 && /^\d+:\d{2}\.\d{3}$/.test(el.textContent.trim())
+        && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden')?.textContent.trim() ?? null);
+    const match = /^(\d+):(\d{2})\.(\d{3})$/.exec(text || '');
+    if (match) return Number(match[1]) * 60 + Number(match[2]) + Number(match[3]) / 1000;
+  }
+  return null;
 }
 
 /**
- * Move the window to `startSec` from wherever Suno opened it: read the pill, drag the waveform
- * under the fixed box (right moves the window earlier), re-read, repeat until within a second.
+ * The window's start to the millisecond and the waveform's scale, from two hover times either
+ * side of the pill. The window box is centred on its pill and is as long as the cut, so it starts
+ * half a cut before the time under the pill's centre. Null when the page offers no hover time
+ * (an older editor) or no cut length: the pill's whole seconds are then all there is.
+ */
+async function measureWindow(page, { cx, y, left, right }) {
+  const cutSec = await page.evaluate(() => [...document.querySelectorAll('video')].map((v) => v.duration).find((d) => d > 0) ?? null);
+  const span = Math.min(HOVER_SPAN_PX, cx - left - 8, right - cx - 8);
+  if (!cutSec || span < 40) return null;
+  const before = await hoverSongTime(page, cx - span, y);
+  if (before == null) return null;
+  const after = await hoverSongTime(page, cx + span, y);
+  if (after == null || after <= before) return null;
+  return { start: (before + after) / 2 - cutSec / 2, pxPerSec: (2 * span) / (after - before) };
+}
+
+const fmtExact = (sec) => `${Math.floor(sec / 60)}:${(sec % 60).toFixed(2).padStart(5, '0')}`;
+
+/**
+ * Move the window to `startSec` from wherever Suno opened it by dragging the waveform under the
+ * fixed box (right moves the window earlier). Where the page shows a hover time the window is set
+ * and checked to a tenth of a second, since a second's error shows against the picture; otherwise
+ * by the pill: read, drag, re-read until within a second.
  */
 async function setWindowStart(page, startSec) {
   const target = Math.max(0, Number(startSec) || 0);
-  let at = await readWindowStart(page);
-  if (at == null) throw new Error('no window label to read');
-  if (Math.abs(at - target) <= READBACK_TOLERANCE_SEC) return at;
+  const pill = await readWindowPill(page);
+  if (!pill) throw new Error('no window label to read');
+  let at = pill.seconds;
   const box = await page.locator(WAVEFORM).first().boundingBox();
   if (!box) throw new Error('no waveform to set the window on');
   const viewport = page.viewportSize() ?? await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
@@ -262,15 +313,46 @@ async function setWindowStart(page, startSec) {
   const x = (left + right) / 2;
   const y = (top + bottom) / 2;
   const reach = (right - left) / 2 - 16;
-  let pxPerSec = WAVEFORM_PX_PER_SEC;
-  let direction = 1; // +1: dragging right moves the window earlier
-  let still = 0;
-  for (let drag = 0; drag < MAX_DRAGS && Math.abs(at - target) > READBACK_TOLERANCE_SEC; drag += 1) {
-    const dx = clamp((at - target) * pxPerSec * direction, -reach, reach);
+  const drag = async (dx) => {
     await page.mouse.move(x, y);
     await page.mouse.down();
     await page.mouse.move(x + dx, y, { steps: 20 });
     await page.mouse.up();
+  };
+
+  const place = { cx: pill.cx, y, left, right };
+  let exact = await measureWindow(page, place);
+  if (exact) {
+    let still = 0;
+    for (let n = 0; n < MAX_DRAGS && Math.abs(exact.start - target) > EXACT_STEP_SEC; n += 1) {
+      const dx = clamp((exact.start - target) * exact.pxPerSec, -reach, reach);
+      if (Math.abs(dx) < 1) break; // under a pixel is as close as a drag gets
+      await drag(dx);
+      const next = await measureWindow(page, place);
+      if (!next) throw new Error(`the hover time went missing (the window started at ${fmtExact(exact.start)}, wanted ${fmtExact(target)})`);
+      still = Math.abs(next.start - exact.start) < EXACT_STEP_SEC ? still + 1 : 0;
+      exact = next;
+      if (still >= 2) break; // the window no longer moves (the song's edge)
+    }
+    if (Math.abs(exact.start - target) > EXACT_TOLERANCE_SEC) {
+      throw new Error(`the window starts at ${fmtExact(exact.start)}, wanted ${fmtExact(target)}`);
+    }
+    // The pill shows the start's whole second while the preview is stopped; a hover time that
+    // disagrees with it was not read off this window.
+    const shown = await readWindowStart(page);
+    if (shown != null && Math.abs(shown - Math.floor(exact.start)) > READBACK_TOLERANCE_SEC) {
+      throw new Error(`the window label reads ${fmtClock(shown)} but the hover time puts it at ${fmtExact(exact.start)}`);
+    }
+    return Math.round(exact.start * 100) / 100;
+  }
+
+  if (Math.abs(at - target) <= READBACK_TOLERANCE_SEC) return at;
+  let pxPerSec = WAVEFORM_PX_PER_SEC;
+  let direction = 1; // +1: dragging right moves the window earlier
+  let still = 0;
+  for (let n = 0; n < MAX_DRAGS && Math.abs(at - target) > READBACK_TOLERANCE_SEC; n += 1) {
+    const dx = clamp((at - target) * pxPerSec * direction, -reach, reach);
+    await drag(dx);
     // Poll the readout after a drag; an unchanged value at the edge is handled below.
     const deadline = Date.now() + 2000;
     let now = await readWindowStart(page);
@@ -346,6 +428,9 @@ export const sunoHookAdapter = {
     await step(label, 'select the song', () => selectSong(page, payload));
     const windowStart = await step(label, 'set the audio window', () => setWindowStart(page, payload.startSec));
     await step(label, 'open the Post Hook dialog', async () => {
+      // Next stays disabled while Suno processes the upload; a click on it then does nothing.
+      await page.waitForFunction(() => [...document.querySelectorAll('button,[role=button]')]
+        .some((b) => b.offsetParent && (b.innerText || '').trim() === 'Next' && !b.disabled && b.getAttribute?.('aria-disabled') !== 'true'), null, { timeout: T });
       await clickVisibleText(page, 'Next');
       await page.locator('textarea[placeholder="Add a caption..."]').first().waitFor({ timeout: T });
     });
