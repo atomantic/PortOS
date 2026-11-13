@@ -31,11 +31,17 @@ describe('client/src/services/ catalog', () => {
     }
   });
 
-  it('every non-test source file has a README row', () => {
-    for (const f of sourceFiles) {
-      const base = f.replace(/\.(js|jsx)$/, '');
-      expect(README_SRC, `missing README entry for ${f}`).toContain(base);
-    }
+  it('lists every source file exactly once in the alphabetical module table', () => {
+    const section = README_SRC.split(/^## Modules$/m)[1]?.split(/^## /m)[0] ?? '';
+    const table = section.match(/\|[^\n]+\|\n\|[-| ]+\|\n(?:\|[^\n]+\|\n)+/)?.[0] ?? '';
+    const rows = [...table.matchAll(/^\| `([^`]+)` \|/gm)].map((m) => m[1]);
+    expect(section.match(/^\| `[^`]+` \|/gm) ?? [], 'rows must be in the contiguous module table').toHaveLength(rows.length);
+    const files = [...sourceFiles, 'api.js'].map((f) => f);
+    expect(files.filter((f) => !rows.includes(f)), 'missing README rows').toEqual([]);
+    expect(rows.filter((f, i) => rows.indexOf(f) !== i), 'duplicate README rows').toEqual([]);
+    expect(rows.filter((f) => !files.includes(f)), 'stale README rows').toEqual([]);
+    const sorted = [...rows].sort((a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0));
+    expect(rows, 'README rows must be in case-insensitive code-point order').toEqual(sorted);
   });
 });
 // @vitest-environment node
