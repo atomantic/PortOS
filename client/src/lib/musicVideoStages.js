@@ -461,7 +461,7 @@ const codeComposed = (project) => {
 const blenderShotsDone = (project) => blenderShotsReady(project?.blenderShots);
 
 const composeDone = (project, mode) => {
-  if (mode === 'composed') return (project.composition?.textCues || []).length > 0 || composedDrawsLyrics(project);
+  if (mode === 'composed') return project.composition?.noTypography === true || (project.composition?.textCues || []).length > 0 || composedDrawsLyrics(project);
   if (mode === 'document') return !!project.composition?.document;
   if (mode === 'eidoverse') return !!project.composition?.eidoverseScene?.inlineScript;
   if (mode === 'code') return codeComposed(project);
@@ -1179,7 +1179,9 @@ function footageItem(project, scenes) {
 // Make's composition row by render mode; concat and the other footage-only modes have none.
 const COMPOSITION_ITEMS = {
   // Timed lyrics with no subtitle cues are drawn by the render itself, as the player shows them.
-  composed: (composition, project) => composedDrawsLyrics(project)
+  composed: (composition, project) => composition.noTypography === true
+    ? { id: 'composition', label: 'No typography (dismissed)', done: true, action: { label: 'Undo', anchor: 'mv-typo-none' } }
+    : composedDrawsLyrics(project)
     ? { id: 'composition', label: 'Lyrics drawn over the footage', done: true }
     : { id: 'composition', label: 'Timed typography added', done: (composition.textCues || []).length > 0, action: { label: 'Add typography', anchor: 'mv-typo-font' } },
   document: (composition) => ({ id: 'composition', label: 'Composition document attached', done: !!composition.document, action: { label: 'Attach a document', anchor: 'mv-doc-folder' } }),
