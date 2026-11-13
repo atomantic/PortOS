@@ -209,7 +209,7 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
     return persisted;
   };
   // As a footage excerpt does: the film look re-encodes the finished window, on song time.
-  const finishing = Boolean(renderer.filmLookFinish) && filmLookFinishNeeded(project);
+  const finishing = Boolean(renderer.filmLookFinish) && filmLookFinishNeeded(project, { shotLooks: true });
   const encodeTop = finishing ? 0.5 : 1;
   Promise.resolve().then(() => renderer.encode({
     prepared, project: drawn, projectId, jobId, audioPath, soundBed, outputPath, signal, startSec, endSec: endClamped, fade, lookPass: finishing,
@@ -217,7 +217,7 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
   })).then(async (encoded) => {
     if (!finishing) return encoded;
     // `lookPassInputs`: what the encode left for the pass to draw over the look (a Blender film's steady title card).
-    await applyFilmLookFinish({ project, path: outputPath, jobId, offsetSec: startSec, signal, label: 'Music-video excerpt film look', ...encoded.lookPassInputs,
+    await applyFilmLookFinish({ project, shotLooks: true, path: outputPath, jobId, offsetSec: startSec, signal, label: 'Music-video excerpt film look', ...encoded.lookPassInputs,
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop + (1 - encodeTop) * fraction }) });
     return encoded;
   }).then(async (encoded) => {

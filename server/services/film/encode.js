@@ -4,7 +4,7 @@
  * yuv420p, BT.709, constant frame rate with a keyframe at least every second
  * and no audio, so shot videos join by stream copy.
  */
-import { rename, rm } from 'node:fs/promises';
+import { rename, rm, writeFile } from 'node:fs/promises';
 import { BT709_CONTAINER_ARGS, H264_ENCODE_ARGS, bt709TagFilter, findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { blenderRefusal } from './workspace.js';
 
@@ -129,6 +129,26 @@ export async function encodeBlenderPoster({ frame, output, signal }) {
   const args = ['-hide_banner', '-loglevel', 'error', '-i', frame, '-frames:v', '1',
     '-vf', 'scale=480:-2:flags=lanczos', '-q:v', '4', '-y', partial];
   await runBlenderFfmpeg(ffmpeg, args, { signal, what: 'Making the shot poster' }).catch(async (error) => {
+    await rm(partial, { force: true });
+    throw error;
+  });
+  await rename(partial, output);
+}
+
+/** Tile `frames` into a JPEG contact sheet at `output` (`columns` wide). */
+export async function encodeBlenderSheet({ frames, columns, listFile, output, signal }) {
+  const ffmpeg = await requireFfmpeg();
+  const rows = Math.ceil(frames.length / columns);
+  const concatBody = `${frames.map((frame) => `file '${String(frame).replace(/'/g, "'\\''")}'`).join('\n')}\n`;
+  await writeFile(listFile, concatBody);
+  const partial = `${output}.part.jpg`;
+  const args = [
+    '-hide_banner', '-loglevel', 'error',
+    '-f', 'concat', '-safe', '0', '-i', listFile,
+    '-vf', `scale=320:-2:flags=lanczos,tile=${columns}x${rows}:margin=4:padding=4:color=black`,
+    '-frames:v', '1', '-q:v', '3', '-y', partial,
+  ];
+  await runBlenderFfmpeg(ffmpeg, args, { signal, what: 'Tiling the contact sheet' }).catch(async (error) => {
     await rm(partial, { force: true });
     throw error;
   });

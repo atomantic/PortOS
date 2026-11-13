@@ -159,6 +159,43 @@ describe('film look finishing pass', () => {
     expect(existsSync(`${path}.look.mp4`)).toBe(false);
   });
 
+  // Windowing must resolve camera inheritance and explicit Clean, clip on the output
+  // frame grid, retain song time in excerpts, and copy the original audio only once.
+  it('finishes shot windows including Clean on song time and keeps the card above each look', async () => {
+    const project = { filmLook: look, cameras: [{ id: 'camera', filmLook: { version: 2, vignette: 0.8 } }], scenes: [
+      { startSec: 0, endSec: 4 },
+      { startSec: 4, endSec: 4.5, shotSheet: { cameraId: 'camera' } },
+      { startSec: 4.5, endSec: 5, filmLook: { preset: 'none' } },
+    ] };
+    const titleCard = { title: 'Example', artist: 'Artist', startSec: 0, endSec: 8 };
+    await applyFilmLookFinish({ project, shotLooks: true, path, jobId: 'windows', offsetSec: 3, titleCard, useGpu: false });
+    expect(seen.opened).toHaveLength(3);
+    expect(seen.opened.map(opened => /OFFSET = ([\d.]+)/.exec(opened.app)[1])).toEqual(['3', '4', '4.5']);
+    for (const opened of seen.opened) {
+      expect(opened.app).toContain('t - ' + (opened === seen.opened[0] ? 'OFFSET' : '3'));
+      expect(opened.options.initScripts[1]).toContain('__portosTitleCard');
+      expect(opened.options.initScripts[1]).toContain('"steady":true');
+    }
+    expect(seen.opened[1].options.initScripts[0]).toContain('"vignette":0.8');
+    expect(seen.opened[2].app).toContain('const LOOK = null;');
+    expect(seen.ffmpeg.filter(args => args.includes('1:a?'))).toHaveLength(1);
+    expect(seen.ffmpeg.at(-1)).toContain(path);
+    expect(await readFile(path, 'utf8')).toBe('finished-video');
+    expect(filmLookFinishNeeded({ scenes: [{ filmLook: look }] }, { shotLooks: true })).toBeTruthy();
+  });
+
+  it('coalesces identical shot looks and preserves the source when a window fails', async () => {
+    const project = { filmLook: look, scenes: [{ startSec: 0, endSec: 1, filmLook: look }, { startSec: 1, endSec: 2 }] };
+    await applyFilmLookFinish({ project, shotLooks: true, path, jobId: 'same-looks', useGpu: false });
+    expect(seen.opened).toHaveLength(1);
+    await writeFile(path, 'composed-render');
+    project.scenes[0].filmLook = { preset: 'none' };
+    seen.encodeFail = new Error('window failed');
+    await expect(applyFilmLookFinish({ project, shotLooks: true, path, jobId: 'failed-window' })).rejects.toThrow('window failed');
+    expect(await readFile(path, 'utf8')).toBe('composed-render');
+    expect(existsSync(`${path}.look-window-0.mp4`)).toBe(false);
+  });
+
   it('keeps the render as it was when the capture fails, and cleans up', async () => {
     seen.encodeFail = new Error('browser died');
     await expect(applyFilmLookFinish({ project: { filmLook: look }, path, jobId: 'job-fail' })).rejects.toThrow('browser died');

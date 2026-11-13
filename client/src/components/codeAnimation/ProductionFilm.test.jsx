@@ -8,12 +8,15 @@ vi.mock('../../services/apiCodeAnimation', () => ({ getCodeAnimationProject: vi.
 vi.mock('../../services/apiCodeAnimationFilm.js', async load => ({ ...await load(),
   getMusicVideoBlender: vi.fn(), listMusicVideoBlenderFiles: vi.fn(), getMusicVideoBlenderFile: vi.fn(),
   assembleMusicVideoBlenderCut: vi.fn(), patchFilm: vi.fn(),
+  promoteFilm: vi.fn(),
 }));
+vi.mock('../../services/api', () => ({ listTracks: vi.fn(), uploadFile: vi.fn() }));
 vi.mock('../musicVideo/blender/BlenderReadiness.jsx', () => ({ default: () => <div>Blender setup</div> }));
 import ProductionFilm from './ProductionFilm.jsx';
 import { getCodeAnimationProject } from '../../services/apiCodeAnimation';
 import * as filmApi from '../../services/apiCodeAnimationFilm.js';
 import socket from '../../services/socket';
+import { listTracks } from '../../services/api';
 
 const id = '00000000-0000-4000-8000-000000000001';
 const project = { id, kind: 'film', title: 'Silent example', film: {
@@ -59,4 +62,20 @@ it('keeps film detail drafts after a rejected save', async () => {
   await waitFor(() => expect(filmApi.patchFilm).toHaveBeenCalled());
   await waitFor(() => expect(screen.getByRole('button', { name: 'Save film details' }).disabled).toBe(false));
   expect(title.value).toBe('Unsaved direction');
+});
+
+it('sends the selected track without analysis and links to the new Music Video with coverage guidance', async () => {
+  listTracks.mockResolvedValue([{ id: 'track', title: 'Example song', audioFilename: 'example.wav' }]);
+  filmApi.promoteFilm.mockResolvedValue({ project: { id: 'mv-copy', name: 'Song version' }, coverageProblems: ['No shot covers the song after 12 s.'] });
+  render(<MemoryRouter initialEntries={[`/code-animation/production/films/${id}/shots`]}><Routes>
+    <Route path="/code-animation/production/films/:filmId/:tab?" element={<ProductionFilm />} />
+  </Routes></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: 'Send to Music Video' }));
+  fireEvent.click(await screen.findByRole('radio', { name: 'Select Example song' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Select track' }));
+  const link = await screen.findByRole('link', { name: 'Open Song version in Music Video' });
+  expect(link.getAttribute('href')).toBe('/music-video/mv-copy');
+  expect(filmApi.promoteFilm).toHaveBeenCalledWith(id, { trackId: 'track' }, { silent: true });
+  expect(screen.getByText('No shot covers the song after 12 s.')).toBeTruthy();
+  expect(screen.getByText('The copy needs song analysis and a shot sync. Sending starts no jobs.')).toBeTruthy();
 });

@@ -229,6 +229,13 @@ it('renders a Blender shot, a code shot and a code layer, then marks only the ed
   expect(runtime.opened.length).toBeGreaterThan(0);
   expect(runtime.opened.every((call) => call.options.ownedBrowser === true && call.options.isolation === 'legacy' && call.options.mediaMode === 'code-only')).toBe(true);
 
+  const jobsBeforeSheet = runtime.blender.control.jobs.length;
+  const openedBeforeSheet = runtime.opened.length;
+  await settled(owner, (await enqueueBlenderRenders(owner, { quality: 'sheet', shotIds: ['s030'], sheet: { every: 6, columns: 2 } })).jobs.map((job) => job.id));
+  expect(runtime.blender.control.jobs).toHaveLength(jobsBeforeSheet);
+  expect(runtime.opened.length).toBeGreaterThan(openedBeforeSheet);
+  expect((await getBlenderState(owner)).renders.s030.sheets[0]).toMatchObject({ fromPreview: true, stale: false, tiles: 1 });
+
   const first = frameBytes(owner, 's020', 'preview');
   await settled(owner, (await enqueueBlenderRenders(owner, { quality: 'preview', shotIds: ['s020'], force: true })).jobs.map((job) => job.id));
   const second = frameBytes(owner, 's020', 'preview');
@@ -275,7 +282,11 @@ it('syncs and renders a code-only film with Blender unconfigured', async () => {
   writeFileSync(join(src, 'code', 's010.js'), 'export function render() {}\n');
   await settled(owner, [(await startBlenderSync(owner)).job.id]);
   expect(runtime.blender.control.jobs).toEqual([]);
+  await settled(owner, (await enqueueBlenderRenders(owner, { quality: 'sheet', shotIds: ['s010'], sheet: { every: 6, columns: 2 } })).jobs.map((job) => job.id));
+  expect(runtime.blender.control.jobs).toEqual([]);
+  expect(runtime.opened.length).toBeGreaterThan(0);
   const state = await getBlenderState(owner);
+  expect(state.renders.s010.sheets[0]).toMatchObject({ fromPreview: false, stale: false });
   expect(state.tool.ready).toBe(false);
   expect(state.manifest.shots[0]).toMatchObject({ renderer: 'code', entry: 'code/s010.js' });
   await settled(owner, (await enqueueBlenderRenders(owner, { quality: 'still', shotIds: ['s010'], times: [0.5] })).jobs.map((job) => job.id));

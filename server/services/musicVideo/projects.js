@@ -227,6 +227,38 @@ export async function createProject(input) {
   return withCatalogDescriptions(project);
 }
 
+/** Import a standalone film into a fresh, unanalyzed project; never starts work. */
+export async function createProjectFromFilm(input, sourceOwner, settings) {
+  const backend = await selectBackend();
+  const [{ copyBlenderFilm, removeBlenderFilmCopy }, { musicVideoFilmOwner }, { readBlenderManifest, writeBlenderManifest }, { normalizeBlenderRecord }] = await Promise.all([
+    import('../film/fork.js'), import('./blender/owner.js'), import('../film/manifest.js'), import('../../lib/musicVideoBlender.js'),
+  ]);
+  const seeded = await seedTrackMetadata(await seedVideoBackendDefault(input));
+  let target = null;
+  let project = null;
+  try {
+    project = await backend.createProject(seeded, async ({ id }) => {
+      target = musicVideoFilmOwner(id);
+      const [{ lstat }, { join }] = await Promise.all([import('node:fs/promises'), import('node:path')]);
+      const copied = await copyBlenderFilm(sourceOwner, target);
+      if (!copied || !(await lstat(join(target.workspaceDir, 'src', 'film.py')).catch(() => null))?.isFile()) {
+        throw new ServerError('Create the film workspace before sending it to Music Video', { status: 409, code: 'MUSIC_VIDEO_BLENDER_NO_FILM' });
+      }
+      const manifest = await readBlenderManifest(target);
+      // Keep the authored shot/options inventory, but its timing has never been synced to this song.
+      if (manifest) await writeBlenderManifest(target, { ...manifest, syncedAt: null });
+      return { blender: { settings }, sourceFilm: { kind: sourceOwner.kind, projectId: sourceOwner.id } };
+    });
+    const { writeBlenderSong } = await import('./blender/song.js');
+    await writeBlenderSong(project, normalizeBlenderRecord(project.blender).settings);
+  } catch (error) {
+    await Promise.all([project ? backend.deleteProject(project.id) : null, target ? removeBlenderFilmCopy(target) : null]);
+    throw error;
+  }
+  announceNewProject(project.id);
+  return project;
+}
+
 // A Blender film's scripts live in the source's workspace. A new version gets its own copy,
 // placed under the id it is about to take, so the record never exists without its film.
 // Resolves null when the source has no film to copy (the clone then keeps only its settings).

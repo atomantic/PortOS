@@ -8,7 +8,12 @@
 // PortOS engine ids. `BLENDER_EEVEE_NEXT` is EEVEE on every supported Blender
 // (the driver maps it to Blender 5's `BLENDER_EEVEE`).
 export const MUSIC_VIDEO_BLENDER_ENGINES = Object.freeze(['BLENDER_EEVEE_NEXT', 'CYCLES']);
-export const MUSIC_VIDEO_BLENDER_QUALITIES = Object.freeze(['still', 'preview', 'final']);
+export const MUSIC_VIDEO_BLENDER_QUALITIES = Object.freeze(['still', 'sheet', 'preview', 'final']);
+export const MUSIC_VIDEO_BLENDER_SHEET_LIMITS = Object.freeze({
+  every: { min: 1, max: 24, default: 3 },
+  columns: { min: 2, max: 12, default: 6 },
+  maxTiles: 96,
+});
 export const MUSIC_VIDEO_BLENDER_NOTE_STATUSES = Object.freeze(['todo', 'wip', 'review', 'approved']);
 export const MUSIC_VIDEO_BLENDER_MAX_SHOTS = 400;
 
@@ -162,17 +167,32 @@ const evenPixels = (value) => {
   return Math.max(2, rounded - (rounded % 2));
 };
 
+/** Normalized `{ every, columns, range }` contact-sheet options. */
+export function normalizeBlenderSheetOptions(sheet) {
+  const raw = plainObject(sheet);
+  const { every, columns } = MUSIC_VIDEO_BLENDER_SHEET_LIMITS;
+  const range = Array.isArray(raw.range) && raw.range.length === 2
+    && Number.isFinite(raw.range[0]) && Number.isFinite(raw.range[1]) && raw.range[0] <= raw.range[1]
+    ? [raw.range[0], raw.range[1]] : null;
+  return {
+    every: inRange(raw.every, every, true) ? raw.every : every.default,
+    columns: inRange(raw.columns, columns, true) ? raw.columns : columns.default,
+    range,
+  };
+}
+
 /**
- * What one quality renders at: preview frames are scaled and use the preview
- * samples; finals and stills are full size with the final samples.
+ * What one quality renders at: preview and contact-sheet frames are scaled
+ * and use the preview samples; finals and stills are full size with the final samples.
  */
 export function blenderRenderFrame(settings, quality) {
-  const scale = quality === 'preview' ? settings.previewScale : 1;
+  const previewLike = quality === 'preview' || quality === 'sheet';
+  const scale = previewLike ? settings.previewScale : 1;
   return {
     scale,
     width: evenPixels(settings.width * scale),
     height: evenPixels(settings.height * scale),
-    samples: quality === 'preview' ? settings.previewSamples : settings.finalSamples,
+    samples: previewLike ? settings.previewSamples : settings.finalSamples,
   };
 }
 

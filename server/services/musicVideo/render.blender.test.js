@@ -105,7 +105,10 @@ beforeEach(async () => {
   const project = await projects.createProject({ name: 'Example Film', uploadedAudioFilename: 'example-song.wav', composition: { mode: 'blender' } });
   id = project.id;
   await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, audioAnalysis: { durationSec: 6, beats: [], downbeats: [], sections: [] } } }));
-  for (const path of ['film.py', 'shots/s010.py', 'shots/s020.py', 'shots/s030.py']) await writeBlenderFile(id, path, `# ${path}\n`);
+  // `import bpy` keeps this stub on the Blender driver. A film with no Blender import syncs through system Python.
+  for (const path of ['film.py', 'shots/s010.py', 'shots/s020.py', 'shots/s030.py']) {
+    await writeBlenderFile(id, path, path === 'film.py' ? 'import bpy\n' : `# ${path}\n`);
+  }
   ended.length = 0;
   await startBlenderSync(id);
   await vi.waitFor(() => expect(ended.map((job) => [job.kind, job.status])).toEqual([['sync', 'done']]), WAIT);
@@ -167,6 +170,23 @@ it('runs the project film look as a finishing pass on a Blender final and its ex
   await excerptDone(excerptId);
   expect(applyFilmLookFinish).toHaveBeenCalledTimes(2);
   expect(applyFilmLookFinish.mock.calls[1][0]).toMatchObject({ offsetSec: 1, jobId: excerptId });
+});
+
+// A neutral project must still schedule finishing when only a mirrored shot has a look.
+it('finishes shot-only looks for Blender cuts, finals and excerpts', async () => {
+  await renderShots('final');
+  await projects.mutateProjectRecord(id, current => ({ project: { ...current, filmLook: null,
+    scenes: current.scenes.map((scene, index) => index === 1 ? { ...scene, filmLook: { version: 2, vignette: 0.7 } } : scene) } }));
+  const { startBlenderCut } = await import('./blender/cuts.js');
+  const cut = await startBlenderCut(id, { quality: 'final', filmLook: true });
+  await vi.waitFor(() => expect(ended.some(job => job.id === cut.job.id && job.status === 'done')).toBe(true), WAIT);
+  expect(applyFilmLookFinish).toHaveBeenCalledTimes(1);
+  const { jobId } = await renderMusicVideo(id);
+  await finished(jobId);
+  const { excerptId } = await startExcerptRender(id, { startSec: 1, endSec: 3 });
+  await excerptDone(excerptId);
+  expect(applyFilmLookFinish).toHaveBeenCalledTimes(3);
+  for (const [options] of applyFilmLookFinish.mock.calls) expect(options).toMatchObject({ shotLooks: true, project: { filmLook: null } });
 });
 
 // The mtv card here is steady, but no film look pass follows a neutral look: the join is the only place to draw it.

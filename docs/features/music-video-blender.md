@@ -66,6 +66,7 @@ data/music-video/<projectId>/blender/
     <shotId>/preview/layers/<n>/frame_000123.png   a code layer, PNG with alpha
     <shotId>/final/frames/frame_000123.png, shot.mp4, poster.jpg, render.json
     <shotId>/stills/t000012345.png, stills.json
+    <shotId>/sheets/sheet-0-95-e3.jpg, sheets.json
     <shotId>/shot.blend          when "Save .blend" is on
     cuts/<quality>-<time>.mp4, cuts.json   the newest 8 per quality
     logs/<jobId>.log                       the newest 60
@@ -320,7 +321,9 @@ window from the best video each shot has: a current final, else its preview fitt
 
 ### Finishing
 
-- **Film look.** The project's film look (grain, gate weave, halation, VHS looks) is applied to the final render
+- **Film look.** Each shot uses its own film look, then its camera's look, then the project's look. An explicit
+  **Clean** overrides those inherited looks. Consecutive shots with the same look share a finishing window;
+  films without shot overrides keep a single pass. The film look (grain, gate weave, halation, VHS looks) is applied to the final render
   and to excerpts as a finishing pass, as it is for footage. For a cut, tick **Film look** (off by default: the
   pass is slow).
 - **Grade and shot effects.** The project's color grade, `fade-black` cut effects, and the timed effects set on each
@@ -389,7 +392,7 @@ changes; a sync, a render and a cut answer with the jobs they queued.
 | `POST /api/music-video/:id/blender/sync` | Start a sync `{ replaceScenes? }` → `202 { job }` |
 | `GET /api/music-video/:id/blender/usage` | What the workspace takes on disk |
 | `POST /api/music-video/:id/blender/frames/clear` | Clear rendered frames → `{ freedBytes, usage }` |
-| `POST /api/music-video/:id/blender/render` | Queue renders `{ quality, shotIds?, times?, force?, onlyStale? }` → `202 { jobs, skipped }` |
+| `POST /api/music-video/:id/blender/render` | Queue renders `{ quality, shotIds?, times?, sheet?, force?, onlyStale? }` → `202 { jobs, skipped }` |
 | `POST /api/music-video/:id/blender/jobs/:jobId/cancel` | Cancel one job |
 | `POST /api/music-video/:id/blender/cancel` | Cancel every job of the project |
 | `POST /api/music-video/:id/blender/cut` | Assemble a cut `{ quality, animatic?, filmLook? }` → `202 { job }` |
@@ -398,7 +401,14 @@ changes; a sync, a render and a cut answer with the jobs they queued.
 | `GET /api/music-video/:id/blender/media` | Serve a file under `renders/` (`?path=s010/preview/shot.mp4`) |
 
 Render selection: without `force`, shots whose render is complete and current are skipped; `onlyStale` renders only
-shots whose existing render is stale (a shot never rendered is not one); stills always render.
+shots whose existing render is stale (a shot never rendered is not one); stills and contact sheets always render.
+
+Contact sheets (`"quality": "sheet"`, with optional `sheet: { every?, columns?, range? }` — `every` 1–24 frames,
+default 3; `columns` 2–12, default 6; `range: [startSec, endSec]` inside the shot) tile at most 96 frames per sheet
+(`sheet-<firstFrame>-<lastFrame>-e<every>.jpg`), reusing existing frames when the shot has a current preview or
+rendering stamped preview-scale frames otherwise. A code shot draws those frames itself, with no Blender. A code
+layer is painted onto each tile, including a sheet taken from a current preview. Agents should review motion from
+contact sheets rendered through PortOS rather than relying on stills alone or a separate local runner.
 
 A job is `{ id, kind: "sync" | "render" | "cut", status: "queued" | "running" | "encoding" | "done" | "error" |
 "canceled", shotId?, quality?, frame?, index?, total?, secPerFrame?, queuedAt, startedAt, finishedAt?, error?,

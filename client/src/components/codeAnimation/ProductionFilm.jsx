@@ -44,7 +44,17 @@ export default function ProductionFilm() {
   const openPreview = key => setPreview(previewItems.find(item => item.key === key) || null);
   const [act, busy] = useAsyncAction(async operation => operation());
   const [tracks, setTracks] = useState([]);
-  const [picker, setPicker] = useState(false);
+  const [picker, setPicker] = useState(null);
+  const [promotion, setPromotion] = useState(null);
+  const promote = input => act(async () => {
+    const result = await api.promoteFilm(filmId, input, { silent: true });
+    setPromotion({ filmId, ...result });
+  });
+  const pickTrack = mode => act(async () => {
+    const rows = await listTracks({ silent: true });
+    setTracks(Array.isArray(rows) ? rows : rows?.tracks || []);
+    setPicker({ filmId, mode });
+  });
   const attach = input => act(async () => { resource.updateData(await api.attachAudio(filmId, input, { silent: true })); await blender.refresh(); });
   const project = resource.data;
   const base = `/code-animation/production/films/${filmId}`;
@@ -59,23 +69,30 @@ export default function ProductionFilm() {
     <FilmDetails key={filmId} project={project} busy={busy}
       onSave={input => act(async () => { const saved = await api.patchFilm(filmId, input, { silent: true }); resource.updateData(saved); await blender.refresh(); return saved; })} onAudio={attach} />
     <div className="flex flex-wrap items-center gap-3">
-      <button type="button" className={buttonCls} disabled={busy} onClick={() => act(async () => {
-        const rows = await listTracks(); setTracks(Array.isArray(rows) ? rows : rows?.tracks || []); setPicker(true);
-      })}>Attach library track and analyze</button>
+      <button type="button" className={buttonCls} disabled={busy} onClick={() => pickTrack('attach')}>Attach library track and analyze</button>
+      <button type="button" className={buttonCls} disabled={busy} onClick={() => pickTrack('promote')}>Send to Music Video</button>
       <div><label htmlFor="film-upload-audio" className="block text-xs">Upload and analyze soundtrack</label><input id="film-upload-audio" type="file" accept="audio/*" disabled={busy} className="max-w-full text-xs" onChange={event => {
         const file = event.target.files?.[0]; event.target.value = '';
         if (file) act(async () => { const upload = await uploadFile(file, file.name, { silent: true });
           resource.updateData(await api.attachAudio(filmId, { source: 'upload', filename: upload.filename }, { silent: true })); await blender.refresh(); });
       }} /></div>
-      {busy && <p role="status" className="text-xs">Saving / analyzing locally…</p>}
+      {busy && <p role="status" className="text-xs">Working locally…</p>}
     </div>
     <p className="text-xs text-port-text-muted">Soundtrack analysis runs locally when attached. Audio sets the film length; without audio, the timeline is silent. No AI provider is called.</p>
+    {promotion?.filmId === filmId && <div role="status" className="space-y-1 text-sm">
+      <Link className="text-port-accent" to={`/music-video/${promotion.project.id}`}>Open {promotion.project.name} in Music Video</Link>
+      <p>The copy needs song analysis and a shot sync. Sending starts no jobs.</p>
+      {promotion.coverageProblems.length > 0 && <ul className="list-disc pl-5">{promotion.coverageProblems.map(problem => <li key={problem}>{problem}</li>)}</ul>}
+    </div>}
+    {project.promotedTo && promotion?.filmId !== filmId && <Link className="text-sm text-port-accent" to={`/music-video/${project.promotedTo}`}>Open latest Music Video copy</Link>}
     <FilmLivePreview key={filmId} state={blender.state} durationSec={project.film.timeline.durationSec} audioUrl={audioUrl} mediaUrl={path => api.musicVideoBlenderMediaUrl(filmId, path)} />
     <BlenderFilmPanel api={api} standalone tab={BLENDER_TAB_IDS.includes(tab) ? tab : 'shots'} onTabChange={onTabChange} shotId={shotId || ''}
       onShotChange={id => navigate(`${base}/shots/${id}`)} board={{ project: { ...project, audioAnalysis: project.film.analysis }, blender, audioUrl, openPreview }} />
     {blender.state?.finalStale && <p className="text-xs text-port-warning">The accepted output is behind the current film. Render current finals and assemble again to replace it.</p>}
     {blender.state?.acceptedOutput && <p className="text-sm"><a href={blender.state.acceptedOutput.path} className="text-port-accent">Open accepted final in Media History output</a></p>}
     <MediaPreview preview={preview} setPreview={setPreview} items={previewItems} />
-    <AlbumTrackPicker open={picker} tracks={tracks.filter(track => track.audioFilename)} single title="Attach soundtrack" onClose={() => setPicker(false)} onAdd={selected => attach({ source: 'track', trackId: selected[0].id })} />
+    <AlbumTrackPicker open={picker?.filmId === filmId} tracks={tracks.filter(track => track.audioFilename)} single
+      title={picker?.mode === 'promote' ? 'Send to Music Video' : 'Attach soundtrack'} onClose={() => setPicker(null)}
+      onAdd={selected => picker.mode === 'promote' ? promote({ trackId: selected[0].id }) : attach({ source: 'track', trackId: selected[0].id })} />
   </div>;
 }

@@ -288,11 +288,13 @@ export function blenderShotStage(state, shotId) {
 
 const stillKey = (shotId, file) => `blender-still:${shotId}:${file}`;
 export const blenderStillPreviewKey = stillKey;
+const sheetKey = (shotId, file) => `blender-sheet:${shotId}:${file}`;
+export const blenderSheetPreviewKey = sheetKey;
 
 /**
- * Lightbox items for every rendered still, in shot order. They are files in
- * the Blender workspace, not gallery images, so they carry no `filename`.
- * `mediaUrl(path)` builds the URL the still is served from.
+ * Lightbox items for every rendered still and contact sheet, in shot order.
+ * They are files in the Blender workspace, not gallery images, so they carry
+ * no `filename`. `mediaUrl(path)` builds the URL the file is served from.
  */
 export function blenderStillPreviewItems(state, mediaUrl) {
   const items = [];
@@ -302,6 +304,12 @@ export function blenderStillPreviewItems(state, mediaUrl) {
       const url = mediaUrl(still.file);
       const caption = `${shot.label || shot.id} · still at ${formatTimecode(still.timeSec ?? shot.start ?? 0)}`;
       items.push({ kind: 'image', key: stillKey(shot.id, still.file), previewUrl: url, thumbnailUrl: url, downloadUrl: url, prompt: caption, label: caption });
+    }
+    for (const sheet of state?.renders?.[shot.id]?.sheets || []) {
+      if (!sheet?.file) continue;
+      const url = mediaUrl(sheet.file);
+      const caption = `${shot.label || shot.id} · contact sheet (frames ${sheet.firstFrame}–${sheet.lastFrame}, every ${sheet.every})`;
+      items.push({ kind: 'image', key: sheetKey(shot.id, sheet.file), previewUrl: url, thumbnailUrl: url, downloadUrl: url, prompt: caption, label: caption });
     }
   }
   return items;

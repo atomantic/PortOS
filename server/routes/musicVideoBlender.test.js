@@ -832,6 +832,80 @@ runpy.run_path(driver, run_name="__main__")
     expect((await request(app).post(api('/render')).send({ quality: 'still', times: [99] })).status).toBe(400);
     expect((await request(app).post(api('/render')).send({ quality: 'preview', times: [1] })).status).toBe(400);
   });
+
+  it('renders contact sheets from Blender when uncached, reuses current preview frames without starting Blender, splits >96 tiles, and marks sheets stale on source edit', async () => {
+    await scaffold();
+    await syncFilm();
+    blender.ffmpeg.length = 0;
+
+    // 1. Shot with no preview renders needed frames once at preview scale/samples and tiles them.
+    const cold = await renderAll('sheet', { shotIds: ['s010'], sheet: { every: 6, columns: 4, range: [0, 1] } });
+    expect(cold.jobs).toHaveLength(1);
+    const coldJob = blender.fake.control.jobs.at(-1);
+    expect(coldJob).toMatchObject({ quality: 'sheet', scale: 0.5, samples: 16, frames: [0, 6, 12, 18] });
+    expect(blender.ffmpeg.at(-1)).toEqual(expect.arrayContaining(['-f', 'concat', '-safe', '0', '-vf', expect.stringContaining('tile=4x1:')]));
+    const afterCold = await state();
+    expect(afterCold.renders.s010.sheets).toEqual([
+      expect.objectContaining({
+        file: 's010/sheets/sheet-0-18-e6.jpg',
+        firstFrame: 0,
+        lastFrame: 18,
+        every: 6,
+        columns: 4,
+        tiles: 4,
+        fromPreview: false,
+        stale: false,
+      }),
+    ]);
+    // Temporary scratch frames are cleaned up after tiling.
+    expect(readdirSync(join(workspace(), 'renders', 's010', 'sheets')).filter((name) => name.startsWith('.'))).toEqual([]);
+    const served = await request(app).get(api(`/media?path=${encodeURIComponent('s010/sheets/sheet-0-18-e6.jpg')}`));
+    expect(served.status).toBe(200);
+    expect(served.headers['content-type']).toMatch(/image\/jpeg/);
+
+    // 2. Shot with a current preview tiles its existing frames without starting Blender.
+    await renderAll('preview', { shotIds: ['s020'] });
+    const jobsBeforeWarm = blender.fake.control.jobs.length;
+    blender.ffmpeg.length = 0;
+    await renderAll('sheet', { shotIds: ['s020'], sheet: { every: 12, columns: 3 } });
+    expect(blender.fake.control.jobs).toHaveLength(jobsBeforeWarm);
+    expect(blender.ffmpeg.at(-1)).toEqual(expect.arrayContaining(['-f', 'concat', '-safe', '0', '-vf', expect.stringContaining('tile=3x2:')]));
+    const afterWarm = await state();
+    expect(afterWarm.renders.s020.sheets[0]).toMatchObject({
+      file: 's020/sheets/sheet-48-84-e12.jpg',
+      firstFrame: 48,
+      lastFrame: 84,
+      every: 12,
+      tiles: 4,
+      fromPreview: true,
+      stale: false,
+    });
+
+    // 3. A source change marks the shot's sheets stale.
+    await request(app).put(api('/file')).send({ path: 'shots/s020.py', content: '# changed\n' });
+    expect((await state()).renders.s020.sheets[0].stale).toBe(true);
+
+    // 4. A 300-frame shot at every: 1 yields four sheets (96 + 96 + 96 + 12).
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, audioAnalysis: { ...current.audioAnalysis, durationSec: 13 } } }));
+    await syncFilm({
+      title: 'Long Shot',
+      shots: [{ id: 's010', label: 'Long', start: 0, end: 12.5, deps: ['shots/s010.py'] }],
+    }, { replaceScenes: true });
+    await renderAll('sheet', { shotIds: ['s010'], sheet: { every: 1 } });
+    const longSheets = (await state()).renders.s010.sheets.filter((s) => s.every === 1);
+    expect(longSheets.map((s) => [s.firstFrame, s.lastFrame, s.tiles])).toEqual([
+      [0, 95, 96],
+      [96, 191, 96],
+      [192, 287, 96],
+      [288, 299, 12],
+    ]);
+
+    // 5. Validation rejects sheet options on other qualities and out-of-range values.
+    expect((await request(app).post(api('/render')).send({ quality: 'preview', sheet: { every: 3 } })).status).toBe(400);
+    expect((await request(app).post(api('/render')).send({ quality: 'sheet', sheet: { every: 0 } })).status).toBe(400);
+    expect((await request(app).post(api('/render')).send({ quality: 'sheet', sheet: { columns: 1 } })).status).toBe(400);
+    expect((await request(app).post(api('/render')).send({ quality: 'sheet', sheet: { range: [5, 2] } })).status).toBe(400);
+  });
 });
 
 describe('Blender film cuts, notes and media', () => {

@@ -782,6 +782,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // opening a saved scene in the Blender application, and clearing rendered frames (hours of
   // GPU work deleted from the host). Settings, notes, cancels and reads stay open.
   'POST /api/code-animation/films/:id/audio',
+  'POST /api/code-animation/films/:id/promote',
   'POST /api/code-animation/films/:id/blender/workspace',
   'PUT /api/code-animation/films/:id/blender/file',
   'DELETE /api/code-animation/films/:id/blender/file',
