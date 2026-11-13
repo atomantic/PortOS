@@ -19,6 +19,7 @@ import { blenderManifestHash, hashBlenderSources } from './hashing.js';
 import { readBlenderManifest, validateBlenderManifest, writeBlenderManifest } from './manifest.js';
 import { writeBlenderSong } from './song.js';
 import { blenderJobBase, requireBlenderFilmTool, runBlenderDriver } from './driver.js';
+import { describeNeedsBlender, requirePythonDescribe, runPythonDescribe } from './describeRun.js';
 import { activeBlenderJobs, createBlenderJob, reserveBlenderSync, updateBlenderJob } from './jobs.js';
 import { openBlenderJobLog } from './logs.js';
 import { announceBlenderState } from './record.js';
@@ -29,10 +30,10 @@ async function describeFilm(entry, { owner, settings, options, tool }) {
   updateBlenderJob(entry, { status: 'running', logFile: log.file });
   const describe = async () => {
     const song = await writeBlenderSong(owner, settings);
-    const result = await runBlenderDriver({
-      tool, song, signal: entry.abort.signal, onLog: log.write,
-      job: { ...blenderJobBase(owner, { settings, options }), mode: 'describe', quality: 'describe', scale: 1, samples: settings.previewSamples },
-    });
+    const job = { ...blenderJobBase(owner, { settings, options }), mode: 'describe', quality: 'describe', scale: 1, samples: settings.previewSamples, jobId: entry.job.id };
+    const result = tool
+      ? await runBlenderDriver({ tool, song, signal: entry.abort.signal, onLog: log.write, job })
+      : await runPythonDescribe({ owner, song, signal: entry.abort.signal, onLog: log.write, job });
     if (result.canceled) throw blenderRefusal('The sync was canceled', 'MUSIC_VIDEO_BLENDER_SYNC_CANCELED', 409);
     if (!result.ok) log.write(result.traceback || result.error);
     if (!result.ok) throw blenderRefusal(`The film could not list its shots: ${result.error}`, 'MUSIC_VIDEO_BLENDER_DESCRIBE_FAILED', 422);
@@ -69,10 +70,15 @@ async function prepareBlenderSync(owner, { replaceScenes = false }) {
   if (!(timeline.durationSec > 0)) {
     throw blenderRefusal('Analyze the song first: shots are checked against its length', 'NOT_ANALYZED', 409);
   }
-  const tool = await requireBlenderFilmTool();
-  if (!(await lstat(join(blenderSrcDir(owner), 'film.py')).catch(() => null))?.isFile()) {
+  // No film yet stays on the Blender gate, so contained mode still refuses before "no film".
+  // A code film (no bpy, bmesh or mathutils) lists its shots with system Python.
+  const hasFilm = (await lstat(join(blenderSrcDir(owner), 'film.py')).catch(() => null))?.isFile() === true;
+  const needsBlender = await describeNeedsBlender(owner);
+  const tool = needsBlender ? await requireBlenderFilmTool() : null;
+  if (!hasFilm) {
     throw blenderRefusal('The workspace has no film yet (src/film.py). Create the starter workspace or add your own film.', 'MUSIC_VIDEO_BLENDER_NO_FILM', 409);
   }
+  if (!needsBlender) await requirePythonDescribe();
   // Known before Blender starts: fail fast rather than after the describe run.
   await owner.beforeSync?.({ replaceScenes });
 

@@ -102,6 +102,37 @@ describe('validateBlenderManifest', () => {
     expect(errors.join(' ')).toContain(reason);
   });
 
+  it('stores a code shot and a code layer, and leaves a Blender shot unchanged', () => {
+    const { manifest, errors } = check([
+      shot('s010', 0, 4),
+      shot('s020', 4, 7, { renderer: 'code', entry: 'code/s020.js', space: 'canvas' }),
+      shot('s030', 7, 10, { renderer: 'code', entry: 'code/s030.js', space: 'three', layers: [{ entry: 'code/fx.js' }] }),
+    ]);
+    expect(errors).toEqual([]);
+    expect(manifest.shots[0]).toEqual({ id: 's010', label: 's010', start: 0, end: 4 });
+    expect(manifest.shots[1]).toEqual({ id: 's020', label: 's020', start: 4, end: 7, renderer: 'code', entry: 'code/s020.js' });
+    expect(manifest.shots[2]).toMatchObject({
+      renderer: 'code', entry: 'code/s030.js', space: 'three',
+      layers: [{ entry: 'code/fx.js', place: 'over', blend: 'normal' }],
+    });
+  });
+
+  it.each([
+    ['an unknown renderer', { renderer: 'paint' }, '"renderer" must be blender or code'],
+    ['a code shot with no module', { renderer: 'code' }, '"entry" must be a .js or .mjs file under src/'],
+    ['an entry on a Blender shot', { entry: 'code/s010.js' }, '"entry" and "space" belong on a code shot'],
+    ['a space on a Blender shot', { space: 'three' }, '"entry" and "space" belong on a code shot'],
+    ['an unknown space', { renderer: 'code', entry: 'code/s010.js', space: 'webgl' }, '"space" must be canvas or three'],
+    ['more than 8 layers', { layers: Array.from({ length: 9 }, (_, index) => ({ entry: `code/l${index}.js` })) }, '"layers" must list at most 8'],
+    ['a layer outside src/', { layers: [{ entry: '../fx.js' }] }, '"entry" must be a .js or .mjs file under src/'],
+    ['an unknown place', { layers: [{ entry: 'code/fx.js', place: 'behind' }] }, '"place" must be over or under'],
+    ['an unknown blend', { layers: [{ entry: 'code/fx.js', blend: 'xor' }] }, '"blend" must be normal, screen, add or multiply'],
+  ])('refuses %s', (_name, extra, reason) => {
+    const { manifest, errors } = check([shot('s010', 0, 1, extra)]);
+    expect(manifest).toBeNull();
+    expect(errors.join(' ')).toContain(reason);
+  });
+
   it('normalizes valid frame-grid handles and omits empty ones', () => {
     const { manifest, errors } = check([
       shot('s010', 0, 1, { handles: { in: 0, out: 0 } }),

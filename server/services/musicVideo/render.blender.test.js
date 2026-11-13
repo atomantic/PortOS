@@ -105,7 +105,10 @@ beforeEach(async () => {
   const project = await projects.createProject({ name: 'Example Film', uploadedAudioFilename: 'example-song.wav', composition: { mode: 'blender' } });
   id = project.id;
   await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, audioAnalysis: { durationSec: 6, beats: [], downbeats: [], sections: [] } } }));
-  for (const path of ['film.py', 'shots/s010.py', 'shots/s020.py', 'shots/s030.py']) await writeBlenderFile(id, path, `# ${path}\n`);
+  // `import bpy` keeps this stub on the Blender driver. A film with no Blender import syncs through system Python.
+  for (const path of ['film.py', 'shots/s010.py', 'shots/s020.py', 'shots/s030.py']) {
+    await writeBlenderFile(id, path, path === 'film.py' ? 'import bpy\n' : `# ${path}\n`);
+  }
   ended.length = 0;
   await startBlenderSync(id);
   await vi.waitFor(() => expect(ended.map((job) => [job.kind, job.status])).toEqual([['sync', 'done']]), WAIT);

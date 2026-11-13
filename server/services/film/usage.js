@@ -14,11 +14,11 @@
  * plus every cut and log. Removed shots lose their whole render folder.
  */
 import { lstat, readdir, rm, rmdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { MUSIC_VIDEO_BLENDER_SHOT_ID } from '../../lib/musicVideoBlender.js';
 import { assertInsideWithoutSymlinks, blenderRefusal, blenderRendersDir, blenderSrcDir, blenderWorkspaceDir, readBlenderJson } from './workspace.js';
 import { readBlenderManifest } from './manifest.js';
-import { BLENDER_RENDER_QUALITIES, blenderFramesDir, blenderRenderFile, blenderShotVideo } from './renderIndex.js';
+import { BLENDER_RENDER_QUALITIES, blenderCompositedHandlesDir, blenderFramesDir, blenderLayersRoot, blenderRenderFile, blenderShotVideo } from './renderIndex.js';
 import { activeBlenderJobs } from './jobs.js';
 import { announceBlenderState } from './record.js';
 import { withBlenderRenderAdmission } from './queue.js';
@@ -92,8 +92,10 @@ export async function getBlenderDiskUsage(owner) {
   for (const shotId of await renderedShotIds(owner)) {
     for (const quality of BLENDER_RENDER_QUALITIES) {
       const held = await measure(blenderFramesDir(owner, shotId, quality));
-      frames.bytes += held.bytes;
-      frames.files += held.files;
+      const layers = await measure(blenderLayersRoot(owner, shotId, quality));
+      const handles = await measure(blenderCompositedHandlesDir(owner, shotId, quality));
+      frames.bytes += held.bytes + layers.bytes + handles.bytes;
+      frames.files += held.files + layers.files + handles.files;
     }
   }
   let clearableBytes = 0;
@@ -120,8 +122,11 @@ async function clearFrames(owner) {
   const { frames, removedShots } = await clearableFolders(owner);
   for (const folder of frames) {
     await assertInsideWithoutSymlinks(blenderWorkspaceDir(owner), folder);
+    const layers = join(dirname(folder), 'layers');
+    await assertInsideWithoutSymlinks(blenderWorkspaceDir(owner), layers);
     const { files } = await clearableShotFrames(folder);
     for (const file of files) await rm(file, { force: true });
+    await rm(layers, { recursive: true, force: true });
     // Remove the now-empty frames folder; handle frames stay for cuts and the final render.
     await rmdir(folder).catch(() => {});
   }
@@ -146,6 +151,12 @@ export async function dropBlenderFramesOutside(owner, shotIds) {
       const frames = blenderFramesDir(owner, shotId, quality);
       await assertInsideWithoutSymlinks(blenderWorkspaceDir(owner), frames);
       await rm(frames, { recursive: true, force: true });
+      const layers = blenderLayersRoot(owner, shotId, quality);
+      await assertInsideWithoutSymlinks(blenderWorkspaceDir(owner), layers);
+      await rm(layers, { recursive: true, force: true });
+      const handles = blenderCompositedHandlesDir(owner, shotId, quality);
+      await assertInsideWithoutSymlinks(blenderWorkspaceDir(owner), handles);
+      await rm(handles, { recursive: true, force: true });
     }
   }
 }

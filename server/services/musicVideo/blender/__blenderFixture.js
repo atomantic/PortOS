@@ -11,6 +11,11 @@ import { dirname, join } from 'node:path';
 import { ServerError } from '../../../lib/errorHandler.js';
 
 const line = (event) => `PORTOS_BLENDER ${JSON.stringify(event)}`;
+// Half-up, then even: the same pixel size the driver and the code renderer use.
+const evenPixels = (value) => {
+  const rounded = Math.floor(Number(value) + 0.5);
+  return Math.max(2, rounded - (rounded % 2));
+};
 
 export const createFakeBlender = () => {
   const control = {
@@ -28,6 +33,8 @@ export const createFakeBlender = () => {
     hold: null,
     running: 0,
     peak: 0,
+    // Preview and final frames are text unless this is set. Layered shots composite those frames, so they need real pixels.
+    imageFrames: false,
   };
 
   const frameFile = (job, shot, frame, side = null) => {
@@ -61,9 +68,16 @@ export const createFakeBlender = () => {
         const skipped = Boolean(job.resume) && existsSync(path) && statSync(path).size > 0;
         if (!skipped) {
           mkdirSync(dirname(path), { recursive: true });
-          if (job.quality === 'still') {
+          if (job.quality === 'still' || control.imageFrames) {
             const { default: sharp } = await import('sharp');
-            await sharp({ create: { width: 1920, height: 1080, channels: 3, background: '#346789' } }).png().toFile(path);
+            // Stills stay 1080p unless the test composites them (`imageFrames`),
+            // where the plate has to match the code layer's frame size.
+            const matchFrame = job.quality !== 'still' || control.imageFrames;
+            const width = matchFrame ? evenPixels(job.width * (job.scale ?? 1)) : 1920;
+            const height = matchFrame ? evenPixels(job.height * (job.scale ?? 1)) : 1080;
+            const image = sharp({ create: { width, height, channels: 3, background: '#346789' } });
+            if (path.endsWith('.jpg')) await image.jpeg().toFile(path);
+            else await image.png().toFile(path);
           } else writeFileSync(path, `frame ${frame}`);
         }
         onStdoutLine(line({ event: 'frame', shot: shot.id, frame, index: index + 1, total: targets.length, sec: skipped ? 0 : 0.25, skipped }));
