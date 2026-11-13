@@ -36,3 +36,39 @@ it('plays a lead-in shot before the song, then the first song shot', () => {
   act(() => tick(start + 1500));
   expect(container.querySelector('video').getAttribute('src')).toContain('song.mp4');
 });
+
+it('authorizes audio during the Play gesture while keeping the lead-in silent and the song at zero', async () => {
+  let tick;
+  vi.stubGlobal('requestAnimationFrame', callback => { tick = callback; return 1; });
+  vi.stubGlobal('cancelAnimationFrame', vi.fn());
+  const state = { settings: { fps: 24 }, manifest: { shots: [{ id: 'lead', start: -1, end: 0 }, { id: 'song', start: 0, end: 2 }] }, renders: {} };
+  const { container } = render(<FilmLivePreview state={state} durationSec={2} audioUrl="/example-song.wav" mediaUrl={path => `/film?path=${path}`} />);
+  const element = container.querySelector('audio');
+  let gesture = false;
+  let authorized = false;
+  let paused = true;
+  const volumes = [];
+  Object.defineProperty(element, 'paused', { get: () => paused });
+  element.pause = vi.fn(() => { paused = true; });
+  element.play = vi.fn(() => {
+    if (gesture) authorized = true;
+    if (!authorized) return Promise.reject(new Error('Playback needs a user gesture'));
+    volumes.push(element.volume);
+    paused = false;
+    return Promise.resolve();
+  });
+  gesture = true;
+  fireEvent.click(screen.getByRole('button', { name: 'Play film' }));
+  gesture = false;
+  await act(async () => {});
+  expect(authorized).toBe(true);
+  expect(volumes).toEqual([0]);
+  expect(element.paused).toBe(true);
+  expect(element.currentTime).toBe(0);
+  expect(element.volume).toBe(1);
+  const start = performance.now();
+  await act(async () => { tick(start + 1500); });
+  expect(volumes).toEqual([0, 1]);
+  expect(element.currentTime).toBeCloseTo(0.5, 1);
+  expect(screen.getByRole('button', { name: 'Pause film' })).toBeTruthy();
+});
