@@ -74,6 +74,22 @@ executions remain ambiguous. Historical policies and current task budgets still 
   published PR. Preserve local-only changes and establish the current owner
   before continuing delivery; do not reset the checkout to make the heads match.
 
+## Cleanup-only recovery completion
+
+A cleanup-only recovery succeeds when the recorded checkout path and local branch
+are both absent. Finalization, interrupted-run recovery and queued retry settlement
+use the same live observation, without reading the retirement receipt ledger or
+requiring a parent checkout-generation receipt. An existing or unreadable path/ref
+keeps the task unresolved. The task's managed-app target and any explicit operator
+review hold still apply; a task that also repairs delivery retains its PR and commit
+gates. This verifies local cleanup only, not remote-branch deletion or delivery.
+
+The branch-reconcile completion pass checks its assigned cleanup targets the same
+way. It records remaining local targets directly instead of manufacturing missing
+receipt obligations. Ownership, locks, cleanliness and merged-PR checks still run
+in the retirement service before anything is deleted. Inventory receipt bookkeeping
+outside these completion paths remains pending removal.
+
 ## Retiring a held checkout
 
 A row with a checkout path and HEAD offers **Retire checkout**. The

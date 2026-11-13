@@ -1,4 +1,4 @@
-import { isRetirementOnlyRecovery, verifyRetirementRecoveryCompletion } from './retirementRecoveryCompletion.js';
+import { isCleanupOnlyRecovery, verifyCleanupCompletion } from './cleanupOnlyCompletion.js';
 import { storeCompletionData, completionReplayInput } from './agentCompletionData.js';
 import { prepareCompletionTaskHandoff, recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
 import { hasClaimCheckoutBindings } from './completedCheckoutEvidence.js';
@@ -142,7 +142,7 @@ export async function evaluateSuccessCriteria({ agentId = null, task, terminated
   if (terminatedByUser) return null;
   if (isUpdateRepoRepairTask(task)) return success
     && await verifyUpdateRepoRepairCompletion(task, agentId, workspacePath).catch(() => false);
-  if (isRetirementOnlyRecovery(task)) return (retirementCompletion || await verifyRetirementRecoveryCompletion(task))?.status === 'verified';
+  if (isCleanupOnlyRecovery(task)) return (retirementCompletion || await verifyCleanupCompletion(task))?.status === 'verified';
   if (success && mergedReviewFollowUp?.status === 'verified') return true;
   const taskType = task?.taskType || 'user';
   // The SCHEDULED type (`metadata.analysisType`) if any, else the queue category —
@@ -1378,7 +1378,7 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   });
 
   if (Number(task?.metadata?.auditDispositionVersion) === 1 && recoveredHook?.auditDisposition?.status !== 'complete') effectiveSuccess = false;
-  const retirementCompletion = isRetirementOnlyRecovery(task) ? await verifyRetirementRecoveryCompletion(task) : null;
+  const retirementCompletion = isCleanupOnlyRecovery(task) ? await verifyCleanupCompletion(task) : null;
   const validationPassed = resolveRecoveredValidation({ task, agent, effectiveSuccess, recoveredHook,
     retirementCompletion, mergedReviewFollowUp, claimDisposition });
   let taskOutcome = reportedOutcome || retirementCompletion ? resolveTaskOutcome({ reported: retirementCompletion?.status === 'unverified'
@@ -2099,7 +2099,7 @@ async function finalizeAgentInCompletionContext({
   const deliveredVerdict = resolveAgentFinalVerdict(verdictEvidence);
   logPrCompletionVerdict({ agentId, task, prEvidence, primaryPrObservation });
 
-  const retirementCompletion = isRetirementOnlyRecovery(task) ? await verifyRetirementRecoveryCompletion(task) : null;
+  const retirementCompletion = isCleanupOnlyRecovery(task) ? await verifyCleanupCompletion(task) : null;
   const { fidelity, fidelityDowngrade } = await reviewGoalFidelity({
     agentId, task, workspacePath, startedAt: runStartedAt, deliveredVerdict, claimDisposition, retirementCompletion,
   });

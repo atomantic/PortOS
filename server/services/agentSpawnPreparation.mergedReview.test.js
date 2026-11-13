@@ -19,7 +19,7 @@ vi.mock('./executionLanes.js', () => ({ determineLane: () => 'default', acquire:
 vi.mock('./agentPromptBuilder.js', () => ({ getAppWorkspace: vi.fn() }));
 vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: async () => 'local-instance' }));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: m.releaseMarker }));
-vi.mock('./retirementRecoveryCompletion.js', () => ({ isRetirementOnlyRecovery: () => false, settleRetirementRecoveryBeforeSpawn: vi.fn() }));
+vi.mock('./cleanupOnlyCompletion.js', () => ({ isCleanupOnlyRecovery: () => false, settleCleanupBeforeSpawn: vi.fn() }));
 
 const epoch = '11111111-1111-4111-8111-111111111111';
 const dispatch = { agentId: 'agent-original', startedAt: 'start', claimedBy: 'local-instance', claimedAt: 'claim', lastSpawnedAt: 'spawn', totalSpawnCount: 2 };
