@@ -54,17 +54,6 @@ async function enableVideoTool(page) {
   await chip.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
 }
 
-// The composer keeps the account's last mode, and a Flash-Lite chat has answered a
-// Create video request with a still (2026-11-09), so every render picks Flash.
-const FLASH_MODE = /^[\d.]*\s*Flash\b(?!-Lite)/i;
-async function chooseFlashMode(page) {
-  const picker = page.getByRole('button', { name: /^Open mode picker/ });
-  const current = await picker.getAttribute('aria-label', { timeout: STEP_TIMEOUT_MS });
-  if (/currently Flash\b(?!-Lite)/i.test(current || '')) return;
-  await picker.click({ timeout: STEP_TIMEOUT_MS });
-  await page.getByRole('menuitemradio', { name: FLASH_MODE }).first().click({ timeout: STEP_TIMEOUT_MS });
-}
-
 // Sending without the tool would spend the prompt on an ordinary chat answer.
 const assertVideoToolOn = (page) => page.getByRole('button', { name: 'Deselect Videos' })
   .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -182,7 +171,6 @@ export async function renderOnGeminiWeb({ prompt, files = [], aspectChoice, outp
       if (signal?.aborted) throw fail('GEMINI_WEB_CANCELED', 'Canceled', 499);
       onPhase?.('open');
       const editor = await step(LABEL, 'open a new chat', () => openComposer(tab));
-      await step(LABEL, 'choose the Flash mode', () => chooseFlashMode(tab));
       await step(LABEL, 'turn on Create video', () => enableVideoTool(tab));
       await step(LABEL, 'choose the aspect ratio', () => chooseAspect(tab, aspectChoice));
       if (files.length) {
