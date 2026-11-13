@@ -335,14 +335,17 @@ async function mergeLinkedTrack({ record, linkedTrack, bundlesMergeable, source,
 }
 
 /**
- * Media Collections `host` mode: this peer keeps the collection's image/video
- * bytes, so record them as peer-hosted (rendered on demand via the static-mount
- * fallback) instead of copying. Only collection-owned assets qualify — a
- * universe/series' own art still copies. Returns the still-missing assets.
+ * `host` mode keeps collection and mood-board image/video bytes on the peer.
+ * Record them for the static-mount fallback instead of copying. Other record
+ * assets (including universe/series art) keep their existing copy behavior.
  */
-async function takeHostedCollectionAssets({ kind, record, desc, issues, linkedCollection, linkedTrack, sourceInstanceId, missingAssets }) {
+async function takeHostedRecordAssets({ kind, record, desc, issues, linkedCollection, linkedTrack, sourceInstanceId, missingAssets }) {
   const senderPeer = await findPeerById(sourceInstanceId);
   if (senderPeer?.mediaSyncMode !== 'host') return missingAssets;
+  if (kind === 'moodBoard') {
+    const keys = new Set((await desc.referencedAssets(record)).map(entry => `${entry.kind}:${entry.filename}`));
+    return takeHostedAssets(sourceInstanceId, missingAssets, keys);
+  }
   const collection = kind === 'mediaCollection' ? record : linkedCollection;
   const assetKey = (entry) => `${entry.kind}:${entry.filename}`;
   const collectionKeys = new Set(isPlainObject(collection) ? referenceCollectionAssetManifest(collection).map(assetKey) : []);
@@ -459,7 +462,7 @@ async function diffIncomingAssets({ kind, record, desc, issues, linkedCollection
   }
   const missingAssets = await diffAssetManifestAgainstLocal(ownAssets, { includeMismatched: applied, senderInstanceId: sourceInstanceId });
   if (missingAssets.length === 0 || !bundlesMergeable) return missingAssets;
-  return takeHostedCollectionAssets({ kind, record, desc, issues, linkedCollection, linkedTrack, sourceInstanceId, missingAssets });
+  return takeHostedRecordAssets({ kind, record, desc, issues, linkedCollection, linkedTrack, sourceInstanceId, missingAssets });
 }
 
 /**
