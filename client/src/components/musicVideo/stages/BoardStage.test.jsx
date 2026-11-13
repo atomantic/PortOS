@@ -297,3 +297,16 @@ it('shows Blender film thumbnails using the scene map and updates after a render
   fireEvent.error(thumb(3).querySelector('img'));
   expect(thumb(3).querySelector('img')).toBeNull();
 });
+
+// Done has both a visual treatment and text; selection and warnings remain independent.
+it('marks completed scene cards without hiding attention or the selected shot', () => {
+  const done = scene(1, { shotSheet: { checked: true }, videoHistoryId: null });
+  const { rerender } = renderBoard(board([done, scene(2)], { activeSceneId: 's1' }));
+  const card = screen.getByRole('button', { name: 'Open Shot 1 · Part 1' });
+  expect(card).toHaveClass('border-port-success', 'bg-port-success/10', 'ring-port-accent');
+  expect(card).toHaveAccessibleDescription(expect.stringContaining('Done'));
+  expect(within(card).getByText('No clip')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Open Shot 2 · Part 2' })).not.toHaveClass('border-port-success');
+  rerender(<MemoryRouter><BoardStage board={board([{ ...done, shotSheet: { checked: false } }, scene(2)])} /></MemoryRouter>);
+  expect(screen.getByRole('button', { name: 'Open Shot 1 · Part 1' })).not.toHaveClass('border-port-success');
+});

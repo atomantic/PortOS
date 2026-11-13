@@ -185,7 +185,7 @@ function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImage
 export default function SceneCard({
   scene, posterSrc, index, shotName = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null, videoJobs = null,
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
-  onMove, onDelete, onEditLocal, onSave,
+  onMove, onDelete, onEditLocal, onSave, onSetDone = null,
   project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
   onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onCheckTake = null, checkingTakes = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, onHandheldClip = null, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false, manifestOwnsShots = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, onMoveEnd = null, nextEndSec = null, falVideoSettings = null, performanceReview = null, onRepairPerformance, repairBusy = false,
@@ -207,6 +207,15 @@ export default function SceneCard({
     if (!dirtyFields.current.has(key)) return;
     dirtyFields.current.delete(key);
     Promise.resolve(onSave(scene.sceneId, patch)).then((saved) => { if (saved === false) markDirty(key); }, () => markDirty(key));
+  };
+  const [doneSaving, setDoneSaving] = useState(false);
+  const doneSavePending = useRef(false);
+  const setDone = (checked) => {
+    if (locked || doneSavePending.current || !onSetDone) return;
+    doneSavePending.current = true;
+    setDoneSaving(true);
+    Promise.resolve(onSetDone(scene.sceneId, checked))
+      .finally(() => { doneSavePending.current = false; setDoneSaving(false); });
   };
   const applyPatch = (patch) => { onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
   const layer = MUSIC_VIDEO_VISUAL_LAYERS.includes(scene.visualLayer) ? scene.visualLayer : 'footage';
@@ -656,6 +665,11 @@ export default function SceneCard({
             </ul>
           )}
         </div>
+        {onSetDone && <label htmlFor={fieldId('done')} className="flex min-h-[44px] shrink-0 items-center gap-2 rounded border border-port-border px-2 text-sm pointer-fine:sm:min-h-[36px]">
+          <input id={fieldId('done')} type="checkbox" checked={!!scene.shotSheet?.checked} disabled={locked || doneSaving}
+            onChange={(event) => setDone(event.target.checked)} />
+          {doneSaving ? 'Saving…' : 'Done'}
+        </label>}
         {stepShot && (
           <>
             <button type="button" onClick={stepShot.prev || undefined} disabled={!stepShot.prev} aria-label="Previous shot" title="Previous shot" className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 pointer-fine:sm:min-h-[36px] pointer-fine:sm:min-w-[36px]">

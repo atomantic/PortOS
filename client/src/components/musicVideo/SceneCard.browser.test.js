@@ -43,6 +43,7 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
                 return h('main', { style: { width: width + 'px', maxWidth: '100%', padding: '8px', boxSizing: 'border-box' } },
                   h(SceneCard, { scene, index: 0, expanded: true, videoModels: models,
                     onGenerateEndFrame: params.has('frames') ? () => {} : undefined,
+                    onSetDone: (_id, checked) => setScene(current => ({ ...current, shotSheet: { ...current.shotSheet, checked } })),
                     onEditLocal: (_id, patch) => setScene(current => ({ ...current, ...patch })), onSave: () => {} }));
               }
               createRoot(document.getElementById('root')).render(
@@ -62,6 +63,32 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
   }, BROWSER_FIXTURE_STARTUP_MS);
 
   afterAll(() => fixture?.close());
+
+  it('keeps Done reachable and keyboard-operable on narrow and wide editors', async () => {
+    const page = await fixture.browser.newPage();
+    await page.route('**/*', route => {
+      const url = new URL(route.request().url());
+      return url.origin === new URL(fixture.origin).origin && !/^\/(api|data|socket\.io)(\/|$)/.test(url.pathname)
+        ? route.continue() : route.abort();
+    });
+    try {
+      for (const width of [360, 1100]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto(`${fixture.origin}shot-editor-test?width=${width}`);
+        const done = page.getByRole('checkbox', { name: 'Done', exact: true });
+        await done.waitFor({ state: 'visible' });
+        await done.focus();
+        await page.keyboard.press('Space');
+        await page.waitForFunction(() => document.querySelector('input[id$="-done"]')?.checked);
+        expect(await done.isChecked()).toBe(true);
+        const bounds = await done.boundingBox();
+        expect(bounds.x).toBeGreaterThanOrEqual(0);
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+        await done.uncheck();
+        expect(await done.isChecked()).toBe(false);
+      }
+    } finally { await page.close(); }
+  });
 
   // Catches measuring a hidden frame as zero, clipping long prompts, and stale heights after edits or wrapping changes.
   it('fits both frame prompts when opened, edited, and rewrapped', async () => {
