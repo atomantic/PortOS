@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { SlidersHorizontal } from 'lucide-react';
 import FilmLookControls from '../media/FilmLookControls.jsx';
 import FilmLookPreview from '../media/FilmLookPreview.jsx';
@@ -17,7 +17,14 @@ export default function ShotFilmLook({ project, scene, onChange, fieldId }) {
   const savedLooks = saved.presets;
   const [tuning, setTuning] = useState(null);
   const [shakeDraft, setShakeDraft] = useState(null);
-  useEffect(() => { setTuning(null); setShakeDraft(null); }, [scene.sceneId]);
+  // Another shot closes Tune and drops a draft. Reset while rendering, not in an effect: a mount
+  // effect that has not flushed yet runs after a first quick click and closes Tune again.
+  const [shownScene, setShownScene] = useState(scene.sceneId);
+  if (shownScene !== scene.sceneId) {
+    setShownScene(scene.sceneId);
+    setTuning(null);
+    setShakeDraft(null);
+  }
   const ownLook = scene.filmLook ? normalizeFilmLook(scene.filmLook) : null;
   const videoLook = normalizeFilmLook(project.filmLook);
   const camera = shotCamera(project, scene);
