@@ -667,7 +667,8 @@ function wordAnchorProblem(shot, cues, documentShots) {
  * Every shot's open work: the timing or storyboard fields it is missing
  * (`incompleteShots`), and lyric anchors that disagree with the lines sung over it
  * (`lyricAnchors`, with both sides so the checklist can show and fix them), each
- * also named in `problems`.
+ * also named in `problems`. A selected take marked bad is advice (`selectedTakeMarkedBad`),
+ * never a problem: the user may keep or pick any take.
  */
 function shotProblems(project, draft, scenes, { documentShots, cues, duration }) {
   const problems = [];
@@ -693,14 +694,6 @@ function shotProblems(project, draft, scenes, { documentShots, cues, duration })
     }
     const wordProblem = wordAnchorProblem(scene, cues, documentShots);
     if (wordProblem) problems.push(wordProblem);
-    const badSelectedTake = scene.selectedTakeMarkedBad || (project.assetMarks && (
-      (scene.referenceImageId && project.assetMarks[`image:${scene.referenceImageId}`] === 'bad') ||
-      (scene.endImageId && project.assetMarks[`image:${scene.endImageId}`] === 'bad') ||
-      (scene.videoHistoryId && project.assetMarks[`video:${scene.videoHistoryId}`] === 'bad')
-    ));
-    if (badSelectedTake) {
-      problems.push(`Selected take marked bad for ${scene.label || scene.sceneId || 'shot'}.`);
-    }
   }
   return { problems, incompleteShots, lyricAnchors };
 }
