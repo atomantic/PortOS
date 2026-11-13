@@ -26,7 +26,7 @@ export default function CompositionPanel({ board }) {
   const mode = project.composition?.mode;
   const blender = mode === 'blender';
   const filmLook = <FilmLookPanel project={project} activeSceneId={board.activeSceneId} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />;
-  const failure = <RenderFailure project={project} renderJob={board.renderJob} onPatchShots={board.onPatchShots} onRenderClips={board.onRenderClips} />;
+  const failure = <RenderFailure project={project} renderJob={board.renderJob} onPatchShots={board.onPatchShots} />;
   return (
     <>
       {blender && <fieldset disabled={locked} className="min-w-0">{failure}</fieldset>}

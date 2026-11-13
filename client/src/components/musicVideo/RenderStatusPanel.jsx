@@ -105,10 +105,6 @@ function refusalFix(failure) {
     return ids.length ? { ids, patch: { shotMode: 'cutaway' }, label: `Switch ${plural(ids, 'it', `these ${ids.length}`)} to Cutaway`,
       done: `Switched ${ids.length} shot${plural(ids, '', 's')} to Cutaway` } : null;
   }
-  if (failure?.code === 'STALE_CLIP_DEPENDENCIES') {
-    const ids = failure.context?.sceneIds || [];
-    return ids.length ? { ids, render: true, label: plural(ids, 'Render a new clip', `Render ${ids.length} new clips`) } : null;
-  }
   if (failure?.code === 'INSUFFICIENT_CLIP_COVERAGE') {
     const ids = (failure.context?.shortfalls || []).map((entry) => entry.sceneId);
     return ids.length ? { ids, patch: { holdLastFrame: true }, label: `Hold the last frame on ${plural(ids, 'it', `these ${ids.length}`)}`,
@@ -120,20 +116,18 @@ function refusalFix(failure) {
 /**
  * Persisted failures survive reload; kickoff/SSE failures stay bound to their project.
  * A refusal with a one-tap fix offers it: `onPatchShots(sceneIds, patch, doneMessage)`,
- * or for clips made from since-changed frames `onRenderClips(sceneIds)`, which renders
- * each shot's clip again from its current frames and the video settings.
  */
-export function RenderFailure({ project, renderJob, onPatchShots, onRenderClips }) {
+export function RenderFailure({ project, renderJob, onPatchShots }) {
   const [fixing, setFixing] = useState(false);
   if (renderJob?.active && renderJob.context === project.id) return null;
   const failure = renderJob?.failure?.projectId === project.id ? renderJob.failure : null;
   const error = failure ? failure.message : project.status === 'failed' ? project.renderError : null;
   if (!error) return null;
   const offered = refusalFix(failure);
-  const fix = offered && (offered.render ? onRenderClips : onPatchShots) ? offered : null;
+  const fix = offered && onPatchShots ? offered : null;
   const apply = () => {
     setFixing(true);
-    Promise.resolve(fix.render ? onRenderClips(fix.ids) : onPatchShots(fix.ids, fix.patch, fix.done)).finally(() => setFixing(false));
+    Promise.resolve(onPatchShots(fix.ids, fix.patch, fix.done)).finally(() => setFixing(false));
   };
   return (
     <Banner tone="error" title="Render failed" className="break-words">
@@ -141,7 +135,7 @@ export function RenderFailure({ project, renderJob, onPatchShots, onRenderClips 
       {fix && (
         <button type="button" onClick={apply} disabled={fixing}
           className="mt-2 block min-h-[44px] pointer-fine:sm:min-h-0 rounded border border-port-border bg-port-bg px-2 py-1 text-xs text-port-text hover:bg-port-border/40 disabled:opacity-50">
-          {fixing ? (fix.render ? 'Starting…' : 'Saving…') : fix.label}
+          {fixing ? 'Saving…' : fix.label}
         </button>
       )}
     </Banner>

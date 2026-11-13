@@ -1201,19 +1201,6 @@ function ProjectWorkspace({
       });
   };
 
-  // A render refused for clips made from since-changed frames: render each shot's clip
-  // again from its current frames and the video settings, as Render on its card would.
-  const renderClips = (sceneIds) => {
-    const scenes = (selected?.scenes || []).filter((scene) => sceneIds.includes(scene.sceneId));
-    if (!scenes.length) return Promise.resolve();
-    return Promise.all(scenes.map((scene) => sceneMedia.generateSceneVideo(scene))).then((results) => {
-      const started = results.filter((result) => result?.ok).length;
-      if (!started) return;
-      renderJob.clearFailure();
-      toast.success(`Rendering ${started === 1 ? 'a new clip' : `${started} new clips`}. Render again once ${started === 1 ? 'it lands' : 'they land'}`);
-    });
-  };
-
   // Optimistic local edit; PATCH on blur (silent — this owns its error toast).
   const editSceneLocal = (sceneId, patch) => {
     const keys = unsavedSceneFields.current.get(sceneId) || new Set();
@@ -1781,7 +1768,6 @@ function ProjectWorkspace({
     sceneMedia,
     renderJob,
     onPatchShots: patchShots,
-    onRenderClips: renderClips,
     production,
     castSets,
     devArtifacts,

@@ -1,7 +1,7 @@
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
-import { assertProductionApproval, clipLocks, nameShots, productionReviewBasis } from './productionReview.js';
+import { assertProductionApproval, nameShots, productionReviewBasis } from './productionReview.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 /**
  * Music Video — render pipeline (#1760, Phase 2).
@@ -1041,25 +1041,13 @@ export function excerptBoundaryTimes(sections, cues, startSec, endSec, { fps = 2
 // authored span. Both callers build on the exact same resolved clip list, so
 // an excerpt frame matches what a full render would produce at that song time.
 //
-// Legacy approval compatibility: a clip locked before shot locking was removed
-// (read-only `clipApprovals`) stays exempt, so older projects still render.
-// Any other stale clip blocks, naming its shots (numbered in song order) and the fix.
-export function assertCurrentClipDependencies(project) {
-  const locks = clipLocks(project);
-  const stale = (project.scenes || []).filter((scene) => scene.videoHistoryId && scene.visualLayer !== 'still' && !isSelfDrawnLayer(scene.visualLayer))
-    .filter((scene) => locks?.[scene.sceneId] !== 'locked')
-    .filter((scene) => musicVideoTakeChanges(project, scene, (scene.takes || []).find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)).length);
-  if (!stale.length) return;
-  const shots = nameShots(project, stale.map((scene) => scene.sceneId));
-  throw new ServerError(`${shots}: the clip was made from frames that have since changed. Render a new one`,
-    { status: 422, code: 'STALE_CLIP_DEPENDENCIES', context: { sceneIds: stale.map((scene) => scene.sceneId) } });
-}
+// A selected clip is never checked against the shot's current frames: the user may
+// override or pick any clip and it renders as chosen.
 
 // `decode: false` plans for a read-only caller without host control: the
 // performance-take review skips its ffmpeg decode of the song master.
 export async function planMusicVideoRender(project, { draft = false, decode = true } = {}) {
   assertMusicVideoMediaSelections(project);
-  assertCurrentClipDependencies(project);
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
 
@@ -1195,7 +1183,6 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   const audioPath = await resolveMasterAudioPath(project);
   assertSongAudioCurrent(project, basename(audioPath));
   if (renderer.performanceTakes) {
-    assertCurrentClipDependencies(project);
     await assertCurrentPerformanceTakes(project, audioPath);
   }
   const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;

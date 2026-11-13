@@ -46,7 +46,6 @@ vi.mock('./render.js', () => ({
   buildMusicVideoFfmpegArgs: vi.fn(() => ({ args: [], totalDuration: 4, canonW: 64, canonH: 64, fps: 24, sections: [] })),
   excerptBoundaryTimes: vi.fn(() => [0]),
   isLocalRenderMark: vi.fn(() => true),
-  assertCurrentClipDependencies: vi.fn(),
   resolveMasterAudioPath: vi.fn(),
   resolveSoundBedPath: vi.fn(),
 }));
