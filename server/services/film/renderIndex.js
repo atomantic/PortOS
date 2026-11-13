@@ -12,7 +12,7 @@ import {
   blenderEffectiveOptions, blenderShotFrameRange, blenderShotHandleRanges, normalizeBlenderHandles,
 } from '../../lib/musicVideoBlender.js';
 import { blenderMediaPath, blenderShotDir, readBlenderJson } from './workspace.js';
-import { BLENDER_NO_OPTIONS_HASH, blenderImportsChanged, blenderOptionsHash, blenderSettingsHash, blenderShotHash, blenderSongHash, hashBlenderSources } from './hashing.js';
+import { BLENDER_NO_OPTIONS_HASH, blenderImportsChanged, blenderOptionsHash, blenderSettingsHash, blenderShotHash, blenderSongHash, codeModuleClosures, hashBlenderSources } from './hashing.js';
 import { getBlenderSong } from './song.js';
 
 export const BLENDER_RENDER_QUALITIES = Object.freeze(['preview', 'final']);
@@ -51,8 +51,18 @@ export const blenderShotVideo = (owner, shotId, quality) => join(blenderShotDir(
 /** A small JPEG of the shot's middle frame, made when its video is encoded: it outlives the frames. */
 export const blenderShotPoster = (owner, shotId, quality) => join(blenderShotDir(owner, shotId, quality), 'poster.jpg');
 export const blenderFramesDir = (owner, shotId, quality) => join(blenderShotDir(owner, shotId, quality), 'frames');
+/** Code layers of one shot: `layers/<index>/` beside `frames/`, PNG with alpha. */
+export const blenderLayersRoot = (owner, shotId, quality) => join(blenderShotDir(owner, shotId, quality), 'layers');
+/** Handle frames with code layers already painted on, so a cut reads the same picture as the shot. */
+export const blenderCompositedHandlesDir = (owner, shotId, quality) => join(blenderShotDir(owner, shotId, quality), 'handles');
+export const blenderCompositedHandleName = (side, frame) => `handle_${side}_${blenderFrameToken(frame)}.png`;
+export const blenderCompositedHandlePattern = (side) => `handle_${side}_%06d.png`;
+export const blenderLayerFramesDir = (owner, shotId, quality, index) => join(blenderLayersRoot(owner, shotId, quality), String(index));
 export const blenderFrameName = (frame, quality) => `frame_${blenderFrameToken(frame)}.${frameExtension(quality)}`;
 export const blenderHandleFrameName = (side, frame, quality) => `handle_${side}_${blenderFrameToken(frame)}.${frameExtension(quality)}`;
+export const blenderLayerFrameName = (frame) => `frame_${blenderFrameToken(frame)}.png`;
+export const blenderLayerHandleFrameName = (side, frame) => `handle_${side}_${blenderFrameToken(frame)}.png`;
+export const blenderLayerFramePattern = () => 'frame_%06d.png';
 /** The frame sequence as ffmpeg reads it. */
 export const blenderFramePattern = (quality) => `frame_%06d.${frameExtension(quality)}`;
 export const blenderHandleFramePattern = (side, quality) => `handle_${side}_%06d.${frameExtension(quality)}`;
@@ -220,13 +230,14 @@ export const blenderFilmOptions = (manifest, settings) => blenderEffectiveOption
  */
 export async function readBlenderRenders(owner, manifest, { settings, sources = null, shots = manifest.shots, finalsOnly = false }) {
   const { files } = sources || await hashBlenderSources(owner);
+  const closures = await codeModuleClosures(owner, shots);
   const qualities = finalsOnly ? ['final'] : BLENDER_RENDER_QUALITIES;
   const settingsHashes = Object.fromEntries(qualities.map((quality) => [quality, blenderSettingsHash(settings, quality)]));
   const optionsHash = blenderOptionsHash(blenderFilmOptions(manifest, settings));
   const songHash = blenderSongHash(await getBlenderSong(owner, settings));
   const renders = {};
   for (const shot of shots) {
-    const shotHash = blenderShotHash(shot, files);
+    const shotHash = blenderShotHash(shot, files, { closures });
     const entry = {
       stills: finalsOnly ? [] : await readStills(owner, shot, { shotHash, optionsHash, songHash, files }),
       sheets: finalsOnly ? [] : await readSheets(owner, shot, { shotHash, optionsHash, songHash, files }),

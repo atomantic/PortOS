@@ -7,9 +7,11 @@
  */
 import { atomicWrite } from '../../lib/fileCore.js';
 import {
-  MUSIC_VIDEO_BLENDER_MAX_CHOICES, MUSIC_VIDEO_BLENDER_MAX_HANDLE_SEC, MUSIC_VIDEO_BLENDER_MAX_OPTIONS,
-  MUSIC_VIDEO_BLENDER_MAX_SHOTS, MUSIC_VIDEO_BLENDER_OPTION_KEY, MUSIC_VIDEO_BLENDER_OPTION_TYPES,
-  MUSIC_VIDEO_BLENDER_SHOT_ID, MUSIC_VIDEO_BLENDER_SOURCE_PATH, blenderOptionValueProblem, blenderShotHandleRanges,
+  MUSIC_VIDEO_BLENDER_CODE_SPACES, MUSIC_VIDEO_BLENDER_LAYER_BLENDS, MUSIC_VIDEO_BLENDER_LAYER_PLACES,
+  MUSIC_VIDEO_BLENDER_MAX_CHOICES, MUSIC_VIDEO_BLENDER_MAX_HANDLE_SEC, MUSIC_VIDEO_BLENDER_MAX_LAYERS,
+  MUSIC_VIDEO_BLENDER_MAX_OPTIONS, MUSIC_VIDEO_BLENDER_MAX_SHOTS, MUSIC_VIDEO_BLENDER_OPTION_KEY,
+  MUSIC_VIDEO_BLENDER_OPTION_TYPES, MUSIC_VIDEO_BLENDER_RENDERERS, MUSIC_VIDEO_BLENDER_SHOT_ID,
+  MUSIC_VIDEO_BLENDER_SOURCE_PATH, blenderOptionValueProblem, blenderShotHandleRanges,
 } from '../../lib/musicVideoBlender.js';
 import { PRE_MUSIC_DURATION_RANGE } from '../../lib/musicVideoColdOpen.js';
 import { blenderManifestFile, readBlenderJson } from './workspace.js';
@@ -22,6 +24,60 @@ const MAX_DEPS = 64;
 const MAX_ERRORS = 40;
 
 const isNumber = (value) => typeof value === 'number' && Number.isFinite(value);
+// A code module is an ES module under src/. The default renderer and canvas space are omitted so a
+// Blender shot's stored shape stays what it was before per-shot renderers existed.
+const codeEntryProblem = (entry) => (
+  typeof entry === 'string' && MUSIC_VIDEO_BLENDER_SOURCE_PATH.test(entry) && /\.(?:js|mjs)$/i.test(entry)
+    ? null : 'must be a .js or .mjs file under src/'
+);
+
+function applyShotRenderer(shot, entry, name, fail) {
+  const renderer = entry.renderer == null ? 'blender' : entry.renderer;
+  if (!MUSIC_VIDEO_BLENDER_RENDERERS.includes(renderer)) {
+    fail(`${name}: "renderer" must be blender or code`);
+    return false;
+  }
+  if (renderer === 'code') {
+    const problem = codeEntryProblem(entry.entry);
+    if (problem) { fail(`${name}: "entry" ${problem}`); return false; }
+    const space = entry.space == null ? 'canvas' : entry.space;
+    if (!MUSIC_VIDEO_BLENDER_CODE_SPACES.includes(space)) {
+      fail(`${name}: "space" must be canvas or three`);
+      return false;
+    }
+    shot.renderer = 'code';
+    shot.entry = entry.entry;
+    if (space !== 'canvas') shot.space = space;
+  } else if (entry.entry != null || entry.space != null) {
+    fail(`${name}: "entry" and "space" belong on a code shot`);
+    return false;
+  }
+  if (entry.layers == null) return true;
+  if (!Array.isArray(entry.layers) || entry.layers.length > MUSIC_VIDEO_BLENDER_MAX_LAYERS) {
+    fail(`${name}: "layers" must list at most ${MUSIC_VIDEO_BLENDER_MAX_LAYERS} code layers`);
+    return false;
+  }
+  const layers = [];
+  for (const [index, layer] of entry.layers.entries()) {
+    const label = `layer ${index + 1}`;
+    if (!isDict(layer)) { fail(`${name}: ${label} must be a dict`); return false; }
+    const problem = codeEntryProblem(layer.entry);
+    if (problem) { fail(`${name}: ${label} "entry" ${problem}`); return false; }
+    const place = layer.place ?? 'over';
+    const blend = layer.blend ?? 'normal';
+    if (!MUSIC_VIDEO_BLENDER_LAYER_PLACES.includes(place)) {
+      fail(`${name}: ${label} "place" must be over or under`);
+      return false;
+    }
+    if (!MUSIC_VIDEO_BLENDER_LAYER_BLENDS.includes(blend)) {
+      fail(`${name}: ${label} "blend" must be normal, screen, add or multiply`);
+      return false;
+    }
+    layers.push({ entry: layer.entry, place, blend });
+  }
+  if (layers.length) shot.layers = layers;
+  return true;
+}
 const seconds = (value) => `${Number(value.toFixed(3))} s`;
 const isDict = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const shortText = (value, max) => typeof value === 'string' && value.length <= max;
@@ -182,6 +238,7 @@ export function validateBlenderManifest(raw, { durationSec, fps }) {
       }
       if (handles.in > 0 || handles.out > 0) shot.handles = handles;
     }
+    if (!applyShotRenderer(shot, entry, name, fail)) continue;
     shots.push(shot);
     previous = shot;
   }

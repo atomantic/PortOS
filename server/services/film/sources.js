@@ -62,7 +62,7 @@ export async function listBlenderFiles(owner) {
   return { files: files.map(({ path, bytes, mtimeMs, kind }) => ({ path, bytes, mtime: new Date(mtimeMs).toISOString(), text: kind === 'text' })) };
 }
 
-const notText = () => blenderRefusal('Only text source files (.py, .json, .txt, .md) are read and written here; place other assets in the workspace folder', 'MUSIC_VIDEO_BLENDER_NOT_TEXT');
+const notText = () => blenderRefusal('Only text source files (.py, .js, .mjs, .json, .txt, .md) are read and written here; place other assets in the workspace folder', 'MUSIC_VIDEO_BLENDER_NOT_TEXT');
 
 export async function readBlenderFile(owner, path) {
   const { absolute, kind } = await resolveBlenderSourceFile(owner, path);

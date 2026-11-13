@@ -658,7 +658,9 @@ describe('Blender film shot renders', () => {
 
   it.skipIf(!python)('renders concurrent shots from their own staged song even when the shared song changes before a driver starts', async () => {
     await scaffold();
-    await writeSource('film.py', `import json, os
+    // The import keeps this harness on the Blender driver. bpy itself is stubbed in the worker below.
+    await writeSource('film.py', `import bpy
+import json, os
 
 def describe(ctx):
     return {"shots": []}

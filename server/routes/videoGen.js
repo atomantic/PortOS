@@ -20,7 +20,7 @@ import { z } from 'zod';
 import { resolveGalleryImage } from '../lib/fileUtils.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { createVideoHistoryItemRead, historyRecordIdSchema } from './videoHistoryRead.js';
-import { uploadFields, optionalUpload, optionalUploadFields } from '../lib/multipart.js';
+import { optionalUpload, optionalUploadFields } from '../lib/multipart.js';
 import {
   validateRequest, hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema,
   icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema,
@@ -186,7 +186,7 @@ export const isAudioMime = (mime, filename) => {
 // slots (REFERENCE_AUDIO_FIELDS). Files stream to disk without a file-size cap.
 // Per-fieldname mime filtering rejects mismatched parts
 // up-front so a stray .mp4 drag-drop can't get staged under these fields.
-const frameImageUpload = uploadFields(['sourceImage', 'lastImage', 'audioFile', ...REFERENCE_AUDIO_FIELDS, ...VIDEO_REFERENCE_IMAGE_FIELDS, 'icReference', 'runwayVideo', 'runwayCharacterVideo'], {
+const frameImageUpload = optionalUploadFields(['sourceImage', 'lastImage', 'audioFile', ...REFERENCE_AUDIO_FIELDS, ...VIDEO_REFERENCE_IMAGE_FIELDS, 'icReference', 'runwayVideo', 'runwayCharacterVideo'], {
   fileFilter: (_req, file, cb) => {
     const isImageField = file.fieldname === 'sourceImage' || file.fieldname === 'lastImage' || VIDEO_REFERENCE_IMAGE_FIELDS.includes(file.fieldname);
     const isAudioField = file.fieldname === 'audioFile' || REFERENCE_AUDIO_FIELDS.includes(file.fieldname);

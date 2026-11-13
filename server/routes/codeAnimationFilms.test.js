@@ -235,8 +235,8 @@ it('promotes twice with independent sources/options, unsynced song timing and no
   expect((await post(`${targetApi}/render`, { quality: 'still' })).body.code).toBe('MUSIC_VIDEO_BLENDER_NOT_SYNCED');
   expect(state.blender.control.jobs).toEqual(jobsBefore);
   expect(analyzeAudioFile).not.toHaveBeenCalled(); expect(runPromptThroughProvider).not.toHaveBeenCalled();
-  writeFileSync(join(targetDir, 'src', 'film.py'), '# target edit');
-  expect(readFileSync(join(secondDir, 'src', 'film.py'), 'utf8')).not.toBe('# target edit');
+  writeFileSync(join(targetDir, 'src', 'film.py'), 'import bpy\n# target edit\n');
+  expect(readFileSync(join(secondDir, 'src', 'film.py'), 'utf8')).not.toBe('import bpy\n# target edit\n');
   expect(state.projects.get(id)).toEqual({ ...original, promotedTo: second.body.project.id });
   expect(readFileSync(join(sourceDir, 'song.json'), 'utf8')).toBe(songBefore);
   expect(JSON.parse(readFileSync(manifestPath))).toEqual(manifest);

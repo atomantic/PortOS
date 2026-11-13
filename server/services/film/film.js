@@ -6,7 +6,10 @@
  */
 import { join } from 'node:path';
 import { blenderRenderFrame, blenderShotFrameRange, normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
-import { blenderFinalsSignature, blenderFramesDir, blenderHandleFramePattern, blenderShotVideo, readBlenderRenders } from './renderIndex.js';
+import {
+  blenderCompositedHandlePattern, blenderCompositedHandlesDir, blenderFinalsSignature, blenderFramesDir,
+  blenderHandleFramePattern, blenderShotVideo, readBlenderRenders,
+} from './renderIndex.js';
 import { blenderFilmProblems, readBlenderManifest } from './manifest.js';
 import { blenderRefusal } from './workspace.js';
 
@@ -27,6 +30,12 @@ export async function readBlenderFilm(owner) {
 export const blenderNotSynced = () => blenderRefusal('Sync shots from scripts first', 'MUSIC_VIDEO_BLENDER_NOT_SYNCED', 409);
 
 const conforms = (render, frame, fps, frames) => render.width === frame.width && render.height === frame.height && render.fps === fps && render.frames === frames;
+
+/** A layered shot's cut reads the composited handles. A bare plate keeps the frames the renderer wrote. */
+function shotHandlePattern(owner, shot, quality, side) {
+  if (shot.layers?.length) return join(blenderCompositedHandlesDir(owner, shot.id, quality), blenderCompositedHandlePattern(side));
+  return join(blenderFramesDir(owner, shot.id, quality), blenderHandleFramePattern(side, quality));
+}
 
 function buildTransitionSpec(owner, { effect, fromQ, toQ }, shots, ranges, from, to) {
   const fromShot = shots[effect.index];
@@ -51,12 +60,12 @@ function buildTransitionSpec(owner, { effect, fromQ, toQ }, shots, ranges, from,
       video: from < effect.cutFrame ? blenderShotVideo(owner, fromShot.id, fromQ) : null,
       videoOffset: from < effect.cutFrame ? from - fromRange.startFrame : 0,
       videoFrames: from < effect.cutFrame ? beforeCutEnd - from : 0,
-      handlePattern: effect.needOutFrames > 0 && to > effect.cutFrame ? join(blenderFramesDir(owner, fromShot.id, fromQ), blenderHandleFramePattern('out', fromQ)) : null,
+      handlePattern: effect.needOutFrames > 0 && to > effect.cutFrame ? shotHandlePattern(owner, fromShot, fromQ, 'out') : null,
       handleStart: to > effect.cutFrame ? afterCutStart : 0,
       handleFrames: to > effect.cutFrame ? to - afterCutStart : 0,
     },
     incoming: {
-      handlePattern: from < effect.cutFrame ? join(blenderFramesDir(owner, toShot.id, toQ), blenderHandleFramePattern('in', toQ)) : null,
+      handlePattern: from < effect.cutFrame ? shotHandlePattern(owner, toShot, toQ, 'in') : null,
       handleStart: from < effect.cutFrame ? from : 0,
       handleFrames: from < effect.cutFrame ? beforeCutEnd - from : 0,
       video: to > effect.cutFrame ? blenderShotVideo(owner, toShot.id, toQ) : null,
