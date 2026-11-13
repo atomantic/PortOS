@@ -49,6 +49,18 @@ it('marks a reviewed render stale when Use end frame turns off', () => {
   expect(presentMusicVideoDependencies(project).renderDependencyState.reasons).toContain('Shot timing or composition layer changed');
 });
 
+// Uniquely catches a final render going out of date at once because a kept clip was made from an older plate.
+it('keeps a final render current when its selected clip was made from a different plate', () => {
+  const project = projectFixture();
+  Object.assign(project.scenes[0], { visualLayer: 'footage', referenceImageId: 'new.png', videoHistoryId: 'clip.mp4',
+    takes: [{ takeId: 't1', kind: 'video', assetId: 'clip.mp4', sourceImageId: 'old.png', status: 'selected' }] });
+  project.renderHistoryId = 'final';
+  project.renderDependencies = captureMusicVideoEvidence(project, { clipFrames: false });
+  expect(presentMusicVideoDependencies(project).renderDependencyState.status).toBe('current');
+  project.renderDependencies = captureMusicVideoEvidence(project);
+  expect(presentMusicVideoDependencies(project).renderDependencyState.status).toBe('stale');
+});
+
 const frameState = (project, scene, take) => presentMusicVideoDependencies({
   ...project, scenes: [{ ...scene, takes: [take] }],
 }).scenes[0].takes[0].dependencyState;
