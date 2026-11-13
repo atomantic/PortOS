@@ -188,7 +188,7 @@ export async function isBlenderRenderCurrent(owner, shot, quality, current) {
   return staleReasons(meta, range, handleRanges, current).length === 0 ? meta : null;
 }
 
-const SHEET_FILE = /^sheet-\d+-\d+-e\d+\.jpg$/;
+const SHEET_FILE = /^sheet--?\d+--?\d+-e\d+\.jpg$/;
 
 async function readSheets(owner, shot, { shotHash, optionsHash, songHash, files }) {
   const listed = await readBlenderJson(blenderSheetsFile(owner, shot.id), []);

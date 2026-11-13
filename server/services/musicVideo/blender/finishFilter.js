@@ -23,17 +23,19 @@ function fadeBlackFilters(scenes, storyboardRows, { fps, first, last }) {
   })), { fps }).filter((effect) => effect.style === 'fade-black');
   const filters = [];
   for (const { cutFrame, outFrames, inFrames } of effects) {
-    if (outFrames > 0 && cutFrame > first && cutFrame - outFrames < last) {
-      const start = Math.max(first, cutFrame - outFrames);
-      const from = start - first;
-      const count = cutFrame - start;
-      filters.push(`fade=t=out:s=${from}:n=${count}:enable='between(n,${from},${from + count - 1})'`);
-    }
-    if (inFrames > 0 && cutFrame + inFrames > first && cutFrame < last) {
-      const start = Math.max(first, cutFrame);
-      const from = start - first;
-      const count = cutFrame + inFrames - start;
-      filters.push(`fade=t=in:s=${from}:n=${count}:enable='between(n,${from},${from + count - 1})'`);
+    for (const [type, origin, count] of [['out', cutFrame - outFrames, outFrames], ['in', cutFrame, inFrames]]) {
+      if (count <= 0 || origin >= last || origin + count <= first) continue;
+      const from = origin - first;
+      if (from >= 0) {
+        filters.push(`fade=t=${type}:s=${from}:n=${count}:enable='between(n,${from},${from + count - 1})'`);
+      } else {
+        // FFmpeg rejects a negative fade start. Shift its clock through the elapsed
+        // part of the fade, then restore the excerpt clock for subsequent filters.
+        const elapsed = -from;
+        filters.push(`setpts=PTS+${elapsed}/(${fps}*TB)`,
+          `fade=t=${type}:st=0:d=${count / fps}:enable='between(n,0,${count - elapsed - 1})'`,
+          `setpts=PTS-${elapsed}/(${fps}*TB)`);
+      }
     }
   }
   return filters;

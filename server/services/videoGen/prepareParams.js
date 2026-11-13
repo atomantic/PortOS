@@ -31,7 +31,7 @@ import { randomUUID } from 'crypto';
 import { join, extname, basename } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { REFERENCE_AUDIO_FIELDS, VIDEO_REFERENCE_IMAGE_FIELDS, MAX_VIDEO_REFERENCE_IMAGES, videoReferenceImageSlots } from './requestFields.js';
-import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded, assertFileNotMediaManifest, sha256File } from '../../lib/fileUtils.js';
+import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded, assertFileNotMediaManifest } from '../../lib/fileUtils.js';
 import { probeVideoDuration, safeUnder } from '../../lib/ffmpeg.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import {
@@ -655,7 +655,7 @@ async function resolveKeyframeAnchors({
 
 // Local audio is queue-owned whether supplied as an upload or copied from a
 // project song. Keep source selection and durable ownership in one step.
-async function prepareLocalAudio({ body, uploads, stageUploadDurable, stagedDurablePaths, cleanupStaged }) {
+async function prepareLocalAudio({ body, uploads, numFrames, stageUploadDurable, stagedDurablePaths, cleanupStaged }) {
   // Music-video a2v jobs reuse an existing library track rather than uploading
   // the same song for every cut. Copy it into the queue-owned uploads area so
   // the worker may safely delete its input on completion without ever touching
@@ -676,7 +676,7 @@ async function prepareLocalAudio({ body, uploads, stageUploadDurable, stagedDura
   };
 
   let audioFilePath = null;
-  let sourceAudioSha256 = null;
+  let audioProject = null;
   if (uploads.audioFile) {
     // a2v: audio file rides through the same durable-staging path as the
     // image uploads. Cleanup tracking via extraUploadedTempPaths so the
@@ -696,10 +696,18 @@ async function prepareLocalAudio({ body, uploads, stageUploadDurable, stagedDura
       await cleanupStaged();
       throw new ServerError('Music-video project audio is unavailable', { status: 400, code: 'VIDEO_GEN_PROJECT_AUDIO_MISSING' });
     }
-    sourceAudioSha256 = body._suppliedAudio ? null : await sha256File(sourceAudioPath);
-    audioFilePath = await stageExistingAudioDurable(sourceAudioPath);
+    const startSample = Math.round((Number(body.audioStartSec) || 0) * 48000);
+    const sampleCount = Math.round(((numFrames - 1) / Number(body.fps ?? 24)) * 48000);
+    const endSample = startSample + sampleCount;
+    const exactWindow = Number.isSafeInteger(startSample) && startSample >= 0
+      && Number.isSafeInteger(sampleCount) && sampleCount > 0 && sampleCount <= 48000 * 60
+      && endSample <= 48000 * 36000;
+    // Exact PCM provenance has a bounded window; longer local inputs retain
+    // the worker's full-song/offset contract without claiming a clip digest.
+    if (!body._suppliedAudio && exactWindow) audioProject = project;
+    else audioFilePath = await stageExistingAudioDurable(sourceAudioPath);
   }
-  return { audioFilePath, sourceAudioSha256 };
+  return { audioFilePath, audioProject };
 }
 
 // A model declares how many of each reference kind it takes (absent = none).
@@ -1354,33 +1362,36 @@ async function resolvePreparedParams({
     // Same path-traversal guard as the start frame.
     lastImagePath = resolveGalleryImage(body.lastImageFile);
   }
-  const { audioFilePath, sourceAudioSha256 } = await prepareLocalAudio({
-    body, uploads, stageUploadDurable, stagedDurablePaths, cleanupStaged,
+  const audioInput = await prepareLocalAudio({
+    body, uploads, numFrames: effectiveNumFrames ?? effectiveModel.defaultFrames ?? DEFAULT_NUM_FRAMES,
+    stageUploadDurable, stagedDurablePaths, cleanupStaged,
   });
-  if (audioFilePath) extraUploadedTempPaths.push(audioFilePath);
+  let { audioFilePath } = audioInput;
   effectiveNumFrames = await resolveAudioFrameCount({
     body, audioFilePath, effectiveModel, effectiveNumFrames, cleanupStaged,
   });
   let audioConditioning = null;
-  if (sourceAudioSha256 && !body._suppliedAudio) {
+  if (audioInput.audioProject) {
+    // Pin the renderer's default with the sliced input so an omitted count
+    // neither reaches the slicer unset nor changes after its PCM is prepared.
+    effectiveNumFrames ??= effectiveModel.defaultFrames ?? DEFAULT_NUM_FRAMES;
     const fps = Number(body.fps ?? 24);
-    const startSample = Math.round((Number(body.audioStartSec) || 0) * 48000);
-    const sampleCount = Math.round(((effectiveNumFrames - 1) / fps) * 48000);
-    const endSample = startSample + sampleCount;
-    if (Number.isSafeInteger(startSample) && startSample >= 0
-      && Number.isSafeInteger(sampleCount) && sampleCount > 0 && sampleCount <= 48000 * 60
-      && endSample <= 48000 * 36000) {
-      audioConditioning = {
-        sourceSha256: sourceAudioSha256,
-        clipSha256: sourceAudioSha256,
-        sampleRate: 48000,
-        channels: 2,
-        startSample,
-        endSample,
-        sampleCount,
-      };
-    }
+    const startSec = Number(body.audioStartSec) || 0;
+    const { prepareSourceAudioWindow } = await import('../federatedMedia/sourceAudio.js');
+    const window = await prepareSourceAudioWindow({
+      project: audioInput.audioProject,
+      scene: { startSec, endSec: startSec + (effectiveNumFrames - 1) / fps },
+      numFrames: effectiveNumFrames,
+      fps,
+    }).catch(async (error) => { await cleanupStaged(); throw error; });
+    audioFilePath = window.audioFilePath;
+    audioConditioning = window.audioConditioning;
+    stagedDurablePaths.push(audioFilePath);
+    // The worker now receives the exact clip whose digest is recorded. Its
+    // original song offset remains in provenance, not a second input trim.
+    body.audioStartSec = 0;
   }
+  if (audioFilePath) extraUploadedTempPaths.push(audioFilePath);
   if (uploads.icReference) {
     // IC-LoRA reference clip — same durable staging + cleanup tracking as the
     // audio upload above. A history-picked reference needs neither (it already

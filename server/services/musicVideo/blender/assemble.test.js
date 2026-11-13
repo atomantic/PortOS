@@ -52,7 +52,8 @@ describe.skipIf(!ffmpeg)('Blender cut assembly with real ffmpeg', () => {
       const audio = join(directory, 'song.wav');
       await execFileAsync(ffmpeg, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=#202020:s=32x32:r=24:d=1', '-pix_fmt', 'yuv420p', '-y', darkVid], { timeout: 15_000 });
       await execFileAsync(ffmpeg, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=#e0e0e0:s=32x32:r=24:d=1', '-pix_fmt', 'yuv420p', '-y', brightVid], { timeout: 15_000 });
-      await execFileAsync(ffmpeg, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=#202020:s=32x32:r=24:d=0.25', '-start_number', '24', join(darkFramesDir, 'handle_out_%06d.png')], { timeout: 15_000 });
+      // The outgoing picture changes after the cut: frozen video padding must not replace these handles.
+      await execFileAsync(ffmpeg, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=#808080:s=32x32:r=24:d=0.25', '-start_number', '24', join(darkFramesDir, 'handle_out_%06d.png')], { timeout: 15_000 });
       await execFileAsync(ffmpeg, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=#e0e0e0:s=32x32:r=24:d=0.25', '-start_number', '18', join(brightFramesDir, 'handle_in_%06d.png')], { timeout: 15_000 });
       await execFileAsync(ffmpeg, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', '2', '-y', audio], { timeout: 15_000 });
 
@@ -97,8 +98,8 @@ describe.skipIf(!ffmpeg)('Blender cut assembly with real ffmpeg', () => {
       expect(lumaAt(47)).toBeGreaterThan(200);
       // Across the 12 dissolve frames [18..29], each frame rises monotonically toward the incoming shot.
       expect(lumaAt(18)).toBeGreaterThan(lumaAt(17));
-      expect(lumaAt(24)).toBeGreaterThan(100);
-      expect(lumaAt(24)).toBeLessThan(170);
+      expect(lumaAt(24)).toBeGreaterThan(165);
+      expect(lumaAt(24)).toBeLessThan(195);
       expect(lumaAt(29)).toBeGreaterThan(lumaAt(24));
       expect(lumaAt(29)).toBeLessThan(lumaAt(30));
 

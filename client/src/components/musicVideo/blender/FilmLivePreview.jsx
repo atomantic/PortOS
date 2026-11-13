@@ -8,9 +8,12 @@ import { buttonCls } from './blenderStyles.js';
 export default function FilmLivePreview({ state, durationSec, audioUrl, mediaUrl }) {
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [starting, setStarting] = useState(false);
   const video = useRef(null);
   const audio = useRef(null);
   const clock = useRef(0);
+  const playRequest = useRef(0);
+  const silentStart = useRef(null);
   const starts = (state?.manifest?.shots || []).map(item => item.start).filter(value => Number.isFinite(value));
   const leadSec = starts.length ? Math.max(0, -Math.min(0, Math.min(...starts))) : 0;
   const totalSec = leadSec + (Number(durationSec) || 0);
@@ -18,6 +21,20 @@ export default function FilmLivePreview({ state, durationSec, audioUrl, mediaUrl
   const shot = state?.manifest?.shots?.find(item => songTime >= item.start && songTime < item.end);
   const clip = shot && blenderShotClip(state.renders?.[shot.id]);
   const source = clip ? `${mediaUrl(clip.render.file)}&v=${encodeURIComponent(clip.render.finishedAt || '')}` : null;
+
+  useEffect(() => {
+    setStarting(false);
+    return () => {
+      playRequest.current += 1;
+      // React can reuse the audio element for another source. Restore its
+      // temporary volume before that source starts its own playback request.
+      if (silentStart.current) {
+        silentStart.current.element.pause();
+        silentStart.current.element.volume = silentStart.current.volume;
+        silentStart.current = null;
+      }
+    };
+  }, [audioUrl]);
 
   useEffect(() => {
     if (!playing) return undefined;
@@ -50,7 +67,7 @@ export default function FilmLivePreview({ state, durationSec, audioUrl, mediaUrl
     if (!element) return;
     if (playing && clock.current - leadSec >= 0) {
       element.currentTime = clock.current - leadSec;
-      element.play().catch(() => setPlaying(false));
+      if (element.paused) element.play().catch(() => setPlaying(false));
     } else element.pause();
   }, [playing, audioUrl, leadSec]);
 
@@ -74,6 +91,32 @@ export default function FilmLivePreview({ state, durationSec, audioUrl, mediaUrl
       if (playing && audio.current.paused) audio.current.play().catch(() => setPlaying(false));
     }
   };
+  const togglePlayback = () => {
+    if (playing) { setPlaying(false); return; }
+    if (starting) return;
+    if (time >= totalSec) seek(0);
+    const element = audio.current;
+    if (!element) { setPlaying(true); return; }
+    const request = ++playRequest.current;
+    const isCurrent = () => playRequest.current === request && audio.current === element && element.getAttribute('src') === audioUrl;
+    const beforeSong = clock.current < leadSec;
+    const volume = element.volume;
+    element.currentTime = Math.max(0, clock.current - leadSec);
+    // Start this media element during the click so browsers grant it playback.
+    // The silent start is paused only once play resolves; the song remains at 0
+    // until the timeline reaches it, without depending on a later user gesture.
+    if (beforeSong) { silentStart.current = { element, volume }; element.volume = 0; }
+    setStarting(true);
+    element.play().then(() => {
+      if (!isCurrent()) return;
+      if (beforeSong) { element.pause(); element.currentTime = 0; element.volume = volume; silentStart.current = null; }
+      setPlaying(true);
+    }).catch(() => {
+      if (!isCurrent()) return;
+      if (beforeSong) { element.volume = volume; silentStart.current = null; }
+      setPlaying(false);
+    }).finally(() => { if (isCurrent()) setStarting(false); });
+  };
   return <section aria-label="Film live preview" className="space-y-2 rounded-lg border border-port-border p-3">
     <h3 className="text-sm font-medium">Film (live)</h3>
     <div className="flex max-h-[45dvh] w-full items-center justify-center rounded bg-black" style={{ aspectRatio: `${state?.settings?.width || 16} / ${state?.settings?.height || 9}` }}>
@@ -82,7 +125,7 @@ export default function FilmLivePreview({ state, durationSec, audioUrl, mediaUrl
         : <span className="text-xs text-gray-400">{shot ? 'Shot has no render yet' : 'No shot at this time'}</span>}
     </div>
     <div className="flex flex-wrap items-center gap-2">
-      <button type="button" className={buttonCls} onClick={() => { if (time >= totalSec) seek(0); setPlaying(value => !value); }}>{playing ? 'Pause film' : 'Play film'}</button>
+      <button type="button" className={buttonCls} onClick={togglePlayback} disabled={starting}>{starting ? 'Starting film…' : playing ? 'Pause film' : 'Play film'}</button>
       <label htmlFor="film-live-time" className="text-xs">{formatTimecode(time)} / {formatTimecode(totalSec)}</label>
       <input id="film-live-time" aria-label="Film time" type="range" min="0" max={totalSec} step={1 / (state?.settings?.fps || 24)} value={time}
         className="min-w-0 flex-1" onChange={event => seek(Number(event.target.value))} />

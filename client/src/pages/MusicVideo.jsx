@@ -1231,7 +1231,7 @@ function ProjectWorkspace({
   const setSceneDone = (sceneId, checked) => {
     const scene = selected.scenes?.find((entry) => entry.sceneId === sceneId);
     if (!scene) return Promise.resolve(false);
-    return saveScene(sceneId, { shotSheet: { ...scene.shotSheet, checked } }).then((saved) => {
+    return saveScene(sceneId, { shotSheet: { checked } }).then((saved) => {
       if (saved) patchProject(selected.id, (project) => ({ scenes: project.scenes?.map((entry) => entry.sceneId === sceneId
         ? { ...entry, shotSheet: { ...entry.shotSheet, checked } } : entry) }));
       return saved;
@@ -1652,13 +1652,16 @@ function ProjectWorkspace({
   const reviewingDraft = activeStage === 'review' && !!latestMusicVideoReviewDraft(selected) && !selected?.renderHistoryId;
   const reviewDraftState = useMusicVideoReviewDraft(selected, { enabled: reviewingDraft });
   const reviewDraft = reviewDraftState.draft;
+  const publishBuildBlockedReason = creativeSetupPending ? 'Save or cancel the creative setup before building the publishing kit.'
+    : styleReferencesPending ? 'Save or cancel the style references before building the publishing kit.'
+      : compositionSavePending > 0 ? 'Saving composition…' : null;
   const nextAction = reviewingDraft ? reviewDraftState.checking
     ? { id: 'review-imported', kind: 'goto', stage: 'review', label: 'Checking review draft', disabled: true, reason: 'Checking exact-version media availability' }
     : reviewDraft
       ? { id: 'review-imported', kind: 'goto', stage: 'review', label: 'Review imported draft', shortLabel: 'Review draft' }
       : { id: 'review-files', kind: 'open', label: 'Choose review file', shortLabel: 'Choose file' }
-    : productionNextAction?.id === 'build-publish-kit' && publishKit.building
-      ? { ...productionNextAction, disabled: true, label: 'Building publishing kit…' }
+    : productionNextAction?.id === 'build-publish-kit' && (publishKit.building || publishBuildBlockedReason)
+      ? { ...productionNextAction, disabled: true, ...(publishKit.building ? { label: 'Building publishing kit…' } : { reason: publishBuildBlockedReason }) }
       : productionNextAction;
   // What the server holds that this tab might not be showing (#9940): derived
   // from the saved record, so it survives a reload. Work this tab can see
@@ -1688,8 +1691,9 @@ function ProjectWorkspace({
   // current inputs; a production approval is given again on the current revision.
   const keepApproval = (stage) => (stage === 'castAndSets' ? castSets.reconfirm() : productionReview.approve(stage));
   const buildPublishKit = () => {
+    if (!selected.renderHistoryId || publishKit.building || publishBuildBlockedReason) return;
     goToStage('publish', 'mv-publish-kit');
-    if (selected.renderHistoryId && !publishKit.building && !creativeSetupPending && !styleReferencesPending && compositionSavePending === 0) publishKit.build();
+    publishKit.build();
   };
   const runChecklistAction = (action) => {
     if (action.run === 'build-publish-kit') { buildPublishKit(); return; }
@@ -1994,7 +1998,8 @@ function ProjectWorkspace({
             cancelRender={renderTargetsSelected && !renderJob.pending ? { onCancel: renderJob.cancel, cancelling: renderJob.cancelling } : null}
             lead={stageHasChecklist(activeStage) ? (
               <StageChecklist
-                items={stageChecklist(activeStage, stageProject, productionReview.readiness, publish)}
+                items={stageChecklist(activeStage, stageProject, productionReview.readiness, publish).map((item) => publishBuildBlockedReason && item.action?.run === 'build-publish-kit'
+                  ? { ...item, detail: publishBuildBlockedReason, action: { ...item.action, disabled: true, reason: publishBuildBlockedReason } } : item)}
                 onAction={runChecklistAction}
                 busy={castSets.busy || productionReview.busy || publishKit.building}
                 onRevert={productionReview.revert}

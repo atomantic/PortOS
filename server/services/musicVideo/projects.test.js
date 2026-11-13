@@ -329,6 +329,23 @@ async function pauseSceneWrite(start) {
 }
 
 describe('scene mutation transactions', () => {
+  it('marks Done against the persisted shot sheet without reverting a concurrent direction edit', async () => {
+    const p = await projects.createProject({ name: 'Concurrent shot direction' });
+    const scene = await projects.addProjectScene(p.id, { prompt: 'Original' });
+    await projects.updateScene(p.id, scene.sceneId, { shotSheet: { location: 'Park' } });
+    const pending = await pauseSceneWrite(() => projects.updateScene(p.id, scene.sceneId, { shotSheet: { checked: true } }));
+    try {
+      await projects.updateScene(p.id, scene.sceneId, { shotSheet: { location: 'Station', emotion: 'Hopeful' } });
+    } finally {
+      pending.resume();
+    }
+    expect(await pending.settled).toMatchObject({ value: { shotSheet: { checked: true, location: 'Station', emotion: 'Hopeful' } } });
+    expect((await projects.getProject(p.id)).scenes[0].shotSheet).toEqual({ checked: true, location: 'Station', emotion: 'Hopeful' });
+    // Existing complete rewrites and explicit clears retain their replacement contract.
+    expect((await projects.updateScene(p.id, scene.sceneId, { shotSheet: { location: 'Home' } })).shotSheet).toEqual({ location: 'Home' });
+    expect((await projects.updateScene(p.id, scene.sceneId, { shotSheet: null })).shotSheet).toBeNull();
+  });
+
   it('applies a pending edit to the fresh scene without overwriting a concurrent edit', async () => {
     const p = await projects.createProject({ name: 'Concurrent scene edit' });
     const scene = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'Original' });

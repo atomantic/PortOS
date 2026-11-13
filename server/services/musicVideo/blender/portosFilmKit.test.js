@@ -49,6 +49,7 @@ print(json.dumps({
     "nearest": [music.nearest_beat(song, 2.4), music.nearest_beat(song, 2.6), music.nearest_beat(song, 99), music.nearest_beat(empty, 1)],
     "phase": [list(music.beat_phase(song, 2.5)), list(music.beat_phase(song, 0.5)), list(music.beat_phase(empty, 3))],
     "pulse": [r(music.pulse(song, 2.0, decay=2)), r(music.pulse(song, 2.5, decay=2)), music.pulse(empty, 2.0)],
+    "before_first_beat": [music.pulse(song, 0), music.pulse(song, 0.5), music.pulse(song, 0.999)],
     "envelope": [r(music.envelope(song, "low", 0.25)), r(music.envelope(song, "low", 0.5)), r(music.envelope(song, "low", 10)),
                  music.envelope(song, "mid", 1), r(music.envelope(song, "high", 3)), music.envelope(song, "nope", 1), music.envelope(empty, "low", 1)],
     "section": [music.section_at(song, 2.4)["label"], music.section_at(song, 2.5)["label"], music.section_at(song, 30)],
@@ -90,6 +91,7 @@ describe.skipIf(!python)('portos_film kit', () => {
       // (last beat index, how far to the next); before the first beat and without a grid it is the start of beat 0.
       phase: [[1, 0.5], [0, 0], [0, 0]],
       pulse: [1, 0.25, 0],
+      before_first_beat: [0, 0, 0],
       // Interpolated between analysis frames, held at the last one, and 0 for a band that is missing or empty.
       envelope: [0.5, 1, 0.5, 0, 0.4, 0, 0],
       section: ['Intro', 'Chorus', null],

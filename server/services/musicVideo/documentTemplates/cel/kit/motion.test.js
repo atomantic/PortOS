@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { len, sub } from './core.js';
+import { apply, col, len, rotY, sub } from './core.js';
 import { DIM, ik2, solve } from './skeleton.js';
 import { walkPose } from './walk.js';
-import { sampleRow, walkOn } from './mocap.js';
+import { retarget, sampleRow, walkOn } from './mocap.js';
 import walk from './motion/walk.js';
 import { buildFigure } from './figure.js';
 
@@ -41,6 +41,19 @@ describe('cel motion kit', () => {
       expect(distance(sk.armR.shoulder, sk.armR.elbow)).toBeCloseTo(DIM.upperArm, 8);
       expect(distance(sk.armR.elbow, sk.armR.wrist)).toBeCloseTo(DIM.foreArm, 8);
       expect(sk.headCenter.every(Number.isFinite)).toBe(true);
+    }
+  });
+
+  // Catches hand orientation being replaced by the forearm despite captured wrist axes.
+  it('keeps both captured hand frames when turning the motion', () => {
+    const row = sampleRow(walk, 0);
+    const axes = [[0, 1, 0], [1, 0, 0], [1, 0, 0], [0, 0, 1]];
+    row.splice(25 * 3 + 6, 12, ...axes.flat());
+    const yaw = 0.7;
+    const sk = retarget(row, walk, { yaw });
+    for (const [hand, y, z] of [[sk.handL, axes[0], axes[1]], [sk.handR, axes[2], axes[3]]]) {
+      expect(distance(col(hand.R, 1), apply(rotY(yaw), y))).toBeLessThan(1e-8);
+      expect(distance(col(hand.R, 2), apply(rotY(yaw), z))).toBeLessThan(1e-8);
     }
   });
 });

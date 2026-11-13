@@ -80,22 +80,24 @@ describe('cutting room floor outro pass', () => {
     await save('renders/one/final/render.json', { complete: true, frameCount: 48, durationMs: 2500 });
     await save('renders/one/final/shot.mp4', 'video');
     await save('renders/one/stills/t123456789.png', 'still');
+    await save('renders/one/stills/tm000000500.png', 'lead-in still');
     await save('renders/two/final/poster.jpg', 'poster');
     await save('renders/two/final/render.json', { complete: false, frameCount: 100, durationMs: 9000 });
     await save('renders/cuts/cuts.json', [{ file: 'final-one.mp4' }, { file: 'final-missing.mp4' }]);
     await save('renders/cuts/final-one.mp4', 'cut');
     const film = { ...project, composition: { mode: 'blender' } };
     const stats = await getMusicVideoOutroStats(film);
-    expect(stats).toMatchObject({ mode: 'blender', shots: 2, framesRendered: 48, renderTimeMs: 2500, stillsRendered: 1, cutsAssembled: 1 });
+    expect(stats).toMatchObject({ mode: 'blender', shots: 2, framesRendered: 48, renderTimeMs: 2500, stillsRendered: 2, cutsAssembled: 1 });
     expect(stats.floorImages).toEqual([
       '/api/music-video/mv-1/blender/media?path=one%2Fstills%2Ft123456789.png',
+      '/api/music-video/mv-1/blender/media?path=one%2Fstills%2Ftm000000500.png',
       '/api/music-video/mv-1/blender/media?path=two%2Ffinal%2Fposter.jpg',
     ]);
     const { statsOutroRows } = await import('../../lib/musicVideoStatsOutro.js');
     expect(statsOutroRows(stats).map(({ label }) => label)).toEqual(['Shots', 'Frames rendered', 'Render time (seconds)', 'Stills rendered', 'Cuts assembled']);
     expect(statsOutroRows({ mode: 'blender', shots: 1 }).map(({ label }) => label)).toEqual(['Shots']);
     await appendStatsOutro({ project: film, path, jobId: 'film-ending' });
-    expect(seen.opened.at(-1).media).toEqual(['floor-0.png', 'floor-1.jpg']);
+    expect(seen.opened.at(-1).media).toEqual(['floor-0.png', 'floor-1.png', 'floor-2.jpg']);
     expect(seen.opened.at(-1).app).toContain('Frames rendered');
   });
 

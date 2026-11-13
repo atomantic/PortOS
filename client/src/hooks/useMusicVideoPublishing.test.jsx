@@ -42,6 +42,37 @@ beforeEach(() => {
 });
 
 describe('music-video publishing project boundary', () => {
+  it('preserves both platform skips clicked before the first list save finishes', async () => {
+    const first = deferred();
+    const second = deferred();
+    api.updateMusicVideoPublishCopy.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const replaceProject = vi.fn();
+    render(<Posting id="project-a" replaceProject={replaceProject} />);
+    await screen.findByText(rowLabel('YouTube'));
+    await act(async () => { fireEvent.click(within(row('YouTube')).getByRole('button', { name: 'Skip for this release' })); });
+    await act(async () => { fireEvent.click(within(row('Reddit')).getByRole('button', { name: 'Skip for this release' })); });
+    expect(api.updateMusicVideoPublishCopy).toHaveBeenCalledTimes(1);
+    expect(api.updateMusicVideoPublishCopy).toHaveBeenLastCalledWith('project-a', { skippedTargets: ['youtube'] });
+    await act(async () => { first.resolve({ project: { id: 'project-a', publishKit: { skippedTargets: ['youtube'] } } }); });
+    expect(api.updateMusicVideoPublishCopy).toHaveBeenLastCalledWith('project-a', { skippedTargets: ['youtube', 'reddit'] });
+    const saved = { id: 'project-a', publishKit: { skippedTargets: ['youtube', 'reddit'] } };
+    await act(async () => { second.resolve({ project: saved }); });
+    expect(replaceProject).toHaveBeenLastCalledWith(saved);
+  });
+
+  it('does not carry a failed skip into the next queued platform change', async () => {
+    const first = deferred();
+    api.updateMusicVideoPublishCopy.mockReturnValueOnce(first.promise).mockResolvedValueOnce({ project: { id: 'project-a', publishKit: { skippedTargets: ['reddit'] } } });
+    render(<Posting id="project-a" />);
+    await screen.findByText(rowLabel('YouTube'));
+    await act(async () => {
+      fireEvent.click(within(row('YouTube')).getByRole('button', { name: 'Skip for this release' }));
+      fireEvent.click(within(row('Reddit')).getByRole('button', { name: 'Skip for this release' }));
+    });
+    await act(async () => { first.reject(new Error('Save unavailable')); });
+    expect(api.updateMusicVideoPublishCopy).toHaveBeenLastCalledWith('project-a', { skippedTargets: ['reddit'] });
+  });
+
   it('drops the previous project preview and posting options immediately on selection', async () => {
     api.prepareMusicVideoPublishDraft.mockResolvedValue({ draftId: 'draft-a', summary: { title: 'Example A' } });
     const view = render(<Posting id="project-a" />);

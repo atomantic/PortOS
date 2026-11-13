@@ -46,7 +46,7 @@ workspaces stay at `data/music-video/<projectId>/blender`; render metadata and
 - **ffmpeg**, to turn frames into video. A still of a code shot does not need it.
 - The song analyzed (the shot list is checked against its length).
 
-A film whose scripts do not import `bpy`, `bmesh` or `mathutils` syncs with system Python and renders in the browser sandbox. It does not need Blender or Trusted local mode. A film that imports any of those — the starter does — stays on the Blender driver, and every Blender shot still needs the tool. A code layer on a Blender shot needs both.
+A film whose scripts do not import `bpy`, `bmesh` or `mathutils` syncs with system Python and renders in the browser sandbox. It does not need Blender installed, but syncing runs the authored Python on this host and requires Trusted local mode. Rendering its code shots stays in the browser sandbox. A film that imports any of those — the starter does — stays on the Blender driver, and every Blender shot still needs the tool. A code layer on a Blender shot needs both.
 
 **A film is your own code running with your account's access to this machine.** It can read and write files, use
 the network and start programs. Only run source you trust. The routes that write the source, run it, assemble

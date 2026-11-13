@@ -99,7 +99,10 @@ export async function getBlenderDiskUsage(owner) {
     }
   }
   let clearableBytes = 0;
-  for (const folder of clearable.frames) clearableBytes += (await clearableShotFrames(folder)).bytes;
+  for (const folder of clearable.frames) {
+    clearableBytes += (await clearableShotFrames(folder)).bytes;
+    clearableBytes += (await measure(join(dirname(folder), 'layers'))).bytes;
+  }
   for (const shotId of clearable.removedShots) clearableBytes += (await measure(join(blenderRendersDir(owner), shotId))).bytes;
   return {
     sourceBytes: source.bytes, rendersBytes: renders.bytes, frameBytes: frames.bytes, frameFiles: frames.files,

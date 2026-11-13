@@ -59,7 +59,7 @@ function blenderTransitionSegmentArgs({ transition, width, height, fps, quality,
       if (!(side.videoFrames > 0)) return;
       const idx = nextInput++;
       inputs.push('-i', side.video);
-      graph.push(`[${idx}:v]fps=${fps},trim=start_frame=${side.videoOffset}:end_frame=${side.videoOffset + side.videoFrames},setpts=PTS-STARTPTS,${fit},tpad=stop_mode=clone:stop=${side.videoFrames}[${tag}]`);
+      graph.push(`[${idx}:v]fps=${fps},trim=start_frame=${side.videoOffset}:end_frame=${side.videoOffset + side.videoFrames},setpts=PTS-STARTPTS,${fit},tpad=stop_mode=clone:stop=${side.videoFrames},trim=end_frame=${side.videoFrames}[${tag}]`);
       parts.push(tag);
     };
     const addHandle = (tag) => {

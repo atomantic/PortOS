@@ -87,7 +87,15 @@ function planSegments(film, { first, last, frame, pickQuality, padEndBlack = fal
   const { settings, shots, renders, owner, cutEffects = [] } = film;
   const { fps } = settings;
   const ranges = shots.map((shot) => blenderShotFrameRange(shot, fps));
-  const picked = shots.map((shot, index) => (ranges[index].endFrame > first && ranges[index].startFrame < last ? pickQuality(shot) : null));
+  const overlaps = ranges.map((range) => range.endFrame > first && range.startFrame < last);
+  const needed = new Set(overlaps.flatMap((overlap, index) => (overlap ? [index] : [])));
+  for (const effect of cutEffects) {
+    if ((effect.style === 'dissolve' || effect.style === 'beat-toggle') && effect.endFrame > first && effect.startFrame < last) {
+      needed.add(effect.index);
+      needed.add(effect.index + 1);
+    }
+  }
+  const picked = shots.map((shot, index) => (needed.has(index) ? pickQuality(shot, overlaps[index]) : null));
   const activeByIndex = new Map();
   for (const effect of cutEffects) {
     if (effect.style !== 'dissolve' && effect.style !== 'beat-toggle') continue;
@@ -237,11 +245,11 @@ export function planBlenderWindow(film, { startSec, endSec }) {
     last,
     frame,
     padEndBlack: true,
-    pickQuality: (shot) => {
+    pickQuality: (shot, required) => {
       const final = renders[shot.id]?.final;
       const preview = renders[shot.id]?.preview;
       const quality = final?.complete && !final.stale ? 'final' : preview?.complete ? 'preview' : final?.complete ? 'final' : null;
-      if (!quality) missing.push(shot.id);
+      if (!quality && required) missing.push(shot.id);
       return quality;
     },
   });
