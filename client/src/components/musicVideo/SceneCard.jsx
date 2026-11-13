@@ -638,8 +638,9 @@ export default function SceneCard({
     <div className="min-w-0">
     <section id={`scene-${scene.sceneId}`} aria-labelledby={`scene-${scene.sceneId}-title`}>
       {/* The drawer's header: it stays put while the editor scrolls, and sits outside the
-          locked fieldset so stepping between shots and closing always work. */}
-      <header className="port-opaque-surface sticky top-0 z-10 -mx-4 -mt-4 mb-3 flex flex-wrap items-center gap-3 border-b border-port-border px-4 py-2">
+          locked fieldset so stepping between shots and closing always work. The sticky
+          inset cancels the Drawer scroll region’s p-4, just like the initial margin. */}
+      <header className="port-opaque-surface sticky -top-4 z-10 -mx-4 -mt-4 mb-3 flex flex-wrap items-center gap-3 border-b border-port-border px-4 py-2">
         <ScenePoster src={posterSrc} scene={scene} scenes={project?.scenes} iconSize={14} className="aspect-video w-20 shrink-0 rounded border border-port-border max-sm:hidden" />
         <div className="min-w-0 flex-1">
           <h2 id={`scene-${scene.sceneId}-title`} tabIndex={-1} data-shot-heading className="truncate text-base font-medium text-white focus:outline-hidden">

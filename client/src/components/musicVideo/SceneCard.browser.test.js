@@ -30,6 +30,7 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
               import React from 'react';
               import { createRoot } from 'react-dom/client';
               import SceneCard from '/src/components/musicVideo/SceneCard.jsx';
+              import Drawer from '/src/components/Drawer.jsx';
               import '/src/index.css';
               const h = React.createElement;
               const params = new URLSearchParams(location.search);
@@ -40,11 +41,12 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
               function Fixture() {
                 const [scene, setScene] = React.useState({ sceneId: 'layout', order: 0, startSec: 0, endSec: 4, referenceImageId: 'synthetic.png',
                   visualIntent: 'Synthetic direction', framePrompt: longPrompt, endFramePrompt: longPrompt, takes: [] });
-                return h('main', { style: { width: width + 'px', maxWidth: '100%', padding: '8px', boxSizing: 'border-box' } },
+                const card = h('main', { style: { width: width + 'px', maxWidth: '100%', padding: params.has('drawer') ? '0' : '8px', boxSizing: 'border-box' } },
                   h(SceneCard, { scene, index: 0, expanded: true, videoModels: models,
                     onGenerateEndFrame: params.has('frames') ? () => {} : undefined,
                     onSetDone: (_id, checked) => setScene(current => ({ ...current, shotSheet: { ...current.shotSheet, checked } })),
                     onEditLocal: (_id, patch) => setScene(current => ({ ...current, ...patch })), onSave: () => {} }));
+                return params.has('drawer') ? h(Drawer, { open: true, showHeader: false, title: 'Shot editor', onClose: () => {} }, card) : card;
               }
               createRoot(document.getElementById('root')).render(
                 h(Fixture));
@@ -86,6 +88,31 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
         expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
         await done.uncheck();
         expect(await done.isChecked()).toBe(false);
+      }
+    } finally { await page.close(); }
+  });
+
+  it('pins the shot header to the drawer top while scrolling', async () => {
+    const page = await fixture.browser.newPage({ viewport: { width: 1100, height: 700 } });
+    try {
+      await page.route('**/*', route => {
+        const url = new URL(route.request().url());
+        return url.origin === new URL(fixture.origin).origin && !/^\/(api|data|socket\.io)(\/|$)/.test(url.pathname)
+          ? route.continue() : route.abort();
+      });
+      for (const width of [360, 1100]) {
+      await page.setViewportSize({ width, height: 700 });
+      await page.goto(`${fixture.origin}shot-editor-test?width=${width}&drawer=1`);
+      const header = page.getByRole('dialog').locator('header');
+      await header.waitFor();
+      expect((await header.boundingBox()).y).toBeCloseTo(0, 0);
+      const top = await header.evaluate(el => {
+        const scroller = el.closest('[role="dialog"]').lastElementChild;
+        scroller.scrollTop = 200;
+        return scroller.getBoundingClientRect().top;
+      });
+      await page.waitForTimeout(100);
+      expect((await header.boundingBox()).y).toBeCloseTo(top, 0);
       }
     } finally { await page.close(); }
   });
