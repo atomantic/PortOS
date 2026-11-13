@@ -1,3 +1,4 @@
+# Bounded #15988 regeneration: uv 0.13.7; cutoff 2026-11-06T00:00:00Z; complete closure constrained to retained pins.
 # Reactor SDK runtime — hash-pinned lock for <data>/venvs/reactor (CPython 3.12).
 # Do not edit by hand.
 #
@@ -18,12 +19,12 @@
 #     --exclude-newer <UTC date at least 7 days ago> -o "$OLDPWD/scripts/requirements-reactor.lock.txt")
 # Generated with uv 0.13.7; --exclude-newer 2026-11-04T00:00:00Z.
 # then check the result against OSV (including MAL- malicious-package records).
-reactor-sdk==1.13.0 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
-    --hash=sha256:2f58379a99f3e592f50f9780eeeb874a91ed604d0d58d46e2ffdd6f65d1b21b3 \
-    --hash=sha256:3f60a3b3a2e5a825cbb344cdd189592b19c0a0a5a8bd94a911ae21434074533e \
-    --hash=sha256:73c44462fca3f3eab24792c73cace7d5828784a3f2a4ad6463423b197b6aa077 \
-    --hash=sha256:a0c31d60a7727c958ffc595fff532338f68fc6e664021bbe12facad018e3a78d \
-    --hash=sha256:a52a607de5238f41daf198102ba78205137e5efd1305dee659f474b0684b327a \
-    --hash=sha256:abcaad57c1c3b02931bc9444fe99e1ac00586222f8509acceec9411bc2091610 \
-    --hash=sha256:bc06bda2d699a8c401aba0da7fc19435389ece9476064a988e86454305727bad
+reactor-sdk==1.14.0 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
+    --hash=sha256:204b7086af3d19c6cbebee30b4162e1f3dd7d650bb03ea2e5209c338c9258be7 \
+    --hash=sha256:22145a0d691ea3ec56282b18325b7b9d99c52580d937d24bee8d045dab6b807a \
+    --hash=sha256:4af3ff222dc4c3b7a72409cd8d7f4f5e4f4daa36c0234ea247820a53b384bfb7 \
+    --hash=sha256:891a8dc4aa5e22e28c27a5787b0470aab788b495e34e35b0bdcfc7f98a18c3f9 \
+    --hash=sha256:8e5d05410db07f8a5cc5adb4663d1bb296de4ea453741213201f8c6f3b532716 \
+    --hash=sha256:e88c11260e04a97496057d3a2370f8d25927309f31ee4d4ac0c0bdaa75e654e5 \
+    --hash=sha256:f847ce51ba4895cdc168ae08b85197a68ba3f6ddf5f5f05cf8764232be9a0ef1
     # via requirements-reactor.txt

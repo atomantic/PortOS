@@ -5,7 +5,7 @@ torch==2.14.1+cu126
 diffusers==0.42.1
 transformers==5.22.1
 huggingface-hub[hf_xet]==2.4.0
-sentencepiece==0.2.2
+sentencepiece==0.2.3
 accelerate==1.15.0
 numpy==2.4.6
 scipy==1.17.1

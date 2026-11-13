@@ -15,7 +15,7 @@ accelerate==1.15.0
 diffusers==0.42.1
 transformers==5.22.1
 huggingface-hub[hf_xet]==2.4.0
-sentencepiece==0.2.2
+sentencepiece==0.2.3
 peft==0.21.2
 einops>=0.8.1
 numba>=0.63.1

@@ -7,6 +7,6 @@ mlx-metal==0.32.4
 numpy==2.5.4
 torch==2.15.0
 transformers==5.22.1
-sentencepiece==0.2.2
+sentencepiece==0.2.3
 huggingface-hub[hf_xet]==2.4.0
 scipy==1.18.1

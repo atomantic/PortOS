@@ -28,7 +28,7 @@ huggingface-hub[hf_xet]==2.4.0
 # Independent FastVideo media-policy/streaming clients still import HTTPX 0.x.
 httpx==0.28.1
 safetensors==0.8.0
-sentencepiece==0.2.2
+sentencepiece==0.2.3
 protobuf==7.36.2
 PyYAML==6.0.3
 tqdm==4.70.1

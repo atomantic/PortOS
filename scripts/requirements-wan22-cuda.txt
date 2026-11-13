@@ -8,7 +8,7 @@ transformers==5.22.1
 accelerate==1.15.0
 huggingface-hub==2.4.0
 hf-xet==1.8.0
-sentencepiece==0.2.2
+sentencepiece==0.2.3
 ftfy==6.3.1
 imageio==2.38.1
 imageio-ffmpeg==0.8.1
