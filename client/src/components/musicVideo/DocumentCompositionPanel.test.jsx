@@ -143,6 +143,17 @@ describe('DocumentCompositionPanel', () => {
     expect(api.startMusicVideoCompositionTemplate).toHaveBeenCalledWith('mv-1', 'layered', { silent: true });
   });
 
+  // Changing template must not reuse the confirmation for a different replacement.
+  it('selects cel and requires a fresh replacement confirmation after changing template', async () => {
+    render(<DocumentCompositionPanel project={attached} onProject={vi.fn()} onSave={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /Replace with template/ }));
+    fireEvent.change(screen.getByLabelText('Template'), { target: { value: 'cel' } });
+    fireEvent.click(screen.getByRole('button', { name: /Replace with template/ }));
+    expect(api.startMusicVideoCompositionTemplate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Click again to replace/ }));
+    await waitFor(() => expect(api.startMusicVideoCompositionTemplate).toHaveBeenCalledWith('mv-1', 'cel', { silent: true }));
+  });
+
   it('shows the attached document and asks twice before replacing or detaching it', async () => {
     const onProject = vi.fn();
     render(<DocumentCompositionPanel project={attached} onProject={onProject} onSave={vi.fn()} />);

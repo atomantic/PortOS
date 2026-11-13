@@ -737,7 +737,7 @@ export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code', 'doc
 // #9290: 'scene' cuts once per planned shot; 'intercut' re-cuts on section energy and sung words.
 export const MUSIC_VIDEO_CUTTING_MODES = ['scene', 'intercut'];
 // Shipped starting points a project can copy into its document folder.
-export const MUSIC_VIDEO_DOCUMENT_TEMPLATES = ['layered'];
+export const MUSIC_VIDEO_DOCUMENT_TEMPLATES = ['layered', 'cel'];
 export const MUSIC_VIDEO_DOCUMENT_SOURCES = ['zip', 'directory', 'template', 'generated'];
 // One immutable document version: data/music-video/<projectId>/composition/<versionId>.
 export const MUSIC_VIDEO_DOCUMENT_DIRECTORY = /^music-video\/[A-Za-z0-9_-]{1,100}\/composition\/[A-Za-z0-9_-]{1,100}$/;
