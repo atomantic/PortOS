@@ -33,6 +33,20 @@ LTX-2.3 retains MLX 0.31.1. Before changing it, check audio levels because the
 0.32.0 and the sampler source verified to preserve the frame-zero anchor.
 Wan retains MLX 0.31.0 and AV 17.0.1.
 
+## Connection failures during Install/Repair
+
+PortOS uses its private `~/.portos/tools/uv-0.13.7/bin/uv`, independent of
+any `uv` on PATH. A browser or another `uv` reaching PyPI does not prove that
+this executable can connect. For connection errors such as `No route to host`,
+check internet/VPN routing and application firewall rules (including Little
+Snitch, if installed). The private executable needs HTTPS access to `pypi.org`
+for package metadata and `files.pythonhosted.org` for wheels.
+
+After restoring access, retry Install/Repair. Recreating the runtime venv or
+changing dependency pins does not resolve an executable-specific network block.
+The installer preserves the package error and exit code; the UI reports the
+dependency stage and the same recovery guidance.
+
 ## Audit on 2026-11-10
 
 OSV querybatch covered every registry version in each universal lock, including
