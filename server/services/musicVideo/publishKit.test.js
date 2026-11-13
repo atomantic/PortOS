@@ -158,6 +158,17 @@ describe('publishing kit build (#9281)', () => {
       state.renders['shot-1'].final.stale = false;
       const cleared = (await kit.capturePublishKitFrame(id, 3)).project.publishKit.frames[0];
       expect(await sharp(join(PATHS.videoThumbnails, cleared)).metadata()).toMatchObject({ width: 320, height: 180 });
+      // Capture times belong to the final video, which includes the lead-in before song time zero.
+      state.shots.unshift({ id: 'lead', start: -1, end: 0 });
+      state.renders.lead = { final: { complete: true, stale: false } };
+      const leadDirectory = blenderFramesDir(id, 'lead', 'final');
+      await mkdir(leadDirectory, { recursive: true });
+      const leadOriginal = join(leadDirectory, blenderFrameName(-12, 'final'));
+      await sharp({ create: { width: 640, height: 360, channels: 3, background: '#0000ff' } }).png().toFile(leadOriginal);
+      const lead = (await kit.capturePublishKitFrame(id, 0.5)).project.publishKit.frames[0];
+      expect(await readFile(join(PATHS.videoThumbnails, lead))).toEqual(await readFile(leadOriginal));
+      const song = (await kit.capturePublishKitFrame(id, 3)).project.publishKit.frames[0];
+      expect(await readFile(join(PATHS.videoThumbnails, song))).toEqual(await readFile(original));
     } finally { read.mockRestore(); }
   });
 
