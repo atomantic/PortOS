@@ -16,7 +16,7 @@ const STATE_TO_TONE = {
 // sticker sheet. Renders something like:  "MODULE.04 // ACTIVE  ●"
 //
 // Sits at the top edge of cards, above widget headers, on empty states.
-// Reuses GeistPixelSquare (already loaded for OpenWorld) so no font cost.
+// Reuses GeistPixelSquare (already loaded by index.css) so no font cost.
 export default function SchematicLabel({
   module,
   prefix = 'MODULE',
