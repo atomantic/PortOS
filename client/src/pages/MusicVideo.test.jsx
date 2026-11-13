@@ -4334,3 +4334,27 @@ describe('Code video storyboard approval gating on Produce stage (#15723)', () =
     expect(await screen.findByText('Approve the storyboard first')).toBeTruthy();
   });
 });
+
+it('shares Done between editor, board and sheet, and accepts remote changes after a failed save', async () => {
+  const project = { ...PROJECT_WITH_CLIP, scenes: [{ ...PROJECT_WITH_CLIP.scenes[0], label: 'Shot 1', shotSheet: { location: 'Park', checked: false } }] };
+  let settle;
+  updateMusicVideoScene.mockImplementationOnce(() => new Promise(resolve => { settle = resolve; }));
+  await openProject(project, 'produce');
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Done', exact: true }));
+  expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-1', project.scenes[0].sceneId, { shotSheet: { location: 'Park', checked: true } }, { silent: true });
+  await act(async () => settle({}));
+  expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).toBeChecked();
+  expect(within(screen.getByLabelText('Storyboard thumbnails')).getByRole('button', { name: 'Open Shot 1' })).toHaveClass('border-port-success');
+  fireEvent.click(screen.getByRole('button', { name: 'Close shot' }));
+  fireEvent.click(screen.getByText('Shot sheet'));
+  expect(screen.getByRole('checkbox', { name: 'Shot 1 done' })).toBeChecked();
+  fireEvent.click(screen.getAllByRole('button', { name: 'Open Shot 1' }).find(button => button.closest('tr')));
+  updateMusicVideoScene.mockRejectedValueOnce(new Error('Save unavailable'));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Done', exact: true }));
+  await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).not.toBeDisabled());
+  expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).toBeChecked();
+  getMusicVideoProject.mockResolvedValue({ ...project, scenes: [{ ...project.scenes[0], shotSheet: { location: 'Station', checked: false } }] });
+  await pushSocket('music-video:project:changed', { id: project.id });
+  await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).not.toBeChecked());
+  expect(screen.getByRole('combobox', { name: 'Location' })).toHaveValue('Station');
+});

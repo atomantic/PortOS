@@ -1228,6 +1228,16 @@ function ProjectWorkspace({
       .catch((err) => { toast.error(err?.message || 'Failed to save scene'); return false; });
   };
 
+  const setSceneDone = (sceneId, checked) => {
+    const scene = selected.scenes?.find((entry) => entry.sceneId === sceneId);
+    if (!scene) return Promise.resolve(false);
+    return saveScene(sceneId, { shotSheet: { ...scene.shotSheet, checked } }).then((saved) => {
+      if (saved) patchProject(selected.id, (project) => ({ scenes: project.scenes?.map((entry) => entry.sceneId === sceneId
+        ? { ...entry, shotSheet: { ...entry.shotSheet, checked } } : entry) }));
+      return saved;
+    });
+  };
+
   // Project-level concept/style (issue #3168) — optimistic-local + silent-PATCH on
   // commit, same as commitSceneTiming below. Sends only the changed sub-field;
   // the server merges it into the existing concept (applyProjectPatch), so a
@@ -1873,6 +1883,7 @@ function ProjectWorkspace({
     }),
     editSceneLocal,
     saveScene,
+    setSceneDone,
     moveScene,
     commitSceneTiming,
     approveCastAndSets,
