@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const f = vi.hoisted(() => ({ registerGate: null, prep: null, publicationActive: false, refusePublication: false, updateResult: { ok: true }, provider: null, tui: false }));
 const releaseDisposition = vi.hoisted(() => vi.fn(async () => null));
 const releaseObservations = vi.hoisted(() => vi.fn(async () => new Map()));
+const releasePreflight = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+vi.mock('./releasePreflight.js', () => ({ releasePreflight }));
 vi.mock('./releaseSynchronization.js', () => ({ releaseTaskDispatchDisposition: releaseDisposition, observeReleaseDeliveries: releaseObservations }));
 vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: vi.fn(async (_repo, work) => {
   if (f.refusePublication) throw new Error('checkout-retirement-reserved');
@@ -84,6 +86,7 @@ const newContext = () => ({
 const isProtected = () => getActiveAgentIds().includes('agent-x') && protectedAgentIds([]).has('agent-x');
 
 beforeEach(() => {
+  releasePreflight.mockReset().mockResolvedValue({ ok: true });
   vi.clearAllMocks();
   releaseDisposition.mockResolvedValue(null);
   setUseRunner(false);
@@ -166,6 +169,16 @@ describe('dispatchAgentRun ownership window', () => {
     expect(context.blockAndBail).toHaveBeenCalledWith(expect.objectContaining({ reason: expect.stringContaining('review policy') }));
     expect(registerAgent).not.toHaveBeenCalled();
     expect(spawnDirectly).not.toHaveBeenCalled();
+  });
+  it('refuses publication activity before starting a release coordinator', async () => {
+    const context = newContext();
+    context.task = { ...task, metadata: { analysisType: 'do-release', app: 'example-app' } };
+    releasePreflight.mockResolvedValueOnce({ ok: false, reason: 'release-promotion-active' });
+    await dispatchAgentRun(context);
+    expect(context.blockAndBail).toHaveBeenCalledWith({ reason: 'release-promotion-active', persist: false });
+    expect(registerAgent).not.toHaveBeenCalled();
+    expect(spawnDirectly).not.toHaveBeenCalled();
+    expect(getActiveAgentIds()).not.toContain(context.agentId);
   });
   it('passes delivery observations into the final ownership fence before spawning a release', async () => {
     const context = newContext();

@@ -97,7 +97,7 @@ export async function readClaimOwnershipAgents() {
     if (synchronization != null && (synchronization.version !== 1 || agent.metadata?.taskAnalysisType !== 'do-release'
       || agent.metadata?.isWorktree !== false || synchronization.startedAt !== agent.startedAt
       || !/^[a-f0-9]{64}$/.test(synchronization.identity || '')
-      || synchronization.branch !== `codex/release-sync-${synchronization.identity}`
+      || ![`codex/release-sync-${synchronization.identity}`, `codex/release-sync-${synchronization.identity}-${id}`].includes(synchronization.branch)
       || synchronization.identity !== agent.metadata?.releasePublication?.identity
       || !Number.isFinite(Date.parse(synchronization.reservedAt)))) return true;
     const recovery = agent.metadata?.releaseCandidateRecovery;

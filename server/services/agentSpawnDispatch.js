@@ -53,12 +53,13 @@ export async function dispatchAgentRun(context, opts) {
   markAgentDispatching(context.agentId);
   try {
     const type = currentTaskTypeName(context.task.metadata?.analysisType || context.task.metadata?.selfImprovementType);
+    let releaseDisposition;
     if (type === 'do-release' || type === 'release-sync') {
       const [{ withClaimOwnershipLock }, { observeReleaseDeliveries, releaseTaskDispatchDisposition }] = await Promise.all([
         import('./cosClaimOwnershipState.js'), import('./releaseSynchronization.js'),
       ]);
       const deliveryObservations = await observeReleaseDeliveries(context.task, { ignoreAgentId: context.agentId }).catch(() => new Map());
-      const disposition = await withClaimOwnershipLock(() => releaseTaskDispatchDisposition(context.task, { ignoreAgentId: context.agentId, deliveryObservations }));
+      const disposition = releaseDisposition = await withClaimOwnershipLock(() => releaseTaskDispatchDisposition(context.task, { ignoreAgentId: context.agentId, deliveryObservations }));
       if (['retired-continuation', 'delivered-continuation', 'wait-for-synchronization', 'review-policy-unverified'].includes(disposition)) {
         const reason = disposition === 'retired-continuation' ? 'This release synchronization was retired by an operator.'
           : disposition === 'delivered-continuation' ? 'This release was independently delivered; the historical continuation is retained.'
@@ -66,6 +67,13 @@ export async function dispatchAgentRun(context, opts) {
             : 'The previous release synchronization is unfinished.';
         return context.blockAndBail({ reason, persist: false });
       }
+    }
+    if (type === 'do-release') {
+      const repoPath = context.task.metadata?.app ? await getAppWorkspace(context.task.metadata.app) : ROOT_DIR;
+      const { releasePreflight } = await import('./releasePreflight.js');
+      const preflight = await releasePreflight({ repoPath, agentId: context.agentId, continuingPublication: releaseDisposition === 'registered-release-owner' })
+        .catch(() => ({ ok: false, reason: 'release-preflight-unavailable' }));
+      if (!preflight.ok) return context.blockAndBail({ reason: preflight.reason, persist: false });
     }
     return await runAgentDispatch(context, opts);
   } finally {

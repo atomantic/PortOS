@@ -228,7 +228,7 @@ export async function updateClaimOwnership({ agentId, action, branch }) {
  * capture locates the physical checkout through Git, never a caller path.
  * Existing/unregistered candidates intentionally cannot be adopted here.
  */
-export async function updateReleaseCandidateOwnership(agentId, action) {
+export async function updateReleaseCandidateOwnership(agentId, action, { version } = {}) {
   const done = action === 'reserve' ? 'reserved' : 'captured';
   if (!/^agent-[a-z0-9-]+$/.test(agentId) || !['reserve', 'capture'].includes(action)) return { [done]: false, reason: 'candidate-owner-invalid' };
   const branch = `codex/release-${agentId}`;
@@ -242,7 +242,12 @@ export async function updateReleaseCandidateOwnership(agentId, action) {
     if (checkoutRetirementFenceReason({ repoPath, branch })) return { [done]: false, reason: 'checkout-retirement-reserved' };
     const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
     return withCheckoutPublication(repoPath, async () => {
-      if (agent.metadata.releaseCandidateRecovery || agent.metadata.resumedFromAgentId) return { [done]: false, reason: 'candidate-recovery-required' };
+      if (action === 'reserve') {
+        const { releasePreflight } = await import('./releasePreflight.js');
+        const preflight = await releasePreflight({ repoPath, agentId, agents: Object.values(state.agents), version })
+          .catch(() => ({ ok: false, reason: 'release-preflight-unavailable' }));
+        if (!preflight.ok) return { reserved: false, reason: preflight.reason };
+      }
       const prior = agent.metadata.releaseCandidate;
       if (prior && (prior.version !== 1 || prior.branch !== branch || prior.startedAt !== agent.startedAt)) return { [done]: false, reason: 'candidate-owner-conflict' };
       const other = claimCheckoutOwnerReason({ branchName: branch, sourceWorkspace: repoPath, agents: Object.values(state.agents), ignoreIds: [agentId] });
@@ -297,15 +302,15 @@ export async function updateReleaseSynchronizationOwnership(agentId, action) {
       || publication.synchronizationHandoffVersion !== 2 || !/^[a-f0-9]{64}$/.test(publication.identity || '')) {
       return { [done]: false, reason: 'synchronization-owner-unverified' };
     }
-    const { isInlineReleaseOwner, publisherCandidateSeed } = await import('../lib/releaseSynchronization.js');
-    if (!publisherCandidateSeed({ publication, owner: { agentId, taskId: agent.taskId, startedAt: agent.startedAt },
-      checkouts: agent.metadata.checkoutSeeds || [] })) return { [done]: false, reason: 'candidate-checkout-unverified' };
+    const { isInlineReleaseOwner } = await import('../lib/releaseSynchronization.js');
     const { readReleaseSynchronizationOutbox } = await import('./releaseSynchronizationStore.js');
     const entry = (await readReleaseSynchronizationOutbox().catch(() => null))?.publications?.[publication.identity];
     if (!entry || !entry.registeredAt || !isInlineReleaseOwner(entry, agent)) {
       return { [done]: false, reason: 'synchronization-registration-unverified' };
     }
-    const branch = `codex/release-sync-${publication.identity}`;
+    // A successor captures its own new sync checkout. Historical checkouts and
+    // their review evidence stay with their original owners for reconciliation.
+    const branch = `codex/release-sync-${publication.identity}${entry.owner.agentId === agentId ? '' : '-' + agentId}`;
     const repoPath = agent.sourceWorkspace || agent.metadata.sourceWorkspace || agent.workspacePath || agent.metadata.workspacePath;
     if (!repoPath) return { [done]: false, reason: 'ownership-unreadable' };
     if (checkoutRetirementFenceReason({ repoPath, branch })) return { [done]: false, reason: 'checkout-retirement-reserved' };

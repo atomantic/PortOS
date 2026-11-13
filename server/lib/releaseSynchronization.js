@@ -47,6 +47,9 @@ export const isInlineReleaseSynchronization = entry => entry?.version === 2;
 export function isInlineReleaseOwner(entry, agent) {
   if (!isInlineReleaseSynchronization(entry) || agent?.taskId !== entry.owner.taskId) return false;
   if (agent.id === entry.owner.agentId && agent.startedAt === entry.owner.startedAt) return true;
+  // Publication receipts are server-written after independent Git/GitHub verification.
+  if (agent.metadata?.releasePublication?.status === 'verified'
+    && agent.metadata.releasePublication.identity === entry.identity) return true;
   const transfer = agent.metadata?.releaseCandidateRecovery?.status === 'transferred'
     ? agent.metadata.releaseCandidateRecovery.transfer : null;
   return releaseCandidateTransferSchema.safeParse(transfer).success

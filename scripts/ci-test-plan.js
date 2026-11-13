@@ -286,7 +286,7 @@ export const WINDOWS_RISK_RULES = [
   /^server\/services\/shell\b/,
   /^server\/services\/agentTuiSpawning(?:\/|(?:\.test)?\.js$)/,
   /^server\/services\/tuiPromptRunner(?:\.test)?\.js$/,
-  /^server\/services\/releaseCandidate(?:Recovery|Settlement|Evidence)(?:\.test)?\.js$/,
+  /^server\/services\/(?:releaseCandidateEvidence|releasePreflight)(?:\.test)?\.js$/,
 ];
 
 // Each entry protects the supported native boundary. No import-graph expansion:
@@ -314,7 +314,7 @@ export const WINDOWS_CONTRACT_TESTS = [
   // Real native ownership/cancellation and safe filesystem semantics.
   'server/lib/execGit.test.js',
   'server/lib/windowsAgentProcess.test.js',
-  'server/services/releaseCandidateRecovery.test.js',
+  'server/services/releasePreflight.test.js',
   'server/lib/windowsGitProcess.test.js',
   'server/lib/windowsGitProcess.protocol.test.js',
   'server/lib/gitRepositoryIdentity.test.js',
@@ -695,14 +695,13 @@ export const DOCKER_CONTAINMENT_LIVE_PATH_RE = /^(?:server\/package(?:-lock)?\.j
 // boundary (#14781): suites that skip on every other platform, so the Linux
 // and Windows jobs can never prove them. macOS runners are the scarcest hosted
 // capacity, so the gate is this explicit path list, not an import closure —
-// the recovery suite's closure reaches most of the server.
+// application import closures reach most of the server.
 export const MACOS_NATIVE_TESTS = [
   'server/lib/windowsAgentProcess.darwin.test.js',
-  'server/services/releaseCandidateRecovery.test.js',
 ];
 // The supervision path itself, the dependency manifests and Vitest harness the
 // job installs and loads, and ci.yml so a workflow edit proves the job runs.
-export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/services\/(?:releaseCandidateRecovery[^/]*\.js|releaseCandidateSettlement\.js)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml)$/;
+export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml)$/;
 
 /**
  * Repository-relative static import closure of `entries` in `cwd`, or null

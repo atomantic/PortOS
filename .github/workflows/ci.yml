@@ -1513,7 +1513,7 @@ jobs:
       - name: Run the macOS release-agent supervision suites
         timeout-minutes: 15
         # Keep this list equal to the impact planner's MACOS_NATIVE_TESTS.
-        run: npm test --prefix server -- --run lib/windowsAgentProcess.darwin.test.js services/releaseCandidateRecovery.test.js
+        run: npm test --prefix server -- --run lib/windowsAgentProcess.darwin.test.js
 
   supercollider-live:
     name: SuperCollider native ${{ matrix.arch }}

@@ -780,19 +780,16 @@ Windows; a failure there must still be fixed, not hidden by this boundary.
 macOS is the primary interactive target, and release agents there run under
 the launchd-coalition supervisor (`server/lib/darwinAgentSupervisor.py`). Its
 real-process boundary suite, `server/lib/windowsAgentProcess.darwin.test.js`,
-and the macOS arm of `supervised native release recovery` in
-`server/services/releaseCandidateRecovery.test.js` skip on every other
-platform. The `macos-native` job (`macos-latest`) runs exactly those two files
-(`MACOS_NATIVE_TESTS` in `scripts/ci-test-plan.js`), so a change that breaks
-macOS release recovery cannot pass every required check.
+skips on every other platform. The `macos-native` job (`macos-latest`) runs that
+file (`MACOS_NATIVE_TESTS` in `scripts/ci-test-plan.js`), so native supervision
+remains a required check. Release pre-flight uses platform-neutral Git/GitHub
+checks and also runs in the Windows contract set.
 
 macOS runners are the scarcest hosted capacity, so the job is gated by an
-explicit path list (`MACOS_NATIVE_PATH_RE`), not an import closure: the
-recovery suite's closure reaches most of the server. On a pull request the
+explicit path list (`MACOS_NATIVE_PATH_RE`), not an application import closure. On a pull request the
 `macos_native` output is true only when the diff touches
 `server/lib/windowsAgentProcess*.js`, `server/lib/darwinAgentSupervisor.py`,
-`server/services/releaseCandidateRecovery*.js`,
-`server/services/releaseCandidateSettlement.js`, the server Vitest harness
+the server Vitest harness
 (`server/vitest.config.js`, `server/vitest.setup.js`,
 `scripts/vitestTempRootSetup.js`), the install inputs
 (`server/package.json`, `server/package-lock.json`, `server/.npmrc`,
@@ -803,7 +800,7 @@ Before the suites, the job runs the supervisor's own `--probe`: a real
 single-use launchd job round trip. A runner whose user domain refuses
 `launchctl bootstrap` fails that named step rather than an assertion inside
 the suite. Pregate reports the job as CI-only; on a Mac, run
-`npm test --prefix server -- --run lib/windowsAgentProcess.darwin.test.js services/releaseCandidateRecovery.test.js`.
+`npm test --prefix server -- --run lib/windowsAgentProcess.darwin.test.js`.
 
 ### Windows selection for mixed changes
 
