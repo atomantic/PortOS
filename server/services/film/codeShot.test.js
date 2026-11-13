@@ -213,6 +213,10 @@ it('renders a Blender shot, a code shot and a code layer, then marks only the ed
   expect(readFileSync(layeredStill).equals(stillOnce)).toBe(true);
   const codeStill = join(owner.workspaceDir, 'renders', 's020', 'stills', 't000000750.png');
   const codeOnce = readFileSync(codeStill);
+  expect(codeOnce.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  const finalFrame = Object.values(frameBytes(owner, 's020', 'final'))[0];
+  expect(finalFrame.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  expect(Object.values(frameBytes(owner, 's020', 'preview'))[0].subarray(0, 2)).toEqual(Buffer.from([255, 216]));
   writeFileSync(codeStill, 'stale-pixels');
   await settled(owner, (await enqueueBlenderRenders(owner, { quality: 'still', shotIds: ['s020'], times: [0.75] })).jobs.map((job) => job.id));
   expect(readFileSync(codeStill).equals(codeOnce)).toBe(true);
