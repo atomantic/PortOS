@@ -695,9 +695,13 @@ export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAsset
       : [...(still ? [input('image', still)] : []), ...(clip ? [input('video', clip)] : [])];
     let outcome = append(current, sceneId, inputs);
     for (const take of outcome.appended) outcome = { ...select(outcome.project, sceneId, take.takeId), appended: outcome.appended };
-    // The placed still's frame prompt comes with it, so the start or end prompt matches the picture.
+    // The placed still's frame prompt comes with it, so the start or end prompt matches the picture. Re-placing the
+    // shot's own selected still (to pair it with a clip) changes no picture: rewriting the prompt then would only
+    // invalidate that still's frame evidence and every clip made from it (#15982).
     const stillTake = outcome.appended.find((take) => take.kind !== 'video');
-    const framePrompt = authoredFramePrompt(current, stillTake?.prompt);
+    const before = current.scenes.find((scene) => scene.sceneId === sceneId);
+    const slot = stillTake?.kind === 'endImage' ? 'endImageId' : 'referenceImageId';
+    const framePrompt = stillTake && before?.[slot] !== stillTake.assetId ? authoredFramePrompt(current, stillTake.prompt) : null;
     if (framePrompt) {
       const field = stillTake.kind === 'endImage' ? 'endFramePrompt' : 'framePrompt';
       const scenes = outcome.project.scenes.map((scene) => (scene.sceneId === sceneId ? { ...scene, [field]: framePrompt } : scene));

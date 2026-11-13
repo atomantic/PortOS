@@ -353,8 +353,18 @@ export function swapSceneFrames(project, sceneId) {
   return { project: replaceScene(project, idx, next), scene: next };
 }
 
-export function reviewSceneTake(project, sceneId, takeId, { status, note, acknowledgeRenderQuality, reviewer }) {
+export function reviewSceneTake(project, sceneId, takeId, { status, note, acknowledgeRenderQuality, confirmFrame, reviewer }) {
   const { idx, scene, takes, take } = locateTake(project, sceneId, takeId);
+  // The director confirms the selected still still matches the shot as it now reads (#15982): its frame evidence is
+  // re-stamped against the current prompt, camera, place, cast and references, without making a new picture.
+  if (confirmFrame) {
+    if (take.kind !== 'image' && take.kind !== 'endImage') {
+      throw new ServerError('Only a start or end frame can be confirmed', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    if (scene[TAKE_SLOT[take.kind]] !== take.assetId) {
+      throw new ServerError('Select this frame for the shot before confirming it', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
+    }
+  }
   if (acknowledgeRenderQuality) {
     const evidence = currentPlateEvidence(scene, take, project);
     const defect = evidence?.checks.find((check) => check.id === 'render-quality' && check.status === 'fail');
@@ -365,6 +375,10 @@ export function reviewSceneTake(project, sceneId, takeId, { status, note, acknow
   const updated = {
     ...take,
     ...(acknowledgeRenderQuality ? { renderQualityAcknowledgement: { ...acknowledgeRenderQuality, reviewer, at: new Date().toISOString() } } : {}),
+    ...(confirmFrame ? {
+      frameDependencies: captureImageFrameDependencies(project, scene, { slot: take.kind === 'endImage' ? 'end' : 'start' }),
+      frameConfirmation: { reviewer, at: new Date().toISOString() },
+    } : {}),
     ...(status !== undefined ? { status } : {}),
     ...(note !== undefined ? { note: note && note.trim() ? note.trim().slice(0, 1000) : null } : {}),
   };

@@ -4,6 +4,7 @@ import { musicVideoCreativeContext, musicVideoDirectorLook } from '../../lib/mus
 import { MOTION_CONTINUITY_CLAUSE } from '../../lib/musicVideoMotion.js';
 import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
 import { musicVideoFrameModelInput, visualDirection } from '../../lib/musicVideoShotPrompt.js';
+import { isQuickEditPrompt } from '../../lib/quickEditPrompt.js';
 /**
  * Music Video external-asset handoff (#8965) — provider-neutral export/import
  * for tools PortOS does not drive, such as Midjourney.
@@ -95,7 +96,7 @@ function composePrompt(primary, fallback, project, clause, { motion = false } = 
  */
 export function authoredFramePrompt(project, prompt) {
   const line = typeof prompt === 'string' ? prompt.split('\n')[0].trim() : '';
-  if (!line || line.startsWith('Edit the reference image:')) return null;
+  if (!line || isQuickEditPrompt(line)) return null;
   const look = [
     project?.concept?.style?.trim(),
     musicVideoCreativeContext(project?.concept, { look: musicVideoDirectorLook(project) }),
