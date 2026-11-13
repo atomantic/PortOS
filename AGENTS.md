@@ -204,7 +204,7 @@ Required shared boundaries: use the clipboard helpers for insecure-origin suppor
 
 ### Maintenance rule (WHEN adding a public module)
 
-Any new file in `server/lib/`, `client/src/lib/`, `client/src/hooks/`, `client/src/utils/`, or a new `apiX.js` in `client/src/services/` **MUST** (1) be re-exported from the same-directory `index.js` barrel (or, for `services/`, from `api.js`) and (2) get a one-line row in the same-directory `README.md`. Enforced: `server/lib/index.test.js` and its client counterparts fail when a non-test `.js` file is missing from either.
+Any new file in `server/lib/`, `client/src/lib/`, `client/src/hooks/`, `client/src/utils/`, or a new `apiX.js` in `client/src/services/` **MUST** (1) be re-exported from the same-directory `index.js` barrel (or, for `services/`, from `api.js`) and (2) get a one-line row in the same-directory `README.md` (in `server/lib/`, at its alphabetical position in the single module table). Enforced: `server/lib/index.test.js` and its client counterparts fail when a non-test `.js` file is missing from either.
 
 **Catalogs and barrels merge with git's `union` driver** (`.gitattributes`), because every branch inserts one sorted line and concurrent branches collide on the same hunk. Union keeps both sides — right for an insertion, wrong for an edit or deletion beside one — so after a rebase that touched a catalog, `scripts/catalog-merge-union.test.js` fails on a doubled or resurrected row; keep one and move on. Never give a file with real code paths the `union` attribute; the guard rejects a `.js` that is not a pure re-export barrel.
 
