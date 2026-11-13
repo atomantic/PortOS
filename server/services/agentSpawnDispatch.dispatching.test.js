@@ -172,7 +172,7 @@ describe('dispatchAgentRun ownership window', () => {
   });
   it('refuses publication activity before starting a release coordinator', async () => {
     const context = newContext();
-    context.task = { ...task, metadata: { analysisType: 'do-release', app: 'example-app' } };
+    context.task = { ...task, metadata: { analysisType: 'do-release', app: 'portos-default' } };
     releasePreflight.mockResolvedValueOnce({ ok: false, reason: 'release-promotion-active' });
     await dispatchAgentRun(context);
     expect(context.blockAndBail).toHaveBeenCalledWith({ reason: 'release-promotion-active', persist: false });
@@ -190,6 +190,8 @@ describe('dispatchAgentRun ownership window', () => {
     expect(releaseObservations).toHaveBeenCalledWith(context.task, { ignoreAgentId: context.agentId });
     expect(releaseDisposition).toHaveBeenCalledWith(context.task, { ignoreAgentId: context.agentId, deliveryObservations: observations });
     expect(spawnDirectly).toHaveBeenCalled();
+    // A managed app may publish from its default branch without release.yml.
+    expect(releasePreflight).not.toHaveBeenCalled();
 
     const blocked = newContext();
     blocked.task = context.task;

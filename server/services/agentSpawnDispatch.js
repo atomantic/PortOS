@@ -39,6 +39,7 @@ import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { buildClaim } from './cosTaskClaim.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
+import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
 
 const ROOT_DIR = PATHS.root;
@@ -68,7 +69,8 @@ export async function dispatchAgentRun(context, opts) {
         return context.blockAndBail({ reason, persist: false });
       }
     }
-    if (type === 'do-release') {
+    // Managed apps keep their own documented release branches and workflows.
+    if (type === 'do-release' && (!context.task.metadata?.app || context.task.metadata.app === PORTOS_APP_ID)) {
       const repoPath = context.task.metadata?.app ? await getAppWorkspace(context.task.metadata.app) : ROOT_DIR;
       const { releasePreflight } = await import('./releasePreflight.js');
       const preflight = await releasePreflight({ repoPath, agentId: context.agentId, continuingPublication: releaseDisposition === 'registered-release-owner' })
