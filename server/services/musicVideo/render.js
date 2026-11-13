@@ -1258,7 +1258,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
     const atSec = typeof project.composition?.posterSec === 'number'
       ? project.composition.posterSec + (encoded.leadSec || 0)
       : (encoded.boundaryTimes[0] || 0);
-    const completed = { status: 'complete', extra: { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) } };
+    const completed = { status: 'complete', extra: { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project, { clipFrames: false }) } };
     // The encoder wrote the MP4 in place; the poster, the history entry naming
     // it and the project row naming that entry publish under one lease (#9982).
     const thumb = await withBackupAssetPublication(async () => {
@@ -1374,7 +1374,7 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
         width: plan.width, height: plan.height, numFrames: Math.round(durationSec * plan.fps), fps: plan.fps,
         filename, thumbnail: poster, createdAt: new Date().toISOString(), musicVideoProjectId: projectId,
       });
-      settled = await writeSettled('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) });
+      settled = await writeSettled('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project, { clipFrames: false }) });
       return poster;
     });
     await retireOldFinals(projectId, jobId);
@@ -1684,7 +1684,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
                 createdAt: new Date().toISOString(),
                 musicVideoProjectId: projectId,
               });
-              settled = await writeSettled('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) });
+              settled = await writeSettled('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project, { clipFrames: false }) });
               return poster;
             });
             await retireOldFinals(projectId, jobId);

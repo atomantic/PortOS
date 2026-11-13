@@ -209,7 +209,7 @@ const songRef = (project) => ({ role: 'song', assetId: 'master', revision: check
 }) });
 
 /** Evidence tracks its rendered window, selected layers and transitive take inputs. */
-export function captureMusicVideoEvidence(project, { sceneIds = null, startSec = 0, endSec = 36000, composition = true } = {}) {
+export function captureMusicVideoEvidence(project, { sceneIds = null, startSec = 0, endSec = 36000, composition = true, clipFrames = true } = {}) {
   const references = [songRef(project)];
   for (const scene of project.scenes || []) {
     if (sceneIds ? !sceneIds.includes(scene.sceneId) : !intersects(scene, startSec, endSec)) continue;
@@ -217,6 +217,9 @@ export function captureMusicVideoEvidence(project, { sceneIds = null, startSec =
     const role = scene.visualLayer === 'still' ? 'plate' : ['card', 'code'].includes(scene.visualLayer) ? null : 'clip';
     if (!role) continue;
     references.push(assetRef(scene, role));
+    // `clipFrames: false` (the final render) does not hold a selected clip to the frames it was made from:
+    // the user may override or pick any clip, so a render never goes out of date because the shot's plate moved on.
+    if (role === 'clip' && !clipFrames) continue;
     const take = selectedTake(scene, role);
     if (take?.dependencies) references.push(...take.dependencies.references);
     else if (role === 'clip' && take?.sourceImageId) references.push(...captureTakeDependencies(scene, take.sourceImageId).references);
