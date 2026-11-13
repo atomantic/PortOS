@@ -7,6 +7,7 @@ import argparse
 import ast
 import asyncio
 import inspect
+from importlib.metadata import version
 import io
 import json
 import pathlib
@@ -35,9 +36,15 @@ def definitions(path, names, namespace):
     exec(compile(ast.fix_missing_locations(module), str(path), "exec"), namespace)
 
 
+def expect_version(package, baseline, previous, candidate):
+    expected = previous if baseline else candidate
+    assert version(package) == expected, f"{package} must be {expected} for this probe"
+
+
 def sentencepiece_probe(directory, baseline):
     import sentencepiece as spm
 
+    expect_version("sentencepiece", baseline, "0.2.2", "0.2.3")
     directory.mkdir(parents=True, exist_ok=True)
     texts = ["A paper boat drifts.", "café 日本語", "  tabs\tand\nspaces  ", "🦊 unknown bytes", ""]
     results = {}
@@ -92,11 +99,12 @@ def sentencepiece_probe(directory, baseline):
     print("SentencePiece: native BPE/unigram encode/decode, serialized models, pickle and invalid-model refusal passed")
 
 
-async def reactor_probe():
+async def reactor_probe(baseline):
     from reactor_sdk import Reactor
     from reactor_sdk._ffi import get_lib
     from reactor_sdk.track import Track, TrackList, TrackKind, TrackDirection
 
+    expect_version("reactor-sdk", baseline, "1.13.0", "1.14.0")
     lib = get_lib()  # Loads and ABI-checks the actual bundled native library.
     for symbol in ["reactor_create_with_adm", "reactor_send_command", "reactor_upload_file", "reactor_disconnect"]:
         assert getattr(lib, symbol).argtypes
@@ -129,12 +137,14 @@ async def reactor_probe():
     print("Reactor: native ABI, construction, raw callbacks, command/upload signatures and offline refusal/disconnect passed; no connect attempted")
 
 
-def pydantic_probe(vlm, gradio, client):
+def pydantic_probe(vlm, gradio, client, baseline):
     import abc
     import typing
     import typing_extensions
     import pydantic
 
+    expect_version("pydantic", baseline, "2.14.2", "2.14.3")
+    expect_version("pydantic-core", baseline, "2.50.2", "2.50.4")
     module = types.ModuleType("cooled_upstream_models")
     sys.modules[module.__name__] = module
     ns = module.__dict__
@@ -191,8 +201,8 @@ if __name__ == "__main__":
             parser.error("--fixtures is required")
         sentencepiece_probe(args.fixtures, args.baseline)
     elif args.probe == "reactor":
-        asyncio.run(reactor_probe())
+        asyncio.run(reactor_probe(args.baseline))
     else:
         if not all([args.vlm, args.gradio, args.client]):
             parser.error("--vlm, --gradio and --client extracted wheel roots are required")
-        pydantic_probe(args.vlm, args.gradio, args.client)
+        pydantic_probe(args.vlm, args.gradio, args.client, args.baseline)

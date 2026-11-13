@@ -1,4 +1,5 @@
 # Bounded #15988 regeneration: uv 0.13.7; cutoff 2026-11-06T00:00:00Z; complete closure constrained to retained pins.
+# Historical baseline documentation follows; older dates below predate this bounded regeneration.
 # AudioLDM2 CUDA: CPython 3.11, x86_64 windows, CUDA 12.6.
 # uv 0.13.1; exclude-newer 2026-11-01; regenerate: docs/AUDIOLDM2_CUDA.md.
 --index-url https://pypi.org/simple

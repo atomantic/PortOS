@@ -2694,7 +2694,9 @@ seven-package baseline/candidate hash-installed subclosures, both passing
 Run the opt-in probes in those isolated environments, never an application's
 installed runtime. First run `sentencepiece --fixtures <scratch> --baseline`
 with 0.2.2; then use the same scratch directory with 0.2.3 and no `--baseline`.
-The `reactor` subcommand needs only the locked SDK. `pydantic` takes `--vlm`,
+Every subcommand enforces its exact baseline/candidate versions; pass
+`--baseline` only in the baseline environment. The `reactor` subcommand needs
+only the locked SDK. `pydantic` takes `--vlm`,
 `--gradio`, and `--client` paths to the package directories from the inspected,
 hash-verified wheels. Python socket connections are refused by the probes;
 Reactor's native connect API is never invoked.
