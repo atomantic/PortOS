@@ -117,6 +117,9 @@ describe('dependency override parity across manifests (#2848)', () => {
     // Each entry is scoped to the MAJOR LINE the flat override pins, so a package
     // pinned on two majors at once would need a per-major shape here first.
     const MINIMUM_SAFE = {
+      // ws 8.23.0 bounds pending automatic Pongs (upstream ace7248f); older
+      // releases let a peer that stops reading exhaust memory with Ping frames.
+      'ws': '8.23.0',
       'protobufjs': '7.6.5', // GHSA-j3f2-48v5-ccww
       'body-parser': '2.3.0', // GHSA-v422-hmwv-36x6
       // GHSA-52cp-r559-cp3m, then GHSA-5p4m-2wfm-xmqj (quadratic CPU in !!omap

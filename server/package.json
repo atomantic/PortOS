@@ -23,7 +23,7 @@
   "dependencies": {
     "@babel/parser": "8.1.2",
     "@cantoo/pdf-lib": "2.11.1",
-    "@googleapis/calendar": "20.1.0",
+    "@googleapis/calendar": "20.2.0",
     "@novnc/novnc": "1.7.0",
     "better-sqlite3-multiple-ciphers": "13.0.3",
     "chokidar": "6.0.0",
@@ -38,7 +38,7 @@
     "socket.io-client": "4.8.4",
     "three": "0.187.0",
     "undici": "8.12.4",
-    "ws": "8.22.2",
+    "ws": "8.23.0",
     "zod": "4.6.7"
   },
   "devDependencies": {
@@ -57,7 +57,7 @@
     "qs": "6.17.1",
     "sharp": "0.35.5",
     "socket.io-parser": "4.2.7",
-    "ws": "8.22.2",
+    "ws": "8.23.0",
     "postcss": "8.5.32",
     "nanoid": "3.3.20",
     "minimatch": "11.0.8"
