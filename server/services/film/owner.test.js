@@ -104,6 +104,17 @@ it('refuses symlinked frame cleanup without deleting the external target', async
   expect(readFileSync(retained, 'utf8')).toBe('keep');
 });
 
+it('indexes contact sheets from negative-time lead-in shots', async () => {
+  const { owner } = createOwner();
+  await scaffoldBlenderWorkspace(owner);
+  runtime.blender.control.manifest.shots.unshift({ id: 'lead', start: -1, end: 0, label: 'Lead-in', deps: ['film.py'] });
+  await settled(owner, [(await startBlenderSync(owner)).job.id]);
+  await settled(owner, (await enqueueBlenderRenders(owner, { quality: 'sheet', shotIds: ['lead'], sheet: { every: 6, columns: 2 } })).jobs.map((job) => job.id));
+  expect((await getBlenderState(owner)).renders.lead.sheets).toEqual([
+    expect.objectContaining({ firstFrame: -24, lastFrame: -6, file: 'lead/sheets/sheet--24--6-e6.jpg' }),
+  ]);
+});
+
 it('holds render admission until frame cleanup finishes', async () => {
   const { owner } = createOwner();
   await scaffoldBlenderWorkspace(owner);
