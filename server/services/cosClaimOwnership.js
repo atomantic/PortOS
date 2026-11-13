@@ -308,9 +308,7 @@ export async function updateReleaseSynchronizationOwnership(agentId, action) {
     if (!entry || !entry.registeredAt || !isInlineReleaseOwner(entry, agent)) {
       return { [done]: false, reason: 'synchronization-registration-unverified' };
     }
-    // A successor captures its own new sync checkout. Historical checkouts and
-    // their review evidence stay with their original owners for reconciliation.
-    const branch = `codex/release-sync-${publication.identity}${entry.owner.agentId === agentId ? '' : '-' + agentId}`;
+    const branch = `codex/release-sync-${publication.identity}`;
     const repoPath = agent.sourceWorkspace || agent.metadata.sourceWorkspace || agent.workspacePath || agent.metadata.workspacePath;
     if (!repoPath) return { [done]: false, reason: 'ownership-unreadable' };
     if (checkoutRetirementFenceReason({ repoPath, branch })) return { [done]: false, reason: 'checkout-retirement-reserved' };
@@ -322,13 +320,22 @@ export async function updateReleaseSynchronizationOwnership(agentId, action) {
       const other = claimCheckoutOwnerReason({ branchName: branch, sourceWorkspace: repoPath,
         agents: Object.values(state.agents), ignoreIds: [agentId] });
       if (other) return { [done]: false, reason: other };
+      let resumePath;
       if (action === 'sync-reserve') {
-        if (prior) return { reserved: true, branch };
+        const { releasePreflight } = await import('./releasePreflight.js');
+        const preflight = await releasePreflight({ repoPath, agentId, agents: Object.values(state.agents), continuingPublication: true })
+          .catch(() => ({ ok: false, reason: 'release-preflight-unavailable' }));
+        if (!preflight.ok) return { reserved: false, reason: preflight.reason };
         const [{ listWorktrees }, { execGit }] = await Promise.all([import('./worktreeManager.js'), import('../lib/execGit.js')]);
         const [trees, ref] = await Promise.all([listWorktrees(repoPath), execGit(['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], repoPath, { ignoreExitCode: true })]);
-        if (!Array.isArray(trees) || ref.exitCode !== 1 || trees.some(tree => branchOf(tree) === branch)) {
+        if (!Array.isArray(trees)) return { reserved: false, reason: 'synchronization-branch-not-available' };
+        const holders = trees.filter(tree => branchOf(tree) === branch);
+        if (ref.exitCode === 0 && holders.length === 1 && !holders[0].locked && holders[0].path !== repoPath) {
+          resumePath = holders[0].path;
+        } else if (ref.exitCode !== 1 || holders.length) {
           return { reserved: false, reason: 'synchronization-branch-not-available' };
         }
+        if (prior) return { reserved: true, branch, ...(resumePath && { path: resumePath }) };
         state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, releaseSynchronizationCheckout: {
           version: 1, identity: publication.identity, branch, startedAt: agent.startedAt, reservedAt: new Date().toISOString(),
         } } };
@@ -345,7 +352,7 @@ export async function updateReleaseSynchronizationOwnership(agentId, action) {
       }
       await save();
       cosEvents.emit('agent:updated', state.agents[agentId]);
-      return { [done]: true, branch };
+      return { [done]: true, branch, ...(resumePath && { path: resumePath }) };
     }).catch(error => {
       if (error.code === 'CHECKOUT_RETIREMENT_RESERVED') return { [done]: false, reason: 'checkout-retirement-reserved' };
       throw error;

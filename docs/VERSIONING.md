@@ -472,10 +472,17 @@ For an inline PortOS release, the coordinator must reserve its separate sync
 checkout before creating it and capture its physical generation before editing:
 
 ```bash
-SYNC_BRANCH=$(curl -fsS -H "Authorization: Bearer ${PORTOS_API_TOKEN:-}" -H 'Content-Type: application/json' \
-  -d '{"action":"sync-reserve"}' "http://127.0.0.1:5553/api/cos/agents/$RELEASE_AGENT_ID/release-candidate" | jq -er 'select(.reserved == true) | .branch')
-git fetch origin main
-git worktree add -b "$SYNC_BRANCH" "$SYNC_WORKTREE" FETCH_HEAD
+SYNC_RESERVATION=$(curl -fsS -H "Authorization: Bearer ${PORTOS_API_TOKEN:-}" -H 'Content-Type: application/json' \
+  -d '{"action":"sync-reserve"}' "http://127.0.0.1:5553/api/cos/agents/$RELEASE_AGENT_ID/release-candidate" | jq -ec 'select(.reserved == true)')
+SYNC_BRANCH=$(printf '%s' "$SYNC_RESERVATION" | jq -er '.branch')
+SYNC_RESUME_PATH=$(printf '%s' "$SYNC_RESERVATION" | jq -r '.path // empty')
+if [ -n "$SYNC_RESUME_PATH" ]; then
+  SYNC_WORKTREE="$SYNC_RESUME_PATH"
+else
+  git fetch origin main
+  git worktree add -b "$SYNC_BRANCH" "$SYNC_WORKTREE" FETCH_HEAD
+  node scripts/link-worktree-deps.js "$PRIMARY" "$SYNC_WORKTREE"
+fi
 curl -fsS -H "Authorization: Bearer ${PORTOS_API_TOKEN:-}" -H 'Content-Type: application/json' \
   -d '{"action":"sync-capture"}' "http://127.0.0.1:5553/api/cos/agents/$RELEASE_AGENT_ID/release-candidate" | jq -e '.captured == true' >/dev/null
 git -C "$SYNC_WORKTREE" merge --no-ff "$PROMOTION_MERGE_SHA"
@@ -487,17 +494,17 @@ checkout under any lock it cannot attribute, and the release then stays
 "synchronization blocked" until an operator clears it. The only lock it accepts
 here is exactly `Active inline release synchronization owned by <agent-id>`.
 
-Use a new, unused `SYNC_WORKTREE` path. A refused reservation or capture is not
+Use a new, unused `SYNC_WORKTREE` path when the reservation returns no path. A refused reservation or capture is not
 authority to adopt another checkout. After interruption, verify the existing
 publication again using the same original task and publication endpoint. Git and
 GitHub must still agree on its candidate, promotion, tag, and successful workflow.
 The service retains the original enrolled publication and synchronization policy;
 no cryptographic checkout transfer or historical process receipt is needed.
 
-The successor reserves a fresh synchronization branch. Inspect prior candidate
-and sync checkouts and carry forward outstanding fixes before continuing; leave
-their contents and review records intact for normal branch reconciliation.
-Fresh captures record their actual owner and time. Previously recorded publication,
+For an idle existing synchronization checkout, reservation returns its path from
+Git. Reuse that checkout and branch, including unfinished edits and private review
+files; do not create a competing synchronization branch. The current run captures
+its ownership at the actual current time. Previously recorded publication,
 review, delivery, and cleanup evidence remains available.
 
 Keep synchronization failures tracked with the exact PR, owner and next step;

@@ -92,12 +92,12 @@ it('binds an inline synchronization checkout to the same release owner and captu
     store.state.agents[successorId] = { id: successorId, taskId: agent.taskId, status: 'running',
       startedAt: new Date().toISOString(), metadata: { taskAnalysisType: 'do-release', isWorktree: false,
         workspacePath: repo, releasePublication: store.state.agents[id].metadata.releasePublication } };
-    const successorBranch = branch + '-' + successorId;
-    expect(await updateReleaseSynchronizationOwnership(successorId, 'sync-reserve')).toEqual({ reserved: true, branch: successorBranch });
-    const successorCheckout = join(scratch, 'successor-sync');
-    await execGit(['worktree', 'add', '-b', successorBranch, successorCheckout, 'main'], repo);
-    expect(await updateReleaseSynchronizationOwnership(successorId, 'sync-capture')).toEqual({ captured: true, branch: successorBranch });
-    expect(store.state.agents[successorId].metadata.checkoutSeeds).toMatchObject([{ agentId: successorId, branch: successorBranch }]);
+    const { writeFile, readFile, realpath } = await import('node:fs/promises');
+    await writeFile(join(sync, 'unfinished-sync.txt'), 'Preserve synchronization work');
+    expect(await updateReleaseSynchronizationOwnership(successorId, 'sync-reserve')).toEqual({ reserved: true, branch, path: await realpath(sync) });
+    expect(await updateReleaseSynchronizationOwnership(successorId, 'sync-capture')).toEqual({ captured: true, branch });
+    expect(store.state.agents[successorId].metadata.checkoutSeeds).toMatchObject([{ agentId: successorId, branch, path: await realpath(sync) }]);
+    expect(await readFile(join(sync, 'unfinished-sync.txt'), 'utf8')).toBe('Preserve synchronization work');
     expect(store.state.agents[id].metadata.checkoutSeeds).toEqual(seeds);
 
   } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
