@@ -37,11 +37,17 @@ export const createFakeBlender = () => {
     imageFrames: false,
   };
 
+  // Same tokens as portos_blender_driver.frame_token / the still name. A negative frame is `m`, not `-`.
+  const frameToken = (frame) => (frame < 0 ? `m${String(-frame).padStart(6, '0')}` : String(frame).padStart(6, '0'));
   const frameFile = (job, shot, frame, side = null) => {
-    if (job.quality === 'still') return join(job.out, shot.id, 'stills', `t${String(Math.round((frame / job.fps) * 1000)).padStart(9, '0')}.png`);
-    if (job.quality === 'sheet') return join(job.out, shot.id, 'sheets', job.framesDir || '.frames', `frame_${String(frame).padStart(6, '0')}.jpg`);
+    if (job.quality === 'still') {
+      const ms = Math.round((frame / job.fps) * 1000);
+      const name = ms < 0 ? `tm${String(-ms).padStart(9, '0')}.png` : `t${String(ms).padStart(9, '0')}.png`;
+      return join(job.out, shot.id, 'stills', name);
+    }
+    if (job.quality === 'sheet') return join(job.out, shot.id, 'sheets', job.framesDir || '.frames', `frame_${frameToken(frame)}.jpg`);
     const ext = job.quality === 'preview' ? 'jpg' : 'png';
-    const name = side ? `handle_${side}_${String(frame).padStart(6, '0')}.${ext}` : `frame_${String(frame).padStart(6, '0')}.${ext}`;
+    const name = side ? `handle_${side}_${frameToken(frame)}.${ext}` : `frame_${frameToken(frame)}.${ext}`;
     return join(job.out, shot.id, job.quality, 'frames', name);
   };
 

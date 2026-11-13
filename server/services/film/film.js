@@ -162,9 +162,12 @@ export function planBlenderCut(film, quality) {
   const frame = blenderRenderFrame(settings, quality);
   const missing = [];
   const stale = [];
-  const last = shots.length ? Math.max(...shots.map((shot) => blenderShotFrameRange(shot, settings.fps).endFrame)) : 0;
+  const ranges = shots.map((shot) => blenderShotFrameRange(shot, settings.fps));
+  // A lead-in starts below 0. A song that starts late still gets black from frame 0, not from the first shot.
+  const first = ranges.length ? Math.min(0, ...ranges.map((range) => range.startFrame)) : 0;
+  const last = ranges.length ? Math.max(...ranges.map((range) => range.endFrame)) : 0;
   const segments = planSegments(film, {
-    first: 0,
+    first,
     last,
     frame,
     pickQuality: (shot) => {

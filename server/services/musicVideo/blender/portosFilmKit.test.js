@@ -67,6 +67,17 @@ print(json.dumps({
     "remap": [timing.remap(5, 0, 10, 0, 100), timing.remap(15, 0, 10, 0, 100), timing.remap(15, 0, 10, 0, 100, clamped=False), timing.remap(1, 3, 3)],
     "ease": [timing.ease(0.5), r(timing.ease(0.25, "in", 2)), r(timing.ease(0.25, "out", 2)), timing.ease(0.25, "linear"), timing.ease(2), r(timing.ease(0.5, "smooth"))],
     "stepped": [r(timing.stepped(0.99, 24, 2)), r(timing.stepped(1.0, 24, 2)), r(timing.stepped(0.99, 24, 1))],
+    "before": {
+        "nearest": music.nearest_beat(song, -1),
+        "beats": music.beats_between(song, -2, -0.1),
+        "phase": list(music.beat_phase(song, -1)),
+        "pulse": music.pulse(song, -1),
+        "section": music.section_at(song, -1),
+        "envelope": music.envelope(song, "low", -1),
+        "swell": music.swell(song, "low", -1),
+        "bar": list(music.bar_at(song, -1)),
+        "words": music.words_between(song, -2, -0.5),
+    },
 }))
 `;
 
@@ -95,6 +106,7 @@ describe.skipIf(!python)('portos_film kit', () => {
       ease: [0.5, 0.0625, 0.4375, 0.25, 1, 0.5],
       // On twos at 24 fps a pose holds for 1/12 s.
       stepped: [0.9167, 1, 0.9583],
+      before: { nearest: null, beats: [], phase: [0, 0], pulse: 0, section: null, envelope: 0, swell: 0, bar: [0, 0], words: [] },
     });
   }, PY_TEST_TIMEOUT_MS);
 });

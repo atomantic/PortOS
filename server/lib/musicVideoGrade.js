@@ -39,7 +39,9 @@ const CURVES = {
 const NOISE_PERIOD = 4093;
 const noisePlane = ({ width, height }, { fps, offsetSec, labels }) => {
   const code = `255*mod(pow(mod(X*73+Y*151,${NOISE_PERIOD}),2)*157,${NOISE_PERIOD})/${NOISE_PERIOD}+0.5`;
-  const shift = `mod(227*floor((t+${offsetSec})*${fps}+0.5),${NOISE_PERIOD})`;
+  // A negative offset is a lead-in: the noise clock would crop a negative column until the song starts.
+  const clock = offsetSec < 0 ? `max(0,t+(${offsetSec}))` : `t+${offsetSec}`;
+  const shift = `mod(227*floor((${clock})*${fps}+0.5),${NOISE_PERIOD})`;
   const row = `floor(${shift}/54)`;
   return `color=c=black:s=${width + 65}x${height + 76}:r=${fps},trim=end_frame=1,format=gbrp,geq=r='${code}':g='${code}':b='${code}',`
     + `loop=loop=-1:size=1,crop=${width}:${height}:x='mod(${shift},54)+11*gt(${row},0)':y='mod(76-${row},76)',settb=1/${2 * fps},setpts=PTS-1,split=${labels.length}${labels.join('')}`;

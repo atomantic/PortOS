@@ -25,7 +25,7 @@ import { compositeFilmStill, renderFilmCodeFrames } from './codeRender.js';
 import { updateBlenderJob } from './jobs.js';
 import { openBlenderJobLog } from './logs.js';
 import {
-  blenderCompositedHandleName, blenderCompositedHandlesDir, blenderFilmOptions, blenderFrameName, blenderFramePattern, blenderFramesDir, blenderHandleFrameName, blenderLayerFrameName,
+  blenderCompositedHandleName, blenderCompositedHandlesDir, blenderFilmOptions, blenderFrameName, blenderFramePattern, blenderFramesDir, blenderHandleFrameName, blenderHandleFrameParts, blenderLayerFrameName,
   blenderLayerFramePattern, blenderLayerFramesDir, blenderLayerHandleFrameName, blenderLayersRoot, blenderRenderFile, blenderSheetName,
   blenderSheetsFile, blenderShotPoster, blenderShotVideo, blenderStillThumbnail, blenderStillsFile,
   countBlenderFrames, countBlenderHandleFrames, isBlenderRenderCurrent,
@@ -37,8 +37,12 @@ const SHEETS_KEPT = 24;
 /** A failure the job reports as its error; `canceled` marks an aborted run. */
 const jobFailure = (message, { canceled = false } = {}) => Object.assign(new Error(message), { canceled });
 
-/** The file name of the still at absolute song frame `frame` (song time in milliseconds). */
-export const blenderStillName = (frame, fps) => `t${String(Math.round((frame / fps) * 1000)).padStart(9, '0')}.png`;
+/** The file name of the still at absolute song frame `frame` (song time in milliseconds). A negative frame uses `tm`. */
+export const blenderStillName = (frame, fps) => {
+  const ms = Math.round((frame / fps) * 1000);
+  const body = String(Math.abs(ms)).padStart(9, '0');
+  return ms < 0 ? `tm${body}.png` : `t${body}.png`;
+};
 
 /** The absolute frames a still job renders for `shot`: the requested song times inside it, else its midpoint. */
 export function blenderStillFrames(shot, fps, times = null) {
@@ -95,11 +99,10 @@ async function compositeHandleFrames(owner, shot, fps, quality, layers) {
 async function dropHandleFramesOutside(directory, handleRanges) {
   const names = await readdir(directory).catch(() => []);
   for (const name of names) {
-    const match = /^handle_(in|out)_(\d{6,})\.(?:jpg|png)$/.exec(name);
-    if (!match) continue;
-    const frame = Number(match[2]);
-    const span = match[1] === 'in' ? handleRanges.in : handleRanges.out;
-    if (frame < span.startFrame || frame >= span.endFrame) await rm(join(directory, name), { force: true });
+    const parsed = blenderHandleFrameParts(name);
+    if (!parsed) continue;
+    const span = parsed.side === 'in' ? handleRanges.in : handleRanges.out;
+    if (parsed.frame < span.startFrame || parsed.frame >= span.endFrame) await rm(join(directory, name), { force: true });
   }
 }
 
@@ -109,18 +112,17 @@ async function missingLayerFrames(directory, range, handleRanges) {
   let inFrames = 0;
   let outFrames = 0;
   for (const name of names) {
-    const main = /^frame_(\d{6,})\.png$/.exec(name);
+    const main = /^frame_(m)?(\d{6,})\.png$/.exec(name);
     if (main) {
-      const frame = Number(main[1]);
+      const frame = main[1] ? -Number(main[2]) : Number(main[2]);
       if (frame >= range.startFrame && frame < range.endFrame) frames += 1;
       continue;
     }
-    const handle = /^handle_(in|out)_(\d{6,})\.png$/.exec(name);
-    if (!handle) continue;
-    const frame = Number(handle[2]);
-    const span = handle[1] === 'in' ? handleRanges.in : handleRanges.out;
-    if (frame < span.startFrame || frame >= span.endFrame) continue;
-    if (handle[1] === 'in') inFrames += 1;
+    const handle = blenderHandleFrameParts(name);
+    if (!handle || !name.endsWith('.png')) continue;
+    const span = handle.side === 'in' ? handleRanges.in : handleRanges.out;
+    if (handle.frame < span.startFrame || handle.frame >= span.endFrame) continue;
+    if (handle.side === 'in') inFrames += 1;
     else outFrames += 1;
   }
   return (range.frameCount - frames) + (handleRanges.in.frameCount - inFrames) + (handleRanges.out.frameCount - outFrames);
@@ -518,6 +520,7 @@ export async function runBlenderShotRender(entry, { owner, shotId, quality, forc
     const framesDir = blenderFramesDir(owner, shotId, quality);
     await encodeBlenderShot({
       pattern: join(framesDir, blenderFramePattern(quality)),
+      framesDir,
       ...(layers.length ? { layers: layers.map((layer, index) => ({
         pattern: join(blenderLayerFramesDir(owner, shotId, quality, index), blenderLayerFramePattern()),
         place: layer.place, blend: layer.blend,

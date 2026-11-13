@@ -4,8 +4,10 @@
  * yuv420p, BT.709, constant frame rate with a keyframe at least every second
  * and no audio, so shot videos join by stream copy.
  */
-import { rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, link, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { BT709_CONTAINER_ARGS, H264_ENCODE_ARGS, bt709TagFilter, findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
+import { blenderFrameName, blenderLayerFrameName } from './renderIndex.js';
 import { blenderRefusal } from './workspace.js';
 
 const CRF = Object.freeze({ final: '18', preview: '21' });
@@ -135,6 +137,47 @@ export async function encodeBlenderPoster({ frame, output, signal }) {
   await rename(partial, output);
 }
 
+// Hardlink across volumes, or a filesystem that has no links. Anything else is a real miss.
+const LINK_REFUSED = new Set(['EXDEV', 'EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS']);
+
+async function placeLeadFrame(source, dest) {
+  try {
+    await link(source, dest);
+  } catch (error) {
+    if (!LINK_REFUSED.has(error?.code)) throw error;
+    await copyFile(source, dest);
+  }
+}
+
+/**
+ * A lead-in body is entirely below frame 0, named `frame_mNNNNNN`, which image2
+ * cannot read as a rising sequence. The concat demuxer is not a substitute: it
+ * timestamps stills on a 25 fps grid, so 30 and 60 fps lead-ins drop and repeat
+ * frames. Stage a 0-based sequence and encode it with the song shot's `-framerate`.
+ * Links avoid copying up to 120 s of full-resolution frames.
+ */
+async function stageSequence({ directory, startFrame, frameCount, stageDir, extension, nameFor }) {
+  if (!directory) throw new Error('A lead-in shot encode needs its frames directory');
+  if (frameCount < 1) throw new Error('A lead-in shot encode needs at least one frame');
+  await rm(stageDir, { recursive: true, force: true });
+  await mkdir(stageDir, { recursive: true });
+  for (let index = 0; index < frameCount; index += 1) {
+    await placeLeadFrame(
+      join(directory, nameFor(startFrame + index)),
+      join(stageDir, `frame_${String(index).padStart(6, '0')}.${extension}`),
+    );
+  }
+  return join(stageDir, `frame_%06d.${extension}`);
+}
+
+async function stageLeadFrames({ framesDir, startFrame, frameCount, quality, stageDir }) {
+  const extension = quality === 'preview' ? 'jpg' : 'png';
+  return stageSequence({
+    directory: framesDir, startFrame, frameCount, stageDir, extension,
+    nameFor: (frame) => blenderFrameName(frame, quality),
+  });
+}
+
 /** Tile `frames` into a JPEG contact sheet at `output` (`columns` wide). */
 export async function encodeBlenderSheet({ frames, columns, listFile, output, signal }) {
   const ffmpeg = await requireFfmpeg();
@@ -156,16 +199,43 @@ export async function encodeBlenderSheet({ frames, columns, listFile, output, si
 }
 
 /** Encode a shot's frames into `output`, replacing it only once the encode succeeded. */
-export async function encodeBlenderShot({ pattern, startFrame, frameCount, fps, quality, output, signal, layers = null }) {
+export async function encodeBlenderShot({ pattern, startFrame, frameCount, fps, quality, output, signal, framesDir = null, layers = null }) {
   const ffmpeg = await requireFfmpeg();
   const partial = `${output}.part.mp4`;
+  const stageDir = startFrame < 0 ? `${partial}.frames` : null;
+  const layerStages = [];
   const tagFilter = await bt709TagFilter();
-  const args = layers?.length
-    ? blenderLayeredEncodeArgs({ pattern, layers, startFrame, frameCount, fps, quality, tagFilter, output: partial })
-    : blenderShotEncodeArgs({ pattern, startFrame, frameCount, fps, quality, tagFilter, output: partial });
-  const encoded = await runBlenderFfmpeg(ffmpeg, args, { signal, what: 'Encoding the shot video' }).then(() => true, async (error) => {
+  try {
+    let plate = pattern;
+    let encodeStart = startFrame;
+    let encodeLayers = layers;
+    if (startFrame < 0) {
+      plate = await stageLeadFrames({ framesDir, startFrame, frameCount, quality, stageDir });
+      encodeStart = 0;
+      if (layers?.length) {
+        encodeLayers = [];
+        for (let index = 0; index < layers.length; index += 1) {
+          const layerStage = `${partial}.layer-${index}`;
+          layerStages.push(layerStage);
+          const stagedPattern = await stageSequence({
+            directory: dirname(layers[index].pattern),
+            startFrame, frameCount, stageDir: layerStage, extension: 'png',
+            nameFor: (frame) => blenderLayerFrameName(frame),
+          });
+          encodeLayers.push({ ...layers[index], pattern: stagedPattern });
+        }
+      }
+    }
+    const args = encodeLayers?.length
+      ? blenderLayeredEncodeArgs({ pattern: plate, layers: encodeLayers, startFrame: encodeStart, frameCount, fps, quality, tagFilter, output: partial })
+      : blenderShotEncodeArgs({ pattern: plate, startFrame: encodeStart, frameCount, fps, quality, tagFilter, output: partial });
+    await runBlenderFfmpeg(ffmpeg, args, { signal, what: 'Encoding the shot video' });
+    await rename(partial, output);
+  } catch (error) {
     await rm(partial, { force: true });
     throw error;
-  });
-  if (encoded) await rename(partial, output);
+  } finally {
+    if (stageDir) await rm(stageDir, { recursive: true, force: true });
+    await Promise.all(layerStages.map((dir) => rm(dir, { recursive: true, force: true })));
+  }
 }

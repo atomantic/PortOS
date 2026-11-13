@@ -5,6 +5,8 @@ import { requireProject } from '../requireProject.js';
 import { blenderRefusal } from './workspace.js';
 import { blenderNotSynced, readBlenderFilm } from './film.js';
 import { blenderFinishFilter } from './finishFilter.js';
+import { blenderLeadAudio } from './leadAudio.js';
+import { blenderLeadSec, blenderSongEndSec } from './manifest.js';
 import { blenderTitleCardPlan, withBlenderTitleCard } from './titleCard.js';
 import { requireFfmpeg } from './encode.js';
 import { updateBlenderJob } from './jobs.js';
@@ -45,17 +47,25 @@ export async function startBlenderCut(projectId, { quality, animatic = false, fi
     async finish({ entry, film, plan, output, signal, log, progress, assemble }) {
       const project = await requireProject(projectId);
       const { finishNeeded, lookPass } = await filmLookPass(project, filmLook);
-      const frame = { width: plan.width, height: plan.height, fps: plan.fps, startSec: 0, endSec: film.shots[film.shots.length - 1].end };
-      const card = blenderTitleCardPlan(project, { lookPass: finishNeeded, filmEndSec: frame.endSec });
-      const { durationSec } = await withBlenderTitleCard({ project, jobId: entry.job.id, ...frame, bake: card.bake, signal }, (overlays) => {
+      const leadSec = blenderLeadSec(film.shots);
+      const songEnd = leadSec > 0 ? blenderSongEndSec(film.shots) : film.shots[film.shots.length - 1].end;
+      const { leadPath } = leadSec > 0 ? await blenderLeadAudio(project, film.shots, plan.fps) : { leadPath: null };
+      const frame = { width: plan.width, height: plan.height, fps: plan.fps, startSec: leadSec > 0 ? -leadSec : 0, endSec: songEnd };
+      const card = blenderTitleCardPlan(project, { lookPass: finishNeeded, filmEndSec: songEnd });
+      const { durationSec } = await withBlenderTitleCard({ project, jobId: entry.job.id, ...frame, filmEndSec: songEnd, bake: card.bake, signal }, (overlays) => {
         if (overlays.length) log.write('PortOS: title card over the cut');
-        return assemble({ overlays, filter: blenderFinishFilter(project, frame), onProgress: progress(0, finishNeeded ? 0.5 : 1) });
+        return assemble({
+          overlays, filter: blenderFinishFilter(project, frame), onProgress: progress(0, finishNeeded ? 0.5 : 1),
+          audio: { path: audioPath, startSec: 0, leadSec, leadPath },
+        });
       });
       if (finishNeeded) {
         updateBlenderJob(entry, { status: 'encoding' });
         log.write(card.bake ? 'PortOS: film look pass' : 'PortOS: film look pass, with the steady title card over it');
-        await lookPass({ project, shotLooks: true, path: output, jobId: entry.job.id, signal, label: 'Blender cut film look', ...card.pass, onProgress: progress(0.5, 1) })
-          .catch(async (error) => { await rm(output, { force: true }); throw error; });
+        await lookPass({
+          project, shotLooks: true, path: output, jobId: entry.job.id, signal, label: 'Blender cut film look', ...card.pass,
+          ...(leadSec > 0 ? { offsetSec: -leadSec } : {}), onProgress: progress(0.5, 1),
+        }).catch(async (error) => { await rm(output, { force: true }); throw error; });
       }
 
       return { durationSec, filmLook: finishNeeded };

@@ -10,10 +10,11 @@
  * over it: a finishing filter (the grade or a scene's timed effects) or overlay
  * clips (the title card).
  */
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { copyFile, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { AAC_ENCODE_ARGS, bt709TagFilter } from '../../lib/ffmpeg.js';
 import { blenderVideoEncodeArgs, requireFfmpeg, runBlenderFfmpeg } from './encode.js';
+import { blenderHandleFrameName } from './renderIndex.js';
 
 const QUIET = ['-hide_banner', '-loglevel', 'error'];
 
@@ -90,12 +91,45 @@ function blenderTransitionSegmentArgs({ transition, width, height, fps, quality,
     ...blenderVideoEncodeArgs({ fps, quality }), '-y', output];
 }
 
-/** ffmpeg arguments that lay `durationSec` of the song from `startSec` under `video`. Pure. */
-function blenderSongMuxArgs({ video, audioPath, startSec, durationSec, output }) {
-  const song = `[1:a]atrim=start=${startSec}:end=${startSec + durationSec},asetpts=PTS-STARTPTS,aresample=48000,`
-    + `aformat=sample_fmts=fltp:channel_layouts=stereo,apad=whole_dur=${durationSec}[a]`;
-  return [...QUIET, '-i', video, '-i', audioPath, '-filter_complex', song, '-map', '0:v:0', '-map', '[a]',
+/** ffmpeg arguments that lay the song under `video`. A lead-in plays its own sound first, then the song. */
+function blenderSongMuxArgs({ video, audioPath, startSec, durationSec, leadSec = 0, leadPath = null, output }) {
+  const lead = Number(leadSec) > 0 ? Number(leadSec) : 0;
+  if (!lead) {
+    const song = `[1:a]atrim=start=${startSec}:end=${startSec + durationSec},asetpts=PTS-STARTPTS,aresample=48000,`
+      + `aformat=sample_fmts=fltp:channel_layouts=stereo,apad=whole_dur=${durationSec}[a]`;
+    return [...QUIET, '-i', video, '-i', audioPath, '-filter_complex', song, '-map', '0:v:0', '-map', '[a]',
+      '-c:v', 'copy', ...AAC_ENCODE_ARGS, '-t', String(durationSec), '-movflags', '+faststart', '-y', output];
+  }
+  const songDur = Math.max(0, durationSec - lead);
+  const songTrim = `atrim=start=${startSec}:end=${startSec + songDur},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo`;
+  if (leadPath) {
+    const graph = `[1:a]atrim=end=${lead},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,apad=whole_dur=${lead}[lead];`
+      + `[2:a]${songTrim}[song];[lead][song]concat=n=2:v=0:a=1,apad=whole_dur=${durationSec}[a]`;
+    return [...QUIET, '-i', video, '-i', leadPath, '-i', audioPath, '-filter_complex', graph, '-map', '0:v:0', '-map', '[a]',
+      '-c:v', 'copy', ...AAC_ENCODE_ARGS, '-t', String(durationSec), '-movflags', '+faststart', '-y', output];
+  }
+  // A film with no cold-open mix keeps the lead-in silent, then the timeline audio.
+  const delay = Math.round(lead * 1000);
+  const graph = `[1:a]${songTrim},adelay=${delay}|${delay},apad=whole_dur=${durationSec}[a]`;
+  return [...QUIET, '-i', video, '-i', audioPath, '-filter_complex', graph, '-map', '0:v:0', '-map', '[a]',
     '-c:v', 'copy', ...AAC_ENCODE_ARGS, '-t', String(durationSec), '-movflags', '+faststart', '-y', output];
+}
+
+/**
+ * image2 counts up from `-start_number`. A handle that begins below 0 (or crosses 0)
+ * is staged as a 0-based sequence so the transition graph stays the one used for song handles.
+ */
+async function stagedHandleSide(side, kind, quality, scratch, tag) {
+  if (!(side?.handleFrames > 0) || !side.handlePattern || !(side.handleStart < 0)) return side;
+  const ext = quality === 'preview' ? 'jpg' : 'png';
+  const dir = join(scratch, `handles-${tag}`);
+  await mkdir(dir, { recursive: true });
+  const sourceDir = dirname(side.handlePattern);
+  for (let index = 0; index < side.handleFrames; index += 1) {
+    const frame = side.handleStart + index;
+    await copyFile(join(sourceDir, blenderHandleFrameName(kind, frame, quality)), join(dir, `frame_${String(index).padStart(6, '0')}.${ext}`));
+  }
+  return { ...side, handlePattern: join(dir, `frame_%06d.${ext}`), handleStart: 0 };
 }
 
 /**
@@ -153,7 +187,12 @@ export async function assembleBlenderVideo({ segments, width, height, fps, quali
       const target = { frames: segment.frames, width, height, fps, quality, tagFilter };
       if (segment.transition) {
         const path = join(scratch, `segment-${index}.mp4`);
-        await run(blenderTransitionSegmentArgs({ ...target, transition: segment.transition, output: path }), 'Blending a transition between shots');
+        const transition = {
+          ...segment.transition,
+          outgoing: await stagedHandleSide(segment.transition.outgoing, 'out', quality, scratch, `${index}-out`),
+          incoming: await stagedHandleSide(segment.transition.incoming, 'in', quality, scratch, `${index}-in`),
+        };
+        await run(blenderTransitionSegmentArgs({ ...target, transition, output: path }), 'Blending a transition between shots');
         parts.push(path);
       } else if (!segment.source) {
         // Black is the same for every shot of one length: encode it once.
@@ -183,7 +222,10 @@ export async function assembleBlenderVideo({ segments, width, height, fps, quali
     }
     const partial = `${output}.part.mp4`;
     await run(audio?.path
-      ? blenderSongMuxArgs({ video: picture, audioPath: audio.path, startSec: audio.startSec || 0, durationSec, output: partial })
+      ? blenderSongMuxArgs({
+        video: picture, audioPath: audio.path, startSec: audio.startSec || 0, durationSec,
+        leadSec: audio.leadSec, leadPath: audio.leadPath, output: partial,
+      })
       : [...QUIET, '-i', picture, '-map', '0:v:0', '-c', 'copy', '-an', '-movflags', '+faststart', '-y', partial],
     audio?.path ? 'Laying the song under the picture' : 'Writing the silent cut')
       .catch(async (error) => { await rm(partial, { force: true }); throw error; });

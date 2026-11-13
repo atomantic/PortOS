@@ -58,6 +58,8 @@ def bar_time(song, bar, beat=0.0):
 
 def bar_at(song, t):
     """Return ``(1-based bar, beat offset)`` at ``t``; an absent grid is bar 1."""
+    if float(t) < 0:
+        return 0, 0.0
     grid = downbeats(song)
     if not grid:
         return 1, 0.0
@@ -105,6 +107,8 @@ def sections(song):
 
 def section_at(song, t):
     """The section playing at `t`, or None."""
+    if float(t) < 0:
+        return None
     for section in sections(song):
         if section.get("startSec", 0) <= t < section.get("endSec", 0):
             return section
@@ -113,6 +117,8 @@ def section_at(song, t):
 
 def nearest_beat(song, t):
     """The beat time closest to `t`, or None when the song has no beat grid."""
+    if float(t) < 0:
+        return None
     grid = beats(song)
     if not grid:
         return None
@@ -123,12 +129,18 @@ def nearest_beat(song, t):
 
 def beats_between(song, a, b):
     """Beat times in `[a, b)`."""
+    if b <= 0:
+        return []
+    if a < 0:
+        a = 0
     grid = beats(song)
     return grid[bisect_left(grid, a):bisect_left(grid, b)]
 
 
 def beat_phase(song, t):
     """`(index, phase)`: the last beat at or before `t` and how far to the next one (0..1)."""
+    if float(t) < 0:
+        return 0, 0.0
     grid = beats(song)
     if not grid:
         return 0, 0.0
@@ -143,7 +155,8 @@ def beat_phase(song, t):
 
 def pulse(song, t, decay=4.0):
     """1 on each beat, falling toward 0 before the next: a hit to drive a light or a scale."""
-    if not beats(song):
+    # Phase 0 would be a hit. Before the song there is no beat, so the pulse stays down.
+    if float(t) < 0 or not beats(song):
         return 0.0
     _, phase = beat_phase(song, t)
     return (1.0 - phase) ** decay
@@ -159,6 +172,10 @@ def cue_words(song, cue_index):
 
 def words_between(song, a, b):
     """Every timed word starting in `[a, b)`, in song order, each with its line's `cue` index."""
+    if b <= 0:
+        return []
+    if a < 0:
+        a = 0
     found = []
     for cue in ((song or {}).get("lyrics") or {}).get("cues") or []:
         for word in cue.get("words") or []:
@@ -170,6 +187,8 @@ def words_between(song, a, b):
 
 def envelope(song, band, t):
     """Loudness of `band` (`rms`, `low`, `mid` or `high`) at `t`, 0..1, interpolated between analysis frames."""
+    if float(t) < 0:
+        return 0.0
     features = _analysis(song).get("features") or {}
     envelopes = features.get("envelopes") or {}
     values = envelopes.get(band) or []
@@ -210,6 +229,8 @@ def onsets(song, band="low", min_gap=0.12, sensitivity=1.5):
 
 def swell(song, band, t, window=2.0):
     """Mean band envelope in a window centred on ``t``; empty analysis returns zero."""
+    if float(t) < 0:
+        return 0.0
     env = ((_analysis(song).get("features") or {}).get("envelopes") or {})
     values = env.get(band) or []
     rate = env.get("fps") or 0

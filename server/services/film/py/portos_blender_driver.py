@@ -218,6 +218,11 @@ def apply_output_format(scene, quality):
     scene.render.use_overwrite = True
 
 
+def frame_token(frame):
+    """`%06d` of a negative frame is `-00144`, which the server's resume scan does not see."""
+    return ("m%06d" % -frame) if frame < 0 else ("%06d" % frame)
+
+
 def apply_render_stamp(scene, frame, fps, height):
     r = scene.render
     r.use_stamp = True
@@ -239,17 +244,19 @@ def apply_render_stamp(scene, frame, fps, height):
 def frame_file(job, shot, frame, quality):
     shot_dir = os.path.join(job["out"], shot["id"])
     if quality == "still":
-        return os.path.join(shot_dir, "stills", "t%09d.png" % half_up(frame / job["fps"] * 1000))
+        ms = half_up(frame / job["fps"] * 1000)
+        name = ("tm%09d.png" % -ms) if ms < 0 else ("t%09d.png" % ms)
+        return os.path.join(shot_dir, "stills", name)
     if quality == "sheet":
-        return os.path.join(shot_dir, "sheets", job.get("framesDir") or ".frames", "frame_%06d.jpg" % frame)
+        return os.path.join(shot_dir, "sheets", job.get("framesDir") or ".frames", "frame_%s.jpg" % frame_token(frame))
     extension = "jpg" if quality == "preview" else "png"
-    return os.path.join(shot_dir, quality, "frames", "frame_%06d.%s" % (frame, extension))
+    return os.path.join(shot_dir, quality, "frames", "frame_%s.%s" % (frame_token(frame), extension))
 
 
 def handle_frame_file(job, shot, side, frame, quality):
     shot_dir = os.path.join(job["out"], shot["id"])
     extension = "jpg" if quality == "preview" else "png"
-    return os.path.join(shot_dir, quality, "frames", "handle_%s_%06d.%s" % (side, frame, extension))
+    return os.path.join(shot_dir, quality, "frames", "handle_%s_%s.%s" % (side, frame_token(frame), extension))
 
 
 def render_frame(scene, path):

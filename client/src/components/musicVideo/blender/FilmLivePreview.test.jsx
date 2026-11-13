@@ -20,3 +20,19 @@ it('plays across shot renders without an audio clock and seeks back while paused
   fireEvent.change(screen.getByLabelText('Film time'), { target: { value: '0.5' } });
   expect(container.querySelector('video').getAttribute('src')).toContain('a.mp4');
 });
+
+it('plays a lead-in shot before the song, then the first song shot', () => {
+  let tick;
+  vi.stubGlobal('requestAnimationFrame', callback => { tick = callback; return 1; });
+  vi.stubGlobal('cancelAnimationFrame', vi.fn());
+  const state = { settings: { fps: 24 }, manifest: { shots: [{ id: 'lead', start: -1, end: 0 }, { id: 'song', start: 0, end: 1 }] },
+    renders: { lead: { final: { complete: true, file: 'lead.mp4' } }, song: { final: { complete: true, file: 'song.mp4' } } } };
+  const { container } = render(<FilmLivePreview state={state} durationSec={1} mediaUrl={path => `/film?path=${path}`} />);
+  expect(container.querySelector('audio')).toBeNull();
+  expect(container.querySelector('video').getAttribute('src')).toContain('lead.mp4');
+  expect(screen.getByLabelText('Film time')).toHaveProperty('max', '2');
+  const start = performance.now();
+  fireEvent.click(screen.getByRole('button', { name: 'Play film' }));
+  act(() => tick(start + 1500));
+  expect(container.querySelector('video').getAttribute('src')).toContain('song.mp4');
+});

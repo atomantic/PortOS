@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   blenderAgentBrief, blenderBulkPlan, blenderFilmSummary, blenderJobPercent, blenderOptionChanges, blenderOptionFields, blenderRenderBlocker,
   blenderSceneClips, blenderSettingsProblems, blenderShotClip, blenderShotPlayable, blenderShotRenderBlocker, blenderShotRenderStatus, blenderShotStage, blenderShotThumbPath,
-  blenderStaleReason, blenderStillPreviewItems, blenderSyncJob, changedBlenderSettings, mergeBlenderJob, sortBlenderJobs,
+  blenderShotTiming, blenderStaleReason, blenderStillPreviewItems, blenderSyncJob, changedBlenderSettings, mergeBlenderJob, sortBlenderJobs,
 } from './musicVideoBlender.js';
 import { blenderFilmState } from '../test/blenderFilmFixture.js';
 
@@ -238,6 +238,13 @@ describe('blenderRenderBlocker', () => {
     // Blender setup outranks an unsaved file: fixing the file first would still leave renders off.
     expect(blenderRenderBlocker({ ...state, tool: { ...state.tool, ready: false } }, { unsavedFiles: ['film.py'] }).tab).toBe('settings');
     expect(blenderRenderBlocker(state, { unsavedFiles: ['film.py', 'kit/rig.py'] })).toEqual({ message: 'Save or discard your changes to src/film.py and 1 more first.', tab: 'files' });
+  });
+});
+
+describe('blenderShotTiming', () => {
+  it('shows a lead-in before 0 and keeps a song shot on the unsigned clock', () => {
+    expect(blenderShotTiming({ id: 's000', start: -6, end: 0, frames: 144 })).toBe('-0:06.00–0:00.00 · 6s · 144 frames');
+    expect(blenderShotTiming({ id: 's010', start: 0, end: 2, frames: 48 })).toBe('0:00.00–0:02.00 · 2s · 48 frames');
   });
 });
 

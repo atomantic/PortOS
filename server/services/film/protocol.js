@@ -9,6 +9,8 @@ export const BLENDER_DRIVER_PREFIX = 'PORTOS_BLENDER ';
 const EVENTS = new Set(['start', 'built', 'frame', 'blend', 'done', 'manifest', 'error']);
 const text = (value, max) => (typeof value === 'string' ? value.slice(0, max) : null);
 const count = (value) => (Number.isInteger(value) && value >= 0 ? value : null);
+// A lead-in shot's song frame is negative. Index and total stay counts.
+const frameNumber = (value) => (Number.isSafeInteger(value) ? value : null);
 const sourcePath = (path) => typeof path === 'string' && path.endsWith('.py')
   && !path.startsWith('/') && !path.includes('\\') && !path.includes(':')
   && !path.split('/').some((part) => !part || part === '.' || part === '..');
@@ -25,7 +27,7 @@ export function parseBlenderDriverLine(line) {
     case 'start':
       return { event: 'start', shot, frames: count(raw.frames), blender: text(raw.blender, 32), engine: text(raw.engine, 40), device: text(raw.device, 40) };
     case 'frame': {
-      const frame = count(raw.frame);
+      const frame = frameNumber(raw.frame);
       const index = count(raw.index);
       const total = count(raw.total);
       if (frame === null || index === null || total === null) return null;

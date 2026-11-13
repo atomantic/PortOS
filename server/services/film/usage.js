@@ -24,7 +24,7 @@ import { announceBlenderState } from './record.js';
 import { withBlenderRenderAdmission } from './queue.js';
 
 const isFile = async (path) => (await lstat(path).catch(() => null))?.isFile() === true;
-const SHOT_FRAME_FILE = /^frame_\d{6,}\.(?:jpg|png)$/;
+const SHOT_FRAME_FILE = /^frame_(?:m)?\d{6,}\.(?:jpg|png)$/;
 
 /** `{ bytes, files }` of every regular file under `directory` (links are neither followed nor counted). */
 async function measure(directory) {

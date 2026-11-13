@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { blenderFilmProblems, validateBlenderManifest } from './manifest.js';
+import { blenderFilmProblems, blenderLeadSec, blenderSongEndSec, validateBlenderManifest } from './manifest.js';
+import { blenderFrameName } from '../../film/renderIndex.js';
+import { blenderStillName } from '../../film/renderJob.js';
 
 const song = { durationSec: 10, fps: 24 };
 const shot = (id, start, end, extra = {}) => ({ id, start, end, ...extra });
@@ -84,7 +86,7 @@ describe('validateBlenderManifest', () => {
     ['a boundary off the frame grid', () => check([shot('s010', 0, 1.02)]), 'frame boundary'],
     ['a shot that ends before it starts', () => check([shot('s010', 2, 1)]), '0 <= start < end'],
     ['a zero-length shot', () => check([shot('s010', 1, 1)]), '0 <= start < end'],
-    ['a negative start', () => check([shot('s010', -1, 1)]), '0 <= start < end'],
+    ['a shot that overlaps frame 0', () => check([shot('s010', -1, 1)]), 'Shot s010: overlaps frame 0'],
     ['a shot past the end of the song', () => check([shot('s010', 0, 10.5)]), 'after the song ends'],
     ['overlapping shots', () => check([shot('s010', 0, 5), shot('s020', 4, 8)]), 'before shot s010 ends'],
     ['shots out of time order', () => check([shot('s020', 5, 8), shot('s010', 0, 5)]), 'before shot s020 ends'],
@@ -100,6 +102,32 @@ describe('validateBlenderManifest', () => {
     const { manifest, errors } = run();
     expect(manifest).toBeNull();
     expect(errors.join(' ')).toContain(reason);
+  });
+
+  it('accepts a lead-in that ends at 0 and stays inside 120 s, and names a broken one', () => {
+    const songAfter = [shot('s010', 0, 10)];
+    const accepted = check([shot('s000', -6, 0), ...songAfter]);
+    expect(accepted.errors).toEqual([]);
+    expect(accepted.manifest.shots.map(({ id, start, end }) => ({ id, start, end }))).toEqual([
+      { id: 's000', start: -6, end: 0 }, { id: 's010', start: 0, end: 10 },
+    ]);
+    expect(accepted.manifest).not.toHaveProperty('leadSec');
+    expect(blenderLeadSec(accepted.manifest.shots)).toBe(6);
+    expect(blenderSongEndSec(accepted.manifest.shots)).toBe(10);
+    expect(check([shot('s000', -120, 0), ...songAfter]).errors).toEqual([]);
+    expect(check([shot('s000', -0.5, 0), ...songAfter]).errors).toEqual([]);
+    expect(check([shot('s000', -2, 0, { handles: { in: 1 } }), ...songAfter]).manifest.shots[0].handles).toEqual({ in: 1, out: 0 });
+    expect(check([shot('s000', -6, -1), ...songAfter]).errors.join(' ')).toContain('Shot s000: ends at -1 s; a lead-in must end exactly at 0 s');
+    expect(check([shot('s000', -6, -2), shot('s001', -1, 0), ...songAfter]).errors.join(' ')).toContain('Shot s001: leaves a gap after shot s000');
+    expect(check([shot('s000', -0.25, 0), ...songAfter]).errors.join(' ')).toContain('Shot s000: a lead-in shot is 0.25 s');
+    expect(check([shot('s000', -121, 0), ...songAfter]).errors.join(' ')).toContain('Shot s000: a lead-in shot is 121 s');
+    const over = check([shot('s000', -121, -71), shot('s001', -71, -21), shot('s002', -21, 0), ...songAfter]);
+    expect(over.errors.join(' ')).toContain('Shot s002: the lead-in runs');
+    expect(blenderFrameName(-144, 'final')).toBe('frame_m000144.png');
+    expect(blenderFrameName(0, 'final')).toBe('frame_000000.png');
+    expect(blenderFrameName(48, 'preview')).toBe('frame_000048.jpg');
+    expect(blenderStillName(-144, 24)).toBe('tm000006000.png');
+    expect(blenderStillName(72, 24)).toBe('t000003000.png');
   });
 
   it('stores a code shot and a code layer, and leaves a Blender shot unchanged', () => {
@@ -166,6 +194,8 @@ describe('blenderFilmProblems', () => {
       'No shot covers 4 s to 5 s (between s010 and s020).',
       'No shot covers the song after 8 s (it runs to 10 s).',
     ]);
+    expect(blenderFilmProblems(synced([shot('s000', -6, 0), shot('s010', 0, 10)]), song)).toEqual([]);
+    expect(blenderFilmProblems(synced([shot('s000', -6, 0), shot('s010', 1, 10)]), song).join(' ')).toContain('No shot covers 0 s to 1 s');
   });
 
   it('asks for a new sync after a frame-rate change, and for an analysis before the song can be checked', () => {
