@@ -1086,8 +1086,10 @@ let overlayTextModule;
 const checkOverlayTextAfterImport = async (req, projectId) => {
   const { requestHasHostControl } = await (authGateModule ??= import('../services/authGate.js'));
   if (!requestHasHostControl(req)) return;
-  (overlayTextModule ??= import('../services/musicVideo/overlayTextService.js'))
-    .then(({ checkOverlayTextInBackground }) => checkOverlayTextInBackground(projectId))
+  // Finish loading before responding so this request owns the kickoff. The
+  // returned check remains background work; its full settlement is awaitable.
+  await (overlayTextModule ??= import('../services/musicVideo/overlayTextService.js'))
+    .then(({ checkOverlayTextInBackground }) => { checkOverlayTextInBackground(projectId); })
     .catch((err) => console.error(`❌ Overlay text check did not start: ${err.message}`));
 };
 
