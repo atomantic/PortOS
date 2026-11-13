@@ -39,6 +39,17 @@ export function drawPhotoStack(ctx, stack, width, height) {
 }
 
 /**
+ * Whether the figure's clip is between frames: on screen but seeking, so it
+ * cannot be copied and drawFigurePicture would fall back to the shot's still.
+ * A reversed clip is stepped back by a seek on every frame, and its still is the
+ * shot's LAST picture, so that fallback flashes the end of the shot.
+ */
+export function figureClipSettling(figure) {
+  const clip = figure?.querySelector('video[data-ready="true"]:not([aria-hidden="true"])');
+  return !!clip && (clip.seeking || clip.readyState < 2);
+}
+
+/**
  * Draw the figure's current picture (its photo stack or still, then a ready clip
  * over it) onto `ctx`. False when nothing has decoded yet.
  */
