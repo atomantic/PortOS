@@ -70,7 +70,7 @@ export default function CastSetsStage({ board }) {
               onClick={() => (project.castAndSets.status === 'approved' ? castSets.reconfirm : board.approveCastAndSets)(catalog.checkin.basis)}>Approve catalog Cast &amp; Sets</button>
             <button type="button" className="min-h-11 rounded border border-port-border px-3 text-sm disabled:opacity-50" disabled={catalogBusy || !catalog.checkin || catalog.checkin.problems.length > 0}
               onClick={() => castSets.rebuildCatalogGuide().then((res) => { if (res?.artifact) board.openArtifact(res.artifact.id); })}>Rebuild guide</button>
-            {project.castAndSets.direction && <CatalogDirectionTextEditor key={JSON.stringify(project.castAndSets.direction)} project={project} direction={project.castAndSets.direction} busy={catalogBusy} onSave={castSets.editDirectionText} />}
+            <CatalogDirectionTextEditor key={JSON.stringify(project.castAndSets.direction || {})} project={project} direction={project.castAndSets.direction || {}} busy={catalogBusy} onSave={castSets.editDirectionText} />
           </div>
         </div> : castSets.linkCatalog && <div className="space-y-1">
           <p className="text-xs text-port-text-muted">Switch this check-in to catalog links only. Generated sheets stay in history. Shots that picked one move to the same image in the catalog, and any shot the catalog cannot serve is listed here.</p>
