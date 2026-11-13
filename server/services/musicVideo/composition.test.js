@@ -30,6 +30,12 @@ describe('normalizeComposition (#8984)', () => {
     expect(normalizeComposition(null)).toBeNull();
   });
 
+  it('round-trips the no-typography dismissal and stays absent otherwise', () => {
+    expect(normalizeComposition({ mode: 'composed', noTypography: true }).noTypography).toBe(true);
+    expect(normalizeComposition({ mode: 'composed', noTypography: 'yes' })).not.toHaveProperty('noTypography');
+    expect(normalizeComposition({ mode: 'composed' })).not.toHaveProperty('noTypography');
+  });
+
   it('keeps a well-formed styleGrammarId a peer sent (even one this catalog lacks) and drops a malformed one (#10254)', () => {
     expect(normalizeComposition({ styleGrammarId: 'future-peer-medium' }).styleGrammarId).toBe('future-peer-medium');
     expect(normalizeComposition({ styleGrammarId: 'Not A Slug' })).not.toHaveProperty('styleGrammarId');

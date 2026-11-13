@@ -58,7 +58,7 @@ function projectSpend(project, run) {
 
 function composeDone(project, mode) {
   const composition = project.composition || {};
-  if (mode === 'composed') return (composition.textCues || []).length > 0 || composedDrawsLyrics(project);
+  if (mode === 'composed') return composition.noTypography === true || (composition.textCues || []).length > 0 || composedDrawsLyrics(project);
   if (mode === 'document') return Boolean(composition.document);
   if (mode === 'eidoverse') return Boolean(composition.eidoverseScene?.inlineScript);
   // A Blender film's shots are done when each has a complete, current final render. The renders

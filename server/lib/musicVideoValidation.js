@@ -869,6 +869,8 @@ export const musicVideoCompositionSchema = z.object({
     }).strict()).max(1000).optional(),
   }).strict().nullable().optional(),
   textCues: z.array(musicVideoTextCueSchema).max(1000).optional(),
+  // The director's "this video has no typography": the Make step stops asking for text cues.
+  noTypography: z.boolean().optional(),
   style: z.object({
     color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').optional(),
     font: z.enum(MUSIC_VIDEO_TYPOGRAPHY_FONTS).optional(),
