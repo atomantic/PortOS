@@ -233,25 +233,12 @@ describe('Drawer', () => {
       expect(onClose).toHaveBeenCalledTimes(2);
     });
 
-    it('portals straight into <body> with no wrapper element by default', () => {
+    it('portals straight into <body> with no wrapper element', () => {
       renderInGlassCard();
       // Backdrop and panel are direct children of <body> — matching the shared
       // Modal's portal shape.
       expect(screen.getByRole('dialog').parentElement).toBe(document.body);
       expect(document.querySelector('[aria-hidden="true"]').parentElement).toBe(document.body);
-    });
-
-    it('re-applies a page-scoped theming class inside the portal via portalClassName', () => {
-      // The OpenWorld HUD palette remap in index.css is written as
-      // `.openworld-themed <utility>` descendant selectors, which the portal
-      // would otherwise leave behind.
-      renderInGlassCard({ portalClassName: 'openworld-themed' });
-
-      const wrapper = screen.getByRole('dialog').parentElement;
-      expect(wrapper.className).toBe('openworld-themed');
-      expect(wrapper.parentElement).toBe(document.body);
-      // The backdrop shares the themed wrapper so the scrim is remapped too.
-      expect(wrapper.contains(document.querySelector('[aria-hidden="true"]'))).toBe(true);
     });
   });
 });

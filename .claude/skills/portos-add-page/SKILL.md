@@ -37,4 +37,4 @@ Fail-fast guards at module load catch missing fields, non-slash paths, and dupli
 See `client/src/AGENTS.md` for the two client-side rules that go with this:
 
 - **ID-based deep linking** — any selection lives in the URL via a route param, never in local `useState`.
-- **Layout scroll mode** — decide whether the route belongs in the full-width rules of `client/src/lib/layoutRoutes.js` (`isFullWidthRoute`, read by `Layout.jsx`; the page owns its own scroll region) or takes the default scrolling+padded `<main>`.
+- **Layout scroll mode** — a normal title/nav page uses `PageLayout` and is registered in the full-width rules of `client/src/lib/layoutRoutes.js` (`isFullWidthRoute`, read by `Layout.jsx`); only an intentional document/form route keeps the default scrolling+padded `<main>`. Full rule: "New page → pick the right Layout scroll mode" in `client/src/AGENTS.md`.

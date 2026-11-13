@@ -252,7 +252,7 @@
   font-display: swap;
 }
 
-/* Geist Pixel font for OpenWorld */
+/* Geist Pixel fonts (pixel themes, goal labels, schematic labels) */
 @font-face {
   font-family: 'GeistPixelSquare';
   src: url('/fonts/GeistPixel-Square.woff2') format('woff2');
