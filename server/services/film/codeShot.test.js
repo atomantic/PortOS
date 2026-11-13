@@ -16,6 +16,7 @@ import { scaffoldBlenderWorkspace } from './sources.js';
 import { getBlenderState } from './state.js';
 import { startBlenderSync } from './sync.js';
 import { startBlenderCut } from './cuts.js';
+import { planBlenderWindow } from './film.js';
 
 function ROOT() { return lazyTempDataRoot('film-code-shot-'); }
 const runtime = vi.hoisted(() => ({ blender: null, ffmpeg: [], opened: [] }));
@@ -310,4 +311,33 @@ it('syncs and renders a code-only film with Blender unconfigured', async () => {
   expect(rendered.renders.s010.preview.complete).toBe(true);
   expect(rendered.cuts[0]).toMatchObject({ missing: [], stale: [] });
   expect(runtime.blender.control.jobs).toEqual([]);
+});
+
+it('includes the neighboring shot handle when an excerpt contains only one side of a transition', () => {
+  const owner = createOwner(2);
+  const film = {
+    owner, settings: { ...SETTINGS }, problems: [],
+    shots: [{ id: 's010', start: 0, end: 1 }, { id: 's020', start: 1, end: 2 }],
+    renders: Object.fromEntries(['s010', 's020'].map((id) => [id, { final: {
+      complete: true, stale: false, width: 320, height: 180, fps: 12, frames: 12,
+      handleFrames: { inFrames: 2, outFrames: 2 },
+    } }])),
+    cutEffects: [{ style: 'dissolve', index: 0, cutFrame: 12, startFrame: 10, endFrame: 14, needOutFrames: 2, needInFrames: 2 }],
+  };
+  const before = planBlenderWindow(film, { startSec: 10 / 12, endSec: 1 });
+  expect(before.segments).toHaveLength(1);
+  expect(before.segments[0].transition).toMatchObject({
+    segStartFrame: 10, segEndFrame: 12,
+    incoming: { handleStart: 10, handleFrames: 2, videoFrames: 0 },
+  });
+  const after = planBlenderWindow(film, { startSec: 1, endSec: 14 / 12 });
+  expect(after.segments).toHaveLength(1);
+  expect(after.segments[0].transition).toMatchObject({
+    segStartFrame: 12, segEndFrame: 14,
+    outgoing: { handleStart: 12, handleFrames: 2, videoFrames: 0 },
+  });
+  // With no incoming render the full cut falls back to a hard cut; an excerpt before it can still play.
+  film.renders.s020 = {};
+  expect(planBlenderWindow(film, { startSec: 10 / 12, endSec: 1 }).segments[0].transition).toBeUndefined();
+  expect(() => planBlenderWindow(film, { startSec: 1, endSec: 14 / 12 })).toThrow(/s020/);
 });
