@@ -655,7 +655,7 @@ async function resolveKeyframeAnchors({
 
 // Local audio is queue-owned whether supplied as an upload or copied from a
 // project song. Keep source selection and durable ownership in one step.
-async function prepareLocalAudio({ body, uploads, stageUploadDurable, stagedDurablePaths, cleanupStaged }) {
+async function prepareLocalAudio({ body, uploads, numFrames, stageUploadDurable, stagedDurablePaths, cleanupStaged }) {
   // Music-video a2v jobs reuse an existing library track rather than uploading
   // the same song for every cut. Copy it into the queue-owned uploads area so
   // the worker may safely delete its input on completion without ever touching
@@ -696,8 +696,16 @@ async function prepareLocalAudio({ body, uploads, stageUploadDurable, stagedDura
       await cleanupStaged();
       throw new ServerError('Music-video project audio is unavailable', { status: 400, code: 'VIDEO_GEN_PROJECT_AUDIO_MISSING' });
     }
-    if (body._suppliedAudio) audioFilePath = await stageExistingAudioDurable(sourceAudioPath);
-    else audioProject = project;
+    const startSample = Math.round((Number(body.audioStartSec) || 0) * 48000);
+    const sampleCount = Math.round(((numFrames - 1) / Number(body.fps ?? 24)) * 48000);
+    const endSample = startSample + sampleCount;
+    const exactWindow = Number.isSafeInteger(startSample) && startSample >= 0
+      && Number.isSafeInteger(sampleCount) && sampleCount > 0 && sampleCount <= 48000 * 60
+      && endSample <= 48000 * 36000;
+    // Exact PCM provenance has a bounded window; longer local inputs retain
+    // the worker's full-song/offset contract without claiming a clip digest.
+    if (!body._suppliedAudio && exactWindow) audioProject = project;
+    else audioFilePath = await stageExistingAudioDurable(sourceAudioPath);
   }
   return { audioFilePath, audioProject };
 }
@@ -1355,7 +1363,8 @@ async function resolvePreparedParams({
     lastImagePath = resolveGalleryImage(body.lastImageFile);
   }
   const audioInput = await prepareLocalAudio({
-    body, uploads, stageUploadDurable, stagedDurablePaths, cleanupStaged,
+    body, uploads, numFrames: effectiveNumFrames ?? effectiveModel.defaultFrames ?? DEFAULT_NUM_FRAMES,
+    stageUploadDurable, stagedDurablePaths, cleanupStaged,
   });
   let { audioFilePath } = audioInput;
   effectiveNumFrames = await resolveAudioFrameCount({
@@ -1363,6 +1372,9 @@ async function resolvePreparedParams({
   });
   let audioConditioning = null;
   if (audioInput.audioProject) {
+    // Pin the renderer's default with the sliced input so an omitted count
+    // neither reaches the slicer unset nor changes after its PCM is prepared.
+    effectiveNumFrames ??= effectiveModel.defaultFrames ?? DEFAULT_NUM_FRAMES;
     const fps = Number(body.fps ?? 24);
     const startSec = Number(body.audioStartSec) || 0;
     const { prepareSourceAudioWindow } = await import('../federatedMedia/sourceAudio.js');
