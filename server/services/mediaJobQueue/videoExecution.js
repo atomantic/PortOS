@@ -1,5 +1,6 @@
 /** Durable video execution receipts contain settings and numeric evidence, never worker paths. */
 import { z } from 'zod';
+import { federatedSourceAudioSchema } from '../../lib/federatedMediaWire.js';
 
 const bytes = z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable().optional();
 const positive = z.number().finite().positive();
@@ -18,6 +19,7 @@ export const videoExecutionParametersSchema = z.object({
   guidanceScale: z.number().finite().nonnegative().optional(),
   tiling: identifier.optional(),
   disableAudio: z.boolean().optional(),
+  audioConditioning: federatedSourceAudioSchema.optional(),
   textEncoderId: identifier.optional(),
   speedProfileId: identifier.optional(),
   draftDecode: identifier.optional(),

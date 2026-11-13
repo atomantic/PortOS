@@ -31,7 +31,7 @@ import { randomUUID } from 'crypto';
 import { join, extname, basename } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { REFERENCE_AUDIO_FIELDS, VIDEO_REFERENCE_IMAGE_FIELDS, MAX_VIDEO_REFERENCE_IMAGES, videoReferenceImageSlots } from './requestFields.js';
-import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded, assertFileNotMediaManifest } from '../../lib/fileUtils.js';
+import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded, assertFileNotMediaManifest, sha256File } from '../../lib/fileUtils.js';
 import { probeVideoDuration, safeUnder } from '../../lib/ffmpeg.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import {
@@ -676,6 +676,7 @@ async function prepareLocalAudio({ body, uploads, stageUploadDurable, stagedDura
   };
 
   let audioFilePath = null;
+  let sourceAudioSha256 = null;
   if (uploads.audioFile) {
     // a2v: audio file rides through the same durable-staging path as the
     // image uploads. Cleanup tracking via extraUploadedTempPaths so the
@@ -695,9 +696,10 @@ async function prepareLocalAudio({ body, uploads, stageUploadDurable, stagedDura
       await cleanupStaged();
       throw new ServerError('Music-video project audio is unavailable', { status: 400, code: 'VIDEO_GEN_PROJECT_AUDIO_MISSING' });
     }
+    sourceAudioSha256 = body._suppliedAudio ? null : await sha256File(sourceAudioPath);
     audioFilePath = await stageExistingAudioDurable(sourceAudioPath);
   }
-  return audioFilePath;
+  return { audioFilePath, sourceAudioSha256 };
 }
 
 // A model declares how many of each reference kind it takes (absent = none).
@@ -1352,13 +1354,33 @@ async function resolvePreparedParams({
     // Same path-traversal guard as the start frame.
     lastImagePath = resolveGalleryImage(body.lastImageFile);
   }
-  const audioFilePath = await prepareLocalAudio({
+  const { audioFilePath, sourceAudioSha256 } = await prepareLocalAudio({
     body, uploads, stageUploadDurable, stagedDurablePaths, cleanupStaged,
   });
   if (audioFilePath) extraUploadedTempPaths.push(audioFilePath);
   effectiveNumFrames = await resolveAudioFrameCount({
     body, audioFilePath, effectiveModel, effectiveNumFrames, cleanupStaged,
   });
+  let audioConditioning = null;
+  if (sourceAudioSha256 && !body._suppliedAudio) {
+    const fps = Number(body.fps ?? 24);
+    const startSample = Math.round((Number(body.audioStartSec) || 0) * 48000);
+    const sampleCount = Math.round(((effectiveNumFrames - 1) / fps) * 48000);
+    const endSample = startSample + sampleCount;
+    if (Number.isSafeInteger(startSample) && startSample >= 0
+      && Number.isSafeInteger(sampleCount) && sampleCount > 0 && sampleCount <= 48000 * 60
+      && endSample <= 48000 * 36000) {
+      audioConditioning = {
+        sourceSha256: sourceAudioSha256,
+        clipSha256: sourceAudioSha256,
+        sampleRate: 48000,
+        channels: 2,
+        startSample,
+        endSample,
+        sampleCount,
+      };
+    }
+  }
   if (uploads.icReference) {
     // IC-LoRA reference clip — same durable staging + cleanup tracking as the
     // audio upload above. A history-picked reference needs neither (it already
@@ -1483,6 +1505,7 @@ async function resolvePreparedParams({
     sourceImagePath,
     lastImagePath,
     audioFilePath,
+    ...(audioConditioning ? { audioConditioning } : {}),
     icReferencePaths,
     referenceImagePaths,
     referenceVideoPaths,

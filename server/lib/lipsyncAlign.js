@@ -162,7 +162,7 @@ async function measureLipsyncSignals(videoPath) {
   if (typeof videoPath !== 'string' || !existsSync(videoPath)) return { reason: 'unmeasurable' };
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) return { reason: 'unmeasurable' };
-  if (!(await hasAudioStream(videoPath))) return { reason: 'no-audio' };
+  if (!(await hasAudioStream(videoPath))) return { reason: 'output-muted' };
   const [info, frames] = await Promise.all([probeVideoStreamInfo(videoPath), probeFrameCount(videoPath)]);
   if (!info.fps || !frames) return { reason: 'unmeasurable' };
   const [gray, pcm] = await Promise.all([
@@ -220,7 +220,7 @@ const holdLeadingFrames = async ({ videoPath, shiftFrames, totalFrames }) => {
  * Resolves `{ shiftFrames, lag, peakScore, reason }`; `shiftFrames > 0` means the file was replaced.
  * `reason` is a fixed token, so a persisted result never carries an ffmpeg
  * message (which can name a path): mouth-lead, no-lead, low-confidence,
- * too-short, flat-signal, no-audio, unmeasurable, hold-failed.
+ * too-short, flat-signal, output-muted, unmeasurable, hold-failed.
  */
 export async function alignLipsyncLead({ videoPath, label = '' }) {
   const tag = label ? ` [${label}]` : '';
