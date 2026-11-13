@@ -141,6 +141,11 @@ reserved branch. A refusal leaves all existing candidates untouched. Ordinary
 branch reconciliation retires merged candidates and preserves dirty or unique
 abandoned work for its normal review path.
 
+A managed candidate still requires a verified publication receipt to report a
+completed release. When readiness finds nothing to release, report
+`no-action-needed`; the server verifies the captured checkout and promotion
+history. Existing retry and spawn budgets still apply.
+
 Resolve the previous **published** version tag and its peeled commit from the
 captured release history (not the latest tag on moving `main`). Verify the GitHub
 Release, notes and tag agree. Reconcile an interrupted publication at its original

@@ -907,6 +907,11 @@ async function applySpawnBudgetOperation({ current, taskId, taskType, updatedMet
   // Compatibility only: retain historical membership for independently upgraded peers.
   delete updatedMetadata[RELEASE_ATTEMPTS_KEY];
   if (current.metadata?.[RELEASE_ATTEMPTS_KEY] !== undefined) updatedMetadata[RELEASE_ATTEMPTS_KEY] = current.metadata[RELEASE_ATTEMPTS_KEY];
+  // Older peers may still use complete membership to authorize recovery. A
+  // dispatch omitted by this version makes that historical record incomplete.
+  if (spawnBudgetOperation?.kind === 'dispatch' && updatedMetadata[RELEASE_ATTEMPTS_KEY]?.complete === true) {
+    updatedMetadata[RELEASE_ATTEMPTS_KEY] = { ...updatedMetadata[RELEASE_ATTEMPTS_KEY], complete: false };
+  }
   delete updatedMetadata.spawnBudgetProof;
   const priorProof = current.metadata?.spawnBudgetProof;
   if (validSpawnBudgetEpisode(priorProof)) updatedMetadata.spawnBudgetProof = priorProof;

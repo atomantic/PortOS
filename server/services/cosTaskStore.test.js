@@ -2627,6 +2627,11 @@ describe('historical release attempt compatibility', () => {
       { now: Date.parse('2026-06-25T12:00:00Z') });
     const updated = await updateTask(task.id, { metadata: { releaseAttempts: undefined } }, 'internal');
     expect(updated.metadata.releaseAttempts).toEqual(history);
+    mock.state.agents['agent-successor'] = { id: 'agent-successor', taskId: task.id, status: 'running', startedAt: 'successor-start' };
+    const dispatched = await updateTask(task.id, { status: 'in_progress', metadata: {
+      totalSpawnCount: 1, claimedBy: 'fixture', claimedAt: 'successor-start', lastSpawnedAt: 'successor-start',
+    } }, 'internal', { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-successor', startedAt: 'successor-start' } });
+    expect(dispatched.metadata.releaseAttempts).toEqual({ ...history, complete: false });
   });
 });
 
