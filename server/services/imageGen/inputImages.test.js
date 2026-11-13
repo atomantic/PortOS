@@ -81,9 +81,9 @@ describe('resolveInputImages', () => {
 
   it('refuses a missing or disallowed input instead of turning an edit into text-only', () => {
     expect(() => resolveInputImages({ mode: IMAGE_GEN_MODE.CODEX, initImagePath: '/etc/passwd' }))
-      .toThrow(/input image is unavailable/);
+      .toThrow(/input image is unavailable.*passwd/);
     expect(() => resolveInputImages({ mode: IMAGE_GEN_MODE.CODEX, referenceImagePaths: ['missing.png'] }))
-      .toThrow(/input image is unavailable/);
+      .toThrow(/input image is unavailable.*missing\.png/);
   });
 
   it('returns an empty list for a render with no input images', () => {

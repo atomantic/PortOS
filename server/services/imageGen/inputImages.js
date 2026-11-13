@@ -17,13 +17,18 @@
  * at an arbitrary local file.
  */
 
+import { basename } from 'path';
 import { resolveImageInputPath } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { maxInputImages } from './cloudProviderConfig.js';
 
-const invalidInput = () => new ServerError('A requested input image is unavailable or outside the allowed image roots', {
-  status: 400, code: 'IMAGE_INPUT_UNAVAILABLE',
-});
+const invalidInput = (rawPath) => {
+  const name = typeof rawPath === 'string' && rawPath.trim() ? basename(rawPath.trim()) : '';
+  const suffix = name ? `: ${name}` : '';
+  return new ServerError(`A requested input image is unavailable or outside the allowed image roots${suffix}`, {
+    status: 400, code: 'IMAGE_INPUT_UNAVAILABLE',
+  });
+};
 
 /**
  * @param {object} opts
@@ -39,14 +44,18 @@ const invalidInput = () => new ServerError('A requested input image is unavailab
  *   minus that leading source image.
  */
 export function resolveInputImages({ mode, initImagePath = null, referenceImagePaths = [], modelId = null } = {}) {
-  if ((initImagePath != null && (typeof initImagePath !== 'string' || !initImagePath.trim()))
-    || !Array.isArray(referenceImagePaths) || referenceImagePaths.some(path => typeof path !== 'string' || !path.trim())) throw invalidInput();
+  if (initImagePath != null && (typeof initImagePath !== 'string' || !initImagePath.trim())) throw invalidInput(initImagePath);
+  if (!Array.isArray(referenceImagePaths)) throw invalidInput();
+  const invalidRef = referenceImagePaths.find(path => typeof path !== 'string' || !path.trim());
+  if (invalidRef !== undefined) throw invalidInput(invalidRef);
   const rawInit = initImagePath;
   const resolvedInit = rawInit ? resolveImageInputPath(rawInit) : null;
+  if (rawInit && !resolvedInit) throw invalidInput(rawInit);
   const rawRefs = referenceImagePaths;
   const resolvedRefs = rawRefs.map((p) => resolveImageInputPath(p));
-  if ((rawInit && !resolvedInit) || resolvedRefs.some((path) => !path)) {
-    throw invalidInput();
+  const missingIdx = resolvedRefs.findIndex((path) => !path);
+  if (missingIdx >= 0) {
+    throw invalidInput(rawRefs[missingIdx]);
   }
 
   const ordered = [...(resolvedInit ? [resolvedInit] : []), ...resolvedRefs];

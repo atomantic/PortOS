@@ -1108,10 +1108,11 @@ function captureQueueSnapshot() {
   const canWriteOutcome = (job) => completionAdmitted || job.durabilityPending?.status !== 'completed';
   const hasDeferredCompletion = [...pendingTransitions.keys()].some((job) => !canWriteOutcome(job));
   // Strip non-serializable bits.
-  const serializable = live.map((job) => (canWriteOutcome(job) ? { ...job, ...job.durabilityPending } : job)).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs, durabilityPending, imported, videoExecution, videoExecutions, cancelRequested, visualProfileFinishing }) =>
+  const serializable = live.map((job) => (canWriteOutcome(job) ? { ...job, ...job.durabilityPending } : job)).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs, durabilityPending, imported, referenceImageFilenames, videoExecution, videoExecutions, cancelRequested, visualProfileFinishing }) =>
     ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs,
       ...((status === 'running' && visualProfileFinishing || kind === 'video-upscale' && params?.mode === 'topaz') && cancelRequested === true ? { cancelRequested: true } : {}),
       ...(imported === true ? { imported } : {}),
+      ...(Array.isArray(referenceImageFilenames) ? { referenceImageFilenames } : {}),
       ...(videoExecution ? { videoExecution } : {}),
       ...(videoExecutions ? { videoExecutions } : {}),
       ...(status !== 'completed' && durabilityPending?.status === 'completed' ? { durabilityPending } : {}) }),
@@ -2267,7 +2268,10 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
       broadcastSse(sseEntry, payload);
     },
     completed: (payload) => {
-      const { remoteInputsDisposable, remoteRecoverySettlement, ...result } = payload;
+      const { remoteInputsDisposable, remoteRecoverySettlement, initImageFilename: _initImageFilename, referenceImageFilenames, ...result } = payload;
+      const recordRefs = (j) => {
+        if (Array.isArray(referenceImageFilenames)) j.referenceImageFilenames = referenceImageFilenames;
+      };
       if (job.kind === 'image' && job.params?.visualProfile) {
         if (job.visualProfileFinishing || !canRequestCancellation(job)) return;
         const applyFilmFinish = !job.params.catalogAttach && !job.params.characterSheet;
@@ -2295,9 +2299,10 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
             const finished = await finishVisualProfileImage({ result, profile: job.params.visualProfile,
               revision: job.params.visualProfileRevision, applyFilmFinish, signal: controller.signal, onCleanupFailure: () => permit.markUnsettled() });
             controller.signal.throwIfAborted();
-            await terminate('completed', j => { j.result = finished; }, remoteInputsDisposable === true);
+            await terminate('completed', j => { recordRefs(j); j.result = finished; }, remoteInputsDisposable === true);
           } catch (error) {
             await terminate(job.cancelRequested ? 'canceled' : 'failed', j => {
+              recordRefs(j);
               j.result = result;
               j.statusMsg = job.cancelRequested ? `Canceled during ${phase.toLowerCase()}; original image retained` : `${phase} failed; original image retained`;
               j.error = job.cancelRequested ? `Canceled during ${phase.toLowerCase()}; original image retained` : `${phase} failed; original image retained: ${error.message}`;
@@ -2307,7 +2312,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
         return;
       }
       trackTerminalOperation(
-        terminate('completed', (j) => { j.result = result; }, remoteInputsDisposable === true)
+        terminate('completed', (j) => { recordRefs(j); j.result = result; }, remoteInputsDisposable === true)
           .catch((e) => console.error(`❌ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),
       );
     },
@@ -2322,6 +2327,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
       if (job.cancelRequested && !(isTopazUpscale(job) && payload.remoteCancellationConfirmed !== true)) {
         trackTerminalOperation(
           terminate('canceled', (j) => {
+            if (Array.isArray(payload.referenceImageFilenames)) j.referenceImageFilenames = payload.referenceImageFilenames;
             // Persist the reason so a late SSE reconnect after the live entry
             // is cleaned up still gets a meaningful terminal frame from the
             // archived state, rather than the generic "Canceled" fallback.
@@ -2335,6 +2341,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
       }
       trackTerminalOperation(
         terminate('failed', (j) => {
+          if (Array.isArray(payload.referenceImageFilenames)) j.referenceImageFilenames = payload.referenceImageFilenames;
           j.error = payload.error || 'unknown error';
           // Evidence only — this job still fails through the normal terminal
           // path. What it buys is every job queued BEHIND it: they hold for the
@@ -2515,7 +2522,10 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
           ...(job.kind === 'video' && jobLane(job) === 'gpu' && Number(safeParams.chunks) > 1 ? { executionQueueJobId: job.id } : {}) };
         const kickoff = (runtime?.invoke ?? MEDIA_JOB_RUNTIME.image.invoke)(mod, request, safeParams);
         markDispatched();
-        await Promise.race([kickoff, abandoned]);
+        const launched = await Promise.race([kickoff, abandoned]);
+        if (Array.isArray(launched?.referenceImageFilenames) && canRequestCancellation(job)) {
+          job.referenceImageFilenames = launched.referenceImageFilenames;
+        }
       }
       if (resettingForTests) return null;
     } catch (err) {
