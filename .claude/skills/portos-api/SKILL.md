@@ -12,6 +12,7 @@ node scripts/portos-api.js whoami
 node scripts/portos-api.js task "<what the agent should do>" --app <app-id> --priority MEDIUM
 node scripts/portos-api.js get /api/cos/tasks
 node scripts/portos-api.js post /api/image-gen/generate '{"prompt":"..."}'
+node scripts/portos-api.js post /api/video-gen '{"prompt":"...","sourceImageFile":"<gallery-image>.png"}'
 node scripts/portos-api.js post /api/music-video/autonomous @brief.json
 node scripts/portos-api.js post /api/human-actions/plans @plan.json   # schedule steps the user must take
 node scripts/portos-api.js get /api/api-docs/catalog.json   # discover endpoints
