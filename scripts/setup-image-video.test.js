@@ -750,6 +750,7 @@ case "$1" in
     case "$2" in
       sync)
         [[ "$cache" == 0 && "$*" == 'pip sync --require-hashes --only-binary :all: --python '"$PWD/.venv/bin/python3 "* && -s "\${@: -1}" ]] || exit 91
+        if [[ "\${FAIL_CONNECTION:-0}" == 1 ]]; then echo 'fixture: package index connection refused' >&2; exit 2; fi
         [[ "\${STALE_LOCK:-0}" == 0 ]] || exit 42
         ;;
       install)
@@ -868,6 +869,20 @@ source "$1"
     expect(result.status, result.stderr).toBe(0);
     expect(install.calls()).toContain('bootstrap -m pip install');
     expect(install.calls()).toContain('private pip sync --require-hashes');
+  });
+
+  it('explains private-tool network access on LTX-2.5 sync failure and stops before building', () => {
+    const install = installer('INSTALL_LTX25');
+    const result = install.run({ FAIL_CONNECTION: '1' });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('fixture: package index connection refused');
+    expect(result.stderr).toContain('LTX-2.5 MLX dependency sync failed (exit 2)');
+    expect(result.stderr).toContain(`${install.home}/.portos/tools/uv-0.13.7/bin/uv`);
+    expect(result.stderr).toContain('Little Snitch');
+    expect(result.stderr).toContain('pypi.org and files.pythonhosted.org');
+    expect(result.stderr).toContain('retry Install/Repair');
+    expect(install.calls()).not.toContain('private pip install');
+    expect(result.stdout).not.toContain('venv ready');
   });
 
   it('reports a missing bootstrap prerequisite before mutating the private tool or runtime venv', () => {

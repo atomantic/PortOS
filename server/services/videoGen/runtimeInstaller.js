@@ -81,6 +81,7 @@ export async function streamVideoRuntimeInstall({
   let installLog = null;
   let aborted = false;
   let finished = false;
+  let installFailure = null;
 
   // Register before any readiness/revision await. Those probes can take tens
   // of seconds on a damaged venv; closing the modal during one must prevent a
@@ -155,6 +156,19 @@ export async function streamVideoRuntimeInstall({
   // while createLineReader still stitches chunks split mid-line.
   const onLine = (line) => {
     const text = line.trimEnd();
+    if (text.startsWith(`📦 Syncing ${info.label} wheels from `)) {
+      emit({ type: 'stage', stage: 'dependencies', message: text });
+      return;
+    }
+    if (text.startsWith(`📦 Building pinned ${info.label} source `)) {
+      emit({ type: 'stage', stage: 'build', message: text });
+      return;
+    }
+    // Retain the installer's actionable summary without interpreting arbitrary
+    // dependency output as an error event that would close the stream early.
+    if (text.startsWith(`❌ ${info.label} dependency sync failed (exit `)) {
+      installFailure = text.slice('❌ '.length);
+    }
     if (text) emit({ type: 'log', message: text });
   };
   const stdoutReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
@@ -189,7 +203,7 @@ export async function streamVideoRuntimeInstall({
           ? 'Installer exited 0 but the runtime is still on an outdated revision. Review the source-update log above, then use Repair in this panel.'
           : `Installer exited 0 but the runtime can't import its core packages. Review the package errors above, then use Repair in this panel.` });
       } else {
-        emit({ type: 'error', message: `Installer exited with code ${code}.` });
+        emit({ type: 'error', message: installFailure || `Installer exited with code ${code}.` });
       }
       safeEnd();
     } catch (err) {
