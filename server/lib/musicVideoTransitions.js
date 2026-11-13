@@ -508,9 +508,9 @@ function framesExpr(frames) {
  * The ffmpeg filter chain (comma-joined, one stream in and one out) that paints
  * `glitches` on a `width`x`height` yuv420p stream counting frames from 0, or null
  * when there are none. Each filter is enabled only on its frames, so every other
- * frame passes through untouched and the stream keeps its length. A smeared band
- * splits off a strip and lays it back with internal `smr…` labels, so the chain
- * appears once in a filter graph.
+ * frame passes through untouched and the stream keeps its length. Smeared bands
+ * are cut from one split of the incoming stream with internal `smr…` labels, so
+ * the chain appears once in a filter graph.
  */
 export function musicVideoTransitionFilter(glitches, { width, height }) {
   if (!Array.isArray(glitches) || glitches.length === 0) return null;
@@ -521,11 +521,16 @@ export function musicVideoTransitionFilter(glitches, { width, height }) {
     groups.get(key).frames.push(g.frame);
   }
   const chain = [];
-  let smearId = 0;
+  // Each smeared band's own branch off the shared split. Splitting the running stream once per band nests every
+  // split inside the previous band's overlay, and ffmpeg's cost then grows exponentially with the number of bands:
+  // twenty (a film with a few rewinds) rendered at under 0.03x and stalled a whole excerpt.
+  const branches = [];
   const rows = (fraction) => Math.max(0, Math.min(height, even(fraction * height)));
   for (const { params: p, frames } of groups.values()) {
     const enable = `:enable='${framesExpr(frames)}'`;
-    const add = (filter) => { if (filter) chain.push(`${filter}${enable}`); };
+    // This group's frame edits so far, which a band's branch replays before cutting the band out.
+    const before = [];
+    const add = (filter) => { if (filter) { chain.push(`${filter}${enable}`); before.push(`${filter}${enable}`); } };
     if (p.roll) add(roll(p.roll * height, width, height));
     if (p.shift) add(slip(p.shift * width, 0, height, width));
     for (const tear of p.tears || []) {
@@ -539,9 +544,9 @@ export function musicVideoTransitionFilter(glitches, { width, height }) {
       if (h < 2) continue;
       add(slip(sm.shift * width, y, h, width));
       const sigma = Math.max(0.5, Math.round((sm.blur || 0) * width * 10) / 10);
-      const id = `smr${smearId++}`;
-      chain.push(`split[${id}a][${id}b];[${id}b]crop=w=${width}:h=${h}:x=0:y=${y},gblur=sigma=${num(sigma)}:sigmaV=0.5${enable}[${id}c];`
-        + `[${id}a][${id}c]overlay=x=0:y=${y}${enable}`);
+      const id = `smr${branches.length}`;
+      branches.push(`[${id}s]${[...before, `crop=w=${width}:h=${h}:x=0:y=${y}`, `gblur=sigma=${num(sigma)}:sigmaV=0.5${enable}`].join(',')}[${id}c]`);
+      chain.push(`null[${id}m];[${id}m][${id}c]overlay=x=0:y=${y}${enable}`);
     }
     for (const sw of p.swaps || []) {
       const box = blockBox(sw.x1, sw.y1, sw.w, sw.h, width, height);
@@ -572,7 +577,10 @@ export function musicVideoTransitionFilter(glitches, { width, height }) {
     }
     if (p.noise) add(`noise=alls=${Math.min(100, Math.round(p.noise * 60))}:allf=t`);
   }
-  return chain.length ? chain.join(',') : null;
+  if (!chain.length) return null;
+  if (!branches.length) return chain.join(',');
+  const outs = branches.map((_, k) => `[smr${k}s]`).join('');
+  return `split=${branches.length + 1}[smrbase]${outs};${branches.join(';')};[smrbase]${chain.join(',')}`;
 }
 
 /**
