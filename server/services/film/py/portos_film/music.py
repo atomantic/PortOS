@@ -155,8 +155,9 @@ def beat_phase(song, t):
 
 def pulse(song, t, decay=4.0):
     """1 on each beat, falling toward 0 before the next: a hit to drive a light or a scale."""
-    # Phase 0 would be a hit. Before the song there is no beat, so the pulse stays down.
-    if float(t) < 0 or not beats(song):
+    # Phase 0 also represents no preceding beat, which is not a hit.
+    grid = beats(song)
+    if float(t) < 0 or not grid or float(t) < grid[0]:
         return 0.0
     _, phase = beat_phase(song, t)
     return (1.0 - phase) ** decay
