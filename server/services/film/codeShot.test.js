@@ -16,6 +16,7 @@ import { scaffoldBlenderWorkspace } from './sources.js';
 import { getBlenderState } from './state.js';
 import { startBlenderSync } from './sync.js';
 import { startBlenderCut } from './cuts.js';
+import { planBlenderWindow } from './film.js';
 
 function ROOT() { return lazyTempDataRoot('film-code-shot-'); }
 const runtime = vi.hoisted(() => ({ blender: null, ffmpeg: [], opened: [] }));
@@ -141,6 +142,12 @@ describe('describeNeedsBlender', () => {
       writeFileSync(join(src, 'film.py'), 'import shots.hero\n');
       writeFileSync(join(src, 'shots', 'hero.py'), 'import bpy\n');
       expect(await describeNeedsBlender({ workspaceDir: root })).toBe(true);
+      writeFileSync(join(src, 'film.py'), "import importlib\nbpy = importlib.import_module('bpy')\n");
+      expect(await describeNeedsBlender({ workspaceDir: root })).toBe(true);
+      writeFileSync(join(src, 'film.py'), "from importlib import import_module as load\nload('shots.hero')\n");
+      expect(await describeNeedsBlender({ workspaceDir: root })).toBe(true);
+      writeFileSync(join(src, 'film.py'), "import importlib as modules\nmodules.import_module('math')\n");
+      expect(await describeNeedsBlender({ workspaceDir: root })).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(src, { recursive: true, force: true });
@@ -207,6 +214,10 @@ it('renders a Blender shot, a code shot and a code layer, then marks only the ed
   expect(readFileSync(layeredStill).equals(stillOnce)).toBe(true);
   const codeStill = join(owner.workspaceDir, 'renders', 's020', 'stills', 't000000750.png');
   const codeOnce = readFileSync(codeStill);
+  expect(codeOnce.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  const finalFrame = Object.values(frameBytes(owner, 's020', 'final'))[0];
+  expect(finalFrame.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  expect(Object.values(frameBytes(owner, 's020', 'preview'))[0].subarray(0, 2)).toEqual(Buffer.from([255, 216]));
   writeFileSync(codeStill, 'stale-pixels');
   await settled(owner, (await enqueueBlenderRenders(owner, { quality: 'still', shotIds: ['s020'], times: [0.75] })).jobs.map((job) => job.id));
   expect(readFileSync(codeStill).equals(codeOnce)).toBe(true);
@@ -280,6 +291,9 @@ it('syncs and renders a code-only film with Blender unconfigured', async () => {
     '    ]}',
   ].join('\n'));
   writeFileSync(join(src, 'code', 's010.js'), 'export function render() {}\n');
+  await expect(startBlenderSync(owner)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_BLENDER_NEEDS_TRUSTED_LOCAL' });
+  expect(listBlenderJobs(owner)).toEqual([]);
+  runtime.blender.control.executionMode = 'trusted-local';
   await settled(owner, [(await startBlenderSync(owner)).job.id]);
   expect(runtime.blender.control.jobs).toEqual([]);
   await settled(owner, (await enqueueBlenderRenders(owner, { quality: 'sheet', shotIds: ['s010'], sheet: { every: 6, columns: 2 } })).jobs.map((job) => job.id));
@@ -297,4 +311,33 @@ it('syncs and renders a code-only film with Blender unconfigured', async () => {
   expect(rendered.renders.s010.preview.complete).toBe(true);
   expect(rendered.cuts[0]).toMatchObject({ missing: [], stale: [] });
   expect(runtime.blender.control.jobs).toEqual([]);
+});
+
+it('includes the neighboring shot handle when an excerpt contains only one side of a transition', () => {
+  const owner = createOwner(2);
+  const film = {
+    owner, settings: { ...SETTINGS }, problems: [],
+    shots: [{ id: 's010', start: 0, end: 1 }, { id: 's020', start: 1, end: 2 }],
+    renders: Object.fromEntries(['s010', 's020'].map((id) => [id, { final: {
+      complete: true, stale: false, width: 320, height: 180, fps: 12, frames: 12,
+      handleFrames: { inFrames: 2, outFrames: 2 },
+    } }])),
+    cutEffects: [{ style: 'dissolve', index: 0, cutFrame: 12, startFrame: 10, endFrame: 14, needOutFrames: 2, needInFrames: 2 }],
+  };
+  const before = planBlenderWindow(film, { startSec: 10 / 12, endSec: 1 });
+  expect(before.segments).toHaveLength(1);
+  expect(before.segments[0].transition).toMatchObject({
+    segStartFrame: 10, segEndFrame: 12,
+    incoming: { handleStart: 10, handleFrames: 2, videoFrames: 0 },
+  });
+  const after = planBlenderWindow(film, { startSec: 1, endSec: 14 / 12 });
+  expect(after.segments).toHaveLength(1);
+  expect(after.segments[0].transition).toMatchObject({
+    segStartFrame: 12, segEndFrame: 14,
+    outgoing: { handleStart: 12, handleFrames: 2, videoFrames: 0 },
+  });
+  // With no incoming render the full cut falls back to a hard cut; an excerpt before it can still play.
+  film.renders.s020 = {};
+  expect(planBlenderWindow(film, { startSec: 10 / 12, endSec: 1 }).segments[0].transition).toBeUndefined();
+  expect(() => planBlenderWindow(film, { startSec: 1, endSec: 14 / 12 })).toThrow(/s020/);
 });

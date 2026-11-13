@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
 import { createHash } from 'node:crypto';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -136,6 +136,10 @@ const { getTrack } = await import('../services/tracks/index.js');
 const { PATHS } = await import('../lib/paths.js');
 const { videoExecutionSchema } = await import('../services/mediaJobQueue/videoExecution.js');
 const { buildLocalVideoJobRecord } = await import('../services/videoGen/generateVideo.js');
+const sourceAudio = await import('../services/federatedMedia/sourceAudio.js');
+const { enqueueJob } = await import('../services/mediaJobQueue/index.js');
+const { findFfmpeg } = await import('../lib/ffmpeg.js');
+const ffmpeg = await findFfmpeg();
 
 const app = express();
 app.use(express.json());
@@ -175,6 +179,50 @@ beforeEach(async () => {
 afterAll(cleanupTempDataRoots);
 
 describe('audio-reactive scene clip song window (#15971)', () => {
+  // Catches a full-song digest being mislabeled as the exact model-conditioning clip.
+  it.skipIf(!ffmpeg)('records the digest of the actual sliced PCM input', async () => {
+    const samples = 24 * 48000;
+    const recording = Buffer.alloc(44 + samples * 4);
+    recording.write('RIFF');
+    recording.writeUInt32LE(recording.length - 8, 4);
+    recording.write('WAVEfmt ', 8);
+    recording.writeUInt32LE(16, 16);
+    recording.writeUInt16LE(1, 20);
+    recording.writeUInt16LE(2, 22);
+    recording.writeUInt32LE(48000, 24);
+    recording.writeUInt32LE(192000, 28);
+    recording.writeUInt16LE(4, 32);
+    recording.writeUInt16LE(16, 34);
+    recording.write('data', 36);
+    recording.writeUInt32LE(samples * 4, 40);
+    writeFileSync(join(PATHS.music, 'song.wav'), recording);
+    const actual = await vi.importActual('../services/federatedMedia/sourceAudio.js');
+    sourceAudio.prepareSourceAudioWindow.mockImplementationOnce(actual.prepareSourceAudioWindow);
+    const response = await request(app).post(`/api/music-video/${project.id}/scenes/scene-2/clip`).send({
+      target: { backend: 'local', modelId: 'ltx23-example', generationMode: 'audioReactive', numFrames: 121 },
+    });
+    expect(response.status).toBe(200);
+    const { params } = jobStore.get(response.body.jobId);
+    const conditioned = readFileSync(params.audioFilePath);
+    expect(params.audioConditioning).toMatchObject({
+      sourceSha256: createHash('sha256').update(recording).digest('hex'),
+      clipSha256: createHash('sha256').update(conditioned).digest('hex'),
+      startSample: 18.5 * 48000, endSample: 23.5 * 48000, sampleCount: 5 * 48000,
+    });
+    expect(params.audioConditioning.clipSha256).not.toBe(params.audioConditioning.sourceSha256);
+    expect(actual.pcmAudioInfo(conditioned)).toEqual({ sampleRate: 48000, channels: 2, sampleCount: 5 * 48000 });
+    expect(params.audioStartSec).toBe(0);
+    const retained = readdirSync(PATHS.uploads).sort();
+    sourceAudio.prepareSourceAudioWindow.mockImplementationOnce(actual.prepareSourceAudioWindow);
+    enqueueJob.mockRejectedValueOnce(new Error('Synthetic queue admission failure'));
+    const refused = await request(app).post(`/api/music-video/${project.id}/scenes/scene-2/clip`).send({
+      target: { backend: 'local', modelId: 'ltx23-example', generationMode: 'audioReactive', numFrames: 121 },
+    });
+    expect(refused.status).toBe(500);
+    expect(readdirSync(PATHS.uploads).sort()).toEqual(retained);
+    expect(readFileSync(join(PATHS.music, 'song.wav'))).toEqual(recording);
+  });
+
   it('records the song window in history and GET /api/media-jobs/:id without altering supplied-audio', async () => {
     const reactiveRes = await request(app)
       .post(`/api/music-video/${project.id}/scenes/scene-2/clip`)
@@ -190,7 +238,7 @@ describe('audio-reactive scene clip song window (#15971)', () => {
     const reactiveJob = jobStore.get(reactiveRes.body.jobId);
     const expectedWindow = {
       sourceSha256: songSha256,
-      clipSha256: songSha256,
+      clipSha256: 'b'.repeat(64),
       sampleRate: 48000,
       channels: 2,
       startSample: Math.round(18.5 * 48000),
@@ -198,6 +246,7 @@ describe('audio-reactive scene clip song window (#15971)', () => {
       sampleCount: Math.round(((121 - 1) / 24) * 48000),
     };
     expect(reactiveJob.params.audioConditioning).toEqual(expectedWindow);
+    expect(reactiveJob.params.audioStartSec).toBe(0);
 
     // History record carries the same audioConditioning window.
     const historyRecord = buildLocalVideoJobRecord({

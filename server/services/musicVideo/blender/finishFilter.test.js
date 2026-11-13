@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { promisify } from 'node:util';
+import { execFile } from '../../../lib/childProcess.js';
+import { findFfmpeg } from '../../../lib/ffmpeg.js';
 import { blenderFinishFilter } from './finishFilter.js';
+
+const ffmpeg = await findFfmpeg();
+const execFileAsync = promisify(execFile);
 
 const frame = { width: 1920, height: 1080, fps: 24 };
 // The Board as a synced film leaves it: one scene per shot, on the shot's times.
@@ -48,5 +54,20 @@ describe('blenderFinishFilter', () => {
       .toBe("fade=t=out:s=18:n=6:enable='between(n,18,23)',fade=t=in:s=24:n=6:enable='between(n,24,29)'");
     expect(film({ scenes: [scenes[0], scenes[1], { ...scenes[2], cutEffect: { style: 'fade-black', enabled: true, overlapSec: 0.5 } }] }))
       .toBe("fade=t=out:s=132:n=12:enable='between(n,132,143)'");
+  });
+
+  // Catches an excerpt restarting either half of a fade instead of showing the same film frames.
+  it.skipIf(!ffmpeg)('keeps the original fade progress when an excerpt starts inside it', async () => {
+    const project = { scenes: [{ ...scenes[0], cutEffect: { style: 'fade-black', enabled: true, overlapSec: 0.5 } }, scenes[1]] };
+    const pixels = async (window) => {
+      const { stdout } = await execFileAsync(ffmpeg, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', `color=white:s=2x2:r=24:d=${window.endSec - window.startSec}`,
+        '-vf', film(project, window), '-pix_fmt', 'gray', '-f', 'rawvideo', 'pipe:1'], { encoding: 'buffer', timeout: 15_000 });
+      return stdout;
+    };
+    const whole = await pixels({ startSec: 0, endSec: 4 });
+    for (const first of [45, 51]) {
+      const excerpt = await pixels({ startSec: first / 24, endSec: (first + 3) / 24 });
+      expect(excerpt).toEqual(whole.subarray(first * 4, (first + 3) * 4));
+    }
   });
 });

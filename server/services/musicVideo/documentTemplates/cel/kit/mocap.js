@@ -44,6 +44,11 @@ export function retarget(row, data, opts = {}) {
   const hz = norm(dir(0));
   const hx = norm(cross(dir(1), hz));
   const headR = fromCols(hx, cross(hz, hx), hz);
+  const handR = (i) => {
+    const y = norm(dir(i));
+    const x = norm(cross(y, dir(i + 1)));
+    return fromCols(x, y, cross(x, y));
+  };
   const reach = (from, to, k) => (origin) => add(origin, scale(sub(turned(to), turned(from)), k));
   const pole = (from, mid, to, fallback) => { const p = sub(turned(mid), lerp3(turned(from), turned(to), 0.5)); return len(p) < 0.01 ? fallback : p; };
   const foot = (side) => {
@@ -62,7 +67,7 @@ export function retarget(row, data, opts = {}) {
     pelvis, pelvisR, chestR, headR,
     wristL: reach('shL', 'wrL', kA), wristR: reach('shR', 'wrR', kA),
     elbowL: pole('shL', 'elL', 'wrL', [0, -1, -0.3]), elbowR: pole('shR', 'elR', 'wrR', [0, -1, -0.3]),
-    handRL: null, handRR: null,
+    handRL: handR(2), handRR: handR(4),
     ankleL: ankle('L', plantL), ankleR: ankle('R', plantR),
     kneeL: pole('hipL', 'kneeL', 'ankleL', pz), kneeR: pole('hipR', 'kneeR', 'ankleR', pz),
     footL: foot('L'), footR: foot('R'),

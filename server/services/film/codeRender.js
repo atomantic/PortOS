@@ -30,12 +30,13 @@ async function codeModuleFile(src, rel) {
 }
 
 /** Encode one RGBA frame. Preview plates flatten onto black; layers keep alpha. */
-async function encodeFilmPixels(rgba, { width, height, alpha }) {
+async function encodeFilmPixels(rgba, { width, height, alpha, jpeg }) {
   if (rgba.length !== width * height * 4) throw new Error(`The code frame is ${rgba.length} bytes, not ${width}×${height} pixels`);
   const { default: sharp } = await import('sharp');
-  const image = sharp(Buffer.from(rgba), { raw: { width, height, channels: 4 } });
-  if (!alpha) {
-    return image.flatten({ background: '#000000' }).jpeg({
+  let image = sharp(Buffer.from(rgba), { raw: { width, height, channels: 4 } });
+  if (!alpha) image = image.flatten({ background: '#000000' });
+  if (jpeg) {
+    return image.jpeg({
       quality: 90, mozjpeg: false, chromaSubsampling: '4:4:4',
       trellisQuantisation: false, overshootDeringing: false, optimiseCoding: false,
     }).toBuffer();
@@ -125,7 +126,7 @@ export async function renderFilmCodeFrames({
       const spec = { frame: frame.frame, t: frame.t, localT: frame.localT, width, height, alpha: alpha === true };
       const encoded = await page.evaluate(`globalThis.portosFilm.frame(${JSON.stringify(spec)})`);
       if (typeof encoded !== 'string' || !encoded) throw new Error(`Shot frame ${frame.frame} returned no pixels`);
-      const bytes = await encodeFilmPixels(Buffer.from(encoded, 'base64'), { width, height, alpha: alpha === true });
+      const bytes = await encodeFilmPixels(Buffer.from(encoded, 'base64'), { width, height, alpha: alpha === true, jpeg: !alpha && frame.file.endsWith('.jpg') });
       await mkdir(dirname(frame.file), { recursive: true });
       // A truncated final name would be resumed as a finished frame. Rename only after the write completes.
       const partial = `${frame.file}.part`;

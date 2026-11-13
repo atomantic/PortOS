@@ -3505,6 +3505,20 @@ describe('MusicVideo stage tabs (#9243)', () => {
       expect(screen.getByRole('button', { name: /Build publishing kit/ })).toBeDisabled();
     });
 
+    it('keeps the build shortcut disabled while creative setup is being edited, then runs after Cancel', async () => {
+      await openProject({ ...PROJECT_WITH_CLIP, audioAnalysis: PROJECT_ANALYZED.audioAnalysis, renderHistoryId: 'rh-9' }, 'story');
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Set up creative direction' })); });
+      const build = screen.getByRole('button', { name: 'Build the publishing kit' });
+      expect(build).toBeDisabled();
+      expect(build).toHaveAttribute('title', 'Save or cancel the creative setup before building the publishing kit.');
+      fireEvent.click(build);
+      expect(buildMusicVideoPublishKit).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel', exact: true }));
+      fireEvent.click(screen.getByRole('button', { name: 'Build the publishing kit' }));
+      await waitFor(() => expect(buildMusicVideoPublishKit).toHaveBeenCalledTimes(1));
+      expect(selectedTab()).toHaveTextContent(/^Publish/);
+    });
+
     it('takes a finished project on to its release (#9281)', async () => {
       await openProject({ ...PROJECT_WITH_CLIP, audioAnalysis: PROJECT_ANALYZED.audioAnalysis, renderHistoryId: 'rh-9' }, 'produce');
       fireEvent.click(screen.getByRole('button', { name: 'Build the publishing kit' }));
@@ -4341,7 +4355,7 @@ it('shares Done between editor, board and sheet, and accepts remote changes afte
   updateMusicVideoScene.mockImplementationOnce(() => new Promise(resolve => { settle = resolve; }));
   await openProject(project, 'produce');
   fireEvent.click(screen.getByRole('checkbox', { name: 'Done', exact: true }));
-  expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-1', project.scenes[0].sceneId, { shotSheet: { location: 'Park', checked: true } }, { silent: true });
+  expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-1', project.scenes[0].sceneId, { shotSheet: { checked: true } }, { silent: true });
   await act(async () => settle({}));
   expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).toBeChecked();
   expect(within(screen.getByLabelText('Storyboard thumbnails')).getByRole('button', { name: 'Open Shot 1' })).toHaveClass('border-port-success');

@@ -12,7 +12,7 @@ import { startBlenderCut } from './cuts.js';
 import { getBlenderState } from './state.js';
 import { copyBlenderFilm } from './fork.js';
 import { listBlenderJobs, __resetBlenderJobsForTests } from './jobs.js';
-import { clearBlenderFrames, dropBlenderFramesOutside } from './usage.js';
+import { clearBlenderFrames, dropBlenderFramesOutside, getBlenderDiskUsage } from './usage.js';
 
 function ROOT() { return lazyTempDataRoot('film-owner-test-'); }
 const runtime = vi.hoisted(() => ({ blender: null, ffmpeg: [] }));
@@ -102,6 +102,32 @@ it('refuses symlinked frame cleanup without deleting the external target', async
   await expect(dropBlenderFramesOutside(owner, [])).rejects.toMatchObject({ code: 'MUSIC_VIDEO_BLENDER_PATH' });
   await expect(clearBlenderFrames(owner)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_BLENDER_PATH' });
   expect(readFileSync(retained, 'utf8')).toBe('keep');
+});
+
+it('indexes contact sheets from negative-time lead-in shots', async () => {
+  const { owner } = createOwner();
+  await scaffoldBlenderWorkspace(owner);
+  runtime.blender.control.manifest.shots.unshift({ id: 'lead', start: -1, end: 0, label: 'Lead-in', deps: ['film.py'] });
+  await settled(owner, [(await startBlenderSync(owner)).job.id]);
+  await settled(owner, (await enqueueBlenderRenders(owner, { quality: 'sheet', shotIds: ['lead'], sheet: { every: 6, columns: 2 } })).jobs.map((job) => job.id));
+  expect((await getBlenderState(owner)).renders.lead.sheets).toEqual([
+    expect.objectContaining({ firstFrame: -24, lastFrame: -6, file: 'lead/sheets/sheet--24--6-e6.jpg' }),
+  ]);
+});
+
+it('reports the layer cache bytes that frame cleanup will actually remove', async () => {
+  const { owner } = createOwner();
+  await scaffoldBlenderWorkspace(owner);
+  await settled(owner, [(await startBlenderSync(owner)).job.id]);
+  await settled(owner, (await enqueueBlenderRenders(owner, { quality: 'preview', shotIds: ['s010'] })).jobs.map((job) => job.id));
+  const layers = join(owner.workspaceDir, 'renders', 's010', 'preview', 'layers', '0');
+  mkdirSync(layers, { recursive: true });
+  writeFileSync(join(layers, 'frame_000000.png'), Buffer.alloc(1000));
+  const before = await getBlenderDiskUsage(owner);
+  const cleared = await clearBlenderFrames(owner);
+  expect(cleared.freedBytes).toBe(before.clearableBytes);
+  expect(cleared.usage.clearableBytes).toBe(0);
+  expect(existsSync(layers)).toBe(false);
 });
 
 it('holds render admission until frame cleanup finishes', async () => {

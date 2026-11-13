@@ -170,15 +170,26 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
 
   const skippedTargets = Array.isArray(project?.publishKit?.skippedTargets) ? project.publishKit.skippedTargets : [];
   const skippedSet = new Set(skippedTargets);
+  // Each request replaces the list, so compose rapid row changes from the last
+  // saved answer instead of the render that both clicks happened to retain.
+  scope.skipWrites ||= { tail: Promise.resolve(), pending: 0, targets: skippedTargets };
+  const skipWrites = scope.skipWrites;
+  if (!skipWrites.pending) skipWrites.targets = skippedTargets;
 
   const setTargetSkipped = (target, skip) => {
     if (!projectId) return Promise.resolve(false);
-    const next = skip
-      ? (skippedSet.has(target) ? skippedTargets : [...skippedTargets, target])
-      : skippedTargets.filter((t) => t !== target);
-    return updateMusicVideoPublishCopy(projectId, { skippedTargets: next })
-      .then((res) => { if (res?.project?.id && res.project.id === selection.current.projectId) replaceProject?.(res.project); return true; })
-      .catch(() => false);
+    skipWrites.pending += 1;
+    const run = skipWrites.tail.then(() => {
+      const current = skipWrites.targets;
+      const next = skip ? [...new Set([...current, target])] : current.filter((t) => t !== target);
+      return updateMusicVideoPublishCopy(projectId, { skippedTargets: next }).then((res) => {
+        skipWrites.targets = Array.isArray(res?.project?.publishKit?.skippedTargets) ? res.project.publishKit.skippedTargets : next;
+        if (res?.project?.id === projectId && selection.current === scope) replaceProjectRef.current?.(res.project);
+        return true;
+      }).catch(() => false);
+    });
+    skipWrites.tail = run;
+    return run.finally(() => { skipWrites.pending -= 1; });
   };
 
   // null until the saved choice is known, so consumers never treat "unknown" as "none on".

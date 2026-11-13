@@ -1,8 +1,8 @@
 /**
  * Decide whether listing a film's shots needs Blender, and list a code-only
  * film with system Python. A film whose source imports bpy, bmesh or mathutils
- * stays on the Blender driver (and its trusted-local check). Anything else is
- * described here, with no Blender configured. The film is still the operator's
+ * stays on the Blender driver. Anything else is described here, with no Blender
+ * configured, under the same trusted-local execution setting. The film is still the operator's
  * own Python: it can read the workspace, and it cannot choose where the
  * manifest is written.
  */
@@ -68,6 +68,10 @@ export async function describeNeedsBlender(owner) {
 
 /** Python 3, or a 503 naming what is missing. Checked before the sync job starts. */
 export async function requirePythonDescribe() {
+  const { getCodeAnimationExecution } = await import('../codeAnimation/execution.js');
+  if ((await getCodeAnimationExecution()).executionMode !== 'trusted-local') {
+    throw blenderRefusal("Listing a code film runs its Python on this host, so it needs Trusted local mode. Switch the execution mode under Blender execution (Code Animation > Production, or this panel's Settings).", 'MUSIC_VIDEO_BLENDER_NEEDS_TRUSTED_LOCAL', 409);
+  }
   const python = (await whichFirst('python3')) || (await whichFirst('python'));
   if (!python) {
     throw blenderRefusal("Python 3 is required to list a code film's shots, and it was not found on PATH", 'MUSIC_VIDEO_BLENDER_PYTHON_MISSING', 503);

@@ -75,7 +75,7 @@ async function getBlenderOutroStats(project) {
       stats.renderTimeMs += Math.max(0, Number.isFinite(final.durationMs) ? final.durationMs : 0);
     }
     const names = (await readdir(join(directory, 'stills')).catch(() => [])).sort();
-    for (const name of names.filter((name) => /^t\d{9,}\.png$/.test(name))) {
+    for (const name of names.filter((name) => /^tm?\d{9,}\.png$/.test(name))) {
       const path = `${shot.id}/stills/${name}`;
       if (!await present(path)) continue;
       stats.stillsRendered += 1;
