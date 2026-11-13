@@ -36,7 +36,7 @@ import { encodeFileContactSheetAtTimes } from '../htmlComposition/encode.js';
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { assertCurrentPerformanceTakes, withDraftPerformanceFallbacks } from './performanceShot.js';
-import { assertCurrentClipDependencies, planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, isLocalRenderMark, resolveMasterAudioPath, resolveSoundBedPath } from './render.js';
+import { planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, isLocalRenderMark, resolveMasterAudioPath, resolveSoundBedPath } from './render.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { encodeDocumentComposition, prepareDocumentRender } from './documentRender.js';
 import { composedLyricWindows, projectTypographyPlan } from './composition.js';
@@ -157,7 +157,6 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
   const drawn = renderer.performanceTakes ? await withDraftPerformanceFallbacks(project, audioPath) : project;
   const prepared = await renderer.prepare(drawn);
   if (renderer.performanceTakes) {
-    assertCurrentClipDependencies(drawn);
     await assertCurrentPerformanceTakes(drawn, audioPath);
   }
   const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;
@@ -271,7 +270,6 @@ export async function renderSeekedWindow(stored, { startSec, endSec, aspect, fad
   const prepared = await renderer.prepare(project);
   const audioPath = await resolveAudio(project);
   if (renderer.performanceTakes) {
-    assertCurrentClipDependencies(project);
     await assertCurrentPerformanceTakes(project, audioPath);
   }
   const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;
