@@ -288,11 +288,15 @@ describe('continuous film motion speed', () => {
     expect(filmLookSchema.safeParse({ flickerRate: 2 }).success).toBe(false);
   });
 
-  it('starts a home movie gently: slow weave and a breathing flicker, never a strobe', () => {
+  it('starts a home movie gently: a breathing flicker, never a strobe', () => {
     const look = filmLookPreset('home-movie');
-    expect(look.weave).toBeGreaterThan(0);
-    expect(look.weaveRate).toBeLessThan(1);
     expect(look.flicker).toBeLessThanOrEqual(0.2);
     expect(look.flickerRate).toBeLessThan(1);
+  });
+
+  it('never shakes the frame unless asked: no preset turns frame shake on', () => {
+    // A wobbling frame reads as camera shake on footage, so picking a look must not add it.
+    expect(FILM_LOOK_PRESETS.filter((preset) => filmLookPreset(preset.id).weave > 0).map((preset) => preset.id)).toEqual([]);
+    expect(FILM_LOOK_CONTROLS.find((control) => control.id === 'weave')).toMatchObject({ label: 'Frame shake', def: 0 });
   });
 });

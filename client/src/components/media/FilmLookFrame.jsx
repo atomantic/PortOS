@@ -20,13 +20,30 @@ const NOMINAL = { width: 1280, height: 720 };
  *   wait for the pause.
  *
  * A neutral look renders the children untouched.
+ *
+ * `frameAt` (optional) returns the song frame now. While playing, the look
+ * follows it on every animation frame, as the render steps it each frame; a
+ * `frame` from the song's timeupdate alone moves the weave and grain a few
+ * times a second, which reads as a jolt on the beat.
  */
-export default function FilmLookFrame({ look, frame = 0, playing = false, className = '', children }) {
+export default function FilmLookFrame({ look, frame = 0, frameAt = null, playing = false, className = '', children }) {
   const ref = useRef(null);
   const [size, setSize] = useState(NOMINAL);
   const filterId = `portos-film-look-${useId().replace(/[^A-Za-z0-9_-]/g, '')}`;
   const settings = normalizeFilmLook(look);
   const active = !!settings && !isFilmLookNeutral(settings);
+  // Playing, every render reads the song's frame now, and each new frame re-renders this box only:
+  // `children` keeps its identity, so the picture under it is not re-rendered.
+  const live = playing && active && !!frameAt;
+  const motionFrame = live ? Math.max(0, Math.floor(frameAt())) : frame;
+  const [, setShownFrame] = useState(null);
+  useEffect(() => {
+    if (!live) return undefined;
+    let handle = 0;
+    const tick = () => { setShownFrame(Math.max(0, Math.floor(frameAt()))); handle = requestAnimationFrame(tick); };
+    handle = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(handle);
+  }, [live, frameAt]);
   useEffect(() => {
     const box = ref.current;
     if (!box || !active) return undefined;
@@ -38,7 +55,7 @@ export default function FilmLookFrame({ look, frame = 0, playing = false, classN
     return () => observer.disconnect();
   }, [active]);
   const exact = active && !playing ? filmLookFilterMarkup(settings, { frame, width: size.width, height: size.height, id: filterId }) : null;
-  const motion = active && playing ? filmLookMotionLayers(settings, { frame, width: size.width, height: size.height }) : null;
+  const motion = active && playing ? filmLookMotionLayers(settings, { frame: motionFrame, width: size.width, height: size.height }) : null;
   // Off, paused or playing, the children sit in one wrapper at one place in the tree, so a
   // switch between the renderings (play, pause, the look going on or off) keeps them mounted:
   // a video remounted there loads again, and its picture is gone until it has. Outside the

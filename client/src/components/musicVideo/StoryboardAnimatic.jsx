@@ -767,8 +767,10 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     audioRef.current?.pause?.();
     seekTo(t);
   }, [seekTo]);
+  // The film look's weave and grain follow the song frame by frame while it plays, as the render steps them.
+  const songFrameAt = useCallback(() => Math.round((audioRef.current?.currentTime || 0) * fps), [fps]);
   // Edit shot pauses the song so the shot stays on screen while its card opens.
-  const editShot = onEditShot ? (sceneId) => { audioRef.current?.pause?.(); onEditShot(sceneId); } : null;
+  const editShot = onEditShot ?(sceneId) => { audioRef.current?.pause?.(); onEditShot(sceneId); } : null;
   captureBasis.current = { project, lyricsOn, lookOn, outro: outro.active, outroTime: outro.t, outroStats: outro.stats };
   const captureFrame = async () => {
     const basis = captureBasis.current;
@@ -1003,7 +1005,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         style={nativeDrawing ? { aspectRatio: `${nativeData.render.width} / ${nativeData.render.height}` } : filmFrame || undefined}>
         {/* The shot's resolved film look over the whole picture, lyrics included. */}
         <FilmLookFrame look={resolvedLook} frame={Math.round((outro.active ? songEndSec + outro.t : cold.active ? cold.time - cold.seconds : time) * fps)}
-          playing={playing || cold.active || (outro.active && !outro.paused && outro.t < outro.seconds)} className="h-full w-full">
+          frameAt={outro.active || cold.active ? null : songFrameAt} playing={playing || cold.active || (outro.active && !outro.paused && outro.t < outro.seconds)} className="h-full w-full">
         {showWindow ? (
           <div className="flex h-full w-full items-center justify-center" style={frameCss ? { background: matte } : undefined}>
             <div className="relative overflow-hidden" style={frameCss || { width: '100%', height: '100%' }} data-testid="animatic-camera-frame">

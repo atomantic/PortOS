@@ -24,7 +24,7 @@ export const FILM_LOOK_GROUPS = Object.freeze([
   { id: 'color', label: 'Color' },
   { id: 'texture', label: 'Texture' },
   { id: 'frame', label: 'Frame & leak' },
-  { id: 'motion', label: 'Continuous film motion',
+  { id: 'motion', label: 'Shake & flicker',
     hint: 'Runs under every frame. Timed film events (gate jumps, shutter blinks, a leak at a moment) are set on each shot\'s Effects.' },
 ]);
 
@@ -123,12 +123,13 @@ export const FILM_LOOK_CONTROLS = Object.freeze([
     hint: 'Light sneaking into the camera body fogs one side of the frame; on video it drifts slowly.',
     words: () => 'light leak, fogged edge of frame' },
   { id: 'leakColor', group: 'frame', label: 'Leak color', term: 'leak hue', type: 'color', def: '#ff7a2a', hint: 'Real leaks are orange-red, from light through the film base.' },
-  { id: 'weave', group: 'motion', label: 'Gate weave', term: 'gate weave · frame jitter', min: 0, max: 1, step: 0.01, def: 0,
-    hint: 'The frame drifts a few pixels as film shuffles through the projector gate. Stills ignore it.',
+  // Off unless asked for: no preset turns it on, since a wobbling frame reads as camera shake.
+  { id: 'weave', group: 'motion', label: 'Frame shake', term: 'gate weave · frame jitter', min: 0, max: 1, step: 0.01, def: 0,
+    hint: 'Gate weave: the frame jitters a few pixels, as film shuffling through a projector gate does. Stills ignore it.',
     words: () => 'projected film gate weave, slight frame jitter' },
   // Rates only reshape time: every value is a function of the song frame, so a
   // slower or faster drift never moves a shot or the audio. 1 is the original speed.
-  { id: 'weaveRate', group: 'motion', label: 'Weave speed', term: 'weave rate', min: 0.25, max: 3, step: 0.05, def: 1, modifier: 'weave',
+  { id: 'weaveRate', group: 'motion', label: 'Shake speed', term: 'weave rate', min: 0.25, max: 3, step: 0.05, def: 1, modifier: 'weave',
     hint: 'How fast the frame drifts. Slow reads as a loose home projector; fast as a hand-cranked camera.' },
   { id: 'flicker', group: 'motion', label: 'Flicker', term: 'projector flicker · exposure flicker', min: 0, max: 1, step: 0.01, def: 0,
     hint: 'Frame-to-frame brightness wobble of a projector or a hand-cranked camera. Stills ignore it.',
@@ -156,13 +157,13 @@ export const FILM_LOOK_PRESETS = Object.freeze([
     values: { version: 2, defocus: 0.12, diffusion: 0.2, halation: 0.2, halationSpread: 0.4, edgeSoftness: 0.3, crossover: 0.5, toe: 0.3, shoulder: 0.5, highlightChroma: 0.3, contrast: 0.12, fade: 0.15, warmth: 0.2, tint: 0.08, grain: 0.25, grainSize: 0.3, grainColor: true, vignette: 0.4, leak: 0.7 } },
   { id: 'vhs', label: 'VHS', summary: 'Sideways smear and color bleed, a torn tracking strip along the bottom, dropouts and faint chroma noise.',
     values: { version: 2, smear: 0.6, bleed: 0.65, chroma: 0.15, diffusion: 0.15, contrast: -0.05, fade: 0.12, saturation: 0.05, tint: 0.06, grain: 0.12, grainSize: 0.15, grainColor: true, tracking: 0.3, tapeNoise: 0.08, vignette: 0.1 } },
-  { id: 'super8', label: 'Super 8', summary: 'Coarse grain, warm faded color, gate weave and projector flicker.',
-    values: { defocus: 0.15, halation: 0.35, contrast: -0.1, fade: 0.25, saturation: 0.1, warmth: 0.35, grain: 0.75, grainSize: 0.7, vignette: 0.5, leak: 0.2, weave: 0.6, flicker: 0.4 } },
-  // Restrained on purpose: a slow, gentle weave and a breathing flicker, never a strobe.
-  { id: 'home-movie', label: 'Home movie', summary: 'Old family film, gently: slow weave, a soft breathing flicker, warm faded color, coarse grain and a faint leak.',
-    values: { defocus: 0.08, halation: 0.15, contrast: -0.06, fade: 0.22, saturation: -0.05, warmth: 0.25, grain: 0.4, grainSize: 0.6, vignette: 0.3, leak: 0.12, weave: 0.3, weaveRate: 0.6, flicker: 0.15, flickerRate: 0.5 } },
+  { id: 'super8', label: 'Super 8', summary: 'Coarse grain, warm faded color and projector flicker.',
+    values: { defocus: 0.15, halation: 0.35, contrast: -0.1, fade: 0.25, saturation: 0.1, warmth: 0.35, grain: 0.75, grainSize: 0.7, vignette: 0.5, leak: 0.2, flicker: 0.4 } },
+  // Restrained on purpose: a breathing flicker, never a strobe.
+  { id: 'home-movie', label: 'Home movie', summary: 'Old family film, gently: a soft breathing flicker, warm faded color, coarse grain and a faint leak.',
+    values: { defocus: 0.08, halation: 0.15, contrast: -0.06, fade: 0.22, saturation: -0.05, warmth: 0.25, grain: 0.4, grainSize: 0.6, vignette: 0.3, leak: 0.12, flicker: 0.15, flickerRate: 0.5 } },
   { id: '16mm', label: '16mm', summary: 'Documentary film: visible grain, honest color, a gentle vignette.',
-    values: { halation: 0.25, contrast: 0.05, fade: 0.1, saturation: -0.05, grain: 0.45, grainSize: 0.4, vignette: 0.25, weave: 0.15 } },
+    values: { halation: 0.25, contrast: 0.05, fade: 0.1, saturation: -0.05, grain: 0.45, grainSize: 0.4, vignette: 0.25 } },
   { id: 'soft-analog', label: 'Soft analog', summary: 'A light hand: a little diffusion, fine grain, a touch of warmth.',
     values: { defocus: 0.1, diffusion: 0.2, halation: 0.15, fade: 0.1, warmth: 0.1, grain: 0.25, grainSize: 0.3, vignette: 0.15 } },
   { id: 'teal-orange', label: 'Teal & orange', summary: 'Modern cinema grade: teal shadows, orange skin, clean and contrasty.',
