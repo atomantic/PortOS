@@ -1,5 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 // Git/filesystem are synthetic in this suite; real durable admission has its own boundary tests.
+const releasePreflight = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+vi.mock('./releasePreflight.js', () => ({ releasePreflight }));
 vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_repo, work) => work() }));
 
 const store = { state: null, stateGate: null, readGate: null, saveGate: null, unreadable: false, stale: false, outbox: null };
@@ -34,6 +36,7 @@ const SOURCE = '/repos/app-x';
 const CHILD = '/repos/app-x/data/cos/worktrees/claim-issue-101';
 
 beforeEach(() => {
+  releasePreflight.mockReset().mockResolvedValue({ ok: true });
   store.stateGate = store.readGate = store.saveGate = null;
   store.unreadable = store.stale = false;
   store.outbox = null;
@@ -83,6 +86,20 @@ it('binds an inline synchronization checkout to the same release owner and captu
     expect(seeds.map(seed => seed.branch)).toEqual([`codex/release-${id}`, branch]);
     expect((await captureCompletedCheckouts(store.state.agents[id], { success: true, strict: true })).map(row => row.branch))
       .toEqual([`codex/release-${id}`, branch]);
+    store.state.agents[id].status = 'completed';
+    const successorId = 'agent-successor';
+    store.outbox.publications[identity].identity = identity;
+    store.state.agents[successorId] = { id: successorId, taskId: agent.taskId, status: 'running',
+      startedAt: new Date().toISOString(), metadata: { taskAnalysisType: 'do-release', isWorktree: false,
+        workspacePath: repo, releasePublication: store.state.agents[id].metadata.releasePublication } };
+    const { writeFile, readFile, realpath } = await import('node:fs/promises');
+    await writeFile(join(sync, 'unfinished-sync.txt'), 'Preserve synchronization work');
+    expect(await updateReleaseSynchronizationOwnership(successorId, 'sync-reserve')).toEqual({ reserved: true, branch, path: await realpath(sync) });
+    expect(await updateReleaseSynchronizationOwnership(successorId, 'sync-capture')).toEqual({ captured: true, branch });
+    expect(store.state.agents[successorId].metadata.checkoutSeeds).toMatchObject([{ agentId: successorId, branch, path: await realpath(sync) }]);
+    expect(await readFile(join(sync, 'unfinished-sync.txt'), 'utf8')).toBe('Preserve synchronization work');
+    expect(store.state.agents[id].metadata.checkoutSeeds).toEqual(seeds);
+
   } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
 });
 
@@ -260,6 +277,13 @@ it('reserves a release branch before creation and captures its actual locked che
     agent.taskId = 'release-task';
     agent.metadata.releaseCandidateLifecycle = { version: 1, agentId, taskId: agent.taskId, startedAt: agent.startedAt, stage: 'registered' };
     expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'candidate-reservation-missing' });
+    agent.metadata.resumedFromAgentId = 'agent-interrupted';
+    agent.metadata.releaseCandidateRecovery = { version: 1, status: 'held', predecessorAgentId: 'agent-interrupted', reason: 'candidate-contemporaneous-lineage-missing' };
+    releasePreflight.mockResolvedValueOnce({ ok: false, reason: 'release-tag-present' });
+    expect(await updateReleaseCandidateOwnership(agentId, 'reserve', { version: '1.2.3' }))
+      .toEqual({ reserved: false, reason: 'release-tag-present' });
+    expect(store.state.agents[agentId].metadata.releaseCandidate).toBeUndefined();
+    expect(releasePreflight).toHaveBeenLastCalledWith(expect.objectContaining({ agentId, repoPath: repo, version: '1.2.3' }));
     expect(await updateReleaseCandidateOwnership(agentId, 'reserve')).toEqual({ reserved: true, branch });
     const reserved = store.state.agents[agentId].metadata.releaseCandidateLifecycle;
     expect(reserved).toMatchObject({ stage: 'reserved', branch, reservedAt: store.state.agents[agentId].metadata.releaseCandidate.reservedAt });

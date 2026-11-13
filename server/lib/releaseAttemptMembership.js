@@ -1,7 +1,5 @@
-/** Store-owned membership of every dispatched release attempt on one task.
- * Unlike the spawn-budget episode, retry resets never clear it. Entries are only
- * appended by a verified dispatch and never removed, rewritten or reordered.
- * `complete: false` means an attempt may predate the record, so recovery holds. */
+/** Historical membership compatibility for independently upgraded peers. New
+ * release dispatches use Git/GitHub pre-flight and do not append this record. */
 import { isDeepStrictEqual } from 'node:util';
 
 export const RELEASE_ATTEMPTS_KEY = 'releaseAttempts';
@@ -16,18 +14,6 @@ export function parseReleaseAttempts(value) {
   if (value?.version !== 1 || typeof value.complete !== 'boolean' || !Array.isArray(value.attempts)
     || Object.keys(value).length !== 3 || value.attempts.length > MAX_ATTEMPTS || !value.attempts.every(validAttempt)) return null;
   return value;
-}
-
-/** Membership after one verified dispatch, or null when it cannot be recorded
- * (the store then refuses the dispatch, so no attempt runs unrecorded).
- * `pristine` says no earlier dispatch left accounting on the task, so a newly
- * created record can be complete. Malformed history stays an incomplete hold. */
-export function appendReleaseAttempt(current, attempt, { pristine }) {
-  const entry = { agentId: attempt.agentId, startedAt: attempt.startedAt, instanceId: attempt.instanceId };
-  const base = parseReleaseAttempts(current) || { version: 1, complete: current === undefined && pristine === true, attempts: [] };
-  if (base.attempts.some(row => isDeepStrictEqual(row, entry))) return base;
-  if (!validAttempt(entry) || base.attempts.length >= MAX_ATTEMPTS) return null;
-  return { ...base, attempts: [...base.attempts, entry] };
 }
 
 /** Peer/local union. Neither side can drop the other's entries or certify them

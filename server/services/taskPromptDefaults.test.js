@@ -956,9 +956,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
     // The cutoff precedes every potentially long task. Open-work options can
     // add only specific fixes, never refresh the release from a moving branch.
     expect(PROMPT_VERSIONS['do-release']).toBeGreaterThanOrEqual(21);
-    expect(current.indexOf('Freeze or recover the release candidate')).toBeLessThan(current.indexOf('Reconcile missing releases'));
+    expect(current.indexOf('Check publication activity and freeze the release candidate')).toBeLessThan(current.indexOf('Reconcile missing releases'));
     expect(current).toContain('RELEASE_CUT_SHA');
-    expect(current).toContain("never recapture today's development tip");
+    expect(current).toContain('reserve a fresh candidate from current development');
     expect(current).toContain('Never use the development branch as the release PR head');
     expect(current).toContain('Development-branch movement alone does not restart validation');
     expect(current).toContain('cherry-pick only its exact reviewed fix commit');

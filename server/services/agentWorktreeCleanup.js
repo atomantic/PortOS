@@ -1043,17 +1043,10 @@ async function resolveClaimContinuationPatch({ task, agentId, agentMetadata }) {
 export async function resolveTaskResumePatch({ task, agentId, agentMetadata }) {
   if (!task?.id || !agentId) return {};
   if (isTruthyMeta(task.metadata?.discardWorktree)) return {};
-  // Inline release runs execute from the primary checkout while their separately
-  // seeded candidate and synchronization trees remain in place. Their recovery
-  // endpoint transfers those exact generations; do not make workspace prep adopt
-  // either one as the coordinator's primary workspace.
-  if (agentMetadata?.taskAnalysisType === 'do-release'
-    && agentMetadata?.releasePublication?.synchronizationHandoffVersion === 2) {
-    return { resumedFromAgentId: agentId };
-  }
+  // Release retries reserve a fresh candidate after Git/GitHub pre-flight.
+  // Published inline synchronization retains its separate continuation path.
   if (agentMetadata?.taskAnalysisType === 'do-release' && agentMetadata.isWorktree === false) {
-    const { releaseCandidateResumePointer } = await import('./releaseCandidateRecovery.js');
-    return releaseCandidateResumePointer(task, agentId);
+    return agentMetadata.releasePublication?.synchronizationHandoffVersion === 2 ? { resumedFromAgentId: agentId } : {};
   }
   const claimContinuation = await resolveClaimContinuationPatch({ task, agentId, agentMetadata });
   if (claimContinuation) return claimContinuation;

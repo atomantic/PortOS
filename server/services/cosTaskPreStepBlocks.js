@@ -215,7 +215,7 @@ function resolveReleaseOptionsBlock(metadata = {}) {
     const enabled = metadata?.[key] !== false;
     return `- **${label}: ${enabled ? 'ON' : 'OFF'}** — ${enabled ? on : off}`;
   }).join('\n');
-  return `${options}\n\nRelease cutoff: before any release work, recover the existing candidate's recorded cutoff or pin the development commit at kickoff in an isolated candidate branch. Follow the project's documented release procedure. Only preparation and evidenced candidate-gating fixes may advance it; later development merges and unrelated open issues/PRs wait for the next release. Never pull, rebase, or merge the live development branch into the candidate. These limits apply even when an option is ON and override broader backlog-sweep instructions in a customized prompt.`;
+  return `${options}\n\nRelease cutoff: before any release work, check live publication activity, then pin the development commit at kickoff in an isolated candidate branch. Follow the project's documented release procedure. Only preparation and evidenced candidate-gating fixes may advance it; later development merges and unrelated open issues/PRs wait for the next release. Never pull, rebase, or merge the live development branch into the candidate. These limits apply even when an option is ON and override broader backlog-sweep instructions in a customized prompt.`;
 }
 
 /**

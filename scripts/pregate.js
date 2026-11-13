@@ -46,7 +46,7 @@ export const UNCOVERED_SUITES = Object.freeze({
   linuxContainment: 'a Linux host with bubblewrap: PORTOS_REQUIRE_LINUX_CONTAINMENT=1 npm test --prefix server -- --run <LINUX_CONTAINMENT_TESTS>',
   supercolliderLive: 'a native amd64/arm64 Linux Docker engine: npm run setup:supercollider -- --yes, then PORTOS_SUPERCOLLIDER_LIVE=1 npx vitest run services/superColliderRender.live.test.js from server/',
   dockerContainmentLive: 'a local Docker engine with Linux containers and npm registry access: PORTOS_DOCKER_CONTAINMENT_LIVE=1 npx vitest run services/dockerContainment.live.test.js from server/',
-  macosNative: 'a Mac: npm test --prefix server -- --run lib/windowsAgentProcess.darwin.test.js services/releaseCandidateRecovery.test.js',
+  macosNative: 'a Mac: npm test --prefix server -- --run lib/windowsAgentProcess.darwin.test.js',
 });
 
 /** Remedy when a prerequisite probe ran but failed (timeout, teardown): nothing indicates a missing install. */

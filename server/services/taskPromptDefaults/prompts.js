@@ -4415,11 +4415,11 @@ These are the operator's settings for this scheduled task. Follow them exactly; 
 
 {releaseOptions}
 
-## Step 0: Freeze or recover the release candidate
+## Step 0: Check publication activity and freeze the release candidate
 
 Before backlog work, reconciliation, version selection, or validation, read the repository's release procedure and resolve its development and publication branches. For PortOS, follow the frozen-candidate procedure in \`docs/VERSIONING.md\`; it overrides generic slashdo instructions to pull/rebase the source branch or promote live \`main\`.
 
-First recover any existing candidate branch and release PR with its recorded cutoff SHA, release-base SHA, previous published tag, and chosen version. Resume those exact identities; never recapture today's development tip for an interrupted run. Leave an actively owned release alone and report its owner. An older PR headed by the live development branch must be migrated to a dedicated branch at its recorded validated head (or explicitly restarted with a recorded cutoff); it is not a frozen candidate.
+First check for a live release or release-sync owner, an open promotion PR, an existing proposed version tag, and an unfinished release workflow (including old re-runs). Leave active publication alone and report its owner. For an interrupted unpublished attempt with no publication activity, reserve a fresh candidate from current development and validate it from scratch. Preserve previous branches, checkouts, uncommitted work, and private review files for ordinary branch reconciliation; historical lineage does not require an operator retirement ceremony. An already published release retains its synchronization obligations: verify that publication through the service and finish the original task's synchronization before starting another release. Inspect and carry forward any outstanding candidate/sync fixes left in earlier checkouts; a fresh branch never implies those fixes were delivered.
 
 For a new candidate, fetch the development branch once at kickoff, immediately resolve its commit to \`RELEASE_CUT_SHA\`, and create an isolated candidate branch from that SHA before lengthy work. Record the cutoff, release-base SHA, previous published tag/commit, candidate branch, and version in durable candidate metadata and the release PR body. The first fetch is the cutoff; do not infer an earlier trigger-time SHA from a timestamp. If dispatch already supplied an exact cutoff SHA, use it instead of fetching a replacement. Open issues and PRs do not delay this capture. Preserve the running application's checkout and follow the repository's worktree/dependency setup rules.
 

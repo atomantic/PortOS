@@ -19,6 +19,7 @@ export const releaseCandidateBranch = meta => meta?.releaseCandidateRecovery?.st
   ? meta.releaseCandidateRecovery.transfer.branch : meta?.releaseCandidate?.branch;
 export const hasReleaseCandidateBinding = meta => meta?.isWorktree !== true && meta?.taskAnalysisType === 'do-release'
   && ((meta.releaseCandidate?.version === 1 && typeof meta.releaseCandidate.branch === 'string')
+    || (meta.releaseSynchronizationCheckout?.version === 1 && meta.releasePublication?.status === 'verified')
     || (meta.releaseCandidateRecovery?.status === 'transferred' && typeof releaseCandidateBranch(meta) === 'string'));
 export const boundCheckoutBranches = meta => hasClaimCheckoutBindings(meta) ? meta.claimBranches
   : hasReleaseCandidateBinding(meta) ? [releaseCandidateBranch(meta), meta.releaseSynchronizationCheckout?.branch].filter(Boolean) : [meta?.worktreeBranch];

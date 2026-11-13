@@ -2416,19 +2416,17 @@ describe('orphan retries resume what the dead run left behind', () => {
     }
   });
 
-  it('holds an orphaned release durably when candidate lineage is unavailable', async () => {
+  it('requeues an interrupted release without a historical lineage hold', async () => {
     const task = { id: 'task-1', taskType: 'internal', status: 'in_progress',
       metadata: { analysisType: 'do-release', orphanRetryCount: 1, totalSpawnCount: 2 } };
     resolveTaskResumePatch.mockRejectedValueOnce(new Error('candidate-terminal-receipt-unverified'));
     await handleProvenOrphan(task.id, 'agent-dead', vi.fn().mockResolvedValue(task), {
       agentMetadata: { taskAnalysisType: 'do-release', isWorktree: false }, interrupted: true,
     });
-    const held = updateTask.mock.calls.find(([id]) => id === task.id)[1];
-    expect(held).toMatchObject({ status: 'blocked', metadata: { blockedCategory: 'release-candidate-recovery',
-      blockedReason: expect.stringContaining('Do not reserve another candidate'), orphanRetryCount: 1, totalSpawnCount: 1 } });
-    updateTask.mockClear();
-    await handleProvenOrphan(task.id, 'agent-dead', vi.fn().mockResolvedValue({ ...task, ...held }));
-    expect(updateTask).not.toHaveBeenCalled();
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'pending',
+      metadata: expect.objectContaining({ orphanRetryCount: 1, totalSpawnCount: 1 }) }), 'internal', expect.any(Object));
+    const update = updateTask.mock.calls.find(([id]) => id === task.id)[1];
+    expect(update.metadata.blockedCategory).not.toBe('release-candidate-recovery');
   });
 
   it('retains the captured predecessor on an unpublished orphan requeue without resetting retry budget', async () => {

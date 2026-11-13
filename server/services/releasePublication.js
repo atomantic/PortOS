@@ -21,9 +21,6 @@ export async function verifyAgentReleasePublication(agentId, body) {
   if (!agent || agent.status !== 'running' || agent.metadata?.taskAnalysisType !== 'do-release') {
     refuse('Publication evidence requires an active release coordinator');
   }
-  if (agent.metadata.resumedFromAgentId && agent.metadata.releaseCandidateRecovery?.status !== 'transferred') {
-    refuse('Interrupted candidate recovery must be verified before publication');
-  }
   const owner = { id: agent.id, taskId: agent.taskId, startedAt: agent.startedAt, metadata: { ...agent.metadata } };
   const cwd = agent.metadata.sourceWorkspace || agent.metadata.workspacePath;
   if (!cwd) refuse('Release coordinator has no registered repository');
@@ -91,7 +88,12 @@ export async function verifyAgentReleasePublication(agentId, body) {
   // Identity/owner checks and the write share the ordinary agent state lock.
   // Replays retain the original verification time; a competing release cannot
   // replace an earlier milestone or turn it into a terminal delivery verdict.
-  const saved = await recordAgentReleasePublication(owner, receipt);
+  const { readReleaseSynchronizationOutbox } = await import('./releaseSynchronizationStore.js');
+  const existing = (await readReleaseSynchronizationOutbox()).publications?.[identity];
+  const samePublication = existing?.version === 2 && existing.owner.taskId === agent.taskId
+    && ['identity', 'repository', 'version', 'candidateHead', 'promotionMerge', 'workflowRunId', 'tagCommit', 'tagTree']
+      .every(key => existing.publication[key] === receipt[key]);
+  const saved = await recordAgentReleasePublication(owner, samePublication ? existing.publication : receipt);
   const { ensureReleaseSynchronization } = await import('./releaseSynchronization.js');
   // A failed handoff never rolls back or overwrites verified publication.
   const synchronization = await ensureReleaseSynchronization(await getAgentRecord(agentId));

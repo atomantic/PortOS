@@ -1763,9 +1763,9 @@ describe('CI test impact planner', () => {
     expect(plan.windowsFiles).toContain(contract);
   });
 
-  it('runs the native supervised release-recovery service contract on Windows', () => {
-    const source = 'server/services/releaseCandidateRecovery.js';
-    const contract = 'server/services/releaseCandidateRecovery.test.js';
+  it('runs the native release pre-flight contract on Windows', () => {
+    const source = 'server/services/releasePreflight.js';
+    const contract = 'server/services/releasePreflight.test.js';
     const plan = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, contract] });
     expect(plan.windows).toBe(true);
     expect(plan.windowsMode).toBe('files');
@@ -2489,13 +2489,12 @@ describe('path-gated single-purpose jobs', () => {
   it('runs the macOS supervision suites only for the native supervision path and its harness', () => {
     for (const file of [
       'server/lib/windowsAgentProcess.js', 'server/lib/windowsAgentProcess.darwin.test.js', 'server/lib/darwinAgentSupervisor.py',
-      'server/services/releaseCandidateRecovery.js', 'server/services/releaseCandidateRecovery.test.js',
-      'server/services/releaseCandidateSettlement.js', 'server/vitest.config.js', 'server/package-lock.json', 'server/.npmrc',
+      'server/vitest.config.js', 'server/package-lock.json', 'server/.npmrc',
       'scripts/trusted-rebuilds.js', '.github/workflows/ci.yml',
     ]) expect(buildCiTestPlan([file]).macosNative, file).toBe(true);
     for (const file of [
       'server/lib/windowsAgentSupervisor.ps1', 'server/lib/linuxAgentSupervisor.py', 'server/lib/bufferedSpawn.js',
-      'server/services/releaseCandidateEvidence.js', 'client/src/App.jsx', 'docs/GITHUB_ACTIONS.md',
+      'server/services/releasePreflight.js', 'server/services/releaseCandidateEvidence.js', 'client/src/App.jsx', 'docs/GITHUB_ACTIONS.md',
       '.github/workflows/release.yml', 'package-lock.json', 'client/.npmrc',
     ]) expect(buildCiTestPlan([file]).macosNative, file).toBe(false);
     expect(buildCiTestPlan(['docs/README.md'], { forceFull: true }).macosNative).toBe(true);

@@ -9,7 +9,7 @@ const scan = (t = {}) => ({ worktreeInventory: [{ ...tree, ...t }] });
 const review = (over = {}) => ({ ok: true, review: { digest: 'd'.repeat(64), forge: { prHead: head },
   comparison: { disposition: 'integrated', localPatch: '+x', difference: '' }, ...over } });
 const deps = (extra = {}) => ({ readPr: vi.fn(async () => 'https://github.com/example/repo/pull/1'), prepare: vi.fn(async () => review()),
-  retire: vi.fn(async () => ({ ok: true, branchDeleted: true })), beforeMutation: vi.fn(), ...extra });
+  unlockAbandoned: vi.fn(async () => false), retire: vi.fn(async () => ({ ok: true, branchDeleted: true })), beforeMutation: vi.fn(), ...extra });
 
 describe('merged release candidate lock release', () => {
   it('retires a locked candidate whose release PR merged at the exact head, passing the lock through the fenced service', async () => {
@@ -30,6 +30,14 @@ describe('merged release candidate lock release', () => {
       expect(await retireMergedReleaseCandidates(app, scan(), d)).toEqual({ retired: [], held: [] });
       expect(d.retire).not.toHaveBeenCalled();
     }
+  });
+
+  it('returns an abandoned candidate to normal reconciliation without deleting its contents', async () => {
+    const d = deps({ readPr: vi.fn(async () => null), unlockAbandoned: vi.fn(async () => true) });
+    expect(await retireMergedReleaseCandidates(app, scan(), d)).toMatchObject({
+      retired: [], held: [{ branch, locked: false, reason: 'candidate-unlocked-for-reconciliation' }],
+    });
+    expect(d.retire).not.toHaveBeenCalled();
   });
 
   it('only considers a lock naming its own branch', () => {
