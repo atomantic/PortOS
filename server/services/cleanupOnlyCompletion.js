@@ -1,7 +1,7 @@
 import { isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { isSafeGitRef } from '../lib/gitArgs.js';
-import { prHeldForOperator } from '../lib/prDisposition.js';
+import { agentPrHeldForOperator, prHeldForOperator } from '../lib/prDisposition.js';
 import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
 
 const hasCleanupTarget = task => task?.taskType === 'internal'
@@ -40,6 +40,11 @@ async function verifyCurrentCleanup(input) {
     || !isDeepStrictEqual(task.metadata.recoveryOrigin, input.metadata.recoveryOrigin)
     || !isDeepStrictEqual(task.metadata.recoveryMergeTarget, input.metadata.recoveryMergeTarget)) return unverified('cleanup-task-changed');
   if (prHeldForOperator(task)) return unverified('cleanup-human-handoff');
+  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
+  const parentId = task.metadata.recoveryOrigin.parentAgentId;
+  const parent = parentId ? await getAgentRecord(parentId) : null;
+  if (!parent || parent.id !== parentId) return unverified('cleanup-parent-unavailable');
+  if (agentPrHeldForOperator(parent, parent)) return unverified('cleanup-parent-human-handoff');
   const { getAppById } = await import('./apps.js');
   const app = await getAppById(target.appId);
   return { ...await observeCleanupTarget(app?.repoPath, target.release), target };
