@@ -5,6 +5,7 @@ import FilmLookPreview from '../media/FilmLookPreview.jsx';
 import TemplateEffectsControls from './TemplateEffectsControls.jsx';
 import useFilmLookPresets from '../../hooks/useFilmLookPresets.js';
 import { FILM_LOOK_PRESETS, filmLookPreset, isFilmLookNeutral, normalizeFilmLook, sameFilmLook } from '../../lib/filmLook.js';
+import { formatCount } from '../../utils/formatters.js';
 import { shotCamera } from '../../../../server/lib/musicVideoFilmLook.js';
 
 const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-xs hover:bg-port-border/40 pointer-fine:sm:min-h-0';
@@ -15,7 +16,8 @@ export default function ShotFilmLook({ project, scene, onChange, fieldId }) {
   const saved = useFilmLookPresets();
   const savedLooks = saved.presets;
   const [tuning, setTuning] = useState(null);
-  useEffect(() => { setTuning(null); }, [scene.sceneId]);
+  const [shakeDraft, setShakeDraft] = useState(null);
+  useEffect(() => { setTuning(null); setShakeDraft(null); }, [scene.sceneId]);
   const ownLook = scene.filmLook ? normalizeFilmLook(scene.filmLook) : null;
   const videoLook = normalizeFilmLook(project.filmLook);
   const camera = shotCamera(project, scene);
@@ -23,6 +25,20 @@ export default function ShotFilmLook({ project, scene, onChange, fieldId }) {
   const followLook = cameraLook != null ? cameraLook : videoLook;
   const savedMatch = ownLook && !FILM_LOOK_PRESETS.some((p) => p.id === ownLook.preset)
     ? savedLooks.find((preset) => sameFilmLook(preset.look, ownLook)) : null;
+  // Frame shake is the look's gate weave, shown on its own so a shaking frame is never hidden behind Tune.
+  // Setting it on a shot that follows the video gives the shot its own copy of the look, as Tune does.
+  const shownLook = ownLook || followLook;
+  const shake = shownLook?.weave ?? 0;
+  const shakeShown = shakeDraft ?? shake;
+  const commitShake = (value) => {
+    if (shakeDraft == null) return;
+    setShakeDraft(null);
+    if (value === shake) return;
+    const look = normalizeFilmLook({ ...(shownLook || filmLookPreset('none')), weave: value, preset: 'custom' });
+    setTuning((open) => (open ? look : null));
+    onChange({ filmLook: look });
+  };
+  const shakeSource = ownLook ? 'This shot\'s look' : cameraLook != null ? 'From this camera\'s look' : 'From the video\'s look';
   const lookValue = ownLook ? (FILM_LOOK_PRESETS.some((p) => p.id === ownLook.preset) ? ownLook.preset : savedMatch ? `saved:${savedMatch.id}` : 'own') : 'video';
 
   const pickLook = (value) => {
@@ -54,6 +70,18 @@ export default function ShotFilmLook({ project, scene, onChange, fieldId }) {
           onClick={() => setTuning((open) => (open ? null : ownLook || followLook || filmLookPreset('none')))}>
           <SlidersHorizontal size={12} aria-hidden="true" /> {tuning ? 'Done' : 'Tune'}
         </button>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <label htmlFor={fieldId('frame-shake')} className="text-[11px] text-port-text-muted">Frame shake</label>
+        <input id={fieldId('frame-shake')} type="range" min={0} max={1} step={0.01} value={shakeShown}
+          title="The film look's gate weave: the picture jitters a few pixels. Off unless you turn it on."
+          onChange={(e) => setShakeDraft(Number(e.target.value))}
+          onPointerUp={(e) => commitShake(Number(e.currentTarget.value))}
+          onKeyUp={(e) => commitShake(Number(e.currentTarget.value))}
+          onBlur={(e) => commitShake(Number(e.currentTarget.value))}
+          className="min-h-[44px] min-w-16 max-w-48 flex-1 accent-port-accent pointer-fine:sm:min-h-0" />
+        <span className="w-10 text-right text-xs tabular-nums">{shakeShown === 0 ? 'Off' : `${formatCount(Math.round(shakeShown * 100))}%`}</span>
+        <span className="text-[11px] text-port-text-muted">{shakeSource}</span>
       </div>
       {project.composition?.mode === 'document' && <TemplateEffectsControls project={project} scene={scene} onCommit={onChange} />}
       {tuning && (
