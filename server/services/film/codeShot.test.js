@@ -280,6 +280,9 @@ it('syncs and renders a code-only film with Blender unconfigured', async () => {
     '    ]}',
   ].join('\n'));
   writeFileSync(join(src, 'code', 's010.js'), 'export function render() {}\n');
+  await expect(startBlenderSync(owner)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_BLENDER_NEEDS_TRUSTED_LOCAL' });
+  expect(listBlenderJobs(owner)).toEqual([]);
+  runtime.blender.control.executionMode = 'trusted-local';
   await settled(owner, [(await startBlenderSync(owner)).job.id]);
   expect(runtime.blender.control.jobs).toEqual([]);
   await settled(owner, (await enqueueBlenderRenders(owner, { quality: 'sheet', shotIds: ['s010'], sheet: { every: 6, columns: 2 } })).jobs.map((job) => job.id));
