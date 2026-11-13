@@ -433,6 +433,7 @@ describe('a swapped still brings its frame prompt', () => {
       'diner.png': 'A neon diner at night, grainy 16mm\nShe enters from the left.',
       'smile.png': 'She smiles. Keep the reference image\'s composition, subject and framing; change only what this prompt describes.',
       'edit.png': 'Edit the reference image: remove the hand. Keep everything else exactly as it is.',
+      'edit-refs.png': 'Edit the first reference image: remove the hand. Use the other reference images only as visual references for this change. Keep everything else exactly as it is.',
       'booth.png': 'An empty red booth, grainy 16mm',
     };
     for (const [name, prompt] of Object.entries(prompts)) {
@@ -441,7 +442,7 @@ describe('a swapped still brings its frame prompt', () => {
     }
     await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, concept: { ...current.concept, style: 'grainy 16mm' } } }));
     await addTake(sceneB.sceneId, { kind: 'image', assetId: 'booth.png', source: 'generated' });
-    for (const name of ['diner.png', 'edit.png']) await addTake(sceneB.sceneId, { kind: 'image', assetId: name, source: 'generated' });
+    for (const name of ['diner.png', 'edit.png', 'edit-refs.png']) await addTake(sceneB.sceneId, { kind: 'image', assetId: name, source: 'generated' });
     await addTake(sceneB.sceneId, { kind: 'endImage', assetId: 'smile.png', source: 'generated' });
     // Cut shot B: its stills land on the floor, where only their image records still name a prompt.
     await request(app).delete(`${base()}/scenes/${sceneB.sceneId}`);
@@ -451,9 +452,55 @@ describe('a swapped still brings its frame prompt', () => {
     expect((await use({ kind: 'endImage', assetId: 'smile.png' })).body.scene).toMatchObject({ framePrompt: 'A neon diner at night', endFramePrompt: 'She smiles' });
     // A refined still's prompt is an edit instruction, not a frame: the shot keeps its prompt.
     expect((await use({ kind: 'image', assetId: 'edit.png' })).body.scene.framePrompt).toBe('A neon diner at night');
+    // So is one made with more references, which leads with the first-reference form (#15982).
+    expect((await use({ kind: 'image', assetId: 'edit-refs.png' })).body.scene.framePrompt).toBe('A neon diner at night');
     const booth = await use({ kind: 'image', assetId: 'booth.png' });
     expect(booth.body.scene.framePrompt).toBe('An empty red booth');
     expect(booth.body.scene.takes.find((take) => take.assetId === 'booth.png').prompt).toBe(prompts['booth.png']);
+  });
+});
+
+describe("a shot's own still and the frame evidence its clips render from (#15982)", () => {
+  const sceneOf = async () => (await reload()).scenes.find((scene) => scene.sceneId === sceneA.sceneId);
+  const stateOf = (scene, assetId) => scene.takes.find((take) => take.assetId === assetId).dependencyState?.status;
+  const review = (takeId, body) => request(app).patch(`${base()}/scenes/${sceneA.sceneId}/takes/${takeId}`).send(body);
+  // The still's take carries the prompt it was rendered from, as a generated frame does.
+  const shotWithClip = async () => {
+    seedImage('own.png');
+    seedVideoHistory([{ id: 'clip-own' }]);
+    const still = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'own.png', source: 'generated' });
+    await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-own', source: 'generated', sourceImageId: 'own.png' });
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, scenes: current.scenes.map((scene) => (scene.sceneId === sceneA.sceneId
+      ? { ...scene, takes: scene.takes.map((take) => (take.assetId === 'own.png' ? { ...take, prompt: 'A different lighthouse at dusk' } : take)) } : scene)) } }));
+    return still.body.take;
+  };
+
+  // Uniquely catches pairing a clip with the shot's own still rewriting the shot's prompt, which stales that still and its clip.
+  it("keeps the prompt when the shot's own selected still is placed with a clip", async () => {
+    await shotWithClip();
+    const placed = await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'video', assetId: 'clip-own', withAssetId: 'own.png' });
+    expect(placed.status).toBe(200);
+    const scene = await sceneOf();
+    expect(scene.framePrompt).toBe('lighthouse still');
+    expect([stateOf(scene, 'own.png'), stateOf(scene, 'clip-own')]).toEqual(['current', 'current']);
+  });
+
+  // Uniquely catches a confirmation that leaves the still or its clip stale, or that accepts a clip or an unselected frame.
+  it('confirms the selected still against the edited shot, which makes its clip current again', async () => {
+    const still = await shotWithClip();
+    await projects.updateScene(project.id, sceneA.sceneId, { framePrompt: 'The lighthouse still, described as it was drawn' });
+    let scene = await sceneOf();
+    expect([stateOf(scene, 'own.png'), stateOf(scene, 'clip-own')]).toEqual(['stale', 'stale']);
+    const clip = scene.takes.find((take) => take.assetId === 'clip-own');
+    race.onRequest = (req) => { req.portosAuthContext = { enabled: false }; };
+    expect((await review(clip.takeId, { confirmFrame: true })).status).toBe(400);
+    expect((await review(still.takeId, { confirmFrame: true })).status).toBe(200);
+    scene = await sceneOf();
+    expect([stateOf(scene, 'own.png'), stateOf(scene, 'clip-own')]).toEqual(['current', 'current']);
+    expect(scene.takes.find((take) => take.assetId === 'own.png').frameConfirmation).toMatchObject({ reviewer: { kind: 'local' } });
+    seedImage('other.png');
+    const other = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'other.png', source: 'generated' });
+    expect((await review(other.body.take.takeId, { confirmFrame: true })).status).toBe(409);
   });
 });
 

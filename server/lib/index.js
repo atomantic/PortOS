@@ -305,6 +305,7 @@ export * from './promptPartials.js';
 export * from './promptSectionRenderer.js';
 export * from './promptSystemStages.js';
 export * from './promptTemplate.js';
+export * from './quickEditPrompt.js';
 export * from './credentialBootstrap.js';
 export * from './providerCooldown.js';
 export * from './providerModels.js';

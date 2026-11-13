@@ -628,12 +628,15 @@ export const musicVideoPoolUseSchema = z.object({
   }
 });
 
-// Review a take: reject/restore it and/or leave a note for regeneration.
+// Review a take: reject/restore it, leave a note for regeneration, acknowledge a rendering defect or confirm a frame.
 export const musicVideoTakeReviewSchema = z.object({
   acknowledgeRenderQuality: z.object({ basis: z.string().min(1), note: z.string().min(1).max(1000) }).strict().optional(),
+  // The selected frame still matches the shot's current prompt (#15982).
+  confirmFrame: z.literal(true).optional(),
   status: z.enum(MUSIC_VIDEO_TAKE_STATUSES).optional(),
   note: z.string().max(1000).nullable().optional(),
-}).strict().refine((r) => r.status !== undefined || r.note !== undefined || r.acknowledgeRenderQuality !== undefined, { message: 'status, note or acknowledgement is required' });
+}).strict().refine((r) => r.status !== undefined || r.note !== undefined || r.acknowledgeRenderQuality !== undefined || r.confirmFrame !== undefined,
+  { message: 'status, note, acknowledgement or frame confirmation is required' });
 
 const colorMatchNumber = (key) => z.number().min(COLOR_MATCH_LIMITS[key][0]).max(COLOR_MATCH_LIMITS[key][1]);
 

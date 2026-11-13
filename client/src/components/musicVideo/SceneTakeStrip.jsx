@@ -195,6 +195,16 @@ export default function SceneTakeStrip({
                   )}
                 </div>
               ))}
+              {frameTake && isSelected && take.dependencyState?.status === 'stale' && onReview && take.takeId && (
+                <div className="space-y-1 text-xs text-port-warning">
+                  <p className="break-words">Made for an earlier version of this shot{take.dependencyState.reasons?.length ? `: ${take.dependencyState.reasons.join(' · ')}` : ''}</p>
+                  <button type="button" disabled={busy} className="min-h-11 rounded border border-port-warning px-2 py-1 disabled:opacity-50"
+                    title="Keep this picture: record that it matches the shot as it now reads, so the clips made from it can render"
+                    onClick={() => onReview(take, { confirmFrame: true })}>
+                    Still matches
+                  </button>
+                </div>
+              )}
               {noteFor === take.takeId && (
                 <div>
                   <label htmlFor={noteInputId(take)} className="sr-only">Take note</label>
