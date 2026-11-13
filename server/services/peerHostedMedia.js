@@ -1,7 +1,7 @@
 /**
- * Peer-hosted media index — the "host" half of the Media Collections sync mode.
+ * Peer-hosted media index — the "host" half of media sync.
  *
- * A peer whose `mediaSyncMode` is `host` never has its collection image/video
+ * A peer whose `mediaSyncMode` is `host` never has its collection or mood-board image/video
  * bytes copied into this install's `data/`. Instead the receiver records, per
  * `<kind>:<filename>`, WHICH peer hosts the file, and the local static mounts
  * (`/data/images`, `/data/videos`, `/data/video-thumbnails`,
@@ -36,8 +36,8 @@ const STREAM_TIMEOUT_MS = 30000;
 // original, while leaving large original-media streams their longer deadline.
 const THUMBNAIL_TIMEOUT_MS = 3000;
 
-// kind → { local dir thunk, peer static-mount prefix }. Only kinds a collection
-// can hold. Thumbnails are derived views of these two, resolved below.
+// Hosted gallery media kinds. Thumbnails are derived views of these two,
+// resolved below; other record assets retain their copy behavior.
 const KIND_DIRS = {
   image: () => PATHS.images,
   video: () => PATHS.videos,
@@ -160,13 +160,13 @@ export function reconcileHostedMedia(peerInstanceId, kind, filenames, checked) {
 }
 
 /**
- * Host-mode split of a push's missing-asset list. Collection-owned entries whose
+ * Host-mode split of a push's missing-asset list. Eligible record-owned entries whose
  * bytes are ABSENT locally are recorded as hosted by `peerInstanceId` and
- * dropped from the pull list; everything else (non-collection assets, or a file
+ * dropped from the pull list; everything else (other assets, or a file
  * that exists locally but differs) still flows through the normal copy path.
- * `collectionKeys` is a Set of `<kind>:<filename>`. Returns the assets to pull.
+ * `eligibleKeys` is a Set of `<kind>:<filename>`. Returns the assets to pull.
  */
-export async function takeHostedAssets(peerInstanceId, missingAssets, collectionKeys) {
+export async function takeHostedAssets(peerInstanceId, missingAssets, eligibleKeys) {
   const hosted = [];
   const remaining = [];
   for (const entry of missingAssets) {
@@ -174,7 +174,7 @@ export async function takeHostedAssets(peerInstanceId, missingAssets, collection
     // A digest-less manifest is metadata, not evidence of local bytes.
     // Legacy manifests still use the normal copy path.
     const verified = /^[a-f0-9]{64}$/i.test(entry.sha256 || '');
-    const owned = verified && dir && collectionKeys.has(hostedKey(entry.kind, entry.filename));
+    const owned = verified && dir && eligibleKeys.has(hostedKey(entry.kind, entry.filename));
     if (owned && !existsSync(join(dir, entry.filename))) hosted.push(entry);
     else remaining.push(entry);
   }
