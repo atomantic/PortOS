@@ -57,13 +57,16 @@ describe('branch reconciliation completion', () => {
     const release = { branch: 'claim/issue-42', path: '/example/checkout', head: 'a'.repeat(40) };
     getTaskById.mockResolvedValue({ id: 'task-example', metadata: { reconcileRetirements: [{ release,
       cognition: { ownerAgentId: 'original-owner', observation: 'exact-observation' } }] } });
+    reconcile.mockResolvedValueOnce({ cleaned: [], inFlight: [{ branch: 'fix/active' }],
+      skipped: [{ branch: 'fix/held', reason: 'worktree-locked' }], worktreeInventory: [] });
     readLocalBranchPresence.mockResolvedValueOnce(null);
     await settleBranchReconcileRun({ ...agent, result: { success: true } });
     expect(recordRepoCleanupRecovery).not.toHaveBeenCalled();
     expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('example', expect.objectContaining({
-      status: 'incomplete', reason: 'cleanup-local-target-unverified', remaining: [{ ...release, reason: 'cleanup-ref-unreadable' }],
+      status: 'incomplete', reason: 'cleanup-local-target-unverified', remaining: expect.arrayContaining([{ ...release, reason: 'cleanup-ref-unreadable' },
+        expect.objectContaining({ branch: 'fix/held', reason: 'worktree-locked' }), { branch: 'fix/active', reason: 'actionable' }]),
     }));
-    expect(emitLog).toHaveBeenLastCalledWith('warn', expect.stringContaining('remaining 1; scan incomplete'), expect.any(Object));
+    expect(emitLog).toHaveBeenLastCalledWith('warn', expect.stringContaining('remaining 3; scan incomplete'), expect.any(Object));
     recordBranchReconcileOutcome.mockClear();
     await settleBranchReconcileRun({ ...agent, result: { success: true } });
     expect(recordBranchReconcileOutcome).not.toHaveBeenCalled();

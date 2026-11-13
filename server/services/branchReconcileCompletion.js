@@ -51,13 +51,6 @@ export async function settleBranchReconcileRun(agent) {
     await recordCleanupOutcome(agent.id, { ...target.release, status: verified ? 'verified' : 'blocked', reason: verdict.reason });
     if (!verified) unverifiedRetirements.push({ ...target.release, reason: verdict.reason });
   }
-  if (unverifiedRetirements.length) {
-    await recordBranchReconcileOutcome(app.id, {
-      status: 'incomplete', reason: 'cleanup-local-target-unverified',
-      remaining: unverifiedRetirements,
-      nextAction: 'Inspect the remaining checkout or local branch and rerun branch reconciliation.',
-    });
-  }
   const inFlightBranches = new Set((result.inFlight || []).map(branch => branch.branch));
   const holds = describeIdleReconcilePark([...(result.skipped || []), ...unverifiedRetirements], [], {
     wip: result.wip, detachedWorktrees: result.detachedWorktrees,
@@ -66,6 +59,13 @@ export async function settleBranchReconcileRun(agent) {
     // remaining checkout projections and includes retained claim reservations.
     worktreeInventory: result.worktreeInventory?.filter(tree => !inFlightBranches.has(tree.branch)) ?? null,
   });
+  if (unverifiedRetirements.length) {
+    await recordBranchReconcileOutcome(app.id, {
+      status: 'incomplete', reason: 'cleanup-local-target-unverified',
+      remaining: [...holds.remaining, ...(result.inFlight || []).map(row => ({ branch: row.branch, reason: 'actionable' }))],
+      nextAction: 'Inspect the remaining checkout or local branch and rerun branch reconciliation.',
+    });
+  }
   const uncertain = unverifiedRetirements.length > 0 || result.forgeUnavailable || result.prStateUnavailable
     || result.worktreeInventory == null || result.orphanRemotes?.remoteUnavailable;
   const remaining = inFlightBranches.size + holds.remaining.length;
