@@ -4341,7 +4341,7 @@ it('shares Done between editor, board and sheet, and accepts remote changes afte
   updateMusicVideoScene.mockImplementationOnce(() => new Promise(resolve => { settle = resolve; }));
   await openProject(project, 'produce');
   fireEvent.click(screen.getByRole('checkbox', { name: 'Done', exact: true }));
-  expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-1', project.scenes[0].sceneId, { shotSheet: { location: 'Park', checked: true } }, { silent: true });
+  expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-1', project.scenes[0].sceneId, { shotSheet: { checked: true } }, { silent: true });
   await act(async () => settle({}));
   expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).toBeChecked();
   expect(within(screen.getByLabelText('Storyboard thumbnails')).getByRole('button', { name: 'Open Shot 1' })).toHaveClass('border-port-success');

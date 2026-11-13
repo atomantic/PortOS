@@ -1231,7 +1231,7 @@ function ProjectWorkspace({
   const setSceneDone = (sceneId, checked) => {
     const scene = selected.scenes?.find((entry) => entry.sceneId === sceneId);
     if (!scene) return Promise.resolve(false);
-    return saveScene(sceneId, { shotSheet: { ...scene.shotSheet, checked } }).then((saved) => {
+    return saveScene(sceneId, { shotSheet: { checked } }).then((saved) => {
       if (saved) patchProject(selected.id, (project) => ({ scenes: project.scenes?.map((entry) => entry.sceneId === sceneId
         ? { ...entry, shotSheet: { ...entry.shotSheet, checked } } : entry) }));
       return saved;
