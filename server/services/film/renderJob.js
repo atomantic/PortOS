@@ -25,7 +25,7 @@ import { compositeFilmStill, renderFilmCodeFrames } from './codeRender.js';
 import { updateBlenderJob } from './jobs.js';
 import { openBlenderJobLog } from './logs.js';
 import {
-  blenderCompositedHandleName, blenderCompositedHandlesDir, blenderFilmOptions, blenderFrameName, blenderFramePattern, blenderFramesDir, blenderHandleFrameName, blenderLayerFrameName,
+  blenderCompositedHandleName, blenderCompositedHandlesDir, blenderFilmOptions, blenderFrameName, blenderFramePattern, blenderFramesDir, blenderHandleFrameName, blenderHandleFrameParts, blenderLayerFrameName,
   blenderLayerFramePattern, blenderLayerFramesDir, blenderLayerHandleFrameName, blenderLayersRoot, blenderRenderFile, blenderSheetName,
   blenderSheetsFile, blenderShotPoster, blenderShotVideo, blenderStillThumbnail, blenderStillsFile,
   countBlenderFrames, countBlenderHandleFrames, isBlenderRenderCurrent,
@@ -99,11 +99,10 @@ async function compositeHandleFrames(owner, shot, fps, quality, layers) {
 async function dropHandleFramesOutside(directory, handleRanges) {
   const names = await readdir(directory).catch(() => []);
   for (const name of names) {
-    const match = /^handle_(in|out)_(m)?(\d{6,})\.(?:jpg|png)$/.exec(name);
-    if (!match) continue;
-    const frame = match[2] ? -Number(match[3]) : Number(match[3]);
-    const span = match[1] === 'in' ? handleRanges.in : handleRanges.out;
-    if (frame < span.startFrame || frame >= span.endFrame) await rm(join(directory, name), { force: true });
+    const parsed = blenderHandleFrameParts(name);
+    if (!parsed) continue;
+    const span = parsed.side === 'in' ? handleRanges.in : handleRanges.out;
+    if (parsed.frame < span.startFrame || parsed.frame >= span.endFrame) await rm(join(directory, name), { force: true });
   }
 }
 
@@ -119,12 +118,11 @@ async function missingLayerFrames(directory, range, handleRanges) {
       if (frame >= range.startFrame && frame < range.endFrame) frames += 1;
       continue;
     }
-    const handle = /^handle_(in|out)_(m)?(\d{6,})\.png$/.exec(name);
-    if (!handle) continue;
-    const frame = handle[2] ? -Number(handle[3]) : Number(handle[3]);
-    const span = handle[1] === 'in' ? handleRanges.in : handleRanges.out;
-    if (frame < span.startFrame || frame >= span.endFrame) continue;
-    if (handle[1] === 'in') inFrames += 1;
+    const handle = blenderHandleFrameParts(name);
+    if (!handle || !name.endsWith('.png')) continue;
+    const span = handle.side === 'in' ? handleRanges.in : handleRanges.out;
+    if (handle.frame < span.startFrame || handle.frame >= span.endFrame) continue;
+    if (handle.side === 'in') inFrames += 1;
     else outFrames += 1;
   }
   return (range.frameCount - frames) + (handleRanges.in.frameCount - inFrames) + (handleRanges.out.frameCount - outFrames);
