@@ -2313,8 +2313,10 @@ describe('Image Gen Routes', () => {
   describe('FLUX.3 HTTP generation', () => {
     it('requires operator authority for runtime installation and accepts an authorized local install', async () => {
       const { installFlux3Runtime } = await import('../services/imageGen/flux3Runtime.js');
+      const { hostControlRouteGate } = await import('../services/authGate.js');
       const denied = express();
       denied.use((req, _res, next) => { req.portosAuthContext = { enabled: true, authenticated: false }; next(); });
+      denied.use(hostControlRouteGate);
       denied.use('/api/image-gen', imageGenRoutes);
       denied.use(errorMiddleware);
       const rejected = await request(denied).post('/api/image-gen/setup/flux3-install?runtime=flux3');

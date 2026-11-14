@@ -28,6 +28,7 @@ const service = await import('./castAndSetsService.js');
 const production = await import('./production.js');
 const { castSetsInspectionInputs } = await import('../../lib/musicVideoCastSetsInspection.js');
 const { musicVideoEvents } = await import('./events.js');
+const { hostControlRouteGate } = await import('../authGate.js');
 
 const app = express();
 app.use(express.json());
@@ -36,6 +37,8 @@ app.use((req, _res, next) => {
   req.portosAuthContext = method ? { enabled: true, authenticated: true, method } : { enabled: false, authenticated: false, method: null };
   next();
 });
+// hostControlRouteGate (#16018) refuses non-operator writes before the handlers run.
+app.use(hostControlRouteGate);
 app.use('/api/music-video', musicVideoRoutes);
 app.use(errorMiddleware);
 

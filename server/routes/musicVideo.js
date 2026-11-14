@@ -904,7 +904,7 @@ router.get('/:id/render-cleanup', asyncHandler(async (req, res) => {
 router.post('/:id/render-cleanup', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoRenderCleanupSchema, req.body ?? {});
   const { cleanupRenders } = await import('../services/musicVideo/renderCleanup.js');
-  res.json(await cleanupRenders(req.params.id, input, await planOptions(req)));
+  res.json(await cleanupRenders(req.params.id, input, { decode: true }));
 }));
 
 // Per-shot render segments (shotSegments.js): every shot's cache state, one
@@ -934,7 +934,7 @@ router.get('/:id/film-looks', asyncHandler(async (req, res) => {
 }));
 router.delete('/:id/film-looks/:lookId', asyncHandler(async (req, res) => {
   const { deleteFilmLook } = await import('../services/musicVideo/shotSegments.js');
-  res.json(await deleteFilmLook(req.params.id, req.params.lookId, await planOptions(req)));
+  res.json(await deleteFilmLook(req.params.id, req.params.lookId, { decode: true }));
 }));
 // The cold open's sound (shots before the song), mixed for the animatic to play
 // before the song: the same mix the final render lays in front of it.
@@ -1073,21 +1073,12 @@ router.post('/:id/code/sections/:sectionId/regenerate', asyncHandler(async (req,
 // install; the record keeps a pointer to the current immutable version.
 // A new document gets its overlay text checked in the background, so the
 // findings are waiting at the storyboard approval (local browser work, no provider).
-// The check renders the document in the headless composition browser, so it
-// runs only for a caller with host control (#13055); anyone else gets the
-// import alone, and the gated production-review text check runs it later.
-// Decide before responding: once the response ends the socket can close and
-// lose the address that makes a caller local. authGate loads lazily because
-// this router is reached by many suites that mock settings. Both deferred
-// imports (`authGateModule`, declared with `planOptions`, and
-// `overlayTextModule`) are memoized: overlapping first loads of one specifier can resolve
-// past a test's module mock.
+// The check renders the document in the headless composition browser. Finish
+// loading before responding so this request owns the kickoff; the returned
+// check remains background work. The deferred import is memoized because
+// overlapping first loads can resolve past a test's module mock.
 let overlayTextModule;
-const checkOverlayTextAfterImport = async (req, projectId) => {
-  const { requestHasHostControl } = await (authGateModule ??= import('../services/authGate.js'));
-  if (!requestHasHostControl(req)) return;
-  // Finish loading before responding so this request owns the kickoff. The
-  // returned check remains background work; its full settlement is awaitable.
+const checkOverlayTextAfterImport = async (projectId) => {
   await (overlayTextModule ??= import('../services/musicVideo/overlayTextService.js'))
     .then(({ checkOverlayTextInBackground }) => { checkOverlayTextInBackground(projectId); })
     .catch((err) => console.error(`❌ Overlay text check did not start: ${err.message}`));
@@ -1109,7 +1100,7 @@ router.post('/:id/composition/document/zip', documentZipUpload, asyncHandler(asy
   if (!req.file) throw new ServerError('No file uploaded (multipart field "file")', { status: 400, code: 'VALIDATION_ERROR' });
   try {
     const imported = await importDocumentZip(req.params.id, req.file.path, req.file.originalname);
-    await checkOverlayTextAfterImport(req, req.params.id);
+    await checkOverlayTextAfterImport(req.params.id);
     res.status(201).json(imported);
   } finally {
     await unlink(req.file.path).catch(() => {});
@@ -1119,7 +1110,7 @@ router.post('/:id/composition/document/zip', documentZipUpload, asyncHandler(asy
 router.post('/:id/composition/document/directory', asyncHandler(async (req, res) => {
   const { directory } = validateRequest(musicVideoDocumentDirectoryImportSchema, req.body || {});
   const imported = await importDocumentDirectory(req.params.id, directory);
-  await checkOverlayTextAfterImport(req, req.params.id);
+  await checkOverlayTextAfterImport(req.params.id);
   res.status(201).json(imported);
 }));
 
@@ -1156,7 +1147,7 @@ router.post('/:id/composition/document/sections/:sectionId/regenerate', asyncHan
 router.post('/:id/composition/document/accept', asyncHandler(async (req, res) => {
   const { directory } = validateRequest(musicVideoDocumentCandidateSchema, req.body || {});
   const accepted = await acceptMixedMediaDocument(req.params.id, directory);
-  await checkOverlayTextAfterImport(req, req.params.id);
+  await checkOverlayTextAfterImport(req.params.id);
   res.json(accepted);
 }));
 
@@ -1787,8 +1778,6 @@ router.post('/:id/cast-and-sets/regenerate', asyncHandler(async (req, res) => {
 
 router.post('/:id/cast-and-sets/use-image', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCastSetsUseImageSchema, req.body || {});
-  const { assertHostControl } = await import('../services/authGate.js');
-  assertHostControl(req);
   res.status(202).json(await useCastAndSetsImage(req.params.id, input));
 }));
 
@@ -1799,15 +1788,11 @@ router.post('/:id/cast-and-sets/edit-image-preview', asyncHandler(async (req, re
 
 router.post('/:id/cast-and-sets/edit-image', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCastSetsImageEditSchema, req.body || {});
-  const { assertHostControl } = await import('../services/authGate.js');
-  assertHostControl(req);
   res.status(202).json(await editCastAndSetsImage(req.params.id, input));
 }));
 
 router.post('/:id/cast-and-sets/accept-image-edit', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCastSetsImageEditDecisionSchema, req.body || {});
-  const { assertHostControl } = await import('../services/authGate.js');
-  assertHostControl(req);
   res.status(202).json(await acceptCastAndSetsImageEdit(req.params.id, input));
 }));
 
@@ -1834,8 +1819,6 @@ router.post('/:id/cast-and-sets/feedback', asyncHandler(async (req, res) => {
 
 router.post('/:id/cast-and-sets/feedback/render', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCastAndSetsFeedbackRenderSchema, req.body || {});
-  const { assertHostControl } = await import('../services/authGate.js');
-  assertHostControl(req);
   res.status(202).json(await renderCastAndSetsFeedback(req.params.id, input));
 }));
 
@@ -1866,16 +1849,12 @@ router.post('/:id/cast-and-sets/resume', asyncHandler(async (req, res) => {
 router.post('/:id/cast-and-sets/inspect', asyncHandler(async (req, res) => {
   const { musicVideoCastSetsInspectSchema } = await import('../lib/musicVideoCastSetsInspectionValidation.js');
   const input = validateRequest(musicVideoCastSetsInspectSchema, req.body || {});
-  const { assertHostControl } = await import('../services/authGate.js');
-  assertHostControl(req);
   res.json(await reinspectCastAndSetsImages(req.params.id, input));
 }));
 
 router.post('/:id/cast-and-sets/acknowledge-image', asyncHandler(async (req, res) => {
   const { musicVideoCastSetsAcknowledgeSchema } = await import('../lib/musicVideoCastSetsInspectionValidation.js');
   const input = validateRequest(musicVideoCastSetsAcknowledgeSchema, req.body || {});
-  const { assertHostControl } = await import('../services/authGate.js');
-  assertHostControl(req);
   const reviewer = req.portosAuthContext.enabled ? await requireProductionReviewer(req) : { kind: 'local', label: 'Local operator' };
   res.json(await acknowledgeCastAndSetsImage(req.params.id, input, reviewer));
 }));

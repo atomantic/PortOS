@@ -7,7 +7,6 @@ import { promisify } from 'util';
 import { getListeningPorts, platform } from '../lib/platform.js';
 import { listProcessesStrict } from '../services/pm2.js';
 import { detectAppWithAi } from '../services/aiDetect.js';
-import { requestHasHostControl } from '../services/authGate.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, detectRepoBodySchema, detectPortBodySchema, detectPm2BodySchema, detectAiBodySchema } from '../lib/validation.js';
 import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
@@ -301,7 +300,7 @@ router.post('/ai', asyncHandler(async (req, res) => {
     throw new ServerError(confinement.error, { status: 400, code: confinement.code });
   }
 
-  const result = await detectAppWithAi(path, providerId, { hasHostControl: requestHasHostControl(req) });
+  const result = await detectAppWithAi(path, providerId, { hasHostControl: true });
 
   res.json(result);
 }));

@@ -23,7 +23,6 @@ import {
 } from '../lib/brainValidation.js';
 import * as repoCloner from '../services/repoCloner.js';
 import { deriveRepoLinkFields } from '../lib/repoLinkFields.js';
-import { assertHostControl } from '../services/authGate.js';
 import { queueMalwareScan, restudyRepoLink } from '../services/repoIntake.js';
 import { getScanReport } from '../services/malwareScanReports.js';
 
@@ -123,7 +122,6 @@ router.get('/links/:id', asyncHandler(async (req, res) => {
  */
 router.post('/links', asyncHandler(async (req, res) => {
   const { url, ...options } = validateRequest(linkInputSchema, req.body);
-  if (deriveRepoLinkFields(url).isRepo && options.autoClone !== false) assertHostControl(req);
 
   const existing = await brainService.getLinkByUrl(url);
   if (existing) {

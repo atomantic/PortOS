@@ -13,7 +13,6 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, voicePiperFetchBodySchema } from '../lib/validation.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
 import { getVoiceConfig, updateVoiceConfig } from '../services/voice/config.js';
-import { requestHasHostControl } from '../services/authGate.js';
 import { checkAll, invalidateHealthCache } from '../services/voice/health.js';
 import * as facetimeBridge from '../services/voice/facetimeBridge.js';
 import { reconcile, verifyBinaries, verifyModels, downloadPiperVoice, startWhisper, stopWhisper } from '../services/voice/bootstrap.js';
@@ -156,12 +155,9 @@ router.put('/config', asyncHandler(async (req, res) => {
   let next = await updateVoiceConfig(parsed.data);
   invalidateHealthCache();
   // Reconcile starts/stops whisper-server under PM2 and can run the setup
-  // script, so it is host work (#13055). hostControlRouteGate refuses this
-  // write to a caller without host control (#16018); the check here is the
-  // handler's own backstop.
-  const reconciliation = requestHasHostControl(req)
-    ? await reconcile(next).catch((err) => ({ error: err.message }))
-    : { skipped: 'host-control' };
+  // script, so it is host work (#13055); hostControlRouteGate (#16018) admits
+  // only a caller with host control to this write.
+  const reconciliation = await reconcile(next).catch((err) => ({ error: err.message }));
   if (next.enabled && next.tts?.retiredEngine && !reconciliation?.skipped && !reconciliation?.error && !reconciliation?.setupRequired) {
     next = await updateVoiceConfig({ tts: { retiredEngine: null } });
   }

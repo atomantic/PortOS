@@ -41,27 +41,11 @@ describe('Detect Routes', () => {
     expect(response.body).toEqual({ success: false, error: 'No AI provider configured' });
   });
 
-  // #9008: whether a non-tool-free provider may run is decided from the
-  // server-derived authority, never from anything the caller sends.
-  it('hands detection the server-derived host-control verdict, ignoring the body', async () => {
+  // #9008: detection runs as the operator the route gate (#16018) admitted, never from the body.
+  it('hands detection the operator verdict, ignoring the body', async () => {
     detectAppWithAi.mockResolvedValue({ success: false, error: 'No AI provider configured' });
-    const withAuth = (authContext) => {
-      const scoped = express();
-      scoped.use(express.json());
-      scoped.use((req, _res, next) => { req.portosAuthContext = authContext; next(); });
-      scoped.use('/api/detect', detectRoutes);
-      scoped.use(errorMiddleware);
-      return scoped;
-    };
-
-    // Password-free install, loopback connection: the operator.
-    await request(withAuth({ enabled: false })).post('/api/detect/ai').send({ path: '/example/project' });
+    await request(app).post('/api/detect/ai').send({ path: '/example/project', hasHostControl: false });
     expect(detectAppWithAi).toHaveBeenLastCalledWith('/example/project', undefined, { hasHostControl: true });
-
-    // A peer credential on a password-gated install never qualifies.
-    await request(withAuth({ enabled: true, authenticated: true, method: 'basic' }))
-      .post('/api/detect/ai').send({ path: '/example/project', hasHostControl: true });
-    expect(detectAppWithAi).toHaveBeenLastCalledWith('/example/project', undefined, { hasHostControl: false });
   });
 
   it('returns the standard error envelope when AI detection throws', async () => {
@@ -293,7 +277,7 @@ describe('POST /api/detect/ai workspace-root confinement', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ success: true, app: { name: 'example' } });
-    expect(detect).toHaveBeenCalledWith(OUTSIDE_DEFAULT_ROOTS, undefined, { hasHostControl: false });
+    expect(detect).toHaveBeenCalledWith(OUTSIDE_DEFAULT_ROOTS, undefined, { hasHostControl: true });
   });
 
   it('stays unrestricted when PORTOS_WORKSPACE_ROOTS is unset', async () => {
@@ -305,6 +289,6 @@ describe('POST /api/detect/ai workspace-root confinement', () => {
       .send({ path: OUTSIDE_DEFAULT_ROOTS });
 
     expect(response.status).toBe(200);
-    expect(detect).toHaveBeenCalledWith(OUTSIDE_DEFAULT_ROOTS, undefined, { hasHostControl: false });
+    expect(detect).toHaveBeenCalledWith(OUTSIDE_DEFAULT_ROOTS, undefined, { hasHostControl: true });
   });
 });

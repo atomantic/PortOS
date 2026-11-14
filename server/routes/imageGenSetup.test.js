@@ -64,7 +64,7 @@ vi.mock('../lib/pythonSetup.js', async (importOriginal) => ({
   isFlux2InstallSatisfied: vi.fn(async () => true),
 }));
 
-import { authGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import imageGenSetupRoutes from './imageGenSetup.js';
 import { PATHS } from '../lib/fileUtils.js';
 
@@ -76,7 +76,7 @@ const buildApp = (remoteAddress) => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress });
     next();
   });
-  app.use(authGate);
+  app.use(authGate, hostControlRouteGate);
   app.use(express.json());
   app.use('/api/image-gen/setup', imageGenSetupRoutes);
   app.use(errorMiddleware);

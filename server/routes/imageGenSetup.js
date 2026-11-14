@@ -37,7 +37,6 @@ import { downloadMossWeights, mossModelCacheStatus } from '../services/imageGen/
 const router = Router();
 
 export async function streamMossAction(req, res, start, installer = 'MOSS Swift') {
-  if (!requestHasHostControl(req)) forbidWithoutHostControl();
   const { send, safeEnd } = openSseStream(res);
   const log = createInstallLogger({ installer });
   const emit = event => { log.onEvent(event); send(event); };
@@ -310,7 +309,6 @@ router.post('/create-venv', asyncHandler(async (req, res) => {
     if (!isAllowedPython(basePython)) {
       throw new ServerError('basePython must be a python interpreter (basename python/python3/python3.NN)', { status: 400 });
     }
-    if (!(await resolveSetupInterpreter(req, basePython))) forbidWithoutHostControl();
   }
   const base = basePython || (await detectPython());
   if (!base) {
@@ -348,7 +346,6 @@ router.post('/install', asyncHandler(async (req, res) => {
       code: 'INVALID_PYTHON_PATH',
     });
   }
-  if (!(await resolveSetupInterpreter(req, input.pythonPath))) forbidWithoutHostControl();
   const disallowed = input.packages.filter((p) => !REQUIRED_PIP_NAMES.has(p));
   if (disallowed.length) {
     throw new ServerError(`Packages not in allowlist: ${disallowed.join(', ')}`, {

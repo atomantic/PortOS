@@ -8,8 +8,7 @@ import { executeMaintenance, getMaintenanceInventory, previewMaintenance } from 
 const router = Router();
 const previewSchema = z.object({ operationId: z.string().min(1).max(100) }).strict();
 const executeSchema = z.object({ token: z.string().uuid(), confirmation: z.string().max(150) }).strict();
-router.use(requireHostControl);
-router.get('/', asyncHandler(async (_req, res) => res.json(await getMaintenanceInventory())));
+router.get('/', requireHostControl, asyncHandler(async (_req, res) => res.json(await getMaintenanceInventory())));
 router.post('/preview', asyncHandler(async (req, res) => {
   const { operationId } = validateRequest(previewSchema, req.body);
   res.json(await previewMaintenance(operationId));
