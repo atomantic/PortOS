@@ -347,21 +347,6 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     }
     return marked;
   });
-  // Owning-service recovery only. Validation and durable receipt publication
-  // run under the same journal lock as the exact reservation removal.
-  const reconcileAbandonedAgent = ({ hold, agentId, validate, publish, replay }) => transaction(state => {
-    if (state.hold?.id !== hold.id || state.hold?.revision !== hold.revision || state.exclusive)
-      throw error('MAINTENANCE_STALE', 'The recovery hold changed or is exclusively owned.');
-    const matches = state.operations.filter(op => op.resource === agentId);
-    if (matches.length === 0) return replay();
-    if (matches.length !== 1 || matches[0].kind !== 'agent' || matches[0].unsettled)
-      throw error('MAINTENANCE_STALE', 'Recovery requires exactly one settled agent reservation.');
-    const operation = { ...matches[0] };
-    validate(operation);
-    const receipt = publish(operation);
-    state.operations = state.operations.filter(op => op.id !== operation.id);
-    return receipt;
-  });
   // The operator's receipt preserves the exact reservations and explicitly
   // records unknown output. It does not settle a release-candidate obligation.
   const reconcileInactiveReservations = ({ hold, update, revision, expected, ordinaryAgentIds = [], validate, publish, replay }) => {
@@ -405,7 +390,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
   };
   const { observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability } = exclusive;
   return { deferredUpdate, harnessActions, directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, reconcilePublicationRefusal, operations, releaseOperations, markOperationsUncertain, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
-    observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability, reconcileAbandonedAgent, reconcileInactiveReservations, isLocallyFinished, assertCurrent };
+    observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability, reconcileInactiveReservations, isLocallyFinished, assertCurrent };
 }
 
 // Resolve the configured data root on first use, after host/test setup.

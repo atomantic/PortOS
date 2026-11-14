@@ -11,7 +11,7 @@ machine-local runtime journal**. It must fence both the API and standalone CoS r
 before either can use PostgreSQL or start work. Its bounded live-operation set and
 operator hold are not app records and never federate. Data snapshots copy the
 `workflow-maintenance/` subtree as evidence, but no restore ever installs it (see
-[Explicitly abandoned duplicate agents](#explicitly-abandoned-duplicate-agents)).
+`scripts/reconcile-maintenance-reservations.mjs` for reservation recovery).
 The schema is versioned; an absent file starts Normal, while corrupt/future state or
 an interrupted transaction fails closed. Replacement uses exclusive directory locking,
 file/directory fsync and atomic rename. No seed or DB migration is required.
@@ -273,35 +273,20 @@ step; never edit the request's hashes to bypass them. The hold and every other
 operation remain; run/task outcomes and transcript warnings stay unchanged.
 `acknowledged-uncertainty` with `outputCompleteness: "unknown"` records an operator
 disposition, **not** successful saving. These machine-local receipts share the
-backup/restore exclusions described below for abandoned-agent receipts; they
+backup/restore exclusions described below; they
 have no seed, migration, federation or automatic expiry.
 
-### Explicitly abandoned duplicate agents
+### Machine-local maintenance receipts
 
-A local operator may reconcile a user-killed duplicate that saved no output with
-`node scripts/reconcile-abandoned-agent.mjs <agent-id> <run-id> --confirm-abandoned <reason>`.
-Begin a normal maintenance hold first and run from the install checkout;
-worktree code deliberately ignores the `PORTOS_DATA_ROOT` pin. This is an
-explicit abandonment decision, never automatic expiry or a successful-run verdict.
-The command refuses present agent/runner ownership, live recorded PIDs, retained
-agent output (including archives), worktrees/branches, nonempty run output,
-untrusted evidence, other reservations for that agent, and failed settlement.
-The exact hold and reservation are checked under the journal transaction lock.
-
-Before releasing the matching reservation, the owning service durably publishes
-`data/workflow-maintenance/abandoned-<run-id>.json`, retaining the original operation,
-operator reason, and evidence fingerprints. Other operations and the hold remain.
-Run/task outcomes are unchanged. Repeating the same request reuses its receipt;
-it cannot settle a replacement reservation. Receipt-first interrupted publication
-can be retried after normal journal recovery; the command never steals a transaction
-lock. These machine-local recovery receipts are never federated and never restored:
-a data snapshot copies them, but every file restore (full or scoped, preview and
-execution) preserves this machine's `workflow-maintenance/` subtree byte-for-byte
-and refuses an explicit selection with `BACKUP_RESTORE_MACHINE_LOCAL`, because
-installing another snapshot's journal or receipts would replace local authority.
-To use a receipt as an investigation artifact elsewhere, copy it out of the
-snapshot or the live data directory separately. This deliberately narrow command
-does not recover nonempty output or general failed saves; those still require the owning workflow's recovery.
+Manual reservation reconciliation uses `node scripts/reconcile-maintenance-reservations.mjs`
+(`inspect` / `reconcile`). Its receipts and the journal are machine-local and never
+federated or restored: a data snapshot copies the `workflow-maintenance/` subtree, but
+every file restore (full or scoped, preview and execution) preserves this machine's copy
+byte-for-byte and refuses an explicit selection with `BACKUP_RESTORE_MACHINE_LOCAL`,
+because installing another snapshot's journal or receipts would replace local authority.
+Historical `abandoned-<run-id>.json` receipts from the retired single-agent command
+remain under the same exclusion. To use a receipt as an investigation artifact elsewhere,
+copy it out of the snapshot or the live data directory separately.
 
 
 ## The Four Storage Classes
