@@ -367,6 +367,22 @@ export function musicVideoLinkedCastReferences(project, castMedia) {
 /** A saved pick of a catalog asset, which only resolves once its cast member's media loads. */
 export const isCatalogMediaReferenceId = (id) => /^mvr-(guide|linked)-/.test(String(id));
 
+/**
+ * A saved linked pick whose image is still on its character's record but no longer offered
+ * (a replaced canonical) renders as that character's current lead image; others pass through.
+ */
+function currentLinkedPickIds(project, ids, castMedia, linked) {
+  const offered = new Set(linked.map((ref) => ref.id));
+  const lead = (subjectId) => linked.find((ref) => ref.subjectId === subjectId && ref.role === 'character')?.id;
+  const owned = (id) => activeMusicVideoSubjects(project?.concept).find((subject) => (castMedia?.[subject.ingredientId] || [])
+    .some((m) => m && !m.deleted && musicVideoLinkedReferenceId(m.mediaKey) === id));
+  return [...new Set(ids.map((id) => {
+    if (!String(id).startsWith('mvr-linked-') || offered.has(id)) return id;
+    const subject = owned(id);
+    return (subject && lead(subject.id)) || id;
+  }))];
+}
+
 /** The cast members whose media this scene's saved references need before they can resolve or render. */
 export function musicVideoSceneCastIds(project, scene) {
   const variant = sceneCastVariant(scene);
@@ -382,9 +398,10 @@ export function musicVideoSceneCastIds(project, scene) {
  */
 export function musicVideoMissingFrameLinkedPicks(project, scene, castMedia) {
   if (!Array.isArray(scene?.frameReferenceIds)) return [];
-  const choices = [...musicVideoLinkedCastReferences(project, castMedia), ...musicVideoCastGuideReferences(project, scene, castMedia)]
+  const linked = musicVideoLinkedCastReferences(project, castMedia);
+  const choices = [...linked, ...musicVideoCastGuideReferences(project, scene, castMedia)]
     .filter((ref) => !isLegacyCatalogReference(project, ref));
-  return scene.frameReferenceIds.filter((id) => isCatalogMediaReferenceId(id) && !choices.some((ref) => ref.id === id));
+  return currentLinkedPickIds(project, scene.frameReferenceIds, castMedia, linked).filter((id) => isCatalogMediaReferenceId(id) && !choices.some((ref) => ref.id === id));
 }
 
 /** What a picker offers: the linked cast first, minus any image the project's own references already offer. */
@@ -408,11 +425,12 @@ function baseConditioningReferences(project, scene, castMedia = null, limit = MU
   const panel = musicVideoPanelArtReferences(scene).filter((ref) => !isLegacyCatalogReference(project, ref));
   // The director's own pick for this shot (the shot card's References row) wins over the automatic set.
   if (Array.isArray(scene?.frameReferenceIds)) {
-    const choices = [...research, ...guides, ...panel, ...musicVideoReferenceChoices(project), ...musicVideoLinkedCastReferences(project, castMedia)]
+    const linked = musicVideoLinkedCastReferences(project, castMedia);
+    const choices = [...research, ...guides, ...panel, ...musicVideoReferenceChoices(project), ...linked]
       .filter((ref) => !isLegacyCatalogReference(project, ref));
     // A pick of a character's replaced canonical image renders as the current one (catalogPickResolver).
     const resolve = project?.castAndSets?.source === 'catalog' ? catalogPickResolver(project) : null;
-    const ids = resolve ? [...new Set(scene.frameReferenceIds.map((id) => resolve(id).id))] : scene.frameReferenceIds;
+    const ids = currentLinkedPickIds(project, resolve ? scene.frameReferenceIds.map((id) => resolve(id).id) : scene.frameReferenceIds, castMedia, linked);
     return ids.map((id) => choices.find((ref) => ref.id === id)).filter(Boolean)
       .slice(0, limit);
   }
