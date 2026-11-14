@@ -1124,6 +1124,8 @@ function IngredientEditor() {
             sheetMedia={media.filter(isSheetMedia).map(protectMedia)}
             missingMedia={missingMedia}
             onDetach={identityReadOnly ? undefined : handleDetachMedia}
+            onSetPortrait={identityReadOnly ? undefined : handleSetPortrait}
+            portraitKey={media.find((m) => m.kind === 'portrait')?.mediaKey || null}
             blockedReason={renderBlockedReason('sheet')}
             savedStamp={record.updatedAt || null}
             onSheetFile={handleSheetFile}

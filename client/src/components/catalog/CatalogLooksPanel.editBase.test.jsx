@@ -134,4 +134,19 @@ describe('CatalogLooksPanel Generate preview', () => {
     await act(async () => { fireEvent.click(refine); });
     expect(refineCatalogMedia).toHaveBeenLastCalledWith('cat-chr-2', { mediaKey: 'pair.png', kind: 'reference', feedback }, { silent: true });
   });
+  // A sheet (e.g. the comparison's own half) can be promoted to the record's canonical image.
+  it('sets a sheet as the canonical image and marks the current one', async () => {
+    listCatalogSheetVariants.mockResolvedValue({ variants: [{ id: 'comparison', label: 'Comparison (two characters)' }] });
+    const onSetPortrait = vi.fn();
+    const sheetMedia = [
+      { mediaKey: 'half.png', kind: 'reference', role: 'sheet:comparison-solo' },
+      { mediaKey: 'current.png', kind: 'reference', role: 'sheet:comparison' },
+    ];
+    render(<CatalogSheetsPanel ingredientId="cat-chr-1" payload={{}} sheetMedia={sheetMedia} portraitKey="current.png" onSetPortrait={onSetPortrait} />);
+    const buttons = await screen.findAllByRole('button', { name: /Set as canonical image/ });
+    expect(buttons).toHaveLength(1);
+    expect(screen.getByText('Canonical image')).toBeInTheDocument();
+    fireEvent.click(buttons[0]);
+    expect(onSetPortrait).toHaveBeenCalledWith('half.png');
+  });
 });
