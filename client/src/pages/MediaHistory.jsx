@@ -9,7 +9,7 @@ import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Combine, Image as ImageIcon, Film, Search, X } from 'lucide-react';
+import { Combine, Image as ImageIcon, Film, Search, X, ShieldCheck } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import MediaCard from '../components/media/MediaCard';
@@ -19,6 +19,8 @@ import VideoUpscaleDrawer from '../components/media/VideoUpscaleDrawer';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import RatingFilterChips from '../components/media/RatingFilterChips';
+import BatchVerificationBar from '../components/media/BatchVerificationBar';
+import { verifyImageNow } from '../services/apiImageVerifier';
 import { normalizeImage, normalizeMediaRow, normalizeVideo } from '../components/media/normalize';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
@@ -85,6 +87,68 @@ export default function MediaHistory() {
     setSelected((s) => s.includes(videoId) ? s.filter((x) => x !== videoId) : [...s, videoId]);
   }, []);
   const handleSelectCard = useCallback((item) => toggleSelect(item.id), [toggleSelect]);
+
+  const [verifyMode, setVerifyMode] = useState(false);
+  const [selectedVerify, setSelectedVerify] = useState([]);
+  const [verifyProfile, setVerifyProfile] = useState('strict_anatomy');
+  const [batchVerifying, setBatchVerifying] = useState(false);
+  const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
+
+  const visibleImages = useMemo(() => items.filter((it) => it.kind === 'image' && it.filename), [items]);
+
+  const toggleSelectVerify = useCallback((filename) => {
+    setSelectedVerify((s) => s.includes(filename) ? s.filter((x) => x !== filename) : [...s, filename]);
+  }, []);
+
+  const handleSelectAllImages = useCallback(() => {
+    setSelectedVerify(visibleImages.map((it) => it.filename));
+  }, [visibleImages]);
+
+  const handleClearVerifySelection = useCallback(() => {
+    setSelectedVerify([]);
+  }, []);
+
+  const handleRunBatchVerify = useCallback(async (profileId) => {
+    if (selectedVerify.length === 0) return;
+    setBatchVerifying(true);
+    setBatchProgress({ current: 0, total: selectedVerify.length });
+
+    let passCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < selectedVerify.length; i++) {
+      const filename = selectedVerify[i];
+      setBatchProgress({ current: i + 1, total: selectedVerify.length });
+      const targetItem = items.find((it) => it.filename === filename);
+      try {
+        const res = await verifyImageNow({
+          filename,
+          profileId,
+          prompt: targetItem?.prompt || '',
+        });
+        if (res?.verdict === 'pass') passCount++;
+        else if (res?.verdict === 'fail') failCount++;
+
+        setItems((all) => all.map((it) => {
+          if (it.filename === filename) {
+            return {
+              ...it,
+              verification: res,
+              raw: { ...it.raw, verification: res },
+            };
+          }
+          return it;
+        }));
+      } catch (err) {
+        console.error(`Verification error on ${filename}:`, err);
+      }
+    }
+
+    setBatchVerifying(false);
+    toast.success(`Batch verification complete: ${passCount} passed, ${failCount} defect(s) flagged.`);
+    setSelectedVerify([]);
+    refresh();
+  }, [selectedVerify, items, setItems, refresh]);
 
   const settleStitch = useCallback((id, error = null) => {
     if (!stitchJobsRef.current.delete(id)) return false;
@@ -281,7 +345,22 @@ export default function MediaHistory() {
           </Link>
           <button
             type="button"
-            onClick={() => { setStitchMode((m) => !m); setSelected([]); }}
+            onClick={() => {
+              setVerifyMode((v) => !v);
+              setSelectedVerify([]);
+              if (!verifyMode) setStitchMode(false);
+            }}
+            className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded border ${
+              verifyMode
+                ? 'bg-port-accent text-white border-port-accent'
+                : 'border-port-border text-gray-300 hover:text-white hover:bg-port-border/50'
+            }`}
+          >
+            <ShieldCheck className="w-3.5 h-3.5" /> {verifyMode ? `Cancel Verify (${selectedVerify.length})` : 'Verify Images'}
+          </button>
+          <button
+            type="button"
+            onClick={() => { setStitchMode((m) => !m); setSelected([]); if (!stitchMode) setVerifyMode(false); }}
             className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded border ${
               stitchMode
                 ? 'bg-port-accent text-white border-port-accent'
@@ -302,6 +381,21 @@ export default function MediaHistory() {
           )}
         </div>
       </div>
+
+      {verifyMode && (
+        <BatchVerificationBar
+          selectedCount={selectedVerify.length}
+          totalImages={visibleImages.length}
+          onSelectAll={handleSelectAllImages}
+          onClearSelection={handleClearVerifySelection}
+          onRunBatchVerify={handleRunBatchVerify}
+          isVerifying={batchVerifying}
+          progress={batchProgress}
+          onCancel={() => { setVerifyMode(false); setSelectedVerify([]); }}
+          selectedProfile={verifyProfile}
+          onProfileChange={setVerifyProfile}
+        />
+      )}
 
       <MediaBatchImport onImported={item => {
         if ((filter === 'all' || filter === item.kind) && !query && !favoritesOnly && !ratingFilter) {
@@ -328,30 +422,44 @@ export default function MediaHistory() {
           <MediaHistoryGrid items={items}>
             {(it) => {
               const inStitch = stitchMode && it.kind === 'video';
-              const idx = inStitch ? selected.indexOf(it.id) : -1;
+              const stitchIdx = inStitch ? selected.indexOf(it.id) : -1;
+              const inVerify = verifyMode && it.kind === 'image';
+              const verifyIdx = inVerify ? selectedVerify.indexOf(it.filename) : -1;
+              const isSelected = inStitch ? (stitchIdx !== -1) : inVerify ? (verifyIdx !== -1) : false;
+              const selectionLabel = inStitch
+                ? (stitchIdx !== -1 ? stitchIdx + 1 : null)
+                : inVerify
+                  ? (verifyIdx !== -1 ? verifyIdx + 1 : null)
+                  : null;
+              const cardClick = inStitch
+                ? handleSelectCard
+                : inVerify
+                  ? () => toggleSelectVerify(it.filename)
+                  : undefined;
+              const selectionActive = stitchMode || verifyMode;
               return (
                 <MediaCard
                   key={it.key}
                   item={it}
-                  onPreview={setPreview}
-                  onClick={inStitch ? handleSelectCard : undefined}
-                  onRemix={!stitchMode ? handleRemix : undefined}
-                  onSendToImage={!stitchMode ? handleSendToImage : undefined}
-                  onSendToVideo={!stitchMode ? handleSendToVideo : undefined}
-                  onSendTo3d={!stitchMode ? handleSendTo3d : undefined}
-                  onContinue={!stitchMode ? handleContinue : undefined}
-                  onUpscale={!stitchMode && it.kind === 'video' ? handleUpscale : undefined}
-                  onDelete={!stitchMode ? handleDelete : undefined}
-                  onCancelPendingDelete={!stitchMode ? handleCancelPendingDelete : undefined}
-                  onToggleHidden={!stitchMode ? handleToggleHidden : undefined}
+                  onPreview={selectionActive ? undefined : setPreview}
+                  onClick={cardClick}
+                  onRemix={!selectionActive ? handleRemix : undefined}
+                  onSendToImage={!selectionActive ? handleSendToImage : undefined}
+                  onSendToVideo={!selectionActive ? handleSendToVideo : undefined}
+                  onSendTo3d={!selectionActive ? handleSendTo3d : undefined}
+                  onContinue={!selectionActive ? handleContinue : undefined}
+                  onUpscale={!selectionActive && it.kind === 'video' ? handleUpscale : undefined}
+                  onDelete={!selectionActive ? handleDelete : undefined}
+                  onCancelPendingDelete={!selectionActive ? handleCancelPendingDelete : undefined}
+                  onToggleHidden={!selectionActive ? handleToggleHidden : undefined}
                   pendingPeerName={it.pendingDelete?.peerId ? peerNames[it.pendingDelete.peerId] : null}
-                  selectionLabel={idx !== -1 ? idx + 1 : null}
-                  selected={idx !== -1}
-                  disabled={stitchMode && it.kind !== 'video'}
-                  hideActions={stitchMode}
+                  selectionLabel={selectionLabel}
+                  selected={isSelected}
+                  disabled={(stitchMode && it.kind !== 'video') || (verifyMode && it.kind !== 'image')}
+                  hideActions={selectionActive}
                   {...getCardProps(it.key)}
-                  onToggleStar={!stitchMode ? toggleStar : undefined}
-                  onAnnotate={!stitchMode && it.kind === 'image' ? handleAnnotate : undefined}
+                  onToggleStar={!selectionActive ? toggleStar : undefined}
+                  onAnnotate={!selectionActive && it.kind === 'image' ? handleAnnotate : undefined}
                 />
               );
             }}
