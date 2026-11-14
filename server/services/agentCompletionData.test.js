@@ -27,7 +27,7 @@ describe('completion data against a cold agent index (#13461)', () => {
 
     const migration = loadAgentIndex();
     const value = { summary: 'Synthetic completion payload.' };
-    const reference = await storeCompletionData(agent, 'sentinel', value);
+    const reference = await storeCompletionData(agent, 'replay', value);
     await migration;
 
     expect(await readCompletionData(agent, reference)).toEqual(value);

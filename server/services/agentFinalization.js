@@ -2590,10 +2590,8 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
  */
 async function persistCompletionSummary(agentId, { workspacePath, finalSummary = null, existingRecord = null }) {
   const { doneSentinelPath, parseSentinelPayload } = await import('../lib/agentSentinel.js');
-  const { readCompletionSentinel } = await import('./agentCompletionSentinel.js');
-  const ingested = await readCompletionSentinel(agentId, workspacePath);
   const sentinelPath = doneSentinelPath(workspacePath, agentId);
-  const contents = ingested?.contents ?? (sentinelPath ? await tryReadFile(sentinelPath) : null);
+  const contents = sentinelPath ? await tryReadFile(sentinelPath) : null;
   let summary = null;
   let source = null;
   let taskOutcome = null;
@@ -2640,8 +2638,6 @@ async function persistCompletionSummary(agentId, { workspacePath, finalSummary =
       && existing.metadata.taskSummary.trim()) return taskOutcome;
   }
   await updateAgent(agentId, { metadata: {
-    ...(ingested ? { completionSentinel: ingested.receipt, completionSentinelData: await storeCompletionData(
-      existingRecord || await getAgentRecord(agentId), 'sentinel', ingested.contents), completionSentinelContents: undefined } : {}),
     taskSummary: summary,
     taskSummarySource: source,
     taskOutcome,

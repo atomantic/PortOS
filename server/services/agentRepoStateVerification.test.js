@@ -1527,7 +1527,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
       ['a failed chain hand-off', { pipeline: { status: 'failed', retryable: false, reason: 'pipeline-write-unverified' } }],
       ['a running chain hand-off', { creative: { status: 'running', retryable: false } }],
       ['an abandoned chain hand-off', { pipeline: { status: 'abandoned', reason: 'external-handoff-unverified' } }],
-      ['a chain hold with another reason', { pipeline: { status: 'held', reason: 'completion-sentinel-generation-pending' } }],
+      ['a chain hold with another reason', { pipeline: { status: 'held', reason: 'example-other-reason' } }],
       ['an external hand-off held on capture', { jira: { status: 'held', retryable: true, reason: 'checkout-capture-pending' } }],
       ['a held worktree stage', { pipeline: { status: 'held', reason: 'checkout-retirement-pending' }, worktree: { status: 'held', value: ['warning'] } }],
       ['a held completion signal', { sentinel: { status: 'held' } }],

@@ -8,7 +8,7 @@ import { assertNotRealDataWrite } from '../lib/testDataIsolation.js';
 
 export const MAX_COMPLETION_DATA_BYTES = 64 * 1024 * 1024;
 const MAX_BYTES = MAX_COMPLETION_DATA_BYTES;
-const kinds = new Set(['replay', 'sentinel', 'retirement-evidence']);
+const kinds = new Set(['replay', 'retirement-evidence']);
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const lease = stat => [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String).join(':');
 const validRun = agent => /^[A-Za-z0-9_-]+$/.test(agent?.id || '') && Number.isFinite(Date.parse(agent.startedAt));
