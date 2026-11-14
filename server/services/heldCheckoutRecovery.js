@@ -1076,10 +1076,6 @@ async function retireHeldCheckout({ repoPath, release, review }, opts = {}) {
   if (!defaultBranch) return { ok: false, reason: 'default-branch-unavailable' };
   if (branch === defaultBranch) return { ok: false, reason: 'protected-branch' };
 
-  const { retainReleaseSynchronizationReview } = await import('./releaseSynchronization.js');
-  const scopedRelease = { ...release, repoPath, checkoutIdentity: release.checkoutIdentity || await readRetirementCheckoutIdentity(release.path) };
-  const retainedReview = await retainReleaseSynchronizationReview(scopedRelease).catch(() => false);
-  if (!retainedReview) return { ok: false, reason: 'release-sync-local-review-unretained' };
   // A merged PR at the release's exact head makes uncommitted and untracked files
   // disposable. Asked before taking the ownership lock (a forge call); each gate
   // below re-binds the answer to the head it observes.

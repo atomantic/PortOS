@@ -638,7 +638,7 @@ describe('CoS Routes', () => {
             evidence: { prUrl: 'https://github.com/example/repo/pull/101', headSha: 'b'.repeat(40) },
           },
         },
-        synchronization: { status: 'blocked', blocker: 'publisher-candidate-checkout-unverified' },
+        synchronization: { status: 'blocked', blocker: 'synchronization-pr-pending' },
       });
       getAgents.mockResolvedValue([
         { id: 'agent-sync-pub', status: 'completed', metadata: { taskDescription: 'Publish release' } }
@@ -648,7 +648,7 @@ describe('CoS Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body[0].metadata.releasePublication).toMatchObject({ status: 'verified', identity });
       expect(response.body[0].metadata.releaseSynchronization).toMatchObject({
-        status: 'blocked', blocker: 'publisher-candidate-checkout-unverified',
+        status: 'blocked', blocker: 'synchronization-pr-pending',
         identity,
         prUrl: 'https://github.com/example/repo/pull/101',
       });

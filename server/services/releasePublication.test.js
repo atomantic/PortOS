@@ -206,7 +206,7 @@ for (const [name, fail] of [
   const outbox = JSON.parse(await readFile(join(PATHS.cos, 'release-synchronization.json'), 'utf8'));
   const entry = outbox.publications[original.identity];
   expect(entry.registeredAt).toEqual(expect.any(String));
-  expect(entry.checkouts).toEqual(fixture.state.agents.publisher.metadata.checkoutSeeds);
+  expect(entry.checkouts).toEqual([]);
   expect(Object.values(entry.obligations).every(value => value.status === 'pending')).toBe(true);
 });
 

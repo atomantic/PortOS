@@ -13,7 +13,6 @@ import { loraTrainingConfigSchema } from './mediaValidation.js';
 import { ServerError } from './errorHandler.js';
 import { isSafeGitRef } from './gitArgs.js';
 import { PM2_PROCESS_NAME_MAX, PM2_PROCESS_NAME_RE } from '../../lib/pm2ProcessName.js';
-import { releaseSynchronizationResetCheckoutSchema } from './releaseSynchronization.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap, presetProviderIdSchema, providerRefSchema } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
 import { LAYERED_INTELLIGENCE_SOURCE_KEYS } from './layeredIntelligenceSourceKeys.js';
@@ -3131,7 +3130,6 @@ export const cosScheduleTriggerBodySchema = z.object({
 });
 export const releaseSynchronizationResetBodySchema = z.object({ identity: z.string().regex(/^[a-f0-9]{64}$/),
   reason: z.string().trim().min(1).max(1000),
-  checkouts: z.array(releaseSynchronizationResetCheckoutSchema).max(10).default([]),
 }).strict();
 export const releaseDeliveryVerificationBodySchema = z.object({ identity: z.string().regex(/^[a-f0-9]{64}$/),
   prNumber: z.number().int().positive().safe() }).strict();

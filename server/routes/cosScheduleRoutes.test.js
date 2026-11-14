@@ -55,9 +55,10 @@ describe('CoS Schedule Routes', () => {
     releaseSync.resetReleaseSynchronization.mockResolvedValue({ identity, reason });
     const path = '/api/cos/schedule/release-synchronization/operator-reset';
     expect((await request(app).post(path).send({ identity, reason })).body).toEqual({ identity, reason });
-    expect(releaseSync.resetReleaseSynchronization).toHaveBeenCalledWith(identity, reason, 'local-operator', []);
+    expect(releaseSync.resetReleaseSynchronization).toHaveBeenCalledWith(identity, reason, 'local-operator');
     expect((await request(app).post(path).send({ identity, reason: '' })).status).toBe(400);
     expect((await request(app).post(path).send({ identity, reason, actor: 'operator-session' })).status).toBe(400);
+    expect((await request(app).post(path).send({ identity, reason, checkouts: [] })).status).toBe(400);
   });
 
   it('accepts only an identity and PR number for independent delivery verification', async () => {

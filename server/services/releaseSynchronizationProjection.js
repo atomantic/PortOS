@@ -5,48 +5,25 @@
 import { readReleaseSynchronizationOutbox } from './releaseSynchronizationStore.js';
 import { effectiveReleaseSynchronization, releaseSynchronizationReset } from '../lib/releaseSynchronization.js';
 
-const HELD_CHECKOUT_NEXT_ACTIONS = {
-  'release-checkout-locked': 'Another owner holds this worktree lock. Leave it if that owner is still working. Once it has finished, unlock the worktree and the next retirement sweep retires the checkout.',
-  'release-checkout-generation-changed': 'This path no longer holds the recorded checkout. Inspect it, then clean it up separately, or retire this checkpoint with the operator reset.',
-  'daemon-stopped': 'Automatic retirement waits for the CoS daemon. Start the daemon and the next sweep retries.',
-  'automatic-retirement-disabled': 'Automatic retirement is turned off. Turn it back on and the next sweep retries.',
-};
-const HELD_CHECKOUT_DEFAULT_ACTION = 'The retirement sweep retries on the release retry schedule. If this reason persists, inspect the checkout or retire this checkpoint with the operator reset.';
-
-/** Holds explain a retirement blocker only; any other state makes them stale. */
-function heldCheckoutsPayload(entry, synchronization, reset) {
-  const rows = entry.obligations?.retirement?.evidence?.heldCheckouts;
-  if (reset || !Array.isArray(rows) || !rows.length || !synchronization?.blocker?.startsWith('retirement:')) return null;
-  return rows.map(row => ({ ...row, nextAction: HELD_CHECKOUT_NEXT_ACTIONS[row.reason] || HELD_CHECKOUT_DEFAULT_ACTION }));
-}
-
 function buildReleaseSynchronizationPayload(entry) {
   if (!entry) return null;
   const synchronization = effectiveReleaseSynchronization(entry);
   const reset = releaseSynchronizationReset(entry);
-  const heldCheckouts = heldCheckoutsPayload(entry, synchronization, reset);
-  const syncPr = entry.obligations?.synchronizationPr?.evidence?.prUrl
-    || entry.obligations?.localReview?.evidence?.prUrl
-    || null;
-  const syncHead = entry.obligations?.synchronizationPr?.evidence?.headSha
-    || entry.obligations?.localReview?.evidence?.receipt?.completedHead
-    || (entry.obligations?.localReview?.evidence?.receipt?.version === 1 && entry.obligations.localReview.evidence.receipt.reviewedHead)
-    || entry.obligations?.requiredCi?.evidence?.headSha
-    || null;
+  // A pre-#16017 entry that is never re-inspected (a reset one) may name its PR
+  // only in a retired obligation's evidence.
+  const evidence = ['synchronizationPr', 'releaseAncestry', 'localReview', 'requiredCi']
+    .map(name => entry.obligations?.[name]?.evidence);
+  const pick = key => evidence.find(row => row?.[key])?.[key] || null;
 
   return {
     version: 1,
     identity: entry.identity,
     status: synchronization?.status || 'pending',
-    prUrl: syncPr,
-    headSha: syncHead,
+    prUrl: pick('prUrl'),
+    headSha: pick('headSha'),
     blocker: synchronization?.blocker || null,
     ...(synchronization?.delivery && { delivery: synchronization.delivery }),
     ...(reset && { operatorReset: reset, nextAction: 'The operator retired this checkpoint; its historical synchronization remains unverified.' }),
-    ...(synchronization?.status === 'blocked' && synchronization.blocker === 'publisher-candidate-checkout-unverified' && !reset && !synchronization.delivery && {
-      nextAction: 'No server-captured seed identifies the publisher checkout, so this synchronization cannot be verified. Confirm the release reached development, then retire this checkpoint with the operator reset.',
-    }),
-    ...(heldCheckouts && { heldCheckouts }),
     verifiedAt: synchronization?.verifiedAt || null,
     checkedAt: synchronization?.checkedAt || null,
     retryAt: synchronization?.retryAt || null,

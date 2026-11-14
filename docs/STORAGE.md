@@ -306,7 +306,7 @@ copy it out of the snapshot or the live data directory separately.
 
 ## `db-primary` — app-native relational records
 
-- Release synchronization outbox — `cos_release_synchronizations`, keyed by the forge-verified publication identity, retains the original publication receipt, coordinator generation, immutable continuation task/policy, physical checkout seeds, pending delivery obligations and registration retry evidence. PostgreSQL is authoritative and covered by the database backup. The `data/cos/release-synchronization.json` adapter is development/test only. This is machine-local execution/ownership state, never federated; the continuation is pinned to the producing instance through existing task controls. No data seed or input migration is needed for this new empty domain; additive schema initialization creates the table on upgrade. Neither completed-history eviction nor task execution success releases its identity or verifies synchronization. Adapter: `server/services/releaseSynchronizationStore.js`.
+- Release synchronization outbox — `cos_release_synchronizations`, keyed by the forge-verified publication identity, retains the original publication receipt, coordinator generation, immutable continuation task/policy, its delivery obligations (back-merge PR merged; release ancestry and version on the default branch) and registration retry evidence. Entries written before #16017 also carry immutable checkout seeds and older obligation names, which stay readable and are no longer consulted. PostgreSQL is authoritative and covered by the database backup. The `data/cos/release-synchronization.json` adapter is development/test only. This is machine-local execution/ownership state, never federated; the continuation is pinned to the producing instance through existing task controls. No data seed or input migration is needed for this new empty domain; additive schema initialization creates the table on upgrade. Neither completed-history eviction nor task execution success releases its identity or verifies synchronization. Adapter: `server/services/releaseSynchronizationStore.js`.
 
 - Deep audit evidence — `deep_audit_ledgers` stores each app/category coverage ledger, source/prompt pins, server-assigned attempts, candidates, receipts and invalidated history. Machine-local and covered by the PostgreSQL dump; it does not federate (no sync cursor or tombstones). JSONB holds structured evidence, not binary assets, and row locking serializes updates. No full-text index is needed for keyed checkpoint reads. Additive schema initialization creates the table for existing and fresh installs without transforming old records or seeding data. Agent-written checkpoint JSON under `data/cos/deep-audit-checkpoints/` is a retained recovery input outside source checkouts, captured by normal CoS filesystem backup; imported database receipts remain authoritative. See [Deep audits](./DEEP-AUDITS.md).
 
@@ -1342,9 +1342,9 @@ records under its existing serialized read/write queue, removing receipt maps,
 obligations, initialization observations and legacy reconciliation history while
 retaining their inventory observations for fresh inspection. Migration 443 and its
 minimal frozen helper remain runnable for older installs; runtime code does not
-import that helper. Agent cleanup and release synchronization observe current
-path/ref absence independently of this display history. Their delivery, review,
-process-settlement and owner checks remain separate requirements.
+import that helper. Agent cleanup observes current path/ref absence independently
+of this display history. Its delivery, review, process-settlement and owner checks
+remain separate requirements.
 
 FableLoom shot-planning run checkpoints live in machine-local `data/fableloom-shot-runs/` JSON journals (atomic writes, one latest run per story/episode). They preserve drafts, review verdicts and feedback across restarts; they do not federate. Reading an interrupted run marks it failed without starting a provider call. Explicit resume uses the saved provider/guidance and rejects changed source revisions. Story records remain PostgreSQL-primary.
 
