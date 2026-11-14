@@ -9,6 +9,11 @@ export const sameRetirementObservation = (left, right) => sameRetirementCheckout
 
 export async function reconcileInventoryRows(repoPath, rows) {
   const current = [];
+  const appendLocalBranch = row => {
+    const index = current.findIndex(entry => !entry.path && entry.reason !== 'remote-branch-held' && entry.branch === row.branch);
+    if (index < 0) current.push(row);
+    else if (current[index].reason === 'branch-cleanup-pending') current[index] = row;
+  };
   for (const row of rows) {
     if (row?.reason === 'remote-branch-held' || (!row?.path && !row?.branch)) { current.push(row); continue; }
     const pathPresent = row.path ? await readCheckoutPathPresence(row.path).catch(() => null) : false;
@@ -20,10 +25,10 @@ export async function reconcileInventoryRows(repoPath, rows) {
     const head = await execGit(['rev-parse', '--verify', `refs/heads/${row.branch}`], repoPath)
       .then(result => result.stdout.trim(), () => null);
     if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(head || '')) { current.push(row); continue; }
-    if (!row.path) { current.push({ ...row, head }); continue; }
+    if (!row.path) { appendLocalBranch({ ...row, head }); continue; }
     // Checkout identities/locks belong to the vanished path, never to its ref.
     const branch = { branch: row.branch, head, locked: false, lockReason: null, reason: 'branch-cleanup-pending' };
-    if (!current.some(entry => !entry.path && entry.reason !== 'remote-branch-held' && entry.branch === branch.branch)) current.push(branch);
+    appendLocalBranch(branch);
   }
   return current;
 }

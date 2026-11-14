@@ -92,7 +92,8 @@ export async function recordSupersededCheckoutPreservation(appId, release, revie
       // An original pointer still present proves the preparation never retired
       // that checkout. Missing, recreated or unreadable source keeps its bytes,
       // independently of the bounded recent-retirements display history.
-      if (stale && saved.checkoutIdentity && await readRetirementCheckoutIdentity(source.path) === saved.checkoutIdentity) continue;
+      const sourceIdentity = saved.checkoutIdentity || source?.checkoutIdentity;
+      if (stale && sourceIdentity && await readRetirementCheckoutIdentity(source.path) === sourceIdentity) continue;
       retained[digest] = saved;
     }
     const next = { ...retained, [review.digest]: { proof, checkoutIdentity, preservedAt: new Date().toISOString() } };

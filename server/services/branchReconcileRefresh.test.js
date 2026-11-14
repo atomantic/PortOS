@@ -72,16 +72,18 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch reconciliation inventory refresh
     await expect(refreshBranchReconcileInventory('missing')).rejects.toMatchObject({ status: 404 });
   });
 
-  it('prunes missing checkout/ref rows, retains current survivor refs and leaves remote-only holds visible', async () => {
+  it.each(['no prior ref row', 'checkout first', 'ref first'])('prunes vanished checkout rows without merging remote holds or duplicating local refs: %s', async order => {
     const head = (await execGit(['rev-parse', 'HEAD'], repoPath)).stdout.trim();
-    await execGit(['branch', 'fix/survivor'], repoPath);
+    await execGit(['branch', '-f', 'fix/survivor', head], repoPath);
     const survivor = { branch: 'fix/survivor', path: join(scratch, 'missing-survivor'), head, locked: true,
       lockReason: 'former lock', checkoutIdentity: 'a'.repeat(64), reason: 'retirement-provenance-unverified' };
     const remote = { branch: survivor.branch, reason: 'remote-branch-held' };
-    await recordBranchReconcileOutcome('example', { status: 'incomplete', remaining: [remote, survivor,
+    const branch = { branch: survivor.branch, head, locked: false, lockReason: null, reason: 'cleanup-disabled' };
+    const local = order === 'no prior ref row' ? [survivor] : order === 'checkout first' ? [survivor, branch] : [branch, survivor];
+    await recordBranchReconcileOutcome('example', { status: 'incomplete', remaining: [remote, ...local,
       { branch: 'fix/vanished', path: join(scratch, 'missing-other'), head, reason: 'retirement-receipt-unverified' }] });
     const current = await getBranchReconcileInventory('example');
-    expect(current.remaining).toEqual([remote, { branch: survivor.branch, head, locked: false, lockReason: null, reason: 'branch-cleanup-pending' }]);
+    expect(current.remaining).toEqual([remote, { ...branch, reason: order === 'no prior ref row' ? 'branch-cleanup-pending' : branch.reason }]);
     expect((await getBranchReconcileOutcome('example')).remaining).toEqual(current.remaining);
     expect(current.retired || []).toEqual([]);
   });

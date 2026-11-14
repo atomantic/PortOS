@@ -468,8 +468,7 @@ describeHeldCheckoutRecovery(() => {
     // A changed review replaces an unconsumed preparation only while its
     // original physical generation still exists. No retirement ledger is used.
     (await getBranchReconcileOutcome('app-1')).supersededSourceEvidence = {
-      stale: { checkoutIdentity: await readRetirementCheckoutIdentity(c.path),
-        proof: { release: { ...c.release, head: 'a'.repeat(40) }, data: 'x'.repeat(1024 * 1024) } },
+      stale: { proof: { release: { ...c.release, head: 'a'.repeat(40), checkoutIdentity: await readRetirementCheckoutIdentity(c.path) }, data: 'x'.repeat(1024 * 1024) } },
     };
     expect(await recordSupersededCheckoutPreservation('app-1', c.release, prepared.review)).toBe(true);
     expect(Object.keys((await getBranchReconcileOutcome('app-1')).supersededSourceEvidence)).toEqual([review.digest]);
