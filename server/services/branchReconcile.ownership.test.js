@@ -746,7 +746,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     const sweep = (options = {}) => reconcile(repo, { activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [] }, ...options });
 
     it('settles a retired detached checkout before the next inventory without claiming a branch deletion', async () => {
-      const { outcomes, path, release, unrelated } = await inventoriedDetached();
+      const { outcomes, path, release } = await inventoriedDetached();
       const result = await sweep({ appId: 'app-1' });
       expect(result.cleaned).toContain(release.path);
       expect(existsSync(path)).toBe(false);
@@ -756,11 +756,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
       expect(first.retired[0]).not.toHaveProperty('branch');
       const next = await outcomes.recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
       expect(next.retired).toEqual(first.retired);
-      expect(next.retirementObligations).toEqual([expect.objectContaining({ branch: unrelated.branch })]);
+      expect(next.remaining).toEqual([]);
+      expect(next).not.toHaveProperty('retirementObligations');
     });
 
-    it('leaves a removed detached checkout a missing-source obligation when its receipt cannot be stored', async () => {
-      const { outcomes, path, release, unrelated } = await inventoriedDetached();
+    it('allows a fresh empty scan to converge after detached cleanup history could not be stored', async () => {
+      const { outcomes, path, release } = await inventoriedDetached();
       injected.failScheduleWrite = true;
       const result = await sweep({ appId: 'app-1' });
       expect(existsSync(path)).toBe(false);
@@ -769,10 +770,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
       injected.failScheduleWrite = false;
       expect((await outcomes.getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
       const next = await outcomes.recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
-      expect(next.retirementObligations).toEqual(expect.arrayContaining([
-        expect.objectContaining({ path: release.path, reason: 'retirement-provenance-unverified' }),
-        expect.objectContaining({ branch: unrelated.branch }),
-      ]));
+      expect(next.remaining).toEqual([]);
+      expect(next).not.toHaveProperty('retirementObligations');
     });
 
     it('does not let a recreated same-path detached checkout borrow the old checkout-only receipt', async () => {
@@ -783,9 +782,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
       const recreated = { ...release, checkoutIdentity: await readRetirementCheckoutIdentity(path), reason: 'retirement-receipt-unverified' };
       expect(recreated.checkoutIdentity).not.toBe(release.checkoutIdentity);
       await outcomes.recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [recreated, unrelated] });
-      const next = await outcomes.recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
+      const next = await outcomes.getBranchReconcileInventory('app-1');
       expect(next.retired).toEqual(retired);
-      expect(next.retirementObligations).toContainEqual(expect.objectContaining({ path: recreated.path, checkoutIdentity: recreated.checkoutIdentity }));
+      expect(next.remaining).toContainEqual(recreated);
+      expect(next).not.toHaveProperty('retirementObligations');
       expect(existsSync(path)).toBe(true);
     });
   });

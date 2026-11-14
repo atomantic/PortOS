@@ -36,10 +36,9 @@ vi.mock('./prProbe.js', async importOriginal => ({ ...await importOriginal(), is
 vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id ? injected.app : null) }));
 
 import { describeHeldCheckoutRecovery, setReceiptWork, it, beforeEach, scratch, repo, external, cosDir, receiptWork, noOwners, heldCheckout, registered, lockText, retire, makeClean, supersededCheckout, reapSuperseded, reviewedCheckout } from './_heldCheckoutRecoveryFixture.js';
-const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, findMissingCheckoutPreservation } = await import('./heldCheckoutRecovery.js');
+const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, inspectAbsentCheckout } = await import('./heldCheckoutRecovery.js');
 const { sha256File } = await import('../lib/fileUtils.js');
-const { recordBranchReconcileOutcome, getBranchReconcileOutcome, recordHeldCheckoutRetirement } = await import('./branchReconcileOutcome.js');
-const { parkPerpetual } = await import('./taskSchedule.js');
+const { recordBranchReconcileOutcome, getBranchReconcileOutcome, getBranchReconcileInventory } = await import('./branchReconcileOutcome.js');
 const { withClaimOwnershipLock, checkReconcileOwnership } = await import('./cosClaimOwnership.js');
 
 describeHeldCheckoutRecovery(() => {
@@ -115,7 +114,8 @@ describeHeldCheckoutRecovery(() => {
         expect(first.retired).toEqual([expect.objectContaining({ branch, path: holder.path, head: holder.head, branchDeleted: true, archiveDir: null })]);
         await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
         const next = await getBranchReconcileOutcome('app-1');
-        expect(next).toMatchObject({ remaining: [], retirementObligations: [] });
+        expect(next.remaining).toEqual([]);
+        expect(next).not.toHaveProperty('retirementObligations');
         expect(next.retired).toEqual(first.retired);
       });
     })());
@@ -139,8 +139,8 @@ describeHeldCheckoutRecovery(() => {
     expect(existsSync(join(PATHS.cos, 'branch-retirement-archives'))).toBe(false);
     await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
     const next = await getBranchReconcileOutcome('app-1');
-    expect(next.retirementObligations).toEqual([expect.objectContaining({ branch: vanished.branch, head, reason: 'retirement-provenance-unverified' })]);
-    expect(next.remaining).toEqual(next.retirementObligations);
+    expect(next.remaining).toEqual([]);
+    expect(next).not.toHaveProperty('retirementObligations');
   });
 
   it('retires a superseded branch without a worktree and does not claim checkout preservation', async () => {
@@ -148,7 +148,7 @@ describeHeldCheckoutRecovery(() => {
     const head = (await execGit(['commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'superseded branch-only commit'], repo)).stdout.trim();
     await execGit(['branch', branch, head], repo);
     const missingCheckout = { branch, path: join(external, 'lost-original'), head, locked: false, lockReason: null };
-    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', retirementObligations: [{ ...missingCheckout, reason: 'retirement-provenance-unverified' }] });
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...missingCheckout, reason: 'checkout-retained' }] });
     let seenHead = null;
     retirementFaults.onBranchDelete = async () => {
       seenHead = (await execGit(['rev-parse', '--verify', `refs/heads/${branch}`], repo)).stdout.trim();
@@ -160,7 +160,8 @@ describeHeldCheckoutRecovery(() => {
     expect(existsSync(join(PATHS.cos, 'branch-retirement-archives'))).toBe(false);
     const outcome = await getBranchReconcileOutcome('app-1');
     expect(outcome.retired).toEqual([expect.objectContaining({ branch, head, branchDeleted: true, archiveDir: null })]);
-    expect(outcome.retirementObligations).toContainEqual(expect.objectContaining(missingCheckout));
+    expect((await getBranchReconcileInventory('app-1')).remaining).toEqual([]);
+    expect(outcome).not.toHaveProperty('retirementObligations');
   });
 
   it('removes a clean superseded checkout without writing any backup or checkout archive', async () => {
@@ -214,7 +215,7 @@ describeHeldCheckoutRecovery(() => {
 
   it('removes a superseded checkout even when an old obligation has no incarnation proof', async () => {
     const { entry, release } = await supersededCheckout({ clean: true });
-    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', retirementObligations: [{ ...release, reason: 'retirement-review-pending' }] });
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'retirement-review-pending' }] });
     expect(await reapSuperseded(entry)).toMatchObject({ reaped: [release.branch], skipped: [] });
     expect(existsSync(release.path)).toBe(false);
   });
@@ -268,83 +269,14 @@ describeHeldCheckoutRecovery(() => {
     expect(outcome.remaining).toEqual([{ branch: 'other', reason: 'actionable' }]);
     expect(outcome.retired[0]).toMatchObject({ path: release.path, branch: 'feature/held', branchDeleted: true, archiveDir: null, checkoutIdentity });
     await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [delayed] });
-    // The stale retired checkout stays settled. The sibling row left this scan, and its
-    // branch is absent, so disappearance stays a provenance obligation.
-    const settled = await getBranchReconcileOutcome('app-1');
-    expect(settled.retirementObligations).toEqual([
-      expect.objectContaining({ branch: 'other', reason: 'retirement-provenance-unverified' }),
-    ]);
-    expect(settled.retirementObligations.some(row => row.path === delayed.path)).toBe(false);
+    expect((await getBranchReconcileInventory('app-1')).remaining).toEqual([]);
     await execGit(['worktree', 'add', '-b', release.branch, path, release.head], repo);
     const recreated = { ...delayed, checkoutIdentity: await readRetirementCheckoutIdentity(path), observedAt: new Date().toISOString() };
     expect(recreated.checkoutIdentity).not.toBe(checkoutIdentity);
     expect(await isCurrentRetirementCheckout(delayed)).toBe(false);
     expect(await isCurrentRetirementCheckout({ ...recreated, head: '0'.repeat(40) })).toBe(false);
-    // Even while the new tuple is live, the old scan cannot create its obligation.
-    await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [delayed] });
-    expect((await getBranchReconcileOutcome('app-1')).retirementObligations).toEqual([
-      expect.objectContaining({ branch: 'other', reason: 'retirement-provenance-unverified' }),
-    ]);
     await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [recreated] });
-    expect((await getBranchReconcileOutcome('app-1')).retirementObligations).toEqual([
-      expect.objectContaining({ branch: 'other', reason: 'retirement-provenance-unverified' }),
-      expect.objectContaining({ checkoutIdentity: recreated.checkoutIdentity, reason: 'retirement-receipt-unverified' }),
-    ]);
-  });
-
-  it('retains vanished active claim provenance instead of reporting an unarchived checkout retired', async () => {
-    const { path, release } = await heldCheckout('already-gone', { branch: 'claim/issue-42' });
-    await execGit(['branch', 'other', 'main'], repo);
-    const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
-    await writeFile(join(gitDir, 'portos-review-status'), 'private synthetic evidence');
-    await recordBranchReconcileOutcome('app-1', {
-      status: 'incomplete', remaining: [{ ...release, reason: 'retirement-review-pending' }, { branch: 'other', reason: 'actionable' }],
-    });
-    await execGit(['worktree', 'unlock', path], repo);
-    await execGit(['worktree', 'remove', '--force', path], repo);
-
-    const activeOwner = async () => [{ id: 'agent-live', status: 'running', metadata: {
-      sourceWorkspace: repo, claimBranches: [release.branch], claimReleasedBranches: [],
-    } }];
-    expect(await retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: activeOwner }))
-      .toEqual({ ok: false, reason: 'retirement-provenance-unverified' });
-    const obligation = { ...release, reason: 'retirement-provenance-unverified', createdAt: expect.any(String) };
-    expect(await getBranchReconcileOutcome('app-1')).toMatchObject({ status: 'incomplete',
-      retirementObligations: [obligation], remaining: [obligation, { branch: 'other', reason: 'actionable' }],
-    });
-    // Neither ignored bytes nor private Git state can be reconstructed from the merged head.
-    expect((await execGit(['rev-parse', `refs/heads/${release.branch}`], repo)).stdout.trim()).toBe(release.head);
-    await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [] });
-    await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-in-flight-branches' });
-    expect(await getBranchReconcileOutcome('app-1')).toMatchObject({ status: 'incomplete', remaining: [obligation] });
-  });
-
-  it('retains a checkout that vanishes between sweeps until its exact preservation receipt arrives', async () => {
-    const { path, release } = await heldCheckout('gone-between-scans', { branch: 'feature/missing' });
-    const marker = { branch: 'claim/issue-99', issue: 99, reason: 'claim-reservation-owner-unverified' };
-    await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [{ ...release, reason: 'worktree-locked' }, marker] });
-    // Model an external directory deletion that leaves Git's registration intact.
-    const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
-    await writeFile(join(gitDir, 'portos-review-status'), 'recoverable private evidence');
-    await rm(path, { recursive: true, force: true });
-    expect(await registered(path)).toBe(true);
-    await recordBranchReconcileOutcome('app-1', { status: 'drained', remaining: [] });
-    const pending = await getBranchReconcileOutcome('app-1');
-    expect(pending).toMatchObject({ status: 'incomplete', reason: 'retirement-provenance-unverified',
-      retirementObligations: [{ ...release, reason: 'retirement-provenance-unverified' }],
-    });
-    expect(pending.remaining).toHaveLength(1);
-    expect(await readFile(join(gitDir, 'portos-review-status'), 'utf8')).toBe('recoverable private evidence');
-    const createdAt = pending.retirementObligations[0].createdAt;
-    // A receipt for another head cannot explain the original disappearance.
-    await recordHeldCheckoutRetirement('app-1', { ...release, head: 'f'.repeat(40), branchDeleted: true, archiveDir: '/example/other-archive' });
-    await recordBranchReconcileOutcome('app-1', { status: 'drained', remaining: [] });
-    expect(await getBranchReconcileOutcome('app-1')).toMatchObject({ status: 'incomplete', reason: 'retirement-provenance-unverified',
-      retirementObligations: [{ ...release, reason: 'retirement-provenance-unverified', createdAt }],
-    });
-    // Only the trusted service writer can supply recovered preservation evidence.
-    await recordHeldCheckoutRetirement('app-1', { ...release, branchDeleted: true, archiveDir: '/example/recovered-original' });
-    expect(await getBranchReconcileOutcome('app-1')).toMatchObject({ retirementObligations: [], remaining: [] });
+    expect((await getBranchReconcileInventory('app-1')).remaining).toEqual([recreated]);
   });
 
   it.each([
@@ -533,10 +465,10 @@ describeHeldCheckoutRecovery(() => {
     };
     review.acceptSuperseded = true;
     const { recordSupersededCheckoutPreservation } = await import('./branchReconcileOutcome.js');
-    // Abandoned preparations have no receipt and no current inventory holder;
-    // they must not grow the schedule on every future preparation.
-    injected.schedule.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome.supersededSourceEvidence = {
-      stale: { proof: { release: { path: '/synthetic/absent', branch: 'old', head: 'a'.repeat(40) }, data: 'x'.repeat(1024 * 1024) } },
+    // A changed review replaces an unconsumed preparation only while its
+    // original physical generation still exists. No retirement ledger is used.
+    (await getBranchReconcileOutcome('app-1')).supersededSourceEvidence = {
+      stale: { proof: { release: { ...c.release, head: 'a'.repeat(40), checkoutIdentity: await readRetirementCheckoutIdentity(c.path) }, data: 'x'.repeat(1024 * 1024) } },
     };
     expect(await recordSupersededCheckoutPreservation('app-1', c.release, prepared.review)).toBe(true);
     expect(Object.keys((await getBranchReconcileOutcome('app-1')).supersededSourceEvidence)).toEqual([review.digest]);
@@ -553,7 +485,7 @@ describeHeldCheckoutRecovery(() => {
     expect(outcome.retired).toContainEqual(expect.objectContaining({ head: c.release.head,
       disposition: 'superseded-preserved', supersessionDigest: review.digest, archiveDir: null }));
     await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
-    expect((await getBranchReconcileOutcome('app-1')).retirementObligations).toEqual([]);
+    expect((await getBranchReconcileOutcome('app-1')).remaining).toEqual([]);
   });
 
   it.each(['changed-source', 'persistence-failure', 'preservation-capacity', 'changed-private-evidence', 'changed-preservation'])('preserves the original when supersession confirmation encounters %s', async scenario => {
@@ -586,7 +518,6 @@ describeHeldCheckoutRecovery(() => {
     else {
       const outcome = injected.schedule.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome;
       outcome.supersededSourceEvidence = { completed: { proof: { data: 'x'.repeat(1024 * 1024) } } };
-      outcome.retirementReceiptEvidence = { completed: { supersessionDigest: 'completed' } };
     }
     const result = await retireInventoriedCheckout({ appId: 'app-1', release: c.release,
       review: { prUrl: c.forge.prUrl, kind: 'preserved-supersession', digest: prepared.review.digest, acceptSuperseded: true } }, c.opts);
@@ -756,18 +687,16 @@ describeHeldCheckoutRecovery(() => {
     expect(await registered(c.path)).toBe(true);
   });
 
-  it('settles an absent original generation from its existing service receipt without any checkout archive', async () => {
-    const c = await reviewedCheckout('receipt-no-archive');
-    const checkoutIdentity = await readRetirementCheckoutIdentity(c.path);
-    const release = { ...c.release, checkoutIdentity, createdAt: new Date(Date.now() - 1000).toISOString() };
+  it('observes current physical cleanup without requiring or creating retirement history', async () => {
+    const c = await reviewedCheckout('current-absence');
+    const release = { ...c.release, checkoutIdentity: await readRetirementCheckoutIdentity(c.path) };
+    expect(await inspectAbsentCheckout({ repoPath: repo, release })).toBeNull();
     const prepared = await c.prepare();
     expect(await c.confirm(prepared.review)).toMatchObject({ ok: true, branchDeleted: true });
-    const proof = await findMissingCheckoutPreservation({ repoPath: repo, release });
-    expect(proof).toMatchObject({ kind: 'service-retirement-receipt', archiveDir: null,
-      receipt: { branchDeleted: true, checkoutIdentity }, evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    (await getBranchReconcileOutcome('app-1')).retired = [];
+    const proof = await inspectAbsentCheckout({ repoPath: repo, release });
+    expect(proof).toMatchObject({ kind: 'current-inventory', evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/) });
     expect(await proof.recheck()).toBe(true);
-    expect(await findMissingCheckoutPreservation({ repoPath: repo, release: { ...release, checkoutIdentity: '0'.repeat(64) } })).toBeNull();
-    expect(await findMissingCheckoutPreservation({ repoPath: repo, release: { ...release, createdAt: new Date(Date.now() + 1000).toISOString() } })).toBeNull();
     await mkdir(c.path);
     expect(await proof.recheck()).toBe(false);
   });

@@ -68,7 +68,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
     await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
   it.each(['Git UI', 'daily cleanup'])('persists exact %s retirement before the next inventory scan', async entryPoint => {
-    const { release, unrelated, run } = await outsideCleanupFixture(entryPoint);
+    const { release, run } = await outsideCleanupFixture(entryPoint);
     const result = await run();
     if (entryPoint === 'Git UI') expect(result).toMatchObject({ deleted: [{ name: release.branch, local: 'deleted' }], skipped: [] });
     else expect(result).toMatchObject({ mergedReaped: 1, worktreesReaped: 0 });
@@ -81,7 +81,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
     expect(existsSync(join(PATHS.cos, 'initialized-checkout-retirements'))).toBe(false);
     const next = await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
     expect(next.retired).toEqual(first.retired);
-    expect(next.retirementObligations).toEqual([expect.objectContaining({ branch: unrelated.branch })]);
+    expect(next.remaining).toEqual([]);
+      expect(next).not.toHaveProperty('retirementObligations');
   });
 
   async function outsideCleanupFixture(entryPoint) {
@@ -148,7 +149,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
   });
 
   it.each(['Git UI', 'daily cleanup'])('keeps a recreated %s checkout unsettled after in-place removal', async entryPoint => {
-    const { release, unrelated, run } = await outsideCleanupFixture(entryPoint);
+    const { release, run, unrelated } = await outsideCleanupFixture(entryPoint);
     const result = await run();
     if (entryPoint === 'Git UI') expect(result).toMatchObject({ deleted: [{ name: release.branch, local: 'deleted' }] });
     else expect(result).toMatchObject({ mergedReaped: 1, worktreesReaped: 0 });
@@ -166,12 +167,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
     };
     expect(recreated.checkoutIdentity).not.toBe(release.checkoutIdentity);
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [recreated, unrelated] });
-    const next = await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
+    const next = await (await import('./branchReconcileOutcome.js')).getBranchReconcileInventory('app-1');
     expect(next.retired).toEqual(retired.retired);
-    expect(next.retirementObligations).toContainEqual(expect.objectContaining({
-      path: recreated.path, head: recreated.head, checkoutIdentity: recreated.checkoutIdentity,
-    }));
-    expect(next.retirementObligations).toContainEqual(expect.objectContaining({ branch: unrelated.branch }));
+    expect(next.remaining).toContainEqual(recreated);
+    expect(next).not.toHaveProperty('retirementObligations');
     expect(existsSync(release.path)).toBe(true);
     expect(existsSync(join(PATHS.cos, 'branch-retirement-archives'))).toBe(false);
   });
@@ -197,7 +196,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
   }
 
   it('settles direct removal of a detached agent checkout with a checkout-only receipt', async () => {
-    const { agentId, path, release, unrelated } = await detachedAgentFixture();
+    const { agentId, path, release } = await detachedAgentFixture();
     const { removeWorktree } = await import('./worktreeManager.js');
     expect(await removeWorktree(agentId, repo, 'cos/detached-follow-up')).toMatchObject({ removed: true });
     expect(existsSync(path)).toBe(false);
@@ -206,11 +205,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
       branchDeleted: false, checkoutOnly: true, archiveDir: null })]);
     expect(first.retired[0]).not.toHaveProperty('branch');
     const next = await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
-    expect(next.retirementObligations).toEqual([expect.objectContaining({ branch: unrelated.branch })]);
+    expect(next.remaining).toEqual([]);
+      expect(next).not.toHaveProperty('retirementObligations');
   });
 
   it('leaves a directly removed detached checkout unsettled when its receipt cannot be stored', async () => {
-    const { agentId, path, release } = await detachedAgentFixture();
+    const { agentId, path } = await detachedAgentFixture();
     const { removeWorktree } = await import('./worktreeManager.js');
     injected.failScheduleWrite = injected.scheduleWrites + 1;
     const result = await removeWorktree(agentId, repo, 'cos/detached-follow-up');
@@ -218,7 +218,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
     expect(result.warnings.join('\n')).toContain('Retirement receipt not recorded');
     expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
     const next = await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
-    expect(next.retirementObligations).toContainEqual(expect.objectContaining({ path: release.path, reason: 'retirement-provenance-unverified' }));
+    expect(next.remaining).toEqual([]);
+    expect(next).not.toHaveProperty('retirementObligations');
   });
 
   it.each(['missing', 'ambiguous', 'unreadable'])('retains both cleanup entry points with %s app scope', async mode => {

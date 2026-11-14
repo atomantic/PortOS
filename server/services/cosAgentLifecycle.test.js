@@ -853,7 +853,7 @@ describe('completeAgent idempotence (#3384)', () => {
       } finally { cosEvents.off('agent:completed', completion); }
     });
 
-  it.each(['own-seed', 'inherited'])('settles a %s retirement receipt without inventing a captured head or successful result', async scenario => {
+  it.each(['own-seed', 'inherited', 'legacy'])('settles a %s cleanup observation without inventing a captured head or successful result', async scenario => {
     const id = 'seeded-retired', startedAt = '2026-01-01T00:00:00Z', completedAt = '2026-01-01T00:01:00Z';
     const stages = Object.fromEntries(['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report'].map(key => [key, { status: 'done' }]));
     stages.worktree = { status: 'held', reason: 'checkout-capture-pending' };
@@ -864,7 +864,7 @@ describe('completeAgent idempotence (#3384)', () => {
     mockCosState.state.agents[id] = record;
     const directory = join(mockCosState.agentsDir, completedAt.slice(0, 10), id);
     await mkdir(directory, { recursive: true }); await writeFile(join(directory, 'metadata.json'), JSON.stringify(record));
-    const proof = { retiredHead: 'a'.repeat(40), checkoutIdentity: 'b'.repeat(64), receiptDigest: 'c'.repeat(64) };
+    const proof = { checkoutIdentity: 'b'.repeat(64), observationDigest: 'c'.repeat(64) };
     const inherited = scenario === 'inherited';
     if (inherited) {
       record.metadata.isWorktree = false; record.metadata.resumedFromAgentId = 'original-parent';
@@ -874,12 +874,20 @@ describe('completeAgent idempotence (#3384)', () => {
     expect(await write(id, { ...record, metadata: { ...record.metadata, changed: true } }, proof)).toBe(false);
     expect(await write(id, structuredClone(record), proof)).toBe(true);
     const saved = JSON.parse(await readFile(join(directory, 'metadata.json'), 'utf8'));
-    expect(saved.metadata.checkoutCapture).toMatchObject({ status: 'retired', unknown: true, reason: inherited ? 'inherited-scope-already-retired' : 'retired-by-service-receipt', ...proof });
+    expect(saved.metadata.checkoutCapture).toMatchObject({ status: 'retired', unknown: true, reason: inherited ? 'inherited-scope-already-retired' : 'retired-from-current-inventory', ...proof });
     expect(saved.metadata.completedCheckouts).toEqual([]);
-    expect(saved.metadata.completionCleanup).toMatchObject({ status: 'completed', stages: { worktree: { status: 'done', verifiedBy: inherited ? 'inherited-service-retirement-receipt' : 'service-retirement-receipt' } } });
+    expect(saved.metadata.completionCleanup).toMatchObject({ status: 'completed', stages: { worktree: { status: 'done', verifiedBy: inherited ? 'inherited-current-inventory' : 'current-inventory' } } });
     expect(saved.metadata.completionCleanup).not.toHaveProperty('replay');
     expect(saved.metadata.repoStateVerification).toMatchObject({ status: 'completed', physicalRetirementVerified: true });
     expect(saved.result).toEqual(record.result);
+    expect(saved.metadata.checkoutCapture).not.toHaveProperty('retiredHead');
+    if (scenario === 'legacy') {
+      const historical = mockCosState.state.agents[id];
+      Object.assign(historical.metadata.checkoutCapture, { retiredHead: 'a'.repeat(40), receiptDigest: 'c'.repeat(64) });
+      delete historical.metadata.checkoutCapture.observationDigest;
+      historical.metadata.completionCleanup.stages.worktree.verifiedBy = 'service-retirement-receipt';
+      await writeFile(join(directory, 'metadata.json'), JSON.stringify(historical));
+    }
     await recordRepoStateVerification(id, { status: 'pending', checkedAt: '2026-01-01T00:03:00Z', reasons: ['task-unavailable'] });
     const replayed = JSON.parse(await readFile(join(directory, 'metadata.json'), 'utf8'));
     expect(replayed.metadata.repoStateVerification).toMatchObject({ status: 'completed', reasons: [], physicalRetirementVerified: true });

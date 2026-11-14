@@ -524,7 +524,7 @@ it('allows unrelated checkouts to retire when an unseeded publisher exists witho
     checkoutIdentity: retirementCheckoutIdentityFromPointer(syncSeed.incarnation.pointer) })).toBe(false);
 });
 
-it('requires the publisher private-review observation as well as both exact retirement receipts', async () => {
+it('requires the publisher private-review observation and current retirement state', async () => {
   await finishExecution({ retain: false });
   await verifyReleaseSynchronizationTask(taskId);
   expect((await getReleaseSynchronization(identity)).obligations.retirement.blocker).toBe('publisher-private-review-unretained');
@@ -575,7 +575,7 @@ it('accepts provider-confirmed merge without a second review, CI or admission ce
   expect(saved.publication).toEqual(publication);
 });
 
-it('retains successful proof and backoff on transport failure, then completes only with exact retirement generation and settled processes', async () => {
+it('retains successful proof and backoff on transport failure, then completes only with absent refs and settled processes', async () => {
   await verifyReleaseSynchronizationTask(taskId);
   const reviewedAt = (await getReleaseSynchronization(identity)).obligations.localReview.verifiedAt;
   f.unavailable = true;
@@ -595,10 +595,7 @@ it('retains successful proof and backoff on transport failure, then completes on
   expect((await getReleaseSynchronization(identity)).obligations.requiredCi.status).toBe('verified');
   f.checks = green;
   await finishExecution();
-  f.receipts[0].checkoutIdentity = '0'.repeat(64);
-  await verifyReleaseSynchronizationTask(taskId);
-  expect((await getReleaseSynchronization(identity)).obligations.retirement.blocker).toBe('exact-retirement-receipt-unverified');
-  f.receipts[0].checkoutIdentity = retirementCheckoutIdentityFromPointer(f.agents[1].metadata.checkoutSeeds[0].incarnation.pointer);
+  f.receipts = []; // History is neither required nor cleanup authority.
   f.busy = true;
   await verifyReleaseSynchronizationTask(taskId);
   expect((await getReleaseSynchronization(identity)).obligations.processSettlement.blocker).toBe('checkout-processes-unsettled');
@@ -727,7 +724,7 @@ it('refuses a squash-shaped result that contains the promotion but loses the syn
   expect(saved.synchronization.status).toBe('blocked');
 });
 
-it('retains complete retirement receipts on an unreadable follow-up while another obligation is blocked', async () => {
+it('retains current retirement observations on an unreadable follow-up', async () => {
   await verifyReleaseSynchronizationTask(taskId);
   await finishExecution();
   const approval = f.reviews;
@@ -735,7 +732,8 @@ it('retains complete retirement receipts on an unreadable follow-up while anothe
   await verifyReleaseSynchronizationTask(taskId);
   const prior = (await getReleaseSynchronization(identity)).obligations.retirement;
   expect(prior.status).toBe('verified');
-  expect(prior.evidence.receipts).toHaveLength(2);
+  expect(prior.evidence.authority).toBe('current-inventory');
+  expect(prior.evidence).not.toHaveProperty('receipts');
   f.retirementUnavailable = true;
   await verifyReleaseSynchronizationTask(taskId);
   expect((await getReleaseSynchronization(identity)).obligations.retirement).toEqual(prior);

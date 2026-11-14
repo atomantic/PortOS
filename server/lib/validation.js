@@ -3141,7 +3141,7 @@ export const heldCheckoutRetireBodySchema = z.object({
   checkoutIdentity: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   observedAt: z.string().datetime({ offset: true }).optional(),
   appId: nonEmptyString,
-  path: nonEmptyString,
+  path: nonEmptyString.optional(),
   head: z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/),
   branch: z.string().min(1).nullable(),
   locked: z.boolean(),

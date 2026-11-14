@@ -1352,18 +1352,22 @@ archive excludes this control subtree; it never excludes repository payload
 because it is ignored or untracked. Admission metadata is not part of the
 portable repository or peer synchronization.
 
-Cleanup-only recovery completion uses live checkout-path and local-branch absence,
-not `schedule.json` retirement receipts. Existing or unreadable paths/refs keep the
-recovery unresolved; these completion checks never delete anything. Historical
-receipt bookkeeping still used by retirement and release synchronization remains
-in `branchReconcileOutcome` until its separate removal.
+Branch reconciliation uses current Git/path state as local inventory authority.
+Missing checkout rows are pruned; a surviving local ref becomes a branch-only row
+and undergoes fresh ownership, completion-policy, integration and expected-head
+checks before deletion. Unreadable paths/refs stay unresolved, and remote-only
+holds remain visible until a fresh forge scan replaces them. Inventory reads do
+not reconcile historical receipts or claim preservation of vanished ephemeral state.
 
-Initialized-checkout finalization receipts keep a compact, uncapped
-`branchReconcileOutcome.retirementReceiptIdentities` map alongside the bounded
-recent-retirements display list. Its keys hash the exact archive path and release
-identity; values preserve the original receipt timestamp. This operational
-recovery evidence prevents an interrupted journal replay from becoming fresh
-retirement evidence after the display row has aged out. It has no TTL purge.
+`branchReconcileOutcome.retired` keeps at most 20 recent retirements for display;
+it never authorizes cleanup or gates completion. The schedule store normalizes old
+records under its existing serialized read/write queue, removing receipt maps,
+obligations, initialization observations and legacy reconciliation history while
+retaining their inventory observations for fresh inspection. Migration 443 and its
+minimal frozen helper remain runnable for older installs; runtime code does not
+import that helper. Agent cleanup and release synchronization observe current
+path/ref absence independently of this display history. Their delivery, review,
+process-settlement and owner checks remain separate requirements.
 
 FableLoom shot-planning run checkpoints live in machine-local `data/fableloom-shot-runs/` JSON journals (atomic writes, one latest run per story/episode). They preserve drafts, review verdicts and feedback across restarts; they do not federate. Reading an interrupted run marks it failed without starting a provider call. Explicit resume uses the saved provider/guidance and rejects changed source revisions. Story records remain PostgreSQL-primary.
 

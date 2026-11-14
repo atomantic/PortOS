@@ -348,12 +348,17 @@ async function archiveCompletedAgent(agentId, agent) {
 export function recordRepoStateVerification(agentId, verification) {
   return updateCompletionReceipt(agentId, (metadata, agent) => {
     const capture = metadata.checkoutCapture;
+    const verifiedBy = metadata.completionCleanup?.stages?.worktree?.verifiedBy;
+    const currentInventory = ['current-inventory', 'inherited-current-inventory'].includes(verifiedBy)
+      && /^[a-f0-9]{64}$/.test(capture?.observationDigest || '');
+    // Completed agent records from before the inventory transition remain valid.
+    const legacyRetirement = ['service-retirement-receipt', 'inherited-service-retirement-receipt'].includes(verifiedBy)
+      && /^[a-f0-9]{64}$/.test(capture?.receiptDigest || '')
+      && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(capture?.retiredHead || '');
     const retired = capture?.status === 'retired' && capture.unknown === true
-      && /^[a-f0-9]{64}$/.test(capture.receiptDigest || '') && /^[a-f0-9]{64}$/.test(capture.checkoutIdentity || '')
-      && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(capture.retiredHead || '')
+      && /^[a-f0-9]{64}$/.test(capture.checkoutIdentity || '') && (currentInventory || legacyRetirement)
       && metadata.repoStateVerification?.physicalRetirementVerified === true
-      && metadata.completionCleanup?.status === 'completed'
-      && ['service-retirement-receipt', 'inherited-service-retirement-receipt'].includes(metadata.completionCleanup.stages?.worktree?.verifiedBy);
+      && metadata.completionCleanup?.status === 'completed';
     // An absent task cannot undo an already verified physical retirement. The
     // startup selector may still hold the snapshot from before receipt replay.
     const next = verification.status === 'pending' && retired ? { ...verification, status: 'completed', reasons: [] } : verification;
@@ -599,15 +604,15 @@ export function recordSuccessorCheckoutRetirement(agentId, expected, proof) {
   return recordCheckoutRetirement(agentId, expected, proof, 'delivered-successor');
 }
 
-/** A canonical service receipt proves physical retirement, not an unknown
- * original terminal head or a successful execution. Preserve both as history. */
+/** Current absence settles physical cleanup without inventing a terminal head
+ * or changing the original execution result. */
 export function recordSeededCheckoutRetirement(agentId, expected, proof) {
-  return recordCheckoutRetirement(agentId, expected, proof, 'service-retirement-receipt');
+  return recordCheckoutRetirement(agentId, expected, proof, 'current-inventory');
 }
 
 /** An unseeded primary continuation never acquires its parent's retired checkout. */
 export function recordInheritedCheckoutRetirement(agentId, expected, proof) {
-  return recordCheckoutRetirement(agentId, expected, proof, 'inherited-service-retirement-receipt');
+  return recordCheckoutRetirement(agentId, expected, proof, 'inherited-current-inventory');
 }
 
 async function recordCheckoutRetirement(agentId, expected, proof, verifiedBy) {
@@ -629,7 +634,7 @@ async function recordCheckoutRetirement(agentId, expected, proof, verifiedBy) {
         || source.repoPath !== metadata.sourceWorkspace || source.path !== metadata.workspacePath
         || !metadata.completedCheckouts?.some(row => completedCheckoutReceiptValid(agent, row) && isDeepStrictEqual(row, source))) return metadata;
     } else if (metadata.checkoutCapture?.status !== 'pending' || metadata.checkoutCapture.unknown !== true) return metadata;
-    if (verifiedBy === 'inherited-service-retirement-receipt'
+    if (verifiedBy === 'inherited-current-inventory'
       && (!proof.inheritedFromAgentId || metadata.resumedFromAgentId !== proof.inheritedFromAgentId
         || metadata.isWorktree !== false || metadata.checkoutSeeds?.length || metadata.completedCheckouts?.length
         || metadata.worktreeBranch || metadata.prDeliveryTarget || metadata.reviewLoopMergeTarget)) return metadata;
@@ -642,7 +647,7 @@ async function recordCheckoutRetirement(agentId, expected, proof, verifiedBy) {
     delete completionCleanup.context; delete completionCleanup.replay;
     const updated = { ...metadata, completionCleanup,
       checkoutCapture: source ? metadata.checkoutCapture : { ...metadata.checkoutCapture, status: 'retired', reason: verifiedBy === 'delivered-successor' ? 'retired-by-verified-successor'
-        : verifiedBy === 'inherited-service-retirement-receipt' ? 'inherited-scope-already-retired' : 'retired-by-service-receipt', ...proof },
+        : verifiedBy === 'inherited-current-inventory' ? 'inherited-scope-already-retired' : 'retired-from-current-inventory', ...proof },
       repoStateVerification: { ...metadata.repoStateVerification, status: 'completed', reasons: [],
         checkedAt: new Date().toISOString(), ...(proof.successorAgentId
           ? { deliveryVerifiedBySuccessor: proof.successorAgentId } : { physicalRetirementVerified: true }) } };

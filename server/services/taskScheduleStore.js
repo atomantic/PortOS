@@ -174,6 +174,39 @@ function migrateLegacyPrReviewerPipeline(config) {
   return true;
 }
 
+/** Retire the former receipt ledger during the existing serialized read repair.
+ * Current inventory is checked separately against Git; history is display only. */
+function normalizeRetirementRecords(schedule) {
+  let changed = false;
+  const records = schedule.executions?.['task:branch-reconcile'];
+  for (const record of [records, ...Object.values(records?.perApp || {})]) {
+    const outcome = record?.branchReconcileOutcome;
+    if (!outcome) continue;
+    const obsolete = ['retirementObligations', 'retirementReceiptIdentities', 'retirementReceiptEvidence',
+      'initializedRetirements', 'legacyRetirementTransition', 'recoveredPreservations'];
+    // Preserve observations as inventory until fresh path/ref inspection. No
+    // historical proof is needed to discard a vanished ephemeral checkout.
+    if (Array.isArray(outcome.retirementObligations)) {
+      const rows = outcome.remaining || [];
+      for (const row of outcome.retirementObligations) {
+        if (!rows.some(current => current.path === row.path && current.branch === row.branch && current.head === row.head)) rows.push(row);
+      }
+      outcome.remaining = rows;
+    }
+    for (const key of obsolete) if (Object.hasOwn(outcome, key)) { delete outcome[key]; changed = true; }
+    if (Array.isArray(outcome.retired)) {
+      if (outcome.retired.length > 20) { outcome.retired = outcome.retired.slice(0, 20); changed = true; }
+      for (const row of outcome.retired) if (Object.hasOwn(row, 'settledObservations')) { delete row.settledObservations; changed = true; }
+    }
+    if (['retirement-provenance-unverified', 'legacy-retirement-records-pending', 'historical-preservation-unresolved'].includes(outcome.reason)) {
+      Object.assign(outcome, { status: 'incomplete', reason: 'inventory-refresh-required',
+        nextAction: 'Refresh branch reconciliation to inspect current local paths and refs.' });
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 /**
  * Read and normalize schedule data without deciding whether the normalized
  * result should be persisted. Callers that mutate the result must do so inside
@@ -187,6 +220,8 @@ async function readSchedule() {
   if (!loaded) {
     return { schedule: structuredClone(DEFAULT_SCHEDULE), needsSave: false };
   }
+
+  const retirementNormalized = normalizeRetirementRecords(loaded);
 
   // Auto-migrate v1 → v2
   if (!loaded.version || loaded.version === 1) {
@@ -240,7 +275,7 @@ async function readSchedule() {
   };
 
   // Populate prompts from defaults if missing, and auto-upgrade stale defaults
-  let needsSave = false;
+  let needsSave = retirementNormalized;
   for (const [taskType, config] of Object.entries(schedule.tasks)) {
     if (config.__prReviewerPipelineMigrated) {
       delete config.__prReviewerPipelineMigrated;

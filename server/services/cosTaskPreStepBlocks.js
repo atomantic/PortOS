@@ -1,4 +1,4 @@
-import { unresolvedRetirements, sameRetirementCheckout, sameRetirementObservation } from '../lib/reconcileRetirementEvidence.js';
+
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { FORGE_MAINTENANCE_VERSION } from '../lib/forgeMaintenanceTasks.js';
 /**
@@ -442,9 +442,6 @@ const isReviewHeldOpen = (branch) => Boolean(branch.openPr) && !branch.openPr.is
   && isCompletionReviewRequired(branch) && !branch.liveOwnerReason
   && !branch.worktreeDirty && !branch.worktreeStatusUnavailable;
 
-const absentRetirementObligations = (outcome, result) => unresolvedRetirements(outcome)
-  .filter(release => !result.worktreeInventory?.some(tree => sameRetirementCheckout(tree, release)));
-
 /**
  * A saved receipt already owns its PR. Wake that exact local successor before
  * reading owners again; conflict recovery may have persisted a new owner.
@@ -469,25 +466,20 @@ async function readPendingMergeBranches(app, metadata) {
  * or a release-candidate tree). Returns the reviews plus the retirement
  * obligations still absent from the inventory after preparation re-read them.
  */
-async function prepareRetirementReviews(app, result, { cleanupMerged, heldLive, previousOutcome, absentObligations }) {
+async function prepareRetirementReviews(app, result, { cleanupMerged, heldLive }) {
   const { prepareReconcileRetirements, retainedMergedClaims } = await import('./branchReconcileRetirement.js');
   const { releaseCandidateTrees } = await import('./branchReconcileReleaseCandidates.js');
-  const none = { retirementReviews: { candidates: [], held: [] }, latestAbsentObligations: absentObligations };
-  if (cleanupMerged === false) return none;
-  if (!result.wip?.some(isCompletionReviewRequired) && !retainedMergedClaims(result).length && !releaseCandidateTrees(result).length) return none;
+  if (cleanupMerged === false || (!result.wip?.some(isCompletionReviewRequired)
+    && !retainedMergedClaims(result).length && !releaseCandidateTrees(result).length)) return { candidates: [], held: [] };
   const { describeIdleReconcilePark } = await import('./branchReconcile.js');
-  const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
+  const { recordBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
   const inventory = describeIdleReconcilePark(result.skipped || [], heldLive, {
     wip: result.wip, worktreeInventory: result.worktreeInventory,
     detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
   });
-  const prepOutcome = await recordBranchReconcileOutcome(app.id, {
-    status: 'running', reason: 'preparing-retirement-reviews', remaining: [...inventory.remaining, ...absentObligations],
-    nextAction: 'Review completed local work before verified archival retirement.',
-  });
-  const retirementReviews = await prepareReconcileRetirements(app, result);
-  const latestOutcome = (await getBranchReconcileOutcome(app.id)) || prepOutcome || previousOutcome;
-  return { retirementReviews, latestAbsentObligations: absentRetirementObligations(latestOutcome, result) };
+  await recordBranchReconcileOutcome(app.id, { status: 'running', reason: 'preparing-retirement-reviews',
+    remaining: inventory.remaining, nextAction: 'Review completed local work before retirement.' });
+  return prepareReconcileRetirements(app, result);
 }
 
 // Fold branches the retirement pass already retired out of every scan list and
@@ -585,7 +577,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   if (taskType !== 'branch-reconcile') return { skip: false, block: '' };
   const { reconcile, filterActionable, limitBranchesForAgent, formatInFlightForPrompt, actionableSignature, describeIdleReconcilePark, buildActiveOwnerIds } = await import('./branchReconcile.js');
   const { formatSupersededForPrompt } = await import('./supersededLedger.js');
-  const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
+  const { recordBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
   const { getActiveAgentIds } = await import('./agentState.js');
   const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
   const pendingMergeBranches = await readPendingMergeBranches(app, metadata);
@@ -675,13 +667,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   const detachedSuffix = countSuffix(result.detachedWorktrees, 'detached worktree(s) held back', (d) => d.reason);
   // Publish the exact release rows before preparing the live preview. Proof
   // objects may be fetched, but only a reviewed digest authorizes retirement.
-  const observedOutcome = await getBranchReconcileOutcome(app.id);
-  const { reconcileLegacyRetirementRecords } = await import('./legacyRetirementReconciliation.js');
-  const previousOutcome = await reconcileLegacyRetirementRecords(app.id, observedOutcome).catch(() => observedOutcome);
-  const { retirementReviews, latestAbsentObligations } = await prepareRetirementReviews(app, result, {
-    cleanupMerged: actions.cleanupMerged, heldLive, previousOutcome,
-    absentObligations: absentRetirementObligations(previousOutcome, result),
-  });
+  const retirementReviews = await prepareRetirementReviews(app, result, { cleanupMerged: actions.cleanupMerged, heldLive });
   dropRetiredBranches(result, retirementReviews);
   const { cognitiveInFlight, routineDeliveryHolds } = await classifyInFlightDelivery(app, result, actions);
   const allActionable = filterActionable([...cognitiveInFlight, ...retirementReviews.candidates], actions);
@@ -691,7 +677,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   const accountedNames = new Set([...actionableNames,
     ...retirementReviews.held.map(held => held.branch), ...routineDeliveryHolds.map(held => held.branch)]);
   const unaccounted = row => !accountedNames.has(row.branch);
-  const idlePark = describeIdleReconcilePark([...(result.skipped || []).filter(unaccounted), ...retirementReviews.held, ...latestAbsentObligations, ...routineDeliveryHolds], heldLive, {
+  const idlePark = describeIdleReconcilePark([...(result.skipped || []).filter(unaccounted), ...retirementReviews.held, ...routineDeliveryHolds], heldLive, {
     wip: result.wip?.filter(unaccounted), detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
     claimMarkersHeld: result.claimMarkersHeld,
     worktreeInventory: result.worktreeInventory?.filter(tree => !actionableNames.has(tree.branch)) ?? result.worktreeInventory,
@@ -779,7 +765,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   metadata.perpetual = true;
   metadata.reconcileRetirements = actionable.filter(branch => branch.retirement).map(branch => ({
     ...branch.retirement,
-    createdAt: dispatchedOutcome.retirementObligations?.find(row => sameRetirementObservation(row, branch.retirement.release))?.createdAt,
+
   }));
   const supersededBlock = formatSupersededForPrompt(result.superseded || []);
   const block = [
