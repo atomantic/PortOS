@@ -110,7 +110,7 @@ export const createFeatureGate = () => {
 };
 
 /**
- * Get learning-adjusted interval for a task type
+ * Get an advisory interval recommendation; dispatch does not apply learning adjustments
  */
 async function getPerformanceAdjustedInterval(taskType, baseIntervalMs) {
   const taskTypeKey = `task:${taskType}`;
@@ -155,16 +155,6 @@ async function getPerformanceAdjustedInterval(taskType, baseIntervalMs) {
 
   const adjustedIntervalMs = Math.round(baseIntervalMs * cooldownInfo.multiplier);
 
-  if (cooldownInfo.multiplier !== 1.0) {
-    const direction = cooldownInfo.multiplier < 1 ? 'decreased' : 'increased';
-    const percentage = Math.abs(Math.round((1 - cooldownInfo.multiplier) * 100));
-    emitLog('debug', `Learning: ${taskType} interval ${direction} by ${percentage}% (${cooldownInfo.successRate}% success rate)`, {
-      taskType,
-      multiplier: cooldownInfo.multiplier,
-      successRate: cooldownInfo.successRate,
-      dataPoints: cooldownInfo.completed
-    }, '📊 TaskSchedule');
-  }
 
   return {
     adjustedIntervalMs,
@@ -1484,7 +1474,7 @@ export async function getScheduleStatus() {
     const execution = schedule.executions[`task:${taskType}`] || { lastRun: null, count: 0, perApp: {} };
     const promptInfo = getTaskTypePromptInfo(taskType);
 
-    // Get learning adjustment info
+    // Historical recommendations are advisory, not the effective schedule
     const baseInterval = interval.intervalMs || DAY;
     const learningInfo = await getPerformanceAdjustedInterval(taskType, baseInterval);
 
@@ -1555,11 +1545,12 @@ export async function getScheduleStatus() {
       totalAppCount,
       appSchedules,
       status: check,
-      learningAdjusted: learningInfo.adjusted,
-      learningMultiplier: learningInfo.multiplier,
+      learningAdjusted: false,
+      learningMultiplier: 1,
+      learningAdvice: { ...learningInfo, advisoryOnly: true },
       successRate: learningInfo.successRate,
       dataPoints: learningInfo.dataPoints,
-      adjustedIntervalMs: learningInfo.adjustedIntervalMs,
+      adjustedIntervalMs: interval.intervalMs ?? null,
       recommendation: learningInfo.recommendation,
       description: interval.description || getTaskTypeDescription(taskType),
       promptMode: promptInfo.mode,

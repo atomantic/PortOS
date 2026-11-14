@@ -160,7 +160,7 @@ describe('proactiveAlerts — current task performance', () => {
     expect(alerts.filter(a => a.type === 'success_drop' || a.type === 'learning_health')).toEqual([]);
   });
 
-  it('keeps alerts backed by enough runs in the current window', async () => {
+  it('keeps one advisory per recent poor-performing type without claiming scheduling is paused', async () => {
     const active = {
       taskType: 'self-improve:example',
       successRate: 20,
@@ -172,16 +172,14 @@ describe('proactiveAlerts — current task performance', () => {
 
     const { alerts } = await generateAlerts();
     expect(alerts.find(a => a.type === 'success_drop')).toMatchObject({
-      detail: '20% success across the last 5 runs'
+      severity: 'medium',
+      detail: '20% success across the last 5 runs. Review run outcomes for blockers; this history does not pause scheduling.'
     });
-    expect(alerts.find(a => a.type === 'learning_health')).toMatchObject({
-      title: '1 task type being skipped: self-improve:example',
-      detail: 'Very low success rates caused automatic skip (self-improve:example) — review task configuration',
-      metadata: { skipped: 1, critical: 1, taskTypes: ['self-improve:example'] }
-    });
+    expect(alerts.filter(a => a.type === 'learning_health')).toEqual([]);
+    expect(alerts.filter(a => a.severity === 'high' || a.severity === 'critical')).toEqual([]);
   });
 
-  it('names multiple skipped task types in title and detail', async () => {
+  it('keeps separate task-type advice without a duplicate learning aggregate', async () => {
     const task1 = {
       taskType: 'internal-task',
       successRate: 10,
@@ -199,11 +197,8 @@ describe('proactiveAlerts — current task performance', () => {
     mock.performance = { needsAttention: [task1, task2], skipped: [task1, task2] };
 
     const { alerts } = await generateAlerts();
-    expect(alerts.find(a => a.type === 'learning_health')).toMatchObject({
-      title: '2 task types being skipped: internal-task, self-improve:claim-issue',
-      detail: 'Very low success rates caused automatic skip (internal-task, self-improve:claim-issue) — review task configuration',
-      metadata: { skipped: 2, critical: 2, taskTypes: ['internal-task', 'self-improve:claim-issue'] }
-    });
+    expect(alerts.filter(a => a.type === 'success_drop').map(a => a.metadata.taskType)).toEqual(['internal-task', 'self-improve:claim-issue']);
+    expect(alerts.some(a => a.type === 'learning_health')).toBe(false);
   });
 });
 

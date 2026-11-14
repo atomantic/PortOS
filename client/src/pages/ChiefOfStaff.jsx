@@ -1006,22 +1006,17 @@ export default function ChiefOfStaff() {
 
   const hasCanvasAvatar = CANVAS_AVATAR_STYLES.has(avatarStyle) || isRiggedAvatarStyle(avatarStyle);
 
-  // Learning tile behaviour shared by the compact (sidebar/mobile) and mini
-  // (ascii stats bar) renderings — only the icon scale and the empty-state
-  // value differ between them. A skipped task type is critical on its own
-  // terms: derive that here rather than trusting the server's status chain to
-  // keep classifying `skipped > 0` as `critical`, or a reorder there would
-  // silently drop the red signal while the tile still reads "N skipped".
-  const learningSkipped = learningSummary?.skipped ?? 0;
+  // Historical learning recommendations do not indicate a scheduler pause.
+  const learningLowSuccess = learningSummary?.lowSuccessCount ?? learningSummary?.skipped ?? 0;
   // `!= null`, not truthiness — a real 0% success rate is the highest-signal
   // state and must not render as the empty state. `null` is the sentinel each
   // tile falls back from to its own (differently sized) empty-state string.
   const learningRate = learningSummary?.overallSuccessRate != null ? `${learningSummary.overallSuccessRate}%` : null;
   const learningStatProps = {
     label: 'Learning',
-    tone: learningSkipped > 0 ? 'critical' : (learningSummary?.status || 'default'),
-    active: learningSkipped > 0,
-    activeLabel: learningSkipped > 0 ? `${learningSkipped} skipped` : null,
+    tone: learningLowSuccess > 0 ? 'warning' : (learningSummary?.status || 'default'),
+    active: learningLowSuccess > 0,
+    activeLabel: learningLowSuccess > 0 ? `${learningLowSuccess} low success` : null,
     title: learningSummary?.statusMessage || 'View learning analytics',
     onClick: () => navigate('/cos/learning'),
   };

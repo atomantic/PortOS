@@ -261,6 +261,7 @@ describe('windowed-rate decisions (issue #2617)', () => {
       loadLearningData.mockResolvedValue(learningWith({ 'self-improve:x': recoveredMetrics() }));
       const out = await getAdaptiveCooldownMultiplier('self-improve:x');
       expect(out.skip).toBe(false);
+      expect(out.recommendation).toContain('scheduling is unchanged');
       expect(out.multiplier).toBe(0.7); // windowed 100% → high-success branch
       expect(out.successRate).toBe(100);
       expect(out.rateSource).toBe('windowed');
@@ -278,6 +279,10 @@ describe('windowed-rate decisions (issue #2617)', () => {
       loadLearningData.mockResolvedValue(learningWith({ 'self-improve:x': stillFailingMetrics() }));
       const out = await getAdaptiveCooldownMultiplier('self-improve:x');
       expect(out.skip).toBe(true);
+      expect(out.multiplier).toBe(0);
+      expect(out.reason).toBe('skip-failing');
+      expect(out.recommendation).toContain('review outcomes; scheduling is unchanged');
+      expect(out.recommendation).not.toContain('skipping until reviewed');
       expect(out.rateSource).toBe('windowed');
     });
   });
