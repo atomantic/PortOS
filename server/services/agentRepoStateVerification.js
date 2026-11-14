@@ -12,7 +12,6 @@ import { recoverCompletionTaskHandoff, matchesCompletionTaskDispatch } from './a
 import { getDeliveryActivity, withDeliveryActivity, COMPLETION_RECOVERY_BATCH_SIZE } from './agentDeliveryActivity.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { processAuditFingerprint } from '../lib/persistentMindProcessAudit.js';
-import { completionSentinelPresent } from './agentCompletionSentinel.js';
 import { hasClaimCheckoutBindings, completedCheckoutReceiptValid, sameTaskRetirementBinding, checkoutSeedSchema,
   readSupersededGenerationRetired } from './completedCheckoutEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
@@ -419,8 +418,6 @@ export async function verifyAgentRepoState(input) {
       const historical = await recoverHistoricalClaimCleanup(input.agentState, verifyRunBranches);
       if (historical) return { ...historical, historicalCleanup: true };
     }
-    if (input.agentState?.metadata?.completionSentinel
-      && await completionSentinelPresent(input.agentId, input.agentState.metadata.workspacePath)) return skipped('completion-sentinel-generation-pending');
     if (input.agentState?.metadata?.checkoutCapture?.status === 'pending') {
       const { retryCompletionCheckoutCapture, getAgentRecord } = await import('./cosAgentLifecycle.js');
       if (!await retryCompletionCheckoutCapture(input.agentId).catch(() => false)) return skipped('checkout-capture-pending');

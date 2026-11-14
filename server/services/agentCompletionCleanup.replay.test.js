@@ -41,7 +41,6 @@ vi.mock('./auditFindings.js', () => ({ settleAuditFindings: vi.fn() }));
 
 import { runAgentCompletionCleanup, replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
 import { storeCompletionData, readCompletionData } from './agentCompletionData.js';
-import { readCompletionSentinel } from './agentCompletionSentinel.js';
 import { cleanupAgentWorktree } from './agentWorktreeCleanup.js';
 import { handleCreativeDirectorCompletion } from './creativeDirector/completionHook.js';
 import { updateTask, addTask, getTaskById } from './cosTaskStore.js';
@@ -68,10 +67,8 @@ describe('durable post-ingestion cleanup replay', () => {
     const contents = JSON.stringify({ summary: 'Delivered summary', payload: { result: 'original payload' } });
     await writeFile(marker, contents);
     fixture.recordPath = join(root, 'agent.json');
-    const evidence = await readCompletionSentinel('agent-one', workspace);
     await writeFile(fixture.recordPath, JSON.stringify({ id: 'agent-one', taskId: task.id, status: 'completed',
       startedAt: '2026-01-01T00:00:00Z', result: { success: true }, metadata: { workspacePath: workspace,
-        completionSentinel: evidence.receipt, completionSentinelContents: contents,
         completionCleanup: { version: 1, status: 'pending', stages: {} } } }));
     cleanupAgentWorktree.mockReset().mockResolvedValue([]);
     updateTask.mockReset().mockResolvedValue({});
@@ -85,7 +82,7 @@ describe('durable post-ingestion cleanup replay', () => {
     updateTask.mockResolvedValueOnce({ error: 'pipeline unavailable' });
     cleanupAgentWorktree.mockImplementationOnce(async () => {
       expect((await execGit(['status', '--porcelain'], workspace)).stdout).toBe('');
-      expect((await saved()).metadata.completionSentinelContents).toContain('original payload');
+      await expect(readFile(marker)).rejects.toMatchObject({ code: 'ENOENT' });
       return [];
     });
     const pipelineTask = { ...task, metadata: { pipeline: { id: 'pipeline-one', status: 'running', currentStage: 0,
@@ -292,23 +289,6 @@ describe('durable post-ingestion cleanup replay', () => {
     expect(cleanupAgentWorktree).toHaveBeenCalledTimes(1);
   });
 
-  it('finishes an acknowledgement interrupted after quarantine without deleting a newer canonical marker', async () => {
-    const record = await saved();
-    const held = `${marker}.ack-${record.metadata.completionSentinel.sha256}`;
-    record.metadata.completionCleanup = { version: 1, status: 'pending', startedAt: record.startedAt,
-      context: { task, effectiveSuccess: true, prOwnership: { taskOpenPR: false, agentOpensOwnPr: false } },
-      stages: { sentinel: { status: 'running', retryable: true } } };
-    await writeFile(fixture.recordPath, JSON.stringify(record));
-    await rename(marker, held); // Crash boundary: durable ingestion exists; ACK has not committed.
-    await writeFile(marker, 'a newer completion generation');
-    await replayAgentCompletionCleanup(await saved());
-    expect(await readFile(marker, 'utf8')).toBe('a newer completion generation');
-    await expect(readFile(held)).rejects.toMatchObject({ code: 'ENOENT' });
-    expect((await saved()).metadata.completionCleanup).toMatchObject({ status: 'pending', stages: { sentinel: { status: 'done' },
-      worktree: { status: 'held', reason: 'completion-sentinel-generation-pending' } } });
-    expect(cleanupAgentWorktree).not.toHaveBeenCalled();
-  });
-
   it('replays only the failed worktree stage after restart and preserves a newer marker across duplicate callbacks', async () => {
     cleanupAgentWorktree.mockRejectedValueOnce(new Error('transient Git read'));
     await expect(finish()).rejects.toThrow('transient Git read');
@@ -324,22 +304,6 @@ describe('durable post-ingestion cleanup replay', () => {
     await replayAgentCompletionCleanup(await saved());
     expect(cleanupAgentWorktree).toHaveBeenCalledTimes(2);
     expect(addTask).not.toHaveBeenCalled();
-  });
-
-  it('refuses acknowledgement when its run-bound ingestion artifact is corrupt, retaining the original marker and checkout', async () => {
-    const record = await saved();
-    record.metadata.completionSentinelData = await storeCompletionData(record, 'sentinel', record.metadata.completionSentinelContents);
-    delete record.metadata.completionSentinelContents;
-    await writeFile(fixture.recordPath, JSON.stringify(record));
-    const reference = record.metadata.completionSentinelData;
-    await writeFile(join(fixture.runRoot, record.id, 'completion', `sentinel-${reference.sha256}.json`), 'corrupt');
-    await expect(finish()).rejects.toThrow('completion-data-size-changed');
-    expect(await readFile(marker, 'utf8')).toContain('original payload');
-    expect(cleanupAgentWorktree).not.toHaveBeenCalled();
-    expect((await saved()).metadata.completionCleanup).toMatchObject({ status: 'pending', stages: {
-      sentinel: { status: 'failed', retryable: true }, worktree: { status: 'held' },
-    } });
-    await expect(readCompletionData(record, reference)).rejects.toThrow('completion-data-size-changed');
   });
 
   it('publishes replay bytes in the canonical run directory after cold index initialization', async () => {
@@ -377,15 +341,5 @@ describe('durable post-ingestion cleanup replay', () => {
     expect((await saved()).metadata.completionCleanup).toMatchObject({ status: 'completed', stages: { worktree: { status: 'done' } } });
     await replayAgentCompletionCleanup(await saved());
     expect(cleanupAgentWorktree).toHaveBeenCalledTimes(2);
-  });
-
-  it('never acknowledges a replacement or sends its checkout to cleanup', async () => {
-    await writeFile(marker, 'replacement generation');
-    await finish();
-    expect(await readFile(marker, 'utf8')).toBe('replacement generation');
-    expect(cleanupAgentWorktree).not.toHaveBeenCalled();
-    expect((await saved()).metadata.completionCleanup).toMatchObject({ status: 'pending', stages: {
-      sentinel: { status: 'held' }, worktree: { status: 'held', reason: 'completion-sentinel-generation-pending' },
-    } });
   });
 });

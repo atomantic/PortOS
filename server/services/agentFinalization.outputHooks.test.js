@@ -367,9 +367,8 @@ describe('recovery output-hook dispatch (#3182)', () => {
       await finalizeAgent({ agentId: 'agent-example', task: { ...TASK, prompt: payload, history: payload },
         success: true, exitCode: 0, duration: 1000, workspacePath, outputBuffer });
       expect(JSON.stringify(persistedAgent.metadata).length).toBeLessThan(15000);
-      expect(JSON.parse(JSON.stringify(persistedAgent.metadata))).not.toHaveProperty('completionSentinelContents');
       expect(JSON.parse(JSON.stringify(persistedAgent.metadata.completionCleanup))).not.toHaveProperty('context');
-      expect(await readCompletionData(persistedAgent, persistedAgent.metadata.completionSentinelData)).toBe(sentinel);
+      expect(persistedAgent.metadata.taskSummary).toBe('Delivered.');
       const replay = await readCompletionData(persistedAgent, persistedAgent.metadata.completionCleanup.replay);
       expect(replay.outputBuffer).toBe(outputBuffer);
       expect(replay.task.id).toBe(TASK.id);
