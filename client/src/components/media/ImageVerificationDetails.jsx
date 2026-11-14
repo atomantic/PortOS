@@ -4,7 +4,7 @@
  */
 
 import { useState } from 'react';
-import { ShieldCheck, AlertTriangle, CheckCircle2, RotateCw, Sparkles, UserCheck, Loader2 } from 'lucide-react';
+import { ShieldCheck, AlertTriangle, CheckCircle2, RotateCw, UserCheck, Loader2 } from 'lucide-react';
 import { verifyImageNow, overrideVerification } from '../../services/apiImageVerifier.js';
 import toast from '../ui/Toast.jsx';
 

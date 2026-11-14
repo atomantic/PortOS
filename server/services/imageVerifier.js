@@ -292,7 +292,7 @@ export async function verifyImage({
             ? { ...c, status: 'unverified', note: `Unconfirmed defect claim: ${c.note || defect.claim}` }
             : c));
         }
-      } catch (err) {
+      } catch (_err) {
         if (!advisory) confirmedDefects.push(defect);
       }
     }
