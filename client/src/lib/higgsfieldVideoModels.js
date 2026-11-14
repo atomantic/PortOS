@@ -10,5 +10,6 @@ export {
   HIGGSFIELD_VIDEO_MODELS,
   HIGGSFIELD_VIDEO_MODEL_IDS,
   getHiggsfieldVideoModel,
+  higgsfieldCapabilityHint,
   higgsfieldVideoLengths,
 } from '../../../server/lib/higgsfieldVideoModels.js';

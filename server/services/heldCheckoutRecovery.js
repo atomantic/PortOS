@@ -18,10 +18,9 @@ import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObserva
  * handoffs always keep the checkout.
  */
 
-import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
+import { readLocalBranchPresence } from './repoCleanupObservation.js';
 import { realpathSync } from 'node:fs';
 import { lstat, readlink, stat, symlink, unlink } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { execGit } from '../lib/execGit.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
@@ -34,26 +33,6 @@ const FULL_OBJECT_ID = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/;
 const shortBranch = (ref) => (ref ? String(ref).replace(/^refs\/heads\//, '') : null);
 // Refusals the automatic daemon gate raises on purpose; any other throw is uncertain.
 const AUTOMATIC_GATE_REASONS = new Set(['daemon-stopped', 'automatic-retirement-disabled']);
-
-async function historicalCheckoutAbsent(release, trees) {
-  const present = await lstat(release.path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-  return !present && trees.length > 0 && !trees.some(tree => tree.path === release.path || (release.branch && shortBranch(tree.branch) === release.branch));
-}
-
-/** Physical cleanup is current absence, independently of execution success.
- * This observation cannot authorize deletion or manufacture a terminal head. */
-export async function inspectAbsentCheckout({ repoPath, release }) {
-  if (!release?.path || !release.branch) return null;
-  const absent = async () => {
-    const trees = await listWorktrees(repoPath);
-    return await readCheckoutPathPresence(release.path) === false
-      && await readLocalBranchPresence(repoPath, release.branch) === false
-      && await historicalCheckoutAbsent(release, trees);
-  };
-  if (!await absent()) return null;
-  return { kind: 'current-inventory', evidenceDigest: createHash('sha256')
-    .update(JSON.stringify([repoPath, release.path, release.branch, release.head ?? null])).digest('hex'), recheck: absent };
-}
 
 /** Re-read daemon authority at each automatic mutation boundary. Manual API
  * callers keep their existing operator-authorized contract.

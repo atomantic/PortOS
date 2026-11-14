@@ -6,6 +6,7 @@ import {
   buildFalVideoRequest,
   coerceFalVideoSeconds,
   estimateFalVideoCostUsd,
+  falCapabilityHint,
   falImageVideoQuotes,
   falVideoClipQuote,
   getFalVideoModel,
@@ -186,5 +187,13 @@ describe('buildFalVideoRequest — prompt length caps', () => {
     expect(build('fal-ai/minimax/hailuo-02/standard/image-to-video', { prompt: 'a', negativePrompt: 'blur' }).body.prompt).toBe('a\nAvoid: blur');
     const long = 'x '.repeat(1500).trim();
     expect(build('fal-ai/veo3.1/fast/image-to-video', { prompt: long }).body.prompt).toBe(long);
+  });
+});
+
+describe('falCapabilityHint', () => {
+  it('marks reference models and plain text/image models apart', () => {
+    expect(falCapabilityHint(getFalVideoModel('minimax/h3-max/reference-to-video'))).toBe('refs ≤9 · end frame · audio refs');
+    expect(falCapabilityHint(getFalVideoModel('fal-ai/minimax/hailuo-02/standard/image-to-video'))).toMatch(/^no refs/);
+    expect(falCapabilityHint(null)).toBe('');
   });
 });

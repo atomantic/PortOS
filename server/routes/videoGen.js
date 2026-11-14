@@ -9,6 +9,7 @@ import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from '../lib/vide
  */
 
 import { withMediaFileSizes } from '../lib/mediaFileInfo.js';
+import { checkHiggsfieldNewModels } from '../services/higgsfieldCatalogCheck.js';
 import { clearMetalBufferProfiles } from '../services/videoGen/metalBufferProfiles.js';
 import { historyListQuerySchema, isHistoryListQuery, listVideoHistoryQuery } from '../services/videoGen/historyList.js';
 import { Router } from 'express';
@@ -768,6 +769,11 @@ async function resolveLocalPythonHealth(py) {
     return { connected: false, reason: `Python probe failed: ${err.message || err}`, missing: [], pythonVersion: null };
   }
 }
+
+// Higgsfield video families the curated picker lacks, read from their public catalog.
+router.get('/higgsfield-models/unsupported', asyncHandler(async (_req, res) => {
+  res.json(await checkHiggsfieldNewModels());
+}));
 
 router.get('/models', asyncHandler(async (_req, res) => {
   const { models } = await hardwareAwareVideoModels();

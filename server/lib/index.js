@@ -708,6 +708,7 @@ export * from './generationModes.js';
 export * from './imageGenCapabilities.js';
 export * from './imageQuotaSignal.js';
 export * from './falImageModels.js';
+export * from './higgsfieldCatalogScan.js';
 export * from './higgsfieldImageModels.js';
 export * from './higgsfieldVideoModels.js';
 export * from './googleCloudConfig.js';

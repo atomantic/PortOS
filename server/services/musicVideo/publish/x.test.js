@@ -29,7 +29,13 @@ const fakePage = ({ dialog, dialogDelay = 0 }) => {
       };
       return {
         waitFor: async (o) => { calls.waited.push(sel); return waitFor(o); },
-        click: async () => { calls.clicked.push(sel); },
+        // Playwright strict mode: a bare click on a selector matching several elements throws. From post 3 on,
+        // every post carries its own addButton, so only .last() (the newest post) may be clicked.
+        click: async () => {
+          if (sel.includes("addButton") && calls.clicked.filter((c) => c.includes("addButton")).length >= 1) throw new Error("strict mode violation: resolved to 2 elements");
+          calls.clicked.push(sel);
+        },
+        last: () => ({ click: async () => { calls.clicked.push(sel); } }),
         first: () => ({ waitFor, setInputFiles: async () => {} }),
       };
     },
@@ -44,6 +50,12 @@ describe('X composer scope', () => {
     expect(page.calls.pasted).toEqual(['[role=dialog] [data-testid=tweetTextarea_0]', '[role=dialog] [data-testid=tweetTextarea_1]']);
     expect(page.calls.clicked).toContain('[role=dialog] [data-testid=addButton]');
     expect(page.calls.waited).toContain('[role=dialog] ');
+  });
+
+  it('adds a third post through the newest add-post button when earlier posts each render one', async () => {
+    const page = fakePage({ dialog: true });
+    await xAdapter.prepare(page, { posts: [{ text: 'one' }, { text: 'two' }, { text: 'three' }] });
+    expect(page.calls.pasted).toHaveLength(3);
   });
 
   it('waits for a modal that hydrates late instead of falling back to unscoped selectors', async () => {

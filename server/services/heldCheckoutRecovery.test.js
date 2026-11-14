@@ -38,7 +38,7 @@ vi.mock('./mergedPrEvidence.js', () => ({ readMergedPrDelivery: async () => {
 vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id ? injected.app : null) }));
 
 import { describeHeldCheckoutRecovery, it, beforeEach, scratch, repo, external, noOwners, heldCheckout, mergedCheckout, registered, lockText, retire, makeClean, supersededCheckout, reapSuperseded } from './_heldCheckoutRecoveryFixture.js';
-const { retireInventoriedCheckout, retirePendingMergeCheckout, inspectAbsentCheckout, readMergedDelivery, retireCompletedCheckouts } = await import('./heldCheckoutRecovery.js');
+const { retireInventoriedCheckout, retirePendingMergeCheckout, readMergedDelivery, retireCompletedCheckouts } = await import('./heldCheckoutRecovery.js');
 const { recordBranchReconcileOutcome, getBranchReconcileOutcome, getBranchReconcileInventory } = await import('./branchReconcileOutcome.js');
 const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
 
@@ -482,19 +482,6 @@ describeHeldCheckoutRecovery(() => {
     expect(await readlink(c.link)).toBe(c.target);
     expect(await readFile(join(c.outside, 'wanted.txt'), 'utf8')).toBe('outside bytes\n');
     expect(await registered(c.path)).toBe(true);
-  });
-
-  it('observes current physical cleanup without requiring or creating retirement history', async () => {
-    const { path, release: merged } = await mergedCheckout('current-absence');
-    const release = { ...merged, checkoutIdentity: await readRetirementCheckoutIdentity(path) };
-    expect(await inspectAbsentCheckout({ repoPath: repo, release })).toBeNull();
-    expect(await retireInventoriedCheckout({ appId: 'app-1', release: merged }, { readAgents: noOwners })).toMatchObject({ ok: true, branchDeleted: true });
-    (await getBranchReconcileOutcome('app-1')).retired = [];
-    const proof = await inspectAbsentCheckout({ repoPath: repo, release });
-    expect(proof).toMatchObject({ kind: 'current-inventory', evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/) });
-    expect(await proof.recheck()).toBe(true);
-    await mkdir(path);
-    expect(await proof.recheck()).toBe(false);
   });
 });
 
