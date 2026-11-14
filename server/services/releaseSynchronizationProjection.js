@@ -9,14 +9,15 @@ function buildReleaseSynchronizationPayload(entry) {
   if (!entry) return null;
   const synchronization = effectiveReleaseSynchronization(entry);
   const reset = releaseSynchronizationReset(entry);
-  const evidence = entry.obligations?.synchronizationPr?.evidence || entry.obligations?.releaseAncestry?.evidence;
+  const evidence = [entry.obligations?.synchronizationPr?.evidence, entry.obligations?.releaseAncestry?.evidence];
+  const pick = key => evidence.find(row => row?.[key])?.[key] || null;
 
   return {
     version: 1,
     identity: entry.identity,
     status: synchronization?.status || 'pending',
-    prUrl: evidence?.prUrl || null,
-    headSha: evidence?.headSha || null,
+    prUrl: pick('prUrl'),
+    headSha: pick('headSha'),
     blocker: synchronization?.blocker || null,
     ...(synchronization?.delivery && { delivery: synchronization.delivery }),
     ...(reset && { operatorReset: reset, nextAction: 'The operator retired this checkpoint; its historical synchronization remains unverified.' }),

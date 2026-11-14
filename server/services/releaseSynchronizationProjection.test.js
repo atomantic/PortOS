@@ -108,7 +108,7 @@ describe('releaseSynchronizationProjection', () => {
 
   it('shows the PR under review before the merge verifies it', () => {
     const pending = { ...entry, synchronization: { status: 'running', blocker: null },
-      obligations: { synchronizationPr: { status: 'pending', blocker: 'synchronization-pr-not-merged' },
+      obligations: { synchronizationPr: { status: 'pending', blocker: 'synchronization-pr-not-merged', evidence: { prUrl: 'https://github.com/example/repo/pull/43' } },
         releaseAncestry: { status: 'pending', evidence: { prUrl: 'https://github.com/example/repo/pull/43', headSha: 'e'.repeat(40) } } } };
     expect(projectTaskReleaseMilestones({ id: 'example', metadata: {} }, pending).metadata.releaseSynchronization)
       .toMatchObject({ status: 'running', prUrl: 'https://github.com/example/repo/pull/43', headSha: 'e'.repeat(40) });
