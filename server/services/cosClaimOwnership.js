@@ -20,6 +20,7 @@ import { resolve } from 'path';
 import { bindClaimBranch, releaseClaimBranch, reserveReconcileBranch, reconcileAssignedTarget, reconcileMergeTarget, claimCheckoutOwnerReason, ownsClaimBranch } from '../lib/claimContinuation.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { advanceCandidateLifecycle } from './releaseCandidateLifecycle.js';
+import { withGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 
 import { withClaimOwnershipLock, readClaimOwnershipAgents, checkoutRetirementFenceReason } from './cosClaimOwnershipState.js';
 
@@ -181,8 +182,7 @@ export async function updateClaimOwnership({ agentId, action, branch }) {
     // retirement then removes; releasing a branch never needs the fence.
     const fenced = action === 'bind' && checkoutRetirementFenceReason({ repoPath, branch });
     if (fenced) return { [done]: false, reason: fenced };
-    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-    return withCheckoutPublication(repoPath, async () => {
+    return withGitMutationLifetime(async () => {
       let patch = action === 'bind' ? bindClaimBranch(agent, branch, Object.values(state.agents)) : releaseClaimBranch(agent, branch);
       let released = [];
       if (patch.refused === 'owner-active' && retiredRemoteGone) {
@@ -207,9 +207,6 @@ export async function updateClaimOwnership({ agentId, action, branch }) {
       }
       cosEvents.emit('agent:updated', state.agents[agentId]);
       return { [done]: true, branch };
-    }).catch(error => {
-      if (error.code === 'CHECKOUT_RETIREMENT_RESERVED') return { [done]: false, reason: 'checkout-retirement-reserved' };
-      throw error;
     });
   });
   let result = await attempt(false);
@@ -240,8 +237,7 @@ export async function updateReleaseCandidateOwnership(agentId, action, { version
     const repoPath = agent.sourceWorkspace || agent.metadata?.sourceWorkspace || agent.workspacePath || agent.metadata?.workspacePath;
     if (!repoPath) return { [done]: false, reason: 'ownership-unreadable' };
     if (checkoutRetirementFenceReason({ repoPath, branch })) return { [done]: false, reason: 'checkout-retirement-reserved' };
-    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-    return withCheckoutPublication(repoPath, async () => {
+    return withGitMutationLifetime(async () => {
       if (action === 'reserve') {
         const { releasePreflight } = await import('./releasePreflight.js');
         const preflight = await releasePreflight({ repoPath, agentId, agents: Object.values(state.agents), version })
@@ -280,9 +276,6 @@ export async function updateReleaseCandidateOwnership(agentId, action, { version
       await save();
       cosEvents.emit('agent:updated', state.agents[agentId]);
       return { [done]: true, branch };
-    }).catch(error => {
-      if (error.code === 'CHECKOUT_RETIREMENT_RESERVED') return { [done]: false, reason: 'checkout-retirement-reserved' };
-      throw error;
     });
   });
 }
@@ -312,8 +305,7 @@ export async function updateReleaseSynchronizationOwnership(agentId, action) {
     const repoPath = agent.sourceWorkspace || agent.metadata.sourceWorkspace || agent.workspacePath || agent.metadata.workspacePath;
     if (!repoPath) return { [done]: false, reason: 'ownership-unreadable' };
     if (checkoutRetirementFenceReason({ repoPath, branch })) return { [done]: false, reason: 'checkout-retirement-reserved' };
-    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-    return withCheckoutPublication(repoPath, async () => {
+    return withGitMutationLifetime(async () => {
       const prior = agent.metadata.releaseSynchronizationCheckout;
       if (prior && (prior.version !== 1 || prior.branch !== branch || prior.identity !== publication.identity
         || prior.startedAt !== agent.startedAt)) return { [done]: false, reason: 'synchronization-owner-conflict' };
@@ -353,9 +345,6 @@ export async function updateReleaseSynchronizationOwnership(agentId, action) {
       await save();
       cosEvents.emit('agent:updated', state.agents[agentId]);
       return { [done]: true, branch, ...(resumePath && { path: resumePath }) };
-    }).catch(error => {
-      if (error.code === 'CHECKOUT_RETIREMENT_RESERVED') return { [done]: false, reason: 'checkout-retirement-reserved' };
-      throw error;
     });
   });
 }
@@ -430,14 +419,13 @@ export async function checkReconcileOwnership(input, deps = {}) {
     }) || claimCheckoutOwnerReason({ branchName: branch, holderPath: holder?.path || null, sourceWorkspace: repoPath, agents: others });
     return reason ? { admitted: false, reason } : { admitted: true };
   };
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  if (!agentId || deps.reserve === false) return withCheckoutPublication(repoPath, admit)
+  if (!agentId || deps.reserve === false) return withGitMutationLifetime(admit)
     .catch(() => ({ admitted: false, reason: 'checkout-retirement-reserved' }));
 
   const { cosEvents } = await import('./cosEvents.js');
   // Decided inside the lock a bind takes, so no bind can land between
   // "admitted" and "reserved".
-  return ownershipTransaction('reserve', 'admitted', async (state, save) => withCheckoutPublication(repoPath, async () => {
+  return ownershipTransaction('reserve', 'admitted', async (state, save) => withGitMutationLifetime(async () => {
     const admission = await admit();
     if (!admission.admitted) return admission;
     const agent = state.agents?.[agentId];

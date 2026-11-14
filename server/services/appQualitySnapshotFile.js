@@ -26,6 +26,7 @@ import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { atomicWrite } from '../lib/fileCore.js';
+import { withGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 import {
   APP_QUALITY_LEGACY_SNAPSHOT_FILENAME,
   APP_QUALITY_SNAPSHOT_FILENAME,
@@ -476,8 +477,7 @@ async function landSnapshotPr(app, { body, count, defaultBranch, git, deps, mess
     };
   };
 
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(app.repoPath, async () => {
+  return withGitMutationLifetime(async () => {
     await (await import('./appQualitySnapshotMerge.js')).sweepSettledSnapshotCheckouts(app, git, deps)
       .then(swept => { if (swept.length) console.log(`🧹 Retired ${swept.length} settled quality snapshot checkout(s) for app ${app.id}`); })
       .catch(err => console.log(`⏭️ Quality snapshot checkout sweep skipped for app ${app.id}: ${err.message}`));

@@ -1,4 +1,3 @@
-vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: async (_repo, work) => work() }));
 /** Resume to real spawn dispatch, registration, completion and ownership gates.
  * Only provider/process, git discovery and persisted IO are doubled.
  */

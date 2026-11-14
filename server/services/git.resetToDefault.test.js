@@ -1,5 +1,4 @@
 // These command-contract fixtures use synthetic repositories; real admission is exercised in git.publication.test.js.
-vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_dir, work) => work() }));
 /**
  * Tests for the "reset to origin's default branch" escape hatch behind the
  * Apps → Git tab button.

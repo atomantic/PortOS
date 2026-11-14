@@ -1329,14 +1329,6 @@ untracked work; git-ignored local files never hold a merged checkout. Migrations
 as `data/cos/worktrees/` intact. See
 [branch reconciliation](./features/branch-reconciliation.md#retiring-a-held-checkout).
 
-`<canonical-common-git-dir>/portos-checkout-admission/` is a separate file-primary
-cross-process safety fence shared by linked checkouts and server/runner processes.
-It contains nonce-owned publication directories and at most one retirement cut.
-Unknown, interrupted and uncertain records block rather than age out. The native
-archive excludes this control subtree; it never excludes repository payload
-because it is ignored or untracked. Admission metadata is not part of the
-portable repository or peer synchronization.
-
 Branch reconciliation uses current Git/path state as local inventory authority.
 Missing checkout rows are pruned; a surviving local ref becomes a branch-only row
 and undergoes fresh ownership, completion-policy, integration and expected-head

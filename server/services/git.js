@@ -9,6 +9,7 @@ import { isGitLockError, listWorktrees } from './worktreeManager.js';
 import { execGit, execGitSafe } from '../lib/execGit.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
 import { resolveForgeForRepo } from './forgeAuth.js';
+import { withGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 export { resolveForgeForRepo, resolveForgeTokenEnv } from './forgeAuth.js';
 import {
   parseStatus,
@@ -71,8 +72,7 @@ async function withCheckoutMutation(dir, work, { exclusive = false } = {}) {
   checkoutMutations.set(key, state);
   const context = { key, state, active: true };
   try {
-    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-    return await withCheckoutPublication(dir, () => checkoutMutationContext.run(context, work));
+    return await withGitMutationLifetime(() => checkoutMutationContext.run(context, work));
   } finally {
     context.active = false;
     if (--state.count === 0) checkoutMutations.delete(key);
@@ -373,8 +373,7 @@ function fetchOriginAttempt(dir, attempt, prune = false) {
  *   remote branch is gone, for callers that go on to reason about what origin still has.
  */
 export async function fetchOrigin(dir, { prune = false } = {}) {
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(dir, () => fetchOriginAdmitted(dir, { prune }));
+  return withGitMutationLifetime(() => fetchOriginAdmitted(dir, { prune }));
 }
 
 function fetchOriginAdmitted(dir, { prune = false } = {}) {
@@ -1461,8 +1460,7 @@ async function ensureLatestUnserialized(dir) {
 export async function getRemoteBranches(dir, { force = false } = {}) {
   // Fetch latest refs if forced or not fresh within window
   if (force || !isFetchFresh(dir)) {
-    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-    const freshen = () => withCheckoutPublication(dir, async () => {
+    const freshen = () => withGitMutationLifetime(async () => {
       if (activeFetches.has(dir)) {
         await activeFetches.get(dir);
       } else {
@@ -1480,14 +1478,7 @@ export async function getRemoteBranches(dir, { force = false } = {}) {
         await fetchPromise;
       }
     });
-    if (force) {
-      await freshen();
-    } else {
-      await freshen().catch(error => {
-        if (error?.code === 'CHECKOUT_RETIREMENT_RESERVED' || error?.message === 'checkout-retirement-reserved') return null;
-        throw error;
-      });
-    }
+    await freshen();
   }
 
   // Detect default branch

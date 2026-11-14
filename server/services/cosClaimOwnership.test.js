@@ -2,7 +2,6 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 // Git/filesystem are synthetic in this suite; real durable admission has its own boundary tests.
 const releasePreflight = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 vi.mock('./releasePreflight.js', () => ({ releasePreflight }));
-vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_repo, work) => work() }));
 
 const store = { state: null, stateGate: null, readGate: null, saveGate: null, unreadable: false, stale: false, outbox: null };
 const deferred = () => {
