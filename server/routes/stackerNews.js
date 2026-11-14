@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { assertHostControl } from '../services/authGate.js';
 import { validateRequest } from '../lib/validation.js';
 import * as stackerNews from '../services/stackerNews.js';
 import { reconcileStackerNewsSchedulers } from '../services/stackerNewsScheduler.js';
@@ -92,7 +91,6 @@ router.get('/accounts', asyncHandler(async (_req, res) => res.json({ accounts: a
 
 router.post('/accounts', asyncHandler(async (req, res) => {
   const data = validateRequest(accountSchema, req.body);
-  if (data.monitoringEnabled === true) assertHostControl(req);
   const account = await stackerNews.createAccount(data);
   await reconcileStackerNewsSchedulers();
   emitChanged(req, account.id);
@@ -109,18 +107,6 @@ router.get('/accounts/:id', asyncHandler(async (req, res) => {
 router.patch('/accounts/:id', asyncHandler(async (req, res) => {
   requireId(req.params.id, 'account ID');
   const data = validateRequest(accountUpdateSchema, req.body);
-  if (data.monitoringEnabled === true) assertHostControl(req);
-  // Re-enabling an account also re-arms saved territory monitoring. The
-  // scheduler never arms an account without an effectively monitored territory.
-  if (data.enabled === true && data.monitoringEnabled !== true) {
-    const current = await stackerNews.getAccount(req.params.id);
-    if (current && !current.enabled) {
-      const territories = await stackerNews.listTerritories(current.id);
-      if (territories.some(territory => territory.monitoringEnabled ?? (data.monitoringEnabled ?? current.monitoringEnabled))) {
-        assertHostControl(req);
-      }
-    }
-  }
   const account = await stackerNews.updateAccount(req.params.id, data);
   if (!account) throw new ServerError('Stacker News account not found', { status: 404 });
   await reconcileStackerNewsSchedulers();
@@ -165,12 +151,6 @@ router.get('/accounts/:id/territories', asyncHandler(async (req, res) => {
 
 router.post('/territories', asyncHandler(async (req, res) => {
   const data = validateRequest(territorySchema, req.body);
-  if (data.monitoringEnabled === true) assertHostControl(req);
-  // Omitted/null territory monitoring inherits the account's opt-in.
-  if (data.monitoringEnabled == null) {
-    const account = await stackerNews.getAccount(data.accountId);
-    if (account?.enabled && account.monitoringEnabled) assertHostControl(req);
-  }
   const territory = await stackerNews.createTerritory(data);
   await reconcileStackerNewsSchedulers();
   emitChanged(req, territory.accountId);
@@ -180,14 +160,6 @@ router.post('/territories', asyncHandler(async (req, res) => {
 router.patch('/territories/:id', asyncHandler(async (req, res) => {
   requireId(req.params.id, 'territory ID');
   const data = validateRequest(territorySchema.omit({ accountId: true }).partial().strict(), req.body);
-  if (data.monitoringEnabled === true) assertHostControl(req);
-  if (data.monitoringEnabled === null) {
-    const current = await stackerNews.getTerritory(req.params.id);
-    if (current && current.monitoringEnabled === false) {
-      const account = await stackerNews.getAccount(current.accountId);
-      if (account?.enabled && account.monitoringEnabled) assertHostControl(req);
-    }
-  }
   const territory = await stackerNews.updateTerritory(req.params.id, data);
   if (!territory) throw new ServerError('Stacker News territory not found', { status: 404 });
   await reconcileStackerNewsSchedulers();

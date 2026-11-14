@@ -22,9 +22,12 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({ listJobs: () => state.job
 vi.mock('../services/dataManagerBusy.js', () => ({ trainingRunsBusy: async () => ({ busy: state.busy }) }));
 vi.mock('../services/loraDatasetCaption.js', () => ({ getActiveCaptionRun: () => state.caption }));
 vi.mock('../lib/backupSnapshotBoundary.js', () => ({ withBackupAssetPublication: work => work() }));
-vi.mock('../services/authGate.js', () => ({ requireHostControl: (_req, res, next) => state.authorized ? next() : res.sendStatus(403) }));
+// hostControlRouteGate (#16018) admits the writes; the inventory GET carries its own check.
+const gate = (_req, res, next) => state.authorized ? next() : res.sendStatus(403);
+vi.mock('../services/authGate.js', () => ({ requireHostControl: gate, hostControlRouteGate: (req, res, next) => (req.method === 'GET' ? next() : gate(req, res, next)) }));
 const { default: routes } = await import('./dataMaintenance.js');
-const app = express(); app.use(express.json()); app.use('/api/data-maintenance', routes);
+const { hostControlRouteGate } = await import('../services/authGate.js');
+const app = express(); app.use(express.json()); app.use(hostControlRouteGate); app.use('/api/data-maintenance', routes);
 app.use((error, _req, res, _next) => res.status(error.status || 500).json({ error: error.message, code: error.code }));
 const preview = () => request(app).post('/api/data-maintenance/preview').send({ operationId: 'retired-training-runs' });
 const execute = p => request(app).post('/api/data-maintenance/execute').send({ token: p.token, confirmation: p.confirmation });

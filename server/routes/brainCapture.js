@@ -7,7 +7,6 @@
 import { Router } from 'express';
 import * as brainService from '../services/brain.js';
 import { recordUserAction } from '../services/userActions.js';
-import { assertHostControl } from '../services/authGate.js';
 import { parseBareUrl } from '../lib/bareUrl.js';
 import { deriveRepoLinkFields } from '../lib/repoLinkFields.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -33,7 +32,6 @@ const router = Router();
 router.post('/capture', asyncHandler(async (req, res) => {
   const { text, providerOverride, modelOverride, creative, repoIntake, note } = validateRequest(captureInputSchema, req.body);
   const bareUrl = parseBareUrl(text);
-  if (bareUrl && deriveRepoLinkFields(bareUrl).isRepo) assertHostControl(req);
   const captureOptions = { creative, repoIntake };
   if (note !== undefined) captureOptions.note = note;
   const result = await brainService.captureThought(text, providerOverride, modelOverride, captureOptions);
