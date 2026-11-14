@@ -1,4 +1,3 @@
-import { matchingRetirementReceipts } from '../lib/reconcileRetirementEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { WORKSPACE_TEST_CACHE_ROOTS } from '../lib/workspaceTestCacheRoots.js';
 import { VITEST_CACHE_TAG, VITEST_MODULE_CACHE_ROOTS, moduleCacheName, moduleCacheMetadata } from '../lib/testCacheRetirementProof.js';
@@ -21,7 +20,7 @@ import { VITEST_CACHE_TAG, VITEST_MODULE_CACHE_ROOTS, moduleCacheName, moduleCac
  * files, or its commit history into an archive.
  */
 
-import { findGoneInventoryRows } from './branchReconcileInventoryPrune.js';
+import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
 import { realpathSync, constants } from 'node:fs';
 import { lstat, stat, realpath, readlink, readdir, opendir, open, unlink, symlink } from 'node:fs/promises';
 import { devNull } from 'node:os';
@@ -147,54 +146,19 @@ async function historicalCheckoutAbsent(release, trees) {
   return !present && trees.length > 0 && !trees.some(tree => tree.path === release.path || (release.branch && shortBranch(tree.branch) === release.branch));
 }
 
-/** Read existing no-archive service receipts, scoped to the original repository
- * and physical checkout generation. Never infer removal from absence alone. */
-async function completedServiceRetirement(repoPath, release) {
-  if (!/^[a-f0-9]{64}$/.test(release.checkoutIdentity || '')) return null;
-  const [{ loadSchedule }, { getAppById }] = await Promise.all([
-    import('./taskScheduleStore.js'), import('./apps.js'),
-  ]);
-  const schedule = await loadSchedule();
-  const root = await realpath(repoPath).catch(() => null);
-  if (!root) return null;
-  const found = new Map();
-  for (const [appId, record] of Object.entries(schedule.executions?.['task:branch-reconcile']?.perApp || {})) {
-    const receipts = matchingRetirementReceipts(record.branchReconcileOutcome, release).filter(row => row.archiveDir == null
-      && row.checkoutIdentity === release.checkoutIdentity && Date.parse(row.retiredAt) >= Date.parse(release.createdAt));
-    if (!receipts.length) continue;
-    const app = await getAppById(appId);
-    if (!app?.repoPath || await realpath(app.repoPath).catch(() => null) !== root) continue;
-    for (const row of receipts) {
-      const key = JSON.stringify([row.branch, row.path, row.head, row.checkoutIdentity, row.retiredAt, row.branchDeleted]);
-      found.set(key, row);
-    }
-  }
-  if (found.size !== 1) return null;
-  const [key, receipt] = [...found][0];
-  return { kind: 'service-retirement-receipt', archiveDir: null, receipt,
-    evidenceDigest: createHash('sha256').update(key).digest('hex') };
-}
-
-/** Completion audits have a server-captured checkout generation, but may never
- * have entered the scheduled retirement queue. Only an exact service retirement
- * receipt settles it; this never creates an obligation or a deletion receipt.
- */
-export async function findMissingCheckoutPreservation({ repoPath, release }) {
-  if (!Number.isFinite(Date.parse(release?.createdAt)) || Date.parse(release.createdAt) > Date.now()
-    || !FULL_OBJECT_ID.test(release?.head || '')) return null;
+/** Physical cleanup is current absence, independently of execution success.
+ * This observation cannot authorize deletion or manufacture a terminal head. */
+export async function inspectAbsentCheckout({ repoPath, release }) {
+  if (!release?.path || !release.branch) return null;
   const absent = async () => {
     const trees = await listWorktrees(repoPath);
-    const ref = await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${release.branch}`], repoPath, { ignoreExitCode: true });
-    return ref.exitCode === 1 && await historicalCheckoutAbsent(release, trees);
+    return await readCheckoutPathPresence(release.path) === false
+      && await readLocalBranchPresence(repoPath, release.branch) === false
+      && await historicalCheckoutAbsent(release, trees);
   };
   if (!await absent()) return null;
-  const receipt = await completedServiceRetirement(repoPath, release).catch(() => null);
-  if (!receipt) return null;
-  return { ...receipt, recheck: async () => {
-    if (!await absent()) return false;
-    const fresh = await completedServiceRetirement(repoPath, release).catch(() => null);
-    return fresh?.evidenceDigest === receipt.evidenceDigest;
-  } };
+  return { kind: 'current-inventory', evidenceDigest: createHash('sha256')
+    .update(JSON.stringify([repoPath, release.path, release.branch, release.head ?? null])).digest('hex'), recheck: absent };
 }
 
 // Review refuses rather than inspect a subset: removing a checkout that was
@@ -664,8 +628,7 @@ export async function prepareInventoriedCheckoutRetirement({ appId, release, prU
   const app = await getAppById(appId);
   if (!app?.repoPath) return { ok: false, reason: 'app-not-found' };
   const outcome = await getBranchReconcileOutcome(appId);
-  const retired = bindRemovedCheckoutRelease(outcome, release);
-  if (retired) return prepareRemovedCheckoutBranch({ appId, release: retired, prUrl, kind }, opts);
+  if (!release.path && release.branch) return prepareBranchOnlyCleanup({ appId, release, prUrl, kind }, opts);
   release = bindInventoriedRelease(outcome, release);
   if (!release) return { ok: false, reason: 'release-not-in-inventory' };
   const reviewOptions = { ...opts, forgeAccount: app.forgeAccount ?? null, retainMissingSource: true };
@@ -1421,22 +1384,16 @@ export async function retireInventoriedCheckout({ appId, release, review }, opts
   const app = await getAppById(appId);
   if (!app?.repoPath) return { ok: false, reason: 'app-not-found' };
   const outcome = await outcomes.getBranchReconcileOutcome(appId);
-  const retired = bindRemovedCheckoutRelease(outcome, release);
-  if (retired) return finalizeRemovedCheckoutBranch({ appId, release: retired, review }, opts);
+  if (!release.path && release.branch) return finalizeBranchOnlyCleanup({ appId, release, review }, opts);
   release = bindInventoriedRelease(outcome, release);
   if (!release) return { ok: false, reason: 'release-not-in-inventory' };
   const inventoryCurrent = async () => (await outcomes.getBranchReconcileOutcome(appId))?.remaining?.some(entry => sameRelease(entry, release)) === true;
   const result = await retireHeldCheckout({ repoPath: app.repoPath, release, review }, { ...opts, inventoryCurrent, forgeAccount: app.forgeAccount ?? null,
     preserveSupersession: async prepared => outcomes.recordSupersededCheckoutPreservation(appId, release, prepared),
   });
-  // A missing original cannot be archived retroactively. Retain its exact
-  // identity for provenance recovery rather than equating absence with success.
   if (!result.ok && result.reason === 'checkout-not-found') {
-    const gone = await findGoneInventoryRows(app.repoPath, [release]).catch(() => []);
-    if (gone.length) {
-      await outcomes.recordMissingInventoryRows(appId, gone);
-      return { ok: false, reason: 'retirement-provenance-unverified' };
-    }
+    await outcomes.getBranchReconcileInventory(appId);
+    return { ok: false, reason: 'inventory-refresh-required' };
   }
   if (result.ok) {
     await outcomes.recordHeldCheckoutRetirement(appId, {
@@ -1450,31 +1407,7 @@ export async function retireInventoriedCheckout({ appId, release, review }, opts
   return result;
 }
 
-/** Canonical physical removal, not missing inventory, selects ref finalization.
- * Ambiguous generations stay unresolved; callers cannot invent a receipt. */
-function removedCheckoutReceipts(outcome) {
-  const rows = [...(outcome?.retired || []), ...Object.values(outcome?.retirementReceiptEvidence || {})];
-  const unique = new Map();
-  for (const row of rows) {
-    const key = JSON.stringify([row.path, row.branch, row.head, row.checkoutIdentity, row.retiredAt]);
-    if (!unique.has(key) || (row.branchDeleted === true && row.branchFinalizedAt)) unique.set(key, row);
-  }
-  return [...unique.values()];
-}
-
-function bindRemovedCheckoutRelease(outcome, release) {
-  const matches = removedCheckoutReceipts(outcome).filter(row => row.path === release.path && row.branch === release.branch
-    && row.head === release.head && release.branch && row.checkoutIdentity && Number.isFinite(Date.parse(row.retiredAt))
-    && (row.branchDeleted === false || (row.branchDeleted === true && row.branchFinalizedAt))
-    && (!release.checkoutIdentity || row.checkoutIdentity === release.checkoutIdentity)
-    && (!release.retiredAt || row.retiredAt === release.retiredAt));
-  const unique = new Map(matches.map(row => [JSON.stringify([row.checkoutIdentity, row.retiredAt]), row]));
-  if (unique.size !== 1) return null;
-  const receipt = [...unique.values()][0];
-  return { ...release, checkoutIdentity: receipt.checkoutIdentity, retiredAt: receipt.retiredAt };
-}
-
-async function reviewRemovedCheckoutBranch({ appId, release, prUrl, kind }, opts = {}) {
+async function reviewBranchOnlyCleanup({ appId, release, prUrl, kind }, opts = {}) {
   if (kind) return { ok: false, reason: 'retirement-exact-delivery-required' };
   const [{ getAppById }, { getBranchReconcileOutcome }, { buildCheckoutRetirementReview, readRetirementForgeEvidence }] = await Promise.all([
     import('./apps.js'), import('./branchReconcileOutcome.js'), import('./heldCheckoutReview.js'),
@@ -1482,18 +1415,15 @@ async function reviewRemovedCheckoutBranch({ appId, release, prUrl, kind }, opts
   const app = await getAppById(appId);
   if (!app?.repoPath) return { ok: false, reason: 'app-not-found' };
   const outcome = await getBranchReconcileOutcome(appId);
-  if (!bindRemovedCheckoutRelease(outcome, release)) return { ok: false, reason: 'retirement-removal-receipt-changed' };
-  const receipt = removedCheckoutReceipts(outcome).find(row => row.path === release.path && row.branch === release.branch
-    && row.head === release.head && row.checkoutIdentity === release.checkoutIdentity && row.retiredAt === release.retiredAt);
+  if (!outcome?.remaining?.some(row => !row.path && row.branch === release.branch && row.head === release.head)) {
+    return { ok: false, reason: 'release-not-in-inventory' };
+  }
   if (PROTECTED_BRANCHES.includes(release.branch)) return { ok: false, reason: 'protected-branch' };
-  const absent = await lstat(release.path).then(() => false, error => error.code === 'ENOENT');
-  if (!absent) return { ok: false, reason: 'checkout-path-recreated' };
   const holders = await listWorktrees(app.repoPath).catch(() => null);
   if (!holders || holders.some(row => shortBranch(row.branch) === release.branch)) return { ok: false, reason: 'branch-has-new-holder' };
   const ref = `refs/heads/${release.branch}`;
   // show-ref exit 1 also covers broken symbolic and malformed loose refs, so
   // only the bounded files-backend inspection can establish actual absence.
-  const { readLocalBranchPresence } = await import('./repoCleanupObservation.js');
   const presence = await readLocalBranchPresence(app.repoPath, release.branch);
   if (presence === null) return { ok: false, reason: 'branch-ref-presence-unverified' };
   // Never treat a symbolic ref as the reviewed direct branch, even if its
@@ -1505,13 +1435,13 @@ async function reviewRemovedCheckoutBranch({ appId, release, prUrl, kind }, opts
   }
   const missing = presence === false;
   const tip = missing ? null : await execGit(['rev-parse', '--verify', ref], app.repoPath).then(row => row.stdout.trim(), () => null);
-  if ((!missing && tip !== release.head) || (receipt.branchDeleted === true && !missing)) {
+  if (!missing && tip !== release.head) {
     return { ok: false, reason: 'branch-ref-changed-or-recreated' };
   }
   const owner = await ownerReason({ repoPath: app.repoPath, tree: { path: release.path }, branch: release.branch,
     readAgents: opts.readAgents || readClaimOwnershipAgents, reviewed: true });
   if (owner) return { ok: false, reason: owner };
-  const options = { ...opts, forgeAccount: app.forgeAccount ?? null };
+  const options = { ...opts, forgeAccount: app.forgeAccount ?? null, mergedReceipt: { expectedHeadSha: release.head } };
   const forge = await (opts.readForge || readRetirementForgeEvidence)(app.repoPath, release.branch, prUrl,
     reviewForgeOptions(release, null, options)).catch(() => null);
   if (forge?.prUrl !== prUrl || forge.prHead !== release.head || forge.scopeProof !== 'exact-delivered-head') {
@@ -1521,38 +1451,34 @@ async function reviewRemovedCheckoutBranch({ appId, release, prUrl, kind }, opts
   if (!identity) return { ok: false, reason: 'retirement-local-objects-missing' };
   const policy = await retirementPolicy(app.repoPath, release.branch, options, identity);
   if (policy.reason) return { ok: false, reason: policy.reason };
-  // A retry after ref CAS/persistence failure reviews the same physical removal.
-  // Actual ref absence changes the action, never the original receipt or grant.
-  const { branchFinalizedAt: _finalizedAt, branchFinalization: _finalization,
-    settledObservations: _settledObservations, ...removalReceipt } = receipt;
   const review = await buildCheckoutRetirementReview({ repoPath: app.repoPath,
-    release: { ...release, appId, receipt: { ...removalReceipt, branchDeleted: false } }, prUrl,
+    release: { branch: release.branch, head: release.head, appId, branchOnly: true }, prUrl,
     contentFingerprint: null, administrationFingerprint: null, policy }, { readForge: async () => forge })
     .catch(error => ({ reason: /^retirement-[a-z-]+$/.test(error.message) ? error.message : 'retirement-review-unavailable' }));
   return review.reason ? { ok: false, reason: review.reason } : { ok: true, review, missing };
 }
 
-async function prepareRemovedCheckoutBranch(input, opts) {
-  const prepared = await withClaimOwnershipLock(() => reviewRemovedCheckoutBranch(input, opts));
+async function prepareBranchOnlyCleanup(input, opts) {
+  const prepared = await withClaimOwnershipLock(() => reviewBranchOnlyCleanup(input, opts));
   return prepared.ok ? { ok: true, review: prepared.review } : prepared;
 }
 
-async function finalizeRemovedCheckoutBranch({ appId, release, review }, opts = {}) {
+async function finalizeBranchOnlyCleanup({ appId, release, review }, opts = {}) {
   if (!review || review.kind || review.acceptSuperseded) return { ok: false, reason: 'retirement-exact-delivery-required' };
   return withClaimOwnershipLock(async () => {
     const input = { appId, release, prUrl: review.prUrl };
-    const current = await reviewRemovedCheckoutBranch(input, opts);
+    const current = await reviewBranchOnlyCleanup(input, opts);
     if (!current.ok) return current;
     if (current.review.digest !== review.digest) return { ok: false, reason: 'retirement-review-changed' };
     const recheck = async () => {
       await opts.beforeMutation?.();
-      const fresh = await reviewRemovedCheckoutBranch(input, opts);
+      const fresh = await reviewBranchOnlyCleanup(input, opts);
       if (!fresh.ok || fresh.review.digest !== review.digest) throw new Error(fresh.reason || 'retirement-review-changed');
       return fresh;
     };
-    const record = async kind => {
-      const { recordRetiredCheckoutBranchFinalization } = await import('./branchReconcileOutcome.js');
-      await recordRetiredCheckoutBranchFinalization(appId, release, kind);
+    const record = async () => {
+      const { recordHeldCheckoutRetirement } = await import('./branchReconcileOutcome.js');
+      await recordHeldCheckoutRetirement(appId, { branch: release.branch, head: release.head, branchDeleted: true });
     };
     let branchDeleted = false;
     const result = await (async () => {

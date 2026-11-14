@@ -8,7 +8,6 @@ import { getOriginInfo } from '../lib/gitRemote.js';
 import { claimCheckoutOwner } from '../lib/claimContinuation.js';
 import { hasProcessCwdInside } from '../lib/processCwdProbe.js';
 import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
-import { matchingRetirementReceipts } from '../lib/reconcileRetirementEvidence.js';
 import { compareSemver } from '../lib/versionUtils.js';
 import { RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS, isInlineReleaseSynchronization, publisherCandidateTarget } from '../lib/releaseSynchronization.js';
 import { completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
@@ -16,7 +15,6 @@ import { execGh } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { getTaskById } from './cosTaskStore.js';
 import { getAppById } from './apps.js';
-import { getBranchReconcileOutcome } from './branchReconcileOutcome.js';
 import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
 import { buildQualitySnapshot } from './appQualityFederation.js';
 import { APP_QUALITY_SNAPSHOT_MAX_BYTES, classifyQualitySnapshot, serializeQualitySnapshot } from './appQualitySnapshotFormat.js';
@@ -357,11 +355,6 @@ export async function inspectReleaseSynchronization(entry, agents) {
       || review.head !== publisherCheckout.head || review.checkoutIdentity !== publisherCheckout.checkoutIdentity
       || review.prUrl !== publisherPrUrl || !Array.isArray(review.models)
       || (review.receipt !== null && (!review.receipt || review.receipt.prUrl !== publisherPrUrl))) hold('publisher-private-review-unretained');
-    const outcome = await getBranchReconcileOutcome(ctx.app.id);
-    const receipts = checkouts.map(row => matchingRetirementReceipts(outcome, row).find(receipt =>
-      receipt.archiveDir === null && receipt.checkoutIdentity === row.checkoutIdentity && Date.parse(receipt.retiredAt) >= Date.parse(row.createdAt)
-      && Date.parse(receipt.retiredAt) <= Date.now()));
-    if (!receipts.length || receipts.some(receipt => !receipt)) hold('exact-retirement-receipt-unverified');
     for (const row of checkouts) {
       const [pathPresent, branchPresent] = await Promise.all([readCheckoutPathPresence(row.path), readLocalBranchPresence(row.repoPath, row.branch)]);
       if (pathPresent === null || branchPresent === null) throw new Error('retirement-inventory-unreadable');
@@ -372,7 +365,7 @@ export async function inspectReleaseSynchronization(entry, agents) {
     if (!Array.isArray(trees) || !trees.length || !(remote instanceof Map)) throw new Error('retirement-inventory-unreadable');
     if (checkouts.some(row => remote.has(row.branch) || trees.some(tree => tree.path === row.path
       || tree.branch?.replace(/^refs\/heads\//, '') === row.branch))) hold('retired-checkout-or-ref-present');
-    return { checkouts, receipts, publisherReview: review };
+    return { checkouts, authority: 'current-inventory', publisherReview: review };
   });
   const verified = RELEASE_SYNC_OBLIGATIONS.every(key => obligations[key]?.status === 'verified');
   const blocked = RELEASE_SYNC_OBLIGATIONS.find(key => obligations[key]?.status === 'blocked');

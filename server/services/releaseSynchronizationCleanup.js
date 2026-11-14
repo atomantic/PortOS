@@ -3,6 +3,7 @@
  * this bounded sweep supplies no new deletion authority of its own. */
 import { realpath } from 'node:fs/promises';
 import { inlineSynchronizationLockReason, isInlineReleaseSynchronization, publisherCandidateTarget, RELEASE_SYNC_OBLIGATIONS, releaseSynchronizationReset } from '../lib/releaseSynchronization.js';
+import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 
 const deliveryReady = entry => entry?.registeredAt && isInlineReleaseSynchronization(entry)
@@ -23,9 +24,10 @@ export async function settleInlineReleaseCheckouts(entry, deps = {}) {
   ]);
   const readApp = deps.getApp || getAppById;
   const list = deps.listWorktrees || listWorktrees;
+  const pathPresence = deps.pathPresence || readCheckoutPathPresence;
+  const branchPresence = deps.branchPresence || readLocalBranchPresence;
   const readIdentity = deps.readIdentity || readRetirementCheckoutIdentity;
-  const getOutcome = deps.getOutcome || outcomes.getBranchReconcileOutcome;
-  const record = deps.record || outcomes.recordBranchReconcileOutcome;
+  const record = deps.record || outcomes.recordBranchReconcileCheckout;
   const prepare = deps.prepare || retirement.prepareInventoriedCheckoutRetirement;
   const retire = deps.retire || retirement.retireInventoriedCheckout;
   const allowed = deps.allowed || guard.assertAutomaticRetirementAllowed;
@@ -50,18 +52,13 @@ export async function settleInlineReleaseCheckouts(entry, deps = {}) {
     const tree = matches.length === 1 ? matches[0] : null;
     let release;
     if (!tree) {
-      // A previous retirement may have removed the checkout but retained its
-      // ref. Only its durable physical-removal receipt can resume that step.
-      const outcome = await getOutcome(app.id).catch(() => null);
-      const receipts = [...(outcome?.retired || []), ...Object.values(outcome?.retirementReceiptEvidence || {})]
-        .filter(receipt => receipt.path === row.path && receipt.branch === row.branch && receipt.head === row.head
-          && receipt.checkoutIdentity === row.checkoutIdentity && receipt.archiveDir == null
-          && Number.isFinite(Date.parse(receipt.retiredAt)) && Date.parse(receipt.retiredAt) >= Date.parse(row.createdAt));
-      // Already fully retired, typically by the branch-reconcile sweep: nothing is held.
-      if (receipts.some(receipt => receipt.branchDeleted === true)) continue;
-      const unique = [...new Map(receipts.filter(receipt => receipt.branchDeleted === false).map(receipt => [receipt.retiredAt, receipt])).values()];
-      if (unique.length !== 1) { hold('release-checkout-generation-changed'); continue; }
-      release = { path: row.path, branch: row.branch, head: row.head, checkoutIdentity: row.checkoutIdentity, retiredAt: unique[0].retiredAt };
+      const [pathPresent, branchPresent] = await Promise.all([pathPresence(row.path), branchPresence(repoPath, row.branch)]);
+      if (pathPresent !== false || branchPresent === null || trees.some(tree => tree.path === row.path
+        || tree.branch?.replace(/^refs\/heads\//, '') === row.branch)) {
+        hold('release-checkout-generation-changed'); continue;
+      }
+      if (branchPresent === false) continue;
+      release = { branch: row.branch, head: row.head, locked: false, lockReason: null };
     } else if (await readIdentity(row.path) !== row.checkoutIdentity) {
       hold('release-checkout-generation-changed'); continue;
     }
@@ -75,9 +72,7 @@ export async function settleInlineReleaseCheckouts(entry, deps = {}) {
       observedAt: new Date().toISOString(), locked: tree.locked === true, lockReason: tree.lockReason ?? null };
     try {
       await allowed();
-      if (tree) await record(app.id, { status: 'incomplete', reason: 'retirement-review-pending',
-        retirementObligations: [{ ...release, reason: 'retirement-review-pending' }],
-        nextAction: 'Retain the exact checkout until its reviewed retirement receipt is verified.' });
+      await record(app.id, release);
       if (tree && !await retainReview({ ...release, repoPath })) {
         hold('release-sync-local-review-unretained'); continue;
       }

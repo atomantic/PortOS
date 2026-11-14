@@ -38,7 +38,7 @@ beforeEach(() => {
       { path: candidate.path, branch: `refs/heads/${candidate.branch}`, head, locked: true, lockReason: `Active release candidate ${candidate.branch}` },
       { path: sync.path, branch: `refs/heads/${sync.branch}`, head: syncHead, locked: false, lockReason: null }]),
     readIdentity: vi.fn(async path => path === candidate.path ? candidate.checkoutIdentity : sync.checkoutIdentity),
-    getOutcome: vi.fn(async () => null),
+    pathPresence: vi.fn(async () => false), branchPresence: vi.fn(async () => false),
     record: vi.fn(async () => ({})), allowed: vi.fn(async () => {}),
     prepare: vi.fn(async ({ release }) => ({ ok: true, review: { digest: 'digest', forge: { prHead: release.head },
       comparison: { disposition: 'integrated', difference: '' } } })),
@@ -52,7 +52,7 @@ describe('inline release cleanup', () => {
     expect(await settleInlineReleaseCheckouts(entry, deps)).toEqual({ attempted: true, retired: [candidate.branch, sync.branch], held: [] });
     expect(deps.record).toHaveBeenCalledTimes(2);
     expect(deps.record).toHaveBeenCalledWith('app', expect.objectContaining({
-      retirementObligations: [expect.objectContaining({ reason: 'retirement-review-pending', checkoutIdentity: candidate.checkoutIdentity })],
+      checkoutIdentity: candidate.checkoutIdentity,
     }));
     expect(deps.prepare.mock.calls.map(([arg]) => arg.prUrl)).toEqual([
       'https://github.com/example/repo/pull/12', 'https://github.com/example/repo/pull/42',
@@ -167,22 +167,19 @@ describe('inline release cleanup', () => {
   it('treats a checkout another sweep already retired as settled, and still retires its sibling', async () => {
     const trees = await deps.listWorktrees();
     deps.listWorktrees.mockResolvedValue(trees.filter(tree => tree.path !== candidate.path));
-    const receipt = { ...candidate, branchDeleted: true, archiveDir: null, retiredAt: '2026-01-01T02:00:00Z' };
-    deps.getOutcome.mockResolvedValue({ retired: [receipt], retirementReceiptEvidence: { same: receipt } });
     expect(await settleInlineReleaseCheckouts(entry, deps)).toEqual({ attempted: true, retired: [sync.branch], held: [] });
     expect(deps.retire.mock.calls.map(([arg]) => arg.release.branch)).toEqual([sync.branch]);
   });
 
-  it('resumes only a receipt-bound partial checkout retirement after interruption', async () => {
+  it('cleans a surviving branch from fresh state without historical receipts', async () => {
     const trees = await deps.listWorktrees();
     deps.listWorktrees.mockResolvedValue(trees.filter(tree => tree.path !== sync.path));
-    const receipt = { ...sync, branchDeleted: false, archiveDir: null, retiredAt: '2026-01-01T02:00:00Z' };
-    deps.getOutcome.mockResolvedValue({ retired: [receipt], retirementReceiptEvidence: { same: receipt } });
+    deps.branchPresence.mockImplementation(async (_repo, branch) => branch === sync.branch);
     const result = await settleInlineReleaseCheckouts(entry, deps);
     expect(result.retired).toEqual([candidate.branch, sync.branch]);
-    expect(deps.record).toHaveBeenCalledTimes(1);
+    expect(deps.record).toHaveBeenCalledTimes(2);
     expect(deps.retire).toHaveBeenCalledWith(expect.objectContaining({ release: expect.objectContaining({
-      path: sync.path, checkoutIdentity: sync.checkoutIdentity, retiredAt: receipt.retiredAt,
+      branch: sync.branch, head: sync.head,
     }) }), expect.any(Object));
   });
 });

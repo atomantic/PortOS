@@ -27,7 +27,9 @@ describe('server/lib/ barrel', () => {
     expect(Object.keys(barrel).length).toBeGreaterThan(0);
     // Forces the maintenance rule: a new server/lib/foo.js must be added to
     // index.js. Catches a new helper that bypassed the barrel.
-    for (const f of sourceFiles) {
+    // Migration 443 imports this frozen helper directly; runtime must not load it.
+    expect(BARREL_SRC).not.toContain("'./legacyRetirementTransition.js'");
+    for (const f of sourceFiles.filter(file => file !== 'legacyRetirementTransition.js')) {
       expect(BARREL_SRC, `missing barrel re-export for ${f}`).toContain(`'./${f}'`);
     }
   });

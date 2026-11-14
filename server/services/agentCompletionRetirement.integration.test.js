@@ -211,7 +211,7 @@ describe('completion to in-place retirement (real Git and persisted service stat
     expect(existsSync(join(path, PREGATE_REPORT_PATH))).toBe(true);
     const results = await Promise.all([verify(), verify()]); expect(results).toMatchObject([{ verified: true, skipReason: null }, { verified: true, skipReason: null }]);
     activeAgents.delete(agent.id);
-    const outcome = await getBranchReconcileOutcome(fixture.app.id); expect(outcome.retirementObligations).toEqual([]);
+    const outcome = await getBranchReconcileOutcome(fixture.app.id); expect(outcome).not.toHaveProperty('retirementObligations');
     expect(outcome.retired).toHaveLength(1); const receipt = outcome.retired[0];
     expect(receipt).toMatchObject({ path, branch, head, branchDeleted: true, archiveDir: null });
     const { listWorktrees } = await import('./worktreeManager.js');

@@ -25,7 +25,6 @@ import { createCosTaskSchema } from '../lib/cosValidation.js';
 import { buildQueuedTask } from './cosTaskIntake.js';
 import { buildAgentRegistration } from '../lib/agentRegistrationRecord.js';
 import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
-import { retainRetirementObligations } from '../lib/reconcileRetirementEvidence.js';
 
 const BRANCH_RECONCILE_TEMPLATE = [
   '# Branch reconcile for {appName}',
@@ -176,7 +175,7 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
     reserveReview.mockResolvedValue({ admitted: true });
     retireCheckout.mockResolvedValue({ ok: true, archiveDir: '/private/archive', branchDeleted: true });
     getBranchReconcileOutcome.mockResolvedValue(null);
-    recordBranchReconcileOutcome.mockImplementation(async (_appId, update) => ({ ...update, retirementObligations: retainRetirementObligations(null, update.remaining || [], '2026-10-20T00:00:00Z') }));
+    recordBranchReconcileOutcome.mockImplementation(async (_appId, update) => update);
     parkPerpetual.mockReset().mockResolvedValue();
     recordPerpetualDispatch.mockReset().mockResolvedValue(1);
     readAgentsStateForSafetyCheck.mockResolvedValue({ trusted: true, agents: {} });
@@ -361,17 +360,11 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
     expect(emitLog.mock.calls.findLast(([, message]) => message.includes('branch-reconcile parked'))?.[1]).toContain('(cleaned 1');
   });
 
-  it('keeps an unresolved retirement visible after the checkout disappears on a later refill', async () => {
-    const release = { branch: 'claim/issue-42', path: '/example/missing', head: 'a'.repeat(40), createdAt: '2026-10-20T00:00:00Z', reason: 'retirement-receipt-unverified' };
-    getBranchReconcileOutcome.mockResolvedValue({ retirementObligations: [release], remaining: [] });
+  it('does not carry vanished checkout ledger holds into a fresh empty scan', async () => {
+    getBranchReconcileOutcome.mockResolvedValue({ remaining: [{ branch: 'fix/gone', path: '/example/missing', head: 'a'.repeat(40) }] });
     reconcileMock.mockResolvedValue(scan({ inFlight: [], worktreeInventory: [] }));
     expect(await generate()).toBeNull();
-    expect(recordBranchReconcileOutcome).toHaveBeenLastCalledWith(APP.id, expect.objectContaining({ remaining: [expect.objectContaining({ branch: release.branch, path: release.path, head: release.head, reason: release.reason })] }));
-    expect(parkPerpetual).toHaveBeenLastCalledWith('branch-reconcile', APP.id, expect.objectContaining({
-      reason: 'branches-blocked', skipCauses: { 'retirement-receipt-unverified': 1 },
-    }));
-    getBranchReconcileOutcome.mockResolvedValue({ retirementObligations: [release], retired: [{ ...release, branchDeleted: true, archiveDir: '/example/archive', retiredAt: '2026-10-20T00:01:00Z' }] });
-    await generate();
+    expect(recordBranchReconcileOutcome).toHaveBeenLastCalledWith(APP.id, expect.objectContaining({ remaining: [] }));
     expect(parkPerpetual).toHaveBeenLastCalledWith('branch-reconcile', APP.id, expect.objectContaining({ reason: 'no-in-flight-branches' }));
   });
 
@@ -556,7 +549,7 @@ describe('scheduled reconciliation registration through handoff ownership', () =
       origin: { host: 'github.com', fullName: 'example/repo' } });
     readAgentsStateForSafetyCheck.mockImplementation(async () => ({ trusted: true, agents: structuredClone(admissionFixture.state.agents) }));
     getBranchReconcileOutcome.mockResolvedValue(null);
-    recordBranchReconcileOutcome.mockImplementation(async (_id, update) => ({ ...update, retirementObligations: [] }));
+    recordBranchReconcileOutcome.mockImplementation(async (_id, update) => update);
     getPerpetualDrainState.mockResolvedValue({ signature: null, dispatchCount: 0 });
     recordPerpetualDispatch.mockResolvedValue(1);
     getTaskInterval.mockResolvedValue({ type: 'on-demand', taskMetadata: { branchesPerAgent: 1 } });

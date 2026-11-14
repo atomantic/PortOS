@@ -54,9 +54,9 @@ executions remain ambiguous. Historical policies and current task budgets still 
   match alone never establishes that local work was integrated.
 - `retirement-pr-lookup-unavailable` and `retirement-review-unavailable`
   distinguish an unexpected lookup failure from a failed checkout preview.
-- `retirement-receipt-unverified` means preservation is unproven. An exception
-  after retirement starts retains this obligation, including the exact checkout
-  identity; it is not downgraded to a failed preview or silently retried as one.
+- `retirement-receipt-unverified` is a legacy failure name still returned by
+  cleanup producers when recording their result fails. Refresh inventory to
+  inspect current paths/refs; no historical receipt is required to converge.
 - Named merged branches retire through the same checks regardless of checkout
   location, from both the Git page and `branch-reconcile`. A clean external
   checkout needs no separate PR, merge timestamp, idle window, or managed-root
@@ -87,8 +87,19 @@ gates. This verifies local cleanup only, not remote-branch deletion or delivery.
 The branch-reconcile completion pass checks its assigned cleanup targets the same
 way. It records remaining local targets directly instead of manufacturing missing
 receipt obligations. Ownership, locks, cleanliness and merged-PR checks still run
-in the retirement service before anything is deleted. Inventory receipt bookkeeping
-outside these completion paths remains pending removal.
+in the retirement service before anything is deleted.
+
+Inventory reads prune absent local checkout/ref rows. If a checkout vanished but
+its branch survives, the branch is listed independently with its current HEAD;
+old checkout locks and physical-generation identities do not attach to that ref.
+Unreadable paths/refs and remote-only holds remain visible. Reading inventory
+never deletes a ref. Branch-only cleanup requires an exact inventory HEAD,
+current direct ref, no checkout holder or active owner, respected completion
+policy, exact merged-PR integration and an expected-head Git deletion under the
+ownership fence. Changing any of those facts invalidates the preview.
+
+Only the most recent 20 retirements are kept for display. Completion, release
+synchronization and branch-only cleanup never depend on that history.
 
 ## Retiring a held checkout
 
@@ -146,7 +157,7 @@ manual-handoff completion policies, and changed evidence remain holds.
 Confirm through `checkouts/retire` with the same inventory tuple and
 `review: { prUrl, digest, kind: "source-supersession", acceptSuperseded: true }`.
 Explicit acceptance is required even when the affected file bytes now match.
-Ownership, content, and merge rechecks plus a persisted retirement receipt
+Ownership, content, and merge rechecks plus current path/ref absence
 remain prerequisites to removal. The checkout is not copied into an archive.
 Initialized checkouts retain their separate workflow; this mode does not bypass
 its gates.
@@ -274,16 +285,10 @@ retry budgets.
 
 ## Archive-era bookkeeping transition
 
-Migration 443 freezes existing retirement observations for reconciliation. A
-supported inventory refresh settles those observations only when no checkout,
-local branch, registered holder or active/human owner remains and a unique
-service receipt or verified merged delivery explains the old work. Squash and
-rebased deliveries use exact merged-head lineage or stable patch equivalence;
-an old SHA need not itself be an ancestor of main. Changed or unreadable
-evidence stays unresolved. New missing-checkout incidents are outside this
-frozen upgrade scope.
-
-The original observation and proof remain in `legacyRetirementTransition`
-audit history. Delivery-only settlement explicitly does not claim a verified
-deletion and creates no retirement receipt. Agent results, retry budgets and
-current worktrees are unchanged. A new sweep still establishes convergence.
+Migration 443 remains unchanged and runnable through its frozen migration-only
+helper. On schedule reads, the existing serialized writer removes the obsolete
+receipt ledger and legacy reconciliation fields. It retains historical inventory
+observations until current path/ref checks prune or update them. No runtime code
+replays legacy receipt observations or needs historical evidence to converge.
+Execution results and retry budgets remain unchanged; a fresh scan establishes
+repository convergence.

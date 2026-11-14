@@ -16,7 +16,6 @@ import { completionSentinelPresent } from './agentCompletionSentinel.js';
 import { hasClaimCheckoutBindings, completedCheckoutReceiptValid, sameTaskRetirementBinding, checkoutSeedSchema,
   readSupersededGenerationRetired } from './completedCheckoutEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
-import { sameRetirementObservation } from '../lib/reconcileRetirementEvidence.js';
 import { resolveRetirementApp } from './retirementAppScope.js';
 /**
  * Agent Repo-State Verification
@@ -628,35 +627,11 @@ async function verifyReleasedSynchronization(agent) {
   }
 }
 
-/** A terminal capture can be unavailable even after the service safely retired
- * its original seeded generation. Settle physical cleanup only; receipt heads
- * remain retirement observations and never become original captured heads. */
+/** Cleanup settlement consults current inventory, never display history. */
 async function ownSeedRetirementContext() {
-  const [{ getInstanceId, UNKNOWN_INSTANCE_ID }, { loadSchedule }] = await Promise.all([
-    import('./instanceIdentity.js'), import('./taskScheduleStore.js'),
-  ]);
+  const { getInstanceId, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
   const instance = await getInstanceId();
-  if (!instance || instance === UNKNOWN_INSTANCE_ID) return null;
-  const schedule = await loadSchedule();
-  const receipts = new Map();
-  for (const record of Object.values(schedule.executions?.['task:branch-reconcile']?.perApp || {})) {
-    const outcome = record.branchReconcileOutcome;
-    for (const row of [...(outcome?.retired || []), ...Object.values(outcome?.retirementReceiptEvidence || {})]) {
-      if (row.branchDeleted !== true || row.archiveDir != null
-        || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(row.head || '') || !Number.isFinite(Date.parse(row.retiredAt))) continue;
-      const aliases = (Array.isArray(row.settledObservations) ? row.settledObservations : []).filter(entry => entry?.observation?.head === row.head
-        && entry.observation.branch === row.branch && entry.observation.checkoutIdentity === row.checkoutIdentity
-        && typeof entry.observation.path === 'string' && entry.observation.path
-        && Number.isFinite(Date.parse(entry.settledAt)) && Date.parse(entry.settledAt) >= Date.parse(row.retiredAt));
-      for (const path of new Set([row.path, ...aliases.map(entry => entry.observation.path)])) {
-        const key = JSON.stringify([path, row.branch, row.checkoutIdentity]);
-        const matches = receipts.get(key) || new Map();
-        matches.set(JSON.stringify([row.path, row.head, row.retiredAt]), row);
-        receipts.set(key, matches);
-      }
-    }
-  }
-  return { instance, receipts };
+  return instance && instance !== UNKNOWN_INSTANCE_ID ? { instance } : null;
 }
 
 function recordedRetirementSeed(agent) {
@@ -689,9 +664,7 @@ function ownSeedRetirementCandidate(agent, context) {
   const seed = ownSeedRetirementSeed(agent);
   if (!seed || !context || agent.metadata.instanceId !== context.instance) return null;
   const checkoutIdentity = retirementCheckoutIdentityFromPointer(seed.incarnation.pointer);
-  const receipts = [...(context.receipts.get(JSON.stringify([seed.path, seed.branch, checkoutIdentity]))?.values() || [])]
-    .filter(row => Date.parse(row.retiredAt) >= Date.parse(agent.completedAt));
-  return receipts.length === 1 ? { seed, checkoutIdentity, receipt: receipts[0] } : null;
+  return { seed, checkoutIdentity };
 }
 
 async function settleOwnSeedRetirement(agent, context) {
@@ -715,24 +688,21 @@ async function settleInheritedRetirement(agent, context) {
       && row.repoPath === seed.repoPath && row.path === seed.path && row.branch === seed.branch
       && isDeepStrictEqual(row.incarnation, seed.incarnation))) return false;
   const checkoutIdentity = retirementCheckoutIdentityFromPointer(seed.incarnation.pointer);
-  const receipts = [...(context.receipts.get(JSON.stringify([seed.path, seed.branch, checkoutIdentity]))?.values() || [])]
-    .filter(row => Date.parse(parent.completedAt) <= Date.parse(row.retiredAt) && Date.parse(row.retiredAt) <= Date.parse(agent.startedAt));
-  if (receipts.length !== 1) return false;
-  return settleSeedRetirement(agent, { seed, checkoutIdentity, receipt: receipts[0] }, parent);
+  return settleSeedRetirement(agent, { seed, checkoutIdentity }, parent);
 }
 
 async function settleSeedRetirement(agent, candidate, parent = null) {
-  const { seed, checkoutIdentity, receipt } = candidate;
+  const { seed, checkoutIdentity } = candidate;
   const { lstat } = await import('node:fs/promises');
   const repositoryCurrent = async () => {
     const info = await lstat(seed.repoPath, { bigint: true }).catch(() => null);
     return info?.isDirectory() && ['dev', 'ino', 'birthtimeNs'].every(key => String(info[key]) === seed.repository[key]);
   };
   if (!await repositoryCurrent()) return false;
-  const { findMissingCheckoutPreservation } = await import('./heldCheckoutRecovery.js');
-  const preservation = await findMissingCheckoutPreservation({ repoPath: seed.repoPath,
-    release: { path: receipt.path, branch: seed.branch, head: receipt.head, createdAt: seed.seededAt, checkoutIdentity } }).catch(() => null);
-  if (!preservation || preservation.kind !== 'service-retirement-receipt') return false;
+  const { inspectAbsentCheckout } = await import('./heldCheckoutRecovery.js');
+  const preservation = await inspectAbsentCheckout({ repoPath: seed.repoPath,
+    release: { path: seed.path, branch: seed.branch, checkoutIdentity } }).catch(() => null);
+  if (!preservation || preservation.kind !== 'current-inventory') return false;
   const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
   return withClaimOwnershipLock(async () => {
     const { getAgentRecord, recordSeededCheckoutRetirement, recordInheritedCheckoutRetirement } = await import('./cosAgentLifecycle.js');
@@ -746,7 +716,7 @@ async function settleSeedRetirement(agent, candidate, parent = null) {
       || await readCheckoutPathPresence(seed.path) !== false || await readLocalBranchPresence(seed.repoPath, seed.branch) !== false
       || (await listWorktrees(seed.repoPath)).some(row => row.path === seed.path || row.branch?.replace(/^refs\/heads\//, '') === seed.branch)) return false;
     const record = parent ? recordInheritedCheckoutRetirement : recordSeededCheckoutRetirement;
-    return record(agent.id, agent, { checkoutIdentity, retiredHead: receipt.head, receiptDigest: preservation.evidenceDigest,
+    return record(agent.id, agent, { checkoutIdentity, observationDigest: preservation.evidenceDigest,
       ...(parent && { inheritedFromAgentId: parent.id }) });
   });
 }
@@ -784,7 +754,7 @@ async function settleSeededPredecessor(agent) {
       && row.metadata.cleanupOutcome?.status === 'verified' && row.metadata.cleanupOutcome.unresolved === 0
       && row.metadata.cleanupOutcome.committedIntegrationVerified === true)));
   if (!candidates.length || candidates.length > 25) return false;
-  const { findMissingCheckoutPreservation } = await import('./heldCheckoutRecovery.js');
+  const { inspectAbsentCheckout } = await import('./heldCheckoutRecovery.js');
   const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
   for (const successor of candidates) {
     for (const capture of successor.metadata.completedCheckouts || []) {
@@ -794,8 +764,8 @@ async function settleSeededPredecessor(agent) {
       if (known ? binding?.sourceCapture?.head !== capture.head || !explicitSameHeadResume(agent, successor, input, agents) : !binding?.sourceSeed) continue;
       const release = { path: capture.path, branch: capture.branch, head: capture.head, createdAt: capture.capturedAt,
         checkoutIdentity: retirementCheckoutIdentityFromPointer(capture.incarnation.pointer) };
-      const preservation = await findMissingCheckoutPreservation({ repoPath: input.repoPath, release }).catch(() => null);
-      if (!preservation || (known && (preservation.kind !== 'service-retirement-receipt'
+      const preservation = await inspectAbsentCheckout({ repoPath: input.repoPath, release }).catch(() => null);
+      if (!preservation || (known && (preservation.kind !== 'current-inventory'
         || !/^[a-f0-9]{64}$/.test(preservation.evidenceDigest || '')))) continue;
       const { recordSuccessorCheckoutRetirement, getAgentRecord } = await import('./cosAgentLifecycle.js');
       const settled = await withClaimOwnershipLock(async () => {
@@ -1801,12 +1771,9 @@ async function prepareRecoveryRetirement({ agentId, appId, app: taskApp, sourceW
   const release = { branch: branchName, path: worktreePath || tree.path, head: tree.head,
     ...(checkoutIdentity && { checkoutIdentity, observedAt: new Date().toISOString() }),
     locked: tree.locked === true, lockReason: tree.lockReason ?? null };
-  const { recordBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
-  const outcome = await recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'retirement-review-pending',
-    retirementObligations: [{ ...release, reason: 'retirement-review-pending' }],
-    nextAction: 'Review this exact checkout through the retirement API; require ok:true and branchDeleted:true with no archive directory.' });
-  const obligation = outcome?.retirementObligations?.find(row => sameRetirementObservation(row, release));
-  if (!obligation?.createdAt) return { reason: 'retirement-obligation-unavailable' };
+  const { recordBranchReconcileOutcome, recordBranchReconcileCheckout } = await import('./branchReconcileOutcome.js');
+  const outcome = await recordBranchReconcileCheckout(app.id, release);
+  if (!outcome?.remaining?.some(row => row.path === release.path && row.head === release.head)) return { reason: 'retirement-inventory-unavailable' };
   // Terminal ingestion releases the registry verdict before every spawn path
   // has finished teardown. Preserve the durable obligation until its exact
   // execution owner has actually left the local active maps.
@@ -1827,7 +1794,7 @@ async function prepareRecoveryRetirement({ agentId, appId, app: taskApp, sourceW
   if (!['integrated', 'review-supersession'].includes(prepared.review?.comparison?.disposition)
     || typeof prepared.review.comparison.localPatch !== 'string' || typeof prepared.review.comparison.difference !== 'string') return { reason: 'retirement-comparison-unavailable' };
   return { appId: app.id, integrated: prepared.review.forge?.prHead === release.head && prepared.review.comparison?.disposition === 'integrated' && prepared.review.comparison.difference === '',
-    retirement: { release, createdAt: obligation.createdAt, prUrl: observed.prUrl, digest: prepared.review.digest,
+    retirement: { release, prUrl: observed.prUrl, digest: prepared.review.digest,
       cognition: (await import('./branchReconcileRetirement.js')).retirementCognitiveIdentity(prepared.review, release, observed.prUrl) } };
 }
 
@@ -1936,7 +1903,7 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
       subsystem: 'repository-cleanup', attempt: reservation.attempt,
       observation, noProgress: false },
     ...(mergeTarget ? { recoveryMergeTarget: mergeTarget } : {}),
-    ...(retirement ? { retirementReview: { appId, release: retirement.release, createdAt: retirement.createdAt } } : {}) },
+    ...(retirement ? { retirementReview: { appId, release: retirement.release } } : {}) },
     context,
     useWorktree: false,
   }, 'internal');
@@ -1958,7 +1925,7 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
   if (retirement && created?.id) {
     const { getTaskById } = await import('./cosTaskStore.js');
     const persisted = await getTaskById(created.id);
-    const target = { appId, release: retirement.release, createdAt: retirement.createdAt };
+    const target = { appId, release: retirement.release };
     if (persisted?.metadata?.recoveryOrigin?.parentAgentId !== agentId
       || persisted.metadata.recoveryOrigin.parentTaskId !== task?.id
       || !isDeepStrictEqual(persisted.metadata.retirementReview, target)) return null;

@@ -1044,8 +1044,6 @@ export * from './brainInboxTransitions.js';
 export * from './brainLinkLocalFields.js';
 export * from './brainBridgeSource.js';
 
-export * from './reconcileRetirementEvidence.js';
-export * from './legacyRetirementTransition.js';
 export * from './retirementCheckoutObservation.js';
 
 export * from './checkoutRetirementAdmission.js';
