@@ -12,6 +12,13 @@ const PROFILES = [
   { id: 'quick_screen', label: 'Quick Defect Screen' },
 ];
 
+export const BATCH_REVIEWER_MODELS = [
+  { id: 'auto', label: 'Auto (Default Reviewer)' },
+  { id: 'gemini-4-argon', label: 'Google Gemini 4 Argon' },
+  { id: 'qwen-27b', label: 'Qwen 27B / 27G (Local)' },
+  { id: 'claude-3-7-sonnet', label: 'Claude 3.7 Sonnet' },
+];
+
 export default function BatchVerificationBar({
   selectedCount = 0,
   totalImages = 0,
@@ -23,6 +30,8 @@ export default function BatchVerificationBar({
   onCancel,
   selectedProfile = 'strict_anatomy',
   onProfileChange,
+  selectedModel = 'auto',
+  onModelChange,
 }) {
   return (
     <div
@@ -69,15 +78,32 @@ export default function BatchVerificationBar({
           onChange={(e) => onProfileChange?.(e.target.value)}
           disabled={isVerifying}
           className="text-xs bg-port-bg border border-port-border rounded px-2 py-1 text-gray-200 focus:outline-none focus:border-port-accent disabled:opacity-50"
+          title="Select verification profile"
         >
           {PROFILES.map((p) => (
             <option key={p.id} value={p.id}>{p.label}</option>
           ))}
         </select>
 
+        <label htmlFor="batch-verify-model" className="text-[11px] text-gray-400 font-medium">
+          Model:
+        </label>
+        <select
+          id="batch-verify-model"
+          value={selectedModel}
+          onChange={(e) => onModelChange?.(e.target.value)}
+          disabled={isVerifying}
+          className="text-xs bg-port-bg border border-port-border rounded px-2 py-1 text-gray-200 focus:outline-none focus:border-port-accent disabled:opacity-50"
+          title="Select evaluator model"
+        >
+          {BATCH_REVIEWER_MODELS.map((m) => (
+            <option key={m.id} value={m.id}>{m.label}</option>
+          ))}
+        </select>
+
         <button
           type="button"
-          onClick={() => onRunBatchVerify?.(selectedProfile)}
+          onClick={() => onRunBatchVerify?.(selectedProfile, selectedModel)}
           disabled={selectedCount === 0 || isVerifying}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white rounded transition-colors"
         >

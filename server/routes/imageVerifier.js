@@ -17,7 +17,7 @@ import {
   verifyImage,
   overrideVerification,
 } from '../services/imageVerifier.js';
-import { verificationProfileSchema } from '../lib/imageVerification.js';
+import { verificationProfileSchema, VERIFIER_REVIEWER_MODELS } from '../lib/imageVerification.js';
 
 const router = Router();
 
@@ -37,6 +37,11 @@ const verifyRequestSchema = z.object({
   profileId: z.string().optional(),
   prompt: z.string().optional(),
   isImport: z.boolean().optional(),
+  reviewerModel: z.string().optional(),
+  reviewer: z.object({
+    providerId: z.string().optional(),
+    model: z.string().optional(),
+  }).optional(),
 });
 
 const overrideRequestSchema = z.object({
@@ -44,6 +49,11 @@ const overrideRequestSchema = z.object({
   verdict: z.enum(['pass', 'fail', 'unreviewed']),
   notes: z.string().max(1000).optional(),
 });
+
+// GET models
+router.get('/models', asyncHandler(async (_req, res) => {
+  res.json({ models: VERIFIER_REVIEWER_MODELS });
+}));
 
 // GET settings
 router.get('/settings', asyncHandler(async (_req, res) => {
@@ -80,7 +90,11 @@ router.delete('/profiles/:id', asyncHandler(async (req, res) => {
 // POST on-demand verification
 router.post('/verify', asyncHandler(async (req, res) => {
   const data = validateRequest(verifyRequestSchema, req.body);
-  const result = await verifyImage(data);
+  const reviewer = data.reviewer || (data.reviewerModel && data.reviewerModel !== 'auto' ? { model: data.reviewerModel } : null);
+  const result = await verifyImage({
+    ...data,
+    reviewer,
+  });
   res.json(result);
 }));
 

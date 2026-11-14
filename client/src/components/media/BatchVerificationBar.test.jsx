@@ -36,10 +36,30 @@ describe('BatchVerificationBar', () => {
     expect(onClearSelection).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole('button', { name: /Verify Selected \(3\)/i }));
-    expect(onRunBatchVerify).toHaveBeenCalledWith('strict_anatomy');
+    expect(onRunBatchVerify).toHaveBeenCalledWith('strict_anatomy', 'auto');
 
     fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders model options including Argon and Qwen', () => {
+    const onModelChange = vi.fn();
+    render(
+      <BatchVerificationBar
+        selectedCount={1}
+        totalImages={3}
+        selectedModel="gemini-4-argon"
+        onModelChange={onModelChange}
+      />
+    );
+
+    const modelSelect = screen.getByTitle('Select evaluator model');
+    expect(modelSelect).toBeTruthy();
+    expect(screen.getByText('Google Gemini 4 Argon')).toBeTruthy();
+    expect(screen.getByText('Qwen 27B / 27G (Local)')).toBeTruthy();
+
+    fireEvent.change(modelSelect, { target: { value: 'qwen-27b' } });
+    expect(onModelChange).toHaveBeenCalledWith('qwen-27b');
   });
 
   it('displays progress when isVerifying is true', () => {

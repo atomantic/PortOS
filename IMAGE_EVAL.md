@@ -41,15 +41,26 @@ The foundation of defect detection is codified in `server/lib/imageRenderQuality
 
 ## 3. Evaluator Models & Empirical Benchmarks
 
-Different vision backends serve different roles depending on speed, cost, and analytical precision:
+Different vision backends serve different roles depending on speed, cost, and analytical precision. Users can explicitly select their preferred evaluator model in the verification drawer and batch verification toolbar, or leave it on **Auto** to let PortOS pick the highest-fidelity available reviewer:
 
-| Model Family | Role / Tier | Key Strengths | Limitations |
-| :--- | :--- | :--- | :--- |
-| **Qwen (2.5-VL / 3.8 27B)** | Primary Local Engine | Exceptional spatial grounding and coordinate tracking; 0% false render-quality fails in local benchmarks (#14811). Reliable digit counting. | High VRAM requirement (runs via vLLM / SGLang / Ollama). |
-| **Claude / Codex (Sonnet / Opus)** | Deep Biomechanical Auditor | Benchmark leader: catches subtle biomechanical defects (joint torque, weight balance, arm anchoring) missed by other models. | API latency and token cost; suited for high-stakes generation and batch reviews. |
-| **Google Carbon / Gemini** | High-Resolution Inspector | Native multimodal tiling; excels at extreme fine-detail inspection (pupil reflection, micro-lettering, fingernails). | Sensitive to prompt framing; requires explicit coordinate requests. |
-| **Kimi (K2.5 / Moonshot)** | Multi-Frame & Continuity | Long-context visual reasoning; cross-references character continuity against reference sheets. | Slower response times for single-frame checks. |
-| **Ollama Lightweight (LLaVA / Gemma)** | Advisory Only | Fast, zero-token cost local checks. Flagged as `isAdvisoryVisionReviewer`. | Prone to false alarms; must pass through Pass 2 confirmation. |
+| Model Option | Identifier | Role / Tier | Key Strengths | Limitations |
+| :--- | :--- | :--- | :--- | :--- |
+| **Google Gemini 4 Argon** | `gemini-4-argon` / `gemini-4-argon-high` | High-Resolution Inspector & Detail Auditor | Native 4K multimodal tiling; excels at extreme fine-detail inspection (nailbeds, micro-lettering, pupil reflections, texture fusions). Uses a dedicated Argon weekly quota bucket in Antigravity. | Cloud API latency; sensitive to prompt framing without coordinate requests. |
+| **Qwen 27B / 27G** | `qwen-27b` / `qwen3.8:27b` / `qwen2.5-vl:27b` | Primary Local Vision Engine | Exceptional spatial grounding and coordinate tracking; benchmark leader with 0% false render-quality fails (#14811). Precise digit counting and local execution with zero token cost. | Requires 24–32 GB VRAM for local execution (via vLLM / SGLang / Ollama). |
+| **Claude / Codex (Sonnet / Opus)** | `claude-3-7-sonnet` | Deep Biomechanical Auditor | Benchmark leader for biomechanics: catches subtle joint torque, weight balance, and limb attachment errors. | Cloud API latency and token cost; best for high-stakes reviews. |
+| **Kimi (K2.5 / Moonshot)** | `kimi-k2.5` | Multi-Frame & Continuity | Long-context visual reasoning; cross-references character consistency against reference sheets. | Slower response times for single-frame checks. |
+| **Ollama Lightweight (LLaVA / Gemma)** | `gemma-4`, `llava` | Advisory Fast Screen | Fast local screening without GPU overhead. Automatically treated as advisory with mandatory Pass 2 confirmation. | Higher false positive rate on complex hands. |
+
+### Selecting Reviewer Models
+
+1. **Individual Inspection Drawer (`MediaLightbox`)**:
+   - In the Quality & Anatomy Verification card, users can select the **Model** from the dropdown (`Auto`, `Google Gemini 4 Argon`, `Qwen 27B / 27G (Local)`, `Claude 3.7 Sonnet`, `Kimi K2.5`).
+   - The verified report stamps the exact evaluating model (e.g., `Audited by: Gemini 4 Argon` or `Audited by: Qwen 27B/27G`).
+2. **Multi-Image Batch Verification Toolbar (`BatchVerificationBar`)**:
+   - The batch toolbar allows picking both the **Profile** (e.g. Strict Anatomy) and the **Model** before batch-verifying selected images.
+3. **API & Automated Pipeline**:
+   - Pass `reviewerModel: "gemini-4-argon"` or `reviewerModel: "qwen-27b"` in requests to `/api/image-verifier/verify`.
+
 
 ---
 

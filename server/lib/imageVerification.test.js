@@ -7,6 +7,8 @@ import {
   buildDefectConfirmationPrompt,
   parseVerificationResponse,
   parseConfirmationResponse,
+  VERIFIER_REVIEWER_MODELS,
+  normalizeReviewerModel,
 } from './imageVerification.js';
 
 describe('imageVerification dimensions and profiles', () => {
@@ -158,5 +160,21 @@ describe('parseConfirmationResponse', () => {
 
     const res = parseConfirmationResponse(raw);
     expect(res.confirmed).toBe(false);
+  });
+});
+
+describe('VERIFIER_REVIEWER_MODELS and normalizeReviewerModel', () => {
+  it('registers Argon and Qwen models', () => {
+    const ids = VERIFIER_REVIEWER_MODELS.map((m) => m.id);
+    expect(ids).toContain('gemini-4-argon');
+    expect(ids).toContain('qwen-27b');
+  });
+
+  it('normalizes model aliases', () => {
+    expect(normalizeReviewerModel('argon')).toBe('gemini-4-argon');
+    expect(normalizeReviewerModel('gemini-4-argon-high')).toBe('gemini-4-argon');
+    expect(normalizeReviewerModel('qwen-27g')).toBe('qwen-27b');
+    expect(normalizeReviewerModel('qwen3.8:27b')).toBe('qwen-27b');
+    expect(normalizeReviewerModel('auto')).toBeNull();
   });
 });

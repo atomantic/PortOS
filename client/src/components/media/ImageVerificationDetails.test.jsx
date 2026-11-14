@@ -86,4 +86,38 @@ describe('ImageVerificationDetails', () => {
       expect(onVerificationChange).toHaveBeenCalled();
     });
   });
+
+  it('allows selecting Argon and passes reviewerModel to api', async () => {
+    const item = { filename: 'test-argon.png', prompt: 'a cybernetic hand' };
+    const onVerificationChange = vi.fn();
+    api.verifyImageNow.mockResolvedValueOnce({
+      verdict: 'pass',
+      summary: 'Clean anatomy, 5 digits detected',
+      defects: [],
+      hands: [{ location: 'Hand', visibleDigits: 5, status: 'pass' }],
+    });
+
+    render(
+      <ImageVerificationDetails
+        item={item}
+        onVerificationChange={onVerificationChange}
+      />
+    );
+
+    const modelSelect = screen.getByTitle('Select vision reviewer model');
+    expect(modelSelect).toBeTruthy();
+    fireEvent.change(modelSelect, { target: { value: 'gemini-4-argon' } });
+
+    const verifyBtn = screen.getByRole('button', { name: /Verify Image/i });
+    fireEvent.click(verifyBtn);
+
+    await waitFor(() => {
+      expect(api.verifyImageNow).toHaveBeenCalledWith({
+        filename: 'test-argon.png',
+        profileId: 'strict_anatomy',
+        prompt: 'a cybernetic hand',
+        reviewerModel: 'gemini-4-argon',
+      });
+    });
+  });
 });

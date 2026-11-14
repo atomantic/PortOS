@@ -331,3 +331,52 @@ export function parseConfirmationResponse(text) {
     note: typeof parsed.note === 'string' ? parsed.note.trim().slice(0, 500) : '',
   };
 }
+
+export const VERIFIER_REVIEWER_MODELS = Object.freeze([
+  {
+    id: 'auto',
+    name: 'Auto (Default Vision Reviewer)',
+    description: 'Uses configured Codex, Claude Code, or primary vision engine.',
+    family: 'auto',
+  },
+  {
+    id: 'gemini-4-argon',
+    name: 'Google Gemini 4 Argon',
+    description: 'Flagship multimodal reasoning model with separate Argon quota; superior fine-detail and text auditing.',
+    family: 'argon',
+    aliases: ['argon', 'gemini-4-argon', 'gemini-4-argon-medium', 'gemini-4-argon-high'],
+  },
+  {
+    id: 'qwen-27b',
+    name: 'Qwen 27B / 27G (Local)',
+    description: '27G parameter-class local vision engine (vLLM / Ollama); 0% false render-quality fails in local benchmarks.',
+    family: 'qwen',
+    aliases: ['qwen-27b', 'qwen-27g', 'qwen3.8:27b', 'qwen2.5-vl:27b', 'qwen:27b', 'qwen2.5:27b'],
+  },
+  {
+    id: 'claude-3-7-sonnet',
+    name: 'Claude 3.7 Sonnet',
+    description: 'Biomechanical audit leader; analyzes limb anchoring and joint torque.',
+    family: 'claude',
+    aliases: ['claude-3-7-sonnet', 'sonnet'],
+  },
+  {
+    id: 'kimi-k2.5',
+    name: 'Kimi K2.5 / Moonshot',
+    description: 'Long-context continuity and multi-frame consistency.',
+    family: 'kimi',
+    aliases: ['kimi', 'kimi-k2.5', 'moonshot-v1-vision'],
+  },
+]);
+
+export function normalizeReviewerModel(modelId) {
+  if (!modelId || modelId === 'auto') return null;
+  const lower = String(modelId).toLowerCase().trim();
+  for (const entry of VERIFIER_REVIEWER_MODELS) {
+    if (entry.id === lower || entry.aliases?.some((a) => lower.includes(a.toLowerCase()))) {
+      return entry.id;
+    }
+  }
+  return modelId;
+}
+

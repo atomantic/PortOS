@@ -100,9 +100,74 @@ export async function deleteCustomProfile(id) {
 /**
  * Resolves the vision reviewer to use for inspection.
  */
-export async function resolveVisionReviewer(reviewer = null) {
+export async function resolveVisionReviewer(reviewerInput = null) {
   const { resolvePlateReviewer } = await import('./musicVideo/plateReview.js');
-  return resolvePlateReviewer(reviewer || {});
+  const { getAllProviders } = await import('./providers.js');
+
+  const reviewer = typeof reviewerInput === 'string'
+    ? { model: reviewerInput }
+    : { ...(reviewerInput || {}) };
+
+  if (reviewer.model === 'auto') {
+    delete reviewer.model;
+  }
+
+  // If a specific model is requested without an explicit providerId, find the best provider that hosts it
+  if (reviewer.model && !reviewer.providerId) {
+    const modelLower = reviewer.model.toLowerCase();
+    const { providers = [] } = await getAllProviders().catch(() => ({ providers: [] }));
+
+    // Argon models: find Google / Antigravity / Gemini provider with Argon
+    if (/argon/i.test(modelLower)) {
+      const argonProvider = providers.find((p) =>
+        p.enabled !== false &&
+        (Array.isArray(p.models) && p.models.some((m) => /argon/i.test(m)))
+      ) || providers.find((p) =>
+        p.enabled !== false && /antigravity|gemini|google/i.test(p.id || p.name || '')
+      );
+      if (argonProvider) {
+        reviewer.providerId = argonProvider.id;
+        if (Array.isArray(argonProvider.models)) {
+          const exact = argonProvider.models.find((m) => /argon/i.test(m));
+          if (exact) reviewer.model = exact;
+        } else if (reviewer.model === 'argon') {
+          reviewer.model = 'gemini-4-argon-medium';
+        }
+      }
+    }
+    // Qwen 27B / 27G models: find Ollama / vLLM / LM Studio provider with Qwen 27b/g
+    else if (/qwen/i.test(modelLower)) {
+      const qwenProvider = providers.find((p) =>
+        p.enabled !== false &&
+        (Array.isArray(p.models) && p.models.some((m) => /qwen.*(?:27[bg]|3\.8)/i.test(m)))
+      ) || providers.find((p) =>
+        p.enabled !== false && (p.type === 'ollama' || /ollama|vllm|lmstudio/i.test(p.id || p.name || ''))
+      );
+      if (qwenProvider) {
+        reviewer.providerId = qwenProvider.id;
+        if (Array.isArray(qwenProvider.models)) {
+          const exact = qwenProvider.models.find((m) => /qwen.*(?:27[bg]|3\.8)/i.test(m));
+          if (exact) reviewer.model = exact;
+        } else if (reviewer.model === 'qwen' || /qwen-?27[bg]/i.test(reviewer.model)) {
+          reviewer.model = 'qwen3.8:27b';
+        }
+      }
+    }
+    // Claude / Sonnet models
+    else if (/claude|sonnet/i.test(modelLower)) {
+      const claudeProvider = providers.find((p) =>
+        p.enabled !== false &&
+        (Array.isArray(p.models) && p.models.some((m) => /sonnet/i.test(m)))
+      ) || providers.find((p) =>
+        p.enabled !== false && /claude|anthropic/i.test(p.id || p.name || '')
+      );
+      if (claudeProvider) {
+        reviewer.providerId = claudeProvider.id;
+      }
+    }
+  }
+
+  return resolvePlateReviewer(reviewer);
 }
 
 /**

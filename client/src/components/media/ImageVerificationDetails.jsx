@@ -8,15 +8,24 @@ import { ShieldCheck, AlertTriangle, CheckCircle2, RotateCw, Sparkles, UserCheck
 import { verifyImageNow, overrideVerification } from '../../services/apiImageVerifier.js';
 import toast from '../ui/Toast.jsx';
 
-const PROFILE_OPTIONS = [
+export const PROFILE_OPTIONS = [
   { id: 'strict_anatomy', label: 'Strict Anatomy (Hands & Limbs)' },
   { id: 'composition_and_text', label: 'Composition & Typography' },
   { id: 'full_audit', label: 'Comprehensive Quality Audit' },
   { id: 'quick_screen', label: 'Quick Defect Screen' },
 ];
 
+export const REVIEWER_MODEL_OPTIONS = [
+  { id: 'auto', label: 'Auto (Recommended Reviewer)' },
+  { id: 'gemini-4-argon', label: 'Google Gemini 4 Argon' },
+  { id: 'qwen-27b', label: 'Qwen 27B / 27G (Local)' },
+  { id: 'claude-3-7-sonnet', label: 'Claude 3.7 Sonnet' },
+  { id: 'kimi-k2.5', label: 'Kimi K2.5 / Moonshot' },
+];
+
 export default function ImageVerificationDetails({ item, onVerificationChange }) {
   const [selectedProfile, setSelectedProfile] = useState('strict_anatomy');
+  const [selectedModel, setSelectedModel] = useState('auto');
   const [verifying, setVerifying] = useState(false);
   const [overriding, setOverriding] = useState(false);
 
@@ -32,6 +41,7 @@ export default function ImageVerificationDetails({ item, onVerificationChange })
         filename: item.filename,
         profileId: selectedProfile,
         prompt: item.prompt || '',
+        reviewerModel: selectedModel !== 'auto' ? selectedModel : undefined,
       });
       if (result) {
         onVerificationChange?.(result);
@@ -108,6 +118,19 @@ export default function ImageVerificationDetails({ item, onVerificationChange })
             {verification.summary || (verification.verdict === 'pass' ? 'All anatomical and quality checks passed.' : 'Defects detected.')}
           </p>
 
+          {verification.reviewerModel && (
+            <div className="text-[10px] text-gray-400 font-mono flex items-center gap-1">
+              <span>Audited by:</span>
+              <span className="text-port-accent">
+                {/argon/i.test(verification.reviewerModel)
+                  ? 'Gemini 4 Argon'
+                  : /qwen.*(?:27[bg]|3\.8)/i.test(verification.reviewerModel)
+                    ? 'Qwen 27B/27G'
+                    : verification.reviewerModel}
+              </span>
+            </div>
+          )}
+
           {Array.isArray(verification.defects) && verification.defects.length > 0 && (
             <div className="space-y-1">
               <span className="text-[10px] uppercase font-bold text-port-error tracking-wider">
@@ -159,9 +182,21 @@ export default function ImageVerificationDetails({ item, onVerificationChange })
               onChange={(e) => setSelectedProfile(e.target.value)}
               disabled={verifying}
               className="text-[11px] bg-port-card border border-port-border rounded px-2 py-1 text-gray-300 focus:outline-none focus:border-port-accent"
+              title="Select verification profile"
             >
               {PROFILE_OPTIONS.map((p) => (
                 <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </select>
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              disabled={verifying}
+              className="text-[11px] bg-port-card border border-port-border rounded px-2 py-1 text-gray-300 focus:outline-none focus:border-port-accent"
+              title="Select vision reviewer model"
+            >
+              {REVIEWER_MODEL_OPTIONS.map((m) => (
+                <option key={m.id} value={m.id}>{m.label}</option>
               ))}
             </select>
             <button
@@ -198,9 +233,21 @@ export default function ImageVerificationDetails({ item, onVerificationChange })
               onChange={(e) => setSelectedProfile(e.target.value)}
               disabled={verifying}
               className="text-[11px] bg-port-card border border-port-border rounded px-2 py-1 text-gray-300 focus:outline-none focus:border-port-accent"
+              title="Select verification profile"
             >
               {PROFILE_OPTIONS.map((p) => (
                 <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </select>
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              disabled={verifying}
+              className="text-[11px] bg-port-card border border-port-border rounded px-2 py-1 text-gray-300 focus:outline-none focus:border-port-accent"
+              title="Select vision reviewer model"
+            >
+              {REVIEWER_MODEL_OPTIONS.map((m) => (
+                <option key={m.id} value={m.id}>{m.label}</option>
               ))}
             </select>
             <button

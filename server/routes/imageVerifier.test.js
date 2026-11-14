@@ -104,6 +104,23 @@ describe('imageVerifier routes', () => {
     expect(res.body.verdict).toBe('pass');
   });
 
+  it('GET /api/image-verifier/models returns available models including Argon and Qwen', async () => {
+    const res = await request(app).get('/api/image-verifier/models');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('models');
+    const modelIds = res.body.models.map((m) => m.id);
+    expect(modelIds).toContain('gemini-4-argon');
+    expect(modelIds).toContain('qwen-27b');
+  });
+
+  it('POST /api/image-verifier/verify triggers verification with reviewerModel', async () => {
+    const res = await request(app)
+      .post('/api/image-verifier/verify')
+      .send({ filename: 'test.png', profileId: 'strict_anatomy', reviewerModel: 'gemini-4-argon' });
+    expect(res.status).toBe(200);
+    expect(res.body.verdict).toBe('pass');
+  });
+
   it('POST /api/image-verifier/override records operator override', async () => {
     const res = await request(app)
       .post('/api/image-verifier/override')

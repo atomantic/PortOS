@@ -8,6 +8,9 @@ import { request } from './apiCore.js';
 export const getVerifierSettings = (options = {}) =>
   request('/image-verifier/settings', options);
 
+export const listVerifierModels = (options = {}) =>
+  request('/image-verifier/models', options);
+
 export const updateVerifierSettings = (updates, options = {}) =>
   request('/image-verifier/settings', {
     method: 'PUT',

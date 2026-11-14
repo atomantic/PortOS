@@ -21,6 +21,7 @@ export default function ImageGenGallerySections({ gallery, cards }) {
   const [verifyMode, setVerifyMode] = useState(false);
   const [selectedVerify, setSelectedVerify] = useState([]);
   const [verifyProfile, setVerifyProfile] = useState('strict_anatomy');
+  const [verifyModel, setVerifyModel] = useState('auto');
   const [batchVerifying, setBatchVerifying] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
 
@@ -38,7 +39,7 @@ export default function ImageGenGallerySections({ gallery, cards }) {
     setSelectedVerify([]);
   }, []);
 
-  const handleRunBatchVerify = useCallback(async (profileId) => {
+  const handleRunBatchVerify = useCallback(async (profileId, modelId = verifyModel) => {
     if (selectedVerify.length === 0) return;
     setBatchVerifying(true);
     setBatchProgress({ current: 0, total: selectedVerify.length });
@@ -55,6 +56,7 @@ export default function ImageGenGallerySections({ gallery, cards }) {
           filename,
           profileId,
           prompt: targetItem?.prompt || '',
+          reviewerModel: modelId !== 'auto' ? modelId : undefined,
         });
         if (res?.verdict === 'pass') passCount++;
         else if (res?.verdict === 'fail') failCount++;
@@ -68,7 +70,7 @@ export default function ImageGenGallerySections({ gallery, cards }) {
     setSelectedVerify([]);
     setVerifyMode(false);
     refreshGallery();
-  }, [selectedVerify, recentItems, refreshGallery]);
+  }, [selectedVerify, verifyModel, recentItems, refreshGallery]);
 
   return (
     <>
@@ -111,6 +113,8 @@ export default function ImageGenGallerySections({ gallery, cards }) {
               onCancel={() => { setVerifyMode(false); setSelectedVerify([]); }}
               selectedProfile={verifyProfile}
               onProfileChange={setVerifyProfile}
+              selectedModel={verifyModel}
+              onModelChange={setVerifyModel}
             />
           )}
 

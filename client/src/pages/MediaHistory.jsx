@@ -91,6 +91,7 @@ export default function MediaHistory() {
   const [verifyMode, setVerifyMode] = useState(false);
   const [selectedVerify, setSelectedVerify] = useState([]);
   const [verifyProfile, setVerifyProfile] = useState('strict_anatomy');
+  const [verifyModel, setVerifyModel] = useState('auto');
   const [batchVerifying, setBatchVerifying] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
 
@@ -108,7 +109,7 @@ export default function MediaHistory() {
     setSelectedVerify([]);
   }, []);
 
-  const handleRunBatchVerify = useCallback(async (profileId) => {
+  const handleRunBatchVerify = useCallback(async (profileId, modelId = verifyModel) => {
     if (selectedVerify.length === 0) return;
     setBatchVerifying(true);
     setBatchProgress({ current: 0, total: selectedVerify.length });
@@ -125,6 +126,7 @@ export default function MediaHistory() {
           filename,
           profileId,
           prompt: targetItem?.prompt || '',
+          reviewerModel: modelId !== 'auto' ? modelId : undefined,
         });
         if (res?.verdict === 'pass') passCount++;
         else if (res?.verdict === 'fail') failCount++;
@@ -148,7 +150,7 @@ export default function MediaHistory() {
     toast.success(`Batch verification complete: ${passCount} passed, ${failCount} defect(s) flagged.`);
     setSelectedVerify([]);
     refresh();
-  }, [selectedVerify, items, setItems, refresh]);
+  }, [selectedVerify, verifyModel, items, setItems, refresh]);
 
   const settleStitch = useCallback((id, error = null) => {
     if (!stitchJobsRef.current.delete(id)) return false;
@@ -394,6 +396,8 @@ export default function MediaHistory() {
           onCancel={() => { setVerifyMode(false); setSelectedVerify([]); }}
           selectedProfile={verifyProfile}
           onProfileChange={setVerifyProfile}
+          selectedModel={verifyModel}
+          onModelChange={setVerifyModel}
         />
       )}
 
