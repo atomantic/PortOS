@@ -36,7 +36,9 @@ export const xAdapter = {
     const scope = await composerScope(page);
     for (const [i, post] of payload.posts.entries()) {
       const editor = `${scope}[data-testid=tweetTextarea_${i}]`;
-      if (i > 0) await step(label, `add post ${i + 1}`, () => page.locator(`${scope}[data-testid=addButton]`).click({ timeout: T }));
+      // Every post in the thread renders its own addButton, so from the third post on the selector matches
+      // several; the newest post's button is the last in DOM order.
+      if (i > 0) await step(label, `add post ${i + 1}`, () => page.locator(`${scope}[data-testid=addButton]`).last().click({ timeout: T }));
       await step(label, `write post ${i + 1}`, async () => {
         await page.locator(editor).waitFor({ timeout: T });
         await pasteText(page, editor, post.text);
