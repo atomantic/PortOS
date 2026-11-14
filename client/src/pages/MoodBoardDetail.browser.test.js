@@ -162,6 +162,10 @@ describe.skipIf(!chrome)('mood board in Chromium', () => {
     const { page, boards, state } = await openBoard(fixture, { width: 390, height: 844 }, undefined, items);
     try {
       await page.getByRole('button', { name: 'Close board tools' }).click();
+      // Closing the routed sheet restores focus in an effect. Wait for that
+      // keyboard handoff before focusing a summary outside the sheet.
+      const opener = page.getByRole('navigation', { name: 'Board tools' }).getByRole('button', { name: 'Add', exact: true });
+      await expect.poll(() => opener.evaluate(element => document.activeElement === element)).toBe(true);
       const summaries = page.locator('summary').filter({ hasText: /^Prompt text$/ });
       const analyzed = page.getByLabel('Analyzed prompt', { exact: true });
       const generated = page.getByLabel('Item prompt', { exact: true });
