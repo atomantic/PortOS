@@ -1900,10 +1900,10 @@ describe('verifyAgentRepoState — divergent runs', () => {
     // Remediation must be actionable without re-diagnosing, and must forbid
     // deleting unmerged work or touching a sibling agent's branch.
     expect(payload.context).toContain(`Keep the retained worktree ${WORKTREE}`);
-    expect(payload.context).toContain('/api/cos/schedule/branch-reconcile/checkouts/review');
+    expect(payload.context).not.toContain('/api/cos/schedule/branch-reconcile/checkouts/review');
     expect(payload.context).toContain('/api/cos/schedule/branch-reconcile/checkouts/retire');
-    expect(payload.context).toContain('FULL returned review.comparison.localPatch and difference');
-    expect(payload.context).toContain('"digest":"<review.digest>"');
+    expect(payload.context).toContain('read-only Git');
+    expect(payload.context).not.toContain('<review.digest>');
     expect(payload.context).toContain('ok:true and branchDeleted:true');
     expect(payload.context).not.toMatch(/git (?:worktree (?:remove|unlock|prune)|branch -[dD]|push[^\n]*--delete)|--remove-source-branch/);
     expect(payload.metadata.retirementReview).toEqual({ appId: 'demo-app', release: RELEASE });

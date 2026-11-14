@@ -116,8 +116,9 @@ describe('historical completed-checkout review obligations', () => {
     expect(deps.prepare).toHaveBeenCalledWith({ appId: app.id, release: { branch: tree.branch, path: tree.path, head, locked: false, lockReason: null }, prUrl: 'https://github.com/example/repo/pull/42' });
     expect(result.candidates).toHaveLength(1);
     const prompt = retirementReviewInstructions(result.candidates[0], app.id);
-    expect(prompt).toContain('FULL returned review.comparison.localPatch and difference');
-    expect(prompt).toContain('checkouts/review');
+    expect(prompt).toContain('read-only Git');
+    expect(prompt).not.toContain('checkouts/review');
+    expect(prompt).not.toContain('<review.digest>');
     expect(prompt).toContain('checkouts/retire');
     expect(prompt).toContain('An uncertain response requires reading the outcome/checkout first');
     expect(prompt).toContain('Do not claim/bind');

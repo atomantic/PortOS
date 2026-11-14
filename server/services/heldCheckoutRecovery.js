@@ -1403,6 +1403,31 @@ export async function retireInventoriedCheckout({ appId, release, review }, opts
   return result;
 }
 
+/**
+ * Single-step operator retirement of one inventory row. A row held only for
+ * `pr-completion-review-required` gets its merged PR located and its review
+ * prepared here, so the confirming click is the whole ceremony. Every safety
+ * gate (owner, lock, identity, dirty content) still runs inside the retire.
+ */
+export async function retireOperatorCheckout({ appId, release }, opts = {}) {
+  const [{ getAppById }, { getBranchReconcileOutcome }] = await Promise.all([import('./apps.js'), import('./branchReconcileOutcome.js')]);
+  const app = await getAppById(appId);
+  if (!app?.repoPath) return { ok: false, reason: 'app-not-found' };
+  const entry = (await getBranchReconcileOutcome(appId))?.remaining?.find(row => sameRelease(row, release));
+  if (!release.path || !release.branch || entry?.reason !== 'pr-completion-review-required') {
+    return retireInventoriedCheckout({ appId, release }, opts);
+  }
+  const { findMergedPullRequest } = await import('./heldCheckoutReview.js');
+  const prUrl = await findMergedPullRequest(app.repoPath, release.branch, release.head, { forgeAccount: app.forgeAccount ?? null })
+    .then(found => found?.url ?? null, () => null);
+  if (!prUrl) return { ok: false, reason: 'retirement-merged-pr-not-found' };
+  const prepared = await prepareInventoriedCheckoutRetirement({ appId, release, prUrl }, opts);
+  if (!prepared.ok) return prepared;
+  const { digest, comparison } = prepared.review;
+  return retireInventoriedCheckout({ appId, release,
+    review: { prUrl, digest, acceptSuperseded: comparison.disposition === 'review-supersession' } }, opts);
+}
+
 async function reviewBranchOnlyCleanup({ appId, release, prUrl, kind }, opts = {}) {
   if (kind) return { ok: false, reason: 'retirement-exact-delivery-required' };
   const [{ getAppById }, { getBranchReconcileOutcome }, { buildCheckoutRetirementReview, readRetirementForgeEvidence }] = await Promise.all([

@@ -10,7 +10,7 @@ import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, heldCheckoutReviewBodySchema, releaseSynchronizationResetBodySchema, releaseDeliveryVerificationBodySchema } from '../lib/validation.js';
+import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, releaseSynchronizationResetBodySchema, releaseDeliveryVerificationBodySchema } from '../lib/validation.js';
 import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
@@ -318,28 +318,17 @@ router.post('/schedule/release-synchronization/verify-delivery', asyncHandler(as
 
 // Scan without changing Git state or scheduling provider work.
 router.post('/schedule/branch-reconcile/refresh', asyncHandler(async (req, res) => {
-  const { appId } = validateRequest(heldCheckoutReviewBodySchema.pick({ appId: true }).strict(), req.body);
+  const { appId } = validateRequest(heldCheckoutRetireBodySchema.pick({ appId: true }).strict(), req.body);
   const { refreshBranchReconcileInventory } = await import('../services/branchReconcileRefresh.js');
   res.json(await refreshBranchReconcileInventory(appId));
 }));
 
-// Prepare evidence only; the separate confirmation binds its digest to fresh facts.
-router.post('/schedule/branch-reconcile/checkouts/review', asyncHandler(async (req, res) => {
-  const { appId, prUrl, kind, ...release } = validateRequest(heldCheckoutReviewBodySchema, req.body);
-  const { prepareInventoriedCheckoutRetirement } = await import('../services/heldCheckoutRecovery.js');
-  const result = await prepareInventoriedCheckoutRetirement({ appId, release, prUrl, ...(kind && { kind }) });
-  if (!result.ok) throw new ServerError(`Checkout review refused: ${result.reason}`, {
-    status: 409, code: 'CHECKOUT_REVIEW_REFUSED', context: { reason: result.reason, ...(result.archiveLimit && { archiveLimit: result.archiveLimit }), ...(result.nextAction && { nextAction: result.nextAction }) },
-  });
-  res.json(result);
-}));
-
-// POST /api/cos/schedule/branch-reconcile/checkouts/retire - Archive and retire
-// one held checkout from the last branch-reconcile inventory (#12002)
+// POST /api/cos/schedule/branch-reconcile/checkouts/retire - single-step retirement of
+// one held checkout from the last branch-reconcile inventory (#12002, #16016)
 router.post('/schedule/branch-reconcile/checkouts/retire', asyncHandler(async (req, res) => {
-  const { appId, review, ...release } = validateRequest(heldCheckoutRetireBodySchema, req.body);
-  const { retireInventoriedCheckout } = await import('../services/heldCheckoutRecovery.js');
-  const result = await retireInventoriedCheckout({ appId, release, review });
+  const { appId, ...release } = validateRequest(heldCheckoutRetireBodySchema, req.body);
+  const { retireOperatorCheckout } = await import('../services/heldCheckoutRecovery.js');
+  const result = await retireOperatorCheckout({ appId, release });
   if (!result.ok) {
     throw new ServerError(`Checkout kept: ${result.reason}${result.detail ? ` (${result.detail})` : ''}`, {
       status: result.reason === 'app-not-found' ? 404 : 409, code: 'CHECKOUT_RETIREMENT_REFUSED', context: { reason: result.reason, ...(result.archiveLimit && { archiveLimit: result.archiveLimit }), ...(result.nextAction && { nextAction: result.nextAction }) },
