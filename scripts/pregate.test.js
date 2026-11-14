@@ -1269,7 +1269,7 @@ describe('the gate end to end', () => {
       join(REPO_ROOT, 'scripts', 'pregate.js'),
     ], { cwd: REPO_ROOT, encoding: 'utf8' });
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Install Git 2.40 or newer');
+    expect(result.stderr).toContain('Install Git 2.43 or newer');
     expect(result.stderr).not.toContain('private subprocess output');
     expect(result.stderr).not.toContain('Unexpected subprocess');
     expect(result.stdout).not.toContain('Planning against');

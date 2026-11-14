@@ -1,6 +1,6 @@
 # Contributing Guide
 
-Git 2.40 or newer is required for merge validation and detached-checkout retirement.
+Git 2.43 or newer is required for merge validation, detached-checkout retirement and branch-presence checks (`git show-ref --exists`).
 The capability check requires both `git merge-tree --write-tree` and `--merge-base`
 ([Git 2.40 documentation](https://github.com/git/git/blob/v2.40.0/Documentation/git-merge-tree.txt)).
 Run `node scripts/checkGitVersion.js` before setup or contribution work; setup and

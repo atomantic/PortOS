@@ -103,7 +103,7 @@ The author builds PortOS by directing AI coding agents rather than typing the co
 
 ## Quick start
 
-You need Node.js `^22.22.2 || ^24.15.0 || >=26.0.0` (26 preferred), Git 2.40+, and Docker for PostgreSQL (or a native PostgreSQL with `PGMODE=native` in `.env`).
+You need Node.js `^22.22.2 || ^24.15.0 || >=26.0.0` (26 preferred), Git 2.43+, and Docker for PostgreSQL (or a native PostgreSQL with `PGMODE=native` in `.env`).
 
 ```bash
 git clone --recurse-submodules https://github.com/atomantic/PortOS.git
