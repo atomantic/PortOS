@@ -149,9 +149,9 @@ const PR_LIST_LIMIT = 200;
  * gate fired instead of re-deriving it from the input fields. Order is
  * load-bearing — moving a rule changes what gets deleted, retired or delegated:
  *   draft              WIP            explicit human-review handoff, even after its agent exits
- *   completion-policy  WIP            policy hold. Sits BEFORE merged so a merged pointer is not
- *                                     deleted by cleanupMerged without the review proof that
- *                                     prepareReconcileRetirements requires (it scans these rows).
+ *   completion-policy  WIP            policy hold. Sits BEFORE merged so cleanupMerged never deletes
+ *                                     a held pointer; retireCompletedCheckouts (heldCheckoutRecovery)
+ *                                     retires these rows directly once their work is merged.
  *                                     Except an UNSHIPPED review obligation (no PR ever recorded,
  *                                     none open, commits not on the default branch): the run died
  *                                     before delivery, so the hold falls through to the rules below
@@ -204,7 +204,7 @@ const CLASSIFY_RULES = [
  *                (pushed-with-no-PR, or never pushed but holding commits)
  *   WIP        — not dispatched to the coordinator: draft, completion-policy hold, live owner,
  *                dirty tree, unreadable forge, or bare pointer. It is NOT "never touch":
- *                completion-policy rows are still scanned for review-gated retirement.
+ *                a completion-policy row whose work merged is still retired directly.
  *
  * @param {{ hasUpstream:boolean, ahead?:number|null, hasOrigin?:boolean, isMerged:boolean, worktreeDirty:boolean, abandonedAgentWorktree?:boolean, abandonedClaimWorktree?:boolean, liveOwnerReason?:string|null, completionPolicyReason?:string|null, completionReviewUnshipped?:boolean, openPr:({mergeable?:string, isDraft?:boolean}|null), prStateUnavailable?:boolean }} input
  *   `ahead` is the branch's own commit count over the default branch (null =
@@ -1062,8 +1062,6 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
 }
 
 const HOLD_NEXT_ACTIONS = {
-  'retirement-pr-ambiguous': 'No unique merged pull request was found for this branch. Finish its delivery, or compare a closed obsolete branch with its replacement and use scoped supersession retirement.',
-  'retirement-policy-not-legacy-completed': 'The historical completion record does not establish retirement for this checkout’s current head. Verify its current merged delivery and use scoped checkout retirement; live owners and manual handoffs still apply.',
   'review-owner-ambiguous': 'Resolve competing or unverified execution owners before resuming the original review workflow.',
   'review-task-missing': 'The original owner task is missing. Restore its trusted task record before resuming review; do not recreate its budgets or infer its policy from PR text.',
   'review-task-unavailable': 'The original owner task could not be read. Restore task-store availability and rerun reconciliation; an unavailable read does not establish that history is missing.',
@@ -2083,7 +2081,6 @@ export const actionOn = (actions, key) => actions?.[key] !== false;
 export function filterActionable(inFlight, actions) {
   return inFlight.filter((b) => {
     if (b.openPr?.isDraft) return false;
-    if (b.state === 'REVIEW_RETIREMENT') return actionOn(actions, 'cleanupMerged');
     if (b.state === 'ABANDONED_WIP') return actionOn(actions, 'finishAbandoned');
     if (b.state === 'NEEDS_PR') return actionOn(actions, 'openPr');
     if (b.state === 'CONFLICTED') return actionOn(actions, 'resolveConflicts');
@@ -2245,7 +2242,7 @@ export function desiredEndState(state, actions, { prNumber, worktreePath, collis
  */
 export function actionableSignature(actionable) {
   return actionable
-    .map((b) => `${b.branch}:${b.state}:${b.openPr?.number ?? 'none'}${b.tip ? `:${b.tip}` : ''}${b.retirement?.digest ? `:${b.retirement.digest}` : ''}`)
+    .map((b) => `${b.branch}:${b.state}:${b.openPr?.number ?? 'none'}${b.tip ? `:${b.tip}` : ''}`)
     .sort()
     .join('|');
 }
@@ -2313,12 +2310,10 @@ export async function formatInFlightForPrompt(inFlight, { defaultBranch, actions
   }
   // This list is a scan from before dispatch; a claim run can take a branch
   // after it. Each branch's own recheck runs right before its first mutation (#10089).
-  if (appId && inFlight.some(branch => !branch.retirement)) {
+  if (appId && inFlight.length) {
     lines.splice(lines.length - 1, 0, '', 'Ownership recheck: immediately before the FIRST edit, commit, rebase, push, merge, PR change, move or removal on a branch below (and again before its merge), run that branch\'s "Recheck" command and require a parsed JSON response with admitted:true. On admitted:false, an HTTP/auth/transport error or unreadable JSON, leave that branch and its checkout untouched and report it as held by a live owner with the returned reason — a live claim run owns it now. A successful Recheck also reserves that branch for this run until it ends, so no claim run can take it mid-mutation.');
   }
-  const { retirementReviewInstructions } = await import('./branchReconcileRetirement.js');
   inFlight.forEach((b, i) => {
-    if (b.retirement) { lines.push(retirementReviewInstructions(b, appId), ''); return; }
     const pr = b.openPr ? ` — PR #${b.openPr.number} (${b.openPr.mergeable})${b.openPr.url ? ` ${b.openPr.url}` : ''}` : ' — no PR';
     lines.push(`### \`${b.branch}\` [${b.state}]${pr}`);
     if (b.worktreePath) lines.push(`- Worktree: \`${b.worktreePath}\`${b.state === 'ABANDONED_WIP' ? ' (holds UNCOMMITTED work — read it before doing anything)' : ''}`);

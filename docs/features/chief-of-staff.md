@@ -136,32 +136,22 @@ repair the exact existing backlink rather than minting another merge authority.
 Missing tasks, unreadable state, active owners and explicit leave-open policy
 never grant recovery permission. GitHub auto-merge enabled alone is unfinished.
 
-When cleanup is enabled, a clean, unlocked, ownerless checkout held only by a
-review obligation whose commits are already on the default branch (ancestor or
-patch-equivalent) is removed in place: no PR identity, owner
-history or agent review is needed, and the retirement
-service re-proves merge evidence and ownership under its fence. Nothing is copied
-into an archive. The checkout remains if Git status shows work or ignored content
-cannot be independently verified as disposable; merge evidence does not cover
-those local bytes. This also applies to an agent's completed checkout and to
-superseded retirement. Historical recovery archives and
-unfinished quarantine journals remain available after setup. Human handoffs
-and unreadable policy stay held. Other completed local review obligations become bounded
-`REVIEW_RETIREMENT` tasks after a fresh merged-PR preview accepts their policy,
-checkout identity and ownership. The task records the exact release and review
-digest, reads the complete original/current code comparison, and uses the live
-retirement endpoint only after review. That endpoint rechecks the digest and
-removes a merged clean checkout without copying it. A successful agent report without
-ok:true and branchDeleted:true remains incomplete across restarts and later empty inventory scans.
-Resumed claims may discover the merged PR during retirement rather than save a
-PR URL in each run. Their captured task lineage, checkout generation and exact
-head still bind every predecessor; a conflicting saved PR remains a hold.
-Repository-cleanup recovery uses the same scoped API review and additive obligation;
-its completion checks the persisted task identity and exact retirement receipt without
-starting another repository sweep. Intentional human handoffs, live owners,
-locks, unmanaged trees and refused previews stay visible with their own reasons.
-A missing remote proof commit can be fetched during preview without advancing
-local refs; changed default-branch evidence requires a new review.
+When cleanup is enabled, an unlocked, ownerless checkout held only by a review
+obligation is removed in place with its branch once its work is merged: its PR
+merged at the checkout's exact head (uncommitted, untracked and ignored files go
+with it), or every commit is already on the default branch (ancestor or
+patch-equivalent) or inside a later merged PR head, and Git status is clean. No
+PR review, digest or agent dispatch is involved; the retirement service re-proves
+merge evidence, content and ownership under its fence, and nothing is copied
+into an archive. Unmerged work stays in place and stays visible in the
+inventory. This also applies to an agent's completed checkout and to a pending-merge
+receipt, which additionally binds the receipt's own PR and exact head. Human
+handoffs, live owners, locks, unmanaged trees and unreadable policy stay held
+with their own reasons. A successful agent report without ok:true and
+branchDeleted:true remains incomplete across restarts and later empty inventory
+scans. An agent's merged-PR checkout that still holds unmerged work goes to
+repository-cleanup recovery (or the scheduled branch reconcile when investigations
+are not auto-approved), which finishes delivery rather than retiring the work.
 
 Reconciliation also wakes existing merge receipts for local unlocked branches.
 It joins the pending-merge coordinator, does not spend its periodic tick budget,

@@ -1,144 +1,148 @@
 /**
- * Scoped retirement of held checkouts through real Git (#12002, #13519): a
- * release binds to the exact inventory row. A merged checkout is removed in
- * place (dirty only when its PR merged at the exact head). Dirty unmerged and
- * live-owner checkouts stay, and retirement never copies the checkout.
- *
- * This file: core retirement, superseded checkouts, ignored module caches and
- * reviewed-checkout preview.
- * The suite is split across heldCheckoutRecovery{,.receipts,.siblings}.test.js
- * so Vitest can run the slow real-Git cases in parallel; the shared mocks,
- * per-case repository and builders live in _heldCheckoutRecoveryMocks.js and
- * _heldCheckoutRecoveryFixture.js.
+ * Retirement of held checkouts through real Git (#12002, #16016): a release
+ * binds to the exact inventory row. A merged checkout is removed in place, its
+ * uncommitted files too when its PR merged at the exact head. Unmerged work,
+ * live owners and manual handoffs stay, and nothing is copied.
  */
-import { expect, vi } from 'vitest';
+import { describe, expect, it as unitIt, vi } from 'vitest';
 // Load the factories before any import below resolves a mocked module.
-import { mockBranchCompletionPolicy, mockClaimOwnershipState, mockExecGit, mockPaths, mockTaskScheduleStore, injected, receiptTiming, retirementFaults, SYMLINKS } from './_heldCheckoutRecoveryMocks.js';
-import { appendFile, cp, mkdir, rm, rename, writeFile, readFile, readlink, symlink, truncate, stat } from 'fs/promises';
+import { mockBranchCompletionPolicy, mockExecGit, mockPaths, mockTaskScheduleStore, injected, retirementFaults, SYMLINKS } from './_heldCheckoutRecoveryMocks.js';
+import { appendFile, lstat, mkdir, readlink, symlink, writeFile, readFile } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
-import { createHash } from 'node:crypto';
-import { execFile } from '../lib/childProcess.js';
 import { dirname, join } from 'path';
 import { readRetirementCheckoutIdentity, isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
 import { execGit } from '../lib/execGit.js';
 import { PATHS } from '../lib/paths.js';
 
-// Mock factories and their shared state live beside this file so the three
-// split suites intercept exactly the same boundaries.
 vi.mock('../lib/paths.js', async importOriginal => mockPaths(await importOriginal()));
-vi.mock('./cosClaimOwnershipState.js', async importOriginal => mockClaimOwnershipState(await importOriginal()));
 vi.mock('../lib/execGit.js', async importOriginal => mockExecGit(await importOriginal()));
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({ env: { ...process.env, GH_TOKEN: 'synthetic-account-token' } }) }));
 vi.mock('./branchCompletionPolicy.js', async importOriginal => mockBranchCompletionPolicy(await importOriginal()));
 vi.mock('./taskScheduleStore.js', async importOriginal => mockTaskScheduleStore(await importOriginal()));
-const mergedPrHeads = new Set();
-const mergedPrLookup = vi.hoisted(() => ({ url: null }));
-vi.mock('./heldCheckoutReview.js', async importOriginal => ({ ...await importOriginal(), findMergedPullRequest: async () => (mergedPrLookup.url ? { url: mergedPrLookup.url } : null) }));
-vi.mock('./prProbe.js', async importOriginal => ({ ...await importOriginal(), isMergedPrHead: async (_repo, branch, head) => mergedPrHeads.has(`${branch}@${head}`) }));
+// The forge's answers: which `branch@head` pairs merged (newest last), and the
+// merged-PR read behind a receipt or a contained-delivery check.
+const forge = vi.hoisted(() => ({ mergedHeads: new Set(), unreadable: false, delivery: null }));
+vi.mock('./git.js', async importOriginal => ({ ...await importOriginal(), resolveForgeForRepo: async () => ({ cli: 'gh', env: null }) }));
+vi.mock('./prProbe.js', async importOriginal => ({ ...await importOriginal(),
+  isMergedPrHead: async (_repo, branch, head) => forge.mergedHeads.has(`${branch}@${head}`),
+  probePrForBranch: async (_repo, branch) => {
+    if (forge.unreadable) return { readable: false, cli: 'gh', prState: null, prHead: null, prUrl: null };
+    const merged = [...forge.mergedHeads].filter(key => key.startsWith(`${branch}@`)).at(-1);
+    return { readable: true, cli: 'gh', prState: merged ? 'MERGED' : null, prHead: merged ? merged.slice(branch.length + 1) : null,
+      prUrl: merged ? 'https://github.com/example/repo/pull/42' : null };
+  } }));
+vi.mock('./mergedPrEvidence.js', () => ({ readMergedPrDelivery: async () => {
+  if (forge.delivery instanceof Error) throw forge.delivery;
+  return forge.delivery;
+} }));
 vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id ? injected.app : null) }));
 
-import { describeHeldCheckoutRecovery, setReceiptWork, it, beforeEach, scratch, repo, external, cosDir, receiptWork, noOwners, heldCheckout, registered, lockText, retire, makeClean, supersededCheckout, reapSuperseded, reviewedCheckout } from './_heldCheckoutRecoveryFixture.js';
-const { retireInventoriedCheckout, retireOperatorCheckout, prepareInventoriedCheckoutRetirement } = await import('./heldCheckoutRecovery.js');
-const { sha256File } = await import('../lib/fileUtils.js');
+import { describeHeldCheckoutRecovery, it, beforeEach, scratch, repo, external, noOwners, heldCheckout, mergedCheckout, registered, lockText, retire, makeClean, supersededCheckout, reapSuperseded } from './_heldCheckoutRecoveryFixture.js';
+const { retireInventoriedCheckout, retirePendingMergeCheckout, readMergedDelivery, retireCompletedCheckouts } = await import('./heldCheckoutRecovery.js');
 const { recordBranchReconcileOutcome, getBranchReconcileOutcome, getBranchReconcileInventory } = await import('./branchReconcileOutcome.js');
-const { withClaimOwnershipLock, checkReconcileOwnership } = await import('./cosClaimOwnership.js');
+const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
+
+const reviewPolicy = (branch, extra = {}) => ({ id: 'agent-done', status: 'completed', startedAt: '2026-01-01T00:00:00.000Z', result: { success: true },
+  metadata: { sourceWorkspace: repo, worktreeBranch: branch, prCompletionPolicy: 'review-then-merge',
+    reviewLoopMergeTarget: { branch, url: 'https://github.com/example/repo/pull/42' }, ...extra } });
 
 describeHeldCheckoutRecovery(() => {
-
-  it.each([false, true])('retires an exact merged delivery with an initialized submodule (unlocked: %s)', async unlocked => {
-    const c = await reviewedCheckout('initialized-delivery', { gitlink: true, normalMerge: true, unlocked });
-    c.forge.scopeProof = 'exact-delivered-head';
-    mergedPrHeads.add(`${c.release.branch}@${c.release.head}`);
-    await writeFile(join(c.path, '.gitmodules'), '[submodule "vendor"]\n\tpath = vendor\n\turl = ./fixture-vendor\n');
-    await execGit(['clone', '--no-hardlinks', repo, join(c.path, 'vendor')], repo);
-    await execGit(['checkout', '--detach', c.forge.changeBase], join(c.path, 'vendor'));
-    await execGit(['submodule', 'absorbgitdirs', 'vendor'], c.path);
-    expect((await stat(join(c.admin, 'modules', 'vendor'))).isDirectory()).toBe(true);
-    const prepared = await c.prepare();
-    expect(prepared.ok, prepared.reason).toBe(true);
-    expect(prepared.review.comparison).toMatchObject({ exactMergedDelivery: true, disposition: 'integrated' });
-    expect(await c.confirm(prepared.review)).toMatchObject({ ok: true, branchDeleted: true });
-    expect(existsSync(c.path)).toBe(false);
-    expect(await registered(c.path)).toBe(false);
-    const outcome = await getBranchReconcileOutcome('app-1');
-    expect(outcome.retired).toContainEqual(expect.objectContaining({ path: c.path, branch: c.release.branch,
-      head: c.release.head, branchDeleted: true, archiveDir: null, checkoutIdentity: expect.any(String) }));
+  beforeEach(() => {
+    forge.mergedHeads.clear();
+    forge.unreadable = false;
+    forge.delivery = null;
   });
 
-  it('retires a review-required merged checkout in one operator step, discovering the PR itself', async () => {
-    const c = await reviewedCheckout('operator-one-step', { normalMerge: true });
-    c.forge.scopeProof = 'exact-delivered-head';
-    mergedPrHeads.add(`${c.release.branch}@${c.release.head}`);
-    mergedPrLookup.url = c.forge.prUrl;
-    expect(await retireOperatorCheckout({ appId: 'app-1', release: c.release }, c.opts)).toMatchObject({ ok: true, branchDeleted: true });
-    expect(existsSync(c.path)).toBe(false);
-    expect(await registered(c.path)).toBe(false);
+  it.each([false, true])('retires a dirty exact merged delivery with an initialized submodule (locked: %s)', async locked => {
+    const branch = 'feature/submodule-delivery';
+    const path = join(external, 'submodule-delivery');
+    await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
+    const base = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
+    await execGit(['update-index', '--add', '--cacheinfo', `160000,${base},vendor`], path);
+    await writeFile(join(path, '.gitmodules'), '[submodule "vendor"]\n\tpath = vendor\n\turl = ./fixture-vendor\n');
+    await execGit(['add', '.gitmodules'], path);
+    await execGit(['commit', '-m', 'feat: vendored submodule'], path);
+    await execGit(['clone', '--no-hardlinks', repo, join(path, 'vendor')], repo);
+    await execGit(['checkout', '--detach', base], join(path, 'vendor'));
+    await execGit(['submodule', 'absorbgitdirs', 'vendor'], path);
+    await writeFile(join(path, 'scratch.txt'), 'uncommitted after merge\n');
+    if (locked) await execGit(['worktree', 'lock', '--reason', 'synthetic external owner', path], repo);
+    const head = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
+    const release = { path: (await execGit(['rev-parse', '--show-toplevel'], path)).stdout.trim(), head, branch,
+      locked, lockReason: locked ? 'synthetic external owner' : null };
+    // Not on local main: only the forge's exact-head merge makes it disposable.
+    forge.mergedHeads.add(`${branch}@${head}`);
+    expect(await retire(release)).toMatchObject({ ok: true, branchDeleted: true });
+    expect(existsSync(release.path)).toBe(false);
+    expect(await registered(release.path)).toBe(false);
+    expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({ path: release.path, branch,
+      head, branchDeleted: true, archiveDir: null, checkoutIdentity: expect.any(String) }));
   });
 
-  it('keeps a review-required checkout when no merged PR can be found for its tip', async () => {
-    const c = await reviewedCheckout('operator-no-pr', { normalMerge: true });
-    mergedPrLookup.url = null;
-    expect(await retireOperatorCheckout({ appId: 'app-1', release: c.release }, c.opts)).toMatchObject({ ok: false, reason: 'retirement-merged-pr-not-found' });
-    expect(existsSync(c.path)).toBe(true);
+  it('settles a completion-review obligation in one operator step once the work merged', async () => {
+    const { path, release } = await mergedCheckout('operator-one-step');
+    injected.policies = [reviewPolicy(release.branch)];
+    expect(await readBranchCompletionHold({ repoPath: repo, branch: release.branch, retirement: true })).toBe('pr-completion-review-required');
+    expect(await retireInventoriedCheckout({ appId: 'app-1', release }, { readAgents: noOwners })).toMatchObject({ ok: true, branchDeleted: true });
+    expect(existsSync(path)).toBe(false);
+    expect(await registered(path)).toBe(false);
+    expect((await execGit(['branch', '--list', release.branch], repo)).stdout.trim()).toBe('');
   });
 
-  it.each(['pointer', 'administration'])('refuses a replaced exact-delivery %s generation after preview', async component => {
-    const c = await reviewedCheckout('replaced-exact-generation', { normalMerge: true });
-    c.forge.scopeProof = 'exact-delivered-head';
-    const prepared = await c.prepare();
-    expect(prepared.ok).toBe(true);
-    const source = component === 'pointer' ? join(c.path, '.git') : c.admin;
-    const retained = join(scratch, `original-${component}`);
-    await rename(source, retained);
-    await cp(retained, source, { recursive: true });
-    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
-    expect(await registered(c.path)).toBe(true);
-    expect(await lockText(c.path)).toBe(c.release.lockReason);
-    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+  it('keeps an unmerged completion-review checkout and its work, even beside a PR merged at another head', async () => {
+    const { path, release } = await mergedCheckout('operator-unmerged', { merge: 'none' });
+    injected.policies = [reviewPolicy(release.branch)];
+    await writeFile(join(path, 'wanted.txt'), 'still wanted\n');
+    forge.mergedHeads.add(`${release.branch}@${'0'.repeat(40)}`);
+    forge.delivery = { prHead: '0'.repeat(40) };
+    expect(await retireInventoriedCheckout({ appId: 'app-1', release }, { readAgents: noOwners })).toEqual({ ok: false, reason: 'not-merged-on-recheck' });
+    expect(await readFile(join(path, 'wanted.txt'), 'utf8')).toBe('still wanted\n');
+    expect((await execGit(['rev-parse', release.branch], repo)).stdout.trim()).toBe(release.head);
   });
 
-  // Both automatic retirement entry points used to omit their receipt, so the
-  // next persisted scan manufactured a missing-source obligation after archival.
-  it.each(['cleanupMerged', 'early reaper'])('settles a normally merged checkout before the next scan through %s', entryPoint => {
-    setReceiptWork((async () => {
-      const branch = 'feature/merged-receipt';
-      const path = join(repo, '.claude', 'worktrees', 'merged-receipt');
-      const holder = await receiptTiming.run('merged-fixture', async () => {
-        await mkdir(dirname(path), { recursive: true });
-        await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
-        await writeFile(join(path, '.gitignore'), 'ignored.txt\n');
-        await execGit(['add', '.gitignore'], path);
-        await execGit(['commit', '-m', 'fixture ignore rule'], path);
-        await execGit(['merge', '--ff-only', branch], repo);
-        return (await (await import('./worktreeManager.js')).listWorktrees(repo)).find(tree => tree.branch === `refs/heads/${branch}`);
-      });
-      const release = { branch, path: holder.path, head: holder.head, locked: false, lockReason: null };
-      await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release,
-        checkoutIdentity: await readRetirementCheckoutIdentity(path), reason: 'checkout-retained' }] });
-      const options = { appId: 'app-1', activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: noOwners } };
-      await receiptTiming.run('cleanup-with-import', async () => {
-        if (entryPoint === 'cleanupMerged') {
-          const result = await (await import('./branchReconcile.js')).cleanupMerged(repo, 'main', [{ branch, worktreePath: holder.path }], options);
-          expect(result).toMatchObject({ cleaned: [branch], skipped: [] });
-        } else {
-          const result = await (await import('./worktreeManager.js')).reapMergedWorktrees(repo, options);
-          expect(result.reaped).toEqual([expect.objectContaining({ branch, branchDeleted: true })]);
-          expect(result.skipped).toEqual([]);
-        }
-      });
-      await receiptTiming.run('receipt-and-next-scan-readback', async () => {
-        expect(existsSync(path)).toBe(false);
-        expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
-        const first = await getBranchReconcileOutcome('app-1');
-        expect(first.retired).toEqual([expect.objectContaining({ branch, path: holder.path, head: holder.head, branchDeleted: true, archiveDir: null })]);
-        await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
-        const next = await getBranchReconcileOutcome('app-1');
-        expect(next.remaining).toEqual([]);
-        expect(next).not.toHaveProperty('retirementObligations');
-        expect(next.retired).toEqual(first.retired);
-      });
-    })());
-    return receiptWork;
+  it('retires a clean checkout whose commits a later merged PR head contains, and keeps a dirty one', async () => {
+    const { path, release } = await mergedCheckout('contained-delivery', { merge: 'none' });
+    // The PR gained a commit pushed from elsewhere, then merged (squash) at that later head.
+    forge.mergedHeads.add(`${release.branch}@${'c'.repeat(40)}`);
+    forge.delivery = { prHead: 'c'.repeat(40), scopeProof: 'ancestor-of-delivered-head', deliveredAncestorHead: release.head };
+    await writeFile(join(path, 'wanted.txt'), 'uncommitted\n');
+    expect(await retireInventoriedCheckout({ appId: 'app-1', release }, { readAgents: noOwners })).toEqual({ ok: false, reason: 'worktree-dirty' });
+    expect(await readFile(join(path, 'wanted.txt'), 'utf8')).toBe('uncommitted\n');
+    await makeClean(path);
+    expect(await retireInventoriedCheckout({ appId: 'app-1', release }, { readAgents: noOwners })).toMatchObject({ ok: true, branchDeleted: true });
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it.each(['cleanupMerged', 'early reaper'])('settles a normally merged checkout before the next scan through %s', async entryPoint => {
+    const branch = 'feature/merged-receipt';
+    const path = join(repo, '.claude', 'worktrees', 'merged-receipt');
+    await mkdir(dirname(path), { recursive: true });
+    await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
+    await writeFile(join(path, '.gitignore'), 'ignored.txt\n');
+    await execGit(['add', '.gitignore'], path);
+    await execGit(['commit', '-m', 'fixture ignore rule'], path);
+    await execGit(['merge', '--ff-only', branch], repo);
+    const holder = (await (await import('./worktreeManager.js')).listWorktrees(repo)).find(tree => tree.branch === `refs/heads/${branch}`);
+    const release = { branch, path: holder.path, head: holder.head, locked: false, lockReason: null };
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release,
+      checkoutIdentity: await readRetirementCheckoutIdentity(path), reason: 'checkout-retained' }] });
+    const options = { appId: 'app-1', activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: noOwners } };
+    if (entryPoint === 'cleanupMerged') {
+      const result = await (await import('./branchReconcile.js')).cleanupMerged(repo, 'main', [{ branch, worktreePath: holder.path }], options);
+      expect(result).toMatchObject({ cleaned: [branch], skipped: [] });
+    } else {
+      const result = await (await import('./worktreeManager.js')).reapMergedWorktrees(repo, options);
+      expect(result.reaped).toEqual([expect.objectContaining({ branch, branchDeleted: true })]);
+      expect(result.skipped).toEqual([]);
+    }
+    expect(existsSync(path)).toBe(false);
+    expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
+    const first = await getBranchReconcileOutcome('app-1');
+    expect(first.retired).toEqual([expect.objectContaining({ branch, path: holder.path, head: holder.head, branchDeleted: true, archiveDir: null })]);
+    await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
+    const next = await getBranchReconcileOutcome('app-1');
+    expect(next.remaining).toEqual([]);
+    expect(next.retired).toEqual(first.retired);
   });
 
   it('settles a normally retired branch-only row while retaining unrelated unexplained disappearance', async () => {
@@ -156,10 +160,31 @@ describeHeldCheckoutRecovery(() => {
     expect(first.remaining).toEqual([vanished]);
     expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/portos/completed/${head}`], repo)).stdout.trim()).toBe(head);
     expect(existsSync(join(PATHS.cos, 'branch-retirement-archives'))).toBe(false);
-    await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
-    const next = await getBranchReconcileOutcome('app-1');
-    expect(next.remaining).toEqual([]);
-    expect(next).not.toHaveProperty('retirementObligations');
+  });
+
+  it('deletes an inventoried merged branch without a checkout, and keeps unmerged or unproven ones', async () => {
+    const merged = 'feature/inventoried-merged';
+    await execGit(['branch', merged, 'main'], repo);
+    const head = (await execGit(['rev-parse', merged], repo)).stdout.trim();
+    const unmerged = 'feature/inventoried-unmerged';
+    const unmergedHead = (await execGit(['commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'unmerged branch-only work'], repo)).stdout.trim();
+    await execGit(['branch', unmerged, unmergedHead], repo);
+    const absent = { branch: 'feature/already-gone', head: unmergedHead };
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [
+      { branch: merged, head, reason: 'branch-held' }, { branch: unmerged, head: unmergedHead, reason: 'branch-held' },
+      { ...absent, reason: 'branch-held' }] });
+    const row = (branch, at) => ({ appId: 'app-1', release: { branch, head: at, locked: false, lockReason: null } });
+    expect(await retireInventoriedCheckout(row(unmerged, unmergedHead), { readAgents: noOwners })).toEqual({ ok: false, reason: 'not-merged-on-recheck' });
+    expect((await execGit(['rev-parse', unmerged], repo)).stdout.trim()).toBe(unmergedHead);
+    // An absent ref records retirement only on the forge's exact merge.
+    expect(await retireInventoriedCheckout(row(absent.branch, absent.head), { readAgents: noOwners })).toEqual({ ok: false, reason: 'not-merged-on-recheck' });
+    forge.mergedHeads.add(`${absent.branch}@${absent.head}`);
+    expect(await retireInventoriedCheckout(row(absent.branch, absent.head), { readAgents: noOwners })).toEqual({ ok: true, branchDeleted: true });
+    expect(await retireInventoriedCheckout(row(merged, head), { readAgents: noOwners })).toEqual({ ok: true, branchDeleted: true });
+    expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${merged}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
+    const outcome = await getBranchReconcileOutcome('app-1');
+    expect(outcome.retired.map(entry => entry.branch).sort()).toEqual([absent.branch, merged].sort());
+    expect(outcome.remaining).toEqual([{ branch: unmerged, head: unmergedHead, reason: 'branch-held' }]);
   });
 
   it('retires a superseded branch without a worktree and does not claim checkout preservation', async () => {
@@ -176,21 +201,19 @@ describeHeldCheckoutRecovery(() => {
     expect(await reapSuperseded(entry)).toMatchObject({ reaped: [branch], skipped: [] });
     expect(seenHead).toBe(head);
     expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
-    expect(existsSync(join(PATHS.cos, 'branch-retirement-archives'))).toBe(false);
     const outcome = await getBranchReconcileOutcome('app-1');
     expect(outcome.retired).toEqual([expect.objectContaining({ branch, head, branchDeleted: true, archiveDir: null })]);
     expect((await getBranchReconcileInventory('app-1')).remaining).toEqual([]);
-    expect(outcome).not.toHaveProperty('retirementObligations');
   });
 
-  it('removes a clean superseded checkout without writing any backup or checkout archive', async () => {
+  it('removes a clean superseded checkout, ignored files included, without writing any backup', async () => {
     const { entry, release } = await supersededCheckout({ clean: true });
+    await appendFile(join(repo, '.git', 'info', 'exclude'), 'ignored.txt\n');
+    await writeFile(join(release.path, 'ignored.txt'), 'generated bytes');
     expect(await reapSuperseded(entry)).toMatchObject({ reaped: [release.branch], skipped: [] });
     expect(existsSync(release.path)).toBe(false);
     expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${release.branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
-    expect(existsSync(join(cosDir, 'abandoned-worktree-backups'))).toBe(false);
-    const outcome = await getBranchReconcileOutcome('app-1');
-    expect(outcome.retired).toContainEqual(expect.objectContaining({
+    expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({
       path: release.path, branch: release.branch, head: release.head, archiveDir: null, branchDeleted: true, retiredAt: expect.any(String),
     }));
   });
@@ -198,29 +221,18 @@ describeHeldCheckoutRecovery(() => {
   it('keeps a superseded checkout with uncommitted work, since nothing is copied before removal', async () => {
     const { entry, release } = await supersededCheckout();
     expect(await reapSuperseded(entry)).toMatchObject({ reaped: [], skipped: [expect.objectContaining({ branch: release.branch, reason: 'worktree-dirty' })] });
-    expect(existsSync(release.path)).toBe(true);
     expect(await readFile(join(release.path, 'initial.txt'), 'utf8')).toBe('unstaged original work\n');
-    expect(existsSync(join(cosDir, 'abandoned-worktree-backups'))).toBe(false);
   });
 
-  it('keeps a superseded checkout held by a live owner and writes no checkout archive', async () => {
+  it('keeps a superseded checkout held by a live owner', async () => {
     const { entry, release } = await supersededCheckout();
     const owners = [{ id: 'new-owner', status: 'running', metadata: { sourceWorkspace: repo, claimBranches: [release.branch] } }];
     const result = await reapSuperseded(entry, async () => owners);
     expect(result.reaped).toEqual([]);
     expect(result.skipped).toHaveLength(1);
-    expect(existsSync(release.path)).toBe(true);
     expect(await registered(release.path)).toBe(true);
     expect((await execGit(['rev-parse', release.branch], repo)).stdout.trim()).toBe(release.head);
     expect((await getBranchReconcileOutcome('app-1'))?.retired || []).toEqual([]);
-  });
-
-  it('discards ignored files with a clean superseded checkout', async () => {
-    const { entry, release } = await supersededCheckout({ clean: true });
-    await appendFile(join(repo, '.git', 'info', 'exclude'), 'ignored.txt\n');
-    await writeFile(join(release.path, 'ignored.txt'), 'generated bytes');
-    expect(await reapSuperseded(entry)).toMatchObject({ reaped: [release.branch], skipped: [] });
-    expect(existsSync(release.path)).toBe(false);
   });
 
   it('preserves a superseded branch whose exact head no longer matches its verdict', async () => {
@@ -228,18 +240,18 @@ describeHeldCheckoutRecovery(() => {
     entry.tip = 'f'.repeat(40);
     entry.verdict.tip = entry.tip;
     expect(await reapSuperseded(entry)).toMatchObject({ reaped: [], skipped: [{ branch: release.branch, reason: 'branch-head-changed' }] });
-    expect(existsSync(release.path)).toBe(true);
     expect(await registered(release.path)).toBe(true);
   });
 
-  it('removes a superseded checkout even when an old obligation has no incarnation proof', async () => {
+  it('removes a superseded checkout that an earlier pass left in the inventory', async () => {
     const { entry, release } = await supersededCheckout({ clean: true });
-    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'retirement-review-pending' }] });
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'retirement-pending' }] });
     expect(await reapSuperseded(entry)).toMatchObject({ reaped: [release.branch], skipped: [] });
     expect(existsSync(release.path)).toBe(false);
+    expect((await getBranchReconcileInventory('app-1')).remaining).toEqual([]);
   });
 
-  it('reports an unverified receipt when retirement persistence fails and writes no checkout archive', async () => {
+  it('reports an unverified receipt when retirement persistence fails', async () => {
     const { entry, release } = await supersededCheckout({ clean: true });
     retirementFaults.failScheduleWrite = 1;
     expect(await reapSuperseded(entry)).toMatchObject({ reaped: [], skipped: [{ branch: release.branch, reason: 'retirement-receipt-unverified' }] });
@@ -247,13 +259,11 @@ describeHeldCheckoutRecovery(() => {
     expect(existsSync(release.path)).toBe(false);
   });
 
-  it('keeps a dirty locked detached checkout and does not copy it', async () => {
+  it('keeps a dirty locked detached checkout', async () => {
     const { path, release } = await heldCheckout('detached-held');
     await writeFile(join(path, 'staged-only.txt'), 'staged work\n');
     await execGit(['add', 'staged-only.txt'], path);
-    const result = await retire(release);
-    expect(result).toEqual({ ok: false, reason: 'worktree-dirty' });
-    expect(existsSync(path)).toBe(true);
+    expect(await retire(release)).toEqual({ ok: false, reason: 'worktree-dirty' });
     expect(await registered(release.path)).toBe(true);
     expect(await lockText(release.path)).toBe(release.lockReason);
   });
@@ -267,24 +277,20 @@ describeHeldCheckoutRecovery(() => {
       await execGit(['commit', '-m', 'feat: synthetic feature (squash)'], repo);
     } });
     const checkoutIdentity = await readRetirementCheckoutIdentity(path);
-    const delayed = { ...release, checkoutIdentity, observedAt: new Date().toISOString(), reason: 'retirement-review-pending' };
+    const delayed = { ...release, checkoutIdentity, observedAt: new Date().toISOString(), reason: 'retirement-pending' };
     await recordBranchReconcileOutcome('app-1', {
       status: 'incomplete', reason: 'holds-remaining', nextAction: 'Recover held checkouts.',
       remaining: [{ ...delayed, managed: false, reason: 'worktree-locked' }, { branch: 'other', reason: 'actionable' }],
     });
-    expect(await retireInventoriedCheckout({ appId: 'app-1', release: { ...release, checkoutIdentity: '0'.repeat(64) } }, { cosDir, readAgents: noOwners }))
+    expect(await retireInventoriedCheckout({ appId: 'app-1', release: { ...release, checkoutIdentity: '0'.repeat(64) } }, { readAgents: noOwners }))
       .toEqual({ ok: false, reason: 'release-not-in-inventory' });
     expect(await isCurrentRetirementCheckout(delayed)).toBe(true);
     await makeClean(path);
-    const result = await retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners });
-
-    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, branchDeleted: true, checkoutIdentity });
-    expect(result.archiveDir).toBeUndefined();
-    expect(existsSync(join(PATHS.cos, 'branch-retirement-archives'))).toBe(false);
+    const result = await retireInventoriedCheckout({ appId: 'app-1', release }, { readAgents: noOwners });
+    expect(result, JSON.stringify(result)).toEqual({ ok: true, branchDeleted: true, checkoutIdentity });
     expect(existsSync(path)).toBe(false);
     expect((await execGit(['branch', '--list', 'feature/held'], repo)).stdout.trim()).toBe('');
     const outcome = await getBranchReconcileOutcome('app-1');
-    expect(outcome.status).toBe('incomplete');
     expect(outcome.remaining).toEqual([{ branch: 'other', reason: 'actionable' }]);
     expect(outcome.retired[0]).toMatchObject({ path: release.path, branch: 'feature/held', branchDeleted: true, archiveDir: null, checkoutIdentity });
     await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [delayed] });
@@ -293,7 +299,6 @@ describeHeldCheckoutRecovery(() => {
     const recreated = { ...delayed, checkoutIdentity: await readRetirementCheckoutIdentity(path), observedAt: new Date().toISOString() };
     expect(recreated.checkoutIdentity).not.toBe(checkoutIdentity);
     expect(await isCurrentRetirementCheckout(delayed)).toBe(false);
-    expect(await isCurrentRetirementCheckout({ ...recreated, head: '0'.repeat(40) })).toBe(false);
     await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [recreated] });
     expect((await getBranchReconcileInventory('app-1')).remaining).toEqual([recreated]);
   });
@@ -311,7 +316,6 @@ describeHeldCheckoutRecovery(() => {
   ])('treats %s since the inventory as an ownership change', async (_label, change, reason) => {
     const { path, release } = await heldCheckout('changed-owner');
     await change(path);
-
     expect(await retire(release)).toEqual({ ok: false, reason });
     expect(existsSync(join(path, 'ignored.txt'))).toBe(true);
   });
@@ -331,23 +335,18 @@ describeHeldCheckoutRecovery(() => {
     expect(await registered(c.path)).toBe(true);
     expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
     expect(await lockText(c.path)).toBe(c.release.lockReason);
-    expect((await execGit(['rev-parse', `refs/heads/${c.release.branch}`], repo)).stdout.trim()).toBe(c.release.head);
   });
 
-  it('keeps the checkout, its content and its original lock when an owner appears after the archive', async () => {
+  it('keeps the checkout, its content and its original lock when an owner appears before removal', async () => {
     const { path, release } = await heldCheckout('owner-arrives', { lockReason: 'handoff pending' });
     let reads = 0;
-    // Clear for the pre-archive check; a live run occupies the checkout by the removal recheck.
+    // Clear at admission; a live run occupies the checkout by the removal recheck.
     const readAgents = async () => (++reads === 1 ? [] : [{ id: 'agent-live', status: 'running', workspacePath: release.path }]);
-
     await makeClean(path);
-    const result = await retire(release, { readAgents });
-
-    expect(result).toMatchObject({ ok: false, reason: 'claim-owner-active' });
+    expect(await retire(release, { readAgents })).toEqual({ ok: false, reason: 'claim-owner-active' });
     expect(await registered(release.path)).toBe(true);
     expect(await lockText(release.path)).toBe('handoff pending');
     expect(existsSync(join(path, 'initial.txt'))).toBe(true);
-    expect(result.archiveDir).toBeUndefined();
   });
 
   it('keeps a clean checkout that becomes dirty before removal', async () => {
@@ -365,81 +364,24 @@ describeHeldCheckoutRecovery(() => {
   it('retires a dirty checkout whose PR merged at its exact head, and keeps one whose head differs', async () => {
     const { path, release } = await heldCheckout('merged-dirty', { branch: 'feature/merged-dirty' });
     await writeFile(join(path, 'scratch.txt'), 'unsaved\n');
-    mergedPrHeads.add(`${release.branch}@${'0'.repeat(40)}`);
+    forge.mergedHeads.add(`${release.branch}@${'0'.repeat(40)}`);
     expect(await retire(release)).toEqual({ ok: false, reason: 'worktree-dirty' });
     expect(existsSync(join(path, 'scratch.txt'))).toBe(true);
-
-    mergedPrHeads.add(`${release.branch}@${release.head}`);
+    forge.mergedHeads.add(`${release.branch}@${release.head}`);
     expect(await retire(release)).toMatchObject({ ok: true });
-    mergedPrHeads.clear();
     expect(existsSync(path)).toBe(false);
   });
 
-  it('keeps a dirty checkout when a nested repository is present and writes no archive', async () => {
-    const { path, release } = await heldCheckout('archive-fails');
+  it('keeps a dirty checkout when a nested repository is present', async () => {
+    const { path, release } = await heldCheckout('nested-repository');
     await mkdir(join(path, 'nested'));
     await execGit(['init', '-q'], join(path, 'nested'));
-
-    const result = await retire(release);
-
-    expect(result).toEqual({ ok: false, reason: 'worktree-dirty' });
+    expect(await retire(release)).toEqual({ ok: false, reason: 'worktree-dirty' });
     expect(await lockText(release.path)).toBe('synthetic external owner');
     expect(existsSync(join(path, 'nested', '.git'))).toBe(true);
   });
 
-  it.skipIf(!SYMLINKS)('preserves the checkout when a link target cannot be represented losslessly in archive metadata', async () => {
-    const { path, release } = await heldCheckout('opaque-link', { branch: 'feature/opaque-link' });
-    const target = Buffer.from([0xff]);
-    await symlink(target, join(path, 'opaque-link'));
-
-    expect(await retire(release)).toEqual({ ok: false, reason: 'worktree-dirty' });
-    expect(await readlink(join(path, 'opaque-link'), { encoding: 'buffer' })).toEqual(target);
-    expect(await lockText(path)).toBe('synthetic external owner');
-    expect(await registered(path)).toBe(true);
-    expect((await execGit(['rev-parse', release.branch], repo)).stdout.trim()).toBe(release.head);
-  });
-
-  // #12682: archive I/O ran inside the shared ownership lock and starved every
-  // claim-ownership check behind its 15 s queue budget for minutes.
-  it('rechecks a clean checkout with the ownership queue free and removes it without a copy', async () => {
-    const { path, release } = await heldCheckout('fenced', { branch: 'feature/fenced' });
-    await makeClean(path);
-    let paused;
-    let resume;
-    const pausedRecheck = new Promise(resolve => { paused = resolve; });
-    injected.onUnlockedStatus = () => new Promise(resolve => { resume = resolve; paused(); });
-    const admission = branch => checkReconcileOwnership({ appId: 'app-1', branch },
-      { getAgents: async () => [], getActiveAgentIds: () => [], readCompletionHold: async () => null });
-
-    const retiring = retire(release);
-    await pausedRecheck;
-    injected.onUnlockedStatus = null;
-    expect(await withClaimOwnershipLock(() => 'settled')).toBe('settled');
-    expect(await admission('feature/fenced')).toEqual({ admitted: false, reason: 'checkout-retirement-reserved' });
-    expect(await admission('feature/unrelated')).toEqual({ admitted: true });
-    expect(await retireInventoriedCheckout({ appId: 'app-1', release }, { cosDir, readAgents: noOwners }))
-      .toEqual({ ok: false, reason: 'checkout-retirement-reserved' });
-    expect(existsSync(path)).toBe(true);
-
-    resume();
-    expect(await retiring).toMatchObject({ ok: true, branchDeleted: true });
-    expect(existsSync(path)).toBe(false);
-    expect(await admission('feature/fenced')).toEqual({ admitted: true });
-  });
-
-  it('keeps a clean checkout that gains a file during the unlocked recheck', async () => {
-    const { path, release } = await heldCheckout('mid-recheck');
-    await makeClean(path);
-    injected.onUnlockedStatus = async () => {
-      injected.onUnlockedStatus = null;
-      await writeFile(join(path, 'late.txt'), 'late work\n');
-    };
-    expect(await retire(release)).toEqual({ ok: false, reason: 'worktree-dirty' });
-    expect(await registered(release.path)).toBe(true);
-    expect(await lockText(release.path)).toBe('synthetic external owner');
-  });
-
-  it('refuses unmerged work and a manual completion handoff before archiving anything', async () => {
+  it('refuses unmerged work, a manual completion handoff and unreadable policy before removing anything', async () => {
     const unmerged = await heldCheckout('unmerged');
     await execGit(['worktree', 'unlock', unmerged.path], repo);
     await execGit(['commit', '--allow-empty', '-m', 'feat: synthetic unmerged work'], unmerged.path);
@@ -451,396 +393,177 @@ describeHeldCheckoutRecovery(() => {
     await makeClean(handoff.path);
     injected.policies = [{ id: 'agent-done', status: 'completed', startedAt: '2026-01-01T00:00:00.000Z',
       metadata: { sourceWorkspace: repo, worktreeBranch: 'feature/handoff', prCompletionPolicy: 'leave-open' } }];
-    expect(await retire(handoff.release))
-      .toEqual({ ok: false, reason: 'pr-completion-human-handoff' });
+    expect(await retire(handoff.release)).toEqual({ ok: false, reason: 'pr-completion-human-handoff' });
+    injected.policies = null;
+    expect(await retire(handoff.release)).toEqual({ ok: false, reason: 'pr-completion-policy-unavailable' });
     expect(existsSync(handoff.path)).toBe(true);
+    expect(await lockText(handoff.path)).toBe(handoff.release.lockReason);
   });
 
-  // Uniquely catches the gap between exact merged delivery and an abandoned
-  // prototype whose implementation was replaced rather than merged verbatim.
-  it.each([false, true])('retires an explicitly accepted published prototype only after durable small-evidence preservation, replacement changed=%s', async superseded => {
-    const c = await reviewedCheckout('published-prototype', { superseded });
-    c.forge.prHead = c.forge.mergeCommit;
-    c.forge.firstCommit = c.forge.mergeCommit;
-    c.forge.changeBase = (await execGit(['rev-parse', `${c.forge.mergeCommit}^`], repo)).stdout.trim();
-    c.forge.sourceSupersessionHead = c.release.head;
-    c.forge.remoteHead = `${c.release.head}\trefs/heads/${c.release.branch}`;
-    c.forge.sourcePreservation = { head: c.release.head, remoteRef: `refs/heads/${c.release.branch}`,
-      prUrl: 'https://github.com/example/repo/pull/41' };
-    await writeFile(join(c.path, 'ignored.txt'), 'small private prototype evidence');
-    const input = { appId: 'app-1', release: c.release, prUrl: c.forge.prUrl, kind: 'preserved-supersession' };
-    const prepared = await prepareInventoriedCheckoutRetirement(input, c.opts);
-    expect(prepared, prepared.reason).toMatchObject({ ok: true, review: { comparison: { disposition: 'review-supersession', exactMergedDelivery: false } } });
-    const review = { prUrl: c.forge.prUrl, kind: input.kind, digest: prepared.review.digest, acceptSuperseded: false };
-    expect(await retireInventoriedCheckout({ appId: input.appId, release: c.release, review }, c.opts))
-      .toMatchObject({ ok: false, reason: 'retirement-supersession-not-accepted' });
-    expect(existsSync(c.path)).toBe(true);
-    retirementFaults.onRemove = async () => {
-      const outcome = await getBranchReconcileOutcome('app-1');
-      const saved = outcome.supersededSourceEvidence[review.digest].proof;
-      expect(saved.source.files).toContainEqual(expect.objectContaining({ path: 'ignored.txt',
-        data: Buffer.from('small private prototype evidence').toString('base64') }));
-      expect(outcome.retired || []).toEqual([]);
-    };
-    review.acceptSuperseded = true;
-    const { recordSupersededCheckoutPreservation } = await import('./branchReconcileOutcome.js');
-    // A changed review replaces an unconsumed preparation only while its
-    // original physical generation still exists. No retirement ledger is used.
-    (await getBranchReconcileOutcome('app-1')).supersededSourceEvidence = {
-      stale: { proof: { release: { ...c.release, head: 'a'.repeat(40), checkoutIdentity: await readRetirementCheckoutIdentity(c.path) }, data: 'x'.repeat(1024 * 1024) } },
-    };
-    expect(await recordSupersededCheckoutPreservation('app-1', c.release, prepared.review)).toBe(true);
-    expect(Object.keys((await getBranchReconcileOutcome('app-1')).supersededSourceEvidence)).toEqual([review.digest]);
-    const preservedAt = (await getBranchReconcileOutcome('app-1')).supersededSourceEvidence[review.digest].preservedAt;
-    // Simulate restart after preparation but before removal: replay uses saved
-    // evidence, creates no receipt early, and preserves the original timestamp.
-    injected.schedule = JSON.parse(JSON.stringify(injected.schedule));
-    expect(await recordSupersededCheckoutPreservation('app-1', c.release, prepared.review)).toBe(true);
-    expect((await getBranchReconcileOutcome('app-1')).supersededSourceEvidence[review.digest].preservedAt).toBe(preservedAt);
-    const retirement = await retireInventoriedCheckout({ appId: input.appId, release: c.release, review }, c.opts);
-    expect(retirement, retirement.detail || retirement.reason).toMatchObject({ ok: true, branchDeleted: true });
-    expect(existsSync(c.path)).toBe(false);
-    const outcome = await getBranchReconcileOutcome('app-1');
-    expect(outcome.retired).toContainEqual(expect.objectContaining({ head: c.release.head,
-      disposition: 'superseded-preserved', supersessionDigest: review.digest, archiveDir: null }));
-    await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
-    expect((await getBranchReconcileOutcome('app-1')).remaining).toEqual([]);
+  it('retires a pending-merge receipt checkout at its exact merged head, uncommitted files included', async () => {
+    const { path, release } = await mergedCheckout('receipt', { merge: 'none' });
+    await writeFile(join(path, 'feature.txt'), 'edited after handoff\n');
+    const receipt = (more = {}) => ({ repoPath: repo, release, prUrl: 'https://github.com/example/repo/pull/42', expectedHeadSha: release.head, ...more });
+    forge.delivery = { prHead: 'f'.repeat(40) };
+    expect(await retirePendingMergeCheckout(receipt())).toEqual({ ok: false, reason: 'receipt-pr-head-changed' });
+    forge.delivery = new Error('merged-pr-remote-head-changed');
+    expect(await retirePendingMergeCheckout(receipt())).toEqual({ ok: false, reason: 'merged-pr-remote-head-changed' });
+    expect(await retirePendingMergeCheckout(receipt({ release: { ...release, locked: true, lockReason: 'owner' } }))).toEqual({ ok: false, reason: 'receipt-checkout-locked' });
+    expect(await retirePendingMergeCheckout(receipt({ expectedHeadSha: 'e'.repeat(40) }))).toEqual({ ok: false, reason: 'receipt-checkout-head-unverified' });
+    expect(await readFile(join(path, 'feature.txt'), 'utf8')).toBe('edited after handoff\n');
+    forge.delivery = { prHead: release.head };
+    expect(await retirePendingMergeCheckout(receipt(), { readAgents: noOwners })).toMatchObject({ ok: true, branchDeleted: true });
+    expect(existsSync(path)).toBe(false);
+    expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({ path: release.path, branch: release.branch, branchDeleted: true }));
   });
 
-  it.each(['changed-source', 'persistence-failure', 'preservation-capacity', 'changed-private-evidence', 'changed-preservation'])('preserves the original when supersession confirmation encounters %s', async scenario => {
-    const c = await reviewedCheckout(`prototype-confirm-${scenario}`, { superseded: true });
-    c.forge.prHead = c.forge.mergeCommit;
-    c.forge.firstCommit = c.forge.mergeCommit;
-    c.forge.changeBase = (await execGit(['rev-parse', `${c.forge.mergeCommit}^`], repo)).stdout.trim();
-    c.forge.sourceSupersessionHead = c.release.head;
-    c.forge.remoteHead = `${c.release.head}\trefs/heads/${c.release.branch}`;
-    c.forge.sourcePreservation = { head: c.release.head, remoteRef: `refs/heads/${c.release.branch}`, prUrl: 'https://github.com/example/repo/pull/41' };
-    const mutateAfterPreservation = scenario === 'changed-private-evidence' || scenario === 'changed-preservation';
-    if (mutateAfterPreservation) await writeFile(join(c.path, 'ignored.txt'), 'original private evidence');
-    const prepared = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release: c.release,
-      prUrl: c.forge.prUrl, kind: 'preserved-supersession' }, c.opts);
-    expect(prepared, prepared.reason).toMatchObject({ ok: true });
-    if (scenario === 'changed-source') c.forge.remoteHead = null;
-    else if (scenario === 'persistence-failure') retirementFaults.failScheduleWrite = retirementFaults.scheduleWrites + 1;
-    else if (mutateAfterPreservation) {
-      let mutations = 0;
-      c.opts.beforeMutation = async () => {
-        // Admission is first; the second boundary follows durable preservation.
-        if (++mutations !== 2) return;
-        const saved = (await getBranchReconcileOutcome('app-1')).supersededSourceEvidence[prepared.review.digest];
-        const file = saved.proof.source.files.find(entry => entry.scope === 'content' && entry.path === 'ignored.txt');
-        expect(file.data).toBe(Buffer.from('original private evidence').toString('base64'));
-        if (scenario === 'changed-private-evidence') await writeFile(join(c.path, 'ignored.txt'), 'changed private evidence');
-        else file.data = Buffer.from('changed saved evidence').toString('base64');
-      };
-    }
-    else {
-      const outcome = injected.schedule.executions['task:branch-reconcile'].perApp['app-1'].branchReconcileOutcome;
-      outcome.supersededSourceEvidence = { completed: { proof: { data: 'x'.repeat(1024 * 1024) } } };
-    }
-    const result = await retireInventoriedCheckout({ appId: 'app-1', release: c.release,
-      review: { prUrl: c.forge.prUrl, kind: 'preserved-supersession', digest: prepared.review.digest, acceptSuperseded: true } }, c.opts);
-    const reasons = { 'changed-source': 'retirement-source-not-published', 'changed-private-evidence': 'retirement-review-changed',
-      'changed-preservation': 'retirement-source-preservation-unavailable' };
-    expect(result).toMatchObject({ ok: false, reason: reasons[scenario] || 'checkout-not-disposable' });
-    expect(existsSync(c.path)).toBe(true);
-    expect((await execGit(['rev-parse', c.release.branch], repo)).stdout.trim()).toBe(c.release.head);
-    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
-    if (mutateAfterPreservation) {
-      expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe(scenario === 'changed-private-evidence'
-        ? 'changed private evidence' : 'original private evidence');
-      expect(await lockText(c.path)).toBe(c.release.lockReason);
-    }
-    if (scenario === 'preservation-capacity') expect((await getBranchReconcileOutcome('app-1'))
-      .supersededSourceEvidence.completed.proof.data).toHaveLength(1024 * 1024);
+  it('keeps a receipt checkout whose head moved after the handoff', async () => {
+    const { path, release } = await mergedCheckout('receipt-moved', { merge: 'none' });
+    await execGit(['commit', '--allow-empty', '-m', 'feat: work after handoff'], path);
+    forge.delivery = { prHead: release.head };
+    expect(await retirePendingMergeCheckout({ repoPath: repo, release, prUrl: 'https://github.com/example/repo/pull/42',
+      expectedHeadSha: release.head }, { readAgents: noOwners })).toEqual({ ok: false, reason: 'checkout-head-changed' });
+    expect(await registered(path)).toBe(true);
   });
 
-  it.each(['unpublished-source', 'private-commit', 'large-private-file', 'index-recovery', 'active-operation', 'unknown-private-ref'])('keeps a prototype with %s', async scenario => {
-    const c = await reviewedCheckout(`prototype-${scenario}`, { superseded: true });
-    c.forge.prHead = c.forge.mergeCommit;
-    c.forge.firstCommit = c.forge.mergeCommit;
-    c.forge.changeBase = (await execGit(['rev-parse', `${c.forge.mergeCommit}^`], repo)).stdout.trim();
-    c.forge.sourceSupersessionHead = c.release.head;
-    c.forge.remoteHead = `${c.release.head}\trefs/heads/${c.release.branch}`;
-    c.forge.sourcePreservation = { head: c.release.head, remoteRef: `refs/heads/${c.release.branch}`, prUrl: 'https://github.com/example/repo/pull/41' };
-    if (scenario === 'unpublished-source') c.forge.remoteHead = null;
-    if (scenario === 'large-private-file') await writeFile(join(c.path, 'ignored.txt'), Buffer.alloc(64 * 1024 + 1));
-    if (scenario === 'index-recovery') {
-      const blob = (await execGit(['rev-parse', 'HEAD:feature.txt'], c.path)).stdout.trim();
-      await new Promise((resolve, reject) => {
-        const child = execFile('git', ['update-index', '--index-info'], { cwd: c.path }, error => error ? reject(error) : resolve());
-        child.stdin.end(`0 ${'0'.repeat(40)}\tfeature.txt\n${[1, 2, 3].map(stage => `100644 ${blob} ${stage}\tfeature.txt\n`).join('')}`);
-      });
-      await execGit(['add', 'feature.txt'], c.path);
-      expect((await execGit(['ls-files', '--resolve-undo'], c.path)).stdout).toContain('feature.txt');
-    }
-    if (scenario === 'private-commit') {
-      const unique = (await execGit(['commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'unpublished private work'], c.path)).stdout.trim();
-      await writeFile(join(c.admin, 'ORIG_HEAD'), `${unique}\n`);
-    }
-    // Private recovery references the evidence reader cannot interpret hold the checkout.
-    if (scenario === 'active-operation') {
-      await mkdir(join(c.admin, 'sequencer'), { recursive: true });
-      await writeFile(join(c.admin, 'sequencer', 'todo'), `pick ${c.release.head}\n`);
-    }
-    if (scenario === 'unknown-private-ref') {
-      await mkdir(join(c.admin, 'refs', 'worktree'), { recursive: true });
-      await writeFile(join(c.admin, 'refs', 'worktree', 'unknown'), 'ref: HEAD^{tree}\n');
-    }
-    const result = await prepareInventoriedCheckoutRetirement({ appId: 'app-1', release: c.release,
-      prUrl: c.forge.prUrl, kind: 'preserved-supersession' }, c.opts);
-    const reasons = { 'unpublished-source': 'retirement-source-not-published', 'private-commit': 'retirement-source-private-work-unpublished',
-      'index-recovery': 'retirement-source-index-recovery-unpublished', 'large-private-file': 'retirement-source-evidence-too-large',
-      'active-operation': 'retirement-operation-active', 'unknown-private-ref': 'retirement-local-evidence-unavailable' };
-    expect(result).toMatchObject({ ok: false, reason: reasons[scenario] });
-    expect(existsSync(c.path)).toBe(true);
-    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+  it('reads merged delivery as merged, unmerged or unknown without changing the checkout', async () => {
+    const merged = await mergedCheckout('delivery-merged');
+    expect(await readMergedDelivery(repo, merged.release)).toBe(true);
+    const unmerged = await mergedCheckout('delivery-unmerged', { merge: 'none' });
+    expect(await readMergedDelivery(repo, unmerged.release)).toBe(false);
+    forge.unreadable = true;
+    expect(await readMergedDelivery(repo, unmerged.release)).toBeNull();
+    forge.unreadable = false;
+    // Every commit on main, but uncommitted work stays unless the PR merged at this head.
+    await writeFile(join(merged.path, 'wanted.txt'), 'uncommitted\n');
+    expect(await readMergedDelivery(repo, merged.release)).toBe(false);
+    forge.mergedHeads.add(`${merged.release.branch}@${merged.release.head}`);
+    expect(await readMergedDelivery(repo, merged.release)).toBe(true);
+    expect(await readFile(join(merged.path, 'wanted.txt'), 'utf8')).toBe('uncommitted\n');
+    // A later merged head that contains the work retires it only when clean.
+    forge.mergedHeads.add(`${unmerged.release.branch}@${'c'.repeat(40)}`);
+    forge.delivery = { prHead: 'c'.repeat(40), scopeProof: 'ancestor-of-delivered-head', deliveredAncestorHead: unmerged.release.head };
+    expect(await readMergedDelivery(repo, unmerged.release)).toBe(true);
+    forge.delivery = new Error('merged-pr-forge-unavailable');
+    expect(await readMergedDelivery(repo, unmerged.release)).toBeNull();
   });
 
-  async function moduleCache(checkout, { count = 1, bytes = 26 * 1024 * 1024, ignored = true,
-    tagged = true, name = 'a'.repeat(40),
-    // Match Vitest's producer: SHA-256(lockfile contents), truncated to eight.
-    metadata = { lockfileHash: createHash('sha256').update('synthetic lockfile').digest('hex').slice(0, 8) } } = {}) {
-    if (ignored) await writeFile(join(repo, '.git', 'info', 'exclude'), 'server/.cache/\n');
-    const root = join(checkout.path, 'server/.cache/vitest/modules');
-    await mkdir(root, { recursive: true });
-    if (tagged) await writeFile(join(root, 'CACHEDIR.TAG'),
-      'Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by Vitest.\n');
-    await writeFile(join(root, '_metadata.json'), JSON.stringify(metadata));
-    for (let i = 0; i < count; i++) {
-      const path = join(root, count === 1 ? name : i.toString(16).padStart(40, '0'));
-      await writeFile(path, 'synthetic compiled module\n');
-      await truncate(path, bytes);
-    }
-    return root;
-  }
-
-  it.each(['reviewed', 'merged'])('discards ignored files through the %s retirement boundary', async mode => {
-    const c = await reviewedCheckout(`ignored-payload-${mode}`, { normalMerge: true, ignoredPayload: true });
-    const prepared = await c.prepare();
-    expect(prepared.ok).toBe(true);
-    const result = mode === 'reviewed' ? await c.confirm(prepared.review)
-      : await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, { ...c.opts, settleMergedReviewObligation: true });
-    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
-    expect(existsSync(c.path)).toBe(false);
-    expect(await registered(c.path)).toBe(false);
-  });
-
-  it.each([
-    { kind: 'oversized-file', cache: {} },
-    { kind: 'oversized-total', cache: { count: 12, bytes: 22 * 1024 * 1024 } },
-  ])('retires a reviewed checkout whose ignored module cache exceeds the review budget: $kind', async ({ kind, cache }) => {
-    const c = await reviewedCheckout(`disposable-cache-${kind}`);
-    await moduleCache(c, cache);
-    const prepared = await c.prepare();
-    expect(prepared).toMatchObject({ ok: true, review: { comparison: { disposition: 'integrated' } } });
-    const retired = await c.confirm(prepared.review);
-    expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
-    expect(retired.archiveDir ?? null).toBeNull();
-    expect(existsSync(c.path)).toBe(false);
-    expect(await registered(c.path)).toBe(false);
-  });
-
-  // Untracked (not ignored) output is still bound by the review budget, even when cache-shaped.
-  it('retains large untracked content that only resembles disposable module cache', async () => {
-    const c = await reviewedCheckout('unverified-cache-untracked');
-    const root = await moduleCache(c, { ignored: false });
-    expect(await c.prepare()).toMatchObject({ ok: false, reason: 'retirement-archive-limit-exceeded' });
-    expect(await registered(c.path)).toBe(true);
-    expect((await stat(join(root, 'a'.repeat(40)))).size).toBe(26 * 1024 * 1024);
-  });
-
-  async function cacheDirectoryLink(checkout) {
-    await writeFile(join(repo, '.git', 'info', 'exclude'), 'server/.cache/\n');
-    const outside = join(scratch, 'wanted-outside-cache');
+  // A merged checkout holding an ignored link to an outside directory.
+  async function linkedCheckout(name) {
+    const checkout = await mergedCheckout(name);
+    await appendFile(join(repo, '.git', 'info', 'exclude'), 'linked-dir\n');
+    const outside = join(scratch, `outside-${name}`);
     await mkdir(outside);
-    const wanted = join(outside, 'a'.repeat(40));
-    await writeFile(wanted, 'wanted outside bytes');
-    await truncate(wanted, 26 * 1024 * 1024);
-    const before = await sha256File(wanted);
-    const root = join(checkout.path, 'server/.cache/vitest');
-    await mkdir(root, { recursive: true });
-    const link = join(root, 'modules');
+    await writeFile(join(outside, 'wanted.txt'), 'outside bytes\n');
+    const link = join(checkout.path, 'linked-dir');
     await symlink(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
-    return { wanted, before, link };
+    return { ...checkout, outside, link, target: await readlink(link) };
   }
 
-  it.each(['native', 'traversed', 'directory'].flatMap(listing => [false, true].map(exact => ({ listing, exact }))))
-  ('never follows a cache directory link or removes the outside content: $listing listing, exact: $exact', async ({ listing, exact }) => {
-    const c = await reviewedCheckout('linked-cache');
-    if (exact) c.forge.scopeProof = 'exact-delivered-head';
-    const { wanted, before, link } = await cacheDirectoryLink(c);
-    if (listing !== 'native') {
-      // Git for Windows can enumerate junction descendants as ordinary files.
-      // Reproduce that boundary on every OS while retaining a real link.
-      injected.onOtherFiles = output => !existsSync(link) ? output
-        : [...output.split('\0').filter(rel => rel && !rel.startsWith('server/.cache/vitest/modules')),
-          ...(listing === 'directory' ? ['server/.cache/vitest/modules/']
-            : [`server/.cache/vitest/modules/${'a'.repeat(40)}`, 'server/.cache/vitest/modules/missing'])].join('\0') + '\0';
-    }
-    const prepared = await c.prepare();
-    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true });
-    const retired = await c.confirm(prepared.review);
-    expect(retired, JSON.stringify(retired)).toMatchObject({ ok: true, branchDeleted: true });
+  it.skipIf(!SYMLINKS).each(['native', 'descendant'])('never follows a directory link while retiring, with a %s listing', async listing => {
+    const c = await linkedCheckout(`linked-${listing}`);
+    // Git for Windows can enumerate a junction's descendants as ordinary files.
+    if (listing === 'descendant') injected.onOtherFiles = output => output.split('\0')
+      .map(entry => (entry === 'linked-dir' ? 'linked-dir/wanted.txt' : entry)).join('\0');
+    expect(await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, { readAgents: noOwners })).toMatchObject({ ok: true, branchDeleted: true });
     expect(existsSync(c.path)).toBe(false);
-    expect(await registered(c.path)).toBe(false);
-    expect(await sha256File(wanted)).toBe(before);
+    expect(await readFile(join(c.outside, 'wanted.txt'), 'utf8')).toBe('outside bytes\n');
   });
 
-  it('restores reviewed cache directory links when Git refuses removal', async () => {
-    const c = await reviewedCheckout('linked-cache-removal-refused');
-    const { wanted, before, link } = await cacheDirectoryLink(c);
-    const target = await readlink(link);
-    const prepared = await c.prepare();
-    expect(prepared, JSON.stringify(prepared)).toMatchObject({ ok: true });
-    retirementFaults.onRemove = vi.fn(async () => {
-      expect(existsSync(link)).toBe(false);
-      expect(await sha256File(wanted)).toBe(before);
+  it.skipIf(!SYMLINKS)('restores unlinked directory links when Git refuses removal', async () => {
+    const c = await linkedCheckout('linked-refused');
+    let linkGoneAtRemoval = null;
+    retirementFaults.onRemove = async () => {
+      linkGoneAtRemoval = !(await lstat(c.link).catch(() => null));
       throw new Error('synthetic Git removal refusal');
-    });
-    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false });
-    expect(retirementFaults.onRemove).toHaveBeenCalledTimes(1);
-    expect(await readlink(link)).toBe(target);
-    expect(await sha256File(wanted)).toBe(before);
-    expect(existsSync(c.path)).toBe(true);
+    };
+    expect(await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, { readAgents: noOwners })).toMatchObject({ ok: false });
+    expect(linkGoneAtRemoval).toBe(true);
+    expect(await readlink(c.link)).toBe(c.target);
+    expect(await readFile(join(c.outside, 'wanted.txt'), 'utf8')).toBe('outside bytes\n');
     expect(await registered(c.path)).toBe(true);
   });
+});
 
-  it.each(['delivered', 'unpublished-tip', 'lagging-local-default', 'merge-not-in-default'])(
-    'keeps exact squash delivery retirement scoped when shared files change: %s', async scenario => {
-      const c = await reviewedCheckout(`exact-squash-${scenario}`, { multipleCommits: true, superseded: true });
-      if (scenario === 'unpublished-tip') {
-        await writeFile(join(c.path, 'unpublished.txt'), 'still wanted local work\n');
-        await execGit(['add', 'unpublished.txt'], c.path);
-        await execGit(['commit', '-m', 'unpublished local continuation'], c.path);
-        c.release.head = (await execGit(['rev-parse', 'HEAD'], c.path)).stdout.trim();
-        await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'pr-completion-review-required' }] });
-      }
-      if (scenario === 'lagging-local-default') {
-        await execGit(['checkout', '--detach', 'main'], repo);
-        await execGit(['branch', '-f', 'main', c.forge.changeBase], repo);
-      }
-      if (scenario === 'merge-not-in-default') c.forge.defaultHead = c.forge.changeBase;
-      const prepared = await c.prepare();
-      if (scenario === 'merge-not-in-default') {
-        expect(prepared).toMatchObject({ ok: false, reason: 'retirement-merge-not-in-default' });
-        expect(await registered(c.path)).toBe(true);
-        expect(existsSync(c.path)).toBe(true);
-        return;
-      }
-      expect(prepared).toMatchObject({ ok: true, review: { comparison: { disposition: scenario === 'unpublished-tip' ? 'review-supersession' : 'integrated' } } });
-      const result = await retireInventoriedCheckout({ appId: 'app-1', release: c.release,
-        review: { prUrl: c.forge.prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, c.opts);
-      if (scenario !== 'unpublished-tip') {
-        expect(result).toMatchObject({ ok: true, branchDeleted: true });
-        expect(await registered(c.path)).toBe(false);
-        expect(existsSync(c.path)).toBe(false);
-      } else {
-        expect(result.ok).toBe(false);
-        expect(await registered(c.path)).toBe(true);
-        expect(existsSync(c.path)).toBe(true);
-        if (scenario === 'unpublished-tip') expect(await readFile(join(c.path, 'unpublished.txt'), 'utf8')).toBe('still wanted local work\n');
-      }
-    });
-  it.each(['snapshot', 'forge'])('keeps unrelated ownership admission available while preview %s work is pending', async phase => {
-    const c = await reviewedCheckout(`preview-queue-${phase}`);
-    let paused;
-    let resume;
-    const entered = new Promise(resolve => { paused = resolve; });
-    const pending = new Promise(resolve => { resume = resolve; });
-    const pause = async () => { paused(); await pending; };
-    if (phase === 'snapshot') injected.onSnapshot = pause;
-    else c.opts.readForge = async () => { await pause(); return c.forge; };
-    const preparing = c.prepare();
-    try {
-      await entered;
-      expect(await withClaimOwnershipLock(() => 'settled')).toBe('settled');
-      expect(await checkReconcileOwnership({ appId: 'app-1', branch: 'feature/unrelated' }, {
-        getAgents: async () => [], getActiveAgentIds: () => [], readCompletionHold: async () => null,
-      })).toEqual({ admitted: true });
-    } finally {
-      resume();
+describe('automatic retirement of completed local work', () => {
+  const app = { id: 'example', repoPath: '/example/repo' };
+  const head = 'a'.repeat(40);
+  const branch = { branch: 'claim/issue-42', tip: head, worktreePath: '/example/checkout', isMerged: false,
+    rule: 'completion-policy', completionPolicyReason: 'pr-completion-review-required' };
+  const tree = { branch: branch.branch, path: branch.worktreePath, head, managed: true, locked: false, lockReason: null };
+  const scan = (b = {}, t = {}) => ({ wip: [{ ...branch, ...b }], worktreeInventory: [{ ...tree, ...t }] });
+  const release = { branch: tree.branch, path: tree.path, head, locked: false, lockReason: null };
+  const deps = (extra = {}) => ({ retire: vi.fn(async () => ({ ok: true, branchDeleted: true })), readForgeDelivery: vi.fn(async () => 'none'),
+    retireReleaseCandidates: vi.fn(async () => ({ retired: [], held: [] })), ...extra });
+
+  unitIt('retires a clean checkout whose commits are all on the default branch, binding the observed row', async () => {
+    const d = deps();
+    const observation = { observedAt: '2026-10-23T00:00:00Z', checkoutIdentity: 'original-checkout' };
+    expect(await retireCompletedCheckouts(app, scan({ isMerged: true }, observation), d)).toEqual({ held: [], retired: [{ ...observation, ...release }] });
+    // The forge answer read for the pass is handed on, so the service does not ask again.
+    expect(d.retire).toHaveBeenCalledWith({ appId: app.id, release: { ...observation, ...release } }, { beforeMutation: expect.any(Function), delivery: 'none' });
+  });
+
+  unitIt('retires a dirty or squash-merged checkout only when its PR merged at the exact head', async () => {
+    const d = deps({ readForgeDelivery: vi.fn(async () => 'exact') });
+    expect(await retireCompletedCheckouts(app, scan({ worktreeDirty: true }), d)).toMatchObject({ retired: [release] });
+    expect(d.readForgeDelivery).toHaveBeenCalledWith(app.repoPath, branch.branch, head);
+    expect(d.retire).toHaveBeenCalledWith({ appId: app.id, release }, { beforeMutation: expect.any(Function), delivery: 'exact' });
+    const contained = deps({ readForgeDelivery: vi.fn(async () => 'contained') });
+    expect(await retireCompletedCheckouts(app, scan(), contained)).toMatchObject({ retired: [release] });
+    expect(contained.retire).toHaveBeenCalledWith({ appId: app.id, release }, { beforeMutation: expect.any(Function), delivery: 'contained' });
+    for (const [delivery, b] of [['none', {}], ['none', { worktreeDirty: true }], ['none', { isMerged: true, worktreeDirty: true }],
+      ['contained', { worktreeDirty: true }], [null, {}]]) {
+      const held = deps({ readForgeDelivery: vi.fn(async () => delivery) });
+      expect(await retireCompletedCheckouts(app, scan(b), held)).toEqual({ held: [], retired: [] });
+      expect(held.retire).not.toHaveBeenCalled();
     }
-    expect(await preparing).toMatchObject({ ok: true });
-    expect(await registered(c.path)).toBe(true);
-    expect(await lockText(c.path)).toBe(c.release.lockReason);
   });
 
-  it.each([
-    ['owner', 'claim-owner-active'],
-    ['unreadable-owner', 'claim-ownership-unreadable'],
-    ['handoff', 'pr-completion-human-handoff'],
-    ['policy', 'retirement-review-changed'],
-    ['head', 'checkout-head-changed'],
-    ['lock', 'checkout-lock-changed'],
-    ['pointer', 'checkout-identity-changed'],
-    ['administration', 'checkout-identity-changed'],
-  ])('refuses preview when %s changes during unlocked evidence construction', async (change, reason) => {
-    const c = await reviewedCheckout(`preview-race-${change}`, { ignoredPayload: true });
-    let owners = [];
-    c.opts.readAgents = async () => owners;
-    injected.onPreviewEvidence = async () => {
-      injected.onPreviewEvidence = null;
-      if (change === 'owner') owners = [{ id: 'agent-live', status: 'running', workspacePath: c.path }];
-      if (change === 'unreadable-owner') owners = null;
-      if (change === 'handoff') injected.policies[0].metadata.prCompletionPolicy = 'leave-open';
-      if (change === 'policy') injected.policies[0].id = 'different-completed-agent';
-      if (change === 'head') await execGit(['commit', '--allow-empty', '-m', 'new work during preview'], c.path);
-      if (change === 'lock') await writeFile(join(c.admin, 'locked'), 'new owner lock');
-      if (change === 'pointer') {
-        const pointer = join(c.path, '.git');
-        const bytes = await readFile(pointer);
-        await rename(pointer, join(scratch, 'original-pointer'));
-        await writeFile(pointer, bytes);
-      }
-      if (change === 'administration') {
-        const original = join(scratch, 'original-administration');
-        await rename(c.admin, original);
-        await cp(original, c.admin, { recursive: true });
-      }
-    };
-    expect(await c.prepare()).toMatchObject({ ok: false, reason });
-    expect(await registered(c.path)).toBe(true);
-    expect(await readFile(join(c.path, 'ignored.txt'), 'utf8')).toBe('ignored work\n');
+  unitIt.each([
+    [{ liveOwnerReason: 'claim-owner-active' }, {}],
+    [{ completionPolicyReason: 'pr-completion-human-handoff' }, {}],
+    [{ rule: 'draft', openPr: { isDraft: true, headRefOid: 'c'.repeat(40) } }, {}],
+    [{ openPr: { isDraft: false, headRefOid: head } }, {}],
+    [{ openPr: { isDraft: false, headRefOid: null } }, {}],
+    [{ worktreeStatusUnavailable: true }, {}],
+    [{}, { locked: true }], [{}, { managed: false }], [{}, { head: 'b'.repeat(40) }],
+  ])('never retires an unsafe or intentionally held candidate: %j %j', async (b, t) => {
+    const d = deps({ readForgeDelivery: vi.fn(async () => 'exact') });
+    for (const isMerged of [false, true]) {
+      expect(await retireCompletedCheckouts(app, scan({ isMerged, ...b }, t), d)).toEqual({ held: [], retired: [] });
+    }
+    expect(d.retire).not.toHaveBeenCalled();
   });
 
-  it('rechecks local work at confirmation after an unlocked preview observes an older tree', async () => {
-    const c = await reviewedCheckout('preview-content-change');
-    injected.onPreviewEvidence = async () => {
-      injected.onPreviewEvidence = null;
-      await writeFile(join(c.path, 'wanted.txt'), 'written during preview\n');
-    };
-    const prepared = await c.prepare();
-    expect(prepared.ok).toBe(true);
-    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false, reason: 'worktree-dirty' });
-    expect(await readFile(join(c.path, 'wanted.txt'), 'utf8')).toBe('written during preview\n');
-    expect(await lockText(c.path)).toBe(c.release.lockReason);
+  unitIt('retires a merged checkout left idle behind its open PR, and keeps one still in use', async () => {
+    const behind = { isMerged: true, openPr: { isDraft: false, headRefOid: 'c'.repeat(40) } };
+    const d = deps({ checkoutIdleMs: vi.fn(async () => 2 * 60 * 60 * 1000) });
+    expect(await retireCompletedCheckouts(app, scan(behind), d)).toMatchObject({ retired: [release], held: [] });
+    expect(d.checkoutIdleMs).toHaveBeenCalledWith(tree.path);
+    expect(d.readForgeDelivery).not.toHaveBeenCalled();
+    for (const idle of [5 * 60 * 1000, null]) {
+      const busy = deps({ checkoutIdleMs: vi.fn(async () => idle) });
+      expect(await retireCompletedCheckouts(app, scan(behind), busy)).toEqual({ held: [], retired: [] });
+      expect(busy.retire).not.toHaveBeenCalled();
+    }
   });
 
-  it.each(['unrelated-upstream', 'changed-delivery'])('uses exact merged PR file scope after inherited upstream history: %s', async scenario => {
-    const c = await reviewedCheckout(`scope-${scenario}`, { normalMerge: true });
-    await writeFile(join(repo, 'upstream.txt'), 'inherited upstream\n');
-    await execGit(['add', 'upstream.txt'], repo);
-    await execGit(['commit', '-m', 'upstream work already delivered elsewhere'], repo);
-    await execGit(['merge', '--ff-only', 'main'], c.path);
-    await writeFile(join(c.path, 'feature.txt'), 'current PR delivery\n');
-    await execGit(['commit', '-am', 'current PR'], c.path);
-    c.release.head = (await execGit(['rev-parse', 'HEAD'], c.path)).stdout.trim();
-    await execGit(['merge', '--ff-only', c.release.branch], repo);
-    c.forge.prHead = c.release.head;
-    c.forge.mergeCommit = c.release.head;
-    await writeFile(join(repo, scenario === 'changed-delivery' ? 'feature.txt' : 'upstream.txt'), 'later upstream change\n');
-    await execGit(['commit', '-am', 'advance default after delivery'], repo);
-    c.forge.defaultHead = (await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim();
-    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...c.release, reason: 'pr-completion-review-required' }] });
-    const prepared = await c.prepare();
-    expect(prepared).toMatchObject({ ok: true, review: { comparison: { paths: ['feature.txt'],
-      disposition: 'integrated' } } });
-    const result = await c.confirm(prepared.review);
-    expect(result).toMatchObject({ ok: true, branchDeleted: true });
-    expect(await registered(c.path)).toBe(false);
-    expect(await readFile(join(repo, scenario === 'changed-delivery' ? 'feature.txt' : 'upstream.txt'), 'utf8')).toBe('later upstream change\n');
+  unitIt('keeps a refused or failed retirement held with its reason, never a raw error', async () => {
+    const merged = scan({ isMerged: true });
+    expect(await retireCompletedCheckouts(app, merged, deps({ retire: vi.fn(async () => ({ ok: false, reason: 'pr-completion-human-handoff' })) })))
+      .toEqual({ retired: [], held: [{ ...release, reason: 'pr-completion-human-handoff' }] });
+    expect((await retireCompletedCheckouts(app, merged, deps({ retire: vi.fn(async () => ({ ok: true, branchDeleted: false, branchRetainedReason: 'branch-has-new-holder' })) }))).held[0].reason)
+      .toBe('branch-has-new-holder');
+    expect((await retireCompletedCheckouts(app, merged, deps({ retire: vi.fn(async () => { throw new Error('daemon-stopped'); }) }))).held[0].reason).toBe('daemon-stopped');
+    expect((await retireCompletedCheckouts(app, merged, deps({ retire: vi.fn(async () => { throw new Error('private diagnostic'); }) }))).held[0].reason)
+      .toBe('retirement-outcome-uncertain');
   });
 
-
+  unitIt('folds release-candidate results into the pass', async () => {
+    const candidate = { branch: 'codex/release-agent-x', path: '/example/release', head, locked: true, lockReason: 'Active release candidate codex/release-agent-x' };
+    const d = deps({ retireReleaseCandidates: vi.fn(async () => ({ retired: [candidate], held: [{ ...candidate, reason: 'worktree-dirty' }] })) });
+    expect(await retireCompletedCheckouts(app, { wip: [], worktreeInventory: [] }, d)).toEqual({ retired: [candidate], held: [{ ...candidate, reason: 'worktree-dirty' }] });
+    expect(d.retireReleaseCandidates).toHaveBeenCalledWith(app, { wip: [], worktreeInventory: [] }, d);
+  });
 });

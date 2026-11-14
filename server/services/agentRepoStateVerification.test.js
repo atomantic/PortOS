@@ -40,7 +40,7 @@ vi.mock('./repoCleanupRecovery.js', () => ({ inspectOrQueueCompletedReview: vi.f
 vi.mock('./repoCleanupObservation.js', async original => ({ ...await original(), readCheckoutPathPresence: vi.fn(async () => false), readLocalBranchPresence: vi.fn(async () => false) }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: vi.fn(async () => ({ host: 'github.com', fullName: 'example/repo', isGithub: true })) }));
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: vi.fn(async () => ({})) }));
-vi.mock('./heldCheckoutReview.js', () => ({ readRetirementForgeEvidence: vi.fn(async () => ({ prHead: '1'.repeat(40), mergeCommit: '3'.repeat(40), defaultHead: '2'.repeat(40) })) }));
+vi.mock('./mergedPrEvidence.js', () => ({ readMergedPrDelivery: vi.fn(async () => ({ prHead: '1'.repeat(40), mergeCommit: '3'.repeat(40), defaultHead: '2'.repeat(40) })) }));
 vi.mock('./completedCheckoutEvidence.js', async original => ({ ...await original(), readCompletedCheckoutIdentity: vi.fn() }));
 vi.mock('./cos.js', () => ({}));
 vi.mock('./cosState.js', () => ({ getConfig: vi.fn(async () => ({ autoApproveInvestigations: true })) }));
@@ -54,7 +54,8 @@ vi.mock('./taskSchedule.js', () => ({ acknowledgeSwarmCleanupRefill: vi.fn(async
 vi.mock('node:fs/promises', async original => { const actual = await original(); return { ...actual, lstat: vi.fn(actual.lstat) }; });
 vi.mock('./heldCheckoutRecovery.js', () => ({
   retireInventoriedCheckout: vi.fn(async () => ({ ok: true, archiveDir: '/private/archive', branchDeleted: true })),
-  prepareInventoriedCheckoutRetirement: vi.fn().mockResolvedValue({ ok: true, review: { digest: 'a'.repeat(64) } }),
+  readMergedDelivery: vi.fn().mockResolvedValue(true),
+  assertAutomaticRetirementAllowed: vi.fn(async () => {}),
 }));
 vi.mock('./cosEvents.js', async original => ({ ...await original(), emitLog: vi.fn() }));
 vi.mock('./cosTaskStore.js', () => ({
@@ -65,7 +66,6 @@ vi.mock('./cosTaskStore.js', () => ({
 }));
 vi.mock('./prWatcher.js', () => ({ readPendingMergePrs: vi.fn().mockReturnValue([]) }));
 vi.mock('./worktreeManager.js', () => ({ listWorktrees: vi.fn().mockResolvedValue([]) }));
-vi.mock('./branchReconcileRetirement.js', async original => ({ ...await original(), assertAutomaticRetirementAllowed: vi.fn(async () => {}) }));
 vi.mock('./branchReconcile.js', () => ({
   listRemoteHeads: vi.fn().mockResolvedValue(new Map()),
   cleanupMerged: vi.fn().mockResolvedValue({ cleaned: [] }),
@@ -104,7 +104,7 @@ vi.mock('./cosState.js', async (importOriginal) => {
 
 import { inspectOrQueueCompletedReview } from './repoCleanupRecovery.js';
 import { readLocalBranchPresence, readCheckoutPathPresence } from './repoCleanupObservation.js';
-import { readRetirementForgeEvidence } from './heldCheckoutReview.js';
+import { readMergedPrDelivery } from './mergedPrEvidence.js';
 import { readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
 import { recordSwarmCleanupContinuationAttempt, retryCompletionCheckoutCapture, getAgentRecord, recordCleanupOutcome, recordSwarmCleanupDelivery, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from './cosAgentLifecycle.js';
@@ -113,7 +113,6 @@ import { recordCompletionCleanup, recordAbsentCheckoutRetirement, settleAbsentTa
 import { replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
 import { recheckAgentCleanup, resumeAgentCompletionRetirement, resumeDeferredRepoStateVerifications, verifyAgentRepoState, sweepRepoStateVerifications, bindCompletionRetirementEvents, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
 import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
-import { assertAutomaticRetirementAllowed } from './branchReconcileRetirement.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { verifyCleanupClaimDisposition } from './claimDisposition.js';
 import { getTaskById, updateTask } from './cosTaskStore.js';
@@ -121,7 +120,7 @@ import { recordBranchReconcileCheckout, recordBranchReconcileOutcome } from './b
 import { loadSchedule } from './taskScheduleStore.js';
 import { acknowledgeSwarmCleanupRefill } from './taskSchedule.js';
 import { lstat } from 'node:fs/promises';
-import { prepareInventoriedCheckoutRetirement, retireInventoriedCheckout } from './heldCheckoutRecovery.js';
+import { assertAutomaticRetirementAllowed, readMergedDelivery, retireInventoriedCheckout } from './heldCheckoutRecovery.js';
 import { addTask, getAllTasks } from './cosTaskStore.js';
 import { ensureTaskThread } from './brainTaskThreads.js';
 import { listWorktrees } from './worktreeManager.js';
@@ -166,8 +165,6 @@ const localBranch = present => {
   readLocalBranchPresence.mockResolvedValue(present);
   execGit.mockImplementation(async args => ({ exitCode: args[0] === 'merge-base' || present ? 0 : 1, stdout: args[0] === 'rev-parse' ? `${HEAD}\n` : '', stderr: '' }));
 };
-const review = () => ({ digest: 'a'.repeat(64), policy: { policies: [{ id: 'agent-1', startedAt: CREATED_AT }] },
-  comparison: { disposition: 'review-supersession', localPatch: '+old behavior', difference: '+new behavior' }, forge: { prHead: HEAD } });
 const completedCleanup = () => ({ version: 1, status: 'completed', stages: Object.fromEntries(
   ['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'worktree', 'report'].map(key => [key, { status: 'done' }])) });
 const manualCleanupResult = () => ({ success: false, cleanupPending: true, deliveryRecoveryOwned: true,
@@ -274,13 +271,13 @@ it.each(['all-merged', 'all-retired', 'one-open', 'manual-merged'])('wakes a cle
   listWorktrees.mockResolvedValue(branches.map((branch, index) => ({ branch: `refs/heads/${branch}`, path: `/tree/${index}`, head: heads[index] })));
   readCompletedCheckoutIdentity.mockImplementation(async ({ branch }) => agent.metadata.completedCheckouts.find(row => row.branch === branch));
   readCheckoutPathPresence.mockResolvedValue(true);
-  prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: false, reason: 'worktree-dirty' });
+  readMergedDelivery.mockResolvedValue(null);
   findPullRequestForBranch.mockImplementation(async branch => {
     const index = branches.indexOf(branch);
     return { status: 'found', number: index + 1, url: urls[index],
       detail: scenario === 'one-open' && index === 1 ? 'OPEN' : 'MERGED' };
   });
-  readRetirementForgeEvidence.mockImplementation(async (_repo, branch) => {
+  readMergedPrDelivery.mockImplementation(async (_repo, branch) => {
     const index = branches.indexOf(branch);
     return { scopeProof: 'exact-delivered-head', prHead: heads[index], prUrl: urls[index] };
   });
@@ -292,8 +289,7 @@ it.each(['all-merged', 'all-retired', 'one-open', 'manual-merged'])('wakes a cle
     recordBranchReconcileOutcome.mockImplementation(async (_app, input) => ({
       retirementObligations: input.retirementObligations?.map(row => ({ ...row })) || [],
     }));
-    prepareInventoriedCheckoutRetirement.mockImplementation(async ({ release }) => ({ ok: true, review: { digest: 'a'.repeat(64),
-      forge: { prHead: release.head }, comparison: { disposition: 'integrated', localPatch: '', difference: '' } } }));
+    readMergedDelivery.mockResolvedValue(true);
     updateTask.mockImplementation(async (_id, patch) => {
       originalTask.status = patch.status;
       Object.assign(originalTask.metadata, patch.metadata);
@@ -333,7 +329,7 @@ beforeEach(() => {
   retryCompletionCheckoutCapture.mockReset().mockResolvedValue(false);
   getAgentRecord.mockReset().mockResolvedValue(null);
   recordCleanupOutcome.mockReset().mockResolvedValue(true);
-  readRetirementForgeEvidence.mockReset().mockResolvedValue({ prHead: HEAD, mergeCommit: '3'.repeat(40), defaultHead: '2'.repeat(40) });
+  readMergedPrDelivery.mockReset().mockResolvedValue({ prHead: HEAD, mergeCommit: '3'.repeat(40), defaultHead: '2'.repeat(40) });
   inspectOrQueueCompletedReview.mockResolvedValue({ disposition: 'held', reason: 'delivery-ci-or-review-pending' });
   readBranchCompletionPolicies.mockResolvedValue([]);
   updateTask.mockReset().mockResolvedValue({ status: 'completed' });
@@ -341,7 +337,7 @@ beforeEach(() => {
     deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } });
   recordBranchReconcileCheckout.mockReset().mockImplementation(async (_app, release) => ({ remaining: [release] }));
   recordBranchReconcileOutcome.mockReset().mockResolvedValue({});
-  prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: review() });
+  readMergedDelivery.mockReset().mockResolvedValue(false);
   retireInventoriedCheckout.mockReset().mockResolvedValue({ ok: true, archiveDir: '/private/archive', branchDeleted: true });
   execGh.mockResolvedValue(openView());
   readClaimOwnershipAgents.mockResolvedValue([]);
@@ -465,25 +461,24 @@ describe('verifyAgentRepoState — clean runs', () => {
     localBranch(true);
     listWorktrees.mockResolvedValue([RELEASE]);
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/7', detail: 'MERGED' });
-    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: false, reason: 'retirement-policy-not-legacy-completed' });
+    // The forge or checkout cannot be read: merged delivery is unknown, not refused.
+    readMergedDelivery.mockResolvedValue(null);
     // Repeated completion sweeps must retain ownership and the original budget.
     for (let attempt = 0; attempt < 2; attempt++) {
       expect(await run({ task: pending, success: false, agentState: state })).toMatchObject({
-        verified: false, skipReason: 'retirement-policy-not-legacy-completed', recoveryTaskId: null,
+        verified: false, skipReason: 'delivery-evidence-unavailable', recoveryTaskId: null,
       });
     }
     expect(recordBranchReconcileCheckout).toHaveBeenCalledWith('demo-app', RELEASE);
     expect(recordRepoStateVerification).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({
-      status: 'pending', reasons: ['retirement-policy-not-legacy-completed'],
+      status: 'pending', reasons: ['delivery-evidence-unavailable'],
     }));
     expect(updateTask).not.toHaveBeenCalled();
     expect(releaseRetryHold).not.toHaveBeenCalled();
     expect(addTask).not.toHaveBeenCalled();
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     // Once the hold clears, the same service owner retries retirement, not delivery.
-    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: {
-      ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' },
-    } });
+    readMergedDelivery.mockResolvedValue(true);
     retireInventoriedCheckout.mockResolvedValue({ ok: true, branchDeleted: true, archiveDir: null });
     expect(await run({ task: pending, success: false, agentState: state })).toMatchObject({ verified: true });
     expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'user', expect.any(Object));
@@ -789,7 +784,7 @@ describe('verifyAgentRepoState — clean runs', () => {
       getAgentRecord.mockResolvedValue(state);
       readBranchCompletionPolicies.mockResolvedValue([state]);
       execGh.mockResolvedValue(openView({ state: 'MERGED' }));
-      if (scenario === 'forge-unavailable') readRetirementForgeEvidence.mockRejectedValue(new Error('forge unavailable'));
+      if (scenario === 'forge-unavailable') readMergedPrDelivery.mockRejectedValue(new Error('forge unavailable'));
       const events = new EventEmitter();
       const unbind = bindCompletionRetirementEvents(events);
       try {
@@ -817,7 +812,7 @@ describe('verifyAgentRepoState — clean runs', () => {
     getAgentRecord.mockResolvedValue(state);
     getTaskById.mockResolvedValue({ ...task(), status: 'completed' });
     execGit.mockResolvedValue({ exitCode: 1, stdout: '' });
-    if (!delivered) readRetirementForgeEvidence.mockRejectedValue(new Error('forge unavailable'));
+    if (!delivered) readMergedPrDelivery.mockRejectedValue(new Error('forge unavailable'));
     const followUp = { id: 'follow-up', status: 'completed', metadata: { reviewLoopFollowUp: 'true',
       sourceAgentId: 'agent-1', sourceTaskId: 'task-1', reviewLoopPRBranch: BRANCH,
       reviewLoopPRUrl: 'https://github.com/example/repo/pull/7',
@@ -950,7 +945,7 @@ describe('verifyAgentRepoState — clean runs', () => {
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/7', detail: 'MERGED' });
     expect(await run({ task: task({ openPR: 'false' }), prExpected: false, success: false, agentState: state }))
       .toMatchObject({ verified: true });
-    expect(readRetirementForgeEvidence).toHaveBeenCalledWith('/repo', BRANCH, 'https://github.com/example/repo/pull/7',
+    expect(readMergedPrDelivery).toHaveBeenCalledWith('/repo', BRANCH, 'https://github.com/example/repo/pull/7',
       expect.objectContaining({ exactDeliveredHead: HEAD }));
     expect(updateTask).toHaveBeenLastCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'user', expect.any(Object));
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
@@ -979,7 +974,7 @@ describe('verifyAgentRepoState — clean runs', () => {
     // needed to settle a merged PR whose checkout and refs are already gone.
     execGit.mockImplementation(async () => ({ exitCode: scenario === 'rebased' ? 1 : 0, stdout: '' }));
     expect(await run({ success: false, agentState: state })).toMatchObject({ verified: true });
-    expect(readRetirementForgeEvidence).toHaveBeenCalledExactlyOnceWith('/repo', BRANCH,
+    expect(readMergedPrDelivery).toHaveBeenCalledExactlyOnceWith('/repo', BRANCH,
       'https://github.com/example/repo/pull/7', expect.objectContaining({ exactDeliveredHead: captured.head }));
     expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'user', expect.any(Object));
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
@@ -1032,7 +1027,7 @@ describe('verifyAgentRepoState — clean runs', () => {
       expect(result).toMatchObject({ verified: false, skipReason: 'absent-checkout-integration-unverified' });
       expect(updateTask).not.toHaveBeenCalled();
     }
-    expect(readRetirementForgeEvidence).not.toHaveBeenCalled();
+    expect(readMergedPrDelivery).not.toHaveBeenCalled();
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     expect(addTask).not.toHaveBeenCalled();
   });
@@ -1073,7 +1068,7 @@ describe('verifyAgentRepoState — clean runs', () => {
   });
 
   it.each(['unavailable', 'unmerged'])('keeps absent checkout delivery unverified when merge proof is %s', async scenario => {
-    if (scenario === 'unavailable') readRetirementForgeEvidence.mockRejectedValue(new Error('forge unavailable'));
+    if (scenario === 'unavailable') readMergedPrDelivery.mockRejectedValue(new Error('forge unavailable'));
     if (scenario === 'unmerged') getPullRequestState.mockResolvedValueOnce({ status: 'known', state: 'OPEN' });
     expect(await run({ agentState: agentState({ reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' } }) }))
       .toMatchObject({ verified: false, skipReason: 'absent-checkout-integration-unverified' });
@@ -1110,7 +1105,7 @@ describe('verifyAgentRepoState — clean runs', () => {
     readClaimOwnershipAgents.mockResolvedValue([{ id: 'new-owner', status: 'completed', result: { success: true } }]);
     expect(await run()).toMatchObject({ skipReason: 'checkout-incarnation-changed', recoveryTaskId: null });
     expect(addTask).not.toHaveBeenCalled();
-    expect(prepareInventoriedCheckoutRetirement).not.toHaveBeenCalled();
+    expect(readMergedDelivery).not.toHaveBeenCalled();
   });
 
   it('retains a recreated same-path checkout despite identical branch and head', async () => {
@@ -1166,7 +1161,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
     localBranch(true);
     listWorktrees.mockResolvedValue([RELEASE]);
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
-    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+    readMergedDelivery.mockResolvedValue(true);
     retireInventoriedCheckout.mockImplementation(async (_input, options) => { await options.beforeMutation(); return { ok: true, branchDeleted: true }; });
 
     expect(await recheckAgentCleanup(owner.id, pending.id)).toMatchObject({ ok: true, verified: true });
@@ -1236,7 +1231,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
     localBranch(true);
     listWorktrees.mockResolvedValue([RELEASE]);
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
-    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+    readMergedDelivery.mockResolvedValue(true);
     let removed = false;
     retireInventoriedCheckout.mockImplementation(async (_input, options) => {
       if (boundary === 'retirement') owner.metadata.swarmCleanupDelivery = { version: 1 };
@@ -1267,7 +1262,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
     localBranch(true);
     listWorktrees.mockResolvedValue([RELEASE]);
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
-    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+    readMergedDelivery.mockResolvedValue(true);
     let removed = false;
     retireInventoriedCheckout.mockImplementation(async (_input, options) => {
       owner.result.executionSuccess = false;
@@ -1293,7 +1288,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
     localBranch(true);
     listWorktrees.mockResolvedValue([RELEASE]);
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
-    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+    readMergedDelivery.mockResolvedValue(true);
     retireInventoriedCheckout.mockImplementation(async (_input, options) => { await options.beforeMutation(); return { ok: true, branchDeleted: true }; });
     recordCompletionCleanup.mockImplementationOnce(async () => { owner.metadata.blocker = { reason: 'manual decision' }; return true; });
 
@@ -1328,7 +1323,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
     localBranch(true);
     listWorktrees.mockResolvedValue([RELEASE]);
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
-    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+    readMergedDelivery.mockResolvedValue(true);
     retireInventoriedCheckout.mockImplementation(async (_input, options) => { await options.beforeMutation(); return { ok: true, branchDeleted: true }; });
 
     expect(await recheckAgentCleanup(owner.id, pending.id)).toMatchObject({ ok: true, verified: true });
@@ -1356,7 +1351,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
       listWorktrees.mockResolvedValue([RELEASE]);
       readCompletedCheckoutIdentity.mockResolvedValue(captured);
       findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
-      prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+      readMergedDelivery.mockResolvedValue(true);
       return { pending, owner };
     };
     const expectNoSettlementOrDispatch = () => {
@@ -1474,7 +1469,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
     localBranch(true);
     listWorktrees.mockResolvedValue([RELEASE]);
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
-    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+    readMergedDelivery.mockResolvedValue(true);
     retireInventoriedCheckout.mockImplementation(async (_input, options) => { await options.beforeMutation(); return { ok: true, branchDeleted: true }; });
     recordCompletionCleanup.mockImplementationOnce(async () => {
       owner.metadata.completionCleanup.stages.pipeline = { status: 'held' };
@@ -1531,15 +1526,13 @@ describe('verifyAgentRepoState — divergent runs', () => {
     cosEvents.on('checkout:retired', seenRetirement);
     const unbind = bindCompletionRetirementEvents(cosEvents);
     try {
-      prepareInventoriedCheckoutRetirement.mockImplementation(async ({ release }) => {
+      readMergedDelivery.mockImplementation(async (_repo, release) => {
         cosEvents.emit('agent:checkout-captured', { agentId: 'another-owner' });
         if (release.branch === branches[0]) { startedPreview(); await previewRelease; }
-        return release.branch === branches[0]
-          ? { ok: true, review: { digest: 'a'.repeat(64), forge: { prHead: HEAD },
-            comparison: { disposition: 'integrated', localPatch: '', difference: '' } } }
-          : { ok: false, reason: 'worktree-dirty' };
+        return true;
       });
       retireInventoriedCheckout.mockImplementation(async ({ release }, options) => {
+        if (release.branch !== branches[0]) return { ok: false, reason: 'worktree-dirty' };
         await options.beforeMutation();
         cosEvents.emit('checkout:retired', { appId: 'demo-app', ...release, checkoutIdentity: 'a'.repeat(64) });
         return { ok: true, branchDeleted: true };
@@ -1596,7 +1589,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
     localBranch(true);
     listWorktrees.mockResolvedValue([RELEASE]);
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
-    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+    readMergedDelivery.mockResolvedValue(true);
     let removed = false;
     retireInventoriedCheckout.mockImplementation(async (_input, options) => {
       getTaskById.mockResolvedValue(null);
@@ -1637,7 +1630,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
     localBranch(true);
     listWorktrees.mockResolvedValue([RELEASE]);
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
-    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: review() });
+    readMergedDelivery.mockResolvedValue(false);
     expect(await recheckAgentCleanup(owner.id, pending.id)).toMatchObject({ ok: true, verified: false, reasons: ['cleanup-review-required'] });
     expect(addTask).not.toHaveBeenCalled();
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
@@ -1653,13 +1646,12 @@ describe('verifyAgentRepoState — divergent runs', () => {
     existsSync.mockReturnValue(true);
     localBranch(true);
     listWorktrees.mockResolvedValue([RELEASE]);
-    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+    readMergedDelivery.mockResolvedValue(true);
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
 
     expect(await run({ task: pending, agentState: state, success: false, prExpected: false })).toMatchObject({ verified: true });
-    expect(retireInventoriedCheckout).toHaveBeenCalledWith(expect.objectContaining({
-      release: RELEASE, review: { prUrl: 'https://github.com/example/repo/pull/1', digest: 'a'.repeat(64), acceptSuperseded: false },
-    }), expect.objectContaining({ beforeMutation: expect.any(Function) }));
+    expect(retireInventoriedCheckout).toHaveBeenCalledWith({ appId: 'demo-app', release: RELEASE },
+      expect.objectContaining({ beforeMutation: expect.any(Function) }));
     expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'user', expect.any(Object));
     expect(releaseRetryHold).not.toHaveBeenCalled();
     expect(addTask).not.toHaveBeenCalled();
@@ -1685,12 +1677,12 @@ describe('verifyAgentRepoState — divergent runs', () => {
     localBranch(true);
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
     listWorktrees.mockResolvedValue([RELEASE]);
-    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+    readMergedDelivery.mockResolvedValue(true);
 
     const result = await run();
 
     expect(result).toMatchObject({ verified: true, recoveryTaskId: null });
-    expect(retireInventoriedCheckout).toHaveBeenCalledWith(expect.objectContaining({ review: expect.objectContaining({ acceptSuperseded: false }) }), expect.objectContaining({ beforeMutation: expect.any(Function) }));
+    expect(retireInventoriedCheckout).toHaveBeenCalledWith({ appId: 'demo-app', release: RELEASE }, expect.objectContaining({ beforeMutation: expect.any(Function) }));
     expect(addTask).not.toHaveBeenCalled();
     expect(recordCleanupOutcome).toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'verified', reason: 'retirement-receipt-verified' }));
   });
@@ -1701,7 +1693,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
       localBranch(true);
       listWorktrees.mockResolvedValue([{ ...RELEASE, branch: `refs/heads/${BRANCH}` }]);
       findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
-      prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+      readMergedDelivery.mockResolvedValue(true);
     };
     const appless = () => run({ task: task({ app: undefined, appName: undefined }) });
 
@@ -1711,21 +1703,18 @@ describe('verifyAgentRepoState — divergent runs', () => {
       expect(await appless()).toMatchObject({ verified: true, recoveryTaskId: null });
       expect(resolveRetirementApp).toHaveBeenCalledWith('/repo');
       expect(recordBranchReconcileCheckout).toHaveBeenCalledWith('repo-app', RELEASE);
-      expect(prepareInventoriedCheckoutRetirement).toHaveBeenCalledWith(expect.objectContaining({ appId: 'repo-app' }));
+      expect(readMergedDelivery).toHaveBeenCalledWith('/repo', RELEASE);
       expect(retireInventoriedCheckout).toHaveBeenCalledWith(expect.objectContaining({ appId: 'repo-app' }), expect.any(Object));
     });
 
-    it('carries a resolved app scope through cognitive retirement dispatch and its server binding', async () => {
+    it('carries a resolved app scope into the recovery for unmerged work, without a retirement target', async () => {
       mergedLeftover();
       resolveRetirementApp.mockResolvedValue({ app: { id: 'repo-app', repoPath: '/repo' } });
-      prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: review() });
+      readMergedDelivery.mockResolvedValue(false);
       expect(await appless()).toMatchObject({ verified: false, recoveryTaskId: 'task-recovery-1' });
-      expect(addTask).toHaveBeenCalledWith(expect.objectContaining({ app: 'repo-app',
-        metadata: expect.objectContaining({ retirementReview: { appId: 'repo-app', release: RELEASE } }),
-      }), 'internal');
-      expect(recordRepoStateRecovery).toHaveBeenCalledWith('agent-1', expect.objectContaining({
-        retirementReview: { appId: 'repo-app', release: RELEASE },
-      }), { claimRun: true });
+      expect(addTask).toHaveBeenCalledWith(expect.objectContaining({ app: 'repo-app' }), 'internal');
+      expect(addTask.mock.calls[0][0].metadata).not.toHaveProperty('retirementReview');
+      expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     });
 
     it.each(['retirement-app-ambiguous', 'retirement-app-unavailable'])('retains an app-less task whose repository scope is %s', async reason => {
@@ -1733,7 +1722,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
       resolveRetirementApp.mockResolvedValue({ reason });
       expect(await appless()).toMatchObject({ verified: false, skipReason: reason });
       expect(recordBranchReconcileOutcome).not.toHaveBeenCalled();
-      expect(prepareInventoriedCheckoutRetirement).not.toHaveBeenCalled();
+      expect(readMergedDelivery).not.toHaveBeenCalled();
       expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     });
 
@@ -1752,8 +1741,8 @@ describe('verifyAgentRepoState — divergent runs', () => {
   });
 
   it('files ONE recovery task for a leftover worktree and branch after a merged PR', async () => {
-    // The reported failure shape: the agent merged its own PR (branch gone on the
-    // forge) but its local branch and worktree survived cleanup silently.
+    // The PR merged (branch gone on the forge), but the surviving local branch
+    // and worktree are not a merged delivery, so their work is not discarded.
     existsSync.mockReturnValue(true);
     localBranch(true);
     listWorktrees.mockResolvedValue([{ ...RELEASE, branch: `refs/heads/${BRANCH}` }]);
@@ -1781,17 +1770,16 @@ describe('verifyAgentRepoState — divergent runs', () => {
     // deleting unmerged work or touching a sibling agent's branch.
     expect(payload.context).toContain(`Keep the retained worktree ${WORKTREE}`);
     expect(payload.context).not.toContain('/api/cos/schedule/branch-reconcile/checkouts/review');
-    expect(payload.context).toContain('/api/cos/schedule/branch-reconcile/checkouts/retire');
-    expect(payload.context).toContain('read-only Git');
-    expect(payload.context).not.toContain('<review.digest>');
+    expect(payload.context).not.toContain('[REVIEW_RETIREMENT]');
+    expect(payload.context).toContain('/api/cos/schedule/trigger');
     expect(payload.context).toContain('ok:true and branchDeleted:true');
     expect(payload.context).not.toMatch(/git (?:worktree (?:remove|unlock|prune)|branch -[dD]|push[^\n]*--delete)|--remove-source-branch/);
-    expect(payload.metadata.retirementReview).toEqual({ appId: 'demo-app', release: RELEASE });
-    expect(recordRepoStateRecovery).toHaveBeenCalledWith('agent-1', { taskId: 'task-recovery-1', branch: BRANCH,
-      repoPath: '/repo', retirementReview: payload.metadata.retirementReview }, { claimRun: true });
+    expect(payload.metadata).not.toHaveProperty('retirementReview');
+    expect(recordRepoStateRecovery).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     expect(recordBranchReconcileCheckout).toHaveBeenCalledWith('demo-app', RELEASE);
-    expect(recordBranchReconcileCheckout.mock.invocationCallOrder[0]).toBeLessThan(prepareInventoriedCheckoutRetirement.mock.invocationCallOrder[0]);
-    expect(prepareInventoriedCheckoutRetirement.mock.invocationCallOrder[0]).toBeLessThan(addTask.mock.invocationCallOrder[0]);
+    expect(recordBranchReconcileCheckout.mock.invocationCallOrder[0]).toBeLessThan(readMergedDelivery.mock.invocationCallOrder[0]);
+    expect(readMergedDelivery.mock.invocationCallOrder[0]).toBeLessThan(addTask.mock.invocationCallOrder[0]);
     expect(payload.context).toContain(`touch ONLY ${BRANCH}`);
     expect(ensureTaskThread).not.toHaveBeenCalled();
   });
@@ -1807,24 +1795,24 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(recordCleanupOutcome).toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'blocked', reason: 'cleanup-successor-review-unresolved' }));
   });
 
-  it('retains a refused preview obligation and retries fresh evidence without dispatching unsafe cleanup', async () => {
+  it('retains an unverifiable delivery and retries fresh evidence without dispatching unsafe cleanup', async () => {
     existsSync.mockReturnValue(true);
     localBranch(true);
     listWorktrees.mockResolvedValue([{ ...RELEASE, branch: `refs/heads/${BRANCH}` }]);
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
-    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: false, reason: 'active-agent-owner' });
-    expect(await run()).toMatchObject({ verified: false, skipReason: 'active-agent-owner', recoveryTaskId: null });
+    readMergedDelivery.mockResolvedValue(null);
+    expect(await run()).toMatchObject({ verified: false, skipReason: 'delivery-evidence-unavailable', recoveryTaskId: null });
     expect(addTask).not.toHaveBeenCalled();
-    expect(recordBranchReconcileOutcome).toHaveBeenCalledWith('demo-app', expect.objectContaining({ reason: 'active-agent-owner' }));
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     // The gate declining to retire is its designed outcome: reported at info, never warn.
     expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('Repo-state retirement retained'), expect.any(Object));
     expect(emitLog).not.toHaveBeenCalledWith('warn', expect.stringContaining('Repo-state retirement retained'), expect.anything());
-    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), digest: 'b'.repeat(64) } });
+    readMergedDelivery.mockResolvedValue(false);
     expect(await run()).toMatchObject({ verified: false, recoveryTaskId: 'task-recovery-1' });
     // The recovery task is the investigation, so the divergence itself is logged at info.
     expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('Repo state diverged'), expect.any(Object));
     expect(emitLog).not.toHaveBeenCalledWith('warn', expect.stringContaining('Repo state diverged'), expect.anything());
-    expect(prepareInventoriedCheckoutRetirement).toHaveBeenCalledTimes(2);
+    expect(readMergedDelivery).toHaveBeenCalledTimes(2);
   });
 
   it.each(['locked', 'persistence-failed', 'obligation-missing', 'inventory-missing'])('preserves %s cleanup without shell fallback', async cause => {
@@ -1837,7 +1825,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
     const result = await run();
     expect(result.verified).toBe(false);
     expect(result.skipReason).toMatch(/^retirement-/);
-    expect(prepareInventoriedCheckoutRetirement).not.toHaveBeenCalled();
+    expect(readMergedDelivery).not.toHaveBeenCalled();
     expect(addTask).not.toHaveBeenCalled();
   });
 
@@ -2113,15 +2101,16 @@ describe('verifyAgentRepoState — every hold records the reason it returns', ()
       localBranch(true); hasBranchMergeEvidence.mockResolvedValue(false);
       findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/9', detail: 'OPEN', headRefOid: HEAD });
     }],
-    ['active-agent-owner', 'active-agent-owner', {}, () => {
+    ['claim-owner-active', 'claim-owner-active', {}, () => {
       existsSync.mockReturnValue(true); localBranch(true); merged();
       listWorktrees.mockResolvedValue([RELEASE]);
-      prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: false, reason: 'active-agent-owner' });
+      readMergedDelivery.mockResolvedValue(true);
+      retireInventoriedCheckout.mockResolvedValue({ ok: false, reason: 'claim-owner-active' });
     }],
     ['retirement-outcome-uncertain', 'retirement-outcome-uncertain', {}, () => {
       existsSync.mockReturnValue(true); localBranch(true); merged();
       listWorktrees.mockResolvedValue([RELEASE]);
-      prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { ...review(), comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+      readMergedDelivery.mockResolvedValue(true);
       retireInventoriedCheckout.mockRejectedValue(new Error('archive write failed'));
     }],
   ])('records %s and returns %s', async (reason, skipReason, extra, arrange, overrides = {}) => {
@@ -2361,8 +2350,7 @@ describe('claim-swarm completion', () => {
       retirementObligations: input.retirementObligations?.map(row => ({ ...row })) || [],
     }));
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/11', detail: 'MERGED' });
-    prepareInventoriedCheckoutRetirement.mockResolvedValue({ ok: true, review: { digest: 'a'.repeat(64),
-      forge: { prHead: HEAD }, comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+    readMergedDelivery.mockResolvedValue(true);
     existsSync.mockReturnValue(true);
     localBranch(true);
     const events = new EventEmitter();
@@ -2733,7 +2721,7 @@ describe('completion after its originating task was removed', () => {
     findPullRequestForBranch.mockResolvedValue(mode === 'unreadable' ? { status: 'unavailable' }
       : mode.startsWith('missing') ? { status: 'none' }
         : { status: 'found', url: 'https://github.com/example/repo/pull/7', detail: mode === 'open' ? 'OPEN' : 'MERGED' });
-    if (mode === 'unreadable-integration') readRetirementForgeEvidence.mockRejectedValue(new Error('forge unavailable'));
+    if (mode === 'unreadable-integration') readMergedPrDelivery.mockRejectedValue(new Error('forge unavailable'));
     // A no-change run never opens a PR; its captured head already in the
     // default branch is the delivery proof. Unique local commits are not.
     if (mode === 'missing-unintegrated') execGit.mockImplementation(async args => ({ exitCode: args[0] === 'merge-base' ? 1 : 0, stdout: '', stderr: '' }));

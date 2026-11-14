@@ -58,8 +58,8 @@ function RetireCheckout({ appId, entry, onRetired }) {
   return (
     <div className="mt-1 space-y-1 rounded border border-port-warning/50 p-2">
       <p className="text-gray-300">
-        Retire this exact merged, clean checkout{entry.locked ? ' and its lock' : ''}?
-        {entry.branch ? ` The checkout and branch ${entry.branch} are removed in place.` : ' The checkout is removed in place.'} No checkout archive is created. Dirty checkouts and checkouts with unique unverified ignored files stay in place. A changed lock, HEAD or a live owner also keeps everything in place.
+        Retire this exact merged checkout{entry.locked ? ' and its lock' : ''}?
+        {entry.branch ? ` The checkout and branch ${entry.branch} are removed in place.` : ' The checkout is removed in place.'} No checkout archive is created. Uncommitted and untracked files go with it only when its PR merged at this exact HEAD; otherwise a dirty checkout stays in place, as does unmerged work. A changed lock, HEAD or a live owner also keeps everything in place.
       </p>
       {error && <p role="alert" className="break-words text-port-error">{error}</p>}
       <div className="flex gap-2">
@@ -161,7 +161,7 @@ export default function BranchReconcileOutcome({ outcomes, apps }) {
                 </ul>
               </details>}
               {(remaining || []).some(isInventoriedCheckout) && (
-                <p>Retiring a checkout is a scoped release of the exact row shown. It needs merged work, a clean checkout, and no live owner or manual handoff; git-ignored files are discarded with it. No checkout archive is created. Lock age, an absent process, and lock text never release a checkout on their own.</p>
+                <p>Retiring a checkout is a scoped release of the exact row shown. It needs merged work and no live owner or manual handoff. Git-ignored files are discarded with it; uncommitted or untracked work is discarded only when its PR merged at this exact HEAD, and otherwise keeps the checkout. No checkout archive is created. Lock age, an absent process, and lock text never release a checkout on their own.</p>
               )}
               {Array.isArray(outcome.retired) && outcome.retired.length > 0 && (
                 <div>

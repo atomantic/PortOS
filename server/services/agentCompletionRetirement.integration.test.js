@@ -28,9 +28,9 @@ vi.mock('./cos.js', () => ({}));
 vi.mock('./domainUsage.js', () => ({ recordDomainUsage: async () => {} }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn() } }));
 vi.mock('./apps.js', () => ({ getAppById: async id => id === fixture.app?.id ? fixture.app : null }));
-vi.mock('./branchReconcileRetirement.js', async original => ({ ...await original(), assertAutomaticRetirementAllowed: async () => {} }));
+vi.mock('./heldCheckoutRecovery.js', async original => ({ ...await original(), assertAutomaticRetirementAllowed: async () => {} }));
 vi.mock('./branchReconcile.js', async original => ({ ...await original(), listRemoteHeads: async () => new Map() }));
-vi.mock('./heldCheckoutReview.js', async original => ({ ...await original(), readRetirementForgeEvidence: async (_repo, branch) => fixture.forges ? fixture.forges[branch] : fixture.forge }));
+vi.mock('./mergedPrEvidence.js', async original => ({ ...await original(), readMergedPrDelivery: async (_repo, branch) => fixture.forges ? fixture.forges[branch] : fixture.forge }));
 vi.mock('./prProbe.js', async original => ({ ...await original(), probePrForBranch: async (_repo, branch) => fixture.forges ? { readable: true, prState: fixture.forges[branch] ? 'MERGED' : null,
   prUrl: fixture.forges[branch]?.prUrl || null, prNumber: fixture.forges[branch] ? 42 : null, cli: 'gh' } : ({ readable: true,
   prState: fixture.forge ? 'MERGED' : 'OPEN', prUrl: 'https://github.com/example/repo/pull/42', prNumber: 42, cli: 'gh' }) }));
