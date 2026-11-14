@@ -9,7 +9,10 @@ function buildReleaseSynchronizationPayload(entry) {
   if (!entry) return null;
   const synchronization = effectiveReleaseSynchronization(entry);
   const reset = releaseSynchronizationReset(entry);
-  const evidence = [entry.obligations?.synchronizationPr?.evidence, entry.obligations?.releaseAncestry?.evidence];
+  // A pre-#16017 entry that is never re-inspected (a reset one) may name its PR
+  // only in a retired obligation's evidence.
+  const evidence = ['synchronizationPr', 'releaseAncestry', 'localReview', 'requiredCi']
+    .map(name => entry.obligations?.[name]?.evidence);
   const pick = key => evidence.find(row => row?.[key])?.[key] || null;
 
   return {

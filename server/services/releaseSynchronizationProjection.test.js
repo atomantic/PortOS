@@ -112,6 +112,10 @@ describe('releaseSynchronizationProjection', () => {
         releaseAncestry: { status: 'pending', evidence: { prUrl: 'https://github.com/example/repo/pull/43', headSha: 'e'.repeat(40) } } } };
     expect(projectTaskReleaseMilestones({ id: 'example', metadata: {} }, pending).metadata.releaseSynchronization)
       .toMatchObject({ status: 'running', prUrl: 'https://github.com/example/repo/pull/43', headSha: 'e'.repeat(40) });
+    const legacy = { ...entry, obligations: { synchronizationPr: { status: 'pending' }, releaseAncestry: { status: 'pending' },
+      localReview: { status: 'verified', evidence: { prUrl: 'https://github.com/example/repo/pull/44', headSha: 'f'.repeat(40) } } } };
+    expect(projectTaskReleaseMilestones({ id: 'example', metadata: {} }, legacy).metadata.releaseSynchronization)
+      .toMatchObject({ prUrl: 'https://github.com/example/repo/pull/44', headSha: 'f'.repeat(40) });
   });
 
   it('shows an operator reset without claiming the historical synchronization succeeded', () => {
