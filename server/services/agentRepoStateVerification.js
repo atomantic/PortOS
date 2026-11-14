@@ -632,7 +632,8 @@ function inheritedRetirementScope(agent) {
 }
 
 /** A cleanup run whose task moved to another owner owes only its own checkout's
- * physical cleanup; the current owner verifies delivery. */
+ * physical cleanup; the current owner verifies delivery. The writer settles it
+ * only once that move is final. */
 function handedOffRetirementScope(agent) {
   const meta = agent?.metadata;
   if (agent?.status !== 'completed' || agent.result?.cleanupPending !== true || meta?.isWorktree !== true

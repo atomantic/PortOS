@@ -578,17 +578,25 @@ export async function recordCompletionCleanup(agentId, startedAt, patch) {
 
 /** Verified absence settles physical cleanup without inventing a terminal
  * head or changing the original execution result. A captured checkout settles
- * only for a cleanup run whose task moved to another owner. */
+ * only for a cleanup run whose task already completed or names another
+ * cleanup owner; neither state can be handed back to this run, while a merely
+ * unowned task may still be awaiting this run's own cleanup handoff. */
 export async function recordAbsentCheckoutRetirement(agentId, expected, proof) {
   const verifiedBy = proof.inheritedFromAgentId ? 'inherited-current-inventory' : 'current-inventory';
   let matched = false;
-  const saved = await updateCompletionReceipt(agentId, (metadata, agent) => {
+  const saved = await updateCompletionReceipt(agentId, async (metadata, agent) => {
     if (agent.status !== 'completed' || agent.startedAt !== expected.startedAt || agent.taskId !== expected.taskId
       || !isDeepStrictEqual(metadata, expected.metadata) || metadata.completionCleanup?.status !== 'pending') return metadata;
     const handedOff = metadata.checkoutCapture?.status === 'captured';
-    if (handedOff ? agent.result?.cleanupPending !== true || metadata.isWorktree !== true || proof.inheritedFromAgentId
+    if (handedOff ? agent.result?.cleanupPending !== true || metadata.isWorktree !== true
         || proof.branch !== metadata.worktreeBranch || proof.path !== metadata.workspacePath
       : metadata.checkoutCapture?.status !== 'pending' || metadata.checkoutCapture.unknown !== true) return metadata;
+    if (handedOff) {
+      const { getTaskById } = await import('./cosTaskStore.js');
+      const task = await getTaskById(agent.taskId).catch(() => null);
+      const owner = task?.metadata?.deliveryRecoveryAgentId;
+      if (task?.status !== 'completed' && !(typeof owner === 'string' && owner && owner !== agentId)) return metadata;
+    }
     if (verifiedBy === 'inherited-current-inventory'
       && (!proof.inheritedFromAgentId || metadata.resumedFromAgentId !== proof.inheritedFromAgentId
         || metadata.isWorktree !== false || metadata.checkoutSeeds?.length || metadata.completedCheckouts?.length

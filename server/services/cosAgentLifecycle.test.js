@@ -805,8 +805,8 @@ describe('completeAgent idempotence (#3384)', () => {
     expect(await settleAbsentTaskCompletion(id, expected)).toBe(false);
   });
 
-  it.each(['verified', 'refused-cas', 'wrong-task', 'wrong-path', 'not-cleanup', 'inherited-proof'])(
-    'settles a handed-off cleanup run\'s absent captured checkout without promoting its result: %s', async scenario => {
+  it.each(['completed-task', 'other-owner', 'handoff-pending', 'own-handoff', 'task-missing', 'refused-cas', 'wrong-path', 'not-cleanup'])(
+    'settles a handed-off cleanup run\'s absent captured checkout only after its task moved on: %s', async scenario => {
       const id = 'handed-off', startedAt = '2026-01-01T00:00:00Z', completedAt = '2026-01-01T00:01:00Z';
       const capture = { version: 1, agentId: id, startedAt, capturedAt: completedAt, head: 'a'.repeat(40),
         repoPath: '/synthetic/repo', branch: 'feature/retired', path: '/synthetic/old-path',
@@ -825,14 +825,19 @@ describe('completeAgent idempotence (#3384)', () => {
       await mkdir(directory, { recursive: true }); await writeFile(join(directory, 'metadata.json'), JSON.stringify(record));
       const expected = structuredClone(record);
       if (scenario === 'refused-cas') expected.metadata.changed = true;
-      if (scenario === 'wrong-task') expected.taskId = 'other-task';
-      const proof = { path: scenario === 'wrong-path' ? '/synthetic/other-path' : capture.path, branch: capture.branch,
-        ...(scenario === 'inherited-proof' && { inheritedFromAgentId: 'other-parent' }) };
+      const proof = { path: scenario === 'wrong-path' ? '/synthetic/other-path' : capture.path, branch: capture.branch };
+      // Only a completed task or another named cleanup owner is final; an unowned
+      // task may still be waiting for this run's own cleanup handoff.
+      const owner = { 'other-owner': 'successor-run', 'own-handoff': id }[scenario];
+      if (scenario !== 'task-missing') recoveryTasks.set(record.taskId, { id: record.taskId,
+        status: ['other-owner', 'handoff-pending', 'own-handoff'].includes(scenario) ? 'in_progress' : 'completed',
+        metadata: owner ? { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: owner } : {} });
+      const settles = ['completed-task', 'other-owner'].includes(scenario);
       const completion = vi.fn(); cosEvents.on('agent:completed', completion);
       try {
-        expect(await recordAbsentCheckoutRetirement(id, expected, proof)).toBe(scenario === 'verified');
+        expect(await recordAbsentCheckoutRetirement(id, expected, proof)).toBe(settles);
         const saved = JSON.parse(await readFile(join(directory, 'metadata.json'), 'utf8'));
-        if (scenario === 'verified') {
+        if (settles) {
           expect(saved.result).toEqual(record.result);
           expect(saved.metadata.completedCheckouts).toEqual([capture]);
           expect(saved.metadata.checkoutCapture).toEqual({ status: 'captured' });
@@ -845,7 +850,7 @@ describe('completeAgent idempotence (#3384)', () => {
           expect(await recordAbsentCheckoutRetirement(id, expected, proof)).toBe(false);
         } else expect(saved).toEqual(record);
         expect(completion).not.toHaveBeenCalled();
-      } finally { cosEvents.off('agent:completed', completion); }
+      } finally { cosEvents.off('agent:completed', completion); recoveryTasks.delete(record.taskId); }
     });
 
   it.each(['own-seed', 'inherited', 'legacy'])('settles a %s cleanup observation without inventing a captured head or successful result', async scenario => {
