@@ -853,6 +853,28 @@ describe('completeAgent idempotence (#3384)', () => {
       } finally { cosEvents.off('agent:completed', completion); recoveryTasks.delete(record.taskId); }
     });
 
+  it.each(['owner', 'completed-task', 'unowned-task'])('settles a cleanup-owning capture-pending run\'s absent seed checkout only after its task moved on: %s', async scenario => {
+    const id = 'capture-pending-owner', startedAt = '2026-01-01T00:00:00Z', completedAt = '2026-01-01T00:01:00Z';
+    const stages = Object.fromEntries(['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report'].map(key => [key, { status: 'done' }]));
+    stages.worktree = { status: 'held', reason: 'checkout-capture-pending' };
+    const record = { id, taskId: 'owned-task', status: 'completed', startedAt, completedAt,
+      result: { success: false, executionSuccess: true, cleanupPending: true, deliveryRecoveryOwned: true },
+      metadata: { completedCheckouts: [], checkoutCapture: { status: 'pending', unknown: true, targets: [] },
+        repoStateVerification: { status: 'pending' }, completionCleanup: { version: 1, status: 'pending', stages, replay: { version: 1 } } } };
+    mockCosState.state.agents[id] = record;
+    const directory = join(mockCosState.agentsDir, completedAt.slice(0, 10), id);
+    await mkdir(directory, { recursive: true }); await writeFile(join(directory, 'metadata.json'), JSON.stringify(record));
+    recoveryTasks.set(record.taskId, { id: record.taskId, status: scenario === 'completed-task' ? 'completed' : 'in_progress',
+      metadata: scenario === 'owner' ? { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: id } : {} });
+    try {
+      // Only a finished task is final; an unowned one may still await this run's own handoff.
+      const settles = scenario === 'completed-task';
+      expect(await recordAbsentCheckoutRetirement(id, structuredClone(record), { path: '/tree', branch: 'claim/issue-1' })).toBe(settles);
+      const saved = JSON.parse(await readFile(join(directory, 'metadata.json'), 'utf8'));
+      if (!settles) expect(saved).toEqual(record);
+    } finally { recoveryTasks.delete(record.taskId); }
+  });
+
   it.each(['own-seed', 'inherited', 'legacy'])('settles a %s cleanup observation without inventing a captured head or successful result', async scenario => {
     const id = 'seeded-retired', startedAt = '2026-01-01T00:00:00Z', completedAt = '2026-01-01T00:01:00Z';
     const stages = Object.fromEntries(['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report'].map(key => [key, { status: 'done' }]));

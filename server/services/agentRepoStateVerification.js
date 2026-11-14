@@ -392,7 +392,10 @@ export async function verifyAgentRepoState(input) {
       const reason = await input.recheckCleanup({ requireCapture: false }).then(() => null, error => error.message);
       if (reason) return skipped(reason);
     }
-    if (input.agentState?.metadata?.checkoutCapture?.status === 'pending') {
+    // A capture that can never complete because its checkout is already gone
+    // falls through to the absent-checkout path, which proves delivery from the
+    // forge without a captured head.
+    if (input.agentState?.metadata?.checkoutCapture?.status === 'pending' && !(cleanupPending && await seedCheckoutAbsent(input.agentState))) {
       const { retryCompletionCheckoutCapture, getAgentRecord } = await import('./cosAgentLifecycle.js');
       if (!await retryCompletionCheckoutCapture(input.agentId).catch(() => false)) return skipped('checkout-capture-pending');
       const recovered = await getAgentRecord(input.agentId).catch(() => null);
@@ -619,6 +622,17 @@ function ownSeedRetirementSeed(agent) {
   const meta = agent.metadata;
   return agent.status === 'completed' && meta?.checkoutCapture?.status === 'pending' && meta.checkoutCapture.unknown === true
     && meta.completionCleanup?.status === 'pending' ? recordedRetirementSeed(agent) : null;
+}
+
+/** The recorded seed's checkout path, local branch and worktree entry are all
+ * verifiably gone. Any unreadable observation reads as present. */
+async function seedCheckoutAbsent(agent) {
+  const seed = ownSeedRetirementSeed(agent);
+  if (!seed) return false;
+  const worktrees = await listWorktrees(seed.repoPath).catch(() => null);
+  return !!worktrees && await readCheckoutPathPresence(seed.path) === false
+    && await readLocalBranchPresence(seed.repoPath, seed.branch) === false
+    && !worktrees.some(row => resolve(row.path) === resolve(seed.path) || row.branch?.replace(/^refs\/heads\//, '') === seed.branch);
 }
 
 function inheritedRetirementScope(agent) {
