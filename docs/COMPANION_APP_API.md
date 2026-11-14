@@ -73,8 +73,9 @@ PortOS auth is a single optional password (`server/services/auth.js`,
 depending on how the app presents it — Basic is not a full session, and the app
 needs both.
 
-- **When `authRequired` is `false`:** reads need no credential at all, but
-  every write is gated — see
+- **When `authRequired` is `false`:** reads need no credential at all (except
+  the few sensitive reads listed under [Host control](#operator-sessions-vs-http-basic)),
+  but every write is gated — see
   [Operator sessions](#operator-sessions-vs-http-basic) below. A remote
   companion app can never satisfy that gate on a passwordless install: host
   control falls back to a local (loopback) connection, which a tailnet caller
@@ -85,8 +86,9 @@ needs both.
   `Authorization: Basic base64(":" + password)` on every `/api/*` request as a
   baseline credential. PortOS is single-user, so the username half is ignored —
   only the password is verified. Store the password **per instance in the iOS
-  Keychain**. Basic alone is enough for reads, but **not** for any write
-  (below) — every write needs an operator session on top.
+  Keychain**. Basic alone is enough for reads other than the sensitive reads
+  listed under host control, but **not** for any write (below) — every write
+  and those reads need an operator session on top.
 
 ### Operator sessions vs. HTTP Basic
 

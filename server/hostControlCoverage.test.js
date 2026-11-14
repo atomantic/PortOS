@@ -12,7 +12,9 @@
  *     a rename cannot silently ungate a sensitive read.
  */
 import { describe, expect, it } from 'vitest';
+import { isAlwaysPublicApiPath, isPeerApiRequestAllowed, isPeerBasicBootstrapRequest } from './lib/apiAccessPolicy.js';
 import { getApiRouteCatalog } from './lib/apiRouteGraph.js';
+import { API_REGISTRY } from './lib/apiRegistry.js';
 import { HOST_CONTROL_GET_ROUTES, hostControlGetRouteFor, isHostControlRoute } from './lib/hostControlRoutes.js';
 
 const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -62,12 +64,25 @@ const OPEN_WRITES = {
 
 const catalog = () => getApiRouteCatalog().routes;
 
+// Which surface's admission a route answers to, from the policy modules
+// themselves (a catalog `:param` segment stands in for any value).
+const admissionOf = (method, path) => {
+  const lower = path.toLowerCase();
+  if (isAlwaysPublicApiPath(lower)) return 'public';
+  if (isPeerApiRequestAllowed(method, lower)) return 'peer';
+  if (isPeerBasicBootstrapRequest(method, lower)) return 'peer-bootstrap';
+  if (/^\/api\/managed-visitors\/v1(?:\/|$)/.test(lower)) return 'managed-visitor';
+  if (API_REGISTRY.some((entry) => entry.publicPrefixes.some((prefix) => lower.startsWith(prefix)))) return 'exposed-api';
+  return 'operator';
+};
+
 describe('host-control default over mounted writes (#16018)', () => {
   it('opens only the reviewed non-operator surfaces; every other mounted write is gated', () => {
-    const open = new Set(catalog()
+    const open = Object.fromEntries(catalog()
       .filter(({ method, path }) => !READ_METHODS.has(method) && !isHostControlRoute(method, path))
-      .map(({ method, path }) => `${method} ${path}`));
-    expect([...open].sort()).toEqual(Object.keys(OPEN_WRITES).sort());
+      .map(({ method, path }) => [`${method} ${path}`, admissionOf(method, path)]));
+    // Keys pin which writes bypass the gate; values pin whose admission each answers to.
+    expect(open).toEqual(OPEN_WRITES);
   });
 });
 
