@@ -1939,7 +1939,6 @@ describe('Windows native support boundary', () => {
     'server/lib/windowsAgentProcess.js',
     'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
     'server/lib/gitRepositoryIdentity.js',
-    'server/lib/checkoutRetirementAdmission.js',
     'server/lib/pathSafety.js',
     'server/services/shell.windows.test.js',
     'server/services/agentTuiSpawning/sessionController.js',
@@ -1993,7 +1992,7 @@ describe('Windows native support boundary', () => {
       'server/services/shell.windows.test.js', 'server/services/tuiPromptRunner.test.js',
       'server/lib/execGit.test.js', 'server/lib/windowsGitProcess.test.js', 'server/lib/windowsGitProcess.protocol.test.js',
       'server/lib/windowsAgentProcess.test.js',
-      'server/lib/gitRepositoryIdentity.test.js', 'server/lib/checkoutRetirementAdmission.test.js',
+      'server/lib/gitRepositoryIdentity.test.js',
       'server/lib/nativeTrash.smoke.test.js',
     ]));
     const repo = fileURLToPath(new URL('../', import.meta.url));

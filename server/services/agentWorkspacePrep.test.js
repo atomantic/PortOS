@@ -16,12 +16,6 @@ const pendingGuardCheck = vi.hoisted(() => vi.fn(async () => null));
 vi.mock('./pendingMergeRecovery.js', () => ({ validatePendingMergeRecovery: (...args) => pendingGuardCheck(...args) }));
 vi.mock('./cos.js', () => ({}));
 vi.mock('./cosMergeHandoff.js', () => ({ validateCleanupReviewTarget: (...args) => recoveryCheck(...args) }));
-const publication = vi.hoisted(() => ({ active: false, refuse: false }));
-vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: vi.fn(async (_repo, work) => {
-  if (publication.refuse) throw new Error('checkout-retirement-reserved');
-  publication.active = true;
-  try { return await work(); } finally { publication.active = false; }
-}) }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('../lib/execGit.js', () => ({
   execGit: vi.fn().mockImplementation(async args => ({ stdout: args.includes('--is-inside-work-tree') ? 'true' : '', stderr: '', exitCode: 0 })),
@@ -114,7 +108,7 @@ import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktree
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 
-beforeEach(() => { vi.clearAllMocks(); recoveryCheck.mockReset().mockResolvedValue(null); pendingGuardCheck.mockReset().mockResolvedValue(null); listWorktrees.mockResolvedValue([]); publication.active = publication.refuse = false; });
+beforeEach(() => { vi.clearAllMocks(); recoveryCheck.mockReset().mockResolvedValue(null); pendingGuardCheck.mockReset().mockResolvedValue(null); listWorktrees.mockResolvedValue([]); });
 
 describe('prepareAgentWorkspace — Creative Director scratch cwd (#4650)', () => {
   it('pins a CD no-worktree task to an isolated scratch dir and skips the git pull', async () => {
@@ -1316,47 +1310,26 @@ describe('resolveTaskExistingBranch', () => {
 
 
 describe('durable workspace preparation and registration lifetime', () => {
-  it('retains admission after ordinary creation until its registration continuation settles', async () => {
+  it('waits for the registration continuation before settling', async () => {
     let finish;
     const registration = new Promise(resolve => { finish = resolve; });
-    createWorktree.mockImplementationOnce(async () => {
-      expect(publication.active).toBe(true);
-      return { worktreePath: '/mock/worktrees/new', branchName: 'cos/new' };
-    });
+    createWorktree.mockImplementationOnce(async () => ({ worktreePath: '/mock/worktrees/new', branchName: 'cos/new' }));
     const onPrepared = vi.fn(async result => {
       expect(result.outcome).toBe('ready');
-      expect(publication.active).toBe(true);
       await registration;
-      expect(publication.active).toBe(true);
       return 'registered-and-spawned';
     });
     const result = prepareAgentWorkspace({ agentId: 'new', task: {
       id: 'new', metadata: { useWorktree: true },
     }, onPrepared });
     await vi.waitFor(() => expect(onPrepared).toHaveBeenCalledOnce());
-    expect(publication.active).toBe(true);
     finish();
     expect(await result).toBe('registered-and-spawned');
-    expect(publication.active).toBe(false);
   });
 
-  it('refuses before ordinary preparation can mutate or call registration', async () => {
-    publication.refuse = true;
-    const onPrepared = vi.fn();
-    await expect(prepareAgentWorkspace({ agentId: 'new', task: {
-      id: 'new', metadata: { useWorktree: true },
-    }, onPrepared })).rejects.toThrow('checkout-retirement-reserved');
-    expect(createWorktree).not.toHaveBeenCalled();
-    expect(ensureLatest).not.toHaveBeenCalled();
-    expect(onPrepared).not.toHaveBeenCalled();
-  });
-
-  it('continues non-Git read-only tasks without a repository permit', async () => {
+  it('continues non-Git read-only tasks', async () => {
     execGit.mockResolvedValueOnce({ stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git', exitCode: 128 });
-    const onPrepared = vi.fn(async result => {
-      expect(publication.active).toBe(false);
-      return result;
-    });
+    const onPrepared = vi.fn(async result => result);
     const result = await prepareAgentWorkspace({ agentId: 'docs', task: {
       id: 'docs', metadata: { readOnly: true },
     }, onPrepared });

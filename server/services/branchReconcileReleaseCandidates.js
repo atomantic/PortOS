@@ -5,6 +5,7 @@
  * served its purpose: route the checkout through the inventoried review/retire
  * path, which archives it and releases the reviewed lock itself.
  */
+import { withGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 
 const LOCK_PREFIX = 'Active release candidate ';
 
@@ -63,8 +64,7 @@ async function unlockAbandonedCandidate(app, tree, deps = {}) {
   const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
   const { listWorktrees } = await import('./worktreeManager.js');
   const { execGit } = await import('../lib/execGit.js');
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withClaimOwnershipLock(() => withCheckoutPublication(app.repoPath, async () => {
+  return withClaimOwnershipLock(() => withGitMutationLifetime(async () => {
     await (deps.beforeMutation || (await import('./branchReconcileRetirement.js')).assertAutomaticRetirementAllowed)();
     const agents = await readClaimOwnershipAgents();
     const { getActiveAgentIds } = await import('./agentState.js');

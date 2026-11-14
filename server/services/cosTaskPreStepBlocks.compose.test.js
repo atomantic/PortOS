@@ -131,7 +131,6 @@ vi.mock('./worktreeManager.js', async original => ({ ...await original(), listWo
 vi.mock('../lib/execGit.js', async original => ({ ...await original(), execGit: async () => ({ stdout: admissionFixture.branch }) }));
 vi.mock('./branchCompletionPolicy.js', async original => ({ ...await original(), readBranchCompletionHold: async () => admissionFixture.hold }));
 // The test's repository is synthetic; durable retirement fencing has real-filesystem coverage.
-vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_repo, work) => work() }));
 
 import { registerAgent } from './cosAgentLifecycle.js';
 import { resolveMergeHandoffOwner } from './mergeHandoffOwner.js';

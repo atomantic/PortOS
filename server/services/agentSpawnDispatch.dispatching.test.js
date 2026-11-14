@@ -3,17 +3,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const f = vi.hoisted(() => ({ registerGate: null, prep: null, publicationActive: false, refusePublication: false, updateResult: { ok: true }, provider: null, tui: false }));
+const f = vi.hoisted(() => ({ registerGate: null, prep: null, updateResult: { ok: true }, provider: null, tui: false }));
 const releaseDisposition = vi.hoisted(() => vi.fn(async () => null));
 const releaseObservations = vi.hoisted(() => vi.fn(async () => new Map()));
 const releasePreflight = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 vi.mock('./releasePreflight.js', () => ({ releasePreflight }));
 vi.mock('./releaseSynchronization.js', () => ({ releaseTaskDispatchDisposition: releaseDisposition, observeReleaseDeliveries: releaseObservations }));
-vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: vi.fn(async (_repo, work) => {
-  if (f.refusePublication) throw new Error('checkout-retirement-reserved');
-  f.publicationActive = true;
-  try { return await work(); } finally { f.publicationActive = false; }
-}) }));
 vi.mock('./cos.js', () => ({}));
 vi.mock('./cosState.js', () => ({ getConfig: async () => ({}) }));
 vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async () => f.updateResult) }));
@@ -47,10 +42,7 @@ vi.mock('./agentProviderResolution.js', () => ({
     ok: true, provider: f.provider, selectedModel: 'example-model', modelSelection: {},
   }),
 }));
-vi.mock('./agentWorkspacePrep.js', () => ({ prepareAgentWorkspace: vi.fn(async ({ onPrepared }) => {
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication('/repos/example', () => onPrepared(f.prep));
-}) }));
+vi.mock('./agentWorkspacePrep.js', () => ({ prepareAgentWorkspace: vi.fn(async ({ onPrepared }) => onPrepared(f.prep)) }));
 vi.mock('./agentCliSpawning.js', () => ({
   buildCliSpawnConfig: () => ({ command: 'codex', args: [] }),
   isClaudeCliProvider: () => false,
@@ -74,7 +66,6 @@ import { createAgentRun } from './agentRunTracking.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { updateTask } from './cosTaskStore.js';
 import { registerAgent, updateAgent } from './cosAgentLifecycle.js';
-import { withCheckoutPublication } from '../lib/checkoutRetirementAdmission.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
 
 const task = { id: 'task-example', taskType: 'user', description: 'example', metadata: {} };
@@ -90,7 +81,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   releaseDisposition.mockResolvedValue(null);
   setUseRunner(false);
-  f.publicationActive = f.refusePublication = false;
   f.registerGate = Promise.resolve();
   f.updateResult = { ok: true };
   f.prep = { outcome: 'ready', workspacePath: '/repos/example', worktreeInfo: null };
@@ -237,30 +227,16 @@ describe('dispatchAgentRun ownership window', () => {
     expect(getActiveAgentIds()).not.toContain('agent-x');
   });
 
-  it.each([{}, { claimResumeInPlace: true }, { existingBranch: 'feature/existing', useWorktree: true }])('holds workspace publication through pending registration and spawn: %j', async metadata => {
+  it.each([{}, { claimResumeInPlace: true }, { existingBranch: 'feature/existing', useWorktree: true }])('spawns only after pending registration settles: %j', async metadata => {
     let finishRegistration;
     f.registerGate = new Promise(resolve => { finishRegistration = resolve; });
     const context = newContext();
     context.task = { ...task, metadata: { ...metadata, app: 'example-app' } };
     const dispatched = dispatchAgentRun(context);
     await vi.waitFor(() => expect(registerAgent).toHaveBeenCalled());
-    expect(withCheckoutPublication).toHaveBeenCalledWith('/repos/example', expect.any(Function));
-    expect(f.publicationActive).toBe(true);
     expect(spawnDirectly).not.toHaveBeenCalled();
-    spawnDirectly.mockImplementationOnce(async () => { expect(f.publicationActive).toBe(true); return 'agent-x'; });
     finishRegistration(); await dispatched;
-    expect(f.publicationActive).toBe(false);
-  });
-
-  it('refuses a resumed claim before workspace preparation when retirement owns the cut', async () => {
-    f.refusePublication = true;
-    const context = newContext();
-    context.task = { ...task, metadata: { claimResumeInPlace: 'true', app: 'example-app' } };
-    await expect(dispatchAgentRun(context)).rejects.toThrow('checkout-retirement-reserved');
-    expect(prepareAgentWorkspace).toHaveBeenCalledOnce();
-    expect(registerAgent).not.toHaveBeenCalled();
-    expect(spawnDirectly).not.toHaveBeenCalled();
-    expect(getActiveAgentIds()).not.toContain('agent-x');
+    expect(spawnDirectly).toHaveBeenCalled();
   });
 
   it.each([{ error: 'write refused' }, { statusChanged: true }])('never starts a recovered reviewer when its initial pin consumption was not persisted: %j', async result => {
@@ -278,7 +254,6 @@ describe('dispatchAgentRun ownership window', () => {
     expect(context.cleanupOnError).toHaveBeenCalledWith(expect.stringContaining('Failed to persist reviewed-head launch admission'));
     expect(context.claimAcquired).toBe(false);
     expect(context.spawnWorktree).toBeNull();
-    expect(f.publicationActive).toBe(false);
   });
 
   it('refuses before registration and the in_progress claim when host shutdown lands during preparation (#14170)', async () => {
