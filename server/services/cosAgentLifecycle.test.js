@@ -105,7 +105,7 @@ vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await import
   dataRoot: () => lazyTempDataRoot('portos-cos-lifecycle-'),
 }));
 
-import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, readProtectedCleanupOwners, recordAuditFindingsReceipt, recordCompletionCleanup, recordInheritedCheckoutRetirement, recordSeededCheckoutRetirement, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, recordSwarmCleanupDelivery, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, readProtectedCleanupOwners, recordAuditFindingsReceipt, recordCompletionCleanup, recordSuccessorCheckoutRetirement, recordAbsentCheckoutRetirement, settleAbsentTaskCompletion, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, recordSwarmCleanupDelivery, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
@@ -864,13 +864,13 @@ describe('completeAgent idempotence (#3384)', () => {
     mockCosState.state.agents[id] = record;
     const directory = join(mockCosState.agentsDir, completedAt.slice(0, 10), id);
     await mkdir(directory, { recursive: true }); await writeFile(join(directory, 'metadata.json'), JSON.stringify(record));
-    const proof = { checkoutIdentity: 'b'.repeat(64), observationDigest: 'c'.repeat(64) };
+    const proof = { path: '/tree', branch: 'claim/issue-1' };
     const inherited = scenario === 'inherited';
     if (inherited) {
       record.metadata.isWorktree = false; record.metadata.resumedFromAgentId = 'original-parent';
       proof.inheritedFromAgentId = 'original-parent';
     }
-    const write = inherited ? recordInheritedCheckoutRetirement : recordSeededCheckoutRetirement;
+    const write = recordAbsentCheckoutRetirement;
     expect(await write(id, { ...record, metadata: { ...record.metadata, changed: true } }, proof)).toBe(false);
     expect(await write(id, structuredClone(record), proof)).toBe(true);
     const saved = JSON.parse(await readFile(join(directory, 'metadata.json'), 'utf8'));
@@ -883,8 +883,7 @@ describe('completeAgent idempotence (#3384)', () => {
     expect(saved.metadata.checkoutCapture).not.toHaveProperty('retiredHead');
     if (scenario === 'legacy') {
       const historical = mockCosState.state.agents[id];
-      Object.assign(historical.metadata.checkoutCapture, { retiredHead: 'a'.repeat(40), receiptDigest: 'c'.repeat(64) });
-      delete historical.metadata.checkoutCapture.observationDigest;
+      Object.assign(historical.metadata.checkoutCapture, { checkoutIdentity: 'b'.repeat(64), retiredHead: 'a'.repeat(40), receiptDigest: 'c'.repeat(64) });
       historical.metadata.completionCleanup.stages.worktree.verifiedBy = 'service-retirement-receipt';
       await writeFile(join(directory, 'metadata.json'), JSON.stringify(historical));
     }
