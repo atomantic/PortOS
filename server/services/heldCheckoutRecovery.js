@@ -20,7 +20,7 @@ import { VITEST_CACHE_TAG, VITEST_MODULE_CACHE_ROOTS, moduleCacheName, moduleCac
  * files, or its commit history into an archive.
  */
 
-import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
+import { readLocalBranchPresence } from './repoCleanupObservation.js';
 import { realpathSync, constants } from 'node:fs';
 import { lstat, stat, realpath, readlink, readdir, opendir, open, unlink, symlink } from 'node:fs/promises';
 import { devNull } from 'node:os';
@@ -139,26 +139,6 @@ async function archiveBytes(path, work, limitBytes, reason = 'retirement-archive
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
-}
-
-async function historicalCheckoutAbsent(release, trees) {
-  const present = await lstat(release.path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-  return !present && trees.length > 0 && !trees.some(tree => tree.path === release.path || (release.branch && shortBranch(tree.branch) === release.branch));
-}
-
-/** Physical cleanup is current absence, independently of execution success.
- * This observation cannot authorize deletion or manufacture a terminal head. */
-export async function inspectAbsentCheckout({ repoPath, release }) {
-  if (!release?.path || !release.branch) return null;
-  const absent = async () => {
-    const trees = await listWorktrees(repoPath);
-    return await readCheckoutPathPresence(release.path) === false
-      && await readLocalBranchPresence(repoPath, release.branch) === false
-      && await historicalCheckoutAbsent(release, trees);
-  };
-  if (!await absent()) return null;
-  return { kind: 'current-inventory', evidenceDigest: createHash('sha256')
-    .update(JSON.stringify([repoPath, release.path, release.branch, release.head ?? null])).digest('hex'), recheck: absent };
 }
 
 // Review refuses rather than inspect a subset: removing a checkout that was

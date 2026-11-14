@@ -1,4 +1,3 @@
-import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 /**
  * CoS Agent Lifecycle Module
  *
@@ -24,7 +23,7 @@ import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
 import { loadAgentIndex, saveAgentIndex, getAgentDir, recordArchivedAgentOrder, moveAgentDir } from './cosAgentIndex.js';
-import { hasClaimCheckoutBindings, hasReleaseCandidateBinding, boundCheckoutBranches, completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
+import { hasClaimCheckoutBindings, hasReleaseCandidateBinding, boundCheckoutBranches } from './completedCheckoutEvidence.js';
 import { isAgentHandoff } from '../lib/agentOutcome.js';
 import { collectProtectedCleanupOwners } from '../lib/taskRetryHold.js';
 import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
@@ -577,38 +576,27 @@ export async function recordCompletionCleanup(agentId, startedAt, patch) {
   return saved && matched;
 }
 
-/** Settle only an earlier run's physical cleanup after its verified successor.
- * Keep the original unknown capture and failed execution verdict explicit. */
-export function recordSuccessorCheckoutRetirement(agentId, expected, proof) {
-  return recordCheckoutRetirement(agentId, expected, proof, 'delivered-successor');
-}
-
 /** Verified absence settles physical cleanup without inventing a terminal
- * head or changing the original execution result. */
-export function recordAbsentCheckoutRetirement(agentId, expected, proof) {
-  return recordCheckoutRetirement(agentId, expected, proof,
-    proof.inheritedFromAgentId ? 'inherited-current-inventory' : 'current-inventory');
-}
-
-async function recordCheckoutRetirement(agentId, expected, proof, verifiedBy) {
+ * head or changing the original execution result. A captured checkout settles
+ * only for a cleanup run whose task already completed or names another
+ * cleanup owner; neither state can be handed back to this run, while a merely
+ * unowned task may still be awaiting this run's own cleanup handoff. */
+export async function recordAbsentCheckoutRetirement(agentId, expected, proof) {
+  const verifiedBy = proof.inheritedFromAgentId ? 'inherited-current-inventory' : 'current-inventory';
   let matched = false;
-  const saved = await updateCompletionReceipt(agentId, (metadata, agent) => {
+  const saved = await updateCompletionReceipt(agentId, async (metadata, agent) => {
     if (agent.status !== 'completed' || agent.startedAt !== expected.startedAt || agent.taskId !== expected.taskId
       || !isDeepStrictEqual(metadata, expected.metadata) || metadata.completionCleanup?.status !== 'pending') return metadata;
-    const source = proof.sourceCapture;
-    if (source) {
-      if (verifiedBy !== 'delivered-successor' || metadata.checkoutCapture?.status !== 'captured'
-        || agent.result?.executionSuccess !== true || agent.result.validationPassed === false
-        || agent.result.cleanupPending !== true || agent.result.deliveryRecoveryOwned !== true
-        || agent.result.taskOutcome?.status !== 'incomplete' || agent.result.taskOutcome?.recovery?.mode !== 'cleanup'
-        || agent.result.executionInterruption || metadata.executionInterruption || metadata.blocker
-        || !proof.successorAgentId || proof.successorAgentId === agentId || proof.head !== source.head
-        || !/^[a-f0-9]{64}$/.test(proof.receiptDigest || '')
-        || retirementCheckoutIdentityFromPointer(source.incarnation?.pointer) !== proof.checkoutIdentity
-        || proof.prUrl !== metadata.reviewLoopMergeTarget?.url || source.branch !== metadata.worktreeBranch
-        || source.repoPath !== metadata.sourceWorkspace || source.path !== metadata.workspacePath
-        || !metadata.completedCheckouts?.some(row => completedCheckoutReceiptValid(agent, row) && isDeepStrictEqual(row, source))) return metadata;
-    } else if (metadata.checkoutCapture?.status !== 'pending' || metadata.checkoutCapture.unknown !== true) return metadata;
+    const handedOff = metadata.checkoutCapture?.status === 'captured';
+    if (handedOff ? agent.result?.cleanupPending !== true || metadata.isWorktree !== true
+        || proof.branch !== metadata.worktreeBranch || proof.path !== metadata.workspacePath
+      : metadata.checkoutCapture?.status !== 'pending' || metadata.checkoutCapture.unknown !== true) return metadata;
+    if (handedOff) {
+      const { getTaskById } = await import('./cosTaskStore.js');
+      const task = await getTaskById(agent.taskId).catch(() => null);
+      const owner = task?.metadata?.deliveryRecoveryAgentId;
+      if (task?.status !== 'completed' && !(typeof owner === 'string' && owner && owner !== agentId)) return metadata;
+    }
     if (verifiedBy === 'inherited-current-inventory'
       && (!proof.inheritedFromAgentId || metadata.resumedFromAgentId !== proof.inheritedFromAgentId
         || metadata.isWorktree !== false || metadata.checkoutSeeds?.length || metadata.completedCheckouts?.length
@@ -618,18 +606,17 @@ async function recordCheckoutRetirement(agentId, expected, proof, verifiedBy) {
       || Object.entries(stages).some(([key, stage]) => key !== 'worktree' && stage.status !== 'done')) return metadata;
     matched = true;
     const completionCleanup = { ...metadata.completionCleanup, status: 'completed', updatedAt: new Date().toISOString(),
-      stages: { ...stages, worktree: { status: 'done', retryable: false, verifiedBy, ...(proof.successorAgentId && { successorAgentId: proof.successorAgentId }) } } };
+      stages: { ...stages, worktree: { status: 'done', retryable: false, verifiedBy } } };
     delete completionCleanup.context; delete completionCleanup.replay;
     const updated = { ...metadata, completionCleanup,
-      checkoutCapture: source ? metadata.checkoutCapture : { ...metadata.checkoutCapture, status: 'retired', reason: verifiedBy === 'delivered-successor' ? 'retired-by-verified-successor'
-        : verifiedBy === 'inherited-current-inventory' ? 'inherited-scope-already-retired' : 'retired-from-current-inventory', ...proof },
       repoStateVerification: { ...metadata.repoStateVerification, status: 'completed', reasons: [],
-        checkedAt: new Date().toISOString(), ...(proof.successorAgentId
-          ? { deliveryVerifiedBySuccessor: proof.successorAgentId } : { physicalRetirementVerified: true }) } };
-    return source ? metadataWithCleanupOutcome(updated, { status: 'verified', reason: 'same-head-successor-retirement-verified',
-      branch: source.branch, path: source.path, prUrl: proof.prUrl, committedIntegrationVerified: true,
-      successorAgentId: proof.successorAgentId, preservation: { verifiedAt: new Date().toISOString(),
-        checkoutIdentity: proof.checkoutIdentity, receiptDigest: proof.receiptDigest } }) : updated;
+        checkedAt: new Date().toISOString(), physicalRetirementVerified: true } };
+    // The captured checkout stays recorded; its ledger row shows the cleanup
+    // settled without claiming integration, so the execution result is unchanged.
+    if (handedOff) return metadataWithCleanupOutcome(updated, { status: 'verified', reason: 'already-absent-after-handoff',
+      branch: proof.branch, path: proof.path });
+    return { ...updated, checkoutCapture: { ...metadata.checkoutCapture, status: 'retired',
+      reason: verifiedBy === 'inherited-current-inventory' ? 'inherited-scope-already-retired' : 'retired-from-current-inventory', ...proof } };
   });
   return saved && matched;
 }
