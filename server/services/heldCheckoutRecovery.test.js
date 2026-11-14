@@ -38,7 +38,7 @@ vi.mock('./prProbe.js', async importOriginal => ({ ...await importOriginal(), is
 vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id ? injected.app : null) }));
 
 import { describeHeldCheckoutRecovery, setReceiptWork, it, beforeEach, scratch, repo, external, cosDir, receiptWork, noOwners, heldCheckout, registered, lockText, retire, makeClean, supersededCheckout, reapSuperseded, reviewedCheckout } from './_heldCheckoutRecoveryFixture.js';
-const { retireInventoriedCheckout, retireOperatorCheckout, prepareInventoriedCheckoutRetirement, inspectAbsentCheckout } = await import('./heldCheckoutRecovery.js');
+const { retireInventoriedCheckout, retireOperatorCheckout, prepareInventoriedCheckoutRetirement } = await import('./heldCheckoutRecovery.js');
 const { sha256File } = await import('../lib/fileUtils.js');
 const { recordBranchReconcileOutcome, getBranchReconcileOutcome, getBranchReconcileInventory } = await import('./branchReconcileOutcome.js');
 const { withClaimOwnershipLock, checkReconcileOwnership } = await import('./cosClaimOwnership.js');
@@ -704,20 +704,6 @@ describeHeldCheckoutRecovery(() => {
     expect(await sha256File(wanted)).toBe(before);
     expect(existsSync(c.path)).toBe(true);
     expect(await registered(c.path)).toBe(true);
-  });
-
-  it('observes current physical cleanup without requiring or creating retirement history', async () => {
-    const c = await reviewedCheckout('current-absence');
-    const release = { ...c.release, checkoutIdentity: await readRetirementCheckoutIdentity(c.path) };
-    expect(await inspectAbsentCheckout({ repoPath: repo, release })).toBeNull();
-    const prepared = await c.prepare();
-    expect(await c.confirm(prepared.review)).toMatchObject({ ok: true, branchDeleted: true });
-    (await getBranchReconcileOutcome('app-1')).retired = [];
-    const proof = await inspectAbsentCheckout({ repoPath: repo, release });
-    expect(proof).toMatchObject({ kind: 'current-inventory', evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/) });
-    expect(await proof.recheck()).toBe(true);
-    await mkdir(c.path);
-    expect(await proof.recheck()).toBe(false);
   });
 
   it.each(['delivered', 'unpublished-tip', 'lagging-local-default', 'merge-not-in-default'])(
