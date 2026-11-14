@@ -1,4 +1,5 @@
 import { lstat } from 'fs/promises';
+import { join } from 'path';
 import { isSafeGitRef } from '../lib/gitArgs.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
 import { execGit } from '../lib/execGit.js';
@@ -21,7 +22,13 @@ export async function readLocalBranchPresence(repoPath, branch) {
   try {
     if ((await run(['check-ref-format', ref])).exitCode !== 0) return null;
     const { exitCode } = await run(['show-ref', '--exists', ref]);
-    return exitCode === 0 ? true : exitCode === 2 ? false : null;
+    if (exitCode === 0) return true;
+    if (exitCode !== 2) return null;
+    // show-ref reports a directory or dangling symlink squatting on the loose
+    // ref path as absent; it still blocks the branch, so it must read unknown.
+    const gitDir = await run(['rev-parse', '--path-format=absolute', '--git-common-dir']);
+    if (gitDir.exitCode !== 0) return null;
+    return await readCheckoutPathPresence(join(gitDir.stdout.trim(), ref)) === false ? false : null;
   } catch { return null; }
 }
 
