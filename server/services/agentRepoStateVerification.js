@@ -413,11 +413,6 @@ export async function verifyAgentRepoState(input) {
       const reason = await input.recheckCleanup({ requireCapture: false }).then(() => null, error => error.message);
       if (reason) return skipped(reason);
     }
-    if (cleanupPending && !input.manualCleanupOnly && input.agentState?.metadata?.isWorktree === false) {
-      const { recoverHistoricalClaimCleanup } = await import('./historicalClaimCleanup.js');
-      const historical = await recoverHistoricalClaimCleanup(input.agentState, verifyRunBranches);
-      if (historical) return { ...historical, historicalCleanup: true };
-    }
     if (input.agentState?.metadata?.checkoutCapture?.status === 'pending') {
       const { retryCompletionCheckoutCapture, getAgentRecord } = await import('./cosAgentLifecycle.js');
       if (!await retryCompletionCheckoutCapture(input.agentId).catch(() => false)) return skipped('checkout-capture-pending');
@@ -461,7 +456,6 @@ export async function verifyAgentRepoState(input) {
       });
     }
     const result = await verify();
-    if (result.historicalCleanup) return result;
     if (result.skipReason === 'cleanup-owner-changed' || result.skipReason === 'cleanup-task-unavailable') return result;
     if (input.originTaskAbsent) {
       if (!result.verified) return result;
@@ -815,8 +809,6 @@ async function resumeReleasedCompletion(agentId, seedContext) {
   const { getTaskById } = await import('./cosTaskStore.js');
   const task = await getTaskById(agent.taskId);
   const { replayAgentCompletionCleanup } = await import('./agentCompletionCleanup.js');
-  const historical = await resumeHistoricalCleanup(agent, task);
-  if (historical) return historical;
   if (task) await replayAgentCompletionCleanup(agent);
   // Failed/no-change runs can still owe physical cleanup. The owner-release
   // event replays that obligation without changing their original verdict or
@@ -836,16 +828,6 @@ async function resumeReleasedCompletion(agentId, seedContext) {
   if (task) await replayAgentCompletionCleanup(settled);
   await verifyReleasedSynchronization(settled);
   return result;
-}
-
-// Replay may discard an unbound retry's now-finished cleanup inputs. Reconnect
-// historical captures first, while its immutable dispatch replay still exists.
-async function resumeHistoricalCleanup(agent, task) {
-  if (task?.status !== 'blocked' || task.metadata?.blockedCategory !== 'task-recovery-exhausted'
-    || agent.result?.cleanupPending !== true || agent.metadata?.isWorktree !== false
-    || agent.metadata.claimBranches?.length || agent.metadata.claimReleasedBranches?.length) return null;
-  const result = await verifyAgentRepoState({ agentId: agent.id, agentState: agent, task, success: false, prExpected: true });
-  return result.historicalCleanup ? result : null;
 }
 
 /** A completed delivery follow-up settles its original job immediately. No
@@ -1256,13 +1238,6 @@ async function settleTasklessCompletionAudit(agent, { readable }, seedContext) {
     checkedAt: new Date().toISOString(), reasons: [resumed?.skipReason || 'task-unavailable'] });
 }
 
-// Keep the original replay and outcome available to the latest owner's
-// historical reconciliation. Its old external stages have transferred.
-const cleanupTransferredToRecovery = (task, agent) => task.status === 'blocked'
-  && task.metadata?.blockedCategory === 'task-recovery-exhausted'
-  && task.metadata.deliveryRecovery === 'cleanup' && task.metadata.deliveryRecoveryAgentId !== agent.id
-  && agent.metadata.repoStateVerification?.reasons?.includes('cleanup-transferred-to-recovery');
-
 const completionPrExpected = (task, agent) => isTruthyMeta(task.metadata?.openPR) || !!task.metadata?.reviewLoopPRUrl
   || !!agent.metadata?.reviewLoopMergeTarget?.url;
 
@@ -1297,7 +1272,7 @@ async function resumePendingCompletionAudit(original, seedContext, getTaskById) 
   const lookup = await getTaskById(agent.taskId).then(task => ({ task, readable: true }), () => ({ task: null, readable: false }));
   const { task } = lookup;
   if (!task) await settleTasklessCompletionAudit(agent, lookup, seedContext);
-  else if (!cleanupTransferredToRecovery(task, agent) && !await resumeHistoricalCleanup(agent, task)) await verifyAndReplayCompletion(agent, task);
+  else await verifyAndReplayCompletion(agent, task);
   return true;
 }
 
@@ -1686,7 +1661,7 @@ async function retireIntegratedCheckout({ agentId, appId, observed, issues, reco
         const hold = await resolveCheckoutIncarnation({ agentId, metadata, sourceWorkspace, branchName, worktreePath });
         if (hold) throw new Error(hold.reason);
       }
-    } }).catch(error => ({ reason: (error.message.startsWith('historical-cleanup-') || ['daemon-stopped', 'automatic-retirement-disabled', 'checkout-incarnation-changed', 'claim-owner-active', 'claim-owner-ambiguous', 'cleanup-owner-changed', 'cleanup-provenance-unverified', 'swarm-continuation-pending', 'completion-stages-pending', 'checkout-capture-unverified'].includes(error.message)) ? error.message : 'retirement-outcome-uncertain' }));
+    } }).catch(error => ({ reason: (['daemon-stopped', 'automatic-retirement-disabled', 'checkout-incarnation-changed', 'claim-owner-active', 'claim-owner-ambiguous', 'cleanup-owner-changed', 'cleanup-provenance-unverified', 'swarm-continuation-pending', 'completion-stages-pending', 'checkout-capture-unverified'].includes(error.message)) ? error.message : 'retirement-outcome-uncertain' }));
   if (!result.ok || result.branchDeleted !== true || (recheckCleanup && result.archiveDir != null)) {
     return blockWith(result.reason || result.branchRetainedReason || 'retirement-receipt-unverified', { issues, observed });
   }

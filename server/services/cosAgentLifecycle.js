@@ -372,26 +372,6 @@ export function recordRepoStateVerification(agentId, verification) {
   });
 }
 
-/** Historical cleanup has its own ledger; the runs' original verdicts and
- * transferred verification records remain evidence, never rewritten success. */
-export async function recordHistoricalCleanupReconciliation(agentId, expected, patch) {
-  let matched = false;
-  const saved = await updateCompletionReceipt(agentId, (metadata, agent) => {
-    const { historicalCleanupReconciliation: _prior, ...current } = metadata;
-    const { historicalCleanupReconciliation: _expected, ...original } = expected.metadata || {};
-    if (agent.startedAt !== expected.startedAt || agent.taskId !== expected.taskId
-      || !isDeepStrictEqual(agent.result, expected.result) || !isDeepStrictEqual(current, original)) return metadata;
-    matched = true;
-    const { branchOutcome, ...fields } = patch;
-    const prior = metadata.historicalCleanupReconciliation || {};
-    return { ...metadata, historicalCleanupReconciliation: { ...prior, ...fields,
-      ...(branchOutcome && { branches: { ...prior.branches,
-        [JSON.stringify([branchOutcome.branch, branchOutcome.path || null])]: { ...branchOutcome, observedAt: patch.checkedAt } } }),
-    } };
-  }, { preserveResult: true });
-  return saved && matched;
-}
-
 /** Reserve a cognitive recovery once per exact observation on its original run.
  * Persist before dispatch: an interrupted publication stays held, never launches
  * another agent just because the old task completed or the server restarted.
