@@ -262,6 +262,7 @@ export * from './fontMetadata.js';
 export * from './musicVideoCoverOverlay.js';
 export * from './musicVideoSequenceCoverage.js';
 export * from './musicVideoSourceTake.js';
+export * from './musicVideoShotDownloadBasis.js';
 export * from './musicVideoShotTiming.js';
 export * from './musicVideoSections.js';
 export * from './musicVideoSubjectLimits.js';

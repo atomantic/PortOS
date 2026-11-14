@@ -787,6 +787,32 @@ describe('clip playback and coverage', () => {
   };
   const coverage = () => screen.queryByText(/Shot runs .* but its clip is/);
 
+  it('blocks the download after a timing save fails until that field is saved', async () => {
+    const onSave = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    function Harness() {
+      const [current, setCurrent] = useState(scene);
+      return <SceneCard scene={current} project={{ id: 'mv-1', scenes: [current] }} index={0} expanded
+        onEditLocal={(_id, patch) => setCurrent((value) => ({ ...value, ...patch }))} onSave={onSave} />;
+    }
+    render(<Harness />);
+    fireEvent.click(screen.getByLabelText(/Hold last frame/));
+    await waitFor(() => expect(screen.getByText('Save the shot changes before preparing this clip.')).toBeTruthy());
+    expect(screen.getByRole('button', { name: 'Prepare clip with music' }).disabled).toBe(true);
+    fireEvent.click(screen.getByLabelText(/Hold last frame/));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Prepare clip with music' }).disabled).toBe(false));
+  });
+
+  it('blocks preparation while a cut move is pending', async () => {
+    let finish;
+    const onMoveEnd = vi.fn(() => new Promise((resolve) => { finish = resolve; }));
+    render(<SceneCard scene={scene} project={{ id: 'mv-1', scenes: [scene] }} index={0} expanded isLast
+      onEditLocal={vi.fn()} onSave={vi.fn()} onMoveEnd={onMoveEnd} />);
+    fireEvent.click(screen.getByRole('button', { name: 'One frame shorter' }));
+    expect(screen.getByRole('button', { name: 'Prepare clip with music' }).disabled).toBe(true);
+    await act(async () => finish(true));
+    expect(screen.getByRole('button', { name: 'Prepare clip with music' }).disabled).toBe(false);
+  });
+
   it('clears both coverage warnings when the director holds the last frame, and restores them when cleared', () => {
     const onSave = vi.fn();
     function Harness() {
