@@ -1423,9 +1423,10 @@ export async function retireOperatorCheckout({ appId, release }, opts = {}) {
   if (!prUrl) return { ok: false, reason: 'retirement-merged-pr-not-found' };
   const prepared = await prepareInventoriedCheckoutRetirement({ appId, release, prUrl }, opts);
   if (!prepared.ok) return prepared;
-  const { digest, comparison } = prepared.review;
+  // Work the merged PR does not fully carry (review-supersession) is never accepted
+  // here; the retire refuses it and the checkout stays held.
   return retireInventoriedCheckout({ appId, release,
-    review: { prUrl, digest, acceptSuperseded: comparison.disposition === 'review-supersession' } }, opts);
+    review: { prUrl, digest: prepared.review.digest, acceptSuperseded: false } }, opts);
 }
 
 async function reviewBranchOnlyCleanup({ appId, release, prUrl, kind }, opts = {}) {

@@ -75,6 +75,14 @@ describeHeldCheckoutRecovery(() => {
     expect(await registered(c.path)).toBe(false);
   });
 
+  it('keeps a review-required checkout whose work was only superseded, never auto-accepting it', async () => {
+    const c = await reviewedCheckout('operator-superseded', { superseded: true });
+    mergedPrHeads.add(`${c.release.branch}@${c.release.head}`);
+    mergedPrLookup.url = c.forge.prUrl;
+    expect(await retireOperatorCheckout({ appId: 'app-1', release: c.release }, c.opts)).toMatchObject({ ok: false, reason: 'retirement-supersession-not-accepted' });
+    expect(existsSync(c.path)).toBe(true);
+  });
+
   it('keeps a review-required checkout when no merged PR can be found for its tip', async () => {
     const c = await reviewedCheckout('operator-no-pr', { normalMerge: true });
     mergedPrLookup.url = null;

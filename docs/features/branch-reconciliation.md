@@ -142,6 +142,8 @@ The body is the exact inventory tuple the operator saw. For a checkout held only
 for `pr-completion-review-required`, the server locates the merged PR for the
 branch tip, prepares and binds the review, and retires in the same call, so the
 UI asks for one confirmation and no PR URL, digest or supersession checkbox.
+Only fully integrated work retires this way; superseded, detached or
+replacement-delivered work stays held (the former review kinds were removed).
 Ownership, content, merge and current path/ref rechecks still run inside the
 retirement and keep the checkout on any mismatch. No checkout archive is created.
 There is no separate review endpoint (#16016); automatic retirement paths still
