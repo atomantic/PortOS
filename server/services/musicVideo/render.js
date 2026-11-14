@@ -348,7 +348,7 @@ async function footageClip(scene, entry, planned, editOverride = undefined) {
 // in scene order. Neither needs footage: a still needs its selected reference
 // frame (404 MISSING_STILLS when it is gone), and both need an authored span
 // (422 UNTIMED_SECTIONS), since there is no clip to take a length from.
-export async function resolveSceneClips(project, { layered = false, stillForMissingClip = false } = {}) {
+export async function resolveSceneClips(project, { layered = false, stillForMissingClip = false, sceneId = null } = {}) {
   // A draft shows a footage shot that has no clip yet as its still (layered renders only).
   const allScenes = Array.isArray(project.scenes) ? project.scenes : [];
   const playableId = (s) => scenePlayableClipId(s, allScenes);
@@ -360,7 +360,7 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
   const scenes = allScenes
     .slice()
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-    .filter((s) => s && (playableId(s) || sceneVisualLayer(s, { layered }) !== 'footage' || standIn(s)));
+    .filter((s) => s && (!sceneId || s.sceneId === sceneId) && (playableId(s) || sceneVisualLayer(s, { layered }) !== 'footage' || standIn(s)));
   if (scenes.length === 0) {
     throw new ServerError('No scene videos to render — generate at least one scene clip first', {
       status: 400, code: 'NO_SCENE_CLIPS',
@@ -766,7 +766,7 @@ function buildSegmentArgs(segment, { plan, prerolls, postrolls, addInput, sectio
 // overlap the window, clipped to it and re-based to the excerpt's own timeline
 // (0 = `startSec`) so a contact sheet built from the excerpt file can sample
 // cut boundaries directly. `totalDuration` becomes the excerpt's own length.
-export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, overlays = [], frameGrid: gridOption = false, excerpt = null, soundBed = null, grade = null, aspect = null, beats = [], segment = null, canvas = null } = {}) {
+export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, audioStartSec = 0, overlays = [], frameGrid: gridOption = false, excerpt = null, soundBed = null, grade = null, aspect = null, beats = [], segment = null, canvas = null } = {}) {
   if (!Array.isArray(clips) || clips.length === 0) throw new Error('buildMusicVideoFfmpegArgs: empty clips');
   const frameGrid = gridOption || clips.some((c) => c.layer);
   // Stills and cards have no dimensions of their own: the first footage clip
@@ -929,6 +929,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   for (const preroll of prerolls) preroll.input = addInput(preroll.clip);
   for (const postroll of postrolls) postroll.input = addInput(postroll.clip);
   const audioIdx = nextInput; // master audio follows the section inputs
+  if (audioStartSec > 0) inputs.push('-ss', String(audioStartSec));
   inputs.push('-i', audioPath);
   for (const overlay of overlays) inputs.push('-itsoffset', String(overlay.startSec), '-i', overlay.path);
 

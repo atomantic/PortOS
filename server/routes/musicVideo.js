@@ -1,6 +1,7 @@
 import { musicVideoCastSetsUseImageSchema, musicVideoCastSetsImageEditSchema, musicVideoCastSetsImageEditDecisionSchema, musicVideoColorMatchMeasureSchema, musicVideoColorMatchReferenceUpdateSchema, musicVideoColorMatchTakePatchSchema } from '../lib/musicVideoValidation.js';
 import { musicVideoDcpRequestSchema, musicVideoShotReferenceRepairSchema } from '../lib/musicVideoValidation.js';
 import { inspectDcpReadiness } from '../services/musicVideo/dcpPreflight.js';
+import { renderShotDownload } from '../services/musicVideo/shotDownload.js';
 import { activeDcp, startDcp, attachDcp, cancelDcp, dcpArtifactPaths } from '../services/musicVideo/dcp.js';
 /**
  * Music Video Routes — REST surface for the director scene board (#1760, Phase 1).
@@ -17,6 +18,7 @@ import { unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { basename } from 'path';
 import { Router } from 'express';
+import { z } from 'zod';
 import storyRoutes from './musicVideoStory.js';
 import festivalPacketRoutes from './musicVideoFestivalPacket.js';
 import researchSeedRoutes from './musicVideoResearchSeed.js';
@@ -1224,6 +1226,18 @@ router.delete('/:id/composition/document', asyncHandler(async (req, res) => {
 }));
 
 // --- Draft excerpt render (#8986) ---
+// This temporary export does not create a project excerpt or video history entry.
+router.post('/:id/scenes/:sceneId/download', asyncHandler(async (req, res, next) => {
+  const { basis } = validateRequest(z.object({ basis: z.string().max(100000) }), req.body);
+  const controller = new AbortController();
+  res.on('close', () => { if (!res.writableFinished) controller.abort(); });
+  const result = await renderShotDownload(req.params.id, req.params.sceneId, controller.signal, basis);
+  if (controller.signal.aborted) { await result.cleanup(); return; }
+  res.download(result.path, 'music-video-shot.mp4', (err) => {
+    result.cleanup().catch(() => {});
+    if (err && !res.headersSent && !controller.signal.aborted) next(err);
+  });
+}));
 // A director-chosen [startSec, endSec) window re-rendered through the same
 // composed pipeline, plus a cut/cue contact sheet and timecoded review notes.
 // Kickoff returns { jobId, excerptId }; progress streams over SSE (mirrors the

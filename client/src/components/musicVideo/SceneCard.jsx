@@ -9,6 +9,8 @@ import SceneClipLength from './SceneClipLength.jsx';
 import SceneClipTiming from './SceneClipTiming.jsx';
 import SceneRejectUnused from './SceneRejectUnused.jsx';
 import ShotFinalRender from './ShotFinalRender.jsx';
+import ShotDownload from './ShotDownload.jsx';
+import { shotDownloadBasis } from '../../../../server/lib/musicVideoShotDownloadBasis.js';
 import ShotColorMatch from './ShotColorMatch.jsx';
 import ShotFilmLook from './ShotFilmLook.jsx';
 import ShotStoryboardPanel from './ShotStoryboardPanel.jsx';
@@ -52,6 +54,7 @@ const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan', 'Pan']
 const SHOT_MODE_LABELS = { cutaway: 'Cutaway', performance: 'Performance (lip-sync)', music: 'Performance (music-driven)' };
 const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
 const SECONDARY_BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
+const DOWNLOAD_FIELDS = new Set(['startSec', 'endSec', 'offsetFrames', 'speedFps', 'reverse', 'loop', 'holdLastFrame', 'sourceTake', 'videoHistoryId', 'frameFit']);
 import { buildSceneTimingPresentation } from '../../lib/musicVideoSceneTiming.js';
 import SceneTimingPlan from './SceneTimingPlan.jsx';
 import SceneShotCuts, { SceneCutField, SceneDuration } from './SceneShotCuts.jsx';
@@ -198,6 +201,23 @@ export default function SceneCard({
   const [speakerDirty, setSpeakerDirty] = useState(false);
   const [speakerSaving, setSpeakerSaving] = useState(false);
   const [clipReferenceSaveState, setClipReferenceSaveState] = useState('saved');
+  const [shotSaves, setShotSaves] = useState(0);
+  const [shotMoves, setShotMoves] = useState(0);
+  const [failedDownloadFields, setFailedDownloadFields] = useState(() => new Set());
+  const saveShot = (id, patch) => {
+    const saved = onSave(id, patch);
+    const fields = Object.keys(patch).filter((field) => DOWNLOAD_FIELDS.has(field));
+    if (!project?.id || !fields.length) return Promise.resolve(saved);
+    const recordResult = (ok) => setFailedDownloadFields((current) => {
+      const next = new Set(current);
+      for (const field of fields) { if (ok) next.delete(field); else next.add(field); }
+      return next;
+    });
+    if (!saved || typeof saved.then !== 'function') return Promise.resolve(saved);
+    setShotSaves((n) => n + 1);
+    return Promise.resolve(saved).then((result) => { recordResult(result !== false); return result; }, (err) => { recordResult(false); throw err; })
+      .finally(() => setShotSaves((n) => n - 1));
+  };
   // Which slot's "Swap from unused" picker is open: 'image', 'video' or null.
   const [swapKind, setSwapKind] = useState(null);
   // Fields typed in since they last loaded: a blur saves only those, so an untouched box never writes a stale copy over a newer edit made elsewhere.
@@ -206,7 +226,7 @@ export default function SceneCard({
   const saveIfDirty = (key, patch) => {
     if (!dirtyFields.current.has(key)) return;
     dirtyFields.current.delete(key);
-    Promise.resolve(onSave(scene.sceneId, patch)).then((saved) => { if (saved === false) markDirty(key); }, () => markDirty(key));
+    saveShot(scene.sceneId, patch).then((saved) => { if (saved === false) markDirty(key); }, () => markDirty(key));
   };
   const [doneSaving, setDoneSaving] = useState(false);
   const doneSavePending = useRef(false);
@@ -217,7 +237,13 @@ export default function SceneCard({
     Promise.resolve(onSetDone(scene.sceneId, checked))
       .finally(() => { doneSavePending.current = false; setDoneSaving(false); });
   };
-  const applyPatch = (patch) => { onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
+  const applyPatch = (patch) => { onEditLocal(scene.sceneId, patch); saveShot(scene.sceneId, patch).catch(() => {}); };
+  const moveCut = (move) => move && ((...args) => {
+    const pending = move(...args);
+    if (!pending || typeof pending.then !== 'function' || !project?.id || !clipPlayback.clipId) return pending;
+    setShotMoves((n) => n + 1);
+    return Promise.resolve(pending).finally(() => setShotMoves((n) => n - 1));
+  });
   const layer = MUSIC_VIDEO_VISUAL_LAYERS.includes(scene.visualLayer) ? scene.visualLayer : 'footage';
   // A return plays another shot's clip. Its own frame and clip are not rendered.
   const sourceWindow = resolveSourceTake(scene, project?.scenes);
@@ -473,7 +499,9 @@ export default function SceneCard({
     <SceneTimingPlan timing={timing} lipSyncBackend={renderLane} />
   );
   // A timed shot's cuts move with the shot beside them; an untimed one sets its own times first.
-  const cutMoves = sceneHasAuthoredSpan(scene) ? { startSec: onMoveStart, endSec: onMoveEnd } : {};
+  const moveStart = moveCut(onMoveStart);
+  const moveEnd = moveCut(onMoveEnd);
+  const cutMoves = sceneHasAuthoredSpan(scene) ? { startSec: moveStart, endSec: moveEnd } : {};
   const detailsSummary = fromSheet
     ? shotSheetPromptLines(project, scene).map((line) => line.label.toLowerCase()).join(', ') || 'none set'
     : 'not in the prompts';
@@ -500,11 +528,11 @@ export default function SceneCard({
         <PreMusicTiming fieldId={fieldId} scene={scene} onChange={applyPatch} />
         {/* Move the cut before this shot a frame at a time; the shot before ends where this one starts. */}
         {!preMusic && onMoveStart && sceneHasAuthoredSpan(scene) && (
-          <SceneStartFrame id={fieldId('start-frame')} scene={scene} joinsPrevious={(scene.order ?? index) > 0} onMove={onMoveStart} />
+          <SceneStartFrame id={fieldId('start-frame')} scene={scene} joinsPrevious={(scene.order ?? index) > 0} onMove={moveStart} />
         )}
         {/* How long the shot runs; the next shot grows or shrinks to meet the new end. */}
         {!preMusic && onMoveEnd && sceneHasAuthoredSpan(scene) && (
-          <SceneDuration id={fieldId('duration')} scene={scene} nextEndSec={isLast ? null : nextEndSec} songDurationSec={songDurationSec} onMoveEnd={onMoveEnd} />
+          <SceneDuration id={fieldId('duration')} scene={scene} nextEndSec={isLast ? null : nextEndSec} songDurationSec={songDurationSec} onMoveEnd={moveEnd} />
         )}
         <div className="flex flex-wrap gap-2 items-center text-xs">
           {!preMusic && SCENE_TIME_FIELDS.map(([labelText, key]) => {
@@ -767,6 +795,10 @@ export default function SceneCard({
           <SceneClipPreview scene={scene} index={index} performance={performance} playback={clipPlayback}
             onOpenPreview={onOpenPreview} onTrimClip={onTrimClip} onHandheldClip={onHandheldClip}
             takeBusy={takeBusy} generatingVideo={generatingVideo} />
+          {project?.id && clipPlayback.clipId && layer === 'footage' && !isPreMusicShot(scene) && (
+            <ShotDownload key={JSON.stringify([project.id, project.trackId, project.uploadedAudioFilename, project.audioRevision, project.scenes, scene, project.treatment?.brief?.aspectRatio, shotSaves > 0, shotMoves > 0, failedDownloadFields.size > 0, takeBusy, settingsSaving, !!generatingVideo])}
+              projectId={project.id} sceneId={scene.sceneId} basis={shotDownloadBasis(project, scene)} startSec={scene.startSec} endSec={scene.endSec} saveFailed={failedDownloadFields.size > 0} disabled={shotSaves > 0 || shotMoves > 0 || failedDownloadFields.size > 0 || takeBusy || settingsSaving || !!generatingVideo} />
+          )}
           {/* One take cut across shots needs a source clip longer than this shot's span, and may need another model. */}
           {layer === 'footage' && !performance && (
             <SceneClipLength fieldId={fieldId} scene={scene} settings={renderSettings || {}} onChange={applyPatch} />
@@ -846,7 +878,7 @@ export default function SceneCard({
           )}
           {layer === 'footage' && scene.coverage === 'sequence' && <SceneSequenceCoverage project={project} scene={scene} />}
           {layer === 'footage' && (
-            <SharedTakeOffers scenes={project?.scenes || []} sceneId={scene.sceneId} onSave={(sceneId, patch) => { onEditLocal(sceneId, patch); return onSave(sceneId, patch); }} />
+            <SharedTakeOffers scenes={project?.scenes || []} sceneId={scene.sceneId} onSave={(sceneId, patch) => { onEditLocal(sceneId, patch); return saveShot(sceneId, patch); }} />
           )}
           {endFramePlan.endImageId && (
             <p className={`text-[11px] ${endFramePlan.used ? 'text-port-text-muted' : 'text-port-warning'}`} data-testid="end-frame-plan">
