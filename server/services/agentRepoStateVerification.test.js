@@ -46,7 +46,7 @@ vi.mock('./cos.js', () => ({}));
 vi.mock('./cosState.js', () => ({ getConfig: vi.fn(async () => ({ autoApproveInvestigations: true })) }));
 vi.mock('./agentCompletionData.js', () => ({ readCompletionData: vi.fn() }));
 vi.mock('./agentCompletionCleanup.js', () => ({ replayAgentCompletionCleanup: vi.fn(async () => {}) }));
-vi.mock('./cosAgentLifecycle.js', async original => ({ recordInheritedCheckoutRetirement: vi.fn(async () => true), recordSeededCheckoutRetirement: vi.fn(async () => true), isSettleableCompletionReceipt: (await original()).isSettleableCompletionReceipt, recordSuccessorCheckoutRetirement: vi.fn(async () => true), settleAbsentTaskCompletion: vi.fn(async () => true), retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), recordSwarmCleanupDelivery: vi.fn(async () => true), recordSwarmCleanupContinuationAttempt: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
+vi.mock('./cosAgentLifecycle.js', async original => ({ recordAbsentCheckoutRetirement: vi.fn(async () => true), isSettleableCompletionReceipt: (await original()).isSettleableCompletionReceipt, recordSuccessorCheckoutRetirement: vi.fn(async () => true), settleAbsentTaskCompletion: vi.fn(async () => true), retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), recordSwarmCleanupDelivery: vi.fn(async () => true), recordSwarmCleanupContinuationAttempt: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn().mockResolvedValue([]), withClaimOwnershipLock: fn => fn() }));
 vi.mock('./branchReconcileOutcome.js', () => ({ recordBranchReconcileCheckout: vi.fn(async (_app, release) => ({ remaining: [release] })), recordBranchReconcileOutcome: vi.fn().mockResolvedValue({}) }));
 vi.mock('./taskScheduleStore.js', () => ({ loadSchedule: vi.fn(async () => ({})) }));
@@ -110,7 +110,7 @@ import { readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
 import { recordSwarmCleanupContinuationAttempt, retryCompletionCheckoutCapture, getAgentRecord, recordCleanupOutcome, recordSwarmCleanupDelivery, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from './cosAgentLifecycle.js';
 import { readCompletionData } from './agentCompletionData.js';
-import { recordCompletionCleanup, recordInheritedCheckoutRetirement, recordSeededCheckoutRetirement, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion } from './cosAgentLifecycle.js';
+import { recordCompletionCleanup, recordAbsentCheckoutRetirement, recordSuccessorCheckoutRetirement, settleAbsentTaskCompletion } from './cosAgentLifecycle.js';
 import { replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
 import { recheckAgentCleanup, resumeAgentCompletionRetirement, resumeDeferredRepoStateVerifications, verifyAgentRepoState, sweepRepoStateVerifications, bindCompletionRetirementEvents, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
 import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
@@ -590,7 +590,7 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(state.result).toEqual({ success: false, executionSuccess: true, cleanupPending: true });
   });
 
-  it.each(['verified', 'startup', 'duplicate', 'unreadable-inventory', 'foreign-instance', 'replaced-repository', 'inventory-raced', 'live-owner', 'live-path', 'live-ref'])(
+  it.each(['verified', 'startup', 'duplicate', 'live-owner', 'live-path', 'live-ref'])(
     'settles only physical cleanup from its own seed and current inventory: %s', async scenario => {
       const physical = { dev: '1', ino: '2', birthtimeNs: '3' };
       const seed = { version: 1, agentId: 'unknown-source', startedAt: CREATED_AT,
@@ -605,11 +605,6 @@ describe('verifyAgentRepoState — clean runs', () => {
       const checkoutIdentity = retirementCheckoutIdentityFromPointer(physical);
       const receipt = { path: WORKTREE, branch: BRANCH, head: HEAD, checkoutIdentity,
         branchDeleted: true, retiredAt: '2026-01-01T00:02:00.000Z', archiveDir: null };
-      if (scenario === 'foreign-instance') state.metadata.instanceId = 'another-install';
-      lstat.mockResolvedValue({ isDirectory: () => true, dev: 1n, ino: scenario === 'replaced-repository' ? 9n : 2n, birthtimeNs: 3n });
-      inspectAbsentCheckout.mockResolvedValue({ kind: 'current-inventory', evidenceDigest: 'a'.repeat(64),
-        recheck: async () => scenario !== 'inventory-raced' });
-      if (scenario === 'unreadable-inventory') inspectAbsentCheckout.mockResolvedValue(null);
       if (scenario === 'live-owner') readClaimOwnershipAgents.mockResolvedValue([{ status: 'running', metadata: {
         sourceWorkspace: '/repo', worktreeBranch: BRANCH } }]);
       if (scenario === 'live-path') readCheckoutPathPresence.mockResolvedValue(true);
@@ -618,7 +613,7 @@ describe('verifyAgentRepoState — clean runs', () => {
       if (scenario === 'startup' || scenario === 'duplicate') {
         // A receipt written before restart settles without waiting for retryAt.
         state.metadata.completionCleanup.retryAt = '2999-01-01T00:00:00Z';
-        recordSeededCheckoutRetirement.mockImplementationOnce(async () => {
+        recordAbsentCheckoutRetirement.mockImplementationOnce(async () => {
           state.metadata.checkoutCapture.status = 'retired';
           state.metadata.completionCleanup.status = state.metadata.repoStateVerification.status = 'completed';
           return true;
@@ -639,17 +634,15 @@ describe('verifyAgentRepoState — clean runs', () => {
         try { await events.listeners('checkout:retired')[0]({ appId: 'demo-app', ...receipt }); } finally { unbind(); }
       }
       const settled = ['verified', 'startup', 'duplicate'].includes(scenario);
-      expect(recordSeededCheckoutRetirement).toHaveBeenCalledTimes(settled ? 1 : 0);
-      if (settled) expect(recordSeededCheckoutRetirement).toHaveBeenCalledWith(state.id, state, {
-        checkoutIdentity, observationDigest: 'a'.repeat(64) });
+      expect(recordAbsentCheckoutRetirement).toHaveBeenCalledTimes(settled ? 1 : 0);
+      if (settled) expect(recordAbsentCheckoutRetirement).toHaveBeenCalledWith(state.id, state, { path: WORKTREE, branch: BRANCH });
       expect(state.metadata.completedCheckouts).toEqual([]);
       expect(state.result).toEqual({ success: false, validationPassed: false, taskOutcome: { status: 'blocked' } });
       expect(addTask).not.toHaveBeenCalled(); expect(updateTask).not.toHaveBeenCalled();
       expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     });
 
-  it.each(['startup', 'direct', 'wrong-parent', 'wrong-task', 'foreign-instance', 'own-seed', 'live-owner', 'live-source-path',
-    'parent-raced', 'wrong-branch', 'unreadable-inventory'])(
+  it.each(['startup', 'direct', 'wrong-parent', 'wrong-task', 'own-seed', 'live-owner', 'live-source-path', 'wrong-branch'])(
     'settles only a primary continuation of an already retired inherited scope: %s', async scenario => {
       const physical = { dev: '1', ino: '2', birthtimeNs: '3' };
       const seed = { version: 1, agentId: 'parent', startedAt: CREATED_AT, seededAt: '2026-01-01T00:00:01.000Z',
@@ -670,62 +663,22 @@ describe('verifyAgentRepoState — clean runs', () => {
         branchDeleted: true, archiveDir: null, retiredAt: '2026-01-01T00:02:00.000Z' };
       if (scenario === 'wrong-parent') child.metadata.resumedFromAgentId = 'missing';
       if (scenario === 'wrong-task') parent.taskId = 'other-task';
-      if (scenario === 'foreign-instance') child.metadata.instanceId = 'foreign';
       if (scenario === 'own-seed') child.metadata.checkoutSeeds = [seed];
       if (scenario === 'wrong-branch') child.metadata.claimBranches = ['unrelated'];
       if (scenario === 'live-source-path') readCheckoutPathPresence.mockResolvedValue(true);
       if (scenario === 'live-owner') readClaimOwnershipAgents.mockResolvedValue([{ status: 'running', metadata: { sourceWorkspace: '/repo', worktreeBranch: BRANCH } }]);
       loadSchedule.mockResolvedValue({ executions: { 'task:branch-reconcile': { perApp: { app: { branchReconcileOutcome: { retired: [receipt] } } } } } });
-      lstat.mockResolvedValue({ isDirectory: () => true, dev: 1n, ino: 2n, birthtimeNs: 3n });
-      inspectAbsentCheckout.mockResolvedValue({ kind: 'current-inventory', evidenceDigest: 'a'.repeat(64), recheck: async () => true });
-      if (scenario === 'unreadable-inventory') inspectAbsentCheckout.mockResolvedValue(null);
-      let parentReads = 0;
-      getAgentRecord.mockImplementation(async id => id === child.id ? child : id === parent.id
-        ? scenario === 'parent-raced' && ++parentReads > 1 ? { ...parent, taskId: 'changed' } : parent : null);
+      getAgentRecord.mockImplementation(async id => id === child.id ? child : id === parent.id ? parent : null);
       readBranchCompletionPolicies.mockResolvedValue([parent, child]);
       if (scenario === 'direct') await resumeAgentCompletionRetirement(child.id);
       else await sweepRepoStateVerifications();
-      expect(recordInheritedCheckoutRetirement).toHaveBeenCalledTimes(['startup', 'direct'].includes(scenario) ? 1 : 0);
-      if (['startup', 'direct'].includes(scenario)) expect(recordInheritedCheckoutRetirement).toHaveBeenCalledWith(child.id, child, {
-        checkoutIdentity: receipt.checkoutIdentity, observationDigest: 'a'.repeat(64), inheritedFromAgentId: parent.id });
+      expect(recordAbsentCheckoutRetirement).toHaveBeenCalledTimes(['startup', 'direct'].includes(scenario) ? 1 : 0);
+      if (['startup', 'direct'].includes(scenario)) expect(recordAbsentCheckoutRetirement).toHaveBeenCalledWith(child.id, child, {
+        path: WORKTREE, branch: BRANCH, inheritedFromAgentId: parent.id });
       expect(child.result).toEqual({ success: false, executionSuccess: true, taskOutcome: { status: 'incomplete' } });
       expect(child.metadata.checkoutSeeds).toEqual(scenario === 'own-seed' ? [seed] : undefined);
-      expect(recordSeededCheckoutRetirement).not.toHaveBeenCalled();
       expect(addTask).not.toHaveBeenCalled(); expect(updateTask).not.toHaveBeenCalled(); expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     });
-
-  it.each(['available', 'unavailable'])('avoids the %s historical receipt store during startup replay', async scenario => {
-    const physical = { dev: '1', ino: '2', birthtimeNs: '3' };
-    const agents = Array.from({ length: 3 }, (_, index) => {
-      const id = `ordinary-${index}`, branch = `feature/${id}`, path = `/repo/worktrees/${id}`;
-      const seed = { version: 1, agentId: id, startedAt: CREATED_AT, seededAt: '2026-01-01T00:00:01.000Z',
-        repoPath: '/repo', branch, path, repository: physical, checkout: physical,
-        incarnation: { pointer: physical, gitdir: { ...physical, path: `/repo/.git/worktrees/${id}` } } };
-      return { id, taskId: `task-${id}`, status: 'completed', startedAt: CREATED_AT, completedAt: '2026-01-01T00:01:00.000Z',
-        result: { success: false, cleanupPending: true, validationPassed: false },
-        metadata: { instanceId: index === 0 ? 'other-install' : 'fixture-local', sourceWorkspace: '/repo',
-          workspacePath: path, worktreeBranch: branch, checkoutSeeds: index === 2 ? [] : [seed],
-          completedCheckouts: [], checkoutCapture: { status: 'pending', unknown: true },
-          repoStateVerification: { status: 'pending' }, completionCleanup: { status: 'pending', replay: { version: 1 } } } };
-    });
-    if (scenario === 'unavailable') loadSchedule.mockRejectedValue(new Error('synthetic schedule unavailable'));
-    readBranchCompletionPolicies.mockResolvedValue(agents);
-    getAgentRecord.mockImplementation(async id => agents.find(agent => agent.id === id));
-    getTaskById.mockResolvedValue(null);
-    expect(await sweepRepoStateVerifications()).toMatchObject({ checked: agents.length });
-    expect(loadSchedule).not.toHaveBeenCalled();
-    for (const agent of agents) expect(getAgentRecord).toHaveBeenCalledWith(agent.id);
-    expect(recordSeededCheckoutRetirement).not.toHaveBeenCalled();
-    expect(addTask).not.toHaveBeenCalled();
-    expect(updateTask).not.toHaveBeenCalled();
-  });
-
-  it('does not load a receipt context for an unseeded completed callback', async () => {
-    getAgentRecord.mockResolvedValue({ id: 'unseeded', status: 'completed', metadata: {}, result: { success: false } });
-    await resumeAgentCompletionRetirement('unseeded');
-    expect(loadSchedule).not.toHaveBeenCalled();
-    expect(recordSeededCheckoutRetirement).not.toHaveBeenCalled();
-  });
 
   it.each(['ineligible-history', 'deep-held-history', 'deep-held-stamp-failed'])(
     'reaches a vanished own-seed checkout beyond the startup batch: %s', async scenario => {
@@ -748,16 +701,14 @@ describe('verifyAgentRepoState — clean runs', () => {
       const target = rows.at(-1).agent;
       if (scenario === 'ineligible-history') for (const [index, { agent }] of rows.slice(0, -1).entries()) {
         if (index % 3 !== 1) agent.metadata.checkoutSeeds = [];
-        if (index % 3 === 1) agent.metadata.instanceId = 'other-install';
+        if (index % 3 === 1) agent.metadata.worktreeBranch = 'mismatched-branch';
       }
       const receipts = rows.filter((_, index) => deepHeld || index % 3 !== 2 || index === rows.length - 1).map(row => row.receipt);
       loadSchedule.mockResolvedValue({ executions: { 'task:branch-reconcile': { perApp: { 'demo-app': {
         branchReconcileOutcome: { retired: receipts, retirementReceiptEvidence: {} } } } } } });
-      lstat.mockResolvedValue({ isDirectory: () => true, dev: 1n, ino: 2n, birthtimeNs: 3n });
       readBranchCompletionPolicies.mockResolvedValue(rows.map(row => row.agent));
-      inspectAbsentCheckout.mockResolvedValue({ kind: 'current-inventory', evidenceDigest: 'a'.repeat(64), recheck: async () => true });
       readCheckoutPathPresence.mockImplementation(async path => deepHeld && path !== target.metadata.workspacePath);
-      recordSeededCheckoutRetirement.mockImplementation(async (_id, agent) => {
+      recordAbsentCheckoutRetirement.mockImplementation(async (_id, agent) => {
         agent.metadata.checkoutCapture.status = 'retired';
         agent.metadata.completionCleanup.status = agent.metadata.repoStateVerification.status = 'completed';
         return true;
@@ -776,58 +727,18 @@ describe('verifyAgentRepoState — clean runs', () => {
         await sweepRepoStateVerifications();
         expect(loadSchedule).not.toHaveBeenCalled();
         if (deepHeld) {
-          expect(recordSeededCheckoutRetirement).not.toHaveBeenCalled();
+          expect(recordAbsentCheckoutRetirement).not.toHaveBeenCalled();
           await sweepRepoStateVerifications();
           expect(loadSchedule).not.toHaveBeenCalled();
         }
-        expect(recordSeededCheckoutRetirement).toHaveBeenCalledExactlyOnceWith(target.id, target, expect.any(Object));
+        expect(recordAbsentCheckoutRetirement).toHaveBeenCalledExactlyOnceWith(target.id, target, expect.any(Object));
         if (!deepHeld) expect(recordCompletionCleanup).not.toHaveBeenCalled();
         if (scenario === 'deep-held-stamp-failed') expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('synthetic attempt write unavailable'));
         expect(addTask).not.toHaveBeenCalled(); expect(updateTask).not.toHaveBeenCalled();
       } finally {
-        recordSeededCheckoutRetirement.mockReset().mockResolvedValue(true);
+        recordAbsentCheckoutRetirement.mockReset().mockResolvedValue(true);
         recordCompletionCleanup.mockReset().mockResolvedValue(true);
       }
-    });
-
-  it.each(['verified', 'missing-receipt', 'receipt-raced', 'live-holder', 'live-owner', 'reused-source-path', 'unverified-successor', 'foreign-instance'])(
-    'settles unknown predecessor cleanup from the verified successor receipt: %s', async scenario => {
-      const physical = { dev: '1', ino: '2', birthtimeNs: '3' };
-      const incarnation = { pointer: physical, gitdir: { ...physical, path: '/repo/.git/worktrees/original' } };
-      const makeOwner = (id, hour, unknown) => {
-        const startedAt = `2026-01-01T0${hour}:00:00.000Z`, seededAt = `2026-01-01T0${hour}:00:01.000Z`;
-        const seed = { version: 1, agentId: id, startedAt, seededAt, repoPath: '/repo', branch: BRANCH, path: WORKTREE,
-          repository: physical, checkout: physical, incarnation };
-        return { id, taskId: 'same-task', status: 'completed', startedAt, completedAt: `2026-01-01T0${hour}:01:00.000Z`,
-          result: { success: false, executionSuccess: true }, metadata: { instanceId: 'fixture-local', isWorktree: true,
-            sourceWorkspace: '/repo', workspacePath: WORKTREE, worktreeBranch: BRANCH, prCompletionPolicy: 'review-then-merge',
-            reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7', branch: BRANCH }, checkoutSeeds: [seed],
-            completionTaskDispatch: { taskId: 'same-task', taskType: 'internal', expected: [['claimedBy', 'fixture-local'],
-              ['claimedAt', seededAt], ['lastSpawnedAt', seededAt], ['totalSpawnCount', 2]] },
-            checkoutCapture: { status: unknown ? 'pending' : 'captured', unknown, targets: [] },
-            repoStateVerification: { status: unknown ? 'pending' : 'completed' }, completionCleanup: { status: unknown ? 'pending' : 'completed' },
-            completedCheckouts: unknown ? [] : [{ ...seed, version: 2, head: HEAD, capturedAt: `2026-01-01T0${hour}:01:01.000Z` }] } };
-      };
-      const source = makeOwner('unknown-source', 1, true), successor = makeOwner('delivered-successor', 2, false);
-      if (scenario === 'unverified-successor') successor.metadata.repoStateVerification.status = 'pending';
-      if (scenario === 'foreign-instance') source.metadata.instanceId = 'other-install';
-      if (scenario === 'reused-source-path') {
-        source.metadata.workspacePath = source.metadata.checkoutSeeds[0].path = '/repo/old-source';
-        readCheckoutPathPresence.mockImplementation(async path => path === '/repo/old-source');
-      }
-      if (scenario === 'live-owner') readClaimOwnershipAgents.mockResolvedValue([{ status: 'running',
-        metadata: { sourceWorkspace: '/repo', worktreeBranch: BRANCH } }]);
-      getAgentRecord.mockResolvedValue(source); readBranchCompletionPolicies.mockResolvedValue([source, successor]);
-      inspectAbsentCheckout.mockResolvedValue(scenario === 'missing-receipt' ? null : { recheck: async () => scenario !== 'receipt-raced' });
-      if (scenario === 'live-holder') listWorktrees.mockResolvedValue([{ path: WORKTREE, branch: `refs/heads/${BRANCH}` }]);
-      const events = new EventEmitter(), unbind = bindCompletionRetirementEvents(events);
-      try { await events.listeners('checkout:retired')[0]({ appId: 'demo-app', path: WORKTREE, branch: BRANCH, head: HEAD,
-        checkoutIdentity: retirementCheckoutIdentityFromPointer(physical) }); } finally { unbind(); }
-      expect(recordSuccessorCheckoutRetirement).toHaveBeenCalledTimes(scenario === 'verified' ? 1 : 0);
-      expect(source.metadata.completedCheckouts).toEqual([]);
-      expect(source.result.success).toBe(false);
-      expect(addTask).not.toHaveBeenCalled();
-      expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     });
 
   it.each(['verified', 'wrong-generation', 'wrong-head', 'wrong-task', 'live-owner', 'live-ref', 'refused-cas'])(
@@ -2888,30 +2799,6 @@ describe('completion after its originating task was removed', () => {
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
   });
 
-  it.each(['verified', 'other-dispatch', 'other-run', 'duplicate-dispatch', 'missing-handoff', 'missing-replay', 'surviving-checkout'])('settles a pre-dispatch replay only through its exact durable handoff: %s', async mode => {
-    const { state, original } = fixture();
-    state.metadata.completionCleanup.taskHandoff = { version: 1, taskId: state.taskId,
-      taskType: 'user', startedAt: state.startedAt,
-      expected: state.metadata.completionTaskDispatch.expected.map(([key, value]) =>
-        [key, key === 'totalSpawnCount' ? String(value) : value]) };
-    readCompletionData.mockResolvedValue({ task: { ...original, metadata: {
-      ...original.metadata, claimedAt: 'earlier-lease', lastSpawnedAt: undefined, totalSpawnCount: undefined } } });
-    if (mode === 'other-dispatch') state.metadata.completionCleanup.taskHandoff.expected[1][1] = 'another-dispatch';
-    if (mode === 'other-run') state.metadata.completionCleanup.taskHandoff.startedAt = 'another-run';
-    if (mode === 'duplicate-dispatch') state.metadata.completionCleanup.taskHandoff.expected.push(['claimedAt', CREATED_AT]);
-    if (mode === 'missing-handoff') delete state.metadata.completionCleanup.taskHandoff;
-    if (mode === 'missing-replay') readCompletionData.mockRejectedValue(new Error('completion-data-changed'));
-    if (mode === 'surviving-checkout') readCheckoutPathPresence.mockResolvedValue(true);
-    const result = await resumeAgentCompletionRetirement('agent-1');
-    expect(result.verified).toBe(mode === 'verified');
-    if (mode === 'verified') expect(settleAbsentTaskCompletion).toHaveBeenCalledWith('agent-1', state);
-    else expect(settleAbsentTaskCompletion).not.toHaveBeenCalled();
-    expect(updateTask).not.toHaveBeenCalled();
-    expect(addTask).not.toHaveBeenCalled();
-    expect(replayAgentCompletionCleanup).not.toHaveBeenCalled();
-    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
-  });
-
   it('keeps merged absent work pending when its completion settlement races', async () => {
     fixture();
     settleAbsentTaskCompletion.mockResolvedValue(false);
@@ -2920,12 +2807,10 @@ describe('completion after its originating task was removed', () => {
     expect(updateTask).not.toHaveBeenCalled();
   });
 
-  it('does not settle another instance, ambiguous captures or a corrupt immutable replay', async () => {
-    for (const kind of ['instance', 'capture', 'replay', 'dispatch']) {
+  it('does not settle ambiguous captures or a corrupt immutable replay', async () => {
+    for (const kind of ['capture', 'replay']) {
       const { state, captured } = fixture();
-      if (kind === 'instance') state.metadata.instanceId = 'another-install';
       if (kind === 'capture') state.metadata.completedCheckouts.push({ ...captured, head: 'f'.repeat(40) });
-      if (kind === 'dispatch') state.metadata.completionTaskDispatch.expected = [];
       if (kind === 'replay') readCompletionData.mockRejectedValue(new Error('completion-data-changed'));
       expect(await resumeAgentCompletionRetirement('agent-1')).toMatchObject({ verified: false,
         skipReason: 'cleanup-task-unavailable' });

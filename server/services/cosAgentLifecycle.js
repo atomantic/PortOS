@@ -349,14 +349,13 @@ export function recordRepoStateVerification(agentId, verification) {
   return updateCompletionReceipt(agentId, (metadata, agent) => {
     const capture = metadata.checkoutCapture;
     const verifiedBy = metadata.completionCleanup?.stages?.worktree?.verifiedBy;
-    const currentInventory = ['current-inventory', 'inherited-current-inventory'].includes(verifiedBy)
-      && /^[a-f0-9]{64}$/.test(capture?.observationDigest || '');
+    const currentInventory = ['current-inventory', 'inherited-current-inventory'].includes(verifiedBy);
     // Completed agent records from before the inventory transition remain valid.
     const legacyRetirement = ['service-retirement-receipt', 'inherited-service-retirement-receipt'].includes(verifiedBy)
       && /^[a-f0-9]{64}$/.test(capture?.receiptDigest || '')
       && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(capture?.retiredHead || '');
     const retired = capture?.status === 'retired' && capture.unknown === true
-      && /^[a-f0-9]{64}$/.test(capture.checkoutIdentity || '') && (currentInventory || legacyRetirement)
+      && (currentInventory || (legacyRetirement && /^[a-f0-9]{64}$/.test(capture.checkoutIdentity || '')))
       && metadata.repoStateVerification?.physicalRetirementVerified === true
       && metadata.completionCleanup?.status === 'completed';
     // An absent task cannot undo an already verified physical retirement. The
@@ -584,15 +583,11 @@ export function recordSuccessorCheckoutRetirement(agentId, expected, proof) {
   return recordCheckoutRetirement(agentId, expected, proof, 'delivered-successor');
 }
 
-/** Current absence settles physical cleanup without inventing a terminal head
- * or changing the original execution result. */
-export function recordSeededCheckoutRetirement(agentId, expected, proof) {
-  return recordCheckoutRetirement(agentId, expected, proof, 'current-inventory');
-}
-
-/** An unseeded primary continuation never acquires its parent's retired checkout. */
-export function recordInheritedCheckoutRetirement(agentId, expected, proof) {
-  return recordCheckoutRetirement(agentId, expected, proof, 'inherited-current-inventory');
+/** Verified absence settles physical cleanup without inventing a terminal
+ * head or changing the original execution result. */
+export function recordAbsentCheckoutRetirement(agentId, expected, proof) {
+  return recordCheckoutRetirement(agentId, expected, proof,
+    proof.inheritedFromAgentId ? 'inherited-current-inventory' : 'current-inventory');
 }
 
 async function recordCheckoutRetirement(agentId, expected, proof, verifiedBy) {
@@ -645,14 +640,11 @@ export async function settleAbsentTaskCompletion(agentId, expected) {
   let matched = false;
   const saved = await updateCompletionReceipt(agentId, async (metadata, agent) => {
     const { getTaskById } = await import('./cosTaskStore.js');
-    const { getInstanceId, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
-    const instanceId = await getInstanceId();
-    const keys = ['instanceId', 'completionCleanup', 'completionTaskDispatch', 'completedCheckouts', 'checkoutSeeds', 'supersededCheckoutSeeds',
+    const keys = ['completionCleanup', 'completedCheckouts', 'checkoutSeeds', 'supersededCheckoutSeeds',
       'worktreeBranch', 'workspacePath', 'sourceWorkspace', 'isWorktree', 'claimBranches', 'claimReleasedBranches'];
     const successfulAudit = agent.result?.success === true && agent.result?.cleanupPending !== true;
     if (agent.startedAt !== expected.startedAt || agent.taskId !== expected.taskId
       || (agent.result?.cleanupPending !== true && !successfulAudit)
-      || !instanceId || instanceId === UNKNOWN_INSTANCE_ID || metadata.instanceId !== instanceId
       || keys.some(key => !isDeepStrictEqual(metadata[key], expected.metadata?.[key]))
       || await getTaskById(agent.taskId)) return metadata;
     const prior = metadata.completionCleanup;
