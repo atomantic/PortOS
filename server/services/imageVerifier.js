@@ -167,7 +167,41 @@ export async function resolveVisionReviewer(reviewerInput = null) {
     }
   }
 
-  return resolvePlateReviewer(reviewer);
+  // If a provider was resolved (or explicitly provided)
+  if (reviewer.providerId) {
+    const { getProviderById } = await import('./providers.js');
+    const { resolveEffectiveModel } = await import('./promptRunner.js');
+    let provider = await getProviderById(reviewer.providerId).catch(() => null);
+    if (!provider) {
+      const { providers = [] } = await getAllProviders().catch(() => ({ providers: [] }));
+      provider = providers.find((p) => p.id === reviewer.providerId);
+    }
+    if (provider && provider.enabled !== false) {
+      const selectedModel = resolveEffectiveModel(provider, reviewer.model);
+      return { provider, model: selectedModel, costUsd: 0 };
+    }
+  }
+
+  // Fall back to plate reviewer if available
+  try {
+    return await resolvePlateReviewer(reviewer);
+  } catch (plateErr) {
+    // If plate reviewer fails, find any enabled vision-capable or multimodal provider
+    const { providers = [] } = await getAllProviders().catch(() => ({ providers: [] }));
+    const candidate = providers.find((p) =>
+      p.enabled !== false &&
+      (
+        /antigravity|gemini|google|claude|codex|grok|ollama/i.test(p.id || p.command || '') ||
+        (Array.isArray(p.models) && p.models.some((m) => /argon|vision|llava|qwen|sonnet/i.test(m)))
+      )
+    );
+    if (candidate) {
+      const { resolveEffectiveModel } = await import('./promptRunner.js');
+      const selectedModel = resolveEffectiveModel(candidate, reviewer.model);
+      return { provider: candidate, model: selectedModel, costUsd: 0 };
+    }
+    throw plateErr;
+  }
 }
 
 /**
@@ -197,6 +231,9 @@ export async function verifyImage({
 
   const reviewer = await resolveVisionReviewer(reviewerInput || profile.reviewer || settings.reviewer);
   const { runPromptThroughProvider, assertVisionRunUsedImages } = await import('./promptRunner.js');
+  const { isToolFreeOneShotProvider } = await import('../lib/providerVendors.js');
+
+  const toolFree = isToolFreeOneShotProvider(reviewer.provider);
 
   // Pass 1: Multi-Aspect Scan
   const pass1Prompt = buildMultiAspectVerificationPrompt({ profile, prompt, isImport });
@@ -207,7 +244,7 @@ export async function verifyImage({
     screenshots: [resolvedPath],
     source,
     timeout: Math.min(reviewer.provider.timeout || 120000, 120000),
-    toolFree: true,
+    toolFree,
     allowFallback: false,
     beforeExecute,
   });
@@ -235,7 +272,7 @@ export async function verifyImage({
           screenshots: [resolvedPath],
           source: `${source}-confirmation`,
           timeout: Math.min(reviewer.provider.timeout || 120000, 120000),
-          toolFree: true,
+          toolFree,
           allowFallback: false,
           beforeExecute,
         });

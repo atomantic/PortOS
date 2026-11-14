@@ -42,7 +42,23 @@ vi.mock('./musicVideo/plateReview.js', () => ({
   })),
 }));
 
+vi.mock('./providers.js', () => ({
+  getAllProviders: vi.fn(async () => ({
+    providers: [
+      { id: 'antigravity-cli', name: 'Antigravity CLI', enabled: true, models: ['antigravity-configured-default', 'gemini-4-argon-medium', 'gemini-4-argon-high'] },
+      { id: 'ollama-local', name: 'Ollama', enabled: true, type: 'ollama', models: ['qwen3.8:27b', 'llama3'] },
+    ],
+  })),
+  getProviderById: vi.fn(async (id) => {
+    if (id === 'antigravity-cli') {
+      return { id: 'antigravity-cli', name: 'Antigravity CLI', enabled: true, models: ['antigravity-configured-default', 'gemini-4-argon-medium', 'gemini-4-argon-high'] };
+    }
+    return null;
+  }),
+}));
+
 vi.mock('./promptRunner.js', () => ({
+  resolveEffectiveModel: vi.fn((provider, model) => model || provider.defaultModel || provider.models?.[0]),
   runPromptThroughProvider: vi.fn(async ({ prompt }) => {
     if (prompt.includes('Automated first looks frequently hallucinate')) {
       // Pass 2 confirmation reply
@@ -79,6 +95,7 @@ import {
   deleteCustomProfile,
   verifyImage,
   overrideVerification,
+  resolveVisionReviewer,
 } from './imageVerifier.js';
 
 describe('imageVerifier service settings and profiles', () => {
@@ -155,5 +172,19 @@ describe('verifyImage execution', () => {
     expect(overridden.verdict).toBe('pass');
     expect(overridden.overridden).toBe(true);
     expect(overridden.overrideNotes).toBe('Stylized glove, not polydactyly');
+  });
+});
+
+describe('resolveVisionReviewer model routing', () => {
+  it('routes gemini-4-argon to antigravity-cli provider', async () => {
+    const reviewer = await resolveVisionReviewer({ model: 'gemini-4-argon' });
+    expect(reviewer.provider.id).toBe('antigravity-cli');
+    expect(reviewer.model).toBe('gemini-4-argon-medium');
+  });
+
+  it('routes qwen-27b to matching Ollama provider', async () => {
+    const reviewer = await resolveVisionReviewer({ model: 'qwen-27b' });
+    expect(reviewer.provider.id).toBe('ollama-local');
+    expect(reviewer.model).toBe('qwen3.8:27b');
   });
 });

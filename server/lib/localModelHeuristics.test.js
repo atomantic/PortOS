@@ -222,13 +222,15 @@ describe('localModelHeuristics', () => {
       expect(isVisionCapableCliProvider({ type: 'cli', command: 'codex' })).toBe(true);
       expect(isVisionCapableCliProvider({ type: 'cli', command: 'claude' })).toBe(true);
       expect(isVisionCapableCliProvider({ type: 'cli', command: '/Users/me/.grok/bin/grok' })).toBe(true);
+      expect(isVisionCapableCliProvider({ type: 'cli', command: 'agy' })).toBe(true);
+      expect(isVisionCapableCliProvider({ type: 'cli', command: '/Users/me/.local/bin/agy' })).toBe(true);
       // A path-configured binary must pass, or an image review it ran is rejected as image-blind.
       expect(isVisionCapableCliProvider({ type: 'cli', command: '/usr/local/bin/codex' })).toBe(true);
       expect(isVisionCapableCliProvider({ type: 'cli', command: 'C:\\tools\\Codex.exe' })).toBe(true);
     });
 
     it('rejects non-vision CLI commands and non-CLI providers', () => {
-      expect(isVisionCapableCliProvider({ type: 'cli', command: 'agy' })).toBe(false);
+      expect(isVisionCapableCliProvider({ type: 'cli', command: 'aider' })).toBe(false);
       expect(isVisionCapableCliProvider({ type: 'api', command: 'codex' })).toBe(false);
       expect(isVisionCapableCliProvider({ type: 'tui', command: 'claude' })).toBe(false);
       expect(isVisionCapableCliProvider(null)).toBe(false);

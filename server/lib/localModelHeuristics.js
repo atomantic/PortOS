@@ -117,7 +117,8 @@ const VISION_RE = new RegExp([
 // command-based allow-list is how the captioner knows a CLI provider can read
 // images. Keyed on `command` so a renamed/duplicated provider still qualifies.
 // grok has no attach flag; it opens a staged image with its read_file tool (#15576).
-const VISION_CLI_COMMANDS = new Set(['codex', 'claude', 'grok']);
+// agy (Antigravity) multimodal models (Gemini 4 Argon, etc.) inspect staged images in their workspace.
+const VISION_CLI_COMMANDS = new Set(['codex', 'claude', 'grok', 'agy', 'antigravity']);
 
 /**
  * Whether a CLI-type provider can caption images (its model reads vision and
