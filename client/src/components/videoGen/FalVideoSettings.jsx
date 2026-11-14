@@ -1,5 +1,5 @@
 import { FormField } from '../ui/FormField';
-import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, FAL_VIDEO_MODELS, estimateFalVideoCostUsd } from '../../lib/falVideoModels.js';
+import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, FAL_VIDEO_MODELS, estimateFalVideoCostUsd, falCapabilityHint } from '../../lib/falVideoModels.js';
 import { formatUsd } from '../../utils/formatters';
 
 export default function FalVideoSettings({
@@ -22,7 +22,7 @@ export default function FalVideoSettings({
         />
         <datalist id="fal-video-model-suggestions">
           {FAL_VIDEO_MODELS.filter((m) => m.kind === (mode === 'image' ? 'i2v' : 't2v')).map((m) => (
-            <option key={m.id} value={m.id}>{m.label}</option>
+            <option key={m.id} value={m.id}>{m.label} · {falCapabilityHint(m)}</option>
           ))}
         </datalist>
       </FormField>

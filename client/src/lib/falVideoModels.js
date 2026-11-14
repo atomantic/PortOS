@@ -16,6 +16,7 @@ export {
   coerceFalVideoSeconds,
   describeFalVideoRate,
   estimateFalVideoCostUsd,
+  falCapabilityHint,
   falHearsAudioReference,
   falImageVideoQuotes,
   falPromptExpansionAddition,
