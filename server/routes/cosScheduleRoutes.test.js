@@ -8,7 +8,7 @@ const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
 vi.mock('../services/userActions.js', () => ({ recordUserAction }));
 const maintenance = vi.hoisted(() => ({ updateMaintenanceStep: vi.fn(), listMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn(), resumeMaintenanceRun: vi.fn() }));
 vi.mock('../services/maintenanceRun.js', () => maintenance);
-const recovery = vi.hoisted(() => ({ retireOperatorCheckout: vi.fn() }));
+const recovery = vi.hoisted(() => ({ retireInventoriedCheckout: vi.fn() }));
 vi.mock('../services/heldCheckoutRecovery.js', () => recovery);
 const releaseSync = vi.hoisted(() => ({ resetReleaseSynchronization: vi.fn(), verifyIndependentReleaseDelivery: vi.fn() }));
 vi.mock('../services/releaseSynchronization.js', () => releaseSync);
@@ -89,12 +89,12 @@ describe('CoS Schedule Routes', () => {
   it.each([false, true])('retires in one step from the observed tuple, with optional observation identity: %s', async withObservation => {
     const tuple = { path: '/synthetic/checkout', head: 'a'.repeat(40), branch: 'claim/42', locked: false, lockReason: null };
     if (withObservation) Object.assign(tuple, { checkoutIdentity: 'c'.repeat(64), observedAt: '2026-10-23T00:00:00Z' });
-    recovery.retireOperatorCheckout.mockResolvedValue({ ok: true });
+    recovery.retireInventoriedCheckout.mockResolvedValue({ ok: true });
     expect((await request(app).post('/api/cos/schedule/branch-reconcile/checkouts/retire').send({ appId: 'app-1', ...tuple })).status).toBe(200);
-    expect(recovery.retireOperatorCheckout).toHaveBeenCalledWith({ appId: 'app-1', release: tuple });
-    recovery.retireOperatorCheckout.mockClear();
+    expect(recovery.retireInventoriedCheckout).toHaveBeenCalledWith({ appId: 'app-1', release: tuple });
+    recovery.retireInventoriedCheckout.mockClear();
     expect((await request(app).post('/api/cos/schedule/branch-reconcile/checkouts/retire').send({ appId: 'app-1', ...tuple, head: 'nope' })).status).toBe(400);
-    expect(recovery.retireOperatorCheckout).not.toHaveBeenCalled();
+    expect(recovery.retireInventoriedCheckout).not.toHaveBeenCalled();
   });
 
   it('no longer exposes the digest-bound review endpoint', async () => {
@@ -102,17 +102,15 @@ describe('CoS Schedule Routes', () => {
     expect(response.status).toBe(404);
   });
 
-  it('returns measured archive capacity and recovery guidance from a refused checkout retirement', async () => {
-    const tuple = { path: '/synthetic/checkout', head: 'a'.repeat(40), branch: 'feature/bounded', locked: false, lockReason: null };
-    const result = { ok: false, reason: 'retirement-archive-work-limit-exceeded',
-      archiveLimit: { scope: 'verification', kind: 'time', limitMs: 600000, observedMs: 600001 },
-      nextAction: 'Keep the checkout and ref; free resources and retry with fresh evidence.' };
-    recovery.retireOperatorCheckout.mockResolvedValue(result);
+  it('returns only the refusal reason from a kept checkout', async () => {
+    const tuple = { path: '/synthetic/checkout', head: 'a'.repeat(40), branch: 'feature/unmerged', locked: false, lockReason: null };
+    const result = { ok: false, reason: 'not-merged-on-recheck' };
+    recovery.retireInventoriedCheckout.mockResolvedValue(result);
     app.use(errorMiddleware);
     const response = await request(app).post('/api/cos/schedule/branch-reconcile/checkouts/retire').send({ appId: 'app-1', ...tuple });
     expect(response.status).toBe(409);
     expect(response.body).toMatchObject({ code: 'CHECKOUT_RETIREMENT_REFUSED' });
-    expect(response.body.context).toEqual({ reason: result.reason, archiveLimit: result.archiveLimit, nextAction: result.nextAction });
+    expect(response.body.context).toEqual({ reason: result.reason });
     expect(response.body).not.toHaveProperty('archiveDir');
     expect(JSON.stringify(response.body)).not.toContain(tuple.path);
   });

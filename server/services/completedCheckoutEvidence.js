@@ -337,9 +337,9 @@ export async function hasCompletedCheckoutEvidence(records, target) {
  * Returns that PR and its merge time, or null — any read failure grants nothing.
  */
 export async function readMergedClaimEvidence({ repoPath, branch, head, forgeAccount = null }) {
-  const { findMergedPullRequest, readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
+  const { findMergedPullRequest, readMergedPrDelivery } = await import('./mergedPrEvidence.js');
   const pr = await findMergedPullRequest(repoPath, branch, head, { forgeAccount }).catch(() => null);
   if (!pr || !Number.isFinite(Date.parse(pr.mergedAt))) return null;
-  const forge = await readRetirementForgeEvidence(repoPath, branch, pr.url, { forgeAccount }).catch(() => null);
+  const forge = await readMergedPrDelivery(repoPath, branch, pr.url, { forgeAccount, exactDeliveredHead: head }).catch(() => null);
   return forge?.prHead === head ? { prUrl: pr.url, mergedAt: pr.mergedAt } : null;
 }

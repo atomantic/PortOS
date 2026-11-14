@@ -86,14 +86,13 @@ vi.mock('./taskLearning.js', async (importActual) => ({
 // feeds stay REAL so the block the prompt receives is the real rendering.
 vi.mock('./repoCleanupRecovery.js', () => ({ inspectOrQueueCompletedReview: vi.fn(async () => ({ disposition: 'held', reason: 'review-recorded-handoff-missing' })) }));
 vi.mock('./repoCleanupObservation.js', () => ({ inspectOpenDeliveryRepair: vi.fn(async () => ({ reason: 'delivery-ci-or-review-pending' })) }));
-const prepareRetirement = vi.fn();
+// The real automatic retirement pass runs against the fenced service and forge seams.
 const retireCheckout = vi.fn();
-const reserveReview = vi.fn(async () => ({ admitted: true }));
-vi.mock('./heldCheckoutRecovery.js', () => ({ retireInventoriedCheckout: (...args) => retireCheckout(...args), prepareInventoriedCheckoutRetirement: (...args) => prepareRetirement(...args) }));
-const mergedPrRead = vi.fn();
-vi.mock('./branchReconcileRetirement.js', async (original) => {
+const forgeDelivery = vi.fn(async () => 'none');
+vi.mock('./heldCheckoutRecovery.js', async (original) => {
   const real = await original();
-  return { ...real, reserveRetirementReview: (...args) => reserveReview(...args), prepareReconcileRetirements: (app, result) => real.prepareReconcileRetirements(app, result, { readPr: mergedPrRead }) };
+  return { ...real, retireInventoriedCheckout: (...args) => retireCheckout(...args),
+    retireCompletedCheckouts: (app, result) => real.retireCompletedCheckouts(app, result, { retire: retireCheckout, readForgeDelivery: forgeDelivery }) };
 });
 const reconcileMock = vi.fn();
 vi.mock('./branchReconcile.js', async (importActual) => ({
@@ -171,8 +170,8 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
     vi.clearAllMocks();
     inspectOpenDeliveryRepair.mockResolvedValue({ reason: 'delivery-ci-or-review-pending' });
     inspectOrQueueCompletedReview.mockResolvedValue({ disposition: 'held', reason: 'review-recorded-handoff-missing' });
-    reserveReview.mockResolvedValue({ admitted: true });
-    retireCheckout.mockResolvedValue({ ok: true, archiveDir: '/private/archive', branchDeleted: true });
+    retireCheckout.mockResolvedValue({ ok: true, branchDeleted: true });
+    forgeDelivery.mockResolvedValue('none');
     getBranchReconcileOutcome.mockResolvedValue(null);
     recordBranchReconcileOutcome.mockImplementation(async (_appId, update) => update);
     parkPerpetual.mockReset().mockResolvedValue();
@@ -183,30 +182,23 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
     getTaskInterval.mockResolvedValue({ type: 'on-demand', perpetual: true, drainDispatchCap: 5, taskMetadata: { branchesPerAgent: 3 } });
   });
 
-  it('a user run retires merged review holds and generates review work only for the rest', async () => {
-    const rows = [1, 2, 3, 4].map(n => ({ branch: `claim/issue-${n}`, tip: String(n).repeat(40),
-      worktreePath: `/example/checkouts/${n}`, isMerged: n !== 2, rule: 'completion-policy', completionPolicyReason: 'pr-completion-review-required' }));
+  it('a user run retires merged review holds directly and leaves unmerged work held without a coordinator', async () => {
+    // 1 and 3 are on main and clean; 4 is squash-merged at its exact (dirty) head; 2 holds unmerged work.
+    const rows = [1, 2, 3, 4].map(n => ({ branch: `claim/issue-${n}`, tip: String(n).repeat(40), worktreePath: `/example/checkouts/${n}`,
+      isMerged: n === 1 || n === 3, worktreeDirty: n === 4, rule: 'completion-policy', completionPolicyReason: 'pr-completion-review-required' }));
     reconcileMock.mockResolvedValue(scan({ inFlight: [], wip: rows, worktreeInventory: rows.map(row => ({
       branch: row.branch, path: row.worktreePath, head: row.tip, managed: true, locked: false, lockReason: null,
     })) }));
-    mergedPrRead.mockImplementation(async (_app, name) => `https://github.com/example/repo/pull/${name.split('-').at(-1)}`);
-    prepareRetirement.mockResolvedValue({ ok: true, review: { digest: 'd'.repeat(64), policy: { policies: [{ id: 'completed-owner' }] }, comparison: { disposition: 'review-supersession', localPatch: '+old', difference: '+replacement' } } });
-    const task = await generate({ onDemand: true });
-    expect(task).not.toBeNull();
-    // Ancestral checkouts retire through the fenced service; only the
-    // non-ancestral one needs a cognitive review.
+    forgeDelivery.mockImplementation(async (_repo, name) => (name === 'claim/issue-4' ? 'exact' : 'none'));
+    expect(await generate({ onDemand: true })).toBeNull();
     expect(retireCheckout).toHaveBeenCalledTimes(3);
-    expect(retireCheckout).toHaveBeenCalledWith(expect.objectContaining({ release: expect.objectContaining({ branch: 'claim/issue-1' }) }),
-      expect.objectContaining({ settleMergedReviewObligation: true }));
-    expect(task.metadata.reconcileRetirements).toHaveLength(1);
-    expect(task.metadata.reconcileRetirements[0].release.branch).toBe('claim/issue-2');
-    expect(task.description).toContain('[REVIEW_RETIREMENT]');
-    expect(task.description).toContain('checkouts/retire');
-    expect(task.description).not.toContain('claim-ownership');
-    expect(parkPerpetual).not.toHaveBeenCalled();
-    expect(recordBranchReconcileOutcome).toHaveBeenLastCalledWith(APP.id, expect.objectContaining({
-      remaining: expect.arrayContaining([expect.objectContaining({ branch: 'claim/issue-2', head: '2'.repeat(40), reason: 'retirement-review-pending' })]),
-    }));
+    expect(retireCheckout).toHaveBeenCalledWith({ appId: APP.id, release: expect.objectContaining({ branch: 'claim/issue-1' }) }, { beforeMutation: expect.any(Function), delivery: 'none' });
+    expect(retireCheckout).toHaveBeenCalledWith({ appId: APP.id, release: expect.objectContaining({ branch: 'claim/issue-4' }) },
+      { beforeMutation: expect.any(Function), delivery: 'exact' });
+    expect(retireCheckout.mock.calls.map(([input]) => input.release.branch)).not.toContain('claim/issue-2');
+    expect(recordPerpetualDispatch).not.toHaveBeenCalled();
+    const remaining = recordBranchReconcileOutcome.mock.calls.at(-1)[1].remaining;
+    expect(remaining).toEqual([expect.objectContaining({ branch: 'claim/issue-2', head: '2'.repeat(40) })]);
   });
 
   it.each([
@@ -289,9 +281,9 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
     reconcileMock.mockResolvedValue(scan({ inFlight: [], wip: [{ branch: release.branch, worktreePath: release.path, tip: release.head,
       rule: 'completion-policy', completionPolicyReason: 'pr-completion-review-required' }], worktreeInventory: [release] }));
     await generate();
-    expect(mergedPrRead).not.toHaveBeenCalled();
-    expect(prepareRetirement).not.toHaveBeenCalled();
-    expect(recordBranchReconcileOutcome).not.toHaveBeenCalledWith(APP.id, expect.objectContaining({ reason: 'preparing-retirement-reviews' }));
+    expect(forgeDelivery).not.toHaveBeenCalled();
+    expect(retireCheckout).not.toHaveBeenCalled();
+    expect(recordBranchReconcileOutcome).not.toHaveBeenCalledWith(APP.id, expect.objectContaining({ reason: 'retiring-merged-checkouts' }));
   });
 
   it('nudges no receipt with autoMerge off but still hands reconcile the saved pending-merge branches', async () => {
@@ -339,24 +331,31 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
     expect(row.nextAction).toContain('CI Gate (FAILURE)');
   });
 
-  it.each(['completion-policy', 'merged-claim'])('a normal user reconcile drains %s retirement without generating an agent', async kind => {
+  it('a normal user reconcile drains a merged completion-review hold without generating an agent', async () => {
     const release = { branch: 'claim/issue-1', path: '/example/checkouts/1', head: 'a'.repeat(40), managed: true, locked: false };
     const branch = { branch: release.branch, worktreePath: release.path, tip: release.head,
       rule: 'completion-policy', completionPolicyReason: 'pr-completion-review-required' };
-    reconcileMock.mockResolvedValue(scan({ inFlight: [], wip: kind === 'completion-policy' ? [branch] : [],
-      merged: kind === 'merged-claim' ? [{ ...branch, state: 'MERGED', isMerged: true }] : [],
-      skipped: kind === 'merged-claim' ? [{ ...release, reason: 'claim-completion-unverified' }] : [], worktreeInventory: [release] }));
-    mergedPrRead.mockResolvedValue('https://github.com/example/repo/pull/1');
-    prepareRetirement.mockResolvedValue({ ok: true, review: { digest: 'd'.repeat(64), policy: { integratedCleanupHead: 'c'.repeat(40), policies: [{ id: 'completed-owner' }] },
-      forge: { prHead: release.head }, comparison: { disposition: 'integrated', localPatch: '', difference: '' } } });
+    reconcileMock.mockResolvedValue(scan({ inFlight: [], wip: [branch], worktreeInventory: [release] }));
+    forgeDelivery.mockResolvedValue('exact');
     expect(await generate({ onDemand: true })).toBeNull();
     expect(retireCheckout).toHaveBeenCalledOnce();
-    expect(retireCheckout.mock.calls[0][0].review.acceptSuperseded).toBe(false);
-    expect(reserveReview).not.toHaveBeenCalled();
+    expect(retireCheckout.mock.calls[0][1]).toEqual({ beforeMutation: expect.any(Function), delivery: 'exact' });
     expect(recordPerpetualDispatch).not.toHaveBeenCalled();
     expect(recordBranchReconcileOutcome.mock.calls.at(-1)[1].remaining).toEqual([]);
     // The retired checkout is reported as cleaned, not silently dropped.
     expect(emitLog.mock.calls.findLast(([, message]) => message.includes('branch-reconcile parked'))?.[1]).toContain('(cleaned 1');
+  });
+
+  it('leaves a merged claim inside its completion grace window to the ordinary cleanup', async () => {
+    const release = { branch: 'claim/issue-1', path: '/example/checkouts/1', head: 'a'.repeat(40), managed: true, locked: false };
+    const branch = { branch: release.branch, worktreePath: release.path, tip: release.head, state: 'MERGED', rule: 'merged', isMerged: true };
+    reconcileMock.mockResolvedValue(scan({ inFlight: [], wip: [], merged: [branch],
+      skipped: [{ ...release, reason: 'claim-completion-unverified' }], worktreeInventory: [release] }));
+    forgeDelivery.mockResolvedValue('exact');
+    expect(await generate({ onDemand: true })).toBeNull();
+    expect(forgeDelivery).not.toHaveBeenCalled();
+    expect(retireCheckout).not.toHaveBeenCalled();
+    expect(recordBranchReconcileOutcome.mock.calls.at(-1)[1].remaining).toEqual([expect.objectContaining({ branch: release.branch })]);
   });
 
   it('does not carry vanished checkout ledger holds into a fresh empty scan', async () => {

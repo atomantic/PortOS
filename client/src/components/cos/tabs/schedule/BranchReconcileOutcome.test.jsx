@@ -59,7 +59,7 @@ describe('BranchReconcileOutcome checkout retirement', () => {
     let finishRetirement;
     retire.mockImplementation(() => new Promise(resolve => { finishRetirement = resolve; }));
     const { rerender } = open();
-    expect(screen.getByText(/Retire this exact merged, clean checkout and its lock\?/)).toHaveTextContent('No checkout archive is created. Dirty checkouts and checkouts with unique unverified ignored files stay in place.');
+    expect(screen.getByText(/Retire this exact merged checkout and its lock\?/)).toHaveTextContent('No checkout archive is created. Uncommitted and untracked files go with it only when its PR merged at this exact HEAD; otherwise a dirty checkout stays in place, as does unmerged work.');
     fireEvent.click(screen.getByRole('button', { name: 'Yes, retire checkout' }));
     expect(screen.getByRole('button', { name: 'Retiring…' })).toBeDisabled();
     await act(async () => finishRetirement({ ok: true, branchDeleted: true }));

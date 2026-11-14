@@ -99,14 +99,14 @@ vi.mock('./branchCompletionPolicy.js', async (importOriginal) => {
 
 // The hermetic repo has no forge. A branch's merged PR is injected at the
 // forge-read boundary: { head, mergedAt }, or 'unavailable' for a failed read.
-vi.mock('./heldCheckoutReview.js', async (importOriginal) => ({
+vi.mock('./mergedPrEvidence.js', async (importOriginal) => ({
   ...await importOriginal(),
   findMergedPullRequest: async (repoPath, branch) => {
     const pr = injected.forge[branch];
-    if (!pr || pr === 'unavailable') throw new Error('retirement-forge-unavailable');
+    if (!pr || pr === 'unavailable') throw new Error('merged-pr-forge-unavailable');
     return { url: `https://github.com/example/repo/pull/${branch.split('-').at(-1)}`, mergedAt: pr.mergedAt };
   },
-  readRetirementForgeEvidence: async (repoPath, branch, prUrl) => ({ prUrl, prHead: injected.forge[branch].head }),
+  readMergedPrDelivery: async (repoPath, branch, prUrl) => ({ prUrl, prHead: injected.forge[branch].head }),
 }));
 
 // Keep the run hermetic: the verdict ledger otherwise reads this install's

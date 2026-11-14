@@ -38,22 +38,15 @@ executions remain ambiguous. Historical policies and current task budgets still 
 - `review-task-missing` means the completed owner's task record is unavailable.
   Restore trusted task history before resuming its configured review; PR text is
   not a replacement policy and a missing record does not replenish any budget.
-- `retirement-pr-ambiguous` means no unique merged PR could be selected, including
-  branches whose PR was closed without merging. Finish wanted work, or inspect
-  the replacement and use the explicit supersession retirement described below.
-- `retirement-policy-not-legacy-completed` means historical completion evidence
-  does not establish retirement for the current head, for example after rebasing.
-  Verify its current merged delivery and use the scoped checkout release below;
-  that endpoint still enforces live ownership and manual policy holds.
-
-- `retirement-forge-unavailable` means PR evidence could not be read. Restore
-  the managed app's forge access and rerun. A missing local commit on the forge
-  is handled separately: reconciliation tries bounded merged-branch history,
-  requires exactly one matching-repository candidate, and still performs the
-  fresh checkout/policy/content review before any retirement. A branch-name
-  match alone never establishes that local work was integrated.
-- `retirement-pr-lookup-unavailable` and `retirement-review-unavailable`
-  distinguish an unexpected lookup failure from a failed checkout preview.
+- `not-merged-on-recheck` means the checkout's work is not merged: its PR did
+  not merge at this exact head, its commits are not on the default branch, and no
+  later merged PR head contains them. Finish wanted work through normal delivery;
+  a merged PR at another head is not permission to discard local commits.
+- `worktree-dirty` means merged work with uncommitted, untracked or nested
+  content that only an exact-head merge makes disposable. Commit and deliver it,
+  or clean it deliberately, then retry.
+- `delivery-evidence-unavailable` means the forge or the checkout could not be
+  read. The checkout stays until a fresh read answers.
 - `retirement-receipt-unverified` is a legacy failure name still returned by
   cleanup producers when recording their result fails. Refresh inventory to
   inspect current paths/refs; no historical receipt is required to converge.
@@ -93,144 +86,90 @@ Inventory reads prune absent local checkout/ref rows. If a checkout vanished but
 its branch survives, the branch is listed independently with its current HEAD;
 old checkout locks and physical-generation identities do not attach to that ref.
 Unreadable paths/refs and remote-only holds remain visible. Reading inventory
-never deletes a ref. Branch-only cleanup requires an exact inventory HEAD,
+never deletes a ref. Branch-only cleanup requires an exact inventory HEAD, a
 current direct ref, no checkout holder or active owner, respected completion
-policy, exact merged-PR integration and an expected-head Git deletion under the
-ownership fence. Changing any of those facts invalidates the preview.
+policy and merged work, then an expected-head Git deletion under the ownership
+fence. An already-absent ref is recorded as retired only when the forge proves
+its PR delivered that exact head, so an unexplained disappearance stays visible.
 
 Only the most recent 20 retirements are kept for display. Completion, release
 synchronization and branch-only cleanup never depend on that history.
 
 ## Retiring a held checkout
 
-A row with a checkout path and HEAD offers **Retire checkout**. The
-inline confirmation is a scoped release of that exact row: its path, HEAD,
-branch and lock text. The server refuses unless the row is in the app's last
-persisted inventory and a fresh Git read still matches it — a changed lock,
-HEAD or branch is an ownership change. It then requires merge evidence on the
-default branch and no live owner, claim binding or manual completion handoff.
+A row with a checkout path and HEAD offers **Retire checkout**. The inline
+confirmation is a scoped release of that exact row: its path, HEAD, branch and
+lock text. The server refuses unless the row is in the app's last persisted
+inventory and a fresh Git read still matches it — a changed lock, HEAD or branch
+is an ownership change. It then requires merged work and no live owner, claim
+binding or manual completion handoff.
 
-A merged checkout is removed at its original path. **Merged ⇒ disposable:** a
-checkout whose branch PR the forge reports MERGED at the observed head loses its
-uncommitted, untracked and git-ignored files with it (build output, caches,
-dependency links, seeded data, scratch edits). They are never the delivered
-work, which the merged PR already places on the default branch. The skip is bound
-to that exact SHA and re-checked against the head observed at the removal
-boundary, so a later local commit keeps the hold. Every retirement path applies
-the same predicate: the branch-reconcile merged retirement, the merged-worktree
-reaper (including external-repo checkouts), held-checkout and legacy-release
-retirement, and quality-snapshot checkouts (merged PR). A dirty checkout with no
-merged PR at its head, an unmerged, protected, or live-owner checkout stays
-where it is; an empty branch trivially "contains" main, so local ancestry alone
-never makes a dirty checkout disposable. Retirement does not
-copy the checkout, its ignored files, or its commit history. The lock is
-released only after a second fresh match, and ownership, HEAD and cleanliness
-are rechecked immediately before removal; if that recheck refuses, the original
-lock is restored. A retired row leaves the inventory and appears under
-*Recently retired*; only the next sweep can report convergence. No retirement
-path writes a checkout archive. Setup migrations 442 and 454 remove the
-historical `data/cos/held-checkout-archives/`,
+A merged checkout is removed at its original path with its branch. Work counts as
+merged when the forge reports its branch PR MERGED at the observed head, when
+every commit is already on the default branch (ancestor or patch-equivalent), or
+when a later merged PR head contains the observed head (an update or follow-up
+pushed from elsewhere before the merge). **Merged at the exact head ⇒
+disposable:** that checkout loses its uncommitted, untracked and git-ignored files
+with it (build output, caches, dependency links, seeded data, scratch edits). They
+are never the delivered work, which the merged PR already places on its target.
+The other two forms of merge evidence cover commits only, so they retire a clean
+checkout and keep a dirty one. The answer is bound to that exact SHA and
+re-checked at the removal boundary, so a later local commit keeps the hold. Every
+retirement path applies the same exact-head disposal predicate: the
+branch-reconcile merged retirement, the merged-worktree reaper (including
+external-repo checkouts), held-checkout, pending-merge receipt and legacy-release
+retirement, and quality-snapshot checkouts. Containment in a later merged head is
+recognized by the held-checkout service (operator, automatic and release-candidate
+retirement). An unmerged, protected or live-owner checkout stays where it is; an
+empty branch trivially "contains" main, so local ancestry alone never makes a
+dirty checkout disposable.
+
+Retirement does not copy the checkout, its ignored files, or its commit history.
+A released lock is removed only after a second fresh match, and ownership, HEAD,
+merge evidence and content are rechecked immediately before removal; if that
+recheck refuses, the original lock is restored. A retired row leaves the inventory
+and appears under *Recently retired*; only the next sweep can report convergence.
+No retirement path writes a checkout archive. Setup migrations 442 and 454 remove
+the historical `data/cos/held-checkout-archives/`,
 `data/cos/branch-retirement-archives/`, and
 `data/cos/initialized-checkout-retirements/` directories (a symlinked directory
-is left alone), and nothing reads them. A merged checkout is disposable; a
-missing original generation is never recovered from an archive.
+is left alone), and nothing reads them. A missing original generation is never
+recovered from an archive.
 
 ### Operator retirement
 
 `POST /api/cos/schedule/branch-reconcile/checkouts/retire` is a single step.
-The body is the exact inventory tuple the operator saw. For a checkout held only
-for `pr-completion-review-required`, the server locates the merged PR for the
-branch tip, prepares and binds the review, and retires in the same call, so the
-UI asks for one confirmation and no PR URL, digest or supersession checkbox.
-Only fully integrated work retires this way; superseded, detached or
-replacement-delivered work stays held (the former review kinds were removed).
-Ownership, content, merge and current path/ref rechecks still run inside the
-retirement and keep the checkout on any mismatch. No checkout archive is created.
-There is no separate review endpoint (#16016); automatic retirement paths still
-prepare their own reviews internally.
+The body is the exact inventory tuple the operator saw; a row held only for
+`pr-completion-review-required` retires the same way once its work is merged,
+since a merged review-then-merge obligation has nothing left to gate. There is
+no review endpoint, PR URL, digest or supersession acceptance (#16016). Ownership,
+content, merge and current path/ref rechecks run inside the retirement and keep
+the checkout on any mismatch.
 
-### Preserved superseded prototypes
+### Automatic retirement
 
-A closed prototype can be replaced by different code without its original
-commits ever becoming ancestors of the replacement. Do not merge obsolete code
-or claim it was merged just to make cleanup eligible. An operator may instead
-request `kind: "preserved-supersession"` with the replacement merged PR, inspect
-the exact source/replacement differences, and confirm the returned digest with
-`acceptSuperseded: true` and that same kind.
-
-Published sources require an exact same-repository source ref and one closed,
-unmerged source PR at that head. A private source instead retains its exact
-commit/tree objects under `refs/portos/retained-checkout-source/<head>`; it does
-not need publication or a patch-size inspection limit. Separate private recovery
-commits are retained too. Missing, advanced, reopened, ambiguous or foreign
-source evidence refuses removal. An index with resolve-undo conflict stages
-remains held. Existing owner,
-completion-policy, inventory-generation and final content checks still apply.
-
-Before removal, the service durably retains at most 64 KiB of checkout-only
-non-cache files and Git administration evidence in the local schedule record.
-Git source objects remain reachable through the exact retained refs rather than
-being copied into that record. It also retains symlink
-metadata. Only independently recognized module cache artifacts and a clean,
-reconstructible index/checkout pointers are omitted. The aggregate encoded evidence store is bounded to 1 MiB. Stale, unconsumed
-preparations are pruned; completed preservation evidence is never evicted just
-to make room. Larger evidence or a full store remains
-in its original checkout; this mode does not copy a repository or create an
-archive directory. Preparation is replayable and does not settle an obligation
-or claim deletion. A completed service removal records
-`disposition: "superseded-preserved"`, bound to that preparation digest, instead
-of claiming merged delivery. Ordinary merged cleanup does not use this mode.
+Branch reconciliation retires a completion-review hold directly when its managed,
+unlocked, ownerless checkout is merged by the rules above, through the same
+service and behind the daemon gate (`daemon-stopped`,
+`automatic-retirement-disabled`). It dispatches no agent to review or retire
+checkouts. Unmerged work stays held and visible with its completion reason.
+Superseded branches keep their own verdict-based reap, and older release
+candidates have their candidate lock released once their release PR delivered
+the head.
 
 ### Released ref without a checkout
 
 Use the existing `POST /api/git/delete-branch` with the repository `path`, exact
 `branch`, `local: true`, `remote: false`, and caller-observed `expectedHead`.
-Do not invent a checkout path for the checkout-review endpoint. The Git service
-checks current owners and worktree holders, retains the exact source under
-`refs/portos/completed/<head>`, and removes only that ref with compare-and-swap.
-Refresh branch reconciliation afterward to observe the actual remaining refs.
-This is an explicit source-retaining removal, not a claim that its original
-commits were merged.
+The Git service checks current owners and worktree holders, retains the exact
+source under `refs/portos/completed/<head>`, and removes only that ref with
+compare-and-swap. Refresh branch reconciliation afterward to observe the actual
+remaining refs. This is an explicit source-retaining removal, not a claim that
+its original commits were merged.
 
-To recover the prototype, fetch the recorded source ref, verify the exact head,
-and create a new checkout. Retained small files and symlink metadata are audit
-and recovery evidence; old Git registration pointers/locks must never be copied
-into a recreated checkout as if it were the previous incarnation. The published
-source branch is retained; local retirement does not delete it remotely.
-
-### Review work budgets
-
-Review fingerprints apply byte budgets and can refuse with
-`retirement-archive-limit-exceeded`. That refusal keeps the checkout; review
-never writes an archive directory.
-
-Patch capture preserves original Git output bytes, including non-UTF-8 content. Metadata names and symlink targets must round-trip losslessly through UTF-8; unsupported encodings refuse before removal.
-
-File count is not admission policy; the byte and metadata budgets below bound
-each snapshot, and independently recognized disposable test caches do not count
-against them. Hashing uses 64 KiB chunks with at most two concurrent
-snapshot file streams. Git snapshot queries keep a finite fan-out: seven content
-queries plus the private Git directory lookup.
-
-The limits are 25 MiB per raw file, 250 MiB combined content and private
-administration, and the Git output buffer of `64 * 1024 * 1024` JavaScript code
-units. Git output overflow and command timeout report measured usage and recovery
-guidance. Metadata is charged incrementally against a 16 MiB ceiling, including
-file entries, symlink targets and gitlinks; this also bounds zero-byte-file trees.
-Transient sorted directory names have a separate 16 MiB scan budget, so directory
-traversal cannot allocate unbounded name lists. A snapshot has a ten-minute
-elapsed work budget, a conservative ceiling of twenty 30-second Git command
-timeouts. Checks run between filesystem operations and 64 KiB chunks; a running
-Git command retains its 30-second timeout. Kernel I/O may finish before
-cancellation is observed. No global setting is written.
-
-Internal callers may pass an `AbortSignal` as `opts.signal`. Cancellation or a
-resource refusal keeps the original checkout, ref and outstanding obligations. A
-new attempt starts from fresh snapshots rather than treating partial work as
-evidence. Capacity responses include measured bytes, Git output code units, or
-elapsed milliseconds. Recover by freeing resources or preserving large outputs
-separately, then retrying the exact checkout with fresh evidence; do not remove it
-or raise global limits to clear a refusal.
+Earlier releases could preserve a superseded prototype's small checkout-only
+files in the schedule record (`supersededSourceEvidence`). That mode is gone;
+existing records are left untouched and no longer read.
 
 ## Completing a merged job
 
@@ -251,24 +190,12 @@ recorded accurately rather than turned into invented code defects.
 
 ## Later deliveries on a captured checkout
 
-A later merged PR on the same captured checkout generation can satisfy an
-earlier completed review obligation. Explicit retirement review must prove that
-both PRs merged on this repository's default branch, the earlier PR head is an
-ancestor of the captured completion head, and that capture is an ancestor of the
-currently reviewed delivery. The captured pointer and private-administration
-generation must match exactly. Missing evidence, changed generations, active
-owners and human handoffs remain held. The original agent result and policy are
-never rewritten; the new proof is bound into the retirement review and removal receipt.
-Cleanup creates no checkout archive. Only that reviewed generation can finish branch retirement;
-a recreated checkout path or new branch holder still refuses.
-
-An incomplete multi-claim batch does not prevent cleanup of a separately
-verified merged checkout. Its completed execution must have a valid capture of
-that same generation, and the captured head must be included in the exact
-merged delivery. Failed execution or validation, missing captures and unmerged
-delivery remain held. Cleanup preserves the batch's incomplete result, every
-capture and unfinished sibling checkout; it does not reset or resume exhausted
-retry budgets.
+A later merged PR whose head contains the checkout's head settles a clean
+checkout through the same rules, whatever earlier PR the run recorded: the
+merged history holds every commit. Changed generations, active owners and human
+handoffs remain held. Cleanup preserves an incomplete multi-claim batch's
+result, captures and unfinished sibling checkouts; it does not reset or resume
+exhausted retry budgets.
 
 ## Archive-era bookkeeping transition
 

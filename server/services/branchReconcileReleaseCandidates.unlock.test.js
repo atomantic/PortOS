@@ -28,7 +28,7 @@ afterAll(async () => { await rm(root, { recursive: true, force: true, maxRetries
 it('preserves a live or open-PR candidate, then unlocks abandonment without removing unique work', async () => {
   const app = { repoPath: repo };
   const tree = { branch, path, head, locked: true, lockReason: 'Active release candidate ' + branch };
-  const deps = { beforeMutation: vi.fn(), readPr: async () => null, prepare: vi.fn(), retire: vi.fn() };
+  const deps = { beforeMutation: vi.fn(), readForgeDelivery: async () => 'none', retire: vi.fn() };
   const run = () => retireMergedReleaseCandidates(app, { worktreeInventory: [tree] }, deps);
   f.agents = { 'agent-old': { id: 'agent-old', status: 'running', metadata: {
     workspacePath: path, sourceWorkspace: repo, taskAnalysisType: 'do-release',

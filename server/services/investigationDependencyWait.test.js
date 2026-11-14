@@ -16,7 +16,7 @@ vi.mock('./cosState.js', async () => ({ loadState: async () => ({ agents: fixtur
   withStateLock: (await import('../lib/fileWriteQueue.js')).createFileWriteQueue() }));
 vi.mock('./cos.js', () => ({ isRunning: () => false }));
 vi.mock('./notifications.js', () => ({ removeByMetadata: async () => 0 }));
-vi.mock('./heldCheckoutReview.js', () => ({ readRetirementForgeEvidence: async () => {
+vi.mock('./mergedPrEvidence.js', () => ({ readMergedPrDelivery: async () => {
   if (fixture.denyProof) throw new Error('forge unavailable');
   return fixture.forge;
 } }));

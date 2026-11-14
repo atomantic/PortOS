@@ -84,8 +84,8 @@ export function cleanupRefillSourceMatches(task, agent, instanceId) {
 export async function proveSwarmCleanupDelivery(task, agent, instanceId) {
   const captures = cleanupOnlySwarmCaptures(task, agent, instanceId);
   if (!captures) return null;
-  const [{ probePrForBranch }, { readRetirementForgeEvidence }, { getAppById }] = await Promise.all([
-    import('./prProbe.js'), import('./heldCheckoutReview.js'), import('./apps.js'),
+  const [{ probePrForBranch }, { readMergedPrDelivery }, { getAppById }] = await Promise.all([
+    import('./prProbe.js'), import('./mergedPrEvidence.js'), import('./apps.js'),
   ]);
   const app = await getAppById(task.metadata.app).catch(() => null);
   const repo = agent.metadata.sourceWorkspace || agent.metadata.workspacePath;
@@ -95,7 +95,7 @@ export async function proveSwarmCleanupDelivery(task, agent, instanceId) {
     const probe = await probePrForBranch(repo, capture.branch).catch(() => null);
     if (!probe?.readable || probe.prState !== 'MERGED' || !probe.prUrl) return null;
     if (probe.cli === 'gh') {
-      const forge = await readRetirementForgeEvidence(repo, capture.branch, probe.prUrl, {
+      const forge = await readMergedPrDelivery(repo, capture.branch, probe.prUrl, {
         forgeAccount: app.forgeAccount ?? null, exactDeliveredHead: capture.head,
       }).catch(() => null);
       if (forge?.scopeProof !== 'exact-delivered-head' || forge.prHead !== capture.head || forge.prUrl !== probe.prUrl) return null;

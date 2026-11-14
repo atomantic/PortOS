@@ -327,11 +327,11 @@ router.post('/schedule/branch-reconcile/refresh', asyncHandler(async (req, res) 
 // one held checkout from the last branch-reconcile inventory (#12002, #16016)
 router.post('/schedule/branch-reconcile/checkouts/retire', asyncHandler(async (req, res) => {
   const { appId, ...release } = validateRequest(heldCheckoutRetireBodySchema, req.body);
-  const { retireOperatorCheckout } = await import('../services/heldCheckoutRecovery.js');
-  const result = await retireOperatorCheckout({ appId, release });
+  const { retireInventoriedCheckout } = await import('../services/heldCheckoutRecovery.js');
+  const result = await retireInventoriedCheckout({ appId, release });
   if (!result.ok) {
-    throw new ServerError(`Checkout kept: ${result.reason}${result.detail ? ` (${result.detail})` : ''}`, {
-      status: result.reason === 'app-not-found' ? 404 : 409, code: 'CHECKOUT_RETIREMENT_REFUSED', context: { reason: result.reason, ...(result.archiveLimit && { archiveLimit: result.archiveLimit }), ...(result.nextAction && { nextAction: result.nextAction }) },
+    throw new ServerError(`Checkout kept: ${result.reason}`, {
+      status: result.reason === 'app-not-found' ? 404 : 409, code: 'CHECKOUT_RETIREMENT_REFUSED', context: { reason: result.reason },
     });
   }
   res.json(result);

@@ -370,7 +370,6 @@ const HANDOFF_POLICIES = new Set([PR_COMPLETIONS.MERGE_ON_GREEN, PR_COMPLETIONS.
 const INVALID_HANDOFF = Symbol('invalid-handoff');
 const CLEANUP_REQUIRES_RECOVERY = new Set([
   'receipt-checkout-locked', 'receipt-checkout-head-unverified', 'receipt-pr-head-changed',
-  'retirement-submodule-not-uninitialized', 'retirement-supersession-not-accepted',
   'pr-completion-human-handoff', 'checkout-head-changed', 'checkout-branch-changed',
   'checkout-lock-changed', 'checkout-not-found', 'checkout-primary', 'protected-branch',
 ]);

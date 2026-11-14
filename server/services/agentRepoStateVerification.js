@@ -1494,7 +1494,7 @@ async function containedInDefaultBranch(sourceWorkspace, head) {
 
 /** Already removed checkouts need delivery proof, not a retroactive backup. */
 async function settleAbsentCheckout({ agentId, agentState, metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen, recheckCleanup }) {
-  const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
+  const { readMergedPrDelivery } = await import('./mergedPrEvidence.js');
   const repository = await canonicalRepository(sourceWorkspace);
   // Opening a PR need not have been requested by the original task. A run
   // can nevertheless have delivered one itself. Its immutable capture permits
@@ -1508,7 +1508,7 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
   const delivery = capturedHead && !originalPrUrl && !observed.prState
     ? await probePrForBranch(sourceWorkspace, branchName).catch(() => null) : observed;
   const proofUrl = originalPrUrl || delivery?.prUrl;
-  const forge = proofUrl && delivery?.prState === 'MERGED' ? await readRetirementForgeEvidence(sourceWorkspace, branchName, proofUrl,
+  const forge = proofUrl && delivery?.prState === 'MERGED' ? await readMergedPrDelivery(sourceWorkspace, branchName, proofUrl,
     { forgeAccount: app?.forgeAccount ?? null, ...(capturedHead && { exactDeliveredHead: capturedHead }) }).catch(() => null) : null;
   // The forge binds merged delivery to this repository and named PR branch.
   // A follow-up may rebase or advance its head after the original capture.
@@ -1560,7 +1560,7 @@ async function settleDivergedBranch(ctx) {
     return settleUndeliveredBranch(ctx);
   }
   const prepared = await prepareRecoveryRetirement({ agentId, appId, app, sourceWorkspace, branchName, worktreePath, observed })
-    .catch(() => ({ reason: 'retirement-review-unavailable' }));
+    .catch(() => ({ reason: 'retirement-evidence-unavailable' }));
   if (!prepared.retirement) {
     const held = await blockWith(prepared.reason, { issues, observed });
     // The retirement gate declining is its designed outcome; the reason is recorded on the ledger above.
@@ -1576,16 +1576,14 @@ async function settleDivergedBranch(ctx) {
   if (ctx.task?.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup') {
     return ctx.blockWith('cleanup-successor-review-unresolved', { issues: ctx.issues, observed: ctx.observed });
   }
-  return fileDivergenceRecovery({ ...ctx, appId: prepared.appId }, prepared.retirement);
+  return fileDivergenceRecovery({ ...ctx, appId: prepared.appId });
 }
 
 async function retireIntegratedCheckout({ agentId, appId, observed, issues, record, blockWith, recheckCleanup, manualCleanupOnly, metadata, sourceWorkspace, branchName, worktreePath }, retirement) {
-  const { retireInventoriedCheckout } = await import('./heldCheckoutRecovery.js');
-  const { assertAutomaticRetirementAllowed } = await import('./branchReconcileRetirement.js');
-  const result = await retireInventoriedCheckout({ appId, release: retirement.release,
-    review: { prUrl: retirement.prUrl, digest: retirement.digest, acceptSuperseded: false } }, { beforeMutation: async () => {
+  const { retireInventoriedCheckout, assertAutomaticRetirementAllowed } = await import('./heldCheckoutRecovery.js');
+  const result = await retireInventoriedCheckout({ appId, release: retirement.release }, { beforeMutation: async () => {
       // An explicit host-authorized recheck is not unattended daemon work.
-      // It still goes through all ownership, review and retirement gates.
+      // It still goes through all ownership, merge and content gates.
       if (!manualCleanupOnly) await assertAutomaticRetirementAllowed();
       await recheckCleanup?.();
       if (recheckCleanup) {
@@ -1593,7 +1591,7 @@ async function retireIntegratedCheckout({ agentId, appId, observed, issues, reco
         if (hold) throw new Error(hold.reason);
       }
     } }).catch(error => ({ reason: (['daemon-stopped', 'automatic-retirement-disabled', 'checkout-incarnation-changed', 'claim-owner-active', 'claim-owner-ambiguous', 'cleanup-owner-changed', 'cleanup-provenance-unverified', 'swarm-continuation-pending', 'completion-stages-pending', 'checkout-capture-unverified'].includes(error.message)) ? error.message : 'retirement-outcome-uncertain' }));
-  if (!result.ok || result.branchDeleted !== true || (recheckCleanup && result.archiveDir != null)) {
+  if (!result.ok || result.branchDeleted !== true) {
     return blockWith(result.reason || result.branchRetainedReason || 'retirement-receipt-unverified', { issues, observed });
   }
   await record('verified', 'retirement-receipt-verified', { prUrl: observed.prUrl, committedIntegrationVerified: true,
@@ -1628,7 +1626,7 @@ async function settleUndeliveredBranch({ agentId, app, sourceWorkspace, branchNa
   return blockWith(review?.reason || delivery.reason || 'completed-review-target-unverified', { issues, observed });
 }
 
-async function fileDivergenceRecovery({ agentId, task, appId, metadata, sourceWorkspace, branchName, worktreePath, observed, issues, record }, retirement) {
+async function fileDivergenceRecovery({ agentId, task, appId, metadata, sourceWorkspace, branchName, worktreePath, observed, issues, record }) {
   const { loadState } = await import('./cosState.js');
   const stateConfig = (await loadState().catch(() => null))?.config;
   if (stateConfig && stateConfig.autoApproveInvestigations !== true) {
@@ -1640,7 +1638,7 @@ async function fileDivergenceRecovery({ agentId, task, appId, metadata, sourceWo
   emitLog('info', `🔎 Repo state diverged after ${agentId}: ${issues.map(i => i.code).join(', ')}`, { agentId, branchName, taskId: task?.id });
 
   const recoveryTaskId = await fileRepoStateRecoveryTask({
-    agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, retirement, claimRun: isTruthyMeta(metadata.claimPicksOwnBranch),
+    agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, claimRun: isTruthyMeta(metadata.claimPicksOwnBranch),
   }).catch(err => {
     emitLog('warn', `Failed to file repo-state recovery task for ${agentId}: ${err.message}`, { agentId, branchName });
     return null;
@@ -1649,8 +1647,9 @@ async function fileDivergenceRecovery({ agentId, task, appId, metadata, sourceWo
   return { verified: false, skipReason: null, issues, observed, recoveryTaskId };
 }
 
-/** Persist the exact obligation before preview, so refusal or restart cannot
- * lose it. The preview supplies evidence for review, never deletion authority.
+/** Persist the exact obligation before retirement, so a refusal or restart
+ * cannot lose it. A merged delivery retires directly; anything else is unmerged
+ * work for a recovery agent. Neither answer is deletion authority.
  */
 async function prepareRecoveryRetirement({ agentId, appId, app: taskApp, sourceWorkspace, branchName, worktreePath, observed }) {
   // A task naming an app is bound to exactly that app: a missing or mismatched one
@@ -1684,21 +1683,13 @@ async function prepareRecoveryRetirement({ agentId, appId, app: taskApp, sourceW
   if (getActiveAgentIds().filter(id => id !== agentId).includes(agentId)) return { reason: 'completion-execution-active' };
   if (release.locked) {
     await recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'retirement-worktree-locked',
-      nextAction: 'Keep the checkout locked; its owner must explicitly release it before another preview.' });
+      nextAction: 'Keep the checkout locked; its owner must explicitly release it before another retirement attempt.' });
     return { reason: 'retirement-worktree-locked' };
   }
-  const { prepareInventoriedCheckoutRetirement } = await import('./heldCheckoutRecovery.js');
-  const prepared = await prepareInventoriedCheckoutRetirement({ appId: app.id, release, prUrl: observed.prUrl });
-  if (!prepared.ok) {
-    await recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: prepared.reason,
-      nextAction: 'Retain the checkout and obligation; retry a fresh preview after the reported hold resolves.' });
-    return { reason: prepared.reason };
-  }
-  if (!['integrated', 'review-supersession'].includes(prepared.review?.comparison?.disposition)
-    || typeof prepared.review.comparison.localPatch !== 'string' || typeof prepared.review.comparison.difference !== 'string') return { reason: 'retirement-comparison-unavailable' };
-  return { appId: app.id, integrated: prepared.review.forge?.prHead === release.head && prepared.review.comparison?.disposition === 'integrated' && prepared.review.comparison.difference === '',
-    retirement: { release, prUrl: observed.prUrl, digest: prepared.review.digest,
-      cognition: (await import('./branchReconcileRetirement.js')).retirementCognitiveIdentity(prepared.review, release, observed.prUrl) } };
+  const { readMergedDelivery } = await import('./heldCheckoutRecovery.js');
+  const integrated = await readMergedDelivery(sourceWorkspace, release);
+  if (integrated === null) return { reason: 'delivery-evidence-unavailable' };
+  return { appId: app.id, integrated, retirement: { release } };
 }
 
 /**
@@ -1714,7 +1705,7 @@ async function prepareRecoveryRetirement({ agentId, appId, app: taskApp, sourceW
  */
 export const REPO_STATE_REMEDIATIONS = Object.freeze({
   [REPO_STATE_ISSUES.WORKTREE_PRESENT]: ({ worktreePath }) =>
-    `Keep the retained worktree ${worktreePath} intact until the retirement service removes a merged clean checkout. Use only the exact inventory, full preview review and digest-bound retirement API. Do not copy the checkout into an archive.`,
+    `Keep the retained worktree ${worktreePath} intact until the retirement service removes it. A merged checkout is retired directly through the exact branch-reconcile inventory; unmerged work stays. Do not copy the checkout into an archive.`,
   [REPO_STATE_ISSUES.LOCAL_BRANCH_PRESENT]: ({ branchName }) =>
     `Keep local branch ${branchName} until the retirement service returns ok:true and branchDeleted:true. Missing checkout or merged status is not permission for shell deletion.`,
   [REPO_STATE_ISSUES.REMOTE_BRANCH_PRESENT]: ({ branchName }) =>
@@ -1738,14 +1729,12 @@ export const REPO_STATE_REMEDIATIONS = Object.freeze({
  *
  * @returns {Promise<string|null>} the task id, or null when it was a duplicate
  */
-async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, retirement = null, claimRun = false }) {
+async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, claimRun = false }) {
   const appName = task?.metadata?.appName || appId || 'PortOS';
   const base = observed.defaultBranch || 'the default branch';
   const ctx = { branchName, base, prUrl: observed.prUrl, prNumber: observed.prNumber, worktreePath, forgeCli: observed.forgeCli };
 
-  const retirementInstructions = retirement
-    ? (await import('./branchReconcileRetirement.js')).retirementReviewInstructions({ branch: branchName, retirement }, appId)
-    : `After confirming MERGED and releasing admission, request branch-reconcile through POST /api/cos/schedule/trigger with ${JSON.stringify({ taskType: 'branch-reconcile', appId })} using authenticated PortOS transport. Keep checkout and refs for its exact inventory/review/retire workflow. Report cleanup pending until the retirement service returns ok:true and branchDeleted:true. Do not copy the checkout into an archive.`;
+  const retirementInstructions = `After confirming MERGED and releasing admission, request branch-reconcile through POST /api/cos/schedule/trigger with ${JSON.stringify({ taskType: 'branch-reconcile', appId })} using authenticated PortOS transport. Keep checkout and refs for its exact inventory and retirement: a merged checkout is removed with its branch. Report cleanup pending until the retirement service returns ok:true and branchDeleted:true. Do not copy the checkout into an archive.`;
   const context = [
     'An agent finished successfully but the repository did not end up in the expected state.',
     '',
@@ -1771,23 +1760,21 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
     '',
     retirementInstructions,
     '',
-    `Rules: preserve wanted unmerged work until it is delivered. Retirement requires service-verified integration in ${base} or explicitly reviewed supersession, plus an exact digest. A merged clean checkout is removed in place; do not copy it into an archive. `
+    `Rules: preserve wanted unmerged work until it is delivered. Retirement requires service-verified merged delivery: a PR merged at the exact head, or merged commits (on ${base} or inside a later merged PR head) with a clean checkout. A merged checkout is removed in place; do not copy it into an archive. `
       + `Other agents are running concurrently with their own worktrees and branches; touch ONLY ${branchName} and its worktree. `
       + `Do not switch branches in ${sourceWorkspace} itself.`,
   ].join('\n');
 
   const head = await execGit(['rev-parse', '--verify', `refs/heads/${branchName}`], sourceWorkspace)
     .then(result => result.exitCode === 0 ? result.stdout.trim() : null).catch(() => null);
-  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(head || '')
-    || (retirement && retirement.release.head !== head)) return null;
-  const observation = retirement?.cognition?.observation || processAuditFingerprint({ branchName, worktreePath, head, prUrl: observed.prUrl,
+  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(head || '')) return null;
+  const observation = processAuditFingerprint({ branchName, worktreePath, head, prUrl: observed.prUrl,
     codes: issues.map(issue => issue.code).sort(), merged: observed.branchMerged,
     remotePresent: observed.remoteBranchPresent, prState: observed.prState, deliveryRepair: observed.deliveryRepair,
     // Stable observation: periodic checks alone do not create new work.
     work: 'delivery-repair' });
   const { reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
-  const recoveryOwner = retirement?.cognition?.ownerAgentId || agentId;
-  const reservation = await reserveRepoCleanupRecovery(recoveryOwner, branchName, observation);
+  const reservation = await reserveRepoCleanupRecovery(agentId, branchName, observation);
   if (!reservation?.admitted) {
     await recordCleanupOutcome(agentId, { status: 'blocked', reason: reservation?.reason || 'cleanup-observation-unavailable', branch: branchName, path: worktreePath });
     return null;
@@ -1805,13 +1792,12 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
     metadata: { recoveryOrigin: { parentAgentId: agentId, parentTaskId: task?.id || null,
       subsystem: 'repository-cleanup', attempt: reservation.attempt,
       observation, noProgress: false },
-    ...(mergeTarget ? { recoveryMergeTarget: mergeTarget } : {}),
-    ...(retirement ? { retirementReview: { appId, release: retirement.release } } : {}) },
+    ...(mergeTarget ? { recoveryMergeTarget: mergeTarget } : {}) },
     context,
     useWorktree: false,
   }, 'internal');
 
-  await recordRepoCleanupRecovery(recoveryOwner, branchName, observation, { phase: created?.id ? 'dispatched' : 'blocked', taskId: created?.id || null });
+  await recordRepoCleanupRecovery(agentId, branchName, observation, { phase: created?.id ? 'dispatched' : 'blocked', taskId: created?.id || null });
   await recordCleanupOutcome(agentId, { status: 'pending', reason: 'cognitive-review-pending', branch: branchName, path: worktreePath, taskId: created?.id || null });
   if (created?.duplicate) {
     emitLog('info', `🔎 Repo-state recovery for ${branchName} already queued as ${created.id}`, { agentId, branchName });
@@ -1823,19 +1809,7 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
     const target = duplicate?.metadata?.recoveryMergeTarget;
     if (origin?.parentAgentId !== agentId || origin?.parentTaskId !== task?.id
       || origin?.subsystem !== 'repository-cleanup'
-      || (!retirement && (!mergeTarget || target?.url !== mergeTarget.url || target?.branch !== branchName))) return null;
-  }
-  if (retirement && created?.id) {
-    const { getTaskById } = await import('./cosTaskStore.js');
-    const persisted = await getTaskById(created.id);
-    const target = { appId, release: retirement.release };
-    if (persisted?.metadata?.recoveryOrigin?.parentAgentId !== agentId
-      || persisted.metadata.recoveryOrigin.parentTaskId !== task?.id
-      || !isDeepStrictEqual(persisted.metadata.retirementReview, target)) return null;
-    const { recordRepoStateRecovery } = await import('./cosAgentLifecycle.js');
-    const bound = await recordRepoStateRecovery(agentId, { taskId: created.id, branch: branchName,
-      retirementReview: target, repoPath: sourceWorkspace }, { claimRun: true });
-    if (!bound) throw new Error('retirement-recovery-binding-unavailable');
+      || !mergeTarget || target?.url !== mergeTarget.url || target?.branch !== branchName) return null;
   }
   if (mergeTarget && created?.id) {
     // Admission's trust anchor: task metadata is API-writable, so only this

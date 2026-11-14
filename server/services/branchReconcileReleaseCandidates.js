@@ -2,8 +2,8 @@
  * Older releases locked each release-candidate checkout with
  * `Active release candidate <branch>` and nothing unlocks it afterwards. Once the
  * candidate's release PR is merged at the checkout's exact head, that lock has
- * served its purpose: route the checkout through the inventoried review/retire
- * path, which archives it and releases the reviewed lock itself.
+ * served its purpose: the inventoried retirement service releases that exact
+ * lock and removes the merged checkout with its branch.
  */
 import { withGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 
@@ -15,36 +15,32 @@ export function releaseCandidateTrees(result) {
     && tree.lockReason === `${LOCK_PREFIX}${tree.branch.replace(/^refs\/heads\//, '')}`);
 }
 
-/** Only an exact-head merged PR with a fully integrated, difference-free review retires. */
+/** Only a merged release PR that delivered the candidate's head retires it. */
 export async function retireMergedReleaseCandidates(app, result, deps = {}) {
   const retired = [];
   const held = [];
   const trees = releaseCandidateTrees(result);
   if (!trees.length) return { retired, held };
-  const readPr = deps.readPr || (async (a, name, tip) => (await (await import('./heldCheckoutReview.js'))
-    .findMergedPullRequest(a.repoPath, name, tip, { forgeAccount: a.forgeAccount ?? null })).url);
-  const prepare = deps.prepare || (await import('./heldCheckoutRecovery.js')).prepareInventoriedCheckoutRetirement;
-  const retire = deps.retire || (await import('./heldCheckoutRecovery.js')).retireInventoriedCheckout;
-  const guard = deps.beforeMutation || (await import('./branchReconcileRetirement.js')).assertAutomaticRetirementAllowed;
+  const recovery = await import('./heldCheckoutRecovery.js');
+  const readDelivery = deps.readForgeDelivery || recovery.readForgeDelivery;
+  const retire = deps.retire || recovery.retireInventoriedCheckout;
+  const guard = deps.beforeMutation || recovery.assertAutomaticRetirementAllowed;
   for (const tree of trees) {
     const release = { ...(tree.observedAt && { observedAt: tree.observedAt }), ...(tree.checkoutIdentity && { checkoutIdentity: tree.checkoutIdentity }),
       branch: tree.branch, path: tree.path, head: tree.head, locked: true, lockReason: tree.lockReason };
     // An open, closed-unmerged or unreadable PR is the normal "still active" case: leave the lock alone.
-    const prUrl = await readPr(app, tree.branch.replace(/^refs\/heads\//, ''), tree.head).catch(() => null);
-    if (!prUrl) {
+    const delivery = await readDelivery(app.repoPath, tree.branch.replace(/^refs\/heads\//, ''), tree.head).catch(() => null);
+    if (delivery !== 'exact' && delivery !== 'contained') {
       // Release only the old candidate-specific lock. Normal branch reconcile
       // then applies its ordinary dirty/unique-content and ownership rules.
       const unlocked = await (deps.unlockAbandoned || unlockAbandonedCandidate)(app, tree, deps).catch(() => false);
       if (unlocked) held.push({ ...release, locked: false, lockReason: null, reason: 'candidate-unlocked-for-reconciliation' });
       continue;
     }
-    const prepared = await prepare({ appId: app.id, release, prUrl }).catch(() => null);
-    const review = prepared?.ok ? prepared.review : null;
-    if (review?.forge?.prHead !== release.head || review.comparison?.disposition !== 'integrated' || review.comparison.difference !== '') continue;
-    const outcome = await retire({ appId: app.id, release, review: { prUrl, digest: review.digest, acceptSuperseded: false } }, { beforeMutation: guard })
-      .catch(error => ({ ok: false, reason: ['daemon-stopped', 'automatic-retirement-disabled'].includes(error.message) ? error.message : 'retirement-receipt-unverified' }));
+    const outcome = await retire({ appId: app.id, release }, { beforeMutation: guard, delivery })
+      .catch(error => ({ ok: false, reason: ['daemon-stopped', 'automatic-retirement-disabled'].includes(error.message) ? error.message : 'retirement-outcome-uncertain' }));
     if (outcome.ok && outcome.branchDeleted === true) retired.push(release);
-    else held.push({ ...release, reason: outcome.reason || 'retirement-receipt-unverified', ...(outcome.archiveLimit && { archiveLimit: outcome.archiveLimit }) });
+    else held.push({ ...release, reason: outcome.reason || outcome.branchRetainedReason || 'retirement-outcome-uncertain' });
   }
   return { retired, held };
 }
@@ -65,7 +61,7 @@ async function unlockAbandonedCandidate(app, tree, deps = {}) {
   const { listWorktrees } = await import('./worktreeManager.js');
   const { execGit } = await import('../lib/execGit.js');
   return withClaimOwnershipLock(() => withGitMutationLifetime(async () => {
-    await (deps.beforeMutation || (await import('./branchReconcileRetirement.js')).assertAutomaticRetirementAllowed)();
+    await (deps.beforeMutation || (await import('./heldCheckoutRecovery.js')).assertAutomaticRetirementAllowed)();
     const agents = await readClaimOwnershipAgents();
     const { getActiveAgentIds } = await import('./agentState.js');
     const active = new Set(getActiveAgentIds());

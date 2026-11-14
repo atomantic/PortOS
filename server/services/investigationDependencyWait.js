@@ -51,7 +51,7 @@ async function delivered(owner, task, wait) {
   const captures = owner.metadata?.completedCheckouts?.filter(row => completedCheckoutReceiptValid(owner, row)
     && (row.branch === owner.metadata.worktreeBranch || owner.metadata.claimBranches?.includes(row.branch))) || [];
   if (captures.length !== 1 || !await sameRepository(captures[0].repoPath, wait.repoPath)) return null;
-  const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
+  const { readMergedPrDelivery } = await import('./mergedPrEvidence.js');
   const capture = captures[0];
   const executionDelivered = isTaskDeliveryComplete(owner) && owner.result.validationPassed === true
     && owner.result.taskOutcome?.status === 'completed';
@@ -63,7 +63,7 @@ async function delivered(owner, task, wait) {
     && Object.values(owner.metadata.cleanupOutcomes || {}).some(row => row.status === 'verified'
       && row.branch === capture.branch && row.path === capture.path && row.committedIntegrationVerified === true);
   if (!executionDelivered && !verifiedAfterExecution) return null;
-  const proof = await readRetirementForgeEvidence(wait.repoPath, capture.branch, wait.prUrl, { exactDeliveredHead: capture.head });
+  const proof = await readMergedPrDelivery(wait.repoPath, capture.branch, wait.prUrl, { exactDeliveredHead: capture.head });
   if (proof.prHead !== capture.head || proof.scopeProof !== 'exact-delivered-head') return null;
   const { execGit } = await import('../lib/execGit.js');
   const included = await execGit(['merge-base', '--is-ancestor', proof.mergeCommit, proof.targetHead ?? proof.defaultHead],
