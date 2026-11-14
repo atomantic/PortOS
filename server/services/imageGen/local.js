@@ -1508,6 +1508,12 @@ export async function saveUploadedGalleryImage(base64Data, tempPath) {
         await atomicWrite(join(PATHS.images, filename.replace('.png', '.metadata.json')), metadata);
       }
       await refreshImageIndex(filename);
+      import('../imageVerifier.js').then(async ({ getVerifierSettings, verifyImageAsync }) => {
+        const vs = await getVerifierSettings().catch(() => null);
+        if (vs?.enabledForImport || metadata?.verify === true) {
+          verifyImageAsync(filename, { isImport: true, prompt: metadata?.prompt || '' });
+        }
+      }).catch(() => {});
       console.log(`📥 Saved uploaded gallery image: ${filename} (PNG from ${detected.mime})`);
       return { filename, path: `/data/images/${filename}`, metadata };
     });
