@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -440,6 +441,21 @@ describe('pending-merge handoff', () => {
     expect(mergePrMock).not.toHaveBeenCalled();
     expect(notifyMock).toHaveBeenCalledTimes(1);
   });
+
+  it.each(['receipt-pr-head-changed', 'receipt-checkout-locked', 'checkout-head-changed', 'checkout-lock-changed'])(
+    'holds a refused merged cleanup for recovery without force-removing the checkout: %s', async reason => {
+      cleanupMock.mockResolvedValue({ ok: false, reason });
+      await handedOff();
+      greenChecks();
+      await processPendingMergePrs(f.apps.get('app1'));
+      f.pr.state = 'MERGED';
+      pending()[0].cleanup = undefined;
+      await processPendingMergePrs(f.apps.get('app1'));
+      expect(pending()).toHaveLength(1);
+      expect(pending()[0].cleanup).toMatchObject({ status: 'held', reason });
+      expect(existsSync(workspace)).toBe(true);
+    },
+  );
 
   it('keeps merged cleanup owned and bounded after an archival refusal', async () => {
     cleanupMock.mockResolvedValue({ ok: false, reason: 'retirement-forge-unreadable' });
