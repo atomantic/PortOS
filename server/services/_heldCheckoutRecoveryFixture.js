@@ -38,7 +38,7 @@ export function describeHeldCheckoutRecovery(body) {
     beforeEach(async () => {
       scratch = null;
       Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
-      Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, onUnlockedStatus: null, statusReads: 0 });
+      Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, onUnlockedStatus: null, statusReads: 0, onOtherFiles: null });
       scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
       const safeRepo = join(scratch, 'repo');
       await mkdir(safeRepo);

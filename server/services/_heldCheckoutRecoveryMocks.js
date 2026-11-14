@@ -13,7 +13,7 @@ export const owned = ownFixtureWork();
 
 export const SYMLINKS = process.platform !== 'win32';
 export const retirementFaults = { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null };
-export const injected = { policies: [], schedule: null, app: null, onUnlockedStatus: null, statusReads: 0 };
+export const injected = { policies: [], schedule: null, app: null, onUnlockedStatus: null, statusReads: 0, onOtherFiles: null };
 
 // Local branch deletion uses PATHS.cos, independently of any checkout path.
 export const mockPaths = actual => makePathsProxy(actual, { dataRoot: () => lazyTempDataRoot('portos-held-branch-archives-') });
@@ -29,7 +29,10 @@ export const mockExecGit = actual => ({ ...actual,
     }
     if (retirementFaults.onRemove && args[0] === 'worktree' && args[1] === 'remove') await retirementFaults.onRemove();
     if (retirementFaults.onBranchDelete && args[0] === 'push' && args.some(arg => arg.startsWith(':refs/heads/'))) await retirementFaults.onBranchDelete();
-    return owned.run('git', () => actual.execGit(args, cwd, options));
+    const result = await owned.run('git', () => actual.execGit(args, cwd, options));
+    // Lets a test reproduce Git for Windows listing a junction's descendants.
+    if (injected.onOtherFiles && args[0] === 'ls-files' && args[1] === '--others') return { ...result, stdout: injected.onOtherFiles(result.stdout) };
+    return result;
   } });
 
 export const mockBranchCompletionPolicy = actual => ({

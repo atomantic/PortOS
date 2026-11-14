@@ -6,8 +6,8 @@
  */
 import { describe, expect, it as unitIt, vi } from 'vitest';
 // Load the factories before any import below resolves a mocked module.
-import { mockBranchCompletionPolicy, mockExecGit, mockPaths, mockTaskScheduleStore, injected, retirementFaults } from './_heldCheckoutRecoveryMocks.js';
-import { appendFile, mkdir, writeFile, readFile } from 'fs/promises';
+import { mockBranchCompletionPolicy, mockExecGit, mockPaths, mockTaskScheduleStore, injected, retirementFaults, SYMLINKS } from './_heldCheckoutRecoveryMocks.js';
+import { appendFile, lstat, mkdir, readlink, symlink, writeFile, readFile } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { dirname, join } from 'path';
 import { readRetirementCheckoutIdentity, isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
@@ -37,7 +37,7 @@ vi.mock('./mergedPrEvidence.js', () => ({ readMergedPrDelivery: async () => {
 } }));
 vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id ? injected.app : null) }));
 
-import { describeHeldCheckoutRecovery, it, beforeEach, repo, external, noOwners, heldCheckout, mergedCheckout, registered, lockText, retire, makeClean, supersededCheckout, reapSuperseded } from './_heldCheckoutRecoveryFixture.js';
+import { describeHeldCheckoutRecovery, it, beforeEach, scratch, repo, external, noOwners, heldCheckout, mergedCheckout, registered, lockText, retire, makeClean, supersededCheckout, reapSuperseded } from './_heldCheckoutRecoveryFixture.js';
 const { retireInventoriedCheckout, retirePendingMergeCheckout, inspectAbsentCheckout, readMergedDelivery, retireCompletedCheckouts } = await import('./heldCheckoutRecovery.js');
 const { recordBranchReconcileOutcome, getBranchReconcileOutcome, getBranchReconcileInventory } = await import('./branchReconcileOutcome.js');
 const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
@@ -446,6 +446,42 @@ describeHeldCheckoutRecovery(() => {
     expect(await readMergedDelivery(repo, unmerged.release)).toBe(true);
     forge.delivery = new Error('merged-pr-forge-unavailable');
     expect(await readMergedDelivery(repo, unmerged.release)).toBeNull();
+  });
+
+  // A merged checkout holding an ignored link to an outside directory.
+  async function linkedCheckout(name) {
+    const checkout = await mergedCheckout(name);
+    await appendFile(join(repo, '.git', 'info', 'exclude'), 'linked-dir\n');
+    const outside = join(scratch, `outside-${name}`);
+    await mkdir(outside);
+    await writeFile(join(outside, 'wanted.txt'), 'outside bytes\n');
+    const link = join(checkout.path, 'linked-dir');
+    await symlink(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+    return { ...checkout, outside, link, target: await readlink(link) };
+  }
+
+  it.skipIf(!SYMLINKS).each(['native', 'descendant'])('never follows a directory link while retiring, with a %s listing', async listing => {
+    const c = await linkedCheckout(`linked-${listing}`);
+    // Git for Windows can enumerate a junction's descendants as ordinary files.
+    if (listing === 'descendant') injected.onOtherFiles = output => output.split('\0')
+      .map(entry => (entry === 'linked-dir' ? 'linked-dir/wanted.txt' : entry)).join('\0');
+    expect(await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, { readAgents: noOwners })).toMatchObject({ ok: true, branchDeleted: true });
+    expect(existsSync(c.path)).toBe(false);
+    expect(await readFile(join(c.outside, 'wanted.txt'), 'utf8')).toBe('outside bytes\n');
+  });
+
+  it.skipIf(!SYMLINKS)('restores unlinked directory links when Git refuses removal', async () => {
+    const c = await linkedCheckout('linked-refused');
+    let linkGoneAtRemoval = null;
+    retirementFaults.onRemove = async () => {
+      linkGoneAtRemoval = !(await lstat(c.link).catch(() => null));
+      throw new Error('synthetic Git removal refusal');
+    };
+    expect(await retireInventoriedCheckout({ appId: 'app-1', release: c.release }, { readAgents: noOwners })).toMatchObject({ ok: false });
+    expect(linkGoneAtRemoval).toBe(true);
+    expect(await readlink(c.link)).toBe(c.target);
+    expect(await readFile(join(c.outside, 'wanted.txt'), 'utf8')).toBe('outside bytes\n');
+    expect(await registered(c.path)).toBe(true);
   });
 
   it('observes current physical cleanup without requiring or creating retirement history', async () => {

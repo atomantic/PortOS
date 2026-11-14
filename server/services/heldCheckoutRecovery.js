@@ -20,9 +20,9 @@ import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObserva
 
 import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
 import { realpathSync } from 'node:fs';
-import { lstat } from 'node:fs/promises';
+import { lstat, readlink, stat, symlink, unlink } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { execGit } from '../lib/execGit.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
@@ -167,6 +167,52 @@ async function matchRelease(repoPath, release) {
   return { tree: { ...tree, path: release.path } };
 }
 
+/** The first link component of a checkout-relative path, never following one.
+ * Git for Windows can list a junction's descendants as ordinary files. */
+async function firstLinkComponent(root, rel) {
+  const parts = rel.replace(/\/$/, '').split('/');
+  for (let i = 0; i < parts.length; i++) {
+    const prefix = parts.slice(0, i + 1).join('/');
+    const info = await lstat(join(root, prefix)).catch(() => null);
+    if (!info) return null;
+    if (info.isSymbolicLink()) return prefix;
+    if (!info.isDirectory()) return null;
+  }
+  return null;
+}
+
+/** Git for Windows leaves directory junctions behind (git-for-windows/git#6151).
+ * Just before removal, unlink each untracked or ignored link to a directory,
+ * never its target; `removed` collects them so a refused removal can restore. */
+async function unlinkDirectoryLinks(root, removed) {
+  const listed = (await execGit(['ls-files', '--others', '-z'], root, { maxBuffer: 64 * 1024 * 1024 })).stdout.split('\0').filter(Boolean);
+  const seen = new Set();
+  for (const entry of listed) {
+    const rel = await firstLinkComponent(root, entry);
+    if (!rel || seen.has(rel)) continue;
+    seen.add(rel);
+    // Git handles file links itself; inspect the target's type without reading it.
+    if (!(await stat(join(root, rel)).catch(() => null))?.isDirectory()) continue;
+    const target = await readlink(join(root, rel));
+    await unlink(join(root, rel));
+    removed.push({ rel, target });
+  }
+}
+
+/** Recreate unlinked directory links under unchanged real parent directories only. */
+async function restoreDirectoryLinks(root, removed) {
+  let restored = true;
+  for (const { rel, target } of removed) {
+    const parent = rel.split('/').slice(0, -1).join('/');
+    const parentSafe = !parent || ((await lstat(join(root, parent)).catch(() => null))?.isDirectory()
+      && await firstLinkComponent(root, parent) === null);
+    const ok = parentSafe && await symlink(target, join(root, rel), process.platform === 'win32' ? 'junction' : 'dir')
+      .then(() => true, () => false);
+    if (!ok) restored = false;
+  }
+  return restored;
+}
+
 /**
  * Remove one merged checkout under a scoped release. Nothing is copied.
  *
@@ -238,16 +284,30 @@ async function finishHeldCheckoutRetirement({ repoPath, release, tree, branch, d
     if (!merged) return 'not-merged-on-recheck';
     return ownerReason({ repoPath, tree, branch, readAgents });
   };
+  const removedLinks = [];
+  let linksPrepared = false;
   const removal = await forceRemoveWorktreeDir(repoPath, tree.path, {
-    label: '🧹 held-checkout recovery: remove checkout', log: 'all', verifyRemoval, beforeMutation: opts.beforeMutation,
+    label: '🧹 held-checkout recovery: remove checkout', log: 'all', verifyRemoval,
+    beforeMutation: async () => {
+      await opts.beforeMutation?.();
+      // The removal helper also calls this hook before pruning registration.
+      if (linksPrepared) return;
+      linksPrepared = true;
+      await unlinkDirectoryLinks(tree.path, removedLinks);
+    },
   });
   if (!removal.removed) {
+    // A refused removal may leave the original generation intact. Restore its
+    // links without overwriting anything a concurrent writer created.
+    const linkRestoreFailed = removedLinks.length > 0 && await readRetirementCheckoutIdentity(tree.path) === checkoutIdentity
+      && !await restoreDirectoryLinks(tree.path, removedLinks);
     // Hand the lock back exactly as released. A lock someone took in the
     // meantime makes this fail, which is the outcome we want anyway.
     if (release.locked) {
       const args = ['worktree', 'lock', ...(release.lockReason != null ? ['--reason', release.lockReason] : []), tree.path];
       await execGit(args, repoPath).catch(err => console.warn(`⚠️ held-checkout recovery: could not restore lock on ${tree.path}: ${err.message}`));
     }
+    if (linkRestoreFailed) return { ok: false, reason: 'retirement-link-restore-failed' };
     return { ok: false, reason: removal.reason || 'worktree-remove-failed' };
   }
   console.log(`🧹 held-checkout recovery: retired ${tree.path}`);
