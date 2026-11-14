@@ -157,7 +157,7 @@ export default function LearningTab() {
     const [learningData, performanceData, skippedData, durationsData, routingData, confidenceData, feedbackData, dismissedData] = await Promise.all([
       read(LEARNING_LABEL, api.getCosLearning),
       read('performance', api.getCosLearningPerformance),
-      read('skipped tasks', api.getCosLearningSkipped),
+      read('low-success history', api.getCosLearningSkipped),
       read('durations', api.getCosLearningDurations),
       read('model routing', api.getCosLearningRouting),
       read('confidence', api.getCosLearningConfidence),
@@ -279,7 +279,7 @@ export default function LearningTab() {
   const hasData = learning?.totals?.completed > 0;
   const learningFailed = loadFailures.includes(LEARNING_LABEL);
   const sectionFailures = loadFailures.filter((label) => label !== LEARNING_LABEL);
-  const skippedFailed = sectionFailures.includes('skipped tasks');
+  const skippedFailed = sectionFailures.includes('low-success history');
   const performanceFailed = sectionFailures.includes('performance');
 
   return (
@@ -373,7 +373,7 @@ export default function LearningTab() {
             <div className="bg-port-card border border-port-border rounded-lg p-4">
               <div className="flex items-center gap-2 mb-1">
                 <SkipForward size={14} className={skipped?.skippedCount > 0 ? 'text-port-warning' : 'text-gray-500'} />
-                <span className="text-xs text-gray-500">Skipped Types</span>
+                <span className="text-xs text-gray-500">Low-Success Types</span>
               </div>
               <div className={`text-2xl font-bold ${skipped?.skippedCount > 0 ? 'text-port-warning' : 'text-gray-500'}`}>
                 {skippedFailed ? '—' : (skipped?.skippedCount || 0)}
@@ -682,7 +682,7 @@ export default function LearningTab() {
                               onClick={() => handleResetTaskType(item.taskType)}
                               disabled={resettingType === item.taskType}
                               className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded transition-colors disabled:opacity-50 min-h-[32px]"
-                              title="Reset learning data to re-enable this task type"
+                              title="Clear historical learning metrics; scheduling is unchanged"
                               aria-label={`Reset ${item.taskType}`}
                             >
                               <RotateCcw size={12} className={resettingType === item.taskType ? 'animate-spin' : ''} />
@@ -704,7 +704,7 @@ export default function LearningTab() {
             )}
           </div>
 
-          {/* Skipped Task Types */}
+          {/* Low-Success History */}
           {skipped?.skippedCount > 0 && (
             <div>
               <button
@@ -713,13 +713,13 @@ export default function LearningTab() {
               >
                 {expandedSections.skipped ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                 <SkipForward size={16} className="text-port-warning" />
-                <span className="font-medium text-white">Skipped Task Types</span>
+                <span className="font-medium text-white">Low-Success History</span>
                 <span className="text-xs text-port-warning">({skipped.skippedCount})</span>
               </button>
               {expandedSections.skipped && (
                 <div className="bg-port-warning/10 border border-port-warning/30 rounded-lg p-4">
                   <p className="text-sm text-gray-400 mb-3">
-                    These task types have been automatically skipped due to very low success rates (&lt;30% with 5+ attempts).
+                    These task types have low historical success rates. This is a recommendation to review their outcomes, not a scheduler pause.
                   </p>
                   <div className="space-y-2">
                     {skipped.skippedTypes.map((item, idx) => (
@@ -736,7 +736,7 @@ export default function LearningTab() {
                             onClick={() => handleResetTaskType(item.taskType)}
                             disabled={resettingType === item.taskType}
                             className="flex items-center gap-1 px-2 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded transition-colors disabled:opacity-50 min-h-[40px]"
-                            title="Reset learning data to re-enable this task type"
+                            title="Clear historical learning metrics; scheduling is unchanged"
                           >
                             <RotateCcw size={12} className={resettingType === item.taskType ? 'animate-spin' : ''} />
                             Reset
@@ -746,7 +746,7 @@ export default function LearningTab() {
                     ))}
                   </div>
                   <p className="text-xs text-gray-500 mt-3">
-                    Reset clears historical metrics so the task type can be retried with a fresh start
+                    Reset clears historical metrics. It does not resume or change scheduling.
                   </p>
                 </div>
               )}

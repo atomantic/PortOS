@@ -745,7 +745,8 @@ describe('reviewQueue.buildQueue', () => {
     // Real non-product alert shape: { id, type, severity, title, detail, link }.
     proactiveAlerts.generateNonProductAlerts.mockResolvedValue([
       { id: 'system_resource:memory', type: 'system_resource', severity: 'critical', title: 'High memory usage', detail: '95% used', link: '/apps' },
-      { id: 'goal_stall:example-goal', type: 'goal_stall', severity: 'medium', title: 'meh', detail: 'low' }
+      { id: 'goal_stall:example-goal', type: 'goal_stall', severity: 'medium', title: 'meh', detail: 'low' },
+      { id: 'success_drop:example', type: 'success_drop', severity: 'medium', title: 'Low success rate: example', detail: 'Historical outcomes', link: '/cos/learning' }
     ]);
     // Real backup failure shape: status 'error' with an `error` field.
     backup.getState.mockResolvedValue({ status: 'error', error: 'disk full', lastRun: '2026-06-03T07:00:00.000Z' });
@@ -758,10 +759,10 @@ describe('reviewQueue.buildQueue', () => {
 
   it('supplies drillLabel Open Learning when health alert links to /cos/learning', async () => {
     proactiveAlerts.generateNonProductAlerts.mockResolvedValue([
-      { id: 'learning_skipped:all', type: 'learning_health', severity: 'high', title: '1 task type being skipped: internal-task', detail: 'Very low success rates', link: '/cos/learning' }
+      { id: 'learning_storage:unavailable', type: 'learning_storage', severity: 'high', title: 'Learning storage unavailable', detail: 'Cannot read learning history', link: '/cos/learning' }
     ]);
     const queue = await buildQueue();
-    const row = queue.items.find(i => i.id === 'health:learning_skipped:all');
+    const row = queue.items.find(i => i.id === 'health:learning_storage:unavailable');
     expect(row).toMatchObject({
       drillTo: '/cos/learning',
       drillLabel: 'Open Learning',

@@ -164,7 +164,7 @@ describe('insights.getLearningSummary — effective (windowed) rates (issue #261
     expect(summary.status).not.toBe('critical');
   });
 
-  it('still counts a genuinely failing type as skipped', async () => {
+  it('labels low historical success as advisory while preserving the legacy count', async () => {
     loadLearningData.mockResolvedValue(learningData({
       totals: { completed: 20, succeeded: 2, avgDurationMs: 60000 },
       byTaskType: {
@@ -176,6 +176,9 @@ describe('insights.getLearningSummary — effective (windowed) rates (issue #261
     }));
     const summary = await getLearningSummary();
     expect(summary.skipped).toBe(1);
-    expect(summary.status).toBe('critical');
+    expect(summary.status).toBe('warning');
+    expect(summary.lowSuccessCount).toBe(1);
+    expect(summary.advisoryOnly).toBe(true);
+    expect(summary.statusMessage).toContain('low historical success');
   });
 });

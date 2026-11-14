@@ -92,6 +92,9 @@ describe('CoS Learning Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.skippedCount).toBe(1);
+      expect(response.body.lowSuccessCount).toBe(1);
+      expect(response.body.advisoryOnly).toBe(true);
+      expect(response.body.message).toContain('does not pause scheduling');
     });
 
     it('should return message when no types skipped', async () => {

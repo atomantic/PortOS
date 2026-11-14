@@ -54,7 +54,7 @@ describe('LearningTab failed reads', () => {
     api.getCosLearningSkipped.mockRejectedValueOnce(new Error('Synthetic skipped failure'));
     renderTab();
 
-    expect(await screen.findByText(/Could not load some learning sections \(skipped tasks\)/)).toBeInTheDocument();
+    expect(await screen.findByText(/Could not load some learning sections \(low-success history\)/)).toBeInTheDocument();
     expect(screen.getByText('not loaded')).toBeInTheDocument();
     expect(screen.queryByText('due to low success')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
@@ -76,4 +76,15 @@ describe('LearningTab failed reads', () => {
     expect(screen.getByText('Tasks Analyzed')).toBeInTheDocument();
     expect(screen.queryByText('Could not load learning analytics')).not.toBeInTheDocument();
   });
+});
+
+it('labels low success as historical advice rather than automatic skipping', async () => {
+  api.getCosLearningSkipped.mockResolvedValue({
+    skippedCount: 1, skippedTypes: [{ taskType: 'pr-watcher', successRate: 13, completed: 8 }]
+  });
+  renderTab();
+  expect(await screen.findByText('Low-Success History')).toBeInTheDocument();
+  expect(screen.getByText(/not a scheduler pause/)).toBeInTheDocument();
+  expect(screen.queryByText(/automatically skipped/)).not.toBeInTheDocument();
+  expect(screen.getByTitle('Clear historical learning metrics; scheduling is unchanged')).toBeInTheDocument();
 });

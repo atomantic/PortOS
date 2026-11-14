@@ -16,7 +16,6 @@ import { getCareSummary } from './tribe.js';
 import { findUnansweredTribeThreads } from './tribeOutreach.js';
 
 const STALL_THRESHOLD_DAYS = 14;
-const SUCCESS_RATE_WARNING = 50;
 
 /**
  * Condition + explicit resource identity, never presentation text or
@@ -84,10 +83,13 @@ async function checkSuccessRates(perf) {
     .map(item => ({
       id: alertId('success_drop', item.taskType),
       type: 'success_drop',
-      severity: item.successRate < 30 ? 'high' : 'medium',
+      // Outcome history is advice, not evidence of a current service failure.
+      // Scheduling uses its own failure ledger, not this learning percentage.
+      severity: 'medium',
       title: `Low success rate: ${item.taskType}`,
-      detail: `${item.successRate}% success across the last ${item.windowedCompleted} runs`,
+      detail: `${item.successRate}% success across the last ${item.windowedCompleted} runs. Review run outcomes for blockers; this history does not pause scheduling.`,
       link: '/cos/learning',
+      timestamp: item.lastCompleted || null,
       metadata: {
         taskType: item.taskType,
         successRate: item.successRate,
@@ -134,57 +136,6 @@ async function checkSystemHealth() {
         evidence: { processId: process.pm_id, unstableRestarts: process.unstableRestarts, restarts: process.restarts || 0 },
       });
     }
-  }
-
-  return alerts;
-}
-
-/** Check task learning health for critical issues. */
-async function checkLearningHealth(perf) {
-  if (!perf) return [];
-
-  const alerts = [];
-  const recentAttention = (perf.needsAttention || []).filter(hasCurrentPerformanceEvidence);
-  const skippedList = (perf.skipped || []).filter(hasCurrentPerformanceEvidence);
-  const skipped = skippedList.length;
-  const criticalList = recentAttention.filter(item => item.successRate < 40);
-  const critical = criticalList.length;
-  const warning = recentAttention.length - critical;
-
-  if (skipped > 0) {
-    const names = skippedList.map(item => item.taskType).filter(Boolean);
-    const namesFormatted = names.slice(0, 3).join(', ') + (names.length > 3 ? `, +${names.length - 3} more` : '');
-    alerts.push({
-      id: alertId('learning_skipped', 'all'),
-      type: 'learning_health',
-      severity: 'high',
-      title: namesFormatted
-        ? `${skipped} task type${skipped > 1 ? 's' : ''} being skipped: ${namesFormatted}`
-        : `${skipped} task type${skipped > 1 ? 's' : ''} being skipped`,
-      detail: namesFormatted
-        ? `Very low success rates caused automatic skip (${namesFormatted}) — review task configuration`
-        : 'Very low success rates caused automatic skip — review task configuration',
-      link: '/cos/learning',
-      metadata: { skipped, critical, ...(names.length > 0 ? { taskTypes: names } : {}) },
-      evidence: { skipped, taskTypes: [...names].sort() },
-    });
-  } else if (critical > 0) {
-    const names = criticalList.map(item => item.taskType).filter(Boolean);
-    const namesFormatted = names.slice(0, 3).join(', ') + (names.length > 3 ? `, +${names.length - 3} more` : '');
-    alerts.push({
-      id: alertId('learning_critical', 'all'),
-      type: 'learning_health',
-      severity: 'medium',
-      title: namesFormatted
-        ? `${critical} task type${critical > 1 ? 's' : ''} need attention: ${namesFormatted}`
-        : `${critical} task type${critical > 1 ? 's' : ''} need attention`,
-      detail: namesFormatted
-        ? `Success rates below ${SUCCESS_RATE_WARNING}% (${namesFormatted}) — may need provider or prompt adjustments`
-        : `Success rates below ${SUCCESS_RATE_WARNING}% — may need provider or prompt adjustments`,
-      link: '/cos/learning',
-      metadata: { critical, warning, ...(names.length > 0 ? { taskTypes: names } : {}) },
-      evidence: { critical, taskTypes: [...names].sort() },
-    });
   }
 
   return alerts;
@@ -255,11 +206,10 @@ export async function generateNonProductAlerts() {
     if (id.startsWith('learning_') && (!learningSince || resolution.at > learningSince)) learningSince = resolution.at;
   }
   const performance = await getPerformanceSummary({ sinceByTaskType, since: learningSince }).catch(() => null);
-  const [goalAlerts, successAlerts, systemAlerts, learningAlerts, tribeAlerts, unansweredAlerts] = await Promise.all([
+  const [goalAlerts, successAlerts, systemAlerts, tribeAlerts, unansweredAlerts] = await Promise.all([
     checkGoalStalls(),
     checkSuccessRates(performance),
     checkSystemHealth(),
-    checkLearningHealth(performance),
     checkTribeCadence(),
     checkUnansweredTribeThreads(),
   ]);
@@ -267,7 +217,6 @@ export async function generateNonProductAlerts() {
     ...goalAlerts,
     ...successAlerts,
     ...systemAlerts,
-    ...learningAlerts,
     ...tribeAlerts,
     ...unansweredAlerts,
   ].filter(alert => {

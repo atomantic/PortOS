@@ -512,7 +512,7 @@ describe('ChiefOfStaff Learning card skipped label', () => {
 
     for (const card of await learningCards()) {
       const value = within(card).getByText('84%');
-      const label = within(card).getByText(/skipped/);
+      const label = within(card).getByText(/low success/);
       // The value element holds the rate and nothing else — a parenthetical
       // tucked beside it inside one flex row is what overflowed.
       expect(value.textContent).toBe('84%');
@@ -530,7 +530,7 @@ describe('ChiefOfStaff Learning card skipped label', () => {
     await renderSettledAt('config');
 
     for (const card of await learningCards()) {
-      expect(within(card).getByText(/skipped/).classList.contains('truncate')).toBe(true);
+      expect(within(card).getByText(/low success/).classList.contains('truncate')).toBe(true);
     }
   });
 
@@ -547,7 +547,7 @@ describe('ChiefOfStaff Learning card skipped label', () => {
     // Scope to the compact cards: the ascii `mini` card's label parent is the
     // <button> itself (not a flex-item column), so this leg doesn't apply there.
     const columns = (await learningCards())
-      .map(c => within(c).getByText(/skipped/).parentElement)
+      .map(c => within(c).getByText(/low success/).parentElement)
       .filter(col => col.classList.contains('flex-1'));
     expect(columns.length).toBeGreaterThan(0);
     for (const col of columns) {
@@ -587,16 +587,14 @@ describe('ChiefOfStaff Learning card skipped label', () => {
     }
   });
 
-  it('paints a skipped tile as critical even if the server status disagrees', async () => {
-    // The tile derives `critical` from `skipped > 0` itself instead of trusting
-    // the server's status chain to keep classifying it that way — this fixture
-    // is deliberately the mismatched combination (skipped 3 / status 'warning').
+  it('paints historical low success as a warning, not a critical scheduler failure', async () => {
+    // Legacy skipped counts remain advisory; they do not imply a paused scheduler.
     api.getCosLearningSummary.mockResolvedValue(summaryWithSkipped);
     await renderSettledAt('config');
 
     for (const card of await learningCards()) {
-      expect(within(card).getByText(/skipped/).className).toContain('text-port-error');
-      expect(card.className).toContain('border-port-error');
+      expect(within(card).getByText(/low success/).className).toContain('text-port-warning');
+      expect(card.className).toContain('border-port-warning');
     }
   });
 
@@ -605,7 +603,7 @@ describe('ChiefOfStaff Learning card skipped label', () => {
     await renderSettledAt('config');
 
     expect(await screen.findAllByText('84%')).not.toHaveLength(0);
-    expect(screen.queryByText(/skipped/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/low success/)).not.toBeInTheDocument();
   });
 });
 

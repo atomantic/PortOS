@@ -287,6 +287,8 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 | POST | `/cos/learning/backfill` | Backfill learning data from history |
 | POST | `/cos/learning/recalculate-durations` | Manual repair: rebuild the success-only duration ETAs (and the execution-scoped buckets) from the agent archive. No UI or scheduled caller — run it by hand after a bulk edit or purge of the archive |
 
+Learning success rates describe recorded outcomes, including delivery blockers; they do not pause task scheduling. Low-success advice stays in Learning rather than interrupting the Review Queue as a health failure. The legacy `/cos/learning/skipped` endpoint lists review recommendations, not tasks skipped by the scheduler. Configured cadence and the scheduler’s separate failure ledger determine readiness.
+
 ### CoS Jobs (Autonomous Jobs)
 
 | Method | Endpoint | Description |

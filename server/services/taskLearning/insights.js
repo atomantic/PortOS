@@ -330,11 +330,8 @@ export async function getLearningSummary() {
   let criticalCount = 0;
   let skippedCount = 0;
 
-  // Health tiers read the EFFECTIVE rate (issue #2617) and the skipped count
-  // uses the shared skip predicate, so this dashboard summary — and the
-  // proactive "task types skipped" alert built on it — reflects what the
-  // scheduler actually does. On lifetime rates alone, a type that recovered
-  // in its recent window would be alerted as "skipped" forever.
+  // Historical performance is advisory, not evidence of scheduler pauses.
+  // Keep the legacy skipped count for API compatibility only.
   for (const [, metrics] of Object.entries(data.byTaskType)) {
     if (metrics.completed < 3) continue; // Insufficient data
 
@@ -358,8 +355,8 @@ export async function getLearningSummary() {
   let statusMessage = 'All task types healthy';
 
   if (skippedCount > 0) {
-    status = 'critical';
-    statusMessage = `${skippedCount} task type${skippedCount > 1 ? 's' : ''} skipped`;
+    status = 'warning';
+    statusMessage = `${skippedCount} task type${skippedCount > 1 ? 's' : ''} with low historical success`;
   } else if (criticalCount > 0) {
     status = 'warning';
     statusMessage = `${criticalCount} need${criticalCount === 1 ? 's' : ''} attention`;
@@ -378,7 +375,9 @@ export async function getLearningSummary() {
     healthy: healthyCount,
     warning: warningCount,
     critical: criticalCount,
-    skipped: skippedCount,
+    skipped: skippedCount, // Legacy advisory count, not actual scheduler skips.
+    lowSuccessCount: skippedCount,
+    advisoryOnly: true,
     overallSuccessRate: data.totals.completed > 0
       ? Math.round((data.totals.succeeded / data.totals.completed) * 100)
       : null,

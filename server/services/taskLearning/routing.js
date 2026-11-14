@@ -556,6 +556,7 @@ export async function getPerformanceSummary({ sinceByTaskType = {}, since = null
       rateSource,
       windowedCompleted,
       completed: metrics.completed,
+      lastCompleted: metrics.lastCompleted || null,
       avgDurationMin: Math.round(metrics.avgDurationMs / 60000)
     };
 
@@ -578,9 +579,10 @@ export async function getPerformanceSummary({ sinceByTaskType = {}, since = null
 }
 
 /**
- * Get adaptive cooldown multiplier for a task type based on historical performance
+ * Get advisory cooldown recommendations based on historical performance
  *
- * This allows the CoS to work more efficiently:
+ * These legacy multiplier/skip fields are recommendations, not scheduler state.
+ * Current dispatch does not apply them:
  * - High success rate tasks: Reduced cooldown (can work on similar tasks sooner)
  * - Low success rate tasks: Increased cooldown (give time for fixes/investigation)
  * - Very low success rate: Skip this task type (needs review)
@@ -627,7 +629,7 @@ export async function getAdaptiveCooldownMultiplier(taskType) {
       successRate,
       rateSource,
       completed: metrics.completed,
-      recommendation: `Task type has ${successRate}% success rate - reduced cooldown`
+      recommendation: `Task type has ${successRate}% historical success rate - consider a shorter cooldown; scheduling is unchanged`
     };
   }
 
@@ -664,7 +666,7 @@ export async function getAdaptiveCooldownMultiplier(taskType) {
       successRate,
       rateSource,
       completed: metrics.completed,
-      recommendation: `Task type has only ${successRate}% success rate - increased cooldown`
+      recommendation: `Task type has only ${successRate}% historical success rate - consider a longer cooldown; scheduling is unchanged`
     };
   }
 
@@ -677,7 +679,7 @@ export async function getAdaptiveCooldownMultiplier(taskType) {
       successRate,
       rateSource,
       completed: metrics.completed,
-      recommendation: `Task type has ${successRate}% success rate after ${metrics.completed} attempts - skipping until reviewed`
+      recommendation: `Task type has ${successRate}% historical success rate after ${metrics.completed} total attempts - review outcomes; scheduling is unchanged`
     };
   }
 
@@ -689,7 +691,7 @@ export async function getAdaptiveCooldownMultiplier(taskType) {
     successRate,
     rateSource,
     completed: metrics.completed,
-    recommendation: `Task type has ${successRate}% success rate - doubled cooldown for retry`
+    recommendation: `Task type has ${successRate}% historical success rate - consider a longer retry interval; scheduling is unchanged`
   };
 }
 
