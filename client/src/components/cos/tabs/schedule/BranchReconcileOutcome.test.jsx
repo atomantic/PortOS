@@ -2,9 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
 const retire = vi.hoisted(() => vi.fn());
-const prepare = vi.hoisted(() => vi.fn());
 const refresh = vi.hoisted(() => vi.fn());
-vi.mock('../../../../services/api', () => ({ retireBranchReconcileCheckout: retire, reviewBranchReconcileCheckout: prepare, refreshBranchReconcileInventory: refresh }));
+vi.mock('../../../../services/api', () => ({ retireBranchReconcileCheckout: retire, refreshBranchReconcileInventory: refresh }));
 
 import BranchReconcileOutcome from './BranchReconcileOutcome';
 
@@ -22,7 +21,7 @@ function open() {
 }
 
 describe('BranchReconcileOutcome checkout retirement', () => {
-  beforeEach(() => { retire.mockReset(); prepare.mockReset(); refresh.mockReset(); });
+  beforeEach(() => { retire.mockReset(); refresh.mockReset(); });
 
   it('shows the retained branch reason, delivery blockers and pull request together', () => {
     const nextAction = 'The original owner task is missing. Failed checks: CI Gate (FAILURE).';
@@ -87,46 +86,16 @@ describe('BranchReconcileOutcome checkout retirement', () => {
     expect(screen.getByRole('button', { name: 'Retire checkout…' })).toBeVisible();
   });
 
-  it('keeps confirmation disabled when preparation returns no review', async () => {
-    prepare.mockResolvedValue({ ok: true, review: null });
+  it('retires a review-required row in one step with no PR URL, digest or supersession input', async () => {
+    retire.mockResolvedValue({ ok: true, branchDeleted: true });
     render(<BranchReconcileOutcome outcomes={{ 'app-1': { status: 'incomplete', remaining: [{ ...held, reason: 'pr-completion-review-required' }] } }} apps={[]} />);
     fireEvent.click(screen.getByRole('button', { name: 'Retire checkout…' }));
-    fireEvent.change(screen.getByLabelText('Merged pull request URL'), { target: { value: 'https://github.com/example/repo/pull/42' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Review merged work' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Review merged work' })).toBeEnabled());
-    expect(screen.getByRole('button', { name: 'Yes, retire checkout' })).toBeDisabled();
-    expect(retire).not.toHaveBeenCalled();
-  });
-
-  it('requires review and explicit supersession acceptance, discarding review when the inventory changes', async () => {
-    const legacy = { ...held, reason: 'pr-completion-review-required' };
-    const review = { digest: 'd'.repeat(64), forge: { prUrl: 'https://github.com/example/repo/pull/42', defaultBranch: 'main', defaultHead: 'b'.repeat(40) },
-      comparison: { localPatch: 'original change', difference: 'strengthened replacement', disposition: 'review-supersession' } };
-    let resolveReview;
-    prepare.mockImplementation(() => new Promise(resolve => { resolveReview = resolve; }));
-    retire.mockRejectedValue(new Error('Checkout kept: retirement-review-changed'));
-    const props = { outcomes: { 'app-1': { status: 'incomplete', remaining: [legacy] } }, apps: [] };
-    const { rerender } = render(<BranchReconcileOutcome {...props} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Retire checkout…' }));
-    expect(screen.getByRole('button', { name: 'Yes, retire checkout' })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Merged pull request URL'), { target: { value: review.forge.prUrl } });
-    fireEvent.click(screen.getByRole('button', { name: 'Review merged work' }));
-    expect(screen.getByRole('button', { name: 'Preparing comparison…' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Yes, retire checkout' })).toBeDisabled();
-    resolveReview({ ok: true, review });
-    expect(await screen.findByText('strengthened replacement')).toBeInTheDocument();
-    expect(retire).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Yes, retire checkout' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('checkbox'));
+    expect(screen.queryByLabelText('Merged pull request URL')).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Yes, retire checkout' }));
-    await waitFor(() => expect(retire).toHaveBeenCalledWith(expect.objectContaining({
-      review: { prUrl: review.forge.prUrl, digest: review.digest, acceptSuperseded: true },
-    }), { silent: true }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('retirement-review-changed');
-    rerender(<BranchReconcileOutcome {...props} outcomes={{ 'app-1': { status: 'incomplete', remaining: [{ ...legacy, head: 'c'.repeat(40) }] } }} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Retire checkout…' }));
-    expect(screen.queryByText('strengthened replacement')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Yes, retire checkout' })).toBeDisabled();
+    await waitFor(() => expect(retire).toHaveBeenCalledWith({
+      appId: 'app-1', path: held.path, head: held.head, branch: held.branch, locked: true, lockReason: 'owner handoff',
+    }, { silent: true }));
   });
 });
 

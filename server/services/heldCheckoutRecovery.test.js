@@ -32,11 +32,13 @@ vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => (
 vi.mock('./branchCompletionPolicy.js', async importOriginal => mockBranchCompletionPolicy(await importOriginal()));
 vi.mock('./taskScheduleStore.js', async importOriginal => mockTaskScheduleStore(await importOriginal()));
 const mergedPrHeads = new Set();
+const mergedPrLookup = vi.hoisted(() => ({ url: null }));
+vi.mock('./heldCheckoutReview.js', async importOriginal => ({ ...await importOriginal(), findMergedPullRequest: async () => (mergedPrLookup.url ? { url: mergedPrLookup.url } : null) }));
 vi.mock('./prProbe.js', async importOriginal => ({ ...await importOriginal(), isMergedPrHead: async (_repo, branch, head) => mergedPrHeads.has(`${branch}@${head}`) }));
 vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id ? injected.app : null) }));
 
 import { describeHeldCheckoutRecovery, setReceiptWork, it, beforeEach, scratch, repo, external, cosDir, receiptWork, noOwners, heldCheckout, registered, lockText, retire, makeClean, supersededCheckout, reapSuperseded, reviewedCheckout } from './_heldCheckoutRecoveryFixture.js';
-const { retireInventoriedCheckout, prepareInventoriedCheckoutRetirement, inspectAbsentCheckout } = await import('./heldCheckoutRecovery.js');
+const { retireInventoriedCheckout, retireOperatorCheckout, prepareInventoriedCheckoutRetirement, inspectAbsentCheckout } = await import('./heldCheckoutRecovery.js');
 const { sha256File } = await import('../lib/fileUtils.js');
 const { recordBranchReconcileOutcome, getBranchReconcileOutcome, getBranchReconcileInventory } = await import('./branchReconcileOutcome.js');
 const { withClaimOwnershipLock, checkReconcileOwnership } = await import('./cosClaimOwnership.js');
@@ -61,6 +63,23 @@ describeHeldCheckoutRecovery(() => {
     const outcome = await getBranchReconcileOutcome('app-1');
     expect(outcome.retired).toContainEqual(expect.objectContaining({ path: c.path, branch: c.release.branch,
       head: c.release.head, branchDeleted: true, archiveDir: null, checkoutIdentity: expect.any(String) }));
+  });
+
+  it('retires a review-required merged checkout in one operator step, discovering the PR itself', async () => {
+    const c = await reviewedCheckout('operator-one-step', { normalMerge: true });
+    c.forge.scopeProof = 'exact-delivered-head';
+    mergedPrHeads.add(`${c.release.branch}@${c.release.head}`);
+    mergedPrLookup.url = c.forge.prUrl;
+    expect(await retireOperatorCheckout({ appId: 'app-1', release: c.release }, c.opts)).toMatchObject({ ok: true, branchDeleted: true });
+    expect(existsSync(c.path)).toBe(false);
+    expect(await registered(c.path)).toBe(false);
+  });
+
+  it('keeps a review-required checkout when no merged PR can be found for its tip', async () => {
+    const c = await reviewedCheckout('operator-no-pr', { normalMerge: true });
+    mergedPrLookup.url = null;
+    expect(await retireOperatorCheckout({ appId: 'app-1', release: c.release }, c.opts)).toMatchObject({ ok: false, reason: 'retirement-merged-pr-not-found' });
+    expect(existsSync(c.path)).toBe(true);
   });
 
   it.each(['pointer', 'administration'])('refuses a replaced exact-delivery %s generation after preview', async component => {

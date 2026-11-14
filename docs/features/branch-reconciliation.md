@@ -135,32 +135,19 @@ historical `data/cos/held-checkout-archives/`,
 is left alone), and nothing reads them. A merged checkout is disposable; a
 missing original generation is never recovered from an archive.
 
-### Explicit delivery reviews
+### Operator retirement
 
-`POST /api/cos/schedule/branch-reconcile/checkouts/review` accepts the exact
-inventory tuple and `prUrl`. A detached checkout may name its merged PR only
-when its HEAD exactly equals the published PR head. The published branch's
-saved completion policy and live owners still apply. Retirement preserves the
-detached checkout and records checkout-only completion; it never deletes the
-published branch.
-
-Sometimes a completed local branch was delivered through a replacement PR
-instead of its original tip. For that case, add `kind: "source-supersession"`
-to the review request and name the replacement merged PR. The server verifies
-the same repository and default branch, refuses an open delivery for the
-original branch, and binds both original and replacement heads plus current
-source differences. This does not claim that the original commits were merged.
-Inspect the original unique patch and its current replacement before accepting;
-wanted unfinished work still needs delivery. Unknown/active owners, failed or
-manual-handoff completion policies, and changed evidence remain holds.
-
-Confirm through `checkouts/retire` with the same inventory tuple and
-`review: { prUrl, digest, kind: "source-supersession", acceptSuperseded: true }`.
-Explicit acceptance is required even when the affected file bytes now match.
-Ownership, content, and merge rechecks plus current path/ref absence
-remain prerequisites to removal. The checkout is not copied into an archive.
-Initialized checkouts retain their separate workflow; this mode does not bypass
-its gates.
+`POST /api/cos/schedule/branch-reconcile/checkouts/retire` is a single step.
+The body is the exact inventory tuple the operator saw. For a checkout held only
+for `pr-completion-review-required`, the server locates the merged PR for the
+branch tip, prepares and binds the review, and retires in the same call, so the
+UI asks for one confirmation and no PR URL, digest or supersession checkbox.
+Only fully integrated work retires this way; superseded, detached or
+replacement-delivered work stays held (the former review kinds were removed).
+Ownership, content, merge and current path/ref rechecks still run inside the
+retirement and keep the checkout on any mismatch. No checkout archive is created.
+There is no separate review endpoint (#16016); automatic retirement paths still
+prepare their own reviews internally.
 
 ### Preserved superseded prototypes
 

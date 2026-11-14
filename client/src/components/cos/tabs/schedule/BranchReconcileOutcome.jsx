@@ -1,6 +1,6 @@
-import { useId, useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { formatCount, formatDateTime } from '../../../../utils/formatters';
-import { retireBranchReconcileCheckout, reviewBranchReconcileCheckout, refreshBranchReconcileInventory } from '../../../../services/api';
+import { retireBranchReconcileCheckout, refreshBranchReconcileInventory } from '../../../../services/api';
 import useMounted from '../../../../hooks/useMounted';
 import { isHttpUrl } from '../../../../utils/urlNormalize';
 
@@ -33,26 +33,11 @@ function InventoryEntry({ appId, entry, onRetired }) {
 function RetireCheckout({ appId, entry, onRetired }) {
   const [state, setState] = useState('idle');
   const [error, setError] = useState(null);
-  const [prUrl, setPrUrl] = useState('');
-  const [review, setReview] = useState(null);
-  const [acceptSuperseded, setAcceptSuperseded] = useState(false);
-  const inputId = useId();
-  const needsReview = entry.reason === 'pr-completion-review-required';
   const release = { appId, path: entry.path, head: entry.head, branch: entry.branch ?? null, locked: entry.locked, lockReason: entry.lockReason ?? null };
-  const prepareReview = async () => {
-    setState('preparing'); setError(null); setReview(null); setAcceptSuperseded(false);
-    const result = await reviewBranchReconcileCheckout({ ...release, prUrl }, { silent: true })
-      .catch(err => { setError(err?.message || 'Checkout review failed'); return null; });
-    if (result && !result.review) setError('Checkout review returned no comparison; checkout kept.');
-    setReview(result?.review || null); setState('confirming');
-  };
   const retire = async () => {
     setState('pending');
     setError(null);
-    const result = await retireBranchReconcileCheckout({
-      ...release,
-      ...(needsReview ? { review: { prUrl: review.forge.prUrl, digest: review.digest, acceptSuperseded } } : {}),
-    }, { silent: true }).catch(err => {
+    const result = await retireBranchReconcileCheckout(release, { silent: true }).catch(err => {
       setError(err?.message || 'Checkout retirement failed');
       return null;
     });
@@ -76,24 +61,10 @@ function RetireCheckout({ appId, entry, onRetired }) {
         Retire this exact merged, clean checkout{entry.locked ? ' and its lock' : ''}?
         {entry.branch ? ` The checkout and branch ${entry.branch} are removed in place.` : ' The checkout is removed in place.'} No checkout archive is created. Dirty checkouts and checkouts with unique unverified ignored files stay in place. A changed lock, HEAD or a live owner also keeps everything in place.
       </p>
-      {needsReview && <div className="space-y-2">
-        <label htmlFor={inputId}>Merged pull request URL</label>
-        <input id={inputId} value={prUrl} onChange={event => { setPrUrl(event.target.value); setReview(null); }} disabled={state === 'pending' || state === 'preparing'} className="w-full rounded border border-port-border bg-port-bg p-1" />
-        <button type="button" onClick={prepareReview} disabled={!prUrl || state === 'pending' || state === 'preparing'} className="rounded border border-port-border px-2 py-1">{state === 'preparing' ? 'Preparing comparison…' : 'Review merged work'}</button>
-        {review && <>
-          <p>Compared with {review.forge.defaultBranch} at {review.forge.defaultHead}. Original work and its differences from the current default branch are shown below.</p>
-          <details><summary>Original changes</summary><pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all">{review.comparison.localPatch || 'No original changes.'}</pre></details>
-          <details><summary>Differences from current default</summary><pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all">{review.comparison.difference || 'No differences in the affected files.'}</pre></details>
-          {review.comparison.disposition === 'review-supersession' && <label htmlFor={`${inputId}-superseded`} className="flex gap-2">
-            <input id={`${inputId}-superseded`} type="checkbox" checked={acceptSuperseded} onChange={event => setAcceptSuperseded(event.target.checked)} />
-            I reviewed these differences and confirm the current implementation supersedes this original work.
-          </label>}
-        </>}
-      </div>}
       {error && <p role="alert" className="break-words text-port-error">{error}</p>}
       <div className="flex gap-2">
-        <button type="button" className="rounded border border-port-border px-2 py-1" disabled={state === 'pending' || state === 'preparing'} onClick={() => setState('idle')}>Cancel</button>
-        <button type="button" className="rounded bg-port-error/80 px-2 py-1 text-white disabled:opacity-50" disabled={state === 'pending' || state === 'preparing' || (needsReview && (!review || (review.comparison.disposition === 'review-supersession' && !acceptSuperseded)))} onClick={retire}>
+        <button type="button" className="rounded border border-port-border px-2 py-1" disabled={state === 'pending'} onClick={() => setState('idle')}>Cancel</button>
+        <button type="button" className="rounded bg-port-error/80 px-2 py-1 text-white disabled:opacity-50" disabled={state === 'pending'} onClick={retire}>
           {state === 'pending' ? 'Retiring…' : 'Yes, retire checkout'}
         </button>
       </div>
@@ -198,7 +169,7 @@ export default function BranchReconcileOutcome({ outcomes, apps }) {
                   <ul className="space-y-1">
                     {outcome.retired.map(item => (
                       <li key={`${item.path}:${item.retiredAt}`} className="break-all">
-                        {item.branch || 'Detached checkout'} · {formatDateTime(item.retiredAt)} · archive {item.archiveDir}
+                        {item.branch || 'Detached checkout'} · {formatDateTime(item.retiredAt)}
                       </li>
                     ))}
                   </ul>
