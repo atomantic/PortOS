@@ -166,7 +166,7 @@ function SheetJob({ job, onFilename, onStatus }) {
 // pointers + `sheet:<variant>`), then each alternate age/look
 // (`sheet:<variant>@<formId>`), which always renders through the catalog path.
 export default function CatalogSheetsPanel({
-  ingredientId, payload, universeRef, sheetMedia, missingMedia, onDetach,
+  ingredientId, payload, universeRef, sheetMedia, missingMedia, onDetach, onSetPortrait, portraitKey = null,
   blockedReason = null, savedStamp = null, onSheetFile, onPointerSheetReady, onMediaChanged,
   onRemovePointerSheet, removingPointerSheet = null,
 }) {
@@ -482,7 +482,8 @@ export default function CatalogSheetsPanel({
                 </div> : null;
                 return (
                   <CatalogMediaTile key={`${m.mediaKey}:${m.kind}`} m={m} label={labelFor(m)} contain
-                    missing={missingMedia?.has?.(m.mediaKey)} onDetach={onDetach}
+                    missing={missingMedia?.has?.(m.mediaKey)} isPortrait={!!portraitKey && m.mediaKey === portraitKey}
+                    onSetPortrait={onSetPortrait} onDetach={onDetach}
                     armedDetach={armedDetach} onArmDetach={setArmedDetach}
                     badge={bad ? <BadFlag /> : null} pinActions={bad}
                     extraContent={note || review ? <>{note}{review}</> : null} />
