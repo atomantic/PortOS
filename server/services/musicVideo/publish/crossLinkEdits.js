@@ -10,6 +10,7 @@
  */
 import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, pasteText, step } from './browser.js';
 import { SUNO_SONG_MENU_SELECTOR, waitForSunoSongPage, markSunoSongMenu } from '../../../lib/sunoPage.js';
+import { typeXText } from './xTyping.js';
 import { facebookSignedOut, typeFacebookComment } from './facebook.js';
 
 // Suno's caption limit; the new-draft builder enforces the same one.
@@ -99,15 +100,13 @@ const x = {
   async prepare(page, row) {
     const id = tweetIdOf(row.url);
     if (!id) throw new Error(`no post id in ${row.url}`);
-    const url = `https://x.com/intent/post?in_reply_to=${id}&text=${encodeURIComponent(row.text)}`;
+    const url = `https://x.com/intent/post?in_reply_to=${id}`;
     await step(this.label, 'open a reply to the post', () => page.goto(url, { waitUntil: 'domcontentloaded', timeout: T }));
     await page.waitForTimeout(4000);
     if (/\/login|\/i\/flow/.test(page.url())) throw loginRequired(this.label, url);
     const editor = '[data-testid=tweetTextarea_0]';
     await step(this.label, 'wait for the reply composer', () => page.locator(editor).first().waitFor({ timeout: T }));
-    // The intent link normally prefills the text; paste it when it did not.
-    const shown = await page.locator(editor).first().innerText().catch(() => '');
-    if (!shown.includes(row.missing[0]?.url || row.text)) await step(this.label, 'write the reply', () => pasteText(page, editor, row.text));
+    await step(this.label, 'write the reply', () => typeXText(page, editor, row.text));
     return { added: row.text.split('\n'), leftForYou: ['Reply'] };
   },
 };

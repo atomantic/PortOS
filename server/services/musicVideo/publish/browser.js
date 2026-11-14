@@ -5,9 +5,8 @@
  *
  * - Connect with `isLocal: true`: Playwright otherwise refuses to hand a file
  *   over 50 MB to a browser it thinks is remote, and every video upload is.
- * - Draft.js / Lexical editors (X, TikTok, Stacker News) ignore `fill()` and
- *   drop newlines from typed text; a synthetic `paste` event lands the text
- *   the way a user's paste does.
+ * - Draft.js / Lexical editors ignore `fill()` and may drop typed newlines;
+ *   most adapters use a synthetic paste. X handles line breaks separately.
  * - Each draft gets its OWN new tab, so a fill can never land in another tab
  *   that happens to match the same URL (a YouTube Studio edit page of an
  *   already-published video matched `studio.youtube.com` once and was edited).

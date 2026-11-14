@@ -280,7 +280,7 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
       console.log(`📝 ${adapter.label} draft filled for music-video ${projectId.slice(0, 8)} [${id.slice(6, 14)}]`);
       return draftPresentation(draft);
     } catch (err) {
-      await page.close().catch(() => {});
+      if (err?.code !== 'PUBLISH_EDIT_INTERRUPTED') await page.close().catch(() => {});
       await browser.close().catch(() => {});
       throw err;
     }
@@ -388,7 +388,7 @@ export async function prepareCrossLinkEdit(projectId, target, deps = {}) {
       console.log(`🔗 ${adapter.label} cross-link edit filled for music-video ${projectId.slice(0, 8)}`);
       return { target, links: row.missing.map((l) => l.target), summary, screenshot: shot ? `data:image/jpeg;base64,${shot.toString('base64')}` : null };
     } catch (err) {
-      await page.close().catch(() => {});
+      if (err?.code !== 'PUBLISH_EDIT_INTERRUPTED') await page.close().catch(() => {});
       throw err;
     } finally {
       await browser.close().catch(() => {}); // disconnects; the tab stays open for the director
