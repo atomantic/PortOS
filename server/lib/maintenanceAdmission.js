@@ -37,13 +37,14 @@ export const isOperatorDisposableReservation = op => ['media', 'runner', 'api-ru
   || (op.kind === 'settlement' && op.resource === 'Output publication');
 
 export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, assertWrite = assertNotRealDataWrite,
-  makeId = randomUUID, now = Date.now, verifyExclusiveReceipt = () => false, harnessAbsent, harnessOwnerPresent, harnessParentPid } = {}) {
+  makeId = randomUUID, now = Date.now, verifyExclusiveReceipt = () => false, harnessAbsent, harnessOwnerPresent, harnessParentPid,
+  lockRetryAttempts, lockRetryDelayMs } = {}) {
   const context = new AsyncLocalStorage();
   const events = new EventEmitter();
   const localOwners = new Map();
   const locallyFinished = new Map();
   const { directory, lock, read, readForStatus, transaction, exists, unavailable, isUncertain, markUncertain } = createMaintenanceJournal(dataDir, {
-    io, assertWrite, makeId, validate: value => maintenanceJournalSchema.parse(value),
+    io, assertWrite, makeId, validate: value => maintenanceJournalSchema.parse(value), lockRetryAttempts, lockRetryDelayMs,
     // Listener errors must not turn a committed reservation into failed admission.
     changed: () => queueMicrotask(() => { for (const listener of events.listeners('changed')) {
       try { listener(status()); } catch (err) { console.error(`❌ Maintenance notification failed: ${err.message}`); }
