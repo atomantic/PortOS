@@ -23,7 +23,7 @@ export async function reconcileInventoryRows(repoPath, rows) {
     if (!row.path) { current.push({ ...row, head }); continue; }
     // Checkout identities/locks belong to the vanished path, never to its ref.
     const branch = { branch: row.branch, head, locked: false, lockReason: null, reason: 'branch-cleanup-pending' };
-    if (!current.some(entry => !entry.path && entry.branch === branch.branch)) current.push(branch);
+    if (!current.some(entry => !entry.path && entry.reason !== 'remote-branch-held' && entry.branch === branch.branch)) current.push(branch);
   }
   return current;
 }

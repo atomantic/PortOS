@@ -77,11 +77,11 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch reconciliation inventory refresh
     await execGit(['branch', 'fix/survivor'], repoPath);
     const survivor = { branch: 'fix/survivor', path: join(scratch, 'missing-survivor'), head, locked: true,
       lockReason: 'former lock', checkoutIdentity: 'a'.repeat(64), reason: 'retirement-provenance-unverified' };
-    const remote = { branch: 'fix/peer-only', reason: 'remote-branch-held' };
-    await recordBranchReconcileOutcome('example', { status: 'incomplete', remaining: [survivor,
-      { branch: 'fix/vanished', path: join(scratch, 'missing-other'), head, reason: 'retirement-receipt-unverified' }, remote] });
+    const remote = { branch: survivor.branch, reason: 'remote-branch-held' };
+    await recordBranchReconcileOutcome('example', { status: 'incomplete', remaining: [remote, survivor,
+      { branch: 'fix/vanished', path: join(scratch, 'missing-other'), head, reason: 'retirement-receipt-unverified' }] });
     const current = await getBranchReconcileInventory('example');
-    expect(current.remaining).toEqual([{ branch: survivor.branch, head, locked: false, lockReason: null, reason: 'branch-cleanup-pending' }, remote]);
+    expect(current.remaining).toEqual([remote, { branch: survivor.branch, head, locked: false, lockReason: null, reason: 'branch-cleanup-pending' }]);
     expect((await getBranchReconcileOutcome('example')).remaining).toEqual(current.remaining);
     expect(current.retired || []).toEqual([]);
   });

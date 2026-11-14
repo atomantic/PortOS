@@ -1,5 +1,6 @@
 /** Current branch/checkout inventory and bounded recent-retirement display history. */
 import { sameRetirementCheckout, sameRetirementObservation, reconcileInventoryRows } from './branchReconcileInventoryPrune.js';
+import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { cosEvents } from './cosEvents.js';
 import { getAppById } from './apps.js';
@@ -81,7 +82,20 @@ export async function recordSupersededCheckoutPreservation(appId, release, revie
       prHead: review.forge.prHead, mergeCommit: review.forge.mergeCommit },
       contentFingerprint: review.contentFingerprint, administrationFingerprint: review.administrationFingerprint };
     if (prior) return { result: JSON.stringify(prior.proof) === JSON.stringify(proof), changed: false };
-    const next = { ...outcome.supersededSourceEvidence, [review.digest]: { proof, preservedAt: new Date().toISOString() } };
+    const checkoutIdentity = await readRetirementCheckoutIdentity(release.path);
+    if (!checkoutIdentity || (release.checkoutIdentity && checkoutIdentity !== release.checkoutIdentity)) return { result: false, changed: false };
+    const retained = {};
+    for (const [digest, saved] of Object.entries(outcome.supersededSourceEvidence || {})) {
+      const source = saved.proof?.release;
+      const stale = source && (sameRetirementCheckout(source, release)
+        || !outcome.remaining.some(row => sameRetirementCheckout(row, source)));
+      // An original pointer still present proves the preparation never retired
+      // that checkout. Missing, recreated or unreadable source keeps its bytes,
+      // independently of the bounded recent-retirements display history.
+      if (stale && saved.checkoutIdentity && await readRetirementCheckoutIdentity(source.path) === saved.checkoutIdentity) continue;
+      retained[digest] = saved;
+    }
+    const next = { ...retained, [review.digest]: { proof, checkoutIdentity, preservedAt: new Date().toISOString() } };
     // Never evict completed evidence that may contain the only private bytes.
     // Bound the whole encoded store instead; a full store retains the original
     // checkout. This source custody is independent of bounded display history.
