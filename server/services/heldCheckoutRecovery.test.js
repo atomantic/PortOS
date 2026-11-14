@@ -417,6 +417,24 @@ describeHeldCheckoutRecovery(() => {
     expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({ path: release.path, branch: release.branch, branchDeleted: true }));
   });
 
+  it('retires a clean receipt checkout contained in the merged PR head and holds a dirty one', async () => {
+    const contained = (release) => ({ prHead: 'c'.repeat(40), scopeProof: 'ancestor-of-delivered-head', deliveredAncestorHead: release.head });
+    const clean = await mergedCheckout('receipt-contained-clean', { merge: 'none' });
+    await makeClean(clean.path);
+    forge.delivery = contained(clean.release);
+    expect(await retirePendingMergeCheckout({ repoPath: repo, release: clean.release, prUrl: 'https://github.com/example/repo/pull/42',
+      expectedHeadSha: clean.release.head }, { readAgents: noOwners })).toMatchObject({ ok: true, branchDeleted: true });
+    expect(existsSync(clean.path)).toBe(false);
+
+    const dirty = await mergedCheckout('receipt-contained-dirty', { merge: 'none' });
+    await writeFile(join(dirty.path, 'feature.txt'), 'edited after handoff\n');
+    forge.delivery = contained(dirty.release);
+    const held = await retirePendingMergeCheckout({ repoPath: repo, release: dirty.release, prUrl: 'https://github.com/example/repo/pull/42',
+      expectedHeadSha: dirty.release.head }, { readAgents: noOwners });
+    expect(held.ok).toBe(false);
+    expect(await readFile(join(dirty.path, 'feature.txt'), 'utf8')).toBe('edited after handoff\n');
+  });
+
   it('keeps a receipt checkout whose head moved after the handoff', async () => {
     const { path, release } = await mergedCheckout('receipt-moved', { merge: 'none' });
     await execGit(['commit', '--allow-empty', '-m', 'feat: work after handoff'], path);

@@ -317,7 +317,7 @@ function bindInventoriedRelease(outcome, release) {
 
 /** Finish only the checkout named by a trusted pending-merge receipt. Unlike an
  * operator release, this never unlocks a checkout. Fresh forge evidence must
- * prove the receipt's own PR merged at exactly the handed-off head.
+ * prove the receipt's own PR merged at the handed-off head or at a descendant of it.
  */
 export async function retirePendingMergeCheckout({ repoPath, release, prUrl, expectedHeadSha }, opts = {}) {
   if (!release || release.locked !== false || release.lockReason !== null) return { ok: false, reason: 'receipt-checkout-locked' };
@@ -329,8 +329,11 @@ export async function retirePendingMergeCheckout({ repoPath, release, prUrl, exp
   const forge = await readMergedPrDelivery(repoPath, release.branch, prUrl, { forgeAccount: opts.forgeAccount ?? null, exactDeliveredHead: expectedHeadSha })
     .catch(error => ({ error }));
   if (forge.error) return { ok: false, reason: /^merged-pr-[a-z-]+$/.test(forge.error.message) ? forge.error.message : 'receipt-pr-merge-unverified' };
-  if (forge.prHead !== expectedHeadSha) return { ok: false, reason: 'receipt-pr-head-changed' };
-  const result = await retireHeldCheckout({ repoPath, release }, { ...opts, delivery: 'exact' });
+  // A PR merged at a later head still delivers this checkout when that head
+  // descends from the handed-off one; retirement then needs a clean tree.
+  const exact = forge.prHead === expectedHeadSha;
+  if (!exact && forge.scopeProof !== 'ancestor-of-delivered-head') return { ok: false, reason: 'receipt-pr-head-changed' };
+  const result = await retireHeldCheckout({ repoPath, release }, { ...opts, delivery: exact ? 'exact' : 'contained' });
   if (result.ok) {
     const { recordWorkspaceCheckoutRetirement } = await import('./branchReconcileOutcome.js');
     await recordWorkspaceCheckoutRetirement(repoPath, {
