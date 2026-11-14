@@ -62,7 +62,7 @@ export default function DownloadManager() {
     : error ? 'Use the browser download or close and try again.'
     : `Loading the file onto this device${percent == null ? '…' : ` (${Math.floor(percent)}%)`}`;
 
-  return <Modal open={Boolean(download)} onClose={close} ariaLabel="Save download" size="sm"
+  return <Modal open={Boolean(download)} onClose={close} ariaLabel="Save download" size="sm" usePortal zIndexClassName="z-[60]"
     panelClassName="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
     <h2 className="text-lg font-semibold">Save download</h2>
     <p className="text-sm break-all">{download?.filename}</p>
