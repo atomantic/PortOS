@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../lib/pathSafety.js', () => ({
   resolveGalleryImage: vi.fn((f) => `/fake/data/images/${f}`),
+}));
+
+vi.mock('./imageGen/local.js', () => ({
   assertGalleryFilename: vi.fn(),
 }));
 

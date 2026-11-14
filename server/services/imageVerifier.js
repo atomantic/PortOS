@@ -6,7 +6,8 @@
 import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
 import { ServerError } from '../lib/errorHandler.js';
-import { resolveGalleryImage, assertGalleryFilename } from '../lib/pathSafety.js';
+import { resolveGalleryImage } from '../lib/pathSafety.js';
+import { assertGalleryFilename } from './imageGen/local.js';
 import { getSettings, saveSettings } from './settings.js';
 import { editImageSidecar } from './imageGen/sidecarStore.js';
 import { isOllamaBackedProvider } from '../lib/aiToolkit/internal/ollamaBacked.js';
