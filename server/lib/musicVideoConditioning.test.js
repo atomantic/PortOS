@@ -2,7 +2,7 @@ import { musicVideoFrameModelInput } from './musicVideoShotPrompt.js';
 import { shotSheetCast } from './musicVideoShotSheet.js';
 import { musicVideoConceptSchema } from './musicVideoValidation.js';
 import { describe, it, expect } from 'vitest';
-import { musicVideoCastGuideReferences, musicVideoCatalogPickPlans, musicVideoReferenceChoices, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
+import { musicVideoCastGuideReferences, musicVideoCatalogPickPlans, musicVideoReferenceChoices, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoLinkedReferenceId, musicVideoMissingFrameLinkedPicks, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
 import { getFalVideoModel } from './falVideoModels.js';
 
 const CAST_ID = 'cat-chr-example';
@@ -261,6 +261,21 @@ describe('catalog-linked check-in conditioning', () => {
     expect(musicVideoCatalogPickPlans(p, [scene])[0].unmappedFrame).toEqual([{ id, label: "Lead's image current-lead.png" }]);
     p.castAndSets.catalogCheckin.problems = [{ subjectId: 'lead', code: 'CATALOG_UNAVAILABLE', message: 'Try again' }];
     expect(musicVideoCatalogPickPlans(p, [scene])).toEqual([]);
+  });
+
+  // Uniquely catches a replaced canonical blocking frame renders: its linked pick vanished from the offered set.
+  it('renders a linked pick of a replaced canonical image as the character\'s current lead image', () => {
+    const p = { ...catalogProject(), concept: { subjects: [{ id: 'mvc-1', kind: 'character', name: 'Lead', ingredientId: CAST_ID }] } };
+    const media = { [CAST_ID]: [
+      { mediaKey: 'lead-portrait.png', kind: 'portrait', createdAt: '2026-01-01T00:00:00.000Z' },
+      { mediaKey: 'old-canonical.png', kind: 'reference', createdAt: '2026-01-01T00:00:00.000Z' },
+    ] };
+    const oldId = musicVideoLinkedReferenceId('old-canonical.png');
+    const scene = { sceneId: 's1', frameReferenceIds: [oldId, musicVideoLinkedReferenceId('lead-portrait.png')] };
+    expect(musicVideoMissingFrameLinkedPicks(p, scene, media)).toEqual([]);
+    expect(ids(musicVideoConditioningReferences(p, scene, media))).toEqual(['lead-portrait.png']);
+    // An image the record no longer holds at all still blocks the render.
+    expect(musicVideoMissingFrameLinkedPicks(p, { frameReferenceIds: [musicVideoLinkedReferenceId('gone.png')] }, media)).toHaveLength(1);
   });
 
   it('conditions from current catalog media without copying or modifying historical sheets', () => {
