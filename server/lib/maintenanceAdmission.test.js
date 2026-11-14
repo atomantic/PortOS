@@ -11,10 +11,10 @@ const roots = [];
 // Frozen pre-stamp v1 operation-reader fixture: unknown fields were rejected.
 const legacyOperation = z.object({ id: z.string().uuid(), kind: z.string().min(1), resource: z.string().max(256),
   pid: z.number().int().positive(), startedAt: z.string().datetime(), unsettled: z.boolean().optional() }).strict();
-const gate = () => {
+const gate = (options = {}) => {
   const root = mkdtempSync(join(tmpdir(), 'workflow-admission-'));
   roots.push(root);
-  return { root, admission: createMaintenanceAdmission(root) };
+  return { root, admission: createMaintenanceAdmission(root, { lockRetryDelayMs: 0, ...options }) };
 };
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
@@ -210,7 +210,7 @@ describe('durable graceful maintenance', () => {
     const original = admission.admit('media', 'peer-render');
     original.markUnsettled();
     const hold = admission.begin({ reason: 'Drain', owner: 'Operator' }).hold;
-    const restarted = createMaintenanceAdmission(root);
+    const restarted = createMaintenanceAdmission(root, { lockRetryDelayMs: 0 });
     expect(restarted.status()).toMatchObject({ state: 'draining', hold, blockers: [{ unsettled: true }] });
     const recovered = restarted.recoverOwned('media', 'peer-render');
     expect(recovered.id).toBe(original.id);
@@ -228,7 +228,7 @@ describe('durable graceful maintenance', () => {
     const state = JSON.parse(fs.readFileSync(file, 'utf8'));
     delete state.operations[0].uncertaintyStamp;
     fs.writeFileSync(file, JSON.stringify(state));
-    const restarted = createMaintenanceAdmission(root);
+    const restarted = createMaintenanceAdmission(root, { lockRetryDelayMs: 0 });
     const recovered = restarted.recoverOwned('media', 'legacy');
     expect(recovered.completeRecovery()).toBe(false);
     await recovered.finish();
@@ -259,7 +259,7 @@ describe('durable graceful maintenance', () => {
     // the lock, just as an uncertain publication did; do not repair it by age.
     fs.mkdirSync(join(admission.directory, 'transaction'));
     expect(() => legacyOperation.parse(JSON.parse(before).operations[0])).toThrow();
-    const restarted = createMaintenanceAdmission(root);
+    const restarted = createMaintenanceAdmission(root, { lockRetryDelayMs: 0 });
     expect(restarted.status()).toMatchObject({ state: 'unavailable', cause: 'interrupted-transaction' });
     expect(restarted.tryAdmit('media', 'new')).toBeNull();
     expect(() => recovered.completeRecovery()).toThrow(/needs recovery/);
@@ -370,7 +370,7 @@ describe('durable graceful maintenance', () => {
     const { root, admission } = gate();
     const original = admission.admit('media', 'training');
     admission.begin({ reason: 'Work', owner: 'Operator' });
-    const restarted = createMaintenanceAdmission(root);
+    const restarted = createMaintenanceAdmission(root, { lockRetryDelayMs: 0 });
     const recovered = restarted.recoverOwned('media', 'training');
     expect(recovered.id).toBe(original.id);
     expect(restarted.status().blockers).toHaveLength(1);
@@ -381,7 +381,7 @@ describe('durable graceful maintenance', () => {
   it('a second process sees the same fence and restart never discards old ownership', async () => {
     const { root, admission } = gate();
     const owner = admission.admit('agent', 'agent-fixture');
-    const restarted = createMaintenanceAdmission(root);
+    const restarted = createMaintenanceAdmission(root, { lockRetryDelayMs: 0 });
     const held = restarted.begin({ reason: 'Service work', owner: 'Operator session' });
     expect(admission.tryAdmit('runner', 'new')).toBeNull();
     expect(createMaintenanceAdmission(root).status()).toMatchObject({ state: 'draining', hold: held.hold });
@@ -431,7 +431,7 @@ describe('durable graceful maintenance', () => {
     admission.begin({ reason: 'Drain', owner: 'Operator' });
     expect(admission.status()).toMatchObject({ state: 'draining', blockers: [{ unsettled: true }] });
     writeFileSync(join(admission.directory, 'state.json'), '{"version":999}');
-    const restarted = createMaintenanceAdmission(root);
+    const restarted = createMaintenanceAdmission(root, { lockRetryDelayMs: 0 });
     expect(restarted.status()).toMatchObject({ state: 'unavailable', cause: 'unreadable-journal' });
     expect(restarted.tryAdmit('agent', 'new')).toBeNull();
     expect(() => restarted.resume({ id: '00000000-0000-4000-8000-000000000000', revision: 1 })).toThrow();

@@ -44,7 +44,7 @@ export function syncMaintenanceDirectory(path, io = fs) {
 }
 
 export function createMaintenanceJournal(dataDir = PATHS.data, { io = fs, assertWrite = assertNotRealDataWrite,
-  makeId = randomUUID, validate = parseJournal, changed = () => {} } = {}) {
+  makeId = randomUUID, validate = parseJournal, changed = () => {}, lockRetryAttempts = 100, lockRetryDelayMs = 5 } = {}) {
   const directory = join(dataDir, 'workflow-maintenance');
   const file = join(directory, 'state.json');
   const lock = join(directory, 'transaction');
@@ -97,11 +97,12 @@ export function createMaintenanceJournal(dataDir = PATHS.data, { io = fs, assert
       // Writers do no async work while holding this lock. Same-process calls
       // cannot contend; briefly yield the CPU to a competing server/runner.
       // A crashed writer remains closed, rather than stealing its lock.
+      const waitBuffer = lockRetryDelayMs > 0 ? new Int32Array(new SharedArrayBuffer(4)) : null;
       for (let attempt = 0; ; attempt++) {
         try { io.mkdirSync(lock, { mode: 0o700 }); break; }
         catch (err) {
-          if (err.code !== 'EEXIST' || attempt === 99) throw err;
-          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+          if (err.code !== 'EEXIST' || attempt >= lockRetryAttempts - 1) throw err;
+          if (waitBuffer) Atomics.wait(waitBuffer, 0, 0, lockRetryDelayMs);
         }
       }
     } catch (err) { reportFailure(err); throw unavailable(); }
