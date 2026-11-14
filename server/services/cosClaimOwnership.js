@@ -295,13 +295,13 @@ export async function updateReleaseSynchronizationOwnership(agentId, action) {
       || publication.synchronizationHandoffVersion !== 2 || !/^[a-f0-9]{64}$/.test(publication.identity || '')) {
       return { [done]: false, reason: 'synchronization-owner-unverified' };
     }
-    const { isInlineReleaseOwner } = await import('../lib/releaseSynchronization.js');
+    const { isInlineReleaseOwner, inlineSynchronizationBranch } = await import('../lib/releaseSynchronization.js');
     const { readReleaseSynchronizationOutbox } = await import('./releaseSynchronizationStore.js');
     const entry = (await readReleaseSynchronizationOutbox().catch(() => null))?.publications?.[publication.identity];
     if (!entry || !entry.registeredAt || !isInlineReleaseOwner(entry, agent)) {
       return { [done]: false, reason: 'synchronization-registration-unverified' };
     }
-    const branch = `codex/release-sync-${publication.identity}`;
+    const branch = inlineSynchronizationBranch(publication.identity);
     const repoPath = agent.sourceWorkspace || agent.metadata.sourceWorkspace || agent.workspacePath || agent.metadata.workspacePath;
     if (!repoPath) return { [done]: false, reason: 'ownership-unreadable' };
     if (checkoutRetirementFenceReason({ repoPath, branch })) return { [done]: false, reason: 'checkout-retirement-reserved' };

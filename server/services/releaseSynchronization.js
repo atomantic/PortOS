@@ -6,14 +6,13 @@ import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { realpath } from 'node:fs/promises';
-import { isCurrentRetirementCheckout, retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { z } from 'zod';
 import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { RELEASE_SYNC_POLICY_KEYS, RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS,
-  effectiveReleaseSynchronization, inlineSynchronizationLockReason, isInlineReleaseOwner, isInlineReleaseSynchronization, publisherCandidateSeed, publisherCandidateTarget,
-  releaseSynchronizationReset, releaseSynchronizationResetSchema, resetReleasesCheckout } from '../lib/releaseSynchronization.js';
+  effectiveReleaseSynchronization, isInlineReleaseOwner, isInlineReleaseSynchronization,
+  releaseSynchronizationReset, releaseSynchronizationResetSchema } from '../lib/releaseSynchronization.js';
 import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
 import { explicitPrCompletion, resolveAppPrCompletion } from '../lib/prDisposition.js';
 import { storedForm } from '../lib/cosTaskRows.js';
@@ -33,13 +32,15 @@ const entrySchema = z.object({
   version: z.union([z.literal(1), z.literal(2)]), identity: identitySchema, owner: ownerSchema,
   publication: z.object({ identity: identitySchema, status: z.literal('verified') }).passthrough(),
   task: z.object({ id: z.string(), metadata: z.object({ releaseSynchronization: z.object({ identity: identitySchema }).passthrough() }).passthrough() }).passthrough(),
-  obligations: z.object(Object.fromEntries(RELEASE_SYNC_OBLIGATIONS.map(key => [key, obligationSchema]))).strict(),
+  // Legacy obligation names (pre-#16017) stay readable until the next inspection drops them.
+  obligations: z.object(Object.fromEntries(RELEASE_SYNC_OBLIGATIONS.map(key => [key, obligationSchema]))).catchall(z.unknown()),
   synchronization: z.object({ status: z.enum(['pending', 'running', 'blocked', 'verified']),
     attempts: z.number().int().nonnegative(), checkedAt: z.string().datetime(), retryAt: z.string().datetime().nullable(),
     verifiedAt: z.string().datetime().nullable(), blocker: z.string().nullable(), delivery: deliverySchema.optional() }).strict().optional(),
   // Accepted pre-#14345 archive recoveries stay readable; they no longer bind a checkout.
   legacyRecovery: z.record(z.string(), z.unknown()).optional(),
   operatorReset: releaseSynchronizationResetSchema.optional(),
+  // Immutable checkout seeds copied by pre-#16017 entries; nothing reads them now.
   checkouts: z.array(z.unknown()), registeredAt: z.string().datetime().nullable(),
   attempts: z.number().int().nonnegative(), lastAttemptAt: z.string().datetime().nullable(),
   blocker: z.string().nullable(), retryAt: z.string().datetime().nullable(),
@@ -97,16 +98,10 @@ export async function releaseTaskDispatchDisposition(task, { ignoreAgentId = nul
 function deliveryPrNumber(entry) {
   const original = entry.obligations.synchronizationPr;
   if (!isInlineReleaseSynchronization(entry) && entry.synchronization?.delivery) return entry.synchronization.delivery.number;
-  const required = RELEASE_SYNC_OBLIGATIONS.filter(name => !['processSettlement', 'retirement'].includes(name));
-  return required.every(name => entry.obligations[name]?.status === 'verified'
+  return RELEASE_SYNC_OBLIGATIONS.every(name => entry.obligations[name]?.status === 'verified'
     && entry.obligations[name].evidence?.prUrl === original?.evidence?.prUrl
     && entry.obligations[name].evidence?.headSha === original?.evidence?.headSha)
     && Number.isSafeInteger(original?.evidence?.number) ? original.evidence.number : null;
-}
-
-function deliveryMatchesQuality(entry, proof) {
-  return Boolean(entry.synchronization?.delivery && !isInlineReleaseSynchronization(entry))
-    || entry.obligations.qualitySnapshot?.evidence?.developmentHead === proof?.developmentHead;
 }
 
 /** Observe the forge before entering the short spawn ownership fence. */
@@ -123,7 +118,7 @@ export async function observeReleaseDeliveries(task, { ignoreAgentId = null } = 
     const ownerState = await releaseOwnersIdle(entry, ignoreAgentId);
     if (!ownerState) continue;
     const proof = await inspectReleaseDelivery(entry, number).catch(() => null);
-    if (proof && deliveryMatchesQuality(entry, proof)) observations.set(entry.identity, { ...proof, ownerState });
+    if (proof) observations.set(entry.identity, { ...proof, ownerState });
   }
   return observations;
 }
@@ -225,13 +220,12 @@ async function releaseDeliveredAndIdle(entry, ignoreAgentId = null, observations
     const proof = observations.get(entry.identity);
     const expected = entry.synchronization?.delivery || entry.obligations.synchronizationPr?.evidence;
     if (proof?.number !== number || proof.headSha !== expected?.headSha || proof.mergeSha !== expected?.mergeSha
-      || !proof.ownerState || !deliveryMatchesQuality(entry, proof)) return false;
+      || !proof.ownerState) return false;
   }
   if (!await releaseOwnersIdle(entry, ignoreAgentId, observations?.get(entry.identity)?.ownerState)) return false;
   if (observations) return true;
   const { inspectReleaseDelivery } = await import('./releaseSynchronizationEvidence.js');
-  const proof = await inspectReleaseDelivery(entry, number).catch(() => null);
-  return Boolean(proof && deliveryMatchesQuality(entry, proof));
+  return Boolean(await inspectReleaseDelivery(entry, number).catch(() => null));
 }
 
 /** Exclude only delivered, inactive release tasks from scheduler deduplication. */
@@ -279,7 +273,7 @@ export async function verifyIndependentReleaseDelivery(identity, number) {
 }
 
 /** Retire one stale checkpoint; retain its original verdict and publication. */
-export function resetReleaseSynchronization(identity, reason, actor, checkouts = []) {
+export function resetReleaseSynchronization(identity, reason, actor) {
   return queue(async () => {
     const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
     return withClaimOwnershipLock(async () => {
@@ -287,7 +281,7 @@ export function resetReleaseSynchronization(identity, reason, actor, checkouts =
       if (!entry) refuse('Release synchronization was not found');
       const previous = releaseSynchronizationReset(entry);
       if (previous) {
-        if (previous.reason !== reason || previous.actor !== actor || !isDeepStrictEqual(previous.checkouts, checkouts)) refuse('A different operator reset was already recorded');
+        if (previous.reason !== reason || previous.actor !== actor) refuse('A different operator reset was already recorded');
         await parkRetiredContinuation(entry);
         return previous;
       }
@@ -333,15 +327,7 @@ export function resetReleaseSynchronization(identity, reason, actor, checkouts =
         const [originalCommon, activeCommon] = await Promise.all([common(repo), common(ownerRepo)]);
         if (!originalCommon || !activeCommon || samePath(originalCommon, activeCommon)) refuse('A release or synchronization is still active');
       }
-      if (checkouts.length) {
-        const { getBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
-        const inventory = await getBranchReconcileOutcome(entry.task.metadata.app);
-        if (!checkouts.every(checkout => inventory?.remaining?.some(row => ['path', 'branch', 'head', 'checkoutIdentity']
-          .every(key => row[key] === checkout[key])))) refuse('Selected checkout is not in the current inventory');
-        const current = await Promise.all(checkouts.map(checkout => isCurrentRetirementCheckout(checkout).catch(() => false)));
-        if (current.some(value => !value)) refuse('Selected checkout changed since the inventory');
-      }
-      entry.operatorReset = releaseSynchronizationResetSchema.parse({ version: 1, identity, resetAt: new Date().toISOString(), actor, reason, checkouts,
+      entry.operatorReset = releaseSynchronizationResetSchema.parse({ version: 1, identity, resetAt: new Date().toISOString(), actor, reason, checkouts: [],
         previousStatus: synchronization?.status || 'pending', previousBlocker: synchronization?.blocker || entry.blocker || null });
       await saveReleaseSynchronization(entry);
       const saved = (await readOutbox()).publications[identity];
@@ -392,12 +378,11 @@ export async function readReleaseSynchronizationRetention() {
 // retry budgets). Review settings are the original delivery obligations.
 function synchronizationPrompt(publication) {
   return `Continue the verified release's development synchronization only. Publication is already verified; do not release again.
-Use this task's provisioned isolated worktree and normal PR delivery lifecycle. Merge the exact published promotion commit into this synchronization branch, preserve newer development work, and deliver its PR against development through the configured review/CI/admission workflow. Do not edit the running application's checkout or adopt the publisher's checkout. After an interruption, ordinary delivery recovery retains this task's branch/PR; do not mint another synchronization task.
-Read AGENTS.md and docs/VERSIONING.md, especially synchronization after publication. Use the normal delivery/recovery workflow, local review lifecycle, required exact-head hosted reviews and CI, combined-tree guards and repository merge admission. Do not enable deferred forge auto-merge or create a second merger.
+Use this task's provisioned isolated worktree and normal PR delivery lifecycle. Merge the exact published promotion commit into this synchronization branch, preserve newer development work, open or update the back-merge PR against development, and merge it once the repository's required reviews and CI pass. Do not edit the running application's checkout or adopt the publisher's checkout. After an interruption, resume the same branch/PR; do not mint another synchronization task.
+Read AGENTS.md and docs/VERSIONING.md, especially synchronization after publication. Apply the configured reviewer policy during delivery; the hosting provider decides merge eligibility. Do not enable deferred forge auto-merge or create a second merger.
 The immutable publication evidence is:\n${JSON.stringify(publication, null, 2)}
-Carry all candidate-only fixes and the published promotion ancestry into a normal synchronization PR against development. Resume the same PR/head after interruption; refuse another live owner and retain exact checkout identities. Never mutate the published tag/tree or merge later development into the release.
-Run the required development quality snapshot without advancing the published release. Track its result separately from the synchronization PR. Preserve all configured reviewer obligations and budgets. Process settlement and receipt-verified API-only checkout retirement remain required; never take or delete the publisher's retained checkout.
-Record exact synchronization PR/head, quality snapshot and retained checkout evidence through ordinary task delivery/recovery. A successful process or terminal summary does not verify synchronization. Report unresolved obligations explicitly; do not replace or erase the original publication receipt.`;
+The server verifies synchronization independently: the PR merged, and the candidate head and published promotion are ancestors of the development head, whose package version (and any published npm lockfile) is at least the published version. Never mutate the published tag/tree or merge later development into the release.
+The post-release quality snapshot is a separate development update, never part of this PR or a synchronization gate. Ordinary worktree cleanup removes the merged checkouts; do not retire them yourself. A successful process or terminal summary does not verify synchronization; report an unmerged PR or a failed check explicitly.`;
 }
 
 async function newEntry(agent, publication) {
@@ -421,14 +406,11 @@ async function newEntry(agent, publication) {
   const reviews = await resolveReviewLoopOptions(source.metadata);
   const owner = ownerSchema.parse({ agentId: agent.id, taskId: agent.taskId, startedAt: agent.startedAt,
     workspace: agent.metadata.sourceWorkspace || agent.metadata.workspacePath });
-  // Seeds are physical identities, not authority to adopt a branch by name. The
-  // generic completion/retirement owner retains them and captures final heads.
-  const checkouts = structuredClone(agent.metadata.checkoutSeeds || []);
   const inline = publication.synchronizationHandoffVersion === 2;
   const id = inline ? source.id : `task-release-sync-${publication.identity}`;
   const sourceType = source.taskType || 'internal';
   const entry = entrySchema.parse({ version: inline ? 2 : 1, identity: publication.identity, owner, publication,
-    checkouts, registeredAt: null, attempts: 0, lastAttemptAt: null, blocker: null, retryAt: null,
+    checkouts: [], registeredAt: null, attempts: 0, lastAttemptAt: null, blocker: null, retryAt: null,
     obligations: Object.fromEntries(RELEASE_SYNC_OBLIGATIONS.map(key => [key, { status: 'pending' }])),
     task: { id, ...(inline && { taskType: sourceType }), description: `Synchronize verified release ${publication.tag} (${publication.repository})`,
       status: 'pending', priority: source.priority || 'MEDIUM', autoApproved: true, approvalRequired: false,
@@ -558,62 +540,20 @@ export async function recoverReleaseSynchronizationHandoffs(agents) {
   });
   for (const taskId of due) {
     await verifyReleaseSynchronizationTask(taskId, { agents, respectRetryAt: true });
-    // Retirement calls back into this service to preserve the exact review.
-    // Run it outside the outbox queue and let its normal fences recheck every
-    // owner and physical generation at the destructive boundary.
-    const entry = Object.values((await readOutbox()).publications).find(value => value.task.id === taskId);
-    if (isInlineReleaseSynchronization(entry)) {
-      const { settleInlineReleaseCheckouts } = await import('./releaseSynchronizationCleanup.js');
-      const result = await settleInlineReleaseCheckouts(entry).catch(error => {
-        console.log(`🚫 Release checkout retirement retained for ${taskId}: ${error.code || 'retirement-unavailable'}`);
-        return null;
-      });
-      // The obligation only reports a missing receipt; say why this sweep made none.
-      for (const row of result?.held || []) console.log(`⏸️ Release checkout retained ${row.branch}: ${row.reason}`);
-      if (result?.attempted) await recordReleaseCheckoutHolds(entry.identity, result.held, agents).catch(error => {
-        console.log(`🚫 Release checkout holds not recorded for ${taskId}: ${error.code || 'store-unavailable'}`);
-      });
-      if (result?.retired?.length) await verifyReleaseSynchronizationTask(taskId, { agents });
-    }
   }
 }
 
-/** Keep the latest sweep's reasons with the evidence they explain, so status views
- * can name the cause. A row keeps its first observation time while its hold is
- * unchanged, and an unchanged sweep writes nothing. */
-async function recordReleaseCheckoutHolds(identity, held, agents) {
-  const updated = await queue(async () => {
-    const entry = (await readOutbox()).publications[identity];
-    const evidence = entry?.obligations.retirement.evidence;
-    if (!evidence) return null;
-    const previous = evidence.heldCheckouts || [];
-    const observedAt = new Date().toISOString();
-    const rows = held.map(row => {
-      const prior = previous.find(({ observedAt: _observedAt, ...hold }) => isDeepStrictEqual(hold, row));
-      return prior || { ...row, observedAt };
-    });
-    if (isDeepStrictEqual(rows, previous)) return null;
-    const { heldCheckouts: _prior, ...rest } = evidence;
-    entry.obligations.retirement.evidence = { ...rest, ...(rows.length && { heldCheckouts: rows }) };
-    await saveReleaseSynchronization(entry);
-    return entry;
-  });
-  if (updated) await emitReleaseSynchronization(updated, agents, { suppressCompletionWake: true });
-}
-
 async function verifyEntry(entry, agents) {
-  const result = !publisherCandidateTarget(entry)
-    ? { status: 'blocked', blocker: 'publisher-candidate-checkout-unverified', obligations: entry.obligations }
-    : agents.some(agent => agent.taskId === entry.task.id)
-      ? await (await import('./releaseSynchronizationEvidence.js')).inspectReleaseSynchronization(entry, agents)
-      : { status: 'pending', blocker: 'continuation-not-started', obligations: entry.obligations };
+  const result = agents.some(agent => agent.taskId === entry.task.id)
+    ? await (await import('./releaseSynchronizationEvidence.js')).inspectReleaseSynchronization(entry, agents)
+    : { status: 'pending', blocker: 'continuation-not-started', obligations: entry.obligations };
   const attempts = (entry.synchronization?.attempts || 0) + 1;
   const checkedAt = new Date().toISOString();
   entry.obligations = result.obligations;
   entry.synchronization = { ...(entry.synchronization?.delivery && { delivery: entry.synchronization.delivery }), status: result.status, attempts, checkedAt,
     blocker: result.blocker, verifiedAt: result.status === 'verified' ? checkedAt : null,
     retryAt: result.status === 'verified' ? null : new Date(Date.now() + Math.min(30 * 60_000, 60_000 * 2 ** Math.min(attempts - 1, 5))).toISOString() };
-  // Receipt persistence precedes change events and checkout retirement.
+  // Receipt persistence precedes change events.
   await saveReleaseSynchronization(entry);
   await emitReleaseSynchronization(entry, agents);
   return entry.synchronization;
@@ -659,9 +599,7 @@ export function verifyReleaseSynchronizationTask(taskId, { agents = null, respec
   });
 }
 
-/** A release may finish execution only after delivery and quality are observed.
- * Process settlement and checkout retirement necessarily follow process exit.
- */
+/** A release may finish execution only after its synchronization is verified. */
 export async function verifyInlineReleaseDelivery(agent) {
   const publication = agent?.metadata?.releasePublication;
   if (publication?.synchronizationHandoffVersion !== 2) return null;
@@ -671,115 +609,14 @@ export async function verifyInlineReleaseDelivery(agent) {
     return { verified: false, reason: 'release synchronization ownership is unavailable' };
   }
   // A failed context read can leave earlier per-obligation receipts intact.
-  // They do not prove the current PR still has the reviewed head.
-  if (!inspection || (inspection.blocker && !/^(?:processSettlement|retirement):/.test(inspection.blocker))) {
+  // They do not prove the current PR still has the inspected head.
+  if (!inspection || inspection.blocker) {
     return { verified: false, reason: inspection?.blocker || 'release synchronization evidence is unavailable' };
   }
-  const required = RELEASE_SYNC_OBLIGATIONS.filter(name => !['processSettlement', 'retirement'].includes(name));
-  const missing = required.find(name => entry.obligations[name]?.status !== 'verified');
+  const missing = RELEASE_SYNC_OBLIGATIONS.find(name => entry.obligations[name]?.status !== 'verified');
   return missing ? { verified: false, reason: `${missing}: ${entry.obligations[missing]?.blocker || 'not verified'}` }
     : { verified: true };
 }
 
 const samePath = (a, b) => typeof a === 'string' && typeof b === 'string'
   && (process.platform === 'win32' ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b));
-
-/** Retirement runs this outside its ownership fence. The ordinary retirement
- * transaction still rechecks the exact generation and all removal authority.
- */
-export function retainReleaseSynchronizationReview(release) {
-  return queue(async () => {
-    const outbox = await readOutbox();
-    const entries = Object.values(outbox.publications).filter(entry => entry.registeredAt && effectiveReleaseSynchronization(entry)?.status !== 'verified');
-    if (!entries.length) return true;
-    const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
-    const agents = await readBranchCompletionPolicies({ repairIndex: false });
-    for (const entry of entries) {
-      if (releaseSynchronizationReset(entry) || resetReleasesCheckout(entry, release)) continue;
-      const owns = agents.some(agent => (agent.taskId === entry.task.id
-        || (agent.id === entry.owner.agentId && agent.startedAt === entry.owner.startedAt)) && agent.metadata?.checkoutSeeds?.some(seed =>
-        seed.branch === release.branch && seed.path === release.path
-        && retirementCheckoutIdentityFromPointer(seed.incarnation?.pointer) === release.checkoutIdentity));
-      if (!owns) continue;
-      if (!(entry.synchronization?.delivery && !isInlineReleaseSynchronization(entry))) await verifyEntry(entry, agents);
-      const review = entry.obligations.localReview;
-      const retained = entry.obligations.retirement.evidence;
-      if (review.status !== 'verified' || review.evidence?.prUrl !== retained?.prUrl
-        || !retained?.checkouts?.some(row => row.branch === release.branch && row.path === release.path
-          && row.head === release.head && row.checkoutIdentity === release.checkoutIdentity)) return false;
-      const publisherSeed = publisherCandidateSeed(entry);
-      if (publisherSeed && publisherSeed.branch === release.branch && publisherSeed.path === release.path
-        && retirementCheckoutIdentityFromPointer(publisherSeed.incarnation.pointer) === release.checkoutIdentity) {
-        // Capture private worktree review metadata while the exact publisher
-        // generation still exists. An absent optional review is recorded as
-        // absent; a mismatched or unreadable receipt never becomes a verdict.
-        const prUrl = `https://github.com/${entry.publication.repository}/pull/${entry.publication.promotionPrNumber}`;
-        const { localReviewLifecycle } = await import('../lib/localReviewLifecycle.js');
-        const { localReviewAttributionLabels } = await import('../lib/localReviewAttribution.js');
-        const lifecycle = await localReviewLifecycle(release.path, { base: 'release', prUrl });
-        if ((!lifecycle.reusable && !lifecycle.legacyPublished) || lifecycle.receipt?.status === 'review-blocked') return false;
-        const models = await localReviewAttributionLabels(release.path);
-        entry.obligations.retirement.evidence = { ...retained, publisherReview: {
-          branch: release.branch, path: release.path, head: release.head, checkoutIdentity: release.checkoutIdentity,
-          prUrl, receipt: lifecycle.receipt || null, models,
-        } };
-        await saveReleaseSynchronization(entry);
-      }
-    }
-    return true;
-  });
-}
-
-/** The same limit for the delivered synchronization checkout: its exact merged
- * head, its owner's own lock, and processes settled at the destructive boundary. */
-export async function validateLockedSynchronizationRetirement(release) {
-  if (!release.checkoutIdentity || !release.locked) return false;
-  const outbox = await readOutbox();
-  const owned = Object.values(outbox.publications).flatMap(entry => {
-    if (!entry.registeredAt || !isInlineReleaseSynchronization(entry)) return [];
-    const rows = entry.obligations.retirement.evidence?.checkouts || [];
-    return rows.filter(row => ['repoPath', 'path', 'branch', 'head', 'checkoutIdentity'].every(key => row[key] === release[key]))
-      .map(row => ({ entry, row }));
-  });
-  if (owned.length !== 1) return false;
-  const [{ entry, row }] = owned;
-  const delivery = entry.obligations.synchronizationPr;
-  if (release.lockReason !== inlineSynchronizationLockReason(row.agentId)
-    || delivery.status !== 'verified' || delivery.evidence?.branch !== release.branch || delivery.evidence?.headSha !== release.head
-    || entry.obligations.processSettlement.status !== 'verified') return false;
-  const [{ readBranchCompletionPolicies }, { publisherProcessesSettled }] = await Promise.all([
-    import('./branchCompletionPolicy.js'), import('./releaseProcessSettlement.js'),
-  ]);
-  const agents = await readBranchCompletionPolicies({ repairIndex: false });
-  return publisherProcessesSettled(entry, agents, release.path);
-}
-
-/** Locked initialized retirement is limited to an exact, settled publisher.
- * Cached settlement is not authority at the destructive boundary. */
-export async function validateLockedPublisherRetirement(release) {
-  if (!release.checkoutIdentity || !release.locked) return false;
-  const outbox = await readOutbox();
-  const entries = Object.values(outbox.publications).filter(entry => {
-    const target = publisherCandidateTarget(entry);
-    return entry.registeredAt && target && target.repoPath === release.repoPath
-      && target.path === release.path && target.branch === release.branch
-      && target.head === release.head && target.checkoutIdentity === release.checkoutIdentity;
-  });
-  if (entries.length !== 1) return false;
-  const entry = entries[0], target = publisherCandidateTarget(entry);
-  const evidence = entry.obligations.retirement.evidence;
-  if (entry.obligations.localReview.status !== 'verified' || entry.obligations.processSettlement.status !== 'verified'
-    || !evidence?.checkouts?.some(row => isInlineReleaseSynchronization(entry)
-      ? ['repoPath', 'path', 'branch', 'head', 'checkoutIdentity'].every(key => row[key] === target[key])
-      : isDeepStrictEqual(row, target))) return false;
-  const review = evidence.publisherReview;
-  if (!review || review.path !== target.path || review.branch !== target.branch
-    || review.head !== target.head || review.checkoutIdentity !== target.checkoutIdentity
-    || review.prUrl !== `https://github.com/${entry.publication.repository}/pull/${entry.publication.promotionPrNumber}`
-    || !Array.isArray(review.models)) return false;
-  const [{ readBranchCompletionPolicies }, { publisherProcessesSettled }] = await Promise.all([
-    import('./branchCompletionPolicy.js'), import('./releaseProcessSettlement.js'),
-  ]);
-  const agents = await readBranchCompletionPolicies({ repairIndex: false });
-  return publisherProcessesSettled(entry, agents, release.path);
-}

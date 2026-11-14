@@ -256,12 +256,13 @@ The card shows publication immediately, but that receipt verifies **publication
 only**. With `synchronizationMode: "inline"`, the publication-keyed outbox binds
 synchronization to the same release task and returns its frozen
 `synchronizationPolicy`. The same coordinator follows it through the synchronization
-PR, reviews, CI and merge. The server independently verifies those obligations,
-and after the process exits it verifies settlement and eligible checkout retirement.
-Another release for the app waits for verified delivery and an inactive release owner;
-checkout retirement may remain outstanding without holding the next release.
-An interrupted run resumes the same task, subject to the existing ownership and
-process-settlement checks. Do not create a follow-up task or republish the release.
+PR, reviews, CI and merge. The server independently verifies that the back-merge
+PR merged and that the published release landed on development (see below).
+Another release for the app waits for that verified delivery; ordinary worktree
+cleanup removes the merged release and synchronization checkouts afterwards and
+never holds the next release. An interrupted run resumes the same task, subject
+to the existing ownership checks. Do not create a follow-up task or republish
+the release.
 
 Requests from older running coordinators that omit `synchronizationMode` retain
 the existing version-1 continuation contract. Existing continuation tasks,
@@ -294,88 +295,64 @@ If a separate merged PR delivered a historical release, an operator can POST
 merged PR and current default branch, candidate and published ancestry, and the
 development version and lockfile. It records that independent delivery separately;
 the original task and review verdicts remain historical. Future release dispatch
-rechecks the delivery and active owners. This operation does not retire checkouts,
-start a release, or release the checkout-review retention gate.
+rechecks the delivery and active owners. This operation does not retire checkouts
+or start a release.
 
-The outbox keeps the original reviewer policy, publication ancestry and retained
-physical checkout seeds. It never transfers checkout authority. The owner
-uses the procedure below and ordinary delivery, admission and retirement recovery.
+The outbox keeps the original reviewer policy and publication ancestry. It never
+transfers checkout authority. The owner uses the procedure below and ordinary
+delivery and cleanup recovery.
 Task CRUD cannot delete a synchronization task directly. Deleting one from the
 task list (or `DELETE /api/cos/tasks/:id`) is the owner's decision to abandon
-it: the route records the operator reset below with an empty checkout list unless
+it: the route records the operator reset below unless
 synchronization is already verified or reset, then removes the row. The outbox
 keeps the publication receipt, and the reset refuses while a release or
 synchronization is active. The outbox is machine-local, so the delete also
 refuses on an instance that has no entry for the task; delete it on the
 publishing instance. Execution success does **not** mark synchronization verified:
-the delivery and other obligations remain pending until their evidence is observed. A bounded recovery
+the delivery obligations remain pending until their evidence is observed. A bounded recovery
 sweep checks the same outbox after restart, including completed task/agent history.
 It records pending, running, blocked or verified synchronization separately from the
 original publication timestamp and link. Transport failures retain successful
 revision-bound proof and durable retry times; conflicting owners remain blocked.
 
-Verification inspects the exact same-repository synchronization PR/head and its
-merged development ancestry (including the candidate head and published promotion).
-For inline releases it also reads the package version at the observed development
-head and requires it to be at least the published version. When the published tree
-contains `package-lock.json`, its development copy must agree with the package
-version. A newer development version is preserved; unreadable or older versions
-remain a synchronization hold.
+Verification checks two obligations, each bound to the observed PR head and
+development head:
+
+- `synchronizationPr` — a same-repository back-merge PR into the default branch
+  from the synchronization branch (`codex/release-sync-<identity>` for an inline
+  release, the continuation's worktree branch otherwise) is merged, and its merge
+  commit is on the development head. A merged attempt wins over closed ones; two
+  merged or two open candidates are a `synchronization-pr-conflict` hold.
+- `releaseAncestry` — the candidate head and the published promotion are both
+  ancestors of the development head. For inline releases it also reads the
+  package version at that head and requires it to be at least the published
+  version; when the published tree contains `package-lock.json`, its development
+  copy must agree with the package version. A newer development version is
+  preserved; unreadable or older versions remain a synchronization hold.
+
 A provider-confirmed merge establishes delivery under the repository's merge
-policy. The legacy local-review, hosted-review, CI and admission obligation names
-record that provider authority; they do not claim that PortOS independently
-re-inspected each review, check or lease after the merge. Run the requested reviews
-and validation during delivery without treating an unavailable review as clean.
-Keep the historical reviewed head in the private local-review receipt when later
-hosted feedback changes the PR; never synthesize a missing review. Before checkout
-retirement, the service retains the synchronization evidence bound to that checkout.
-
-The development quality snapshot must include the available local numeric
-measurements; an independently observed lack of local measurements is recorded
-explicitly as a no-evidence result. Publication does not run providers to create
-quality evidence. Runtime, runner, PID and checkout process checks establish
-process settlement separately from task execution success. Every retained physical
-checkout generation requires its exact service retirement receipt plus checkout
-and local/remote ref absence; generic delivery/retirement recovery remains the
-only writer of those receipts. After an inline owner's process settles, the
-bounded server sweep asks that same retirement service to review and retire only
-the exact delivered candidate and synchronization checkout generations. A hold
-leaves their evidence in place; it does not queue another agent. The latest held
-branch, path, reason and any foreign lock text are kept with the retirement
-evidence (`heldCheckouts`) and shown on the agent and task release milestones with
-a next step. A lock the sweep cannot attribute to the release belongs to its
-holder: once that holder has finished, `git worktree unlock <path>` lets the next
-sweep retire the checkout. A checkpoint with an operator reset no longer retries
-and is labeled as retired, with its original blocker kept as history. No verifier merges a PR, changes a published tag,
-steals a checkout, or resets a task retry budget. Status-view integration is
-tracked in #13773 under #13760.
-
-The ordinary inventoried checkout retirement service can release the exact
-reviewed lock as part of its fenced removal. Its initialized-submodule and
-whole-checkout counterpart currently refuses locked checkouts; retain that lock
-and the checkout as an explicit synchronization hold until service-owned lock
-recovery is available. A missing publisher seed cannot be recreated from a branch
-name, a later filesystem observation or a historical checkout archive, so a
-publication without one stays blocked on `publisher-candidate-checkout-unverified`.
-Its checkpoint is retired with the operator reset below. Earlier installs could
-accept an archive-backed legacy recovery; those receipts stay readable on the
-outbox entry, but they no longer bind a checkout, and the entry is treated like
-any other unseeded publication.
+policy: PortOS does not replay review, CI or merge admission after the merge. Run
+the requested reviews and validation during delivery without treating an
+unavailable review as clean. The post-release quality snapshot is a separate
+development update; it never gates synchronization or the next release. Process
+settlement and checkout retirement are not synchronization obligations either:
+ordinary worktree cleanup removes the merged checkouts once no active agent owns
+them. Outboxes written before these obligations were reduced (#16017) keep their
+older obligation names readable; the next inspection drops them, so an entry held
+only on a quality snapshot or checkout retirement verifies from its merged PR. A
+checkpoint with an operator reset no longer retries and is labeled as retired,
+with its original blocker kept as history. No verifier merges a PR, changes a
+published tag, steals a checkout, or resets a task retry budget.
 
 When an operator has decided to abandon a stale synchronization checkpoint and
 start a fresh release from `main`, POST `{ "identity": "<identity>", "reason":
-"<operator decision>", "checkouts": [{ "path": "<absolute path>", "branch":
-"<branch>", "head": "<40-character SHA>", "checkoutIdentity": "<64-character
-identity>" }] }` to `/api/cos/schedule/release-synchronization/operator-reset`.
-`checkouts` is optional and may be empty; when cleanup is needed, include the
-exact inventory tuples to release from this checkpoint's retention before the
-reset. The decision is immutable, so its checkout list cannot be added later.
-This host-control action refuses while a CoS release or synchronization for the same
+"<operator decision>" }` to `/api/cos/schedule/release-synchronization/operator-reset`.
+The decision is immutable. This host-control action refuses while a CoS release or synchronization for the same
 repository is active. The operator must also check for an external release process.
 It records the operator, reason and prior blocker, retires
 that checkpoint's queued continuation, and allows a new release. It does not mark
 the old synchronization verified, change a tag, remove a checkout, or start a
-release. Other checkout identities and outstanding checkpoints retain their own gates. Inspect and clean
+release. Other outstanding checkpoints retain their own gates. Inspect and clean
 up any abandoned candidate separately before starting the new release.
 
 On Windows, newly registered CLI and PTY release publishers and synchronization
@@ -386,8 +363,7 @@ have exited. Cancellation requests terminate the owned Job and wait for the same
 empty-Job proof. The server compares the original agent/start reservation and
 launch identity after restart, and binds it to each server-captured checkout
 generation; a recycled PID is never treated as the original process. Runner and
-session checks, exact retirement receipts, review, CI and admission still apply.
-Legacy unsupervised runs, lost supervisors, failed native inspection and missing
+session checks still apply. Legacy unsupervised runs, lost supervisors, failed native inspection and missing
 or conflicting receipts remain blocked. API-only agents without a supervised
 process root also retain the explicit hold. An empty Windows cwd listing is never
 a substitute for this proof.
@@ -411,8 +387,7 @@ supervisor needs `python3` (3.9 or later) with `ctypes` and pidfd support (Linux
 recovery stays held. Legacy, unsupervised, lost-supervisor and mismatched records
 stay held, and an absent PID is never treated as settlement. Processes started
 outside the tree through IPC (`systemd-run`, `at`, a session manager or another
-daemon) are out of scope, as with the Windows Job. Synchronization retirement on
-Linux still uses its existing PID and cwd checks.
+daemon) are out of scope, as with the Windows Job.
 
 On macOS, which offers an unprivileged process neither a child subreaper nor a
 Job, the same release agents launch through
@@ -439,7 +414,6 @@ startup probe runs a real launchd round trip; when it fails (no `python3`, no
 launchd user domain), the agent runs unsupervised and its recovery stays held.
 Processes started outside the coalition through IPC (another launchd job,
 `open`, a session manager) are out of scope, as with the Windows Job.
-Synchronization retirement on macOS still uses its existing PID and cwd checks.
 
 A forge publication fence was evaluated for macOS and rejected as the
 settlement mechanism. Under that design, a successor would resume only the
@@ -489,10 +463,8 @@ git -C "$SYNC_WORKTREE" merge --no-ff "$PROMOTION_MERGE_SHA"
 ```
 
 Do not `git worktree lock` the sync checkout: its reservation and captured seed
-already protect it from sweeps while the run is live. Post-exit retirement holds a
-checkout under any lock it cannot attribute, and the release then stays
-"synchronization blocked" until an operator clears it. The only lock it accepts
-here is exactly `Active inline release synchronization owned by <agent-id>`.
+already protect it from sweeps while the run is live, and ordinary cleanup leaves
+a checkout under a foreign lock in place.
 
 Use a new, unused `SYNC_WORKTREE` path when the reservation returns no path. A refused reservation or capture is not
 authority to adopt another checkout. After interruption, verify the existing
@@ -504,8 +476,8 @@ no cryptographic checkout transfer or historical process receipt is needed.
 For an idle existing synchronization checkout, reservation returns its path from
 Git. Reuse that checkout and branch, including unfinished edits and private review
 files; do not create a competing synchronization branch. The current run captures
-its ownership at the actual current time. Previously recorded publication,
-review, delivery, and cleanup evidence remains available.
+its ownership at the actual current time. Previously recorded publication and
+delivery evidence remains available.
 
 Keep synchronization failures tracked with the exact PR, owner and next step;
 they do not invalidate an already verified publication or require revalidating it.

@@ -10,7 +10,6 @@ const HOLD_REASONS = {
   'already-absent-preservation-unverified': 'The workspace is gone; its preservation evidence still needs verification.',
   'cognitive-review-pending': 'Waiting for the cleanup recovery task to review preservation and finish cleanup.',
   'active-agent-owner': 'Waiting for the current workspace owner to finish.',
-  'release-sync-local-review-unretained': 'Waiting for release review evidence to be verified before cleanup.',
   'cleanup-review-required': 'The retained checkout needs a preservation review before it can be removed.',
   'completion-stages-pending': 'Other completion steps must finish before cleanup can be retried safely.',
   'completion-handoff-pending': 'Repository cleanup is verified. The next completion recovery pass finishes the pipeline or Creative Director hand-off, then completes the task.',

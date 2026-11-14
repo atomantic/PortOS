@@ -5,13 +5,9 @@ import { join } from 'node:path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 
-const f = vi.hoisted(() => ({ agents: [], pr: null, review: null, reviews: [], checks: [], receipts: [],
-  present: true, busy: false, unavailable: false, ancestor: true, quality: null, qualityFile: null, qualityBlob: null, failSave: false,
-  missingSyncAncestry: false, retirementUnavailable: false, liveAgents: null, liveTrusted: true,
-  forgeCalls: 0, checkoutHead: null, developmentVersion: null, lockVersion: null, lockRootVersion: null,
+const f = vi.hoisted(() => ({ agents: [], pr: null, prs: null, unavailable: false, ancestor: true, notAncestor: new Set(), failSave: false,
+  liveAgents: null, liveTrusted: true, forgeCalls: 0, developmentVersion: null, lockVersion: null, lockRootVersion: null,
   hasLock: true, versionUnavailable: false, versionReads: [], developmentHead: null, compareUnavailable: false, runner: [] }));
-const inlineCleanup = vi.hoisted(() => vi.fn(async () => ({ attempted: true, retired: [], held: [] })));
-vi.mock('./releaseSynchronizationCleanup.js', () => ({ settleInlineReleaseCheckouts: inlineCleanup }));
 vi.mock('../lib/fileUtils.js', async original => {
   const actual = await original();
   return makePathsProxy(actual, { dataRoot: lazyTempDataRoot('release-sync-verifier-'), overrides: {
@@ -39,29 +35,9 @@ vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: vi
 vi.mock('./apps.js', () => ({ getAppById: async () => ({ id: 'example-app', repoPath: '/example/repo' }) }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async () => ({ host: 'github.com', fullName: 'example/repo' }) }));
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({}) }));
-vi.mock('../lib/execGit.js', () => ({ execGit: async (args, cwd) => args.includes('--git-common-dir')
-  ? { exitCode: 0, stdout: `${cwd}/.git` }
-  : { stdout: cwd === '/example/publisher-checkout' ? 'a'.repeat(40) : f.checkoutHead || f.pr.head.sha } }));
-vi.mock('./completedCheckoutEvidence.js', async original => ({ ...await original(), readCompletedCheckoutIdentity: async row =>
-  f.present ? { ...row, incarnation: f.agents[1].metadata.checkoutSeeds[0].incarnation } : null }));
-vi.mock('../lib/localReviewLifecycle.js', () => ({ localReviewLifecycle: async path => path === '/example/publisher-checkout'
-  ? { reusable: false, legacyPublished: true, receipt: null } : f.review || { reusable: false, receipt: null } }));
-vi.mock('../lib/localReviewAttribution.js', () => ({ localReviewAttributionLabels: async () => [] }));
-vi.mock('../lib/windowsAgentProcess.js', () => ({ readWindowsAgentSettlement: async agent => {
-  if (f.busy) throw Object.assign(new Error('synthetic unavailable native proof'), { code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED' });
-  return { owner: { agentId: agent.id, startedAt: agent.startedAt }, active: 0 };
-} }));
-vi.mock('../lib/processCwdProbe.js', () => ({ hasProcessCwdInside: async () => f.busy }));
-vi.mock('./repoCleanupObservation.js', () => ({ readCheckoutPathPresence: async () => f.present, readLocalBranchPresence: async () => f.present }));
-vi.mock('./branchReconcileOutcome.js', () => ({ getBranchReconcileOutcome: async () => {
-  if (f.retirementUnavailable) throw new Error('synthetic retirement transport failure');
-  return { retired: f.receipts };
-} }));
+vi.mock('../lib/execGit.js', () => ({ execGit: async (args, cwd) => ({ exitCode: 0, stdout: `${cwd}/.git` }) }));
 vi.mock('./shell.js', () => ({ listAllSessions: () => [] }));
 vi.mock('./cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: async () => f.runner }));
-vi.mock('./worktreeManager.js', () => ({ listWorktrees: async () => [{ path: '/example/repo', branch: 'refs/heads/main' }] }));
-vi.mock('./branchReconcile.js', () => ({ listRemoteHeads: async () => new Map() }));
-vi.mock('./appQualityFederation.js', () => ({ buildQualitySnapshot: async () => f.quality }));
 vi.mock('./github.js', () => ({ execGh: async args => {
   f.forgeCalls++;
   if (f.unavailable) throw new Error('synthetic forge transport failure');
@@ -69,13 +45,12 @@ vi.mock('./github.js', () => ({ execGh: async args => {
   let result;
   if (path === '') result = { full_name: 'example/repo', default_branch: 'main', owner: { login: 'example' } };
   else if (path === 'git/ref/heads/main') result = { object: { type: 'commit', sha: f.developmentHead } };
-  else if (path.startsWith('pulls?')) result = [[f.pr]];
-  else if (path === 'pulls/42') result = f.pr;
-  else if (path === 'pulls/42/reviews?per_page=100') result = [f.reviews];
+  else if (path.startsWith('pulls?')) result = [f.prs || [f.pr]];
+  else if (/^pulls\/\d+$/.test(path)) result = [f.pr, ...(f.prs || [])].find(pr => pr.number === Number(path.slice(6)));
   else if (path.startsWith('compare/')) {
     if (f.compareUnavailable) throw new Error('synthetic compare transport failure');
-    result = { status: f.ancestor
-      && !(f.missingSyncAncestry && path === `compare/${f.pr.head.sha}...${f.developmentHead}`) ? 'ahead' : 'diverged', merge_base_commit: { sha: path.slice(8, 48) } };
+    const base = path.slice(8, 48);
+    result = { status: f.ancestor && !f.notAncestor.has(base) ? 'ahead' : 'diverged', merge_base_commit: { sha: base } };
   }
   else if (path.startsWith('git/trees/')) result = { truncated: false, tree: f.hasLock
     ? [{ path: 'package-lock.json', type: 'blob', sha: '1'.repeat(40) }] : [] };
@@ -88,22 +63,17 @@ vi.mock('./github.js', () => ({ execGh: async args => {
     result = { encoding: 'base64', sha: '3'.repeat(40), content: Buffer.from(JSON.stringify({ version: f.lockVersion,
       packages: { '': { version: f.lockRootVersion } } })).toString('base64') };
   }
-  else if (path.startsWith('contents/.quality.json?')) result = f.qualityFile;
-  else if (path.startsWith('git/blobs/')) result = f.qualityBlob;
   else throw new Error(`Unexpected synthetic forge endpoint: ${path}`);
   return JSON.stringify(result);
 } }));
 
 import { addTask, getTaskById, updateTask } from './cosTaskStore.js';
-import { readBranchCompletionPolicies } from './branchCompletionPolicy.js';
-import { ensureReleaseSynchronization, verifyReleaseSynchronizationTask, verifyInlineReleaseDelivery, recoverReleaseSynchronizationHandoffs, retainReleaseSynchronizationReview,
+import { ensureReleaseSynchronization, verifyReleaseSynchronizationTask, verifyInlineReleaseDelivery, recoverReleaseSynchronizationHandoffs,
   releaseTaskDispatchDisposition, verifyIndependentReleaseDelivery, deliveredReleaseTaskIds, observeReleaseDeliveries } from './releaseSynchronization.js';
 import { markAgentDispatching, clearAgentDispatching, setUseRunner } from './agentState.js';
 import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';
-import { projectTaskReleaseMilestones } from './releaseSynchronizationProjection.js';
-import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
+import { RELEASE_SYNC_OBLIGATIONS } from '../lib/releaseSynchronization.js';
 import { cosEvents } from './cosEvents.js';
-import { classifyQualitySnapshot, qualityFileFromWireSnapshot } from './appQualitySnapshotFormat.js';
 import { PATHS } from '../lib/fileUtils.js';
 
 let restorePlatform;
@@ -111,11 +81,10 @@ afterEach(() => restorePlatform?.());
 afterAll(cleanupTempDataRoots);
 let identity, taskId, publication;
 const getReleaseSynchronization = async key => (await readReleaseSynchronizationOutbox()).publications[key];
+const syncBranch = 'cos/example/issue-42/example';
 beforeEach(async () => {
-  inlineCleanup.mockClear();
   await rm(join(PATHS.cos, 'release-synchronization.json'), { force: true });
   f.forgeCalls = 0;
-  f.checkoutHead = null;
   f.developmentVersion = f.lockVersion = f.lockRootVersion = '2.109.0';
   f.hasLock = true;
   f.versionUnavailable = false;
@@ -125,202 +94,136 @@ beforeEach(async () => {
   f.liveAgents = null;
   f.liveTrusted = true;
   f.runner = [];
-  // POSIX settlement is the default contract; the native Windows test overrides it.
+  f.prs = null;
   restorePlatform = pinPlatform('darwin');
   f.failSave = false;
+  f.unavailable = false;
+  f.ancestor = true;
+  f.notAncestor = new Set();
   identity = (await import('node:crypto')).randomBytes(32).toString('hex');
   const source = await addTask({ description: `Release example ${identity}`, app: 'example-app' });
   publication = { identity, status: 'verified', synchronizationHandoffVersion: 1, repository: 'example/repo', tag: `v1.2.3-${identity}`,
     candidateHead: 'a'.repeat(40), candidateBranch: 'codex/release-publisher', promotionPrNumber: 12, promotionMerge: 'b'.repeat(40), publishedAt: '2026-01-01T01:00:00Z' };
-  const publisherPointer = { dev: '1', ino: '5', birthtimeNs: '3' };
-  const publisherSeed = { version: 1, agentId: `publisher-${identity}`, startedAt: '2026-01-01T00:00:00Z', seededAt: '2026-01-01T00:00:01Z',
-    repoPath: '/example/repo', path: '/example/publisher-checkout', branch: publication.candidateBranch, repository: publisherPointer, checkout: publisherPointer,
-    incarnation: { pointer: publisherPointer, gitdir: { path: '/example/repo/.git/worktrees/publisher', ...publisherPointer } } };
   const publisher = { id: `publisher-${identity}`, taskId: source.id, startedAt: '2026-01-01T00:00:00Z', status: 'completed', completedAt: '2026-01-01T01:01:00Z',
-    metadata: { workspacePath: '/example/repo', releasePublication: publication, checkoutSeeds: [publisherSeed],
-      completedCheckouts: [{ ...publisherSeed, version: 2, head: publication.candidateHead, capturedAt: '2026-01-01T01:00:50Z' }] } };
+    metadata: { workspacePath: '/example/repo', releasePublication: publication, checkoutSeeds: [{ branch: publication.candidateBranch }] } };
   ({ taskId } = await ensureReleaseSynchronization(publisher));
-  const pointer = { dev: '1', ino: '2', birthtimeNs: '3' };
-  const seed = { version: 1, agentId: `sync-${identity}`, startedAt: '2026-01-01T01:02:00Z', seededAt: '2026-01-01T01:02:01Z',
-    repoPath: '/example/repo', path: '/example/sync-checkout', branch: 'cos/example/issue-42/example', repository: pointer, checkout: pointer,
-    incarnation: { pointer, gitdir: { path: '/example/repo/.git/worktrees/example', ...pointer } } };
-  f.pr = { number: 42, merged: true, merged_at: '2026-01-01T01:10:00Z', merge_commit_sha: 'd'.repeat(40),
-    head: { sha: 'c'.repeat(40), ref: seed.branch, repo: { full_name: 'example/repo' } }, base: { ref: 'main', repo: { full_name: 'example/repo' } } };
-  f.agents = [publisher, { id: seed.agentId, taskId, startedAt: seed.startedAt, status: 'running',
-    metadata: { workspacePath: seed.path, sourceWorkspace: seed.repoPath, isWorktree: true, worktreeBranch: seed.branch,
-      checkoutSeeds: [seed] } }];
-  f.review = { reusable: true, receipt: { version: 1, status: 'clean', reviewedHead: 'c'.repeat(40), prUrl: 'https://github.com/example/repo/pull/42' } };
-  f.reviews = [{ id: 1, user: { login: 'example-reviewer' }, commit_id: f.pr.head.sha, state: 'APPROVED', submitted_at: '2026-01-01T01:08:00Z' }];
-  f.checks = [{ name: 'CI Gate', status: 'completed', conclusion: 'success', completed_at: '2026-01-01T01:09:00Z' }];
-  f.receipts = [];
-  f.present = true;
-  f.busy = false;
-  f.unavailable = false;
-  f.ancestor = true;
-  f.missingSyncAncestry = false;
-  f.retirementUnavailable = false;
-  f.quality = { schemaVersion: 1, repository: 'f'.repeat(64), measurements: [] };
-  f.qualityBlob = null;
+  f.pr = { number: 42, state: 'closed', merged: true, merged_at: '2026-01-01T01:10:00Z', merge_commit_sha: 'd'.repeat(40),
+    head: { sha: 'c'.repeat(40), ref: syncBranch, repo: { full_name: 'example/repo' } }, base: { ref: 'main', repo: { full_name: 'example/repo' } } };
+  f.agents = [publisher, { id: `sync-${identity}`, taskId, startedAt: '2026-01-01T01:02:00Z', status: 'running',
+    metadata: { workspacePath: '/example/sync-checkout', sourceWorkspace: '/example/repo', isWorktree: true, worktreeBranch: syncBranch } }];
 });
 
-async function finishExecution({ retain = true } = {}) {
-  const agent = f.agents[1], seed = agent.metadata.checkoutSeeds[0];
-  const publisherSeed = f.agents[0].metadata.checkoutSeeds[0];
-  if (retain) expect(await retainReleaseSynchronizationReview({ branch: publisherSeed.branch, path: publisherSeed.path, head: publication.candidateHead,
-    checkoutIdentity: retirementCheckoutIdentityFromPointer(publisherSeed.incarnation.pointer) })).toBe(true);
-  agent.status = 'completed';
-  agent.completedAt = '2026-01-01T01:12:00Z';
-  agent.result = { success: true, summary: 'Everything is synchronized' };
-  agent.metadata.completedCheckouts = [{ ...seed, version: 2, head: f.pr.head.sha, capturedAt: '2026-01-01T01:11:00Z' }];
-  f.receipts = [{ branch: seed.branch, path: seed.path, head: f.pr.head.sha, branchDeleted: true, archiveDir: null,
-    checkoutIdentity: retirementCheckoutIdentityFromPointer(seed.incarnation.pointer), retiredAt: '2026-01-01T01:13:00Z' },
-  { branch: publisherSeed.branch, path: publisherSeed.path, head: publication.candidateHead, branchDeleted: true, archiveDir: null,
-    checkoutIdentity: retirementCheckoutIdentityFromPointer(publisherSeed.incarnation.pointer), retiredAt: '2026-01-01T01:13:00Z' }];
-  f.present = false;
-}
-
-it('verifies an inline owner against its exact synchronization head and settles after the owner exits', async () => {
+it('verifies an inline release from its merged back-merge PR, ancestry and version floor while the owner still runs', async () => {
   const source = await addTask({ description: 'Inline release', app: 'inline-app', metadata: { analysisType: 'do-release' } }, 'internal');
   const inlinePublication = { ...publication, identity: '8'.repeat(64), synchronizationHandoffVersion: 2,
     version: '2.109.0', tag: 'v2.109.0', tagTree: 'f'.repeat(40) };
   const publisher = structuredClone(f.agents[0]);
   publisher.id = 'inline-publisher';
-  publisher.metadata.checkoutSeeds[0].agentId = publisher.id;
   publisher.taskId = source.id;
   publisher.status = 'running';
   delete publisher.completedAt;
   publisher.metadata.releasePublication = inlinePublication;
-  delete publisher.metadata.completedCheckouts;
   const { taskId: inlineTask } = await ensureReleaseSynchronization(publisher);
   expect(inlineTask).toBe(source.id);
-  const syncSeed = { ...structuredClone(f.agents[1].metadata.checkoutSeeds[0]), agentId: publisher.id,
-    startedAt: publisher.startedAt, seededAt: '2026-01-01T00:00:02Z' };
-  publisher.metadata.checkoutSeeds.push(syncSeed);
   f.agents = [publisher];
-  f.pr.head.ref = syncSeed.branch;
+  // The inline synchronization branch is derived from the publication identity.
+  f.pr.head.ref = `codex/release-sync-${inlinePublication.identity}`;
   f.pr.merged = false;
+  f.pr.state = 'open';
+  f.pr.merged_at = null;
   expect((await verifyReleaseSynchronizationTask(inlineTask)).status).toBe('running');
   let entry = await getReleaseSynchronization(inlinePublication.identity);
-  expect(entry.obligations.synchronizationPr.blocker).toBe('synchronization-pr-not-merged');
-  f.pr.merged = true;
-  expect((await verifyReleaseSynchronizationTask(inlineTask)).status).toBe('running');
-  await expect(verifyIndependentReleaseDelivery(inlinePublication.identity, 42)).rejects.toThrow('historical continuations');
-  expect(await verifyInlineReleaseDelivery(publisher)).toEqual({ verified: true });
+  expect(entry.obligations.synchronizationPr).toMatchObject({ status: 'pending', blocker: 'synchronization-pr-not-merged',
+    evidence: { prUrl: 'https://github.com/example/repo/pull/42' } });
   const next = { id: 'next-release', metadata: { app: 'inline-app', analysisType: 'do-release' } };
   expect(await releaseTaskDispatchDisposition(next)).toBe('wait-for-synchronization');
-  await updateTask(inlineTask, { status: 'blocked' }, 'internal');
-  const nextInput = { id: 'sys-next-release', description: 'Inline release', status: 'pending', priority: 'LOW', priorityValue: 1,
-    metadata: { app: 'inline-app', analysisType: 'do-release' } };
-  const oldRow = await getTaskById(inlineTask);
-  let deliveredIds = await deliveredReleaseTaskIds([oldRow]);
-  expect(await addTask(nextInput, 'internal', { raw: true, deliveredReleaseTaskIds: [...deliveredIds] })).toMatchObject({ id: inlineTask, duplicate: true });
-  publisher.status = 'completed';
-  publisher.completedAt = '2026-01-01T01:12:00Z';
-  entry = await getReleaseSynchronization(inlinePublication.identity);
-  const quality = entry.obligations.qualitySnapshot;
-  entry.obligations.qualitySnapshot = { status: 'blocked', blocker: 'development-quality-snapshot-pending' };
-  await saveReleaseSynchronization(entry);
-  expect(await releaseTaskDispatchDisposition(next)).toBe('wait-for-synchronization');
-  entry.obligations.qualitySnapshot = quality;
-  await saveReleaseSynchronization(entry);
-  expect(await releaseTaskDispatchDisposition(next)).toBeNull();
-  deliveredIds = await deliveredReleaseTaskIds([oldRow]);
-  expect(await addTask(nextInput, 'internal', { raw: true, deliveredReleaseTaskIds: [...deliveredIds] })).toMatchObject({ id: nextInput.id, status: 'pending' });
-  f.developmentHead = '4'.repeat(40);
-  expect(await releaseTaskDispatchDisposition(next)).toBe('wait-for-synchronization');
-  f.developmentHead = 'e'.repeat(40);
-  publisher.status = 'running';
-  delete publisher.completedAt;
-  expect(f.versionReads).toContain(`contents/package.json?ref=${'e'.repeat(40)}`);
-  expect(f.versionReads).toContain(`contents/package-lock.json?ref=${'e'.repeat(40)}`);
-  // A previous success cannot prove the newly observed development tree when
-  // the ancestry comparison fails before the version files are read.
+  expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false });
+
+  Object.assign(f.pr, { merged: true, state: 'closed', merged_at: '2026-01-01T01:10:00Z' });
+  for (const [change, reason] of [
+    [{ developmentVersion: '2.108.0' }, 'releaseAncestry:development-version-behind-publication'],
+    [{ developmentVersion: '2.109.0-rc.1' }, 'releaseAncestry:development-version-behind-publication'],
+    [{ lockRootVersion: '2.108.0' }, 'releaseAncestry:development-lockfile-version-conflict'],
+    [{ versionUnavailable: true }, 'releaseAncestry:development-version-unreadable'],
+  ]) {
+    Object.assign(f, change);
+    expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false, reason });
+    f.developmentVersion = f.lockVersion = f.lockRootVersion = '2.109.0';
+    f.versionUnavailable = false;
+  }
+  // An unreadable comparison keeps the same-head merge proof, but cannot be
+  // replaced by a version read.
   f.versionReads = [];
-  f.developmentHead = '4'.repeat(40);
   f.compareUnavailable = true;
-  f.developmentVersion = '2.108.0';
   expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false });
   entry = await getReleaseSynchronization(inlinePublication.identity);
-  expect(entry.obligations.synchronizationPr).toMatchObject({ status: 'blocked', blocker: 'evidence-unavailable' });
-  expect(f.versionReads).not.toContain(`contents/package.json?ref=${f.developmentHead}`);
+  expect(entry.obligations.synchronizationPr.status).toBe('verified');
+  expect(entry.obligations.releaseAncestry).toMatchObject({ status: 'blocked', blocker: 'evidence-unavailable' });
+  expect(f.versionReads).toEqual([]);
   f.compareUnavailable = false;
-  expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false,
-    reason: 'synchronizationPr:development-version-behind-publication' });
-  f.developmentVersion = '2.109.0';
-  expect(await verifyInlineReleaseDelivery(publisher)).toEqual({ verified: true });
-  f.developmentVersion = '2.108.0';
-  expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false,
-    reason: 'synchronizationPr:development-version-behind-publication' });
-  f.developmentVersion = '2.109.0-rc.1';
-  expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false,
-    reason: 'synchronizationPr:development-version-behind-publication' });
-  f.developmentVersion = '2.109.0';
-  f.lockRootVersion = '2.108.0';
-  expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false,
-    reason: 'synchronizationPr:development-lockfile-version-conflict' });
+  f.pr.base.ref = 'release';
+  expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false, reason: 'synchronization-pr-identity-changed' });
+  f.pr.base.ref = 'main';
+
+  // A newer development version is preserved; a project without a published lock keeps its contract.
   f.developmentVersion = f.lockVersion = f.lockRootVersion = '2.110.0';
-  expect(await verifyInlineReleaseDelivery(publisher)).toEqual({ verified: true });
-  f.versionUnavailable = true;
-  expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false,
-    reason: 'synchronizationPr:development-version-unreadable' });
-  f.versionUnavailable = false;
   f.hasLock = false;
   expect(await verifyInlineReleaseDelivery(publisher)).toEqual({ verified: true });
-  f.hasLock = true;
-  f.developmentVersion = f.lockVersion = f.lockRootVersion = '2.109.0';
-  f.checkoutHead = 'c'.repeat(40);
-  f.pr.head.sha = '9'.repeat(40);
-  expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false, reason: 'synchronization-pr-identity-changed' });
-  f.pr.head.sha = 'c'.repeat(40);
-  const candidateSeed = publisher.metadata.checkoutSeeds[0];
-  expect(await retainReleaseSynchronizationReview({ branch: candidateSeed.branch, path: candidateSeed.path,
-    head: inlinePublication.candidateHead, checkoutIdentity: retirementCheckoutIdentityFromPointer(candidateSeed.incarnation.pointer) })).toBe(true);
-  publisher.status = 'completed';
-  publisher.completedAt = '2026-01-01T01:12:00Z';
-  publisher.metadata.completedCheckouts = publisher.metadata.checkoutSeeds.map(seed => ({ ...seed, version: 2,
-    head: seed.branch === candidateSeed.branch ? inlinePublication.candidateHead : 'c'.repeat(40), capturedAt: '2026-01-01T01:11:00Z' }));
+  expect(f.versionReads).toContain(`contents/package.json?ref=${'e'.repeat(40)}`);
   entry = await getReleaseSynchronization(inlinePublication.identity);
-  entry.synchronization.retryAt = '2026-01-01T00:00:00Z';
-  await saveReleaseSynchronization(entry);
-  const hold = { branch: candidateSeed.branch, path: candidateSeed.path, reason: 'release-checkout-locked', lockReason: 'operator hold' };
-  inlineCleanup.mockResolvedValueOnce({ attempted: true, retired: [], held: [hold] });
-  await recoverReleaseSynchronizationHandoffs(f.agents);
-  expect(inlineCleanup).toHaveBeenCalledWith(expect.objectContaining({ version: 2, task: expect.objectContaining({ id: inlineTask }),
-    obligations: expect.objectContaining({ processSettlement: expect.objectContaining({ status: 'verified' }) }) }));
-  const sweepAgain = async result => {
-    const due = await getReleaseSynchronization(inlinePublication.identity);
-    due.synchronization.retryAt = '2026-01-01T00:00:00Z';
-    await saveReleaseSynchronization(due);
-    inlineCleanup.mockResolvedValueOnce(result);
-    await recoverReleaseSynchronizationHandoffs(f.agents);
-    return getReleaseSynchronization(inlinePublication.identity);
-  };
-  entry = await getReleaseSynchronization(inlinePublication.identity);
-  const [persisted] = entry.obligations.retirement.evidence.heldCheckouts;
-  expect(persisted).toMatchObject(hold);
-  expect(entry.synchronization.blocker).toMatch(/^retirement:/);
-  expect(projectTaskReleaseMilestones({ id: inlineTask, metadata: {} }, entry).metadata.releaseSynchronization.heldCheckouts)
-    .toEqual([expect.objectContaining({ ...hold, nextAction: expect.stringContaining('unlock the worktree') })]);
-  // Re-verification and an unchanged sweep both keep the first observation; a clean sweep clears it.
-  entry = await sweepAgain({ attempted: true, retired: [], held: [hold] });
-  expect(entry.obligations.retirement.evidence.heldCheckouts).toEqual([persisted]);
-  entry = await sweepAgain({ attempted: false });
-  expect(entry.obligations.retirement.evidence.heldCheckouts).toEqual([persisted]);
-  entry = await sweepAgain({ attempted: true, retired: [], held: [] });
-  expect(entry.obligations.retirement.evidence).not.toHaveProperty('heldCheckouts');
-  f.receipts = publisher.metadata.completedCheckouts.map(row => ({ branch: row.branch, path: row.path, head: row.head,
-    branchDeleted: true, archiveDir: null, checkoutIdentity: retirementCheckoutIdentityFromPointer(row.incarnation.pointer),
-    retiredAt: '2026-01-01T01:13:00Z' }));
-  f.present = false;
-  f.pr.head.sha = '9'.repeat(40);
-  expect((await verifyReleaseSynchronizationTask(inlineTask)).status).toBe('blocked');
-  f.pr.head.sha = 'c'.repeat(40);
-  expect((await verifyReleaseSynchronizationTask(inlineTask)).status).toBe('verified');
-  entry = await getReleaseSynchronization(inlinePublication.identity);
-  expect(entry.obligations.retirement.evidence.checkouts).toHaveLength(2);
+  expect(entry.synchronization).toMatchObject({ status: 'verified', blocker: null });
+  expect(Object.keys(entry.obligations)).toEqual(RELEASE_SYNC_OBLIGATIONS);
+  expect(entry.obligations.releaseAncestry.evidence).toMatchObject({ developmentVersion: '2.110.0', publishedVersion: '2.109.0', lockBlob: null });
+  await expect(verifyIndependentReleaseDelivery(inlinePublication.identity, 42)).rejects.toThrow('historical continuations');
+  // Neither a quality snapshot nor checkout retirement holds the next release.
+  expect(await releaseTaskDispatchDisposition(next)).toBeNull();
 });
 
-it('recognizes a merged replacement PR without changing the failed historical task or its checkout hold', async () => {
+it('chooses the merged attempt beside a closed one and refuses two merged candidates', async () => {
+  const closed = { ...structuredClone(f.pr), number: 41, merged: false, merged_at: null, merge_commit_sha: null, head: { ...f.pr.head, sha: '7'.repeat(40) } };
+  const unrelated = { ...structuredClone(f.pr), number: 40, head: { ...f.pr.head, ref: 'unrelated' } };
+  const intoRelease = { ...structuredClone(f.pr), number: 39, base: { ...f.pr.base, ref: 'release' } };
+  f.agents[1].status = 'completed';
+  f.agents[1].completedAt = '2026-01-01T01:12:00Z';
+  f.prs = [closed, unrelated, intoRelease, f.pr];
+  expect((await verifyReleaseSynchronizationTask(taskId)).status).toBe('verified');
+  expect((await getReleaseSynchronization(identity)).obligations.synchronizationPr.evidence).toMatchObject({ number: 42, headSha: f.pr.head.sha });
+
+  const other = { ...structuredClone(f.pr), number: 43 };
+  const second = (await import('node:crypto')).randomBytes(32).toString('hex');
+  const source = await addTask({ description: `Release example ${second}`, app: 'example-app' });
+  const { taskId: secondTask } = await ensureReleaseSynchronization({ ...f.agents[0], id: `publisher-${second}`, taskId: source.id,
+    metadata: { ...f.agents[0].metadata, releasePublication: { ...publication, identity: second, tag: `v1.2.4-${second}` } } });
+  f.agents.push({ ...f.agents[1], id: `sync-${second}`, taskId: secondTask });
+  f.prs = [f.pr, other];
+  expect(await verifyReleaseSynchronizationTask(secondTask)).toMatchObject({ status: 'blocked', blocker: 'synchronization-pr-conflict' });
+});
+
+it('upgrades a pre-#16017 outbox blocked on removed obligations to the back-merge invariants', async () => {
+  f.agents[1].status = 'completed';
+  f.agents[1].completedAt = '2026-01-01T01:12:00Z';
+  const entry = await getReleaseSynchronization(identity);
+  const legacy = ['candidateFixes', 'releaseAncestry', 'synchronizationPr', 'localReview', 'hostedReview', 'requiredCi',
+    'mergeAdmission', 'qualitySnapshot', 'processSettlement', 'retirement'];
+  entry.obligations = Object.fromEntries(legacy.map(name => [name, { status: 'verified', verifiedAt: '2026-01-01T01:11:00Z',
+    evidence: { prUrl: 'https://github.com/example/repo/pull/42', headSha: f.pr.head.sha } }]));
+  entry.obligations.qualitySnapshot = { status: 'blocked', blocker: 'development-quality-snapshot-pending' };
+  entry.obligations.retirement = { status: 'pending', evidence: { checkouts: [], heldCheckouts: [] } };
+  entry.synchronization = { status: 'blocked', attempts: 3, checkedAt: '2026-01-01T01:11:00Z', verifiedAt: null,
+    retryAt: '2026-01-01T01:12:00Z', blocker: 'qualitySnapshot:development-quality-snapshot-pending' };
+  await saveReleaseSynchronization(entry);
+  const next = { id: 'next', metadata: { app: 'example-app', analysisType: 'do-release' } };
+  expect(await releaseTaskDispatchDisposition(next)).toBe('wait-for-synchronization');
+  await recoverReleaseSynchronizationHandoffs(f.agents);
+  const saved = await getReleaseSynchronization(identity);
+  expect(saved.synchronization).toMatchObject({ status: 'verified', attempts: 4, blocker: null });
+  expect(Object.keys(saved.obligations)).toEqual(RELEASE_SYNC_OBLIGATIONS);
+  expect(saved.publication).toEqual(publication);
+  // The removed quality snapshot no longer serializes the next release.
+  expect(await releaseTaskDispatchDisposition(next)).toBeNull();
+});
+
+it('recognizes a merged replacement PR without changing the failed historical task', async () => {
   const source = await addTask({ description: 'Historical release with independent repair', app: 'repaired-app' });
   const repairedPublication = { ...publication, identity: (await import('node:crypto')).randomBytes(32).toString('hex'),
     version: '2.109.0', tag: 'v2.109.0', tagTree: 'f'.repeat(40) };
@@ -332,8 +235,6 @@ it('recognizes a merged replacement PR without changing the failed historical ta
   continuation.taskId = oldTask;
   continuation.status = 'completed';
   continuation.completedAt = '2026-01-01T01:12:00Z';
-  const seed = continuation.metadata.checkoutSeeds[0];
-  continuation.metadata.completedCheckouts = [{ ...seed, version: 2, head: 'c'.repeat(40), capturedAt: '2026-01-01T01:11:00Z' }];
   f.agents = [publisher, continuation];
   f.pr.head.ref = 'codex/separate-repair';
   expect((await verifyReleaseSynchronizationTask(oldTask)).blocker).toBe('synchronization-pr-pending');
@@ -444,225 +345,63 @@ it('recognizes a merged replacement PR without changing the failed historical ta
   expect(f.forgeCalls).toBe(callsBeforeReplay);
   saved = await getReleaseSynchronization(repairedPublication.identity);
   expect(saved.synchronization).toMatchObject({ status: 'blocked', blocker: 'synchronization-pr-pending', delivery: proof });
-  const beforeRetention = structuredClone(saved);
-  const callsBeforeRetention = f.forgeCalls;
-  expect(await retainReleaseSynchronizationReview({ branch: seed.branch, path: seed.path, head: 'c'.repeat(40),
-    checkoutIdentity: retirementCheckoutIdentityFromPointer(seed.incarnation.pointer) })).toBe(false);
-  saved = await getReleaseSynchronization(repairedPublication.identity);
-  expect(saved.synchronization).toEqual(beforeRetention.synchronization);
-  expect(saved.obligations).toEqual(beforeRetention.obligations);
-  expect(f.forgeCalls).toBe(callsBeforeRetention);
 });
 
-it('preserves an already-verified synchronization without a publisher seed and allows unrelated checkouts to retire', async () => {
-  await finishExecution();
-  expect((await verifyReleaseSynchronizationTask(taskId)).status).toBe('verified');
-  const valid = await getReleaseSynchronization(identity);
-  const legacyIdentity = (await import('node:crypto')).randomBytes(32).toString('hex');
-  const source = await addTask({ description: 'Legacy publisher', app: 'example-app' });
-  const legacyPublication = { ...publication, identity: legacyIdentity, tag: `v9.9.9-${legacyIdentity}` };
-  delete legacyPublication.candidateBranch; // old publication receipts did not store this field
-  const publisher = { ...f.agents[0], id: `old-${legacyIdentity}`, taskId: source.id,
-    metadata: { workspacePath: '/example/repo', releasePublication: legacyPublication } };
-  const legacyTask = (await ensureReleaseSynchronization(publisher)).taskId;
-  const old = await getReleaseSynchronization(legacyIdentity);
-  old.synchronization = valid.synchronization;
-  old.obligations = valid.obligations;
-  await saveReleaseSynchronization(old);
-  f.agents = [publisher, { ...f.agents[1], taskId: legacyTask }];
-  const projected = projectTaskReleaseMilestones({ id: legacyTask, metadata: {} }, old);
-  expect(projected.metadata.releasePublication).toEqual(old.publication);
-  expect(projected.metadata.releaseSynchronization).toMatchObject({ status: 'verified' });
-  expect(await releaseTaskDispatchDisposition({ metadata: { analysisType: 'do-release', app: 'example-app' } })).toBeNull();
-  expect(await retainReleaseSynchronizationReview({ repoPath: '/example/repo', branch: 'some-unknown-branch', path: '/example/publisher-checkout', head: publication.candidateHead })).toBe(true);
-  expect(await verifyReleaseSynchronizationTask(legacyTask)).toMatchObject({ status: 'verified', blocker: null });
-  expect((await getReleaseSynchronization(legacyIdentity)).publication).toEqual(old.publication);
-});
-
-
-it('treats an accepted archive-backed legacy recovery as an unseeded publication', async () => {
-  await finishExecution();
-  const syncAgent = f.agents[1];
-  const id = '9'.repeat(64);
-  const source = await addTask({ description: 'Old publisher', app: 'example-app' });
-  const legacyPublication = { ...publication, identity: id, tag: `v9.9.9-${id}` };
-  delete legacyPublication.candidateBranch;
-  const oldSeed = f.agents[0].metadata.checkoutSeeds[0];
-  const capture = { version: 1, agentId: 'old-publisher', startedAt: oldSeed.startedAt, capturedAt: '2026-01-01T01:00:50Z',
-    repoPath: oldSeed.repoPath, path: oldSeed.path, branch: oldSeed.branch, head: legacyPublication.candidateHead, incarnation: oldSeed.incarnation };
-  const publisher = { ...f.agents[0], id: capture.agentId, taskId: source.id,
-    metadata: { workspacePath: capture.repoPath, releasePublication: legacyPublication, completedCheckouts: [capture] } };
-  const legacyTask = (await ensureReleaseSynchronization(publisher)).taskId;
-  syncAgent.taskId = legacyTask;
-  f.agents = [publisher, syncAgent];
-  // Receipt shape written by installs that still had checkout archives.
-  const legacyRecovery = { version: 1, kind: 'legacy-publisher', digest: '1'.repeat(64), acceptedAt: '2026-01-01T02:00:00Z',
-    evidence: { identity: id, capture, mode: 'present', archive: { archiveDir: '/example/archive/candidate' } } };
-  await saveReleaseSynchronization({ ...await getReleaseSynchronization(id), legacyRecovery });
-  expect(await verifyReleaseSynchronizationTask(legacyTask)).toMatchObject({ status: 'blocked', blocker: 'publisher-candidate-checkout-unverified' });
-  const saved = await getReleaseSynchronization(id);
-  expect(saved.legacyRecovery).toEqual(legacyRecovery);
-  expect(projectTaskReleaseMilestones({ id: legacyTask, metadata: {} }, saved).metadata.releaseSynchronization.nextAction).toContain('operator reset');
-  // The captured checkout no longer holds retirement on the old recovery's behalf.
-  expect(await retainReleaseSynchronizationReview({ repoPath: capture.repoPath, path: capture.path, branch: capture.branch, head: capture.head,
-    checkoutIdentity: retirementCheckoutIdentityFromPointer(capture.incarnation.pointer) })).toBe(true);
-});
-
-it('allows unrelated checkouts to retire when an unseeded publisher exists without blocking claim branches', async () => {
-  const id = '6'.repeat(64), source = await addTask({ description: 'Primary checkout publisher', app: 'example-app' });
-  const legacyPublication = { ...publication, identity: id, tag: `v6.6.6-${id}` };
-  delete legacyPublication.candidateBranch;
-  const publisher = { ...f.agents[0], id: 'primary-publisher', taskId: source.id,
-    metadata: { workspacePath: '/example/repo', releasePublication: legacyPublication } };
-  const legacyTask = (await ensureReleaseSynchronization(publisher)).taskId;
-  f.agents[1].taskId = legacyTask;
-  f.agents.push(publisher);
-  const release = { repoPath: '/example/repo', path: '/example/other-checkout', branch: 'claim/issue-42', head: 'f'.repeat(40), checkoutIdentity: '1'.repeat(64) };
-  expect(await retainReleaseSynchronizationReview(release)).toBe(true);
-  const syncSeed = f.agents[1].metadata.checkoutSeeds[0];
-  expect(await retainReleaseSynchronizationReview({ ...release, branch: syncSeed.branch, path: syncSeed.path,
-    checkoutIdentity: retirementCheckoutIdentityFromPointer(syncSeed.incarnation.pointer) })).toBe(false);
-});
-
-it('requires the publisher private-review observation and current retirement state', async () => {
-  await finishExecution({ retain: false });
-  await verifyReleaseSynchronizationTask(taskId);
-  expect((await getReleaseSynchronization(identity)).obligations.retirement.blocker).toBe('publisher-private-review-unretained');
-  const seed = f.agents[0].metadata.checkoutSeeds[0];
-  expect(await retainReleaseSynchronizationReview({ branch: seed.branch, path: seed.path, head: publication.candidateHead,
-    checkoutIdentity: retirementCheckoutIdentityFromPointer(seed.incarnation.pointer) })).toBe(true);
-  const saved = await getReleaseSynchronization(identity);
-  expect(saved.obligations.retirement.evidence.publisherReview).toMatchObject({ receipt: null, models: [], head: publication.candidateHead });
-  expect((await verifyReleaseSynchronizationTask(taskId)).status).toBe('verified');
-});
-
-it('persists independent revision proofs before retirement and rejoins the same completed task after restart', async () => {
+it('persists revision-bound proof and rejoins the same completed task after restart', async () => {
   const events = [];
   const listener = change => events.push(change);
   cosEvents.on('tasks:changed', listener);
   try {
+    Object.assign(f.pr, { merged: false, state: 'open', merged_at: null });
     await Promise.all([verifyReleaseSynchronizationTask(taskId), verifyReleaseSynchronizationTask(taskId)]);
     let saved = await getReleaseSynchronization(identity);
     expect(saved.synchronization).toMatchObject({ status: 'running', attempts: 2, blocker: null });
-    expect(saved.obligations.localReview.status).toBe('verified');
-    expect(saved.obligations.requiredCi.evidence.headSha).toBe(f.pr.head.sha);
-    await finishExecution();
+    Object.assign(f.pr, { merged: true, state: 'closed', merged_at: '2026-01-01T01:10:00Z' });
     await updateTask(taskId, { status: 'completed' }, 'internal');
-    f.review = null;
     await verifyReleaseSynchronizationTask(taskId);
     saved = await getReleaseSynchronization(identity);
     expect(saved.synchronization.status).toBe('verified');
     expect(saved.publication).toEqual(publication);
-    expect(Object.values(saved.obligations).every(value => value.status === 'verified')).toBe(true);
+    expect(saved.obligations.synchronizationPr.evidence).toMatchObject({ number: 42, mergeSha: f.pr.merge_commit_sha, developmentHead: f.developmentHead });
     expect((await ensureReleaseSynchronization(f.agents[0])).taskId).toBe(taskId);
     expect(await getTaskById(taskId)).toMatchObject({ status: 'completed' });
+    const calls = f.forgeCalls;
     expect(await verifyReleaseSynchronizationTask(taskId)).toEqual(saved.synchronization);
-    expect(events.filter(change => change.action === 'release-synchronization')).toHaveLength(4);
+    expect(f.forgeCalls).toBe(calls);
+    expect(events.filter(change => change.action === 'release-synchronization')).toHaveLength(3);
   } finally { cosEvents.off('tasks:changed', listener); }
 });
 
-it('accepts provider-confirmed merge without a second review, CI or admission certificate', async () => {
-  await finishExecution();
-  f.review = null;
-  f.reviews = [];
-  f.checks = [{ conclusion: 'failure' }];
-  await verifyReleaseSynchronizationTask(taskId);
-  const saved = await getReleaseSynchronization(identity);
-  expect(saved.synchronization.status).toBe('verified');
-  for (const name of ['localReview', 'hostedReview', 'requiredCi', 'mergeAdmission']) {
-    expect(saved.obligations[name]).toMatchObject({ status: 'verified', evidence: { authority: 'hosting-provider', headSha: f.pr.head.sha } });
-  }
-  expect(saved.publication).toEqual(publication);
-});
-
-it('retains successful proof and backoff on transport failure, then completes only with absent refs and settled processes', async () => {
-  await verifyReleaseSynchronizationTask(taskId);
-  const reviewedAt = (await getReleaseSynchronization(identity)).obligations.localReview.verifiedAt;
-  f.unavailable = true;
+it('retains successful proof and backoff on transport failure', async () => {
+  f.notAncestor = new Set([publication.promotionMerge]);
   await verifyReleaseSynchronizationTask(taskId);
   let saved = await getReleaseSynchronization(identity);
+  expect(saved.obligations.releaseAncestry).toMatchObject({ status: 'blocked', blocker: 'published-ancestry-not-on-development' });
+  const mergedAt = saved.obligations.synchronizationPr.verifiedAt;
+  expect(mergedAt).toEqual(expect.any(String));
+  f.unavailable = true;
+  await verifyReleaseSynchronizationTask(taskId);
+  saved = await getReleaseSynchronization(identity);
   expect(saved.synchronization).toMatchObject({ status: 'blocked', blocker: 'synchronization-evidence-unavailable' });
   expect(Date.parse(saved.synchronization.retryAt)).toBeGreaterThan(Date.parse(saved.synchronization.checkedAt));
-  expect(saved.obligations.localReview.verifiedAt).toBe(reviewedAt);
+  expect(saved.obligations.synchronizationPr.verifiedAt).toBe(mergedAt);
   f.unavailable = false;
-  const green = f.checks;
-  const ciVerifiedAt = saved.obligations.requiredCi.verifiedAt;
-  f.checks = null;
-  await verifyReleaseSynchronizationTask(taskId);
-  expect((await getReleaseSynchronization(identity)).obligations.requiredCi).toMatchObject({ status: 'verified', verifiedAt: ciVerifiedAt });
-  f.checks = [{ ...green[0], conclusion: 'failure' }];
-  await verifyReleaseSynchronizationTask(taskId);
-  expect((await getReleaseSynchronization(identity)).obligations.requiredCi.status).toBe('verified');
-  f.checks = green;
-  await finishExecution();
-  f.receipts = []; // History is neither required nor cleanup authority.
-  f.busy = true;
-  await verifyReleaseSynchronizationTask(taskId);
-  expect((await getReleaseSynchronization(identity)).obligations.processSettlement.blocker).toBe('checkout-processes-unsettled');
-  f.busy = false;
+  f.notAncestor = new Set();
   expect((await verifyReleaseSynchronizationTask(taskId)).status).toBe('verified');
+  expect((await getReleaseSynchronization(identity)).obligations.synchronizationPr.verifiedAt).toBe(mergedAt);
 });
 
-it('does not reopen confirmed delivery when review history changes after merge', async () => {
-  f.reviews.push({ ...f.reviews[0], id: 2, state: 'COMMENTED', submitted_at: '2026-01-01T01:08:30Z' });
-  await verifyReleaseSynchronizationTask(taskId);
-  expect((await getReleaseSynchronization(identity)).obligations.hostedReview.status).toBe('verified');
-  f.reviews.push({ ...f.reviews[0], id: 3, state: 'CHANGES_REQUESTED', submitted_at: '2026-01-01T01:09:00Z' });
-  await verifyReleaseSynchronizationTask(taskId);
-  expect((await getReleaseSynchronization(identity)).obligations.hostedReview.status).toBe('verified');
-});
-
-it('rejects a conflicting live checkout owner without modifying the dispatch, and never waives missing candidate ancestry', async () => {
-  const seed = f.agents[1].metadata.checkoutSeeds[0];
-  f.agents.push({ id: 'other-owner', taskId: 'other-task', startedAt: '2026-01-01T01:03:00Z', status: 'running',
-    metadata: { isWorktree: true, workspacePath: seed.path, sourceWorkspace: seed.repoPath, worktreeBranch: seed.branch } });
-  await verifyReleaseSynchronizationTask(taskId);
-  expect((await getReleaseSynchronization(identity)).synchronization.blocker).toBe('checkout-conflicting-live-owner');
+it('never waives missing candidate ancestry and refuses conflicting live continuation owners', async () => {
+  f.agents.push({ ...f.agents[1], id: 'other-owner' });
+  expect(await verifyReleaseSynchronizationTask(taskId)).toMatchObject({ status: 'blocked', blocker: 'continuation-conflicting-live-owners' });
   f.agents.pop();
-  f.ancestor = false;
+  f.notAncestor = new Set([publication.candidateHead]);
   await verifyReleaseSynchronizationTask(taskId);
   const saved = await getReleaseSynchronization(identity);
-  expect(saved.obligations.candidateFixes.blocker).toBe('candidate-fixes-not-preserved');
-  expect(saved.obligations.releaseAncestry.blocker).toBe('published-ancestry-not-preserved');
+  expect(saved.obligations.synchronizationPr.status).toBe('verified');
+  expect(saved.obligations.releaseAncestry.blocker).toBe('candidate-head-not-on-development');
+  expect(saved.synchronization.status).toBe('blocked');
   expect((await getTaskById(taskId)).metadata.releaseSynchronization.identity).toBe(identity);
-});
-
-it('keeps compact historical completions out of live ownership checks while refusing an unreadable current registry', async () => {
-  await finishExecution();
-  f.liveAgents = [...f.agents];
-  f.agents.push({ id: 'historical-compact-record', agentId: 'historical-compact-record',
-    taskId: 'old-task', completedAt: '2025-12-01T00:00:00Z', exitCode: 0, success: true });
-  f.liveTrusted = false;
-  expect((await verifyReleaseSynchronizationTask(taskId)).blocker).toBe('checkout-ownership-unreadable');
-  f.liveTrusted = true;
-  expect((await verifyReleaseSynchronizationTask(taskId)).status).toBe('verified');
-});
-
-it('requires development quality evidence and refreshes it without redoing a successful local review', async () => {
-  f.quality = { ...f.quality, measurements: [{ measurementId: 'a'.repeat(64), assessedAt: '2026-01-01T00:00:00Z',
-    report: { version: 1, category: 'security', score: 80, worstSeverity: 5, coverage: 'broad', confidence: 'high', scannedFiles: 2, totalFiles: 2 } }] };
-  f.qualityFile = { encoding: 'base64', sha: '9'.repeat(40), content: Buffer.from(qualityFileFromWireSnapshot({ ...f.quality, measurements: [] })).toString('base64') };
-  await verifyReleaseSynchronizationTask(taskId);
-  expect((await getReleaseSynchronization(identity)).obligations.qualitySnapshot.status).toBe('blocked');
-  const body = qualityFileFromWireSnapshot(f.quality);
-  expect(classifyQualitySnapshot(body).status).toBe('v3');
-  f.qualityFile.content = Buffer.from(body).toString('base64');
-  await finishExecution();
-  f.review = null;
-  expect((await verifyReleaseSynchronizationTask(taskId)).status).toBe('verified');
-});
-
-it('verifies a large quality snapshot through its pinned Git blob', async () => {
-  f.quality = { ...f.quality, measurements: [{ measurementId: 'a'.repeat(64), assessedAt: '2026-01-01T00:00:00Z',
-    report: { version: 1, category: 'security', score: 80, worstSeverity: 5, coverage: 'broad', confidence: 'high', scannedFiles: 2, totalFiles: 2 } }] };
-  const body = `${qualityFileFromWireSnapshot(f.quality)}${' '.repeat(1024 * 1024)}`;
-  f.qualityFile = { encoding: 'none', sha: '9'.repeat(40), content: '', size: Buffer.byteLength(body) };
-  f.qualityBlob = { encoding: 'base64', sha: '8'.repeat(40), content: Buffer.from(body).toString('base64') };
-  await verifyReleaseSynchronizationTask(taskId);
-  expect((await getReleaseSynchronization(identity)).obligations.qualitySnapshot.blocker).toBe('development-quality-unreadable');
-  f.qualityBlob.sha = '9'.repeat(40);
-  await finishExecution();
-  expect((await verifyReleaseSynchronizationTask(taskId)).status).toBe('verified');
 });
 
 it('leaves an unstarted continuation pending and respects durable retry times during recovery sweeps', async () => {
@@ -674,88 +413,14 @@ it('leaves an unstarted continuation pending and respects durable retry times du
   expect((await getReleaseSynchronization(identity)).synchronization.attempts).toBe(saved.synchronization.attempts);
 });
 
-it('withholds retirement until provider-confirmed merge and retains each checkout generation', async () => {
-  f.pr.merged = false;
-  const seed = f.agents[1].metadata.checkoutSeeds[0];
-  const release = { branch: seed.branch, path: seed.path, head: f.pr.head.sha,
-    checkoutIdentity: retirementCheckoutIdentityFromPointer(seed.incarnation.pointer) };
-  f.review = null;
-  expect(await retainReleaseSynchronizationReview(release)).toBe(false);
-  f.review = { reusable: true, receipt: { status: 'clean', reviewedHead: f.pr.head.sha } };
-  expect(await retainReleaseSynchronizationReview(release)).toBe(false);
-  f.pr.head.sha = '8'.repeat(40);
-  f.pr.merged = true;
-  f.review = null;
-  expect(await retainReleaseSynchronizationReview({ ...release, head: f.pr.head.sha })).toBe(true);
-  const saved = await getReleaseSynchronization(identity);
-  expect(saved.obligations.localReview).toMatchObject({ status: 'verified', evidence: { headSha: f.pr.head.sha, authority: 'hosting-provider' } });
-  expect(saved.obligations.hostedReview.status).toBe('verified');
-  const owner = f.agents[1];
-  owner.status = 'completed';
-  owner.completedAt = '2026-01-01T01:12:00Z';
-  owner.metadata.completedCheckouts = [{ ...seed, version: 2, head: f.pr.head.sha, capturedAt: '2026-01-01T01:11:00Z' }];
-  const nextSeed = structuredClone(seed);
-  Object.assign(nextSeed, { agentId: `resumed-${identity}`, startedAt: '2026-01-01T01:14:00Z', seededAt: '2026-01-01T01:14:01Z' });
-  nextSeed.incarnation.pointer.ino = '4';
-  f.agents.push({ id: nextSeed.agentId, taskId, startedAt: nextSeed.startedAt, status: 'running',
-    metadata: { ...owner.metadata, checkoutSeeds: [nextSeed], completedCheckouts: [] } });
-  expect(await retainReleaseSynchronizationReview({ ...release, head: f.pr.head.sha,
-    checkoutIdentity: retirementCheckoutIdentityFromPointer(nextSeed.incarnation.pointer) })).toBe(true);
-  expect((await getReleaseSynchronization(identity)).obligations.retirement.evidence.checkouts).toHaveLength(3);
-});
-
 it('does not publish verification or lose original evidence when its durable write fails', async () => {
+  Object.assign(f.pr, { merged: false, state: 'open', merged_at: null });
   await verifyReleaseSynchronizationTask(taskId);
-  await finishExecution();
+  Object.assign(f.pr, { merged: true, state: 'closed', merged_at: '2026-01-01T01:10:00Z' });
   const prior = await getReleaseSynchronization(identity);
   f.failSave = true;
   await expect(verifyReleaseSynchronizationTask(taskId)).rejects.toThrow('synthetic outbox write failure');
   expect(await getReleaseSynchronization(identity)).toEqual(prior);
   f.failSave = false;
   expect((await verifyReleaseSynchronizationTask(taskId)).status).toBe('verified');
-});
-
-it('refuses a squash-shaped result that contains the promotion but loses the synchronization head ancestry', async () => {
-  f.missingSyncAncestry = true;
-  await verifyReleaseSynchronizationTask(taskId);
-  const saved = await getReleaseSynchronization(identity);
-  expect(saved.obligations.synchronizationPr.blocker).toBe('synchronization-head-not-on-development');
-  expect(saved.obligations.releaseAncestry.status).toBe('verified');
-  expect(saved.synchronization.status).toBe('blocked');
-});
-
-it('retains current retirement observations on an unreadable follow-up', async () => {
-  await verifyReleaseSynchronizationTask(taskId);
-  await finishExecution();
-  const approval = f.reviews;
-  f.reviews = [];
-  await verifyReleaseSynchronizationTask(taskId);
-  const prior = (await getReleaseSynchronization(identity)).obligations.retirement;
-  expect(prior.status).toBe('verified');
-  expect(prior.evidence.authority).toBe('current-inventory');
-  expect(prior.evidence).not.toHaveProperty('receipts');
-  f.retirementUnavailable = true;
-  await verifyReleaseSynchronizationTask(taskId);
-  expect((await getReleaseSynchronization(identity)).obligations.retirement).toEqual(prior);
-  f.reviews = approval;
-  expect((await verifyReleaseSynchronizationTask(taskId)).status).toBe('verified');
-});
-
-it('requires Windows native tree proof independently of completed task prose and binds it to retained checkout generations', async () => {
-  restorePlatform();
-  restorePlatform = pinPlatform('win32');
-  await verifyReleaseSynchronizationTask(taskId);
-  await finishExecution();
-  f.busy = true;
-  await verifyReleaseSynchronizationTask(taskId);
-  let saved = await getReleaseSynchronization(identity);
-  expect(saved.obligations.processSettlement).toMatchObject({ status: 'blocked', blocker: 'WINDOWS_AGENT_PROCESS_UNVERIFIED' });
-  expect(saved.publication).toEqual(publication);
-  expect(saved.obligations.retirement.status).not.toBe('verified');
-  f.busy = false;
-  expect(await verifyReleaseSynchronizationTask(taskId)).toMatchObject({ status: 'verified', blocker: null });
-  saved = await getReleaseSynchronization(identity);
-  expect(saved.obligations.processSettlement.evidence.receipts).toHaveLength(2);
-  expect(saved.obligations.processSettlement.evidence.checkouts.find(row => row.agentId === f.agents[1].id).checkoutIdentity)
-    .toBe(retirementCheckoutIdentityFromPointer(f.agents[1].metadata.checkoutSeeds[0].incarnation.pointer));
 });

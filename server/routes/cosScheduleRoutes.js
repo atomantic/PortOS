@@ -303,10 +303,10 @@ router.post('/schedule/trigger', asyncHandler(async (req, res) => {
 
 // This is an explicit operator decision, not a successful synchronization.
 router.post('/schedule/release-synchronization/operator-reset', asyncHandler(async (req, res) => {
-  const { identity, reason, checkouts } = validateRequest(releaseSynchronizationResetBodySchema, req.body);
+  const { identity, reason } = validateRequest(releaseSynchronizationResetBodySchema, req.body);
   const { resetReleaseSynchronization } = await import('../services/releaseSynchronization.js');
   const actor = req.portosAuthContext?.method === 'session' ? 'operator-session' : 'local-operator';
-  res.json(await resetReleaseSynchronization(identity, reason, actor, checkouts));
+  res.json(await resetReleaseSynchronization(identity, reason, actor));
 }));
 
 // Observe an independently merged repair; the old run and checkout history stay intact.

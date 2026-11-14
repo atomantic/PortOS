@@ -245,14 +245,14 @@ describe('TasksTab spawning window', () => {
   });
 
   it('rechecks only the selected cleanup owner and reports a remaining hold', async () => {
-    api.recheckCosAgentCleanup.mockResolvedValue({ ok: true, verified: false, reasons: ['release-sync-local-review-unretained'] });
+    api.recheckCosAgentCleanup.mockResolvedValue({ ok: true, verified: false, reasons: ['active-agent-owner'] });
     const task = { id: 'sys-held', description: 'Finish delivery', status: 'in_progress',
       metadata: { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-owner' } };
     renderTab({ tasks: { user: { tasks: [] }, cos: { tasks: [task] } },
       agents: [{ id: 'agent-owner', taskId: task.id, status: 'completed', result: { cleanupPending: true } }] });
     fireEvent.click(await screen.findByRole('button', { name: 'Retry cleanup' }));
     await waitFor(() => expect(api.recheckCosAgentCleanup).toHaveBeenCalledWith('agent-owner', task.id, { silent: true }));
-    expect(await screen.findByText(/Cleanup still needs attention: Waiting for release review evidence/)).toBeInTheDocument();
+    expect(await screen.findByText(/Cleanup still needs attention: Waiting for the current workspace owner/)).toBeInTheDocument();
     expect(toast.info).toHaveBeenCalledWith(expect.stringContaining('sys-held: Cleanup still needs attention'));
   });
 

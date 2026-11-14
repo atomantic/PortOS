@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readReleaseSynchronizationOutbox } from './releaseSynchronizationStore.js';
-import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import {
   projectTaskReleaseMilestones,
   projectAgentReleaseMilestones,
@@ -25,12 +24,6 @@ describe('releaseSynchronizationProjection', () => {
     publishedAt: '2026-01-01T10:00:00Z',
     repository: 'example/repo', promotionPrNumber: 12, candidateBranch: 'codex/release-publisher', candidateHead: 'a'.repeat(40),
   };
-  const pointer = { dev: '1', ino: '2', birthtimeNs: '3' };
-  const seed = { version: 1, agentId: 'publisher-agent-1', startedAt: '2026-01-01T09:00:00Z', seededAt: '2026-01-01T09:00:01Z',
-    repoPath: '/example/repo', path: '/example/publisher', branch: publication.candidateBranch, repository: pointer, checkout: pointer,
-    incarnation: { pointer, gitdir: { path: '/example/repo/.git/worktrees/publisher', ...pointer } } };
-  const target = { agentId: seed.agentId, repoPath: seed.repoPath, branch: seed.branch, path: seed.path,
-    head: publication.candidateHead, checkoutIdentity: retirementCheckoutIdentityFromPointer(pointer), createdAt: seed.seededAt };
   const entry = {
     version: 1,
     identity,
@@ -41,7 +34,7 @@ describe('releaseSynchronizationProjection', () => {
       workspace: '/example/repo',
     },
     publication,
-    checkouts: [seed],
+    checkouts: [],
     task: {
       id: `task-release-sync-${identity}`,
       metadata: {
@@ -61,9 +54,7 @@ describe('releaseSynchronizationProjection', () => {
           headSha: 'c'.repeat(40),
         },
       },
-      retirement: { evidence: { checkouts: [target], receipts: [{ ...target, branchDeleted: true, archiveDir: null, retiredAt: '2026-01-01T10:00:00Z' }],
-        publisherReview: { branch: seed.branch, path: seed.path, head: publication.candidateHead,
-          checkoutIdentity: target.checkoutIdentity, prUrl: 'https://github.com/example/repo/pull/12', receipt: null, models: [] } } },
+      releaseAncestry: { status: 'verified', evidence: { prUrl: 'https://github.com/example/repo/pull/42', headSha: 'c'.repeat(40) } },
     },
     synchronization: {
       status: 'verified',
@@ -115,32 +106,21 @@ describe('releaseSynchronizationProjection', () => {
     });
   });
 
-  it('projects the completed publication head rather than an earlier actual inspection', () => {
-    const completedHead = 'e'.repeat(40);
-    const local = { ...entry, obligations: { localReview: { evidence: { receipt: { version: 2, completedHead, reviewedHead: 'f'.repeat(40) } } } } };
-    expect(projectTaskReleaseMilestones({ id: 'example', metadata: {} }, local).metadata.releaseSynchronization.headSha).toBe(completedHead);
-    local.obligations.localReview.evidence.receipt = { version: 1, reviewedHead: completedHead };
-    expect(projectTaskReleaseMilestones({ id: 'example', metadata: {} }, local).metadata.releaseSynchronization.headSha).toBe(completedHead);
+  it('shows the PR under review before the merge verifies it', () => {
+    const pending = { ...entry, synchronization: { status: 'running', blocker: null },
+      obligations: { synchronizationPr: { status: 'pending', blocker: 'synchronization-pr-not-merged' },
+        releaseAncestry: { status: 'pending', evidence: { prUrl: 'https://github.com/example/repo/pull/43', headSha: 'e'.repeat(40) } } } };
+    expect(projectTaskReleaseMilestones({ id: 'example', metadata: {} }, pending).metadata.releaseSynchronization)
+      .toMatchObject({ status: 'running', prUrl: 'https://github.com/example/repo/pull/43', headSha: 'e'.repeat(40) });
   });
 
   it('shows an operator reset without claiming the historical synchronization succeeded', () => {
-    const legacy = { ...entry, checkouts: [], synchronization: { status: 'blocked', blocker: 'publisher-candidate-checkout-unverified' },
+    const legacy = { ...entry, synchronization: { status: 'blocked', blocker: 'synchronization-pr-pending' },
       operatorReset: { version: 1, identity, resetAt: '2026-01-01T12:00:00Z', actor: 'local-operator',
-        reason: 'Start from main', previousStatus: 'blocked', previousBlocker: 'publisher-candidate-checkout-unverified', checkouts: [] } };
+        reason: 'Start from main', previousStatus: 'blocked', previousBlocker: 'synchronization-pr-pending', checkouts: [] } };
     const projected = projectTaskReleaseMilestones({ id: 'example', metadata: {} }, legacy).metadata.releaseSynchronization;
-    expect(projected).toMatchObject({ status: 'blocked', blocker: 'publisher-candidate-checkout-unverified', operatorReset: legacy.operatorReset });
+    expect(projected).toMatchObject({ status: 'blocked', blocker: 'synchronization-pr-pending', operatorReset: legacy.operatorReset });
     expect(projected.nextAction).toContain('remains unverified');
-  });
-
-  it('shows retirement holds only while they explain a live retirement blocker', () => {
-    const hold = { branch: 'codex/release-sync', path: '/example/sync', reason: 'release-checkout-generation-changed', observedAt: '2026-01-01T12:00:00Z' };
-    const held = { ...entry, synchronization: { status: 'blocked', blocker: 'retirement:exact-retirement-receipt-unverified' },
-      obligations: { ...entry.obligations, retirement: { status: 'blocked', evidence: { checkouts: [], heldCheckouts: [hold] } } } };
-    const project = record => projectTaskReleaseMilestones({ id: 'example', metadata: {} }, record).metadata.releaseSynchronization;
-    expect(project(held).heldCheckouts).toEqual([{ ...hold, nextAction: expect.stringContaining('operator reset') }]);
-    expect(project({ ...held, synchronization: { status: 'blocked', blocker: 'synchronization-pr-pending' } })).not.toHaveProperty('heldCheckouts');
-    expect(project({ ...held, operatorReset: { version: 1, identity, resetAt: '2026-01-01T12:00:00Z', actor: 'local-operator',
-      reason: 'Start from main', previousStatus: 'blocked', previousBlocker: null, checkouts: [] } })).not.toHaveProperty('heldCheckouts');
   });
 
   it('projects release publication and synchronization onto agents', () => {
