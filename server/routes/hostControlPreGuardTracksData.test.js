@@ -110,7 +110,7 @@ vi.mock('../services/sharing/peerPullAuthorization.js', () => ({}));
 vi.mock('../services/pm2.js', () => ({}));
 vi.mock('../services/aiDetect.js', () => ({}));
 
-import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import tracksRoutes from './tracks.js';
 import superColliderRoutes from './superCollider.js';
@@ -164,7 +164,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/tracks', tracksRoutes);
   app.use('/api/music/supercollider', superColliderRoutes);
   app.use('/api/conflict-journal', conflictJournalRoutes);
@@ -194,9 +194,8 @@ beforeEach(() => {
 
 describe('pre-guard audit remainder: tracks, renders, publication and host data (#13055)', () => {
   it('refuses remote password-free callers, spoofed-proxy and case variants before any effect', async () => {
-    for (const operation of [...operations, restore]) {
-      const [method, path, body] = operation;
-      const targets = operation === restore ? [path] : [path, path.toUpperCase() + '/'];
+    for (const [method, path, body] of [...operations, restore]) {
+      const targets = [path, path.toUpperCase() + '/'];
       for (const [address, headers] of [
         ['192.0.2.10', {}],
         ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
@@ -257,11 +256,18 @@ describe('pre-guard audit remainder: tracks, renders, publication and host data 
     expect(effects.resolveConflict).toHaveBeenLastCalledWith('example-conflict-1', { action: 'restore-all' });
   });
 
-  it('leaves a conflict discard and the deterministic chiptune render open to a remote caller', async () => {
-    const discard = await call(appFor(), ['post', restore[1], { action: 'discard' }]);
+  it('refuses a conflict discard and the deterministic chiptune render to a remote caller and runs them locally', async () => {
+    const discardOp = ['post', restore[1], { action: 'discard' }];
+    const chiptuneOp = ['post', `/api/tracks/${trackId}/chiptune/render`, {}];
+    for (const operation of [discardOp, chiptuneOp]) {
+      const refused = await call(appFor(), operation);
+      expect([refused.status, refused.body.code], operation[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expectNoEffects();
+    const discard = await call(appFor('127.0.0.1'), discardOp);
     expect(discard.status, JSON.stringify(discard.body)).toBe(200);
     expect(effects.resolveConflict).toHaveBeenCalledExactlyOnceWith('example-conflict-1', { action: 'discard' });
-    const chiptune = await call(appFor(), ['post', `/api/tracks/${trackId}/chiptune/render`, {}]);
+    const chiptune = await call(appFor('127.0.0.1'), chiptuneOp);
     expect(chiptune.status, JSON.stringify(chiptune.body)).toBe(200);
     expect(effects.chiptuneRender).toHaveBeenCalledExactlyOnceWith({ trackId });
   });

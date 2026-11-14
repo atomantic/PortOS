@@ -156,9 +156,9 @@ router.put('/config', asyncHandler(async (req, res) => {
   let next = await updateVoiceConfig(parsed.data);
   invalidateHealthCache();
   // Reconcile starts/stops whisper-server under PM2 and can run the setup
-  // script, so it is host work (#13055). hostControlBodyGate already refused a
-  // caller without host control that changed a runtime key, so skipping it
-  // leaves nothing that caller changed un-applied.
+  // script, so it is host work (#13055). hostControlRouteGate refuses this
+  // write to a caller without host control (#16018); the check here is the
+  // handler's own backstop.
   const reconciliation = requestHasHostControl(req)
     ? await reconcile(next).catch((err) => ({ error: err.message }))
     : { skipped: 'host-control' };

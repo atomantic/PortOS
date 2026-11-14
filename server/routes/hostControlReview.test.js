@@ -29,7 +29,7 @@ vi.mock('../services/reviewQueue.js', () => ({
   buildQueue: vi.fn(), claimQueueDelivery: vi.fn(), MAX_REVIEW_QUEUE_SNOOZE_MS: 30 * 24 * 60 * 60 * 1000, ...effects,
 }));
 
-import { authGate, hostControlRouteGate, hostControlBodyGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import reviewRoutes from './review.js';
 
@@ -39,7 +39,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/review', reviewRoutes);
   app.use(errorMiddleware);
   return app;
@@ -58,7 +58,7 @@ const executing = [
   ['/api/review/queue/resolve', { id: 'COS:example-task' }, effects.resolveQueueItem],
   ['/api/review/queue/promote-ask', { id: 'ask:example-conversation', target: 'task' }, effects.promoteAskQueueItem],
 ];
-// Data-only operations keep their existing admission.
+// Data-only operations are gated by the default-deny write policy (#16018) too.
 const dataOnly = [
   ['/api/review/queue/resolve', { id: 'memory:example-memory', operation: 'approve' }, effects.resolveQueueItem],
   ['/api/review/queue/resolve', { id: 'threads:example-thread', operation: 'complete' }, effects.resolveQueueItem],
@@ -116,10 +116,15 @@ describe('Review facade execution authority (#10890)', () => {
     }
   });
 
-  it('leaves data-only resolution, triage and Brain/Goal promotion open to remote password-free callers', async () => {
+  it('refuses data-only resolution, triage and Brain/Goal promotion to remote callers and applies them locally', async () => {
+    for (const [path, body] of dataOnly) {
+      const refused = await call(appFor(), path, body);
+      expect([refused.status, refused.body.code], `${path} ${JSON.stringify(body)}`).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    for (const effect of Object.values(effects)) expect(effect).not.toHaveBeenCalled();
     for (const [path, body, effect] of dataOnly) {
       const before = effect.mock.calls.length;
-      const response = await call(appFor(), path, body);
+      const response = await call(appFor('127.0.0.1'), path, body);
       expect(response.status, `${path} ${JSON.stringify(body)}: ${JSON.stringify(response.body)}`).toBe(200);
       expect(effect).toHaveBeenCalledTimes(before + 1);
     }

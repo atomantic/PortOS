@@ -147,8 +147,8 @@ router.get('/notifications', asyncHandler(async (req, res) => {
 
 /**
  * POST /api/github/notifications/sync — fetch unread notifications from GitHub.
- * Open as a refresh; Assist/Autopilot run only for a caller with host control
- * (lib/hostControlRoutes.js, #12952).
+ * Assist/Autopilot run only for a caller with host control (#12952), which
+ * hostControlRouteGate already requires for this write (#16018).
  */
 router.post('/notifications/sync', asyncHandler(async (req, res) => {
   const { accountId } = validateRequest(githubNotificationsSyncSchema, req.body ?? {});

@@ -130,9 +130,10 @@ describe('Beeper outbox operator authority (#11417)', () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it('refuses sending an existing approved row, preserving data-only history and discard', async () => {
+  it('refuses sending or discarding an existing approved row remotely, preserving history and local discard', async () => {
     const app = appFor();
-    const approved = await approve(appFor('127.0.0.1'));
+    const local = appFor('127.0.0.1');
+    const approved = await approve(local);
     query.mockClear();
     const sent = await post(app, `outbox/${approved.body.id}/send`, { confirmFirstContact: true });
     expect([sent.status, sent.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
@@ -141,9 +142,12 @@ describe('Beeper outbox operator authority (#11417)', () => {
     expect(sendMessage).not.toHaveBeenCalled();
     expect(getOutboxBreakerState().sendsInWindow).toBe(0);
 
-    // History and declining unsent local intent do not authorize a send.
+    // History stays readable remotely; discarding the intent is an operator write.
     expect((await request(app).get(`/api/beeper/outbox?conversationId=${CONVERSATION_ID}`)).body.entries).toHaveLength(1);
-    expect((await request(app).delete(`/api/beeper/outbox/${approved.body.id}`)).status).toBe(204);
+    const remoteDiscard = await request(app).delete(`/api/beeper/outbox/${approved.body.id}`);
+    expect([remoteDiscard.status, remoteDiscard.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect(rows.size).toBe(1);
+    expect((await request(local).delete(`/api/beeper/outbox/${approved.body.id}`)).status).toBe(204);
     expect(rows.size).toBe(0);
   });
 

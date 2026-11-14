@@ -81,7 +81,7 @@ vi.mock('../services/eidoverseControllerRuntime.js', () => ({
 vi.mock('../services/eidoverseFoundationLedger.js', () => ({}));
 vi.mock('../services/eidoverseControllerRegistry.js', () => ({}));
 
-import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import continuousVideoRoutes from './continuousVideoEpisode.js';
 import fableLoomRoutes from './fableLoom.js';
@@ -92,7 +92,8 @@ import worldRoutes from './eidoverseWorldRoutes.js';
 
 const customCheck = { label: 'Example check', prompt: 'Flag example problems' };
 const beaconInstall = { id: 'example-beacon', controllerId: 'ambient-beacon' };
-// [method, path, gated body, effect, status, open body (body-gated rows only)]
+// [method, path, body, effect, status, twin body]: the twin (a non-delivering
+// install, a disarm) is gated whole too and proves the handler applies it.
 const operations = [
   ['post', '/api/continuous-video', {
     scenes: [{ lines: [{ type: 'action', text: 'Example action at dusk.' }] }], bible: {},
@@ -122,7 +123,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/continuous-video', continuousVideoRoutes);
   app.use('/api/fableloom', fableLoomRoutes);
   app.use('/api/pipeline', pipelineEditorialRoutes);
@@ -204,9 +205,15 @@ describe('story, video and Eidoverse world operator authority (#13055)', () => {
     expect(effects.controllerConfig).toHaveBeenLastCalledWith('example-beacon', { label: 'beacon', announce: true });
   });
 
-  it('leaves a non-delivering install and disarming open to a remote password-free caller', async () => {
-    for (const [method, path, , effect, status, openBody] of operations.filter((operation) => operation[5])) {
-      const response = await call(appFor(), [method, path, openBody]);
+  it('refuses a non-delivering install and disarming to a remote caller and applies them locally', async () => {
+    const twinned = operations.filter((operation) => operation[5]);
+    for (const [method, path, , , , twinBody] of twinned) {
+      const refused = await call(appFor(), [method, path, twinBody]);
+      expect([refused.status, refused.body.code], `${method} ${path}`).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expectNoEffects();
+    for (const [method, path, , effect, status, twinBody] of twinned) {
+      const response = await call(appFor('127.0.0.1'), [method, path, twinBody]);
       expect(response.status, `${method} ${path}: ${JSON.stringify(response.body)}`).toBe(status);
       expect(effect).toHaveBeenCalledTimes(1);
     }

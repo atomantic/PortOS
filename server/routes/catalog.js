@@ -813,8 +813,8 @@ router.post('/previz-jobs/:id/finish', asyncHandler(async (req, res) => {
   res.json({ finished: finishPrevizJob(req.params.id, body) });
 }));
 
-// Place greybox. Draft is a provider call on the user's tap (host-control gated,
-// see hostControlRoutes.js) and answers with a preview; save stores or clears it;
+// Place greybox. Draft is a provider call on the user's tap (host-control gated
+// like every write, see hostControlRoutes.js) and answers with a preview; save stores or clears it;
 // capture attaches a rendered shot as a reference image.
 router.post('/ingredients/:id/greybox/draft', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogGreyboxDraftSchema, req.body);

@@ -64,7 +64,7 @@ vi.mock('../services/goalScorecard.js', async (importOriginal) => ({
   refreshScorecardNarrative: vi.fn(async () => ({})),
 }));
 
-import { authGate, hostControlRouteGate, hostControlBodyGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import importerRoutes from './importer.js';
 import brainCaptureRoutes from './brainCapture.js';
@@ -110,7 +110,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/importer', importerRoutes);
   app.use('/api/brain', brainCaptureRoutes, brainDigestRoutes, brainDailyLogRoutes);
   app.use('/api/model-personality', modelPersonalityRoutes);
@@ -193,24 +193,29 @@ describe('Importer, Brain and analytics AI operator authority (#11036)', () => {
     for (const service of sinks) expect(service).toHaveBeenCalled();
   });
 
-  it('gates Importer commit only when cleanupFormatting is true', async () => {
-    const remote = appFor('192.0.2.10');
-    for (const body of [commitBody, { ...commitBody, cleanupFormatting: false }]) {
-      const response = await send(remote, ['post', '/api/importer/commit', body]);
+  it('gates every Importer commit body for a remote caller and commits without cleanup for a local one', async () => {
+    const bodies = [commitBody, { ...commitBody, cleanupFormatting: false }];
+    for (const body of bodies) {
+      const refused = await send(appFor('192.0.2.10'), ['post', '/api/importer/commit', body]);
+      expect([refused.status, refused.body.code], JSON.stringify(body)).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expect(commitImport).not.toHaveBeenCalled();
+
+    for (const body of bodies) {
+      const response = await send(appFor('127.0.0.1'), ['post', '/api/importer/commit', body]);
       expect(response.status, JSON.stringify(body)).toBe(200);
     }
     expect(commitImport).toHaveBeenCalledTimes(2);
-
-    vi.clearAllMocks();
-    const refused = await send(remote, ['post', '/api/importer/commit', { ...commitBody, cleanupFormatting: true }]);
-    expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    expect(commitImport).not.toHaveBeenCalled();
   });
 
-  it('leaves record reads and Brain daily-log CRUD open to a remote caller', async () => {
-    const remote = appFor();
-    expect((await request(remote).get('/api/importer/config')).status).toBe(200);
-    const append = await send(remote, ['post', '/api/brain/daily-log/2026-01-02/append', { text: 'Example entry' }]);
+  it('leaves record reads open remotely and runs Brain daily-log CRUD for host control without AI', async () => {
+    expect((await request(appFor()).get('/api/importer/config')).status).toBe(200);
+    const appendOp = ['post', '/api/brain/daily-log/2026-01-02/append', { text: 'Example entry' }];
+    const refused = await send(appFor(), appendOp);
+    expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect(appendJournal).not.toHaveBeenCalled();
+
+    const append = await send(appFor('127.0.0.1'), appendOp);
     expect(append.status).toBe(200);
     expect(appendJournal).toHaveBeenCalledTimes(1);
     expectNoEffects();

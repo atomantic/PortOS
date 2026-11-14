@@ -17,9 +17,9 @@ afterAll(cleanupTempDataRoots);
 // ffmpeg/ffprobe over caller or peer media, the headless composition browser,
 // re-armed local video dispatch, the signed-in Pinterest browser and the GPU
 // image clean need operator authority (#13055). Real routers behind the real
-// gates; every host-process service is doubled. The standalone image clean is
-// gated in its handler only for the GPU mode, so its in-process sharp passes
-// stay open to a remote caller.
+// gates; every host-process service is doubled. Every image-clean write needs
+// host control under the default-deny write policy (#16018); its handler also
+// gates the GPU mode.
 const auth = vi.hoisted(() => ({ enabled: false }));
 const effects = vi.hoisted(() => ({
   codeExport: vi.fn(async () => ({ status: 'queued' })),
@@ -92,7 +92,7 @@ vi.mock('../services/imageGen/cleanGpu.js', () => ({
   enqueueGpuClean: effects.gpuClean,
   readGpuCleanResult: vi.fn(), getGpuCleanStatus: vi.fn(), saveGpuCleanToGallery: vi.fn(),
 }));
-// Observed, not doubled: the remote-open image clean runs the real sharp pass.
+// Observed, not doubled: the local image clean runs the real sharp pass.
 vi.mock('../lib/imageClean.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, cleanImageBuffer: vi.fn(actual.cleanImageBuffer) };
@@ -134,7 +134,7 @@ vi.mock('../services/videoGen/displayPower.js', () => ({}));
 vi.mock('../services/hfDownloadStream.js', () => ({}));
 vi.mock('../services/userActions.js', () => ({ recordUserAction: vi.fn() }));
 
-import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import { cleanImageBuffer } from '../lib/imageClean.js';
 import codeAnimationRoutes from './codeAnimation.js';
@@ -191,7 +191,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/code-animation', codeAnimationRoutes);
   app.use('/api/html-composition', htmlCompositionRoutes);
   app.use('/api/image-clean', imageCleanRoutes);
@@ -265,8 +265,8 @@ describe('media pre-guard host-process authority (#13055)', () => {
   });
 });
 
-// The mode rides in the query, so the handler (not the route list) gates the
-// GPU pass; the in-process sharp passes must stay open to a remote caller.
+// The mode rides in the query; the write gate refuses every remote clean and
+// the handler additionally gates the GPU pass.
 describe('standalone image clean GPU authority (#13055)', () => {
   let png;
   const clean = (app, query, headers = {}) => {
@@ -305,9 +305,14 @@ describe('standalone image clean GPU authority (#13055)', () => {
     expect(effects.gpuClean).toHaveBeenCalledTimes(3);
   });
 
-  it('keeps the in-process sharp clean open to a remote password-free caller', async () => {
+  it('runs the in-process sharp clean for a local caller and refuses it to a remote password-free caller', async () => {
     for (const query of ['', '?diffusion=light']) {
-      const response = await clean(appFor(), query);
+      const refused = await clean(appFor(), query);
+      expect([refused.status, refused.body.code], query).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expect(cleanImageBuffer).not.toHaveBeenCalled();
+    for (const query of ['', '?diffusion=light']) {
+      const response = await clean(appFor('127.0.0.1'), query);
       expect(response.status, `${query}: ${response.text}`).toBe(200);
       expect(response.headers['content-type']).toBe('image/png');
       expect(JSON.parse(response.headers['x-clean-report']).steps.some(({ step }) => step === 'diffusion')).toBe(query !== '');

@@ -407,7 +407,7 @@ export const ALWAYS_RUN_TESTS = [
   // impact selection only reaches them when the guard itself changes.
   'server/lib/apiRouteGraph.test.js',
   'server/lib/apiRouteParity.test.js',
-  // Route inventories and write-back scans depend on independently changed files (#13224).
+  // Route policy and write-back scans depend on independently changed files (#13224).
   'server/lib/hostControlRoutes.test.js',
   'server/jsonWritebackConventions.test.js',
   // Whole-tree scanner (#9982): any server module can start taking backup
@@ -481,8 +481,8 @@ export const ALWAYS_RUN_TESTS = [
   // Whole-tree scanner (#12048): server/index.js can mount a new router that no
   // test imports, with no import edge from that router to this guard.
   'server/routeTestCoverageConventions.test.js',
-  // Whole-tree scanner (#12952): server/index.js can mount a mutating route that
-  // no host-control classification names, with no import edge to this guard.
+  // Whole-tree scanner (#12952, #16018): server/index.js can mount a write under a
+  // surface that bypasses host control, with no import edge to this guard.
   'server/hostControlCoverage.test.js',
   'server/routeValidationConventions.test.js',
   'server/floatingAsyncConventions.test.js',

@@ -144,7 +144,7 @@ import settingsRoutes from './settings.js';
 import { resolveReviewLoopOptions } from '../services/codeReview.js';
 import { buildReviewLoopFollowUpSection, reviewPolicyToLoopMetadata } from '../services/promptSections/reviewLifecycle.js';
 import { buildReviewWithArgs } from '../lib/reviewerConfig.js';
-import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import * as auth from '../services/auth.js';
 import * as instanceIdentity from '../services/instanceIdentity.js';
 import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
@@ -1758,7 +1758,7 @@ const guardedSettingsApp = (authority) => {
       : { enabled: false, authenticated: false, method: null };
     next();
   });
-  app.use(hostControlBodyGate);
+  app.use(hostControlRouteGate);
   app.use('/api/settings', settingsRoutes);
   return app;
 };
@@ -1813,8 +1813,8 @@ describe('generic voice settings operator authority', () => {
     expect(store.voice).toEqual(voice);
   });
 
-  it('keeps unrelated generic settings writes open without changing voice policy', async () => {
-    const res = await request(guardedSettingsApp('remote')).put('/api/settings').send({ theme: 'dark' });
+  it('saves unrelated generic settings without changing voice policy', async () => {
+    const res = await request(guardedSettingsApp('local')).put('/api/settings').send({ theme: 'dark' });
     expect(res.status).toBe(200);
     expect(store.voice).toEqual(original);
   });
@@ -1866,8 +1866,8 @@ describe('autofixer settings operator authority', () => {
     expect(updateAiAssignment).toHaveBeenLastCalledWith('settings.autofixer', body);
   });
 
-  it('keeps unrelated remote settings saves open without changing deferred repair policy', async () => {
-    expect((await request(guardedSettingsApp('remote')).put('/api/settings').send({ theme: 'dark' })).status).toBe(200);
+  it('saves unrelated settings without changing deferred repair policy', async () => {
+    expect((await request(guardedSettingsApp('local')).put('/api/settings').send({ theme: 'dark' })).status).toBe(200);
     expect(store.autofixer).toEqual(original);
   });
 });

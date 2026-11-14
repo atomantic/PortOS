@@ -55,7 +55,7 @@ vi.mock('../services/musicVideo/publishKit.js', async (importOriginal) => ({
   startPublishKitBuild: sink.startPublishKitBuild,
 }));
 
-import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import musicVideoRoutes from './musicVideo.js';
 
@@ -76,7 +76,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/music-video', musicVideoRoutes);
   app.use(errorMiddleware);
   return app;

@@ -221,10 +221,13 @@ describe('Deck and chiptune host-action authority (#10893)', () => {
     expect(publishChiptuneTrack).toHaveBeenCalledTimes(4);
   });
 
-  it('keeps CRUD, progress, deterministic chiptune render and track reads open to remote callers', async () => {
-    const app = appFor();
-    expect((await request(app).get('/api/decks')).status).toBe(200);
-    expect((await call(app, [`/api/tracks/${deckId}/chiptune/render`, {}])).status).toBe(200);
+  it('keeps deck reads open remotely and runs the deterministic chiptune render alone for a local caller', async () => {
+    const remote = appFor();
+    expect((await request(remote).get('/api/decks')).status).toBe(200);
+    const refused = await call(remote, [`/api/tracks/${deckId}/chiptune/render`, {}]);
+    expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect(renderChiptuneTrack).not.toHaveBeenCalled();
+    expect((await call(appFor('127.0.0.1'), [`/api/tracks/${deckId}/chiptune/render`, {}])).status).toBe(200);
     expect(renderChiptuneTrack).toHaveBeenCalledTimes(1);
     expect(generateChiptuneScore).not.toHaveBeenCalled();
     expect(publishChiptuneTrack).not.toHaveBeenCalled();

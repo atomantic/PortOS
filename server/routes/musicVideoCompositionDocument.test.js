@@ -169,11 +169,14 @@ describe('music-video composition documents', () => {
     }
   });
 
-  it('keeps uploaded archives and shipped templates reachable for remote callers', async () => {
+  it('refuses uploaded archives and shipped templates to a remote password-free caller before writing a version', async () => {
     const remote = appFor('192.0.2.10');
+    const before = versionsOf(project.id);
     const uploaded = await uploadZip(project.id, createZip(Object.entries(FILES).map(([name, data]) => ({ name, data }))), 'doc.zip', remote);
-    expect(uploaded.status).toBe(201);
-    expect((await request(remote).post(`/api/music-video/${project.id}/composition/document/template`).send({})).status).toBe(201);
+    expect([uploaded.status, uploaded.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    const template = await request(remote).post(`/api/music-video/${project.id}/composition/document/template`).send({});
+    expect([template.status, template.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect(versionsOf(project.id)).toEqual(before);
   });
 
   it.each([

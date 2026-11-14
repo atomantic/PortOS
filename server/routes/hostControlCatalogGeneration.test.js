@@ -58,7 +58,7 @@ vi.mock('../services/catalogIngestSources.js', () => ({
   ingestFromVoice: effects.ingestVoice, ingestFromBrain: effects.ingestBrain,
 }));
 
-import { authGate, hostControlRouteGate, hostControlBodyGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import catalogRoutes from './catalog.js';
 
@@ -91,7 +91,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/catalog', catalogRoutes);
   app.use(errorMiddleware);
   return app;
@@ -173,10 +173,18 @@ describe('Catalog generation authority (#10891)', () => {
     }));
   });
 
-  it('keeps data-only scrap CRUD open to remote callers (not blanket-gated)', async () => {
-    const created = await call(appFor(), '/api/catalog/scraps', { title: 'Example', rawText: 'Example text' });
+  it('keeps scrap CRUD data-only for a local caller, refuses its writes remotely and leaves reads open', async () => {
+    for (const [path, body, method] of [
+      ['/api/catalog/scraps', { title: 'Example', rawText: 'Example text' }, 'post'],
+      [scrapPath, { title: 'Edited' }, 'patch'],
+    ]) {
+      const refused = await call(appFor(), path, body, {}, method);
+      expect([refused.status, refused.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expectNoEffects();
+    const created = await call(appFor('127.0.0.1'), '/api/catalog/scraps', { title: 'Example', rawText: 'Example text' });
     expect(created.status).toBe(201);
-    const patched = await call(appFor(), scrapPath, { title: 'Edited' }, {}, 'patch');
+    const patched = await call(appFor('127.0.0.1'), scrapPath, { title: 'Edited' }, {}, 'patch');
     expect(patched.status).toBe(200);
     const read = await call(appFor(), scrapPath, undefined, {}, 'get');
     expect(read.status).toBe(200);

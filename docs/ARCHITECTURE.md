@@ -402,7 +402,7 @@ Error severity levels:
 The authoritative statement is "Security Model" in the root `AGENTS.md`; in brief:
 
 1. **Network Security**: A private network behind Tailscale; PortOS is never exposed to the public internet
-2. **Optional authentication**: An instance password (off by default) gates `/api/*` and `/data/*`; spawned agents carry a loopback `PORTOS_API_TOKEN`; host-control routes (`server/lib/hostControlRoutes.js`) need operator authority
+2. **Optional authentication**: An instance password (off by default) gates `/api/*` and `/data/*`; spawned agents carry a loopback `PORTOS_API_TOKEN`; every `/api` write outside the public, peer and opt-in public-API surfaces, plus a short list of sensitive reads (`server/lib/hostControlRoutes.js`), needs operator authority
 3. **Command Allowlist**: Shell execution restricted to approved commands (`server/lib/commandSecurity.js`)
 4. **No Shell Interpolation**: Uses `spawn()` with argument arrays
 5. **Zod Validation**: All API inputs validated

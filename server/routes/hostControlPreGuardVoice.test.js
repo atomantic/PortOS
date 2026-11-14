@@ -13,15 +13,16 @@ afterAll(cleanupTempDataRoots);
 // The piper voice fetch runs the setup script (which can brew install) and
 // whisper start launches whisper-server under PM2, so both need operator
 // authority (#13055). Whisper stop and the TTS test, which runs an installed
-// runtime on text, stay open. Real router behind the real gates; the voice
-// services are doubled so no process starts.
+// runtime on text, are gated by the default-deny write policy (#16018). Real
+// router behind the real gates; the voice services are doubled so no process
+// starts.
 const auth = vi.hoisted(() => ({ enabled: false }));
 const storedVoice = vi.hoisted(() => ({ enabled: true, stt: { engine: 'whisper' }, tts: { engine: 'piper' } }));
 const effects = vi.hoisted(() => ({
   piperFetch: vi.fn(async () => ({ downloaded: true })),
   startWhisper: vi.fn(async () => ({ started: true })),
 }));
-const open = vi.hoisted(() => ({
+const runtime = vi.hoisted(() => ({
   stopWhisper: vi.fn(async () => {}),
   synthesize: vi.fn(async () => ({ wav: Buffer.from('RIFF'), latencyMs: 1 })),
 }));
@@ -47,9 +48,9 @@ vi.mock('../services/voice/config.js', () => ({
 vi.mock('../services/voice/bootstrap.js', () => ({
   downloadPiperVoice: effects.piperFetch,
   startWhisper: effects.startWhisper,
-  stopWhisper: open.stopWhisper,
+  stopWhisper: runtime.stopWhisper,
 }));
-vi.mock('../services/voice/tts.js', () => ({ synthesize: open.synthesize, VALID_ENGINES: new Set(['piper']) }));
+vi.mock('../services/voice/tts.js', () => ({ synthesize: runtime.synthesize, VALID_ENGINES: new Set(['piper']) }));
 vi.mock('../services/voice/piper-voices.js', () => ({ findPiperVoice: vi.fn(() => ({ id: 'en_US-example-medium' })) }));
 vi.mock('../services/voice/health.js', () => ({ invalidateHealthCache: vi.fn() }));
 vi.mock('../services/voice/proactiveSpeech.js', () => ({
@@ -63,7 +64,7 @@ vi.mock('../services/voice/profileBenchmarks.js', () => ({}));
 vi.mock('../services/voice/qwen3TtsRuntime.js', () => ({}));
 vi.mock('../services/voice/fineTuning.js', () => ({}));
 
-import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import voiceRoutes from './voice.js';
 
@@ -78,7 +79,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/voice', voiceRoutes);
   app.use(errorMiddleware);
   return app;
@@ -151,13 +152,21 @@ describe('voice runtime setup and whisper start operator authority (#13055)', ()
     expect(effects.startWhisper).toHaveBeenLastCalledWith(storedVoice);
   });
 
-  it('leaves whisper stop and the TTS test open to a remote password-free caller', async () => {
-    const stop = await post(appFor(), ['/api/voice/whisper', { action: 'stop' }]);
+  it('refuses whisper stop and the TTS test to a remote caller and runs them locally', async () => {
+    const stopOp = ['/api/voice/whisper', { action: 'stop' }];
+    const testOp = ['/api/voice/test', { text: 'Hello' }];
+    for (const operation of [stopOp, testOp]) {
+      const refused = await post(appFor(), operation);
+      expect([refused.status, refused.body.code], operation[0]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expect(runtime.stopWhisper).not.toHaveBeenCalled();
+    expect(runtime.synthesize).not.toHaveBeenCalled();
+    const stop = await post(appFor('127.0.0.1'), stopOp);
     expect([stop.status, stop.body]).toEqual([200, { success: true, action: 'stop' }]);
-    expect(open.stopWhisper).toHaveBeenCalledTimes(1);
-    const spoken = await post(appFor(), ['/api/voice/test', { text: 'Hello' }]);
+    expect(runtime.stopWhisper).toHaveBeenCalledTimes(1);
+    const spoken = await post(appFor('127.0.0.1'), testOp);
     expect(spoken.status).toBe(200);
-    expect(open.synthesize).toHaveBeenCalledWith('Hello', { voice: undefined, engine: undefined });
+    expect(runtime.synthesize).toHaveBeenCalledWith('Hello', { voice: undefined, engine: undefined });
     expectNoEffects();
   });
 });

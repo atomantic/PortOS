@@ -46,7 +46,7 @@ const reads = [
   [`${PROJECT}/render-cleanup`, planners.getRenderCleanup],
 ];
 
-// Open record/cache cleanup routes: they replan the render before and after the delete.
+// Record/cache cleanup routes: they replan the render before and after the delete.
 const LOOK_ID = '0123456789abcdef0123456789abcdef';
 const mutations = [
   ['post', `${PROJECT}/render-cleanup`, planners.cleanupRenders, (service, options) => expect(service).toHaveBeenCalledWith('example-project', {}, options)],
@@ -86,11 +86,11 @@ describe('Music Video plan reads and the song-master decode (#13156)', () => {
     }
   });
 
-  it('keeps the open cleanup and film-look delete routes from decoding for a remote password-free caller', async () => {
-    for (const [method, path, service, assertCalled] of mutations) {
+  it('refuses the cleanup and film-look delete routes to a remote password-free caller before planning', async () => {
+    for (const [method, path, service] of mutations) {
       const response = await request(appFor('192.0.2.10'))[method](path).send({});
-      expect(response.status, path).toBe(200);
-      assertCalled(service, { decode: false });
+      expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      expect(service, path).not.toHaveBeenCalled();
     }
   });
 

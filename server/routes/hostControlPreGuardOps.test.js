@@ -110,7 +110,7 @@ vi.mock('../services/credentialInventory.js', () => ({}));
 vi.mock('../services/eidoverse.js', () => ({}));
 vi.mock('../services/eidoverseHost.js', () => ({}));
 
-import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import agentContextRoutes from './agentContextMcp.js';
 import agentPersonalitiesRoutes from './agentPersonalities.js';
@@ -124,9 +124,9 @@ import brainSettingsRoutes from './brainSettings.js';
 
 const REMOTE = '192.0.2.10';
 const brainPut = (body) => ['put', '/api/brain/settings', body, effects.updateBrainMeta, 200];
-// [method, path, gated body, effect, success status, open twin]. A row with an
-// open twin is gated per request (body gate or handler) and the twin is the
-// same route with a body that stays open; the others are gated whole.
+// [method, path, body, effect, success status, twin]. Every write is gated
+// whole now; a twin is the same route with a body that used to stay open and
+// proves the handler still applies it for an authorized caller.
 const operations = [
   ['post', '/api/agent-context/mcp', {
     jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'brain_capture', arguments: {} },
@@ -153,7 +153,7 @@ const operations = [
   [...brainPut({ defaultProvider: 'example-other' }), ['put', '/api/brain/settings', { defaultProvider: 'example-cli', defaultModel: 'example-model' }]],
   [...brainPut({ defaultModel: 'example-other-model' }), ['put', '/api/brain/settings', { defaultModel: 'example-model' }]],
 ];
-const isWholeRoute = (operation) => operation[5] === undefined;
+const twinned = operations.filter((row) => row[5] !== undefined);
 // The agent-context router admits loopback sockets only, so its operator and
 // agent sessions arrive locally; a password still makes the session the grant.
 const callerAddress = ([, path], address) => (path.startsWith('/api/agent-context/') ? '127.0.0.1' : address);
@@ -164,7 +164,7 @@ const appFor = (address = REMOTE) => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/agent-context', agentContextRoutes);
   app.use('/api/agents/personalities', agentPersonalitiesRoutes);
   app.use('/api/cos', cosAgentRoutes, cosReportRoutes, cosLearningRoutes, cosScheduleRoutes);
@@ -192,7 +192,7 @@ beforeEach(() => {
 describe('pre-guard audit operations and policy splits require operator authority (#13055)', () => {
   it('refuses remote password-free callers, spoofed-proxy and case variants before any effect', async () => {
     for (const operation of operations) {
-      const targets = isWholeRoute(operation) ? [operation[1], operation[1].toUpperCase() + '/'] : [operation[1]];
+      const targets = [operation[1], operation[1].toUpperCase() + '/'];
       for (const [address, headers] of [
         [REMOTE, {}],
         ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: REMOTE }],
@@ -250,10 +250,16 @@ describe('pre-guard audit operations and policy splits require operator authorit
     expect(effects.updateBrainMeta).toHaveBeenLastCalledWith({ defaultModel: 'example-other-model' });
   });
 
-  it('leaves the open body of each split route to a remote password-free caller', async () => {
-    for (const operation of operations.filter((row) => !isWholeRoute(row))) {
+  it('refuses each former open-body twin to a remote caller and applies it for a local caller', async () => {
+    for (const operation of twinned) {
+      const refused = await call(appFor(), operation[5]);
+      expect([refused.status, refused.body.code], `${operation[5][1]} ${JSON.stringify(operation[5][2])}`)
+        .toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expectNoEffects();
+    for (const operation of twinned) {
       const previousCalls = operation[3].mock.calls.length;
-      const response = await call(appFor(), operation[5]);
+      const response = await call(appFor('127.0.0.1'), operation[5]);
       expect(response.status, `${operation[5][1]}: ${JSON.stringify(response.body)}`).toBe(operation[4]);
       expect(operation[3]).toHaveBeenCalledTimes(previousCalls + 1);
     }

@@ -34,7 +34,7 @@ vi.mock('../services/jiraReports.js', () => ({
 vi.mock('../services/apps.js', () => ({ getAppById: vi.fn() }));
 
 import { authGate, hostControlRouteGate } from '../services/authGate.js';
-import { hostControlRouteFor } from '../lib/hostControlRoutes.js';
+import { isHostControlRoute } from '../lib/hostControlRoutes.js';
 import { createSession } from '../services/auth.js';
 import * as jiraService from '../services/jira.js';
 import jiraRoutes from './jira.js';
@@ -87,16 +87,18 @@ describe('Jira credential destination operator authority (#11270)', () => {
     await jiraService.upsertInstance('example', savedDetails);
   });
 
-  it('refuses remote password-free repointing and keeps tests on the saved destination and token', async () => {
+  it('refuses remote password-free repointing and testing, and keeps tests on the saved destination and token', async () => {
     const collected = installCollector();
     const app = appFor();
-    expect(hostControlRouteFor('POST', '/api/jira/instances')).toBe('POST /api/jira/instances');
+    expect(isHostControlRoute('POST', '/api/jira/instances')).toBe(true);
 
-    const update = await post(app, 'instances', replacementDetails);
-    expect(update.status, JSON.stringify(update.body)).toBe(403);
-    expect(update.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    for (const [path, body] of [['instances', replacementDetails], ['instances/example/test', {}]]) {
+      const refused = await post(app, path, body);
+      expect([refused.status, refused.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expect(collected).toEqual([]);
 
-    const connection = await post(app, 'instances/example/test', {});
+    const connection = await post(appFor('127.0.0.1'), 'instances/example/test', {});
     expect(connection.status).toBe(200);
     expect(connection.body.success).toBe(true);
     expect(collected).toEqual([{

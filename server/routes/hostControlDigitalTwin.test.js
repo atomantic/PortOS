@@ -168,16 +168,25 @@ describe('Digital Twin process-capable AI authority (#10671)', () => {
     expect(effects.analyzeWritingSamples).toHaveBeenLastCalledWith(['Example writing sample'], picker.providerId, picker.model);
   });
 
-  it('preserves remote data editing, deterministic evidence recomputation, bounded vision and history', async () => {
-    const app = appFor();
-    for (const [method, path, body, effect, status] of [
+  it('keeps data editing, deterministic evidence recomputation and bounded vision local-only, with history readable remotely', async () => {
+    const writes = [
       ['post', 'enrich/save-list', { category: 'favorite_books', content: 'Example content', items }, effects.saveEnrichmentListDocument, 200],
       ['post', 'documents', { filename: 'EXAMPLE.md', title: 'Example document', category: 'core', content: 'Example reference' }, effects.createDocument, 201],
       ['put', 'traits', { bigFive: { O: 0.5 } }, effects.updateTraits, 200],
       ['post', 'import/save', { source: 'goodreads', suggestedDoc: { filename: 'EXAMPLE.md', content: 'Example reference' } }, effects.saveImportAsDocument, 200],
       ['post', 'twin-evidence/recompute', {}, evidence.aggregateTwinEvidence, 200],
       ['post', 'identity/image', { imageDataUrl: 'data:image/png;base64,ZXhhbXBsZQ==', ...picker }, effects.analyzeIdentityImage, 200],
-      ['get', 'tests/history', undefined, effects.getTestHistory, 200],
+    ];
+    const remote = appFor();
+    for (const [method, path, body] of writes) {
+      const refused = await call(remote, path, body, {}, method);
+      expect([refused.status, refused.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expectNoEffects();
+    const local = appFor('127.0.0.1');
+    for (const [method, path, body, effect, status, app] of [
+      ...writes.map((write) => [...write, local]),
+      ['get', 'tests/history', undefined, effects.getTestHistory, 200, remote],
     ]) {
       const before = effect.mock.calls.length;
       const response = await call(app, path, body, {}, method);

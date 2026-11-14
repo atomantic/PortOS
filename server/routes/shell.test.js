@@ -3,7 +3,7 @@ import express from 'express';
 import { EventEmitter } from 'node:events';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
-import { authGate, hostControlRouteGate, hostControlBodyGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { rmSync, readFileSync, readdirSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { request } from '../lib/testHelper.js';
@@ -65,7 +65,6 @@ const buildApp = (address = '127.0.0.1') => {
   app.use(authGate);
   app.use(hostControlRouteGate);
   app.use(express.json({ limit: '20mb' }));
-  app.use(hostControlBodyGate);
   app.use('/api/shell', shellRoutes);
   app.use(errorMiddleware);
   return app;

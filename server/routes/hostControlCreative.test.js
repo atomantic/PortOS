@@ -236,8 +236,14 @@ describe('Creative Director and Commission operator authority (#10867)', () => {
     expect(startCreativeDirectorProject).toHaveBeenCalledTimes(12);
   });
 
-  it('leaves pause, stop, delete, catalog-only auto-cast suggestions and reads open to remote callers', async () => {
-    const app = appFor();
+  it('runs pause, stop, delete and catalog-only auto-cast suggestions for a local caller without starting work', async () => {
+    const remote = appFor();
+    for (const operation of harmless) {
+      const refused = await call(remote, operation);
+      expect([refused.status, refused.body.code], operation[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      if (operation[4]) expect(operation[4]).not.toHaveBeenCalled();
+    }
+    const app = appFor('127.0.0.1');
     for (const operation of harmless) {
       // Pause is only legal while a project is running; the shared fixture is `paused` (resume needs that).
       project.status = operation[1].endsWith('/pause') ? 'rendering' : 'paused';
@@ -246,8 +252,9 @@ describe('Creative Director and Commission operator authority (#10867)', () => {
       if (operation[4]) expect(operation[4]).toHaveBeenCalled();
     }
     project.status = 'paused';
-    expect((await request(app).get(cd)).status).toBe(200);
-    expect((await request(app).get(`${cc}/example-commission`)).status).toBe(200);
+    // Reads stay open to a remote password-free caller.
+    expect((await request(remote).get(cd)).status).toBe(200);
+    expect((await request(remote).get(`${cc}/example-commission`)).status).toBe(200);
     expect(startCreativeDirectorProject).not.toHaveBeenCalled();
     expect(runCommissionNow).not.toHaveBeenCalled();
   });
