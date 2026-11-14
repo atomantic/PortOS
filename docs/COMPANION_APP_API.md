@@ -19,11 +19,11 @@ over Tailscale. Each install:
   (`npm run setup:cert`). When HTTPS is on, `:5555` is TLS-only and a loopback HTTP
   mirror runs on `127.0.0.1:5553` (not reachable over the tailnet). See
   [PORTS.md](./PORTS.md).
-- Has an **optional single password** gate. When off, the tailnet-private trust
-  model means the app needs no credential for most routes; when on, every
-  `/api/*` request needs credentials. Either way, peer management and host
-  control need a separate **operator session** on top (see
-  [Authentication](#authentication)).
+- Has an **optional single password** gate. When off, the app needs no
+  credential to read; when on, every `/api/*` request needs credentials. Either
+  way, every write needs an **operator session** (see
+  [Authentication](#authentication)), so a passwordless install is read-only to
+  a remote app (#16018).
 
 The app therefore treats each instance as `{ scheme, host, port: 5555, password? }`
 and must handle both the auth-on/auth-off and HTTP/HTTPS cases per instance,
@@ -73,22 +73,20 @@ PortOS auth is a single optional password (`server/services/auth.js`,
 depending on how the app presents it — Basic is not a full session, and the app
 needs both.
 
-- **When `authRequired` is `false`:** most routes need no credential at all, but
-  peer management and host control are still gated — see
+- **When `authRequired` is `false`:** reads need no credential at all, but
+  every write is gated — see
   [Operator sessions](#operator-sessions-vs-http-basic) below. A remote
-  companion app can never satisfy either gate on a passwordless install: host
+  companion app can never satisfy that gate on a passwordless install: host
   control falls back to a local (loopback) connection, which a tailnet caller
-  never is, and peer management requires a real session, which
-  `POST /api/auth/login` refuses to issue while the password is off
-  (`400 AUTH_NOT_ENABLED`). Managing peers remotely requires setting a
-  password first.
+  never is, and a real session is what `POST /api/auth/login` refuses to issue
+  while the password is off (`400 AUTH_NOT_ENABLED`). Writing remotely
+  requires setting a password first.
 - **When `authRequired` is `true`:** send
   `Authorization: Basic base64(":" + password)` on every `/api/*` request as a
   baseline credential. PortOS is single-user, so the username half is ignored —
   only the password is verified. Store the password **per instance in the iOS
-  Keychain**. Basic alone is enough for ordinary reads and most writes, but
-  **not** for peer management or host control (below) — those need an
-  operator session on top.
+  Keychain**. Basic alone is enough for reads, but **not** for any write
+  (below) — every write needs an operator session on top.
 
 ### Operator sessions vs. HTTP Basic
 
@@ -103,18 +101,20 @@ not satisfy it, no matter how correct the password is:
   `POST /peers/announce` and the one-time `POST /peers/pair-secret` Basic
   bootstrap — see [§3](#3-instance-management)) requires an operator session,
   or a local connection on a password-free install. A Basic-only request gets
-  `403 PEER_SETTINGS_OPERATOR_REQUIRED`, as does a remote caller on a
-  password-free install. `POST /peers/sync-categories` additionally accepts a
+  `403 HOST_CONTROL_FORBIDDEN`, as does a remote caller on a password-free
+  install (the route's own `403 PEER_SETTINGS_OPERATOR_REQUIRED` stays behind
+  that gate). `POST /peers/sync-categories` additionally accepts a
   paired peer's scoped credential acting for its own instance id.
-- **Host control** (`/api/commands/*` and the routes audited in
-  `server/lib/hostControlRoutes.js` — app lifecycle, CoS agent queueing, git,
-  scaffold, provider/runtime installs, autopilot start, and the matching
-  Socket.IO events) requires an operator session, **or** a genuinely local
-  (loopback) connection when no password is set. A remote caller — which a
-  companion app always is, even on a passwordless install — never gets host
-  control from Basic or from being on the tailnet; it gets
-  `403 HOST_CONTROL_FORBIDDEN`. See [API.md](./API.md#security-model) for the
-  full host-control contract.
+- **Host control** — every `/api/*` write (any method but `GET`/`HEAD`/
+  `OPTIONS`), the sensitive reads listed in `server/lib/hostControlRoutes.js`
+  (`HOST_CONTROL_GET_ROUTES`), and the matching Socket.IO events — requires an
+  operator session, **or** a genuinely local (loopback) connection when no
+  password is set. The only writes outside it are the public auth routes and
+  the peer federation, managed-visitor and opt-in public API surfaces, none of
+  which a companion app calls. A remote caller — which a companion app always
+  is, even on a passwordless install — never gets host control from Basic or
+  from being on the tailnet; it gets `403 HOST_CONTROL_FORBIDDEN`. See
+  [API.md](./API.md#security-model) for the full host-control contract.
 
 To obtain a session, sign in the same way the web UI does:
 
@@ -138,10 +138,9 @@ Content-Type: application/json
 - If the password is not enabled, `/api/auth/login` returns
   `400 AUTH_NOT_ENABLED` — there is nothing to sign in to, and no other way to
   mint a session. A companion app reaching the instance remotely therefore
-  cannot obtain peer-management authority at all on a passwordless install;
-  host control is separately unreachable there too, since it falls back to
-  requiring a local (loopback) connection instead of a session. Set an
-  instance password to manage peers or host control from the companion app.
+  cannot write at all on a passwordless install, since host control falls
+  back to requiring a local (loopback) connection instead of a session. Set an
+  instance password to write from the companion app.
 - `GET /api/auth/status` (always public) reports whether a password is set;
   `GET /api/auth/whoami` confirms whether the app's current cookie is still a
   valid session. Neither requires the app to already hold a session.
@@ -167,7 +166,7 @@ handling needed. Do not set an `Origin` header manually.
 
 A dedicated per-device API-key surface (a companion group in `apiRegistry.js` /
 long-lived device token) is a **possible future enhancement**, not built here —
-the single-password Basic posture works today and reuses the whole gate.
+the password, exchanged for a session cookie, works today and reuses the whole gate.
 
 ## 3. Instance management
 
@@ -179,16 +178,17 @@ Every route under `/api/instances/peers/*` other than `GET`/`HEAD`,
 `POST /peers/announce`, and the one-time `POST /peers/pair-secret` Basic
 bootstrap requires an **operator session** (see
 [Operator sessions vs. HTTP Basic](#operator-sessions-vs-http-basic)) — Basic
-alone gets `403 PEER_SETTINGS_OPERATOR_REQUIRED`, even with the correct
-password and even on a passwordless install. Every other route below,
-including `PUT /api/instances/self`, only needs the baseline credential from
-[§2](#2-authentication) (Basic when a password is set, none when it's off).
+alone gets `403 HOST_CONTROL_FORBIDDEN`, even with the correct
+password and even on a passwordless install. The other reads below only need
+the baseline credential from [§2](#2-authentication) (Basic when a password is
+set, none when it's off); `PUT /api/instances/self`, like every write, needs a
+session.
 
 | Method | Path | Session required? | Purpose |
 |--------|------|--------------------|---------|
 | `GET` | `/api/instances` | No | Self + all configured peers. |
 | `GET` | `/api/instances/self` | No | This instance's identity (`instanceId`, `name`). |
-| `PUT` | `/api/instances/self` | No | Rename this instance. |
+| `PUT` | `/api/instances/self` | **Yes** | Rename this instance. |
 | `GET` | `/api/instances/tailnet-suffix` | No | The tailnet's MagicDNS suffix. |
 | `GET` | `/api/instances/sync-status` | No | Federation sync status. |
 | `POST` | `/api/instances/peers` | **Yes** | Add a peer. |
@@ -232,7 +232,8 @@ navigates its own UI from the manifest's nav list.
   intentionally excluded, so the app renders its own UI and uses `nav` for routing.
 - `POST /api/palette/action/:id` — dispatch a whitelisted action. Body:
   `{ "args": { … } }` (args object optional, defaults to `{}`). Returns
-  `{ ok, result }`. Unknown ids 404.
+  `{ ok, result }`. Unknown ids 404. Like every write, it needs an operator
+  session (`403 HOST_CONTROL_FORBIDDEN` otherwise).
 
 Palette action ids the app is expected to use (`PALETTE_ACTIONS` in
 `server/routes/palette.js` — always read the live manifest for the authoritative
@@ -240,7 +241,7 @@ list and each action's parameter schema):
 
 | id | Purpose |
 |----|---------|
-| `brain_capture` | Capture a note to the Brain. Host control, like `POST /api/brain/capture`: it can clone a repo URL or run the classifier, so it needs an operator session (`403 HOST_CONTROL_FORBIDDEN` otherwise). Use `daily_log_append` for a quick note without one. |
+| `brain_capture` | Capture a note to the Brain. Like `POST /api/brain/capture`, it can clone a repo URL or run the classifier. Use `daily_log_append` for a quick note. |
 | `brain_search` / `brain_list_recent` | Search / list recent Brain entries. |
 | `daily_log_append` | Append a line to today's daily log. |
 | `daily_log_read` | Read today's daily log. |
@@ -254,7 +255,8 @@ Dictation is transcribed **on device** (or server-side over Socket.IO); the
 resulting text is POSTed as plain text. There is **no** server-side audio/STT
 upload endpoint.
 
-- `POST /api/brain/daily-log/:date/append` — body `{ "text": "…", "source": "…" }`.
+- `POST /api/brain/daily-log/:date/append` — body `{ "text": "…", "source": "…" }`;
+  needs an operator session, like every write.
   `:date` accepts `today` (resolved server-side) or `YYYY-MM-DD`. Empty/whitespace
   `text` 400s. `source` records the **input modality** and is a controlled
   vocabulary — one of `text`, `voice`, or `edit` (any other value is silently
@@ -275,6 +277,7 @@ are **not** interchangeable with these routes — pick per your need:
 
 `/api/meatspace/post/*` (`server/routes/meatspacePostRoutes.js`). These are the
 read/write endpoints for POST config, sessions, and progress on a single instance.
+The writes need an operator session; the reads only the baseline credential.
 
 > **Note — POST progress is intentionally machine-local today.** Normalized
 > history lives in PostgreSQL `post_runs` / `post_attempts` with no peer-sync

@@ -81,7 +81,7 @@ vi.mock('../services/reviewQueue.js', () => ({
   resolveQueueItem: effects.resolveQueueItem, triageQueueItem: vi.fn(), promoteAskQueueItem: vi.fn(),
 }));
 
-import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import beeperRoutes from './beeper.js';
 import messagesRoutes from './messages.js';
@@ -113,7 +113,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/beeper', beeperRoutes);
   app.use('/api/messages', messagesRoutes);
   app.use('/api/review', reviewRoutes);
@@ -196,13 +196,17 @@ describe('Beeper chat writes, Messages browser sync and draft approval operator 
     expect(effects.resolveQueueItem).toHaveBeenLastCalledWith(`DRAFTS:${DRAFT}`);
   });
 
-  it('leaves draft content edits and non-draft Review rows open to a remote caller', async () => {
+  it('applies draft content edits and non-draft Review rows for a local caller, refusing them to a remote caller', async () => {
     for (const [operation, effect, args] of [
       [['put', `/api/messages/drafts/${DRAFT}`, { body: 'Example reply text' }], effects.updateDraft, [DRAFT, { body: 'Example reply text' }]],
       [['post', '/api/review/queue/resolve', { id: 'memory:example-memory', operation: 'approve' }], effects.resolveQueueItem, ['memory:example-memory', 'approve']],
       [['post', '/api/review/queue/resolve', { id: 'threads:example-thread', operation: 'complete' }], effects.resolveQueueItem, ['threads:example-thread', 'complete']],
     ]) {
-      const response = await send(appFor(), operation);
+      const before = effect.mock.calls.length;
+      const refused = await send(appFor(), operation);
+      expect([refused.status, refused.body.code], operation[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      expect(effect).toHaveBeenCalledTimes(before);
+      const response = await send(appFor('127.0.0.1'), operation);
       expect(response.status, `${operation[1]} ${JSON.stringify(response.body)}`).toBe(200);
       expect(effect).toHaveBeenLastCalledWith(...args);
     }

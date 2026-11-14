@@ -144,7 +144,7 @@ vi.mock('../services/musicVideo/castAndSetsService.js', () => ({
   applyCastAndSetsFeedback: vi.fn(async () => ({ status: 'running' })),
 }));
 
-import { authGate, hostControlRouteGate, hostControlBodyGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import codeAnimationRoutes from './codeAnimation.js';
 import musicRoutes from './music.js';
 import tracksRoutes from './tracks.js';
@@ -215,7 +215,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/code-animation', codeAnimationRoutes);
   app.use('/api/music', musicRoutes);
   app.use('/api/tracks', tracksRoutes);
@@ -293,18 +293,21 @@ describe('media authoring operator authority (#9512, #9869)', () => {
     }
   });
 
-  it('gates the code-animation prompt only when it studies a reference video (#13055)', async () => {
+  it('gates the code-animation prompt with or without a reference video, and studies it for host control (#13055)', async () => {
     const withVideo = ['/api/code-animation/prompt', { concept: 'Example scene', referenceVideo: { filename: 'example.mp4' } }];
-    for (const [address, headers] of [
-      ['192.0.2.10', {}],
-      ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
-    ]) {
-      const refused = await call(appFor(address), withVideo, headers);
-      expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    const withoutVideo = ['/api/code-animation/prompt', { concept: 'Example scene', referenceVideo: null }];
+    for (const operation of [withVideo, withoutVideo]) {
+      for (const [address, headers] of [
+        ['192.0.2.10', {}],
+        ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
+      ]) {
+        const refused = await call(appFor(address), operation, headers);
+        expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      }
     }
     expect(buildCodeAnimationRequest).not.toHaveBeenCalled();
 
-    expect((await call(appFor(), ['/api/code-animation/prompt', { concept: 'Example scene', referenceVideo: null }])).status).toBe(200);
+    expect((await call(appFor('127.0.0.1'), withoutVideo)).status).toBe(200);
     const agentSession = await createSession({ label: 'agent' });
     for (const [enabled, address, headers] of [
       [false, '127.0.0.1', {}],
@@ -318,10 +321,16 @@ describe('media authoring operator authority (#9512, #9869)', () => {
     expect(buildCodeAnimationRequest).toHaveBeenLastCalledWith(expect.objectContaining({ referenceVideo: expect.objectContaining({ filename: 'example.mp4' }) }));
   });
 
-  it('keeps song-revision remove and dismiss available without host authority', async () => {
+  it('resolves song-revision remove and dismiss for host control without authoring, and refuses them remotely', async () => {
     for (const action of ['remove', 'dismiss']) {
       const body = { revisionId: 'example-revision', action };
-      const response = await request(appFor()).post(`/api/music-video/${id}/song-revision/scenes`).send(body);
+      const refused = await request(appFor()).post(`/api/music-video/${id}/song-revision/scenes`).send(body);
+      expect([refused.status, refused.body.code], action).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      expect(resolveSongRevisionScenes).not.toHaveBeenCalled();
+    }
+    for (const action of ['remove', 'dismiss']) {
+      const body = { revisionId: 'example-revision', action };
+      const response = await request(appFor('127.0.0.1')).post(`/api/music-video/${id}/song-revision/scenes`).send(body);
       expect(response.status).toBe(200);
       expect(resolveSongRevisionScenes).toHaveBeenLastCalledWith(id, body);
     }
@@ -398,18 +407,24 @@ describe('media authoring operator authority (#9512, #9869)', () => {
     }
   });
 
-  it('keeps previews, reads, cancellation and contained rendering available remotely', async () => {
+  it('keeps reads remote and runs previews, cancellation and contained rendering for host control without authoring', async () => {
     const app = appFor();
     for (const path of [`/api/code-animation/generate/${id}`, `/api/music-video/${id}/autonomous`]) {
       expect((await request(app).get(path)).status, path).toBe(200);
     }
-    for (const [path, body, status] of [
+    const writes = [
       ['/api/code-animation/prompt', { concept: 'Example scene' }, 200],
       [`/api/code-animation/projects/${id}/stage-runs/${id}/cancel`, {}, 200],
       [`/api/tracks/${id}/waveform/render`, {}, 200],
       [`/api/music-video/${id}/autonomous/stop`, {}, 200],
       [`/api/music-video/${id}/autonomous/cancel`, {}, 200],
-    ]) expect((await call(app, [path, body])).status, path).toBe(status);
+    ];
+    for (const [path, body] of writes) {
+      const refused = await call(app, [path, body]);
+      expect([refused.status, refused.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    const local = appFor('127.0.0.1');
+    for (const [path, body, status] of writes) expect((await call(local, [path, body])).status, path).toBe(status);
     expectNoAuthoring();
   });
 });

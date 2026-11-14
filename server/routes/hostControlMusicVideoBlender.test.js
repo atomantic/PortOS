@@ -60,7 +60,7 @@ vi.mock('../services/film/record.js', async (importOriginal) => ({
   ...await importOriginal(), saveBlenderSettings: open.saveBlenderSettings, saveBlenderShotNote: open.saveBlenderShotNote,
 }));
 
-import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import musicVideoRoutes from './musicVideo.js';
 
@@ -76,7 +76,7 @@ const operations = [
   ['post', `${FILM}/shots/s010/open`, {}, sink.openBlenderShot],
 ];
 // Records and cancellation: nothing here chooses or starts what runs.
-const openOperations = [
+const recordOperations = [
   ['put', `${FILM}/settings`, { fps: 30 }, open.saveBlenderSettings],
   ['put', `${FILM}/shots/s010/note`, { text: 'Example note' }, open.saveBlenderShotNote],
   ['post', `${FILM}/cancel`, {}, open.cancelBlenderProjectJobs],
@@ -88,7 +88,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/music-video', musicVideoRoutes);
   app.use(errorMiddleware);
   return app;
@@ -142,11 +142,17 @@ describe('Music Video Blender film host control', () => {
     }
   });
 
-  it('leaves settings, notes and cancellation open to a remote caller on a password-free install', async () => {
-    for (const [method, path, body, service] of openOperations) {
-      const response = await send(appFor(), method, path, body);
+  it('refuses remote settings, notes and cancellation, and saves them for a local caller without running anything', async () => {
+    for (const [method, path, body, service] of recordOperations) {
+      const refused = await send(appFor(), method, path, body);
+      expect([refused.status, refused.body.code], `${method} ${path}`).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      expect(service, `${method} ${path}`).not.toHaveBeenCalled();
+    }
+    for (const [method, path, body, service] of recordOperations) {
+      const response = await send(appFor('127.0.0.1'), method, path, body);
       expect(response.status, `${method} ${path}: ${JSON.stringify(response.body)}`).toBe(200);
       expect(service, `${method} ${path}`).toHaveBeenCalledTimes(1);
     }
+    for (const [, , , service] of operations) expect(service).not.toHaveBeenCalled();
   });
 });

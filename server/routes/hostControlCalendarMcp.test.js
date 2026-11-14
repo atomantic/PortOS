@@ -93,7 +93,7 @@ vi.mock('../services/calendarApiSync.js', async (importOriginal) => ({
   ...await importOriginal(), syncOutlookCalendarApi: vi.fn(async () => null),
 }));
 
-import { authGate, hostControlRouteGate, hostControlBodyGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import { getAllProviders } from '../services/providers.js';
 import { runCliProviderPrompt } from '../lib/cliProviderRun.js';
@@ -111,7 +111,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/calendar', calendarRoutes);
   app.use(errorMiddleware);
   return app;
@@ -195,28 +195,37 @@ describe('Calendar MCP operator authority (#11051)', () => {
     }
   });
 
-  it('allows remote reference-data edits, push ingestion and direct API operations without a CLI', async () => {
-    const app = appFor();
-    const edited = await request(app).put(`/api/calendar/accounts/${fixture.id}/subcalendars`).send({
-      subcalendars: [{ calendarId: fixture.calendarId, name: fixture.marker, enabled: true }],
-    });
-    expect(edited.status).toBe(200);
-    const read = await request(app).get(`/api/calendar/accounts/${fixture.id}/subcalendars`);
+  it('runs reference-data edits, push ingestion and direct API operations without a CLI, and refuses them remotely', async () => {
+    const remote = appFor();
+    const subcalendarsPath = `/api/calendar/accounts/${fixture.id}/subcalendars`;
+    const edit = { subcalendars: [{ calendarId: fixture.calendarId, name: fixture.marker, enabled: true }] };
+    const push = { calendarId: fixture.calendarId, calendarName: fixture.marker, events: [] };
+    for (const response of [
+      await request(remote).put(subcalendarsPath).send(edit),
+      await request(remote).post(`/api/calendar/sync/${fixture.id}/push`).send(push),
+      await post(remote, 'api'),
+      await post(remote, 'discover-api'),
+    ]) expect([response.status, response.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expectNoEffects();
+    expect(apiSyncAccount).not.toHaveBeenCalled();
+    expect(apiDiscoverCalendars).not.toHaveBeenCalled();
+
+    const app = appFor('127.0.0.1');
+    expect((await request(app).put(subcalendarsPath).send(edit)).status).toBe(200);
+    const read = await request(remote).get(subcalendarsPath);
     expect(read.body[0].name).toBe(fixture.marker);
-    const pushed = await request(app).post(`/api/calendar/sync/${fixture.id}/push`).send({
-      calendarId: fixture.calendarId, calendarName: fixture.marker, events: [],
-    });
-    expect(pushed.status).toBe(200);
+    expect((await request(app).post(`/api/calendar/sync/${fixture.id}/push`).send(push)).status).toBe(200);
     expect(mutateCache).toHaveBeenCalledTimes(1);
     for (const action of ['api', 'discover-api']) expect((await post(app, action)).status).toBe(200);
     expect(apiSyncAccount).toHaveBeenCalledWith(fixture.id, undefined);
     expect(apiDiscoverCalendars).toHaveBeenCalledWith(fixture.id);
+    expect(runCliProviderPrompt).not.toHaveBeenCalled();
 
     // The stored marker remains data: neither MCP entry point may consume it
-    // when this same remote caller tries to start the agent.
+    // when a remote caller tries to start the agent.
     getAccount.mockClear();
     getAllProviders.mockClear();
-    for (const action of ['google', 'discover']) expect((await post(app, action)).status).toBe(403);
+    for (const action of ['google', 'discover']) expect((await post(remote, action)).status).toBe(403);
     expect(getAccount).not.toHaveBeenCalled();
     expect(getAllProviders).not.toHaveBeenCalled();
     expect(runCliProviderPrompt).not.toHaveBeenCalled();
@@ -266,7 +275,7 @@ describe('Calendar host-browser automation operator authority (#12952)', () => {
 describe('Calendar generic sync operator authority (#13055)', () => {
   // An Outlook account's generic sync captures a bearer token from the
   // operator's signed-in browser tab on a cache miss, so the route is gated
-  // whole; its /api, /push and /discover-api siblings stay open (above).
+  // whole, like every other calendar write.
   const path = `/api/calendar/sync/${fixture.id}`;
   const sync = (app, headers = {}, target = path) => {
     const pending = request(app).post(target);

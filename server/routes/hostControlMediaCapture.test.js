@@ -131,10 +131,13 @@ describe('capture and live-stream operator authority (#11272)', () => {
     expect(mediaService.getAudioStream).toHaveBeenCalledTimes(6);
   });
 
-  it('keeps status, device discovery and stop behavior available', async () => {
+  it('keeps status and device discovery remote, and stops capture for host control only', async () => {
     const app = appFor();
     for (const path of ['/api/media/status', '/api/media/devices']) expect((await request(app).get(path)).status).toBe(200);
-    expect((await request(app).post('/api/media/stop').send({})).status).toBe(200);
+    const refused = await request(app).post('/api/media/stop').send({});
+    expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect(mediaService.stopAll).not.toHaveBeenCalled();
+    expect((await request(appFor('127.0.0.1')).post('/api/media/stop').send({})).status).toBe(200);
     expect(mediaService.stopAll).toHaveBeenCalledOnce();
     expectNoCaptureEffects();
   });

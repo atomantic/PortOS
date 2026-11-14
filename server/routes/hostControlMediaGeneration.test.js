@@ -145,7 +145,7 @@ vi.mock('../services/federatedMedia/inputAssets.js', () => ({}));
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PATHS } from '../lib/fileUtils.js';
-import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import imageRoutes from './imageGen.js';
 import videoRoutes from './videoGen.js';
 import spriteRoutes from './sprites.js';
@@ -184,7 +184,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/image-gen', imageRoutes);
   app.use('/api/video-gen', videoRoutes);
   app.use('/api/sprites', spriteRoutes);
@@ -274,20 +274,24 @@ describe('media generation and source publication authority (#9667)', () => {
     expectNoEffects();
   });
 
-  it('keeps the in-process light SynthID regen open to a remote caller (#13055)', async () => {
-    const response = await call(appFor(), ['post', '/api/image-gen/example.png/regenerate', { method: 'light' }]);
+  it('runs the light SynthID regen in-process without queueing for host control, and refuses every method remotely (#13055)', async () => {
+    for (const method of ['light', 'flux']) {
+      const refused = await call(appFor(), ['post', '/api/image-gen/example.png/regenerate', { method }]);
+      expect([refused.status, refused.body.code], method).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expectNoEffects();
+    const response = await call(appFor('127.0.0.1'), ['post', '/api/image-gen/example.png/regenerate', { method: 'light' }]);
     expect(response.status, JSON.stringify(response.body)).toBe(200);
     expect(effects.lightRegen).toHaveBeenCalledTimes(1);
     expect(effects.enqueue).not.toHaveBeenCalled();
-    const refused = await call(appFor(), ['post', '/api/image-gen/example.png/regenerate', { method: 'flux' }]);
-    expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    expect(effects.enqueue).not.toHaveBeenCalled();
   });
 
-  it('retains remote reads and cancellation', async () => {
+  it('retains remote reads and refuses remote cancellation, which host control keeps', async () => {
     expect((await request(appFor()).get('/api/threejs-models')).status).toBe(200);
     expect((await request(appFor()).get('/api/sprites')).status).toBe(200);
-    expect((await call(appFor(), ['post', '/api/image-gen/cancel', {}])).status).toBe(200);
+    const refused = await call(appFor(), ['post', '/api/image-gen/cancel', {}]);
+    expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect((await call(appFor('127.0.0.1'), ['post', '/api/image-gen/cancel', {}])).status).toBe(200);
     expectNoEffects();
   });
 });

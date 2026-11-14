@@ -100,19 +100,28 @@ describe('Stacker News browser and monitoring authority', () => {
     expect(effects.reconcileStackerNewsSchedulers).toHaveBeenCalledTimes(12);
   });
 
-  it('keeps unchanged monitoring, labels, disabling and deletes open', async () => {
+  it('stores unchanged monitoring, labels, disabling and deletes for a local caller and refuses them remotely', async () => {
     state.account.monitoringEnabled = true;
     state.territory.monitoringEnabled = true;
-    for (const [method, path, body] of mutations) {
+    for (const [method, path, body, effect] of mutations) {
       for (const addition of [{ monitoringEnabled: false }, { label: 'Changed label' }]) {
         // Creating an inherited territory under an enabled account is an opt-in.
         if (path === '/territories' && addition.monitoringEnabled === undefined) continue;
-        const res = await call(appFor(), [method, path, { ...body, ...addition }]);
+        const remote = await call(appFor(), [method, path, { ...body, ...addition }]);
+        expect([remote.status, remote.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+        expect(effects[effect], path).not.toHaveBeenCalled();
+        const res = await call(appFor('127.0.0.1'), [method, path, { ...body, ...addition }]);
         expect(res.status, path).toBe(method === 'post' ? 201 : 200);
+        expect(effects[effect], path).toHaveBeenCalledOnce();
+        effects[effect].mockClear();
       }
     }
-    for (const path of [`/accounts/${accountId}`, `/territories/${territoryId}`]) {
-      expect((await call(appFor(), ['delete', path, {}])).status).toBe(204);
+    for (const [path, effect] of [[`/accounts/${accountId}`, 'deleteAccount'], [`/territories/${territoryId}`, 'deleteTerritory']]) {
+      const remote = await call(appFor(), ['delete', path, {}]);
+      expect([remote.status, remote.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      expect(effects[effect], path).not.toHaveBeenCalled();
+      expect((await call(appFor('127.0.0.1'), ['delete', path, {}])).status).toBe(204);
+      expect(effects[effect], path).toHaveBeenCalledOnce();
     }
   });
 
@@ -133,24 +142,29 @@ describe('Stacker News browser and monitoring authority', () => {
     for (const effect of Object.values(effects)) expect(effect).not.toHaveBeenCalled();
   });
 
-  it('keeps account re-enabling open when no territory would be monitored', async () => {
+  it('re-enables an account for a local caller when no territory would be monitored', async () => {
     state.account.enabled = false;
     state.account.monitoringEnabled = true;
     for (const territory of [state.territory, null]) {
       state.territory = territory;
-      expect((await call(appFor(), ['patch', `/accounts/${accountId}`, { enabled: true }])).status).toBe(200);
+      expect((await call(appFor('127.0.0.1'), ['patch', `/accounts/${accountId}`, { enabled: true }])).status).toBe(200);
     }
+    expect(effects.updateAccount).toHaveBeenCalledTimes(2);
   });
 
-  it('allows dormant inheritance and re-enabling with all monitoring disabled', async () => {
+  it('stores dormant inheritance and re-enabling with all monitoring disabled for a local caller', async () => {
+    const local = appFor('127.0.0.1');
     for (const operation of [
       ['post', '/territories', { accountId, slug: 'example' }],
       ['patch', `/territories/${territoryId}`, { monitoringEnabled: null }],
-    ]) expect((await call(appFor(), operation)).status).toBe(operation[0] === 'post' ? 201 : 200);
+    ]) expect((await call(local, operation)).status).toBe(operation[0] === 'post' ? 201 : 200);
     state.account.enabled = false;
-    expect((await call(appFor(), ['patch', `/accounts/${accountId}`, { enabled: true, monitoringEnabled: false }])).status).toBe(200);
+    expect((await call(local, ['patch', `/accounts/${accountId}`, { enabled: true, monitoringEnabled: false }])).status).toBe(200);
     // Re-saving an already inherited opt-in does not arm anything new.
     state.account.enabled = true; state.account.monitoringEnabled = true; state.territory.monitoringEnabled = null;
-    expect((await call(appFor(), ['patch', `/territories/${territoryId}`, { monitoringEnabled: null }])).status).toBe(200);
+    expect((await call(local, ['patch', `/territories/${territoryId}`, { monitoringEnabled: null }])).status).toBe(200);
+    expect(effects.createTerritory).toHaveBeenCalledOnce();
+    expect(effects.updateTerritory).toHaveBeenCalledTimes(2);
+    expect(effects.updateAccount).toHaveBeenCalledOnce();
   });
 });

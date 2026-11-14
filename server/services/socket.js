@@ -163,7 +163,7 @@ const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe', '
 // gallery); read-only subscriptions stay open to remote sockets.
 // `error:recover` queues a recovery agent that runs shell commands (#8716).
 // Detection can bootstrap a PM2 daemon while inspecting an app-specific home.
-// The HTTP twin of this set is HOST_CONTROL_ROUTES in lib/hostControlRoutes.js.
+// The HTTP twin of this set is isHostControlRoute in lib/hostControlRoutes.js.
 const HOST_CONTROL_SOCKET_EVENTS = new Set(['app:update', 'app:standardize', 'app:deploy', 'standardize:start', 'detect:start', 'error:recover']);
 const HOST_CONTROL_SOCKET_PREFIXES = ['shell:', 'iterm:', 'generated-preview:'];
 // Closing only stops work, so a refused socket can always tear down its own preview.

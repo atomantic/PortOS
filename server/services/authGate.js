@@ -4,7 +4,6 @@ import { isAuthEnabled, verifyPassword, verifyRequestSession } from './auth.js';
 // on :5560 applies byte-identical credential extraction and CSRF rules.
 import { browserRequestRefusal, isLocalConnection, isOriginlessCrossSiteBrowserRequest, extractBasicPassword } from '../../lib/portosAuthCore.js';
 import { getSettings, settingsEvents } from './settings.js';
-import { getVoiceConfig } from './voice/config.js';
 import { isRegistryPublic } from '../lib/apiRegistry.js';
 import {
   GATED_NON_API_PREFIXES,
@@ -15,10 +14,7 @@ import {
 import { sendErrorResponse, ServerError } from '../lib/errorHandler.js';
 import { logSecurityEvent } from '../lib/securityAuditLog.js';
 import { isRemoteRequest } from '../lib/requestOrigin.js';
-import {
-  changedHostControlSettingsPaths, changedVoiceConfigHostControlPaths, hostControlBodyKeys,
-  hostControlSettingsPathsIn, isHostControlRoute, voiceConfigHostControlPathsIn,
-} from '../lib/hostControlRoutes.js';
+import { isHostControlRoute } from '../lib/hostControlRoutes.js';
 import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { isPairedPeer } from '../lib/peerPairing.js';
 import { loadData as loadInstances } from './instanceIdentity.js';
@@ -315,39 +311,13 @@ export const assertHostControl = (req) => {
   if (!requestHasHostControl(req)) throw hostControlRefusal(req);
 };
 
-// Applies requireHostControl to every route in the audited
-// HOST_CONTROL_ROUTES list (lib/hostControlRoutes.js). Mounted once, right
-// after authGate, so the list — not each route file — is the one place that
-// says which HTTP routes execute on the host.
+// Applies requireHostControl to every request lib/hostControlRoutes.js names:
+// every /api write outside the explicit public, peer and broker surfaces, plus
+// the listed sensitive GETs. Mounted once, right after authGate, so a new
+// route is gated by default rather than by remembering to list it (#16018).
 export const hostControlRouteGate = (req, res, next) => (
   isHostControlRoute(req.method, req.path) ? requireHostControl(req, res, next) : next()
 );
-
-// The body-slice twin, mounted right after the JSON parser: the two
-// polymorphic policy stores (PUT /api/settings, PUT /api/cos/config) are
-// gated only when the body names a key that changes execution policy, or
-// changes the stored value of a nested settings key that picks an executable
-// (HOST_CONTROL_SETTINGS_PATHS). PUT /api/voice/config is gated the same way
-// when the body would change the voice agent's instructions or coding-agent
-// tool (HOST_CONTROL_VOICE_CONFIG_PATHS). Those stored-value reads are
-// skipped when the caller already holds host control, since the answer
-// could not change.
-export const hostControlBodyGate = async (req, res, next) => {
-  if (hostControlBodyKeys(req.method, req.path, req.body).length > 0) return requireHostControl(req, res, next);
-  const settingsNamed = hostControlSettingsPathsIn(req.method, req.path, req.body);
-  const voiceNamed = voiceConfigHostControlPathsIn(req.method, req.path, req.body);
-  if ((settingsNamed.length === 0 && voiceNamed.length === 0)
-    || hasHostControl(req.portosAuthContext, requestIsLocalConnection(req))) return next();
-  if (settingsNamed.length > 0
-    && changedHostControlSettingsPaths(settingsNamed, req.body, await getSettings(), req.method, req.path).length > 0) {
-    return requireHostControl(req, res, next);
-  }
-  if (voiceNamed.length > 0
-    && changedVoiceConfigHostControlPaths(voiceNamed, req.body, await getVoiceConfig()).length > 0) {
-    return requireHostControl(req, res, next);
-  }
-  return next();
-};
 
 // The socket twin of requireHostControl on a password-free install, for the
 // per-event re-check in socket.js (with a password set, that re-check already

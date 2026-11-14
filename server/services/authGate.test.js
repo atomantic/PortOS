@@ -819,19 +819,19 @@ describe('host-control authority', () => {
   // handshake (which engine.io intercepts before the app handler).
   it('refuses password-free host control to requests the Tailcat ingress marked remote', async () => {
     const { remoteRequestHandler, markRemoteServer } = await import('../lib/requestOrigin.js');
-    const { hostControlBodyGate, requestHasHostControl, socketAuthGate, socketHasHostControl } = await import('./authGate.js');
+    const { hostControlRouteGate, requestHasHostControl, socketAuthGate, socketHasHostControl } = await import('./authGate.js');
     const local = { headers: {}, socket: { remoteAddress: '127.0.0.1' }, portosAuthContext: { enabled: false } };
     const viaIngress = { headers: {}, socket: { remoteAddress: '127.0.0.1' }, portosAuthContext: { enabled: false } };
     remoteRequestHandler(() => {})(viaIngress, {});
     expect(requestHasHostControl(local)).toBe(true);
     expect(requestHasHostControl(viaIngress)).toBe(false);
 
-    const policyWrite = { ...viaIngress, method: 'PUT', path: '/api/cos/config', body: { autonomyMode: 'execute' } };
-    remoteRequestHandler(() => {})(policyWrite, {});
-    const bodyGate = await runGate(hostControlBodyGate, policyWrite);
-    expect(bodyGate.called).toBe(false);
-    expect(bodyGate.res.statusCode).toBe(403);
-    expect(bodyGate.res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    const write = { ...viaIngress, method: 'PUT', path: '/api/cos/config' };
+    remoteRequestHandler(() => {})(write, {});
+    const routeGate = await runGate(hostControlRouteGate, write);
+    expect(routeGate.called).toBe(false);
+    expect(routeGate.res.statusCode).toBe(403);
+    expect(routeGate.res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
 
     const { EventEmitter } = await import('node:events');
     const server = markRemoteServer(new EventEmitter());
@@ -857,16 +857,21 @@ describe('host-control authority', () => {
   });
 });
 
-describe('mounted host-control trailing slashes (#8950)', () => {
+// Every /api write needs operator authority by default (#16018); reads stay
+// open except the listed sensitive GETs, and the public, peer and exposed-API
+// surfaces keep their own admission. The gate runs before the body parser, so
+// a refused request never reaches a handler or a persistence sink.
+describe('host control by default on /api writes (#16018)', () => {
   const buildApp = async (remoteAddress = '192.0.2.10') => {
-    const { authGate, hostControlRouteGate, hostControlBodyGate } = await import('./authGate.js');
+    const { authGate, hostControlRouteGate } = await import('./authGate.js');
     const { createRunsRoutes } = await import('../lib/aiToolkit/routes/runs.js');
     const runner = {
       createRun: vi.fn().mockResolvedValue({ runId: 'example-run', provider: { type: 'cli' }, metadata: {} }),
       executeCliRun: vi.fn(),
       listRuns: vi.fn().mockResolvedValue([]),
     };
-    const persist = vi.fn();
+    const sink = vi.fn();
+    const ok = (req, res) => { sink(`${req.method} ${req.path}`); res.json({ ok: true }); };
     const app = express();
     app.use((req, res, next) => {
       Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress, configurable: true });
@@ -875,216 +880,98 @@ describe('mounted host-control trailing slashes (#8950)', () => {
     app.use(authGate);
     app.use(hostControlRouteGate);
     app.use(express.json());
-    app.use(hostControlBodyGate);
     app.use('/api/runs', createRunsRoutes(runner));
     const settings = express.Router();
-    settings.put('/', (req, res) => {
-      persist(req.body);
-      res.json({ saved: true });
-    });
-    settings.patch('/slice', (req, res) => {
-      persist(req.body);
-      res.json({ saved: true });
-    });
+    settings.get('/', ok);
+    settings.put('/', ok);
+    settings.patch('/slice', ok);
     app.use('/api/settings', settings);
-    app.put('/api/settings/features/:featureId', (req, res) => {
-      persist(req.body);
-      res.json({ saved: true });
-    });
-    return { app, runner, persist };
+    app.post('/api/brain/inbox', ok);
+    app.delete('/api/apps/:id', ok);
+    app.get('/api/scaffold/directories', ok);
+    app.post('/api/peer-sync/push', ok);
+    app.post('/api/voice/public/synthesize', ok);
+    return { app, runner, sink };
   };
   const runBody = { providerId: 'example-cli', prompt: 'Example prompt' };
-  const protectedBodies = [
-    { harnesses: {} },
-    { autofixer: { verifyCommand: 'npm test', autoPromote: true } },
-    { imageGen: { codex: { codexPath: '/example/codex' } } },
-    // A PATCH-shaped extra field must not change how a legacy PUT is gated.
-    { slicePath: 'pipeline', partial: {}, imageGen: { local: { pythonPath: '/example/python3' } } },
+  // Record CRUD, a destructive delete, a policy store and a run dispatch alike.
+  const writes = [
+    ['put', '/api/settings', { location: {} }],
+    ['patch', '/api/settings/slice', { slicePath: 'localLlm.mtplx', partial: { keepLoaded: true } }],
+    ['post', '/api/brain/inbox', { text: 'Example note' }],
+    ['delete', '/api/apps/example-app', undefined],
   ];
+  const send = (app, method, path, body, header) => {
+    const pending = request(app)[method](path);
+    if (header) pending.set(...header);
+    return body === undefined ? pending : pending.send(body);
+  };
+  const authorityHeader = async (authority) => {
+    if (authority === 'local') return null;
+    const { token } = await (await import('./auth.js')).setPassword({ newPassword: 'example-password' });
+    if (authority === 'session') return ['Cookie', `portos_auth=${token}`];
+    if (authority === 'basic') return ['Authorization', `Basic ${Buffer.from(':example-password').toString('base64')}`];
+    const { resolveAgentApiEnv } = await import('./agentApiAuth.js');
+    const { PORTOS_API_TOKEN } = await resolveAgentApiEnv();
+    expect(PORTOS_API_TOKEN).toBeTruthy();
+    return ['Authorization', `Bearer ${PORTOS_API_TOKEN}`];
+  };
 
-  it('denies remote password-free dispatch and protected writes before either sink', async () => {
-    const { app, runner, persist } = await buildApp();
+  it('refuses a remote password-free caller on every write and sensitive GET before any sink', async () => {
+    const { app, runner, sink } = await buildApp();
     for (const suffix of ['', '/', '//']) {
       const run = await request(app).post('/api/runs' + suffix).send(runBody);
       expect(run.status).toBe(403);
       expect(run.body.code).toBe('HOST_CONTROL_FORBIDDEN');
-      for (const body of protectedBodies) {
-        const write = await request(app).put('/api/settings' + suffix).send(body);
-        expect(write.status).toBe(403);
-        expect(write.body.code).toBe('HOST_CONTROL_FORBIDDEN');
-      }
-    }
-    expect(runner.createRun).not.toHaveBeenCalled();
-    expect(runner.executeCliRun).not.toHaveBeenCalled();
-    expect(persist).not.toHaveBeenCalled();
-    expect((await request(app).get('/api/runs//')).status).toBe(200);
-    expect((await request(app).put('/api/settings//').send({ location: {} })).status).toBe(200);
-    expect(persist).toHaveBeenCalledExactlyOnceWith({ location: {} });
-  });
-
-  it('applies the PUT authority policy to slice patches, preserving delegated agents', async () => {
-    const remote = await buildApp();
-    const protectedPatches = [
-      { slicePath: 'autoUpdate', partial: { enabled: true } },
-      { slicePath: 'seriesAutopilot', partial: { schedules: [] } },
-      { slicePath: 'imageGen.local', partial: { pythonPath: '/example/python3' } },
-    ];
-    for (const suffix of ['', '/', '//']) {
-      for (const body of protectedPatches) {
-        const response = await request(remote.app).patch('/api/settings/slice' + suffix).send(body);
-        expect(response.status).toBe(403);
+      for (const [method, path, body] of writes) {
+        const response = await send(app, method, path + suffix, body);
+        expect(response.status, `${method} ${path}${suffix}`).toBe(403);
         expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
       }
     }
-    expect(remote.persist).not.toHaveBeenCalled();
-    // The existing PUT allows data-only updates and clearing executable pins.
-    expect((await request(remote.app).patch('/api/settings/slice').send({
-      slicePath: 'localLlm.mtplx', partial: { keepLoaded: true },
-    })).status).toBe(200);
-    expect((await request(remote.app).patch('/api/settings/slice').send({
-      slicePath: 'imageGen.local', partial: { pythonPath: null },
-    })).status).toBe(200);
-    const local = await buildApp('127.0.0.1');
-    for (const body of protectedPatches) {
-      expect((await request(local.app).patch('/api/settings/slice').send(body)).status).toBe(200);
-    }
-    const auth = await import('./auth.js');
-    await auth.setPassword({ newPassword: 'example-password' });
-    const { resolveAgentApiEnv } = await import('./agentApiAuth.js');
-    const { PORTOS_API_TOKEN: token } = await resolveAgentApiEnv();
-    expect(token).toBeTruthy();
-    for (const body of protectedPatches) {
-      expect((await request(local.app).patch('/api/settings/slice')
-        .set('Authorization', `Bearer ${token}`).send(body)).status).toBe(200);
-    }
-    expect(local.persist).toHaveBeenCalledTimes(6);
+    const listing = await request(app).get('/api/scaffold/directories');
+    expect(listing.status).toBe(403);
+    expect(listing.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    expect(runner.createRun).not.toHaveBeenCalled();
+    expect(runner.executeCliRun).not.toHaveBeenCalled();
+    expect(sink).not.toHaveBeenCalled();
+    // Ordinary reads stay open.
+    expect((await request(app).get('/api/runs//')).status).toBe(200);
+    expect((await request(app).get('/api/settings')).status).toBe(200);
   });
 
-  it('requires operator authority to arm Eidoverse through either settings path', async () => {
-    const remote = await buildApp();
-    const body = { instanceFeatures: { eidoverse: { enabled: true } } };
-    expect((await request(remote.app).put('/api/settings').send(body)).status).toBe(403);
-    expect((await request(remote.app).put('/api/settings/features/eidoverse').send({ enabled: true })).status).toBe(403);
-    expect(remote.persist).not.toHaveBeenCalled();
-    const local = await buildApp('127.0.0.1');
-    expect((await request(local.app).put('/api/settings').send(body)).status).toBe(200);
-    expect((await request(local.app).put('/api/settings/features/eidoverse').send({ enabled: true })).status).toBe(200);
-    expect(local.persist).toHaveBeenCalledTimes(2);
+  it('leaves the peer and exposed-API surfaces and the public auth routes to their own admission', async () => {
+    const { app, sink } = await buildApp();
+    expect((await request(app).post('/api/peer-sync/push').send({})).status).toBe(200);
+    expect((await request(app).post('/api/voice/public/synthesize').send({ text: 'Hello' })).status).toBe(200);
+    expect(sink.mock.calls.map(([call]) => call)).toEqual(['POST /api/peer-sync/push', 'POST /api/voice/public/synthesize']);
+    // Login is answered by its own route (absent here), not refused by the gate.
+    expect((await request(app).post('/api/auth/login').send({})).status).toBe(404);
   });
 
-  it.each(['local', 'session', 'agent', 'basic'])('preserves %s authority through mounted root handlers', async (authority) => {
-    let header = ['X-Example', 'local'];
-    if (authority !== 'local') {
-      const { token } = await (await import('./auth.js')).setPassword({ newPassword: 'example-password' });
-      if (authority === 'agent') {
-        const { resolveAgentApiEnv } = await import('./agentApiAuth.js');
-        const { PORTOS_API_TOKEN } = await resolveAgentApiEnv();
-        header = ['Authorization', `Bearer ${PORTOS_API_TOKEN}`];
-      } else {
-        header = authority === 'session'
-          ? ['Cookie', `portos_auth=${token}`]
-          : ['Authorization', `Basic ${Buffer.from(':example-password').toString('base64')}`];
-      }
-    }
-    const { app, runner, persist } = await buildApp(authority === 'session' ? '192.0.2.10' : '127.0.0.1');
+  it.each(['local', 'session', 'agent', 'basic'])('applies %s authority to every write', async (authority) => {
+    const header = await authorityHeader(authority);
+    // A session or agent token carries authority from any address; locality only counts without a password.
+    const { app, runner, sink } = await buildApp(authority === 'local' ? '127.0.0.1' : '192.0.2.10');
     const allowed = authority !== 'basic';
     for (const suffix of ['', '/', '//']) {
-      const run = await request(app).post('/api/runs' + suffix).set(...header).send(runBody);
+      const run = await send(app, 'post', '/api/runs' + suffix, runBody, header);
       expect(run.status).toBe(allowed ? 202 : 403);
-      for (const body of protectedBodies) {
-        const write = await request(app).put('/api/settings' + suffix).set(...header).send(body);
-        expect(write.status).toBe(allowed ? 200 : 403);
-        if (!allowed) expect(write.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+      if (suffix === '//') continue;
+      for (const [method, path, body] of writes) {
+        const response = await send(app, method, path + suffix, body, header);
+        expect(response.status, `${authority} ${method} ${path}${suffix}`).toBe(allowed ? 200 : 403);
+        if (!allowed) expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
       }
-      if (!allowed) expect(run.body.code).toBe('HOST_CONTROL_FORBIDDEN');
     }
+    expect((await send(app, 'get', '/api/scaffold/directories', undefined, header)).status).toBe(allowed ? 200 : 403);
     expect(runner.executeCliRun).toHaveBeenCalledTimes(allowed ? 3 : 0);
-    expect(persist).toHaveBeenCalledTimes(allowed ? protectedBodies.length * 3 : 0);
-  });
-});
-
-// A remote caller who picks where PortOS sends audio, prompts or a stored
-// token can read them, answer with forged results, or 307 the request back to
-// PortOS's own loopback port, where it counts as a local operator. Picking a
-// store's host file path lets them rewrite any JSON file the host user owns.
-describe('outbound endpoint and host file settings authority', () => {
-  const buildApp = async (remoteAddress = '192.0.2.10') => {
-    const { authGate, hostControlRouteGate, hostControlBodyGate } = await import('./authGate.js');
-    const persist = vi.fn();
-    const ok = (req, res) => { persist(req.body); res.json({ saved: true }); };
-    const app = express();
-    app.use((req, res, next) => {
-      Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress, configurable: true });
-      next();
-    });
-    app.use(authGate);
-    app.use(hostControlRouteGate);
-    app.use(express.json());
-    app.use(hostControlBodyGate);
-    app.put('/api/settings', ok);
-    app.patch('/api/settings/slice', ok);
-    app.put('/api/voice/config', ok);
-    app.put('/api/lmstudio/config', ok);
-    return { app, persist };
-  };
-  const attacker = 'http://attacker.example:7860';
-  const redirects = [
-    ['put', '/api/settings', { imageGen: { mode: 'external', external: { sdapiUrl: attacker } } }],
-    ['put', '/api/settings', { imageGen: { sdapiUrl: attacker } }],
-    ['patch', '/api/settings/slice', { slicePath: 'imageGen.external', partial: { sdapiUrl: attacker } }],
-    ['put', '/api/settings', { beeper: { baseUrl: attacker, allowNonLoopbackBaseUrl: true } }],
-    ['patch', '/api/settings/slice', { slicePath: 'beeper', partial: { baseUrl: attacker } }],
-    ['put', '/api/settings', { mortalloom: { enabled: true, path: '/example/target.json' } }],
-    ['put', '/api/voice/config', { stt: { endpoint: attacker } }],
-    ['put', '/api/lmstudio/config', { baseUrl: attacker }],
-  ];
-  const stored = {
-    imageGen: { mode: 'external', sdapiUrl: 'http://192.0.2.20:7860', external: { sdapiUrl: 'http://192.0.2.20:7860' } },
-    beeper: { enabled: true, baseUrl: 'http://localhost:23373', allowNonLoopbackBaseUrl: false },
-    mortalloom: { enabled: true, path: '/example/MortalLoom.json' },
-  };
-
-  it('refuses a remote password-free caller before any write', async () => {
-    mergeSettingsFile(stored);
-    const { app, persist } = await buildApp();
-    for (const [method, path, body] of redirects) {
-      const response = await request(app)[method](path).send(body);
-      expect(response.status, `${method} ${path}`).toBe(403);
-      expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    expect(sink).toHaveBeenCalledTimes(allowed ? writes.length * 2 + 1 : 0);
+    // The legacy password still reads and still federates.
+    if (!allowed) {
+      expect((await send(app, 'get', '/api/settings', undefined, header)).status).toBe(200);
+      expect((await send(app, 'post', '/api/peer-sync/push', {}, header)).status).toBe(200);
     }
-    expect(persist).not.toHaveBeenCalled();
-  });
-
-  it('keeps unchanged resends, clears and unrelated fields open to a remote caller', async () => {
-    mergeSettingsFile(stored);
-    const { app, persist } = await buildApp();
-    const open = [
-      ['put', '/api/settings', { imageGen: { ...stored.imageGen, external: { sdapiUrl: stored.imageGen.external.sdapiUrl, denoise: true } } }],
-      ['put', '/api/settings', { beeper: { ...stored.beeper, intervalMinutes: 30 } }],
-      ['put', '/api/settings', { mortalloom: { enabled: true, path: '' } }],
-      ['put', '/api/voice/config', { stt: { endpoint: 'http://127.0.0.1:5562', language: 'en' } }],
-    ];
-    for (const [method, path, body] of open) {
-      expect((await request(app)[method](path).send(body)).status, JSON.stringify(body)).toBe(200);
-    }
-    expect(persist).toHaveBeenCalledTimes(open.length);
-  });
-
-  it('preserves local and delegated agent operators', async () => {
-    mergeSettingsFile(stored);
-    const local = await buildApp('127.0.0.1');
-    for (const [method, path, body] of redirects) {
-      expect((await request(local.app)[method](path).send(body)).status, `${method} ${path}`).toBe(200);
-    }
-    await (await import('./auth.js')).setPassword({ newPassword: 'example-password' });
-    const { PORTOS_API_TOKEN: token } = await (await import('./agentApiAuth.js')).resolveAgentApiEnv();
-    expect(token).toBeTruthy();
-    const agent = await buildApp();
-    for (const [method, path, body] of redirects) {
-      expect((await request(agent.app)[method](path).set('Authorization', `Bearer ${token}`).send(body)).status, `${method} ${path}`).toBe(200);
-    }
-    expect(local.persist).toHaveBeenCalledTimes(redirects.length);
-    expect(agent.persist).toHaveBeenCalledTimes(redirects.length);
   });
 });
 

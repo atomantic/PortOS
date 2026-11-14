@@ -10,8 +10,8 @@ import { DOCKER_CONTAINMENT_PHASES, isDigestPinnedImage, isEgressHostname } from
 /**
  * Limits, extra egress hosts and image overrides. Host-control: an override
  * picks the image untrusted code runs in and extra hosts widen install
- * egress, so `PUT /api/settings` gates the whole slice
- * (`HOST_CONTROL_SETTINGS_SLICES`).
+ * egress; like every settings write, it needs operator authority
+ * (`hostControlRouteGate`).
  */
 export const dockerContainmentSettingsSchema = z.object({
   limits: z.object({

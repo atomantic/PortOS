@@ -76,7 +76,7 @@ describe('Datadog credential destination operator authority (#11351)', () => {
     await datadogService.upsertInstance('example', savedDetails);
   });
 
-  it('refuses remote password-free repointing and keeps tests on the saved destination and credentials', async () => {
+  it('refuses remote password-free repointing and testing, and keeps local tests on the saved destination and credentials', async () => {
     const collected = installCollector();
     const app = appFor();
 
@@ -84,7 +84,12 @@ describe('Datadog credential destination operator authority (#11351)', () => {
     expect(update.status, JSON.stringify(update.body)).toBe(403);
     expect(update.body.code).toBe('HOST_CONTROL_FORBIDDEN');
 
-    const connection = await post(app, 'instances/example/test', {});
+    const remoteConnection = await post(app, 'instances/example/test', {});
+    expect([remoteConnection.status, remoteConnection.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect(collected).toEqual([]);
+
+    // The refused repoint left nothing behind: a local test still reaches the saved destination.
+    const connection = await post(appFor('127.0.0.1'), 'instances/example/test', {});
     expect(connection.status).toBe(200);
     expect(connection.body.success).toBe(true);
     expect(collected).toEqual([{

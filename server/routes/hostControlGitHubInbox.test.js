@@ -127,21 +127,23 @@ describe('GitHub inbox writes require operator authority (#12952)', () => {
     for (const write of writes) expect(write[3], write[1]).toHaveBeenCalledTimes(3);
   });
 
-  it('leaves the refresh, deletions and the read-only audit run open, with automation only for host control', async () => {
-    for (const write of [
+  it('runs the refresh, deletions and the read-only audit for host control, with automation, and refuses them remotely', async () => {
+    const others = [
       ['delete', '/api/github/accounts/acct-example', undefined, accounts.deleteAccount],
       ['delete', '/api/github/automations/rules/7', undefined, inbox.deleteLearnedRule],
       ['post', '/api/github/audit/example-account', {}, audit.runAccountAudit],
-    ]) {
-      expect((await send(appFor(), write)).status, write[1]).toBe(200);
+      ['post', '/api/github/notifications/sync', { accountId: 'example-account' }, inbox.syncAccountNotifications],
+      ['post', '/api/github/notifications/sync', {}, inbox.syncAllNotifications],
+    ];
+    for (const write of others) {
+      const response = await send(appFor(), write);
+      expect([response.status, response.body.code], write[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      expect(write[3], write[1]).not.toHaveBeenCalled();
+    }
+    for (const write of others.slice(0, 3)) {
+      expect((await send(appFor('127.0.0.1'), write)).status, write[1]).toBe(200);
       expect(write[3]).toHaveBeenCalledTimes(1);
     }
-
-    const remote = await send(appFor(), ['post', '/api/github/notifications/sync', { accountId: 'example-account' }]);
-    expect(remote.status).toBe(200);
-    expect(inbox.syncAccountNotifications).toHaveBeenLastCalledWith('example-account', { automate: false });
-    await send(appFor(), ['post', '/api/github/notifications/sync', {}]);
-    expect(inbox.syncAllNotifications).toHaveBeenLastCalledWith({ automate: false });
 
     await send(appFor('127.0.0.1'), ['post', '/api/github/notifications/sync', { accountId: 'example-account' }]);
     expect(inbox.syncAccountNotifications).toHaveBeenLastCalledWith('example-account', { automate: true });

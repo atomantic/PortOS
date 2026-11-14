@@ -147,10 +147,13 @@ describe('host-control gate on update, brain-link and ask promote writes (#8742)
     expect(askPromote.promoteTurnById).toHaveBeenCalledTimes(2);
   });
 
-  it('leaves the conversation-level promote (no execution) open to a remote caller', async () => {
+  it('refuses the conversation-level promote remotely and keeps it a flag-only write for a local caller', async () => {
     askConversations.setPromoted.mockResolvedValue({ id: 'conv-1', promoted: true });
-    const res = await call(remote(), ['post', '/api/ask/conv-1/promote', {}]);
+    expectRefused(await call(remote(), ['post', '/api/ask/conv-1/promote', {}]));
+    expect(askConversations.setPromoted).not.toHaveBeenCalled();
+    const res = await call(local(), ['post', '/api/ask/conv-1/promote', {}]);
     expect(res.status).toBe(200);
     expect(askConversations.setPromoted).toHaveBeenCalledTimes(1);
+    expect(askPromote.promoteTurnById).not.toHaveBeenCalled();
   });
 });

@@ -79,7 +79,7 @@ vi.mock('../services/meatspacePostAdaptive.js', async (importOriginal) => ({
   resolveDrillConfig: vi.fn(async (_type, config) => ({ config: config ?? {}, adaptive: null, progression: null })),
 }));
 
-import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import musicVideoRoutes from './musicVideo.js';
 import meatspaceRoutes from './meatspacePostRoutes.js';
@@ -114,7 +114,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/music-video', musicVideoRoutes);
   app.use('/api/meatspace', meatspaceRoutes);
   app.use(errorMiddleware);
@@ -247,22 +247,33 @@ describe('Music Video cover/promotion and POST LLM operator authority (#10989)',
     }));
   });
 
-  it('keeps a non-LLM drill open to a remote caller', async () => {
-    const response = await post(appFor(), ['/api/meatspace/post/drill', { type: 'doubling-chain' }]);
+  it('generates a non-LLM drill for a local caller without a provider, and refuses it remotely', async () => {
+    const drill = ['/api/meatspace/post/drill', { type: 'doubling-chain' }];
+    const refused = await post(appFor(), drill);
+    expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    const response = await post(appFor('127.0.0.1'), drill);
     expect(response.status, JSON.stringify(response.body)).toBe(200);
     expect(response.body.questions?.length).toBeGreaterThan(0);
     expectNoEffects();
   });
 
-  it('leaves cover compose, lettering saves and promotion reads open to a remote caller', async () => {
-    const app = appFor();
-    const compose = await request(app).post(`/api/music-video/${projectId}/publish-kit/cover-art`).send({});
+  it('keeps promotion reads remote, and runs cover compose and lettering saves for host control without AI', async () => {
+    const remote = appFor();
+    const coverArt = `/api/music-video/${projectId}/publish-kit/cover-art`;
+    const letteringBody = { design: { layout: 'top-center' } };
+    for (const pending of [request(remote).post(coverArt).send({}), request(remote).put(`${coverArt}/design`).send(letteringBody)]) {
+      const refused = await pending;
+      expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+
+    const local = appFor('127.0.0.1');
+    const compose = await request(local).post(coverArt).send({});
     expect([compose.status, compose.body.code]).toEqual([422, 'VALIDATION_ERROR']);
 
-    const lettering = await request(app).put(`/api/music-video/${projectId}/publish-kit/cover-art/design`).send({ design: { layout: 'top-center' } });
+    const lettering = await request(local).put(`${coverArt}/design`).send(letteringBody);
     expect(lettering.status, JSON.stringify(lettering.body)).toBe(200);
 
-    const plan = await request(app).get(`/api/music-video/${projectId}/publish/promotion-plan`);
+    const plan = await request(remote).get(`/api/music-video/${projectId}/publish/promotion-plan`);
     expect(plan.status).toBe(200);
     expect(promotionPlanSteps).toHaveBeenCalled();
     expectNoEffects();

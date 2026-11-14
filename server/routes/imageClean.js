@@ -118,9 +118,8 @@ router.post(
   raw({ type: RAW_TYPES, limit: RAW_LIMIT }),
   asyncHandler(async (req, res) => {
     const { metadata, denoise, diffusion, mask: hasMask, feather, strength, maxMp } = validateRequest(cleanQuerySchema, req.query);
-    // The GPU pass queues a local Python FLUX job (#13055); the sync passes are
-    // in-process sharp and stay open. The mode rides in the query, which the
-    // body gate cannot see, so the handler checks it.
+    // The GPU pass queues a local Python FLUX job (#13055). hostControlRouteGate
+    // already requires host control for this write; the handler keeps its own check.
     if (diffusion === 'gpu') assertHostControl(req);
 
     const rawBody = Buffer.isBuffer(req.body) ? req.body : null;

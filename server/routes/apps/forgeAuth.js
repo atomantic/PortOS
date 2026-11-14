@@ -6,7 +6,7 @@
  *   POST /:id/forge-auth/refresh/:jobId/cancel    → stop it
  *
  * The host is always derived from the app's own origin, never taken from the
- * request. All three are host-control routes (lib/hostControlRoutes.js): the
+ * request. All three need host control (lib/hostControlRoutes.js): the
  * device-code stream matters as much as the start — whoever approves a code
  * decides which account the host's gh token belongs to.
  */

@@ -192,8 +192,7 @@ describe('Universe Builder agent workflow authority (#10669)', () => {
     expect(effects.update).toHaveBeenCalledTimes(3);
   });
 
-  it('preserves remote record CRUD, proposal application, merge, locks, backfill and history', async () => {
-    const app = appFor();
+  it('keeps remote history reads open, refuses remote record writes, and runs CRUD, proposal application, merge, locks and backfill locally', async () => {
     const merge = { survivorId: 'example-world', loserId: 'example-other-world' };
     for (const [method, path, body, effect, status] of [
       ['post', base, { name: 'Example World' }, effects.create, 201],
@@ -208,7 +207,12 @@ describe('Universe Builder agent workflow authority (#10669)', () => {
       ['get', `${world}/runs`, undefined, effects.listRuns, 200],
     ]) {
       const before = effect.mock.calls.length;
-      const response = await call(app, [path, body], {}, method);
+      if (method !== 'get') {
+        const remote = await call(appFor(), [path, body], {}, method);
+        expect([remote.status, remote.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+        expect(effect).toHaveBeenCalledTimes(before);
+      }
+      const response = await call(appFor(method === 'get' ? '192.0.2.10' : '127.0.0.1'), [path, body], {}, method);
       expect(response.status, `${path}: ${JSON.stringify(response.body)}`).toBe(status);
       expect(effect).toHaveBeenCalledTimes(before + 1);
     }

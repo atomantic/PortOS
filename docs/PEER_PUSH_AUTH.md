@@ -128,10 +128,10 @@ federation surface, so its provider keeps admitting paired peers. Automatic
 pairing requires that host to have an instance password when the pair is set up.
 
 Legacy HTTP Basic is the instance password itself, verified as `method:
-'basic'` — but that is narrower than an operator session: it's refused for
-host control (`403 HOST_CONTROL_FORBIDDEN`) and for peer-settings mutations
-(`403 PEER_SETTINGS_OPERATOR_REQUIRED`), including the ones this pairing flow
-itself uses (`PUT`/`DELETE` on a peer, connect/reciprocate/probe/sync). Its
+'basic'` — but that is narrower than an operator session: it reaches reads and
+the federation surface, and every other write refuses it with
+`403 HOST_CONTROL_FORBIDDEN` (#16018), including the peer-settings mutations
+this pairing flow itself uses (`PUT`/`DELETE` on a peer, connect/reciprocate/probe/sync). Its
 holder can already sign in at `/api/auth/login` to obtain the operator session
 those routes need. The one exception is the one-time
 `POST /api/instances/peers/pair-secret` bootstrap above, which Basic alone is

@@ -64,7 +64,7 @@ vi.mock('../services/goalCalendarScheduler.js', () => ({
 }));
 vi.mock('../services/identity.js', () => ({}));
 
-import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import privacyRoutes from './privacy.js';
 import youtubeRoutes from './youtube.js';
@@ -73,7 +73,7 @@ import identityRoutes from './identity.js';
 const subjectId = '22222222-2222-4222-8222-222222222222';
 const consents = `/api/privacy/subjects/${subjectId}/consents`;
 const schedule = '/api/privacy/optout/schedule';
-// [method, path, body, effect, status]; the last six rows are body gates.
+// [method, path, body, effect, status]
 const operations = [
   ['post', '/api/privacy/scan', {}, effects.scan, 200],
   ['post', '/api/privacy/optout', {}, effects.optOut, 200],
@@ -98,7 +98,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/privacy', privacyRoutes);
   app.use('/api/youtube', youtubeRoutes);
   app.use('/api/digital-twin/identity', identityRoutes);
@@ -176,11 +176,18 @@ describe('privacy broker, YouTube and goal calendar operator authority (#13055)'
     expect(effects.recordConsent).toHaveBeenLastCalledWith(expect.objectContaining({ subjectId, scope: 'broker_optout' }));
   });
 
-  it('leaves disarming the recheck and a local-vault consent open to a remote caller', async () => {
-    const disarm = await call(appFor(), ['put', schedule, { enabled: false, autoApproveOptOutEmails: false, autoSubmitWebForms: false }]);
+  it('refuses disarming the recheck and a local-vault consent to a remote caller and applies them locally', async () => {
+    const disarmOp = ['put', schedule, { enabled: false, autoApproveOptOutEmails: false, autoSubmitWebForms: false }];
+    const vaultOp = ['post', consents, { scope: 'pii_vault', method: 'verbal' }];
+    for (const operation of [disarmOp, vaultOp]) {
+      const refused = await call(appFor(), operation);
+      expect([refused.status, refused.body.code], operation[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expectNoEffects();
+    const disarm = await call(appFor('127.0.0.1'), disarmOp);
     expect(disarm.status, JSON.stringify(disarm.body)).toBe(200);
     expect(effects.restartRecheck).toHaveBeenCalledTimes(1);
-    const vault = await call(appFor(), ['post', consents, { scope: 'pii_vault', method: 'verbal' }]);
+    const vault = await call(appFor('127.0.0.1'), vaultOp);
     expect(vault.status, JSON.stringify(vault.body)).toBe(201);
     expect(effects.recordConsent).toHaveBeenCalledWith(expect.objectContaining({ subjectId, scope: 'pii_vault' }));
   });

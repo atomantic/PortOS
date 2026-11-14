@@ -186,12 +186,12 @@ describe('automatic repository intake operator authority (#11037)', () => {
     expect(clone.runRepoIntake.mock.calls[0][1]).toEqual(expect.objectContaining(intake));
   });
 
-  it('keeps plain bookmarks and autoClone:false repository records open to a remote caller, data-only', async () => {
+  it('keeps plain bookmarks and autoClone:false repository records data-only for an authorized caller', async () => {
     for (const body of [
       { url: 'https://example.com/article' },
       { url: REPO_URL, autoClone: false, repoIntake: intake },
     ]) {
-      const response = await post(appFor(), ['/api/brain/links', body]);
+      const response = await post(appFor('127.0.0.1'), ['/api/brain/links', body]);
       expect(response.status, JSON.stringify(response.body)).toBe(201);
       expect(response.body.cloneStatus).toBe('none');
       expect(response.body.repoIntake).toBeUndefined();
