@@ -18,6 +18,19 @@
 const SEEDANCE_RATIOS = Object.freeze(['16:9', '4:3', '1:1', '3:4', '9:16', '21:9']);
 const WAN_RATIOS = Object.freeze(['16:9', '4:3', '1:1', '3:4', '9:16']);
 const KLING_RATIOS = Object.freeze(['16:9', '9:16', '1:1']);
+const KLING4_TEXT_RATIOS = Object.freeze(['21:9', '16:9', '9:16', '1:1']);
+const KLING4_REFERENCE_RATIOS = Object.freeze([...KLING4_TEXT_RATIOS, 'adaptive']);
+
+// Kling 4 families share every field but length, resolution tiers and end-frame support.
+const klingV4 = ({ id, resolutions, maxSec, endFrameField, ...label }) => Object.freeze({
+  id, ...label,
+  endpoints: Object.freeze({ text: `${id}/text-to-video`, image: `${id}/image-to-video`, reference: `${id}/reference-to-video` }),
+  duration: Object.freeze({ min: 3, max: maxSec, defaultSec: 5 }),
+  resolutions: Object.freeze(resolutions), defaultResolution: resolutions.at(-1),
+  textRatios: KLING4_TEXT_RATIOS, referenceRatios: KLING4_REFERENCE_RATIOS,
+  endFrameField, maxReferenceImages: 10,
+  audio: null, seed: null, promptMax: null, fixed: Object.freeze({}),
+});
 const TIERS = Object.freeze(['480p', '720p', '1080p']);
 
 /**
@@ -46,6 +59,11 @@ export const HIGGSFIELD_VIDEO_MODELS = Object.freeze([
     endFrameField: 'end_image_url', maxReferenceImages: 30, maxReferenceAudio: 10,
     audio: 'generate_audio', seed: null, promptMax: null, fixed: Object.freeze({}),
   }),
+  // Kling 4: schemas read from console.higgsfield.ai model pages on 2026-11-13. It has no
+  // audio toggle, and the image route takes no aspect ratio. Reference video_urls and
+  // Kling element ids are not offered. Flash's endpoints reject unknown fields.
+  klingV4({ id: 'kling-video/v4.0', label: 'Kling 4.0', priceNote: 'from ~$0.126/s', maxSec: 30, resolutions: ['720p', '1080p'], endFrameField: 'end_image_url' }),
+  klingV4({ id: 'kling-video/v4.0-flash', label: 'Kling 4.0 Flash', priceNote: 'from ~$0.063/s', maxSec: 20, resolutions: ['720p'], endFrameField: null }),
   Object.freeze({
     id: 'kling-video/v3.0/pro', label: 'Kling 3.0 Pro', priceNote: '~$0.084/s',
     endpoints: Object.freeze({
@@ -86,6 +104,8 @@ export const HIGGSFIELD_VIDEO_MODELS = Object.freeze([
 ]);
 
 export const HIGGSFIELD_DEFAULT_VIDEO_MODEL = HIGGSFIELD_VIDEO_MODELS[0].id;
+/** Every endpoint id the curated families call. */
+export const HIGGSFIELD_VIDEO_ENDPOINT_IDS = Object.freeze(HIGGSFIELD_VIDEO_MODELS.flatMap((m) => Object.values(m.endpoints).filter(Boolean)));
 export const HIGGSFIELD_VIDEO_MODEL_IDS = Object.freeze(HIGGSFIELD_VIDEO_MODELS.map((m) => m.id));
 export const getHiggsfieldVideoModel = (id) => HIGGSFIELD_VIDEO_MODELS.find((m) => m.id === id) || null;
 
@@ -94,15 +114,27 @@ export const higgsfieldVideoLengths = (model) => (model
   ? Array.from({ length: model.duration.max - model.duration.min + 1 }, (_, i) => model.duration.min + i)
   : []);
 
+/** Picker hint for which inputs a family takes beyond text, e.g. "refs ≤30 · end frame · audio refs". */
+export function higgsfieldCapabilityHint(model) {
+  if (!model) return '';
+  return [
+    model.endpoints.reference ? `refs ≤${model.maxReferenceImages}` : 'no refs',
+    model.endFrameField ? 'end frame' : null,
+    model.maxReferenceAudio ? 'audio refs' : null,
+  ].filter(Boolean).join(' · ');
+}
+
 const refuse = (message) => Object.assign(new Error(message), { status: 400, code: 'HIGGSFIELD_VIDEO_INPUT_INVALID' });
 
+// Non-numeric ratios ('adaptive') are only ever an explicit pick, never the nearest match.
 function nearestRatio(width, height, ratios) {
+  const numeric = ratios.filter((r) => /^\d+:\d+$/.test(r));
   const w = Number(width);
   const h = Number(height);
   if (!(w > 0 && h > 0)) return null;
   const target = Math.log(w / h);
   const distance = (ratio) => { const [rw, rh] = ratio.split(':').map(Number); return Math.abs(Math.log(rw / rh) - target); };
-  return ratios.reduce((best, ratio) => (distance(ratio) < distance(best) ? ratio : best));
+  return numeric.reduce((best, ratio) => (distance(ratio) < distance(best) ? ratio : best));
 }
 
 /** The prompt text the model receives: the user's words plus a folded "Avoid:" clause. */

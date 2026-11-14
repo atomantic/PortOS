@@ -209,6 +209,8 @@ export const getVideoGenStatus = (options = {}) => request('/video-gen/status', 
     ...status,
     models: filterHardwareCompatibleModels(status?.models),
   }));
+/** Higgsfield video families the picker doesn't offer yet, read from their public catalog. */
+export const checkHiggsfieldNewModels = (options = {}) => request('/video-gen/higgsfield-models/unsupported', options);
 export const listVideoModels = ({ includeUnavailable = false, ...options } = {}) =>
   request('/video-gen/models', options)
     .then((models) => filterHardwareCompatibleModels(models, { includeUnavailable }));

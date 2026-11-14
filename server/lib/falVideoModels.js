@@ -236,6 +236,13 @@ const BY_ID = new Map(FAL_VIDEO_MODELS.map((m) => [m.id, m]));
 /** The catalog row for `modelId`, or null for a model PortOS has not curated. */
 export const getFalVideoModel = (modelId) => (typeof modelId === 'string' ? BY_ID.get(modelId.trim()) || null : null);
 
+/** Picker hint for the inputs a model takes beyond text, e.g. "refs ≤9 · end frame · audio refs". */
+export const falCapabilityHint = (model) => (model ? [
+  model.referenceImages ? `refs ≤${model.referenceImages.max}` : 'no refs',
+  model.endImage ? 'end frame' : null,
+  model.referenceAudio ? 'audio refs' : null,
+].filter(Boolean).join(' · ') : '');
+
 /**
  * Music Video cutaway models that accept a frame, including reference models.
  * A reference-only model treats it as guidance instead of a pinned first frame;
