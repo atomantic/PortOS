@@ -937,6 +937,24 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
+  it.each(['absent', 'present'])('verifies a cleanup-owning capture-pending run by forge delivery once its seed checkout is %s', async scenario => {
+    const physical = { dev: '1', ino: '2', birthtimeNs: '3' };
+    const seed = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, seededAt: CREATED_AT, repoPath: '/repo', branch: BRANCH,
+      path: WORKTREE, repository: physical, checkout: physical, incarnation: { pointer: physical, gitdir: { ...physical, path: '/repo/.git/worktrees/a' } } };
+    const state = { ...agentState({ reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' }, checkoutSeeds: [seed],
+      completedCheckouts: [], checkoutCapture: { status: 'pending', unknown: true, targets: [] }, repoStateVerification: { status: 'pending' }, completionCleanup: { status: 'pending' } }),
+      id: 'agent-1', status: 'completed', result: { success: false, cleanupPending: true } };
+    if (scenario === 'present') readCheckoutPathPresence.mockResolvedValue(true);
+    const result = await run({ success: false, agentState: state });
+    if (scenario === 'absent') {
+      expect(result).toMatchObject({ verified: true, skipReason: null });
+      expect(updateTask).toHaveBeenLastCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'user', expect.any(Object));
+    } else {
+      expect(result).toMatchObject({ verified: false, skipReason: 'checkout-capture-pending' });
+      expect(updateTask).not.toHaveBeenCalled();
+    }
+  });
+
   it('settles captured merged delivery even when the original task did not request opening a PR', async () => {
     const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
       repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };

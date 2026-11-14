@@ -580,7 +580,8 @@ export async function recordCompletionCleanup(agentId, startedAt, patch) {
  * head or changing the original execution result. A captured checkout settles
  * only for a cleanup run whose task already completed or names another
  * cleanup owner; neither state can be handed back to this run, while a merely
- * unowned task may still be awaiting this run's own cleanup handoff. */
+ * unowned task may still be awaiting this run's own cleanup handoff. A cleanup
+ * run with an unknown capture follows the same rule. */
 export async function recordAbsentCheckoutRetirement(agentId, expected, proof) {
   const verifiedBy = proof.inheritedFromAgentId ? 'inherited-current-inventory' : 'current-inventory';
   let matched = false;
@@ -591,7 +592,9 @@ export async function recordAbsentCheckoutRetirement(agentId, expected, proof) {
     if (handedOff ? agent.result?.cleanupPending !== true || metadata.isWorktree !== true
         || proof.branch !== metadata.worktreeBranch || proof.path !== metadata.workspacePath
       : metadata.checkoutCapture?.status !== 'pending' || metadata.checkoutCapture.unknown !== true) return metadata;
-    if (handedOff) {
+    // A run that still owns its task's cleanup keeps its delivery obligation
+    // whether or not its capture completed.
+    if (handedOff || agent.result?.cleanupPending === true) {
       const { getTaskById } = await import('./cosTaskStore.js');
       const task = await getTaskById(agent.taskId).catch(() => null);
       const owner = task?.metadata?.deliveryRecoveryAgentId;
