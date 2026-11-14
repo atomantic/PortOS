@@ -193,8 +193,12 @@ function catalogItemReferences(project) {
 }
 
 // The check-in's still-listed catalog images it no longer offers (catalogCheckin.js `retiredImages`), by reference id.
-const retiredCatalogImages = (project) => new Map((project.castAndSets.catalogCheckin?.items || []).flatMap((item) => (item.retiredImages || [])
-  .map((filename) => [catalogReferenceId(item.subjectId, filename), { name: item.name, filename }])));
+// A character's retired image carries the id of the image Auto now sends for it (`successor`): a canonical swap moves its shot picks.
+const retiredCatalogImages = (project) => new Map((project.castAndSets.catalogCheckin?.items || []).flatMap((item) => {
+  const current = item.kind === 'character' ? (item.images || []).find((filename) => SENDABLE_REFERENCE_FILE.test(filename)) : null;
+  const successor = current ? catalogReferenceId(item.subjectId, current) : null;
+  return (item.retiredImages || []).map((filename) => [catalogReferenceId(item.subjectId, filename), { name: item.name, filename, successor }]);
+}));
 
 /**
  * Resolves one saved shot pick against the check-in. A generated sheet's id never
@@ -219,6 +223,7 @@ function catalogPickResolver(project) {
       if (offered.some((choice) => choice.id === id)) return { id };
       retired ??= retiredCatalogImages(project);
       const owner = retired.get(id);
+      if (owner?.successor && offered.some((choice) => choice.id === owner.successor)) return { id: owner.successor, moved: true };
       return { id, unmapped: { id, label: owner ? `${owner.name || 'a catalog item'}'s image ${owner.filename}` : 'an image removed from the catalog or from this video' } };
     }
     const ref = saved.get(id);
@@ -405,7 +410,10 @@ function baseConditioningReferences(project, scene, castMedia = null, limit = MU
   if (Array.isArray(scene?.frameReferenceIds)) {
     const choices = [...research, ...guides, ...panel, ...musicVideoReferenceChoices(project), ...musicVideoLinkedCastReferences(project, castMedia)]
       .filter((ref) => !isLegacyCatalogReference(project, ref));
-    return scene.frameReferenceIds.map((id) => choices.find((ref) => ref.id === id)).filter(Boolean)
+    // A pick of a character's replaced canonical image renders as the current one (catalogPickResolver).
+    const resolve = project?.castAndSets?.source === 'catalog' ? catalogPickResolver(project) : null;
+    const ids = resolve ? [...new Set(scene.frameReferenceIds.map((id) => resolve(id).id))] : scene.frameReferenceIds;
+    return ids.map((id) => choices.find((ref) => ref.id === id)).filter(Boolean)
       .slice(0, limit);
   }
   const automatic = automaticConditioningReferences(project, scene, limit);
