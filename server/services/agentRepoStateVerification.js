@@ -356,8 +356,7 @@ async function readAbsentTaskSnapshot(agent) {
   for (const branch of new Set(branches)) {
     const rows = meta.completedCheckouts?.filter(row => row.branch === branch);
     if (rows?.length !== 1 || !completedCheckoutReceiptValid(agent, rows[0])
-      || resolve(rows[0].repoPath || '') !== canonical || !rows[0].path || !/^[a-f0-9]{40,64}$/.test(rows[0].head || '')
-      || !retirementCheckoutIdentityFromPointer(rows[0].incarnation?.pointer)) return null;
+      || resolve(rows[0].repoPath || '') !== canonical || !rows[0].path || !/^[a-f0-9]{40,64}$/.test(rows[0].head || '')) return null;
   }
   return snapshot;
 }
@@ -1236,8 +1235,7 @@ async function verifyRunBranches(input) {
     const unretired = superseded.find((_, index) => !retired[index]);
     if (unretired) { results.push(await holdBranch(branch, 'superseded-checkout-generation-present', null, unretired.path)); continue; }
     const captures = (meta.completedCheckouts || []).filter(row => row?.branch === branch && completedCheckoutReceiptValid(input.agentState, row)
-      && typeof row.path === 'string' && row.path && typeof row.repoPath === 'string' && resolve(row.repoPath) === repository
-      && retirementCheckoutIdentityFromPointer(row.incarnation?.pointer));
+      && typeof row.path === 'string' && row.path && typeof row.repoPath === 'string' && resolve(row.repoPath) === repository);
     const original = meta.completedCheckouts?.find(row => row.branch === branch);
     // A transient forge failure for one sibling must not undo an already
     // verified removal of this run's exact captured checkout. A reused path or
@@ -1275,8 +1273,7 @@ async function verifyRunBranches(input) {
       && meta.completedCheckouts?.some(row => row.branch !== branch
         && completedCheckoutReceiptValid(input.agentState, row)
         && typeof row.repoPath === 'string' && resolve(row.repoPath) === repository
-        && /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(row.head || '')
-        && retirementCheckoutIdentityFromPointer(row.incarnation?.pointer));
+        && /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(row.head || ''));
     if (releasedSelection && await settleReleasedSelectionHistory(input.agentId, meta, branch, trees)) {
       await branchLedger(input.agentId, { branch }).record('verified', 'released-selection-no-local-artifacts');
       results.push({ branch, verified: true, issues: [], skipReason: null });
@@ -1454,7 +1451,7 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
     completedCheckoutReceiptValid(agentState, row) && row.branch === branchName
     && typeof row.repoPath === 'string' && resolve(row.repoPath) === repository
     && typeof row.path === 'string' && worktreePath && resolve(row.path) === resolve(worktreePath)
-    && /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(row.head || '') && retirementCheckoutIdentityFromPointer(row.incarnation?.pointer)) : [];
+    && /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(row.head || '')) : [];
   const capturedHead = captures.length === 1 ? captures[0].head : null;
   const delivery = capturedHead && !originalPrUrl && !observed.prState
     ? await probePrForBranch(sourceWorkspace, branchName).catch(() => null) : observed;
