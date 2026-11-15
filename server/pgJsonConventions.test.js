@@ -1,40 +1,8 @@
 /**
- * Repo-wide guard: a value bound to a `json`/`jsonb` parameter is serialized with
- * `toPgJson` (lib/pgJson.js), never bare `JSON.stringify`.
- *
- * PostgreSQL refuses a lone UTF-16 surrogate and NUL inside `jsonb`, which every
- * file store these records came from accepted. `JSON.stringify` writes a lone
- * surrogate as the ASCII escape `\ud83d`, so the value reaches the server intact
- * and is refused — an emoji cut in half by `.slice()` lost a user-promoted CoS
- * task (#12815). `toPgJson` applies the repair the old UTF-8 file writes did.
- *
- * ## The rule
- *
- * A `JSON.stringify(` call is a violation when it feeds a statement that mentions
- * `::json`/`::jsonb`, in either shape:
- *
- *   1. it sits anywhere inside a `query(…)`/`execute(…)`-style call whose text
- *      mentions `::json`/`::jsonb` (the common case, including a `.map(…)` that
- *      builds an `unnest` column), or
- *   2. its innermost bracket is an array literal or a `.push(…)` — a bind-parameter
- *      list assembled apart from the SQL — and the enclosing block mentions
- *      `::json`/`::jsonb`.
- *
- * Hashing, logging, HTTP bodies and advisory-lock keys are not in either shape.
- *
- * ## Allowlist
- *
- * There is none. Applied migrations (`scripts/db-migrations/`) are frozen and
- * skipped wholesale: `020-*` binds to `json` (exact text) on purpose and verifies
- * byte equality. Anything else: swap in `toPgJson`.
- *
- * ## What this guard CANNOT see
- *
- * A lexer-assisted source scan (see lib/sourceScan.js), not a type-aware one. It
- * misses a stringified value bound to a `json`/`jsonb` COLUMN with no `::json`
- * cast anywhere in its block, and a value stringified in one function and bound
- * in another. `db.js` repairs plain-object parameters regardless, which covers
- * the call sites that never stringified at all.
+ * Rule: Values bound to a `::json`/`::jsonb` parameter must be serialized with `toPgJson` (`lib/pgJson.js`), never bare `JSON.stringify` (frozen `scripts/db-migrations/` skipped).
+ * Fix: Replace `JSON.stringify(…)` with `toPgJson(…)`.
+ * What this guard cannot see:
+ *   - Lexer-assisted scan (`lib/sourceScan.js`): misses a stringified value bound to a `json`/`jsonb` column with no `::json` cast in its block, or stringified in one function and bound in another.
  */
 import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 import { describe, it, expect } from 'vitest';

@@ -1,43 +1,10 @@
 // @vitest-environment node
 
 /**
- * Repo-wide guard (#7566): an AI provider is picked through the shared
- * preset-first `ProviderModelSelector` (`components/ProviderModelSelector.jsx`),
- * never through a hand-rolled `<select>` that maps over a provider list.
- *
- * The shared selector is what gives every surface the same contract at once:
- * enabled presets grouped by harness, the "Custom combination…" compose flow
- * (composite ids, "Save as preset"), a saved value that is unavailable staying
- * visible with its reason instead of being auto-replaced, hardware and
- * caller-mode policies, and the harness-keyed effort ladder. A bespoke select
- * gets none of that, and the next capability added to the selector skips it
- * silently — which is exactly how ~30 copies accumulated before this guard.
- *
- * The rule is structural: a `<select …>…</select>` block whose body maps over
- * an identifier that names providers (`providers.map(`, `providerOptions.map(`,
- * `enabledProviders.map(`, …) fails this suite unless the file is allowlisted.
- *
- * ## Allowlist
- *
- * - `src/components/ProviderModelSelector.jsx` — it IS the shared implementation.
- * - `src/components/sprites/AnimationProviderPicker.jsx` — sprite ANIMATION
- *   backends (`{ id, label, ready }`), not AI provider records; the name
- *   collides with the detector, the concept does not.
- * - `src/components/models/ModelComparison.jsx` — read-only chart filter over
- *   evidence already loaded, not an execution/provider configuration picker.
- *   Its All providers option must not resolve to an active execution preset.
- * - `LEGACY_BESPOKE` is EMPTY as of #7585 — every legacy site was migrated.
- *   It stays declared, and shrink-only, so a future exception has to be
- *   written down here with a reason rather than smuggled into `ALLOWED`;
- *   the third test fails the moment an entry stops earning its place.
- *
- * ## What this guard CANNOT see
- *
- * It is a source grep, not an AST pass. A select whose options come from a
- * pre-mapped array (`{options}` built elsewhere) or a `.map` over an
- * identifier that does not name providers slips through; comments are
- * stripped so prose mentioning a select does not trip it. Closing those
- * gaps means moving to an AST pass.
+ * Rule: Pick AI providers through `ProviderModelSelector` (`components/ProviderModelSelector.jsx`), never a hand-rolled `<select>` mapping over a provider list.
+ * Fix: Replace the bespoke `<select>` with `ProviderModelSelector`.
+ * What this guard cannot see:
+ *   - A `<select>` whose options come from a pre-mapped array (`{options}`) or a `.map` over an identifier that does not name providers.
  */
 
 import { describe, it, expect } from 'vitest';

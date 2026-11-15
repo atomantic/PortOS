@@ -1,27 +1,8 @@
 /**
- * Repo-wide guard: a statement-level call to an `async` function must say who
- * owns its rejection (#12978).
- *
- *   announceSelf(peer);        // ← bare: a rejection before its own catch is unowned
- *
- * Nobody holds the promise, so a rejection becomes an `unhandledRejection`.
- * `setupProcessErrorHandlers` tags that critical, broadcasts it to the UI and
- * `autoFixer` files an AI task for what was meant to be best-effort bookkeeping.
- *
- * ## The rule
- *
- * An `ExpressionStatement` that calls an `async` function must be `await`ed,
- * end in `.catch(…)`, or start with `void`. `void` is the explicit spelling of
- * "this function owns its rejections and is intentionally fire-and-forget" —
- * confirm that is true before adding it.
- *
- * "Async function" means a module-scope `async` function declaration / `const f =
- * async …` (nested helpers are not resolved — names shadow across scopes), or a name imported from a relative module whose same-named export
- * is one of those. Calls through member access (`obj.run()`), namespace imports
- * and re-exports are not resolved. A local binding that shadows an async name
- * would be flagged; rename it.
- *
- * There is no allowlist: fix the call site.
+ * Rule: A statement-level call to a module-scope or relatively-imported `async` function must be `await`ed, end in `.catch(…)`, or start with `void`.
+ * Fix: Add `await`, `.catch(…)`, or `void` (only when the function owns its own rejections).
+ * What this guard cannot see:
+ *   - Nested helpers, member-access calls (`obj.run()`), namespace imports, and re-exports are not resolved.
  */
 import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 

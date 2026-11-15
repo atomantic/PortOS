@@ -1,75 +1,13 @@
 // @vitest-environment node
 
 /**
- * Repo-wide guard: an async effect keyed to a switchable identity must drop a
- * superseded response.
- *
- * The broken shape is an effect that fetches on a dependency and writes the
- * answer straight into state:
- *
- *   useEffect(() => {
- *     loadBible(work.id).then(setCharacters);   // ← no disposal guard
- *   }, [work.id]);
- *
- * Switch work A → work B faster than the first request resolves and A's answer
- * lands after B's, so B is displayed holding A's records. `useMounted()` does
- * NOT cover this — the component never unmounted, only its subject changed —
- * which is exactly why this guard exists alongside
- * `hooks/mountedRefConventions.test.js` rather than inside it.
- *
- * It is not always a transient flicker. `WorkEditor` passed its bible lists
- * down as controlled props, and `BibleSection` returns early rather than
- * refetching when it receives them, so nothing re-read the server: the wrong
- * characters and places stayed until the user manually re-ran an extraction,
- * and in the meantime enriched the image-gen prompts behind persisted
- * storyboard renders. Issues #6996, #6997, #6998, #6999 and #7000 were each
- * filed and fixed as one site of this same class; #7242 swept the rest and
- * added this test, because fixing them one at a time never stopped new ones
- * from landing.
- *
- * ## The sanctioned fixes
- *
- * Three shapes count as a guard, matched on structure rather than on a name —
- * the tree spells the flag `active`, `cancelled`, `canceled`, `live`, `current`
- * and `ignore`, and a rule keyed to that list would be defeated by the next
- * synonym:
- *
- *   1. **A local flip flag** — the dominant idiom, ~150 files:
- *      `let active = true;` … `if (active) setX(v);` … `return () => { active = false; };`
- *   2. **A request-generation ref** — for an effect whose response must be
- *      matched against the LATEST request rather than merely dropped:
- *      `const gen = ++genRef.current;` … `if (gen !== genRef.current) return;`
- *   3. **An `AbortController`** whose `.abort()` runs in the cleanup.
- *
- * ## What this guard CANNOT see
- *
- * It is a lexical scan, not a scope-aware AST pass. The boundary, so a green
- * run is not trusted further than it earns:
- *
- *   - It cannot tell a setter that truly runs in the async continuation from
- *     one that merely appears later in the source than the first `await` /
- *     `.then(`. A synchronous `setX()` written below an unrelated `.then()`
- *     reads as a violation; those sites are on the allowlist with that reason.
- *   - A flag must be declared, flipped, and read, but the read is not traced to
- *     the setter: a flag that gates the WRONG `set*` call still counts, and so
- *     does a flip written outside the returned cleanup.
- *   - One guarded request exempts the whole effect, so a second unguarded fetch
- *     added beside it is invisible. Pinning that needs per-statement dataflow,
- *     which a lexical scan cannot do; the allowlist rows are deliberately
- *     file-scoped for the same reason.
- *   - The self-retrigger rule reads control flow only as far as "this block's
- *     last statement is a `return`". A path that leaves by `throw`, or through a
- *     branch whose return sits anywhere but last, reads as reachable — which
- *     errs toward reporting, so the cost is an allowlist row, not a miss.
- *   - The fetch/apply pair moved into a helper the effect calls is invisible,
- *     and so is a guard living in that helper.
- *   - `depsAllStable` resolves a `useRef` / `useMounted` handle only by a
- *     file-local `const` declaration, so a stable handle arriving as a prop
- *     still reads as switchable.
- *   - Regex literals are not lexed. A `(`, `)` or quote inside one skews the
- *     paren walk and can truncate the effect being read — which fails open for
- *     that effect. Strings, template literals and comments ARE blanked, and
- *     both directions are pinned by fixtures below.
+ * Rule: An async `useEffect` keyed to a switchable dependency must drop superseded responses (local flip flag `let active = true; …`, generation ref, or `AbortController`).
+ * Fix: Add a local `active` flag flipped in cleanup, a `++genRef.current` check, or an `AbortController` aborted in cleanup.
+ * What this guard cannot see:
+ *   - Synchronous `setX()` after an unrelated `.then()`/`await` (reads as a violation; allowlist if genuinely synchronous).
+ *   - Whether a declared/flipped flag actually gates the right `set*` call, or a second unguarded fetch in the same effect.
+ *   - Early-exit control flow other than a block-final `return`, helpers called by the effect, or `useRef`/`useMounted` props.
+ *   - Regex literals containing `(`, `)`, or quotes can skew the paren walk and truncate the effect.
  */
 
 import { describe, it, expect } from 'vitest';
