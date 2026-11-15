@@ -1433,7 +1433,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toContain('publish_reviewed_branch -u "$PUBLISH_REMOTE" "HEAD:refs/heads/$BRANCH"');
       expect(prompt).toContain('publish_reviewed_branch --force-with-lease="refs/heads/${BRANCH}:${REMOTE_BRANCH_SHA}" -u "$PUBLISH_REMOTE" "HEAD:refs/heads/$BRANCH"');
       expect(prompt).toContain('PUBLISH_ERROR="publish failed; refusing PR/MR"');
-      expect(prompt).toContain('publish_reviewed_branch() { git push "$@" || { echo "$PUBLISH_ERROR" >&2; exit 1; }; }');
+      expect(prompt).toContain('publish_reviewed_branch() { git push --no-follow-tags "$@" || { echo "$PUBLISH_ERROR" >&2; exit 1; }; }');
       expect(prompt).toContain('PUSH_OWNER=$(gh repo view "$(git remote get-url --push "$PUSH_REMOTE"');
       expect(prompt).toContain('[ -n "$PUSH_OWNER" ] || { echo "Missing PR head owner; refusing PR" >&2; exit 1; }');
       expect(prompt).toContain('PR_HEAD="$PUSH_OWNER:$BRANCH"');
