@@ -23,6 +23,7 @@
  * unsettled too. Model probes (`checkGoogleModel`) are free reads.
  */
 
+import { assertHeaderSafeKey } from '../lib/headerSafeKey.js';
 import { createSign } from 'crypto';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -142,7 +143,7 @@ async function getGoogleAccessToken(credential, { now = Date.now } = {}) {
 export const __resetGoogleTokenCache = () => tokenCache.clear();
 
 async function authHeaders(config) {
-  if (config.credential.kind === 'apiKey') return { 'x-goog-api-key': config.credential.apiKey };
+  if (config.credential.kind === 'apiKey') return { 'x-goog-api-key': assertHeaderSafeKey(config.credential.apiKey, 'Google') };
   return { Authorization: `Bearer ${await getGoogleAccessToken(config.credential)}` };
 }
 

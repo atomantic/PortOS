@@ -418,9 +418,11 @@ export function ImageGenTab() {
     const trimmed = value.trim();
     if (!trimmed) return false;
     setVideoCredentialBusy(`${id}-saving`);
-    const row = await saveCredential(id, trimmed, { silent: true }).catch(() => null);
+    let failure = null;
+    const row = await saveCredential(id, trimmed, { silent: true }).catch((error) => { failure = error; return null; });
     setVideoCredentialBusy(null);
-    if (!row) { toast.error('Failed to save key'); return false; }
+    // The server's message names why (e.g. a character that cannot go in a header).
+    if (!row) { toast.error(failure?.context?.details?.[0]?.message || 'Failed to save key'); return false; }
     setCredentialRows((previous) => ({ ...previous, [id]: row }));
     toast.success('Key saved privately.');
     return true;

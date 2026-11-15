@@ -6,6 +6,7 @@ export { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
 import { CREDENTIALS } from './credentialRegistry.js';
 import { DEFAULT_BACKUP_CRON, MIN_RETENTION_COUNT, MAX_RETENTION_COUNT } from './backupConfig.js';
 import { z } from 'zod';
+import { isHeaderSafeKey, headerSafeKeyMessage } from './headerSafeKey.js';
 import { NOTIFICATION_TYPES } from './notificationTypes.js';
 import { POLLUTING_KEYS } from './objects.js';
 import { pipelineEditorialChecksSettingsSchema } from './pipelineValidation.js';
@@ -2305,6 +2306,17 @@ const googlePlacementFields = {
   location: z.union([z.literal(''), z.string().trim().regex(GOOGLE_LOCATION_PATTERN, 'Not a Google Cloud region')]).optional(),
 };
 
+// Hosted provider key: '' clears. Validated untrimmed, so a pasted trailing
+// newline is refused with the setting named rather than silently altered.
+// `allowJson` lets Google's service-account JSON (spaces/newlines are legal) through.
+const hostedApiKeySchema = (label, max, { allowJson = false } = {}) => z.preprocess(
+  (v) => (v === '' ? undefined : v),
+  z.string().max(max).refine(
+    (v) => isHeaderSafeKey(v) || (allowJson && v.trim().startsWith('{')),
+    { message: headerSafeKeyMessage(label) },
+  ).optional(),
+);
+
 export const videoGenSettingsSchema = z.object({
   mode: videoModePinSchema,
   defaultModelId: z.preprocess(emptyToNull, z.string().trim().max(64).nullable().optional()),
@@ -2323,29 +2335,29 @@ export const videoGenSettingsSchema = z.object({
   // fal.ai queue REST provider (#6213) — settings-stored key wins over the
   // FAL_KEY env var (same precedence as loras.js's Civitai key).
   fal: z.object({
-    apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(200).optional()),
+    apiKey: hostedApiKeySchema('fal.ai', 200),
     parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   }).optional(),
   // reactor.inc fast-h3 provider (#6214) — same settings-wins-over-env
   // precedence as `fal` above.
   reactor: z.object({
-    apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(200).optional()),
+    apiKey: hostedApiKeySchema('reactor.inc', 200),
     parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   }).optional(),
   // Runway developer API — same settings-wins-over-env (RUNWAYML_API_SECRET) precedence.
   runway: z.object({
-    apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(200).optional()),
+    apiKey: hostedApiKeySchema('Runway', 200),
     parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   }).optional(),
   // Higgsfield developer API — KEY_ID:KEY_SECRET; settings win over HIGGSFIELD_API_KEY.
   higgsfield: z.object({
-    apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(400).optional()),
+    apiKey: hostedApiKeySchema('Higgsfield', 400),
     parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   }).optional(),
   // Google Cloud Agent Platform: the credential is an API key or a service account
   // JSON key (settings win over GOOGLE_CLOUD_API_KEY). Project and region are plain settings.
   google: z.object({
-    apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(GOOGLE_CREDENTIAL_MAX_LENGTH).optional()),
+    apiKey: hostedApiKeySchema('Google', GOOGLE_CREDENTIAL_MAX_LENGTH, { allowJson: true }),
     ...googlePlacementFields,
     parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   }).optional(),
@@ -2796,6 +2808,26 @@ export const modelComparisonDiscoverySchema = z.object({ providerId: z.string().
 export const privateCredentialParamsSchema = z.object({ id: z.enum(CREDENTIALS.filter(entry => entry.privateStore).map(entry => entry.id)) });
 // Large enough for a Google Cloud service account JSON key (the Google credential).
 export const privateCredentialInputSchema = z.object({ value: z.string().trim().max(GOOGLE_CREDENTIAL_MAX_LENGTH) }).strict();
+
+// Private-store ids whose value is sent verbatim in an HTTP header (label for the message).
+const HEADER_CREDENTIAL_LABELS = Object.freeze({ fal: 'fal.ai', reactor: 'reactor.inc', runway: 'Runway', higgsfield: 'Higgsfield', 'google-cloud': 'Google' });
+
+/**
+ * PUT body for one private credential. Header-bound hosted keys are validated
+ * untrimmed ('' clears), so an emoji, inner space or pasted trailing newline is
+ * refused and the message names the setting; other credentials keep `trim()`.
+ */
+export const privateCredentialInputSchemaFor = (id) => {
+  const label = HEADER_CREDENTIAL_LABELS[id];
+  if (!label) return privateCredentialInputSchema;
+  const allowJson = id === 'google-cloud';
+  return z.object({
+    value: z.string().max(GOOGLE_CREDENTIAL_MAX_LENGTH).refine(
+      (v) => v === '' || isHeaderSafeKey(v) || (allowJson && v.trim().startsWith('{')),
+      { message: headerSafeKeyMessage(label) },
+    ).transform((v) => v.trim()),
+  }).strict();
+};
 
 export const modelComparisonBenchmarkRunSchema = z.object({
   providerId: z.string().min(1).max(200),
