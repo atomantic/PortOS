@@ -15,30 +15,21 @@
  * queue params.
  */
 
-import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
-import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { randomUUID } from 'crypto';
 import { readFile } from 'fs/promises';
-import { basename, join } from 'path';
 import sharp from 'sharp';
-import { atomicWrite, detectImageFormat, ensureDir, PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
+import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
-import { renderTimingFields } from '../../lib/renderTiming.js';
 import { GOOGLE_IMAGE_DEFAULT_MODEL, buildGoogleImageRequest, googleImageFamily } from '../../lib/googleImageModels.js';
-import {
-  broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer, dispatchTerminalEvent,
-} from '../../lib/sseUtils.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { getSettings } from '../settings.js';
 import {
   checkGoogleModel, googleExpressModeRefusal, googleInlineImage, googleModelUrl, googlePost, resolveGoogleConfig,
 } from '../googleCloudApi.js';
-import { IMAGE_GEN_MODE, describeFidelity, visualReferenceRole } from './modes.js';
+import { IMAGE_GEN_MODE, attachedImageRoles } from './modes.js';
 import { resolveInputImages } from './inputImages.js';
 import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
-import { rejectDegenerateFrame } from './frameGuard.js';
+import { createHostedImageJobRunner } from './hostedJobRunner.js';
 import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
 
 const MODE = IMAGE_GEN_MODE.GOOGLE;
@@ -49,40 +40,11 @@ const GOOGLE_IMAGE_TIMEOUT_MS = (() => {
 // Up to 14 inputs ride in one JSON body, so a large photo is downscaled first.
 const INPUT_MAX_LONG_SIDE = 2048;
 const INPUT_MAX_BYTES = 4 * 1024 * 1024;
-const jobs = new Map();
-const activeRequests = new Map();
-const activeJobs = new Map();
-
-export const getActiveJob = () => {
-  const entries = [...activeJobs.values()];
-  return entries.length ? entries[entries.length - 1] : null;
-};
-export const getActiveJobs = () => [...activeJobs.values()];
-export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
-
-const preparations = createMediaJobPreparation();
-
-// A synchronous call cannot be canceled remotely once sent; aborting stops the
-// wait and discards the result (still billed, so the run is unsettled).
-export const cancel = (jobId) => {
-  if (!jobId) {
-    throw new Error('imageGen/google.cancel requires a jobId — use cancelAll() to terminate every in-flight render');
-  }
-  const pending = preparations.cancel(jobId);
-  if (pending) return pending;
-  const entry = activeRequests.get(jobId);
-  if (!entry) return false;
-  entry.aborted = true;
-  entry.controller.abort();
-  return true;
-};
-
-export const cancelAll = () => {
-  const ids = [...preparations.ids(), ...activeRequests.keys()];
-  if (ids.length === 0) return false;
-  for (const id of ids) cancel(id);
-  return true;
-};
+// A synchronous call cannot be canceled remotely once sent (no cancelRemote);
+// aborting stops the wait and discards the result (still billed, so the run is unsettled).
+const runner = createHostedImageJobRunner({ mode: MODE, provider: 'Google' });
+export const { getActiveJob, getActiveJobs, attachSseClient, cancel, cancelAll } = runner;
+const { finalizeJobFailure, finalizeCanceled } = runner;
 
 const noKeyReason = 'No Google credential configured — add an API key or service account JSON in Settings → Credentials (Google Cloud (Agent Platform)) or set GOOGLE_CLOUD_API_KEY';
 
@@ -103,21 +65,13 @@ export async function checkConnection({ model = GOOGLE_IMAGE_DEFAULT_MODEL } = {
   return { ...base, connected: probe.ok, ...(probe.ok ? {} : { reason: probe.reason }) };
 }
 
-function imageRoleLines({ hasInitImage, initImageStrength, referenceCount }) {
-  if (hasInitImage) {
-    return [`The first attached image is the source image to edit — ${describeFidelity(initImageStrength)}.`,
-      ...(referenceCount ? [`The remaining attached ${referenceCount === 1 ? 'image is' : 'images are'} ${visualReferenceRole(referenceCount)}.`] : [])].join('\n\n');
-  }
-  return referenceCount ? `Use the attached ${referenceCount === 1 ? 'image' : 'images'} as ${visualReferenceRole(referenceCount)}.` : '';
-}
-
 /**
  * The exact text Google receives and the record of what PortOS added (#11317).
  * Shared by the render and the compose preview; it also runs the request
  * builder, so an unsupported input refuses before anything is queued.
  */
 export function googleImageSentPrompt({ family, prompt = '', negativePrompt, inputImages, initImageStrength, promptAdditions = [], width, height }) {
-  const roles = imageRoleLines({
+  const roles = attachedImageRoles({
     hasInitImage: Boolean(inputImages.initPath), initImageStrength, referenceCount: inputImages.referencePaths.length,
   });
   const fullPrompt = [String(prompt ?? '').trim(), roles].filter(Boolean).join('\n\n');
@@ -174,14 +128,14 @@ function responseImage(family, payload) {
   return { reason: `Google returned no image: ${why}` };
 }
 
-export const generateImage = (params) => preparations.run(params, generateImagePrepared);
+export const generateImage = (params) => runner.prepare(params, generateImagePrepared);
 
 async function generateImagePrepared({
   promptAdditions = [],
   model, prompt = '', negativePrompt, width, height, seed,
   initImagePath, initImageStrength, referenceImagePaths = [],
   visualConditioning = null,
-  jobId: providedJobId = null, reviewedReferenceSnapshot = null,
+  jobId, reviewedReferenceSnapshot = null,
   cleanC2PA = false,
   denoise = false,
   settings = null,
@@ -206,53 +160,32 @@ async function generateImagePrepared({
   const expressRefusal = googleExpressModeRefusal(config, family);
   if (expressRefusal) throw new ServerError(expressRefusal, { status: 400, code: 'GOOGLE_PROJECT_REQUIRED' });
 
-  const jobId = providedJobId || randomUUID();
-  const filename = `${jobId}.png`;
-  const outputPath = join(PATHS.images, filename);
   const { fullPrompt, request: planned, record: sentRecord } = googleImageSentPrompt({
     family, prompt, negativePrompt, inputImages, initImageStrength, promptAdditions, width, height,
   });
-
-  const meta = {
-    id: jobId, prompt: prompt.trim(), negativePrompt: negativePrompt || '',
-    width: width ? Number(width) : null, height: height ? Number(height) : null,
-    filename, mode: MODE,
-    model: family.id,
-    ...(planned.aspectRatio ? { aspectRatio: planned.aspectRatio } : {}),
-    ...(planned.imageSize ? { resolution: planned.imageSize } : {}),
-    inputProvenance: 'provider-inputs',
-    initImageFilename: inputImages.initPath ? basename(inputImages.initPath) : null,
-    referenceImageFilenames: inputImages.referencePaths.map(path => basename(path)),
-    ...(inputImages.paths.length ? { inputImageCount: inputImages.paths.length } : {}),
-    ...(visualConditioning ? { visualConditioning } : {}),
-    ...sentRecord,
-    createdAt: new Date().toISOString(),
-  };
-  const reviewedReferenceBytes = await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
-  const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
-  jobs.set(jobId, job);
-
-  console.log(`🎨 Generating image [${jobId.slice(0, 8)}] Google (${family.id})`);
-  imageGenEvents.emit('started', { generationId: jobId, totalSteps: 1 });
-  activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0, currentImage: null });
-  broadcastSse(job, { type: 'status', message: 'Rendering on Google…' });
-  runGoogle(job, jobId, {
-    config, family, fullPrompt, negativePrompt, width, height, seed, inputImages, reviewedReferenceBytes,
-    outputPath, filename, meta, cleanC2PA, denoise,
-  }).catch((err) => {
-    console.error(`❌ Google image run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
+  const meta = runner.jobMeta({
+    jobId, prompt, negativePrompt, width, height, inputImages, visualConditioning, sentRecord,
+    modelFields: {
+      model: family.id,
+      ...(planned.aspectRatio ? { aspectRatio: planned.aspectRatio } : {}),
+      ...(planned.imageSize ? { resolution: planned.imageSize } : {}),
+    },
   });
-
-  return { jobId, filename, path: `/data/images/${filename}`, generationId: jobId, mode: MODE, status: 'running' };
+  const reviewedReferenceBytes = await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
+  return runner.start({
+    meta, renderStartedAtMs, model: family.id, status: 'Rendering on Google…',
+    run: (job) => runGoogle(job, jobId, {
+      config, family, fullPrompt, negativePrompt, width, height, seed, inputImages, reviewedReferenceBytes,
+      meta, cleanC2PA, denoise,
+    }),
+  });
 }
 
 async function runGoogle(job, jobId, {
   config, family, fullPrompt, negativePrompt, width, height, seed, inputImages, reviewedReferenceBytes,
-  outputPath, filename, meta, cleanC2PA = false, denoise = false,
+  meta, cleanC2PA = false, denoise = false,
 }) {
-  const entry = { controller: new AbortController(), aborted: preparations.take(jobId) };
-  activeRequests.set(jobId, entry);
-  let wroteOutput = false;
+  const entry = runner.track(jobId, { controller: new AbortController() });
   // The activity ping keeps the media queue's idle watchdog quiet during one long synchronous call.
   const heartbeat = setInterval(() => imageGenEvents.emit('activity', { generationId: jobId }), 5000);
   try {
@@ -269,68 +202,14 @@ async function runGoogle(job, jobId, {
     if (entry.aborted) return finalizeCanceled(job, jobId);
     const image = responseImage(family, payload);
     if (!image.bytes) return finalizeJobFailure(job, jobId, null, image.reason);
-    const bytes = image.bytes;
-
-    await withBackupAssetPublication(async () => {
-      if (entry.aborted) return finalizeCanceled(job, jobId);
-      try {
-        const format = detectImageFormat(bytes)?.format;
-        if (!format) return finalizeJobFailure(job, jobId, null, 'Google returned a file that is not an image');
-        await atomicWrite(outputPath, format === 'png' ? bytes : await sharp(bytes).png().toBuffer());
-        wroteOutput = true;
-        if (entry.aborted) {
-          await unlinkGuarded(outputPath).catch(() => {});
-          return finalizeCanceled(job, jobId);
-        }
-        const emptyFrame = await rejectDegenerateFrame(outputPath);
-        if (emptyFrame) {
-          await unlinkGuarded(outputPath).catch(() => {});
-          return finalizeJobFailure(job, jobId, null, emptyFrame);
-        }
-        const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
-        await atomicWrite(sidecar, {
-          ...meta,
-          ...(request.seed != null ? { seed: request.seed } : {}),
-          estimatedCostUsd: request.estimatedCostUsd,
-          ...renderTimingFields(job.renderStartedAtMs),
-        });
-        await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: MODE });
-        if (entry.aborted) {
-          await Promise.all([outputPath, sidecar].map(path => unlinkGuarded(path)));
-          return finalizeCanceled(job, jobId);
-        }
-        job.status = 'complete';
-        if (activeRequests.get(jobId) === entry) activeRequests.delete(jobId);
-        activeJobs.delete(jobId);
-        console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (Google ${family.id})`);
-        const done = { filename, path: `/data/images/${filename}` };
-        dispatchTerminalEvent(
-          jobId,
-          () => broadcastSse(job, { type: 'complete', result: done }),
-          () => imageGenEvents.emit('completed', { mode: MODE, generationId: jobId, inputProcessSettled: true, path: done.path, filename }),
-        );
-        closeJobAfterDelay(jobs, jobId);
-      } catch (err) {
-        if (wroteOutput && job.status !== 'complete') {
-          await Promise.all([outputPath, join(PATHS.images, `${jobId}.metadata.json`)].map(path => unlinkGuarded(path).catch(() => {})));
-        }
-        throw err;
-      }
+    await runner.publish({
+      job, entry, bytes: image.bytes, meta, cleanC2PA, denoise,
+      sidecarFields: { ...(request.seed != null ? { seed: request.seed } : {}), estimatedCostUsd: request.estimatedCostUsd },
+      doneNote: `Google ${family.id}`,
     });
   } catch (err) {
-    if (entry.aborted) return finalizeCanceled(job, jobId);
-    finalizeJobFailure(job, jobId, null, `Google image generation failed: ${err?.message || err}`, { force: true });
+    await runner.failRun(job, entry, `Google image generation failed: ${err?.message || err}`);
   } finally {
     clearInterval(heartbeat);
   }
 }
-
-const finalizeJobFailure = createJobFailureFinalizer({
-  jobs,
-  activeJobs,
-  activeSlots: activeRequests,
-  label: 'Google image generation',
-  events: imageGenEvents,
-  failedPayload: (jobId, reason) => ({ mode: MODE, generationId: jobId, error: reason }),
-});
-const finalizeCanceled = finalizeJobFailure.canceled;

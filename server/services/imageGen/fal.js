@@ -1,5 +1,3 @@
-import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
-import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 /**
  * Image Gen — fal.ai queue REST API provider.
  *
@@ -29,24 +27,19 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
  * persisted queue job params.
  */
 
-import { randomUUID, createHash } from 'crypto';
+import { createHash } from 'crypto';
 import { readFile } from 'fs/promises';
-import { basename, join } from 'path';
 import sharp from 'sharp';
-import { atomicWrite, detectImageFormat, ensureDir, PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
+import { detectImageFormat, ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { anyAbortSignal } from '../../lib/requestAbort.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { createConcurrencyGate } from '../../lib/concurrencyGate.js';
-import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
-import { renderTimingFields } from '../../lib/renderTiming.js';
 import {
   FAL_IMAGE_DEFAULT_MODEL, FAL_MEGAPIXEL, buildFalImageRequest, falImageFamily,
 } from '../../lib/falImageModels.js';
-import {
-  broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer, dispatchTerminalEvent,
-} from '../../lib/sseUtils.js';
+import { broadcastSse } from '../../lib/sseUtils.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { getSettings } from '../settings.js';
 import { autoDeleteHostedCopy } from '../hostedRenderRemoteDelete.js';
@@ -54,11 +47,11 @@ import {
   awaitFalCompletion, cancelFalRequest, createFalRequestEntry, hostFalDataUri, readCompletedFalResult, resolveFalApiKey,
   submitFalRequest,
 } from '../falQueue.js';
-import { IMAGE_GEN_MODE, describeFidelity, visualReferenceRole } from './modes.js';
+import { IMAGE_GEN_MODE, attachedImageRoles } from './modes.js';
 import { resolveInputImages } from './inputImages.js';
 import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
-import { rejectDegenerateFrame } from './frameGuard.js';
+import { createHostedImageJobRunner } from './hostedJobRunner.js';
 import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
 
 const MODE = IMAGE_GEN_MODE.FAL;
@@ -248,44 +241,9 @@ async function uploadReferenceImage({ apiKey, dataUri, signal, deadline }) {
   return awaitReferenceUploadSubscriber({ entry: inflightEntry, cacheKey, signal, deadline });
 }
 
-const jobs = new Map();
-// jobId → the fal.ai request entry (falQueue.createFalRequestEntry), so
-// cancel() can stop the poll loop AND cancel the billed remote request.
-const activeRequests = new Map();
-const activeJobs = new Map();
-
-export const getActiveJob = () => {
-  const entries = [...activeJobs.values()];
-  return entries.length ? entries[entries.length - 1] : null;
-};
-export const getActiveJobs = () => [...activeJobs.values()];
-
-export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
-
-// Cancel one specific render. jobId is required — with parallel renders an
-// anonymous cancel would stop every in-flight one; use cancelAll() for that.
-const preparations = createMediaJobPreparation();
-
-export const cancel = (jobId) => {
-  if (!jobId) {
-    throw new Error('imageGen/fal.cancel requires a jobId — use cancelAll() to terminate every in-flight render');
-  }
-  const pending = preparations.cancel(jobId);
-  if (pending) return pending;
-  const entry = activeRequests.get(jobId);
-  if (!entry) return false;
-  entry.aborted = true;
-  entry.controller.abort();
-  void cancelFalRequest(entry);
-  return true;
-};
-
-export const cancelAll = () => {
-  const ids = [...preparations.ids(), ...activeRequests.keys()];
-  if (ids.length === 0) return false;
-  for (const id of ids) cancel(id);
-  return true;
-};
+const runner = createHostedImageJobRunner({ mode: MODE, provider: 'fal.ai', logName: 'fal', cancelRemote: cancelFalRequest });
+export const { getActiveJob, getActiveJobs, attachSseClient, cancel, cancelAll } = runner;
+const { finalizeJobFailure, finalizeCanceled } = runner;
 
 const noKeyReason = 'No fal.ai API key configured — add it under Settings → Image Gen → Defaults (shared with the fal.ai video backend) or set FAL_KEY';
 
@@ -313,26 +271,6 @@ export async function checkConnection({ model } = {}) {
   const price = payload?.prices?.find((p) => p?.endpoint_id === family.textEndpoint);
   const priceLabel = price ? ` — $${price.unit_price}/${price.unit === 'images' ? 'image' : price.unit}` : '';
   return { connected: true, mode: MODE, model: `${family.label}${priceLabel}`, modelId: family.textEndpoint };
-}
-
-/**
- * The prompt a fal.ai edit model receives. These models read the attached
- * images in order and take plain-language direction about them, so the
- * init/reference roles the CLI providers spell out as tool arguments are
- * spelled out here as prose, with the same fidelity + reference wording the
- * CLI prompt builders share (describeFidelity / visualReferenceRole).
- */
-function buildFalPrompt({ prompt, hasInitImage = false, initImageStrength, referenceCount = 0 }) {
-  const lines = [prompt.trim()];
-  if (hasInitImage) {
-    lines.push(`The first attached image is the source image to edit — ${describeFidelity(initImageStrength)}.`);
-    if (referenceCount) {
-      lines.push(`The remaining attached ${referenceCount === 1 ? 'image is' : 'images are'} ${visualReferenceRole(referenceCount)}.`);
-    }
-  } else if (referenceCount) {
-    lines.push(`Use the attached ${referenceCount === 1 ? 'image' : 'images'} as ${visualReferenceRole(referenceCount)}.`);
-  }
-  return lines.join('\n\n');
 }
 
 // Read one input image into a data URI — the original bytes when they are a
@@ -373,12 +311,10 @@ const firstImageUrl = (result) => {
  * render and the compose preview.
  */
 export function falImageSentPrompt({ family, prompt = '', negativePrompt, inputImages, initImageStrength, promptAdditions = [] }) {
-  const fullPrompt = buildFalPrompt({
-    prompt,
-    hasInitImage: Boolean(inputImages.initPath),
-    initImageStrength,
-    referenceCount: inputImages.referencePaths.length,
+  const roles = attachedImageRoles({
+    hasInitImage: Boolean(inputImages.initPath), initImageStrength, referenceCount: inputImages.referencePaths.length,
   });
+  const fullPrompt = roles ? `${prompt.trim()}\n\n${roles}` : prompt.trim();
   return {
     fullPrompt,
     record: sentPromptRecord({
@@ -390,14 +326,14 @@ export function falImageSentPrompt({ family, prompt = '', negativePrompt, inputI
   };
 }
 
-export const generateImage = (params) => preparations.run(params, generateImagePrepared);
+export const generateImage = (params) => runner.prepare(params, generateImagePrepared);
 
 async function generateImagePrepared({
   promptAdditions = [],
   model, prompt = '', negativePrompt, width, height, seed,
   initImagePath, initImageStrength, referenceImagePaths = [],
   visualConditioning = null,
-  jobId: providedJobId = null, reviewedReferenceSnapshot = null,
+  jobId, reviewedReferenceSnapshot = null,
   cleanC2PA = false,
   denoise = false,
   apiKey: providedApiKey = null,
@@ -436,50 +372,21 @@ async function generateImagePrepared({
   }
 
   const endpointId = inputImages.paths.length ? family.editEndpoint : family.textEndpoint;
-  const jobId = providedJobId || randomUUID();
-  const filename = `${jobId}.png`;
-  const outputPath = join(PATHS.images, filename);
   const { fullPrompt, record: sentRecord } = falImageSentPrompt({ family, prompt, negativePrompt, inputImages, initImageStrength, promptAdditions });
-
-  const meta = {
-    id: jobId, prompt: prompt.trim(), negativePrompt: negativePrompt || '',
-    width: width ? Number(width) : null, height: height ? Number(height) : null,
-    filename, mode: MODE,
+  const meta = runner.jobMeta({
+    jobId, prompt, negativePrompt, width, height, inputImages, visualConditioning, sentRecord,
     // The endpoint that actually rendered (text vs /edit), plus the family the
     // user chose — a gallery reader should not have to re-derive either.
-    model: endpointId,
-    modelFamily: family.id,
-    inputProvenance: 'provider-inputs',
-    initImageFilename: inputImages.initPath ? basename(inputImages.initPath) : null,
-    referenceImageFilenames: inputImages.referencePaths.map(path => basename(path)),
-    ...(inputImages.paths.length ? { inputImageCount: inputImages.paths.length } : {}),
-    ...(visualConditioning ? { visualConditioning } : {}),
-    ...sentRecord,
-    createdAt: new Date().toISOString(),
-  };
-  const reviewedReferenceBytes = await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
-  const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
-  jobs.set(jobId, job);
-
-  console.log(`🎨 Generating image [${jobId.slice(0, 8)}] fal (${endpointId})`);
-  imageGenEvents.emit('started', { generationId: jobId, totalSteps: 1 });
-  activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0, currentImage: null });
-  broadcastSse(job, { type: 'status', message: 'Submitting to fal.ai…' });
-
-  // Returns the job descriptor synchronously; the paid request runs
-  // out-of-band while the client attaches to the per-job SSE stream.
-  runFal(job, jobId, {
-    apiKey, family, fullPrompt, negativePrompt, width, height, seed,
-    inputPaths: inputImages.paths, reviewedReferenceBytes, outputPath, filename, meta, cleanC2PA, denoise,
-  }).catch((err) => {
-    console.error(`❌ fal image run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
+    modelFields: { model: endpointId, modelFamily: family.id },
   });
-
-  return {
-    jobId, filename, path: `/data/images/${filename}`, generationId: jobId,
-    mode: MODE,
-    status: 'running',
-  };
+  const reviewedReferenceBytes = await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
+  return runner.start({
+    meta, renderStartedAtMs, model: endpointId, status: 'Submitting to fal.ai…',
+    run: (job) => runFal(job, jobId, {
+      apiKey, family, fullPrompt, negativePrompt, width, height, seed,
+      inputPaths: inputImages.paths, reviewedReferenceBytes, meta, cleanC2PA, denoise,
+    }),
+  });
 }
 
 function formatStepFailure(step, errOrReason) {
@@ -497,13 +404,10 @@ function formatStepFailure(step, errOrReason) {
 
 async function runFal(job, jobId, {
   apiKey, family, fullPrompt, negativePrompt, width, height, seed,
-  inputPaths, reviewedReferenceBytes, outputPath, filename, meta, cleanC2PA = false, denoise = false,
+  inputPaths, reviewedReferenceBytes, meta, cleanC2PA = false, denoise = false,
 }) {
-  const entry = createFalRequestEntry(apiKey);
-  entry.aborted = preparations.take(jobId);
-  activeRequests.set(jobId, entry);
+  const entry = runner.track(jobId, createFalRequestEntry(apiKey));
   const deadline = Date.now() + FAL_IMAGE_TIMEOUT_MS;
-  let wroteOutput = false;
   let currentStep = inputPaths.length ? 'input encoding' : 'submit';
   try {
     const encoded = [];
@@ -586,84 +490,24 @@ async function runFal(job, jobId, {
     });
     if (entry.aborted) return finalizeCanceled(job, jobId);
 
-    await withBackupAssetPublication(async () => {
-      try {
-        // Signature-sniff before anything reaches the gallery: an error page or
-        // truncated body must never be accepted as an image. The gallery serves
-        // by extension and sidecars assume PNG, so a JPEG/WebP result is
-        // transcoded rather than shipped mislabeled.
-        const format = detectImageFormat(bytes)?.format;
-        if (!format) return finalizeJobFailure(job, jobId, null, 'fal.ai returned a file that is not an image');
-        await atomicWrite(outputPath, format === 'png' ? bytes : await sharp(bytes).png().toBuffer());
-        wroteOutput = true;
-        if (entry.aborted) {
-          await unlinkGuarded(outputPath).catch(() => {});
-          return finalizeCanceled(job, jobId);
-        }
-
-        // Degenerate-frame gate (#4173) — a moderated/blank result must fail
-        // here, not become a gallery record.
-        const emptyFrame = await rejectDegenerateFrame(outputPath);
-        if (emptyFrame) {
-          await unlinkGuarded(outputPath).catch(() => {});
-          return finalizeJobFailure(job, jobId, null, emptyFrame);
-        }
-
-        const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
-        const actualSeed = Number.isInteger(result?.seed) ? result.seed : (request.body.seed ?? null);
-        await atomicWrite(sidecar, {
-          ...meta,
-          ...(request.body.aspect_ratio ? { aspectRatio: request.body.aspect_ratio } : {}),
-          ...(request.resolution ? { resolution: request.resolution } : {}),
-          ...(actualSeed != null ? { seed: actualSeed } : {}),
-          // An ESTIMATE from the catalog's published prices — fal.ai bills the
-          // account; this only lets a gallery record say roughly what it cost.
-          estimatedCostUsd: request.estimatedCostUsd,
-          ...renderTimingFields(job.renderStartedAtMs),
-        });
-        // Cleaners run BEFORE the SSE complete + completed events so subscribers
-        // see the cleaned bytes.
-        await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: MODE });
-        job.status = 'complete';
-        if (activeRequests.get(jobId) === entry) activeRequests.delete(jobId);
-        activeJobs.delete(jobId);
-        console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (fal ${request.endpointId}, ~$${request.estimatedCostUsd})`);
-        const done = { filename, path: `/data/images/${filename}` };
-        dispatchTerminalEvent(
-          jobId,
-          () => broadcastSse(job, { type: 'complete', result: done }),
-          () => imageGenEvents.emit('completed', { mode: MODE, generationId: jobId, inputProcessSettled: true, path: done.path, filename }),
-        );
-        closeJobAfterDelay(jobs, jobId);
-      } catch (err) {
-        if (wroteOutput && job.status !== 'complete') {
-          await Promise.all([outputPath, join(PATHS.images, `${jobId}.metadata.json`)].map(path => unlinkGuarded(path).catch(() => {})));
-        }
-        throw err;
-      }
+    const actualSeed = Number.isInteger(result?.seed) ? result.seed : (request.body.seed ?? null);
+    await runner.publish({
+      job, entry, bytes, meta, cleanC2PA, denoise,
+      sidecarFields: {
+        ...(request.body.aspect_ratio ? { aspectRatio: request.body.aspect_ratio } : {}),
+        ...(request.resolution ? { resolution: request.resolution } : {}),
+        ...(actualSeed != null ? { seed: actualSeed } : {}),
+        // An ESTIMATE from the catalog's published prices — fal.ai bills the
+        // account; this only lets a gallery record say roughly what it cost.
+        estimatedCostUsd: request.estimatedCostUsd,
+      },
+      doneNote: `fal ${request.endpointId}, ~$${request.estimatedCostUsd}`,
     });
-    if (job.status === 'complete') void autoDeleteHostedCopy('fal', 'image', filename, { apiKey });
+    if (job.status === 'complete') void autoDeleteHostedCopy('fal', 'image', meta.filename, { apiKey });
   } catch (err) {
-    // An unanticipated throw (input encode, retrieval, transcode) may still
-    // leave the remote request queued or running — cancel it. cancelFalRequest
-    // no-ops once fal.ai reported a terminal state or before anything was
-    // submitted. `force` because the success tail stamps 'complete' before its
-    // last awaits.
-    await cancelFalRequest(entry);
-    if (entry.aborted) return finalizeCanceled(job, jobId);
-    finalizeJobFailure(job, jobId, null, formatStepFailure(currentStep, err), { force: true });
+    await runner.failRun(job, entry, formatStepFailure(currentStep, err));
   }
 }
-
-const finalizeJobFailure = createJobFailureFinalizer({
-  jobs,
-  activeJobs,
-  activeSlots: activeRequests,
-  label: 'fal image generation',
-  events: imageGenEvents,
-  failedPayload: (jobId, reason) => ({ mode: MODE, generationId: jobId, error: reason }),
-});
-const finalizeCanceled = finalizeJobFailure.canceled;
 
 // Test-only handles.
 export const _internals = {

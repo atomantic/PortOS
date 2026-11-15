@@ -13,24 +13,12 @@
  * backend and re-resolved at dispatch, never persisted in queue params.
  */
 
-import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
-import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { randomUUID } from 'crypto';
-import { basename, join } from 'path';
-import sharp from 'sharp';
-import { atomicWrite, detectImageFormat, ensureDir, PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
+import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { withAbortTimeout } from '../../lib/abortTimeout.js';
-import { anyAbortSignal } from '../../lib/requestAbort.js';
-import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
-import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
-import { renderTimingFields } from '../../lib/renderTiming.js';
 import {
   HIGGSFIELD_IMAGE_DEFAULT_MODEL, buildHiggsfieldImageRequest, higgsfieldImageFamily,
 } from '../../lib/higgsfieldImageModels.js';
-import {
-  broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer, dispatchTerminalEvent,
-} from '../../lib/sseUtils.js';
+import { broadcastSse } from '../../lib/sseUtils.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { getSettings } from '../settings.js';
 import { autoDeleteHostedCopy } from '../hostedRenderRemoteDelete.js';
@@ -38,11 +26,11 @@ import {
   awaitHiggsfieldRequest, cancelHiggsfieldRequest, createHiggsfieldRequestEntry, resolveHiggsfieldApiKey,
   submitHiggsfieldRequest, uploadHiggsfieldImage,
 } from '../higgsfieldApi.js';
-import { IMAGE_GEN_MODE, describeFidelity, visualReferenceRole } from './modes.js';
+import { IMAGE_GEN_MODE, attachedImageRoles } from './modes.js';
 import { resolveInputImages } from './inputImages.js';
 import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
-import { rejectDegenerateFrame } from './frameGuard.js';
+import { createHostedImageJobRunner } from './hostedJobRunner.js';
 import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
 
 const MODE = IMAGE_GEN_MODE.HIGGSFIELD;
@@ -51,39 +39,9 @@ const HIGGSFIELD_IMAGE_TIMEOUT_MS = (() => {
   return Number.isFinite(n) && n > 0 ? n : 15 * 60 * 1000;
 })();
 const HIGGSFIELD_IMAGE_DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000;
-const jobs = new Map();
-const activeRequests = new Map();
-const activeJobs = new Map();
-
-export const getActiveJob = () => {
-  const entries = [...activeJobs.values()];
-  return entries.length ? entries[entries.length - 1] : null;
-};
-export const getActiveJobs = () => [...activeJobs.values()];
-export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
-
-const preparations = createMediaJobPreparation();
-
-export const cancel = (jobId) => {
-  if (!jobId) {
-    throw new Error('imageGen/higgsfield.cancel requires a jobId — use cancelAll() to terminate every in-flight render');
-  }
-  const pending = preparations.cancel(jobId);
-  if (pending) return pending;
-  const entry = activeRequests.get(jobId);
-  if (!entry) return false;
-  entry.aborted = true;
-  entry.controller.abort();
-  void cancelHiggsfieldRequest(entry);
-  return true;
-};
-
-export const cancelAll = () => {
-  const ids = [...preparations.ids(), ...activeRequests.keys()];
-  if (ids.length === 0) return false;
-  for (const id of ids) cancel(id);
-  return true;
-};
+const runner = createHostedImageJobRunner({ mode: MODE, provider: 'Higgsfield', cancelRemote: cancelHiggsfieldRequest });
+export const { getActiveJob, getActiveJobs, attachSseClient, cancel, cancelAll } = runner;
+const { finalizeJobFailure, finalizeCanceled } = runner;
 
 const noKeyReason = 'No Higgsfield credential configured — add it in Settings → Credentials or set HIGGSFIELD_API_KEY (KEY_ID:KEY_SECRET)';
 
@@ -94,23 +52,13 @@ export async function checkConnection({ model = HIGGSFIELD_IMAGE_DEFAULT_MODEL }
   return { connected: Boolean(apiKey), mode: MODE, model: family.label, modelId: family.textEndpoint, ...(apiKey ? {} : { reason: noKeyReason }) };
 }
 
-// These models read the attached images in order and take plain-language
-// direction about them, the same prose the fal.ai backend sends.
-function imageRoleLines({ hasInitImage, initImageStrength, referenceCount }) {
-  if (hasInitImage) {
-    return [`The first attached image is the source image to edit — ${describeFidelity(initImageStrength)}.`,
-      ...(referenceCount ? [`The remaining attached ${referenceCount === 1 ? 'image is' : 'images are'} ${visualReferenceRole(referenceCount)}.`] : [])].join('\n\n');
-  }
-  return referenceCount ? `Use the attached ${referenceCount === 1 ? 'image' : 'images'} as ${visualReferenceRole(referenceCount)}.` : '';
-}
-
 /**
  * The exact text Higgsfield receives and the record of what PortOS added
  * (#11317). Shared by the render and the compose preview; it also runs the
  * request builder, so an over-limit prompt refuses before anything is queued.
  */
 export function higgsfieldImageSentPrompt({ family, prompt = '', negativePrompt, inputImages, initImageStrength, promptAdditions = [], width, height }) {
-  const roles = imageRoleLines({
+  const roles = attachedImageRoles({
     hasInitImage: Boolean(inputImages.initPath), initImageStrength, referenceCount: inputImages.referencePaths.length,
   });
   const fullPrompt = [String(prompt ?? '').trim(), roles].filter(Boolean).join('\n\n');
@@ -137,14 +85,14 @@ export function higgsfieldImageSentPrompt({ family, prompt = '', negativePrompt,
   };
 }
 
-export const generateImage = (params) => preparations.run(params, generateImagePrepared);
+export const generateImage = (params) => runner.prepare(params, generateImagePrepared);
 
 async function generateImagePrepared({
   promptAdditions = [],
   model, prompt = '', negativePrompt, width, height, seed,
   initImagePath, initImageStrength, referenceImagePaths = [],
   visualConditioning = null,
-  jobId: providedJobId = null, reviewedReferenceSnapshot = null,
+  jobId, reviewedReferenceSnapshot = null,
   cleanC2PA = false,
   denoise = false,
   apiKey: providedApiKey = null,
@@ -169,56 +117,34 @@ async function generateImagePrepared({
   const apiKey = providedApiKey || resolveHiggsfieldApiKey(effectiveSettings);
   if (!apiKey) throw new ServerError(noKeyReason, { status: 400, code: 'HIGGSFIELD_NOT_CONFIGURED' });
 
-  const jobId = providedJobId || randomUUID();
-  const filename = `${jobId}.png`;
-  const outputPath = join(PATHS.images, filename);
   const { fullPrompt, request, record: sentRecord } = higgsfieldImageSentPrompt({
     family, prompt, negativePrompt, inputImages, initImageStrength, promptAdditions, width, height,
   });
-
-  const meta = {
-    id: jobId, prompt: prompt.trim(), negativePrompt: negativePrompt || '',
-    width: width ? Number(width) : null, height: height ? Number(height) : null,
-    filename, mode: MODE,
-    model: request.endpointId,
-    modelFamily: family.id,
-    ...(request.body.aspect_ratio ? { aspectRatio: request.body.aspect_ratio } : {}),
-    ...(request.resolution ? { resolution: request.resolution } : {}),
-    inputProvenance: 'provider-inputs',
-    initImageFilename: inputImages.initPath ? basename(inputImages.initPath) : null,
-    referenceImageFilenames: inputImages.referencePaths.map(path => basename(path)),
-    ...(inputImages.paths.length ? { inputImageCount: inputImages.paths.length } : {}),
-    ...(visualConditioning ? { visualConditioning } : {}),
-    ...sentRecord,
-    createdAt: new Date().toISOString(),
-  };
-  const reviewedReferenceBytes = await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
-  const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
-  jobs.set(jobId, job);
-
-  console.log(`🎨 Generating image [${jobId.slice(0, 8)}] Higgsfield (${request.endpointId})`);
-  imageGenEvents.emit('started', { generationId: jobId, totalSteps: 1 });
-  activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0, currentImage: null });
-  broadcastSse(job, { type: 'status', message: 'Submitting to Higgsfield…' });
-  runHiggsfield(job, jobId, {
-    apiKey, family, fullPrompt, negativePrompt, width, height, seed, inputImages, reviewedReferenceBytes,
-    outputPath, filename, meta, cleanC2PA, denoise,
-  }).catch((err) => {
-    console.error(`❌ Higgsfield image run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
+  const meta = runner.jobMeta({
+    jobId, prompt, negativePrompt, width, height, inputImages, visualConditioning, sentRecord,
+    modelFields: {
+      model: request.endpointId,
+      modelFamily: family.id,
+      ...(request.body.aspect_ratio ? { aspectRatio: request.body.aspect_ratio } : {}),
+      ...(request.resolution ? { resolution: request.resolution } : {}),
+    },
   });
-
-  return { jobId, filename, path: `/data/images/${filename}`, generationId: jobId, mode: MODE, status: 'running' };
+  const reviewedReferenceBytes = await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
+  return runner.start({
+    meta, renderStartedAtMs, model: request.endpointId, status: 'Submitting to Higgsfield…',
+    run: (job) => runHiggsfield(job, jobId, {
+      apiKey, family, fullPrompt, negativePrompt, width, height, seed, inputImages, reviewedReferenceBytes,
+      meta, cleanC2PA, denoise,
+    }),
+  });
 }
 
 async function runHiggsfield(job, jobId, {
   apiKey, family, fullPrompt, negativePrompt, width, height, seed, inputImages, reviewedReferenceBytes,
-  outputPath, filename, meta, cleanC2PA = false, denoise = false,
+  meta, cleanC2PA = false, denoise = false,
 }) {
-  const entry = createHiggsfieldRequestEntry(apiKey);
-  entry.aborted = preparations.take(jobId);
-  activeRequests.set(jobId, entry);
+  const entry = runner.track(jobId, createHiggsfieldRequestEntry(apiKey));
   const deadline = Date.now() + HIGGSFIELD_IMAGE_TIMEOUT_MS;
-  let wroteOutput = false;
   try {
     const signal = entry.controller.signal;
     if (entry.aborted) {
@@ -246,74 +172,16 @@ async function runHiggsfield(job, jobId, {
     if (polled.outcome === 'canceled') return finalizeCanceled(job, jobId);
     if (polled.outcome === 'failed') return finalizeJobFailure(job, jobId, null, polled.reason);
 
-    const bytes = await withAbortTimeout(HIGGSFIELD_IMAGE_DOWNLOAD_TIMEOUT_MS, async (timeoutSignal) => {
-      const downloadSignal = anyAbortSignal([timeoutSignal, signal]);
-      const response = await fetchWithTimeout(polled.outputUrl, { signal: downloadSignal }, HIGGSFIELD_IMAGE_DOWNLOAD_TIMEOUT_MS);
-      if (!response.ok) throw new Error(`Higgsfield image download failed: HTTP ${response.status}`);
-      return Buffer.from(await response.arrayBuffer());
-    });
+    const bytes = await runner.download(entry, polled.outputUrl, { timeoutMs: HIGGSFIELD_IMAGE_DOWNLOAD_TIMEOUT_MS, label: 'Higgsfield image' });
     if (entry.aborted) return finalizeCanceled(job, jobId);
 
-    await withBackupAssetPublication(async () => {
-      if (entry.aborted) return finalizeCanceled(job, jobId);
-      try {
-        const format = detectImageFormat(bytes)?.format;
-        if (!format) return finalizeJobFailure(job, jobId, null, 'Higgsfield returned a file that is not an image');
-        await atomicWrite(outputPath, format === 'png' ? bytes : await sharp(bytes).png().toBuffer());
-        wroteOutput = true;
-        if (entry.aborted) {
-          await unlinkGuarded(outputPath).catch(() => {});
-          return finalizeCanceled(job, jobId);
-        }
-        const emptyFrame = await rejectDegenerateFrame(outputPath);
-        if (emptyFrame) {
-          await unlinkGuarded(outputPath).catch(() => {});
-          return finalizeJobFailure(job, jobId, null, emptyFrame);
-        }
-        const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
-        await atomicWrite(sidecar, {
-          ...meta,
-          ...(request.body.seed != null ? { seed: request.body.seed } : {}),
-          estimatedCostUsd: null,
-          ...renderTimingFields(job.renderStartedAtMs),
-        });
-        await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: MODE });
-        if (entry.aborted) {
-          await Promise.all([outputPath, sidecar].map(path => unlinkGuarded(path)));
-          return finalizeCanceled(job, jobId);
-        }
-        job.status = 'complete';
-        if (activeRequests.get(jobId) === entry) activeRequests.delete(jobId);
-        activeJobs.delete(jobId);
-        console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (Higgsfield ${request.endpointId})`);
-        const done = { filename, path: `/data/images/${filename}` };
-        dispatchTerminalEvent(
-          jobId,
-          () => broadcastSse(job, { type: 'complete', result: done }),
-          () => imageGenEvents.emit('completed', { mode: MODE, generationId: jobId, inputProcessSettled: true, path: done.path, filename }),
-        );
-        closeJobAfterDelay(jobs, jobId);
-      } catch (err) {
-        if (wroteOutput && job.status !== 'complete') {
-          await Promise.all([outputPath, join(PATHS.images, `${jobId}.metadata.json`)].map(path => unlinkGuarded(path).catch(() => {})));
-        }
-        throw err;
-      }
+    await runner.publish({
+      job, entry, bytes, meta, cleanC2PA, denoise,
+      sidecarFields: { ...(request.body.seed != null ? { seed: request.body.seed } : {}), estimatedCostUsd: null },
+      doneNote: `Higgsfield ${request.endpointId}`,
     });
-    if (job.status === 'complete') void autoDeleteHostedCopy('higgsfield', 'image', filename, { apiKey });
+    if (job.status === 'complete') void autoDeleteHostedCopy('higgsfield', 'image', meta.filename, { apiKey });
   } catch (err) {
-    await cancelHiggsfieldRequest(entry);
-    if (entry.aborted) return finalizeCanceled(job, jobId);
-    finalizeJobFailure(job, jobId, null, `Higgsfield image generation failed: ${err?.message || err}`, { force: true });
+    await runner.failRun(job, entry, `Higgsfield image generation failed: ${err?.message || err}`);
   }
 }
-
-const finalizeJobFailure = createJobFailureFinalizer({
-  jobs,
-  activeJobs,
-  activeSlots: activeRequests,
-  label: 'Higgsfield image generation',
-  events: imageGenEvents,
-  failedPayload: (jobId, reason) => ({ mode: MODE, generationId: jobId, error: reason }),
-});
-const finalizeCanceled = finalizeJobFailure.canceled;

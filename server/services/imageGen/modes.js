@@ -145,6 +145,19 @@ export const describeFidelity = (strength) => {
 };
 
 /**
+ * The prose a hosted edit model (fal.ai, Higgsfield, Google) gets about the
+ * images attached in order, or '' when none are. These models take
+ * plain-language direction where the CLI providers take tool arguments.
+ */
+export function attachedImageRoles({ hasInitImage, initImageStrength, referenceCount }) {
+  if (hasInitImage) {
+    return [`The first attached image is the source image to edit — ${describeFidelity(initImageStrength)}.`,
+      ...(referenceCount ? [`The remaining attached ${referenceCount === 1 ? 'image is' : 'images are'} ${visualReferenceRole(referenceCount)}.`] : [])].join('\n\n');
+  }
+  return referenceCount ? `Use the attached ${referenceCount === 1 ? 'image' : 'images'} as ${visualReferenceRole(referenceCount)}.` : '';
+}
+
+/**
  * Map a pixel width/height onto the closest ratio in `ratios` ('W:H' strings).
  * Returns null when either dimension is missing or non-positive, so the caller
  * omits its ratio directive entirely rather than asserting one the user never
