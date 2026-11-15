@@ -1,13 +1,12 @@
 /**
- * Mutable VideoGen field values, setters, and lifecycle refs initialized from URL handoff values.
+ * Mutable VideoGen field values, setters, and lifecycle refs, grouped by concern and seeded from URL handoff values.
  *
  * Use when: Internal state slice composed by `useVideoGenForm`; keep model reconciliation and
- * submission behavior in their focused units.
+ * submission behavior in their focused units. Hosted-provider fields live in
+ * `useVideoGenBackendCaps`.
  */
 
 import { useRef, useState } from 'react';
-import { GROK_VIDEO_DEFAULT_DURATION } from '../lib/grokVideoClip.js';
-import { REACTOR_DEFAULT_CLIP_LENGTH } from '../lib/reactorVideoClip.js';
 import { DEFAULT_I2V_REFERENCE_MODE } from '../lib/videoReferenceModes.js';
 import {
   DEFAULT_CONTEXT_FRAMES,
@@ -28,33 +27,6 @@ export function useVideoGenFieldState({
   incomingPrompt,
   incomingSourceImage,
 }) {
-  const [backend, setBackend] = useState('local');
-  const [grokDuration, setGrokDuration] = useState(GROK_VIDEO_DEFAULT_DURATION);
-  const [falDuration, setFalDuration] = useState('');
-  const [falModelId, setFalModelId] = useState('');
-  const [falResolution, setFalResolution] = useState('');
-  const [falGenerateAudio, setFalGenerateAudio] = useState(false);
-  // Runway: '' = the catalog default model / the model's default length and size.
-  const [runwayModelId, setRunwayModelId] = useState('');
-  const [runwayDuration, setRunwayDuration] = useState('');
-  const [runwayResolution, setRunwayResolution] = useState('');
-  const [runwayInputs, setRunwayInputs] = useState({});
-  // Higgsfield: '' = the catalog default family / the family's default length and tier.
-  const [higgsfieldModelId, setHiggsfieldModelId] = useState('');
-  const [higgsfieldDuration, setHiggsfieldDuration] = useState('');
-  const [higgsfieldResolution, setHiggsfieldResolution] = useState('');
-  const [higgsfieldGenerateAudio, setHiggsfieldGenerateAudio] = useState(false);
-  // Google Veo: '' = the catalog default model / the model's default length and tier.
-  const [googleModelId, setGoogleModelId] = useState('');
-  const [googleDuration, setGoogleDuration] = useState('');
-  const [googleResolution, setGoogleResolution] = useState('');
-  const [googleGenerateAudio, setGoogleGenerateAudio] = useState(false);
-  const [reactorClipId, setReactorClipId] = useState('');
-  const [reactorSeconds, setReactorSeconds] = useState(REACTOR_DEFAULT_CLIP_LENGTH);
-  const [reactorSeed, setReactorSeed] = useState('');
-  // '' is the picker's Auto entry: submit no aspect and let the server derive
-  // the fast-h3 canvas from the starting frame (text renders fall back to 16:9).
-  const [reactorAspect, setReactorAspect] = useState('');
   const [mode, setMode] = useState(incomingAudioFilename ? 'a2v' : (incomingSourceImage ? 'image' : 'text'));
   const [prompt, setPrompt] = useState(incomingPrompt || '');
   const [negativePrompt, setNegativePrompt] = useState(incomingNegativePrompt || '');
@@ -110,79 +82,76 @@ export function useVideoGenFieldState({
   const [icReferenceNames, setIcReferenceNames] = useState([]);
   const staleModelToastRef = useRef(null);
 
+  const [unavailableSourceImageName, setUnavailableSourceImageName] = useState('');
+  const [unavailableReferenceImageNames, setUnavailableReferenceImageNames] = useState([]);
+
+  // Grouped by the form concern each slice serves, so the orchestration hook
+  // reads a named group rather than one flat bag of every setter.
   return {
-    audioDurationSec, setAudioDurationSec,
-    audioFile, setAudioFile, audioHandoffRef,
-    backend, setBackend,
-    chunks, setChunks,
-    chunkPrompts, setChunkPrompts,
-    contextFrames, setContextFrames,
-    disableAudio, setDisableAudio,
-    extendingFrame, setExtendingFrame,
-    extendFromVideoId, setExtendFromVideoId,
-    fps, setFps,
-    grokDuration, setGrokDuration,
-    falDuration, setFalDuration,
-    falModelId, setFalModelId,
-    falResolution, setFalResolution,
-    falGenerateAudio, setFalGenerateAudio,
-    runwayModelId, setRunwayModelId,
-    runwayDuration, setRunwayDuration,
-    runwayResolution, setRunwayResolution,
-    runwayInputs, setRunwayInputs,
-    higgsfieldModelId, setHiggsfieldModelId,
-    higgsfieldDuration, setHiggsfieldDuration,
-    higgsfieldResolution, setHiggsfieldResolution,
-    higgsfieldGenerateAudio, setHiggsfieldGenerateAudio,
-    googleModelId, setGoogleModelId,
-    googleDuration, setGoogleDuration,
-    googleResolution, setGoogleResolution,
-    googleGenerateAudio, setGoogleGenerateAudio,
-    reactorClipId, setReactorClipId,
-    reactorSeconds, setReactorSeconds,
-    reactorSeed, setReactorSeed,
-    reactorAspect, setReactorAspect,
-    guidanceScale, setGuidanceScale,
-    height, setHeight,
-    i2vReferenceMode, setI2vReferenceMode,
-    icReferenceFile, setIcReferenceFile,
-    icReferenceImageFiles, setIcReferenceImageFiles,
-    referenceImageFiles, setReferenceImageFiles,
-    referenceVideoIds, setReferenceVideoIds,
-    referenceAudioFiles, setReferenceAudioFiles,
-    icReferenceNames, setIcReferenceNames,
-    icReferenceVideoId, setIcReferenceVideoId,
-    icSkipStage2, setIcSkipStage2,
-    icStrength, setIcStrength,
-    imageStrength, setImageStrength,
-    keyframes, setKeyframes,
-    keyframesMode, setKeyframesMode,
-    lastImageFile, setLastImageFile,
-    lastImageUpload, setLastImageUpload,
-    mode, setMode,
-    modelId, setModelId,
-    negativePrompt, setNegativePrompt,
-    noMusic, setNoMusic,
-    numFrames, setNumFrames,
-    prompt, setPrompt,
-    remixModelFallback, setRemixModelFallback,
-    remixSourceModel, setRemixSourceModel,
-    seed, setSeed, batchSize, setBatchSize,
-    selectedLoras, setSelectedLoras,
-    a2vLoraStageStrengths, setA2vLoraStageStrengths,
-    selectedUniverse, setSelectedUniverse,
-    sizeManuallySetRef,
-    speedProfileId, setSpeedProfileId,
-    draftDecode, setDraftDecode,
-    streamingMode, setStreamingMode,
-    staleModelToastRef,
-    steps, setSteps,
-    stylePreset, setStylePreset,
-    sourceImageFile, setSourceImageFile,
-    sourceImageUpload, setSourceImageUpload,
-    textEncoderId, setTextEncoderId,
-    tiling, setTiling,
-    width, setWidth,
+    prompt: {
+      prompt, setPrompt,
+      negativePrompt, setNegativePrompt,
+      stylePreset, setStylePreset,
+      selectedUniverse, setSelectedUniverse,
+    },
+    model: {
+      modelId, setModelId,
+      remixSourceModel, setRemixSourceModel,
+      remixModelFallback, setRemixModelFallback,
+      staleModelToastRef,
+      selectedLoras, setSelectedLoras,
+      a2vLoraStageStrengths, setA2vLoraStageStrengths,
+      textEncoderId, setTextEncoderId,
+      speedProfileId, setSpeedProfileId,
+      draftDecode, setDraftDecode,
+      streamingMode, setStreamingMode,
+    },
+    sampler: {
+      width, setWidth,
+      height, setHeight,
+      sizeManuallySetRef,
+      numFrames, setNumFrames,
+      fps, setFps,
+      chunks, setChunks,
+      chunkPrompts, setChunkPrompts,
+      contextFrames, setContextFrames,
+      steps, setSteps,
+      guidanceScale, setGuidanceScale,
+      imageStrength, setImageStrength,
+      i2vReferenceMode, setI2vReferenceMode,
+      batchSize, setBatchSize,
+      seed, setSeed,
+      tiling, setTiling,
+      disableAudio, setDisableAudio,
+      noMusic, setNoMusic,
+    },
+    frames: {
+      mode, setMode,
+      sourceImageFile, setSourceImageFile,
+      sourceImageUpload, setSourceImageUpload,
+      unavailableSourceImageName, setUnavailableSourceImageName,
+      lastImageFile, setLastImageFile,
+      lastImageUpload, setLastImageUpload,
+      keyframesMode, setKeyframesMode,
+      keyframes, setKeyframes,
+      extendFromVideoId, setExtendFromVideoId,
+      extendingFrame, setExtendingFrame,
+    },
+    conditioning: {
+      audioFile, setAudioFile,
+      audioDurationSec, setAudioDurationSec,
+      audioHandoffRef,
+      icReferenceFile, setIcReferenceFile,
+      icReferenceVideoId, setIcReferenceVideoId,
+      icReferenceImageFiles, setIcReferenceImageFiles,
+      icReferenceNames, setIcReferenceNames,
+      icStrength, setIcStrength,
+      icSkipStage2, setIcSkipStage2,
+      referenceImageFiles, setReferenceImageFiles,
+      unavailableReferenceImageNames, setUnavailableReferenceImageNames,
+      referenceVideoIds, setReferenceVideoIds,
+      referenceAudioFiles, setReferenceAudioFiles,
+    },
   };
 }
 
