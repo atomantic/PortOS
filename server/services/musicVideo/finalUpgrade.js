@@ -47,7 +47,7 @@ function planShot(project, scene, method) {
   return { sceneId: scene.sceneId, status: 'ready', method, resolution: final.resolution, costUsd: final.costUsd };
 }
 
-export function planUpgrade(project, { sceneIds, method }) {
+function planUpgrade(project, { sceneIds, method }) {
   const scenes = sceneIds ? sceneIds.map((id) => findScene(project, id)) : (project.scenes || []).filter(sceneFinalApproved);
   const shots = scenes.map((scene) => planShot(project, scene, method));
   const priced = shots.filter((shot) => shot.status === 'ready');

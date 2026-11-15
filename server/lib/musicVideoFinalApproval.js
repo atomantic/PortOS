@@ -9,8 +9,6 @@
 
 import { authoredShotPrompt } from './musicVideoShotPrompt.js';
 
-import { MUSIC_VIDEO_UPGRADE_METHODS } from './musicVideoRenderTier.js';
-
 // FNV-1a: a short stable fingerprint, not a security boundary.
 function fingerprint(text) {
   let hash = 0x811c9dc5;
@@ -70,4 +68,3 @@ export function finalTierCounts(scenes) {
   return counts;
 }
 
-export const isMusicVideoUpgradeMethod = (method) => MUSIC_VIDEO_UPGRADE_METHODS.includes(method);
