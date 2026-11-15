@@ -8,7 +8,22 @@ vi.mock('../components/ui/Toast', () => ({
   default: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), loading: vi.fn() }),
 }));
 
-const { useVideoGenForm } = await import('./useVideoGenForm.js');
+const { useVideoGenForm: useGroupedVideoGenForm } = await import('./useVideoGenForm.js');
+
+// The hook returns named groups (lane, prompt, model, …) whose field names are
+// unique across groups, so these behavior tests read one flattened view. A
+// collision would make a group silently shadow another, so it fails loudly.
+const useVideoGenForm = (props) => {
+  const groups = useGroupedVideoGenForm(props);
+  const flat = {};
+  for (const group of Object.values(groups)) {
+    for (const [key, value] of Object.entries(group)) {
+      if (key in flat) throw new Error(`useVideoGenForm groups both define ${key}`);
+      flat[key] = value;
+    }
+  }
+  return flat;
+};
 
 // Two runtimes matter to the payload shape: `ltx2` unlocks keyframes / LoRAs /
 // a2v / IC remix and routes extend through the video id, `mlx_video` is the
