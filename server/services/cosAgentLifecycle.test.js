@@ -1046,6 +1046,36 @@ describe('completeAgent idempotence (#3384)', () => {
     } finally { await rm(scratch, { recursive: true, force: true }); }
   });
 
+  seedBodies.it('recovers an unknown completion capture with fresh merge proof and the original delivery binding', async () => {
+    const scratch = await mkdtemp(join(tmpdir(), 'portos-merged-snapshot-'));
+    const merged = vi.spyOn(await import('./completedCheckoutEvidence.js'), 'readMergedClaimEvidence').mockResolvedValue(null);
+    try {
+      const repo = join(scratch, 'repo'), checkout = join(scratch, 'checkout');
+      await materializeGitRepo(repo);
+      await execGit(['worktree', 'add', '-b', 'feature/merged', checkout, 'main'], repo);
+      const agentId = 'merged-unknown', prUrl = 'https://github.com/example/repo/pull/7';
+      await registerAgent(agentId, 'merged-task', { isWorktree: true, sourceWorkspace: repo, workspacePath: checkout,
+        worktreeBranch: 'feature/merged', prCompletionPolicy: 'review-then-merge', reviewLoopMergeTarget: { branch: 'feature/merged', url: prUrl } });
+      captureCompletedCheckouts.mockRejectedValueOnce(new Error('inventory unavailable'));
+      const completed = await completeAgent(agentId, { success: true });
+      delete mockCosState.state.agents[agentId];
+      expect(await retryCompletionCheckoutCapture(agentId)).toBe(false);
+      merged.mockResolvedValue({ prUrl: prUrl + '0', mergedAt: new Date().toISOString() });
+      expect(await retryCompletionCheckoutCapture(agentId)).toBe(false);
+      merged.mockResolvedValue({ prUrl, mergedAt: new Date().toISOString() });
+      mockCosState.state.agents['new-owner'] = { id: 'new-owner', status: 'running', startedAt: new Date().toISOString(),
+        metadata: { sourceWorkspace: repo, worktreeBranch: 'feature/merged', workspacePath: checkout } };
+      expect(await retryCompletionCheckoutCapture(agentId)).toBe(false);
+      delete mockCosState.state.agents['new-owner'];
+      expect(await retryCompletionCheckoutCapture(agentId)).toBe(true);
+      const saved = await getAgent(agentId);
+      expect(saved.result).toEqual(completed.result);
+      expect(saved.metadata.completedCheckouts).toEqual([expect.objectContaining({ version: 2, branch: 'feature/merged' })]);
+      expect(saved.metadata.completedCheckouts[0]).not.toHaveProperty('incarnation');
+      expect(completedCheckoutReceiptValid(saved, saved.metadata.completedCheckouts[0])).toBe(true);
+    } finally { merged.mockRestore(); await rm(scratch, { recursive: true, force: true }); }
+  });
+
   it('ignores legacy seeds rather than inventing a terminal snapshot after an unknown capture', async () => {
     const agentId = 'legacy-unknown';
     mockCosState.state.agents[agentId] = { id: agentId, taskId: 'legacy-task', status: 'completed',
