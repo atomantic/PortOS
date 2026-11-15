@@ -318,6 +318,7 @@ describe('BoardStage board panels', () => {
     const { rerender } = renderBoard(b);
     for (let pass = 0; pass < 3; pass += 1) rerender(<MemoryRouter><BoardStage board={{ ...b }} /><Search /></MemoryRouter>);
     expect(screen.getAllByTestId('sequence-take-panel')).toHaveLength(1);
+    expect(screen.getAllByTestId('final-upgrade-panel')).toHaveLength(1);
     expect(duplicateKeys.mock.calls.filter(([message]) => String(message).includes('same key'))).toHaveLength(0);
     duplicateKeys.mockRestore();
   });
