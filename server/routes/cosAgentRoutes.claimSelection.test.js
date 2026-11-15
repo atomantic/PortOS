@@ -58,7 +58,8 @@ beforeEach(() => {
   resolveAppForgeTarget.mockResolvedValue({ tracker: 'github', target });
   getInstanceId.mockResolvedValue('example-instance');
   resolveForgeForRepo.mockResolvedValue({ cli: 'gh' });
-  execGit.mockResolvedValue({ exitCode: 0, stdout: '' });
+  execGit.mockImplementation(async args => ({ exitCode: 0, stdout: args[0] === 'worktree'
+    ? `worktree /example/project\nHEAD ${'a'.repeat(40)}\nbranch refs/heads/main\n` : ' M unrelated.js' }));
   repository = { nameWithOwner: target.fullName, defaultBranchRef: { name: 'main', target: { oid: 'a'.repeat(40) } },
     issue: { number: 42, state: 'OPEN', repository: { nameWithOwner: target.fullName },
       labels: { nodes: [{ name: 'blocked' }] }, timelineItems: { nodes: [
@@ -81,8 +82,7 @@ describe('pre-claim selection through completion', () => {
     expect(fixture.task).toEqual(before.task);
     fixture.state = JSON.parse(JSON.stringify(fixture.state));
     expect(await verify()).toMatchObject({ status: 'verified', issues: [{ issue: 42, disposition: 'operator-blocked' }] });
-    expect(execGit.mock.calls[0][0]).toEqual(['status', '--porcelain', '--untracked-files=all']);
-    expect(execGit.mock.calls[0][1]).toBe('/example/project');
+    expect(execGit.mock.calls).toEqual([[['worktree', 'list', '--porcelain'], '/example/project']]);
   });
 
   it.each([
@@ -124,7 +124,7 @@ describe('pre-claim selection through completion', () => {
     expect(execGh).not.toHaveBeenCalled();
   });
 
-  it('keeps live authority, actionable work and dirty-checkout checks after selection', async () => {
+  it('keeps live authority, actionable work and held-claim checkout checks after selection', async () => {
     await call();
     repository.issue.timelineItems.nodes[0].actor.login = 'outside-contributor';
     expect(await verify()).toMatchObject({ status: 'unverified' });
@@ -132,7 +132,7 @@ describe('pre-claim selection through completion', () => {
     repository.issue.labels.nodes = [];
     expect(await verify()).toMatchObject({ status: 'unverified' });
     repository.issue.labels.nodes = [{ name: 'blocked' }];
-    execGit.mockResolvedValue({ exitCode: 0, stdout: ' M unfinished.js' });
+    execGit.mockResolvedValue({ exitCode: 0, stdout: `worktree /example/claim\nHEAD ${'b'.repeat(40)}\nbranch refs/heads/claim/issue-42\n` });
     expect(await verify()).toMatchObject({ status: 'unverified', reason: 'checkout-has-undelivered-work' });
   });
 
