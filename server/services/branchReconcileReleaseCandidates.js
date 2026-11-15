@@ -56,7 +56,7 @@ async function unlockAbandonedCandidate(app, tree, deps = {}) {
   const options = await resolveForgeExecOptions(app.repoPath, { forgeAccount: app.forgeAccount ?? null });
   const open = JSON.parse(await execGh(['pr', 'list', '--state', 'open', '--head', branch, '--json', 'number', '--limit', '1'], undefined, options));
   if (!Array.isArray(open) || open.length) return false;
-  const { withClaimOwnershipLock, readClaimOwnershipAgents, checkoutRetirementFenceReason } = await import('./cosClaimOwnershipState.js');
+  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
   const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
   const { listWorktrees } = await import('./worktreeManager.js');
   const { execGit } = await import('../lib/execGit.js');
@@ -67,8 +67,7 @@ async function unlockAbandonedCandidate(app, tree, deps = {}) {
     const active = new Set(getActiveAgentIds());
     if (!agents || [...active].some(id => !agents.some(agent => agent.id === id))) return false;
     const owners = agents.map(agent => active.has(agent.id) ? { ...agent, status: 'running' } : agent);
-    if (checkoutRetirementFenceReason({ repoPath: app.repoPath, path: tree.path, branch })
-      || claimCheckoutOwnerReason({ branchName: branch, holderPath: tree.path, sourceWorkspace: app.repoPath, agents: owners })) return false;
+    if (claimCheckoutOwnerReason({ branchName: branch, holderPath: tree.path, sourceWorkspace: app.repoPath, agents: owners })) return false;
     const current = (await listWorktrees(app.repoPath)).find(row => row.path === tree.path);
     if (!current || current.head !== tree.head || current.branch?.replace(/^refs\/heads\//, '') !== branch
       || current.locked !== true || current.lockReason !== LOCK_PREFIX + branch) return false;

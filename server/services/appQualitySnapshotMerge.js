@@ -23,29 +23,21 @@ async function listSnapshotCheckouts(app, deps) {
 async function retireSnapshotTrees(app, deps, trees) {
   const { forceRemoveWorktreeDir, classifyWorktreeDirt } = await import('./worktreeManager.js');
   const { execGit } = await import('../lib/execGit.js');
-  const { retireWithUnlockedArchive } = await import('./cosClaimOwnershipState.js');
+  const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
   const checkOwner = deps.checkSnapshotPublicationOwnership
     || (await import('./cosClaimOwnership.js')).checkSnapshotPublicationOwnership;
   const held = [];
   for (const tree of trees) {
     const ownership = async () => (await checkOwner({ appId: app.id, branch: 'portos/quality-snapshot', prUrl: tree.prUrl }))?.admitted === true;
-    const result = await retireWithUnlockedArchive({
-      busy: () => ({ removed: false }),
-      admit: async () => await ownership()
-        ? { fence: { repoPath: app.repoPath, path: tree.path, branch: null } }
-        : { result: { removed: false } },
-      // The receipt binds this detached tree to `tree.head`; a MERGED PR (`mergedHead`) makes uncommitted files disposable.
-      archive: async () => ({ archive: {
-        verify: async holder => {
-          if (!holder || holder.head !== tree.head || holder.branch || holder.detached !== true) return 'snapshot-checkout-changed';
-          const status = await execGit(['status', '--porcelain'], tree.path).then(r => r.stdout, () => null);
-          return status !== null && (classifyWorktreeDirt(status).clean || tree.mergedHead === holder.head) ? null : 'worktree-dirty';
-        },
-      } }),
-      finish: async (_admitted, archive) => forceRemoveWorktreeDir(app.repoPath, tree.path, {
-        verifyRemoval: async holder => await ownership() ? archive.verify(holder) : 'snapshot-owner-changed',
-      }),
-    }).catch(() => ({ removed: false }));
+    // The receipt binds this detached tree to `tree.head`; a MERGED PR (`mergedHead`) makes uncommitted files disposable.
+    const verifyRemoval = async holder => {
+      if (!await ownership()) return 'snapshot-owner-changed';
+      if (!holder || holder.head !== tree.head || holder.branch || holder.detached !== true) return 'snapshot-checkout-changed';
+      const status = await execGit(['status', '--porcelain'], tree.path).then(r => r.stdout, () => null);
+      return status !== null && (classifyWorktreeDirt(status).clean || tree.mergedHead === holder.head) ? null : 'worktree-dirty';
+    };
+    const result = await withClaimOwnershipLock(() => forceRemoveWorktreeDir(app.repoPath, tree.path, { verifyRemoval }))
+      .catch(() => ({ removed: false }));
     if (!result.removed) held.push(tree.path);
   }
   return held;
