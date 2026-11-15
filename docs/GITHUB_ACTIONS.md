@@ -1207,6 +1207,9 @@ successor run".
   (`server/lib/apiRouteGraph.test.js`, `server/lib/apiRouteParity.test.js`,
   `scripts/generate-prompt-stage-call-sites.test.js`): they read the tree
   rather than importing what they scan, so no import edge reaches them (#5898).
+- A change to `server/scripts/init-db.sql` or `init-db.base.sql` adds
+  `server/lib/db.ddlParity.test.js`, which fails when the generated file is
+  stale (#16092).
 - A `scripts/*.py` sidecar selects every test that names a python script
   (`git grep`), in `files` mode, and falls back to the full suite when none do
   — see "Python sidecar scripts" above.

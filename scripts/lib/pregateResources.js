@@ -59,7 +59,7 @@ export function resolveTestDatabaseStageEnv(repoRoot, env = process.env) {
   return testDatabaseStageEnv({ env, saved: parseEnvFile(join(repoRoot, '.env')) });
 }
 
-/** Extensions init-db.sql creates; keep in sync with server/scripts/init-db.sql. */
+/** Extensions init-db.sql creates; keep in sync with server/scripts/init-db.base.sql. */
 const REQUIRED_EXTENSIONS = ['vector', 'pgcrypto'];
 
 /**

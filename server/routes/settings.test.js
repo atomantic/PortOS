@@ -1399,6 +1399,28 @@ it('accepts only registered private keys and never returns the submitted secret'
   expect(store.civitai.apiKey).toBe('');
 });
 
+it.each([
+  ['higgsfield', 'Higgsfield'], ['fal', 'fal.ai'], ['runway', 'Runway'], ['reactor', 'reactor.inc'], ['google-cloud', 'Google'],
+])('refuses a %s key that cannot go in an HTTP header, naming the setting and never echoing it', async (id, label) => {
+  const app = buildApp();
+  const goodKey = 'key_id:key_secret-123';
+  for (const bad of ['abc\u{1F600}def', 'abc def', `${goodKey}\n`]) {
+    store = {};
+    const res = await request(app).put(`/api/settings/credentials/${id}`).send({ value: bad });
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(res.body)).toContain(`The ${label} API key contains characters that cannot be sent`);
+    expect(JSON.stringify(res.body)).not.toContain('abc');
+    expect(JSON.stringify(store)).not.toContain('abc');
+  }
+  expect((await request(app).put(`/api/settings/credentials/${id}`).send({ value: goodKey })).status).toBe(200);
+});
+
+it('still accepts a Google service account JSON credential, whitespace and all', async () => {
+  const app = buildApp();
+  const json = '{\n  "type": "service_account",\n  "private_key": "-----BEGIN\\nabc"\n}';
+  expect((await request(app).put('/api/settings/credentials/google-cloud').send({ value: json })).status).toBe(200);
+});
+
 describe('Settings routes — optional networking preference', () => {
   beforeEach(() => { store = {}; vi.clearAllMocks(); });
   it('persists all supported choices and rejects invalid preferences without replacing the saved choice', async () => {

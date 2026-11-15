@@ -9,7 +9,7 @@ import { plateRequirements, selectedPlatePasses } from '../../lib/musicVideoPlat
  */
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -83,6 +83,17 @@ describe('projectsFile backend', () => {
     proj = await file.deleteScene(p.id, s2.sceneId);
     expect(proj.scenes).toHaveLength(1);
     expect(proj.scenes[0].order).toBe(0);
+  });
+
+  it('repairs scenes stored out of startSec order when a project loads (#16117)', async () => {
+    const p = await file.createProject({ name: 'A' });
+    const a = await file.addProjectScene(p.id, { prompt: 'a', startSec: 0, endSec: 4 });
+    const b = await file.addProjectScene(p.id, { prompt: 'b', startSec: 4, endSec: 8 });
+    const all = await file.loadAll();
+    all[0].scenes = [{ ...all[0].scenes[1], order: 0 }, { ...all[0].scenes[0], order: 1 }];
+    writeFileSync(join(TEST_DATA_ROOT, 'music-video-projects.json'), JSON.stringify(all));
+    const loaded = await file.getProject(p.id);
+    expect(loaded.scenes.map((s) => [s.sceneId, s.order])).toEqual([[a.sceneId, 0], [b.sceneId, 1]]);
   });
 
   it('soft-deletes a project (tombstone hidden from live list)', async () => {

@@ -205,7 +205,7 @@ export function normalizeAccountRow(account) {
 /**
  * Conversation row. `type` is stored RAW: the schema deliberately carries no
  * enum constraint on it (`db.ddlParity.test.js` forbids one), so a new
- * Beeper chat type never needs a two-file migration to accept. `is_group` is
+ * Beeper chat type never needs a constraint migration to accept. `is_group` is
  * the derived boolean the UI filters on.
  */
 export function normalizeChatRow(chat) {

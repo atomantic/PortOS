@@ -69,7 +69,7 @@ explicitly needed locally. Focused receipts are local evidence only.
 
 A conflict-free feature branch may merge behind `main` once its current-head
 required checks and configured reviews pass. Do not restart validation solely
-because another agent merged; follow [the merge policy](../AGENTS.md#git-workflow).
+because another agent merged; follow [the merge policy](../.claude/skills/portos-ship/SKILL.md#merge-authority).
 
 See [`.changelog/README.md`](../.changelog/README.md) — release notes are
 synthesized from commit history by `/do:release`, not staged during development.
