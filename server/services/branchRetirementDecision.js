@@ -758,3 +758,40 @@ export function decideIdleNextHolderRelease({
   if (nowMs - facts.lastTouchMs < idleMs) return holdOn('recently-touched');
   return decideCleanPushedDetach({ allowUntracked, facts });
 }
+
+/**
+ * Whether `forceRemoveWorktreeDir` may let Git delete one checkout. Gates, in
+ * order: the worktree registry is readable; the holder is unlocked; the caller's
+ * own guard (when it passed one) declines nothing; a fresh registry read is
+ * still readable and unlocked; the registered branch and head did not change
+ * while the guard awaited; and, for a guarded removal of a registered holder,
+ * the checkout's physical incarnation is unchanged (a same-path, same-head
+ * recreation would otherwise pass). A lock or an unreadable registry costs no
+ * guard call.
+ *
+ * @param {object} input
+ * @param {boolean} input.guarded - the caller supplied a `verifyRemoval` guard
+ * @param {object} input.facts - `listing` and `fresh` (`{ holder }` where holder is `{ locked, branch, head }` or null when unregistered; null is an unreadable registry), `identity` (checkout incarnation before the guard), `guardReason` (the guard's verdict, null = no objection), `identityAfter`
+ * @returns {{ need: string } | { hold: { reason: string } } | { admit: true }}
+ */
+export function decideForceRemoval({ guarded, facts }) {
+  if (facts.listing === undefined) return { need: 'listing' };
+  if (facts.listing === null) return holdOn('worktree-ownership-unreadable');
+  const { holder } = facts.listing;
+  if (holder?.locked) return holdOn('worktree-locked');
+  if (guarded && holder && facts.identity === undefined) return { need: 'identity' };
+  if (guarded) {
+    if (facts.guardReason === undefined) return { need: 'guardReason' };
+    if (facts.guardReason) return holdOn(facts.guardReason);
+  }
+  if (facts.fresh === undefined) return { need: 'fresh' };
+  if (facts.fresh === null) return holdOn('worktree-ownership-unreadable');
+  const current = facts.fresh.holder;
+  if (current?.locked) return holdOn('worktree-locked');
+  if (current?.branch !== holder?.branch || current?.head !== holder?.head) return holdOn('worktree-holder-changed');
+  if (guarded && holder) {
+    if (facts.identityAfter === undefined) return { need: 'identityAfter' };
+    if (facts.identityAfter !== facts.identity) return holdOn('worktree-holder-changed');
+  }
+  return { admit: true };
+}
