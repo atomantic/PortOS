@@ -3,6 +3,7 @@ import {
   DEFAULT_TASK_PROMPTS,
   PROMPT_VERSIONS,
   REFERENCE_WATCH_AUDITED_VERSION,
+  UNPERSISTED_PROMPT_KEYS,
   promptMatchesShippedDefault,
 } from './taskPromptDefaults.js';
 import {
@@ -23,12 +24,12 @@ import { FORGE_REVIEWER_WAIT_NOTE } from '../lib/reviewerConfig.js';
 // cross-install prompt-upgrade contract (see AGENTS.md "Distribution model"):
 // a refactor of the taskPromptDefaults/ split cannot silently alter a prompt
 // byte, and an INTENTIONAL prompt change forces the author through this file —
-// where the rule is: bump PROMPT_VERSIONS, then run
+// where the rule is: edit the body, then run
 //
 //   node scripts/regen-prompt-integrity-snapshot.js
 //
-// which retires the outgoing default's hash onto the snapshot's
-// PREVIOUS_DEFAULT_PROMPTS history (and refuses a body change with no bump).
+// which bumps the snapshot's version for that key and retires the outgoing
+// default's hash onto its PREVIOUS_DEFAULT_PROMPTS history.
 // Prompt bodies embed the install's API origin, so hashing normalizes it to a
 // placeholder first — see taskPromptDefaults/integrityHash.js, which this test,
 // that tool and promptMatchesShippedDefault all share so they can't drift apart.
@@ -421,7 +422,10 @@ describe('taskPromptDefaults integrity snapshot', () => {
     const actual = Object.fromEntries(
       Object.entries(DEFAULT_TASK_PROMPTS).map(([k, v]) => [k, hashPromptBody(v)]),
     );
-    expect(actual).toEqual(SNAPSHOT.DEFAULT_TASK_PROMPTS);
+    expect(
+      actual,
+      'A prompt default changed without regenerating the snapshot; run `node scripts/regen-prompt-integrity-snapshot.js` (it bumps the version and retires the old hash)',
+    ).toEqual(SNAPSHOT.DEFAULT_TASK_PROMPTS);
   });
 
   // The snapshot pins prompt BYTES, not the machine that generated it. Hashing
@@ -447,10 +451,6 @@ describe('taskPromptDefaults integrity snapshot', () => {
   ])('reproduces the snapshot on an install whose API origin is %j', async (env, expectedOrigin) => {
     const { fresh, PORTOS_API_URL } = await importDefaultsUnder(env, expectedOrigin);
     expect(buildPromptIntegritySnapshot(fresh, PORTOS_API_URL)).toEqual(SOURCE_SECTIONS);
-  });
-
-  it('PROMPT_VERSIONS matches the snapshot', () => {
-    expect(PROMPT_VERSIONS).toEqual(SNAPSHOT.PROMPT_VERSIONS);
   });
 
   it('REFERENCE_WATCH_AUDITED_VERSION matches the snapshot', () => {
@@ -696,26 +696,8 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // change ships and no install ever receives it. console-errors,
   // error-handling and typing were frozen exactly that way.
   //
-  // The exemptions are an explicit ALLOWLIST, not a derived predicate. Keying
-  // off "absent from DEFAULT_TASK_INTERVALS" would exempt any future body that
-  // merely isn't a schedule key yet — the exact regression this guards — so a
-  // new unversioned prompt has to be justified by naming it here.
-  const UNPERSISTED_PROMPT_KEYS = [
-    // Pipeline stage bodies: getStagePrompt reads them live from this catalog
-    // and never persists them, so an edit reaches every install on the next
-    // dispatch (their pipeline's SCHEDULE key carries the version instead).
-    'pr-reviewer-security',
-    'pr-reviewer-eligibility',
-    'pr-reviewer-review',
-    'code-reviewer-review',
-    'code-reviewer-implement',
-    'branch-cleanup',
-    // The manual /do:next PLAN claim's default body: taskPromptService reads it
-    // only as a claimFlow fallback when the STORED 'plan-task' prompt is a
-    // shipped default (see getTaskPrompt) — it is never itself persisted to a
-    // schedule, so it carries no PROMPT_VERSIONS entry of its own (issue #6479).
-    'plan-task-claim',
-  ];
+  // The exemptions are the explicit UNPERSISTED_PROMPT_KEYS allowlist in
+  // versions.js, not a derived predicate.
 
   it('every persisted default prompt is versioned, so none is silently exempt from auto-upgrade', () => {
     for (const key of Object.keys(DEFAULT_TASK_PROMPTS)) {

@@ -17,17 +17,17 @@
  * contract.
  *
  * Distribution-model machinery (see AGENTS.md "Distribution model"):
- * - PROMPT_VERSIONS — bumped when a default prompt changes so existing installs auto-upgrade.
+ * - PROMPT_VERSIONS — read from the snapshot; the regen raises a key's version when its default
+ *   changes so existing installs auto-upgrade.
  * - integrity.snapshot.json → PREVIOUS_DEFAULT_PROMPTS — the md5 of every default
  *   a key has since replaced, recognized on read so a stored (non-customized)
  *   prompt can be safely auto-upgraded across installs/versions.
- * Do NOT change a prompt default without bumping PROMPT_VERSIONS and then
- * running `node scripts/regen-prompt-integrity-snapshot.js`, which retires the
- * outgoing default's hash onto that history. The retired bodies themselves are
+ * After changing a prompt default, run `node scripts/regen-prompt-integrity-snapshot.js`,
+ * which bumps its version and retires the outgoing default's hash onto that history. The retired bodies themselves are
  * not kept in the tree — git history has them.
  */
 
 export { DEFAULT_TASK_PROMPTS } from './taskPromptDefaults/prompts.js';
-export { PROMPT_VERSIONS, REFERENCE_WATCH_AUDITED_VERSION } from './taskPromptDefaults/versions.js';
+export { PROMPT_VERSIONS, REFERENCE_WATCH_AUDITED_VERSION, UNPERSISTED_PROMPT_KEYS } from './taskPromptDefaults/versions.js';
 export { promptMatchesShippedDefault } from './taskPromptDefaults/shippedPrompts.js';
 export { reconcileStoredPrompt, stampPromptWrite } from './taskPromptDefaults/storedPrompt.js';
