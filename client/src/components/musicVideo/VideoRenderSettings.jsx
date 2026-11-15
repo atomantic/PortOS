@@ -18,6 +18,7 @@ import { useModelDownloadStatus } from '../../hooks/useModelDownloadStatus.js';
 import ModelDownloadBadge from '../media/ModelDownloadBadge.jsx';
 import { formatBytes, formatUsd } from '../../utils/formatters.js';
 import { localModelRendersCutaway } from '../../../../server/lib/musicVideoLocalModels.js';
+import { sceneRenderTierPlan } from '../../../../server/lib/musicVideoRenderTier.js';
 
 const falSelectCls = 'w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 sm:w-auto min-h-[44px] pointer-fine:sm:min-h-0';
 const falOptionLabel = (model) => {
@@ -86,6 +87,9 @@ export default function VideoRenderSettings({ videoSettings, generating, project
   const runwayModel = getRunwayVideoModel(settings.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL);
   const runwayResolutions = runwayVideoResolutions(runwayModel);
   const runwayLengths = runwayVideoLengths(runwayModel);
+  // #16136: the shot card's Render draft / Render final use these ceilings on any
+  // model with resolution tiers; the choices shown are the project model's tiers.
+  const tierPlan = sceneRenderTierPlan(settings.backend, { videoSettings: settings });
   return (
     <>
       {catalogStatus === 'error' && (
@@ -452,6 +456,23 @@ export default function VideoRenderSettings({ videoSettings, generating, project
           )}
         </>
       )}
+      {tierPlan && [['draft', 'draftResolution', 'Draft', `Draft: lowest (${tierPlan.options[0]})`], ['final', 'finalResolution', 'Final', `Final: highest (${tierPlan.options.at(-1)})`]].map(([tier, field, label, unset]) => (
+        <span key={tier} className="contents">
+          <label htmlFor={`mv-${tier}-resolution`} className="sr-only">{`${label} clip resolution`}</label>
+          <select
+            id={`mv-${tier}-resolution`}
+            value={settings[field] || ''}
+            onChange={(e) => change({ [field]: e.target.value || null })}
+            disabled={locked}
+            title={`Highest resolution a shot card's Render ${tier} uses; a model without it renders at its nearest lower tier (or its lowest)`}
+            className={falSelectCls}
+          >
+            <option value="">{unset}</option>
+            {tierPlan.options.map((res) => <option key={res} value={res}>{`${label}: up to ${res}`}</option>)}
+            {settings[field] && !tierPlan.options.includes(settings[field]) && <option value={settings[field]}>{`${label}: up to ${settings[field]}`}</option>}
+          </select>
+        </span>
+      ))}
       {falSpend?.totalUsd > 0 && (
         <p className="w-full min-w-0 break-words text-xs text-port-text-muted" title="Estimated from the price each paid render was quoted at; the provider's own invoice is the final word">
           {`Paid video spend (est.) ${formatUsd(falSpend.totalUsd)}: `}

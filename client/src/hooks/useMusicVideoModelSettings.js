@@ -119,6 +119,9 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
     runwayModelId: project?.videoSettings?.runwayModelId ?? null,
     runwayDuration: project?.videoSettings?.runwayDuration ?? null,
     runwayResolution: project?.videoSettings?.runwayResolution ?? null,
+    // #16136: ceilings for the shot card's Render draft / Render final; null = the model's lowest / highest tier.
+    draftResolution: project?.videoSettings?.draftResolution ?? null,
+    finalResolution: project?.videoSettings?.finalResolution ?? null,
     generationMode: project?.videoSettings?.generationMode || 'image',
     audioReactiveLora: project?.videoSettings?.audioReactiveLora || '',
     audioReactiveScale: project?.videoSettings?.audioReactiveScale ?? 1.2,
