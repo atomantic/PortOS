@@ -73,7 +73,7 @@ Test at the highest practical public boundary (route, service workflow, store ad
 - **Never delete or skip migration/compatibility code because "there's only one install."**
 - On-disk format changes need a migration in `scripts/migrations/` (applied-list per install in `data/migrations.applied.json`). Seed files ship in `data.reference/`.
 - **A migration that DERIVES `data/<x>` from existing records ships NO `data.reference/<x>` seed and gates on its INPUT, never its output's absence**: `setup-data.js` copies missing seeds first, so a seeded output looks "already done" and the next write destroys the user's data (`scripts/migrations/340-cos-config-seed-repair.js`). Declare such a path in `scripts/lib/migrationOwnedPaths.js` and in the migration's `OWNED_OUTPUT_PATHS`; the guard checks both.
-- Prompt-default changes bump `PROMPT_VERSIONS` and regenerate the integrity snapshot so other installs upgrade stored defaults (procedure: `server/AGENTS.md` "Prompt templates").
+- Prompt-default changes: edit the body, then run the integrity-snapshot regen, which bumps the version so other installs upgrade stored defaults (procedure: `server/AGENTS.md` "Prompt templates").
 - Cross-machine sync payloads stay version-gated (`server/lib/schemaVersions.js`).
 - Self-update stays fork-aware. **Never add `--force` to the server-side `gh repo sync`** (it discards fork commits; the 409 `FORK_DIVERGED` message tells the user to run it themselves). The upstream slug lives only in `server/lib/gitRemote.js`; UI claiming "you are running PortOS" reads `remoteInfo.isUpstream` ([docs/SELF_UPDATE.md](docs/SELF_UPDATE.md)).
 

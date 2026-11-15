@@ -1869,8 +1869,8 @@ describe('codeReview helpers', () => {
         'diff --git a/server/services/taskPromptDefaults/prompts.js b/server/services/taskPromptDefaults/prompts.js',
         '+## Stay with the release PR',
         '+Do not stop while CI is pending; wait until the PR is MERGED.',
-        'diff --git a/server/services/taskPromptDefaults/versions.js b/server/services/taskPromptDefaults/versions.js',
-        "+  'do-release': 18, // v18: agent-example stopped at CI pending",
+        'diff --git a/server/services/taskPromptDefaults/integrity.snapshot.json b/server/services/taskPromptDefaults/integrity.snapshot.json',
+        '+    "do-release": 18,',
         'diff --git a/server/services/prWatcher.js b/server/services/prWatcher.js',
         '-export function unusedHelper() {}',
         '+function unusedHelper() {}',
@@ -1879,13 +1879,13 @@ describe('codeReview helpers', () => {
         const request = JSON.parse(init.body)
         const creditsPromptFix = request.messages[0].content.includes('the prompt text IS the production behavior')
           && request.messages[0].content.includes('a prompt edit with no version bump')
-        const hasBump = request.messages[1].content.includes("'do-release': 18")
+        const hasBump = request.messages[1].content.includes('"do-release": 18')
         return mockJsonResponse({ choices: [{ message: { content: JSON.stringify(creditsPromptFix && hasBump
           ? { verdict: 'ship', missing: [], unrequested: [], evidence: 'Prompt section and version bump deliver the behavior fix.' }
           : { verdict: 'fix-first', missing: ['runtime code'], unrequested: ['prWatcher change'], evidence: 'No runtime change.' }) } }] })
       })
       const full = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff: promptDiff })
-      const noBump = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff: promptDiff.replace("'do-release': 18", "'do-release': 17") })
+      const noBump = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff: promptDiff.replace('"do-release": 18', '"do-release": 17') })
       expect(full).toMatchObject({ ok: true, verdict: 'ship', missing: [], unrequested: [] })
       expect(noBump).toMatchObject({ ok: true, verdict: 'fix-first' })
     })

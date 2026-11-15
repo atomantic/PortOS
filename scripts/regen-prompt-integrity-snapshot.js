@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 /**
  * Advance server/services/taskPromptDefaults/integrity.snapshot.json to the
- * current prompt source — step two of every prompt-default change (AGENTS.md
- * "Distribution model"): bump the prompt's PROMPT_VERSIONS entry, then
+ * current prompt source — the second half of every prompt-default change
+ * (AGENTS.md "Distribution model"): edit the body, then
  *
  *   node scripts/regen-prompt-integrity-snapshot.js
  *
- * The mechanism — retire the outgoing hash on a bump, refuse a body change or
- * a rollback without one — is advancePromptIntegritySnapshot in
+ * The snapshot owns the version numbers, so the tool bumps a key's version
+ * itself and retires the outgoing hash. After a rebase conflict in the
+ * snapshot, take the base side and rerun it. The mechanism is
+ * advancePromptIntegritySnapshot in
  * server/services/taskPromptDefaults/integrityHash.js. Output is
  * environment-independent, and nothing is written when the snapshot is
  * already current.
@@ -34,22 +36,13 @@ export function runCli({
   write = (text) => writeFileSync(PROMPT_INTEGRITY_SNAPSHOT_PATH, text),
 } = {}) {
   const committed = read();
-  const { snapshot, retired, drift, dropped } = advancePromptIntegritySnapshot(committed, promptDefaults);
-
-  if (drift.length) {
-    for (const { key, version, reason } of drift) {
-      console.error(reason === 'rollback'
-        ? `❌ ${key}: PROMPT_VERSIONS went backwards to v${version} — a rollback is not a bump; restore the version or ship the change as a new one`
-        : `❌ ${key}: the default body changed but PROMPT_VERSIONS is still v${version} — bump it, then rerun`);
-    }
-    console.error('🔒 Snapshot left unchanged: an edited default with no version bump would ship unrecognized on every other install');
-    return 1;
-  }
+  const { snapshot, retired, added, dropped } = advancePromptIntegritySnapshot(committed, promptDefaults);
 
   for (const { key, from, to, hash } of retired) {
     console.log(`📦 ${key}: ${from === undefined ? 'unversioned' : `v${from}`} → v${to}, retired ${hash} onto the recognized history`);
   }
-  for (const key of dropped) console.log(`🗑️ ${key}: no longer in PROMPT_VERSIONS — dropped its retired-hash history`);
+  for (const { key, to } of added) console.log(`🆕 ${key}: new prompt starts at v${to}`);
+  for (const key of dropped) console.log(`🗑️ ${key}: no longer in the snapshot's PROMPT_VERSIONS — dropped its retired-hash history`);
 
   const text = serialize(snapshot);
   if (text === serialize(committed)) {

@@ -12,8 +12,8 @@
  *   - taskPromptDefaults.test.js asserts the current bodies and versions still
  *     match the snapshot;
  *   - scripts/regen-prompt-integrity-snapshot.js advances the snapshot after a
- *     PROMPT_VERSIONS bump, retiring the outgoing hash onto the history
- *     (advancePromptIntegritySnapshot below).
+ *     body edit, bumping the version and retiring the outgoing hash onto the
+ *     history (advancePromptIntegritySnapshot below).
  *
  * Not re-exported from ../taskPromptDefaults.js: that barrel is the prompt
  * DATA leaf, and this is the snapshot's tooling.
@@ -98,32 +98,31 @@ export const buildPromptIntegritySnapshot = ({
 });
 
 /**
- * Advance a committed snapshot to the current source — the bump tool's core,
- * and the only writer of the history lists.
+ * Advance a committed snapshot to the current source — the regen tool's core,
+ * and the only writer of PROMPT_VERSIONS and the history lists.
  *
- * For each versioned key whose body hash changed, the committed CURRENT hash is
- * the outgoing default. When PROMPT_VERSIONS rose it is appended to that key's
- * history, so the body every un-customized install is still holding stays
- * recognized by construction — no paste, nothing to mis-copy. When the version
- * did not rise the change is drift, reported instead of blessed: writing it
- * would ship an edited default no install recognizes as shipped, which is
- * exactly what the integrity test exists to catch.
+ * The snapshot is the source of version numbers (versions.js re-exports them),
+ * so authors never pick a bump: for each versioned key whose body hash changed,
+ * the version rises by one and the committed CURRENT hash — the default every
+ * un-customized install is still holding — is retired onto that key's history.
+ * Recognition is by construction: no paste, nothing to mis-copy. Versions only
+ * ever rise here; the guard test compares against the base snapshot to catch a
+ * hand edit that lowers one (every install stamped at the higher number would
+ * read the next real bump as `storedVersion < current` false and never get it).
  *
- * Versions only ever rise. A rollback — even with the body untouched — is drift
- * too: every install already stamped at the higher number would read the next
- * real bump as `storedVersion < current` false and never receive it.
- *
- * Unversioned keys (pipeline stage bodies, the manual-claim body) are read live
- * and never persisted, so their hash simply follows the source. For the same
- * reason the history of a key that is no longer versioned is dropped: nothing
- * unversioned is ever stored (versions.js's parity allowlist), so no install
- * holds a body of it that needs recognizing.
+ * A body with no committed hash is new: it starts at v1 unless the key is on
+ * `UNPERSISTED_PROMPT_KEYS` (pipeline stage bodies and the manual claim body are
+ * read live and never persisted, so their hash simply follows the source and
+ * they carry no version or history). Nothing unversioned is ever stored, so the
+ * history of a key that is no longer versioned is dropped.
  */
 export const advancePromptIntegritySnapshot = (committed, defaults) => {
-  const next = buildPromptIntegritySnapshot(defaults);
+  const unpersisted = new Set(defaults.UNPERSISTED_PROMPT_KEYS ?? []);
+  const versions = { ...committed.PROMPT_VERSIONS };
+  const next = buildPromptIntegritySnapshot({ ...defaults, PROMPT_VERSIONS: versions });
   const history = { ...committed.PREVIOUS_DEFAULT_PROMPTS };
   const retired = [];
-  const drift = [];
+  const added = [];
 
   for (const [oldKey, newKey] of Object.entries(TASK_TYPE_RENAMES)) {
     const moved = [...(history[oldKey] || [])];
@@ -132,35 +131,39 @@ export const advancePromptIntegritySnapshot = (committed, defaults) => {
     if (moved.length) {
       history[newKey] = [...new Set([...(history[newKey] || []), ...moved])];
     }
+    if (versions[oldKey] !== undefined && versions[newKey] === undefined) versions[newKey] = versions[oldKey];
     delete history[oldKey];
-  }
-
-  for (const [key, to] of Object.entries(next.PROMPT_VERSIONS)) {
-    if (committed.PROMPT_VERSIONS[key] > to) drift.push({ key, version: to, reason: 'rollback' });
   }
 
   for (const [key, hash] of Object.entries(next.DEFAULT_TASK_PROMPTS)) {
     const outgoing = committed.DEFAULT_TASK_PROMPTS[key];
-    const from = committed.PROMPT_VERSIONS[key];
-    const to = next.PROMPT_VERSIONS[key];
-    if (outgoing === undefined || outgoing === hash || to === undefined) continue;
-    if (from === to) {
-      drift.push({ key, version: to, reason: 'unbumped' });
+    if (outgoing === hash) continue;
+    if (outgoing === undefined) {
+      if (versions[key] === undefined && !unpersisted.has(key)) {
+        versions[key] = 1;
+        added.push({ key, to: 1 });
+      }
       continue;
     }
-    if (from > to) continue; // already reported as a rollback
+    const from = versions[key];
+    if (from === undefined) continue;
+    versions[key] = from + 1;
     // A revert to an older body is already on the list; keep one entry per body.
     if (!history[key]?.includes(outgoing)) history[key] = [...(history[key] || []), outgoing];
-    retired.push({ key, from, to, hash: outgoing });
+    retired.push({ key, from, to: from + 1, hash: outgoing });
   }
 
-  const dropped = Object.keys(history).filter((key) => next.PROMPT_VERSIONS[key] === undefined);
+  const dropped = Object.keys(history).filter((key) => versions[key] === undefined);
   for (const key of dropped) delete history[key];
 
   return {
-    snapshot: { ...next, PREVIOUS_DEFAULT_PROMPTS: sortedEntries(Object.entries(history)) },
+    snapshot: {
+      ...next,
+      PROMPT_VERSIONS: sortedEntries(Object.entries(versions)),
+      PREVIOUS_DEFAULT_PROMPTS: sortedEntries(Object.entries(history)),
+    },
     retired,
-    drift,
+    added,
     dropped,
   };
 };

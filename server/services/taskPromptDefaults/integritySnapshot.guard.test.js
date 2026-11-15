@@ -22,8 +22,17 @@ function missingRetiredHashes(base, current, versions) {
   });
 }
 
+// Versions are owned by the snapshot, so a hand edit that lowers one is the
+// only way to roll back: installs already stamped at the higher number would
+// read the next real bump as `storedVersion < current` false and never get it.
+function loweredVersions(base, current) {
+  return Object.entries(base.PROMPT_VERSIONS)
+    .filter(([key, version]) => current.PROMPT_VERSIONS[key] !== undefined && current.PROMPT_VERSIONS[key] < version)
+    .map(([key, version]) => `${key}: v${version} -> v${current.PROMPT_VERSIONS[key]}`);
+}
+
 describe('retired prompt hash history (#11992)', () => {
-  it('preserves every base hash for prompts that remain versioned', (context) => {
+  it('preserves every base hash for prompts that remain versioned and never lowers a version', (context) => {
     const explicitBase = process.env.CI_BASE_SHA?.trim();
     let base;
     if (explicitBase) {
@@ -45,6 +54,11 @@ describe('retired prompt hash history (#11992)', () => {
     expect(missingRetiredHashes(previous, current, PROMPT_VERSIONS),
       `Retired prompt hashes removed since ${base}; restore this upgrade recognition history`,
     ).toEqual([]);
+    expect(loweredVersions(previous, current), `Prompt versions went backwards since ${base}`).toEqual([]);
+  });
+
+  it('detects a lowered version', () => {
+    expect(loweredVersions({ PROMPT_VERSIONS: { a: 3, b: 1 } }, { PROMPT_VERSIONS: { a: 2, b: 2 } })).toEqual(['a: v3 -> v2']);
   });
 
   const snapshot = (history) => ({ PREVIOUS_DEFAULT_PROMPTS: history });
