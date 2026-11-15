@@ -84,9 +84,12 @@ function fakeHangingChild(stderr) {
   return child;
 }
 
-const prPages = rows => JSON.stringify([{ data: { repository: { pullRequests: {
-  nodes: rows.map((pr, index) => ({ ...pr, number: pr.number || index + 1, commits: {
-    nodes: (pr.commits || []).map(commit => ({ commit: { message: `${commit.messageHeadline || ''}\n${commit.messageBody || ''}` } })),
+const prPages = rows => JSON.stringify([{ data: { repository: {
+  defaultBranchRef: { name: 'main', target: { oid: 'a'.repeat(40) } }, pullRequests: {
+  nodes: rows.map((pr, index) => ({ baseRefName: 'main', baseRefOid: 'c'.repeat(40), headRefOid: 'b'.repeat(40), ...pr, number: pr.number || index + 1, commits: {
+    nodes: (pr.commits || []).map((commit, index) => ({ commit: {
+      oid: commit.oid || (index + 1).toString(16).padStart(40, '0'), message: `${commit.messageHeadline || ''}\n${commit.messageBody || ''}`,
+    } })),
     pageInfo: { hasNextPage: (pr.commits || []).length >= 100 },
   } })), pageInfo: { hasNextPage: false, endCursor: null },
 } } } }]);
@@ -566,10 +569,41 @@ describe('perpetualWork', () => {
       routeSpawn({
         'gh issue': { stdout: JSON.stringify([7, 8].map(number => ({ number, title: 'work', labels: [], assignees: [] }))) },
         'gh pr': { stdout: JSON.stringify([pr]) },
-        'gh api': { stdout: JSON.stringify([pr.commits.map(() => ({ commit: { message: 'other work' } })), [{ commit: { message: 'fix: work (#7)' } }]]) }
+        'gh api': { stdout: JSON.stringify([
+          { total_commits: 101, commits: pr.commits.map((_, index) => ({ sha: (index + 1).toString(16).padStart(40, '0'), commit: { message: 'other work' } })) },
+          { total_commits: 101, commits: [{ sha: 'f'.repeat(40), commit: { message: 'fix: work (#7)' } }] },
+        ]) }
       });
       expect(await detectGithubIssues(app, { issueAuthorFilter: 'any' })).toMatchObject({ sample: [8], count: 1, inFlightCount: 1 });
-      expect(spawn.mock.calls.some(([cmd, args]) => cmd === 'gh' && args.includes('--paginate') && args.includes('repos/{owner}/{repo}/pulls/23/commits?per_page=100'))).toBe(true);
+      expect(spawn.mock.calls.some(([cmd, args]) => cmd === 'gh' && args.includes('--paginate')
+        && args.includes(`repos/{owner}/{repo}/compare/${'c'.repeat(40)}...${'b'.repeat(40)}?per_page=100`))).toBe(true);
+    });
+
+    it('leaves shipped slices claimable during release promotion while retaining unpublished commit coverage', async () => {
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([7, 8, 9].map(number => ({ number, title: 'remaining work', labels: [], assignees: [] }))) },
+        'gh pr': { stdout: JSON.stringify([{
+          number: 23, baseRefName: 'release', headRefName: 'candidate/release', body: '',
+          commits: [{ oid: '1'.repeat(40), messageHeadline: 'test: shipped slice (#7)' },
+            { oid: '3'.repeat(40), messageHeadline: 'fix: unpublished release correction (#8)' }],
+        }]) },
+        'gh api': { stdout: JSON.stringify([
+          { total_commits: 2, commits: [{ sha: '2'.repeat(40), commit: { message: 'fix: inherited target-branch change (#9)' } }] },
+          { total_commits: 2, commits: [{ sha: '3'.repeat(40), commit: { message: 'fix: unpublished release correction (#8)' } }] },
+        ]) },
+      });
+      expect(await detectGithubIssues(app, { issueAuthorFilter: 'any' })).toMatchObject({ sample: [7, 9], count: 2, inFlightCount: 1 });
+      expect(spawn.mock.calls.some(([cmd, args]) => cmd === 'gh'
+        && args.includes(`repos/{owner}/{repo}/compare/${'a'.repeat(40)}...${'b'.repeat(40)}?per_page=100`))).toBe(true);
+    });
+
+    it('keeps an unreadable release comparison transient', async () => {
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([{ number: 7, title: 'remaining work', labels: [], assignees: [] }]) },
+        'gh pr': { stdout: JSON.stringify([{ baseRefName: 'release', headRefName: 'candidate/release', body: '', commits: [] }]) },
+        'gh api': { stdout: '', code: 1, stderr: 'API rate limit exceeded' },
+      });
+      expect(await detectGithubIssues(app, { issueAuthorFilter: 'any' })).toMatchObject({ actionable: false, transient: true, reason: 'gh-unavailable' });
     });
 
     it.each(['{broken', JSON.stringify([{ headRefName: 'feature', body: '', commits: Array.from({ length: 100 }, () => ({ messageHeadline: 'change' })) }])])(
