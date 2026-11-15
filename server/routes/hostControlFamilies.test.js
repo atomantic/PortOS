@@ -1,28 +1,29 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import express, { Router } from 'express';
-import { errorMiddleware } from '../lib/errorHandler.js';
-import { request } from '../lib/testHelper.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
+import { Router } from 'express';
+import { expectAuthorizedWorkflows, expectRemoteRefusal } from './hostControlTestHarness.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-// The real authGate and host-control route gate over the #8721 families,
-// pinned to a password-free install so the developer's own settings cannot
-// change what these cases observe.
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-families-authority-') }));
+afterAll(cleanupTempDataRoots);
+
+// Feature-agent, loop, provider-runtime, GitHub and tool-registry writes (#8721,
+// #9014, #10111) are plain writes under the default-deny gate (#16018), whose
+// principal matrix lives in services/authGate.test.js. The settings-key split
+// that once lived here is gone: every settings write is an operator write now.
+// This suite keeps one authorized workflow per router with its sink doubled.
+const auth = vi.hoisted(() => ({ enabled: false }));
 vi.mock('../services/auth.js', async (importOriginal) => ({
-  ...await importOriginal(),
-  isAuthEnabled: vi.fn().mockResolvedValue(false),
-  verifyRequestSession: vi.fn(async req => req.headers.authorization === 'Bearer example-session'),
+  ...await importOriginal(), isAuthEnabled: vi.fn(async () => auth.enabled),
 }));
-
-// Stored settings; a resave that repeats them is still an operator write (#16018).
-const settingsStore = vi.hoisted(() => ({ current: {} }));
-vi.mock('../services/settings.js', async (importOriginal) => ({
-  ...await importOriginal(),
-  getSettings: vi.fn(async () => settingsStore.current),
+vi.mock('../services/settings.js', () => ({
+  settingsEvents: new EventEmitter(), getSettings: vi.fn(async () => ({})),
 }));
 
 const featureAgents = vi.hoisted(() => ({
   createFeatureAgent: vi.fn(),
-  activateFeatureAgent: vi.fn(),
+  activateFeatureAgent: vi.fn(async () => ({ id: 'agent-1', status: 'active' })),
   triggerFeatureAgent: vi.fn(),
   stopFeatureAgent: vi.fn(),
 }));
@@ -30,14 +31,14 @@ vi.mock('../services/featureAgents.js', () => featureAgents);
 
 const loops = vi.hoisted(() => ({
   createLoop: vi.fn(),
-  triggerLoop: vi.fn(),
+  triggerLoop: vi.fn(async () => ({ id: 'loop-1' })),
   stopLoop: vi.fn(),
 }));
 vi.mock('../services/loops.js', () => loops);
 
 const github = vi.hoisted(() => ({
   updateRepoFlags: vi.fn(),
-  setRepoArchived: vi.fn(),
+  setRepoArchived: vi.fn(async () => ({ archived: true })),
   setSecret: vi.fn(),
   syncSecretToRepos: vi.fn(),
   syncRepos: vi.fn(),
@@ -49,8 +50,8 @@ const tools = vi.hoisted(() => ({
   getEnabledTools: vi.fn(),
   getToolsSummaryForPrompt: vi.fn(),
   getTool: vi.fn(),
-  registerTool: vi.fn(),
-  updateTool: vi.fn(),
+  registerTool: vi.fn(async () => ({ id: 'example-tool' })),
+  updateTool: vi.fn(async () => ({ id: 'example-tool' })),
   deleteTool: vi.fn(),
 }));
 vi.mock('../services/tools.js', () => tools);
@@ -67,274 +68,45 @@ const installer = vi.hoisted(() => ({
 }));
 vi.mock('../services/providerRuntimeInstaller.js', () => installer);
 
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import featureAgentsRoutes from './featureAgents.js';
 import loopsRoutes from './loops.js';
 import { createPortOSProviderRoutes } from './providers.js';
 import githubRoutes from './github.js';
 import toolsRoutes from './tools.js';
-import { isAuthEnabled } from '../services/auth.js';
 
-// Stand-ins for the two policy-store handlers: the gate, not the store, is
-// under test, and a handler that never runs is the proof nothing was written.
-const settingsWrite = vi.fn((req, res) => res.json({ saved: Object.keys(req.body) }));
-const cosConfigWrite = vi.fn((req, res) => res.json({ saved: Object.keys(req.body) }));
-const mediaHostAction = vi.fn((_req, res) => res.json({ started: true }));
-
-// Mirrors the order server/index.js mounts them in.
-const buildGatedApp = (remoteAddress) => {
-  const app = express();
-  app.use((req, _res, next) => {
-    // Model the server's socket observation, never an HTTP header.
-    Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress });
-    next();
-  });
-  app.use(authGate);
-  app.use(hostControlRouteGate);
-  app.use(express.json());
-  app.use('/api/feature-agents', featureAgentsRoutes);
-  app.use('/api/loops', loopsRoutes);
-  app.use('/api/providers', createPortOSProviderRoutes({ services: { providers: {} }, routes: { providers: Router() } }));
-  app.use('/api/github', githubRoutes);
-  app.use('/api/tools', toolsRoutes);
-  app.put('/api/settings', settingsWrite);
-  app.put('/api/cos/config', cosConfigWrite);
-  app.post('/api/voice/studio/setup', mediaHostAction);
-  app.post('/api/instances/provision-cert', mediaHostAction);
-  app.post('/api/apps/:id/launch-videos/publish', mediaHostAction);
-  app.use(errorMiddleware);
-  return app;
-};
-
-const remote = () => buildGatedApp('192.0.2.10');
-const local = () => buildGatedApp('127.0.0.1');
-
-// `proxyClient` is the address the Vite dev proxy reports for the browser it
-// forwarded, which is what makes a loopback socket a remote caller.
-const call = (app, [method, path, body = {}], proxyClient) => {
-  const pending = request(app)[method](path);
-  if (proxyClient) pending.set(DEV_PROXY_CLIENT_ADDRESS_HEADER, proxyClient);
-  return pending.send(body);
-};
-
-const expectRefused = (response) => {
-  expect(response.status).toBe(403);
-  expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
-};
-
-const REFUSED_WRITES = [
-  ['post', '/api/feature-agents', { name: 'Example agent' }],
-  ['post', '/api/feature-agents/agent-1/start', {}],
-  ['post', '/api/feature-agents/agent-1/trigger', {}],
-  ['post', '/api/loops', { prompt: 'run the example', interval: '5m' }],
-  ['post', '/api/loops/loop-1/trigger', {}],
-  ['post', '/api/providers/runtimes/install?runtime=codex', {}],
-  ['post', '/api/voice/studio/setup', {}],
-  ['post', '/api/instances/provision-cert', {}],
-  ['post', '/api/apps/example-app/launch-videos/publish', {}],
-  ['put', '/api/github/repos/example.com%2Fexample', { flags: ['archived'] }],
-  ['post', '/api/github/repos/example.com%2Fexample/archive', {}],
-  ['post', '/api/github/repos/example.com%2Fexample/unarchive', {}],
-  ['put', '/api/github/secrets/EXAMPLE_SECRET', { value: 'secret-value' }],
-  ['post', '/api/github/secrets/EXAMPLE_SECRET/sync', {}],
-  ['put', '/api/settings', { harnesses: { claude: { enabled: true } } }],
-  ['put', '/api/cos/config', { avatarStyle: 'svg', maxConcurrentAgents: 9 }],
+const mounts = [
+  ['/api/feature-agents', featureAgentsRoutes],
+  ['/api/loops', loopsRoutes],
+  ['/api/providers', createPortOSProviderRoutes({ services: { providers: {} }, routes: { providers: Router() } })],
+  ['/api/github', githubRoutes],
+  ['/api/tools', toolsRoutes],
 ];
 
-describe('host-control gate on agent, loop, provider and policy writes (#8721)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    featureAgents.activateFeatureAgent.mockResolvedValue({ id: 'agent-1', status: 'active' });
-    featureAgents.stopFeatureAgent.mockResolvedValue({ id: 'agent-1', status: 'stopped' });
-    loops.triggerLoop.mockResolvedValue({ id: 'loop-1' });
-    loops.stopLoop.mockResolvedValue({ id: 'loop-1', status: 'stopped' });
-    github.updateRepoFlags.mockResolvedValue({ archived: false });
-    github.setRepoArchived.mockResolvedValue({ archived: true });
-    github.setSecret.mockResolvedValue({ success: true });
-    github.syncSecretToRepos.mockResolvedValue({ synced: true });
-    github.syncRepos.mockResolvedValue({ repos: [] });
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
+  auth.enabled = false;
+});
 
-  it('refuses a remote password-free caller, direct or proxied, before anything runs or is written', async () => {
-    for (const write of REFUSED_WRITES) {
-      expectRefused(await call(remote(), write));
-      expectRefused(await call(local(), write, '192.0.2.10'));
-    }
-    expect(featureAgents.createFeatureAgent).not.toHaveBeenCalled();
-    expect(featureAgents.activateFeatureAgent).not.toHaveBeenCalled();
-    expect(featureAgents.triggerFeatureAgent).not.toHaveBeenCalled();
-    expect(loops.createLoop).not.toHaveBeenCalled();
-    expect(loops.triggerLoop).not.toHaveBeenCalled();
-    expect(installer.getProviderRuntimeStatus).not.toHaveBeenCalled();
-    expect(installer.spawnRuntimeInstaller).not.toHaveBeenCalled();
-    expect(github.updateRepoFlags).not.toHaveBeenCalled();
-    expect(github.setRepoArchived).not.toHaveBeenCalled();
-    expect(github.setSecret).not.toHaveBeenCalled();
-    expect(github.syncSecretToRepos).not.toHaveBeenCalled();
-    expect(settingsWrite).not.toHaveBeenCalled();
-    expect(cosConfigWrite).not.toHaveBeenCalled();
-    expect(mediaHostAction).not.toHaveBeenCalled();
-  });
-
-  it('refuses a remote caller even the writes that only stop work or change no execution policy, and keeps them local', async () => {
-    const writes = [
-      ['post', '/api/feature-agents/agent-1/stop'],
-      ['post', '/api/loops/loop-1/stop'],
-      ['put', '/api/settings', { location: { lat: null, lon: null } }],
-      ['put', '/api/cos/config', { avatarStyle: 'svg' }],
-      ['post', '/api/github/repos/sync'],
-    ];
-    for (const write of writes) expectRefused(await call(remote(), write));
-    expect(github.syncRepos).not.toHaveBeenCalled();
-    expect(featureAgents.stopFeatureAgent).not.toHaveBeenCalled();
-    expect(loops.stopLoop).not.toHaveBeenCalled();
-    expect(settingsWrite).not.toHaveBeenCalled();
-    expect(cosConfigWrite).not.toHaveBeenCalled();
-    const statuses = [];
-    for (const write of writes) statuses.push((await call(local(), write)).status);
-    expect(statuses).toEqual([200, 200, 200, 200, 200]);
-    expect(github.syncRepos).toHaveBeenCalledTimes(1);
-    expect(featureAgents.stopFeatureAgent).toHaveBeenCalledTimes(1);
-    expect(loops.stopLoop).toHaveBeenCalledTimes(1);
-    expect([settingsWrite, cosConfigWrite].map((write) => write.mock.calls.length)).toEqual([1, 1]);
-  });
-
-  it('keeps a local caller, direct or through the dev proxy, able to run and configure everything', async () => {
-    for (const proxyClient of [undefined, '::ffff:127.0.0.1']) {
-      const statuses = [];
-      for (const write of [
-        ['post', '/api/feature-agents/agent-1/start'],
-        ['post', '/api/loops/loop-1/trigger'],
-        ['post', '/api/voice/studio/setup'],
-        ['post', '/api/instances/provision-cert'],
-        ['post', '/api/apps/example-app/launch-videos/publish'],
-        ['post', '/api/github/repos/example%2Fexample/archive'],
-        ['put', '/api/settings', { codeReview: { reviewers: ['claude'] } }],
-        ['put', '/api/cos/config', { maxConcurrentAgents: 2 }],
-      ]) statuses.push((await call(local(), write, proxyClient)).status);
-      expect(statuses).toEqual([200, 200, 200, 200, 200, 200, 200, 200]);
-    }
+describe('agent, loop, provider, GitHub and tool-registry writes behind the default-deny gate (#8721, #9014, #16114)', () => {
+  it('still starts agents and loops, archives repos and writes the tool registry for a local operator and a delegated agent session', async () => {
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: [
+      ['post', '/api/feature-agents/agent-1/start', {}, featureAgents.activateFeatureAgent, 200],
+      ['post', '/api/loops/loop-1/trigger', {}, loops.triggerLoop, 200],
+      ['post', '/api/github/repos/example%2Fexample/archive', {}, github.setRepoArchived, 200],
+      ['post', '/api/tools', { id: 'example-tool', name: 'Example tool', category: 'cli', enabled: true, promptHints: 'Use the example tool' }, tools.registerTool, 201],
+      ['put', '/api/tools/example-tool', { description: 'Updated example tool' }, tools.updateTool, 200],
+    ] });
     expect(github.setRepoArchived).toHaveBeenCalledWith('example/example', true);
-    expect(featureAgents.activateFeatureAgent).toHaveBeenCalledTimes(2);
-    expect(loops.triggerLoop).toHaveBeenCalledTimes(2);
-    expect([settingsWrite, cosConfigWrite].map((write) => write.mock.calls.length)).toEqual([2, 2]);
-  });
-});
-
-describe('host-control gate on Tailscale certificate provisioning (#10111)', () => {
-  it('lets a remote caller with a verified operator session provision', async () => {
-    isAuthEnabled.mockResolvedValue(true);
-    const response = await request(remote()).post('/api/instances/provision-cert').set('Authorization', 'Bearer example-session').send({});
-    isAuthEnabled.mockResolvedValue(false);
-    expect(response.status).toBe(200);
-  });
-});
-
-describe('host-control gate on settings keys that pick an executable (#8751)', () => {
-  const STORED = {
-    imageGen: {
-      grok: { enabled: true, grokPath: '/opt/example/bin/grok', aspectRatio: '1:1' },
-      agy: { enabled: true, agyPath: '/opt/example/bin/agy' },
-      local: { pythonPath: '/opt/example/.venv/bin/python3' },
-    },
-    layeredIntelligence: { trustShellSources: false },
-  };
-  const CHANGES = [
-    { imageGen: { ...STORED.imageGen, grok: { ...STORED.imageGen.grok, grokPath: '/bin/bash' } } },
-    { imageGen: { agy: { agyPath: '/bin/sh' } } },
-    { imageGen: { codex: { codexPath: '/usr/bin/env' } } },
-    { imageGen: { local: { pythonPath: '/opt/example/other/python3' } } },
-    { layeredIntelligence: { trustShellSources: true } },
-  ];
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    settingsStore.current = STORED;
-  });
-
-  it('refuses a remote password-free caller that changes one, before anything is written', async () => {
-    for (const body of CHANGES) {
-      expectRefused(await call(remote(), ['put', '/api/settings', body]));
-      expectRefused(await call(local(), ['put', '/api/settings', body], '192.0.2.10'));
-    }
-    expect(settingsWrite).not.toHaveBeenCalled();
-  });
-
-  it('refuses a remote caller that only resaves the stored values or clears one, and keeps it local', async () => {
-    const bodies = [
-      { imageGen: { ...STORED.imageGen, grok: { ...STORED.imageGen.grok, aspectRatio: '16:9' } } },
-      { layeredIntelligence: { trustShellSources: false } },
-      { imageGen: { grok: { enabled: false, grokPath: '' } } },
-    ];
-    for (const body of bodies) expectRefused(await call(remote(), ['put', '/api/settings', body]));
-    expect(settingsWrite).not.toHaveBeenCalled();
-    const statuses = [];
-    for (const body of bodies) statuses.push((await call(local(), ['put', '/api/settings', body])).status);
-    expect(statuses).toEqual([200, 200, 200]);
-    expect(settingsWrite).toHaveBeenCalledTimes(3);
-  });
-
-  it('keeps a local caller able to change every one', async () => {
-    const statuses = [];
-    for (const body of CHANGES) statuses.push((await call(local(), ['put', '/api/settings', body])).status);
-    expect(statuses).toEqual(CHANGES.map(() => 200));
-  });
-});
-
-describe('tool registry prompt writes require operator authority (#9014)', () => {
-  const tool = { id: 'example-tool', name: 'Example tool', category: 'cli', enabled: true };
-  const writes = [
-    ['post', '/api/tools', { ...tool, promptHints: 'Use the example tool' }],
-    ['put', '/api/tools/example-tool', { description: 'Updated example tool' }],
-  ];
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    isAuthEnabled.mockResolvedValue(false);
-    tools.registerTool.mockResolvedValue(tool);
-    tools.updateTool.mockResolvedValue({ ...tool, description: 'Updated example tool' });
-    tools.getTools.mockResolvedValue([tool]);
-    tools.getEnabledTools.mockResolvedValue([tool]);
-    tools.getToolsSummaryForPrompt.mockResolvedValue('Example tool');
-    tools.getTool.mockResolvedValue(tool);
-  });
-
-  it('refuses direct and proxied remote writes before the registry can change', async () => {
-    for (const write of writes) {
-      expectRefused(await call(remote(), write));
-      expectRefused(await call(local(), write, '192.0.2.10'));
-    }
-    expect(tools.registerTool).not.toHaveBeenCalled();
-    expect(tools.updateTool).not.toHaveBeenCalled();
-  });
-
-  it('keeps all reads available to remote password-free callers and deletion to local ones', async () => {
-    for (const path of ['/api/tools', '/api/tools/enabled', '/api/tools/summary', '/api/tools/example-tool']) {
-      expect((await request(remote()).get(path)).status).toBe(200);
-    }
-    expectRefused(await request(remote()).delete('/api/tools/example-tool'));
-    expect(tools.deleteTool).not.toHaveBeenCalled();
-    expect((await request(local()).delete('/api/tools/example-tool')).status).toBe(204);
-    expect(tools.deleteTool).toHaveBeenCalledWith('example-tool');
-  });
-
-  it('preserves local writes and remote operator-session writes', async () => {
-    for (const [enabled, app, proxyClient] of [
-      [false, local(), undefined],
-      [false, local(), '::ffff:127.0.0.1'],
-      [true, remote(), undefined],
-    ]) {
-      isAuthEnabled.mockResolvedValue(enabled);
-      for (const [method, path, body] of writes) {
-        const pending = request(app)[method](path);
-        if (enabled) pending.set('Authorization', 'Bearer example-session');
-        if (proxyClient) pending.set(DEV_PROXY_CLIENT_ADDRESS_HEADER, proxyClient);
-        expect((await pending.send(body)).status).toBe(method === 'post' ? 201 : 200);
-      }
-    }
-    expect(tools.registerTool).toHaveBeenCalledTimes(3);
-    expect(tools.updateTool).toHaveBeenCalledTimes(3);
     expect(tools.updateTool).toHaveBeenCalledWith('example-tool', { description: 'Updated example tool' });
-    isAuthEnabled.mockResolvedValue(false);
+  });
+
+  it('refuses a remote caller on the provider-runtime installer before it spawns anything', async () => {
+    await expectRemoteRefusal(mounts, ['post', '/api/providers/runtimes/install?runtime=codex', {}, installer.spawnRuntimeInstaller]);
+    expect(installer.getProviderRuntimeStatus).not.toHaveBeenCalled();
+  });
+
+  it('refuses a remote caller on the secret and tool deletes that host control keeps', async () => {
+    await expectRemoteRefusal(mounts, ['put', '/api/github/secrets/EXAMPLE_SECRET', { value: 'secret-value' }, github.setSecret]);
+    await expectRemoteRefusal(mounts, ['delete', '/api/tools/example-tool', undefined, tools.deleteTool]);
   });
 });
