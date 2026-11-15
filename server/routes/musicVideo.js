@@ -79,9 +79,10 @@ router.use(writeOriginScope);
 const projectCreateSchema = musicVideoProjectCreateSchema.extend(recordRenderPinFields);
 const projectUpdateSchema = musicVideoProjectUpdateSchema.extend(recordRenderPinFields);
 
-// Backward-compatible by default: returns the full projects array. When a client
+// Unpaged, the list is every project's summary projection (#16210): full records of every
+// project ran past 100 MB, and nothing reads them; a full record is GET /:id. When a client
 // passes `limit`/`offset`, the response becomes the bounded
-// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+// `{ items, total, limit, offset }` envelope every paginated PortOS list shares, of full records.
 // `summary=1` (#10169) swaps each record for its bounded summary projection —
 // newest first, with a `nextCursor` — for the project index and header picker, so
 // they never load every project's scenes, runs and reviews.
@@ -91,13 +92,15 @@ const projectUpdateSchema = musicVideoProjectUpdateSchema.extend(recordRenderPin
 // second request is in flight. GET /:id/production-review still serves the full review payload.
 // A restart archives a thumbnail paint without clearing `pending`. Heal on read,
 // and only when one is present, so a project list does not load the image stack.
-async function presentProjectForRead(project) {
+// `catalogCheckinResolved`: the project came from getProject in this request, which already
+// resolved its catalog check-in; resolving it again only repeats every linked catalog read (#16210).
+async function presentProjectForRead(project, { catalogCheckinResolved = false } = {}) {
   let current = project;
   if (project?.publishKit?.youtubeThumbnail?.pending) {
     const { reconcileInterruptedYoutubeThumbnail } = await import('../services/musicVideo/youtubeThumbnail.js');
     current = await reconcileInterruptedYoutubeThumbnail(project);
   }
-  if (current?.castAndSets?.source === 'catalog') {
+  if (current?.castAndSets?.source === 'catalog' && !(catalogCheckinResolved && current.castAndSets.catalogCheckin)) {
     const { withCatalogCheckin } = await import('../services/musicVideo/catalogCheckin.js');
     current = await withCatalogCheckin(current);
   }
@@ -135,7 +138,8 @@ router.get('/', asyncHandler(async (req, res) => {
     const next = Math.min(page.offset + page.limit, page.total);
     return res.json({ ...page, items, ...(summary ? { nextCursor: next < page.total ? String(next) : null } : {}) });
   }
-  res.json(await Promise.all((await listProjects()).map((project) => presentProjectForRead(project))));
+  const presented = await Promise.all((await listProjects()).map((project) => presentProjectForRead(project)));
+  res.json(presented.map((project) => summarizeMusicVideoProject(project, project.productionReadiness)));
 }));
 
 // Sidebar sub-nav rows; registered before /:id so "names" is not read as an id.
@@ -167,7 +171,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const p = await requireProject(req.params.id);
   // Transient (never persisted): lets a reloaded page reattach to a running publishing-kit build.
   const activePublishKitBuild = getActivePublishKitBuild(p.id);
-  const presented = await presentProjectForRead(p);
+  const presented = await presentProjectForRead(p, { catalogCheckinResolved: true });
   const activeDcpBuild = activeDcp(p.id);
   res.json({ ...presented, ...(activePublishKitBuild ? { activePublishKitBuild } : {}), ...(activeDcpBuild ? { activeDcpBuild } : {}) });
 }));

@@ -139,12 +139,16 @@ describe('musicVideo routes', () => {
     });
   });
 
-  it('GET / lists projects', async () => {
+  // Uniquely catches the unpaged list going back to every project's full record (#16210),
+  // which ran past 100 MB on a real install while nothing read it.
+  it('GET / lists every project as its summary, never the full record', async () => {
+    svc.listProjects.mockResolvedValueOnce([{ id: 'mv-1', name: 'A', scenes: [{ sceneId: 's1', takes: [{ takeId: 't1', prompt: 'long composed prompt' }] }],
+      productionReview: { draft: { storyboard: [] } } }]);
     const r = await request(app).get('/api/music-video');
     expect(r.status).toBe(200);
     expect(r.body).toHaveLength(1);
-    expect(r.body[0]).toMatchObject({ id: 'mv-1', name: 'A' });
-    expect(r.body[0].productionReadiness).toMatchObject({ readyForProduction: false, art: { approved: false } });
+    expect(r.body[0]).toMatchObject({ id: 'mv-1', name: 'A', stage: expect.any(String) });
+    for (const heavy of ['scenes', 'productionReview', 'productionReadiness']) expect(r.body[0]).not.toHaveProperty(heavy);
   });
 
   it('GET /names serves sidebar rows instead of treating "names" as a project id', async () => {

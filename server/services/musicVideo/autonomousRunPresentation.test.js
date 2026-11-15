@@ -32,8 +32,9 @@ describe('autonomous run restart presentation (#10022)', () => {
     await pin('proc-before-restart');
     const one = await request(app).get(`/api/music-video/${project.id}`);
     expect(one.body.autonomousRun).toMatchObject({ status: 'running', interrupted: true });
-    const list = await request(app).get('/api/music-video');
-    expect(list.body.find((p) => p.id === project.id).autonomousRun.interrupted).toBe(true);
+    // The paged list carries full records, presented the same way.
+    const list = await request(app).get('/api/music-video?limit=50');
+    expect(list.body.items.find((p) => p.id === project.id).autonomousRun.interrupted).toBe(true);
 
     await pin(__autonomousProcessId());
     const live = await request(app).get(`/api/music-video/${project.id}`);

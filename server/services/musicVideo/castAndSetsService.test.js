@@ -386,8 +386,9 @@ describe('Cast & Sets restart presentation (#9940)', () => {
     // The client has no way to know the server's process id, so the read must say it.
     const one = await request(app).get(`/api/music-video/${project.id}`);
     expect(one.body.castAndSets).toMatchObject({ status: 'imaging', interrupted: true });
-    const list = await request(app).get('/api/music-video');
-    expect(list.body.find((p) => p.id === project.id).castAndSets.interrupted).toBe(true);
+    // The paged list carries full records, presented the same way.
+    const list = await request(app).get('/api/music-video?limit=50');
+    expect(list.body.items.find((p) => p.id === project.id).castAndSets.interrupted).toBe(true);
 
     await pin(service.__castAndSetsProcessId());
     const live = await request(app).get(`/api/music-video/${project.id}`);
@@ -3002,6 +3003,38 @@ describe('rebuilding a catalog stage guide (#15086)', () => {
   };
   const rebuild = (id) => request(app).post(`/api/music-video/${id}/cast-and-sets/catalog/guide`).send({});
   const guideHtml = async (id, artifactId) => (await request(app).get(`/api/music-video/${id}/dev-artifacts/${artifactId}/file`)).text;
+
+  // Uniquely catches a project read, a cast-and-sets read or a shot edit resolving the catalog check-in
+  // more than once (#16210): each pass reads every linked record, which made small edits slow.
+  it('reads each linked catalog record once per project read, cast-and-sets read and shot edit', async () => {
+    Object.keys(RECORDS).forEach((id) => onDisk(`${id}.png`));
+    // No injected catalog: the stage read and the project read both go to the live catalog module, as in production.
+    service.__setCastAndSetsDepsForTests(testDeps({ catalog: null }));
+    const catalogDB = await import('../catalogDB.js');
+    const recordSpy = vi.spyOn(catalogDB, 'getIngredient').mockImplementation(async (id) => RECORDS[id] ?? null);
+    const mediaSpy = vi.spyOn(catalogDB, 'listMediaForIngredient').mockImplementation(async (id) => [{ kind: 'portrait', mediaKey: `${id}.png` }]);
+    onTestFinished(() => { recordSpy.mockRestore(); mediaSpy.mockRestore(); });
+    const project = await catalogProject();
+    const linked = Object.keys(RECORDS).length;
+    const reads = async (call) => {
+      recordSpy.mockClear();
+      mediaSpy.mockClear();
+      const response = await call();
+      expect(response.status).toBe(200);
+      return { records: recordSpy.mock.calls.length, media: mediaSpy.mock.calls.length, body: response.body };
+    };
+    const read = await reads(() => request(app).get(`/api/music-video/${project.id}`));
+    expect(read).toMatchObject({ records: linked, media: linked });
+    expect(read.body.castAndSets.catalogCheckin.items).toHaveLength(SUBJECTS.length);
+    const checkin = await reads(() => request(app).get(`/api/music-video/${project.id}/cast-and-sets`));
+    expect(checkin).toMatchObject({ records: linked, media: linked });
+    expect(checkin.body.catalogCheckin.basis).toBe(read.body.castAndSets.catalogCheckin.basis);
+    expect(checkin.body.stage.catalogCheckin.basis).toBe(read.body.castAndSets.catalogCheckin.basis);
+    // The edit still resolves it once under the write, for the stale-pick clean-up.
+    const edit = await reads(() => request(app).patch(`/api/music-video/${project.id}/scenes/shot-1`).send({ shotSheet: { checked: true } }));
+    expect(edit).toMatchObject({ records: linked, media: linked });
+    expect(edit.body).toMatchObject({ sceneId: 'shot-1', shotSheet: { checked: true } });
+  });
 
   // Uniquely catches a guide versioning without current catalog text, or a rebuild disturbing the check-in approval.
   it('saves each rebuild as a new version of the guide with current catalog text, leaving the approval alone', async () => {
