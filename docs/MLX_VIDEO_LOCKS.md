@@ -203,7 +203,7 @@ constraints, replace the bounded helper-update block with:
 ```python
 for name in ("httpx", "httpcore", "certifi"):
     pins.pop(name, None)
-pins.update({"huggingface-hub": "2.4.0", "transformers": "5.22.1",
+pins.update({"huggingface-hub": "2.4.0", "transformers": "5.22.2",
              "hf-xet": "1.6.0", "httpx2": "2.16.0",
              "httpcore2": "2.16.0", "truststore": "0.10.5"})
 ```
