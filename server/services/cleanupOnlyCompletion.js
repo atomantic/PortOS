@@ -1,13 +1,24 @@
+import { realpath } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { isSafeGitRef } from '../lib/gitArgs.js';
 import { agentPrHeldForOperator, prHeldForOperator } from '../lib/prDisposition.js';
 import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
 
-const hasCleanupTarget = task => task?.taskType === 'internal'
-  && task.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup' && !!task.metadata?.retirementReview;
+const isRepositoryCleanup = task => task?.taskType === 'internal'
+  && task.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup';
 // Delivery repair still owns its PR, review and commit gates.
-export const isCleanupOnlyRecovery = task => hasCleanupTarget(task) && !task.metadata?.recoveryMergeTarget;
+export const isCleanupOnlyRecovery = task => isRepositoryCleanup(task) && !task.metadata?.recoveryMergeTarget;
+// A pre-existing delivery repair that also persisted a target keeps its cleanup bookkeeping.
+const hasCleanupScope = task => isCleanupOnlyRecovery(task) || (isRepositoryCleanup(task) && !!task.metadata?.retirementReview);
+
+/** The one metadata shape the divergence producer persists. Completion reads
+ * `retirementReview` back, so a retirement-only recovery must carry its target. */
+export function repositoryCleanupRecoveryMetadata({ parentAgentId, parentTaskId = null, attempt, observation, mergeTarget = null, target = null }) {
+  return { recoveryOrigin: { parentAgentId, parentTaskId, subsystem: 'repository-cleanup', attempt, observation, noProgress: false },
+    ...(mergeTarget ? { recoveryMergeTarget: mergeTarget } : {}),
+    ...(target ? { retirementReview: target } : {}) };
+}
 
 /** Observe local cleanup, not delivery or who removed it. The retirement service
  * owns authorization before deletion; completion needs no historical receipt. */
@@ -25,18 +36,17 @@ export async function observeCleanupTarget(repoPath, release) {
 }
 
 export async function verifyCleanupCompletion(input) {
-  if (!hasCleanupTarget(input)) return null;
+  if (!hasCleanupScope(input)) return null;
   return verifyCurrentCleanup(input).catch(() => ({ status: 'unverified', reason: 'cleanup-state-unreadable',
     target: input.metadata.retirementReview }));
 }
 
 async function verifyCurrentCleanup(input) {
-  if (!hasCleanupTarget(input)) return null;
   const { getTaskById } = await import('./cosTaskStore.js');
   const task = await getTaskById(input.id);
-  const target = input.metadata.retirementReview;
+  let target = input.metadata.retirementReview;
   const unverified = reason => ({ status: 'unverified', reason, target });
-  if (!hasCleanupTarget(task) || !isDeepStrictEqual(task.metadata.retirementReview, target)
+  if (!hasCleanupScope(task) || !isDeepStrictEqual(task.metadata.retirementReview, target)
     || !isDeepStrictEqual(task.metadata.recoveryOrigin, input.metadata.recoveryOrigin)
     || !isDeepStrictEqual(task.metadata.recoveryMergeTarget, input.metadata.recoveryMergeTarget)) return unverified('cleanup-task-changed');
   if (prHeldForOperator(task)) return unverified('cleanup-human-handoff');
@@ -45,9 +55,39 @@ async function verifyCurrentCleanup(input) {
   const parent = parentId ? await getAgentRecord(parentId) : null;
   if (!parent || parent.id !== parentId || parent.taskId !== task.metadata.recoveryOrigin.parentTaskId) return unverified('cleanup-parent-unavailable');
   if (agentPrHeldForOperator(parent, parent)) return unverified('cleanup-parent-human-handoff');
+  const recorded = target ? null : await resolveRecordedCleanupTarget(task, parent);
+  if (recorded?.reason) return unverified(recorded.reason);
+  if (recorded) target = recorded.target;
   const { getAppById } = await import('./apps.js');
   const app = await getAppById(target.appId);
+  if (recorded && (!app?.repoPath || await realpath(app.repoPath).catch(() => null) !== recorded.repoPath)) {
+    return unverified('cleanup-app-scope-mismatch');
+  }
   return { ...await observeCleanupTarget(app?.repoPath, target.release), target };
+}
+
+/** Recoveries filed without a persisted target (#16059) resolve it only from
+ * server-written parent evidence: the dispatch backlink naming this task with
+ * the same observation, and the parent's own captured checkout of that branch.
+ * Task text, API-written paths and current inventory grant nothing. */
+async function resolveRecordedCleanupTarget(task, parent) {
+  const origin = task.metadata.recoveryOrigin;
+  const appId = task.metadata.app;
+  if (typeof appId !== 'string' || !appId) return { reason: 'cleanup-app-scope-unavailable' };
+  const links = Object.entries(parent.metadata?.repoCleanupRecoveries || {}).filter(([, link]) => link?.taskId === task.id);
+  if (links.length !== 1) return { reason: links.length ? 'cleanup-backlink-ambiguous' : 'cleanup-backlink-missing' };
+  const [branch, link] = links[0];
+  if (typeof origin.observation !== 'string' || link.observation !== origin.observation || link.attempt !== origin.attempt) {
+    return { reason: 'cleanup-observation-mismatch' };
+  }
+  const { completedCheckoutReceiptValid } = await import('./completedCheckoutEvidence.js');
+  const rows = [...(parent.metadata?.completedCheckouts || []), ...(parent.metadata?.checkoutCapture?.targets || [])];
+  const captures = new Map(rows.filter(row => row?.branch === branch && completedCheckoutReceiptValid(parent, row)
+    && typeof row.repoPath === 'string' && typeof row.path === 'string' && typeof row.head === 'string')
+    .map(row => [JSON.stringify([row.repoPath, row.path, row.head]), row]));
+  if (captures.size !== 1) return { reason: captures.size ? 'cleanup-capture-ambiguous' : 'cleanup-capture-missing' };
+  const [capture] = captures.values();
+  return { repoPath: capture.repoPath, target: { appId, release: { branch, path: capture.path, head: capture.head } } };
 }
 
 export async function recordCleanupCompletion(agent, verdict) {

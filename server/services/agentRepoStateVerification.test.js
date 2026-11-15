@@ -136,6 +136,7 @@ import { readPendingMergePrs } from './prWatcher.js';
 import { execGit } from '../lib/execGit.js';
 import { existsSync } from 'fs';
 import { REPO_STATE_ISSUES, REPO_STATE_SKIPS } from '../lib/repoStateExpectations.js';
+import { isCleanupOnlyRecovery, repositoryCleanupRecoveryMetadata } from './cleanupOnlyCompletion.js';
 
 const BRANCH = 'cos/task-x/agent-1';
 const WORKTREE = '/repo/data/cos/worktrees/agent-1';
@@ -1725,13 +1726,13 @@ describe('verifyAgentRepoState — divergent runs', () => {
       expect(retireInventoriedCheckout).toHaveBeenCalledWith(expect.objectContaining({ appId: 'repo-app' }), expect.any(Object));
     });
 
-    it('carries a resolved app scope into the recovery for unmerged work, without a retirement target', async () => {
+    it('carries the resolved app scope and exact inventoried target into the recovery for unmerged work', async () => {
       mergedLeftover();
       resolveRetirementApp.mockResolvedValue({ app: { id: 'repo-app', repoPath: '/repo' } });
       readMergedDelivery.mockResolvedValue(false);
       expect(await appless()).toMatchObject({ verified: false, recoveryTaskId: 'task-recovery-1' });
       expect(addTask).toHaveBeenCalledWith(expect.objectContaining({ app: 'repo-app' }), 'internal');
-      expect(addTask.mock.calls[0][0].metadata).not.toHaveProperty('retirementReview');
+      expect(addTask.mock.calls[0][0].metadata.retirementReview).toEqual({ appId: 'repo-app', release: RELEASE });
       expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     });
 
@@ -1792,7 +1793,10 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(payload.context).toContain('/api/cos/schedule/trigger');
     expect(payload.context).toContain('ok:true and branchDeleted:true');
     expect(payload.context).not.toMatch(/git (?:worktree (?:remove|unlock|prune)|branch -[dD]|push[^\n]*--delete)|--remove-source-branch/);
-    expect(payload.metadata).not.toHaveProperty('retirementReview');
+    // Completion's deterministic criterion reads this exact target back (#16059).
+    expect(payload.metadata).toEqual(repositoryCleanupRecoveryMetadata({ parentAgentId: 'agent-1', parentTaskId: 'task-1',
+      attempt: 1, observation: payload.metadata.recoveryOrigin.observation, target: { appId: 'demo-app', release: RELEASE } }));
+    expect(isCleanupOnlyRecovery({ ...payload, taskType: kind })).toBe(true);
     expect(recordRepoStateRecovery).not.toHaveBeenCalled();
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     expect(recordBranchReconcileCheckout).toHaveBeenCalledWith('demo-app', RELEASE);
@@ -1800,6 +1804,23 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(readMergedDelivery.mock.invocationCallOrder[0]).toBeLessThan(addTask.mock.invocationCallOrder[0]);
     expect(payload.context).toContain(`touch ONLY ${BRANCH}`);
     expect(ensureTaskThread).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['joins a duplicate bound to the same exact target', target => target, 'task-recovery-1'],
+    ['never binds a duplicate with a different target', target => ({ ...target, release: { ...target.release, head: 'f'.repeat(40) } }), null],
+    ['never binds a targetless duplicate', () => undefined, null],
+  ])('%s', async (_name, persisted, expected) => {
+    existsSync.mockReturnValue(true);
+    localBranch(true);
+    listWorktrees.mockResolvedValue([{ ...RELEASE, branch: `refs/heads/${BRANCH}` }]);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
+    addTask.mockImplementation(async payload => {
+      getTaskById.mockResolvedValue({ id: 'task-recovery-1', metadata: { ...payload.metadata,
+        retirementReview: persisted(payload.metadata.retirementReview) } });
+      return { id: 'task-recovery-1', duplicate: true };
+    });
+    expect(await run()).toMatchObject({ verified: false, recoveryTaskId: expected });
   });
 
   it('retains a recovery successor divergence without starting another lineage', async () => {

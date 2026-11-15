@@ -47,6 +47,7 @@ import { resolveRetirementApp } from './retirementAppScope.js';
  */
 
 import { readLocalBranchPresence, readCheckoutPathPresence, inspectOpenDeliveryRepair } from './repoCleanupObservation.js';
+import { repositoryCleanupRecoveryMetadata } from './cleanupOnlyCompletion.js';
 import { join, resolve } from 'path';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { addTask, updateTask } from './cosTaskStore.js';
@@ -1524,7 +1525,7 @@ async function settleDivergedBranch(ctx) {
   if (ctx.task?.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup') {
     return ctx.blockWith('cleanup-successor-review-unresolved', { issues: ctx.issues, observed: ctx.observed });
   }
-  return fileDivergenceRecovery({ ...ctx, appId: prepared.appId });
+  return fileDivergenceRecovery({ ...ctx, appId: prepared.appId }, prepared.retirement);
 }
 
 async function retireIntegratedCheckout({ agentId, appId, observed, issues, record, blockWith, recheckCleanup, manualCleanupOnly, metadata, sourceWorkspace, branchName, worktreePath }, retirement) {
@@ -1574,7 +1575,7 @@ async function settleUndeliveredBranch({ agentId, app, sourceWorkspace, branchNa
   return blockWith(review?.reason || delivery.reason || 'completed-review-target-unverified', { issues, observed });
 }
 
-async function fileDivergenceRecovery({ agentId, task, appId, metadata, sourceWorkspace, branchName, worktreePath, observed, issues, record }) {
+async function fileDivergenceRecovery({ agentId, task, appId, metadata, sourceWorkspace, branchName, worktreePath, observed, issues, record }, retirement) {
   const { loadState } = await import('./cosState.js');
   const stateConfig = (await loadState().catch(() => null))?.config;
   if (stateConfig && stateConfig.autoApproveInvestigations !== true) {
@@ -1586,7 +1587,7 @@ async function fileDivergenceRecovery({ agentId, task, appId, metadata, sourceWo
   emitLog('info', `🔎 Repo state diverged after ${agentId}: ${issues.map(i => i.code).join(', ')}`, { agentId, branchName, taskId: task?.id });
 
   const recoveryTaskId = await fileRepoStateRecoveryTask({
-    agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, claimRun: isTruthyMeta(metadata.claimPicksOwnBranch),
+    agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, retirement, claimRun: isTruthyMeta(metadata.claimPicksOwnBranch),
   }).catch(err => {
     emitLog('warn', `Failed to file repo-state recovery task for ${agentId}: ${err.message}`, { agentId, branchName });
     return null;
@@ -1677,7 +1678,7 @@ export const REPO_STATE_REMEDIATIONS = Object.freeze({
  *
  * @returns {Promise<string|null>} the task id, or null when it was a duplicate
  */
-async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, claimRun = false }) {
+async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, retirement = null, claimRun = false }) {
   const appName = task?.metadata?.appName || appId || 'PortOS';
   const base = observed.defaultBranch || 'the default branch';
   const ctx = { branchName, base, prUrl: observed.prUrl, prNumber: observed.prNumber, worktreePath, forgeCli: observed.forgeCli };
@@ -1715,7 +1716,8 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
 
   const head = await execGit(['rev-parse', '--verify', `refs/heads/${branchName}`], sourceWorkspace)
     .then(result => result.exitCode === 0 ? result.stdout.trim() : null).catch(() => null);
-  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(head || '')) return null;
+  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(head || '')
+    || (retirement && retirement.release.head !== head)) return null;
   const observation = processAuditFingerprint({ branchName, worktreePath, head, prUrl: observed.prUrl,
     codes: issues.map(issue => issue.code).sort(), merged: observed.branchMerged,
     remotePresent: observed.remoteBranchPresent, prState: observed.prState, deliveryRepair: observed.deliveryRepair,
@@ -1732,15 +1734,16 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
   // own answer for this branch, never the agent's report or the task prose.
   const mergeTarget = issues.some(issue => issue.code === REPO_STATE_ISSUES.PR_UNMERGED) && parsePullRequestUrl(observed.prUrl)
     ? { url: observed.prUrl, branch: branchName } : null;
+  // Completion observes this exact inventoried target; without it a
+  // retirement-only recovery has no deterministic criterion (#16059).
+  const cleanupTarget = retirement && appId ? { appId, release: retirement.release } : null;
   const created = await addTask({
     description: `${RECOVERY_TASK_PREFIX} Finish incomplete cleanup for branch ${branchName} in ${appName}`,
     priority: 'HIGH',
     app: appId || undefined,
     isRecovery: true,
-    metadata: { recoveryOrigin: { parentAgentId: agentId, parentTaskId: task?.id || null,
-      subsystem: 'repository-cleanup', attempt: reservation.attempt,
-      observation, noProgress: false },
-    ...(mergeTarget ? { recoveryMergeTarget: mergeTarget } : {}) },
+    metadata: repositoryCleanupRecoveryMetadata({ parentAgentId: agentId, parentTaskId: task?.id || null,
+      attempt: reservation.attempt, observation, mergeTarget, target: cleanupTarget }),
     context,
     useWorktree: false,
   }, 'internal');
@@ -1755,9 +1758,10 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
     const duplicate = await getTaskById(created.id).catch(() => null);
     const origin = duplicate?.metadata?.recoveryOrigin;
     const target = duplicate?.metadata?.recoveryMergeTarget;
+    const sameScope = mergeTarget ? target?.url === mergeTarget.url && target?.branch === branchName
+      : !!cleanupTarget && isDeepStrictEqual(duplicate?.metadata?.retirementReview, cleanupTarget);
     if (origin?.parentAgentId !== agentId || origin?.parentTaskId !== task?.id
-      || origin?.subsystem !== 'repository-cleanup'
-      || !mergeTarget || target?.url !== mergeTarget.url || target?.branch !== branchName) return null;
+      || origin?.subsystem !== 'repository-cleanup' || !sameScope) return null;
   }
   if (mergeTarget && created?.id) {
     // Admission's trust anchor: task metadata is API-writable, so only this

@@ -77,6 +77,16 @@ keeps the task unresolved. The task's managed-app target and explicit operator
 review holds on the task or its parent still apply; a task that also repairs delivery retains its PR and commit
 gates. This verifies local cleanup only, not remote-branch deletion or delivery.
 
+The divergence audit persists that target (`retirementReview`: managed app plus
+the exact inventoried release) on every repository-cleanup recovery it files for
+a merged checkout it could not retire directly. A recovery filed without one
+resolves its target only from the parent run's server-written evidence: the
+single dispatch backlink naming this task with the same observation and attempt,
+and the parent's single valid captured checkout of that branch, whose repository
+must be the task's managed app. Missing, mismatched or ambiguous evidence keeps
+the task unresolved with a specific reason; task text and API-written paths
+grant nothing.
+
 The branch-reconcile completion pass checks its assigned cleanup targets the same
 way. It records remaining local targets directly instead of manufacturing missing
 receipt obligations. Ownership, locks, cleanliness and merged-PR checks still run
