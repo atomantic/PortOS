@@ -103,9 +103,9 @@ an earlier trigger-time commit. Capture before any potentially lengthy work. Use
 unique candidate name and an unused worktree path; never reset an existing branch:
 
 A scheduled PortOS release coordinator must first reserve its candidate with the
-server and capture its physical checkout immediately after creation. The server
-chooses the branch for that active run, checks it was unused, and records the
-checkout generation from Git; a supplied path or a branch name by itself does
+server and verify its checkout immediately after creation. The server
+chooses the branch for that active run, checks it was unused, and verifies the
+current bound checkout through Git; a supplied path or branch name alone does
 not establish ownership. Set `RELEASE_AGENT_ID` to the registered coordinator's
 ID in the following example. A release outside PortOS has no agent registration
 and can leave it unset. A missing/refused registration must not be replaced by a
@@ -443,7 +443,7 @@ Preserve newer development work. Never retarget the candidate, tag, or `release`
 ref to `main`, and never back-merge development commits into the published tree.
 
 For an inline PortOS release, the coordinator must reserve its separate sync
-checkout before creating it and capture its physical generation before editing:
+checkout before creating it and verify the current bound checkout before editing:
 
 ```bash
 SYNC_RESERVATION=$(curl -fsS -H "Authorization: Bearer ${PORTOS_API_TOKEN:-}" -H 'Content-Type: application/json' \

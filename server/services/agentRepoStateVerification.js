@@ -2,7 +2,6 @@ import { isDeepStrictEqual } from 'node:util';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { realpath } from 'node:fs/promises';
 import { outsideGitMutationLifetime } from '../lib/gitMutationLifetime.js';
-import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { canonicalizePath } from '../lib/pathContainment.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
@@ -12,8 +11,7 @@ import { recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
 import { getDeliveryActivity, withDeliveryActivity, COMPLETION_RECOVERY_BATCH_SIZE } from './agentDeliveryActivity.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { processAuditFingerprint } from '../lib/persistentMindProcessAudit.js';
-import { hasClaimCheckoutBindings, completedCheckoutReceiptValid, checkoutSeedSchema,
-  readSupersededGenerationRetired } from './completedCheckoutEvidence.js';
+import { hasClaimCheckoutBindings, completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { resolveRetirementApp } from './retirementAppScope.js';
 /**
@@ -394,7 +392,7 @@ export async function verifyAgentRepoState(input) {
     // A capture that can never complete because its checkout is already gone
     // falls through to the absent-checkout path, which proves delivery from the
     // forge without a captured head.
-    if (input.agentState?.metadata?.checkoutCapture?.status === 'pending' && !(cleanupPending && await seedCheckoutAbsent(input.agentState))) {
+    if (input.agentState?.metadata?.checkoutCapture?.status === 'pending' && !(cleanupPending && await pendingCheckoutAbsent(input.agentState))) {
       const { retryCompletionCheckoutCapture, getAgentRecord } = await import('./cosAgentLifecycle.js');
       if (!await retryCompletionCheckoutCapture(input.agentId).catch(() => false)) return skipped('checkout-capture-pending');
       const recovered = await getAgentRecord(input.agentId).catch(() => null);
@@ -605,33 +603,28 @@ async function verifyReleasedSynchronization(agent) {
   }
 }
 
-/** A run whose terminal capture never completed settles its physical cleanup
- * once the recorded checkout, branch and worktree entry are gone and no live
- * run owns the branch. Records without a usable seed simply stay pending. */
-function recordedRetirementSeed(agent) {
-  const meta = agent.metadata;
-  if (meta?.checkoutSeeds?.length !== 1) return null;
-  const seed = meta.checkoutSeeds[0];
-  if (!checkoutSeedSchema.safeParse(seed).success || seed.agentId !== agent.id || seed.startedAt !== agent.startedAt
-    || seed.repoPath !== meta.sourceWorkspace || seed.path !== meta.workspacePath || seed.branch !== meta.worktreeBranch) return null;
-  return seed;
+/** Physical cleanup uses the registered checkout scope, including legacy records
+ * whose seed or incarnation fields are no longer relevant. */
+function recordedCheckoutScope(agent) {
+  const meta = agent?.metadata;
+  if (![meta?.sourceWorkspace, meta?.workspacePath, meta?.worktreeBranch].every(value => typeof value === 'string' && value)
+    || resolve(meta.sourceWorkspace) === resolve(meta.workspacePath)) return null;
+  return { repoPath: meta.sourceWorkspace, path: meta.workspacePath, branch: meta.worktreeBranch };
 }
 
-function ownSeedRetirementSeed(agent) {
-  const meta = agent.metadata;
-  return agent.status === 'completed' && meta?.checkoutCapture?.status === 'pending' && meta.checkoutCapture.unknown === true
-    && meta.completionCleanup?.status === 'pending' ? recordedRetirementSeed(agent) : null;
+function pendingCheckoutScope(agent) {
+  return agent.status === 'completed' && agent.metadata?.checkoutCapture?.status === 'pending'
+    && agent.metadata.checkoutCapture.unknown === true && agent.metadata.completionCleanup?.status === 'pending'
+    ? recordedCheckoutScope(agent) : null;
 }
 
-/** The recorded seed's checkout path, local branch and worktree entry are all
- * verifiably gone. Any unreadable observation reads as present. */
-async function seedCheckoutAbsent(agent) {
-  const seed = ownSeedRetirementSeed(agent);
-  if (!seed) return false;
-  const worktrees = await listWorktrees(seed.repoPath).catch(() => null);
-  return !!worktrees && await readCheckoutPathPresence(seed.path) === false
-    && await readLocalBranchPresence(seed.repoPath, seed.branch) === false
-    && !worktrees.some(row => resolve(row.path) === resolve(seed.path) || row.branch?.replace(/^refs\/heads\//, '') === seed.branch);
+async function pendingCheckoutAbsent(agent) {
+  const scope = pendingCheckoutScope(agent);
+  if (!scope) return false;
+  const worktrees = await listWorktrees(scope.repoPath).catch(() => null);
+  return !!worktrees && await readCheckoutPathPresence(scope.path) === false
+    && await readLocalBranchPresence(scope.repoPath, scope.branch) === false
+    && !worktrees.some(row => resolve(row.path) === resolve(scope.path) || row.branch?.replace(/^refs\/heads\//, '') === scope.branch);
 }
 
 function inheritedRetirementScope(agent) {
@@ -639,7 +632,7 @@ function inheritedRetirementScope(agent) {
   return agent.status === 'completed' && meta?.isWorktree === false && typeof meta.resumedFromAgentId === 'string'
     && meta.resumedFromAgentId !== agent.id && meta.checkoutCapture?.status === 'pending' && meta.checkoutCapture.unknown === true
     && Array.isArray(meta.checkoutCapture.targets) && meta.checkoutCapture.targets.length === 0
-    && meta.completionCleanup?.status === 'pending' && !meta.checkoutSeeds?.length && !meta.completedCheckouts?.length
+    && meta.completionCleanup?.status === 'pending' && !meta.completedCheckouts?.length
     && !meta.worktreeBranch && !meta.prDeliveryTarget && !meta.reviewLoopMergeTarget
     && meta.claimBranches?.length === 1;
 }
@@ -678,18 +671,18 @@ async function settleAbsentScope(agent, { repoPath, branch, paths }, proof = {})
   });
 }
 
-async function settleAbsentSeedRetirement(agent) {
-  let seed = ownSeedRetirementSeed(agent);
+async function settleAbsentCheckoutRetirement(agent) {
+  let scope = pendingCheckoutScope(agent);
   let parent = null;
-  if (!seed && inheritedRetirementScope(agent)) {
+  if (!scope && inheritedRetirementScope(agent)) {
     const { getAgentRecord } = await import('./cosAgentLifecycle.js');
     parent = await getAgentRecord(agent.metadata.resumedFromAgentId).catch(() => null);
-    seed = parent?.status === 'completed' && parent.taskId === agent.taskId ? recordedRetirementSeed(parent) : null;
-    if (seed && (agent.metadata.claimBranches[0] !== seed.branch || agent.metadata.workspacePath !== seed.repoPath
-      || seed.path === seed.repoPath)) seed = null;
+    scope = parent?.status === 'completed' && parent.taskId === agent.taskId ? recordedCheckoutScope(parent) : null;
+    if (scope && (agent.metadata.claimBranches[0] !== scope.branch || agent.metadata.workspacePath !== scope.repoPath
+      || scope.path === scope.repoPath)) scope = null;
   }
-  if (!seed) return false;
-  return settleAbsentScope(agent, { repoPath: seed.repoPath, branch: seed.branch, paths: [seed.path] },
+  if (!scope) return false;
+  return settleAbsentScope(agent, { repoPath: scope.repoPath, branch: scope.branch, paths: [scope.path] },
     parent ? { inheritedFromAgentId: parent.id } : {});
 }
 
@@ -700,7 +693,7 @@ async function resumeReleasedCompletion(agentId) {
   const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const agent = await getAgentRecord(agentId);
   if (agent?.status !== 'completed') return;
-  if (await settleAbsentSeedRetirement(agent)) return { verified: false, physicalRetirementVerified: true, skipReason: 'original-result-preserved' };
+  if (await settleAbsentCheckoutRetirement(agent)) return { verified: false, physicalRetirementVerified: true, skipReason: 'original-result-preserved' };
   const deliveryPending = agent.metadata?.repoStateVerification?.status === 'pending'
     && (agent.result?.cleanupPending === true || agent.result?.success === true);
   if (!deliveryPending && agent.metadata?.completionCleanup?.status !== 'pending') {
@@ -823,7 +816,7 @@ export function bindCompletionRetirementEvents(events) {
   };
   const onRetirement = async receipt => {
     if (manualCleanupContext.getStore()) return;
-    if (!receipt?.appId || !receipt.path || !receipt.branch || !receipt.checkoutIdentity) return;
+    if (!receipt?.appId || !receipt.path || !receipt.branch) return;
     const [{ getAppById }, { readBranchCompletionPolicies }] = await Promise.all([
       import('./apps.js'), import('./branchCompletionPolicy.js'),
     ]);
@@ -832,13 +825,11 @@ export function bindCompletionRetirementEvents(events) {
     const matches = agents.filter(agent => agent.status === 'completed'
       && agent.metadata?.repoStateVerification?.status === 'pending'
       && agent.metadata.completedCheckouts?.some(row => completedCheckoutReceiptValid(agent, row)
-        && row.repoPath === app.repoPath && row.path === receipt.path && row.branch === receipt.branch
-        && retirementCheckoutIdentityFromPointer(row.incarnation?.pointer) === receipt.checkoutIdentity));
-    for (const agent of matches) await resumeAgentCompletionRetirement(agent.id || agent.agentId);
-    const seeded = agents.filter(agent => agent.status === 'completed' && agent.metadata?.checkoutCapture?.status === 'pending'
-      && agent.metadata.checkoutSeeds?.some(seed => seed.repoPath === app.repoPath && seed.branch === receipt.branch
-        && retirementCheckoutIdentityFromPointer(seed.incarnation?.pointer) === receipt.checkoutIdentity));
-    await Promise.all(seeded.map(agent => resumeAgentCompletionRetirement(agent.id || agent.agentId)));
+        && row.repoPath === app.repoPath && row.path === receipt.path && row.branch === receipt.branch));
+    const pending = agents.filter(agent => agent.status === 'completed' && agent.metadata?.checkoutCapture?.status === 'pending'
+      && agent.metadata.sourceWorkspace === app.repoPath && agent.metadata.worktreeBranch === receipt.branch
+      && agent.metadata.workspacePath === receipt.path);
+    for (const agent of new Set([...matches, ...pending])) await resumeAgentCompletionRetirement(agent.id || agent.agentId);
   };
   const onReceipt = receipt => onRetirement(receipt)
     .catch(error => emitLog('warn', `Completion deferred after retirement receipt: ${error.message}`, { appId: receipt?.appId }));
@@ -965,21 +956,20 @@ async function reconcileReleasedSelectionHistory(agents) {
 
 const agentIdOf = agent => agent.id || agent.agentId;
 
-// Receipt-less history cannot consume the bounded deep-check turn. Use the
-// existing attempt timestamp to rotate receipt-backed but still-held rows.
-async function replayOwnSeedRetirements(agents) {
-  const due = agents.filter(ownSeedRetirementSeed)
+// Rotate pending registered checkout scopes with the existing attempt timestamp.
+async function replayPendingCheckoutRetirements(agents) {
+  const due = agents.filter(pendingCheckoutScope)
     .sort((a, b) => (a.metadata.completionCleanup.lastAttemptAt || '').localeCompare(b.metadata.completionCleanup.lastAttemptAt || ''))
     .slice(0, COMPLETION_RECOVERY_BATCH_SIZE);
   for (const agent of due) {
-    const settled = await settleAbsentSeedRetirement(agent).catch(error => {
-      emitLog('warn', `Seeded retirement settlement deferred for ${agent.id}: ${error.message}`);
+    const settled = await settleAbsentCheckoutRetirement(agent).catch(error => {
+      emitLog('warn', `Checkout retirement settlement deferred for ${agent.id}: ${error.message}`);
       return false;
     });
     if (settled) continue;
     const { recordCompletionCleanup } = await import('./cosAgentLifecycle.js');
     await recordCompletionCleanup(agent.id, agent.startedAt, { lastAttemptAt: new Date().toISOString() }).catch(error => {
-      emitLog('warn', `Seeded retirement attempt retained: ${error.message}`);
+      emitLog('warn', `Checkout retirement attempt retained: ${error.message}`);
     });
   }
 }
@@ -1073,7 +1063,7 @@ async function runCompletionAuditPrelude(agents) {
     emitLog('warn', `Release synchronization handoffs retained: ${error.code || 'outbox-unavailable'}`);
   });
   await reconcileReleasedSelectionHistory(agents);
-  await replayOwnSeedRetirements(agents);
+  await replayPendingCheckoutRetirements(agents);
   await replayDeferredDeliverySettlements(agents);
   await replaySwarmCleanupContinuations(agents);
   await acknowledgeIssuedSwarmRefills(agents);
@@ -1153,7 +1143,7 @@ async function resumePendingCompletionAudit(original, getTaskById) {
     agent = await getAgentRecord(agentIdOf(agent)).catch(() => null) || agent;
   }
   if (agent.metadata.completionCleanup?.status === 'completed' && agent.metadata.repoStateVerification?.status === 'completed') return false;
-  if (!ownSeedRetirementSeed(agent) && await settleAbsentSeedRetirement(agent)) return true;
+  if (!pendingCheckoutScope(agent) && await settleAbsentCheckoutRetirement(agent)) return true;
   await recordCompletionReplayAttempt(original);
   agent = await getAgentRecord(agentIdOf(original)).catch(() => null) || original;
   const lookup = await getTaskById(agent.taskId).then(task => ({ task, readable: true }), () => ({ task: null, readable: false }));
@@ -1226,20 +1216,12 @@ async function verifyRunBranches(input) {
       const reason = await input.recheckCleanup().then(() => null, error => error.message);
       if (reason) { results.push(await holdBranch(branch, reason)); continue; }
     }
-    // A branch re-cut after release has earlier generations (#15463). Each
-    // must stay physically retired; the branch's delivery proof below still
-    // runs because any seeded generation keeps it off the released-selection path.
-    const superseded = (meta.supersededCheckoutSeeds || []).filter(row => row?.branch === branch);
-    const retired = await Promise.all(superseded.map(readSupersededGenerationRetired));
-    if (retired.includes(null)) { results.push(await holdBranch(branch, 'superseded-checkout-generation-unreadable')); continue; }
-    const unretired = superseded.find((_, index) => !retired[index]);
-    if (unretired) { results.push(await holdBranch(branch, 'superseded-checkout-generation-present', null, unretired.path)); continue; }
     const captures = (meta.completedCheckouts || []).filter(row => row?.branch === branch && completedCheckoutReceiptValid(input.agentState, row)
       && typeof row.path === 'string' && row.path && typeof row.repoPath === 'string' && resolve(row.repoPath) === repository);
     const original = meta.completedCheckouts?.find(row => row.branch === branch);
     // A transient forge failure for one sibling must not undo an already
     // verified removal of this run's exact captured checkout. A reused path or
-    // branch still goes through the normal incarnation and ownership checks.
+    // branch still goes through the normal checkout and ownership checks.
     const capture = captures.length === 1 ? captures[0] : null;
     const previous = capture && meta.cleanupOutcomes?.[JSON.stringify([branch, capture.path])];
     if (previous?.status === 'verified'
@@ -1258,18 +1240,17 @@ async function verifyRunBranches(input) {
       continue;
     }
     // A current branch holder is not evidence of the old claim's checkout.
-    // Only the server's completion capture names its original incarnation.
-    // With no checkout and no local ref left, there is no incarnation to confuse:
+    // The server's completion capture names the original checkout scope.
+    // With no checkout and no local ref left, only delivery proof remains:
     // only the delivery evidence remains to settle.
     const absent = !original?.path && !trees.some(tree => tree.branch?.replace(/^refs\/heads\//, '') === branch)
       && await readLocalBranchPresence(sourceWorkspace, branch).catch(() => null) === false;
     // A selection explicitly handed back before another claim was captured
     // owns no delivery obligation when no local artifact ever remains. Keep
-    // captured/seeded checkouts and current bindings on the full proof path;
+    // captured checkouts and current bindings on the full proof path;
     // release alone must not erase evidence of actual work.
     const releasedSelection = absent && (meta.claimReleasedBranches?.includes(branch) || (meta.claimBranches?.length > 1 && !original?.path))
       && (!meta.claimBranches?.includes(branch) || !meta.claimReleasedBranches?.includes(branch)) && meta.checkoutCapture?.status === 'captured'
-      && ![...(meta.checkoutSeeds || []), ...superseded].some(row => row.branch === branch)
       && meta.completedCheckouts?.some(row => row.branch !== branch
         && completedCheckoutReceiptValid(input.agentState, row)
         && typeof row.repoPath === 'string' && resolve(row.repoPath) === repository
@@ -1407,8 +1388,7 @@ async function resolveCheckoutIncarnation({ agentId, metadata, sourceWorkspace, 
   if (!inventory) return { reason: 'checkout-inventory-unavailable' };
   const holders = inventory.filter(tree => tree.branch?.replace(/^refs\/heads\//, '') === branchName);
   // Git porcelain uses forward slashes on Windows; registration spelling is
-  // not an incarnation change. Resolve only native lexical path syntax here;
-  // the persisted pointer/private-administration identity is still checked below.
+  // not a checkout change. Compare native lexical paths and the recorded head.
   const samePath = tree => !!worktreePath && canonicalizePath(tree.path) === canonicalizePath(worktreePath);
   const pathHolder = inventory.find(samePath);
   if (holders.some(tree => !samePath(tree))
@@ -1420,7 +1400,7 @@ async function resolveCheckoutIncarnation({ agentId, metadata, sourceWorkspace, 
     const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
     const identity = await readCompletedCheckoutIdentity({ repoPath: sourceWorkspace, branch: branchName,
       path: worktreePath, head: pathHolder.head }).catch(() => null);
-    if (!identity || identity.head !== completed.head || JSON.stringify(identity.incarnation) !== JSON.stringify(completed.incarnation)) {
+    if (!identity || identity.head !== completed.head) {
       return { reason: 'checkout-incarnation-changed' };
     }
   }

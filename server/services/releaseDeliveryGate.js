@@ -4,7 +4,7 @@ import { realpath } from 'node:fs/promises';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { isHistoricalReleaseReceipt } from '../lib/releasePublication.js';
-import { captureSeededCompletionCheckouts, hasReleaseCandidateBinding, releaseCandidateBranch } from './completedCheckoutEvidence.js';
+import { captureCompletedCheckouts, hasReleaseCandidateBinding, releaseCandidateBranch } from './completedCheckoutEvidence.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { execGh } from './github.js';
 
@@ -35,11 +35,9 @@ export async function verifyReleaseDelivery(agent, outcome) {
   if (outcome?.status !== 'no-action-needed') return hold('The release candidate has no verified publication receipt.');
   try {
     const branch = releaseCandidateBranch(metadata);
-    const seeds = (metadata.checkoutSeeds || []).filter(seed => seed.branch === branch
-      && seed.agentId === agent.id && seed.startedAt === agent.startedAt);
-    const rows = await captureSeededCompletionCheckouts(agent, { preterminal: true });
-    const candidates = rows?.filter(row => row.branch === branch) || [];
-    if (seeds.length !== 1 || candidates.length !== 1 || rows.length !== metadata.checkoutSeeds.length) {
+    const rows = await captureCompletedCheckouts(agent, { success: true, strict: true });
+    const candidates = rows.filter(row => row.branch === branch);
+    if (candidates.length !== 1) {
       return hold('The no-release candidate checkout is unverified.');
     }
     const checkout = candidates[0];

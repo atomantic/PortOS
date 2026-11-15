@@ -96,7 +96,6 @@ export async function inspectReleaseDelivery(entry, number) {
 function synchronizationBranches(entry, owners) {
   const branches = new Set(isInlineReleaseSynchronization(entry) ? [inlineSynchronizationBranch(entry.identity)] : []);
   for (const agent of owners) {
-    for (const seed of agent.metadata?.checkoutSeeds || []) if (seed?.branch) branches.add(seed.branch);
     for (const branch of [agent.metadata?.worktreeBranch, agent.metadata?.releaseSynchronizationCheckout?.branch]) if (branch) branches.add(branch);
   }
   branches.delete(entry.publication.candidateBranch);

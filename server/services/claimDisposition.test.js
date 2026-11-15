@@ -5,6 +5,7 @@ vi.mock('../lib/workTracker.js', () => ({ resolveAppForgeTarget: vi.fn() }));
 vi.mock('./forgeAuth.js', () => ({ resolveForgeForRepo: vi.fn() }));
 vi.mock('./github.js', () => ({ execGh: vi.fn() }));
 vi.mock('./gitlab.js', () => ({ execGlab: vi.fn() }));
+vi.mock('./worktreeManager.js', () => ({ listWorktrees: vi.fn() }));
 vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn() }));
 
 import { getAppDataForTask } from './agentAppWorkspace.js';
@@ -13,6 +14,7 @@ import { resolveForgeForRepo } from './forgeAuth.js';
 import { execGh } from './github.js';
 import { execGlab } from './gitlab.js';
 import { execGit } from '../lib/execGit.js';
+import { listWorktrees } from './worktreeManager.js';
 import { verifyClaimDisposition, verifyCleanupClaimDisposition } from './claimDisposition.js';
 
 const target = { forge: 'github', fullName: 'example/project', webHost: 'github.example.test', apiHost: 'github.example.test', repoSpec: 'github.example.test/example/project' };
@@ -34,6 +36,7 @@ const verify = (extra = {}) => verifyClaimDisposition({ task, agent, reportedOut
 
 beforeEach(() => {
   vi.resetAllMocks();
+  listWorktrees.mockResolvedValue([{ branch: 'refs/heads/claim/issue-42', path: '/example/claim' }]);
   getAppDataForTask.mockResolvedValue({ repoPath: '/example/project', forgeAccount: 'configured-account' });
   resolveAppForgeTarget.mockResolvedValue({ tracker: 'github', target });
   resolveForgeForRepo.mockResolvedValue({ cli: 'gh', env: { GH_TOKEN: 'invented-test-token' } });
@@ -150,6 +153,7 @@ describe('selected claim tracker completion', () => {
     const selected = { ...agent, metadata: { ...agent.metadata, claimBranches: ['claim/issue-42', 'claim/issue-43'],
       checkoutSeeds: [42, 43].map(number => ({ agentId: agent.id, branch: `claim/issue-${number}`,
         repoPath: '/example/project', path: `/example/child-${number}` })) } };
+    listWorktrees.mockResolvedValue([42, 43].map(number => ({ branch: `refs/heads/claim/issue-${number}`, path: `/example/child-${number}` })));
     execGh.mockImplementation(async args => {
       if (args[1] !== 'graphql') return JSON.stringify({ login: 'configured-account' });
       return JSON.stringify({ data: { repository: { ...repository, issue: { ...repository.issue,
@@ -161,6 +165,8 @@ describe('selected claim tracker completion', () => {
     execGit.mockResolvedValue({ exitCode: 0, stdout: '' });
     expect(await verify({ agent: selected })).toMatchObject({ status: 'verified' });
     selected.metadata.checkoutSeeds = [];
+    expect(await verify({ agent: selected })).toMatchObject({ status: 'verified' });
+    listWorktrees.mockRejectedValueOnce(new Error('inventory unavailable'));
     expect(await verify({ agent: selected })).toMatchObject({ status: 'unverified', reason: 'checkout-unavailable' });
   });
 

@@ -31,7 +31,7 @@ export async function recordClaimSelection({ agentId, issueNumber }) {
       || agent.metadata?.isWorktree !== false) return refuse('picker-run-unverified');
     if (!Number.isSafeInteger(issueNumber) || issueNumber < 1) return refuse('issue-number-invalid');
     // Existing claims must be delivered independently; selection cannot replace them.
-    if (['claimBranches', 'claimReleasedBranches', 'checkoutSeeds'].some(key =>
+    if (['claimBranches', 'claimReleasedBranches'].some(key =>
       agent.metadata[key] != null && (!Array.isArray(agent.metadata[key]) || agent.metadata[key].length))) {
       return refuse('picker-already-claimed');
     }
