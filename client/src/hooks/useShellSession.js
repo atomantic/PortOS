@@ -216,9 +216,11 @@ export function useShellSession({ isFullscreen } = {}) {
 
   // CR, not LF — see SUBMIT_KEY in server/lib/tuiHandshake.js for why. Same byte as
   // TerminalHotKeys' Enter key.
+  // Submits with CR, never `\n` (SUBMIT_KEY in server/lib/tuiHandshake.js).
   const sendCommand = useCallback((cmd) => emitShellInput(cmd + '\r'), [emitShellInput]);
   // cd is the one "command" the client does NOT compose itself: it sends the folder and
   // the server renders the `cd` for the session's actual shell (server/lib/shellCd.js).
+  // Sends the folder over shell:cd instead of composing a `cd` line: only the server knows the session's shell (cmd.exe needs its own form).
   const sendCd = useCallback((path) => emitToSession('shell:cd', { path }), [emitToSession]);
   const sendCtrlB = useCallback(() => emitShellInput('\x02'), [emitShellInput]);
   const sendCtrlC = useCallback(() => emitShellInput('\x03'), [emitShellInput]);

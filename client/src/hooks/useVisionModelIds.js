@@ -72,6 +72,7 @@ const LOCAL_PROVIDER_IDS = ['ollama', 'lmstudio'];
  *   picker doesn't pay for the capability scan. Fetches once and keeps the result
  *   if `enabled` later goes false.
  * @returns {{idsByProvider: Record<string, Set<string>>|null, loaded: boolean}}
+  * Never vouches for a provider the server did not enumerate; gate any "none installed" message on `loaded`.
  */
 export default function useVisionModelIds(enabled = true) {
   const [state, setState] = useState({ idsByProvider: null, loaded: false });

@@ -66,6 +66,7 @@ function getEntry(namespace) {
  * @param {string} namespace - a namespace registered server-side via
  *   `registerSubscriber` (e.g. 'notifications', 'errors', 'instances', 'loops').
  * @param {{ onResubscribe?: () => void, enabled?: boolean, payload?: object, releasePayload?: object }} [options]
+  * client/src/socketSubscriptionConventions.test.js enforces this: no code emits a literal `<ns>:subscribe` outside this hook.
  */
 export function useSocketSubscription(namespace, {
   onResubscribe, enabled = true, payload, releasePayload,

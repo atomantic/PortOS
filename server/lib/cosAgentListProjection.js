@@ -12,6 +12,7 @@ export const AGENT_LIST_DESCRIPTION_CHARS = 2000;
 /**
  * Project one agent record into its list shape: no transcript, and a bounded
  * description and summaries that say when they were clipped.
+  * Applied at the route layer only: getAgents and getAgentsByDate also feed the weekly digest and CoS reports, which need the whole task text.
  */
 export function toAgentListItem(agent) {
   const { output, ...rest } = agent;

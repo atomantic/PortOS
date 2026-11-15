@@ -63,6 +63,7 @@ export {
  * the provider's catalog or the caller's array. Accepts strings and { id, name }
  * entries, matching the shared picker and custom-combination model options.
  * CLIENT-ONLY — presentation order must not change default-model resolution.
+  * Returns a new array and never mutates the catalog.
  */
 export const sortProviderModels = (models) => [...models].sort((a, b) => {
   const label = (model) => typeof model === 'string' ? model : model?.name || model?.id || '';

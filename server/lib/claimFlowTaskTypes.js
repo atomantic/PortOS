@@ -14,6 +14,7 @@
 // `metadata.analysisType`.
 //
 // Pure leaf: shared by prompt selection, registration and resume authority.
+// claimFlowTaskTypes.test.js fails if a local copy of this list reappears.
 export const CLAIM_FLOW_TASK_TYPES = new Set([
   'plan-task', 'claim-issue', 'claim-issue-gitlab', 'claim-issue-jira', 'claim-work'
 ]);

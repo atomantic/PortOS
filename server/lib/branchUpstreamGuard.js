@@ -60,6 +60,7 @@ const GIT_TIMEOUT_MS = 10_000;
  * @param {string} repo - repository (or worktree) path to read config from
  * @param {string} branchName
  * @returns {Promise<{remote: string|null, merge: string|null}>}
+  * `null` means the upstream could not be read; `''` means genuinely unset. Keep the two apart.
  */
 export async function readBranchUpstream(repo, branchName) {
   if (!repo || !branchName) return { remote: '', merge: '' };
@@ -118,6 +119,7 @@ export function isSafeBranchUpstream(branchName, merge) {
  * @param {string} branchName
  * @param {{remoteBranch?: string}} options - explicit PR head when the local name is namespaced
  * @returns {Promise<{safe: boolean, repaired: boolean, upstream: string}>}
+  * A throw here makes worktreeManager.js undo the `worktree add`, so a refusal cannot strand a tree.
  */
 export async function enforceSafeBranchUpstream(repo, branchName, { remoteBranch = branchName } = {}) {
   if (!repo || !branchName) return { safe: true, repaired: false, upstream: '' };

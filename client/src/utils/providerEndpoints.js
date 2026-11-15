@@ -41,6 +41,7 @@
  *
  * @param {{id?:string,endpoint?:string,name?:string}} provider
  * @returns {'ollama'|'lmstudio'|null}
+  * Matches by NAME as well, so pair it with isLocalInstanceProvider before claiming this machine's install state.
  */
 export const localBackendForProvider = (provider) => {
   if (!provider) return null;

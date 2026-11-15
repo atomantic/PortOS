@@ -149,6 +149,7 @@ let retryBlockedUntil = 0;
  * timeout is retried (after a cooldown); a definitive "not a repo" is not.
  *
  * @returns {Promise<{commit: string|null, shortCommit: string|null, branch: string|null, dirty: boolean|null}>}
+  * Served only on GET /api/system/build, never on /health/details: peers scrape that payload and persist it verbatim, and the commit stays machine-local.
  */
 export function getBuildIdentity() {
   if (!cached && retryBlockedUntil > Date.now()) return Promise.resolve(UNKNOWN_IDENTITY);

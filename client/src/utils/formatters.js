@@ -125,6 +125,7 @@ export function formatDate(dateStr) {
  * @param {string|number|Date|null} value - ISO timestamp, `YYYY-MM-DD`, epoch ms, or Date
  * @param {string} [fallback=''] - Rendered for missing/invalid input
  * @returns {string} Formatted numeric date
+  * Never write `new Date(x).toLocaleDateString()` inline; pick the helper for the shape you want, and do not re-define formatters inside components.
  */
 export function formatDateNumeric(value, fallback = '') {
   return localized('date', value, undefined, fallback);

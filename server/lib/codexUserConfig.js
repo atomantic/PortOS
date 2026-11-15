@@ -118,6 +118,7 @@ let cachedAt = 0;
  * @param {string} [options.codexHome] — override the config directory (tests)
  * @param {boolean} [options.force] — bypass the TTL cache
  * @returns {{overridden: boolean, keys: string[], baseUrl: string|null}|null}
+  * PortOS never writes this file. `null` means it could not be read, which is not the same as an absent file (a definite `overridden: false`).
  */
 export function readCodexRoutingOverride({ codexHome = null, force = false } = {}) {
   const home = codexHome || codexHomeDir();

@@ -124,6 +124,7 @@ export function buildCodexAuthModeArgs(provider, existingArgs = []) {
   return ['-c', `forced_login_method="${mode}"`];
 }
 
+// Selects the local model through argv flags only; the user's ~/.codex/config.toml is never rewritten.
 export function buildCodexOssArgs(provider, existingArgs = []) {
   const localProvider = codexOssLocalProvider(provider);
   if (!localProvider) return [];

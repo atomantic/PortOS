@@ -275,6 +275,7 @@ export const updateSubscriptionCosts = (costs, options = {}) =>
 // state, plan tier, monthly price, the provider records a toggle fans out to).
 // Deliberately separate from `getUsage().subscriptionSavings`, which answers
 // what those plans SPENT over a report window — this answers what they are.
+// PortOS-side enablement and plan-tier tracking only, never vendor billing.
 export const getSubscriptions = (options = {}) => request('/usage/subscriptions', options);
 // Save plan prices and/or plan tiers in ONE request, and get the refreshed rows
 // back — so an editor applies a save without a follow-up GET. Both maps are
@@ -636,6 +637,8 @@ export const updateGoalScorecardSettings = (partial) => request('/insights/goal-
 export const getEidoverseDestinations = (options) => request('/eidoverse/travel/destinations', options);
 export const departEidoverse = (peerId, options) => request('/eidoverse/travel/depart', { method: 'POST', body: JSON.stringify({ peerId }), ...options });
 
+// Write-only: the value is sent and never returned. Presence and source come from
+// getCredentialInventory, never a value.
 export const saveCredential = (id, value, options) => request(`/settings/credentials/${encodeURIComponent(id)}`, { ...options, method: 'PUT', body: JSON.stringify({ value }) });
 
 // CoS raw recordings; metadata, prompts and parsed output are retained.

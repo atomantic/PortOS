@@ -84,6 +84,7 @@ export const isVisionCapableCliProvider = (provider) =>
  * @param {object} [provider]
  * @param {Record<string, Set<string>>|null} [toolUseIdsByProvider]
  * @returns {{toolCapable:boolean}|null}
+  * Tool use is an annotation plus a warning on the picker, never a filter.
  */
 export const localToolUseHint = (id, provider, toolUseIdsByProvider = null) =>
   (localBackendForProvider(provider) || isOllamaBackedProvider(provider) || provider?.lmstudioBacked === true || provider?.mtplxBacked === true || provider?.llamaBacked === true || provider?.vllmBacked === true || provider?.sglangBacked === true)
