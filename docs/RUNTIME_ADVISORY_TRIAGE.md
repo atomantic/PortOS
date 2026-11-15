@@ -118,3 +118,103 @@ SBOM/database evidence on both native architectures before this review is
 considered delivered. Passing strict reconciliation means every match has a
 reviewed disposition; it does not mean no vulnerabilities or coverage gaps.
 The external eidoverse render parent remains explicitly unavailable.
+
+# Runtime advisory review, 2026-11-14
+
+This is the advisory-specific review for [#16049](https://github.com/atomantic/PortOS/issues/16049).
+It reconciles 43 new exact target/package/version pairs shared by amd64 and
+arm64 (38 pgvector, 5 SuperCollider) and retires six stale pgvector entries.
+Nothing is suppressed: every pair stays detected by the scanner and carries a
+disposition. The reviewed ledger does not claim the images are clean.
+
+## Inventory
+
+[Run 43607901550](https://github.com/atomantic/PortOS/actions/runs/43607901550)
+scanned commit `1eb140a79efec395d3a793943ea3fe4ebf90844d` with vulnerability
+database built `2026-11-14T06:19:25Z`. Both architectures produced the identical
+unreviewed set, so ledger scopes carry the package and installed version but no
+architecture. Replaying strict verification with each run's SBOM, scan and
+database-status artifacts now reports 0 unreviewed (pgvector 566 reviewed per
+architecture, SuperCollider 216).
+
+| Target | Pinned input |
+| --- | --- |
+| pgvector | `pgvector/pgvector:pg17@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd` |
+| SuperCollider | `debian:trixie-20261104-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2`, snapshot `20261104T212339Z` |
+
+The recipes and pins are unchanged. The pgvector digest was already adopted
+before this review; it carries `apt 2.6.2` and the `libsasl2` fix, which is why
+the matching `2.6.1`/`2.1.28+dfsg-10` entries were stale and are removed (a
+removed entry cannot hide a current finding because the scan no longer reports
+those versions). `CVE-2011-3374` is re-reviewed for `apt 2.6.2` and
+`libapt-pkg6.0 2.6.2`.
+
+## Method
+
+Primary sources: the Debian security tracker entry for every advisory, plus
+the [Go vulnerability database entry GO-2026-6859](https://vuln.go.dev/ID/GO-2026-6859.json).
+Runtime paths come from the pinned image itself (`ldd` over every ELF in the
+PostgreSQL tree, `libpq` and the extensions, and over all `/bin`, `/sbin`,
+`/usr` and library files), dynamic-symbol greps and `dpkg -L`, and for
+SuperCollider from the pinned 3.14.1 source tarball (hash matches the recipe)
+plus the recipe's own use of `dpkg`.
+
+## pgvector
+
+- **util-linux family on `libfdisk1`** (`CVE-2026-53613`, `-53615`, `-78410`,
+  `-13595`, `-27456`, `-3184`, `CVE-2022-0563`, `CVE-2025-14104`): Debian matches
+  the whole util-linux source package, but each defect is in `mount`, `libblkid`,
+  `login`, `chfn`/`chsh` or `setpwnam()`, not libfdisk. The only ELF in the image
+  that links `libfdisk.so.1` is `systemd-repart`. `not-reachable`.
+- **systemd and `libsystemd-shared`** (`CVE-2026-15059`, `-16742`, `-40228`,
+  `CVE-2013-4392`, `CVE-2023-31437`/`-31438`/`-31439`): `systemd-oomd` and
+  `systemd-homed`/`homectl` (the components of the first two) are not installed,
+  journald is never started (PID 1 is the entrypoint, not systemd), and the
+  postgres tree plus `libsystemd.so.0` link none of the private library.
+  `libsystemd0` (sd_notify only) remains separately reviewed. `not-reachable`.
+- **`apt`/`libapt-pkg6.0 2.6.2`, `libip4tc2`, `libapparmor1`, `dmsetup`,
+  `libdevmapper1.02.1`, `dpkg`**: apt-key, iptables, AppArmor-compiler, LVM
+  metadata and `dpkg-source` defects whose executables are not installed or never
+  run by the entrypoint, `pg_isready` probe or PortOS; the libraries are linked
+  only by systemd and cryptsetup tooling. `not-reachable`.
+- **`stdlib go1.24.6` (`GO-2026-6859`)**: the defect is the `net/http` HTTP/1
+  server `MaxBytesReader` race. The embedded `gosu 1.19` only drops privileges and
+  execs; its binary has no `net/http` server, `MaxBytes` or `ListenAndServe`
+  symbol. `not-reachable`, but a fix still requires a rebuilt gosu (Go 1.26.11 or
+  1.27.4) from docker-library/postgres, tracked with the other gosu toolchain
+  entries in [#15669](https://github.com/atomantic/PortOS/issues/15669).
+- **glibc `CVE-2026-115819` and `CVE-2026-100290`** (`libc6`, `libc-bin`,
+  `libc-l10n`, `locales`, `2.36-9+deb12u14`): the Debian tracker lists bookworm
+  vulnerable with no fix. The first is wide `scanf` with unqualified `%s`/`%[`
+  into a `char` buffer; the second is a double free in `regcomp`/`regexec` only
+  after an allocation failure. A symbol scan of 119 PostgreSQL, libpq and
+  extension ELF files finds neither family (PostgreSQL ships its own regex
+  engine); only `/bin/bash`, running the constant patterns of the entrypoint
+  script, imports `regcomp`/`regexec`. No reachable caller was found, but glibc
+  is loaded by every process and cannot be patched or replaced ad hoc, so these
+  stay **blocked, not fixed**, tracked in #15669 (Debian must ship a fix and an
+  upstream pgvector digest must carry it). Loopback-only PostgreSQL bounds the
+  exposure.
+
+## SuperCollider
+
+- **glibc `CVE-2026-115819`/`CVE-2026-100290`** (`libc6`, `libc-bin`
+  `2.41-12+deb13u4`): Debian lists trixie vulnerable. SuperCollider 3.14.1's own
+  source has no wide-`scanf` call and no POSIX `regcomp`/`regexec` call (Boost's
+  `cregex.hpp` renames its private engine). Third-party library callers were not
+  traced and generated `.scd` code can execute commands, so the sandbox
+  (`--network none`, `--cap-drop ALL`, no-new-privileges, read-only root,
+  unprivileged disposable user) is the bound rather than a fix. **Blocked, not
+  fixed**, tracked in #15669.
+- **`dpkg 1.22.22` (`CVE-2026-91094`)**: Debian fixes this only in 1.23.12. The
+  recipe uses `dpkg --compare-versions` and `dpkg-query -S` at build time only,
+  never `dpkg-source`, and the runtime argv is `sclang`/`scsynth`.
+  `not-reachable`.
+
+## Limits
+
+The upstream tags could not be re-resolved from this checkout (the registry
+timed out), so no pin moved and #15669/#15788 still own upstream adoption. Fresh
+strict scans on both native architectures must come from the hosted workflow
+after this merges; the unavailable Eidoverse parent image and `deno.lock`
+remain explicitly unavailable. No unrelated image upgrade is included.
