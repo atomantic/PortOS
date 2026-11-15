@@ -652,7 +652,7 @@ export default function DataManager() {
   };
 
   // `fullHeight` + `padded` + the `p-4` bar/body mirror the loaded shell below,
-  // and stay correct now that `/data` is an `isFullWidthRoute` — its `<main>`
+  // and stay correct now that `/data` renders in FullWidthMain — its `<main>`
   // supplies neither the scroll container nor the padding.
   if (loading) {
     return (
@@ -684,8 +684,8 @@ export default function DataManager() {
   const presentKinds = DATA_KIND_ORDER.filter((k) => categories.some((c) => dataKindOf(c) === k));
   const selectedCat = categories.find((c) => c.key === expandedCat) || null;
 
-  // `/data` is an `isFullWidthRoute` (Layout.jsx), so `<main>` is a bare
-  // `relative overflow-hidden` and this shell owns the only scroll region.
+  // `/data` renders in FullWidthMain (App.jsx), so `<main>` is a bare
+  // `relative overflow-clip-safe` and this shell owns the only scroll region.
   // `min-h-0` on the column and on the body keeps a tall body scrolling instead
   // of stretching the shell past `<main>` (#4145).
   return (
