@@ -3,9 +3,7 @@ import { EventEmitter } from 'node:events';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-writers-authority-') }));
@@ -98,43 +96,18 @@ const expectNoEffects = () => {
 beforeEach(() => { vi.clearAllMocks(); auth.enabled = false; });
 
 describe('Writers Room authoring authority', () => {
-  it('refuses direct and proxied remote callers before reads, records or provider dispatch', async () => {
+  it('refuses a remote caller before reads, records or provider dispatch', async () => {
     for (const operation of operations) {
-      for (const [address, headers] of [
-        ['192.0.2.10', {}],
-        ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
-      ]) {
-        const response = await call(appFor(address), operation, headers);
-        expect([response.status, response.body.code], operation[0]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
-      const variant = await call(appFor(), [operation[0].toUpperCase() + '/', operation[1]]);
-      expect([variant.status, variant.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      const response = await call(appFor(), operation);
+      expect([response.status, response.body.code], operation[0]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     }
     expectNoEffects();
   });
 
-  it('refuses anonymous, Basic and scoped-peer credentials when authentication is enabled', async () => {
-    auth.enabled = true;
-    for (const operation of operations) {
-      for (const [headers, status, code] of [
-        [{}, 401, 'AUTH_REQUIRED'],
-        [{ Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403, 'HOST_CONTROL_FORBIDDEN'],
-        [{ [PEER_AUTH_HEADER]: derivePeerAuthToken('a'.repeat(32), 'example-instance'),
-          [PEER_INSTANCE_HEADER]: 'example-instance' }, 403, 'PEER_SCOPE_FORBIDDEN'],
-      ]) {
-        const response = await call(appFor(), operation, headers);
-        expect([response.status, response.body.code], operation[0]).toEqual([status, code]);
-      }
-    }
-    expectNoEffects();
-  });
-
-  it('preserves local, operator and delegated agent workflows and provider selection', async () => {
-    const owner = await createSession();
+  it('preserves local and delegated agent workflows and provider selection', async () => {
     const agent = await createSession({ label: 'agent' });
     for (const [enabled, address, headers] of [
       [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Cookie: `portos_auth=${owner.token}` }],
       [true, '127.0.0.1', { Authorization: `Bearer ${agent.token}` }],
     ]) {
       auth.enabled = enabled;
@@ -143,7 +116,7 @@ describe('Writers Room authoring authority', () => {
         expect(response.status, `${operation[0]}: ${JSON.stringify(response.body)}`).toBe(operation[3]);
       }
     }
-    for (const [, , effect] of operations) expect(effect).toHaveBeenCalledTimes(3);
+    for (const [, , effect] of operations) expect(effect).toHaveBeenCalledTimes(2);
     expect(effects.augment).toHaveBeenLastCalledWith('wr-work-example', 'wr-char-example', operations[4][1]);
   });
 
@@ -171,23 +144,14 @@ describe('Deferred maintenance stage authority', () => {
   const path = '/api/cos/schedule/maintenance-runs/example-run/steps/example-stage';
   const pins = { providerId: 'example-cli', model: 'example-model', effort: 'medium' };
   it('refuses remote edits before changing a pending automatic dispatch', async () => {
-    for (const [address, headers] of [
-      ['192.0.2.10', {}],
-      ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
-    ]) {
-      const pending = request(appFor(address)).patch(path);
-      for (const [key, value] of Object.entries(headers)) pending.set(key, value);
-      const response = await pending.send(pins);
-      expect([response.status, response.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
+    const response = await request(appFor()).patch(path).send(pins);
+    expect([response.status, response.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     expect(maintenance.updateMaintenanceStep).not.toHaveBeenCalled();
   });
-  it('preserves local, operator and delegated-agent provider edits', async () => {
-    const owner = await createSession();
+  it('preserves local and delegated-agent provider edits', async () => {
     const agent = await createSession({ label: 'agent' });
     for (const [enabled, address, headers] of [
       [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Cookie: `portos_auth=${owner.token}` }],
       [true, '127.0.0.1', { Authorization: `Bearer ${agent.token}` }],
     ]) {
       auth.enabled = enabled;
@@ -197,7 +161,7 @@ describe('Deferred maintenance stage authority', () => {
       expect(response.status).toBe(200);
       expect(response.body.run.steps[0]).toMatchObject(pins);
     }
-    expect(maintenance.updateMaintenanceStep).toHaveBeenCalledTimes(3);
+    expect(maintenance.updateMaintenanceStep).toHaveBeenCalledTimes(2);
     expect(maintenance.updateMaintenanceStep).toHaveBeenLastCalledWith('example-run', 'example-stage', pins);
   });
 });

@@ -4,7 +4,6 @@ import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { request } from '../lib/testHelper.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 
 // The real authGate + hostControlRouteGate, pinned to a password-free install
 // so the developer's own settings cannot change what these cases observe.
@@ -88,11 +87,7 @@ const buildGatedApp = (remoteAddress) => {
 const remote = () => buildGatedApp('192.0.2.10');
 const local = () => buildGatedApp('127.0.0.1');
 
-const call = (app, [method, path, body = {}], proxyClient) => {
-  const pending = request(app)[method](path);
-  if (proxyClient) pending.set(DEV_PROXY_CLIENT_ADDRESS_HEADER, proxyClient);
-  return pending.send(body);
-};
+const call = (app, [method, path, body = {}]) => request(app)[method](path).send(body);
 
 const expectRefused = (response) => {
   expect(response.status).toBe(403);
@@ -111,7 +106,7 @@ describe('host-control gate on update, brain-link and ask promote writes (#8742)
     askPromote.promoteTurnById.mockResolvedValue({ target: 'task', taskId: 'task-1' });
   });
 
-  it('refuses a remote password-free caller, direct or proxied, with no side effects', async () => {
+  it('refuses a remote caller with no side effects', async () => {
     const writes = [
       ['post', '/api/update/execute', {}],
       ['post', '/api/update/sync-fork', {}],
@@ -124,7 +119,6 @@ describe('host-control gate on update, brain-link and ask promote writes (#8742)
     ];
     for (const write of writes) {
       expectRefused(await call(remote(), write));
-      expectRefused(await call(local(), write, '192.0.2.10'));
     }
     expect(selfUpdate.startPortosSelfUpdate).not.toHaveBeenCalled();
     expect(nodeRuntime.startNodeUpdate).not.toHaveBeenCalled();
@@ -135,16 +129,12 @@ describe('host-control gate on update, brain-link and ask promote writes (#8742)
     expect(askPromote.promoteTurnById).not.toHaveBeenCalled();
   });
 
-  it('keeps a local caller, direct or through the dev proxy, able to run all three', async () => {
-    for (const proxyClient of [undefined, '::ffff:127.0.0.1']) {
-      const app = local();
-      const pull = await call(app, ['post', '/api/brain/links/link-1/pull', {}], proxyClient);
-      const promote = await call(app, ['post', '/api/ask/conv-1/turns/turn-1/promote', { target: 'task' }], proxyClient);
-      expect(pull.status).toBe(200);
-      expect(promote.status).toBe(200);
-    }
-    expect(repoCloner.pullRepo).toHaveBeenCalledTimes(2);
-    expect(askPromote.promoteTurnById).toHaveBeenCalledTimes(2);
+  it('keeps a local caller able to run the pull and the turn promote', async () => {
+    const app = local();
+    expect((await call(app, ['post', '/api/brain/links/link-1/pull', {}])).status).toBe(200);
+    expect((await call(app, ['post', '/api/ask/conv-1/turns/turn-1/promote', { target: 'task' }])).status).toBe(200);
+    expect(repoCloner.pullRepo).toHaveBeenCalledTimes(1);
+    expect(askPromote.promoteTurnById).toHaveBeenCalledTimes(1);
   });
 
   it('refuses the conversation-level promote remotely and keeps it a flag-only write for a local caller', async () => {

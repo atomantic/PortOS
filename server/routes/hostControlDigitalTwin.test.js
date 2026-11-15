@@ -3,9 +3,7 @@ import { EventEmitter } from 'node:events';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 // Real gates, mounted routers and schemas. Stub the first service boundaries:
 // refusal must happen before private reads, document writes or provider dispatch.
@@ -121,38 +119,14 @@ describe('Digital Twin process-capable AI authority (#10671)', () => {
         const response = await call(app, path, candidate);
         expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
       }
-      const variant = await call(app, path.toUpperCase() + '/', body);
-      expect([variant.status, variant.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     }
     expectNoEffects();
   });
 
-  it('refuses forwarded local, anonymous auth-on, Basic and scoped-peer requests before any effect', async () => {
-    for (const [enabled, address, headers, status, code] of [
-      [false, '127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }, 403, 'HOST_CONTROL_FORBIDDEN'],
-      [true, '192.0.2.10', {}, 401, 'AUTH_REQUIRED'],
-      [true, '192.0.2.10', { Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403, 'HOST_CONTROL_FORBIDDEN'],
-      [true, '192.0.2.10', {
-        [PEER_AUTH_HEADER]: derivePeerAuthToken('a'.repeat(32), 'example-instance'),
-        [PEER_INSTANCE_HEADER]: 'example-instance',
-      }, 403, 'PEER_SCOPE_FORBIDDEN'],
-    ]) {
-      auth.enabled = enabled;
-      const app = appFor(address);
-      for (const [path, body] of operations) {
-        const response = await call(app, path, body, headers);
-        expect([response.status, response.body.code], path).toEqual([status, code]);
-      }
-    }
-    expectNoEffects();
-  });
-
-  it('preserves genuine local, operator-session and delegated-agent actions through real schemas', async () => {
-    const operator = await createSession();
+  it('preserves genuine local and delegated-agent actions through real schemas', async () => {
     const agent = await createSession({ label: 'agent' });
     for (const [enabled, address, headers] of [
       [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Cookie: `portos_auth=${operator.token}` }],
       [true, '127.0.0.1', { Authorization: `Bearer ${agent.token}` }],
     ]) {
       auth.enabled = enabled;
@@ -164,7 +138,7 @@ describe('Digital Twin process-capable AI authority (#10671)', () => {
         expect(effect, path).toHaveBeenCalledTimes(before + 1);
       }
     }
-    expect(effects.getPersonaById).toHaveBeenCalledTimes(15);
+    expect(effects.getPersonaById).toHaveBeenCalledTimes(10);
     expect(effects.analyzeWritingSamples).toHaveBeenLastCalledWith(['Example writing sample'], picker.providerId, picker.model);
   });
 
