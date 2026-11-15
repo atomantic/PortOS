@@ -37,7 +37,7 @@ node scripts/pregate.js [--full] # same gate on Windows
 
 No `NODE_ENV` prefix is needed: `server/vitest.config.js` forces `NODE_ENV=test` (#4554) so a suite never inherits PM2's `development` and aims at the real Postgres. A focused file run is not a full-suite result. `PORTOS_TEST_MEMO=off` disables the passed-input test memo (`docs/GITHUB_ACTIONS.md`).
 
-**Run pregate before every push and again after rebasing onto a moved base** (`node scripts/pregate.js` on Windows, where cmd may miss the `exec.cmd` shim). It runs lint/format, structural guards, and changed plus sibling tests over committed, uncommitted and untracked changes, but not transitive imports or browser/DB/build/boot-smoke suites, so run a focused public-boundary regression as you implement. `--full` runs CI's broad plan, still pinned to `portos_test`. Its receipt is local evidence only ([docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)); hosted CI and provider-enforced checks and reviews stay mandatory.
+**Run pregate before every push and again after rebasing onto a moved base** (`node scripts/pregate.js` on Windows, where cmd may miss the `exec.cmd` shim). It runs lint/format, structural guards, and changed, sibling and one-hop importing/mocking tests (cap 25 per source) over committed, uncommitted and untracked changes, but not transitive imports or browser/DB/build/boot-smoke suites, so run a focused public-boundary regression as you implement. `--full` runs CI's broad plan, still pinned to `portos_test`. Its receipt is local evidence only ([docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)); hosted CI and provider-enforced checks and reviews stay mandatory.
 
 ## Test Strategy: Value Over Assertion Count
 
