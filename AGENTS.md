@@ -163,7 +163,7 @@ Write comments for agents maintaining the code: the why, invariants, non-obvious
 
 Other rules:
 
-- **No changelog entries in PRs.** Commit messages are the record; `/do:release` builds `.changelog/v{version}.md` from the log, so write subjects and bodies for a human reading release notes (`.changelog/README.md`).
+- **No changelog entries in PRs.** Commit messages are the record; `/do:release` writes the single `.changelog/RELEASE.md` from the log, so write subjects and bodies for a human reading release notes (`.changelog/README.md`).
 - After each change, review the diff for needless complexity and duplication (`/simplify` when available). A review-only request does not authorize shipping.
 - Make routine design decisions instead of parking issues for input; PortOS issue labels come only from `MANDATORY_DISPATCH_HINT_GUIDANCE` in `server/lib/dispatchLabels.js`.
 - **Archive approved design plans**: when a plan is approved out of plan mode, copy it from `~/.claude/plans/` to `./docs/plans/YYYY-MM-DD-<slug>.md` before implementing (`docs/plans/README.md`).

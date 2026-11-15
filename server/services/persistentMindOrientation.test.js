@@ -9,7 +9,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.readFile.mockImplementation(async (url) => String(url).endsWith('package.json')
     ? JSON.stringify({ version: '1.2.3' })
-    : Array.from({ length: 20 }, (_, i) => `- Release improvement ${i}`).join('\n'));
+    : ['# Release v1.2.3 - Test Otter', ...Array.from({ length: 20 }, (_, i) => `- Release improvement ${i}`)].join('\n'));
   mocks.world.mockResolvedValue({
     setup: { installed: true, runtimeStatus: 'online' },
     cos: { enabled: true, connected: false },
@@ -37,6 +37,14 @@ describe('Persistent Mind orientation', () => {
     expect(mocks.world).toHaveBeenCalledWith({ compact: true });
     mocks.world.mockResolvedValue({ setup: { installed: true, runtimeStatus: 'unknown' } });
     expect((await readPersistentMindOrientation(root)).eidoverse.status).toBe('unknown');
+  });
+
+  it('reports unavailable when RELEASE.md describes another version', async () => {
+    mocks.readFile.mockImplementation(async (url) => String(url).endsWith('package.json')
+      ? JSON.stringify({ version: '1.2.3' })
+      : '# Release v1.2.30 - Other Otter\n\n- Not this release');
+    const { readPersistentMindOrientation } = await import('./persistentMindOrientation.js');
+    expect((await readPersistentMindOrientation()).release).toMatchObject({ status: 'unavailable', version: '1.2.3', highlights: [] });
   });
 
   it('reports unavailable release notes without inventing release history', async () => {

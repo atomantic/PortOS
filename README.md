@@ -85,7 +85,7 @@ Ports are listed in [docs/PORTS.md](./docs/PORTS.md) and the full design in [doc
 
 The author builds PortOS by directing AI coding agents rather than typing the code, and PortOS in turn manages those agents, its own development, and the author's digital twin.
 
-> **Opinionated and personal.** PortOS assumes one person, one private network, and the author's workflow. Pull requests are welcome, but updates can break things. If one does, ask your coding agent: `"Read .changelog/vX.Y.Z.md and fix any migration issues in my PortOS data/ directory."`
+> **Opinionated and personal.** PortOS assumes one person, one private network, and the author's workflow. Pull requests are welcome, but updates can break things. If one does, ask your coding agent: `"Read the vX.Y.Z notes on the PortOS GitHub Releases page and fix any migration issues in my PortOS data/ directory."`
 
 ---
 
@@ -241,8 +241,8 @@ labeled `in-progress` or already assigned are not up for grabs.
 
 Pull requests are welcome. This is a personal project, so:
 
-- **Breakage happens.** Major version bumps (e.g. v2.0.0) may rename pages, reorganize data directories, or change schemas in ways that require a migration pass on your local data. Check the relevant `.changelog/vX.Y.Z.md` for what changed.
-- **Data migration.** If something stops working after an update, the fastest fix is to point your coding agent at the changelog: `"Read .changelog/vX.Y.Z.md and fix any migration issues in my PortOS data/ directory."` Most data issues are trivially auto-fixable this way.
+- **Breakage happens.** Major version bumps (e.g. v2.0.0) may rename pages, reorganize data directories, or change schemas in ways that require a migration pass on your local data. Check the relevant version on the [GitHub Releases](https://github.com/atomantic/PortOS/releases) page for what changed.
+- **Data migration.** If something stops working after an update, the fastest fix is to point your coding agent at the release notes: `"Read the vX.Y.Z notes on the PortOS GitHub Releases page and fix any migration issues in my PortOS data/ directory."` Most data issues are trivially auto-fixable this way.
 - **Opinionated by design.** Architecture decisions (single-user, auth optional and off by default, PostgreSQL + flat files over a heavy ORM, Tailscale-only networking) are intentional and will not change. PRs that add multi-user support or general-purpose hardening — CORS restrictions, rate limiting, request-level concurrency controls — will not be merged. See the Security Model section of [AGENTS.md](./AGENTS.md) for what that trust model does and does not assume.
 - **Style.** Match the existing conventions in [AGENTS.md](./AGENTS.md) before opening a PR — especially the no-try/catch route convention, emoji-prefixed logging, and Zod validation on all inputs.
 

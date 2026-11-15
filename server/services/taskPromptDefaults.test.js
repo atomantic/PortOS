@@ -533,7 +533,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // feature-ideas v11: product-source precedence (PRD.md → GOALS.md → docs),
   // on top of v10's rejected-ideas ledger consultation (issue #2621). Pins the
   // version-bump pairing — the prompt change ships WITH its version bump.
-  it('feature-ideas v11 reads PRD.md before GOALS.md', () => {
+  // v12: shipped-work lookup moved from the retired per-version .changelog files
+  // to git log plus GitHub Releases (#16222).
+  it('feature-ideas v12 reads PRD.md before GOALS.md', () => {
     const current = DEFAULT_TASK_PROMPTS['feature-ideas'];
     expect(current).toContain('REJECTED.md');
     expect(current).toContain('is:unmerged');
@@ -545,14 +547,15 @@ describe('taskPromptDefaults integrity snapshot', () => {
     // The schedule unification folded `data/COS-GOALS.md` into the root
     // GOALS.md; the body must not send a run back to the retired file.
     expect(current).not.toContain('COS-GOALS.md');
-    expect(PROMPT_VERSIONS['feature-ideas']).toBe(11);
+    expect(current).not.toContain('.changelog/');
+    expect(PROMPT_VERSIONS['feature-ideas']).toBe(12);
   });
 
   // plan-feature v6 uses tracker-defined IDs, and v5's omitted optional preloads
   // still fall back to direct inventory.
-  it('plan-feature v6 handles omitted preloads and plain forge titles', () => {
+  it('plan-feature v7 handles omitted preloads and plain forge titles', () => {
     const current = DEFAULT_TASK_PROMPTS['plan-feature'];
-    expect(PROMPT_VERSIONS['plan-feature']).toBe(6);
+    expect(PROMPT_VERSIONS['plan-feature']).toBe(7);
     expect(current).toContain('Preloaded task data');
     expect(current).toContain('do NOT list it again');
     expect(current).toContain('corresponding section that is absent');

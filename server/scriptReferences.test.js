@@ -19,7 +19,7 @@ import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const TOP_LEVEL_SCRIPT = /^scripts\/[^/]+$/;
 const VITEST_COLLECTED = /\.test\.js$/;
-const HISTORICAL = /^(?:\.changelog\/|docs\/(?:plans|decisions|research)\/)/;
+const HISTORICAL = /^(?:docs\/(?:plans|decisions|research)\/)/;
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // A whole `[\w.-]+` token equal to a key once its trailing dots are dropped.
