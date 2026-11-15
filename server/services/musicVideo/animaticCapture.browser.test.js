@@ -513,6 +513,29 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     expect(await page.locator('[data-film-look="exact"]').count()).toBe(1);
   });
 
+  it('saves a settled dissolve when animation frames arrive slower than the settle deadline (#16180)', async () => {
+    onTestFinished(async () => {
+      await page.reload();
+      await page.waitForFunction(() => typeof window.show === 'function');
+    });
+    await show(project([
+      { ...still, visualLayer: 'footage', videoHistoryId: 'smpte170m', cutEffect: { style: 'dissolve', enabled: true, overlapSec: 1 } },
+      { ...still, sceneId: 'incoming', order: 1, startSec: 4, endSec: 8, visualLayer: 'footage', videoHistoryId: 'bt709' },
+    ], { filmLook: filmLookPreset('vhs') }), 3.5);
+    await enableFilmLook();
+    // A loaded runner rasterizing the VHS look can deliver frames over a
+    // second apart. The preview is already settled, so only a deadline that
+    // expires between the settle wait's frames can fail this save.
+    await page.waitForFunction(() => [...document.querySelectorAll('video[data-preview-video]')]
+      .every(video => Number(getComputedStyle(video.parentElement).opacity) === 0 || (!video.seeking && video.dataset.pausedFrame === String(video.currentTime))));
+    await page.evaluate(() => {
+      const frame = window.requestAnimationFrame;
+      window.requestAnimationFrame = callback => frame(() => setTimeout(() => callback(performance.now()), 1100));
+    });
+    await capture('slow frames');
+    expect(await page.locator('canvas[data-paused-video]:visible').count()).toBe(2);
+  });
+
   it('isolates a deferred filter commit from box, song and both paused footage revisions', async () => {
     onTestFinished(async () => {
       await page.reload();

@@ -802,28 +802,33 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     }
     // Pause swaps the live film look for its exact filter and catches the shot up
     // to the audio clock. Effects/clip seeks then get a paint before freezing.
+    // The deadline only arms the error: a frame must still observe an unsettled
+    // preview after it. Frames can arrive over a second apart on a loaded host
+    // rasterizing the film look, so expiring between them would reject a
+    // preview that settled in time (#16180).
     await new Promise((resolve, reject) => {
-      let handle;
-      let clips = [];
-      const timer = setTimeout(() => {
-        cancelAnimationFrame(handle);
-        reject(new Error(clips.some(video => video.readyState < 2) ? 'Video frame is still loading' : 'Preview did not settle'));
-      }, 2000);
+      let expired = false;
+      const timer = setTimeout(() => { expired = true; }, 2000);
       let paints = 0;
       const settle = () => {
-        clips = [...(figureRef.current?.querySelectorAll('video[data-preview-video]') || [])]
+        const clips = [...(figureRef.current?.querySelectorAll('video[data-preview-video]') || [])]
           // The current clip stays transparent until decoded. Include it even
           // at metadata readiness so it cannot appear after serialization.
           .filter((video) => Number(getComputedStyle(video.parentElement).opacity) > 0
             || video.matches('[data-ready]:not([aria-hidden="true"])'));
         const failedClip = clips.find((video) => video.dataset.previewError);
         if (failedClip) { clearTimeout(timer); reject(new Error(failedClip.dataset.previewError)); return; }
-        if (++paints >= 2 && clips.every((video) => !video.seeking && video.dataset.pausedFrame === String(video.currentTime))) {
+        const current = clips.every((video) => !video.seeking && video.dataset.pausedFrame === String(video.currentTime));
+        if (++paints >= 2 && current) {
           clearTimeout(timer); resolve(); return;
         }
-        handle = requestAnimationFrame(settle);
+        if (expired && !current) {
+          reject(new Error(clips.some(video => video.readyState < 2) ? 'Video frame is still loading' : 'Preview did not settle'));
+          return;
+        }
+        requestAnimationFrame(settle);
       };
-      handle = requestAnimationFrame(settle);
+      requestAnimationFrame(settle);
     });
     // The click can land before a tick's queued setT has rendered; pause() stops
     // further ticks, so the clock the settle wait observed is the one captured.
