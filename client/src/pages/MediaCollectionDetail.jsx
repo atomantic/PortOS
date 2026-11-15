@@ -1,7 +1,7 @@
 import MediaBatchImport from '../components/media/MediaBatchImport';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router';
-import { ArrowLeft, Cloud, CloudOff, CheckSquare, Copy, DatabaseZap, FolderInput, HardDriveDownload, Inbox, Lock, Pencil, Star, StarOff, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Cloud, CloudOff, CheckSquare, Copy, DatabaseZap, FolderInput, HardDriveDownload, Inbox, Lock, Pencil, ShieldCheck, Star, StarOff, Trash2, X } from 'lucide-react';
 import ShareToButton from '../components/sharing/ShareToButton';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
@@ -14,6 +14,7 @@ import { useAsyncAction } from '../hooks/useAsyncAction';
 import useGalleryPreviewResolver from '../hooks/useGalleryPreviewResolver';
 import { UNSORTED_ID, buildUnsortedCollection } from '../lib/unsorted';
 import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
+import { verifyImageNow } from '../services/apiImageVerifier';
 import {
   getMediaCollection, updateMediaCollection,
   listMediaCollections,
@@ -307,6 +308,36 @@ function MediaCollectionDetailContent() {
     exitSelectMode();
     if (failed) toast.error(`Removed ${selectedItems.length - failed}; ${failed} failed`);
     else toast.success(`Removed ${selectedItems.length} item${selectedItems.length === 1 ? '' : 's'} from "${collection.name}"`);
+  };
+
+  const bulkVerify = async () => {
+    const imagesToVerify = selectedItems.filter((it) => it.kind === 'image' && it.filename);
+    if (imagesToVerify.length === 0) {
+      toast.info('No images selected for verification');
+      return;
+    }
+    setBulkBusy(true);
+    let passCount = 0;
+    let failCount = 0;
+    let errorCount = 0;
+    for (const it of imagesToVerify) {
+      try {
+        const res = await verifyImageNow({
+          filename: it.filename,
+          profileId: 'strict_anatomy',
+          prompt: it.prompt || '',
+        });
+        if (res?.verdict === 'pass') passCount++;
+        else if (res?.verdict === 'fail') failCount++;
+      } catch (err) {
+        errorCount++;
+        console.error(`Error verifying ${it.filename}:`, err);
+      }
+    }
+    setBulkBusy(false);
+    if (errorCount > 0) toast.warning(`Batch verification: ${passCount} passed, ${failCount} defect(s) flagged, ${errorCount} could not be verified.`);
+    else toast.success(`Verified ${imagesToVerify.length} images: ${passCount} passed, ${failCount} defect(s) flagged.`);
+    page.refresh();
   };
 
   const bulkMoveOrCopy = async (targetId, targetName) => {
@@ -613,6 +644,17 @@ function MediaCollectionDetailContent() {
                   <Trash2 className="w-3 h-3" /> Remove
                 </button>
               </>
+            )}
+            {selectedItems.some((it) => it.kind === 'image') && (
+              <button
+                type="button"
+                onClick={bulkVerify}
+                disabled={bulkBusy || selected.size === 0}
+                className="px-2 py-1 text-[11px] bg-port-accent/20 hover:bg-port-accent/40 text-port-accent rounded flex items-center gap-1 disabled:opacity-40"
+                title="Verify anatomy and quality of selected images"
+              >
+                <ShieldCheck className="w-3 h-3" /> Verify
+              </button>
             )}
             <button
               type="button"

@@ -234,6 +234,9 @@ function MediaCard({
             them, and these badges are the only thing explaining "frame". */}
         <div className="absolute top-1.5 right-1.5 flex flex-col items-end gap-0.5 pointer-events-none">
           {[
+            item.verification?.verdict === 'pass' && { label: '✓ verified', cls: 'bg-port-success/80 text-white', title: item.verification.summary || 'Verified clean' },
+            item.verification?.verdict === 'fail' && { label: '⚠ defect', cls: 'bg-port-error/90 text-white', title: item.verification.summary || 'Defect detected' },
+            item.verification?.overridden && { label: 'override', cls: 'bg-purple-600/80 text-white', title: item.verification.overrideNotes || 'Operator override' },
             item.stitchedFrom && { label: 'stitched', cls: 'bg-port-success/80 text-white' },
             item.upscaledFrom && { label: '2×', cls: 'bg-port-accent/80 text-white' },
             item.trimmedFrom && { label: 'trimmed', cls: 'bg-port-border text-white', title: 'Starts at a later frame of another clip' },

@@ -2311,6 +2311,43 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
         }).catch(e => console.error(`❌ media-job [${job.id.slice(0, 8)}] film finishing handler failed: ${e.message}`)));
         return;
       }
+      if (job.kind === 'image' && result?.filename) {
+        trackTerminalOperation(permit.run(async () => {
+          try {
+            const { getVerifierSettings, verifyImage } = await import('../imageVerifier.js');
+            const vs = await getVerifierSettings().catch(() => null);
+            if (vs?.enabledForGeneration || job.params?.verifyImage === true) {
+              const verification = await verifyImage({
+                filename: result.filename,
+                prompt: job.params?.prompt || '',
+                profileId: job.params?.verificationProfileId || vs?.defaultProfileId,
+              }).catch(() => null);
+              if (verification) {
+                result.verification = verification;
+                const maxRerolls = Number.isFinite(job.params?.maxRerolls) ? job.params.maxRerolls : (vs?.maxRerolls ?? 2);
+                const rerollsDone = job.params?.verificationRerollCount || 0;
+                if (verification.verdict === 'fail' && rerollsDone < maxRerolls) {
+                  console.log(`⚠️ media-job [${job.id.slice(0, 8)}] verification failed: ${verification.summary}. Auto-rerolling (attempt ${rerollsDone + 1} of ${maxRerolls})...`);
+                  await enqueueJob({
+                    kind: 'image',
+                    owner: job.owner,
+                    params: {
+                      ...job.params,
+                      seed: (Number.isFinite(job.params?.seed) ? job.params.seed : Date.now()) + 1,
+                      verificationRerollCount: rerollsDone + 1,
+                      parentJobId: job.id,
+                    },
+                  }).catch((e) => console.error(`❌ Auto-reroll enqueue failed: ${e.message}`));
+                }
+              }
+            }
+          } catch (err) {
+            console.warn(`🔍 Verification check failed on completed image job [${job.id.slice(0, 8)}]:`, err.message);
+          }
+          await terminate('completed', (j) => { recordRefs(j); j.result = result; }, remoteInputsDisposable === true);
+        }).catch((e) => console.error(`❌ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)));
+        return;
+      }
       trackTerminalOperation(
         terminate('completed', (j) => { recordRefs(j); j.result = result; }, remoteInputsDisposable === true)
           .catch((e) => console.error(`❌ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),

@@ -18,7 +18,7 @@ import { plateReviewEvidence, plateRequirements, plateStripFindings } from '../.
 // Scored on a hand-labeled 16-image set (#14811): Qwen3.8 27B made no false
 // render-quality fails, Gemma 4 31B three, Gemma 3 27B three. Ollama's tag order
 // otherwise decides, which picked the worst one. MLX builds crashed on image input.
-const VISION_REVIEWER_PREFERENCE = [/qwen3\.8/i, /gemma-?4/i];
+const VISION_REVIEWER_PREFERENCE = [/qwen.*(?:27[bg]|3\.8)/i, /qwen3\.8/i, /qwen2\.5-vl/i, /argon/i, /gemma-?4/i];
 const visionReviewerRank = (id) => {
   const family = VISION_REVIEWER_PREFERENCE.findIndex((pattern) => pattern.test(id));
   return (/mlx/i.test(id) ? VISION_REVIEWER_PREFERENCE.length + 1 : 0) + (family === -1 ? VISION_REVIEWER_PREFERENCE.length : family);

@@ -423,8 +423,8 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
   //   - Every other provider: unchanged, prompt over stdin → useStdin=true.
   // cleanupPromptFile removes any temp file after the run (no-op otherwise).
   const promptInput = vision ? vision.invocation.stdin : prompt;
-  const { args, useStdin, cleanup: cleanupPromptFile } = vision
-    ? { args: builtArgs, useStdin: promptInput != null, cleanup: () => {} }
+  const { args, useStdin, cleanup: cleanupPromptFile } = (vision && vision.invocation.stdin == null)
+    ? { args: builtArgs, useStdin: false, cleanup: () => {} }
     : prepareCliPrompt(provider.command, builtArgs, promptInput, { cwd: effectiveCwd });
   console.log(`🚀 Executing CLI: ${provider.command} (${prompt.length} chars via ${useStdin ? 'stdin' : 'argv'}${vision ? `, ${screenshots.length} images` : ''})`);
 
