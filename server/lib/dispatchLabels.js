@@ -736,7 +736,7 @@ const HELP_WANTED_GUIDANCE = `Apply \`help wanted\` (color 008672) ${HELP_WANTED
  * label inflated by breadth buys cost and latency, not care. Breadth is
  * diligence: an enumerated checklist in the body, not a higher level.
  */
-const effortAxisGuidance = (p, levels) => `\`${levels}\` — how hard each step is to reason through, independent of model and of how much work there is. \`${p}medium\` is the normal level. Use \`${p}low\` when every step is mechanical, \`${p}high\` when a step hinges on a hard argument (concurrency, cross-version compatibility, an invariant), and \`${p}xhigh\`/\`${p}max\` only when that reasoning is the whole difficulty; higher levels multiply cost and latency. Breadth is not effort: a mechanical sweep across 40 call sites is light capability at \`${p}low\`, with the call sites enumerated in the body.`;
+const effortAxisGuidance = (p, levels) => `\`${levels}\` — thinking per step, not amount of work: \`${p}medium\` is normal, \`${p}low\` for mechanical steps, \`${p}high\` when a step hinges on a hard argument, \`${p}xhigh\`/\`${p}max\` rarely. Breadth is not effort: list a wide sweep's call sites in the body.`;
 
 /** Canonical filing contract for every autonomous issue producer. */
 export const MANDATORY_DISPATCH_HINT_GUIDANCE = [
