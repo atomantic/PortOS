@@ -10,6 +10,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { PR_COMPLETIONS, agentPrHeldForOperator, prHeldForOperator } from '../lib/prDisposition.js';
+import { execGit } from '../lib/execGit.js';
 
 export const repositoryKey = (origin) => origin?.host && origin?.fullName
   ? `${origin.host.replace(/^ssh\.github\.com$/i, 'github.com')}/${origin.fullName}`.toLowerCase()
@@ -30,7 +31,6 @@ async function liveTask(agent) {
 // assigned branch checked out; an unreadable checkout is not a match.
 async function checkoutOnBranch(workspace, branch, repository) {
   if (repositoryKey(await getOriginInfo(workspace).catch(() => null)) !== repository) return false;
-  const { execGit } = await import('../lib/execGit.js');
   const checkout = await execGit(['symbolic-ref', '--quiet', '--short', 'HEAD'], workspace).catch(() => null);
   return checkout?.stdout?.trim() === branch;
 }

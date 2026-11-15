@@ -3,7 +3,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { getSettings } from './settings.js';
 import { getProviderById } from './providers.js';
 import { getTriageRules } from './messageTriageRules.js';
-import { runUntrustedContentAnalysis } from './untrustedContent.js';
+import { runUntrustedContentAnalysis, jevBatchGate } from './untrustedContent.js';
 import { resolveUntrustedContentPolicy } from '../lib/untrustedContent.js';
 
 const EVAL_PROMPT = `Recommend ONE action for each message: reply (a response is warranted), archive (informational), delete (junk), or review (the user should read it). Return ONLY a JSON array, one object per input message: {"id":"MSG_ID","action":"reply|archive|delete|review","reason":"brief reason","priority":"high|medium|low"}. These are recommendations only; do not execute them.`;
@@ -79,7 +79,6 @@ export async function evaluateMessages(messages) {
     premise: () => JSON.stringify(evidence.get(idOf(message))),
     decisionIds: ['message-triage', 'message-priority'],
   }));
-  const { jevBatchGate } = await import('./untrustedContent.js');
   // `action` and `priority` are two argmaxes over one premise, and the chat
   // model's priority was conditioned on its own action — so an item counts as
   // resolved only when BOTH cleared their floors. The gate already enforces

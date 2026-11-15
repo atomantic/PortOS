@@ -33,6 +33,7 @@ import { normalizeEligibilityFacts } from './modelAbuseGuard.js';
 import { issuePrerequisiteWaived, linkedIssueIntentFingerprint } from '../lib/modelAbuseGuard.js';
 import { screenedPullRequestFingerprintMatches } from '../lib/prReviewContent.js';
 import { trimTo } from '../lib/textUtils.js';
+import { getProviderById } from './providers.js';
 
 const IN_PROGRESS_LABEL_SPEC = dispatchLabelSpec(IN_PROGRESS_LABEL);
 
@@ -1131,7 +1132,6 @@ async function analyzePendingIssueComments({ app, interval, input, pending }) {
   const model = configured.providerId ? configured.model || undefined : configured.model || interval?.model;
   let provider;
   if (providerId) {
-    const { getProviderById } = await import('./providers.js');
     provider = await getProviderById(providerId);
     if (!provider) {
       await persistState(app.id, { lastError: 'untrusted-provider-unavailable' });

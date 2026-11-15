@@ -18,7 +18,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { CONTAINED_BLENDER_GPU_NOTICE, codeAnimationWorkerFailure } from '../lib/codeAnimationContainment.js';
-import { H264_ENCODE_ARGS } from '../lib/ffmpeg.js';
+import { H264_ENCODE_ARGS, findFfmpeg, runFfmpegProcess } from '../lib/ffmpeg.js';
 import { launchDetached } from '../lib/launchDetached.js';
 import { resolveGreybox } from '../lib/greyboxScene.js';
 import { resolvePhotorealLook } from '../lib/photorealLook.js';
@@ -37,8 +37,8 @@ const refuse = (message, code, status = 400) => new ServerError(message, { statu
 const deps = {
   resolveTool: async () => (await import('./codeAnimation/execution.js')).resolveBlenderTool(),
   lastCheckedVersion: async () => (await import('./codeAnimation/execution.js')).lastCheckedBlenderVersion(),
-  findFfmpeg: async () => (await import('../lib/ffmpeg.js')).findFfmpeg(),
-  runFfmpeg: async (args) => (await import('../lib/ffmpeg.js')).runFfmpegProcess(args),
+  findFfmpeg: async () => findFfmpeg(),
+  runFfmpeg: async (args) => runFfmpegProcess(args),
   saveVideo: async (path, name) => (await import('./videoUpload.js')).saveUploadedGalleryVideoFile(path, name),
   launch: (executable, args) => launchDetached(executable, args),
   stageTextures: async (textures) => (await import('./photorealTextures.js')).stagePhotorealTextures(textures),
