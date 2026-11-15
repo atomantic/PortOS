@@ -15,12 +15,16 @@
 # they publish:
 #   LOCK="$PWD/scripts/requirements-guard-runtime.lock.txt"; TMP="$(mktemp -d)"
 #   cp scripts/requirements-guard-runtime{,.lock}.txt "$TMP/"
-#   printf '[project]\nname = "guard-lock"\nversion = "0"\n[tool.uv]\nenvironments = ["sys_platform == '"'"'darwin'"'"' and platform_machine == '"'"'arm64'"'"'", "sys_platform == '"'"'linux'"'"' and platform_machine == '"'"'x86_64'"'"'", "sys_platform == '"'"'linux'"'"' and platform_machine == '"'"'aarch64'"'"'", "sys_platform == '"'"'win32'"'"' and platform_machine == '"'"'AMD64'"'"'"]\n' > "$TMP/pyproject.toml"
+#   printf '[project]\nname = "guard-lock"\nversion = "0"\n[tool.uv]\nenvironments = ["python_full_version < '"'"'3.15'"'"' and sys_platform == '"'"'darwin'"'"' and platform_machine == '"'"'arm64'"'"'", "python_full_version < '"'"'3.15'"'"' and sys_platform == '"'"'linux'"'"' and platform_machine == '"'"'x86_64'"'"'", "python_full_version < '"'"'3.15'"'"' and sys_platform == '"'"'linux'"'"' and platform_machine == '"'"'aarch64'"'"'", "python_full_version < '"'"'3.15'"'"' and sys_platform == '"'"'win32'"'"' and platform_machine == '"'"'AMD64'"'"'"]\n' > "$TMP/pyproject.toml"
 #   (cd "$TMP" && uv pip compile requirements-guard-runtime.txt --universal --python-version 3.11 \
 #     --generate-hashes --only-binary :all: --index-url https://pypi.org/simple --no-header --annotation-style line \
 #     --exclude-newer <UTC date at least 7 days ago> -o "$LOCK")
 # then check the result against OSV (including MAL- malicious-package records).
-# exclude-newer 2026-11-05T00:00:00Z
+# Bounded Transformers refresh: uv 0.13.7, exclude-newer 2026-11-07T00:00:00Z.
+# Constrain companion pins; regenerate for Python <3.15 in the declared environments
+# (Torch has no Linux 3.15 wheel), then transfer only the verified Transformers block.
+# See docs/PYTHON_RUNTIME_REFRESH.md for the curl relay and marker comparison.
+# Historical baseline: exclude-newer 2026-11-05T00:00:00Z
 annotated-doc==0.0.5 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
     --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101 \
     --hash=sha256:c7e58ce09192557605d8bbd92836d7e1d520ac9580096042c0bfd197efacf1bb
@@ -821,9 +825,9 @@ tqdm==4.70.1 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (pl
     --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73 \
     --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4
     # via huggingface-hub, transformers
-transformers==5.22.1 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
-    --hash=sha256:bed9fd76d6f43b4a1a9fc5d0c565ace7c77edbd029784f8cbcdf772cb5e924d8 \
-    --hash=sha256:c940b4bf98de4f568723895f330ba1460a398bd83061b93b70238c3fe32e4389
+transformers==5.22.2 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
+    --hash=sha256:55f57e5cbd7c0b500b7a706daa0ecd76567b56ca139e6e02ef0bba0437e3a763 \
+    --hash=sha256:829c2820aff91730b8ec45a4b8ff4be07f586a140b68a9073998b36fa35297dc
     # via -r requirements-guard-runtime.txt
 triton==3.8.0 ; (python_full_version < '3.15' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.15' and platform_machine == 'x86_64' and sys_platform == 'linux') \
     --hash=sha256:1b84e7d512490ba529111260fa6f7cad8b254a6bb5fbdf41d5ef9a5e57f52d0a \

@@ -2755,3 +2755,78 @@ install, Metal inference or model run was executed.
 Remaining under #16047: Transformers 5.22.2 across its profiles, then
 Typer 0.28.0 / Regex 2026.11.7 (Pixal/TRELLIS/H3) and Protobuf 7.36.2 (H3) as
 separate slices.
+
+
+## Transformers slice for Prompt Guard and JEV (2026-11-15, #16047)
+
+Third slice of #16047: **Transformers 5.22.1 → 5.22.2** in the shared
+Guard/JEV source recipe, complete lock and both canonical JavaScript pin lists.
+The classifier models/revisions, thresholds, prompt handling, interpreter,
+Torch 2.14.1, Hub 2.4.0, optional extras and all 55 companion entries are
+unchanged. This slice isolates the security classifiers from the independent
+creative MLX/CUDA profiles; it does not complete the issue.
+
+The [5.22.2 release](https://github.com/huggingface/transformers/releases/tag/v5.22.2)
+fixes distributed backend device binding and hardens the chat-template sandbox.
+Hash-verified baseline/candidate wheels differ in only four package files:
+version initialization, the Jinja dependency table, distributed utilities and
+chat-template utilities. The actual AutoTokenizer/sequence-classification,
+DeBERTa-v2 and Qwen3.5 implementations consumed by `run_prompt_guard.py`,
+`run_jev.py` and `jev_head_kit.py` are byte-identical. Python remains >=3.11;
+the raised optional Jinja floor (3.1.6) is already satisfied by this lock.
+Neither classifier uses Jinja chat templates or distributed training.
+
+The complete 56-entry universal closure was regenerated with hash-verified
+**uv 0.13.7** and **2026-11-07T00:00:00Z** cutoff. Extract every existing
+`name==version` requirement with its marker into scratch constraints,
+substitute only Transformers 5.22.2, and pass `--constraint <scratch-file>`
+to the header's compile command. Universal resolution needs
+`python_full_version < '3.15'` in each declared environment: Torch 2.14.1 has
+no Linux Python 3.15 wheel. The header now records that resolver bound;
+installation markers and supported-target refusal behavior are unchanged.
+Compare the complete emitted package/version/hash sets at Python 3.11–3.14
+for all four declared OS/architecture pairs before transferring only the
+new Transformers block. All 16 comparisons passed; the retained companion
+blocks and every original marker are byte-identical. No hashes were composed
+by hand.
+
+Direct PyPI connections timed out from both uv 0.13.7 and 0.8.14, while curl
+worked. Resolution therefore used a temporary loopback curl relay to official
+PyPI Simple JSON and `files.pythonhosted.org` artifacts, with download concurrency
+2 and HTTP multiplexing disabled. Only artifact URLs were rewritten for local
+transport; upload timestamps, yanked status, Requires-Python, metadata and hashes
+were retained. No relay, index override or network setting ships to installers.
+All **56 registry identities / 718 artifact hashes** were independently checked
+against fresh official version JSON: non-yanked and uploaded before the cutoff.
+Fresh OSV querybatch results cover all 56 identities, including MAL records;
+response cardinality, errors and pagination are checked, with zero findings.
+The only changed runtime registry input is Transformers; the resolver's uv
+wheel is separately SHA-256 verified. There are no changed source revisions.
+
+Eight hash-required, wheel-only installation dry plans pass for Python 3.11
+and 3.12 on Apple Silicon macOS 14, Linux x86_64/aarch64 (glibc 2.28) and
+Windows AMD64. They select artifacts; they do not execute those other platforms.
+An isolated Apple Silicon **CPython 3.11.17** environment hash-installed all
+34 applicable wheels, with `uv pip check` passing. It ran baseline 5.22.1 then
+candidate 5.22.2 on the same synthetic saved models/tokenizer fixtures:
+
+- The shipped Prompt Guard CLI loads a tiny real DeBERTa-v2 classifier and
+  tokenizes all 1,200 synthetic tokens into three overlapping windows. Scores
+  are finite, coverage is complete, and empty/null/whitespace input is refused.
+- The shipped JEV loader, scorer and pooling helper load a tiny real Qwen3.5
+  classifier with linear and full-attention layers on MPS. Hypothesis order,
+  normalized probabilities, 16-value pooling and three logits are preserved;
+  oversized scoring and pooling requests are refused before model execution.
+- Baseline/candidate Guard results are identical; the maximum absolute numeric
+  difference for JEV scores, pooling and logits is **0.0**. Model Hub offline
+  flags are set; the probe process refuses Python socket connections.
+
+Ten existing public installer/profile/runner/service regression files pass
+**119 tests**. These are synthetic API contracts, not production model weights,
+classifier accuracy/canary certification, full GPU-profile validation or native
+Windows/Linux execution. Production install canaries remain mandatory.
+
+Remaining under #16047: Transformers 5.22.2 in the other requested profiles,
+then the independent Typer 0.28.0 / Regex 2026.11.7 slices for Pixal/TRELLIS/H3
+and Protobuf 7.36.2 for H3. The documented LTX CUDA Transformers 5.14.1 and
+other retained exceptions remain unchanged.
