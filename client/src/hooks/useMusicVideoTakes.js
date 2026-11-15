@@ -164,7 +164,9 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
   // Its reply carries the edit result: the placed shot, any shot whose takes went stale, and readiness.
   const placePoolItem = (scene, pick) => runTakeOp(
     (projectId) => placeMusicVideoPoolItem(projectId, scene.sceneId, pick, applyEdit ? own() : { silent: true }).then(({ scene: placed, edit }) => {
-      if (applyEdit && edit) { applyEdit(projectId, edit); return null; }
+      // Only when no other take decision is queued: one behind it would be painted over by this reply's
+      // copy of its shot, which predates it. Otherwise patch the shot as the other take decisions do.
+      if (applyEdit && edit && runningRef.current === 1) { applyEdit(projectId, edit); return null; }
       const field = pick.kind === 'endImage' ? 'endFramePrompt' : 'framePrompt';
       const stillPlaced = pick.kind !== 'video' || Boolean(pick.withAssetId);
       if (stillPlaced && placed[field] !== scene[field]) applyScenePatch?.(projectId, placed.sceneId, { [field]: placed[field] ?? null });

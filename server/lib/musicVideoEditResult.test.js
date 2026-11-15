@@ -39,4 +39,11 @@ describe('applyMusicVideoEdit', () => {
     expect(applyMusicVideoEdit(project, { updatedAt: project.updatedAt })).toBeNull();
     expect(applyMusicVideoEdit(project, edit({ updatedAt: project.updatedAt }))).not.toBeNull();
   });
+
+  // Uniquely catches a diff applied over a record that is behind its base: the change between them
+  // (another writer's, or a take decision patched in without its readiness) would never show.
+  it('refuses a reply taken from a revision other than the one shown', () => {
+    expect(applyMusicVideoEdit(project, edit({ baseUpdatedAt: '2026-01-01T00:00:01.500Z' }))).toBeNull();
+    expect(applyMusicVideoEdit(project, edit({ baseUpdatedAt: project.updatedAt }))).not.toBeNull();
+  });
 });
