@@ -9,6 +9,7 @@
  */
 
 import { GEMINI_OMNI_WEB_MODEL } from '../../../server/lib/geminiWebVideo.js';
+import { renderTierVideoSettings, sceneRenderTierPlan } from '../../../server/lib/musicVideoRenderTier.js';
 import { meteredModelLabel, meteredSceneTake } from './musicVideoShotTiming.js';
 import { formatUsd } from '../utils/formatters.js';
 
@@ -43,6 +44,7 @@ export function videosButtonLabel({ renderableCount, footageCount, waiting }) {
  * with the same `meteredSceneTake` the scene card shows; a scene it cannot
  * price is counted as unpriced. Local and Grok renders show the count only;
  * Gemini also says where the images go, since no key or price signals it.
+ * A model with resolution tiers is priced at the draft tier the batch renders (#16136).
  */
 export function videoBatchPreview({ scenes, backend, videoSettings, songDurationSec = null }) {
   const count = scenes.length;
@@ -50,7 +52,10 @@ export function videoBatchPreview({ scenes, backend, videoSettings, songDuration
     return { count, backend, text: `Generate ${plural(count, 'clip')} on ${GEMINI_OMNI_WEB_MODEL.label}: sends prompts and images to Google and uses the video quota of the account signed in to the PortOS Browser` };
   }
   if (backend !== 'fal' && backend !== 'runway') return { count, backend, text: `Generate ${plural(count, 'clip')} on ${backend === 'grok' ? 'Grok' : 'the local renderer'}` };
-  const takes = scenes.map((scene) => meteredSceneTake(backend, { scene, videoSettings, songDurationSec }));
+  const takes = scenes.map((scene) => meteredSceneTake(backend, {
+    scene, songDurationSec, videoSettings: renderTierVideoSettings(backend, { scene, videoSettings, tier: 'draft' }),
+  }));
+  const drafts = scenes.some((scene) => sceneRenderTierPlan(backend, { scene, videoSettings }));
   const priced = takes.filter((take) => take.costUsd != null);
   const costUsd = priced.reduce((sum, take) => sum + take.costUsd, 0);
   const modelIds = [...new Set(takes.map((take) => take.modelId))];
@@ -59,7 +64,7 @@ export function videoBatchPreview({ scenes, backend, videoSettings, songDuration
   const unpriced = takes.length - priced.length;
   return {
     count, backend, costUsd, unpriced,
-    text: `Generate ${plural(count, 'clip')} on ${backend === 'runway' ? 'Runway' : 'fal'} / ${model}${resolutions.length === 1 ? ` ${resolutions[0]}` : ''}`
+    text: `Generate ${plural(count, drafts ? 'draft clip' : 'clip')} on ${backend === 'runway' ? 'Runway' : 'fal'} / ${model}${resolutions.length === 1 ? ` ${resolutions[0]}` : ''}`
       + ` · est. ${formatUsd(costUsd)}${unpriced > 0 ? ` (${unpriced} unpriced)` : ''}`,
   };
 }

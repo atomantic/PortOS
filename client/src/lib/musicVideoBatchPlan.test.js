@@ -10,10 +10,21 @@ describe('musicVideoBatchPlan', () => {
     expect(priced.count).toBe(2);
     expect(priced.costUsd).toBeGreaterThan(0);
     expect(priced.unpriced).toBe(0);
-    expect(priced.text).toMatch(/^Generate 2 clips on fal \/ .* · est\. \$/);
+    expect(priced.text).toMatch(/^Generate 2 draft clips on fal \/ .* · est\. \$/);
     const uncurated = videoBatchPreview({ scenes, backend: 'fal', videoSettings: { falModelId: 'fal-ai/not-curated' } });
     expect(uncurated.unpriced).toBe(2);
     expect(uncurated.text).toContain('(2 unpriced)');
+  });
+
+  // #16136: the batch renders drafts on a tiered model, so it is priced at the draft tier, not the saved resolution.
+  it('prices a tiered model at the draft tier the batch renders', () => {
+    const scenes = [scene(0), scene(1)];
+    const saved = { falResolution: '768P' };
+    const draft = videoBatchPreview({ scenes, backend: 'fal', videoSettings: saved });
+    const higherDraft = videoBatchPreview({ scenes, backend: 'fal', videoSettings: { ...saved, draftResolution: '768P' } });
+    expect(draft.text).toContain(' 512P ');
+    expect(higherDraft.text).toContain(' 768P ');
+    expect(higherDraft.costUsd).toBeGreaterThan(draft.costUsd);
   });
 
   it('shows the count only for local and Grok renders', () => {

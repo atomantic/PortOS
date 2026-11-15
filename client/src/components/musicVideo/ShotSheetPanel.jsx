@@ -14,6 +14,7 @@ import {
   SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, SHOT_SHEET_MAP_BARS, normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMarkDoneEdits, shotSheetMediaEdits, shotSheetOptions, shotSheetProblems, shotSheetRows, shotSheetStretches,
 } from '../../../../server/lib/musicVideoShotSheet.js';
 import { MUSIC_VIDEO_CAMERA_FRAME_ASPECTS } from '../../../../server/lib/musicVideoFilmLook.js';
+import { sceneClipIsFinal, sceneFinalApproved, selectedVideoTake } from '../../../../server/lib/musicVideoFinalApproval.js';
 import { FILM_LOOK_PRESETS, filmLookPreset } from '../../lib/filmLook.js';
 import { MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS } from '../../lib/musicVideoTransitions.js';
 
@@ -255,7 +256,7 @@ function CameraList({ project, disabled, onChange }) {
 }
 
 /** One shot's row. Each column is the director's own plan; the prompts it sits beside are shown on request. */
-function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen }) {
+function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen, onApproveFinal = null }) {
   const { scene, sheet, lyric, camera, frameOutdated, problems, output } = row;
   const setField = (field, value) => onEdit(scene.sceneId, { ...sheet, [field]: value });
   const label = scene.label || 'Shot';
@@ -278,6 +279,15 @@ function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen })
           {/* Done is stored as `checked`, the box's first name. */}
           <input type="checkbox" aria-label={`${label} done`} checked={!!sheet.checked} disabled={disabled} onChange={(event) => setField('checked', event.target.checked)} /> Done
         </label>
+        {/* #16136: the shot card's Approve for final, for a selected draft clip. */}
+        {onApproveFinal && selectedVideoTake(scene) && (sceneClipIsFinal(scene)
+          ? <span className="mt-1 block text-port-success">Final</span>
+          : (
+            <label className="mt-1 flex min-h-[44px] items-center gap-1 pointer-fine:sm:min-h-0">
+              <input type="checkbox" aria-label={`${label} approved for final`} checked={sceneFinalApproved(scene)} disabled={disabled}
+                onChange={(event) => onApproveFinal([scene.sceneId], event.target.checked)} /> Final
+            </label>
+          ))}
       </td>
       <td className="w-28 p-1.5">
         <button type="button" onClick={() => onOpen(scene.sceneId)} aria-label={`Open ${label} from preview`} className="block min-h-[44px] min-w-[44px] rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-port-accent">
@@ -341,7 +351,7 @@ function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen })
  * prompts; any other shot sends its own prompts alone (shown with Show prompts).
  */
 export default function ShotSheetPanel({ board }) {
-  const { project, locked, editSceneLocal, saveScene, editProjectLocal, saveProjectFields, onEditShot, treatment } = board;
+  const { project, locked, editSceneLocal, saveScene, editProjectLocal, saveProjectFields, onEditShot, treatment, approveFinal = null } = board;
   const [query, setQuery] = useState('');
   const [cameraFilter, setCameraFilter] = useState('');
   const [outdatedOnly, setOutdatedOnly] = useState(false);
@@ -453,7 +463,7 @@ export default function ShotSheetPanel({ board }) {
           </thead>
           <tbody className="divide-y divide-port-border">
             {listed.map((row) => (
-              <SheetRow key={row.scene.sceneId} project={project} row={row} cast={cast} showPrompts={showPrompts} disabled={locked || aiApplying} onEdit={editSheet} onOpen={onEditShot} />
+              <SheetRow key={row.scene.sceneId} project={project} row={row} cast={cast} showPrompts={showPrompts} disabled={locked || aiApplying} onEdit={editSheet} onOpen={onEditShot} onApproveFinal={approveFinal} />
             ))}
           </tbody>
         </table>

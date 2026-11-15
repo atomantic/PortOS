@@ -19,7 +19,7 @@
 
 import { higgsfieldShotRequestFields } from '../../../server/lib/higgsfieldVideoModels.js';
 import { googleShotRequestFields } from '../../../server/lib/googleVideoModels.js';
-import { renderTierVideoSettings } from '../../../server/lib/musicVideoRenderTier.js';
+import { renderTierVideoSettings, sceneRenderTierPlan } from '../../../server/lib/musicVideoRenderTier.js';
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { isOutsideMusicVideoReference, musicVideoClipConditioningReferences, musicVideoConditioningReferences, musicVideoLinkedCastIds, musicVideoSceneCastIds } from '../../../server/lib/musicVideoConditioning.js';
 import { preMusicClipSound } from '../../../server/lib/musicVideoColdOpen.js';
@@ -614,7 +614,9 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         : 'Every scene already has a video');
       return;
     }
-    runBatch(videoBatch, pending, generateSceneVideo);
+    // #16136: a batch renders drafts on a model with resolution tiers; an untiered lane renders as before.
+    const draftTier = (scene) => (sceneRenderTierPlan(videoSettings.settings.backend, { scene, scenes: project?.scenes, videoSettings: videoSettings.settings }) ? { tier: 'draft' } : {});
+    runBatch(videoBatch, pending, (scene, options) => generateSceneVideo(scene, { ...options, ...draftTier(scene) }));
   };
 
   return {

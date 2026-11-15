@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router';
 import { ChevronDown, ChevronUp, Maximize2, Minimize2, MonitorPlay } from 'lucide-react';
 import CompositionPreviewPlayer from './CompositionPreviewPlayer.jsx';
 import StoryboardAnimatic from './StoryboardAnimatic.jsx';
+import DraftCoverageNote from './DraftCoverageNote.jsx';
 import ShotStepper, { shotSteps } from './ShotStepper.jsx';
 import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
 import { sceneShotName } from '../../lib/musicVideoStages.js';
@@ -224,7 +225,11 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
           {blender?.status === 'error' ? 'The Blender film could not be loaded. Retry it in Blender film on Shots.' : 'Loading the Blender film…'}
         </p>
       ) : (
-        <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} variant="composite" blender={film ? blender.state : null} />
+        <>
+          <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} variant="composite" blender={film ? blender.state : null} />
+          {/* A Blender film's shots render from its scripts, not as clip takes. */}
+          {!film && <DraftCoverageNote project={project} collapsed={collapsed} onEditShot={onEditShot} />}
+        </>
       ))}
       {source?.kind === 'lyrics' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} lyrics shotNav onEditShot={onEditShot} /></div>}
       {source?.kind === 'animatic' && <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} />}

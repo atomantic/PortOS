@@ -24,7 +24,7 @@ describe('GenerationActions batch confirm (#10153)', () => {
     const media = setup({ scenes: [scene(0, { referenceImageId: 'a.png' }), scene(1, { referenceImageId: 'b.png' })] });
     fireEvent.click(screen.getByRole('button', { name: /^Videos 0\/2/ }));
     expect(media.generateMissingVideos).not.toHaveBeenCalled();
-    expect(screen.getByRole('group', { name: 'Confirm clip batch' }).textContent).toMatch(/Generate 2 clips on fal .* est\. \$/);
+    expect(screen.getByRole('group', { name: 'Confirm clip batch' }).textContent).toMatch(/Generate 2 draft clips on fal .* est\. \$/);
     fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
     expect(media.generateMissingVideos).toHaveBeenCalledTimes(1);
   });
