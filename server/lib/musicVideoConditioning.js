@@ -387,7 +387,8 @@ function currentLinkedPickIds(project, ids, castMedia, linked) {
  * The cast members whose media this scene's saved references need before they can resolve or render:
  * its look variant, plus (when it saved a catalog-linked pick) the linked subjects the shot names.
  * A pick names its asset by hash only, so when the shot names no linked subject every linked member
- * is needed to find the owner.
+ * is needed to find the owner. This set only gates the shot's controls and renders: the board still
+ * loads every linked member in one batched read, so a pick owned by an unnamed subject resolves too.
  */
 export function musicVideoSceneCastIds(project, scene) {
   const variant = sceneCastVariant(scene);
