@@ -1456,8 +1456,10 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
   const delivery = capturedHead && !originalPrUrl && !observed.prState
     ? await probePrForBranch(sourceWorkspace, branchName).catch(() => null) : observed;
   const proofUrl = originalPrUrl || delivery?.prUrl;
+  let forgeRefusal = null;
   const forge = proofUrl && delivery?.prState === 'MERGED' ? await readMergedPrDelivery(sourceWorkspace, branchName, proofUrl,
-    { forgeAccount: app?.forgeAccount ?? null, ...(capturedHead && { exactDeliveredHead: capturedHead }) }).catch(() => null) : null;
+    { forgeAccount: app?.forgeAccount ?? null, ...(capturedHead && { exactDeliveredHead: capturedHead }) })
+    .catch(err => { forgeRefusal = err?.message; return null; }) : null;
   // The forge binds merged delivery to this repository and named PR branch.
   // A follow-up may rebase or advance its head after the original capture.
   // With the checkout and local ref already absent, there is nothing to remove
@@ -1470,7 +1472,14 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
   // forge affirmatively reports none, no remote branch holds other work, and the
   // captured final head is already in the fetched default branch, the removed
   // checkout held nothing undelivered.
-  const unpublishedContained = !integrated && capturedHead && !proofUrl && delivery?.readable === true && !delivery.prState
+  // A merged contributor-fork PR is refused by the same-repository helper
+  // ('merged-pr-not-matching'); the forge still reports it MERGED, so the
+  // captured head's ancestry in the fetched default branch proves delivery.
+  const noPrToProve = !proofUrl && delivery?.readable === true && !delivery.prState;
+  // Only the task's own recorded PR identity qualifies: a PR inferred from a
+  // branch-name probe could be unrelated, so ancestry alone must not settle it.
+  const mergedForkPr = !!originalPrUrl && delivery?.prState === 'MERGED' && forgeRefusal === 'merged-pr-not-matching';
+  const unpublishedContained = !integrated && capturedHead && (noPrToProve || mergedForkPr)
     && observed.remoteBranchPresent === false && await containedInDefaultBranch(sourceWorkspace, capturedHead);
   if (!staysOpen && integrated && observed.remoteBranchPresent !== false) {
     const reason = observed.remoteBranchPresent === true ? 'remote-branch-present' : 'remote-branch-unverified';

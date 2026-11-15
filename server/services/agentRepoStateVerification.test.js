@@ -1050,6 +1050,31 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
+  it.each(['contained', 'not-contained', 'other-refusal', 'remote-branch', 'wrong-capture', 'uncaptured'])('settles a merged contributor-fork PR from captured-head ancestry only when proven: %s', async scenario => {
+    const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
+      repoPath: scenario === 'wrong-capture' ? '/other-instance' : '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
+      incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+    const state = { ...agentState({ completedCheckouts: scenario === 'uncaptured' ? [] : [captured], repoStateVerification: { status: 'pending' },
+      reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' } }),
+    id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT, result: { success: false, cleanupPending: true } };
+    readMergedPrDelivery.mockRejectedValue(new Error(scenario === 'other-refusal' ? 'merged-pr-forge-unavailable' : 'merged-pr-not-matching'));
+    if (scenario === 'remote-branch') listRemoteHeads.mockResolvedValue(new Map([[BRANCH, 'f'.repeat(40)]]));
+    execGit.mockImplementation(async args => ({ exitCode: args[0] === 'merge-base' && args[2] === HEAD
+      && args[3] === 'refs/remotes/origin/main' && scenario !== 'not-contained' ? 0 : 1, stdout: '' }));
+    const result = await run({ success: false, agentState: state });
+    if (scenario === 'contained') {
+      expect(result).toMatchObject({ verified: true, skipReason: null });
+      expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({
+        status: 'verified', reason: 'already-absent-integrated', committedIntegrationVerified: true }));
+      expect(updateTask).toHaveBeenLastCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'user', expect.any(Object));
+    } else {
+      expect(result.verified).toBe(false);
+      expect(updateTask).not.toHaveBeenCalled();
+    }
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it.each(['wrong-head', 'foreign-repository', 'uncaptured', 'ambiguous', 'open', 'unavailable'])('retains an unrequested-PR handoff when captured delivery is %s', async failure => {
     const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
       repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
