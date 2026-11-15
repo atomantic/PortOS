@@ -12,22 +12,14 @@
  * never rides in persisted queue params.
  */
 
-import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
-import { randomUUID } from 'crypto';
-import { readFile, writeFile, unlink } from 'fs/promises';
-import { basename, join, relative, resolve, isAbsolute } from 'path';
+import { readFile } from 'fs/promises';
+import { basename } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { withAbortTimeout } from '../../lib/abortTimeout.js';
-import { anyAbortSignal } from '../../lib/requestAbort.js';
-import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, buildHiggsfieldVideoRequest, getHiggsfieldVideoModel } from '../../lib/higgsfieldVideoModels.js';
-import { probeVideoGeometry } from '../../lib/ffmpeg.js';
-import { attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
 import { videoGenEvents } from './events.js';
-import { discardUnpublishedVideo, finalizeGeneratedVideo, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
-import { maintenance } from '../../lib/maintenanceAdmission.js';
-import { mutateVideoHistory } from './history.js';
+import { emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
+import { createHostedVideoJobRunner } from './hostedJobRunner.js';
 import { getSettings } from '../settings.js';
 import { autoDeleteHostedCopy } from '../hostedRenderRemoteDelete.js';
 import { frameDataUriAtAspect } from './falFrameAspect.js';
@@ -43,38 +35,8 @@ const HIGGSFIELD_RENDER_TIMEOUT_MS = (() => {
   return Number.isFinite(n) && n > 0 ? n : 30 * 60 * 1000;
 })();
 
-const jobs = new Map();
-const activeRequests = new Map();
-const activeJobs = new Map();
-
-export const getActiveJob = () => {
-  const entries = [...activeJobs.values()];
-  return entries.length ? entries[entries.length - 1] : null;
-};
-export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
-
-const preparations = createMediaJobPreparation();
-
-export const cancel = (jobId) => {
-  if (!jobId) {
-    throw new Error('videoGen/higgsfield.cancel requires a jobId — use cancelAll() to terminate every in-flight render');
-  }
-  const pending = preparations.cancel(jobId);
-  if (pending) return pending;
-  const entry = activeRequests.get(jobId);
-  if (!entry) return false;
-  entry.aborted = true;
-  entry.controller.abort();
-  void cancelHiggsfieldRequest(entry);
-  return true;
-};
-
-export const cancelAll = () => {
-  const ids = [...preparations.ids(), ...activeRequests.keys()];
-  if (ids.length === 0) return false;
-  for (const id of ids) cancel(id);
-  return true;
-};
+const runner = createHostedVideoJobRunner({ mode: 'higgsfield', provider: 'Higgsfield', cancelRemote: cancelHiggsfieldRequest });
+export const { getActiveJob, attachSseClient, cancel, cancelAll } = runner;
 
 /**
  * Dry-run the request with placeholder media before anything is read or paid
@@ -106,12 +68,12 @@ export function higgsfieldVideoSentPrompt({
   return { planned, record };
 }
 
-export const generateVideo = (params) => preparations.run(params, generateVideoPrepared);
+export const generateVideo = (params) => runner.prepare(params, generateVideoPrepared);
 
 async function generateVideoPrepared({
   apiKey: providedApiKey, settings, modelId: requestedModelId,
   prompt = '', negativePrompt, duration, aspectRatio, width, height, resolution = null, generateAudio = false, seed = null,
-  sourceImagePath = null, lastImagePath = null, referenceImagePaths = [], audioFilePath = null, jobId: providedJobId = null,
+  sourceImagePath = null, lastImagePath = null, referenceImagePaths = [], audioFilePath = null, jobId,
   uploadedTempPath = null, uploadedTempPaths = [], frameAspect = null, promptAdditions = [],
 }) {
   await ensureDir(PATHS.videos);
@@ -133,9 +95,7 @@ async function generateVideoPrepared({
     ...spec, promptAdditions, hasAudio: !!audioFilePath, hasImage: !!sourceImagePath, hasEndImage: !!lastImagePath, referenceCount: referenceImagePaths.length,
   });
 
-  const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.mp4`;
-  const outputPath = join(PATHS.videos, filename);
   const meta = {
     id: jobId,
     prompt: (prompt || '').trim(),
@@ -153,28 +113,14 @@ async function generateVideoPrepared({
     mode: sourceImagePath ? 'image' : 'text',
     ...(referenceImagePaths.length ? { clipReferenceFiles: referenceImagePaths.map((path) => basename(path)) } : {}),
   };
-  const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
-  jobs.set(jobId, job);
-
-  console.log(`🎬 Generating video [${jobId.slice(0, 8)}] Higgsfield (${planned.endpointId}${meta.resolution ? ` ${meta.resolution}` : ''} ${planned.seconds}s)`);
-  videoGenEvents.emit('started', { generationId: jobId, totalSteps: 1, ...meta });
-  activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0 });
-  emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Submitting to Higgsfield…');
-
-  runHiggsfieldVideo(job, jobId, {
-    apiKey, spec, sourceImagePath, lastImagePath, referenceImagePaths, audioFilePath, outputPath, filename, meta,
-    uploadedTempPath, uploadedTempPaths, frameAspect,
-  }).catch((err) => {
-    console.error(`❌ Higgsfield video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
+  return runner.start({
+    meta, renderStartedAtMs, logDetail: `${planned.endpointId}${meta.resolution ? ` ${meta.resolution}` : ''} ${planned.seconds}s`,
+    run: (job) => runHiggsfieldVideo(job, jobId, {
+      apiKey, spec, sourceImagePath, lastImagePath, referenceImagePaths, audioFilePath, meta,
+      uploadedTempPath, uploadedTempPaths, frameAspect,
+    }),
   });
-
-  return { jobId, filename, path: `/data/videos/${filename}`, generationId: jobId, mode: 'higgsfield', status: 'running' };
 }
-
-const isStagedUpload = (path) => {
-  const rel = relative(PATHS.uploads, resolve(path));
-  return !!rel && !rel.startsWith('..') && !isAbsolute(rel);
-};
 
 // A frame is cropped to the project's aspect (Music Video) before upload, like the fal lane.
 async function uploadFrame({ apiKey, path, aspect, signal }) {
@@ -188,31 +134,12 @@ async function uploadFrame({ apiKey, path, aspect, signal }) {
 }
 
 async function runHiggsfieldVideo(job, jobId, {
-  apiKey, spec, sourceImagePath, lastImagePath, referenceImagePaths, audioFilePath, outputPath, filename, meta,
+  apiKey, spec, sourceImagePath, lastImagePath, referenceImagePaths, audioFilePath, meta,
   uploadedTempPath = null, uploadedTempPaths = [], frameAspect = null,
 }) {
-  const entry = createHiggsfieldRequestEntry(apiKey);
-  entry.aborted = preparations.take(jobId);
-  const publication = {};
-  let inputCleanup;
-  const settleInputs = () => (inputCleanup ??= (async () => {
-    const inputs = new Set([uploadedTempPath, ...(Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [])]);
-    for (const path of inputs) {
-      if (!path || !isStagedUpload(path)) continue;
-      await unlink(path).catch(error => {
-        if (error.code === 'ENOENT') return;
-        maintenance.markCurrentUnsettled();
-        maintenance.markResourceUnsettled('media', jobId);
-        console.error(`❌ Higgsfield staged-input cleanup failed [${jobId.slice(0, 8)}]: ${error.message}`);
-      });
-    }
-  })());
-  const finishFailure = async (reason) => {
-    await settleInputs();
-    if (entry.aborted) return finalizeCanceled(job, jobId);
-    return finalizeJobFailure(job, jobId, null, reason, { force: true });
-  };
-  activeRequests.set(jobId, entry);
+  const { entry, finishFailure, publish, fail } = runner.begin(job, createHiggsfieldRequestEntry(apiKey), {
+    inputs: [uploadedTempPath, ...(Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [])],
+  });
   const deadline = Date.now() + HIGGSFIELD_RENDER_TIMEOUT_MS;
   try {
     const signal = entry.controller.signal;
@@ -245,45 +172,10 @@ async function runHiggsfieldVideo(job, jobId, {
     if (polled.outcome === 'failed') return finishFailure(polled.reason);
 
     emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.FETCH, 'Downloading video…');
-    const buffer = await withAbortTimeout(HIGGSFIELD_DOWNLOAD_TIMEOUT_MS, async (timeoutSignal) => {
-      const downloadSignal = anyAbortSignal([timeoutSignal, signal]);
-      const response = await fetchWithTimeout(polled.outputUrl, { signal: downloadSignal }, HIGGSFIELD_DOWNLOAD_TIMEOUT_MS);
-      if (!response.ok) throw new Error(`Higgsfield video download failed: HTTP ${response.status}`);
-      return Buffer.from(await response.arrayBuffer());
-    });
+    const buffer = await runner.download(entry, polled.outputUrl, { timeoutMs: HIGGSFIELD_DOWNLOAD_TIMEOUT_MS, label: 'Higgsfield video' });
     if (entry.aborted) return finishFailure('Canceled');
-    await writeFile(outputPath, buffer);
-    if (entry.aborted) {
-      await unlink(outputPath);
-      return finishFailure('Canceled');
-    }
-    const measured = (await probeVideoGeometry(outputPath)) || {};
-    await settleInputs();
-    if (entry.aborted) {
-      await unlink(outputPath);
-      return finishFailure('Canceled');
-    }
-    activeRequests.delete(jobId);
-    activeJobs.delete(jobId);
-    await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, ...measured }, actualSeed: request.body.seed ?? null, mutateHistory: mutateVideoHistory, publication });
-    closeJobAfterDelay(jobs, jobId);
-    void autoDeleteHostedCopy('higgsfield', 'video', jobId, { apiKey });
+    if (await publish({ buffer, meta, actualSeed: request.body.seed ?? null })) void autoDeleteHostedCopy('higgsfield', 'video', jobId, { apiKey });
   } catch (err) {
-    if (!publication.committed) await discardUnpublishedVideo({ jobId, outputPath }).catch(error => {
-      maintenance.markCurrentUnsettled();
-      maintenance.markResourceUnsettled('media', jobId);
-      console.error(`❌ Higgsfield video publication cleanup failed [${jobId.slice(0, 8)}]: ${error.message}`);
-    });
-    await cancelHiggsfieldRequest(entry);
-    return finishFailure(`Higgsfield video generation failed: ${err?.message || err}`);
+    return fail(err);
   }
 }
-
-const finalizeJobFailure = createJobFailureFinalizer({
-  jobs,
-  activeJobs,
-  activeSlots: activeRequests,
-  label: 'Higgsfield video generation',
-  events: videoGenEvents,
-});
-const finalizeCanceled = finalizeJobFailure.canceled;
