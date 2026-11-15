@@ -147,7 +147,7 @@ describe('deferred delivery receipt result', () => {
         completionTaskDispatch: { taskId: task.id, taskType: 'internal', expected: [
           ['claimedBy', 'fixture-local'], ['claimedAt', start], ['lastSpawnedAt', start], ['totalSpawnCount', 1],
         ] }, completedCheckouts: [{ version: 1, agentId: agent.id, startedAt: start, capturedAt: start,
-          repoPath: '/repo', path: '/tree', branch, head, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } }] });
+          repoPath: '/repo', path: '/tree', branch, head }] });
       const expected = structuredClone(agent);
       const proof = { version: 1, branches: [{ branch, head, prUrl: 'https://github.com/a/b/pull/42' }] };
       if (scenario === 'new-dispatch') task.metadata.totalSpawnCount = 2;
@@ -300,7 +300,7 @@ describe('cosAgentLifecycle', () => {
   it.each([true, false])('aggregates every branch outcome independently of update order (%s)', async reversed => {
     const id = 'agent-swarm-outcome';
     mockCosState.state.agents[id] = { id, status: 'completed', metadata: {} };
-    const rows = [{ branch: 'claim/blocked', path: '/example/blocked', status: 'blocked', reason: 'checkout-incarnation-changed' },
+    const rows = [{ branch: 'claim/blocked', path: '/example/blocked', status: 'blocked', reason: 'checkout-changed' },
       { branch: 'claim/verified', path: '/example/verified', status: 'verified', reason: 'retirement-receipt-verified' }];
     for (const row of reversed ? rows.reverse() : rows) await recordCleanupOutcome(id, row);
     expect(mockCosState.state.agents[id].metadata.cleanupOutcome).toMatchObject({ status: 'blocked', unresolved: 1, total: 2 });
@@ -809,10 +809,9 @@ describe('completeAgent idempotence (#3384)', () => {
     'settles a handed-off cleanup run\'s absent captured checkout only after its task moved on: %s', async scenario => {
       const id = 'handed-off', startedAt = '2026-01-01T00:00:00Z', completedAt = '2026-01-01T00:01:00Z';
       const capture = { version: 1, agentId: id, startedAt, capturedAt: completedAt, head: 'a'.repeat(40),
-        repoPath: '/synthetic/repo', branch: 'feature/retired', path: '/synthetic/old-path',
-        incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+        repoPath: '/synthetic/repo', branch: 'feature/retired', path: '/synthetic/old-path' };
       const stages = Object.fromEntries(['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report'].map(key => [key, { status: 'done' }]));
-      stages.worktree = { status: 'held', reason: 'checkout-incarnation-changed' };
+      stages.worktree = { status: 'held', reason: 'checkout-changed' };
       const record = { id, taskId: 'same-task', status: 'completed', startedAt, completedAt,
         result: { success: false, executionSuccess: true, cleanupPending: scenario !== 'not-cleanup', deliveryRecoveryOwned: true,
           taskOutcome: { status: 'incomplete', reason: 'retirement pending', recovery: { mode: 'cleanup' } } },

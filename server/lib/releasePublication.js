@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { checkoutSeedSchema } from './checkoutSeed.js';
 
 const sha = z.string().regex(/^[a-f0-9]{40}$/);
 export const isHistoricalReleaseReceipt = receipt => receipt?.status === 'verified'
@@ -10,9 +9,9 @@ const releaseOwner = z.object({ agentId: z.string().min(1), taskId: z.string().m
 export const releaseCandidateTransferSchema = z.object({
   version: z.literal(1), source: releaseOwner, successor: releaseOwner, origin: releaseOwner,
   transferredAt: z.string().datetime(), branch: z.string().min(1), path: z.string().min(1),
-  lineage: z.object({ kind: z.enum(['seeded', 'contemporaneous-receipt']), seed: checkoutSeedSchema.optional(),
-    receipt: z.object({ repoPath: z.string().min(1), branch: z.string().min(1), path: z.string().min(1),
-      head: sha, incarnation: checkoutSeedSchema.shape.incarnation }) }),
+  // Historical transfers also carry seed/incarnation evidence; it is ignored on read.
+  lineage: z.object({ kind: z.enum(['seeded', 'contemporaneous-receipt']),
+    receipt: z.object({ repoPath: z.string().min(1), branch: z.string().min(1), path: z.string().min(1), head: sha }) }),
   candidate: z.object({ cutoff: sha, pin: sha, releaseBase: sha, previousCommit: sha,
     previousTag: z.string().min(1), version: z.string().regex(/^\d+\.\d+\.\d+$/), tree: sha }),
   review: z.object({ legacyPublished: z.boolean(), files: z.array(z.object({ name: z.string().min(1),

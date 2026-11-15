@@ -14,7 +14,6 @@ import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 
 import { existsSync } from 'fs';
 import { realpath, rm } from 'node:fs/promises';
-import { isDeepStrictEqual } from 'node:util';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { join, resolve } from 'path';
 import { emitLog } from './cosEvents.js';
@@ -300,8 +299,8 @@ async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBran
         const reason = await owner();
         if (reason) return reason;
         if (!holder || holder.branch !== `refs/heads/${branch}` || holder.head !== capture.head) return 'checkout-changed';
-        const identity = await readCompletedCheckoutIdentity({ repoPath: sourceWorkspace, branch, path: capture.path, head: capture.head, worktrees: trees }).catch(() => null);
-        if (!identity || !isDeepStrictEqual(identity.incarnation, capture.incarnation)) return 'checkout-changed';
+        const current = await readCompletedCheckoutIdentity({ repoPath: sourceWorkspace, branch, path: capture.path, head: capture.head, worktrees: trees }).catch(() => null);
+        if (!current) return 'checkout-changed';
         if (!merged) {
           const base = await git.getDefaultBranch(sourceWorkspace, { strict: true, allowRemote: false }).catch(() => null);
           const [status, contained] = await Promise.all([

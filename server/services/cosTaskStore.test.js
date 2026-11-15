@@ -3283,8 +3283,7 @@ describe('shared development work admission', () => {
           ['claimedBy', 'fixture-local'], ['claimedAt', start], ['lastSpawnedAt', start], ['totalSpawnCount', 1],
         ] },
         completedCheckouts: branches.map((branch, index) => ({ version: 1, agentId: 'agent-original', startedAt: start,
-          capturedAt: '2026-01-01T00:01:00.000Z', repoPath: '/repo', path: `/tree/${index}`, branch, head: heads[index],
-          incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } })),
+          capturedAt: '2026-01-01T00:01:00.000Z', repoPath: '/repo', path: `/tree/${index}`, branch, head: heads[index] })),
         swarmCleanupDelivery: { version: 1, continuationIssued: true, branches: branches.map((branch, index) => ({ branch, head: heads[index], prUrl: `https://github.com/a/b/pull/${index + 1}` })) },
       } };
     await seed('internal', [source]);

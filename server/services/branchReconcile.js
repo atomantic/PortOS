@@ -1130,7 +1130,6 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
       ...(entry.observedAt && { observedAt: entry.observedAt }),
       ...(entry.createdAt && { createdAt: entry.createdAt }),
       ...(entry.checkoutIdentity && { checkoutIdentity: entry.checkoutIdentity }),
-      ...(entry.checkoutIncarnation && { checkoutIncarnation: entry.checkoutIncarnation }),
       ...(entry.preservationReceipt && { preservationReceipt: entry.preservationReceipt }),
       ...(entry.preservationEvidence && { preservationEvidence: entry.preservationEvidence }),
       ...(entry.checkoutMissing && { checkoutMissing: true }),
