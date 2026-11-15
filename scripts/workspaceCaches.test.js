@@ -23,7 +23,7 @@ describe('checkout-owned server Vite caches with shared dependencies', () => {
   });
 
   for (const [configName, cacheName] of [['vitest.config.js', 'vitest'], ['vitest.config.db.js', 'vitest-db']]) {
-    it(`server ${configName} keeps concurrent publications separate and reuses its owned cache`, async ({ signal, onTestFailed }) => {
+    it.concurrent(`server ${configName} keeps concurrent publications separate and reuses its owned cache`, async ({ signal, onTestFailed }) => {
       const children = new Map();
       onTestFailed(({ task }) => {
         const evidence = `Cache children: ${JSON.stringify([...children.values()])}`;
