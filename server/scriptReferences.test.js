@@ -20,10 +20,14 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const TOP_LEVEL_SCRIPT = /^scripts\/[^/]+$/;
 const VITEST_COLLECTED = /\.test\.js$/;
 const HISTORICAL = /^(?:\.changelog\/|docs\/(?:plans|decisions|research)\/)/;
-const TOKEN = /[\w.-]+/g;
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const tokensOf = (text) => new Set(
-  [...text.matchAll(TOKEN)].map((match) => match[0].replace(/\.+$/, '')),
+// A whole `[\w.-]+` token equal to a key once its trailing dots are dropped.
+// One scan for the known keys instead of tokenizing ~47 MB into per-file sets
+// keeps this always-run guard inside its time budget.
+const keyPattern = (keys) => new RegExp(
+  `(?<![\\w.-])(?:${[...keys].sort((a, b) => b.length - a.length).map(escapeRegExp).join('|')})(?=\\.*(?:[^\\w.-]|$))`,
+  'g',
 );
 
 /** Map each candidate's referencing key (file name, plus stem for Python) to its owner path. */
@@ -40,13 +44,16 @@ function referenceKeys(candidates) {
 /** Candidate scripts that no other live tracked file references. */
 export function unreferencedScripts(candidates, corpus) {
   const keys = referenceKeys(candidates);
+  const pattern = keyPattern(keys.keys());
   const referenced = new Set();
   for (const path of corpus) {
     // Tracked symlinks (.claude/commands/do/*) point into the lib/slashdo submodule; a symlink holds no text of its own.
     const full = join(REPO_ROOT, path);
     if (!lstatSync(full).isFile()) continue;
-    const text = readFileSync(full, 'utf8');
-    for (const token of tokensOf(text)) {
+    const bytes = readFileSync(full);
+    // A binary asset (git's NUL-in-the-first-8000-bytes heuristic) holds no pointer to a script.
+    if (bytes.subarray(0, 8000).includes(0)) continue;
+    for (const [token] of bytes.toString('utf8').matchAll(pattern)) {
       const owner = keys.get(token);
       if (owner && owner !== path) referenced.add(owner);
     }
@@ -62,5 +69,5 @@ describe('top-level scripts/ reference guard (#16089)', () => {
     expect(candidates.length).toBeGreaterThan(100);
     const corpus = files.filter((path) => !HISTORICAL.test(path));
     expect(unreferencedScripts(candidates, corpus), 'document in docs/SCRIPTS.md or delete').toEqual([]);
-  }, 60_000); // reads every tracked file (~47 MB) once; slower than the default 5 s on a loaded machine
+  }, 60_000); // reads every tracked file once; slower than the default 5 s on a loaded machine
 });
