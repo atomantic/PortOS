@@ -71,7 +71,7 @@ describe('fableLoomSceneVideoHook', () => {
   it('ignores image jobs and videos without a complete destination tag', async () => {
     mediaJobEvents.emit('completed', { kind: 'image', id: 'image-1', params: { fableLoom: tag() }, result: { filename: 'image-1.png' } });
     mediaJobEvents.emit('completed', completedVideoJob({ params: { fableLoom: { loomId: 'loom-1' } } }));
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await hook.__testing.settled();
     expect(attachNodeVideo).not.toHaveBeenCalled();
   });
 });
