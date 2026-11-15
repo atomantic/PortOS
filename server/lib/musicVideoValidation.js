@@ -999,8 +999,6 @@ const musicVideoWipeSchema = z.object({
 // see musicVideoLayers.js. Only a composed render honors a non-footage layer.
 
 const sceneLayerFields = {
-  // #16136: approval to upgrade the selected draft clip; derived-valid (see musicVideoFinalApproval.js).
-  finalApproval: z.object({ takeId: z.string().max(128), revision: z.string().max(32) }).nullable().optional(),
   // The references (visual spec ids) sent with this shot's frame renders; absent or null = the automatic set.
   // Priority-ordered; each render sends as many as its renderer takes (musicVideoReferenceCapacity).
   frameReferenceIds: z.array(z.string().min(1).max(128)).max(IMAGE_REFERENCE_REQUEST_LIMIT).nullable().optional(),
@@ -2243,6 +2241,8 @@ export const musicVideoSceneLastFailureSchema = z.object({
 // patch alone (the paired value may live on the existing record), so the merged
 // range is validated in projectsLogic.applySceneUpdate instead.
 export const musicVideoSceneUpdateSchema = z.object({
+  // #16136: approval to upgrade the selected draft clip; derived-valid (see musicVideoFinalApproval.js).
+  finalApproval: z.object({ takeId: z.string().max(128), revision: z.string().max(32) }).nullable().optional(),
   label: z.string().max(120).optional(),
   sectionLabel: z.string().max(120).nullable().optional(),
   prompt: z.string().max(8000).optional(),
