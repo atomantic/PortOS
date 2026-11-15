@@ -757,8 +757,6 @@ describe('openSnapshotStream', () => {
   });
 });
 
-
-
 describe('dumpPostgres status classification', () => {
   let dumpPostgres;
   beforeEach(async () => {
@@ -1075,7 +1073,6 @@ describe('dumpPostgres status classification', () => {
   });
 });
 
-
 describe('runBackup pg status propagation', () => {
   let _backup;
   beforeEach(async () => {
@@ -1192,7 +1189,6 @@ describe('generateManifest', () => {
     expect(manifest.fileCount).toBe(1);
   });
 });
-
 
 // restoreSnapshot's service-side subdirFilter guard (issue #1822). These reject
 // BEFORE runRsync/spawn is reached, so no fake child process is needed — an
@@ -1498,8 +1494,6 @@ describe('getState and saveState', () => {
     expect(await readStateFile()).toEqual(after);
   });
 });
-
-
 
 it('cannot re-enable Tailcat authority/capability files in backup filters', () => {
   const paths = ['/tailcat-serve.json', '/tailcat-serve.json.*.tmp', '/tailcat-serve.addr'];
