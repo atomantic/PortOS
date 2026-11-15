@@ -205,9 +205,9 @@ async function inFlightIssueNumbers(repoPath, forge = 'github', env, ignoreTaskI
   try { changes = JSON.parse(prRes.stdout); } catch { changes = null; }
   const changeNumbers = forge === 'gitlab'
     ? collectGitlabMrIssueNumbers(changes)
-    : await collectGithubPrIssueNumbers(githubPrRowsFromPages(changes), async number => {
+    : await collectGithubPrIssueNumbers(githubPrRowsFromPages(changes), async path => {
       const res = await runCli('gh', await withGithubHost([
-        'api', '--paginate', '--slurp', `repos/{owner}/{repo}/pulls/${number}/commits?per_page=100`
+        'api', '--paginate', '--slurp', `repos/{owner}/{repo}/${path}`
       ], repoPath), repoPath, env);
       if (res.code !== 0) return null;
       try { return JSON.parse(res.stdout); } catch { return null; }
