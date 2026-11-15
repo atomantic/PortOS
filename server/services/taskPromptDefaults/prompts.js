@@ -2823,7 +2823,7 @@ Repository: {repoPath}
 ## Phase 1 — Find the Next Task
 
 1. Read PLAN.md from {repoPath}
-2. Skim recent \`.changelog/\` entries and \`git log\` (last 50 commits) to understand what has already shipped — do NOT re-implement completed features
+2. Skim \`git log\` (last 50 commits) and recent releases (\`gh release list\`, then \`gh release view <tag>\`) to understand what has already shipped — do NOT re-implement completed features
 3. If the **Item Constraint** block above named a specific \`[plan-id]\`, find the matching \`- [ ]\` line and use that — do NOT pick a different one, do NOT brainstorm. If the line is missing, has been checked, or carries \`<!-- NEEDS_INPUT -->\`, exit cleanly without commits or PR.
 4. Otherwise, if PLAN.md does not exist, is empty, or has no unchecked items (\`- [ ]\`), go to **Phase 4 — Brainstorm**.
 5. Otherwise, find the first unchecked item (\`- [ ]\`) that does NOT have a \`<!-- NEEDS_INPUT -->\` annotation.
@@ -2879,13 +2879,13 @@ When PLAN.md is missing, empty, or fully completed, brainstorm and implement a n
      inventing a product direction.
    - If PRD.md and GOALS.md conflict, follow the PRD's concrete requirements
      and success criteria, and name the tension in your commit message.
-2. Skim recent \`.changelog/\` entries and the last 50 \`git log\` entries to avoid re-implementing completed features
+2. Skim the last 50 \`git log\` entries and recent releases (\`gh release list\`, \`gh release view <tag>\`) to avoid re-implementing completed features
 3. Read REJECTED.md from {repoPath} (if it exists) to understand previously rejected ideas — do NOT re-propose an idea matching a rejected entry
 4. Check the repo's recently closed-unmerged PRs (\`gh pr list --state closed --search "is:unmerged" --limit 20\`, or the forge's equivalent) — a brainstormed feature whose PR the user closed WITHOUT merging was rejected; treat those ideas as rejected too
 5. Review the codebase structure, recent git log, and any README or docs to understand the app
 6. Identify ONE small, high-impact feature that:
    - Aligns with PRD.md requirements and success criteria when available; otherwise with GOALS.md or the documentation gathered in step 1
-   - Is NOT already shipped per recent \`.changelog/\` entries or \`git log\` (avoid re-implementing shipped features)
+   - Is NOT already shipped per recent releases (\`gh release view\`) or \`git log\` (avoid re-implementing shipped features)
    - Does NOT match a REJECTED.md entry or a closed-unmerged automation PR (rejected ideas stay rejected)
    - Saves user time, improves UX, or makes the app more useful
    - Is self-contained and completable in one session
@@ -2927,7 +2927,7 @@ Repository: {repoPath}
    could not be collected, or when you need a full issue body. De-duplicate
    against existing items by the feature need and approach; the tracker block
    defines how to identify and record each item. Then skim
-   the last 50 \`git log\` entries plus recent \`.changelog/\` files: an idea
+   the last 50 \`git log\` entries plus recent releases (\`gh release list\` / \`gh release view\`): an idea
    that is already an open tracker item, in an open PR, or recently shipped work
    is NOT a candidate.
 
@@ -4209,7 +4209,7 @@ Repository: {repoPath}
 
 1. Read GOALS.md (if exists) for project goals and priorities
 2. Read PLAN.md (if exists) to understand already-planned work — do NOT re-suggest items already planned
-3. Skim recent \`.changelog/\` entries (or equivalent) and \`git log\` (last 50 commits) to understand completed work — do NOT re-suggest items already shipped
+3. Skim recent release notes (\`gh release list\` / \`gh release view\`, or the repo's equivalent) and \`git log\` (last 50 commits) to understand completed work — do NOT re-suggest items already shipped
 4. Read REJECTED.md (if exists) to understand previously rejected recommendations — do NOT re-suggest rejected items
 5. Read AGENTS.md (or CLAUDE.md) for project conventions and architecture
 6. Review the codebase structure, key files, recent git log (last 20 commits)
@@ -4263,7 +4263,7 @@ Repository: {repoPath}
 1. Read REVIEW.md from {repoPath} — this contains the recommendations from Stage 1
 2. Read GOALS.md (if exists) for alignment context
 3. Read PLAN.md (if exists) for current planned work
-4. Skim recent \`.changelog/\` entries and \`git log\` for completed work
+4. Skim \`git log\` and recent releases (\`gh release view\`) for completed work
 5. Read AGENTS.md (or CLAUDE.md) for project conventions
 
 ## Phase 2 — Triage Each Recommendation
@@ -4441,7 +4441,7 @@ Check for existing release tags that lack a corresponding GitHub Release:
    \`\`\`
 3. Compare every \`vX.Y.Z\` tag with published releases. For each missing release:
    - Report it explicitly as "Unpublished release detected: vX.Y.Z".
-   - Find its changelog body (for example, \`.changelog/vX.Y.Z.md\` or \`.changelog/vX.Y.x.md\`).
+   - Find its changelog body: the release-notes file as of that tag (for example, \`git show vX.Y.Z:.changelog/RELEASE.md\`; check that its heading names vX.Y.Z), or the repo's documented convention.
    - Check whether a newer version exists.
    - When publishing it, pass the complete named heading without its leading # as the GitHub title with --title, not only the version.
    - Publish it with \`gh release create "vX.Y.Z"\`, using \`--notes-file\` or \`--body-file\`; pass \`--latest=false\` when a newer release exists, and \`--latest\` only for the newest version.
@@ -4489,13 +4489,13 @@ Opening the release PR is the middle of the run, not the end. Stay in this sessi
 
 When the canonical release workflow compiles the notes for a new release, the agent in charge of the release MUST choose the release name. Read the complete release range and identify the one or two biggest user-visible wins — especially performance, reliability, accessibility, or bandwidth improvements — then choose a short, memorable, fun name that is accurate to those wins (for example, \`Performant Dragon\`). The name is a theme, not a new product claim: do not invent benefits, use private data, repeat implementation jargon, or settle for a generic label such as \`Update\`.
 
-The versioned changelog's first heading MUST be exactly:
+The release notes' first heading (in \`.changelog/RELEASE.md\` for PortOS, or the repo's documented release-notes file) MUST be exactly:
 
 \`# Release vX.Y.Z - <Fun Name>\`
 
 Use the ASCII \` - \` separator, keep the name on one line, and keep the same name in the release notes and GitHub release title. Do not leave the bare \`# Release vX.Y.Z\` heading or put the name only in a later section; the GitHub Actions workflow extracts this heading to title the release. If correcting an already-published release, update the changelog body and GitHub release title together.
 
-The canonical workflow owns readiness and should count both the current changelog and any uncollected per-branch fragments (for example, \`.changelog/next/\`) across the assembled notes. If the changelog README documents a preview/collect command, use only that documented command — Do NOT guess a command name. Count only changes included in the frozen candidate. If fewer than two substantive entries remain, stop without creating a release PR.
+The canonical workflow owns readiness and should count the substantive entries across the assembled notes, including any uncollected per-branch fragments the repo documents. If the changelog README documents a preview/collect command, use only that documented command — Do NOT guess a command name. Count only changes included in the frozen candidate. If fewer than two substantive entries remain, stop without creating a release PR.
 
 If the release docs identify a separate database-backed test suite, the canonical workflow must first use the documented test-database provisioning/setup command and then run that suite against an isolated test database. The workflow must never substitute a production database; if the isolated setup cannot reach its documented service, that is an environmental blocker — report the command and its error and stop.
 

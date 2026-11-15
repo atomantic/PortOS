@@ -11,7 +11,7 @@
  * point-in-time directories are deliberately out of scope: the index presents
  * them as examples and per-directory READMEs rather than a complete list.
  */
-import { readdirSync, readFileSync } from 'fs';
+import { readdirSync, readFileSync, statSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { describe, expect, it } from 'vitest';
@@ -31,6 +31,26 @@ const LIVING_DOCS = [
 
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+const MAX_DOC_BYTES = 40 * 1024;
+const RATCHET_SLACK_BYTES = 2 * 1024;
+
+// Grandfathered byte ceilings for living docs that currently exceed 40 KB.
+// Each ceiling must stay within 2 KB of the file's actual size so shrinking
+// a doc forces its entry down or out.
+const SIZE_RATCHET_CEILINGS = {
+  'STORAGE.md': 233548,
+  'API.md': 111397,
+  'BACKUP.md': 103721,
+  'GITHUB_ACTIONS.md': 98951,
+  'features/eidoverse.md': 95026,
+  'HTML_COMPOSITIONS.md': 67233,
+  'features/beeper.md': 59578,
+  'TROUBLESHOOTING.md': 51356,
+  'FEDERATED_MEDIA_PROVIDERS.md': 45625,
+  'QUOTA-BURN.md': 44909,
+  'features/product-surfaces.md': 44547,
+};
+
 describe('docs/README.md index coverage', () => {
   it('discovers the living docs it guards', () => {
     expect(LIVING_DOCS).toContain('JEV_SETUP.md');
@@ -40,5 +60,29 @@ describe('docs/README.md index coverage', () => {
   it.each(LIVING_DOCS)('links %s by its relative path', (doc) => {
     const link = new RegExp(`\\]\\((\\./)?${escapeRegExp(doc)}(#[^)]*)?\\)`);
     expect(INDEX, `docs/README.md must link ./${doc}`).toMatch(link);
+  });
+});
+
+describe('living doc size ratchet', () => {
+  it('only lists existing living docs above 40 KB', () => {
+    for (const [doc, ceiling] of Object.entries(SIZE_RATCHET_CEILINGS)) {
+      expect(LIVING_DOCS, `${doc} is not a living doc`).toContain(doc);
+      expect(ceiling, `${doc} ceiling should be > ${MAX_DOC_BYTES}`).toBeGreaterThan(MAX_DOC_BYTES);
+    }
+  });
+
+  it.each(LIVING_DOCS)('keeps %s within its byte ceiling', (doc) => {
+    const size = statSync(join(DOCS_DIR, doc)).size;
+    const ceiling = SIZE_RATCHET_CEILINGS[doc] ?? MAX_DOC_BYTES;
+    expect(
+      size,
+      `${doc} (${size} B) exceeds ceiling (${ceiling} B); split by topic instead of appending`
+    ).toBeLessThanOrEqual(ceiling);
+    if (doc in SIZE_RATCHET_CEILINGS) {
+      expect(
+        ceiling - size,
+        `${doc} shrank to ${size} B; lower or remove its SIZE_RATCHET_CEILINGS entry (${ceiling} B)`
+      ).toBeLessThanOrEqual(RATCHET_SLACK_BYTES);
+    }
   });
 });

@@ -6,6 +6,8 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 
 ## Guides (living documents)
 
+A living doc describes current behaviour and operator procedure; issue numbers, dated evidence, and "what changed" belong in the commit or PR. Each guide is capped at 40 KB (grandfathered files are ratcheted in `docs/docs-index.test.js`); a doc at its ceiling is split by topic, not appended to.
+
 | Doc | Covers |
 |-----|--------|
 | [SCRIPTS.md](./SCRIPTS.md) | Every `npm run` maintenance command and the operator scripts in `scripts/`, with when to run each |
@@ -17,7 +19,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [WAN22_CUDA.md](./WAN22_CUDA.md) | Wan 2.2 CUDA hash locks, Python/CUDA targets, regeneration, advisory scans and NVIDIA readiness validation |
 | [DEMUCS_RUNTIME.md](./DEMUCS_RUNTIME.md) | Vocal separation hash locks, source-build contract, supported interpreters and validation limits |
 | [RIGGING_RUNTIME.md](./RIGGING_RUNTIME.md) | Blender rigging interpreter artifacts, wheel locks, provisioning and validation limits |
-| [PYTHON_RUNTIME_REFRESH.md](./PYTHON_RUNTIME_REFRESH.md) | Staged Python compatibility updates, Reactor/SoundFile lock evidence and remaining validation |
+| [PYTHON_RUNTIME_REFRESH.md](./PYTHON_RUNTIME_REFRESH.md) | Held-back Python runtime pins and the selective lock-regeneration procedure |
 | [MINIMAX_MUSIC3_CUDA.md](./MINIMAX_MUSIC3_CUDA.md) | MiniMax Music 3 CUDA hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
 | [AUDIOLDM2_CUDA.md](./AUDIOLDM2_CUDA.md) | AudioLDM2 Windows/Linux hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
 | [MUSCRIPTOR_CUDA.md](./MUSCRIPTOR_CUDA.md) | MuScriptor Windows/Linux hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
@@ -135,7 +137,7 @@ Comms & voice: [beeper](./features/beeper.md) · [messages-browser-send](./featu
 
 - **[themes/](./themes/README.md)** — UI theme specs and the theme integration contract.
 - **[examples/](./examples/README.md)** — copy-ready config examples (e.g. Claude Code → Ollama settings).
-- **[`.changelog/README.md`](../.changelog/README.md)** — how `/do:release` synthesizes release notes from the commit log, and the versioned-file format.
+- **[`.changelog/README.md`](../.changelog/README.md)** — how `/do:release` synthesizes the single `RELEASE.md` from the commit log (GitHub Releases is the archive), and its format.
 - **media/** — screenshots and logo used by the root README.
 
 - [Local managed-app visitor broker](features/managed-visitors.md) — opt-in credential provisioning, versioned nonhumanoid scope and host negotiation.

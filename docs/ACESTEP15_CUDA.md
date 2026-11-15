@@ -46,7 +46,7 @@ days ago and restore each target/cutoff header.
 
 Ordinary PyPI packages on the CUDA mirror can lack upload dates and fail
 cooldown validation. The
-[bounded #15988 procedure](./PYTHON_RUNTIME_REFRESH.md#newly-cooled-follow-on-2026-11-13-15988)
+[selective regeneration procedure](./PYTHON_RUNTIME_REFRESH.md#selective-regeneration)
 describes complete-closure constraints and selective generated-block transfer.
 Query OSV for every resolved package, including `MAL-`, using
 [AudioLDM2's audit](./AUDIOLDM2_CUDA.md#regenerating-locks) with the ACE-Step

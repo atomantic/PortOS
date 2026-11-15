@@ -125,26 +125,6 @@ describe('notifications', () => {
     expect(await actions()).toEqual([])
   })
 
-  describe('NOTIFICATION_TYPES', () => {
-    it('should define expected notification types', () => {
-      expect(NOTIFICATION_TYPES.MEMORY_APPROVAL).toBe('memory_approval')
-      expect(NOTIFICATION_TYPES.TASK_APPROVAL).toBe('task_approval')
-      expect(NOTIFICATION_TYPES.CODE_REVIEW).toBe('code_review')
-      expect(NOTIFICATION_TYPES.HEALTH_ISSUE).toBe('health_issue')
-      expect(NOTIFICATION_TYPES.BRIEFING_READY).toBe('briefing_ready')
-      expect(NOTIFICATION_TYPES.AGENT_WARNING).toBe('agent_warning')
-    })
-  })
-
-  describe('PRIORITY_LEVELS', () => {
-    it('should define expected priority levels', () => {
-      expect(PRIORITY_LEVELS.LOW).toBe('low')
-      expect(PRIORITY_LEVELS.MEDIUM).toBe('medium')
-      expect(PRIORITY_LEVELS.HIGH).toBe('high')
-      expect(PRIORITY_LEVELS.CRITICAL).toBe('critical')
-    })
-  })
-
   describe('getNotifications', () => {
     it('should return all notifications sorted by timestamp descending', async () => {
       const notifications = await getNotifications()

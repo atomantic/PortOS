@@ -1366,18 +1366,16 @@ Triggers on push to `release` branch. Steps:
 2. Calls `ci.yml` with `full: true` **only if** step 1 found nothing.
 3. Reads version from `package.json`.
 4. Checks if the git tag already exists (skips release creation if so).
-5. Looks for a changelog file:
-   - First: `.changelog/v{version}.md` (exact match)
-   - Then: `.changelog/v{major}.{minor}.x.md` (pattern match, replaces placeholders)
-   - Fallback: generates changelog from commit messages
+5. Reads `.changelog/RELEASE.md`, failing the step when its heading's version
+   differs from `package.json` or the file exceeds 100 KB (never truncated).
+   Only a missing file falls back to a changelog generated from commit messages.
 6. Creates the GitHub release with tag `v{version}`.
    The first changelog heading should be `# Release v{version} - {Fun Name}`;
    the workflow uses that complete heading without `# ` as the GitHub release
    title, with `Release v{version}` as the backward-compatible fallback for
    older unnamed notes.
-7. If a pattern changelog file (`.changelog/v{major}.{minor}.x.md`) was used,
-   archives it on `main` (renames `.x.md` to the exact version).
-8. An archive advances only `main`; `release` remains pinned to the verified tree.
+7. Nothing is archived afterwards; GitHub Releases and the tags are the archive,
+   and `release` remains pinned to the verified tree.
 
 Capture and resume candidates using [the release procedure](VERSIONING.md#creating-a-release).
 Concurrent development merges do not change the candidate or its CI inputs.

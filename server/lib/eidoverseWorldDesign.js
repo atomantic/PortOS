@@ -11,7 +11,7 @@
 
 import { normalizeEidoverseLabelAliases } from './eidoverseWorldLabels.js';
 import { createHash } from 'node:crypto';
-import { canonicalStringify, deepMerge } from './objects.js';
+import { canonicalStringify, deepMerge, isPlainObject } from './objects.js';
 
 export const EIDOVERSE_WORLD_STATE_SCHEMA_VERSION = 3;
 export const EIDOVERSE_WORLD_DESIGN_VERSION = 3;
@@ -351,7 +351,6 @@ freezeWorldContract(EIDOVERSE_ASSET_RECIPE_V3);
 freezeWorldContract(EIDOVERSE_WORLD_DESIGN_V3);
 freezeWorldContract(EIDOVERSE_WORLD_DESIGNS);
 
-const isObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const clone = (value) => structuredClone(value);
 const equal = (left, right) => canonicalStringify(left) === canonicalStringify(right);
 
@@ -359,7 +358,7 @@ const mergeDesign = (base, patch) => clone(deepMerge(clone(base), clone(patch)))
 
 function diffLeaves(value, baseline) {
   if (equal(value, baseline)) return undefined;
-  if (!isObject(value) || !isObject(baseline)) return clone(value);
+  if (!isPlainObject(value) || !isPlainObject(baseline)) return clone(value);
   const output = {};
   for (const [key, child] of Object.entries(value)) {
     const diff = diffLeaves(child, baseline[key]);
@@ -381,7 +380,7 @@ export function resolveEidoverseDesign(userOverrides = {}, assetResolutions = {}
 }
 
 export function extractEidoverseDesignOverrides(recipe) {
-  if (!isObject(recipe)) return {};
+  if (!isPlainObject(recipe)) return {};
   const candidate = {};
   // `recipe.assets` contains the materialized per-install resolution lock in
   // status responses. It is not a user override merely because the client
@@ -413,7 +412,7 @@ function v1OverridesForV2(legacyRecipe) {
     if (v1Diff[section]) overrides[section] = clone(v1Diff[section]);
   }
   const unsupportedLimits = {};
-  if (isObject(v1Diff.limits)) {
+  if (isPlainObject(v1Diff.limits)) {
     const preservedLimits = {};
     for (const [source, value] of Object.entries(v1Diff.limits)) {
       const v2Limit = EIDOVERSE_WORLD_DESIGN_V2.limits[source];
@@ -429,7 +428,7 @@ function v1OverridesForV2(legacyRecipe) {
   }
   if (v1Diff.terrain) overrides.environment = { terrain: clone(v1Diff.terrain) };
   let unportableAssets;
-  if (isObject(v1Diff.assets)) {
+  if (isPlainObject(v1Diff.assets)) {
     const entries = Object.entries(v1Diff.assets);
     const portable = entries.filter(([, path]) => isValidEidoverseAssetOverridePath(path));
     if (portable.length) {
@@ -454,7 +453,7 @@ function v1OverridesForV2(legacyRecipe) {
 }
 
 export function migrateEidoverseWorldState(raw, { now = new Date().toISOString() } = {}) {
-  if (raw !== null && raw !== undefined && !isObject(raw)) {
+  if (raw !== null && raw !== undefined && !isPlainObject(raw)) {
     return {
       compatible: false,
       state: raw,
@@ -465,7 +464,7 @@ export function migrateEidoverseWorldState(raw, { now = new Date().toISOString()
       },
     };
   }
-  const input = isObject(raw) ? clone(raw) : {};
+  const input = isPlainObject(raw) ? clone(raw) : {};
   const inputSchema = Number(input.schemaVersion ?? 1);
   if (!Number.isInteger(inputSchema) || inputSchema < 1) {
     return {
@@ -553,7 +552,7 @@ export function migrateEidoverseWorldState(raw, { now = new Date().toISOString()
       ? input.human.name.trim()
       : '';
     if (retiredIdentity) {
-      const ownership = isObject(input.ownership) ? input.ownership : {};
+      const ownership = isPlainObject(input.ownership) ? input.ownership : {};
       const existingRetired = Array.isArray(ownership.retired) ? ownership.retired : [];
       input.ownership = {
         ...ownership,
@@ -581,10 +580,10 @@ export function migrateEidoverseWorldState(raw, { now = new Date().toISOString()
   }
 
   if (inputSchema >= 2) {
-    const userOverrides = isObject(input.userOverrides)
+    const userOverrides = isPlainObject(input.userOverrides)
       ? input.userOverrides
       : extractEidoverseDesignOverrides(input.recipe);
-    const assetResolutions = isObject(input.assetResolutions) ? input.assetResolutions : {};
+    const assetResolutions = isPlainObject(input.assetResolutions) ? input.assetResolutions : {};
     const upgradingDesign = Number(input.selectedDesignVersion ?? input.recipe?.version ?? 2) < 3;
     const report = upgradingDesign
       ? { ...(input.migrationReport || {}),
@@ -718,7 +717,7 @@ export function inspectEidoverseAssetResolutionLocks({ existing = {}, overrides 
   const resolutions = {};
   const invalidated = [];
   for (const [slotName, slot] of Object.entries(EIDOVERSE_ASSET_RECIPE_V3.slots)) {
-    const lock = isObject(existing[slotName]) ? existing[slotName] : null;
+    const lock = isPlainObject(existing[slotName]) ? existing[slotName] : null;
     const overridePath = overrides[slotName];
     const hasOverride = isValidEidoverseAssetOverridePath(overridePath);
     const expectedPathIsValid = hasOverride
@@ -763,7 +762,7 @@ export function resolveEidoverseAssetRecipe({
   for (const [slotName, slot] of Object.entries(EIDOVERSE_ASSET_RECIPE_V3.slots)) {
     const recipeFingerprint = contractFingerprint(slot);
     const overridePath = overrides[slotName];
-    const locked = isObject(existing[slotName]) ? existing[slotName] : { path: existing[slotName] };
+    const locked = isPlainObject(existing[slotName]) ? existing[slotName] : { path: existing[slotName] };
     const lockedPath = locked.path;
     const baseResolution = (path, strategy, userOverride, prior = null, bytes = null) => ({
       designVersion: EIDOVERSE_WORLD_DESIGN_VERSION,

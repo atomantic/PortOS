@@ -75,6 +75,11 @@ describe('release.yml publication contract', () => {
     expect(release).toMatch(/uses: softprops\/action-gh-release@[0-9a-f]{40}[\s\S]*?target_commitish: \$\{\{ github\.sha \}\}/);
   });
 
+  it('publishes the single RELEASE.md and never archives or renames notes', () => {
+    expect(release).toContain('.changelog/RELEASE.md');
+    expect(yaml).not.toMatch(/\.changelog\/v|\.x\.md|Archive changelog|git mv/);
+  });
+
   it('checks an existing tag before the release can be created', () => {
     const check = release.indexOf('node scripts/verify-release-tag.js');
     expect(check).toBeGreaterThan(-1);

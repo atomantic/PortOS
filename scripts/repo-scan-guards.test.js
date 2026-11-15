@@ -65,7 +65,7 @@ describe('tree-scanning guards are derived into CI selection (#5055, #16085)', (
 
   it('selects a client scanner when a client source file changes', () => {
     const plan = buildCiTestPlan(['client/src/components/Foo.jsx'], { trackedFiles: [...trackedTests, 'client/src/components/Foo.jsx'] });
-    expect(plan.client.files).toContain('client/src/storageConventions.test.js');
+    expect(plan.client.files).toContain('client/src/numberFormattingConventions.test.js');
   });
 
   it('keeps the explicit list to entries the detector cannot see, all still tracked', () => {

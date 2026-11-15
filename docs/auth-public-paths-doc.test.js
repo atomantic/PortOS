@@ -29,7 +29,7 @@ describe('auth-exempt path documentation', () => {
     try {
       hits = execFileSync(
         'git',
-        ['grep', '-nw', 'PUBLIC_API_PATHS', '--', ':!.changelog', ':!docs/plans', ':!docs/auth-public-paths-doc.test.js'],
+        ['grep', '-nw', 'PUBLIC_API_PATHS', '--', ':!docs/plans', ':!docs/auth-public-paths-doc.test.js'],
         { cwd: ROOT, encoding: 'utf8' },
       );
     } catch (err) {
