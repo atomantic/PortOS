@@ -3,7 +3,6 @@ import { resolve } from 'node:path';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
-import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { matchesCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
 import { completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
 
@@ -48,8 +47,7 @@ function cleanupOnlySwarmCaptures(task, agent, instanceId) {
     if (typeof branch !== 'string' || !branch || rows.length !== 1 || !completedCheckoutReceiptValid(agent, rows[0])
       || typeof rows[0].repoPath !== 'string' || resolve(rows[0].repoPath) !== resolve(repo)
       || typeof rows[0].path !== 'string' || !rows[0].path
-      || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(rows[0].head || '')
-      || !retirementCheckoutIdentityFromPointer(rows[0].incarnation?.pointer)) return null;
+      || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(rows[0].head || '')) return null;
   }
   return captures;
 }
