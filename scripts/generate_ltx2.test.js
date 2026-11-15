@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { resolveTestPython } from '../server/lib/testHelper.js';
+import { PY_SUBPROCESS_TIMEOUT_MS, PY_TEST_TIMEOUT_MS, resolveTestPython } from '../server/lib/testHelper.js';
 
 const script = join(dirname(fileURLToPath(import.meta.url)), 'generate_ltx2.py');
 
@@ -1934,4 +1934,15 @@ print('verified')
 `);
     expect(output.trim()).toBe('verified');
   });
+});
+
+// generate_ltx2_teacache_test.py covers the TeaCache monkey patches; nothing
+// else runs it, so this wrapper is its only CI entry point.
+describe.skipIf(!pyBin)('generate_ltx2_teacache_test.py unit suite', () => {
+  it('passes the unittest suite', () => {
+    expect(() => execFileSync(pyBin, [fileURLToPath(new URL('./generate_ltx2_teacache_test.py', import.meta.url))], {
+      encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS, stdio: 'pipe',
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+    })).not.toThrow();
+  }, PY_TEST_TIMEOUT_MS);
 });

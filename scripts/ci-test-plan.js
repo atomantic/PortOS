@@ -451,6 +451,9 @@ export const ALWAYS_RUN_TESTS = [
   // Whole-tree scanner: a module moved between directories leaves a stale cited
   // path in some comment, with no import edge to this guard (#12408).
   'server/sourceFileReferences.test.js',
+  // Whole-tree scanner: a script added to scripts/ with no caller, workflow or
+  // doc has no import edge to this guard, so only the always-run list reaches it (#16089).
+  'server/scriptReferences.test.js',
   // Whole-tree scanner: a renamed export in any module leaves a dead key in some
   // suite's vi.mock factory, with no import edge from that suite to this guard (#11891).
   'server/mockContractConventions.test.js',
