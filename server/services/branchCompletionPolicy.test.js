@@ -161,6 +161,34 @@ describe('completion policy across lifecycle and reconciliation boundaries', () 
       expect(await hold([{ ...reviewRun('agent-running', prUrl, verified(prUrl)), status: 'running' }])).toBe('pr-completion-review-required');
     });
 
+    describe('fork review target (remote head name differs from the local checkout)', () => {
+      const forkHead = { ownerLogin: 'contributor', remoteUrl: 'https://github.com/contributor/project.git' };
+      const localBranch = 'fork/contributor/feature/example';
+      const forkRun = (extra = {}, target = {}) => ({ ...reviewRun('agent-fork', prUrl, { worktreeBranch: localBranch, ...extra }),
+        metadata: { ...reviewRun('agent-fork', prUrl).metadata, worktreeBranch: localBranch, ...extra,
+          reviewLoopMergeTarget: { url: prUrl, branch: 'feature/example', fork: { version: 1, url: prUrl, branch: 'feature/example', baseBranch: 'main', forkHead }, ...target } } });
+      const forkHold = (agents, input = {}) => hold(agents, { branch: localBranch, ...input });
+
+      it('releases a verified-merged fork run for its registered local branch', async () => {
+        const agent = forkRun(verified(prUrl));
+        expect(await forkHold([agent])).toBeNull();
+        expect(await forkHold([agent], { prUrl: undefined })).toBeNull();
+        expect(await forkHold([agent], { retirement: true })).toBeNull();
+      });
+
+      it('keeps the hold for unverified merges, other PRs, other forks and other local branches', async () => {
+        expect(await forkHold([forkRun()])).toBe('pr-completion-review-required');
+        expect(await forkHold([forkRun(verified(`${prUrl}0`))])).toBe('pr-completion-review-required');
+        expect(await forkHold([forkRun(verified(prUrl))], { prUrl: `${prUrl}0` })).toBeNull();
+        expect(await forkHold([forkRun({ ...verified(prUrl), mergedReviewFollowUp: { status: 'pending', prUrl } })])).toBe('pr-completion-review-required');
+        const otherFork = forkRun(verified(prUrl), { fork: { version: 1, url: prUrl, branch: 'feature/example', forkHead: { ...forkHead, ownerLogin: 'someone-else' } } });
+        expect(await forkHold([otherFork])).toBe('pr-completion-review-required');
+        expect(await hold([forkRun({ ...verified(prUrl), worktreeBranch: 'fork/other/feature/example' })])).toBeNull(); // bound to another checkout: no claim on this branch
+        expect(await forkHold([forkRun({ ...verified(prUrl), prCompletionPolicy: 'leave-open' })])).toBe('pr-completion-human-handoff');
+        expect(await forkHold([{ ...forkRun(verified(prUrl)), status: 'running' }])).toBe('pr-completion-review-required');
+      });
+    });
+
     it('never discharges a human handoff on a merged PR', async () => {
       const handoff = reviewRun('agent-handoff', prUrl, { ...verified(prUrl), prCompletionPolicy: 'leave-open' });
       expect(await hold([handoff])).toBe('pr-completion-human-handoff');
