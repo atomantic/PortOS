@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { Ban, Check, Loader2, RotateCcw, Eye, X, MessageSquare, PencilLine } from 'lucide-react';
 import { sceneTakeList, takePreviewKey, takeThumbUrl, takeClipUrl, takeProvenance, TAKE_SLOT } from '../../lib/musicVideoTakes.js';
 import { plateVerdict } from './PlateComparison.jsx';
+import TakeExtend from './TakeExtend.jsx';
 import AssetReferenceActions from '../media/AssetReferenceActions.jsx';
 import { getVideoHistoryItem } from '../../services/apiImageVideo.js';
 import { sequenceTakeLabel, sequenceTakeSummary } from '../../../../server/lib/musicVideoSequenceTake.js';
@@ -131,6 +132,9 @@ export default function SceneTakeStrip({
                   {sequenceTakeLabel(take)}
                 </p>
               )}
+              {take.parentTakeId && (
+                <p className="break-words text-[10px] text-port-text-muted" data-testid="extend-take-label">Extends an earlier take</p>
+              )}
               {verdictOpen && (
                 <ul className="space-y-0.5 text-[10px] text-port-warning">
                   {verdict.issues.map((check) => <li key={check.id} className="break-words">{check.note}</li>)}
@@ -192,6 +196,9 @@ export default function SceneTakeStrip({
                     <MessageSquare size={11} />
                   </button>
                 </div>
+              )}
+              {kind === 'video' && take.takeId && !rejected && project?.id && (
+                <TakeExtend projectId={project.id} scene={scene} take={take} busy={busy} />
               )}
               {/* Secondary: copy the file's ID or URL, after the review actions. */}
               <AssetReferenceActions assetId={take.assetId} compact

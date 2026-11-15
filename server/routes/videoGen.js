@@ -24,7 +24,7 @@ import { createVideoHistoryItemRead, historyRecordIdSchema } from './videoHistor
 import { optionalUpload, optionalUploadFields } from '../lib/multipart.js';
 import {
   validateRequest, hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema,
-  icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema,
+  icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema, videoExtendBodySchema,
 } from '../lib/validation.js';
 import { grokVideoDurationSchema } from '../lib/sharedSchemas.js';
 import {
@@ -65,6 +65,7 @@ import { assertNoPendingTopaz, enqueueTopazUpscale, reconcileTopazStatus, recove
 import { enqueueStitch } from '../services/videoGen/stitchJob.js';
 import { trimHistoryItem } from '../services/videoGen/trim.js';
 import { handheldHistoryItem } from '../services/videoGen/handheld.js';
+import { extendHistoryClip } from '../services/videoGen/extendHosted.js';
 import { HANDHELD_SEED_MAX } from '../lib/handheldCamera.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
 import { submitVideoGenJob } from '../services/videoGen/submitJob.js';
@@ -1613,6 +1614,14 @@ router.post('/history/:id/handheld', asyncHandler(async (req, res) => {
   if (!parsed.success) failValidation(parsed);
   const body = validateRequest(handheldBodySchema, req.body ?? {});
   res.json({ ok: true, video: await handheldHistoryItem(parsed.data, body) });
+}));
+
+// Continue a hosted clip on its model's extend endpoint (#16150); `dryRun` returns the exact body and price.
+router.post('/history/:id/extend', asyncHandler(async (req, res) => {
+  const parsed = historyIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const body = validateRequest(videoExtendBodySchema, req.body ?? {});
+  res.json(await extendHistoryClip(parsed.data, body));
 }));
 
 const stitchBodySchema = z.object({

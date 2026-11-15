@@ -3303,3 +3303,14 @@ export const mediaMakePrimarySchema = z.object({
   filename: mediaFilenameSchema,
   instanceId: z.string().min(1).max(128),
 }).strict();
+
+// #16150: extend a hosted clip. The prompt is sent as written; a Music Video caller names the take it extends.
+export const videoExtendBodySchema = z.object({
+  prompt: z.string().min(1).max(20000),
+  dryRun: z.boolean().optional(),
+  musicVideo: z.object({
+    projectId: z.string().min(1).max(200),
+    sceneId: z.string().min(1).max(200),
+    takeId: z.string().min(1).max(128),
+  }).strict().optional(),
+}).strict();

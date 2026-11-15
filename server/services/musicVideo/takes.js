@@ -26,7 +26,7 @@ import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
 
 import { musicVideoCastInputsRecord } from '../../lib/musicVideoCastLook.js';
 import { captureImageFrameDependencies, captureTakeDependencies, musicVideoTakeChanges, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
-import { sequenceTakeRecord, sequenceTakeSelectionPatch } from '../../lib/musicVideoSequenceTake.js';
+import { extendTakeRecord, sequenceTakeRecord, sequenceTakeSelectionPatch } from '../../lib/musicVideoSequenceTake.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
@@ -56,8 +56,9 @@ const clip = (v, max) => (isNonBlankStr(v) ? trimTo(v, max) : null);
 // A basename only — an imported file's name is provenance, never a path.
 const takeOriginalName = (name) => (isNonBlankStr(name) ? clip(name.split(/[\\/]/).pop(), 200) : null);
 
-function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, use = 'final', dependencies = null, frameDependencies = null, inputAssets = null, castInputs = null, costUsd = null, spendKind = null, costModelId = null, sequence = null, tier = null, now }) {
+function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, use = 'final', dependencies = null, frameDependencies = null, inputAssets = null, castInputs = null, costUsd = null, spendKind = null, costModelId = null, sequence = null, extend = null, tier = null, now }) {
   const sequenceRecord = kind === 'video' ? sequenceTakeRecord(sequence) : null;
+  const extendRecord = kind === 'video' ? extendTakeRecord(extend) : null;
   const recordedCastInputs = kind === 'image' || kind === 'endImage' ? musicVideoCastInputsRecord(castInputs) : null;
   return {
     takeId: `mvt-${randomUUID()}`,
@@ -92,6 +93,8 @@ function buildTake({ kind, assetId, source, provider = null, jobId = null, promp
     ...(shotInstruction && typeof shotInstruction === 'object' ? { shotInstruction: structuredClone(shotInstruction) } : {}),
     // #16128: one clip covering a run of shots, and where this shot's window starts in it.
     ...(sequenceRecord ? { sequence: sequenceRecord } : {}),
+    // #16150: a hosted extension of another take, and the in-point of its new footage.
+    ...(extendRecord ? { parentTakeId: extendRecord.parentTakeId, extend: extendRecord } : {}),
   };
 }
 

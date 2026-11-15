@@ -9,7 +9,9 @@
  * `windows`), `proposeSequenceTakeOffsets` (match planned shot changes to detected cuts, centre each
  * window, 24 fps grid), `sequenceTakeRecord` (the take's stored `sequence` block),
  * `sequenceTakeSelectionPatch` (picking the take sets `offsetFrames`; leaving one clears it),
- * `sequenceTakeLabel` / `sequenceTakeSummary` (take-strip text). Pure; client-importable.
+ * `sequenceTakeLabel` / `sequenceTakeSummary` (take-strip text), `extendTakeRecord` / `extendTakeInPointFrames`
+ * (#16150: a hosted extension filed as a child take, with the in-point that plays only its new footage).
+ * Pure; client-importable.
  *
  * Music Video sequence takes (#16128): the director picks a run of consecutive
  * shots and renders them as ONE take on a reference-to-video model, written as
@@ -256,6 +258,27 @@ export function sequenceTakeRecord(input) {
   };
 }
 
+/** The `extend` block a child take keeps (its parent take and the in-point of its new footage), or null. */
+export function extendTakeRecord(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const parent = typeof input.parentTakeId === 'string' ? input.parentTakeId.trim().slice(0, 128) : '';
+  const frames = Number.isInteger(input.offsetFrames) ? input.offsetFrames : null;
+  if (!parent || frames == null || frames < 0 || frames > CLIP_OFFSET_FRAMES_RANGE.max) return null;
+  return { parentTakeId: parent, offsetFrames: frames };
+}
+
+const extendOf = (take) => (take?.kind === 'video' ? extendTakeRecord(take.extend) : null);
+
+/**
+ * In-point (frames) of the new footage in a hosted extension: the delivered clip either holds only the
+ * extension (0) or the source joined with it, in which case the new footage starts `extensionSec` before the end.
+ */
+export function extendTakeInPointFrames({ deliveredSec, extensionSec }) {
+  if (!(deliveredSec > 0) || !(extensionSec > 0)) return 0;
+  const lead = deliveredSec - extensionSec;
+  return lead > 0.5 ? Math.min(CLIP_OFFSET_FRAMES_RANGE.max, Math.round(lead * CLIP_TIMING_FPS)) : 0;
+}
+
 const sequenceOf = (take) => (take?.kind === 'video' ? sequenceTakeRecord(take.sequence) : null);
 
 /**
@@ -266,10 +289,10 @@ const sequenceOf = (take) => (take?.kind === 'video' ? sequenceTakeRecord(take.s
  */
 export function sequenceTakeSelectionPatch(scene, take) {
   if (take?.kind !== 'video' || take.assetId === scene?.videoHistoryId) return {};
-  const sequence = sequenceOf(take);
-  if (sequence) return { offsetFrames: sequence.offsetFrames || null };
+  const inPoint = sequenceOf(take) || extendOf(take);
+  if (inPoint) return { offsetFrames: inPoint.offsetFrames || null };
   const current = (scene?.takes || []).find((t) => t?.kind === 'video' && t.assetId === scene?.videoHistoryId);
-  return sequenceOf(current) ? { offsetFrames: null } : {};
+  return sequenceOf(current) || extendOf(current) ? { offsetFrames: null } : {};
 }
 
 /** A sequence take's short tag for its shot's take strip ("One take · 2/4 · in 2.21s"), or null. */
