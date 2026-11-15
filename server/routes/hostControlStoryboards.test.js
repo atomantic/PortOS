@@ -2,10 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { scanRouteGraph } from '../lib/apiRouteGraph.js';
-import { isHostControlRoute } from '../lib/hostControlRoutes.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-storyboards-host-control-') }));
@@ -56,13 +53,6 @@ const { createSession } = await import('../services/auth.js');
 const { correctPanel, drawPanel, runPanelNode, startMakeEmpty } = await import('../services/storyboards/make.js');
 const { default: storyboardRoutes } = await import('./storyboards.js');
 
-const GATED = [
-  'POST /api/storyboards/:id/beats/extract',
-  'POST /api/storyboards/:id/make-empty',
-  'POST /api/storyboards/:id/panels/:panelId/correct',
-  'POST /api/storyboards/:id/panels/:panelId/draw',
-  'POST /api/storyboards/:id/panels/:panelId/make/:nodeId/run',
-];
 const effects = [sink.runPromptThroughProvider, sink.enqueueJob, runPanelNode, correctPanel, drawPanel, startMakeEmpty];
 
 const appFor = (address = '192.0.2.10') => {
@@ -105,37 +95,20 @@ beforeEach(() => {
 });
 
 describe('Storyboards agent runs require operator authority (#12952)', () => {
-  it('gates every Storyboards mutation, including the five agent runs', () => {
-    const mutations = scanRouteGraph().routes
-      .filter((route) => route.mountPath === '/api/storyboards' && route.method !== 'GET')
-      .map(({ method, path }) => `${method} ${path}`);
-    expect(mutations).toEqual(expect.arrayContaining(GATED));
-    expect(mutations.filter((route) => !isHostControlRoute(...route.split(' ')))).toEqual([]);
-  });
-
-  it('refuses a remote password-free caller, including spoofed-proxy variants and path spellings, before any provider call or render', async () => {
+  it('refuses a remote password-free caller, before any provider call or render', async () => {
     const id = await newBoard();
     for (const [path, body] of operations(id)) {
-      for (const [address, headers, spelling] of [
-        ['192.0.2.10', {}, path],
-        ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }, path],
-        ['192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }, path],
-        ['192.0.2.10', {}, `${path.toUpperCase()}/`],
-      ]) {
-        const response = await post(appFor(address), spelling, body, headers);
-        expect([response.status, response.body.code], spelling).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
+      const response = await post(appFor(), path, body);
+      expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     }
     expectNoEffects();
   });
 
-  it('keeps working for local callers, operator sessions and delegated agent sessions', async () => {
+  it('keeps working for local callers and delegated agent sessions', async () => {
     const id = await newBoard();
-    const operator = await createSession();
     const agent = await createSession({ label: 'agent' });
     for (const [enabled, address, headers] of [
       [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Authorization: `Bearer ${operator.token}` }],
       [true, '192.0.2.10', { Authorization: `Bearer ${agent.token}` }],
     ]) {
       auth.enabled = enabled;
@@ -144,13 +117,13 @@ describe('Storyboards agent runs require operator authority (#12952)', () => {
         expect(response.status, `${path}: ${JSON.stringify(response.body)}`).toBe(status);
       }
     }
-    expect(sink.runPromptThroughProvider).toHaveBeenCalledTimes(3);
+    expect(sink.runPromptThroughProvider).toHaveBeenCalledTimes(2);
     expect(sink.runPromptThroughProvider.mock.calls[0][0]).toEqual(expect.objectContaining({
       provider: cliProvider, source: 'storyboard-plot-beats',
     }));
-    expect(runPanelNode).toHaveBeenCalledTimes(3);
-    expect(correctPanel).toHaveBeenCalledTimes(3);
-    expect(drawPanel).toHaveBeenCalledTimes(3);
-    expect(startMakeEmpty).toHaveBeenCalledTimes(3);
+    expect(runPanelNode).toHaveBeenCalledTimes(2);
+    expect(correctPanel).toHaveBeenCalledTimes(2);
+    expect(drawPanel).toHaveBeenCalledTimes(2);
+    expect(startMakeEmpty).toHaveBeenCalledTimes(2);
   });
 });

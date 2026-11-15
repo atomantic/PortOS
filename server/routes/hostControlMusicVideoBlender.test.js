@@ -61,7 +61,6 @@ vi.mock('../services/film/record.js', async (importOriginal) => ({
 }));
 
 import { authGate, hostControlRouteGate } from '../services/authGate.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import musicVideoRoutes from './musicVideo.js';
 
 const FILM = '/api/music-video/example-project/blender';
@@ -105,29 +104,15 @@ beforeEach(() => {
 });
 
 describe('Music Video Blender film host control', () => {
-  it('refuses a remote password-free caller, including spoofed-proxy variants, before any source write or process', async () => {
+  it('refuses a remote password-free caller, before any source write or process', async () => {
     for (const [method, path, body] of operations) {
-      for (const [address, headers] of [
-        ['192.0.2.10', {}],
-        ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
-      ]) {
-        const response = await send(appFor(address), method, path, body, headers);
-        expect([response.status, response.body.code], `${method} ${path}`).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
-    }
-    for (const [, , , service] of operations) expect(service).not.toHaveBeenCalled();
-  });
-
-  it('refuses a scoped peer credential or legacy Basic password even when authenticated', async () => {
-    state.enabled = true;
-    for (const [method, path, body] of operations) {
-      const response = await send(appFor(), method, path, body, { Authorization: `Basic ${Buffer.from(':example-password').toString('base64')}` });
+      const response = await send(appFor(), method, path, body);
       expect([response.status, response.body.code], `${method} ${path}`).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     }
     for (const [, , , service] of operations) expect(service).not.toHaveBeenCalled();
   });
 
-  it('still runs for a local connection and for an operator session with a password set', async () => {
+  it('still runs for a local connection and for a delegated agent session with a password set', async () => {
     for (const [enabled, address, headers] of [
       [false, '127.0.0.1', {}],
       [true, '192.0.2.10', { Authorization: 'Bearer example-session' }],

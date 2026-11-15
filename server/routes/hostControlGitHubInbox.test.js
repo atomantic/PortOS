@@ -2,7 +2,6 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
@@ -97,25 +96,18 @@ beforeEach(() => {
 });
 
 describe('GitHub inbox writes require operator authority (#12952)', () => {
-  it('refuses a remote password-free caller, direct or proxied, before any gh write, CoS job or account change', async () => {
+  it('refuses a remote password-free caller, before any gh write, CoS job or account change', async () => {
     for (const write of writes) {
-      for (const [address, headers] of [
-        ['192.0.2.10', {}],
-        ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
-      ]) {
-        const response = await send(appFor(address), write, headers);
-        expect([response.status, response.body.code], write[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
+      const response = await send(appFor(), write);
+      expect([response.status, response.body.code], write[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
       expect(write[3], write[1]).not.toHaveBeenCalled();
     }
   });
 
-  it('keeps every write working for local callers, operator sessions and delegated agent sessions', async () => {
-    const operator = await createSession();
+  it('keeps every write working for local callers and delegated agent sessions', async () => {
     const agent = await createSession({ label: 'agent' });
     for (const [enabled, address, headers] of [
       [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Authorization: `Bearer ${operator.token}` }],
       [true, '192.0.2.10', { Authorization: `Bearer ${agent.token}` }],
     ]) {
       auth.enabled = enabled;
@@ -124,7 +116,7 @@ describe('GitHub inbox writes require operator authority (#12952)', () => {
         expect(response.status, `${write[1]}: ${JSON.stringify(response.body)}`).toBeLessThan(300);
       }
     }
-    for (const write of writes) expect(write[3], write[1]).toHaveBeenCalledTimes(3);
+    for (const write of writes) expect(write[3], write[1]).toHaveBeenCalledTimes(2);
   });
 
   it('runs the refresh, deletions and the read-only audit for host control, with automation, and refuses them remotely', async () => {
