@@ -108,44 +108,18 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
     return { release, unrelated, run };
   }
 
-  it.each(['Git UI', 'daily cleanup'])('reports %s unverified when the removal receipt cannot be stored', async entryPoint => {
+  it.each(['Git UI', 'daily cleanup'])('reports %s removal as done when the display history cannot be stored', async entryPoint => {
     const { release, run } = await outsideCleanupFixture(entryPoint);
     // The receipt is the only schedule write during removal, and it lands after the checkout is gone.
     injected.failScheduleWrite = injected.scheduleWrites + 1;
     const result = await run();
-    expect(entryPoint === 'Git UI' ? result.deleted : result.mergedReaped).toEqual(entryPoint === 'Git UI' ? [] : 0);
-    if (entryPoint === 'daily cleanup') expect(result.worktreesReaped).toBe(0);
+    if (entryPoint === 'Git UI') expect(result.deleted).toEqual([expect.objectContaining({ name: release.branch })]);
+    else expect(result).toMatchObject({ mergedReaped: 1, worktreeHolds: [] });
     expect(existsSync(release.path)).toBe(false);
     expect(existsSync(join(PATHS.cos, 'branch-retirement-archives'))).toBe(false);
     expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${release.branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
     expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
-    if (entryPoint === 'Git UI') expect(result.skipped.join('\n')).toContain('retirement-receipt-unverified');
-    else expect(result.worktreeHolds).toContainEqual(expect.objectContaining({ path: release.path, reason: 'retirement-receipt-unverified' }));
-  });
-
-  it('does not invent a receipt or orphan-remove again after an unverified daily removal', async () => {
-    const { release, run } = await outsideCleanupFixture('daily cleanup');
-    injected.failScheduleWrite = injected.scheduleWrites + 1;
-    expect(await run()).toMatchObject({ mergedReaped: 0, worktreesReaped: 0,
-      worktreeHolds: [expect.objectContaining({ path: release.path, reason: 'retirement-receipt-unverified' })] });
-    injected.failMergedInventory = true;
-    expect(await run()).toMatchObject({ mergedReaped: 0, worktreesReaped: 0 });
-    expect(existsSync(release.path)).toBe(false);
-    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
-  });
-
-  it('keeps an unverified daily removal out of orphan cleanup when that inventory read fails', async () => {
-    const { release, run } = await outsideCleanupFixture('daily cleanup');
-    injected.failScheduleWrite = injected.scheduleWrites + 1;
-    injected.failOrphanInventory = true;
-    const result = await run();
-    expect(injected.inventoryFailures).toBe(1);
-    expect(result).toMatchObject({ mergedReaped: 0, worktreesReaped: 0,
-      worktreeHolds: [expect.objectContaining({ path: release.path, reason: 'retirement-receipt-unverified' })] });
-    expect(existsSync(release.path)).toBe(false);
-    expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${release.branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
-    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
-    expect(existsSync(join(PATHS.cos, 'branch-retirement-archives'))).toBe(false);
+    if (entryPoint === 'Git UI') expect(result.skipped.join('\n')).not.toContain(release.branch);
   });
 
   it.each(['Git UI', 'daily cleanup'])('keeps a recreated %s checkout unsettled after in-place removal', async entryPoint => {

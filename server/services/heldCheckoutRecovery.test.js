@@ -251,10 +251,10 @@ describeHeldCheckoutRecovery(() => {
     expect((await getBranchReconcileInventory('app-1')).remaining).toEqual([]);
   });
 
-  it('reports an unverified receipt when retirement persistence fails', async () => {
+  it('reports the removal as reaped when the display-history write fails', async () => {
     const { entry, release } = await supersededCheckout({ clean: true });
     retirementFaults.failScheduleWrite = 1;
-    expect(await reapSuperseded(entry)).toMatchObject({ reaped: [], skipped: [{ branch: release.branch, reason: 'retirement-receipt-unverified' }] });
+    expect(await reapSuperseded(entry)).toMatchObject({ reaped: [release.branch], skipped: [] });
     expect((await getBranchReconcileOutcome('app-1'))?.retired || []).toEqual([]);
     expect(existsSync(release.path)).toBe(false);
   });

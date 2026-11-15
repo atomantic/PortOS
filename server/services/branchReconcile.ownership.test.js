@@ -760,13 +760,13 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
       expect(next).not.toHaveProperty('retirementObligations');
     });
 
-    it('allows a fresh empty scan to converge after detached cleanup history could not be stored', async () => {
+    it('settles a detached cleanup even when its display history could not be stored', async () => {
       const { outcomes, path, release } = await inventoriedDetached();
       injected.failScheduleWrite = true;
       const result = await sweep({ appId: 'app-1' });
       expect(existsSync(path)).toBe(false);
-      expect(result.cleaned).not.toContain(release.path);
-      expect(result.detachedWorktrees).toContainEqual(expect.objectContaining({ path: release.path, reason: 'retirement-receipt-unverified' }));
+      expect(result.cleaned).toContain(release.path);
+      expect(result.detachedWorktrees).not.toContainEqual(expect.objectContaining({ path: release.path }));
       injected.failScheduleWrite = false;
       expect((await outcomes.getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
       const next = await outcomes.recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });

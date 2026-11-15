@@ -31,7 +31,7 @@ import { resolveRetirementApp } from './retirementAppScope.js';
  * It probes and classifies via `lib/repoStateExpectations.js`, tries the shared
  * deterministic cleanup gates, and files one recovery task when needed. A held
  * merged checkout requires persisted inventory and a fresh review preview;
- * the recovery agent cannot substitute shell deletion for a retirement receipt.
+ * the recovery agent cannot substitute shell deletion for the direct branch-reconcile removal.
  *
  * Detection is what this adds over `branchReconcile.js`: that reconciler is an
  * opt-in scheduled task on a recheck cadence, and it parks on no-progress. This
@@ -1530,7 +1530,7 @@ async function retireIntegratedCheckout({ agentId, appId, observed, issues, reco
       }
     } }).catch(error => ({ reason: (['daemon-stopped', 'automatic-retirement-disabled', 'checkout-changed', 'claim-owner-active', 'claim-owner-ambiguous', 'cleanup-owner-changed', 'cleanup-provenance-unverified', 'swarm-continuation-pending', 'completion-stages-pending', 'checkout-capture-unverified'].includes(error.message)) ? error.message : 'retirement-outcome-uncertain' }));
   if (!result.ok || result.branchDeleted !== true) {
-    return blockWith(result.reason || result.branchRetainedReason || 'retirement-receipt-unverified', { issues, observed });
+    return blockWith(result.reason || result.branchRetainedReason || 'retirement-outcome-uncertain', { issues, observed });
   }
   await record('verified', 'retirement-receipt-verified', { prUrl: observed.prUrl, committedIntegrationVerified: true,
     preservation: { verifiedAt: new Date().toISOString() } });
@@ -1643,9 +1643,9 @@ async function prepareRecoveryRetirement({ agentId, appId, app: taskApp, sourceW
  */
 export const REPO_STATE_REMEDIATIONS = Object.freeze({
   [REPO_STATE_ISSUES.WORKTREE_PRESENT]: ({ worktreePath }) =>
-    `Keep the retained worktree ${worktreePath} intact until the retirement service removes it. A merged checkout is retired directly through the exact branch-reconcile inventory; unmerged work stays. Do not copy the checkout into an archive.`,
+    `Keep the retained worktree ${worktreePath} intact until branch-reconcile removes it. A merged checkout is retired directly through the exact branch-reconcile inventory; unmerged work stays. Do not copy the checkout into an archive.`,
   [REPO_STATE_ISSUES.LOCAL_BRANCH_PRESENT]: ({ branchName }) =>
-    `Keep local branch ${branchName} until the retirement service returns ok:true and branchDeleted:true. Missing checkout or merged status is not permission for shell deletion.`,
+    `Keep local branch ${branchName} until branch-reconcile removes it with ok:true and branchDeleted:true. Missing checkout or merged status is not permission for shell deletion.`,
   [REPO_STATE_ISSUES.REMOTE_BRANCH_PRESENT]: ({ branchName }) =>
     `Leave remote branch ${branchName} to the service's fresh exact-head cleanup. An advanced or unreadable ref is a hold; do not use a generic delete API or merge deletion flag.`,
   [REPO_STATE_ISSUES.BRANCH_UNMERGED]: ({ base }) =>
@@ -1672,7 +1672,7 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
   const base = observed.defaultBranch || 'the default branch';
   const ctx = { branchName, base, prUrl: observed.prUrl, prNumber: observed.prNumber, worktreePath, forgeCli: observed.forgeCli };
 
-  const retirementInstructions = `After confirming MERGED and releasing admission, request branch-reconcile through POST /api/cos/schedule/trigger with ${JSON.stringify({ taskType: 'branch-reconcile', appId })} using authenticated PortOS transport. Keep checkout and refs for its exact inventory and retirement: a merged checkout is removed with its branch. Report cleanup pending until the retirement service returns ok:true and branchDeleted:true. Do not copy the checkout into an archive.`;
+  const retirementInstructions = `After confirming MERGED and releasing admission, request branch-reconcile through POST /api/cos/schedule/trigger with ${JSON.stringify({ taskType: 'branch-reconcile', appId })} using authenticated PortOS transport. Keep checkout and refs for its exact inventory and retirement: a merged checkout is removed with its branch. Report cleanup pending until branch-reconcile removes it with ok:true and branchDeleted:true. Do not copy the checkout into an archive.`;
   const context = [
     'An agent finished successfully but the repository did not end up in the expected state.',
     '',
