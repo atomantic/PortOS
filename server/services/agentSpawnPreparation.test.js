@@ -83,6 +83,43 @@ describe('prepareAgentSpawn — duplicate dispatch', () => {
     expect(context.claimAcquired).toBe(true);
     expect(context.cleanupOnError).not.toHaveBeenCalled();
   });
+
+  it('reports a claim write failure while leaving the task queued', async () => {
+    const task = { id: 'sys-release', taskType: 'internal', status: 'pending', metadata: { spawnBudgetProof: newSpawnBudgetEpisode() } };
+    loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
+    ensureInstanceId.mockResolvedValue('local'); getTaskById.mockResolvedValue(task);
+    acquire.mockReturnValue({ success: true }); createToolExecution.mockReturnValue({ id: 'execution' });
+    updateTask.mockRejectedValueOnce(new Error('store unavailable')); emitLog.mockClear();
+    const context = createAgentSpawnContext(task); context.cleanupOnError = vi.fn(async () => {});
+    expect(await prepareAgentSpawn(task, context)).toBeNull();
+    expect(emitLog).toHaveBeenCalledWith('warn', 'Holding task sys-release: claim write failed: store unavailable', { taskId: 'sys-release' });
+    expect(context.cleanupOnError).toHaveBeenCalledWith('task or claim changed during dispatch');
+    expect(context.claimAcquired).toBe(false);
+  });
+
+  it('reports a failed second task read before trying the claim', async () => {
+    const task = { id: 'sys-release', taskType: 'internal', status: 'pending', metadata: { spawnBudgetProof: newSpawnBudgetEpisode() } };
+    loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
+    ensureInstanceId.mockResolvedValue('local'); getTaskById.mockResolvedValueOnce(task).mockRejectedValueOnce(new Error('read failed'));
+    acquire.mockReturnValue({ success: true }); createToolExecution.mockReturnValue({ id: 'execution' });
+    updateTask.mockClear(); emitLog.mockClear();
+    const context = createAgentSpawnContext(task); context.cleanupOnError = vi.fn(async () => {});
+    expect(await prepareAgentSpawn(task, context)).toBeNull();
+    expect(emitLog).toHaveBeenCalledWith('warn', 'Holding task sys-release: task state could not be read', { taskId: 'sys-release' });
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('cleans up even when a claim write rejects without an Error', async () => {
+    const task = { id: 'sys-release', taskType: 'internal', status: 'pending', metadata: { spawnBudgetProof: newSpawnBudgetEpisode() } };
+    loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
+    ensureInstanceId.mockResolvedValue('local'); getTaskById.mockResolvedValue(task);
+    acquire.mockReturnValue({ success: true }); createToolExecution.mockReturnValue({ id: 'execution' });
+    updateTask.mockRejectedValueOnce(null); emitLog.mockClear();
+    const context = createAgentSpawnContext(task); context.cleanupOnError = vi.fn(async () => {});
+    expect(await prepareAgentSpawn(task, context)).toBeNull();
+    expect(emitLog).toHaveBeenCalledWith('warn', 'Holding task sys-release: claim write failed: null', { taskId: 'sys-release' });
+    expect(context.cleanupOnError).toHaveBeenCalledWith('task or claim changed during dispatch');
+  });
 });
 
 describe('createAgentSpawnContext — failed bookkeeping writes', () => {
