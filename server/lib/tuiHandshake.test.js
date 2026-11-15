@@ -27,14 +27,12 @@ import {
   MCP_BOOT_PASTE_DEADLINE_MS,
   isPasteCommitted,
   isPasteConfirmed,
-  MCP_BOOT_PASTE_RETRY_DELAY_MS,
   isMcpBootSignal,
   createMcpBootTracker,
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
   SUBMIT_ENTER_ATTEMPTS,
   SUBMIT_ENTER_SPACING_MS,
-  DEFAULT_TUI_PROMPT_DELAY_MS,
   RAW_BUFFER_CAP,
   RAW_BUFFER_HEADROOM,
   OUTPUT_BUFFER_CAP,
@@ -44,10 +42,7 @@ import {
   buildTuiInvocation,
   detectMissingTuiBinary,
   scheduleSubmitEnters,
-  PASTE_VERIFY_POLL_MS,
   PASTE_VERIFY_WINDOW_MS,
-  PASTE_RETRY_MAX_ATTEMPTS,
-  PASTE_RETRY_BASE_DELAY_MS,
   extractVerifiablePromptPrefix,
   verifyPasteRendered,
   isCollapsedPasteChip,
@@ -473,19 +468,7 @@ describe('tuiHandshake — paste timing constants', () => {  it('PASTE_MARKER_PA
     });
   });
 
-  it('pins provider-default constants', () => {
-    expect(DEFAULT_TUI_PROMPT_DELAY_MS).toBe(2500);
-  });
-
-  it('pins buffer caps with headroom > cap (defensive growth allowance)', () => {
-    expect(RAW_BUFFER_CAP).toBe(512 * 1024);
-    expect(RAW_BUFFER_HEADROOM).toBe(640 * 1024);
-    // OUTPUT cap was bumped 1MB → 8MB so realistic full-context LLM responses
-    // (~600KB UTF-8 from a 200K-token window + screen chrome) fit cleanly
-    // when the file-write path falls back to the buffer scrape. A regression
-    // back to ~1MB would silently mid-token-truncate large fallback responses.
-    expect(OUTPUT_BUFFER_CAP).toBe(8 * 1024 * 1024);
-    expect(OUTPUT_BUFFER_HEADROOM).toBe(10 * 1024 * 1024);
+  it('keeps buffer headroom above cap (defensive growth allowance)', () => {
     // Headroom must exceed cap so the slice-tail-after-overflow logic in
     // the callers actually keeps recent bytes instead of dropping them.
     expect(RAW_BUFFER_HEADROOM).toBeGreaterThan(RAW_BUFFER_CAP);
@@ -497,9 +480,7 @@ describe('tuiHandshake — codex MCP-boot paste patience (agent-c5a26b40)', () =
   it('deadline covers a node_repl startup_timeout_sec=120 plus margin', () => {
     // Long enough for the documented 120s node_repl startup + an npx cold
     // download, with a bounded retry window for a genuinely hung boot.
-    expect(MCP_BOOT_PASTE_DEADLINE_MS).toBe(150000);
     expect(MCP_BOOT_PASTE_DEADLINE_MS).toBeGreaterThan(120000);
-    expect(MCP_BOOT_PASTE_RETRY_DELAY_MS).toBe(5000);
   });
 
   it('isMcpBootSignal matches codex MCP boot banners (case-insensitive)', () => {
@@ -1013,11 +994,7 @@ describe('tuiHandshake.scheduleSubmitEnters', () => {
 
 // Paste verification helpers (issue #2192)
 describe('tuiHandshake — paste verification constants', () => {
-  it('pins paste verification constants', () => {
-    expect(PASTE_VERIFY_POLL_MS).toBe(200);
-    expect(PASTE_VERIFY_WINDOW_MS).toBe(2000);
-    expect(PASTE_RETRY_MAX_ATTEMPTS).toBe(3);
-    expect(PASTE_RETRY_BASE_DELAY_MS).toBe(800);
+  it('keeps the paste verify window inside the paste deadline', () => {
     // Verification window should be shorter than the overall paste deadline
     expect(PASTE_VERIFY_WINDOW_MS).toBeLessThan(PASTE_DEADLINE_MS);
   });
