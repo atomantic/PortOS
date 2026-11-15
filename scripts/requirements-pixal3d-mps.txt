@@ -88,7 +88,7 @@ tomlkit==0.14.0
 torch==2.15.0
 torchvision==0.29.2
 tqdm==4.70.1
-transformers==5.22.1
+transformers==5.22.2
 trimesh==5.2.0
 typer==0.27.3
 typing-inspection==0.4.5

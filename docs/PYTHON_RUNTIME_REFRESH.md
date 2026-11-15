@@ -2903,3 +2903,75 @@ output-quality evaluation or Windows/Linux execution is claimed. This slice
 does not complete #16047: Transformers in the other requested profiles and the
 separate Typer/Regex/Protobuf slices remain there. LTX CUDA's Transformers
 5.14.1 constraint and other documented exceptions are unchanged.
+
+## Transformers slice for Pixal3D and TRELLIS.2 Metal (2026-11-15, #16047)
+
+Both Metal source recipes and locks now use **Transformers 5.22.2** instead
+of 5.22.1. The other **98 Pixal3D / 55 TRELLIS.2** package blocks, markers and
+artifact hashes are byte-identical. Python 3.13, Torch 2.15.0, TorchVision
+0.29.2, Pillow 13, optional extras, native build steps and immutable source
+revisions are unchanged. These installers consume their locks directly; there
+is no separate JavaScript Transformers version constant for these lanes.
+
+The [upstream release](https://github.com/huggingface/transformers/releases/tag/v5.22.2)
+fixes distributed device binding and Jinja sandboxing. Freshly SHA-256-verified
+5.22.1/5.22.2 wheels differ in only version initialization, the dependency table,
+distributed utilities and chat-template utilities. DINOv3, auto-model loading
+and the image segmentation APIs consumed by these sources are byte-identical.
+Neither lane uses distributed training or chat templates; the optional Jinja
+3.1.6 floor is already satisfied. Python's floor remains 3.11.
+
+Both complete closures were regenerated with hash-verified **uv 0.13.7** and
+cutoff **2026-11-07T00:00:00Z**, using each header's platform/interpreter,
+wheel-only flags and Pixal Pillow override. Extract every existing `name==version`
+line into scratch constraints, replacing only Transformers with 5.22.2, and add
+`--constraint <scratch-file>` to the documented command. Resolution emits the
+same 99/56 identities and includes every retained hash, but also emits additional
+artifacts for unchanged packages (including alternative macOS NumPy wheels).
+Transfer only the generated Transformers block to preserve the previously
+selected native artifacts. No hashes are composed by hand.
+
+The resolver's **2,136 Pixal3D / 1,084 TRELLIS.2** hashes were checked against
+fresh official PyPI version JSON: all are non-yanked and pre-cutoff. The shipped
+locks retain **1,408 / 584** hashes respectively. Fresh OSV querybatch covers
+all **101 distinct registry identities** across the two closures, including
+MAL records: zero findings, scanner errors or pending pagination. Transformers
+is the only changed runtime registry input; the resolver wheel was separately
+hash-verified. There are no changed source inputs. Direct uv requests timed out;
+the temporary loopback curl relay described above again supplied official PyPI
+metadata and artifacts without changing timestamps, yanked status or hashes.
+No relay or index override ships to installers.
+
+Native checks used separate scratch environments on **Apple Silicon macOS
+27.2.1 / CPython 3.13.5**, hash-installing each entire shipped wheel lock, then
+hash-verified baseline/candidate Transformers wheels. Both versions pass
+`uv pip check` in TRELLIS; Pixal reports only its already documented CLI-only
+Gradio/Pillow 13 metadata exception, identically on both versions. The opt-in
+`metal-transformers` probe runs
+the actual pinned TRELLIS DINOv3 extractor after its existing MPS patch, and
+Pixal's projection extractor/grid, isolated by AST from heavyweight package
+initializers. Local saved tiny DINOv3 weights are shared between versions.
+RGB, grayscale/RGBA batches and tensor inputs exercise CPU and MPS: feature,
+global-token and projected-grid shapes, finite nonzero values, invalid-image
+refusal and missing-camera refusal pass. Baseline/candidate outputs agree at
+`rtol=atol=1e-6` in both environments. Python socket connections are refused.
+
+Repeat in an isolated hash-installed environment, first with 5.22.1 and
+`--baseline`, then with 5.22.2 and the same fixtures directory (omit `--baseline`):
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 <venv>/bin/python \
+  scripts/cooled_runtime_probe.py metal-transformers \
+  --source <inspected-pixal-source> --trellis-source <inspected-mps-patched-trellis-source> \
+  --fixtures <scratch>/metal-fixtures --baseline
+```
+
+Five existing installer, adapter and lock-profile regression files pass **171
+tests**. This is synthetic API compatibility evidence: no production weights,
+BiRefNet remote model code, NAF, full native-extension install, mesh generation,
+output-quality certification, CUDA or Windows/Linux execution is claimed.
+
+Remaining under #16047: Transformers in the other requested profiles, then
+the independent Typer/Regex slices for Pixal/TRELLIS/H3 and Protobuf for H3.
+LTX CUDA's Transformers 5.14.1 and all documented retained exceptions remain
+unchanged.
