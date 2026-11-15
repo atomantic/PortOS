@@ -66,6 +66,7 @@ import {
   musicVideoTreatmentApplySchema,
   musicVideoTreatmentSyncShotSheetSchema,
   musicVideoSequenceRenderSchema,
+  musicVideoSequenceTakeSchema,
   musicVideoTreatmentProofReviewSchema,
   musicVideoExcerptRequestSchema,
   musicVideoSocialCutsQuerySchema,
@@ -638,6 +639,15 @@ router.post('/:id/sequence-coverage/render', asyncHandler(async (req, res) => {
   const { sceneIds } = validateRequest(musicVideoSequenceRenderSchema, req.body ?? {});
   const { submitSequenceCoverage } = await import('../services/musicVideo/sequenceCoverage.js');
   res.status(202).json(await submitSequenceCoverage(req.params.id, { sceneIds }));
+}));
+
+// #16128: plan (`dryRun`) or queue one hosted take across a run of consecutive shots.
+// The finished clip is filed whole on each shot with its own in-point; no selection changes.
+router.post('/:id/sequence-takes', asyncHandler(async (req, res) => {
+  const body = validateRequest(musicVideoSequenceTakeSchema, req.body ?? {});
+  const { sequenceTake } = await import('../services/musicVideo/sequenceTakes.js');
+  const result = await sequenceTake(req.params.id, body);
+  res.status(result.dryRun ? 200 : 202).json(result);
 }));
 
 router.post('/:id/treatment/apply', asyncHandler(async (req, res) => {

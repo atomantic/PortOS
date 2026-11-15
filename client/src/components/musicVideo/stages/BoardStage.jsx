@@ -15,6 +15,7 @@ import ScenePoster from '../ScenePoster.jsx';
 import { blenderShotThumbPath } from '../../../lib/musicVideoBlender.js';
 import { musicVideoBlenderMediaUrl } from '../../../services/apiMusicVideo.js';
 import SharedTakeOffers from '../SharedTakeOffers.jsx';
+import SequenceTakePanel from '../SequenceTakePanel.jsx';
 import { sceneActiveEndImageId } from '../../../../../server/lib/musicVideoEndFrame.js';
 import ShotEffectsCard, { SceneEffectBadges } from '../ShotEffectsCard.jsx';
 import { shotNumbers } from '../ShotStepper.jsx';
@@ -246,6 +247,7 @@ export default function BoardStage({ board }) {
         </div>
       )}
       {scenes.length > 0 && <SharedTakeOffers scenes={scenes} onSave={board.saveScene} />}
+      {scenes.length > 1 && <SequenceTakePanel key={project.id} project={project} shotName={shotName} disabled={locked} />}
       {scenes.length > 0 && (
         <ShotEffectsCard counts={shotEffectCounts([...effectsById.values()])} selected={effectFilter} onSelect={setEffectFilter} />
       )}
