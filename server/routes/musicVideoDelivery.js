@@ -7,7 +7,6 @@
 import { musicVideoDcpRequestSchema } from '../lib/musicVideoValidation.js';
 import { inspectDcpReadiness } from '../services/musicVideo/dcpPreflight.js';
 import { startDcp, attachDcp, cancelDcp, dcpArtifactPaths } from '../services/musicVideo/dcp.js';
-import { pipeline } from 'stream/promises';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, musicVideoExcerptRequestSchema, musicVideoSocialCutsQuerySchema, musicVideoExcerptNoteSchema, musicVideoExcerptNoteUpdateSchema } from '../lib/validation.js';
