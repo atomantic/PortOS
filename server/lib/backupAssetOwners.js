@@ -246,12 +246,13 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     // apart from the bytes, so each holds the lease from its first byte change
     // (or, for an upload, the record write) through the record. Committing a
     // voice-memo scrap to an ingredient names bytes the admitted scrap already
-    // named, and detaching catalog media removes no bytes.
+    // named, and detaching catalog media removes no bytes. A kept look-around
+    // angle is saved to the gallery first and its plate row commits under the lease.
     id: 'attachments-and-catalog-media',
     status: 'admitted',
     modules: [
       'services/persistentMindAttachments.js', 'routes/brainSongbook.js', 'services/catalogMedia.js',
-      'services/catalogIngestSources.js', 'services/roundReferenceAudioImport.js',
+      'services/catalogIngestSources.js', 'services/roundReferenceAudioImport.js', 'services/catalogLookAround.js',
     ],
   },
   {
