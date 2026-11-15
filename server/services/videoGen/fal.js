@@ -187,7 +187,7 @@ async function generateVideoPrepared({
   uploadedTempPath = null, uploadedTempPaths = [],
   resolution = null, generateAudio = false, frameAspect = null, promptAdditions = [], musicVideo = null,
   guidanceImagePath = null, referenceImagePaths = [], clipReferenceLabels = null,
-  sourceVideoPath = null, extendedFrom = null, extendSourceSec = null,
+  sourceVideoPath = null, extendedFrom = null, extendSourceSec = null, lookAround = null,
 }) {
   await ensureDir(PATHS.videos);
   const renderStartedAtMs = Date.now();
@@ -276,6 +276,8 @@ async function generateVideoPrepared({
     mode: sourceImagePath ? 'image' : 'text',
     // #16150: the clip this render continues.
     ...(extendedFrom ? { extendedFrom, ...(extendSourceSec ? { extendSourceSec } : {}) } : {}),
+    // #16145: a place's look-around clip names its place, motion and main plate (catalogLookAround.js).
+    ...(lookAround?.ingredientId ? { lookAround } : {}),
     ...storyboardGuidanceMeta(guidanceImagePath, referenceImagePaths),
     ...(clipReferenceLabels != null && !guidanceImagePath ? { clipReferenceFiles: referenceImagePaths.map((path) => basename(path)) } : {}),
     // A lip-sync take syncs a mouth; an audio-to-video take moves the whole frame to the audio.

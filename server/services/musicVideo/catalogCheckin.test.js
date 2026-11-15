@@ -163,3 +163,37 @@ describe('environment picks beyond the Auto set (#15544)', () => {
     expect(sixPlusOlder.basis).toBe(six.basis);
   });
 });
+
+describe('look-around angle plates in shots (#16145)', () => {
+  const place = { id: 'subject-quay', ingredientId: 'env-quay', kind: 'place', name: 'Example quay' };
+  const angle = (n, bearingDeg, label) => ({ kind: 'reference', role: 'plate', mediaKey: `angle-${n}.png`, createdAt: `2026-02-0${n}T00:00:00.000Z`,
+    library: { variant: { label }, angle: { clipId: 'clip-1', atSec: n, sourceMediaKey: 'plate.png', bearingDeg, motion: 'full-turn' } } });
+  const media = [{ kind: 'reference', role: 'plate', mediaKey: 'plate.png', createdAt: '2026-01-01T00:00:00.000Z' }, angle(1, 90, '90° right'), angle(2, 180, '180° behind')];
+  const db = { getIngredient: vi.fn(async () => ({ id: place.ingredientId, type: 'place', name: 'Quay', payload: {} })), listMediaForIngredient: vi.fn(async () => media) };
+  const shot = (sceneId, file) => ({ sceneId, takes: [], frameReferenceIds: [refId(place.id, file)] });
+  const project = (scenes) => ({ concept: { subjects: [place] }, castAndSets: { source: 'catalog', status: 'review' }, scenes });
+
+  // Catches angle plates reaching the picker unlabelled, or a new angle staling an approval.
+  it('offers each angle labelled by its bearing with its shared-geometry lineage', async () => {
+    const resolved = await resolveCatalogCheckin(project([shot('a', 'plate.png')]), { catalog: db, exists: () => true });
+    const choices = musicVideoReferenceChoices({ ...project([]), castAndSets: { source: 'catalog', catalogCheckin: resolved } });
+    expect(choices.find(ref => ref.imageId === 'angle-1.png')).toMatchObject({ role: 'set', label: 'Quay · 90° right',
+      angle: { clipId: 'clip-1', sourceMediaKey: 'plate.png', bearingDeg: 90 } });
+    expect(choices.find(ref => ref.imageId === 'plate.png').label).toBe('Quay');
+    expect(resolved.items[0].angles['angle-1.png']).toMatchObject({ label: '90° right', clipId: 'clip-1' });
+    const unlabelled = media.map(({ library: _library, ...row }) => row);
+    const plain = await resolveCatalogCheckin(project([shot('a', 'plate.png')]), { catalog: { ...db, listMediaForIngredient: async () => unlabelled }, exists: () => true });
+    expect(plain.items[0].angles).toBeUndefined();
+    expect(plain.basis).toBe(resolved.basis);
+  });
+
+  // Catches cutting between angles of one clip being reported as "different plates", and a long
+  // run on one view going unnoticed.
+  it('treats angles of one clip as one plate and warns on three consecutive shots from the same view', async () => {
+    const scenes = [shot('s1', 'plate.png'), shot('s2', 'angle-1.png'), shot('s3', 'angle-1.png'), shot('s4', 'angle-1.png'), shot('s5', 'angle-2.png')];
+    const resolved = await resolveCatalogCheckin(project(scenes), { catalog: db, exists: () => true });
+    expect(resolved.shotReferenceProblems.map(({ sceneId, code }) => [sceneId, code])).toEqual([['s4', 'same-angle']]);
+    expect(resolved.shotReferenceProblems[0].message).toMatch(/3 shots in a row at Quay use the same view/);
+    expect(resolved.shotReferenceProblems[0].fix).toBeUndefined();
+  });
+});

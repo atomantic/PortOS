@@ -15,6 +15,11 @@ const CLIP = 'clipReferenceIds';
 const limitFor = { [FRAME]: IMAGE_REFERENCE_REQUEST_LIMIT, [CLIP]: MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT };
 const pickLabel = { [FRAME]: 'frame', [CLIP]: 'clip' };
 const nameKey = value => String(value || '').trim().toLowerCase();
+// A look-around angle shares its clip's geometry with the main plate it was rendered from (#16145),
+// so shots that cut between angles of one place still pick one plate.
+const geometryKey = ref => ref.angle?.sourceMediaKey || ref.imageId;
+// This many consecutive shots at a place on one view earn a nudge toward its other angles.
+const SAME_ANGLE_RUN = 3;
 const readPlateMetadata = file => resolveGalleryImage(file)
   ? readImageSidecar(file).then(({ metadata }) => metadata).catch(() => null) : null;
 
@@ -98,7 +103,7 @@ export async function musicVideoShotReferenceChecks(project, media) {
       .flatMap(ref => ownersOf(ref).filter(id => places.has(id)).map(placeId => ({ field, ref, placeId }))));
     for (const placeId of new Set(shotPlates.map(pick => pick.placeId))) {
       if ((scene.shotSheet?.location || scene.setReference?.subjectId) && !placeIds.has(placeId)) continue;
-      const keys = [...new Set(shotPlates.filter(pick => pick.placeId === placeId && Array.isArray(scene[pick.field])).map(pick => pick.ref.imageId))].sort();
+      const keys = [...new Set(shotPlates.filter(pick => pick.placeId === placeId && Array.isArray(scene[pick.field])).map(pick => geometryKey(pick.ref)))].sort();
       if (!keys.length) continue;
       const group = byPlace.get(placeId) || new Set();
       group.add(JSON.stringify(keys));
@@ -127,6 +132,7 @@ export async function musicVideoShotReferenceChecks(project, media) {
     return [item.subjectId, null];
   }));
   const newest = new Map(latestEntries);
+  const sameAngle = sameAngleRows(shotPicks, subjects, ownersOf);
 
   return shotPicks.flatMap(({ scene, choices, frame, clip, shotPlates, placeIds, row }) => {
     const sheet = scene.shotSheet;
@@ -177,11 +183,36 @@ export async function musicVideoShotReferenceChecks(project, media) {
         rows.push(row('shot-derived-plate', [field, ref.id, placeId], `The ${label} plate ${ref.imageId} comes from a shot frame and may contain cast.`,
           latest ? `Use ${latest.imageId}` : 'Remove shot-derived plate', replacement(scene, field, current, ref.id, latest?.id)));
       } else if (Array.isArray(scene[field]) && (!sheet?.location && !scene.setReference?.subjectId || placeIds.has(placeId))
-        && byPlace.get(placeId)?.size > 1 && latest && ref.imageId !== latest.imageId) {
+        && byPlace.get(placeId)?.size > 1 && latest && geometryKey(ref) !== geometryKey(latest)) {
         rows.push(row('different-plate', [field, ref.id, placeId], `Shots at ${latest.label} pick different plates. The ${label} uses ${ref.imageId}. Newest plate: ${latest.imageId}.`,
           'Use newest plate', replacement(scene, field, current, ref.id, latest.id)));
       }
     }
-    return rows;
+    return [...rows, ...(sameAngle.get(scene.sceneId) || [])];
   });
+}
+
+/** Advisory only: a run of consecutive shots at a place with angle plates that all frame it from one view. */
+function sameAngleRows(shotPicks, subjects, ownersOf) {
+  const withAngles = new Set(shotPicks.flatMap(({ choices }) => choices.filter(ref => ref.angle && ref.role === 'set').flatMap(ownersOf)));
+  const runs = new Map();
+  const out = new Map();
+  for (const { scene, shotPlates, row } of shotPicks) {
+    const views = new Map();
+    for (const { field, ref, placeId } of shotPlates) {
+      if (field === FRAME && withAngles.has(placeId)) views.set(placeId, [...(views.get(placeId) || []), ref.imageId]);
+    }
+    for (const placeId of withAngles) {
+      if (!views.has(placeId)) { runs.delete(placeId); continue; }
+      const key = JSON.stringify([...new Set(views.get(placeId))].sort());
+      const run = runs.get(placeId)?.key === key ? runs.get(placeId) : { key, count: 0 };
+      run.count += 1;
+      runs.set(placeId, run);
+      if (run.count < SAME_ANGLE_RUN) continue;
+      const name = subjects.find(subject => subject.id === placeId)?.names.at(-1) || 'this place';
+      out.set(scene.sceneId, [...(out.get(scene.sceneId) || []), row('same-angle', [placeId, key],
+        `${run.count} shots in a row at ${name} use the same view. Pick another of its angles for variety.`)]);
+    }
+  }
+  return out;
 }

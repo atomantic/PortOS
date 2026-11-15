@@ -34,6 +34,18 @@ describe('catalog assets offered for a linked character', () => {
     expect(refs.map((ref) => ref.label)).toEqual(['Lead · Portrait', 'Lead · Face sheet', 'Lead · Character sheet', 'Lead · Stage look']);
   });
 
+  // Uniquely catches a look-around angle plate (#16145) missing from a linked set's choices or its angle label.
+  it('offers a linked place\'s look-around angle plates, labelled by angle, and not its unrated plain plates', () => {
+    const place = { id: 'quay', kind: 'place', name: 'Quay', ingredientId: 'cat-plc-quay' };
+    const angle = { clipId: 'clip-1', atSec: 2, sourceMediaKey: 'plate.png', bearingDeg: 90, motion: 'full-turn' };
+    const refs = musicVideoLinkedCastReferences(project({ concept: { subjects: [place] } }), { [place.ingredientId]: [
+      { kind: 'reference', role: 'plate', mediaKey: 'plate.png' },
+      { kind: 'reference', role: 'plate', mediaKey: 'angle.png', library: { variant: { label: '90° right · Steps' }, angle } },
+    ] });
+    expect(refs).toEqual([expect.objectContaining({ imageId: 'angle.png', role: 'set', label: 'Quay · 90° right · Steps',
+      angle: { clipId: 'clip-1', sourceMediaKey: 'plate.png', bearingDeg: 90 } })]);
+  });
+
   it('offers only the selected age or look when the subject links one', () => {
     const linked = project({ concept: { subjects: [{ ...subject, castForm: { id: 'child' } }] } });
     expect(musicVideoLinkedCastReferences(linked, castMedia).map((ref) => ref.imageId)).toEqual(['child-face.png', 'child-good.png']);

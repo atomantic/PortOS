@@ -399,3 +399,14 @@ export const refineCatalogDraft = (id, body, { preview = false, ...options } = {
 
 export const renderCatalogGreyboxShot = (id, shotId, options) =>
   request(`/catalog/ingredients/${enc(id)}/greybox/shots/${enc(shotId)}/render`, { method: 'POST', body: JSON.stringify({}), ...options });
+
+// Place look-around (#16145): one rotating-camera clip of the main plate → matching angle plates.
+// `dryRun: true` on the render returns the exact prompt, request body and price; on angles, the labels and clean-up prompt.
+export const getCatalogLookAround = (id, options = {}) =>
+  request(`/catalog/ingredients/${enc(id)}/look-around`, options);
+export const startCatalogLookAround = (id, body, options = {}) =>
+  request(`/catalog/ingredients/${enc(id)}/look-around`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const scoreCatalogLookAroundClip = (id, clipId, options = {}) =>
+  request(`/catalog/ingredients/${enc(id)}/look-around/${enc(clipId)}/frames`, { method: 'POST', body: '{}', ...options });
+export const saveCatalogLookAroundAngles = (id, clipId, body, options = {}) =>
+  request(`/catalog/ingredients/${enc(id)}/look-around/${enc(clipId)}/angles`, { method: 'POST', body: JSON.stringify(body), ...options });

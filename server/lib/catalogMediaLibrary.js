@@ -15,6 +15,8 @@
  * conditioning and tests.
  */
 
+import { normalizeLookAroundAngle } from './catalogLookAround.js';
+
 export const MAX_CAST_GUIDES = 4;
 export const CAST_ERAS = Object.freeze(['child', 'teen', 'adult', 'elder']);
 export const MAX_LIBRARY_TAGS = 20;
@@ -87,6 +89,9 @@ export function normalizeLibrary(value) {
   // The other character on a comparison sheet, so a regenerate keeps the pair.
   const comparedWith = cleanStr(value.comparedWith, 64);
   if (comparedWith) out.comparedWith = comparedWith;
+  // A place's look-around angle plate: the clip, moment and main plate it came from (#16145).
+  const angle = normalizeLookAroundAngle(value.angle);
+  if (angle) out.angle = angle;
   return out;
 }
 

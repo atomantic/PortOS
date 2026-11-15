@@ -5,7 +5,8 @@ import CatalogMediaTile from './CatalogMediaTile';
 // The Plates tab for an environment: set plates are reference images whose
 // catalog media role is `plate`. Marking/unmarking re-attaches the same media
 // key with a new role (the attach endpoint upserts role on the existing row),
-// via `onSetRole(media, role)` which resolves true on success.
+// via `onSetRole(media, role)` which resolves true on success. A look-around
+// angle plate (#16145) is captioned with its angle label.
 export default function CatalogPlatesPanel({ plates, candidates, missingMedia, onSetRole, onDetach }) {
   const [armedDetach, setArmedDetach] = useState(null);
   const [busyKey, setBusyKey] = useState(null);
@@ -39,6 +40,7 @@ export default function CatalogPlatesPanel({ plates, candidates, missingMedia, o
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             {plateList.map((m) => (
               <CatalogMediaTile key={`${m.mediaKey}:${m.kind}`} m={m} missing={missingMedia?.has?.(m.mediaKey)}
+                label={m.library?.angle ? m.library?.variant?.label || 'Angle' : null}
                 onDetach={onDetach} armedDetach={armedDetach} onArmDetach={setArmedDetach}
                 extraActions={roleButton(m, null, 'Unmark plate', PinOff)} />
             ))}
