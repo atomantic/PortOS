@@ -1,27 +1,6 @@
 /**
  * `PROVIDER_HARNESSES`: one row per agent program PortOS drives (claude, codex, opencode, etc.) for
  * the provider connection graph.
- *
- * Provider HARNESS identity for the connection graph (#6366) — `PROVIDER_HARNESSES` (one row per agent
- * program PortOS drives: claude/opencode/codex/antigravity/cursor/grok/kimi/pi, plus `direct` —
- * PortOS's own HTTP client, the harness of an `api` record (#7562) — each with its supported `modes`,
- * wire `protocol`, the existing `is*Provider` predicate as its matcher, and its capability `bindings`:
- * every way the program can be pointed at a service definition — subscription,
- * protocol+baseUrl+credential, static-env service (Bedrock), `codexOss`, `piProvider`),
- * `PROVIDER_HARNESS_IDS`, `harnessById`, `harnessForProvider` (`direct` for an `api` record, null only
- * for an UNKNOWN harness), `normalizeHarnessId` / `graphHarnessId` (the one `direct` ↔ `NULL`
- * translation for the graph's nullable column), `compatibleBindings(harness, serviceInstance)` /
- * `firstCompatibleBinding` / `isCompatible` (which bindings reach a resolved service instance),
- * `CREATABLE_HARNESS_IDS` (mintable from a bare connection) and `harnessConnectionBlocker` (the row's
- * `connectionBlocker`: why not — no recipe at all, or a subscription/Pi row that composes onto named
- * services only), `harnessSupportsMode`, `ROUTE_MODES`, plus the model-name adapters
- * `toExecutableModelName` / `toCanonicalModelName` (the verified inverse of `prefixOpencodeModel`: a
- * stored alias is canonicalized only when it maps back to the exact stored string, so import never
- * rewrites a saved model by heuristically stripping a prefix). Distinct from `providerVendors.js`
- * (argv-shaped), `providerFamilies.js` (subscription quota) and `serviceDefinitions.js` (the
- * backends). Pure leaf — `client/src/utils/providerHarnesses.js` names a binding's harness through
- * `harnessById`; the `direct` ↔ `NULL` translation is mirrored in `aiToolkit/internal/harnesses.js`
- * behind `providerHarnesses.parity.test.js`.
  */
 
 import {

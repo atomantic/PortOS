@@ -3,7 +3,7 @@
  * archival. Real synthetic day files in a temp data root; each restore's
  * transfer replaces destination bytes exactly as rsync does at its process
  * boundary. The JSON ingest crossing is covered end to end through
- * restoreSnapshot in backup.test.js.
+ * restoreSnapshot in backup.restoreBoundaries.test.js.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, readdir, rm, writeFile } from 'fs/promises';

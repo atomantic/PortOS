@@ -1,24 +1,6 @@
 /**
  * Ollama runtime context-window helpers.
  *
- * Ollama runtime context-window reasoning. `resolveOllamaContextLength(provider, env)` → the window
- * PortOS should hold the daemon at (`provider.numCtx`, then `OLLAMA_CONTEXT_LENGTH`, then `null` =
- * leave Ollama's VRAM-based auto-pick alone); `withOllamaContextEnv(env, n)` builds the `ollama serve`
- * child env; `parseOllamaContextOverflow(text)` recognizes the `exceed_context_size_error` rejection
- * and pulls `{ promptTokens, contextLength }` out of either the JSON body or the human message;
- * `describeOllamaContextOverflow` / `describeOllamaContextTooSmall` render the actionable one-liners;
- * `normalizeOllamaBaseUrl(raw)` (scheme, no trailing slash, no `/v1`),
- * `isSameOllamaDaemon(providerBase, managedBase)` compares host+port so a provider pointed at a
- * *remote* Ollama never triggers a local-daemon reload, with `managedOllamaBaseUrl(env)` supplying the
- * managed side (`OLLAMA_URL` → `OLLAMA_HOST` → the stock local daemon);
- * `managedOllamaContextLength(provider, env)` is `resolveOllamaContextLength` gated on that
- * comparison, and `withOllamaRuntimeContextWindow(provider, env)` stamps it onto an in-memory provider
- * projection as `runtimeContextWindow` — how the env rung reaches the vendored toolkit’s
- * `clampToRuntimeContextWindow`, which may not import out here (#7472); `OLLAMA_AGENT_MIN_CONTEXT` is
- * the window below which an agent harness is warned. Pure — the daemon side lives in
- * `services/ollamaManager.js` (`ensureContextWindow`), the pre-spawn enforcement in
- * `services/ollamaAgentContext.js`.
- *
  * Ollama picks a model's runtime window (`n_ctx`) from available VRAM —
  * `OLLAMA_CONTEXT_LENGTH` documents the default as "4k/32k/256k based on VRAM".
  * That auto-pick is fine for a chat turn and far too small for an agent harness:

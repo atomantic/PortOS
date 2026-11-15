@@ -1,76 +1,27 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { AlertTriangle, CheckCircle, Clock, RefreshCw, Zap, Server } from 'lucide-react';
 import * as api from '../../../services/api';
-import socket from '../../../services/socket';
+import { useSocketResource } from '../../../hooks/useSocketResource';
 import { formatClockTime } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
 
+const STATUS_EVENTS = ['provider:status:changed'];
+
+// Without the provider list "All Available" would be vacuous, so a failed
+// read of either one fails the whole card into its Retry state.
+const fetchProviderStatus = async () => {
+  const [statuses, providerData] = await Promise.all([
+    api.getProviderStatuses(),
+    api.getProviders({ silent: true })
+  ]);
+  return { statuses, providers: providerData?.providers || [] };
+};
+
 export default function ProviderStatusCard() {
-  const [statuses, setStatuses] = useState(null);
-  const [providers, setProviders] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { data, loading, refetch: loadData } = useSocketResource(fetchProviderStatus, { events: STATUS_EVENTS });
+  const statuses = data?.statuses ?? null;
+  const providers = data?.providers ?? [];
   const [recovering, setRecovering] = useState(null);
-
-  useEffect(() => {
-    loadData();
-
-    // Listen for real-time status changes
-    const handleStatusChange = (data) => {
-      setStatuses(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          providers: {
-            ...prev.providers,
-            [data.providerId]: {
-              ...data.status,
-              timeUntilRecovery: data.status.estimatedRecovery
-                ? getTimeUntilRecovery(data.status.estimatedRecovery)
-                : null
-            }
-          }
-        };
-      });
-    };
-
-    socket.on('provider:status:changed', handleStatusChange);
-
-    return () => {
-      socket.off('provider:status:changed', handleStatusChange);
-    };
-  }, []);
-
-  const getTimeUntilRecovery = (estimatedRecovery) => {
-    const now = Date.now();
-    const recoveryTime = new Date(estimatedRecovery).getTime();
-    const remainingMs = recoveryTime - now;
-
-    if (remainingMs <= 0) return 'any moment';
-
-    const days = Math.floor(remainingMs / (24 * 60 * 60 * 1000));
-    const hours = Math.floor((remainingMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
-    const minutes = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
-
-    const parts = [];
-    if (days > 0) parts.push(`${days}d`);
-    if (hours > 0) parts.push(`${hours}h`);
-    if (minutes > 0) parts.push(`${minutes}m`);
-
-    return parts.join(' ') || '< 1m';
-  };
-
-  const loadData = async () => {
-    setLoading(true);
-    const [statusData, providerData] = await Promise.all([
-      api.getProviderStatuses().catch(() => null),
-      api.getProviders({ silent: true }).catch(() => null)
-    ]);
-    // Without the provider list "All Available" would be vacuous, so a failed
-    // provider read fails the whole card into its Retry state.
-    setStatuses(providerData ? statusData : null);
-    setProviders(providerData?.providers || []);
-    setLoading(false);
-  };
 
   const handleRecover = async (providerId) => {
     setRecovering(providerId);

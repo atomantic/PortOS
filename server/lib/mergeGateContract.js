@@ -1,23 +1,6 @@
 /**
  * Merge Gate contract check (#5876)
  *
- * `buildManagedGithubMergeScript()` emits the shared claim merge block with verified allowed-method
- * selection, fresh head/check/admission gates and fail-closed mutation readback.
- * `MANAGED_WORKTREE_CLEANUP_CONTRACT` and its `MANAGED_WORKTREE_COMPLETION_HANDOFF` share head-pinned,
- * checkout-preserving merge and ownership-gated removal of a merged clean checkout, with no archive
- * copy. `mergeGateOwed({taskOpenPR, rendersInlinePrLifecycle, leaveOpen})` decides whether a
- * completing run actually owed its own PR merge — only the INLINE (`git`/`gh`) prompt renders a Merge
- * Gate section, so a `/do:pr` run is inert here; `resolveMergeGateVerdict({prProbe, summary})`
- * classifies a run that did (`merged` / `merge-handoff-queued` / `no-pr-action` / `leave-open-stated`
- * / `needs-reprompt`) from the PR's live state and the agent's own sentinel text;
- * `summaryStatesLeaveOpen` and `buildMergeGateReprompt` are its text-matching and corrective-prompt
- * helpers. `buildAutoMergeHandoffInstructions(prRef)` requires delivery ownership until confirmed
- * merge or an exact-head server receipt accepted for measured CI backlog.
- * `hasHealthyAutoMergeRequest(pr, now?)` bounds pending handoffs to one hour with readable, non-failed
- * CI; `prProbe` also verifies the local head matches GitHub before accepting `autoMergeEnabled` or a
- * pending-merge receipt (`mergeHandoffQueued`). Pure — the PR lookup lives in
- * `../services/prProbe.js`, the re-prompt delivery in `agentTuiSpawning.js`.
- *
  * A worktree agent handed the INLINE PR lifecycle — the plain `git`/`gh` steps,
  * because its host cannot type `/do:pr` — gets a "Merge Gate" section that ends
  * with "Confirm the merge before exiting: … must return MERGED". Nothing

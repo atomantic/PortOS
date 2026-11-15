@@ -1,39 +1,11 @@
 // @vitest-environment node
 
 /**
- * Repo-wide guard: a client file that emits `<ns>:subscribe` for a
- * `registerSubscriber` namespace goes through `hooks/useSocketSubscription.js`.
- *
- * The server keeps room membership per server-side socket OBJECT
- * (`registerSubscriber` in `server/services/socket.js`) with NO ref count —
- * `disconnect` clears the whole subscriber Set. A one-shot `socket.emit('<ns>:subscribe')`
- * at mount therefore goes permanently dead the first time the shared client
- * socket reconnects (server restart, PM2 reload, self-update, laptop sleep, a
- * Wi-Fi/Tailscale blip): the server sees a brand new socket belonging to no
- * subscriber set. `useNotifications`, `useErrorNotifications`,
- * `pages/Instances.jsx` and `pages/Loops.jsx` all shipped this bug (#8110) —
- * the bell, error toasts, and the Instances/Loops live streams went silent
- * for the rest of the tab's life after the first reconnect.
- *
- * `useSocketSubscription` centralizes the fix: subscribe once (refcounted
- * across consumers of the same namespace), re-emit on every socket `connect`,
- * and optionally refetch via `onResubscribe`. New namespace subscribers must
- * use it instead of re-implementing the reconnect dance (or forgetting it).
- *
- * Two hooks predate this fix and already implement the correct
- * `socket.on('connect', subscribe)` pattern by hand; they sit on the
- * allowlist below with a reason. The `cos` namespace has NO allowlist left
- * (#12033): every cos:* consumer goes through the hook, including the one
- * that changes the server's task-list mode (`payload` / `releasePayload`).
- *
- * ## What this guard CANNOT see
- *
- * It is a source grep, not an AST pass:
- *   - A subscribe built from a dynamic template string (`` `${ns}:subscribe` ``)
- *     is invisible — that is also `useSocketSubscription`'s own internal form,
- *     so this is by design: the hook itself is exempted by path, not pattern.
- *   - It cannot tell an allowlisted file's *sanctioned* connect-resubscribe
- *     from a second, unguarded emit added to the same file later.
+ * Rule: Client files emitting `<ns>:subscribe` for a `registerSubscriber` namespace must use `hooks/useSocketSubscription.js` (except allowlisted legacy hooks).
+ * Fix: Replace one-shot `socket.emit('<ns>:subscribe')` with `useSocketSubscription`.
+ * What this guard cannot see:
+ *   - Dynamic template strings (`` `${ns}:subscribe` ``) are invisible.
+ *   - Cannot distinguish an allowlisted file's sanctioned connect-resubscribe from a second unguarded emit added later.
  */
 
 import { describe, it, expect } from 'vitest';

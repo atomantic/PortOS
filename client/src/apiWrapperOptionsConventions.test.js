@@ -1,40 +1,10 @@
 // @vitest-environment node
 
 /**
- * Repo-wide guard: a call site that passes `{ silent: true }` to an API wrapper
- * must be passing it somewhere the wrapper actually forwards (#9951).
- *
- * `request(endpoint, options)` in `services/apiCore.js` reads `silent` out of its
- * second argument to suppress the error toast. A wrapper such as
- *
- *   export const getThing = (id) => request(`/things/${id}`);
- *
- * has no parameter for it, so `getThing(id, { silent: true })` type-checks, runs,
- * and silently toasts anyway — and `export const saveThing = (id, data) => …`
- * receives the options object AS THE PAYLOAD. Three call sites shipped that way.
- *
- * ## The rule
- *
- * For every call `wrapper(…, { …silent… }, …)` to an export of
- * `client/src/services/api*.js`, the wrapper's parameter at that argument
- * position must be one of:
- *
- *   - named `options` / `opts` (or any name the wrapper passes straight through
- *     or spreads, `...name`),
- *   - a rest parameter (`...args`), or
- *   - a destructuring pattern that names `silent` or collects `...rest`.
- *
- * A wrapper with no parameter at that position fails.
- *
- * ## What this guard CANNOT see
- *
- * It is a lexer-assisted source scan, not a type check. It judges only a LITERAL
- * object argument (an options object built in a variable, or spread
- * `{ ...opts }`, is invisible), resolves a callee by its exported NAME (judged
- * only in a file that imports it, or via `api.name`; a same-named local binding
- * in an importing file is treated as the wrapper), and reads a
- * wrapper's forwarding from its source text up to the next `export`. A wrapper
- * that is itself a re-export alias (`export const a = b`) is not judged.
+ * Rule: Every call `wrapper(…, { …silent… }, …)` to an export of `client/src/services/api*.js` must target a parameter that accepts/forwards `options`/`opts`/`...args` or destructures `silent`/`...rest`.
+ * Fix: Add an `options = {}` parameter to the wrapper and forward it to `request(endpoint, options)`.
+ * What this guard cannot see:
+ *   - Lexer-assisted scan: judges only literal object arguments (not `{ ...opts }` or variable options), resolves callees by exported name, and ignores re-export aliases (`export const a = b`).
  */
 
 import { describe, it, expect } from 'vitest';

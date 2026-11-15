@@ -87,6 +87,11 @@ export function withLiveHealthRestore(transfer) {
   return run;
 }
 
+/** Test settle signal: whether a live restore is parked draining admitted day cycles. */
+export function _healthRestoreDrainingForTests() {
+  return admission.drained !== null;
+}
+
 // === Pure Functions ===
 
 /**

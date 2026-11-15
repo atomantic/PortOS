@@ -1,29 +1,8 @@
 /**
- * Dashboard widgets lay out by CONTAINER query, never by viewport breakpoint.
- *
- * `client/src/components/dashboard/AGENTS.md` states the rule; this guard is
- * what stops it drifting back. A dashboard cell is a column of a 12-column
- * grid, so a `quarter` widget is ~250px wide no matter how wide the monitor is
- * — and on a 2560px screen every `sm:`/`md:`/`lg:` inside it is unconditionally
- * true. The result is the widest layout pinned into the narrowest column:
- * System Health rendered its five metric tiles `lg:grid-cols-5` at ~40px each,
- * so "Memory"/"CPU"/"Processes" overlapped into an unreadable band, and the
- * `hidden sm:inline` label on "Mark as seen" expanded the button until the
- * While-You-Were-Away heading wrapped one word per line. Both got *worse* on a
- * narrow monitor, because a narrower viewport packs the same columns into less
- * room while still satisfying `sm:`.
- *
- * The rule: a component reachable from `WIDGETS` in `widgetRegistry.jsx` may
- * not carry a bare viewport variant in a class string. Put `@container` on the
- * component's own root and prefix its layout classes `@sm:`/`@md:`/`@lg:` —
- * on the component, not the grid cell, since the same component also renders
- * in drawers and full-width pages that provide no container ancestor.
- *
- * Scope is the registry's own modules (not their whole import closure): those
- * are the components the grid sizes, and a shared primitive used on real pages
- * too has a viewport of its own to answer to. Widgets that genuinely need a
- * viewport variant — a hover-vs-touch affordance is about the device, not the
- * box — go in ALLOWED with the reason.
+ * Rule: Components reachable from `WIDGETS` in `widgetRegistry.jsx` must use `@container` + `@sm:`/`@md:`/`@lg:` container queries, never bare viewport breakpoints (see `client/src/components/dashboard/AGENTS.md`).
+ * Fix: Put `@container` on the component's root and prefix layout classes with `@sm:`/`@md:`/`@lg:`, or add genuinely device-specific exceptions to `ALLOWED` with a reason.
+ * What this guard cannot see:
+ *   - Scoped to `widgetRegistry.jsx`'s own modules, not their transitive import closure.
  */
 
 import { describe, it, expect } from 'vitest';

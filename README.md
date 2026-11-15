@@ -169,7 +169,7 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 
 ### Architecture & Operations
 - [Architecture Overview](./docs/ARCHITECTURE.md) — System design, data flow, and service diagram
-- [API Reference](./docs/API.md) — REST endpoints, full route-domain index, and WebSocket events
+- [API Reference](./docs/API.md) — API conventions, route-domain index, and WebSocket events (endpoint reference: the API Explorer)
 - [API Tool Contract](./docs/API_TOOL_CONTRACT.md) — Unified semantic tool, Persistent Mind, and Agent Tools MCP contract
 - [Companion App API](./docs/COMPANION_APP_API.md) — PortDeck native mobile client discovery and HTTP API contract
 - [Setup Guide](./docs/SETUP.md) — Tailscale, MagicDNS, trusted HTTPS, launch URLs, and AI-provider readiness

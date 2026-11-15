@@ -1,49 +1,10 @@
 /**
- * Repo-wide guard: a spawned child must have its terminal listener attached
- * before the function next yields (#11761).
- *
- * ## The bug class
- *
- *   const child = spawn(cli, args);
- *   const scan = await securityScans.read(id);   // ← real file I/O
- *   child.on('error', onError);                  // ← too late
- *
- * Node reports a failed spawn (ENOENT, EACCES, EMFILE) through
- * `process.nextTick`, and a fast-dying child exits while the function is
- * suspended. An `error` with no listener THROWS and, outside the request
- * lifecycle, takes the process down; a `close`/`exit` with no listener is lost
- * and strands the job `running`. It shipped four times before this guard
- * (#4617, #5655, #5791, and the CoS Runner `/spawn` + `/spawn-tui` + local
- * image render sites of #11761).
- *
- * ## The rule
- *
- * In one function body, a `spawn(` / `pty.spawn(` / `spawnDetached(` result
- * bound to a name must, before the next `await`, have one of:
- *
- *   - `<name>.on('error', …)` (or `once` / `addListener` / `prependListener`),
- *   - `bufferChildExit(<name>, …)`,
- *   - `<name>.onExit(…)` (node-pty).
- *
- * The operand of that first `await` is evaluated before the function suspends,
- * so a listener attached inside it (`await new Promise((r) => child.on('error', r))`)
- * counts. A spawn with no `await` after it in its block has no yield window and
- * passes.
- *
- * There is no allowlist: a new violation is a bug to fix by moving the awaited
- * work BEFORE the spawn, or by calling `bufferChildExit(child)` in the same tick.
- *
- * ## What this guard CANNOT see
- *
- * Lexer-assisted, not scope-aware (see `lib/sourceScan.js`):
- *   - Only spawns bound by `name = spawn(…)` / `const name = await spawnDetached(…)`
- *     are tracked; a spawn passed straight into a helper or chained
- *     (`spawn(…).on(…)`) is not.
- *   - The scan stops at the end of the enclosing function body. It walks out of
- *     `try`/`if`/loop blocks (skipping a `try`'s `catch`) but not out of object
- *     literals or callbacks, where it conservatively reports nothing.
- *   - Awaits inside a nested `async` function body are not the spawning
- *     function's yield point and are skipped.
+ * Rule: A spawned child (`spawn`, `pty.spawn`, `spawnDetached`) bound to a name must attach `.on('error', …)`, `bufferChildExit(…)`, or `.onExit(…)` before the function's next `await`.
+ * Fix: Move awaited work before the spawn, or attach the listener / call `bufferChildExit(child)` in the same tick.
+ * What this guard cannot see:
+ *   - Lexer-assisted (`lib/sourceScan.js`), not scope-aware: un-named spawns passed straight to a helper or chained (`spawn(…).on(…)`) are not tracked.
+ *   - Walks out of `try`/`if`/loop blocks (skipping `catch`) but not out of object literals or callbacks.
+ *   - Awaits inside nested `async` functions are skipped.
  */
 import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 

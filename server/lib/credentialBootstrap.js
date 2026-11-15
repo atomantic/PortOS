@@ -2,44 +2,6 @@
  * `resolveBootstrapEnv` runs a provider's optional envCommand to obtain KEY=value credentials for
  * CLI/TUI providers, parsing without evaluation and caching them for one minute.
  *
- * resolveBootstrapEnv(provider, { safetyProfile }) runs an optional `envCommand` argv for ordinary
- * provider runs or a no-tool review, parses KEY=value output without evaluation, and caches
- * credentials in memory for one minute — the alternative for a bootstrap that PRINTS credentials
- * rather than exec'ing the harness; a record that only names the wrap form is credentialed by the wrap
- * and gets `{}`. Generic support for a CLI/TUI provider whose auth is provisioned by an external CLI
- * at spawn time (e.g. a short-lived token for a proxy) rather than a static `apiKey` PortOS stores — a
- * `provider.credentialBootstrap: { setupCommand?, command, args?, harnessId?, argsSeparator? }`
- * record. `hasCredentialBootstrap(provider)` and `applyCredentialBootstrap(provider, command, args)`
- * (pure) return the command+args PortOS should actually spawn: `<command> <args...> <harnessId ??
- * command> [<argsSeparator>] <args...>` — the bootstrap CLI in front of the harness invocation, naming
- * the harness as `harnessId` when the bootstrap CLI uses its own identifier rather than the binary
- * name, and inserting `argsSeparator` (e.g. `--`) before the harness's own args when the bootstrap CLI
- * needs its flags kept apart from the wrapped program's. `resolveCliSpawn(provider, command, args,
- * childEnv)` composes that with Windows shim resolution (`bufferedSpawn.js`) for the three headless
- * spawn sites that repeated the same sequence (`runner.js`, `cliProviderRun.js`, `visionCli.js`) — the
- * argv analog of why `cliChildEnv.js`'s `buildCliChildEnv` exists. Every call site keeps resolving
- * `provider.command`/`args` unchanged for vendor detection, prompt-delivery convention, and the TUI's
- * own ready-text heuristics, and only asks this module for the pair handed to the literal
- * `spawn`/`pty.spawn` call — plus anything that observes the launching shell or PATH (missing-binary
- * detection, readiness probes), which must read the SPAWNED pair. The `sandboxed-actions` posture is
- * never wrapped — it executes contributor-supplied code inside a sandbox spelled entirely in the
- * recipe's argv, so nothing may sit in front of the harness and rewrite it; the `no-tool` postures
- * (the tool-free reviewer among them) ARE wrapped, because spawned bare they carry no credential at
- * all (#7720). The split lives in the helper, keyed on `safetyProfile`. The pure argv composition
- * lives in `aiToolkit/internal/credentialBootstrap.js` (`composeBootstrapSpawn` /
- * `hasCredentialBootstrap`, dependency-free), re-exported through here so the vendored toolkit's own
- * catalog probes compose the same shape without importing out. Every provider spawn site goes through
- * here — a bare-harness spawn runs with no credential and falls through to ambient vendor auth. Both
- * also return `wrapped`, because a wrapped spawn's direct child is the SUPERVISING wrapper rather than
- * the harness: `needsProcessGroup(wrapped)` says whether to spawn `detached` and kill with `{
- * processGroup: true }` (POSIX only — Windows' `taskkill /T` is already tree-wide), and
- * `processGroupKillable(child, processGroup)` adapts a child for the aiToolkit runner's external-run
- * registry, whose vendored `killProcessTree` has no group option. Without them a stop/timeout/cancel
- * signals the wrapper alone and leaves the harness running. `trackDetachedGroup(child, processGroup)`
- * / `signalDetachedGroups(signal, logFailure)` are the other side of that trade: detaching also moves
- * a child OUT of the server's own process group, so the shutdown handler sweeps this registry to keep
- * a signal aimed at that group (Ctrl-C at `npm start`) from orphaning one.
- *
  * Generic "credential bootstrap" wrapping for a CLI/TUI provider whose auth is
  * provisioned by an external CLI at spawn time, rather than a static `apiKey`
  * PortOS stores — e.g. a company-internal tool that mints a short-lived token

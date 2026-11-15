@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useRef } from 'react';
 import { RefreshCw, Search, MapPin, Users, Clock } from 'lucide-react';
 import * as api from '../../services/api';
-import socket from '../../services/socket';
+import { useSocketResource } from '../../hooks/useSocketResource';
 import { useAccountSyncStatus } from '../../hooks/useAccountSyncStatus';
 import EventDetail from './EventDetail';
 import { formatCount, formatTimeOfDay as formatTime, formatWeekdayDate, localDateKey } from '../../utils/formatters';
@@ -42,9 +42,14 @@ function groupEventsByDay(events) {
     }));
 }
 
+const CALENDAR_EVENTS = ['calendar:changed'];
+const EMPTY_EVENTS = [];
+const PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 200; // server cap per request
+
+const dedupeEvents = list => [...new Map(list.map(event => [`${event.accountId}:${event.id}`, event])).values()];
+
 export default function AgendaTab({ accounts }) {
-  const [events, setEvents] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [accountFilter, setAccountFilter] = useState('');
   const [searchParams, updateParams] = useUrlParams();
@@ -56,77 +61,57 @@ export default function AgendaTab({ accounts }) {
   const fromDate = /^\d{4}-\d{2}-\d{2}$/.test(requestedDate)
     && Number.isFinite(parsedDate.getTime()) && localDateKey(parsedDate) === requestedDate
     ? requestedDate : today;
-  const [total, setTotal] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const requestGeneration = useRef(0);
-  const nextOffset = useRef(0);
-  const pending = useRef(false);
+  const [moreFailed, setMoreFailed] = useState(false);
+  const loadedCount = useRef(0);
 
-  const fetchEvents = useCallback(async (append = false, reconcile = false) => {
-    if (append && pending.current) return;
-    const generation = ++requestGeneration.current;
-    pending.current = true;
-    setFailed(false);
-    setLoadingMore(append);
-    if (!append) {
-      nextOffset.current = 0;
-      if (!reconcile) {
-        setEvents([]);
-        setTotal(0);
-        setLoading(true);
-      }
-    }
-    const offset = nextOffset.current;
-    const params = {
-      startDate: new Date(`${fromDate}T00:00:00`).toISOString(),
-      limit: 50,
-      offset,
-    };
+  const readPage = (offset, limit) => {
+    const params = { startDate: new Date(`${fromDate}T00:00:00`).toISOString(), limit, offset };
     if (accountFilter) params.accountId = accountFilter;
     if (search) params.search = search;
     // The API owns the error toast; retain loaded pages and offer a retry.
-    const data = await api.getCalendarEvents(params).catch(() => null);
-    if (generation !== requestGeneration.current) return;
-    if (data) {
-      const page = data.events || [];
-      nextOffset.current = offset + page.length;
-      setEvents(previous => {
-        const combined = append ? [...previous, ...page] : page;
-        return [...new Map(combined.map(event => [`${event.accountId}:${event.id}`, event])).values()];
-      });
-      setTotal(data.total ?? page.length);
-    } else {
-      setFailed(true);
+    return api.getCalendarEvents(params);
+  };
+
+  // A first read loads one page; reconciliation (events, reconnect, retry)
+  // re-reads as many events as are already shown so "Load more" progress survives.
+  const { data, loading, error, refetch: fetchEvents, updateData } = useSocketResource(async ({ reconcile, events: invalidations }) => {
+    const want = reconcile || invalidations.length ? Math.max(PAGE_SIZE, loadedCount.current) : PAGE_SIZE;
+    const loaded = [];
+    let total = 0;
+    while (loaded.length < want) {
+      const page = await readPage(loaded.length, Math.min(want - loaded.length, MAX_PAGE_SIZE));
+      const batch = page?.events || [];
+      total = page?.total ?? batch.length;
+      loaded.push(...batch);
+      if (batch.length === 0 || loaded.length >= total) break;
     }
-    pending.current = false;
-    setLoading(false);
+    return { events: dedupeEvents(loaded), total };
+  }, { events: CALENDAR_EVENTS, resourceKey: `${fromDate}|${accountFilter}|${search}` });
+  const events = data?.events ?? EMPTY_EVENTS;
+  const total = data?.total ?? 0;
+  loadedCount.current = events.length;
+  const failed = error != null || moreFailed;
+
+  const loadMore = async () => {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    setMoreFailed(false);
+    const page = await readPage(events.length, PAGE_SIZE).catch(() => null);
+    if (page) {
+      const batch = page.events || [];
+      updateData(previous => ({ events: dedupeEvents([...previous.events, ...batch]), total: page.total ?? previous.total }));
+    } else setMoreFailed(true);
     setLoadingMore(false);
-  }, [accountFilter, search, fromDate]);
-
-  useEffect(() => {
-    fetchEvents();
-    return () => {
-      ++requestGeneration.current;
-      pending.current = false;
-    };
-  }, [fetchEvents]);
-
-  useEffect(() => {
-    const reconcile = () => fetchEvents(false, true);
-    socket.on('calendar:changed', reconcile);
-    socket.on('connect', reconcile);
-    return () => {
-      socket.off('calendar:changed', reconcile);
-      socket.off('connect', reconcile);
-    };
-  }, [fetchEvents]);
+  };
+  const retry = () => (events.length > 0 && !error ? loadMore() : fetchEvents());
 
   const { sync } = useAccountSyncStatus({
     eventPrefix: 'calendar',
     label: 'Calendar sync',
     successText: ({ newEvents }) => `Calendar sync complete: ${newEvents ?? 0} events`,
-    onRefresh: fetchEvents,
+    // A finished sync starts the list over from the first page.
+    onRefresh: () => { loadedCount.current = 0; return fetchEvents(); },
     getAccountName: accountId => accounts.find(account => account.id === accountId)?.name,
     isStandaloneCompletion: ({ calendarId }) => Boolean(calendarId),
   });
@@ -209,7 +194,7 @@ export default function AgendaTab({ accounts }) {
       {failed && (
         <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-port-error">
           Could not load events.
-          <button onClick={() => fetchEvents(nextOffset.current > 0)} className="underline">Retry</button>
+          <button onClick={retry} className="underline">Retry</button>
         </div>
       )}
 
@@ -308,9 +293,9 @@ export default function AgendaTab({ accounts }) {
       {!loading && events.length > 0 && (
         <div className="flex flex-wrap items-center justify-center gap-3">
           <p role="status" className="text-sm text-gray-400">{formatCount(events.length)} of {formatCount(total)} events loaded</p>
-          {nextOffset.current < total && (
+          {events.length < total && (
             <button
-              onClick={() => fetchEvents(true)}
+              onClick={loadMore}
               disabled={loadingMore}
               className="px-3 py-2 bg-port-accent/10 text-port-accent rounded-lg text-sm hover:bg-port-accent/20 disabled:opacity-50"
             >

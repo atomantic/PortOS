@@ -1,24 +1,6 @@
 /**
  * Goal-fidelity review contract (#5994) — pure.
  *
- * Goal-fidelity review contract (#5994) — the value half of "does this diff deliver what was asked?",
- * the question the quality-review chain structurally cannot answer because it never sees the request.
- * `GOAL_FIDELITY_VERDICTS` (`ship` / `fix-first` / `rethink`, only `rethink` gating a run via
- * `goalFidelityHoldsRun`), `taskObjective(task)` (the trusted operator-authored objective — the TASK's
- * description + prompt block, never the agent's transcript, since a reviewer handed the transcript
- * inherits the assumptions that produced the drift), `resolveGoalFidelityConfig(codeReview, chain)`
- * (enabled/backend/model/effort, restricted to the local-LLM reviewers PortOS can call server-side and
- * falling back to the quality chain's own local reviewer + its `<backend>Model`/`Effort` scalars),
- * `normalizeGoalFidelityVerdict(parsed)` (`null` = nothing judged the run, never collapsed into a
- * `ship` pass or a `rethink` hold) and `formatGoalFidelitySummary(review)`.
- * `mergeOutcomeObjective(task)` / `mergeOutcomeReview({ number, prState })` /
- * `GOAL_FIDELITY_SOURCE_FORGE` are the second answer shape: a review-loop follow-up is asked to LAND a
- * change request, which no diff evidences, so its verdict is established from forge state (`MERGED` ⇒
- * `ship`, everything else ⇒ nothing). `isForgeRemediationTestFixDiff` declines a pr-watcher run whose
- * only diff is a test-file CI repair. `MAX_OBJECTIVE_CHARS` / `MAX_FIDELITY_DIFF_CHARS` bound what
- * crosses into a fixed-window local model. Pure. `retainedProductionUses(objective, diff)` supplies
- * exact-token surviving production witnesses as evidence for the primary review.
- *
  * Nothing here recognizes one past change: no literal repo path, function name or objective sentence
  * selects special handling (#16103). A misjudged shape is fixed in the general rubric or the evidence
  * the reviewer is given, never with a matcher for that diff.

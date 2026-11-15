@@ -30,6 +30,7 @@
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
+import { isPlainObject as isRecord } from '../../lib/objects.js';
 import { isTailnetPeer } from '../../lib/tailnetPeer.js';
 
 // Only the visual kinds route. A federated audio submission may carry nothing
@@ -40,7 +41,6 @@ import { isTailnetPeer } from '../../lib/tailnetPeer.js';
 // defaultRouting.js.
 export const ROUTABLE_MEDIA_KINDS = Object.freeze(['image', 'video']);
 
-const isRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
 const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
 
 /**

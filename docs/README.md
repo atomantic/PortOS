@@ -39,9 +39,10 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | System design: React client, Express server, PM2 satellites, PostgreSQL + `data/` files |
 | [GREYBOX.md](./GREYBOX.md) | Environment starter layouts, Blender exports, camera shots, reference captures and AI editing |
 | [features/catalog-ingest.md](./features/catalog-ingest.md) | Catalog extraction graph, context budgets, coverage, and review draft contract |
+| [features/catalog-primitives.md](./features/catalog-primitives.md) | Catalog creative primitive ownership, locks, forks, design rounds, and canon description repair HTTP contract |
 | [CATALOG_LOCAL_MERGE.md](./CATALOG_LOCAL_MERGE.md) | Local catalog consolidation, preserved identities and assets, conflict review, and guarded recovery |
 | [CATALOG_SHARED_IDENTITY.md](./CATALOG_SHARED_IDENTITY.md) | Two-owner canonical identity agreements, preparation, adoption, owner refresh, and coordinated recovery |
-| [API.md](./API.md) | REST endpoints, complete route-domain index, Socket.IO events |
+| [API.md](./API.md) | API conventions, security model, peer-probe contract, route-domain index, Socket.IO events, error envelope (endpoint reference: API Explorer / OpenAPI) |
 | [API_TOOL_CONTRACT.md](./API_TOOL_CONTRACT.md) | Unified semantic tool, Persistent Mind, and Agent Tools MCP contract |
 | [COMPANION_APP_API.md](./COMPANION_APP_API.md) | PortDeck native iOS companion client discovery and HTTP API contract |
 | [SETUP.md](./SETUP.md) | First install: Tailscale, MagicDNS, trusted HTTPS, exact launch URL, and AI-provider readiness |

@@ -1,38 +1,11 @@
 // @vitest-environment node
 
 /**
- * Repo-wide guard: a page or component list fetch does not collapse a failed read into
- * an empty list.
- *
- * `listLorasFull().catch(() => [])` and `.catch(() => setTracks([]))` make a
- * transient 5xx during page load render as "you have none" — no error, no
- * retry, and no way to tell it from an empty library (#12040). The root
- * AGENTS.md sentinel rule (absent vs failed vs legitimately empty) is enforced
- * server-side; this is its client half. The shared primitive is
- * `hooks/useListResource` (`{ items, state, error, retry }`) with
- * `components/ui/ListLoadError` for the failed state.
- *
- * The rule is a ratchet. `KNOWN` records how many such sites each page still
- * carries today; a NEW site, or a higher count in a listed page, fails. So does
- * a count that DROPPED, so the row is lowered or removed and the baseline
- * stays honest. The page sweeps (#12169–#12171) and the app detail tabs
- * (#12591) are done; the remaining component sites are tracked by surface in
- * #12783 (Digital Twin), #12784 (Brain/MeatSpace/Messages/Privacy/Tribe),
- * #12785 (creative panels), #12807 (LoRA training panel) and #12786 (settings/sharing/CoS/providers).
- *
- * ## What this guard CANNOT see
- *
- * It is a source grep, not an AST pass. Besides the one-expression spellings it
- * catches the two-step `const x = await read().catch(() => null);` followed,
- * within the next few lines, by `setX(x?.field || [])` with no `!x` /
- * `x === null` check (#12591's sweep missed exactly that shape).
- *
- *   - A catch whose body does more than clear the list after its leading
- *     statements (`{ setX([]); setLoading(false); }`) is not matched; so is a
- *     `.catch` passed a named function.
- *   - A collapse moved into a hook or lib module is invisible (that is also where
- *     a shared, state-carrying read belongs).
- *   - A match inside a comment or string counts.
+ * Rule: A page or component list fetch must not collapse a failed read into an empty list (client half of root `AGENTS.md` sentinel rule); `KNOWN` is a shrink-only ratchet.
+ * Fix: Use `hooks/useListResource` with `components/ui/ListLoadError` (or surface the error), and lower/remove the file's `KNOWN` count.
+ * What this guard cannot see:
+ *   - Multi-statement `.catch` bodies (`{ setX([]); setLoading(false); }`), named `.catch` handlers, or collapses moved into a hook/lib module.
+ *   - Matches inside comments or strings still count.
  */
 
 import { describe, it, expect } from 'vitest';

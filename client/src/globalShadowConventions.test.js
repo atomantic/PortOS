@@ -1,35 +1,11 @@
 // @vitest-environment node
 
 /**
- * Repo-wide guard: no local binding shadows a global whose shadowing fails silently.
- *
- * `CreateLoopForm` held `const [interval, setInterval] = useState('10m')` (#5728),
- * and `RunnerPage` held `const [timeout, setTimeout] = useState(30)`. Either one
- * shadows the timer API for the whole component body, so a timer added to that
- * component later — a countdown, a debounce, a poll — calls the React state
- * setter with a function and a number instead of scheduling anything. Nothing
- * throws: `setTimeout(fn, 1000)` just stores `fn` as the timeout value and
- * re-renders. `ReferenceReposPanel` had the same shape with `const fetch =
- * useCallback(...)`, which turns a stray `fetch(url)` into a zero-arg reload.
- *
- * That failure mode — a call that compiles, runs, and does the wrong thing with
- * no error — is what scopes the list below. It is deliberately NOT "every
- * global": `const [open, setOpen]`, `const [status, setStatus]`, and
- * `const [name, setName]` appear in dozens of components and are idiomatic
- * React. They shadow `window.open` / `window.status` / `window.name`, but
- * nothing in this tree calls those bare, and banning them would buy an
- * allowlist longer than the rule. The names here are the ones that are
- * routinely called as bare functions in view code, so shadowing one is a live
- * trap rather than a naming quibble.
- *
- * ## What this guard CANNOT see
- *
- * It is a source scan, not an AST pass:
- *   - Function parameters and `catch` bindings are not checked, only
- *     `const` / `let` / `var` declarations (including destructuring).
- *   - A banned name written only inside a comment or a template literal that
- *     happens to match a declaration shape would count.
- *   - Re-assignment of an import alias to a banned name is invisible.
+ * Rule: No local `const`/`let`/`var` binding may shadow a bare-called global (`setTimeout`, `setInterval`, `fetch`, etc.).
+ * Fix: Rename the local binding (e.g. `pollInterval`, `fetchItems`).
+ * What this guard cannot see:
+ *   - Function parameters, `catch` bindings, and re-assignment of an import alias to a banned name.
+ *   - Banned names in comments or template literals matching a declaration shape still count.
  */
 
 import { describe, it, expect } from 'vitest';

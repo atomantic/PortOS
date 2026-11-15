@@ -10,6 +10,7 @@
  */
 
 import { asArray } from '../lib/arrayUtils.js';
+import { isPlainObject as isObject } from '../lib/objects.js';
 import { getPostSessions } from './meatspacePost.js';
 import { getAllTrainingEntries } from './postTrainingLogStore.js';
 import { listCommissions } from './creativeCommissions/store.js';
@@ -25,7 +26,6 @@ const SOURCE_MAX_CHARS = 8000;
 const COMPLETED_PROJECT_STATUSES = new Set(['complete', 'completed']);
 const NON_REVIEWABLE_RUN_STATUSES = new Set(['failed', 'skipped', 'cancelled', 'canceled', 'error']);
 
-const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
 
 function dateKey(value, timezone) {
   return recordDayKey(value, timezone);

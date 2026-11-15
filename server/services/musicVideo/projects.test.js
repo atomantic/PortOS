@@ -295,9 +295,10 @@ describe('take decisions', () => {
     await projects.rejectUnusedSceneTakes(p.id, scene.sceneId);
     expect(withCatalogCheckin).not.toHaveBeenCalled();
 
-    // An ordinary edit still resolves it.
+    // An ordinary edit still resolves it under the write for the stale-pick clean-up, and only
+    // there: it answers with the shot, so the saved project is not presented again (#16210).
     await projects.updateScene(p.id, scene.sceneId, { prompt: 'Edited' });
-    expect(withCatalogCheckin).toHaveBeenCalled();
+    expect(withCatalogCheckin).toHaveBeenCalledTimes(1);
     expect((await projects.getProject(p.id)).scenes[0]).toMatchObject({ prompt: 'Edited', videoHistoryId: 'clip-b' });
   });
 });

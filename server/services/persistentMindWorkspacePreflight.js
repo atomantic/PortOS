@@ -13,6 +13,7 @@ import { promisify } from 'util';
 import { execFile } from '../lib/childProcess.js';
 import { commandExists } from '../lib/commandExists.js';
 import { execGit } from '../lib/execGit.js';
+import { isPlainObject as isRecord } from '../lib/objects.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
 import {
@@ -81,7 +82,6 @@ const defaultDependencies = {
 
 const cache = new Map();
 
-const isRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
 
 const nowValue = (clock) => {
   const value = typeof clock === 'function' ? clock() : clock;

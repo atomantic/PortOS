@@ -67,3 +67,15 @@ before committing it.
 The stage ships through a seed migration that preserves customized installed
 prompts. This is an extraction-only response change, not a persisted format or
 federation envelope change.
+
+## Scrap graph commits
+
+An optional UUID `operationKey` makes a reviewed submission retry-safe. Reuse it for retries with the same accepted content, relationships, scrap, universe and role: the server returns the original ingredient response without creating another batch, including after restart or concurrent requests. Reusing it with different input returns HTTP 409. Embedding output is excluded from request identity. Mint a new key for an intentional new submission; callers omitting it keep legacy behavior. Receipts remain local to the accepting instance and persist with its database.
+
+`POST /api/catalog/scraps/:id/commit` accepts up to 200 `accepted` entries and an optional `relationships` array (at most 1,000 edges). Each explicit edge has `fromDraftId`, `toDraftId`, `kind`, and nonempty `evidence` (at most 400 characters). When the array is present, every accepted entry needs a unique nonempty `draftId` (at most 120 characters); both endpoints must be accepted IDs and self-edges are rejected. Draft IDs stay outside persisted payloads. Renaming or reordering entries does not change endpoint identity. An optional `creativeNoteIds` array (at most 200 Brain inbox note GUIDs) names the creative notes the scrap was built from; the commit stamps them consumed in the same request — including when `operationKey` replays an earlier commit — so a reload between the commit and any follow-up call cannot leave them re-sendable.
+
+The server validates the graph before embedding or writing. Duplicate directed tuples create one edge, retaining every distinct evidence passage in the source ingredient's existing `payload.evidence` field with the kind and target name. Bible entries keep their evidence arrays (20 passages, 500 characters each including the contextual prefix); light entries keep string evidence, or arrays when supplied. Overflow is rejected explicitly, never truncated. The existing 200KB payload limit still applies after evidence enrichment.
+
+`relationships: []` means no edges. Omitting `relationships` preserves legacy all-pairs `related-to` links for batches of 2–25 entries. Explicit graphs work above that legacy batch limit. Supported kinds include `owned-by` (inverse: Owns) and `used-by` (inverse: Uses); using an object does not establish ownership. The caller must supply only grounded, accepted facts.
+
+Ingredients, source links, optional `universeRef` bindings, and edges commit in one transaction. No existing records are backfilled. The relation wire shape and existing evidence fields are unchanged; unknown relation kinds continue to round-trip through peer sync. Structured extraction and relationship review are tracked separately under #7895.

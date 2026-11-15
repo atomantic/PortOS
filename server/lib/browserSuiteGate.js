@@ -1,29 +1,6 @@
 /**
  * `probeChromeH264(path)` runs a deadline-bound child process probing Chrome H.264 support and
  * resolves `{ ok }` or `{ ok:false, cause }`, for gating browser test suites.
- *
- * `probeChromeH264(path)` runs the H.264 probe as an owned, deadline-bound child (own process group,
- * SIGTERM→SIGKILL ladder awaiting `close`) and resolves `{ ok }` or `{ ok:false, cause }` —
- * `missing-executable`, `codec-unavailable`, `probe-timeout`, `teardown-failed` (answered, then exited
- * nonzero: never trusted, never a missing codec), `no-answer`; `diagnostics` on lifecycle failures
- * records bounded spawn/answer/exit/close timings, signal verdicts and profile-removal state; profiles
- * remain until the retained child closes, including late close after an unverified timeout. A
- * post-spawn child error is diagnostic, never proof of failed spawn or cleanup. `describeH264Probe`
- * and the required-browser gate retain these path/PID-free phases; `chromeWithH264(path)` (async)
- * returns the path only when that Chrome decodes H.264, null when the executable or codec is genuinely
- * absent, and `{ probeFailure }` when the probe itself failed (reported by `browserSuiteCanRun` as a
- * lifecycle failure, not a missing prerequisite); `browserSuiteCanRun(label, prerequisites)` is the
- * `canRun` guard for the cross-workspace `*.browser.test.js` suites (Chrome + ffmpeg + the client
- * bundler). Pass `{ name: discoveredValue }`; a falsy value is missing. Returns `false` with a visible
- * skip log locally, but throws naming the missing prerequisites when `PORTOS_REQUIRE_BROWSER_SUITES`
- * is set; `browserSuiteBlockReason(prerequisites)` is that verdict alone (the same wording, or `null`)
- * for a caller that only reports, such as `scripts/pregate.js` — the flag the CI `database` job sets
- * for the browser suites the planner selected (#10312). `resolveTestChrome(env)` is the one Chrome
- * candidate list (`CHROME_PATH`, Playwright's bundled Chromium, then the macOS app and the Linux
- * package paths) shared by the suites, the pregate probe and the test memo's tool keying, and
- * `resolveClientBundler(repoRoot)` the one client bundler probe (resolved Vite, React plugin and
- * Tailwind PostCSS paths, or `undefined` when any is missing; non-`MODULE_NOT_FOUND` errors throw)
- * (#12293).
  */
 
 import { spawn } from './childProcess.js';

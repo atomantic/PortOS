@@ -1,11 +1,11 @@
 import TabPills from '../components/ui/TabPills';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import useMounted from '../hooks/useMounted';
 import { useParams, useNavigate, Link } from 'react-router';
 import { Wand2, ArrowLeft } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
-import socket from '../services/socket';
+import { useSocketResource } from '../hooks/useSocketResource';
 import { TABS } from '../components/feature-agents/constants';
 import { useValidTab } from '../hooks/useValidTab';
 import OverviewTab from '../components/feature-agents/OverviewTab';
@@ -16,71 +16,38 @@ import GitTab from '../components/feature-agents/GitTab';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import LoadFailedState from '../components/ui/LoadFailedState';
 
+const AGENT_EVENTS = ['cos:feature-agent:status', 'cos:feature-agent:run-complete'];
+
+const fetchAgentRecord = id => api.getFeatureAgent(id, { silent: true }).catch(err => {
+  if (err?.status === 404) return null;
+  throw err;
+});
+
 export default function FeatureAgentDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const isCreate = !id;
   const activeTab = useValidTab(TABS, 'overview');
 
-  const [agent, setAgent] = useState(null);
-  const [loading, setLoading] = useState(!isCreate);
-  // Only a 404 means the agent is gone; any other failed first read keeps a Retry.
-  const [loadError, setLoadError] = useState(null);
-  // The id whose record is on screen, so a failed background refresh keeps it.
-  const shownIdRef = useRef(null);
+  // Only a 404 means the agent is gone (null data); any other failed first read keeps a Retry.
+  const matchesAgent = useCallback(payload => payload?.id === id, [id]);
+  const { data: agent, loading: agentLoading, error: loadError, refetch, updateData: setAgent } = useSocketResource(
+    () => fetchAgentRecord(id),
+    { events: AGENT_EVENTS, resourceKey: id, matchesEvent: matchesAgent, enabled: !isCreate }
+  );
+  const loading = !isCreate && agentLoading;
   const [apps, setApps] = useState([]);
 
-  // Unmount guard (StrictMode-safe: resets to true on mount) so an async agent
-  // load that resolves after teardown doesn't setState on a dead component.
+  // A failed background refresh keeps the record on screen and says so.
+  useEffect(() => {
+    if (loadError && agent) toast.error(`Couldn’t refresh feature agent: ${loadError.message || 'Request failed'}`);
+  }, [loadError]);
+
   const mountedRef = useMounted();
-  // Monotonic load token: an A→B navigation fires a fresh fetch and bumps this,
-  // so a slow response for A resolving after we've switched to B is ignored
-  // instead of overwriting the displayed agent with the wrong record.
-  const fetchSeqRef = useRef(0);
 
   useEffect(() => {
     api.getApps().then(data => { if (mountedRef.current) setApps((data || []).filter(a => !a.archived)); }).catch(() => {});
   }, []);
-
-  const fetchAgent = useCallback(() => {
-    if (isCreate) return;
-    const seq = ++fetchSeqRef.current;
-    const isCurrent = () => mountedRef.current && seq === fetchSeqRef.current;
-    api.getFeatureAgent(id, { silent: true }).then(data => {
-      if (!isCurrent()) return;
-      shownIdRef.current = id;
-      setAgent(data);
-      setLoadError(null);
-      setLoading(false);
-    }).catch((err) => {
-      if (!isCurrent()) return;
-      if (err?.status === 404) {
-        // Deleted, possibly while on screen: show the not-found view.
-        shownIdRef.current = null;
-        setAgent(null);
-        setLoadError(null);
-      } else if (shownIdRef.current === id) {
-        toast.error(`Couldn’t refresh feature agent: ${err?.message || 'Request failed'}`);
-      } else {
-        setLoadError(err);
-      }
-      setLoading(false);
-    });
-  }, [id, isCreate]);
-
-  useEffect(() => {
-    // On an A→B switch, drop A's record and show the spinner immediately so a
-    // stale agent never flashes under the new id while B is still loading.
-    if (!isCreate) { setAgent(null); setLoadError(null); setLoading(true); shownIdRef.current = null; }
-    fetchAgent();
-    const handler = (data) => { if (data.id === id) fetchAgent(); };
-    socket.on('cos:feature-agent:status', handler);
-    socket.on('cos:feature-agent:run-complete', handler);
-    return () => {
-      socket.off('cos:feature-agent:status', handler);
-      socket.off('cos:feature-agent:run-complete', handler);
-    };
-  }, [fetchAgent, id, isCreate]);
 
   const handleStart = useCallback((agentId) => {
     api.startFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Activated'); }).catch(err => toast.error(err.message || 'Action failed'));
@@ -135,7 +102,7 @@ export default function FeatureAgentDetail() {
   if (!isCreate && !agent && loadError) {
     return (
       <div className="flex flex-col h-full items-center justify-center">
-        <LoadFailedState title="Couldn’t load this feature agent" hint={loadError.message} onRetry={() => { setLoading(true); fetchAgent(); }} />
+        <LoadFailedState title="Couldn’t load this feature agent" hint={loadError.message} onRetry={refetch} />
         <Link to="/feature-agents" className="text-port-accent text-sm hover:underline">Back to list</Link>
       </div>
     );
