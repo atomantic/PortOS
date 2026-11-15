@@ -80,15 +80,15 @@ const RERENDER_HINT = 'Renders this frame again from the current Casting look an
  * the shot plays its start frame only, keeping its selection, prompt and takes for switching back on.
  */
 export default function SceneFrames({
-  project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, greyboxSaving = false, onGreyboxSaving, scene, index, endFrames: endFramesAllowed, endFrameToggle = false, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame, onImageTargetChange = null,
+  project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, greyboxSaving = false, onGreyboxSaving, scene, index, endFrames: endFramesAllowed, endFrameToggle = false, plainStill = false, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame, onImageTargetChange = null,
   onEditLocal, onSave, onOpenPreview, takeBusy = false, onSelectTake, onReviewTake, onSwap = null, onImportTake = null,
   onContinueFromPrevious = null, previousHasClip = false, onSwapFrames = null, assetMarks = null, onMarkTake = null, onCheckTake = null, checkingTakes = null, onApplyCameos = null,
 }) {
-  const endFrameOff = endFrameToggle && scene.endFrameOff === true;
+  const endFrameOff = endFrameToggle && (plainStill || scene.endFrameOff === true);
   const endFrames = endFramesAllowed && !endFrameOff;
   // A detail-built shot: its frame prompt is the still's general prompt and the shot details are composed in.
   const fromSheet = shotSheetDrivesPrompt(scene);
-  const setEndFrameOn = (on) => { const patch = { endFrameOff: on ? null : true }; onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
+  const setEndFrameOn = (on) => { const patch = { endFrameOff: on ? null : true, ...(on && plainStill ? { visualLayer: 'still', imageEffect: 'end-fade', imageEffectSec: null } : {}) }; onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
   const greybox = musicVideoGreyboxReference(project, scene, greyboxPlaces);
   const [referenceSaving, setReferenceSaving] = useState(false);
   // The greybox card stays folded away behind its checkbox unless the shot uses a greybox.
