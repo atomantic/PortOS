@@ -241,6 +241,20 @@ describe('epic-decomposition endpoints (#5042)', () => {
     expect(jiraService.addIssuesToSprint).toHaveBeenCalledWith('inst-1', '42', ['PROJ-2']);
   });
 
+  it('passes a new ticket and a comment to the saved account unchanged', async () => {
+    jiraService.createTicket.mockResolvedValue({ ticketId: 'PROJ-3' });
+    jiraService.addComment.mockResolvedValue({ success: true });
+    const ticket = { projectKey: 'PROJ', summary: 'Example ticket', epicKey: 'PROJ-1', sprintId: '42' };
+    const created = await request(makeApp()).post('/api/jira/instances/inst-1/tickets').send(ticket);
+    expect(created.status).toBe(200);
+    expect(jiraService.createTicket).toHaveBeenCalledWith('inst-1', ticket);
+    const commented = await request(makeApp())
+      .post('/api/jira/instances/inst-1/tickets/PROJ-3/comments')
+      .send({ comment: 'Example comment' });
+    expect(commented.status).toBe(200);
+    expect(jiraService.addComment).toHaveBeenCalledWith('inst-1', 'PROJ-3', 'Example comment');
+  });
+
   it('rejects a sprint move with no issue keys', async () => {
     const response = await request(makeApp())
       .post('/api/jira/instances/inst-1/sprints/42/issues')

@@ -1,71 +1,44 @@
 import { EventEmitter } from 'node:events';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { callRoute, hostControlApp, REMOTE_ADDRESS } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-const auth = vi.hoisted(() => ({ enabled: false }));
 vi.mock('../lib/fileUtils.js', async (importOriginal) => (
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-jira-authority-') })
 ));
 afterAll(cleanupTempDataRoots);
 afterEach(() => vi.unstubAllGlobals());
 
+// Repointing a saved Jira destination would send its stored token elsewhere
+// (#11270), and ticket writes act on the saved account. Every Jira write is gated
+// by the default-deny policy (#16018), whose refusal and principal matrix live in
+// services/authGate.test.js. This suite keeps the authorized workflow against the
+// real service: an update keeps the stored token without echoing it, and the
+// connection test uses it.
+const auth = vi.hoisted(() => ({ enabled: false }));
 vi.mock('../services/auth.js', async (importOriginal) => ({
   ...await importOriginal(),
   isAuthEnabled: vi.fn(async () => auth.enabled),
-  verifyPassword: vi.fn(async () => true),
 }));
 vi.mock('../services/settings.js', () => ({
   settingsEvents: new EventEmitter(),
   getSettings: vi.fn(async () => ({})),
 }));
-vi.mock('../services/instanceIdentity.js', () => ({
-  loadData: vi.fn(async () => ({ peers: [] })),
-}));
-vi.mock('../services/jiraReports.js', () => ({
-  listReports: vi.fn(),
-  generateReport: vi.fn(),
-  generateAllReports: vi.fn(),
-  getLatestReport: vi.fn(),
-  getReport: vi.fn(),
-}));
+vi.mock('../services/jiraReports.js', () => ({}));
 vi.mock('../services/apps.js', () => ({ getAppById: vi.fn() }));
-
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
-import { isHostControlRoute } from '../lib/hostControlRoutes.js';
-import { createSession } from '../services/auth.js';
-import * as jiraService from '../services/jira.js';
-import jiraRoutes from './jira.js';
+const jiraService = await import('../services/jira.js');
+const mounts = [['/api/jira', (await import('./jira.js')).default]];
 
 const savedDetails = {
   id: 'example', name: 'Example Jira', baseUrl: 'https://jira.private.test',
   email: 'operator@example.test', apiToken: 'synthetic-token',
 };
 const replacementDetails = {
-  id: 'example', name: 'Example Jira', baseUrl: 'https://jira.attacker.test',
+  id: 'example', name: 'Example Jira', baseUrl: 'https://jira.replacement.test',
   email: 'operator@example.test',
 };
 
-const appFor = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/jira', jiraRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
-
-const post = (app, path, body, headers = {}) => {
-  const pending = request(app).post(`/api/jira/${path}`);
-  for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return pending.send(body);
-};
-
+// Collects outbound Jira calls; the test harness's own loopback requests pass through.
 const installCollector = () => {
   const requests = [];
   const realFetch = globalThis.fetch;
@@ -73,66 +46,38 @@ const installCollector = () => {
     if (String(url).startsWith('http://127.0.0.1:')) return realFetch(url, options);
     requests.push({ url, authorization: options.headers.Authorization });
     return new Response(JSON.stringify({ displayName: 'Example User', emailAddress: 'operator@example.test' }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
+      status: 200, headers: { 'content-type': 'application/json' },
     });
   }));
   return requests;
 };
 
-describe('Jira credential destination operator authority (#11270)', () => {
-  beforeEach(async () => {
-    auth.enabled = false;
-    await jiraService.saveInstances({ instances: {} });
-    await jiraService.upsertInstance('example', savedDetails);
-  });
+beforeEach(async () => {
+  auth.enabled = false;
+  await jiraService.saveInstances({ instances: {} });
+  await jiraService.upsertInstance('example', savedDetails);
+});
 
-  it('refuses remote password-free repointing and testing, and keeps tests on the saved destination and token', async () => {
+describe('Jira router behind the default-deny gate (#16114)', () => {
+  it('still repoints and tests a destination with its stored token for a local operator and a delegated agent session', async () => {
     const collected = installCollector();
-    const app = appFor();
-    expect(isHostControlRoute('POST', '/api/jira/instances')).toBe(true);
-
-    for (const [path, body] of [['instances', replacementDetails], ['instances/example/test', {}]]) {
-      const refused = await post(app, path, body);
-      expect([refused.status, refused.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    expect(collected).toEqual([]);
-
-    const connection = await post(appFor('127.0.0.1'), 'instances/example/test', {});
-    expect(connection.status).toBe(200);
-    expect(connection.body.success).toBe(true);
-    expect(collected).toEqual([{
-      url: 'https://jira.private.test/rest/api/2/myself',
-      authorization: 'Bearer synthetic-token',
-    }]);
-    expect((await jiraService.getInstances()).instances.example).toMatchObject(savedDetails);
-  });
-
-  it('preserves local, operator-session, and delegated-agent updates', async () => {
-    const collected = installCollector();
-    const local = await post(appFor('127.0.0.1'), 'instances', replacementDetails);
-    expect(local.status).toBe(200);
-
-    const operator = await createSession();
+    const { createSession } = await import('../services/auth.js');
     const agent = await createSession({ label: 'agent' });
-    auth.enabled = true;
-    for (const [address, headers] of [
-      ['192.0.2.10', { Cookie: `portos_auth=${operator.token}` }],
-      ['127.0.0.1', { Authorization: `Bearer ${agent.token}` }],
+    for (const [enabled, address, headers] of [
+      [false, '127.0.0.1', {}],
+      [true, REMOTE_ADDRESS, { Authorization: `Bearer ${agent.token}` }],
     ]) {
-      const response = await post(appFor(address), 'instances', replacementDetails, headers);
-      expect(response.status, JSON.stringify(response.body)).toBe(200);
-      expect(response.body).not.toHaveProperty('apiToken');
-      const connection = await post(appFor(address), 'instances/example/test', {}, headers);
-      expect(connection.status).toBe(200);
-      expect(connection.body.success).toBe(true);
+      auth.enabled = enabled;
+      const app = await hostControlApp(address, mounts);
+      const update = await callRoute(app, ['post', '/api/jira/instances', replacementDetails], headers);
+      expect(update.status, JSON.stringify(update.body)).toBe(200);
+      expect(update.body).not.toHaveProperty('apiToken');
+      const connection = await callRoute(app, ['post', '/api/jira/instances/example/test', {}], headers);
+      expect([connection.status, connection.body.success]).toEqual([200, true]);
     }
-
-    const saved = (await jiraService.getInstances()).instances.example;
-    expect(saved).toMatchObject({ ...replacementDetails, apiToken: 'synthetic-token' });
-    expect(collected).toEqual([
-      { url: 'https://jira.attacker.test/rest/api/2/myself', authorization: 'Bearer synthetic-token' },
-      { url: 'https://jira.attacker.test/rest/api/2/myself', authorization: 'Bearer synthetic-token' },
-    ]);
+    expect((await jiraService.getInstances()).instances.example)
+      .toMatchObject({ ...replacementDetails, apiToken: 'synthetic-token' });
+    const validation = { url: 'https://jira.replacement.test/rest/api/2/myself', authorization: 'Bearer synthetic-token' };
+    expect(collected).toEqual([validation, validation]);
   });
 });
