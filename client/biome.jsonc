@@ -234,6 +234,22 @@
         "!src/**/*.test.jsx"
       ],
       "plugins": ["./lint-no-random-uuid.grit"]
+    },
+    {
+      // Raw Web Storage ban (#5689, formerly storageConventions.test.js). Exempt:
+      // the wrapper itself, timeWindow.js (enumerates keys via .length/.key(i),
+      // which safeStorage deliberately does not expose; it keeps its own
+      // try/catch), the test harness under src/test/, and test files.
+      "includes": [
+        "src/**/*.js",
+        "src/**/*.jsx",
+        "!src/lib/safeStorage.js",
+        "!src/utils/timeWindow.js",
+        "!src/test/**",
+        "!src/**/*.test.js",
+        "!src/**/*.test.jsx"
+      ],
+      "plugins": ["./lint-no-raw-web-storage.grit"]
     }
   ]
 }

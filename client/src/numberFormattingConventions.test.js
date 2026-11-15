@@ -39,7 +39,7 @@
  * - `src/components/usage/UsageMeter.jsx` — `formatResetsAt` renders a quota
  *   reset as a compact "Sep 16, 1:30 AM" (month + day + time, no year, no
  *   weekday). No existing helper matches that shape, and it has exactly one
- *   caller — same reasoning `storageConventions.test.js` uses to allowlist
+ *   caller — same reasoning the removed `storageConventions` guard (now `lint-no-raw-web-storage.grit`) used to allowlist
  *   `timeWindow.js` rather than add a single-caller helper. Move it off this
  *   allowlist (into a named `utils/formatters.js` helper) the day a second
  *   caller wants the same shape.
