@@ -39,6 +39,20 @@ describe('ShotSheetPanel', () => {
     expect(within(row).getByLabelText('Shot 1 emotion')).toHaveValue('Focused');
   });
 
+  // #16136: catches the shot sheet column offering no Approve for final, or offering it on a final clip.
+  it('ticks a draft clip for final from its row and marks a final clip as final', () => {
+    const clip = (sceneId, tier) => ({ videoHistoryId: `v-${sceneId}`, takes: [{ takeId: `t-${sceneId}`, kind: 'video', assetId: `v-${sceneId}`, tier }] });
+    const board = { ...boardFor(), approveFinal: vi.fn() };
+    board.project = { ...board.project, scenes: [{ ...board.project.scenes[0], ...clip('a', 'draft') }, { ...board.project.scenes[1], ...clip('b', 'final') }] };
+    render(<ShotSheetPanel board={board} />);
+    openPanel();
+    fireEvent.click(screen.getByLabelText('Shot 1 approved for final'));
+    expect(board.approveFinal).toHaveBeenCalledWith(['a'], true);
+    const finalRow = screen.getByRole('button', { name: 'Open Shot 2' }).closest('tr');
+    expect(within(finalRow).queryByLabelText('Shot 2 approved for final')).toBeNull();
+    expect(within(finalRow).getByText('Final')).toBeInTheDocument();
+  });
+
   // Catches the frame preview not opening the shot editor, the phone path to a shot.
   it('opens the shot editor from the frame preview', () => {
     const board = boardFor();

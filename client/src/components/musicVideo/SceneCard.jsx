@@ -37,6 +37,7 @@ import PerformanceEvidence from './PerformanceEvidence.jsx';
 import { grokSceneRequestDuration, isPerformanceScene, planPerformanceRepair } from '../../lib/musicVideoShotTiming.js';
 import { resolveSourceTake } from '../../../../server/lib/musicVideoSourceTake.js';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
+import SceneFinalApproval from './SceneFinalApproval.jsx';
 import { sceneEndFramePlanFor } from './SceneEndFrame.jsx';
 import SceneFrames from './SceneFrames.jsx';
 import SceneClipReferences from './SceneClipReferences.jsx';
@@ -189,7 +190,7 @@ function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImage
 export default function SceneCard({
   scene, posterSrc, index, shotName = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null, videoJobs = null,
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
-  onMove, onDelete, onEditLocal, onSave, onSetDone = null,
+  onMove, onDelete, onEditLocal, onSave, onSetDone = null, onApproveFinal = null,
   project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
   onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onCheckTake = null, checkingTakes = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, onHandheldClip = null, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false, manifestOwnsShots = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, onMoveEnd = null, nextEndSec = null, falVideoSettings = null, performanceReview = null, onRepairPerformance, repairBusy = false,
@@ -839,6 +840,7 @@ export default function SceneCard({
             onSelect={(take) => onSelectTake?.(scene, take)}
             onReview={(take, review) => onReviewTake?.(scene, take, review)}
             onOpenPreview={onOpenPreview} marks={project?.assetMarks} onMark={onMarkTake} />
+          {layer === 'footage' && <SceneFinalApproval scene={scene} locked={locked} busy={takeBusy} onApprove={onApproveFinal} onSelectTake={onSelectTake} />}
           {speakerField}
           <div className="flex flex-wrap items-center gap-2">
             <SceneRenderTarget id={fieldId('render-on')} value={renderPick} onChange={setRenderPick} performance={performance}

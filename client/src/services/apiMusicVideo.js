@@ -201,6 +201,14 @@ export const renderMusicVideoSequence = (id, sceneIds, options = {}) => request(
 export const musicVideoSequenceTake = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/sequence-takes`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+// #16136: tick or clear shots for the final-resolution upgrade; returns `{ scenes, counts }`.
+export const approveMusicVideoFinal = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes/approve-final`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+// #16136: upgrade approved draft shots (`method: upscale | rerender`); `dryRun: true` returns the plan and price only.
+export const upgradeMusicVideoShots = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/upgrade`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
 export const updateMusicVideoScene = (id, sceneId, patch, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}`, {
     method: 'PATCH', body: JSON.stringify(patch), ...options,

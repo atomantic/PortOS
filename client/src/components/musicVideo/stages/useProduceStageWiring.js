@@ -1,6 +1,7 @@
 import toast from '../../ui/Toast';
 import {
   addMusicVideoScene,
+  approveMusicVideoFinal,
   cutMusicVideoScenesOnLyrics,
   deleteMusicVideoScene,
   getMusicVideoProject,
@@ -106,6 +107,16 @@ export default function useProduceStageWiring({
       return saved;
     });
   };
+
+  // #16136: tick or clear shots for the final upgrade. Only `finalApproval` changes here, from the server's reply.
+  const approveFinal = (sceneIds, approved) => approveMusicVideoFinal(selected.id, { sceneIds, approved }, { silent: true })
+    .then(({ scenes }) => {
+      const byId = new Map(scenes.map((scene) => [scene.sceneId, scene.finalApproval ?? null]));
+      patchProject(selected.id, (project) => ({ scenes: project.scenes?.map((entry) => (byId.has(entry.sceneId)
+        ? { ...entry, finalApproval: byId.get(entry.sceneId) } : entry)) }));
+      return true;
+    })
+    .catch((err) => { toast.error(err?.message || 'Could not change the final approval'); return false; });
 
   // BeatTimeline drag commit — same optimistic-local + silent-PATCH pattern as
   // the other scene field editors (#1854).
@@ -251,6 +262,7 @@ export default function useProduceStageWiring({
       editSceneLocal,
       saveScene,
       setSceneDone,
+      approveFinal,
       moveScene,
       commitSceneTiming,
     },

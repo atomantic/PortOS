@@ -27,11 +27,12 @@ import { findEnabledByRole } from '../../../test/enabledBarrier.js';
 import { MemoryRouter } from 'react-router';
 import toast from '../../ui/Toast';
 import { createTestPhaseDiagnostics } from '../../../../../server/test/testPhaseDiagnostics.js';
-import { listMusicVideoProjects, renderMusicVideoProject, updateMusicVideoProject, updateMusicVideoScene, proposeMusicVideoShotSheet, splitMusicVideoScene, moveMusicVideoSceneStart, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff, addMusicVideoSceneTake, getMusicVideoHandoffBundle, getMusicVideoProject, startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision, renderMusicVideoSceneFrame, getMusicVideoBlender } from '../../../services/apiMusicVideo.js';
+import { approveMusicVideoFinal, listMusicVideoProjects, renderMusicVideoProject, updateMusicVideoProject, updateMusicVideoScene, proposeMusicVideoShotSheet, splitMusicVideoScene, moveMusicVideoSceneStart, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff, addMusicVideoSceneTake, getMusicVideoHandoffBundle, getMusicVideoProject, startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision, renderMusicVideoSceneFrame, getMusicVideoBlender } from '../../../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../../../services/apiSystem.js';
 import { generateVideo, getVideoGenStatus, getVideoHistoryItem, previewVideoPrompt, trimVideo } from '../../../services/apiImageVideo.js';
 import { downloadBlob } from '../../../lib/downloadBlob.js';
 import { blenderFilmProject, blenderFilmState } from '../../../test/blenderFilmFixture.js';
+import { finalApprovalPatch } from '../../../../../server/lib/musicVideoFinalApproval.js';
 
 installMusicVideoPageHooks();
 
@@ -453,6 +454,22 @@ describe('MusicVideo project video renderer', () => {
       fireEvent.click(await findEnabledByRole('button', { name: /^Render final/ }));
       await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({ backend: 'fal', mode: 'image' })));
       expect(JSON.parse(generateVideo.mock.calls.at(-1)[0].musicVideo)).toMatchObject({ songAudio: false, expectedShot: 'lipsync' });
+    });
+
+    // #16136: catches the card's Approve for final not reaching the route, or its reply not reaching the board.
+    it('approves a draft clip for final from the shot card and badges its board thumbnail', async () => {
+      const take = { takeId: 'tk1', kind: 'video', assetId: 'h1', tier: 'draft', status: 'candidate' };
+      const project = { ...PROJECT_WITH_CLIP, scenes: [{ ...PROJECT_WITH_CLIP.scenes[0], label: 'Opening', takes: [take] }] };
+      approveMusicVideoFinal.mockImplementation(async (_id, { sceneIds, approved }) => ({
+        scenes: sceneIds.map((sceneId) => ({ sceneId, finalApproval: approved ? finalApprovalPatch(project.scenes[0], true).patch.finalApproval : null })),
+        counts: { draft: 1, approved: approved ? 1 : 0, final: 0, missing: 0 },
+      }));
+      await openProject(project, 'produce');
+      fireEvent.click(within(await screen.findByLabelText('Storyboard thumbnails')).getByRole('button', { name: /Opening/ }));
+      fireEvent.click(await screen.findByLabelText(/Approve for final/));
+      await waitFor(() => expect(approveMusicVideoFinal).toHaveBeenCalledWith('mv-1', { sceneIds: ['s1'], approved: true }, { silent: true }));
+      await waitFor(() => expect(screen.getByLabelText(/Approve for final/)).toBeChecked());
+      expect(screen.getByTestId('scene-tier-badge')).toHaveTextContent('Approved for final');
     });
 
     it('persists a scene switched to a performance shot', async () => {
