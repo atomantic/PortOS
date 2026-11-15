@@ -19,7 +19,7 @@ anyio==4.16.0
 certifi==2026.10.23
 cffi==2.1.1
 charset-normalizer==3.5.2
-click==8.5.0
+click==8.5.1
 fastapi==0.162.0
 filelock==4.2.9
 fsspec==2026.9.0
@@ -62,7 +62,7 @@ shellingham==1.5.4
 sounddevice==0.5.6
 starlette==1.10.0
 tokenizers==0.23.3
-tqdm==4.70.0
+tqdm==4.70.1
 transformers==5.22.1
 truststore==0.10.5
 typer==0.27.3
