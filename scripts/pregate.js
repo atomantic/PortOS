@@ -10,7 +10,7 @@
  */
 
 import { spawn, spawnSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, mkdtempSync, rmSync, symlinkSync, writeSync } from 'fs';
 import { constants, homedir, tmpdir } from 'os';
 import { setTimeout as delay } from 'timers/promises';
 import { execFileSync } from 'child_process';
@@ -21,6 +21,7 @@ import { getAlwaysRunTests, FULL_SUITE_SHARDS, structuralTestsFor } from './ci-t
 import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
+import { resolveSpecifier, testReferenceSpecifiers } from './lib/importReach.js';
 import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { ACTIONLINT_VERSION, probeActionlint, selectWorkflowFiles } from './lib/actionlint.js';
 import { GUARD_BUDGET_MS, hostTooBusyForBudget, overBudgetGuards, readGuardDurations } from './lib/guardBudget.js';
@@ -106,6 +107,9 @@ export function uncoveredSuites(plan, { options = {}, downgraded = false, prereq
   }
   if (suiteSelected(plan, 'macosNative')) {
     uncovered.push({ suite: 'macosNative', reason: 'a dedicated macOS CI job; the focused local stages do not select it', remedy: UNCOVERED_SUITES.macosNative });
+  }
+  for (const { source, count } of plan.relatedOverflow ?? []) {
+    uncovered.push({ suite: 'related tests', reason: `${count} suite(s) referencing ${source} beyond the ${RELATED_SUITE_CAP}-suite cap`, remedy: 'run the referencing suites directly with `server/node_modules/.bin/vitest run <files>`; CI runs them' });
   }
   return uncovered;
 }
@@ -342,31 +346,71 @@ export function downgradeFullPlan(plan, trackedFiles, changedFiles = []) {
   };
 }
 
-/** Local selection never expands through the transitive server import graph.
- * A sibling test or an explicitly edited test owns the focused check; broader
- * integration coverage and unowned changes remain with hosted CI.
+/** Suites one changed source may add through a differently named import or mock. */
+export const RELATED_SUITE_CAP = 25;
+
+/**
+ * Local selection owns the edited tests, same-stem siblings and tests one hop
+ * away: a test whose relative import, `import()` or `vi.mock` specifier
+ * resolves to a changed source (a route suite mocking the service it fronts).
+ * It never expands transitively; broader integration coverage and unowned
+ * changes remain with hosted CI. Past RELATED_SUITE_CAP referencing suites for
+ * one source the overflow stays with CI and is recorded in `relatedOverflow`.
  */
-export function focusedLocalPlan(plan, trackedFiles, changedFiles) {
+export function focusedLocalPlan(plan, trackedFiles, changedFiles, readText = readRepoText) {
   const local = downgradeFullPlan(plan, trackedFiles, changedFiles);
   const tracked = new Set(trackedFiles);
   const browser = new Set(plan.browser.files);
   const unitTest = path => !browser.has(path) && /\.test\.[cm]?[jt]sx?$/.test(path)
     && !/(?:\.(?:db|browser|live)\.test\.|\/db\.test\.)/.test(path);
   const focused = new Set();
+  const changedSources = [];
   for (const path of changedFiles) {
     if (unitTest(path) && tracked.has(path)) focused.add(path);
     if (!/\.[cm]?[jt]sx?$/.test(path) || /\.test\./.test(path)) continue;
+    if (tracked.has(path)) changedSources.push(path);
     const stem = path.replace(/\.[cm]?[jt]sx?$/, '');
     for (const suffix of ['.test.js', '.test.jsx', '.test.ts', '.test.tsx', '.test.mjs', '.test.cjs']) {
       const test = `${stem}${suffix}`;
       if (tracked.has(test) && unitTest(test)) focused.add(test);
     }
   }
+  const relatedOverflow = [];
+  if (changedSources.length) {
+    const byBase = changedSources.map(source => ({ source, base: source.slice(source.lastIndexOf('/') + 1).replace(/\.[cm]?[jt]sx?$/, '') }));
+    const referencing = new Map(changedSources.map(source => [source, []]));
+    for (const test of trackedFiles.filter(path => unitTest(path) && !focused.has(path))) {
+      const text = readText(test);
+      if (text == null) continue;
+      // Cheap prefilter: a resolved specifier always spells the source's base name.
+      const candidates = byBase.filter(({ base }) => text.includes(base));
+      if (!candidates.length) continue;
+      const known = new Set(candidates.map(({ source }) => source));
+      for (const spec of testReferenceSpecifiers(text)) {
+        const target = resolveSpecifier(test, spec, known);
+        if (target) referencing.get(target).push(test);
+      }
+    }
+    for (const [source, tests] of referencing) {
+      const unique = [...new Set(tests)].sort();
+      unique.slice(0, RELATED_SUITE_CAP).forEach(test => { focused.add(test); });
+      if (unique.length > RELATED_SUITE_CAP) relatedOverflow.push({ source, count: unique.length - RELATED_SUITE_CAP });
+    }
+  }
   for (const scope of ['server', 'client']) {
     const files = [...new Set([...local[scope].files, ...[...focused].filter(path => scope === 'client' ? path.startsWith('client/') : !path.startsWith('client/'))])];
     local[scope] = { mode: files.length ? 'files' : 'skip', files, sources: [] };
   }
+  local.relatedOverflow = relatedOverflow;
   return local;
+}
+
+function readRepoText(path) {
+  try {
+    return readFileSync(join(REPO_ROOT, path), 'utf8');
+  } catch {
+    return null;
+  }
 }
 
 const git = (args) => execFileSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' }).trim();
