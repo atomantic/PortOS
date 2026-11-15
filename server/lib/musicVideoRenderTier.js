@@ -18,7 +18,7 @@ export const isMusicVideoRenderTier = (tier) => MUSIC_VIDEO_RENDER_TIERS.include
 export const musicVideoRenderTierLabel = (tier) => (tier === 'draft' ? 'Draft' : tier === 'final' ? 'Final' : null);
 
 /** A resolution label's height in lines ('720p', '768P', '2K', '4k'), or null when it is not one. */
-export function renderResolutionRank(resolution) {
+function renderResolutionRank(resolution) {
   const text = String(resolution ?? '').trim().toLowerCase();
   const k = /^(\d+(?:\.\d+)?)k$/.exec(text);
   if (k) return Number(k[1]) === 2 ? 1440 : Number(k[1]) * 540;
@@ -38,7 +38,7 @@ function orderedTiers(options) {
  * is the project's draft or final resolution; unset, draft is the lowest
  * option and final the highest.
  */
-export function pickRenderTierResolution(options, tier, ceiling = null) {
+function pickRenderTierResolution(options, tier, ceiling = null) {
   if (!options?.length || !isMusicVideoRenderTier(tier)) return null;
   const cap = renderResolutionRank(ceiling);
   if (cap == null) return tier === 'draft' ? options[0] : options.at(-1);
@@ -54,7 +54,7 @@ const performanceFalField = (take) => (take.music ? 'falMusicResolution' : 'falL
  * `settingsField` is the video-settings key the shot timing helpers read;
  * `requestField` is the `/api/video-gen` field the render sends.
  */
-export function sceneRenderTierTarget(backend, { scene = null, scenes = null, videoSettings = {} } = {}) {
+function sceneRenderTierTarget(backend, { scene = null, scenes = null, videoSettings = {} } = {}) {
   const settings = videoSettings || {};
   if (backend === 'fal') {
     const take = falSceneTake({ scene, scenes, videoSettings: settings });
@@ -84,7 +84,7 @@ export function sceneRenderTierTarget(backend, { scene = null, scenes = null, vi
 
 /**
  * The shot's draft and final resolutions on `backend`:
- * `{ ...sceneRenderTierTarget, draft, final }`, or null when it has no tiers.
+ * `{ settingsField, requestField, modelId, options, draft, final }`, or null when it has no tiers.
  */
 export function sceneRenderTierPlan(backend, context = {}) {
   const target = sceneRenderTierTarget(backend, context);

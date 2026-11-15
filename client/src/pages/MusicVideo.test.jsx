@@ -1437,7 +1437,8 @@ describe('MusicVideo project video renderer', () => {
     await openStage('produce');
     // No model pin: the default Hailuo-02 image-to-video take, priced before it is paid for.
     expect((await screen.findByTestId('fal-cutaway-plan')).textContent).toContain('est. $0.27 (6s at 768P)');
-    fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
+    // Hailuo-02 offers two resolutions, so the card renders a draft or a final (#16136); final is its highest.
+    fireEvent.click(await findEnabledByRole('button', { name: /^Render final/ }));
     await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
       backend: 'fal',
       falDuration: 6,
@@ -1463,8 +1464,8 @@ describe('MusicVideo project video renderer', () => {
     expect(within(pick).getByRole('option', { name: /^fal\.ai · .*Kling/ })).toBeTruthy();
     expect(within(pick).queryByRole('option', { name: /LTX.*fal|fal.*LTX/ })).toBeNull();
     fireEvent.change(pick, { target: { value: 'fal:fal-ai/minimax/hailuo-02/standard/image-to-video' } });
-    expect(render.getByText(/^est\. \$/)).toBeTruthy();
-    fireEvent.click(render.getByRole('button', { name: /^Render$/ }));
+    expect(render.getByRole('button', { name: /^Render final.*\$/ })).toBeTruthy();
+    fireEvent.click(render.getByRole('button', { name: /^Render final/ }));
     await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
       backend: 'fal', falModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video', mode: 'image', sourceImageFile: 'img1',
     })));
@@ -1522,7 +1523,7 @@ describe('MusicVideo project video renderer', () => {
 
     // A 7.2s shot on H3 Max (5–15s whole seconds) renders 8s at $0.16/s.
     expect((await screen.findByTestId('fal-cutaway-plan')).textContent).toContain('est. $1.28 (8s at 1080P)');
-    fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
+    fireEvent.click(await findEnabledByRole('button', { name: /^Render final/ }));
     await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
       backend: 'fal', falModelId: 'minimax/h3-max/image-to-video', falDuration: 8, falResolution: '1080P',
     })));
@@ -1544,7 +1545,7 @@ describe('MusicVideo project video renderer', () => {
     // exactly the "no fal.ai API key configured" install this covers.
     await openProject({ ...PROJECT_NO_CLIP, videoSettings: { backend: 'fal' } }, 'produce');
 
-    const generate = await screen.findByRole('button', { name: /^Render$/ });
+    const generate = await screen.findByRole('button', { name: /^Render final/ });
     expect(generate).toBeDisabled();
     expect(generate).toHaveProperty('title', expect.stringContaining('No fal.ai API key configured'));
     fireEvent.click(generate);
@@ -1590,9 +1591,10 @@ describe('MusicVideo project video renderer', () => {
       expect(plan.textContent).toMatch(/shot starts 1\.7[78]s into the take/);
       // The padded 5.05s window at the 1080P lip-sync default ($0.16/s).
       expect(plan.textContent).toContain('est. $0.81 (5.05s at 1080P)');
-      fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
+      // With no final resolution set, Render final takes the lip-sync model's highest tier (#16136).
+      fireEvent.click(await findEnabledByRole('button', { name: /^Render final/ }));
       await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
-        backend: 'fal', mode: 'image', sourceImageFile: 'img1', falResolution: '1080P',
+        backend: 'fal', mode: 'image', sourceImageFile: 'img1', falResolution: '2K',
       })));
       expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('falDuration');
       expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('falModelId');
@@ -1607,7 +1609,7 @@ describe('MusicVideo project video renderer', () => {
       fireEvent.change(render.getByLabelText('Render on'), { target: { value: 'fal' } });
       expect(render.getByLabelText('Song audio')).toBeChecked();
       expect(render.getByLabelText('Song audio')).toBeDisabled();
-      fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
+      fireEvent.click(await findEnabledByRole('button', { name: /^Render final/ }));
       await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({ backend: 'fal', mode: 'image' })));
       expect(JSON.parse(generateVideo.mock.calls.at(-1)[0].musicVideo)).toMatchObject({ songAudio: false, expectedShot: 'lipsync' });
     });

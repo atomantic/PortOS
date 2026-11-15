@@ -1227,6 +1227,8 @@ describe('create-schema parity', () => {
     renderPool: { mode: 'peers', peers: [{ peerId: '3f1c2b8e-9d4a-4f6b-8c2e-1a2b3c4d5e6f', modelId: 'peer-model' }] },
     backend: 'runway',
     modelId: 'local-model',
+    draftResolution: '480p',
+    finalResolution: '1080p',
     grokDuration: 10,
     falDuration: 7,
     falModelId: 'fal-model',

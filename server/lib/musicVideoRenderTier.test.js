@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  pickRenderTierResolution, renderResolutionRank, renderTierVideoSettings, sceneRenderTierChoices, sceneRenderTierPlan,
+  renderTierVideoSettings, sceneRenderTierChoices, sceneRenderTierPlan,
 } from './musicVideoRenderTier.js';
 import { musicVideoVideoSettingsSchema } from './musicVideoValidation.js';
 
@@ -28,14 +28,15 @@ describe('render tier resolution per model family (#16136)', () => {
   });
 
   it('treats the project resolutions as ceilings, falling back to the lowest tier', () => {
-    const options = ['480P', '768P', '1080P'];
-    expect(pickRenderTierResolution(options, 'final', '720p')).toBe('480P');
-    expect(pickRenderTierResolution(options, 'final', '1080p')).toBe('1080P');
-    expect(pickRenderTierResolution(options, 'draft', '768p')).toBe('768P');
-    expect(pickRenderTierResolution(options, 'draft', '360p')).toBe('480P');
-    expect(pickRenderTierResolution(options, 'final', '4k')).toBe('1080P');
-    expect(renderResolutionRank('2K')).toBe(1440);
-    expect(renderResolutionRank('auto')).toBeNull();
+    // Seedance 2.0 on Runway offers 480p, 720p, 1080p and 4k.
+    const tiers = (draftResolution, finalResolution) => {
+      const plan = sceneRenderTierPlan('runway', ctx({ runwayModelId: 'seedance2', draftResolution, finalResolution }));
+      return [plan.draft, plan.final];
+    };
+    expect(tiers('720p', '1080p')).toEqual(['720p', '1080p']);
+    expect(tiers('900p', '2K')).toEqual(['720p', '1080p']);
+    expect(tiers('360p', '8k')).toEqual(['480p', '4k']);
+    expect(tiers('auto', null)).toEqual(['480p', '4k']);
   });
 
   it('lets a resolution the render names win over the tier', () => {
