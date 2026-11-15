@@ -940,6 +940,18 @@ describe('host control by default on /api writes (#16018)', () => {
     expect((await request(app).get('/api/settings')).status).toBe(200);
   });
 
+  it('refuses a write whose dev-proxy client header spoofs or hides the real caller', async () => {
+    for (const [socketAddress, proxiedClient] of [['127.0.0.1', '192.0.2.10'], ['192.0.2.10', '127.0.0.1']]) {
+      const { app, sink } = await buildApp(socketAddress);
+      for (const [method, path, body] of writes) {
+        const response = await send(app, method, path, body, [DEV_PROXY_CLIENT_ADDRESS_HEADER, proxiedClient]);
+        expect([response.status, response.body.code], `${socketAddress} as ${proxiedClient} ${method} ${path}`)
+          .toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      }
+      expect(sink).not.toHaveBeenCalled();
+    }
+  });
+
   it('leaves the peer and exposed-API surfaces and the public auth routes to their own admission', async () => {
     const { app, sink } = await buildApp();
     expect((await request(app).post('/api/peer-sync/push').send({})).status).toBe(200);

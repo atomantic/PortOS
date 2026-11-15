@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'child_process';
-import { readFileSync, lstatSync, existsSync } from 'fs';
+import { readFileSync, lstatSync, existsSync, statSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -32,6 +32,16 @@ const INSTRUCTION_DIRS = [
   'server',
   'server/lib/aiToolkit',
 ];
+
+/**
+ * Byte ceilings (#16087). Root AGENTS.md loads into every session and the whole
+ * tree is spliced into API-provider agent prompts, so growth is paid by every
+ * task. When a file hits its ceiling, move task-specific procedure into a skill
+ * (`.claude/skills/`) or a doc rather than raising the number. Rules guarding
+ * data loss, destructive actions, privacy and spend stay in root.
+ */
+const ROOT_MAX_BYTES = 28 * 1024;
+const NESTED_MAX_BYTES = 12 * 1024;
 
 /** Entire body of a bridge file. */
 const IMPORT_BODY = '@AGENTS.md\n';
@@ -74,6 +84,21 @@ describe('agent-instructions files (#4852)', () => {
       expect(readFileSync(agentsPath, 'utf8').trim().length, `${dir}/AGENTS.md must carry content`).toBeGreaterThan(0);
       expect(readFileSync(bridgePath, 'utf8'), `${dir}/CLAUDE.md must be exactly the @AGENTS.md import`).toBe(IMPORT_BODY);
     }
+  });
+
+  it('every AGENTS.md stays under its byte ceiling', () => {
+    const tracked = git('ls-files', '--', 'AGENTS.md', '*/AGENTS.md').split('\n').filter(Boolean);
+    expect(tracked, 'detector self-check: root AGENTS.md must be tracked').toContain('AGENTS.md');
+
+    const oversized = tracked
+      .map((file) => {
+        const limit = file === 'AGENTS.md' ? ROOT_MAX_BYTES : NESTED_MAX_BYTES;
+        return { file, size: statSync(join(REPO_ROOT, file)).size, limit };
+      })
+      .filter(({ size, limit }) => size > limit)
+      .map(({ file, size, limit }) => `${file}: ${size} bytes > ${limit} (move procedure into a skill or doc)`);
+
+    expect(oversized).toEqual([]);
   });
 
   it('no tracked AGENTS.md or CLAUDE.md is a symlink', () => {
