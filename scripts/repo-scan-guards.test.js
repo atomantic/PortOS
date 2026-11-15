@@ -58,6 +58,8 @@ const STRUCTURALLY_SELECTED = new Map([
   // client/src/**.jsx (a11y) or .js/.jsx (mounted-ref) file changes, which is
   // the only way either can start failing.
   ['client/src/a11yConventions.test.js', 'structuralTestsFor: client/src/**.jsx'],
+  // Reads update.sh/update.ps1 and the lockfiles; behavioural, so it does not ride every push (#16086).
+  ['scripts/ensure-deps.test.js', 'structuralTestsFor: ENSURE_DEPS_INPUTS'],
   ['client/src/apiWrapperOptionsConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/asyncEffectDisposalConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/dragHandleTouchConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],

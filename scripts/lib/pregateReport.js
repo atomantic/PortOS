@@ -95,9 +95,9 @@ export function buildPregateReport({
   finishedAt,
   downgraded = false,
 }) {
-  const stageRecords = stages.map(({ name, suite, command, status, durationMs, exitCode = null, signal = null, guard, files, guardReuse }) => ({
+  const stageRecords = stages.map(({ name, suite, command, status, durationMs, exitCode = null, signal = null, guard, files, guardReuse, fileDurations }) => ({
     name, suite, command, status, durationMs, exitCode, signal,
-    ...(guard ? { guard: true, files } : {}),
+    ...(guard ? { guard: true, files, fileDurations: fileDurations ?? {} } : {}),
     ...(guardReuse ? { guardReuse } : {}),
   }));
   const passed = stageRecords.length > 0 && stageRecords.every((stage) => stage.status === 'passed');

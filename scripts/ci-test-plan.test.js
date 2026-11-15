@@ -979,6 +979,13 @@ describe('CI test impact planner', () => {
     }
   });
 
+  // update.* and the lockfiles already force a full CI plan, so the planner
+  // row above can't show it; pregate's downgraded plan relies on this rule.
+  it.each(['update.sh', 'update.ps1', 'scripts/ensure-deps.js', 'server/package-lock.json'])('selects the ensure-deps contract for %s', (changed) => {
+    expect(structuralTestsFor([changed, 'docs/README.md'], new Set(['scripts/ensure-deps.test.js']))).toContain('scripts/ensure-deps.test.js');
+    expect(structuralTestsFor(['docs/README.md'], new Set(['scripts/ensure-deps.test.js']))).not.toContain('scripts/ensure-deps.test.js');
+  });
+
   it('selects lint when scripts, lib, or autofixer changes, and skips slashdo and dependency trees', () => {
     const extra = [
       'scripts/lib/directInvocation.js',
