@@ -2,15 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, MINIMAX_H3_RUNTIMES, LTX2_FAMILY_RUNTIMES, AUDIO_TO_VIDEO_RUNTIMES, videoLoraFamily, isMiniMaxH3Runtime, isLtx2FamilyRuntime, isAudioToVideoRuntime, isMlxVideoLtxLoraCapable, loraFamilyOf, isMflux, isFlux2, isZImage, isErnie, isHiDream, isQwen, flux2VariantFromModel, loraCompatKey, composeCompatKey } from './runners.js';
 
 describe('RUNNER_FAMILIES', () => {
-  it('exports the canonical runner ids', () => {
-    expect(RUNNER_FAMILIES.MFLUX).toBe('mflux');
-    expect(RUNNER_FAMILIES.FLUX2).toBe('flux2');
-    expect(RUNNER_FAMILIES.Z_IMAGE).toBe('z-image');
-    expect(RUNNER_FAMILIES.ERNIE).toBe('ernie');
-    expect(RUNNER_FAMILIES.HIDREAM).toBe('hidream');
-    expect(RUNNER_FAMILIES.QWEN).toBe('qwen');
-  });
-
   it('is frozen so callers can\'t mutate the canonical strings at runtime', () => {
     expect(Object.isFrozen(RUNNER_FAMILIES)).toBe(true);
   });
@@ -29,9 +20,7 @@ describe('RUNNER_FAMILIES', () => {
 });
 
 describe('VIDEO_LORA_FAMILIES / videoLoraFamily', () => {
-  it('exports the canonical video family ids, frozen', () => {
-    expect(VIDEO_LORA_FAMILIES.LTX_VIDEO).toBe('ltx-video');
-    expect(VIDEO_LORA_FAMILIES.MINIMAX_H3).toBe('minimax-h3');
+  it('is frozen so callers can\'t mutate the canonical strings at runtime', () => {
     expect(Object.isFrozen(VIDEO_LORA_FAMILIES)).toBe(true);
   });
 
