@@ -170,4 +170,4 @@ Other rules:
 
 ## Documentation
 
-[ETHOS.md](ETHOS.md) states why unsupervised agent operation is the design target and the commitments a change must not break; read it before proposing supervision gates, per-action confirmations, external edits to a mind's own memories, or new data crossing federation. `docs/README.md` indexes `docs/` (ADRs in `docs/decisions/`, plans in `docs/plans/`); most-referenced: `docs/STORAGE.md`, `docs/ARCHITECTURE.md`, `docs/API.md`.
+[ETHOS.md](ETHOS.md) states why unsupervised agent operation is the design target and the commitments a change must not break; read it before proposing supervision gates, per-action confirmations, external edits to a mind's own memories, or new data crossing federation. `docs/README.md` indexes `docs/` (ADRs in `docs/decisions/`, plans in `docs/plans/`); key: `docs/STORAGE.md`, `docs/ARCHITECTURE.md`, `docs/API.md`.

@@ -6,6 +6,8 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 
 ## Guides (living documents)
 
+A living doc describes current behaviour and operator procedure; issue numbers, dated evidence, and "what changed" belong in the commit or PR. Each guide is capped at 40 KB (grandfathered files are ratcheted in `docs/docs-index.test.js`); a doc at its ceiling is split by topic, not appended to.
+
 | Doc | Covers |
 |-----|--------|
 | [SCRIPTS.md](./SCRIPTS.md) | Every `npm run` maintenance command and the operator scripts in `scripts/`, with when to run each |
