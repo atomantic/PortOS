@@ -417,6 +417,18 @@ export function musicVideoOfferedReferences(choices) {
  * automatic set fills the remaining slots. `castMedia` is optional: without it
  * (or without a variant) the result is the automatic set alone.
  */
+/**
+ * A shot's saved frame picks as they render: a replaced canonical or generated sheet id moves to
+ * its current one. Callers editing the list must compare against these, not the raw saved ids,
+ * or a pick that moved is mistaken for an unresolved guide and saved back, undoing a removal.
+ */
+export function resolvedFramePickIds(project, scene, castMedia = null, linked = musicVideoLinkedCastReferences(project, castMedia)) {
+  const saved = Array.isArray(scene?.frameReferenceIds) ? scene.frameReferenceIds : [];
+  // A pick of a character's replaced canonical image renders as the current one (catalogPickResolver).
+  const resolve = project?.castAndSets?.source === 'catalog' ? catalogPickResolver(project) : null;
+  return currentLinkedPickIds(project, resolve ? saved.map((id) => resolve(id).id) : saved, castMedia, linked);
+}
+
 function baseConditioningReferences(project, scene, castMedia = null, limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES) {
   const research = musicVideoResearchReferences(scene).filter((ref) => !isLegacyCatalogReference(project, ref));
   // A roster cameo's photos (#14821) are the shot's identity references, ahead of any cast guide.
@@ -429,8 +441,7 @@ function baseConditioningReferences(project, scene, castMedia = null, limit = MU
     const choices = [...research, ...guides, ...panel, ...musicVideoReferenceChoices(project), ...linked]
       .filter((ref) => !isLegacyCatalogReference(project, ref));
     // A pick of a character's replaced canonical image renders as the current one (catalogPickResolver).
-    const resolve = project?.castAndSets?.source === 'catalog' ? catalogPickResolver(project) : null;
-    const ids = currentLinkedPickIds(project, resolve ? scene.frameReferenceIds.map((id) => resolve(id).id) : scene.frameReferenceIds, castMedia, linked);
+    const ids = resolvedFramePickIds(project, scene, castMedia, linked);
     return ids.map((id) => choices.find((ref) => ref.id === id)).filter(Boolean)
       .slice(0, limit);
   }

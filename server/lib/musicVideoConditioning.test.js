@@ -2,7 +2,7 @@ import { musicVideoFrameModelInput } from './musicVideoShotPrompt.js';
 import { shotSheetCast } from './musicVideoShotSheet.js';
 import { musicVideoConceptSchema } from './musicVideoValidation.js';
 import { describe, it, expect } from 'vitest';
-import { musicVideoCastGuideReferences, musicVideoCatalogPickPlans, musicVideoReferenceChoices, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoLinkedReferenceId, musicVideoMissingFrameLinkedPicks, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
+import { resolvedFramePickIds, musicVideoCastGuideReferences, musicVideoCatalogPickPlans, musicVideoReferenceChoices, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoLinkedReferenceId, musicVideoMissingFrameLinkedPicks, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
 import { getFalVideoModel } from './falVideoModels.js';
 
 const CAST_ID = 'cat-chr-example';
@@ -276,6 +276,18 @@ describe('catalog-linked check-in conditioning', () => {
     expect(ids(musicVideoConditioningReferences(p, scene, media))).toEqual(['lead-portrait.png']);
     // An image the record no longer holds at all still blocks the render.
     expect(musicVideoMissingFrameLinkedPicks(p, { frameReferenceIds: [musicVideoLinkedReferenceId('gone.png')] }, media)).toHaveLength(1);
+  });
+
+  // Uniquely catches the editor re-saving a moved pick: removing the chip left the stale id in the saved list, so it came straight back.
+  it('resolves a replaced canonical pick to the id the shot card lists', () => {
+    const p = { ...catalogProject(), concept: { subjects: [{ id: 'mvc-1', kind: 'character', name: 'Lead', ingredientId: CAST_ID }] } };
+    const media = { [CAST_ID]: [
+      { mediaKey: 'lead-portrait.png', kind: 'portrait', createdAt: '2026-01-01T00:00:00.000Z' },
+      { mediaKey: 'old-canonical.png', kind: 'reference', createdAt: '2026-01-01T00:00:00.000Z' },
+    ] };
+    const portraitId = musicVideoLinkedReferenceId('lead-portrait.png');
+    const scene = { frameReferenceIds: [musicVideoLinkedReferenceId('old-canonical.png')] };
+    expect(resolvedFramePickIds(p, scene, media)).toEqual([portraitId]);
   });
 
   it('conditions from current catalog media without copying or modifying historical sheets', () => {
