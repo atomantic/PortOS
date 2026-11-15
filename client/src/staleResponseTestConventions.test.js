@@ -1,30 +1,10 @@
 // @vitest-environment node
 
 /**
- * Repo-wide guard: a stale-response test must flush before it asserts absence.
- *
- * The vacuous shape:
- *
- *   resolveOld(payload);
- *   await waitFor(() => expect(screen.queryByText('old')).toBeNull());
- *
- * `waitFor` runs its callback once synchronously, before the resolved
- * promise's continuation has run, so the absence check passes on the first try
- * and the test stays green with the staleness guard deleted (#11890: four
- * guards in DeckStyleSources, PeerAdministrationPanel, useMusicVideoReviewDraft
- * and PromptManager were uncovered this way).
- *
- * Fix: `await act(async () => { resolveOld(payload); });` then assert
- * synchronously, ideally followed by a positive assertion about the current
- * record that must survive the flush. A waitFor is only legitimate when the
- * absent thing is PRESENT before the trigger, so it really waits.
- *
- * ## What this guard CANNOT see
- *
- * Lexical scan: a bare `resolve*(`/`finish*(` statement followed within two
- * lines by `await waitFor(() => expect(...)` with `.not` or `toBeNull()`.
- * Other resolver names, multi-line waitFor bodies, and `await`ed or
- * act-wrapped resolves are not examined.
+ * Rule: A stale-response test must flush the resolved promise with `await act(async () => { resolveOld(payload); })` before asserting absence.
+ * Fix: Wrap `resolve*(…)` in `await act(async () => { … })` and assert synchronously instead of `await waitFor(() => expect(…).toBeNull())`.
+ * What this guard cannot see:
+ *   - Lexical scan: only catches bare `resolve*(`/`finish*(` followed within two lines by `await waitFor(() => expect(…)` with `.not`/`toBeNull()`; other resolver names and multi-line `waitFor` bodies are not examined.
  */
 
 import { describe, it, expect } from 'vitest';

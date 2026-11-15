@@ -1,35 +1,8 @@
 /**
- * A detail page's `<h1>` is the only place the record's name appears on that
- * route, so truncating it away leaves the value unreachable.
- *
- * `truncate` is `overflow:hidden; text-overflow:ellipsis; white-space:nowrap`.
- * At a 360px viewport, after the back link, icon, badges and action buttons
- * sharing the header row, the heading gets roughly 150-180px — about fifteen
- * characters. A series named "Season 2 — The Reclamation Arc (draft)" renders
- * as "Season 2 — The…", and because the clipped text is neither selectable nor
- * expandable there is no way to read the rest on a phone. Desktop would at
- * least surface a native tooltip if `title` were set; it wasn't (issue #5694).
- *
- * The rule: an `<h1>` that renders a DYNAMIC value (its children contain a JSX
- * expression) and clips it with an unprefixed `truncate` must also carry a
- * `title` attribute, so the full value stays reachable. The tree's fix is to
- * drop `truncate` for `line-clamp-2 break-words` AND set `title` — two clamped
- * lines plus a tooltip — but the guard polices the reachability half only, so a
- * page that has a genuine reason to keep one ellipsised line stays legal as
- * long as the value can still be read.
- *
- * Deliberately NOT flagged:
- *  - A heading whose children are a STATIC string (`<h1 …>Media Gen</h1>`).
- *    Nothing is lost when a title the code itself wrote gets clipped, and the
- *    page's nav entry carries the same words.
- *  - `line-clamp-*`, which wraps rather than clipping to one line.
- *  - A variant-prefixed `md:truncate`, which leaves the phone — the viewport
- *    that actually runs out of room — unclipped.
- *  - `h2` and below: a section heading labels content that is itself on screen,
- *    not the record's only identifier.
- *
- * Scoped to git-tracked non-test sources; comments are masked first so a doc
- * block quoting example markup is documentation, not markup.
+ * Rule: A dynamic `<h1>` using an unprefixed `truncate` must also carry a `title` attribute so the full value stays reachable.
+ * Fix: Drop `truncate` for `line-clamp-2 break-words` and/or add `title={…}`.
+ * What this guard cannot see:
+ *   - Scoped to git-tracked non-test sources (comments masked); static `<h1>` strings, `line-clamp-*`, `md:truncate`, and `<h2>`+ are not flagged.
  */
 
 import { describe, it, expect } from 'vitest';
