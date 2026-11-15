@@ -12,7 +12,7 @@ const base = {
   lyricCues: [{ id: 'l1', text: 'first line', startSec: 7, endSec: 9 }],
 };
 
-// The board's local edit + save, as MusicVideo.jsx wires them.
+// The board's local edit + save, as ProjectWorkspace.jsx wires them.
 function Harness({ initial, onSave }) {
   const [project, setProject] = useState(initial);
   return <TitleCardPanel project={project} onEditLocal={(patch) => setProject((p) => ({ ...p, ...patch }))} onSave={onSave} onPreview={() => {}} />;

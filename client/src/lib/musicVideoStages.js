@@ -21,7 +21,7 @@
  * saved image/video render services), `compareMusicVideoProjectsNewestFirst(a, b)` (sort projects
  * newest created / updated first for project cards and pickers), and `currentProductionRun`;
  * `productionReviewStopGuidance` separates current approval blockers from historical run stops. Used
- * by `components/musicVideo/MusicVideoLayout.jsx` and `pages/MusicVideo.jsx`.
+ * by `components/musicVideo/MusicVideoLayout.jsx`, `components/musicVideo/ProjectWorkspace.jsx` and `pages/MusicVideo.jsx`.
  * `projectFalSpend(project)` (estimated fal.ai and Runway spend by model across paid takes and
  * production steps). A Blender film's Shots step reads `project.blenderShots` (`{ total, finalReady,
  * ready }`, attached by the server to every project read and recomputed by the page from the film

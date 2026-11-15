@@ -22,7 +22,7 @@
  * and `blenderAgentBrief({ projectId, state })` (the ready-to-paste brief for a coding agent). Used by
  * `hooks/useMusicVideoBlender.js`, `components/musicVideo/BlenderFilmPanel.jsx` and its `blender/`
  * tabs, `components/musicVideo/StoryboardAnimatic.jsx` (the live film preview), and
- * `pages/MusicVideo.jsx`.
+ * `components/musicVideo/ProjectWorkspace.jsx`.
  *
  * Music Video "Blender film" render style: pure readings of the Blender state
  * the server answers for a project — what each shot's preview and final render
