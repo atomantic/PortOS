@@ -1,0 +1,49 @@
+name: Set up the client workspace
+description: >-
+  A cached client/node_modules (exact key, install skipped on a hit), with
+  Node 26 unless the job already set Node up. Shared by every ci.yml job that
+  installs the client workspace.
+
+inputs:
+  setup-node:
+    description: "'false' when an earlier step (setup-server) already selected Node 26."
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Use Node.js 26.x
+      if: inputs.setup-node == 'true'
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 26.x
+        cache: npm
+        cache-dependency-path: client/package-lock.json
+
+    # `setup-node`'s npm cache only preserves ~/.npm, the tarball cache, so a
+    # clean install still wipes and repopulates client/node_modules (393 MB,
+    # 21k files — MORE files than the server tree) on every job that installs
+    # this workspace. Same exact-key/no-restore-keys shape as `Cache server
+    # node_modules` in setup-server, and for the same reason: a near-miss tree
+    # is not safe to reuse.
+    #
+    # No rebuild half, unlike the server: client/.npmrc pins
+    # ignore-scripts=true AND `scripts/trusted-rebuilds.js` deliberately lists
+    # nothing for this workspace, so a restored tree is usable as-is and the
+    # install can be skipped outright on a hit. That premise is HASHED, not
+    # assumed: `trusted-rebuilds.js` is in the key, so the day a client
+    # dependency does need a rebuild the key moves and no job can keep
+    # restoring a never-rebuilt tree on an exact hit — which no job here has a
+    # stamp check to notice.
+    - name: Cache client node_modules
+      id: client-modules
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: client/node_modules
+        key: client-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
+
+    - name: Install client dependencies
+      if: steps.client-modules.outputs.cache-hit != 'true'
+      shell: bash
+      run: npm ci --prefix client

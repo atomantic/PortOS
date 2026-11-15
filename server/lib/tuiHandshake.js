@@ -116,10 +116,8 @@ export const PASTE_TO_ENTER_FALLBACK_MS = 3500;
 // re-paste cadence that IS the recovery. The spawner reads the boot tracker
 // live for that reason — the banner can latch after the paste went out.
 //
-// The one-shot runner (tuiPromptRunner.js) keeps the flat fallback: it never
-// re-pastes, so it has nothing for patience to protect, and it tracks no
-// verifiable prompt prefix, so a short codex prompt renders no chip there and
-// would simply wait the full window for nothing.
+// Both TUI runners get this rule through the shared paste driver
+// (tuiPasteSubmitDriver.js, `settleRule: 'codex'`).
 export const PASTE_COMMIT_PATIENCE_MS = 45000;
 
 // Codex's composer placeholder — the ONLY positive evidence its input box is

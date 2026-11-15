@@ -24,8 +24,8 @@ vi.mock('./releaseSynchronizationStore.js', () => ({ readReleaseSynchronizationO
 
 const { updateClaimOwnership, updateReleaseCandidateOwnership, updateReleaseSynchronizationOwnership,
   checkReconcileOwnership, CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS } = await import('./cosClaimOwnership.js');
-// Hold the same leaf fence cleanup uses while exercising binding through its public service.
-const { withClaimOwnershipLock, reserveCheckoutRetirementFence } = await import('./cosClaimOwnershipState.js');
+// Hold the same leaf lock checkout removal uses while exercising binding through its public service.
+const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
 const { claimContinuationAdmission, claimBranchAdmission } = await import('../lib/claimContinuation.js');
 
 const { withStateLock, readAgentsStateForSafetyCheck, saveState } = await import('./cosState.js');
@@ -508,24 +508,23 @@ describe('checkReconcileOwnership reservation', () => {
     expect(store.state.agents['agent-recon'].metadata.claimBranches).toBeUndefined();
   });
 
-  // #12682: retirement archives with the ownership lock released, fenced per checkout.
-  it('refuses binds and admissions for a checkout being archived, and only that checkout, until the fence lifts', async () => {
-    const before = structuredClone(store.state);
-    const releaseFence = await withClaimOwnershipLock(() => reserveCheckoutRetirementFence({ repoPath: SOURCE, path: CHILD, branch: 'refs/heads/claim/issue-101' }));
-    expect(await withClaimOwnershipLock(() => reserveCheckoutRetirementFence({ repoPath: `${SOURCE}/`, path: CHILD }))).toBeNull();
-
-    expect(await bind()).toEqual({ bound: false, reason: 'checkout-retirement-reserved' });
-    expect(await admit('agent-recon')).toEqual({ admitted: false, reason: 'checkout-retirement-reserved' });
-    expect(await admit(undefined)).toEqual({ admitted: false, reason: 'checkout-retirement-reserved' });
-    expect(store.state).toEqual(before);
-    // Releasing a branch and binding a different one are not fenced.
-    expect(await updateClaimOwnership({ agentId: 'agent-picker', action: 'bind', branch: 'claim/issue-102' }))
-      .toEqual({ bound: true, branch: 'claim/issue-102' });
-    expect(await updateClaimOwnership({ agentId: 'agent-picker', action: 'release', branch: 'claim/issue-102' }))
-      .toEqual({ released: true, branch: 'claim/issue-102' });
-
-    await withClaimOwnershipLock(releaseFence);
-    expect(await bind()).toEqual({ bound: true, branch: 'claim/issue-101' });
+  // #16101: a checkout removal re-reads owners and removes inside one section of
+  // this lock, so a racing bind settles only after the removal does.
+  it('queues a bind behind an in-flight checkout removal and binds once it settles', async () => {
+    const removal = deferred();
+    const events = [];
+    const removing = withClaimOwnershipLock(async () => {
+      await removal.promise;
+      events.push('removed');
+    });
+    const binding = bind().then(result => { events.push('bound'); return result; });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(events).toEqual([]);
+    expect(store.state.agents['agent-picker'].metadata.claimBranches).toBeUndefined();
+    removal.resolve();
+    await removing;
+    expect(await binding).toEqual({ bound: true, branch: 'claim/issue-101' });
+    expect(events).toEqual(['removed', 'bound']);
   });
 
   it('reserves nothing for a branch no claim run can bind', async () => {

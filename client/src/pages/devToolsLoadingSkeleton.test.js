@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-// These routes are full-width (see layoutRoutes.js), so <main> neither pads nor
+// These routes render in FullWidthMain (App.jsx), so <main> neither pads nor
 // scrolls; the loading skeleton must mirror the loaded PageHeader bar shape.
 const FILES = [
   '../pages/Uploads.jsx',

@@ -2,7 +2,10 @@ import { Suspense, useEffect } from 'react';
 import { isPublicGuestRoute } from './lib/publicGuestRoutes';
 import { Routes, Route, Navigate, useLocation, useParams } from 'react-router';
 import Layout from './components/Layout';
-import { getSettings, updateSettings, getSelfInstance, PORTOS_APP_ID } from './services/api';
+import { FullWidthMain, PaddedMain } from './components/PageShell';
+import { getSettings, updateSettings, getSelfInstance } from './services/api';
+import { NAV_COMMANDS } from '../../server/lib/navManifest.js';
+import { previousPathRedirects, previousPathTarget } from './lib/previousPaths';
 import BrailleSpinner from './components/BrailleSpinner';
 import { CatalogTypesProvider } from './hooks/useCatalogTypes.jsx';
 import { lazyWithReload } from './utils/lazyWithReload';
@@ -161,12 +164,19 @@ const PageLoader = () => (
   </div>
 );
 
-// Preserve query string + hash when redirecting legacy routes — Settings.jsx's
-// /image-gen?settings=1 chain depends on ?settings=1 reaching the new path, and
-// legacy universe bookmarks may carry a hash (e.g. `#canon`) we must not drop.
+// Preserve query string + hash on a hand-written redirect.
 function RedirectWithSearch({ to }) {
   const { search, hash, state } = useLocation();
   return <Navigate to={`${to}${search}${hash}`} state={state} replace />;
+}
+
+// Generated from NAV_COMMANDS so a moved page's old path redirects by being
+// declared beside the page (`previousPaths`), with no second table here.
+const PREVIOUS_PATH_REDIRECTS = previousPathRedirects(NAV_COMMANDS);
+
+function PreviousPathRedirect({ from, to, preserveSuffix }) {
+  const { pathname, search, hash, state } = useLocation();
+  return <Navigate to={previousPathTarget({ from, to, preserveSuffix }, { pathname, search, hash })} state={state} replace />;
 }
 
 // Canon page was folded into Universe Builder; redirect the old sub-route to
@@ -181,28 +191,19 @@ function CanonRedirect() {
   return <Navigate to={`${pathname.replace(/\/canon\/?$/, '')}${search}#canon`} replace />;
 }
 
-// Redirect a legacy universe mount to the current `/universes/*` route. Two
-// legacy prefixes feed this: `/media/universe-builder` (MediaGen tab removed in
-// favor of the Create sidebar link) and `/universe-builder` (page route renamed
-// when the list/table index landed). Both keep old bookmarks + in-app
-// deep-links alive. The canon variant forces `#canon` to scroll the embedded
-// canon section; non-canon preserves whatever hash the user had.
-function UniverseRouteRedirect({ fromPrefix, to, canon = false }) {
-  const { pathname, search, hash } = useLocation();
+// Redirect a legacy universe canon mount (`/media/universe-builder/:id/canon`,
+// `/universe-builder/:id/canon`) to the builder, forcing `#canon` to scroll the
+// embedded canon section. The non-canon legacy paths are `previousPaths`.
+function UniverseRouteRedirect({ fromPrefix, to }) {
+  const { pathname, search } = useLocation();
   const rest = pathname.replace(fromPrefix, '');
-  const target = canon
-    ? `${to}${rest.replace(/\/canon\/?$/, '')}${search}#canon`
-    : `${to}${rest}${search}${hash}`;
-  return <Navigate to={target} replace />;
+  return <Navigate to={`${to}${rest.replace(/\/canon\/?$/, '')}${search}#canon`} replace />;
 }
 
 // Rebase a legacy route prefix onto its current one, preserving the trailing
-// path (ids, tabs), query string, and hash. Every page promoted out of the
-// Media Gen tab shell into its own Create page needs exactly this — Creative
-// Director (`/media/creative-director/:id/:tab`), Sprites
-// (`/media/sprites/:id`), Music Video (`/media/music-video/:projectId`), and
-// 3D (`/media/3d/:id`) so far — so it's parameterized rather than copied per
-// move. `from` must be an anchored regex so it can only match the prefix.
+// path (ids, tabs), query string, and hash. Used where the old prefix is still a
+// live route (`/video` is a page, so `/video/:id` can't be a `previousPaths`
+// entry without capturing it). `from` must be an anchored regex.
 function PrefixRedirect({ from, to }) {
   const { pathname, search, hash, state } = useLocation();
   const rest = pathname.replace(from, '');
@@ -221,16 +222,7 @@ function HarnessConnectionsRedirect() {
   return <Navigate to={`${target}${search}${hash}`} replace />;
 }
 
-const AI_CONNECTIONS_PREFIX = /^\/ai\/connections/;
 const VIDEO_PROJECT_PREFIX = /^\/video/;
-const MEDIA_CREATIVE_DIRECTOR_PREFIX = /^\/media\/creative-director/;
-const MEDIA_SPRITES_PREFIX = /^\/media\/sprites/;
-const MEDIA_MUSIC_VIDEO_PREFIX = /^\/media\/music-video/;
-const MEDIA_3D_PREFIX = /^\/media\/3d/;
-// The annotator lives under the Media shell (/media/annotate). A bare /annotate
-// is what a bookmark, a typed URL, or a half-remembered path lands on — alias it
-// rather than letting the catch-all swallow it (issue #3793).
-const ANNOTATE_PREFIX = /^\/annotate/;
 // Normalize a tab-less /creative-director/:id URL to its overview tab while
 // preserving any query string + hash. A bare `<Navigate to="overview">` would
 // drop them; building the relative target from useLocation keeps deep-link
@@ -295,414 +287,313 @@ export default function App() {
             app chrome consuming part of the height or clipping the controls. */}
         <Route path="/fableloom/join" element={<FableLoomHostedJoin />} />
         <Route path="/" element={<Layout />}>
-          <Route index element={<Dashboard />} />
-          <Route path="apps" element={<Apps />} />
+          <Route element={<PaddedMain />}>
+            <Route index element={<Dashboard />} />
+            <Route path="apps/create" element={<CreateApp />} />
+            <Route path="voice/call-host" element={<VoiceCallHost />} />
+            <Route path="imessage/:chatKey" element={<IMessage />} />
+            <Route path="devtools/jira/reports" element={<JiraReports />} />
+            <Route path="3d/:id" element={<Media3DDetail />} />
+            <Route path="creative-commission/:id" element={<CreativeCommissionDetail />} />
+            <Route path="mood-boards/:id" element={<MoodBoardDetail />} />
+            <Route path="decks/:id" element={<DeckDetail />} />
+            <Route path="pipeline/findings/:commentId" element={<PipelineFindingRedirect />} />
+            <Route path="*" element={<NotFound />} />
+          </Route>
+          <Route element={<FullWidthMain />}>
+            <Route path="apps" element={<Apps />} />
+            <Route path="devtools/datadog" element={<DataDog />} />
+            <Route path="devtools/flows" element={<FlowsDoc />} />
+            <Route path="devtools/github" element={<GitHub />} />
+            <Route path="devtools/github/:tab" element={<GitHub />} />
+            <Route path="devtools/github/:tab/:accountId/:threadId" element={<GitHub />} />
+            <Route path="devtools/history" element={<HistoryPage />} />
+            <Route path="devtools/image-clean" element={<ImageClean />} />
+            <Route path="devtools/quota-burn" element={<QuotaBurn />} />
+            <Route path="devtools/quota-burn/:familyId" element={<QuotaBurn />} />
+            <Route path="devtools/runner" element={<RunnerPage />} />
+            <Route path="devtools/usage" element={<UsagePage />} />
+            <Route path="devtools/video-download" element={<VideoDownloaderPage />} />
+            <Route path="devtools/processes" element={<ProcessesPage />} />
+            <Route path="devtools/agents" element={<AgentsPage />} />
+            <Route path="eidoverse" element={<Eidoverse />} />
+            {/* AI Providers is three views over one page (#7567): Presets (the
+                stored records — the index /ai lands on), Harnesses and Services.
+                Every overlay is deep-linkable over the same page: /ai/presets/new
+                creates, /ai/presets/:presetId edits, /ai/services/new adds a
+                service, /ai/services/:serviceSlug opens one, /ai/harnesses/:harnessId
+                opens one harness card, and /ai/fleet walks through a remote GPU
+                host. A preset id is slugified from its display name, so a preset
+                named "New" gets the id `new` and is shadowed by the static create
+                route under /ai/presets — the legacy /ai/edit/:providerId alias is
+                kept as a WORKING route (not a redirect) so that one record stays
+                reachable; the page's own edit links use it for that id only. */}
+            <Route path="ai/presets" element={<AIProviders />} />
+            <Route path="ai/presets/new" element={<AIProviders />} />
+            <Route path="ai/presets/:presetId" element={<AIProviders />} />
+            <Route path="ai/edit/:providerId" element={<AIProviders />} />
+            <Route path="ai/fleet" element={<AIProviders />} />
+            <Route path="ai/harnesses" element={<AIProviders />} />
+            <Route path="ai/harnesses/:harnessId" element={<AIProviders />} />
+            <Route path="ai/services" element={<AIProviders />} />
+            <Route path="ai/services/new" element={<AIProviders />} />
+            <Route path="ai/services/:serviceSlug" element={<AIProviders />} />
+            <Route path="prompts" element={<PromptManager />} />
+            <Route path="cos/:tab/:agentId" element={<ChiefOfStaff />} />
+            <Route path="cos/:tab" element={<ChiefOfStaff />} />
+            <Route path="calendar/:tab" element={<CalendarPage />} />
+            <Route path="brain/links/:id/scan-report" element={<BrainScanReport />} />
+            <Route path="brain/:tab/:recordType/:recordId" element={<Brain />} />
+            <Route path="brain/:tab" element={<Brain />} />
+            <Route path="digital-twin/:tab" element={<DigitalTwin />} />
+            <Route path="privacy/:tab" element={<Privacy />} />
+            <Route path="goals/:tab" element={<Goals />} />
+            <Route path="goals/list/:goalId" element={<Goals />} />
+            <Route path="feature-agents" element={<FeatureAgents />} />
+            <Route path="feature-agents/create" element={<FeatureAgentDetail />} />
+            <Route path="feature-agents/:id/:tab" element={<FeatureAgentDetail />} />
+            <Route path="apps/:appId" element={<AppDetail />} />
+            <Route path="apps/:appId/:tab" element={<AppDetail />} />
+            <Route path="templates" element={<Templates />} />
+            <Route path="security" element={<Security />} />
+            <Route path="settings/:tab" element={<Settings />} />
+            {/* The FaceTime call host runs in its own tab on the Mac — device
+                permissions and setSinkId need a real browser profile, and the
+                page holds a Web Lock so a second tab cannot double-answer. */}
+            <Route path="voices" element={<VoiceStudio />} />
+            <Route path="voices/:profileId" element={<VoiceStudio />} />
+            <Route path="api-reference/:tab" element={<ApiExplorer />} />
+            {/* Performance owns task views rather than making one long page. The
+                selected result route is more specific so a slash-containing model
+                id stays inside the reversible assessment key segment. */}
+            <Route path="models/llms-runtimes/:recordId?" element={<Models fixedTab="llms-runtimes" />} />
+            <Route path="models/performance/results/:assessmentKey" element={<Models fixedTab="performance" />} />
+            <Route path="models/performance/:view" element={<Models fixedTab="performance" />} />
+            {/* A tab's drill-down (today: the LoRA dataset workbench) renders through
+                Models itself, so it keeps the section header and tab bar — see
+                TAB_DETAIL there. */}
+            <Route path="models/:tab" element={<Models />} />
+            <Route path="models/:tab/:recordId" element={<Models />} />
+            <Route path="models/decision-classifiers/jev/:taskView" element={<Models fixedTab="decision-classifiers" fixedRecordId="jev" />} />
+            <Route path="models/llms/jev/:taskView" element={<Models fixedTab="llms" fixedRecordId="jev" />} />
+            <Route path="local-llm/playground" element={<LocalLlmPlayground />} />
+            <Route path="uploads" element={<Uploads />} />
+            <Route path="shell" element={<Shell />} />
+            {/* The iTerm2 view (#8114): the static `iterm` segment outranks :sessionId. */}
+            <Route path="shell/iterm" element={<Shell />} />
+            <Route path="shell/iterm/:itermSessionId" element={<Shell />} />
+            <Route path="shell/:sessionId" element={<Shell />} />
+            <Route path="browser" element={<BrowserPage />} />
+            <Route path="insights/:tab" element={<Insights />} />
+            <Route path="instances" element={<Instances />} />
+            <Route path="workspace-contexts" element={<WorkspaceContexts />} />
+            <Route path="workspace-contexts/:appId" element={<WorkspaceContexts />} />
+            <Route path="system-resources/:tab" element={<SystemHealthPage />} />
+            <Route path="capabilities" element={<CapabilityMap />} />
+            <Route path="loops" element={<Loops />} />
+            <Route path="meatspace/:tab" element={<MeatSpace />} />
+            <Route path="post/:tab" element={<Post />} />
+            <Route path="post/:tab/:subtab" element={<Post />} />
+            {/* Third segment carries the practice mode for the memory tab
+                (/post/memory/:itemId/:mode) so a drill is directly linkable — the
+                same "selection lives in the URL" contract Morse/Wordplay already
+                satisfy with their :mode subtab (issue #3249). */}
+            <Route path="post/:tab/:subtab/:mode" element={<Post />} />
+            <Route path="review" element={<Review />} />
+            <Route path="review/:actionId" element={<Review />} />
+            {/* :chatKey is only used by the imessage tab; other tabs strip a stray second segment. */}
+            <Route path="messages/:tab/:chatKey" element={<Messages />} />
+            <Route path="messages/:tab" element={<Messages />} />
+            <Route path="stacker-news" element={<StackerNews />} />
+            <Route path="stacker-news/:accountId/:tab" element={<StackerNews />} />
+            <Route path="x" element={<XPage />} />
+            <Route path="x/:accountId/:tab" element={<XPage />} />
+            <Route path="tribe" element={<Tribe />} />
+            <Route path="timeline" element={<Timeline />} />
+            <Route path="timeline/:date" element={<Timeline />} />
+            <Route path="openclaw" element={<OpenClawPage />} />
+            <Route path="devtools/jira" element={<Jira />} />
+            <Route path="data" element={<DataManager />} />
+            <Route path="character" element={<CharacterSheet />} />
+            <Route path="ask" element={<Ask />} />
+            <Route path="ask/:conversationId" element={<Ask />} />
+            <Route path="media" element={<MediaGen />}>
+              <Route index element={<Navigate to="/media/image" replace />} />
+              <Route path="image" element={<ImageGen />} />
+              <Route path="prompt" element={<PromptFromMediaPage />} />
+              <Route path="prompt/:examinationId" element={<PromptFromMediaPage />} />
+              <Route path="history" element={<MediaHistory />} />
+              <Route path="annotate" element={<MediaAnnotate />} />
+              <Route path="annotate/:mediaKey" element={<MediaAnnotate />} />
+              <Route path="collections" element={<MediaCollections />} />
+              <Route path="collections/:id" element={<MediaCollectionDetail />} />
+              <Route path="collections/:id/sync" element={<MediaCollectionSyncView />} />
+              <Route path="timeline" element={<VideoTimeline />} />
+              <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
+              <Route path="threejs" element={<ThreejsModels />} />
+              <Route path="threejs/:id" element={<ThreejsModelDetail />} />
+              <Route path="universe-builder/:universeId/canon" element={<UniverseRouteRedirect fromPrefix={/^\/media\/universe-builder/} to="/universes" />} />
+            </Route>
+            {/* Sprite Manager — a top-level Create page (moved out of the Media
+                Gen tabs). The record id is the URL, per the ID-based deep-linking
+                convention. */}
+            <Route path="sprites" element={<Sprites />} />
+            <Route path="sprites/:id" element={<Sprites />} />
+            {/* Creative Director — a top-level Create page (moved out of the
+                Media Gen tabs); /video is its browse-only view. */}
+            <Route path="video" element={<CreativeDirector browseOnly />} />
+            {/* VideoGen still uses the Media Gen tab shell (header + tabs +
+                overflow-auto body); VideoGen has no internal scroller of its
+                own, so rendering it bare in the full-width main clips the form. */}
+            <Route path="video/generate" element={<MediaGen />}>
+              <Route index element={<VideoGen />} />
+            </Route>
+            <Route path="creative-director" element={<CreativeDirector />} />
+            <Route path="creative-director/:id/:tab/:sceneId" element={<CreativeDirectorDetail />} />
+            <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
+            {/* Music Video — a top-level Create page (moved out of the Media Gen
+                tabs). The project id is the URL, per the ID-based deep-linking
+                convention. */}
+            <Route path="music-video" element={<MusicVideo />} />
+            <Route path="music-video/:projectId" element={<MusicVideo />} />
+            {/* Stage tab (story | setup | board | cast-sets | previz | produce | review | publish; legacy aliases such as compose still resolve); an unknown stage opens the project's default. */}
+            <Route path="music-video/:projectId/:stage" element={<MusicVideo />} />
+            <Route path="music-video/:projectId/:stage/scene/:sceneId" element={<MusicVideo />} />
+            {/* The Storyboard step's open panel. */}
+            <Route path="music-video/:projectId/:stage/panel/:panelId" element={<MusicVideo />} />
+            <Route path="music-video/:projectId/scene/:sceneId" element={<MusicVideo />} />
+            <Route path="music-video/:projectId/dev/:artifactId" element={<MusicVideo />} />
+            <Route path="music-video/:projectId/:stage/dev/:artifactId" element={<MusicVideo />} />
+            {/* 3D — a top-level Create page (moved out of the Media Gen tabs). The
+                record id is the URL, per the ID-based deep-linking convention. */}
+            <Route path="3d" element={<Media3D />} />
+            {/* Index (list) hosts the create drawer at /new; `:id` is now a routed
+                detail page (editable config + render history), not a sidebar edit
+                drawer. React Router ranks the static `new` segment above `:id`, so
+                the index reads `new` off the pathname while every real id lands on
+                the detail page. */}
+            <Route path="creative-commission" element={<CreativeCommissions />} />
+            <Route path="creative-commission/new" element={<CreativeCommissions />} />
+            <Route path="game" element={<Game />} />
+            <Route path="game/:id" element={<Game />} />
+            <Route path="wiki/:tab" element={<Wiki />} />
+            <Route path="rapid-reader" element={<RapidReaderPage />} />
+            <Route path="rapid-reader/:id" element={<RapidReaderPage />} />
+            {/* `/universes` is the universe index (list/table). The editor lives
+                at `/universes/:universeId`; `new` is the create-mode sentinel
+                (UniverseBuilder treats it as no-id → blank draft). Universe ids are
+                UUIDs, so `new` can never collide with a real record. */}
+            <Route path="rounds" element={<Rounds />} />
+            <Route path="rounds/guide" element={<RoundsGuide />} />
+            <Route path="rounds/:id" element={<RoundEditor />} />
+            <Route path="songbook" element={<SongBook />} />
+            <Route path="songbook/import" element={<SongBookImport />} />
+            <Route path="songbook/:id" element={<SongBookViewer />} />
+            <Route path="catalog" element={<Catalog />} />
+            <Route path="catalog/ingest" element={<CatalogIngest />} />
+            <Route path="catalog/:type/:id" element={<CatalogIngredient />} />
+            <Route path="casting" element={<CreativeLibrary key="casting" libraryId="casting" />} />
+            <Route path="casting/import" element={<CreativeCastImport />} />
+            <Route path="casting/:id/:tab?" element={<CatalogIngredient />} />
+            <Route path="environments" element={<CreativeLibrary key="environments" libraryId="environments" />} />
+            <Route path="environments/:id/:tab?" element={<CatalogIngredient />} />
+            <Route path="objects" element={<CreativeLibrary key="objects" libraryId="objects" />} />
+            <Route path="objects/:id/:tab?" element={<CatalogIngredient />} />
+            <Route path="code-animation" element={<CodeAnimation />} />
+            <Route path="code-animation/gallery" element={<CodeAnimation />} />
+            <Route path="code-animation/drafts/:draftId" element={<CodeAnimation />} />
+            <Route path="code-animation/:jobId" element={<CodeAnimation />} />
+            <Route path="code-animation/production" element={<CodeAnimation />} />
+            <Route path="code-animation/production/films/:filmId/:tab?/:shotId?" element={<CodeAnimation />} />
+            <Route path="code-animation/production/:projectId" element={<CodeAnimation />} />
+            <Route path="mood-boards" element={<MoodBoards />} />
+            <Route path="storyboards" element={<Storyboards />} />
+            <Route path="storyboards/:id" element={<StoryboardDetail />} />
+            <Route path="storyboards/:id/panel/:panelId" element={<StoryboardDetail />} />
+            <Route path="decks" element={<Decks />} />
+            <Route path="universes" element={<Universes />} />
+            <Route path="universes/new" element={<UniverseBuilder />} />
+            <Route path="universes/:universeId" element={<UniverseBuilder />} />
+            <Route path="universes/:universeId/sync" element={<SyncView kind="universe" param="universeId" backPath="/universes" />} />
+            <Route path="writers-room" element={<WritersRoom />} />
+            <Route path="writers-room/guide" element={<WritersRoomGuide />} />
+            <Route path="sharing" element={<Sharing />} />
+            <Route path="sharing/:section" element={<Sharing />} />
+            <Route path="sharing/:section/:bucketId" element={<Sharing />} />
+            <Route path="importer" element={<Importer />} />
+            <Route path="fableloom" element={<FableLoom />} />
+            <Route path="fableloom/:loomId" element={<FableLoomStory />} />
+            <Route path="fableloom/:loomId/:episodeId/outline" element={<FableLoomStory view="outline" />} />
+            <Route path="fableloom/:loomId/:episodeId/board" element={<FableLoomStory view="board" />} />
+            <Route path="fableloom/:loomId/:episodeId" element={<FableLoomStory />} />
+            <Route path="fableloom/:loomId/:episodeId/:nodeId" element={<FableLoomStory />} />
+            <Route path="start-story" element={<StartStory />} />
+            <Route path="story-builder" element={<StoryBuilder />} />
+            <Route path="story-builder/:storyId/:step" element={<StoryBuilder />} />
+            {/* Authors is a single master-detail page: the index + editor share one
+                component, so selection rides `:authorId` (which also captures the
+                `new` create-mode sentinel — author ids are UUIDs, so it can't
+                collide). A bare `/authors` is the idle index. */}
+            <Route path="authors" element={<Authors />} />
+            <Route path="authors/:authorId" element={<Authors />} />
+            {/* Music is tabbed (`:tab`); each tab's master-detail selection lives
+                at `/music/:tab/:id` (`new` = create sentinel). */}
+            <Route path="music" element={<Music />} />
+            <Route path="music/:tab" element={<Music />} />
+            <Route path="music/:tab/:id" element={<Music />} />
+            <Route path="pipeline" element={<Pipeline />} />
+            <Route path="pipeline/editorial-checks" element={<PipelineEditorialChecks />} />
+            <Route path="pipeline/series/:seriesId" element={<PipelineSeries />} />
+            <Route path="pipeline/series/:seriesId/roadmap" element={<PipelineSeriesRoadmap />} />
+            <Route path="pipeline/series/:seriesId/reverse-outline" element={<PipelineReverseOutline />} />
+            <Route path="pipeline/series/:seriesId/voice-fingerprint" element={<PipelineVoiceFingerprint />} />
+            <Route path="pipeline/series/:seriesId/continuity-bible" element={<PipelineContinuityBible />} />
+            {/* Splat (not a :param route) so navigating between issues reuses the
+                same component instance instead of remounting + refetching. */}
+            <Route path="pipeline/series/:seriesId/manuscript/*" element={<PipelineManuscriptEditor />} />
+            <Route path="pipeline/series/:seriesId/export" element={<PipelineExport />} />
+            <Route path="pipeline/series/:seriesId/sync" element={<SyncView kind="series" param="seriesId" backPath="/pipeline" />} />
+            <Route path="pipeline/issues/:issueId/:stage" element={<PipelineIssue />} />
+            <Route path="writers-room/works/:workId" element={<WritersRoom />} />
+            <Route path="agents" element={<Agents />} />
+            <Route path="agents/:agentId" element={<Agents />} />
+            <Route path="agents/:agentId/:tab" element={<Agents />} />
+          </Route>
+          {/* One redirect per NAV_COMMANDS[].previousPaths entry (server/lib/navManifest.js):
+              declaring the old path when a page moves IS its redirect. Only redirects
+              with their own logic are written by hand below. */}
+          {PREVIOUS_PATH_REDIRECTS.map((redirect) => (
+            <Route key={redirect.from} path={redirect.from.slice(1)} element={<PreviousPathRedirect {...redirect} />} />
+          ))}
           <Route path="devtools" element={<Navigate to="/devtools/agents" replace />} />
-          <Route path="devtools/datadog" element={<DataDog />} />
-          <Route path="devtools/flows" element={<FlowsDoc />} />
-          <Route path="devtools/github" element={<GitHub />} />
-          <Route path="devtools/github/:tab" element={<GitHub />} />
-          <Route path="devtools/github/:tab/:accountId/:threadId" element={<GitHub />} />
-          <Route path="devtools/history" element={<HistoryPage />} />
-          <Route path="devtools/image-clean" element={<ImageClean />} />
-          <Route path="devtools/quota-burn" element={<QuotaBurn />} />
-          <Route path="devtools/quota-burn/:familyId" element={<QuotaBurn />} />
-          {/* AI run history moved under the Chief of Staff (/cos/runs); keep old
-              links and bookmarks working. */}
-          <Route path="devtools/runs" element={<RedirectWithSearch to="/cos/runs" />} />
-          <Route path="devtools/runner" element={<RunnerPage />} />
-          {/* Submodules moved onto the managed-app detail page (one tab per repo).
-              Keeps old links/bookmarks working by landing on PortOS's own tab. */}
-          <Route path="devtools/submodules" element={<Navigate to={`/apps/${PORTOS_APP_ID}/submodules`} replace />} />
-          <Route path="devtools/usage" element={<UsagePage />} />
-          <Route path="devtools/video-download" element={<VideoDownloaderPage />} />
-          <Route path="devtools/processes" element={<ProcessesPage />} />
-          <Route path="devtools/agents" element={<AgentsPage />} />
-          <Route path="eidoverse" element={<Eidoverse />} />
-          {/* AI Providers is three views over one page (#7567): Presets (the
-              stored records — the index /ai lands on), Harnesses and Services.
-              Every overlay is deep-linkable over the same page: /ai/presets/new
-              creates, /ai/presets/:presetId edits, /ai/services/new adds a
-              service, /ai/services/:serviceSlug opens one, /ai/harnesses/:harnessId
-              opens one harness card, and /ai/fleet walks through a remote GPU
-              host. A preset id is slugified from its display name, so a preset
-              named "New" gets the id `new` and is shadowed by the static create
-              route under /ai/presets — the legacy /ai/edit/:providerId alias is
-              kept as a WORKING route (not a redirect) so that one record stays
-              reachable; the page's own edit links use it for that id only. */}
-          <Route path="ai" element={<RedirectWithSearch to="/ai/presets" />} />
-          <Route path="ai/presets" element={<AIProviders />} />
-          <Route path="ai/presets/new" element={<AIProviders />} />
-          <Route path="ai/presets/:presetId" element={<AIProviders />} />
           <Route path="ai/new" element={<RedirectWithSearch to="/ai/presets/new" />} />
-          <Route path="ai/edit/:providerId" element={<AIProviders />} />
-          <Route path="ai/fleet" element={<AIProviders />} />
-          <Route path="ai/harnesses" element={<AIProviders />} />
-          <Route path="ai/harnesses/:harnessId" element={<AIProviders />} />
-          <Route path="ai/services" element={<AIProviders />} />
-          <Route path="ai/services/new" element={<AIProviders />} />
-          <Route path="ai/services/:serviceSlug" element={<AIProviders />} />
-          {/* The Backend Connections drawer (#6369) is retired: a connection IS
-              a service instance, addressed by the same UUID or slug, so its
-              deep links land on the Services view. The harness-scoped forms
-              land on that harness's card. */}
-          <Route path="ai/connections" element={<PrefixRedirect from={AI_CONNECTIONS_PREFIX} to="/ai/services" />} />
-          <Route path="ai/connections/:connectionId" element={<PrefixRedirect from={AI_CONNECTIONS_PREFIX} to="/ai/services" />} />
           <Route path="ai/harnesses/:harnessId/connections" element={<HarnessConnectionsRedirect />} />
           <Route path="ai/harnesses/:harnessId/connections/:connectionId" element={<HarnessConnectionsRedirect />} />
-          <Route path="prompts" element={<PromptManager />} />
           <Route path="cos" element={<Navigate to="/cos/tasks" replace />} />
-          <Route path="cos/mind/tools" element={<Navigate to="/cos/mind?panel=tools" replace />} />
-          <Route path="cos/tools" element={<Navigate to="/cos/mind?panel=tools" replace />} />
-          <Route path="cos/:tab/:agentId" element={<ChiefOfStaff />} />
-          <Route path="cos/:tab" element={<ChiefOfStaff />} />
           <Route path="calendar" element={<Navigate to="/calendar/agenda" replace />} />
-          <Route path="calendar/:tab" element={<CalendarPage />} />
           <Route path="brain" element={<Navigate to="/brain/inbox" replace />} />
-          <Route path="brain/links/:id/scan-report" element={<BrainScanReport />} />
-          <Route path="brain/:tab/:recordType/:recordId" element={<Brain />} />
-          <Route path="brain/:tab" element={<Brain />} />
           <Route path="digital-twin" element={<Navigate to="/digital-twin/overview" replace />} />
-          <Route path="digital-twin/:tab" element={<DigitalTwin />} />
           <Route path="privacy" element={<Navigate to="/privacy/overview" replace />} />
-          <Route path="privacy/:tab" element={<Privacy />} />
           <Route path="goals" element={<Navigate to="/goals/tree" replace />} />
-          <Route path="goals/:tab" element={<Goals />} />
-          <Route path="goals/list/:goalId" element={<Goals />} />
-          <Route path="feature-agents" element={<FeatureAgents />} />
-          <Route path="feature-agents/create" element={<FeatureAgentDetail />} />
           <Route path="feature-agents/:id" element={<Navigate to="overview" replace />} />
-          <Route path="feature-agents/:id/:tab" element={<FeatureAgentDetail />} />
-          <Route path="apps/create" element={<CreateApp />} />
-          <Route path="apps/:appId" element={<AppDetail />} />
-          <Route path="apps/:appId/:tab" element={<AppDetail />} />
-          <Route path="templates" element={<Templates />} />
-          <Route path="security" element={<Security />} />
           <Route path="settings" element={<Navigate to="/settings/backup" replace />} />
-          {/* Catalog type settings moved into the Catalog feature drawer; keep
-              the old Settings URL working for bookmarks and stale palette links. */}
-          <Route path="settings/catalog" element={<Navigate to="/catalog?settings=1" replace />} />
-          {/* Legacy /settings/contacts → Comms Messages → Contacts tab */}
-          <Route path="settings/contacts" element={<Navigate to="/messages/contacts" replace />} />
-          {/* Local LLM management moved out of Settings into its own top-level
-              Models section (#4736). Bookmarks and stale ⌘K history keep working. */}
-          <Route path="settings/local-llm" element={<Navigate to="/models/llms" replace />} />
-          {/* Embeddings moved into Models with the rest of the model management
-              (#4728) — it picks a model, not a preference. */}
-          <Route path="settings/embeddings" element={<Navigate to="/models/embeddings" replace />} />
-          {/* Code Reviewer configuration moved into Models with the reviewer
-              runtimes it configures; keep the old URL working for bookmarks. */}
-          <Route path="settings/code-reviewers" element={<Navigate to="/models/code-reviewers" replace />} />
-          {/* Spotify/YouTube sync feed the activity Timeline, which lives in
-              Brain — moved alongside it so they show up in the same sidebar
-              section as the data they populate. */}
-          <Route path="settings/spotify" element={<RedirectWithSearch to="/brain/spotify" />} />
-          <Route path="settings/youtube" element={<RedirectWithSearch to="/brain/youtube" />} />
-          <Route path="settings/:tab" element={<Settings />} />
-          {/* The FaceTime call host runs in its own tab on the Mac — device
-              permissions and setSinkId need a real browser profile, and the
-              page holds a Web Lock so a second tab cannot double-answer. */}
-          <Route path="voices" element={<VoiceStudio />} />
-          <Route path="voices/:profileId" element={<VoiceStudio />} />
-          <Route path="voice/call-host" element={<VoiceCallHost />} />
           <Route path="api-reference" element={<Navigate to="/api-reference/catalog" replace />} />
-          <Route path="api-reference/:tab" element={<ApiExplorer />} />
-          <Route path="models/training" element={<Navigate to="/settings/data-maintenance" replace />} />
-          <Route path="models/training/:recordId" element={<Navigate to="/settings/data-maintenance" replace />} />
           <Route path="models" element={<Navigate to="/models/llms" replace />} />
-          {/* Runtimes was the LLMs page's default view until #7414 promoted it to
-              its own tab. A literal segment outranks `models/:tab/:recordId`, so
-              a bookmark on the old pill lands on the new page instead of LLMs
-              rendering an unknown sub-view. */}
-          <Route path="models/llms/jev" element={<Navigate to="/models/decision-classifiers/jev" replace />} />
-          <Route path="models/llms/runtimes" element={<Navigate to="/models/llms-runtimes" replace />} />
-          {/* Harnesses folded into the AI Providers harnesses view (/ai/harnesses);
-              retires the duplicate /models/harnesses page while keeping bookmarks working. */}
-          <Route path="models/harnesses" element={<Navigate to="/ai/harnesses" replace />} />
-          {/* Performance owns task views rather than making one long page. The
-              selected result route is more specific so a slash-containing model
-              id stays inside the reversible assessment key segment. */}
-          <Route path="models/llms-runtimes/:recordId?" element={<Models fixedTab="llms-runtimes" />} />
-          <Route path="models/performance/results/:assessmentKey" element={<Models fixedTab="performance" />} />
-          <Route path="models/performance/:view" element={<Models fixedTab="performance" />} />
-          {/* A tab's drill-down (today: the LoRA dataset workbench) renders through
-              Models itself, so it keeps the section header and tab bar — see
-              TAB_DETAIL there. */}
-          <Route path="models/:tab" element={<Models />} />
-          <Route path="models/:tab/:recordId" element={<Models />} />
-          <Route path="models/decision-classifiers/jev/:taskView" element={<Models fixedTab="decision-classifiers" fixedRecordId="jev" />} />
-          <Route path="models/llms/jev/:taskView" element={<Models fixedTab="llms" fixedRecordId="jev" />} />
-          <Route path="local-llm/playground" element={<LocalLlmPlayground />} />
-          <Route path="uploads" element={<Uploads />} />
-          <Route path="shell" element={<Shell />} />
-          {/* The iTerm2 view (#8114): the static `iterm` segment outranks :sessionId. */}
-          <Route path="shell/iterm" element={<Shell />} />
-          <Route path="shell/iterm/:itermSessionId" element={<Shell />} />
-          <Route path="shell/:sessionId" element={<Shell />} />
-          <Route path="browser" element={<BrowserPage />} />
           <Route path="insights" element={<Navigate to="/insights/overview" replace />} />
-          <Route path="insights/:tab" element={<Insights />} />
-          <Route path="instances" element={<Instances />} />
-          <Route path="workspace-contexts" element={<WorkspaceContexts />} />
-          <Route path="workspace-contexts/:appId" element={<WorkspaceContexts />} />
-          <Route path="system-health" element={<Navigate to="/system-resources/overview" replace />} />
-          <Route path="system-resources" element={<Navigate to="/system-resources/overview" replace />} />
-          {/* The downloaded-model inventory folded into Models → Status (#4728),
-              which already answered "what is resident right now". */}
-          <Route path="system-resources/models" element={<Navigate to="/models/status" replace />} />
-          <Route path="system-resources/:tab" element={<SystemHealthPage />} />
-          <Route path="capabilities" element={<CapabilityMap />} />
-          <Route path="loops" element={<Loops />} />
           <Route path="meatspace" element={<Navigate to="/meatspace/overview" replace />} />
-          <Route path="meatspace/:tab" element={<MeatSpace />} />
           <Route path="post" element={<Navigate to="/post/launcher" replace />} />
-          <Route path="post/:tab" element={<Post />} />
-          <Route path="post/:tab/:subtab" element={<Post />} />
-          {/* Third segment carries the practice mode for the memory tab
-              (/post/memory/:itemId/:mode) so a drill is directly linkable — the
-              same "selection lives in the URL" contract Morse/Wordplay already
-              satisfy with their :mode subtab (issue #3249). */}
-          <Route path="post/:tab/:subtab/:mode" element={<Post />} />
-          <Route path="review" element={<Review />} />
-          <Route path="review/:actionId" element={<Review />} />
           <Route path="messages" element={<Navigate to="/messages/inbox" replace />} />
-          {/* :chatKey is only used by the imessage tab; other tabs strip a stray second segment. */}
-          <Route path="messages/:tab/:chatKey" element={<Messages />} />
-          <Route path="messages/:tab" element={<Messages />} />
-          <Route path="stacker-news" element={<StackerNews />} />
-          <Route path="stacker-news/:accountId/:tab" element={<StackerNews />} />
-          <Route path="x" element={<XPage />} />
-          <Route path="x/:accountId/:tab" element={<XPage />} />
-          {/* Legacy /imessage → Comms Messages → iMessage tab */}
-          <Route path="imessage" element={<Navigate to="/messages/imessage" replace />} />
-          <Route path="imessage/:chatKey" element={<IMessage />} />
-          <Route path="tribe" element={<Tribe />} />
-          <Route path="timeline" element={<Timeline />} />
-          <Route path="timeline/:date" element={<Timeline />} />
-          <Route path="openclaw" element={<OpenClawPage />} />
-          <Route path="annotate" element={<PrefixRedirect from={ANNOTATE_PREFIX} to="/media/annotate" />} />
-          <Route path="annotate/:mediaKey" element={<PrefixRedirect from={ANNOTATE_PREFIX} to="/media/annotate" />} />
-          <Route path="datadog" element={<Navigate to="/devtools/datadog" replace />} />
-          <Route path="jira" element={<Navigate to="/devtools/jira" replace />} />
-          <Route path="devtools/jira" element={<Jira />} />
-          <Route path="devtools/jira/reports" element={<JiraReports />} />
-          {/* OpenWorld is retired: preserve old bookmarks by landing in the
-              persistent private Eidoverse world, including query/hash state. */}
-          <Route path="openworld" element={<RedirectWithSearch to="/eidoverse" />} />
-          <Route path="openworld/*" element={<RedirectWithSearch to="/eidoverse" />} />
-          <Route path="city" element={<RedirectWithSearch to="/eidoverse" />} />
-          <Route path="city/*" element={<RedirectWithSearch to="/eidoverse" />} />
-          <Route path="data" element={<DataManager />} />
-          <Route path="character" element={<CharacterSheet />} />
-          <Route path="ask" element={<Ask />} />
-          <Route path="ask/:conversationId" element={<Ask />} />
-          <Route path="media" element={<MediaGen />}>
-            <Route index element={<Navigate to="/media/image" replace />} />
-            <Route path="image" element={<ImageGen />} />
-            <Route path="video" element={<RedirectWithSearch to="/video/generate" />} />
-            <Route path="prompt" element={<PromptFromMediaPage />} />
-            <Route path="prompt/:examinationId" element={<PromptFromMediaPage />} />
-            <Route path="history" element={<MediaHistory />} />
-            <Route path="annotate" element={<MediaAnnotate />} />
-            <Route path="annotate/:mediaKey" element={<MediaAnnotate />} />
-            <Route path="collections" element={<MediaCollections />} />
-            <Route path="collections/:id" element={<MediaCollectionDetail />} />
-            <Route path="collections/:id/sync" element={<MediaCollectionSyncView />} />
-            {/* Creative Director moved to the top-level /creative-director route
-                (Create sidebar link). These redirects keep legacy
-                /media/creative-director bookmarks + in-app deep-links working. */}
-            <Route path="creative-director" element={<RedirectWithSearch to="/creative-director" />} />
-            <Route path="creative-director/:id" element={<PrefixRedirect from={MEDIA_CREATIVE_DIRECTOR_PREFIX} to="/creative-director" />} />
-            <Route path="creative-director/:id/:tab/:sceneId" element={<PrefixRedirect from={MEDIA_CREATIVE_DIRECTOR_PREFIX} to="/creative-director" />} />
-            <Route path="creative-director/:id/:tab" element={<PrefixRedirect from={MEDIA_CREATIVE_DIRECTOR_PREFIX} to="/creative-director" />} />
-            {/* Music Video moved to the top-level /music-video route (Create
-                sidebar link). These redirects keep legacy /media/music-video
-                bookmarks + in-app deep-links working. */}
-            <Route path="music-video" element={<PrefixRedirect from={MEDIA_MUSIC_VIDEO_PREFIX} to="/music-video" />} />
-            <Route path="music-video/:projectId" element={<PrefixRedirect from={MEDIA_MUSIC_VIDEO_PREFIX} to="/music-video" />} />
-            <Route path="music-video/*" element={<PrefixRedirect from={MEDIA_MUSIC_VIDEO_PREFIX} to="/music-video" />} />
-            {/* Sprites live at /sprites (Create sidebar link). These redirects
-                keep legacy /media/sprites bookmarks working after the MediaGen
-                tab was removed. */}
-            <Route path="sprites" element={<PrefixRedirect from={MEDIA_SPRITES_PREFIX} to="/sprites" />} />
-            <Route path="sprites/:id" element={<PrefixRedirect from={MEDIA_SPRITES_PREFIX} to="/sprites" />} />
-            <Route path="timeline" element={<VideoTimeline />} />
-            <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
-            {/* Media models, LoRAs and LoRA training moved into the Models
-                section (#4728). Redirects keep legacy /media/* bookmarks and
-                stale ⌘K history working. */}
-            <Route path="models" element={<RedirectWithSearch to="/models/media" />} />
-            <Route path="threejs" element={<ThreejsModels />} />
-            <Route path="threejs/:id" element={<ThreejsModelDetail />} />
-            {/* 3D moved to the top-level /3d route (Create sidebar link). These
-                redirects keep legacy /media/3d bookmarks + in-app deep-links
-                working. */}
-            <Route path="3d" element={<PrefixRedirect from={MEDIA_3D_PREFIX} to="/3d" />} />
-            <Route path="3d/:id" element={<PrefixRedirect from={MEDIA_3D_PREFIX} to="/3d" />} />
-            <Route path="loras" element={<RedirectWithSearch to="/models/loras" />} />
-            <Route path="training" element={<Navigate to="/settings/data-maintenance" replace />} />
-            <Route path="training/:datasetId" element={<Navigate to="/settings/data-maintenance" replace />} />
-            {/* Universes live at /universes (Create sidebar link). These
-                redirects keep legacy /media/universe-builder bookmarks working
-                after the MediaGen tab was removed. */}
-            <Route path="universe-builder" element={<RedirectWithSearch to="/universes" />} />
-            <Route path="universe-builder/:universeId" element={<UniverseRouteRedirect fromPrefix={/^\/media\/universe-builder/} to="/universes" />} />
-            <Route path="universe-builder/:universeId/canon" element={<UniverseRouteRedirect fromPrefix={/^\/media\/universe-builder/} to="/universes" canon />} />
-          </Route>
-          {/* Sprite Manager — a top-level Create page (moved out of the Media
-              Gen tabs). The record id is the URL, per the ID-based deep-linking
-              convention. */}
-          <Route path="sprites" element={<Sprites />} />
-          <Route path="sprites/:id" element={<Sprites />} />
-          {/* Creative Director — a top-level Create page (moved out of the
-              Media Gen tabs). :id with no tab redirects to the overview tab,
-              carrying any query string + hash (relative Navigate preserves the
-              :id in the path) so a deep-link like /creative-director/abc?x#y
-              lands on /creative-director/abc/overview?x#y intact. */}
-          <Route path="video" element={<CreativeDirector browseOnly />} />
-          {/* VideoGen still uses the Media Gen tab shell (header + tabs +
-              overflow-auto body). Leaving it as a bare full-width page
-              clips the form: `/video` is a full-width prefix, and VideoGen
-              has no internal scroller of its own. */}
-          <Route path="video/generate" element={<MediaGen />}>
-            <Route index element={<VideoGen />} />
-          </Route>
           <Route path="video/:id" element={<PrefixRedirect from={VIDEO_PROJECT_PREFIX} to="/creative-director" />} />
           <Route path="video/:id/:tab/:sceneId" element={<PrefixRedirect from={VIDEO_PROJECT_PREFIX} to="/creative-director" />} />
           <Route path="video/:id/:tab" element={<PrefixRedirect from={VIDEO_PROJECT_PREFIX} to="/creative-director" />} />
-          <Route path="creative-director" element={<CreativeDirector />} />
+          {/* :id with no tab lands on the overview tab, carrying any query string
+              + hash, so /creative-director/abc?x#y → /creative-director/abc/overview?x#y. */}
           <Route path="creative-director/:id" element={<CreativeDirectorOverviewRedirect />} />
-          <Route path="creative-director/:id/:tab/:sceneId" element={<CreativeDirectorDetail />} />
-          <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
-          {/* Music Video — a top-level Create page (moved out of the Media Gen
-              tabs). The project id is the URL, per the ID-based deep-linking
-              convention. */}
-          <Route path="music-video" element={<MusicVideo />} />
-          <Route path="music-video/:projectId" element={<MusicVideo />} />
-          {/* Stage tab (story | setup | board | cast-sets | previz | produce | review | publish; legacy aliases such as compose still resolve); an unknown stage opens the project's default. */}
-          <Route path="music-video/:projectId/:stage" element={<MusicVideo />} />
-          <Route path="music-video/:projectId/:stage/scene/:sceneId" element={<MusicVideo />} />
-          {/* The Storyboard step's open panel. */}
-          <Route path="music-video/:projectId/:stage/panel/:panelId" element={<MusicVideo />} />
-          <Route path="music-video/:projectId/scene/:sceneId" element={<MusicVideo />} />
-          <Route path="music-video/:projectId/dev/:artifactId" element={<MusicVideo />} />
-          <Route path="music-video/:projectId/:stage/dev/:artifactId" element={<MusicVideo />} />
-          {/* 3D — a top-level Create page (moved out of the Media Gen tabs). The
-              record id is the URL, per the ID-based deep-linking convention. */}
-          <Route path="3d" element={<Media3D />} />
-          <Route path="3d/:id" element={<Media3DDetail />} />
-          {/* Index (list) hosts the create drawer at /new; `:id` is now a routed
-              detail page (editable config + render history), not a sidebar edit
-              drawer. React Router ranks the static `new` segment above `:id`, so
-              the index reads `new` off the pathname while every real id lands on
-              the detail page. */}
-          <Route path="creative-commission" element={<CreativeCommissions />} />
-          <Route path="creative-commission/new" element={<CreativeCommissions />} />
-          <Route path="creative-commission/:id" element={<CreativeCommissionDetail />} />
-          <Route path="game" element={<Game />} />
-          <Route path="game/:id" element={<Game />} />
-          <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
-          <Route path="video-gen" element={<RedirectWithSearch to="/video/generate" />} />
-          <Route path="media-history" element={<RedirectWithSearch to="/media/history" />} />
-          <Route path="media-models" element={<RedirectWithSearch to="/models/media" />} />
           <Route path="wiki" element={<RedirectWithSearch to="/wiki/overview" />} />
-          <Route path="wiki/:tab" element={<Wiki />} />
-          <Route path="rapid-reader" element={<RapidReaderPage />} />
-          <Route path="rapid-reader/:id" element={<RapidReaderPage />} />
-          {/* `/universes` is the universe index (list/table). The editor lives
-              at `/universes/:universeId`; `new` is the create-mode sentinel
-              (UniverseBuilder treats it as no-id → blank draft). Universe ids are
-              UUIDs, so `new` can never collide with a real record. */}
-          <Route path="rounds" element={<Rounds />} />
-          <Route path="rounds/guide" element={<RoundsGuide />} />
-          <Route path="rounds/:id" element={<RoundEditor />} />
-          {/* SongBook: index + import are plain scrolling pages; the viewer
-              (/songbook/:id) is full-bleed (see Layout.jsx isFullWidth). */}
-          <Route path="songbook" element={<SongBook />} />
-          <Route path="songbook/import" element={<SongBookImport />} />
-          <Route path="songbook/:id" element={<SongBookViewer />} />
-          <Route path="catalog" element={<Catalog />} />
-          <Route path="catalog/ingest" element={<CatalogIngest />} />
-          <Route path="catalog/:type/:id" element={<CatalogIngredient />} />
-          <Route path="casting" element={<CreativeLibrary key="casting" libraryId="casting" />} />
-          <Route path="casting/import" element={<CreativeCastImport />} />
-          <Route path="casting/:id/:tab?" element={<CatalogIngredient />} />
-          <Route path="environments" element={<CreativeLibrary key="environments" libraryId="environments" />} />
-          <Route path="environments/:id/:tab?" element={<CatalogIngredient />} />
-          <Route path="objects" element={<CreativeLibrary key="objects" libraryId="objects" />} />
-          <Route path="objects/:id/:tab?" element={<CatalogIngredient />} />
-          <Route path="code-animation" element={<CodeAnimation />} />
-          <Route path="code-animation/gallery" element={<CodeAnimation />} />
-          <Route path="code-animation/drafts/:draftId" element={<CodeAnimation />} />
-          <Route path="code-animation/:jobId" element={<CodeAnimation />} />
-          <Route path="code-animation/production" element={<CodeAnimation />} />
-          <Route path="code-animation/production/films/:filmId/:tab?/:shotId?" element={<CodeAnimation />} />
-          <Route path="code-animation/production/:projectId" element={<CodeAnimation />} />
-          <Route path="mood-boards" element={<MoodBoards />} />
-          <Route path="mood-boards/:id" element={<MoodBoardDetail />} />
-          <Route path="storyboards" element={<Storyboards />} />
-          <Route path="storyboards/:id" element={<StoryboardDetail />} />
-          <Route path="storyboards/:id/panel/:panelId" element={<StoryboardDetail />} />
-          <Route path="decks" element={<Decks />} />
-          <Route path="decks/:id" element={<DeckDetail />} />
-          <Route path="universes" element={<Universes />} />
-          <Route path="universes/new" element={<UniverseBuilder />} />
-          <Route path="universes/:universeId" element={<UniverseBuilder />} />
-          <Route path="universes/:universeId/sync" element={<SyncView kind="universe" param="universeId" backPath="/universes" />} />
           <Route path="universes/:universeId/canon" element={<CanonRedirect />} />
-          {/* Legacy /universe-builder* → /universes* (route renamed when the
-              index landed). Keeps old bookmarks + in-app deep-links working. */}
-          <Route path="universe-builder" element={<RedirectWithSearch to="/universes" />} />
-          <Route path="universe-builder/:universeId/canon" element={<UniverseRouteRedirect fromPrefix={/^\/universe-builder/} to="/universes" canon />} />
-          <Route path="universe-builder/:universeId" element={<UniverseRouteRedirect fromPrefix={/^\/universe-builder/} to="/universes" />} />
-          <Route path="universe-builder/new" element={<RedirectWithSearch to="/universes/new" />} />
-          <Route path="writers-room" element={<WritersRoom />} />
-          <Route path="writers-room/guide" element={<WritersRoomGuide />} />
-          <Route path="sharing" element={<Sharing />} />
-          <Route path="sharing/:section" element={<Sharing />} />
-          <Route path="sharing/:section/:bucketId" element={<Sharing />} />
-          <Route path="importer" element={<Importer />} />
-          <Route path="fableloom" element={<FableLoom />} />
-          <Route path="fableloom/:loomId" element={<FableLoomStory />} />
-          <Route path="fableloom/:loomId/:episodeId/outline" element={<FableLoomStory view="outline" />} />
-          <Route path="fableloom/:loomId/:episodeId/board" element={<FableLoomStory view="board" />} />
-          <Route path="fableloom/:loomId/:episodeId" element={<FableLoomStory />} />
-          <Route path="fableloom/:loomId/:episodeId/:nodeId" element={<FableLoomStory />} />
-          <Route path="start-story" element={<StartStory />} />
-          <Route path="story-builder" element={<StoryBuilder />} />
+          <Route path="universe-builder/:universeId/canon" element={<UniverseRouteRedirect fromPrefix={/^\/universe-builder/} to="/universes" />} />
           <Route path="story-builder/:storyId" element={<Navigate to="idea" replace />} />
-          <Route path="story-builder/:storyId/:step" element={<StoryBuilder />} />
-          {/* Authors is a single master-detail page: the index + editor share one
-              component, so selection rides `:authorId` (which also captures the
-              `new` create-mode sentinel — author ids are UUIDs, so it can't
-              collide). A bare `/authors` is the idle index. */}
-          <Route path="authors" element={<Authors />} />
-          <Route path="authors/:authorId" element={<Authors />} />
-          {/* Music is tabbed (`:tab`); each tab's master-detail selection lives
-              at `/music/:tab/:id` (`new` = create sentinel). */}
-          <Route path="music" element={<Music />} />
-          <Route path="music/:tab" element={<Music />} />
-          <Route path="music/:tab/:id" element={<Music />} />
-          <Route path="pipeline" element={<Pipeline />} />
-          <Route path="pipeline/editorial-checks" element={<PipelineEditorialChecks />} />
-          <Route path="pipeline/findings/:commentId" element={<PipelineFindingRedirect />} />
-          <Route path="pipeline/series/:seriesId" element={<PipelineSeries />} />
-          <Route path="pipeline/series/:seriesId/roadmap" element={<PipelineSeriesRoadmap />} />
-          <Route path="pipeline/series/:seriesId/reverse-outline" element={<PipelineReverseOutline />} />
-          <Route path="pipeline/series/:seriesId/voice-fingerprint" element={<PipelineVoiceFingerprint />} />
-          <Route path="pipeline/series/:seriesId/continuity-bible" element={<PipelineContinuityBible />} />
-          {/* Splat (not a :param route) so navigating between issues reuses the
-              same component instance instead of remounting + refetching. */}
-          <Route path="pipeline/series/:seriesId/manuscript/*" element={<PipelineManuscriptEditor />} />
-          <Route path="pipeline/series/:seriesId/export" element={<PipelineExport />} />
-          <Route path="pipeline/series/:seriesId/sync" element={<SyncView kind="series" param="seriesId" backPath="/pipeline" />} />
           <Route path="pipeline/issues/:issueId" element={<Navigate to="idea" replace />} />
-          <Route path="pipeline/issues/:issueId/:stage" element={<PipelineIssue />} />
-          <Route path="writers-room/works/:workId" element={<WritersRoom />} />
-          <Route path="agents" element={<Agents />} />
-          <Route path="agents/:agentId" element={<Agents />} />
-          <Route path="agents/:agentId/:tab" element={<Agents />} />
-          <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>
     </Suspense>

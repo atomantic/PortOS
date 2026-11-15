@@ -226,7 +226,7 @@ async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBran
   if (!sourceWorkspace || !Array.isArray(claimBranches) || !claimBranches.length) return [];
   const remoteOpts = remoteTimeoutMs ? { timeout: remoteTimeoutMs } : {};
   const [{ probePrForBranch, isExactMergedPrHead }, { completedCheckoutReceiptValid, readCompletedCheckoutIdentity },
-    { withClaimOwnershipLock, readClaimOwnershipAgents, retireWithUnlockedArchive }, { claimCheckoutOwnerReason },
+    { withClaimOwnershipLock, readClaimOwnershipAgents }, { claimCheckoutOwnerReason },
     { forceRemoveWorktreeDir, deleteCompletedLocalBranch }, { readCheckoutPathPresence, readLocalBranchPresence }] = await Promise.all([
     import('./prProbe.js'), import('./completedCheckoutEvidence.js'), import('./cosClaimOwnershipState.js'),
     import('../lib/claimContinuation.js'), import('./worktreeManager.js'), import('./repoCleanupObservation.js'),
@@ -266,12 +266,14 @@ async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBran
       branchName: branch, holderPath: capture.path, sourceWorkspace, agents, ignoreIds: [agentId],
     }));
     const ownerHold = () => withClaimOwnershipLock(owner).catch(() => 'claim-ownership-unreadable');
+    // Each local mutation is one ownership section: a bind lands before its owner
+    // read or after it settles. Remote calls stay outside, behind `ownerHold`.
     const deleteLocal = async () => {
       let reason;
-      const deleted = await deleteCompletedLocalBranch(sourceWorkspace, branch, capture.head, { beforeMutation: async () => {
-        reason = await ownerHold();
+      const deleted = await withClaimOwnershipLock(() => deleteCompletedLocalBranch(sourceWorkspace, branch, capture.head, { beforeMutation: async () => {
+        reason = await owner().catch(() => 'claim-ownership-unreadable');
         if (reason) throw new Error(reason);
-      } }).catch(() => false);
+      } })).catch(() => false);
       return deleted ? null : reason || 'local branch deletion unverified';
     };
     const performCleanup = async () => {
@@ -295,7 +297,7 @@ async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBran
         }
         return null;
       }
-      const verifyRemoval = (holder, trees) => withClaimOwnershipLock(async () => {
+      const verifyRemoval = async (holder, trees) => {
         const reason = await owner();
         if (reason) return reason;
         if (!holder || holder.branch !== `refs/heads/${branch}` || holder.head !== capture.head) return 'checkout-changed';
@@ -310,12 +312,16 @@ async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBran
           if (status?.exitCode !== 0 || status.stdout.trim() || contained?.exitCode !== 0) return 'unmerged work retained';
         }
         return null;
-      });
-      // A claim that ran inside this checkout (server-provisioned, #15517) left
-      // its consumed completion sentinel here; it is not work, and an untracked
-      // file would make the non-forced removal of a clean stand-down refuse.
-      if (!merged) await Promise.all(doneSentinelCandidateNames(agentId).map(name => rm(join(capture.path, name), { force: true }).catch(() => null)));
-      const removal = await forceRemoveWorktreeDir(sourceWorkspace, capture.path, { verifyRemoval, force: merged });
+      };
+      const removal = await withClaimOwnershipLock(async () => {
+        const reason = await owner();
+        if (reason) return { removed: false, reason };
+        // A claim that ran inside this checkout (server-provisioned, #15517) left
+        // its consumed completion sentinel here; it is not work, and an untracked
+        // file would make the non-forced removal of a clean stand-down refuse.
+        if (!merged) await Promise.all(doneSentinelCandidateNames(agentId).map(name => rm(join(capture.path, name), { force: true }).catch(() => null)));
+        return forceRemoveWorktreeDir(sourceWorkspace, capture.path, { verifyRemoval, force: merged });
+      }).catch(() => ({ removed: false, reason: 'claim-ownership-unreadable' }));
       if (!removal.removed) return held(branch, removal.reason || 'worktree removal unverified');
       const local = await deleteLocal();
       if (local) return held(branch, local);
@@ -329,14 +335,8 @@ async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBran
       emitLog('info', `🌳 Cleaned up claim branch ${branch} for ${agentId} (${merged ? 'PR merged' : 'empty clean branch'})`, { agentId, branchName: branch });
       return null;
     };
-    const result = await retireWithUnlockedArchive({
-      busy: () => held(branch, 'checkout-retirement-reserved'),
-      admit: async () => {
-        const reason = await owner();
-        return reason ? { result: held(branch, reason) } : { fence: { repoPath: sourceWorkspace, path: capture.path, branch } };
-      },
-      archive: async () => ({ result: await performCleanup() }),
-    }).catch(() => held(branch, 'cleanup failed or is unverified'));
+    const reason = await ownerHold();
+    const result = reason ? held(branch, reason) : await performCleanup().catch(() => held(branch, 'cleanup failed or is unverified'));
     if (result) warnings.push(result);
   }
   return warnings;
