@@ -1,24 +1,6 @@
 /**
  * Is a provider READY to run on this install, and why not.
  *
- * `credentialSource` (stored / inherited / env / subscription / none) and `providerCardState(provider,
- * { runtime, status, keySetFor, envVarSet, codexAccount })` + `PROVIDER_CARD_STATE` — ready, benched,
- * blocked on a missing prerequisite (CLI not installed / API key absent / empty credential env var /
- * signed-out ChatGPT account), unknown, or simply switched off. Reads the SERVER's
- * `missingPrerequisites` (published per provider on `GET /api/providers` from
- * `server/lib/providerPrerequisites.js`, the same computation `getFallbackProvider` routes on) and
- * adds only what the browser can see; unknown lookup values mean "not probed", never "missing".
- * Distinct from `ProviderReadiness` / `GET /api/providers/readiness`, which probes the local daemon
- * behind a provider. Also `isRunnerAllowedCommand(command, allowedCommands)` — would the CoS Agent
- * Runner accept this command? Mirrors only the normalization in `server/cos-runner/allowedCommands.js`
- * (the list arrives as `runnerAllowedCommands` on `GET /api/providers`); returns `null` for "list not
- * fetched" so a failed fetch never renders a warning; pinned by
- * `server/cos-runner/allowedCommands.parity.test.js`. `resolvesOutsidePortosPath` /
- * `providerRuntimeKey` (the key a CLI runtime is published under by `GET /api/providers/runtimes`),
- * `supportsModelRefresh` (`canRefreshModels === true`, the server's own answer) and
- * `codexRoutingAdvisory` (the non-blocking "your `~/.codex/config.toml` re-points Codex" notice —
- * server-only and machine-local, rendered in the UI and nowhere else).
- *
  * Is a provider READY to run on this install, and if not, why: how it
  * authenticates (`credentialSource`), which prerequisite it is missing, the
  * CoS Agent Runner allowlist check for its command, the key its CLI runtime is

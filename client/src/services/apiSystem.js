@@ -1,23 +1,6 @@
 /**
  * API client for system info (CPU, memory, ports, alerts, activity) and atomic partial settings saves
  * via `patchSettingsSlice`.
- *
- * Atomic partial settings saves (`patchSettingsSlice`, server-queued PATCH with no browser GET/merge),
- * system info (CPU/memory/ports/alerts/active processing (`getSystemActivity` for the bounded
- * snapshot, `getGpuTelemetry` for visible-only GPU samples) and local hardware capabilities) +
- * D&D-style character sheet getter, plus the usage cost report and explicit historical reconciliation
- * (`getUsage`, `getClaudeCodeModelUsage` (per-model token totals for all local Claude Code use, from
- * CLI transcripts), `getUsageRollingCost` (trailing-30-day API cost across every instance, stacked by
- * plan), `getProviderUsage`, `getUsageBackfillStatus`/`startUsageBackfill`, `updateSubscriptionCosts`
- * for the subscription-vs-API savings comparison, `getSubscriptions` / `updateSubscriptions` /
- * `setSubscriptionEnabled` for the Subscriptions page's plan rows (PortOS-side enablement and
- * plan-tier tracking only, never vendor billing), `updateUsageFleetBilling` to exclude an API-billed
- * federated instance from Across Instances totals). Also `saveCredential` (write-only integration key
- * save/clear) and `getCredentialInventory` (`GET /settings/credentials`) — presence and source of each
- * PortOS credential, never a value. Also the Eidoverse world controls and its foundation ledger
- * (`listEidoverseFoundations`, `recordEidoverseFoundation`, `packageEidoverseFoundationCandidate`,
- * `promoteEidoverseFoundation`, `getEidoverseContributions`) — the last three answer 200 with a
- * refusal verdict when a promote gate says no, so callers read `outcome` rather than catching.
  */
 
 import { uploadBody, request, singleFlightRead, API_BASE, throwApiError } from './apiCore.js';
@@ -292,6 +275,7 @@ export const updateSubscriptionCosts = (costs, options = {}) =>
 // state, plan tier, monthly price, the provider records a toggle fans out to).
 // Deliberately separate from `getUsage().subscriptionSavings`, which answers
 // what those plans SPENT over a report window — this answers what they are.
+// PortOS-side enablement and plan-tier tracking only, never vendor billing.
 export const getSubscriptions = (options = {}) => request('/usage/subscriptions', options);
 // Save plan prices and/or plan tiers in ONE request, and get the refreshed rows
 // back — so an editor applies a save without a follow-up GET. Both maps are
@@ -653,6 +637,8 @@ export const updateGoalScorecardSettings = (partial) => request('/insights/goal-
 export const getEidoverseDestinations = (options) => request('/eidoverse/travel/destinations', options);
 export const departEidoverse = (peerId, options) => request('/eidoverse/travel/depart', { method: 'POST', body: JSON.stringify({ peerId }), ...options });
 
+// Write-only: the value is sent and never returned. Presence and source come from
+// getCredentialInventory, never a value.
 export const saveCredential = (id, value, options) => request(`/settings/credentials/${encodeURIComponent(id)}`, { ...options, method: 'PUT', body: JSON.stringify({ value }) });
 
 // CoS raw recordings; metadata, prompts and parsed output are retained.

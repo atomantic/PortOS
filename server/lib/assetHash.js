@@ -1,15 +1,6 @@
 /**
  * SHA-256 cache for data/images assets stored in metadata sidecars, plus `sidecarGenParamsHash` and
  * `stripImageSidecarLocalFields` for cross-machine sidecar comparison and peer sync.
- *
- * Cross-transport SHA-256 cache for `data/images/*` — persists hashes in the asset's `.metadata.json`
- * sidecar (gallery images through the edit-queue writer services register with
- * `registerGallerySha256Writer`) so the share-bucket exporter and the federated peer-sync push
- * pipeline reuse the same value. `sidecarGenParamsHash` canonically hashes a sidecar's gen-params
- * (excludes the machine-local `sha256` cache block and `IMAGE_SIDECAR_LOCAL_FIELDS`) for cross-machine
- * sidecar-convergence comparisons; `stripImageSidecarLocalFields` drops the per-machine fields
- * (`hidden`, `pendingDelete`, `suppliedByInstanceId`) before a sidecar crosses to a peer;
- * `sidecarMatchesGenParamsHash` also accepts an older peer's hash that still counts its `hidden` flag.
  */
 
 import { stat } from 'fs/promises';

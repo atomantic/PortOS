@@ -1,15 +1,6 @@
 /**
  * Hook `useVisionModelIds` returning vision-capable model ids by provider (Ollama, LM Studio) with a
  * `loaded` flag.
- *
- * `{ idsByProvider, loaded }` — vision-capable model ids the server reports (Ollama `/api/show` + LM
- * Studio `type:'vlm'`), keyed by the provider id that serves them (`{ ollama: Set, lmstudio: Set }`),
- * `null` until fetched; `loaded` flips once the fetch settles. Drops `backend:'cli'` rows (a blanket
- * per-provider claim, not a per-model fact) and never vouches for a provider the server didn't
- * enumerate. Use when: Any VISION model picker — pass `idsByProvider` to `visionLocalModelFilter` /
- * `assignmentModelOptions` so a new multimodal family (`gemma4`) isn't hidden by the stale client id
- * regex, and so an installed VLM shows even when the provider's stored `models` snapshot is stale;
- * gate any "none installed" messaging on `loaded` and on the provider being a local backend.
  */
 
 import { useEffect, useState } from 'react';
@@ -81,6 +72,7 @@ const LOCAL_PROVIDER_IDS = ['ollama', 'lmstudio'];
  *   picker doesn't pay for the capability scan. Fetches once and keeps the result
  *   if `enabled` later goes false.
  * @returns {{idsByProvider: Record<string, Set<string>>|null, loaded: boolean}}
+  * Never vouches for a provider the server did not enumerate; gate any "none installed" message on `loaded`.
  */
 export default function useVisionModelIds(enabled = true) {
   const [state, setState] = useState({ idsByProvider: null, loaded: false });

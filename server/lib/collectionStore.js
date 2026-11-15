@@ -2,22 +2,6 @@
  * Collection Store — per-type, per-record JSON storage with explicit
  * `schemaVersion` stamping.
  *
- * Per-type, per-record JSON storage with explicit type-level `schemaVersion` stamping. Use for
- * collections that have outgrown a monolithic JSON file. `createCollectionStore({ dir, type,
- * schemaVersion, sanitizeRecord })` returns `loadOne` / `saveOne` / `saveOneNow` / `listIds` /
- * `loadAll` / `loadAllResult` / `deleteOne` / `loadTypeIndex` / `saveTypeIndex` /
- * `verifySchemaVersion`. `loadAll` silently drops corrupt records; `loadAllResult()` → `{ records,
- * failedIds }` keeps the "which ids failed to load" signal so a caller can tell a partial set from a
- * complete one. Per-id write queue means writes to different records don't serialize; `saveOneNow` is
- * for callers already inside a collection write queue. Boot-time `verifyCollectionVersions([store,
- * ...])` logs schema-version mismatches. **Type-index `config` slot** holds cross-record state (see
- * the `TypeIndexConfig` typedef + header convention): `{ runs?: [], featureFlags?: {}, lockPolicies?:
- * {} }` — `runs` is the shipped slot (universeBuilder's capped history log), the other two are
- * reserved names; consumers may add their own keys but should reuse a reserved name when it fits and
- * document the shape next to the consumer. `saveTypeIndex({ config })` shallow-merges `config` one
- * level deep (a patched `runs` replaces the whole array), so a read-modify-write of a slot must load →
- * mutate a copy → write inside `queueTypeIndexWrite(fn)`.
- *
  * Layout on disk:
  *
  *     {dir}/

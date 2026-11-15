@@ -2,14 +2,6 @@
  * Static scanner for the URL paths `client/src/services/api*.js` asks the server
  * for.
  *
- * Static scan of the paths `client/src/services/api*.js` requests, for the client↔server route-parity
- * guard (`apiRouteParity.test.js`). `scanClientApiPaths({ repoRoot | sources })` constant-folds the
- * first argument of every `request(…)` — and of every `fetch(`${API_BASE}…`)` the streaming/blob
- * wrappers use instead — from string and template literals, module-local path helpers, ternaries and
- * `...helper(path, …)` spreads into normalized `/api/...` paths (dynamic segments → `:p`), and REPORTS
- * what it cannot fold instead of dropping it. `findUnmountedClientPaths(clientPaths, serverPaths)`
- * diffs those against the `apiRouteGraph.js` inventory, honoring Express 5 `*wildcard` segments. Pure.
- *
  * The client's ~87 `apiX.js` wrappers are the only place a browser learns which
  * server route a feature lives at, and their co-located tests assert the wrapper
  * produced the string the wrapper produces — nothing compares those strings to

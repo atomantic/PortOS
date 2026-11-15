@@ -2,16 +2,6 @@
  * Judges an untyped local model's capabilities from its id: `isEmbeddingModel`, `isVisionModel`,
  * `isToolUseModel` and picker annotations, re-exported from the server leaf.
  *
- * What an untyped LOCAL model can do, judged from its id: `isEmbeddingModel` / `isVisionModel` /
- * `isToolUseModel` (re-exported from the pure leaf `server/lib/localModelHeuristics.js` — one regex
- * per family; a model card's explicit capability metadata outranks the id regex),
- * `isVisionCapableCliProvider`, `isVisionCapableCodexTuiProvider` (shared native image-attachment
- * capability), `filterGenerationModels` (sentinels and embedding-only models dropped),
- * `visionLocalModelFilter` and `localToolUseHint` / `withToolUseOptionLabel` (unioned with the
- * server's authoritative per-provider capability maps from `useVisionModelIds` / `useToolUseModelIds`;
- * tool-use is an annotation plus warning, never a filter), and `modelCapabilityInfo` (capability
- * badges for a selected model without over-sharing a local runtime's answer with another provider).
- *
  * What an untyped LOCAL model can do, judged from its id: the embedding /
  * vision / tool-use family regexes, the picker annotations built on them, and
  * the union with the backend's own capability report where the server could
@@ -94,6 +84,7 @@ export const isVisionCapableCliProvider = (provider) =>
  * @param {object} [provider]
  * @param {Record<string, Set<string>>|null} [toolUseIdsByProvider]
  * @returns {{toolCapable:boolean}|null}
+  * Tool use is an annotation plus a warning on the picker, never a filter.
  */
 export const localToolUseHint = (id, provider, toolUseIdsByProvider = null) =>
   (localBackendForProvider(provider) || isOllamaBackedProvider(provider) || provider?.lmstudioBacked === true || provider?.mtplxBacked === true || provider?.llamaBacked === true || provider?.vllmBacked === true || provider?.sglangBacked === true)

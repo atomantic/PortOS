@@ -1,17 +1,6 @@
 /**
  * `buildAgentRegistration` projects a spawn's task into the `registerAgent` payload, with
  * `resolveExecutionMode` choosing direct, runner, tui or runner-tui.
- *
- * The `registerAgent` payload one spawn writes, projected from its task — `buildAgentRegistration({
- * task, provider, … })` plus `resolveExecutionMode({ spawnHeadless, useRunner })` (`direct` / `runner`
- * / `tui` / `runner-tui`, replacing a nested ternary chain). `agent.metadata` is a HAND-PICKED
- * projection of `task.metadata`, never a spread: every downstream reader (run cards,
- * `perpetualRefillPlan`, `declaresNoCommitCriterion`, the quota-burn continuation, `featureAgents`)
- * sees the agent record alone, so an unlisted field does not survive the spawn — which is how
- * `quotaBurnStepId` shipped persisted but unprojected (#6406) while this list was maintained inline in
- * a 900-line orchestrator. Pure and synchronous: `primaryCheckoutBaseline` and `providerEndpoint`
- * arrive as VALUES (both were `await`/service calls inline) keeping this leaf out of the agent-state
- * and local-endpoint graphs.
  */
 
 import { isTruthyMeta } from './metadataFlags.js';

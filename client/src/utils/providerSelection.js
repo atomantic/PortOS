@@ -2,29 +2,6 @@
  * Filters for which providers and models a picker may offer: hardware-compatibility filters,
  * agent-harness runnability and fail-closed selection policy.
  *
- * Which providers and models a picker may OFFER on this install: `isProviderHardwareCompatible` /
- * `isProviderModelHardwareCompatible` / `filterHardwareCompatibleProviderModels` (server-annotated,
- * fail-open), `selectableProviders` (the single rule `ProviderModelSelector` renders from),
- * `filterRunnableProviders` (agent jobs need a CLI/TUI harness), `supportsToolFreeOneShot` /
- * `toolFreeOneShotSelectionPolicy` (API or server-verified tool-free CLI authoring; excludes TUI and
- * unverified composite routes), `supportsStrictToolFreeOneShot` /
- * `strictToolFreeOneShotSelectionPolicy` (the same without read-only-sandboxed authoring CLIs,
- * mirroring the server's `isToolFreeOneShotProvider`), the fail-closed tool-free local policy
- * (`TOOL_FREE_LOCAL_PROVIDER_IDS`, `TOOL_FREE_LOCAL_TEXT_CAPABILITIES`, `isToolFreeLocalProvider`,
- * `isToolFreeLocalModel`, `toolFreeLocalSelectionPolicy`) used by security-sensitive pickers, and the
- * pr-reviewer postures (`PUBLIC_REVIEW_NO_TOOL_POSTURE` / `PUBLIC_REVIEW_ACTIONS_POSTURE`,
- * `supportsPublicReviewPosture`, `enforcesPublicReviewPosture`, `publicReviewSelectionPolicy` — mirror
- * of `server/lib/agentExecutionProfiles.js`: a pipeline stage names a POSTURE, the server publishes
- * each provider's `publicReviewPostures` and `publicReviewEnforcedPostures` on `GET /api/providers`,
- * and the picker offers exactly the providers this install can run the stage on, so no vendor is named
- * on either side). Also the caller EXECUTION-MODE picker rule (`callerModeList`,
- * `providerModeSelectionPolicy` — whose `modes` also bound the selector's compose flow) and
- * `COMPOSE_OPTION_VALUE`, the "Custom combination…" action sentinel outside both provider-id grammars
- * (#7566), over `server/lib/callerModePolicy.js` — the server enforces the policy on the pin, on
- * `activeProvider` inheritance and on every fallback candidate; this only lets a picker SHOW the rule,
- * keeping an ineligible saved value visible-but-disabled instead of hidden or silently replaced — read
- * off `CALLER_MODE_POLICIES` in that pure leaf, so it cannot drift).
- *
  * Which PROVIDERS and MODELS a picker may offer on this install: the
  * hardware-compatibility filters (server-annotated, fail-open), the
  * agent-harness runnability filter, and the fail-closed selection policies

@@ -2,16 +2,6 @@
  * Caller EXECUTION-MODE policy — the one place that answers "may THIS caller
  * run on THAT provider record's execution mode?" (#6368).
  *
- * The one caller EXECUTION-MODE policy: `CALLER_MODE_POLICIES` (`agent-harness`, `cli-harness`,
- * `direct-api`, `any-text`) plus `resolveCallerModePolicy` / `allowedModesFor` / `callerModeRejection`
- * / `isCallerModeEligible` / `filterCallerModeEligible`. Answers "may THIS caller run on THAT route
- * mode?" for an explicit pin, `activeProvider` inheritance and every fallback candidate alike —
- * `allowedModesFor()` is what rides on `requestCapabilities.allowedModes` into the toolkit's
- * `getFallbackProvider`. Pure and dependency-light so the out-of-process autofixer can import it;
- * `enabled`/benched state, prerequisites and text-transport consent stay with their existing owners.
- * Unknown never becomes true: a record with no executable mode, and a required model capability with
- * no positive evidence, are both refused.
- *
  * A provider record's `type` (`cli` / `tui` / `api`) is its executable route
  * mode, and callers are not interchangeable across them: a CoS agent task needs
  * a file-writing harness, the standalone autofixer can only drive a headless

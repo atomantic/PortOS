@@ -1,14 +1,6 @@
 /**
  * Hook giving refcounted `subscribe`/`unsubscribe` for a socket subscriber room, re-subscribing on
  * reconnect and unsubscribing when the last consumer unmounts.
- *
- * Refcounted `<namespace>:subscribe`/`unsubscribe` for a `registerSubscriber` room: the first mounted
- * consumer subscribes and re-emits on every socket reconnect, the last to unmount unsubscribes,
- * `onResubscribe` refetches whatever a consumer may have missed while disconnected, and
- * `payload`/`releasePayload` let one consumer set and later release a server-side room mode
- * (ChiefOfStaff's `taskLists`). Use when: Any hook/page that emits a literal `<ns>:subscribe` for
- * `cos`/`errors`/`notifications`/`agents`/`instances`/`loops`/`beeper` — don't hand-roll the reconnect
- * dance; `client/src/socketSubscriptionConventions.test.js` enforces this.
  */
 
 import { useEffect, useRef } from 'react';
@@ -74,6 +66,7 @@ function getEntry(namespace) {
  * @param {string} namespace - a namespace registered server-side via
  *   `registerSubscriber` (e.g. 'notifications', 'errors', 'instances', 'loops').
  * @param {{ onResubscribe?: () => void, enabled?: boolean, payload?: object, releasePayload?: object }} [options]
+  * client/src/socketSubscriptionConventions.test.js enforces this: no code emits a literal `<ns>:subscribe` outside this hook.
  */
 export function useSocketSubscription(namespace, {
   onResubscribe, enabled = true, payload, releasePayload,

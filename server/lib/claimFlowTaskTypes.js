@@ -1,15 +1,6 @@
 // The task kinds whose prompts own their own claim/<item> worktree and
 // push/PR/MR/review lifecycle, declared ONCE for both sides of the contract:
 //
-// `hasClaimFlowContract(task)` shares trusted claim identity across registration, completion and
-// resume. `CLAIM_FLOW_TASK_TYPES` — the ONE list of task kinds whose prompts own their own
-// `claim/<item>` worktree and push/PR/MR/review lifecycle (#6613). `services/cosTaskGenerator.js`
-// stamps `metadata.claimFlow` from it (WRITE side); `services/agentPromptBuilder.js` reads it back
-// through `isClaimFlowTask()` to pick a run's claim posture (READ side). It lived as two
-// byte-identical copies, so a new claim type added to one silently split the writer from the reader —
-// no error, just a claim run treated as a plain commit-only handoff; `claimFlowTaskTypes.test.js`
-// fails if a local copy reappears. Imports nothing.
-//
 //   - WRITE side (`services/cosTaskGenerator.js`) stamps `metadata.claimFlow`
 //     on a queued task.
 //   - READ side (`services/agentPromptBuilder.js` → `isClaimFlowTask`) decides
@@ -23,6 +14,7 @@
 // `metadata.analysisType`.
 //
 // Pure leaf: shared by prompt selection, registration and resume authority.
+// claimFlowTaskTypes.test.js fails if a local copy of this list reappears.
 export const CLAIM_FLOW_TASK_TYPES = new Set([
   'plan-task', 'claim-issue', 'claim-issue-gitlab', 'claim-issue-jira', 'claim-work'
 ]);

@@ -1,14 +1,5 @@
 /**
  * `useVideoGenForm(...)` returns the VideoGen form as named groups (lane, prompt, model, sampler, frames, …) plus the payload builder.
- *
- * Composes `useVideoGenFieldState` (mutable fields), `useVideoGenBackendCaps` (the
- * Local/hosted lane and each provider's fields) and `useVideoGenUrlPrefill` (ImageGen
- * handoff, Continue, Remix, `?lora=`), then adds the mode/backend transitions that clear
- * stale inputs, the derived model/keyframe/IC gates (`extendModeBlocked`, `a2vModeBlocked`,
- * `icLoraModeBlocked`, `keyframesError`), `applyRemix` / `applyResumedParams`, and
- * `buildGeneratePayload()`. Use when: The /media/video form — the single client-side source
- * of truth for the payload `server/routes/videoGen.js` validates. Reuse it for any second
- * entry point that generates video; hand each panel only the group it renders.
  */
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
