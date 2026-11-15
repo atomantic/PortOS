@@ -40,6 +40,7 @@ import { castInputsFromReferences } from '../../lib/musicVideoCastLook.js';
 import { captureImageFrameDependencies } from '../../lib/musicVideoDependencies.js';
 import { musicVideoClipConditioningReferences, musicVideoLimitReferenceFiles, musicVideoMissingFrameLinkedPicks, musicVideoReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { isPerformanceScene, ltxReferenceFrames } from '../../lib/musicVideoShotTiming.js';
+import { renderTierVideoSettings, sceneRenderTierPlan } from '../../lib/musicVideoRenderTier.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 
 const unprompted = (scene, what) => new ServerError(
@@ -146,12 +147,25 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
  * that productionPool.stepPriceUsd charged the step, so the run pays for exactly
  * what it submits.
  */
-const falClipParams = (project, scene, route) => falTakeRequestFields(falSceneTake({
+const falClipParams = (project, scene, videoSettings) => falTakeRequestFields(falSceneTake({
   scene,
   scenes: project.scenes,
-  videoSettings: falRouteVideoSettings(project, route),
+  videoSettings,
   songDurationSec: project.audioAnalysis?.durationSec ?? null,
 }));
+
+/**
+ * A run renders a tiered lane's clips at the draft tier until the director approves a shot for
+ * final (#16136, #16178): the route's settings with the draft resolution laid in, and the tag's
+ * `tier`. A lane without tiers (local, Grok, an untiered model) stays on the saved settings, untagged.
+ */
+function draftTierSettings(project, scene, route) {
+  const base = route.mode === 'runway' ? runwayRouteVideoSettings(project, route) : falRouteVideoSettings(project, route);
+  const tiered = sceneRenderTierPlan(route.mode, { scene, scenes: project.scenes, videoSettings: base }) != null;
+  return tiered
+    ? { videoSettings: renderTierVideoSettings(route.mode, { scene, scenes: project.scenes, videoSettings: base, tier: 'draft' }), tier: 'draft' }
+    : { videoSettings: base, tier: null };
+}
 
 /** The request fields of a References clip, or null when this shot cannot use them. */
 async function ltxReferenceFields({ project, scene, route }) {
@@ -184,13 +198,14 @@ async function dispatchClip({ project, scene, route, tag }) {
   const spanSec = shotRequestSpanSec(scene, project.scenes);
   // The autonomous run's pilot repair names what the last clip got wrong (autonomousService.js).
   const fixes = typeof scene.clipFixes?.text === 'string' ? scene.clipFixes.text : '';
+  const { videoSettings: routeSettings, tier } = draftTierSettings(project, scene, route);
   const byBackend = {
     // A supplied-audio route animates the frame from its shot's own song window.
     local: route.audio === 'supplied' ? { modelId: route.model, mode: 'a2v', _suppliedAudio: true } : { modelId: route.model, disableAudio: !preMusicClipSound(scene) },
     grok: { grokDuration: spanSec != null ? grokCoverage(spanSec).requestSec : (project.videoSettings?.grokDuration || 10), disableAudio: !preMusicClipSound(scene) },
-    fal: falClipParams(project, scene, route),
+    fal: falClipParams(project, scene, routeSettings),
     reactor: { disableAudio: true },
-    runway: runwayTakeRequestFields(runwaySceneTake({ scene, scenes: project.scenes, videoSettings: runwayRouteVideoSettings(project, route) })),
+    runway: runwayTakeRequestFields(runwaySceneTake({ scene, scenes: project.scenes, videoSettings: routeSettings })),
   };
   // A route bound to LTX 2.5 References sends what the shot card's checkbox sends: the shot's clip
   // references as IC references. A performance or greybox shot, or a model that is not LTX 2.5, renders as usual.
@@ -215,7 +230,7 @@ async function dispatchClip({ project, scene, route, tag }) {
       backend: route.mode, falModelId: byBackend.fal?.falModelId, runwayModelId: byBackend.runway?.runwayModelId,
       googleModelId: byBackend.google?.googleModelId, higgsfieldModelId: byBackend.higgsfield?.higgsfieldModelId, mode: byBackend[route.mode]?.mode || 'image', localRuntime,
     })),
-    musicVideo: { ...tag, compose: true, ...(ltxReferences ? { expectedClipReferenceFiles: ltxReferences.files } : {}) },
+    musicVideo: { ...tag, compose: true, ...(tier ? { tier } : {}), ...(ltxReferences ? { expectedClipReferenceFiles: ltxReferences.files } : {}) },
     ...(fixes ? { _clipFixes: fixes } : {}),
   }, {});
   return { jobId };

@@ -2234,6 +2234,8 @@ export const musicVideoSceneLastFailureSchema = z.object({
   lane: z.enum(['image', 'video']),
   error: z.string().max(300),
   at: z.string().max(64),
+  // #16178: the tier a failed clip render ran at, so the card's Retry repeats it.
+  tier: z.enum(['draft', 'final']).optional(),
 }).strict();
 
 // Times are nullable here so clearing a Start/End input (the UI sends `null`)
