@@ -11,7 +11,7 @@ import { readCiJobs } from './lib/ciWorkflowJobs.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 
 import {
-  ALWAYS_RUN_TESTS,
+  getAlwaysRunTests,
   BROWSER_SUITES,
   buildCiTestPlan,
   classifyDependencyChange,
@@ -380,7 +380,7 @@ describe('real shared-source import chains', () => {
     expect(plan.server.mode).toBe('related');
     expect(plan.server.sources).toEqual([source]);
     // Explicit guards stay additive to the traversal.
-    expect(plan.server.files).toEqual(expect.arrayContaining(ALWAYS_RUN_TESTS.filter((path) => path.startsWith('server/'))));
+    expect(plan.server.files).toEqual(expect.arrayContaining(getAlwaysRunTests().filter((path) => path.startsWith('server/'))));
     // validation.test.js reaches the leaf only through pipelineValidation; it names
     // neither the leaf nor the editorial feature, so only traversal selects it.
     expect(plan.server.files).not.toContain('server/lib/validation.test.js');
@@ -832,9 +832,9 @@ describe('CI test impact planner', () => {
   // Every guard on the list is unreachable by import-graph selection, so a
   // docs-only plan is the one scope where the complete list has to survive.
   it('carries every tracked always-run guard on a docs-only plan', () => {
-    const tracked = [...TRACKED, ...ALWAYS_RUN_TESTS];
+    const tracked = [...TRACKED, ...getAlwaysRunTests()];
     const plan = buildCiTestPlan(['docs/GITHUB_ACTIONS.md'], { trackedFiles: tracked });
-    const { server, client } = splitByRunner(ALWAYS_RUN_TESTS);
+    const { server, client } = splitByRunner(getAlwaysRunTests());
 
     expect(plan.server.mode).toBe('files');
     for (const guard of server) {
@@ -854,16 +854,16 @@ describe('CI test impact planner', () => {
 
   it('maps every always-run guard to a runner', () => {
     // splitByRunner drops a path whose runnerForTest is null. A root-level
-    // entry on ALWAYS_RUN_TESTS would then vanish from both jobs and the
+    // entry on getAlwaysRunTests() would then vanish from both jobs and the
     // docs-only plan would report green having run it nowhere.
-    for (const path of ALWAYS_RUN_TESTS) {
+    for (const path of getAlwaysRunTests()) {
       const { server, client } = splitByRunner([path]);
       expect(server.includes(path) || client.includes(path), path).toBe(true);
     }
   });
 
   it('runs the shipped prompt-hash guard on every plan', () => {
-    expect(ALWAYS_RUN_TESTS).toContain('scripts/migrations/shippedPromptHashes.guard.test.js');
+    expect(getAlwaysRunTests()).toContain('scripts/migrations/shippedPromptHashes.guard.test.js');
   });
 
   it('omits an untracked always-run guard rather than handing Vitest a missing selector', () => {

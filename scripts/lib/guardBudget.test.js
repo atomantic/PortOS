@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ALWAYS_RUN_TESTS } from '../ci-test-plan.js';
+import { getAlwaysRunTests } from '../ci-test-plan.js';
 import { GUARD_BUDGET_MS, hostTooBusyForBudget, OVER_BUDGET_CEILINGS_MS, overBudgetGuards, readGuardDurations } from './guardBudget.js';
 
 describe('guard budget', () => {
@@ -18,8 +18,8 @@ describe('guard budget', () => {
   });
 
   it('keeps ensure-deps out of the always-run list and only ceilings real always-run guards', () => {
-    expect(ALWAYS_RUN_TESTS).not.toContain('scripts/ensure-deps.test.js');
-    for (const file of Object.keys(OVER_BUDGET_CEILINGS_MS)) expect(ALWAYS_RUN_TESTS, file).toContain(file);
+    expect(getAlwaysRunTests()).not.toContain('scripts/ensure-deps.test.js');
+    for (const file of Object.keys(OVER_BUDGET_CEILINGS_MS)) expect(getAlwaysRunTests(), file).toContain(file);
   });
 
   it('skips enforcement only while load exceeds the core count', () => {

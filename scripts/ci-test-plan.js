@@ -2,7 +2,8 @@
 
 import { execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
-import { join, posix, relative } from 'path';
+import { dirname, join, posix, relative } from 'path';
+import { fileURLToPath } from 'url';
 import { staticImportClosure, toModuleKey } from '../server/lib/staticImportGraph.js';
 import { escapeRegExp } from '../server/lib/textUtils.js';
 import { moduleImports } from './lib/sourceTokens.js';
@@ -11,6 +12,7 @@ import { CATALOG_DIRS } from './lib-catalog.js';
 import { SERVER_LINT_RE } from './lib/serverLintSurface.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
+import { detectTreeGuards } from './lib/guardScanners.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { formatReachSummary, measureRepoImportReach } from './lib/importReach.js';
 
@@ -347,9 +349,9 @@ export const WINDOWS_CONTRACT_TESTS = [
 //      They sat structurally unselectable — `agent-instructions-files.test.js`
 //      went red on `main` and stayed there while every PR reported green — and
 //      the always-run list is the only mechanism that can reach them at all.
-//      `repo-scan-guards.test.js` keeps this half of the list honest: it
-//      re-derives the scanner set from the tree and fails when a new one is
-//      added without being registered here or named as structurally selected.
+//      The planner derives this half from the tree (getTreeGuards, detected by
+//      scripts/lib/guardScanners.js), so a new scanner needs no registration;
+//      repo-scan-guards.test.js pins the detector and the derived set.
 //
 // Everything here is deliberately cheap: it reads only prompt data or `git`
 // output, which is affordable on every PR including documentation-only ones,
@@ -357,148 +359,75 @@ export const WINDOWS_CONTRACT_TESTS = [
 // whole set measured ~23s of a 27s focused pregate (#16086), so each guard has
 // a per-file budget (GUARD_BUDGET_MS in scripts/lib/guardBudget.js) that
 // pregate enforces; a behavioural test that no scan needs does not belong here.
-export const ALWAYS_RUN_TESTS = [
+export const EXPLICIT_ALWAYS_RUN_TESTS = [
   // Doc-parity guards: each compares a .md next to it against source it reads
-  // rather than imports. The .md is documentation-only to the planner and the
-  // source has no import edge to the guard, so neither side of the comparison
-  // can select it — a docs-only PR that documented a removed endpoint would
-  // otherwise merge green.
+  // rather than imports, so a docs-only PR that documented a removed endpoint
+  // would otherwise merge green.
   'docs/api-doc.test.js',
-  'docs/auth-public-paths-doc.test.js',
   'docs/doc-endpoint-methods.test.js',
   'docs/docs-index.test.js',
   'docs/deps-doc.test.js',
   'docs/features/product-surfaces.test.js',
-  'scripts/agent-instructions-files.test.js',
   'scripts/doc-code-pointers.test.js',
-  // A newly added shared selector has no import edge to its documentation
-  // inventory. Check that contract before broad suites, including docs-only edits.
+  // A newly added shared selector has no import edge to its documentation inventory.
   'server/lib/executionOptions.consumers.test.js',
-  // Whole-tree scanner: a new browser suite can adopt the gate with no import
-  // edge back to the registry it must join (#10312).
-  'scripts/browser-suite-registry.test.js',
-  // Walks the client→server/lib import graph; any server/lib file can add a
-  // Node-only import and break the client build with no edge back to here.
-  'scripts/client-server-import-purity.test.js',
-  'scripts/direct-invocation-drift.test.js',
   // Base-relative: a rename or deletion of a shipped migration touches no file
-  // the planner would select for it, so the guard must run on every change (#16094).
+  // the planner would select for it (#16094).
   'scripts/migrations/migrationFilenames.guard.test.js',
-  'scripts/migrations/promptBumpMigrations.guard.test.js',
   'scripts/migrations/shippedPromptHistory.guard.test.js',
-  // Reads every reference prompt body and shipped-hashes.json from disk and
-  // compares the table against the merge base; a prompt edit has no import
-  // edge back to it (#16090).
+  // Compares every reference prompt body and shipped-hashes.json against the merge base (#16090).
   'scripts/migrations/shippedPromptHashes.guard.test.js',
-  'scripts/node-version-drift.test.js',
-  // Whole-tree markdown scanner: a docs-only PR can reintroduce the stale band
-  // in prose with no import edge back to this test (#11851).
-  'scripts/port-band-docs.test.js',
-  'scripts/repo-scan-guards.test.js',
-  // Whole-tree scanner: any server file can add an import of client source.
-  'scripts/server-imports-no-client.test.js',
-  'scripts/tailnet-identity-leak.test.js',
-  'server/dependency-overrides.test.js',
-  // Whole-tree scanner: a caller can disappear from any file without touching its export.
-  'server/deadExports.test.js',
-  // Whole-tree scanner: any server file can add a `process.env` read, and
-  // `.env.example` itself is not a scope the selector routes to a runner.
-  'server/envExampleDrift.test.js',
-  // Whole-tree scanner (#12093): any rename or deletion can strand a backticked
-  // file name in an AGENTS.md, which is documentation-only to the planner.
-  'server/instructionFileReferences.test.js',
-  // Whole-tree scanners over the shared collectServerSources/collectClientSources
-  // walkers (#8723): the offending file is never imported by the guard, so
-  // impact selection only reaches them when the guard itself changes.
-  'server/lib/apiRouteGraph.test.js',
-  'server/lib/apiRouteParity.test.js',
   // Route policy and write-back scans depend on independently changed files (#13224).
+  'server/lib/apiRouteParity.test.js',
   'server/lib/hostControlRoutes.test.js',
   'server/jsonWritebackConventions.test.js',
-  // Whole-tree scanner (#9982): any server module can start taking backup
-  // admission with no import edge back to the owner inventory it must join.
-  'server/lib/backupAssetOwners.test.js',
-  'server/lib/childProcess.guards.test.js',
-  'server/lib/claimFlowTaskTypes.test.js',
-  'server/lib/cliChildEnv.test.js',
-  'server/lib/editorial/proseTics.test.js',
-  'server/lib/generatedManifests.test.js',
-  // Whole-tree scanner over git-tracked test files (#9000): a suite anywhere
-  // in server/scripts/lib/autofixer can add a leaked mkdtemp call with no
-  // import edge back to this guard.
-  'server/lib/mkdtempCleanup.guards.test.js',
-  // Base-relative server import-growth guard (#7993). A new eager edge in a
-  // widely reached module multiplies across suites this file does not import,
-  // so impact selection would not reach it unless the diff touched this file.
-  // Docs-only plans and rebases onto a moved base still need the comparison. It reads
-  // CI_BASE_SHA — the same variable main() requires for a pull request that
-  // is not forced full — and fails closed when that commit cannot be read.
-  // Pregate copies the sha into the test process so the local run uses this
-  // plan's base, not a second guess.
+  // Whole-tree route-mount scan (#12952, #16018).
+  'server/hostControlCoverage.test.js',
+  // Base-relative server import-growth guard (#7993): a new eager edge in a widely
+  // reached module multiplies across suites this file does not import. Reads CI_BASE_SHA
+  // and fails closed when that commit cannot be read; pregate forwards the plan's base.
   'server/lib/importScoping.test.js',
   // Scans every lib source for upward service imports without importing it.
   'server/lib/layering.test.js',
-  // Whole-tree scanner over collectServerSources: every cwd-passing spawn pins PWD (#8723).
-  'server/lib/spawnCwd.test.js',
-  // Whole-tree scanner: any server/client file can add a hardcoded "Models →"
-  // breadcrumb, with no import edge back to this file.
-  'server/lib/localProviderRuntime.test.js',
-  'server/lib/qwenAgentParsers.test.js',
-  // Schema reachability reads consumers as text across the tracked source tree.
-  'server/lib/validationSplit.test.js',
-  'server/lib/testDataIsolation.guards.test.js',
-  'server/lib/testHelper.test.js',
-  // Whole-tree scanner: any server/client file can re-inline a RegExp escape (#8723).
-  'server/lib/textUtils.test.js',
-  // Whole-tree scanner: any server file can log a failure through
-  // `console.log`, and the guard only ever sees it as a path string.
-  'server/logLevelConventions.test.js',
-  // Whole-tree scanner: a module moved between directories leaves a stale cited
-  // path in some comment, with no import edge to this guard (#12408).
-  'server/sourceFileReferences.test.js',
-  // Whole-tree scanner: a script added to scripts/ with no caller, workflow or
-  // doc has no import edge to this guard, so only the always-run list reaches it (#16089).
-  'server/scriptReferences.test.js',
-  // Whole-tree scanner: a renamed export in any module leaves a dead key in some
-  // suite's vi.mock factory, with no import edge from that suite to this guard (#11891).
-  'server/mockContractConventions.test.js',
-  // Whole-tree scanner over git-tracked tests (#12047): any suite can add a
-  // real sleep before a not-called assertion with no import edge to this guard.
-  'server/negativeProofSleepConventions.test.js',
-  // Whole-tree scanner: any server file can spawn a child and await before
-  // attaching its error/exit listener (#11761), with no import edge to this file.
-  'server/childListenerOrderConventions.test.js',
-  // Whole-tree scanner: any server/autofixer file can re-implement raw
-  // `pm2 jlist` execution/parsing outside the two designated readers (#8164).
-  'server/pm2JlistOwnership.guard.test.js',
-  'server/services/imageGen/renderTargets.guard.test.js',
-  // Whole-tree scanners over collectServerSources (#8723).
-  'server/services/gitlab.glabFlags.test.js',
-  'server/services/orphanedPartialGc.test.js',
-  'server/services/providers.shape.test.js',
-  'server/services/taskPromptDefaults.test.js',
-  // Whole-tree scanners over server/services import edges (#14327): a PR that
-  // closes a static cycle never imports these guards, so they must run on every PR.
+  // Static import-cycle guards (#14327): a PR that closes a cycle never imports them.
   'server/services/agentImportCycles.test.js',
   'server/services/meatspacePostImportCycles.test.js',
   'server/services/serviceImportCycles.test.js',
   'server/services/twinImportCycles.test.js',
-  // Base-relative retired history guard: JSON edits have no import edge here.
-  // Pregate and CI forward the planner's exact CI_BASE_SHA.
+  // Prompt-upgrade contract and base-relative retired-history guard: JSON edits have no import edge here.
+  'server/services/taskPromptDefaults.test.js',
   'server/services/taskPromptDefaults/integritySnapshot.guard.test.js',
-  // Whole-tree scanner (#12048): server/index.js can mount a new router that no
-  // test imports, with no import edge from that router to this guard.
-  'server/routeTestCoverageConventions.test.js',
-  // Whole-tree scanner (#12952, #16018): server/index.js can mount a write under a
-  // surface that bypasses host control, with no import edge to this guard.
-  'server/hostControlCoverage.test.js',
-  'server/routeValidationConventions.test.js',
-  'server/floatingAsyncConventions.test.js',
-  'server/timerCallbackConventions.test.js',
-  // Whole-tree scanner (#12815): any server file can bind a bare JSON.stringify to
-  // a jsonb parameter, with no import edge to this guard.
-  'server/pgJsonConventions.test.js',
 ];
+
+/**
+ * Tree scanners the detector finds (scripts/lib/guardScanners.js) that another
+ * selector already reaches, so they must NOT ride every plan. Each entry names
+ * that selector.
+ */
+export const TREE_GUARDS_SELECTED_ELSEWHERE = new Map([
+  ['scripts/ensure-deps.test.js', 'structuralTestsFor: ENSURE_DEPS_INPUTS (behavioural, #16086)'],
+  // `.ps1` is an unclassified changed file and forces the complete suite.
+  ['scripts/ps1-bom.test.js', 'unclassified-file full-suite trigger: *.ps1'],
+]);
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+/**
+ * Tracked tree-scanning guards, derived rather than registered (#16085). Lazy
+ * and memoized: scanning spawns git, and pregate must not start a subprocess
+ * before it has validated its arguments.
+ */
+let treeGuards;
+export const getTreeGuards = () => (treeGuards ??= detectTreeGuards(REPO_ROOT));
+
+/** Client scanners are reached by structuralTestsFor on any client/src js(x) change. */
+const isClientGuard = (path) => path.startsWith('client/src/');
+
+let alwaysRun;
+export const getAlwaysRunTests = () => (alwaysRun ??= [...new Set([
+  ...EXPLICIT_ALWAYS_RUN_TESTS,
+  ...getTreeGuards().filter((path) => !isClientGuard(path) && !TREE_GUARDS_SELECTED_ELSEWHERE.has(path)),
+])].sort());
 
 const DB_RISK_RULES = [
   /^scripts\/rehearsal-scratch-db(?:[.\/]|$)/i,
@@ -917,30 +846,10 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
   // None of these files has a source sibling or imports an app module, so nothing
   // else selects them — without this entry they only ever run on a full suite.
   if (changedFiles.some((path) => /^client\/src\/.*\.jsx?$/.test(path))) {
-    add('client/src/apiWrapperOptionsConventions.test.js');
-    add('client/src/asyncEffectDisposalConventions.test.js');
     add('client/src/dashboardWidgetContainerConventions.test.js');
-    add('client/src/dragHandleTouchConventions.test.js');
-    add('client/src/globalShadowConventions.test.js');
-    add('client/src/headingTruncationConventions.test.js');
-    add('client/src/hooks/mountedRefConventions.test.js');
-    add('client/src/hoverRevealConventions.test.js');
-    add('client/src/listFetchConventions.test.js');
-    add('client/src/moduleContractConventions.test.js');
-    add('client/src/numberFormattingConventions.test.js');
-    add('client/src/pageShellConventions.test.js');
-    add('client/src/pollingConventions.test.js');
-    add('client/src/popoverClampConventions.test.js');
-    add('client/src/preWrapClasses.test.js');
-    add('client/src/providerSelectConventions.test.js');
-    add('client/src/responsiveGridConventions.test.js');
-    add('client/src/socketSubscriptionConventions.test.js');
-    add('client/src/storageConventions.test.js');
-    add('client/src/subNavConventions.test.js');
-    // Same trigger, different subject: this one scans the TEST files for an
-    // inline async bound the per-test budget would cut short, and a changed
-    // `*.test.jsx` matches the `.jsx?` pattern above.
-    add('client/src/test/timeouts.test.js');
+    // Tree-scanning client guards are derived (scripts/lib/guardScanners.js);
+    // timeouts.test.js scans the TEST files, which this pattern also matches.
+    for (const path of getTreeGuards()) if (path.startsWith('client/src/')) add(path);
   }
 
   return selected;
@@ -950,14 +859,14 @@ const uniqueSorted = (values) => [...new Set(values)].sort();
 
 // Guarded by trackedSet like every other selector: an untracked path handed to
 // Vitest as an exact selector makes the run exit non-zero.
-const alwaysRunTests = (trackedSet) => ALWAYS_RUN_TESTS.filter((path) => trackedSet.has(path));
+const alwaysRunTests = (trackedSet) => getAlwaysRunTests().filter((path) => trackedSet.has(path));
 
 /**
  * Split a set of always-run selectors across the two Vitest runners.
  *
  * The docs-only plan names its files directly instead of going through the
  * runner split the scoped branches use, so it has to do that split itself: an
- * entry added to ALWAYS_RUN_TESTS under client/src would otherwise be handed to
+ * entry added to the always-run set under client/src would otherwise be handed to
  * the server runner, which does not glob client/, and the guard would report
  * green having run nowhere.
  */

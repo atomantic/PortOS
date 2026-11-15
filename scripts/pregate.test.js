@@ -13,7 +13,7 @@ import { destroyGitSandbox, makeGitSandbox } from '../server/lib/gitTestRepo.js'
 import {
   buildCiTestPlan,
   collectPlanInputs,
-  ALWAYS_RUN_TESTS,
+  getAlwaysRunTests,
   FULL_SUITE_SHARDS,
   WINDOWS_CONTRACT_TESTS,
 } from './ci-test-plan.js';
@@ -193,7 +193,7 @@ describe('resolvePlanStages', () => {
   });
 
   it.each(['related', 'full'])('runs shared guards before every costly %s stage without changing the broad selection', (mode) => {
-    const tracked = ['server/lib/moduleSummaries.test.js', ALWAYS_RUN_TESTS[0], 'client/src/fooConventions.test.js'];
+    const tracked = ['server/lib/moduleSummaries.test.js', getAlwaysRunTests()[0], 'client/src/fooConventions.test.js'];
     const plan = planWith({
       server: { mode, files: tracked.slice(0, 2), sources: ['server/lib/helper.js'] },
       client: { mode, files: tracked.slice(2), sources: [] },
@@ -254,7 +254,7 @@ describe('pregate hidden-content invocation', () => {
     for (const path of [
       'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js', 'scripts/lib/githubActionsApi.js',
       'scripts/ci-test-plan.js', 'scripts/lib-catalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
-      'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
+      'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/guardScanners.js', 'scripts/lib/trackedFiles.js',
       'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js',
       'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
@@ -1077,7 +1077,7 @@ describe('pregateWorkerEnv', () => {
 
 describe('downgradeFullPlan', () => {
   it('replaces the full suite with the tracked always-run guards', () => {
-    const serverGuards = ALWAYS_RUN_TESTS.slice(0, 3);
+    const serverGuards = getAlwaysRunTests().slice(0, 3);
     const clientGuards = [
       'client/src/asyncEffectDisposalConventions.test.js',
       'client/src/fooConventions.test.js',
@@ -1100,13 +1100,13 @@ describe('downgradeFullPlan', () => {
 
   it('drops a guard this checkout does not track, so Vitest is never given a missing path', () => {
     // A fork that deleted a guard, or a branch predating one, still has it in
-    // ALWAYS_RUN_TESTS; passing that path to Vitest is an error, not a skip.
+    // getAlwaysRunTests(); passing that path to Vitest is an error, not a skip.
     const downgraded = downgradeFullPlan(planWith({ full: true }), []);
     expect(downgraded.server.files).toEqual([]);
   });
 
   it('keeps structural guards selected by a large diff when downgrading a full plan', () => {
-    const tracked = [...ALWAYS_RUN_TESTS, 'server/lib/moduleSummaries.test.js'];
+    const tracked = [...getAlwaysRunTests(), 'server/lib/moduleSummaries.test.js'];
     const changedFiles = Array.from({ length: 31 }, (_, index) => `server/lib/module-${index}.js`);
     const downgraded = downgradeFullPlan(planWith({ full: true }), tracked, changedFiles);
 
@@ -1328,7 +1328,7 @@ describe('the gate end to end', () => {
       for (const path of [
         'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
         'scripts/ci-test-plan.js', 'scripts/lib-catalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
-        'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
+        'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/guardScanners.js', 'scripts/lib/trackedFiles.js',
         'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js',
         'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
