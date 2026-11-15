@@ -1,4 +1,5 @@
 /** Reactor FastH3 renders one bounded SDK/WebRTC session per job. */
+import { assertHeaderSafeKey } from '../../lib/headerSafeKey.js';
 import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
 import { randomUUID } from 'crypto';
 import { stat, rm } from 'fs/promises';
@@ -67,7 +68,7 @@ export async function mintReactorToken(apiKey) {
   }
   const res = await fetchWithTimeout(`${REACTOR_API_BASE}/tokens`, {
     method: 'POST',
-    headers: { 'Reactor-API-Key': apiKey, 'Content-Type': 'application/json' },
+    headers: { 'Reactor-API-Key': assertHeaderSafeKey(apiKey, 'reactor.inc'), 'Content-Type': 'application/json' },
     body: JSON.stringify({
       authorization_details: [{ type: 'session', resources: { models: { match: [`reactor/${REACTOR_MODEL_ID}`] } }, constraints: { max_sessions: 1 } }],
     }),

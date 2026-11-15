@@ -98,3 +98,14 @@ it('offers Still matches on the selected frame made for an earlier version of th
   fireEvent.click(buttons[0]);
   expect(onReview).toHaveBeenCalledWith(shot.takes[0], { confirmFrame: true });
 });
+
+// #16128: a take shared by a run of shots says where this shot's window starts.
+it('labels a sequence take with its place in the run and this shot\'s in-point', () => {
+  const clip = { takeId: 'v1', kind: 'video', assetId: 'clip', status: 'candidate', source: 'generated',
+    sequence: { sceneIds: ['s0', 's1', 's2'], index: 1, offsetFrames: 53, from: 'cut' } };
+  const project = { scenes: [{ sceneId: 's0', label: 'Diner wide' }, { sceneId: 's1', label: 'Booth' }, { sceneId: 's2', label: 'Exit' }] };
+  render(<SceneTakeStrip project={project} scene={{ sceneId: 's1', order: 1, takes: [clip] }} kind="video" />);
+  const label = screen.getByTestId('sequence-take-label');
+  expect(label.textContent).toBe('One take · 2/3 · in 2.21s');
+  expect(label.getAttribute('title')).toBe('One take across Diner wide, Booth, Exit. This shot plays from 2.21s, at its detected cut; nudge its Offset to move the window.');
+});

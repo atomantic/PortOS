@@ -14,6 +14,21 @@
  * covering length), `resolveFalVideoResolution()`, `buildFalVideoRequest()` (the exact queue body per
  * model; null for an uncurated id, which keeps the legacy body) (a prompt over the model's
  * `promptMaxChars` is refused, never cut), `estimateFalVideoCostUsd()` (null = unknown),
+ * `describeFalVideoRate()`, `falExtraReferenceLimit()` (reference rows a form may add).
+ * Dependency-free; the client re-exports it.
+ *
+ * Curated fal.ai VIDEO model catalog (`falCapabilityHint` labels refs / end frame / audio per model) —
+ * `FAL_VIDEO_MODELS` (Hailuo-02 standard t2v/i2v default, MiniMax H3 Max/Max Turbo i2v, H3
+ * reference-to-video, H3 lip-sync, OmniHuman v1.5 audio-to-video (`FAL_AUDIO_VIDEO_MODELS`: kind
+ * `a2v`, plus the H3 Max and Seedance reference models that hear a song slice as an audio reference
+ * (`falHearsAudioReference()`, default `FAL_MUSIC_VIDEO_DEFAULT_MODEL`); the supplied audio drives the
+ * whole picture's motion; LTX audio-to-video runs locally, never on fal), Seedance 2.5
+ * t2v/i2v/reference, Kling v3 Pro i2v, Veo 3.1 Fast i2v) with per-model duration rules
+ * (enum/range/audio), resolutions, aspect ratios, optional inputs and list prices verified on
+ * `FAL_VIDEO_PRICING_VERIFIED_AT`; `getFalVideoModel()`, `coerceFalVideoSeconds()` (round UP to a
+ * covering length), `resolveFalVideoResolution()`, `buildFalVideoRequest()` (the exact queue body per
+ * model; null for an uncurated id, which keeps the legacy body) (a prompt over the model's
+ * `promptMaxChars` is refused, never cut), `estimateFalVideoCostUsd()` (null = unknown),
  * `describeFalVideoRate()`. Dependency-free; the client re-exports it.
  *
  * Curated fal.ai VIDEO model catalog (#8977 follow-up) — what PortOS knows
@@ -252,6 +267,10 @@ const BY_ID = new Map(FAL_VIDEO_MODELS.map((m) => [m.id, m]));
 
 /** The catalog row for `modelId`, or null for a model PortOS has not curated. */
 export const getFalVideoModel = (modelId) => (typeof modelId === 'string' ? BY_ID.get(modelId.trim()) || null : null);
+
+/** How many extra reference images a form may add on `model`; a model with no start-frame field of its own spends one slot on a start frame in Image mode (buildFalVideoRequest). */
+export const falExtraReferenceLimit = (model, mode) => (model?.referenceImages
+  ? Math.max(0, model.referenceImages.max - (mode === 'image' && !model.image ? 1 : 0)) : 0);
 
 /** Picker hint for the inputs a model takes beyond text, e.g. "refs ≤9 · end frame · audio refs". */
 export const falCapabilityHint = (model) => (model ? [

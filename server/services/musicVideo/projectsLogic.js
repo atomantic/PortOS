@@ -51,8 +51,8 @@ import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
 import { normalizeCreditsOutro } from '../../lib/musicVideoCreditsOutro.js';
 import { MUSIC_VIDEO_EDGED_WIPES, sceneWipe, varyWipes } from '../../lib/musicVideoWipes.js';
-import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
-import { anchorShotsToSungLyrics, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
+import { carryTreatmentThroughSceneOrder, remapTreatmentForClone, scenesFingerprint } from './treatment.js';
+import { anchorShotsToSungLyrics, carryReviewThroughSceneOrder, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
 import { cuesSungWithin, lyricAnchorOnset, lyricWordCuts, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 import { normalizeShotSheet } from '../../lib/musicVideoShotSheet.js';
@@ -173,6 +173,8 @@ export function buildProjectRecord(input, { id, now, blender, sourceFilm }) {
       runwayModelId: videoSettings.runwayModelId ?? null,
       runwayDuration: videoSettings.runwayDuration ?? null,
       runwayResolution: videoSettings.runwayResolution ?? null,
+      ...(videoSettings.draftResolution ? { draftResolution: videoSettings.draftResolution } : {}),
+      ...(videoSettings.finalResolution ? { finalResolution: videoSettings.finalResolution } : {}),
       generationMode: videoSettings.generationMode ?? 'image',
       audioReactiveLora: videoSettings.audioReactiveLora ?? null,
       audioReactiveScale: videoSettings.audioReactiveScale ?? 1.2,
@@ -662,6 +664,37 @@ function buildScene(input, { order }) {
   };
 }
 
+/**
+ * Stored scene order is time order: the timed shots are stable-sorted by
+ * startSec into the slots timed shots already occupy, untimed shots (a lead-in
+ * or a not-yet-placed shot) keep their position, and `order` equals the index.
+ * Returns the SAME array when it already holds that, so callers can detect a
+ * no-op by identity.
+ */
+function sceneListInTimeOrder(scenes) {
+  const list = Array.isArray(scenes) ? scenes : [];
+  const timed = list.filter((s) => Number.isFinite(s?.startSec));
+  const sortedTimed = timed.map((scene, i) => ({ scene, i })).sort((a, b) => a.scene.startSec - b.scene.startSec || a.i - b.i);
+  let next = 0;
+  const placed = list.map((scene) => (Number.isFinite(scene?.startSec) ? sortedTimed[next++].scene : scene));
+  const inOrder = placed.every((scene, at) => scene === list[at] && scene.order === at);
+  return inOrder ? list : placed.map((scene, at) => (scene.order === at ? scene : { ...scene, order: at }));
+}
+
+/**
+ * Load-time repair for a project whose scenes drifted out of time order
+ * (#16117). Reorders only; labels, times and selections are untouched, and
+ * every review binding that held before still holds: the bases hash `scenes`
+ * by position, and the repair moves no shot in the cut, so it must not stale
+ * an approval, the rendered proof or the treatment. Pure and idempotent, with
+ * `updatedAt` left alone, so the stores run it on every load.
+ */
+export function afterLoad(project) {
+  const scenes = sceneListInTimeOrder(project?.scenes);
+  if (scenes === project?.scenes) return project;
+  return carryReviewThroughSceneOrder(project, carryTreatmentThroughSceneOrder(project, { ...project, scenes }));
+}
+
 /** Where a new scene goes: before the first timed scene that starts after it; untimed scenes go last. */
 function insertByTime(scenes, scene) {
   const at = scene.startSec;
@@ -926,8 +959,9 @@ export function applySceneUpdate(project, sceneId, patch) {
   }
   const recorded = markDirectionStale(scenes[idx], updated);
   assertMusicVideoMediaSelections({ ...project, scenes: [recorded], visualSpec: null });
-  const nextScenes = scenes.slice();
-  nextScenes[idx] = recorded;
+  const patchedScenes = scenes.slice();
+  patchedScenes[idx] = recorded;
+  const nextScenes = 'startSec' in data ? sceneListInTimeOrder(patchedScenes) : patchedScenes;
   const next = retimed ? anchorShotsToSungLyrics(touch(project, { scenes: nextScenes }), [sceneId]) : touch(project, { scenes: nextScenes });
   // Retiming or rewording a shot, or picking another take, keeps the storyboard approval it was judged on.
   const shotEdit = Object.keys(data).every((key) => SCENE_SHOT_EDIT_FIELDS.includes(key));
@@ -1013,7 +1047,7 @@ export function reorderScenes(project, orderedIds) {
   const nextScenes = orderedIds.map((id, i) => ({
     ...withoutSlot(byId.get(id), SCENE_SLOT_FIELDS), ...pickSlot(scenes[i], SCENE_SLOT_FIELDS), order: i,
   }));
-  const extra = { scenes: nextScenes };
+  const extra = { scenes: sceneListInTimeOrder(nextScenes) };
   // A revised song's verdicts are about the lyric in a slot, so they stay with it.
   const sceneReview = project.songRevision?.sceneReview;
   if (sceneReview && typeof sceneReview === 'object') {

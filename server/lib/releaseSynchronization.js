@@ -3,7 +3,6 @@
  * obligations shared by publication enrollment, verification and task update guards.
  */
 
-import { releaseCandidateTransferSchema } from './releasePublication.js';
 import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 
@@ -54,14 +53,8 @@ export function isInlineReleaseOwner(entry, agent) {
   if (!isInlineReleaseSynchronization(entry) || agent?.taskId !== entry.owner.taskId) return false;
   if (agent.id === entry.owner.agentId && agent.startedAt === entry.owner.startedAt) return true;
   // Publication receipts are server-written after independent Git/GitHub verification.
-  if (agent.metadata?.releasePublication?.status === 'verified'
-    && agent.metadata.releasePublication.identity === entry.identity) return true;
-  const transfer = agent.metadata?.releaseCandidateRecovery?.status === 'transferred'
-    ? agent.metadata.releaseCandidateRecovery.transfer : null;
-  return releaseCandidateTransferSchema.safeParse(transfer).success
-    && transfer.origin.agentId === entry.owner.agentId && transfer.origin.taskId === entry.owner.taskId
-    && transfer.origin.startedAt === entry.owner.startedAt && transfer.successor.agentId === agent.id
-    && transfer.successor.taskId === agent.taskId && transfer.successor.startedAt === agent.startedAt;
+  return agent.metadata?.releasePublication?.status === 'verified'
+    && agent.metadata.releasePublication.identity === entry.identity;
 }
 
 export function effectiveReleaseSynchronization(entry) {

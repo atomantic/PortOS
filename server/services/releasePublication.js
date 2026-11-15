@@ -38,13 +38,6 @@ export async function verifyAgentReleasePublication(agentId, body) {
   const promotionMerge = requireSha(pr.merge_commit_sha);
   const candidate = await readReleaseCandidate(candidateHead, cwd).catch(error => refuse(error.message));
   if (candidate.version !== input.version) refuse('Candidate version differs from the requested publication');
-  const transfer = agent.metadata.releaseCandidateRecovery?.transfer;
-  if (transfer && (transfer.branch !== pr.head.ref || transfer.candidate.cutoff !== candidate.cutoff
-    || transfer.candidate.pin !== candidate.pin || transfer.candidate.releaseBase !== candidate.releaseBase
-    || transfer.candidate.version !== candidate.version
-    || (transfer.publication && transfer.publication.number !== input.promotionPrNumber))) {
-    refuse('Publication differs from the recovered candidate');
-  }
   const tag = `v${input.version}`;
   const [release, run, promotion, ref] = await Promise.all([
     api(`releases/tags/${tag}`), api(`actions/runs/${input.workflowRunId}`),
@@ -74,7 +67,6 @@ export async function verifyAgentReleasePublication(agentId, body) {
   if (tagTree !== tree) refuse('Release tag tree differs from the published candidate');
   const identity = createHash('sha256').update(JSON.stringify([origin.host, repository, tag, tagCommit, tree])).digest('hex');
   const receipt = {
-    ...(transfer && { recoveredPublisher: transfer.origin }),
     status: 'verified', synchronizationHandoffVersion: input.synchronizationMode === 'inline' ? 2 : 1,
     identity, repository, version: input.version, candidateHead,
     candidateBranch: pr.head.ref,

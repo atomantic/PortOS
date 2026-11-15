@@ -17,7 +17,8 @@ export function createProjectFileStore({ file, kind, idPrefix, logEmoji, logLabe
 
   async function loadAll() {
     const raw = await readJSONFile(file, [], { strict: true });
-    return Array.isArray(raw) ? raw : [];
+    if (!Array.isArray(raw)) return [];
+    return logic.afterLoad ? raw.map((project) => logic.afterLoad(project)) : raw;
   }
 
   async function saveAll(projects) {

@@ -13,7 +13,6 @@ import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { formatReachSummary, measureRepoImportReach } from './lib/importReach.js';
-import { declaresPromptHashes, isNumberedMigrationFile } from './migrations/shippedPromptHistory.js';
 
 const TEST_FILE_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/i;
 const MODULE_SOURCE_RE = /\.[cm]?[jt]sx?$/i;
@@ -223,6 +222,9 @@ const FULL_TRIGGER_RULES = [
   // ci.yml defines the windows-server job itself. The other workflows (release,
   // acceptance, cancel recovery) never run on windows-latest.
   { re: /^\.github\/workflows\/ci\.yml$/, reason: 'workflow definition changed', windowsRelevant: true },
+  // ci.yml's composite actions (setup-server, diff-base, test-memo, …) are part
+  // of its job definitions, windows-server included.
+  { re: /^\.github\/actions\//, reason: 'workflow definition changed', windowsRelevant: true },
   { re: /^\.github\/workflows\//, reason: 'workflow definition changed', windowsRelevant: false },
   { re: DEPENDENCY_MANIFEST_RE, reason: 'dependency manifest changed', windowsRelevant: 'dependencies' },
   // Every workspace's .npmrc pins ignore-scripts and install behavior; npm reads
@@ -349,10 +351,12 @@ export const WINDOWS_CONTRACT_TESTS = [
 //      re-derives the scanner set from the tree and fails when a new one is
 //      added without being registered here or named as structurally selected.
 //
-// Everything here is deliberately cheap — the whole set runs in ~3s and reads
-// only prompt data or `git` output, which is affordable on every PR including
-// documentation-only ones, where the alternative is reasoning per-scope about
-// what can reach it.
+// Everything here is deliberately cheap: it reads only prompt data or `git`
+// output, which is affordable on every PR including documentation-only ones,
+// where the alternative is reasoning per-scope about what can reach it. The
+// whole set measured ~23s of a 27s focused pregate (#16086), so each guard has
+// a per-file budget (GUARD_BUDGET_MS in scripts/lib/guardBudget.js) that
+// pregate enforces; a behavioural test that no scan needs does not belong here.
 export const ALWAYS_RUN_TESTS = [
   // Doc-parity guards: each compares a .md next to it against source it reads
   // rather than imports. The .md is documentation-only to the planner and the
@@ -377,15 +381,15 @@ export const ALWAYS_RUN_TESTS = [
   // Node-only import and break the client build with no edge back to here.
   'scripts/client-server-import-purity.test.js',
   'scripts/direct-invocation-drift.test.js',
-  'scripts/ensure-deps.test.js',
   // Base-relative: a rename or deletion of a shipped migration touches no file
   // the planner would select for it, so the guard must run on every change (#16094).
   'scripts/migrations/migrationFilenames.guard.test.js',
   'scripts/migrations/promptBumpMigrations.guard.test.js',
   'scripts/migrations/shippedPromptHistory.guard.test.js',
-  // Sweeps every migration export against independent prompt-hash baselines;
-  // migration files have no import edge back to this guard.
-  'scripts/setup-data-drift.test.js',
+  // Reads every reference prompt body and shipped-hashes.json from disk and
+  // compares the table against the merge base; a prompt edit has no import
+  // edge back to it (#16090).
+  'scripts/migrations/shippedPromptHashes.guard.test.js',
   'scripts/node-version-drift.test.js',
   // Whole-tree markdown scanner: a docs-only PR can reintroduce the stale band
   // in prose with no import edge back to this test (#11851).
@@ -498,6 +502,7 @@ export const ALWAYS_RUN_TESTS = [
 
 const DB_RISK_RULES = [
   /^scripts\/rehearsal-scratch-db(?:[.\/]|$)/i,
+  /^scripts\/generate-init-db-sql(?:[.\/]|$)/i,
   /^scripts\/lib\/migrationFiles(?:[.\/]|$)/i,
   /^scripts\/lib\/dbImage(?:[.\/]|$)/i,
   /^server\/lib\/databaseMaintenanceSchema(?:[.\/]|$)/i,
@@ -642,12 +647,11 @@ export const needsSlashdoSubmodule = (plan) => Boolean(
 //   diffs (macos-native; see its note).
 // Every pattern names ci.yml so a workflow edit proves the job still runs.
 export const PROMPT_HISTORY_GUARD = 'scripts/migrations/check-shipped-prompt-history.js';
-// The guard reads git history of data.reference/prompts/stages and imports the
-// migrations that declare prompt hashes. The whole migrations directory is
-// listed (not just today's declaring modules) so a diff that removes a
-// declaration still runs the guard. taskPromptDefaults and the snapshot
-// regenerator are the other half of a prompt-default bump.
-export const PROMPT_HISTORY_PATH_RE = /^(?:scripts\/migrations\/|data\.reference\/prompts\/|server\/services\/taskPromptDefaults(?:\/|\.js$)|scripts\/regen-prompt-integrity-snapshot(?:\.test)?\.js$|\.github\/workflows\/ci\.yml$)/;
+// The guard reads git history of data.reference/prompts against
+// data.reference/prompts/shipped-hashes.json, which the hash regenerator writes.
+// taskPromptDefaults and the snapshot regenerator are the other half of a
+// prompt-default bump.
+export const PROMPT_HISTORY_PATH_RE = /^(?:scripts\/migrations\/|data\.reference\/prompts\/|server\/services\/taskPromptDefaults(?:\/|\.js$)|scripts\/regen-(?:prompt-integrity-snapshot|shipped-prompt-hashes)(?:\.test)?\.js$|\.github\/workflows\/ci\.yml$)/;
 // The files the `linux-containment` job passes to `npm test --prefix server`.
 export const LINUX_CONTAINMENT_TESTS = [
   'autofixer/sandbox.verify.test.js',
@@ -703,8 +707,9 @@ export const MACOS_NATIVE_TESTS = [
   'server/lib/windowsAgentProcess.darwin.test.js',
 ];
 // The supervision path itself, the dependency manifests and Vitest harness the
-// job installs and loads, and ci.yml so a workflow edit proves the job runs.
-export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml)$/;
+// job installs and loads, and ci.yml plus the setup-server action it installs
+// through, so a workflow edit proves the job runs.
+export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml|\.github\/actions\/setup-server\/action\.yml)$/;
 
 /**
  * Repository-relative static import closure of `entries` in `cwd`, or null
@@ -725,18 +730,8 @@ const staticClosureOf = (entries, cwd) => {
   }
 };
 
-/** Static closure of the prompt-history guard and every migration it imports. */
-export function collectPromptHistoryInputs(files, cwd) {
-  try {
-    const declaring = files.filter((path) => path.startsWith('scripts/migrations/')
-      && !path.slice('scripts/migrations/'.length).includes('/')
-      && isNumberedMigrationFile(basenameOf(path))
-      && declaresPromptHashes(readFileSync(join(cwd, path), 'utf8')));
-    return staticClosureOf([PROMPT_HISTORY_GUARD, ...declaring], cwd);
-  } catch {
-    return null;
-  }
-}
+/** Static closure of the prompt-history guard. */
+export const collectPromptHistoryInputs = (cwd) => staticClosureOf([PROMPT_HISTORY_GUARD], cwd);
 
 /** Static closure of the linux-containment tests and their Vitest harness. */
 export const collectLinuxContainmentInputs = (cwd) => staticClosureOf(LINUX_CONTAINMENT_ENTRIES, cwd);
@@ -830,7 +825,7 @@ const featureDirectory = (path) => {
 // import graph; select their shared contract explicitly instead of running its
 // subprocesses on every unrelated or documentation-only change.
 const WORKSPACE_CACHE_COMMON_INPUTS = new Set([
-  '.github/workflows/ci.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
+  '.github/workflows/ci.yml', '.github/actions/setup-server/action.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
   'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
   'scripts/lib/vitestWatch.js', 'scripts/lib/testProcessAttribution.js', 'scripts/lib/testOwnedProcesses.js', 'scripts/lib/darwinTestProcesses.py',
   'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/workspaceTests.js',
@@ -851,6 +846,11 @@ const WORKSPACE_CACHE_CLIENT_INPUTS = new Set([
   'lib/portosAuthCore.js', 'server/lib/eidoverseProxyRoutes.js',
 ]);
 
+const ENSURE_DEPS_INPUTS = new Set([
+  'scripts/ensure-deps.js', 'update.sh', 'update.ps1',
+  'package-lock.json', 'client/package-lock.json', 'server/package-lock.json',
+]);
+
 export const structuralTestsFor = (changedFiles, trackedSet) => {
   const selected = [];
   const add = (path) => {
@@ -866,6 +866,11 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
     // The runner's client enumeration is pinned against `vitest list` from the client workspace, where the client job runs it.
     add('client/src/test/workspaceTests.test.js');
   }
+  // Behavioural temp-directory test: it imports ensure-deps.js (so the graph
+  // selects it for that file) but only reads the update scripts and lockfiles.
+  if (changedFiles.some((path) => ENSURE_DEPS_INPUTS.has(path))) {
+    add('scripts/ensure-deps.test.js');
+  }
   // The module-summary guards readdir-scan their directory instead of importing
   // it, so no import edge selects them for a newly added module.
   for (const dir of CATALOG_DIRS) {
@@ -880,6 +885,12 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
     add('server/lib/apiRouteGraph.test.js');
     add('server/lib/apiRouteParity.test.js');
     add('scripts/generate-prompt-stage-call-sites.test.js');
+  }
+  // The fresh-install schema check reads init-db.sql and its base file rather
+  // than importing them, so a hand edit to either would otherwise select only
+  // the DB suite, which never compares the file with its generator (#16092).
+  if (changedFiles.some((path) => /^server\/scripts\/init-db(?:\.base)?\.sql$/.test(path))) {
+    add('server/lib/db.ddlParity.test.js');
   }
   // The socket guard readdir-scans server/sockets/ rather than importing it, so
   // no import edge reaches it — a handler added there would otherwise only be
@@ -1751,7 +1762,7 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
   }
 
   // A forced-full run always runs every gated job, so it skips the walks.
-  const promptHistoryInputs = forceFull ? null : collectPromptHistoryInputs(dependencyFiles, cwd);
+  const promptHistoryInputs = forceFull ? null : collectPromptHistoryInputs(cwd);
   const linuxContainmentInputs = forceFull ? null : collectLinuxContainmentInputs(cwd);
   const supercolliderLiveInputs = forceFull ? null : collectSuperColliderLiveInputs(cwd);
   const dockerContainmentLiveInputs = forceFull ? null : collectDockerContainmentLiveInputs(cwd);

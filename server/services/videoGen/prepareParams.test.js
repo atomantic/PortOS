@@ -74,6 +74,7 @@ import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
 import { getTrack } from '../tracks/index.js';
 import { getSettings } from '../settings.js';
 import { listVideoModels, defaultVideoModelId, loadHistory } from './local.js';
+import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import {
   prepareVideoGenParams,
   validateVideoRetryParams,
@@ -935,6 +936,35 @@ describe('prepareVideoGenParams — fal end frame catalog check (#10700)', () =>
     );
     expect(posix(prepared.lastImagePath)).toMatch(/^\/mock\/uploads\/video-last-.+\.png$/);
     expect(prepared.uploadedTempPaths).toEqual([prepared.lastImagePath]);
+  });
+});
+
+describe('prepareVideoGenParams — fal reference images (#16118)', () => {
+  const SEEDANCE_REF = 'bytedance/seedance-2.5/reference-to-video';
+  const falSettings = () => ({ imageGen: { local: { pythonPath: '/usr/bin/python3' } }, videoGen: { fal: { apiKey: 'test-key' } } });
+
+  it('stages plain gallery references for a fal reference model, with no storyboard guidance', async () => {
+    getSettings.mockResolvedValueOnce(falSettings());
+    const prepared = await prepare({ backend: 'fal', falModelId: SEEDANCE_REF, mode: 'text', referenceImageFiles: ['sheet.png', 'place.png'] });
+    expect(prepared.referenceImagePaths.map(posix)).toEqual(['/mock/images/sheet.png', '/mock/images/place.png']);
+    expect(prepared.guidanceImagePath).toBeUndefined();
+    const params = HOSTED_VIDEO_SUBMISSIONS.fal.buildParams({ falModelId: SEEDANCE_REF }, prepared);
+    expect(params.clipReferenceLabels).toEqual([{ label: 'sheet.png' }, { label: 'place.png' }]);
+    expect(params.guidanceImagePath).toBeUndefined();
+  });
+
+  it("refuses references past the model's cap, counting a start frame", async () => {
+    getSettings.mockResolvedValueOnce(falSettings());
+    await expect(prepare({ backend: 'fal', falModelId: SEEDANCE_REF, mode: 'image', sourceImageFile: 'face.png',
+      referenceImageFiles: Array.from({ length: 30 }, (_, i) => `r${i}.png`) }))
+      .rejects.toMatchObject({ status: 400, message: expect.stringContaining('at most 30 reference images') });
+  });
+
+  it('refuses references for a fal model without them, naming the model', async () => {
+    getSettings.mockResolvedValueOnce(falSettings());
+    await expect(prepare({ backend: 'fal', falModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video', mode: 'image',
+      sourceImageFile: 'face.png', referenceImageFiles: ['sheet.png'] }))
+      .rejects.toMatchObject({ status: 400, code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY', message: expect.stringContaining('Hailuo') });
   });
 });
 

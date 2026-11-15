@@ -31,6 +31,7 @@ import { staticImportClosure } from '../server/lib/staticImportGraph.js';
 import { destroyGitSandbox, makeGitSandbox } from '../server/lib/gitTestRepo.js';
 import { readTestProcesses } from './lib/testOwnedProcesses.js';
 import { OWNER_FILE, STALE_ROOT_AGE_MS, sweepStaleRunRoots } from './lib/vitestStaleRunRoots.js';
+import { readCiJobs } from './lib/ciWorkflowJobs.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 import { buildCiTestPlan, collectPlanInputs } from './ci-test-plan.js';
 
@@ -616,7 +617,9 @@ it('rejects empty browser coverage except explicitly deferred smoke-only inputs'
 });
 
 describe('ci.yml shard wiring', () => {
-  const runners = Object.entries(workflowJobs(WORKFLOW)).filter(([, body]) => /(?:run|watch)-ci-tests\.js/.test(body));
+  // Composite actions expanded: these contracts hold for the steps GitHub runs.
+  const CI_JOBS = readCiJobs();
+  const runners = Object.entries(CI_JOBS).filter(([, body]) => /(?:run|watch)-ci-tests\.js/.test(body));
 
   it('builds every test runner matrix from the planner and hands each slice to the runner', () => {
     expect(runners.map(([id]) => id).sort()).toEqual(['browser', 'client', 'database', 'server', 'windows-server']);
@@ -635,7 +638,7 @@ describe('ci.yml shard wiring', () => {
   });
 
   it('memoizes the serial database job through the db scope', () => {
-    const body = workflowJobs(WORKFLOW).database;
+    const body = CI_JOBS.database;
     const start = body.indexOf('- name: Run DB-backed tests (portos_test)');
     const step = body.slice(start, body.indexOf('- name:', start + 1));
     expect(step).toContain('run: node scripts/run-ci-tests.js db');
@@ -647,7 +650,7 @@ describe('ci.yml shard wiring', () => {
   });
 
   it('runs the planner-selected browser suites on their own job with prerequisites required (#10312)', () => {
-    const body = workflowJobs(WORKFLOW).browser;
+    const body = CI_JOBS.browser;
     expect(body).toContain("if: needs.impact.outputs.browser_files != '[]'");
     const start = body.indexOf('- name: Run cross-workspace browser suites');
     expect(start).toBeGreaterThan(0);
@@ -667,7 +670,7 @@ describe('ci.yml shard wiring', () => {
   });
 
   it('uploads every failed synthetic template comparison without including arbitrary diagnostics', () => {
-    const body = workflowJobs(WORKFLOW).browser;
+    const body = CI_JOBS.browser;
     const start = body.indexOf('- name: Retain synthetic template parity pixels and media state');
     expect(start).toBeGreaterThan(0);
     const step = body.slice(start, body.indexOf('- name:', start + 1));
@@ -681,7 +684,7 @@ describe('ci.yml shard wiring', () => {
   });
 
   it('deduplicates only Linux browser ownership and runs PR browser suites as smoke', () => {
-    const jobs = workflowJobs(WORKFLOW);
+    const jobs = CI_JOBS;
     expect(jobs.server).toContain('PORTOS_CI_BROWSER_OWNER: unit');
     expect(jobs['windows-server']).not.toContain('PORTOS_CI_BROWSER_OWNER');
     expect(jobs.browser).toContain("github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full'");
@@ -709,7 +712,7 @@ describe('ci.yml shard wiring', () => {
     // lint-only diff from starting a test job; the `lint` job's own comment
     // says why it cannot simply move to a different shard. Both halves are
     // pinned here: no runner job invokes the linter, and lint is not a matrix.
-    const jobs = workflowJobs(WORKFLOW);
+    const jobs = CI_JOBS;
     for (const [id, body] of runners) expect(body, id).not.toContain('run-ci-lint.js');
     expect(jobs.lint).toBeTruthy();
     expect(jobs.lint).toContain('run: node scripts/run-ci-lint.js');

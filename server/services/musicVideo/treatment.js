@@ -924,3 +924,18 @@ export function remapTreatmentForClone(treatment, sceneIdMap, { includeGenerated
 export function scenesFingerprint(scenes) {
   return treatmentBasis({ scenes }).scenes;
 }
+
+/**
+ * Keep a treatment current across a change that only puts the same shots in
+ * time order (#16117): its `scenes` and `media` fingerprints hash by position.
+ * A fingerprint that was already stale on `before` stays stale.
+ */
+export function carryTreatmentThroughSceneOrder(before, after) {
+  const basis = after.treatment?.basis;
+  if (!basis || typeof basis !== 'object') return after;
+  const was = treatmentBasis(before);
+  const now = treatmentBasis(after);
+  const keys = ['scenes', 'media'].filter((key) => basis[key] === was[key] && was[key] !== now[key]);
+  if (!keys.length) return after;
+  return { ...after, treatment: { ...after.treatment, basis: { ...basis, ...Object.fromEntries(keys.map((key) => [key, now[key]])) } } };
+}

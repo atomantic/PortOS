@@ -136,6 +136,52 @@ describe('shot-card clip body validation', () => {
   });
 });
 
+describe('draft and final clip renders (#16136)', () => {
+  const tierProject = (videoSettings) => ({ id: 'mv-card', videoSettings, scenes: [
+    { sceneId: 'a', startSec: 0, endSec: 4, referenceImageId: 'a.png', prompt: 'The rider turns' },
+    { sceneId: 'b', startSec: 4, endSec: 8, referenceImageId: 'b.png', prompt: 'The rider waves' },
+  ] });
+  const sent = () => clipQueue.submit.mock.calls.map(([body]) => body);
+
+  it('renders each shot of a batch at the tier resolution and tags it for the take', async () => {
+    clipQueue.submit.mockClear();
+    const input = validateRequest(musicVideoSceneClipsRenderSchema, { sceneIds: ['a', 'b'], tier: 'draft' });
+    const result = await renderSceneClips(tierProject({ backend: 'higgsfield', higgsfieldResolution: '1080p' }), input);
+    expect(result.results.map((row) => row.ok)).toEqual([true, true]);
+    for (const body of sent()) {
+      expect(body.higgsfieldResolution).toBe('480p');
+      expect(body.musicVideo.tier).toBe('draft');
+      expect(body).not.toHaveProperty('tier');
+    }
+  });
+
+  it('honours the project ceiling, and a resolution the request names', async () => {
+    clipQueue.submit.mockClear();
+    const project = tierProject({ backend: 'fal', falModelId: 'bytedance/seedance-2.5/image-to-video', finalResolution: '720p' });
+    await renderSceneClips(project, { sceneId: 'a', tier: 'final' });
+    await renderSceneClips(project, { sceneId: 'a', tier: 'final', target: { higgsfieldResolution: '1080p', backend: 'higgsfield' } });
+    expect(sent()[0]).toMatchObject({ falResolution: '720p', musicVideo: { tier: 'final' } });
+    expect(sent()[1]).toMatchObject({ higgsfieldResolution: '1080p', musicVideo: { tier: 'final' } });
+  });
+
+  it('fills a prepared body only when it names no resolution, and leaves an untiered render unchanged', async () => {
+    clipQueue.submit.mockClear();
+    const project = tierProject({ backend: 'google' });
+    const body = { mode: 'image', sourceImageFile: 'a.png', prompt: 'The rider turns', backend: 'google', googleModelId: 'veo-3.1-generate-001', googleDuration: 4 };
+    await renderSceneClips(project, { sceneId: 'a', ...body, tier: 'final' });
+    await renderSceneClips(project, { sceneId: 'a', ...body, googleResolution: '720p', tier: 'final' });
+    await renderSceneClips(project, { sceneId: 'a', ...body });
+    expect(sent()[0]).toMatchObject({ googleResolution: '1080p', musicVideo: { tier: 'final' } });
+    expect(sent()[1]).toMatchObject({ googleResolution: '720p', musicVideo: { tier: 'final' } });
+    expect(sent()[2].googleResolution).toBeUndefined();
+    expect(sent()[2].musicVideo.tier).toBeUndefined();
+  });
+
+  it('refuses an unknown tier', () => {
+    expect(() => validateRequest(musicVideoSceneClipRenderSchema, { tier: 'preview' })).toThrow();
+  });
+});
+
 describe('shot-card frame references (#15583)', () => {
   it('uses an explicitly supplied start-frame source as the leading conditioning reference without requiring fromFrame', async () => {
     const project = { id: 'mv-card', scenes: [{ sceneId: 's1', framePrompt: 'A rider at dawn', referenceImageId: 'selected.png' }] };

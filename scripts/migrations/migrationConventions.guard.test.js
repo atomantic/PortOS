@@ -24,6 +24,12 @@
  *      `purge: true` from source text (`sourceDeclaresPurge`) so a fresh
  *      install's first boot does not import every pending module up front;
  *      every shipped migration's module must agree with that probe.
+ *
+ *   4. No log-only registration stub (#16093). Additive DDL is created
+ *      idempotently by `ensureSchema` at boot (server/lib/db/schema/), so a
+ *      migration whose `up()` only logs costs a number, an applied-list entry
+ *      on every install and a boot log line for no effect. Stubs already
+ *      shipped stay on `FROZEN_STUBS` — never delete or rename them.
  */
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -37,6 +43,15 @@ const HERE = resolve(fileURLToPath(import.meta.url), '..');
 // First migration number the conventions apply to. Raise it only when a
 // migration below it is retired from the tree — never to exempt a new one.
 export const GUARDED_FROM = 429;
+
+// Log-only stubs shipped before rule 4. Applied on installs already, so they
+// stay as they are; this list only ever shrinks if one is formally retired.
+const FROZEN_STUBS = new Set([
+  '434-catalog-media-reference-library.js',
+  '435-storyboards-table.js',
+  '436-storyboard-recipes-table.js',
+  '456-reality-style-snapshot-limit.js',
+]);
 
 const LIB_EXPORTS = new Set(Object.keys(lib));
 
@@ -70,6 +85,29 @@ const SERVICE_IMPORT = /(?:\bfrom\s+|\bimport\s*\(\s*)['"][^'"]*\/server\/servic
 
 const importsServerServices = (source) => SERVICE_IMPORT.test(stripComments(source));
 
+/** Text between the braces of the first `up(...) {` method, or null for a factory-built migration. */
+const upBody = (source) => {
+  const code = stripComments(source);
+  const head = /\bup\s*\([^)]*\)\s*\{/.exec(code);
+  if (!head) return null;
+  let depth = 1;
+  let i = head.index + head[0].length;
+  const start = i;
+  for (; i < code.length && depth > 0; i += 1) {
+    if (code[i] === '{') depth += 1;
+    else if (code[i] === '}') depth -= 1;
+  }
+  return code.slice(start, i - 1);
+};
+
+/** True when `up()` does nothing but log: no `await` and no call once console statements are removed. */
+const isLogOnlyStub = (source) => {
+  const body = upBody(source);
+  if (body === null) return false;
+  const rest = body.replace(/console\.\w+\([^\n]*\);?/g, '');
+  return !/\bawait\b/.test(rest) && !/[\w$]\s*\(/.test(rest);
+};
+
 const migrationNumber = (file) => Number.parseInt(file.slice(0, 3), 10);
 
 const migrationFiles = () => readdirSync(HERE)
@@ -97,6 +135,29 @@ describe('new-migration conventions', () => {
       .filter(([, source]) => importsServerServices(source))
       .map(([file]) => `${file}: imports server/services — use _lib.js, server/lib, or a frozen copy of the transform`);
     expect(offenders).toEqual([]);
+  });
+
+  it('no new migration is a log-only stub — ensureSchema creates additive tables', () => {
+    const offenders = guardedSources()
+      .filter(([file, source]) => !FROZEN_STUBS.has(file) && isLogOnlyStub(source))
+      .map(([file]) => `${file}: up() only logs — additive DDL belongs in ensureSchema (server/lib/db/schema/), no migration file needed`);
+    expect(offenders).toEqual([]);
+  });
+
+  it('every frozen stub still exists and still is a stub', () => {
+    for (const file of FROZEN_STUBS) {
+      expect({ file, stub: isLogOnlyStub(readFileSync(resolve(HERE, file), 'utf8')) }).toEqual({ file, stub: true });
+    }
+  });
+
+  describe('log-only stub matching', () => {
+    it('flags a logging or empty up() and passes real work', () => {
+      expect(isLogOnlyStub("export default { async up() { console.log('x: created by ensureSchema'); } };")).toBe(true);
+      expect(isLogOnlyStub('export default { async up() {} };')).toBe(true);
+      expect(isLogOnlyStub("export default { async up({ rootDir }) { const d = await readJsonOrNull(rootDir); console.log('ok'); } };")).toBe(false);
+      expect(isLogOnlyStub('export default { up: (ctx) => other.up(ctx) };')).toBe(false);
+      expect(isLogOnlyStub("export default makeSeedMigration({ id: 'x' });")).toBe(false);
+    });
   });
 
   it('every shipped migration agrees with the static purge probe', async () => {

@@ -17,6 +17,8 @@ const DOC_FILES = [
   'client/src/AGENTS.md',
   'client/src/components/dashboard/AGENTS.md',
   'server/lib/aiToolkit/AGENTS.md',
+  '.claude/skills/portos-add-module/SKILL.md',
+  '.claude/skills/portos-ship/SKILL.md',
   'server/lib/README.md',
   'client/src/lib/README.md',
   'client/src/hooks/README.md',

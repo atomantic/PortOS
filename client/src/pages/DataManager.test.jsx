@@ -328,8 +328,8 @@ describe('DataManager busy categories (#3342)', () => {
   });
 });
 
-// `/data` is an `isFullWidthRoute`, so Layout's `<main>` is a bare
-// `relative overflow-hidden`: this page must supply exactly ONE scroll region
+// `/data` renders in FullWidthMain (App.jsx), so its `<main>` is a bare
+// `relative overflow-clip-safe`: this page must supply exactly ONE scroll region
 // and all of its own padding. Before #4145 the route was NOT full-width, so the
 // page's shell nested inside a padded, scrolling `<main>` — two scrollbars and
 // doubled padding. Assert the shape so a revert on either side fails here.

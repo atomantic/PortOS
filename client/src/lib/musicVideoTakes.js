@@ -17,6 +17,8 @@
  * `legacy` take rather than hiding it.
  */
 
+import { sequenceTakeSelectionPatch } from '../../../server/lib/musicVideoSequenceTake.js';
+
 // `endImage` (#11173): the optional style-break end frame a fal clip ends on.
 export const TAKE_SLOT = Object.freeze({ image: 'referenceImageId', video: 'videoHistoryId', endImage: 'endImageId' });
 
@@ -78,10 +80,14 @@ export function takeProvenance(take) {
 // (server/services/musicVideo/takes.js) will write, applied before the reply so
 // the buttons answer at once. The reply replaces them with the saved scene.
 
-/** Scene patch for Use: the take fills its slot, a rejected take comes back as a candidate. */
+/**
+ * Scene patch for Use: the take fills its slot, a rejected take comes back as a
+ * candidate, and a sequence take brings its in-point (the server's own rule).
+ */
 export function selectTakePatch(scene, take) {
   const takes = Array.isArray(scene?.takes) ? scene.takes : [];
   return {
+    ...sequenceTakeSelectionPatch(scene, take),
     [TAKE_SLOT[take.kind]]: take.assetId,
     takes: takes.map((t) => (t.takeId === take.takeId && t.status === 'rejected' ? { ...t, status: 'candidate' } : t)),
   };

@@ -1,3 +1,4 @@
+import { assertHeaderSafeKey } from '../lib/headerSafeKey.js';
 import { assertRunwayCatalogModel } from './runwayModelCatalog.js';
 /**
  * Runway developer API — the shared task transport for image and video backends.
@@ -38,7 +39,7 @@ export function resolveRunwayApiKey(settings) {
 }
 
 const headers = (apiKey, json = false) => ({
-  Authorization: `Bearer ${apiKey}`,
+  Authorization: `Bearer ${assertHeaderSafeKey(apiKey, 'Runway')}`,
   'X-Runway-Version': RUNWAY_API_VERSION,
   ...(json ? { 'Content-Type': 'application/json' } : {}),
 });

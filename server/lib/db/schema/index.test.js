@@ -14,7 +14,7 @@
  * of the contract, modeled on server/lib/editorial/checkInfraBarrel.test.js.
  *
  * Out of scope: DDL statement text and ordering (schema.test.js and
- * db.ddlParity.test.js own those).
+ * the generated init-db.sql checks in db.ddlParity.test.js own those).
  */
 
 import { describe, it, expect } from 'vitest';

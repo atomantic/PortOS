@@ -19,6 +19,7 @@
 
 import { higgsfieldShotRequestFields } from '../../../server/lib/higgsfieldVideoModels.js';
 import { googleShotRequestFields } from '../../../server/lib/googleVideoModels.js';
+import { renderTierVideoSettings } from '../../../server/lib/musicVideoRenderTier.js';
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { isOutsideMusicVideoReference, musicVideoClipConditioningReferences, musicVideoConditioningReferences, musicVideoLinkedCastIds, musicVideoSceneCastIds } from '../../../server/lib/musicVideoConditioning.js';
 import { preMusicClipSound } from '../../../server/lib/musicVideoColdOpen.js';
@@ -408,7 +409,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * Returns a promise that always resolves to `{ ok }` — see generateFrame's
    * doc comment. `revisionId` (optional) is the revision hook's kickoff tag (#9011).
    */
-  const generateSceneVideo = (scene, { revisionId, onJob, target = null, card = null } = {}) => {
+  const generateSceneVideo = (scene, { revisionId, onJob, target = null, card = null, tier = null } = {}) => {
     if (!scene.referenceImageId) { toast.error('Generate a reference frame first'); return Promise.resolve({ ok: false }); }
     const problem = shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
@@ -418,7 +419,9 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const prompt = card ? card.prompt : authoredShotPrompt(scene);
     if (!prompt) { toast.error('Add a shot prompt first'); return Promise.resolve({ ok: false }); }
     // `target` renders this one shot elsewhere (a scene card's Render on pick) without changing the saved setting.
-    const settings = target ? { ...videoSettings.settings, ...target } : videoSettings.settings;
+    // `tier` (#16136) renders a draft or a final: the tier's resolution on the shot's model, unless `target` names one.
+    const pinned = target ? { ...videoSettings.settings, ...target } : videoSettings.settings;
+    const settings = tier ? renderTierVideoSettings(pinned.backend, { scene, scenes: project?.scenes, videoSettings: videoSettings.settings, override: target, tier }) : pinned;
     const { detectedAudioReactiveLora } = videoSettings;
     const audioReactiveSelected = target ? settings.backend === 'local' && settings.generationMode === 'audioReactive' : videoSettings.audioReactiveSelected;
     const videoBlockedReason = target && videoSettings.blockedReasonFor ? videoSettings.blockedReasonFor(settings) : videoSettings.videoBlockedReason;
@@ -472,6 +475,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const renderKey = videoLane.startScene(scene.sceneId, { label: videoRenderLabel(settings) });
     return renderMusicVideoSceneClip(project.id, scene.sceneId, {
       prompt,
+      ...(tier ? { tier } : {}),
       ...(settings.backend ? { backend: settings.backend } : {}),
       ...(settings.backend === 'grok'
         // Request the 6/10s clip that COVERS this shot; the saved pin is only

@@ -3,6 +3,7 @@
  */
 
 import { CAST_SETS_IMAGE_EDIT_MAX } from './musicVideoCastSetsImageEdit.js';
+import { MUSIC_VIDEO_RENDER_TIERS } from './musicVideoRenderTier.js';
 import {
   ROUTE_MAP_FEATURE_KINDS, ROUTE_MAP_FEATURE_LABEL_MAX, ROUTE_MAP_FEATURE_SIDES, ROUTE_MAP_FEATURES_MAX, ROUTE_MAP_HEADINGS, ROUTE_MAP_MAX, ROUTE_MAP_NAME_MAX, ROUTE_MAP_NOTE_MAX, ROUTE_MAP_STOPS_MAX, ROUTE_MAP_TRAVEL_MAX,
 } from './musicVideoRouteMapLimits.js';
@@ -184,6 +185,9 @@ export const musicVideoConceptSchema = z.object({
 // opening it on a sync peer) cannot silently change provider/model. `modelId`
 // is optional because Grok does not consume it; the video-gen route performs
 // the authoritative installed-model validation when a local render starts.
+// A tier ceiling is a resolution label every catalog ranks ('480p', '768P', '2K', '4k').
+const musicVideoTierResolution = z.string().trim().regex(/^(\d{3,4}p|\d(\.\d)?k)$/i, 'Use a resolution such as 480p, 1080p or 4k');
+
 export const musicVideoVideoSettingsSchema = z.object({
   renderPool: z.object({
     mode: z.enum(['local', 'peers', 'both']),
@@ -238,6 +242,11 @@ export const musicVideoVideoSettingsSchema = z.object({
   runwayModelId: z.string().min(1).max(64).nullable().optional(),
   runwayDuration: z.number().min(1).max(60).nullable().optional(),
   runwayResolution: z.string().min(1).max(16).nullable().optional(),
+  // Draft and final clip renders (#16136, lib/musicVideoRenderTier.js): the
+  // highest resolution each tier may use on a hosted model with resolution
+  // tiers. null/omitted = the model's lowest tier (draft) / its highest (final).
+  draftResolution: musicVideoTierResolution.nullable().optional(),
+  finalResolution: musicVideoTierResolution.nullable().optional(),
   generationMode: z.enum(['image', 'audioReactive', 'suppliedAudio', 'ltxReferences']).optional(),
   audioReactiveLora: z.string().max(255).regex(/^[^/\\]+\.safetensors$/i).nullable().optional(),
   audioReactiveScale: z.number().min(0).max(2).optional(),
@@ -1180,6 +1189,16 @@ export const musicVideoTreatmentCompileSchema = z.object({
 export const musicVideoSequenceRenderSchema = z.object({
   sceneIds: z.array(z.string().min(1).max(200)).min(2).max(30),
 });
+
+// #16128: one hosted take across 2-6 consecutive board shots. `prompt` replaces
+// the composed prompt and is sent as written; `dryRun` returns the plan and price only.
+export const musicVideoSequenceTakeSchema = z.object({
+  sceneIds: z.array(z.string().min(1).max(200)).min(2).max(6),
+  modelId: z.string().trim().min(1).max(200).optional(),
+  resolution: z.string().trim().min(1).max(20).optional(),
+  prompt: z.string().max(20000).optional(),
+  dryRun: z.boolean().optional(),
+}).strict();
 
 // `baseRevision` matches compile and patch. `revision` stays accepted so an older
 // client still applies. Sending both with different numbers is a conflict.
@@ -2431,6 +2450,9 @@ const musicVideoClipTargetSchema = z.object({
 
 export const musicVideoSceneClipRenderSchema = z.object({
   revisionId: z.string().min(1).max(200).optional(),
+  // Draft or final clip (#16136): the shot's model renders at the project's tier
+  // resolution unless the request names one; the take records the tier.
+  tier: z.enum(MUSIC_VIDEO_RENDER_TIERS).optional(),
   prompt: z.string().max(32000).optional(),
   card: musicVideoClipCardSchema.optional(),
   target: musicVideoClipTargetSchema.optional(),

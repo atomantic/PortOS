@@ -5,7 +5,7 @@
  *   - `runPromptMigrationTests` — hash-driven prompt-replace migrations. A
  *     per-migration `*.test.js` collapses to a `describe` + a single
  *     `runPromptMigrationTests({ migration, applyMigration, ACCEPTED_OLD_MD5,
- *     NEW_SHIPPED_MD5, prefix })` call; six standard cases fire inside it.
+ *     NEW_SHIPPED_MD5, prefix })` call; five standard cases fire inside it.
  *   - `runSeededProviderTierMigrationTests` — seeded-provider-tier bumps built
  *     with `makeSeededProviderTierMigration`. Every fixture is derived from the
  *     migration's own `targets` table, so a bump's test is a `describe` + one
@@ -92,7 +92,9 @@ export function runPromptMigrationTests({
     },
   );
 
-  it('skips files already at the new hash (idempotent re-run)', async () => {
+  // The live reference body is current even after a later template edit
+  // leaves NEW_SHIPPED_MD5 behind (#16090), so this also covers drift.
+  it('skips files already at the live reference body (idempotent re-run)', async () => {
     for (const filename of Object.keys(NEW_SHIPPED_MD5)) {
       writeFileSync(join(stagesDir, filename), sampleBody(filename, subdir));
     }
@@ -102,15 +104,6 @@ export function runPromptMigrationTests({
       alreadyCurrent: Object.keys(NEW_SHIPPED_MD5).length,
       skipped: 0,
     });
-  });
-
-  it('NEW_SHIPPED_MD5 matches the live data.reference body (drift catch)', () => {
-    // Without this assertion, a future template edit that forgets to bump
-    // NEW_SHIPPED_MD5 would make the migration classify the sample-shaped
-    // file as "customized" and silently skip the upgrade.
-    for (const filename of Object.keys(NEW_SHIPPED_MD5)) {
-      expect(md5(sampleBody(filename, subdir))).toBe(NEW_SHIPPED_MD5[filename]);
-    }
   });
 
   it('upgrades when on-disk hash matches an accepted-old entry (synthetic fixture)', async () => {

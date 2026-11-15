@@ -63,7 +63,7 @@ describe('resolveRecentNavEntries', () => {
   });
 
   it('resolves a stored path whose page has moved to where it lives now', () => {
-    const moved = [...commands, { id: 'nav.openworld', path: '/openworld', label: 'OpenWorld', previousPaths: ['/city'] }];
+    const moved = [...commands, { id: 'nav.openworld', path: '/openworld', label: 'OpenWorld', previousPaths: ['/city', '/city/*'] }];
     expect(resolveRecentNavEntries(['/city/settings'], moved))
       .toEqual([{ ...moved[4], path: '/openworld/settings' }]);
   });
@@ -81,10 +81,13 @@ describe('migrateLegacyNavPath', () => {
   // Shaped like the real manifest: `previousPaths` is declared on the entry that
   // moved (server/lib/navManifest.js) and ships whole in the palette payload.
   const commands = [
-    { id: 'nav.eidoverse', path: '/eidoverse', label: 'Eidoverse', previousPaths: ['/openworld', '/city'], preservePreviousPathSuffix: false },
+    { id: 'nav.eidoverse', path: '/eidoverse', label: 'Eidoverse', previousPaths: ['/openworld', '/openworld/*', '/city', '/city/*'], preservePreviousPathSuffix: false },
     { id: 'nav.sprites', path: '/sprites', label: 'Sprites', previousPaths: ['/media/sprites', '/media/sprites/:id'] },
-    { id: 'nav.universes', path: '/universes', label: 'Universes', previousPaths: ['/media/universe-builder', '/universe-builder'] },
+    { id: 'nav.universes', path: '/universes', label: 'Universes', previousPaths: ['/media/universe-builder', '/media/universe-builder/:universeId', '/universe-builder', '/universe-builder/:universeId'] },
     { id: 'nav.cityscape', path: '/cityscape', label: 'Cityscape' },
+    { id: 'nav.ai.presets', path: '/ai/presets', label: 'Presets', previousPaths: ['/ai'] },
+    { id: 'nav.ai.harnesses', path: '/ai/harnesses', label: 'Harnesses' },
+    { id: 'nav.catalog.settings', path: '/catalog?settings=1', label: 'Catalog Types', previousPaths: ['/settings/catalog'] },
   ];
 
   it('maps a moved page onto its current path', () => {
@@ -92,7 +95,7 @@ describe('migrateLegacyNavPath', () => {
     expect(migrateLegacyNavPath('/media/sprites', commands)).toBe('/sprites');
   });
 
-  it('carries the trailing path across, including a subtree the manifest never spells out', () => {
+  it('carries the trailing path across, and a declared `/*` covers a retired subtree', () => {
     // Record-detail moves retain the selection. Retired OpenWorld subroutes do
     // not exist in Eidoverse, so its manifest explicitly collapses the suffix.
     expect(migrateLegacyNavPath('/media/sprites/s-1', commands)).toBe('/sprites/s-1');
@@ -102,6 +105,17 @@ describe('migrateLegacyNavPath', () => {
 
   it('is segment-anchored, so a sibling route that merely shares a prefix is untouched', () => {
     expect(migrateLegacyNavPath('/cityscape', commands)).toBe('/cityscape');
+  });
+
+  // Matches the way the router's generated redirect does: `/ai` was one page, so a
+  // stored pin on the live `/ai/harnesses` must not become `/ai/presets/harnesses`.
+  it('never rewrites a live child of a paramless previous path', () => {
+    expect(migrateLegacyNavPath('/ai', commands)).toBe('/ai/presets');
+    expect(migrateLegacyNavPath('/ai/harnesses', commands)).toBe('/ai/harnesses');
+  });
+
+  it('merges a stored query with the destination query', () => {
+    expect(migrateLegacyNavPath('/settings/catalog?tab=types', commands)).toBe('/catalog?settings=1&tab=types');
   });
 
   it('prefers the longest matching previous path', () => {

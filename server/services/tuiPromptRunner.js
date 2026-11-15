@@ -56,13 +56,7 @@ import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
-  PASTE_MARKER_POLL_MS,
   countPasteMarkers,
-  isPasteCommitted,
-  PASTE_TO_ENTER_MIN_DELAY_MS,
-  PASTE_TO_ENTER_FALLBACK_MS,
-  PASTE_COMMIT_PATIENCE_MS,
-  scheduleSubmitEnters,
   SELF_CLEARING_RESUBMIT_POLL_MS,
   PASTE_DEADLINE_MS,
   TUI_INPUT_READY_DEADLINE_MS,
@@ -81,9 +75,9 @@ import {
   createPromptSubmissionGate,
   screenShowsInFlightChrome,
   SUBMIT_KEY,
-  UNSUBMITTED_PROMPT_ENTER_MAX_ATTEMPTS,
 } from '../lib/tuiHandshake.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
+import { createPasteSubmitDriver } from '../lib/tuiPasteSubmitDriver.js';
 import { isCodexCommand } from '../lib/codex.js';
 import { isClaudeCommand, isOpencodeCommand } from '../lib/providerModels.js';
 import { applyCredentialBootstrap, needsProcessGroup, processGroupKillable } from '../lib/credentialBootstrap.js';
@@ -297,16 +291,13 @@ ${prompt}`;
 
   console.log(`📟 Executing TUI: ${command} ${args.join(' ')} (${wrappedPrompt.length} chars via paste, response→${responseFilePath})`);
 
-  // Markers already present in the (wrapped) prompt itself — a transcript-analysis
-  // task can echo `[Pasted text #N]` back into the post-paste stream. The fast
-  // path must wait for the TUI's OWN marker (the count to EXCEED this), so an
-  // echoed marker doesn't fire the submit-Enter mid-reflow (issue #1229 review).
-  // STRIP first so a pasted RAW transcript's cursor-positioned marker (counts as 0
-  // unstripped) is counted the same way the stripped post-paste buffer is.
-  const promptMarkerCount = countPasteMarkers(stripAnsi(wrappedPrompt));
   // The paste chip can render and every submit Enter still be ignored, leaving
   // the prompt sitting in the composer (#12769). Shared with the agent path.
-  const promptGate = createPromptSubmissionGate({ promptMarkerCount, workEvidenceMs: ONE_SHOT_PROMPT_WORK_EVIDENCE_MS });
+  // The marker count is taken on the STRIPPED prompt, the way it echoes back.
+  const promptGate = createPromptSubmissionGate({
+    promptMarkerCount: countPasteMarkers(stripAnsi(wrappedPrompt)),
+    workEvidenceMs: ONE_SHOT_PROMPT_WORK_EVIDENCE_MS,
+  });
 
   // Shared composition (provider.envVars + OpenCode models map + PWD pin +
   // CLAUDECODE strip) — see buildCliChildEnv. The PWD pin matters here because
@@ -434,13 +425,6 @@ ${prompt}`;
   let rawBuffer = '';
   let promptSentAt = null;
   let promptSubmittedAt = null;
-  // ANSI-stripped post-paste accumulator for paste-marker detection. The marker
-  // renders with absolute-column cursor moves between glyphs, so it only matches
-  // after stripping — testing the raw stream never matched and left the fast
-  // path dead (issue #1229). Lives only during the paste→Enter window; nulled
-  // when detection resolves or the run finalizes.
-  let postPasteStripped = null;
-  let postPasteOutputAt = 0;
   let firstOutputAt = null;
   let lastOutputAt = startTime;
   let firstResponseAt = null;
@@ -509,9 +493,10 @@ ${prompt}`;
   };
 
   let readyTimer = null;
-  let pasteEnterTimer = null;
-  let submitEnterTimer = null;
-  let unsubmittedPromptTimer = null;
+  // Paste → commit → verify/retry → submit Enters → unsubmitted-Enter retry,
+  // shared with the agent path (lib/tuiPasteSubmitDriver.js). Created with the
+  // run's finish() below; owns every paste/Enter timer.
+  let pasteDriver = null;
   let idleWatchTimer = null;
   let responseFileWatchTimer = null;
   let hardTimeoutTimer = null;
@@ -533,13 +518,10 @@ ${prompt}`;
   };
 
   const cleanupTimers = () => {
-    // Stop the post-paste accumulator from growing on any chunk that lands
-    // between finalize and the PTY kill (onData here has no finalized guard).
-    postPasteStripped = null;
+    // Also releases the post-paste accumulator, so a chunk landing between
+    // finalize and the PTY kill (onData has no finalized guard) cannot grow it.
+    pasteDriver?.cancel();
     if (readyTimer) { clearInterval(readyTimer); readyTimer = null; }
-    if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
-    if (submitEnterTimer) { clearInterval(submitEnterTimer); submitEnterTimer = null; }
-    if (unsubmittedPromptTimer) { clearInterval(unsubmittedPromptTimer); unsubmittedPromptTimer = null; }
     if (idleWatchTimer) { clearInterval(idleWatchTimer); idleWatchTimer = null; }
     if (responseFileWatchTimer) { clearInterval(responseFileWatchTimer); responseFileWatchTimer = null; }
     if (hardTimeoutTimer) { clearTimeout(hardTimeoutTimer); hardTimeoutTimer = null; }
@@ -651,6 +633,35 @@ ${prompt}`;
       }
     };
 
+    pasteDriver = createPasteSubmitDriver({
+      prompt: wrappedPrompt,
+      command,
+      // node-pty's write takes only the data; the promptSubmission hint is the
+      // shell session layer's, which this direct PTY bypasses.
+      write: (keys) => ptyProcess.write(keys),
+      // pasteToSession schedules its own submit Enters and returns their
+      // handle, or false once the PTY has been unregistered.
+      paste: (text, { label }) => pasteToSession(runId, text, { label: `[tuiRun ${runId}] ${label}` }),
+      isFinalized: () => finalized,
+      onFail: (reason, error) => finish({ success: false, exitCode: 1, reason, error }),
+      onSubmitted: () => { promptSubmittedAt = Date.now(); },
+      promptGate,
+      getLastOutputAt: () => lastOutputAt,
+      settleRule: isCodexCommand(command) ? 'codex' : 'default',
+      unsubmittedPollMs: UNSUBMITTED_PROMPT_POLL_MS,
+      logError: (message) => console.error(`${message} (TUI run ${runId})`),
+      onEvent: (event) => {
+        if (event.type === 'pasted') {
+          const attempt = event.attempt > 1 ? ` [attempt ${event.attempt}]` : '';
+          console.log(`📟 Pasted prompt into TUI ${command} (${event.reason})${attempt}`);
+        } else if (event.type === 'paste-retrying') {
+          console.log(`⚠️ TUI run ${runId} paste not confirmed — retrying in ${event.delayMs}ms${event.mcpBootActive ? ' (MCP servers booting)' : ''}`);
+        } else if (event.type === 'unsubmitted-enter') {
+          console.log(`🔁 TUI run ${runId} prompt still unsubmitted in the composer — pressed Enter (attempt ${event.attempt}/${event.max})`);
+        }
+      },
+    });
+
     // A fallback signal means "this provider can't finish the job" — but the
     // model may have ALREADY finished it. responseFileWatchTimer only finalizes
     // after two 1s polls agree on the file size, so there is a ≥1s window where
@@ -703,10 +714,7 @@ ${prompt}`;
       inputReady.observe(text, stripped);
       if (stripped) {
         promptGate.observe(stripped, now);
-        if (postPasteStripped !== null) {
-          postPasteStripped += stripped;
-          postPasteOutputAt = now;
-        }
+        pasteDriver.ingest(stripped);
         outputBuffer += stripped;
         if (outputBuffer.length > OUTPUT_BUFFER_HEADROOM) {
           outputBuffer = outputBuffer.slice(-OUTPUT_BUFFER_CAP);
@@ -749,12 +757,7 @@ ${prompt}`;
                 promptSubmittedAt = Date.now();
                 let resubmitted = false;
                 try {
-                  if (submitEnterTimer) clearInterval(submitEnterTimer);
-                  submitEnterTimer = null;
-                  submitEnterTimer = pasteToSession(runId, wrappedPrompt, {
-                    label: `[tuiRun ${runId}] Claude low-priority continuation`,
-                  }) || null;
-                  resubmitted = !!submitEnterTimer;
+                  resubmitted = pasteDriver.resubmit({ label: 'Claude low-priority continuation' });
                 } catch (err) {
                   sessionLimit.message = `Claude Code low-priority mode was enabled, but the task could not be re-submitted: ${err?.message || err}`;
                 }
@@ -942,17 +945,7 @@ ${prompt}`;
     const sendPrompt = (reason) => {
       if (finalized || promptSentAt) return;
       promptSentAt = Date.now();
-      // Start capturing stripped post-paste output BEFORE the paste write so the
-      // marker watcher sees every response chunk.
-      postPasteStripped = '';
-      postPasteOutputAt = Date.now();
-      try {
-        ptyProcess.write(`\x1b[200~${wrappedPrompt}\x1b[201~`);
-      } catch (err) {
-        finish({ success: false, exitCode: 1, error: `Failed to write prompt: ${err.message}`, reason: 'write-failed' });
-        return;
-      }
-      console.log(`📟 Pasted prompt into TUI ${command} (${reason})`);
+      if (!pasteDriver.start(reason)) return;
 
       // Watch for the response file from paste onward — it's the model's
       // authoritative "done" signal and must complete the run INDEPENDENTLY of
@@ -976,66 +969,6 @@ ${prompt}`;
           console.error(`❌ TUI run ${runId} response-file poll failed: ${err?.message || err}`);
         }
       }, 1000);
-
-      const pasteSentAt = Date.now();
-      let pasteSettleStartedAt = null;
-      pasteEnterTimer = setInterval(() => {
-        if (finalized) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; postPasteStripped = null; return; }
-        const elapsed = Date.now() - pasteSentAt;
-        // Shared with the agent spawner's poll so the two can't drift on what
-        // counts as a commit — without a verifiable prefix this is the marker
-        // count plus Claude's/OpenCode's collapsed-chip shape.
-        const markerSeen = isPasteCommitted(postPasteStripped || '', { promptMarkerCount });
-        // Receipt can precede the end of a Windows paste burst. The existing
-        // settle interval belongs after its latest output, even on the fallback.
-        const settled = !isCodexCommand(command)
-          || Date.now() - postPasteOutputAt >= PASTE_TO_ENTER_MIN_DELAY_MS;
-        if (!settled && (markerSeen || elapsed >= PASTE_TO_ENTER_FALLBACK_MS)) {
-          pasteSettleStartedAt ??= Date.now();
-          // The fixed cold-start patience also bounds a continuously repainting
-          // composer. Refuse submission instead of forcing a blind Enter.
-          if (Date.now() - pasteSettleStartedAt >= PASTE_COMMIT_PATIENCE_MS) {
-            finish({ success: false, exitCode: 1, reason: 'prompt-not-submitted',
-              error: 'Codex paste output never settled; no submission Enter was sent.' });
-            return;
-          }
-        }
-        if (settled && ((markerSeen && elapsed >= PASTE_TO_ENTER_MIN_DELAY_MS)
-          || elapsed >= PASTE_TO_ENTER_FALLBACK_MS)) {
-          clearInterval(pasteEnterTimer);
-          pasteEnterTimer = null;
-          // The commit buffer holds the chip: a TUI that ignores the Enter may
-          // never repaint it.
-          promptGate.noteInput(Date.now(), postPasteStripped || '');
-          postPasteStripped = null;
-          // Submit with repeated Enters — a single `\r` can be swallowed while
-          // the TUI is still reflowing a large paste, stranding the prompt
-          // unsent. Tracked in submitEnterTimer so finish()'s cleanupTimers()
-          // cancels pending retries if the run ends first.
-          submitEnterTimer = scheduleSubmitEnters(
-            () => {
-              promptGate.noteInput(Date.now());
-              try { ptyProcess.write(SUBMIT_KEY); } catch { /* PTY may have already exited */ }
-            },
-            () => finalized
-          );
-          promptSubmittedAt = Date.now();
-          unsubmittedPromptTimer = setInterval(() => {
-            if (finalized || promptGate.worked) {
-              clearInterval(unsubmittedPromptTimer);
-              unsubmittedPromptTimer = null;
-              return;
-            }
-            const now = Date.now();
-            const enter = promptGate.takeEnter(now, lastOutputAt);
-            if (!enter) return;
-            try {
-              ptyProcess.write(SUBMIT_KEY);
-              console.log(`🔁 TUI run ${runId} prompt still unsubmitted in the composer — pressed Enter (attempt ${enter}/${UNSUBMITTED_PROMPT_ENTER_MAX_ATTEMPTS})`);
-            } catch { /* PTY may have already exited */ }
-          }, UNSUBMITTED_PROMPT_POLL_MS);
-        }
-      }, PASTE_MARKER_POLL_MS);
     };
 
     const dismissStartupDialog = (keys, dialog) => {
@@ -1057,8 +990,8 @@ ${prompt}`;
 
     /**
      * Re-deliver the prompt while a self-clearing provider signal's window is
-     * open. Mirrors `resubmitAfterSignal` on the long-running agent path — see
-     * that copy (and SELF_CLEARING_RESUBMIT_INTERVAL_MS) for why a passive wait
+     * open. The agent path's `resubmitAfterSignal` (and
+     * SELF_CLEARING_RESUBMIT_INTERVAL_MS) explain why a passive wait
      * cannot clear agy's eligibility banner: it is the REJECTION of the
      * submission, so the prompt is gone, the composer is empty, and nothing will
      * generate until something re-asks.
@@ -1069,15 +1002,9 @@ ${prompt}`;
       if (finalized || !promptSentAt) return;
       const attempt = selfClearingGate.takeResubmit(Date.now());
       if (!attempt) return;
-      // Overwriting a live handle would leak the previous attempt's Enter
-      // interval past cleanupTimers. `pasteToSession` returns false once the PTY
-      // has been unregistered, which is also the "don't bother" answer here —
-      // the deadline timer still owns the fail-over.
-      if (submitEnterTimer) clearInterval(submitEnterTimer);
-      const submitted = pasteToSession(runId, wrappedPrompt, {
-        label: `[tuiRun ${runId}] provider-handshake resubmit`,
-      });
-      submitEnterTimer = submitted || null;
+      // `false` once the PTY has been unregistered, which is also the "don't
+      // bother" answer here — the deadline timer still owns the fail-over.
+      const submitted = pasteDriver.resubmit();
       // Only claim the re-submission that actually went out — `false` here means
       // the PTY is already gone, and a log line saying otherwise would send a
       // post-mortem looking for a paste the provider never received.

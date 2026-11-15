@@ -103,7 +103,7 @@ export const TEST_MEMO_TOOLS = Object.freeze(['chrome', 'ffmpeg', 'python']);
  * fail closed on their own. Naming them keeps the reason explicit.
  */
 export const TEST_MEMO_NEVER = Object.freeze({
-  'scripts/setup-data-drift.test.js': 'sweeps every migration export against prompt-hash baselines',
+  'scripts/migrations/shippedPromptHashes.guard.test.js': 'compares shipped-hashes.json against the reference prompts and the merge base',
   'scripts/direct-invocation-drift.test.js': 'scans every tracked .js file',
   'scripts/repo-scan-guards.test.js': 'scans every tracked test file',
   'server/lib/importScoping.test.js': 'base-relative import-growth comparison against git history',

@@ -132,7 +132,7 @@ describe('performance speaker save boundary', () => {
     }
     render(<Harness />);
     const input = screen.getByLabelText('Speaker / singer');
-    const generate = screen.getByRole('button', { name: 'Render' });
+    const generate = screen.getByRole('button', { name: /^Render final/ });
     expect(generate.disabled).toBe(false);
     fireEvent.change(input, { target: { value: 'Example Singer' } });
     expect(generate.disabled).toBe(true);
@@ -188,7 +188,7 @@ describe('failed video retry behind the speaker save gate (#11040)', () => {
     render(<Harness onSave={onSave} onGenerateVideo={onGenerateVideo} lastFailure={videoFailure} />);
     const input = screen.getByLabelText('Speaker / singer');
     const retry = screen.getByRole('button', { name: 'Retry' });
-    const generate = screen.getByRole('button', { name: 'Render' });
+    const generate = screen.getByRole('button', { name: /^Render final/ });
     expect(retry.disabled).toBe(false);
     fireEvent.change(input, { target: { value: 'Example Singer' } });
     expect([generate.disabled, retry.disabled]).toEqual([true, true]);
@@ -481,18 +481,20 @@ describe('scene timing and provider presentation (#11046)', () => {
     expect(plan()).toContain('song 0:08–0:13');
     expect(plan()).toContain('shot starts 1.52s into the take');
     expect(plan()).toContain('est. $0.81 (5.05s at 1080P)');
-    expect(screen.getByRole('button', { name: 'Render' }).title).toContain('est. $0.81');
+    // A tiered lip-sync model offers draft and final, each at its own tier and price (#16136).
+    expect(screen.getByTestId('render-draft').textContent).toMatch(/^Render draft480P · \$\d/);
+    expect(screen.getByTestId('render-final').textContent).toMatch(/^Render final2K · \$\d/);
     rerender(<SceneCard {...props} scene={{ ...performance, startSec: 0, endSec: 6 }} lipSyncBackend="fal"
       falVideoSettings={{ falLipSyncResolution: '768P' }} songDurationSec={null} />);
     expect(plan()).toContain('song 0:00–0:06');
     expect(plan()).not.toContain('shot starts');
     expect(plan()).toContain('est. $0.48 (6s at 768P)');
-    expect(screen.getByRole('button', { name: 'Render' }).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: /^Render final/ }).disabled).toBe(false);
     rerender(<SceneCard {...props} scene={{ ...performance, startSec: 0, endSec: 6 }} lipSyncBackend="fal" />);
-    expect(screen.getByRole('button', { name: 'Render' }).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: /^Render final/ }).disabled).toBe(false);
     rerender(<SceneCard {...props} scene={performance} lipSyncBackend="fal" songDurationSec={11} />);
     expect(screen.getByText('The performance shot runs past the end of the song.')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Render' }).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: /^Render final/ }).disabled).toBe(true);
   });
 
   it('blocks unsupported performance generation and keeps the blocker on the generation control', () => {
@@ -1000,8 +1002,8 @@ describe('Whole sung line', () => {
     expect(within(screen.getByTestId('render-inputs')).getByText('· Song 0:39.2–0:45.6')).toBeTruthy();
     expect(plan()).toContain('shot starts 1.30s into the take');
     expect(plan()).toContain('est. $1.02 (6.4s at 1080P)');
-    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
-    expect(onGenerateVideo).toHaveBeenCalledWith(scene, expect.objectContaining({ card: expect.objectContaining({ wholeLine: true }) }));
+    fireEvent.click(screen.getByRole('button', { name: /^Render final/ }));
+    expect(onGenerateVideo).toHaveBeenCalledWith(scene, expect.objectContaining({ tier: 'final', card: expect.objectContaining({ wholeLine: true }) }));
   });
 });
 
@@ -1647,4 +1649,43 @@ it('saves the shared Done marker and rolls back failed saves without losing othe
   expect(screen.getByRole('checkbox', { name: 'Done' })).toBeChecked();
   rerender(<Harness locked />);
   expect(screen.getByRole('checkbox', { name: 'Done' })).toBeDisabled();
+});
+
+// Uniquely catches the card losing its draft/final choice, sending a render without its tier,
+// pricing both tiers alike, offering tiers on an untiered lane, or a take hiding its tier (#16136).
+describe('Render draft and Render final', () => {
+  const scene = { sceneId: 's1', prompt: 'A boat turns', referenceImageId: 'start.png', startSec: 0, endSec: 4,
+    videoHistoryId: 'clip-d', takes: [
+      { takeId: 't1', kind: 'image', assetId: 'start.png', status: 'selected' },
+      { takeId: 'v1', kind: 'video', assetId: 'clip-d', status: 'selected', tier: 'draft' },
+      { takeId: 'v2', kind: 'video', assetId: 'clip-f', status: 'candidate', tier: 'final' },
+      { takeId: 'v3', kind: 'video', assetId: 'clip-x', status: 'candidate' },
+    ] };
+  const usd = (el) => Number(el.textContent.match(/\$([\d.]+)/)[1]);
+
+  it('offers both tiers with their prices on a tiered hosted model and sends the one picked', () => {
+    const onGenerateVideo = vi.fn();
+    render(<SceneCard scene={scene} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()} onGenerateVideo={onGenerateVideo}
+      lipSyncBackend="fal" falVideoSettings={{ backend: 'fal', falModelId: 'bytedance/seedance-2.5/image-to-video' }} />);
+    const draft = screen.getByTestId('render-draft');
+    const final = screen.getByTestId('render-final');
+    expect(draft.textContent).toContain('480p');
+    expect(final.textContent).toContain('1080p');
+    expect(usd(final)).toBeGreaterThan(usd(draft));
+    expect(screen.queryByRole('button', { name: /^Render( again)?$/ })).toBeNull();
+    fireEvent.click(draft);
+    expect(onGenerateVideo).toHaveBeenLastCalledWith(scene, expect.objectContaining({ tier: 'draft' }));
+    fireEvent.click(final);
+    expect(onGenerateVideo).toHaveBeenLastCalledWith(scene, expect.objectContaining({ tier: 'final' }));
+    expect(screen.getAllByTestId('take-tier').map((el) => el.textContent)).toEqual(['Draft', 'Final']);
+  });
+
+  it('keeps the single Render on a local model', () => {
+    const onGenerateVideo = vi.fn();
+    render(<SceneCard scene={scene} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()} onGenerateVideo={onGenerateVideo}
+      lipSyncBackend="local" falVideoSettings={{ backend: 'local' }} />);
+    expect(screen.queryByTestId('render-draft')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
+    expect(onGenerateVideo.mock.calls[0][1]).not.toHaveProperty('tier');
+  });
 });

@@ -1,7 +1,7 @@
 // Core base-schema DDL — memory sync columns + the versioned db-migration
 // tracker. Extracted from ensureSchemaImpl() in server/lib/db.js (#2832) with
 // zero behavior change; every statement is idempotent and runs on every boot.
-// Parity-locked against server/scripts/init-db.sql by db.ddlParity.test.js.
+// server/scripts/init-db.sql is generated from these modules (#16092).
 
 // Machine-local replay receipts for snapshot database restores (#9725). The
 // restore writes one row for its unique operation id INSIDE the replay
@@ -97,7 +97,7 @@ END$$`,
 
 // Existing installs already have the trigger; replacing its function at boot
 // upgrades the memory clock without rebuilding tables or rewriting records.
-// Keep this body identical to the fresh-install definition in init-db.sql.
+// The trigger itself is created once, by init-db.base.sql.
 export const memoryTimestampDdl = [
     `CREATE OR REPLACE FUNCTION update_memory_timestamp()
 RETURNS TRIGGER AS $$
@@ -177,9 +177,9 @@ export const coreDdl = [
     ...memoryTimestampDdl,
     // Versioned DB-migration tracker (#1029). Records which ordered migration
     // files in server/scripts/db-migrations/ have been applied on THIS install.
-    // It's part of the base schema (created here AND in init-db.sql, parity-
-    // locked by db.ddlParity.test.js) so the runner — which executes
-    // AFTER ensureSchema() at boot — can always read it. ensureSchema()'s
+    // It's part of the base schema (so also in the generated init-db.sql) so
+    // the runner — which executes AFTER ensureSchema() at boot — can always
+    // read it. ensureSchema()'s
     // additive CREATE/ADD IF NOT EXISTS gates handle fresh-install schema; the
     // runner handles DELTAS that those gates can't express (renames, type
     // changes, data transforms, embedding-dimension changes).

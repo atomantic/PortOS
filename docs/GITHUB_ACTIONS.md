@@ -73,6 +73,37 @@ unknown artifacts, or wide diffs.
 PRs into `release` skip the planner entirely and force the full suite: that PR
 is the single gate a release ships behind.
 
+### Composite actions
+
+Setup blocks that several `ci.yml` jobs share live once, with their rationale,
+as composite actions under `.github/actions/`:
+
+| Action | Used by | Holds |
+|--------|---------|-------|
+| `setup-server` | `server`, `database`, `browser`, `windows-server`, `macos-native` | Node 26, the cached and stamped `server/node_modules`, the trusted rebuild, the Vitest transform cache |
+| `setup-client` | `client`, `lint`, `browser` | Node 26 (unless `setup-node: 'false'`), the cached `client/node_modules` |
+| `test-memo` | `server`, `client`, `database`, `browser`, `windows-server` | The memo restore and its key lineage; jobs save with `steps.test-memo.outputs.key` |
+| `diff-base` | `server`, `client`, `windows-server` | `scripts/ci-base-sha.js` (the `impact` job wraps the same script in its stage diagnostics) |
+| `db-tools` | `database`, `browser` | The APT download cache and `scripts/ci-install-db-tools.sh` for a given `pg-major` |
+| `candidate-evidence` | the five test jobs | The frozen release-candidate evidence upload |
+
+Every `run:` step in an action names `shell: bash`, as composite actions
+require. On `windows-latest` that replaces the pwsh default for the server
+install and stamp check too; the trusted rebuild was already pinned to bash for
+the fail-fast reason under "Reusing the server install". Local actions resolve
+from each job's own checkout, so `release.yml`'s `workflow_call` of `ci.yml`
+runs the actions from the commit it checked out.
+
+The workflow-contract tests read the jobs through
+`scripts/lib/ciWorkflowJobs.js`, which expands each local action inline with
+its caller's `with:` inputs, so they assert the steps GitHub runs. Its reads are
+anchored at `import.meta.url`, which makes `ci.yml` and `.github/actions/` test
+memo inputs for every test that uses it. actionlint validates each caller's
+inputs against the action's metadata while it lints `ci.yml`;
+`scripts/github-actions-pinned.test.js` applies the SHA-pin contract to the
+action files, and any change under `.github/actions/` makes the impact plan
+full, Windows included.
+
 ### Hidden-content gate
 
 `npm run pregate` runs this same scanner before client and server lint or tests, using its resolved
@@ -206,7 +237,13 @@ The early guards use the same always-run and diff-selected structural selection
 as CI and `--guards-only`. They run before broad tests and resource probes.
 Successful guards are reused within this invocation only when the working tree,
 index, HEAD and refs remain unchanged; otherwise the broad runner executes them
-again. The receipt records guard outcomes and reuse proofs. Persistent test
+again. The receipt records guard outcomes, reuse proofs and per-file guard
+durations (`fileDurations`). A guard file over 3s fails the stage by name
+(`scripts/lib/guardBudget.js`; five known-slow scanners are held at a ceiling
+until sped up, and enforcement is skipped while host load exceeds the core
+count, since Vitest wall time is then meaningless). `scripts/ensure-deps.test.js`
+is not always-run: it is selected by changes to `ensure-deps.js`, `update.sh`,
+`update.ps1` and the lockfiles. Persistent test
 memo rules, required stages and worker caps remain the same. Downgraded full
 plans and `--guards-only` run the guard selection once; `--full` runs it before
 the full suites.
@@ -256,9 +293,13 @@ four workers made its async rendering assertions timing-dependent under CI
 contention. File-level parallelism stays on; the DB suite already serializes
 files because those tests share one Postgres.
 
-Each test job restores Vite/Vitest transform artifacts
-(`node_modules/.vite`, `node_modules/.vitest`) **after** the install — `npm ci`
-wipes `node_modules`, so a restore ordered ahead of it is lost.
+Each test job restores Vite/Vitest transform artifacts from checkout-owned
+`.cache/` paths (`server/.cache/vitest`, `server/.cache/vitest-db`,
+`client/.cache/vitest`), outside `node_modules`, which `npm ci` wipes and
+worktrees may share. The server key hashes the lockfile, both server Vitest
+configs and `scripts/vitestCiPool.js`, plus a per-job/per-shard suffix from the
+`setup-server` caller so parallel saves never race; restore-keys keep it warm
+across a lockfile bump.
 `scripts/run-ci-tests.js`
 writes Vitest wall time to the job summary so later runs can be compared
 against the pre-change full-suite job wall on `main` (2026-08-16, run
@@ -381,7 +422,8 @@ on its first poll).
 
 ### Reusing the client install
 
-Four jobs install `client/` — the three client test shards and `lint`.
+Every client test shard, `lint` and `browser` install `client/` through the
+`setup-client` action.
 `setup-node`'s `cache: npm` only preserves the tarball cache, so `npm ci` still
 wipes and repopulates a 393 MB `client/node_modules` on each. `Cache client
 node_modules` keys exactly on `client/package-lock.json`, `client/package.json`
@@ -392,8 +434,8 @@ nothing for this workspace, so a restored tree is usable as-is.
 
 ### Reusing the server install
 
-Four jobs install the server workspace — `server`, `database`, `browser`,
-and `windows-server`. `setup-node`'s `cache: npm` only preserves `~/.npm`, the
+Five jobs install the server workspace through the `setup-server` action —
+`server`, `database`, `browser`, `windows-server` and `macos-native`. `setup-node`'s `cache: npm` only preserves `~/.npm`, the
 tarball cache, so `npm ci` still wipes and repopulates a ~570 MB
 `node_modules` on each of them. Two changes cut that.
 
@@ -426,7 +468,8 @@ contract; the parts that are not obvious:
   `NODE_MODULE_VERSION`. A cache hit reads it back and reinstalls on any
   mismatch.
 
-  That step is pinned to `shell: bash`, which is load-bearing rather than
+  That step is pinned to `shell: bash` (composite actions require a shell on
+  every step, but this one must be bash), which is load-bearing rather than
   stylistic. `windows-server` would otherwise default to pwsh, where a
   *native* command's non-zero exit neither throws nor stops the block
   (`$PSNativeCommandUseErrorActionPreference` is false) and only the last
@@ -485,8 +528,8 @@ a cache written by a pull request is visible only to that branch — so the 09:1
 UTC schedule is what seeds the entries on the default branch, the one scope every
 PR branch can read. A PR that changes the lockfile misses by design.
 
-Two entries exist per key state (Linux, shared by `server`, `database` and `browser`, plus
-Windows) at roughly 570 MB each, against GitHub's 10 GB per-repo cache budget.
+Three entries exist per key state (Linux, shared by `server`, `database` and `browser`,
+plus Windows and macOS) at roughly 570 MB each, against GitHub's 10 GB per-repo cache budget.
 Eviction is LRU, so the constantly-read `main` entries outlive the PR-scoped ones
 — but a burst of lockfile-churning PRs can still push out the transform caches
 and `~/.npm`. If that starts showing up as unexplained cold runs, the dependency
@@ -592,13 +635,14 @@ The selected work is split across parallel jobs:
   its `directInvocation.js` import, its drift test or `ci.yml` changed, since nothing else can change its answer; non-PR runs
   always run it.
 - **Shipped prompt history** — the one job with a full-history clone; it checks
-  that every stage-prompt body ever shipped is accepted by a prompt migration.
+  that every prompt body ever shipped is current or retired in
+  `data.reference/prompts/shipped-hashes.json`.
   On a pull request it runs only when the impact planner's `prompt_history`
   output is true: the diff touches `scripts/migrations/`,
-  `data.reference/prompts/`, `server/services/taskPromptDefaults`, the
-  integrity-snapshot regenerator, `ci.yml`, or any module the guard or a
-  hash-declaring migration statically imports (`PROMPT_HISTORY_PATH_RE` and
-  `collectPromptHistoryInputs()` in `scripts/ci-test-plan.js`). Non-PR runs
+  `data.reference/prompts/`, `server/services/taskPromptDefaults`, either
+  prompt-hash regenerator, `ci.yml`, or any module the guard statically
+  imports (`PROMPT_HISTORY_PATH_RE` and `collectPromptHistoryInputs()` in
+  `scripts/ci-test-plan.js`). Non-PR runs
   and pull requests into `release` always run it, and `npm run pregate` runs
   it locally when selected.
 - **Linux worker containment** — runs `LINUX_CONTAINMENT_TESTS` against real
@@ -982,8 +1026,9 @@ every file lands in exactly one shard whatever each shard's store holds;
 Vitest itself is never given `--shard`.
 
 **CI seeding.** The server, client, browser and Windows jobs restore
-`${{ runner.temp }}/portos-test-memo` with `actions/cache/restore` under a
-per-job, per-shard key prefix (`test-memo-<os>-<arch>-<job>-<shard>of<n>-`).
+`${{ runner.temp }}/portos-test-memo` through the `test-memo` action
+(`actions/cache/restore`) under a per-job, per-shard key prefix
+(`test-memo-<os>-<arch>-<job>-<shard>of<n>-`).
 Server, client and Windows restores prefer that partition, then fall back to
 the newest memo from any shard of the same OS, architecture and job. Trusted
 full runs never seed a scoped `1of1` lineage, so an exact-partition-only lookup
@@ -1207,6 +1252,9 @@ successor run".
   (`server/lib/apiRouteGraph.test.js`, `server/lib/apiRouteParity.test.js`,
   `scripts/generate-prompt-stage-call-sites.test.js`): they read the tree
   rather than importing what they scan, so no import edge reaches them (#5898).
+- A change to `server/scripts/init-db.sql` or `init-db.base.sql` adds
+  `server/lib/db.ddlParity.test.js`, which fails when the generated file is
+  stale (#16092).
 - A `scripts/*.py` sidecar selects every test that names a python script
   (`git grep`), in `files` mode, and falls back to the full suite when none do
   — see "Python sidecar scripts" above.
@@ -1398,7 +1446,8 @@ in the root AGENTS.md; combined-tree guards remain available for investigation.
 
 ## Adapting for Sub-Projects
 
-1. Copy `.github/workflows/ci.yml` and `.github/workflows/release.yml`
+1. Copy `.github/workflows/ci.yml`, `.github/workflows/release.yml` and the
+   composite actions under `.github/actions/`
 2. Update installation and build commands for your project structure
 3. For monorepos, add package.json update steps for each workspace
 4. Update the changelog file path pattern if different

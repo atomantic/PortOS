@@ -151,10 +151,12 @@ export function sceneRenderReady(scene, { layered = false, scenes = null } = {})
 // the clip that many frames a second faster (or slower) on the 24 fps grid, and
 // `offsetFrames` slides it against the song (positive starts that many frames
 // into the clip, negative holds its first frame that long). Both are applied
-// at playback and render, never by writing another copy of the clip.
+// at playback and render, never by writing another copy of the clip. A shot
+// playing its window of a sequence take (#16128) starts up to a take's length in,
+// so the forward offset reaches the longest clip a shot keeps (60s).
 export const CLIP_TIMING_FPS = 24;
 export const CLIP_SPEED_FPS_RANGE = Object.freeze({ min: -18, max: 48 });
-export const CLIP_OFFSET_FRAMES_RANGE = Object.freeze({ min: -240, max: 240 });
+export const CLIP_OFFSET_FRAMES_RANGE = Object.freeze({ min: -240, max: 60 * 24 });
 const whole = (value, { min, max }) => (Number.isInteger(value) ? Math.min(max, Math.max(min, value)) : 0);
 /** How fast a shot's clip plays: 1 is as rendered, 26/24 is two frames a second faster. */
 export const clipSpeedRate = (scene) => (CLIP_TIMING_FPS + whole(scene?.speedFps, CLIP_SPEED_FPS_RANGE)) / CLIP_TIMING_FPS;

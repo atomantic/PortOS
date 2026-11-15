@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { existsSync, readdirSync, readFileSync, rmdirSync } from 'fs';
+import { existsSync, readdirSync, rmdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-import { md5, buildPromptDriftTables } from './migrations/_lib.js';
+import { inspectInstalledPrompts } from './migrations/shippedPromptHashes.js';
 import { seedDataDir } from './lib/seedDataDir.js';
 import { mergeJsonStarterTargets } from './lib/mergeJsonStarter.js';
 import { rewriteAppsPortosRoot } from './lib/rewriteAppsPortosRoot.js';
@@ -79,96 +79,28 @@ mergeJsonStarterTargets({
   ledgerPath: join(dataDir, 'setup-data-seeded.json'),
 });
 
-// Drift detection — warn when a data.reference/prompts/{stages,_partials}/*.md
-// differs from the installed copy. Only fires on existing installs (fresh
-// installs already got a full copy above). Prompt templates drift when a PortOS
-// update adds new template variables (e.g. {{lengthTargets.*}}) that existing
-// installs won't pick up because setup-data.js only copies *missing* files.
-//
-// The drift tables are NOT hand-mirrored here — they are swept from each
-// migration's exported `ACCEPTED_OLD_MD5` / `NEW_SHIPPED_MD5` (+ optional
-// `DRIFT_SUBDIRS`) constants, so the migration that actually performs the
-// auto-update is the single source of truth. `buildPromptDriftTables` merges
-// each file's lineage (union of accepted-old + intermediate-new hashes; the
-// highest-numbered migration's new hash is the current shipped baseline) and
-// returns per-subdir `{ oldMap, newMap, files }` tables. Only the files
-// managed by a migration are checked, so prompts with no migration counterpart
-// (e.g. cd-evaluate.md) never produce misleading warnings.
-const driftTables = await buildPromptDriftTables(join(__dirname, 'migrations'));
-const emptyDriftTable = () => ({ oldMap: {}, newMap: {}, files: [] });
-const stageTable   = driftTables.stages    || emptyDriftTable();
-const partialTable = driftTables._partials || emptyDriftTable();
-
-// Walk one directory's worth of shipped prompt files against a hash table
-// and partition them into auto-updatable (still on a known old hash) vs.
-// customized (hash matches neither old nor new). Used twice — once for
-// stage prompts, once for partial fragments.
-const collectDrift = ({ sampleSubdir, dataSubdir, files, oldMap, newMap }) => {
-  const sampleSubpath = join(referenceDir, ...sampleSubdir);
-  const dataSubpath   = join(dataDir,   ...dataSubdir);
-  if (!existsSync(sampleSubpath) || !existsSync(dataSubpath)) {
-    return { autoUpdatable: [], customized: [] };
-  }
-  const autoUpdatable = [];
-  const customized    = [];
-  for (const f of files) {
-    const dataPath = join(dataSubpath, f);
-    // No data.reference twin → the prompt was renamed/retired upstream (e.g.
-    // pipeline-tv-script.md → pipeline-teleplay.md); there's nothing to
-    // auto-update *to*, so skip rather than warn about a phantom drift.
-    if (!existsSync(join(sampleSubpath, f))) continue;
-    if (!existsSync(dataPath)) continue;
-    const dataMd5 = md5(readFileSync(dataPath, 'utf8'));
-    if (dataMd5 === newMap[f]) continue;
-    const oldExpected = oldMap[f];
-    const oldHashes = Array.isArray(oldExpected) ? oldExpected : [oldExpected];
-    if (oldHashes.includes(dataMd5)) {
-      autoUpdatable.push(f);
-    } else {
-      customized.push(f);
-    }
-  }
-  return { autoUpdatable, customized };
-};
-
-const stageDrift = collectDrift({
-  sampleSubdir: ['prompts', 'stages'],
-  dataSubdir:   ['prompts', 'stages'],
-  files: stageTable.files,
-  oldMap: stageTable.oldMap,
-  newMap: stageTable.newMap,
-});
-const partialDrift = collectDrift({
-  sampleSubdir: ['prompts', '_partials'],
-  dataSubdir:   ['prompts', '_partials'],
-  files: partialTable.files,
-  oldMap: partialTable.oldMap,
-  newMap: partialTable.newMap,
-});
-
-const autoUpdatable = [
-  ...stageDrift.autoUpdatable.map((f) => ({ file: f, relDir: 'data/prompts/stages' })),
-  ...partialDrift.autoUpdatable.map((f) => ({ file: f, relDir: 'data/prompts/_partials' })),
-];
-const customized = [
-  ...stageDrift.customized.map((f) => ({ file: f, relDir: 'data/prompts/stages', referenceDir: 'data.reference/prompts/stages' })),
-  ...partialDrift.customized.map((f) => ({ file: f, relDir: 'data/prompts/_partials', referenceDir: 'data.reference/prompts/_partials' })),
-];
+// Drift detection: classify every installed shipped prompt against
+// data.reference/prompts/shipped-hashes.json. An untouched older shipped body
+// is upgraded by the reconciler at the end of the next migration run; a body
+// matching no shipped hash is the user's edit and is never overwritten.
+const drift = await inspectInstalledPrompts(rootDir);
+const autoUpdatable = drift.filter(({ state }) => state === 'retired');
+const customized = drift.filter(({ state }) => state === 'customized');
 
 if (autoUpdatable.length > 0) {
   console.warn(
-    `\n⚠️  ${autoUpdatable.length} pipeline prompt(s) have a pending migration — run \`npm run migrations\` to auto-update:\n` +
-    autoUpdatable.map(({ file, relDir }) => `   • ${relDir}/${file}`).join('\n') + '\n',
+    `\n⚠️  ${autoUpdatable.length} prompt(s) will be auto-updated by the next \`npm run migrations\` (or server start):\n` +
+    autoUpdatable.map(({ key }) => `   • data/prompts/${key}`).join('\n') + '\n',
   );
 }
 
 if (customized.length > 0) {
   console.warn(
-    `\n⚠️  ${customized.length} pipeline prompt(s) are customized and cannot be auto-updated.\n` +
-    `   Manually merge the new template variables into each file:\n` +
-    customized.map(({ file, relDir, referenceDir: sd }) =>
-      `   • ${relDir}/${file}\n` +
-      `     Compare with: ${sd}/${file}`,
+    `\n⚠️  ${customized.length} prompt(s) are customized and cannot be auto-updated.\n` +
+    `   Manually merge the new template changes into each file:\n` +
+    customized.map(({ key }) =>
+      `   • data/prompts/${key}\n` +
+      `     Compare with: data.reference/prompts/${key}`,
     ).join('\n') + '\n',
   );
 }

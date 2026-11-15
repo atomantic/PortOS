@@ -68,3 +68,21 @@ describe('LTX 2.5 References generation mode (#15482)', () => {
     expect(screen.getByRole('group', { name: 'LTX 2.5 References adapter' }).textContent).toMatch(/Available/);
   });
 });
+
+// Uniquely catches the draft/final ceilings missing from a tiered backend, shown on an untiered one, or saved to the wrong field (#16136).
+describe('draft and final clip resolutions', () => {
+  it('offers the model tiers on a tiered hosted backend and saves each ceiling', () => {
+    const change = vi.fn();
+    render(<VideoRenderSettings videoSettings={{ ...base, settings: { backend: 'higgsfield' }, change }} />);
+    expect(screen.getByLabelText('Draft clip resolution').textContent).toContain('Draft: lowest (480p)');
+    expect(screen.getByLabelText('Final clip resolution').textContent).toContain('Final: highest (1080p)');
+    fireEvent.change(screen.getByLabelText('Draft clip resolution'), { target: { value: '720p' } });
+    fireEvent.change(screen.getByLabelText('Final clip resolution'), { target: { value: '' } });
+    expect(change.mock.calls).toEqual([[{ draftResolution: '720p' }], [{ finalResolution: null }]]);
+  });
+
+  it('shows no tier choice on a local backend', () => {
+    render(<VideoRenderSettings videoSettings={base} />);
+    expect(screen.queryByLabelText('Draft clip resolution')).toBeNull();
+  });
+});

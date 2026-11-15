@@ -1,6 +1,11 @@
 /**
  * `LOCAL_LLM_BACKENDS` (id/label/lucide icon for Ollama + LM Studio) and `localLlmBackendLabel(id)`.
  *
+ * `LOCAL_LLM_BACKENDS` (id/label/lucide icon for Ollama + LM Studio) and `localLlmBackendLabel(id)`.
+ * The two backends PortOS keeps a model catalog for, shared by the Runtimes view's backend cards and
+ * the Model Library's backend picker so a third backend is added in one place. Exported under
+ * qualified names because the barrel is flat and `BACKENDS`/`labelFor` are too generic to claim there.
+ *
  * The two backends PortOS keeps a model catalog for, shared by the Runtimes view's backend cards and
  * the Model Library's backend picker so a third backend is added in one place. The qualified names
  * keep generic `BACKENDS` / `labelFor` identifiers out of call sites.

@@ -1,5 +1,4 @@
 import MaintenanceBanner from './MaintenanceBanner.jsx';
-import PageErrorBoundary from './PageErrorBoundary';
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import useFocusTrap from '../hooks/useFocusTrap.js';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router';
@@ -57,7 +56,6 @@ import {
   SECTIONS_AFTER_GOALS,
   SECTIONS_BELOW_MORE,
 } from '../lib/navPresentation.js';
-import { isFullWidthRoute } from '../lib/layoutRoutes.js';
 import { PORTS } from '../lib/ports.js';
 import { getNavCommandForPath, getSectionNavGroups, getSectionNavTabForPath, NAV_COMMANDS } from '../../../server/lib/navManifest.js';
 import { useSidebarApps } from '../hooks/useSidebarApps.js';
@@ -278,7 +276,6 @@ export default function Layout() {
   const [desktopNav, setDesktopNav] = useState(() => window.matchMedia('(min-width: 1024px)').matches);
   const sidebarRef = useRef(null);
   const menuButtonRef = useRef(null);
-  const mainRef = useRef(null);
   const mobileNavActive = mobileOpen && !desktopNav;
   useFocusTrap(mobileNavActive, sidebarRef);
   useEffect(() => {
@@ -455,7 +452,10 @@ export default function Layout() {
       const children = item.children.filter((child) => isFeatureEnabled(child.feature));
       if (children.length === item.children.length) return [item];
       const navigable = item.dynamic || children.some((child) => child.to || child.href);
-      return navigable ? [{ ...item, children }] : [];
+      const groups = item.groups
+        ?.map((group) => ({ ...group, children: group.children.filter((child) => isFeatureEnabled(child.feature)) }))
+        .filter((group) => group.children.length > 0);
+      return navigable ? [{ ...item, children, ...(groups ? { groups } : {}) }] : [];
     });
 
     return gatedItems.map((item) => {
@@ -833,7 +833,7 @@ export default function Layout() {
       {/* Skip to main content link for keyboard users */}
       <a
         href="#main-content"
-        onClick={() => mainRef.current?.focus()}
+        onClick={() => document.getElementById('main-content')?.focus()}
         className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-port-accent focus:text-white focus:rounded-lg focus:outline-hidden"
       >
         Skip to main content
@@ -1157,17 +1157,9 @@ export default function Layout() {
         <PasswordRiskWarning />
         <MaintenanceBanner />
 
-        {/* Main content */}
-        {(() => {
-          const isFullWidth = isFullWidthRoute(location.pathname);
-          return (
-            <main ref={mainRef} id="main-content" tabIndex={-1} className={`focus:outline-none flex-1 min-h-0 print:overflow-visible print:min-h-0 ${isFullWidth ? 'relative overflow-clip-safe' : 'overflow-auto p-4 md:p-6'}`}>
-              <PageErrorBoundary>
-                <Outlet />
-              </PageErrorBoundary>
-            </main>
-          );
-        })()}
+        {/* Main content — the matched route's shell (components/PageShell.jsx)
+            renders <main>, so the shell is declared where the route is. */}
+        <Outlet />
       </div>
       {/* Cmd+K search overlay — mounted in layout so it's available on every page */}
       <ActionActivityBar />

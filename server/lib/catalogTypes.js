@@ -10,21 +10,17 @@
  * Single source of truth for the catalog's ingredient types. Every place that
  * used to hard-code the six types (`catalogValidation.js` Zod enum,
  * `catalogExtraction.js` light-shape sanitizer, `catalogDB.js` ID prefix +
- * type guard, the `db.js` / init-db.sql CHECK constraint + FTS field set, and
+ * type guard, the schema modules' FTS field set, and
  * the three client surfaces) now derives from this one list.
  *
  * Adding a new type becomes: one registry entry here, one editor layout in
  * `client/src/lib/catalogTypes.js` (which PROJECTS its UI registry from this
- * one), and one migration that loosens the CHECK constraint. The validation enum, extraction
+ * one). The validation enum, extraction
  * prompt slot, ID prefix, and FTS field set all pick the new type up
  * automatically.
  *
- * NOTE on the CHECK constraint: this registry SOURCES the allowed values for
- * the `catalog_ingredients.type` CHECK in db.js, but the DROP/re-ADD of the
- * constraint itself is the gated [catalog-type-table-vs-check] PLAN item.
- * Today the CHECK still lists the six types literally in init-db.sql + db.js —
- * `INGREDIENT_TYPE_IDS` is what those literals must equal (asserted by
- * `db.ddlParity.test.js`).
+ * `catalog_ingredients.type` carries no CHECK constraint: valid types are
+ * gated here, at the app layer (`db.ddlParity.test.js` forbids a hardcoded one).
  *
  * Per-type `payloadSchemaVersion` + `payloadUpgraders`: the JSONB `payload`
  * carries `payload.schemaVersion` stamped at create time (see
@@ -387,7 +383,7 @@ export function ingredientIdPrefix(id) {
 /**
  * Ordered, de-duplicated payload field set folded into the weighted FTS
  * column. Today only `character` declares `ftsFields` (matching the v2 search
- * expansion); the union here is what `db.js` / `init-db.sql` must index.
+ * expansion); the union here is what the catalog schema module must index.
  */
 export const FTS_PAYLOAD_FIELDS = Object.freeze((() => {
   const out = [];

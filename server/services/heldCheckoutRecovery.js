@@ -27,7 +27,7 @@ import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 import { listWorktrees, forceRemoveWorktreeDir, deleteCompletedLocalBranch, classifyWorktreeDirt } from './worktreeManager.js';
 import { getDefaultBranch, getStatusPorcelain, hasBranchMergeEvidence, resolveForgeForRepo } from './git.js';
-import { withClaimOwnershipLock, readClaimOwnershipAgents, retireWithUnlockedArchive } from './cosClaimOwnership.js';
+import { withClaimOwnershipLock, readClaimOwnershipAgents } from './cosClaimOwnership.js';
 
 const FULL_OBJECT_ID = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/;
 const shortBranch = (ref) => (ref ? String(ref).replace(/^refs\/heads\//, '') : null);
@@ -212,42 +212,34 @@ async function retireHeldCheckout({ repoPath, release }, opts = {}) {
   const delivery = Object.hasOwn(opts, 'delivery') ? opts.delivery : await readForgeDelivery(repoPath, branch, release.head);
   const deliveredHead = DELIVERED.has(delivery) ? String(release.head).toLowerCase() : null;
   const disposableHead = delivery === 'exact' ? deliveredHead : null;
-  const refuse = reason => ({ result: { ok: false, reason } });
-  // Every ownership check queues behind the claim-ownership lock with a short
-  // budget, so removal runs in its own critical section (#12682).
-  return retireWithUnlockedArchive({
-    busy: () => ({ ok: false, reason: 'checkout-retirement-reserved' }),
-    admit: async () => {
-      if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return refuse('release-not-in-inventory');
-      await opts.beforeMutation?.();
-      const first = await matchRelease(repoPath, release);
-      if (!first.tree) return refuse(first.reason);
-      const { tree } = first;
-      const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path);
-      if (!checkoutIdentity || (release.checkoutIdentity && release.checkoutIdentity !== checkoutIdentity)) return refuse('checkout-identity-changed');
-      if (!await isMergedHead(repoPath, tree.head, defaultBranch, deliveredHead)) return refuse('not-merged-on-recheck');
-      const porcelain = await getStatusPorcelain(tree.path).catch(() => null);
-      if (porcelain === null) return refuse('worktree-status-unavailable');
-      if (!isDisposable(tree.head, porcelain, disposableHead)) return refuse('worktree-dirty');
-      const owner = await ownerReason({ repoPath, tree, branch, readAgents });
-      if (owner) return refuse(owner);
-      return { fence: { repoPath, path: tree.path, branch }, tree, checkoutIdentity };
-    },
-    archive: async () => ({ archive: null }),
-    finish: async ({ tree, checkoutIdentity }) => {
-      const result = await finishHeldCheckoutRetirement({ repoPath, release, tree, branch, defaultBranch, checkoutIdentity, deliveredHead, disposableHead }, opts);
-      return result.ok ? { ...result, checkoutIdentity } : result;
-    },
+  const refuse = reason => ({ ok: false, reason });
+  // One ownership critical section: a bind lands before the owner read or after removal.
+  return withClaimOwnershipLock(async () => {
+    if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return refuse('release-not-in-inventory');
+    await opts.beforeMutation?.();
+    const matched = await matchRelease(repoPath, release);
+    if (!matched.tree) return refuse(matched.reason);
+    const { tree } = matched;
+    const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path);
+    if (!checkoutIdentity || (release.checkoutIdentity && release.checkoutIdentity !== checkoutIdentity)) return refuse('checkout-identity-changed');
+    if (!await isMergedHead(repoPath, tree.head, defaultBranch, deliveredHead)) return refuse('not-merged-on-recheck');
+    const porcelain = await getStatusPorcelain(tree.path).catch(() => null);
+    if (porcelain === null) return refuse('worktree-status-unavailable');
+    if (!isDisposable(tree.head, porcelain, disposableHead)) return refuse('worktree-dirty');
+    const owner = await ownerReason({ repoPath, tree, branch, readAgents });
+    if (owner) return refuse(owner);
+    const result = await removeHeldCheckout({ repoPath, release, tree, branch, defaultBranch, checkoutIdentity, deliveredHead, disposableHead }, opts);
+    return result.ok ? { ...result, checkoutIdentity } : result;
   });
 }
 
-/** The second critical section: re-prove the release, ownership and content, then remove. */
-async function finishHeldCheckoutRetirement({ repoPath, release, tree, branch, defaultBranch, checkoutIdentity, deliveredHead, disposableHead }, opts) {
+/**
+ * Unlock, remove and delete the branch of a checkout admitted in the same section.
+ * Agent registration and checkout content change without the ownership lock, so
+ * removal re-checks them at Git's mutation boundary.
+ */
+async function removeHeldCheckout({ repoPath, release, tree, branch, defaultBranch, checkoutIdentity, deliveredHead, disposableHead }, opts) {
   const { readAgents = readClaimOwnershipAgents } = opts;
-  const second = await matchRelease(repoPath, release);
-  if (!second.tree) return { ok: false, reason: second.reason };
-  if (await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return { ok: false, reason: 'checkout-identity-changed' };
-  await opts.beforeMutation?.();
   if (release.locked) {
     const unlocked = await execGit(['worktree', 'unlock', tree.path], repoPath).then(() => true, () => false);
     if (!unlocked) return { ok: false, reason: 'worktree-unlock-failed' };

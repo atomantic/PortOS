@@ -8,6 +8,21 @@
  * `mambaFullMemoryRatio(...)` derives `--mamba-full-memory-ratio` from the cookbook formula `(S + D) ×
  * state_bytes / (L × kv_bytes_per_token)` — load-bearing, because the cookbook default `0.9`
  * under-sizes the GDN state pool at CoS prompt lengths and silently clamps `max_running_requests`.
+ * Both Qwen parsers (`--reasoning-parser qwen3`, `--tool-call-parser qwen3_coder` — NOT vLLM's
+ * `qwen3_xml`) are baked into every cell: getting them wrong fails silently, with the model emitting
+ * raw markup and the agent never calling a tool. `sglangCellForGpu(gpu)` maps a `cudaCapability.js`
+ * compute-cap row to a cell (SM 9.x → `h200`, SM ≥10 → `rtx6000`/`rtx5090` by VRAM, Ampere → `null`,
+ * which is a refusal: 24 GB stays on vLLM), and `sglangUnsupportedReason({platform, status, gpus})` is
+ * the prose for every no — never collapsing a probe `'unknown'` into "no GPU". Pure: no filesystem, no
+ * docker, no network.
+ *
+ * The `sglang serve` launch line PortOS owns, per NVIDIA card class. `buildSglangQwenRecipe({hw,
+ * contextLength, ssmDtype, spec, radixStrategy, host, port})` → `{image, modelName, modelPath, cell,
+ * mambaRatio, stateSlots, flags, env}`, and `sglangComposeYaml(recipe)` renders the
+ * `docker-compose.yml` from it (one source of truth; a test pins the doc against it).
+ * `mambaFullMemoryRatio(...)` derives `--mamba-full-memory-ratio` from the cookbook formula `(S + D) ×
+ * state_bytes / (L × kv_bytes_per_token)` — load-bearing, because the cookbook default `0.9`
+ * under-sizes the GDN state pool at CoS prompt lengths and silently clamps `max_running_requests`.
  * Both Qwen parsers (the SGLang spellings from `qwenAgentParsers.js`, not vLLM's) are baked into
  * every cell: getting them wrong fails silently, with the model emitting
  * raw markup and the agent never calling a tool. `sglangCellForGpu(gpu)` maps a `cudaCapability.js`
