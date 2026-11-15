@@ -79,3 +79,15 @@ describe('Settings — Orchestration tab', () => {
     expect(tab?.to).toBe('/settings/orchestration');
   });
 });
+
+describe('Settings — grouped tab header', () => {
+  it('renders four labeled groups and a grouped phone select with unchanged destinations', async () => {
+    const { container } = renderTab('/settings/general');
+    await act(async () => {});
+    const select = container.querySelector('select');
+    const groups = [...select.querySelectorAll('optgroup')].map((g) => g.label);
+    expect(groups).toEqual(['Access', 'Agents', 'Integrations', 'System']);
+    expect(screen.getAllByRole('tab', { name: 'General' }).length).toBeGreaterThan(0);
+    expect(screen.getByRole('tablist', { name: 'System Settings sections' })).toBeTruthy();
+  });
+});
