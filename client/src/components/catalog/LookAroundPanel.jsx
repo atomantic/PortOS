@@ -9,8 +9,8 @@ import { getCatalogLookAround, startCatalogLookAround } from '../../services/api
 import { useMediaCompletionRefresh } from '../../hooks/useMediaCompletionRefresh';
 import { formatDateTime, formatUsd } from '../../utils/formatters';
 
-const FIELD = 'w-full rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white min-h-[44px] sm:min-h-0';
-const BUTTON = 'inline-flex items-center gap-1 rounded border border-port-border px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const FIELD = 'w-full rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white min-h-[44px] pointer-fine:sm:min-h-0';
+const BUTTON = 'inline-flex items-center gap-1 rounded border border-port-border px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 export const priceText = (usd) => (usd == null ? 'an unknown price' : formatUsd(usd));
 
 /**

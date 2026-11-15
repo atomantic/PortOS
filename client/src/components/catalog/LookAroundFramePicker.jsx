@@ -5,8 +5,8 @@ import { formatCount } from '../../utils/formatters';
 import { saveCatalogLookAroundAngles, scoreCatalogLookAroundClip } from '../../services/apiCatalog';
 import { lookAroundAngleLabel } from '../../../../server/lib/catalogLookAround.js';
 
-const FIELD = 'rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white min-h-[44px] sm:min-h-0';
-const BUTTON = 'inline-flex items-center gap-1 rounded border border-port-border px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const FIELD = 'rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white min-h-[44px] pointer-fine:sm:min-h-0';
+const BUTTON = 'inline-flex items-center gap-1 rounded border border-port-border px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 const nearest = (frames, atSec) => frames.reduce((best, f) => (Math.abs(f.atSec - atSec) < Math.abs(best.atSec - atSec) ? f : best), frames[0]);
 
 /**
@@ -122,7 +122,7 @@ export default function LookAroundFramePicker({ ingredientId, clip, readOnly = f
                 <input id={`${scrubId}-name-${index}`} type="text" maxLength={80} placeholder="Name (optional)" className={`${FIELD} min-w-0 flex-1`} value={angle.name}
                   onChange={(e) => edit(index, { name: e.target.value })} />
                 <button type="button" aria-label={`Drop the angle at ${angle.atSec.toFixed(2)}s`} onClick={() => toggle(angle)}
-                  className="min-h-[44px] min-w-[44px] sm:min-h-8 sm:min-w-8 rounded border border-port-border flex items-center justify-center">
+                  className="min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-8 pointer-fine:sm:min-w-8 rounded border border-port-border flex items-center justify-center">
                   <X size={14} aria-hidden="true" />
                 </button>
               </li>
