@@ -1,10 +1,8 @@
-# Bounded #16047 regeneration: uv 0.8.14 (0.13.x could not reach PyPI on the regenerating host); cutoff 2026-11-07T00:00:00Z; click 8.5.1 and tqdm 4.70.1 only — all other pins unchanged.
-# Historical baseline documentation follows; older dates below predate this bounded regeneration.
 # AUTO-GENERATED hash-pinned lock — do not edit by hand. Input: requirements-minimax-h3-mlx.txt
 # Regenerate with hash-verified uv 0.13.7 on Apple Silicon, from the repo root.
-# Use a freshly computed UTC cutoff at least seven days old (below: 2026-11-12 run):
+# Use a freshly computed UTC cutoff at least seven days old (below: 2026-11-15 run):
 #   uv --no-config pip compile scripts/requirements-minimax-h3-mlx.txt --generate-hashes --python-version 3.11 \
-#     --only-binary :all: --exclude-newer 2026-11-05T00:00:00Z --no-header -o scripts/requirements-minimax-h3-mlx.lock.txt
+#     --only-binary :all: --exclude-newer 2026-11-07T00:00:00Z --no-header -o scripts/requirements-minimax-h3-mlx.lock.txt
 # Installed with: uv pip sync --require-hashes --only-binary :all: (scripts/setup-image-video.sh)
 annotated-doc==0.0.5 \
     --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101 \
@@ -1509,9 +1507,9 @@ tqdm==4.70.1 \
     #   mlx-audio
     #   mlx-vlm
     #   transformers
-transformers==5.22.1 \
-    --hash=sha256:bed9fd76d6f43b4a1a9fc5d0c565ace7c77edbd029784f8cbcdf772cb5e924d8 \
-    --hash=sha256:c940b4bf98de4f568723895f330ba1460a398bd83061b93b70238c3fe32e4389
+transformers==5.22.2 \
+    --hash=sha256:55f57e5cbd7c0b500b7a706daa0ecd76567b56ca139e6e02ef0bba0437e3a763 \
+    --hash=sha256:829c2820aff91730b8ec45a4b8ff4be07f586a140b68a9073998b36fa35297dc
     # via
     #   -r scripts/requirements-minimax-h3-mlx.txt
     #   mlx-audio

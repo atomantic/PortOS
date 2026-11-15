@@ -2830,3 +2830,76 @@ Remaining under #16047: Transformers 5.22.2 in the other requested profiles,
 then the independent Typer 0.28.0 / Regex 2026.11.7 slices for Pixal/TRELLIS/H3
 and Protobuf 7.36.2 for H3. The documented LTX CUDA Transformers 5.14.1 and
 other retained exceptions remain unchanged.
+
+## Transformers slice for MiniMax H3 MLX (2026-11-15, #16047)
+
+This slice updates **Transformers 5.22.1 → 5.22.2** in H3's Apple Silicon
+source recipe and complete lock. All **56 companion entries**, their markers
+and hashes are identical. The immutable H3 source revision
+`fcd9e9b79a1d6018d91ac477c0968de1fa067e49`, Python 3.11, MLX/MLX-Metal,
+MLX-VLM, optional extras and the torch-free installation contract are unchanged.
+The installer consumes this lock directly; no separate runtime version literal
+needs changing.
+
+The [upstream patch release](https://github.com/huggingface/transformers/releases/tag/v5.22.2)
+changes distributed device binding and Jinja sandboxing. SHA-256-verified
+baseline/candidate wheels differ in only four package files: version
+initialization, the dependency table, distributed utilities and chat-template
+utilities. H3's pinned `MiniMaxH3TextEncoder.build_request` tokenizes the prompt
+directly with `AutoTokenizer`, without a chat template. PortOS's
+`load_pil_image_processor` binds `Qwen2VLImageProcessorPil` for keyframes;
+these tokenization and image-processing implementations are byte-identical.
+The Python floor remains 3.11 and the raised optional Jinja floor (3.1.6)
+is already satisfied. H3 does not use distributed Torch setup.
+
+The entire **57-package** lock was regenerated with SHA-256-verified
+**uv 0.13.7**, wheel-only resolution and cutoff **2026-11-07T00:00:00Z**.
+Only Transformers and its two hashes changed. Every one of the resulting
+**1,292 hashes** independently matches an official non-yanked pre-cutoff PyPI
+artifact. Fresh OSV querybatch, including MAL records, covers all 57 identities
+with zero findings, scanner errors or pagination tokens. The only changed runtime
+registry input is Transformers; the resolver's uv wheel was separately verified.
+No source revision changes or bundled-native-library security certification
+are included.
+
+Direct uv-to-PyPI requests timed out, as in the preceding classifier slice.
+Resolution and installation used a temporary loopback curl relay to official
+PyPI Simple JSON and `files.pythonhosted.org`, retaining upload dates, yanked
+status, Requires-Python, metadata and hashes. Only artifact transport URLs were
+rewritten. No relay, index override or extra setup ships to installers.
+
+Native verification used a fresh Apple Silicon **macOS 27.2.1 / CPython
+3.11.18** scratch environment. All 57 candidate wheels installed with
+`--require-hashes --only-binary :all:` and `uv pip check` passed. Only Transformers
+was then hash-swapped to the baseline and back to the candidate:
+
+- Both versions pass the shipped `minimax_h3_runtime_probe.py --verify-seams`
+  against the exact source revision, including the pipeline, Qwen3-VL import,
+  encoder digest and borrowed MLX-VLM seams.
+- The new opt-in `cooled_runtime_probe.py h3-transformers` exercises the actual
+  pinned request builder, local `AutoTokenizer` loading and PortOS PIL adapter
+  with six synthetic cases: ordinary, Unicode/whitespace, empty and long text,
+  one keyframe and two keyframes. Torch and TorchVision remain absent. Token
+  IDs, modality tags, pixel arrays and image grids exactly match the baseline;
+  non-string prompts are refused. Only weight construction is bypassed.
+- Five existing installer/runner/seam test files pass **257 tests**, with nine
+  existing interpreter/dependency-conditional skips. Native probes above use
+  the separately installed Python 3.11 environment.
+
+To repeat the offline comparison, run the following in isolated environments
+containing the complete lock, first with hash-installed Transformers 5.22.1
+and then 5.22.2. Use the same fixture directory, initially absent; omit
+`--baseline` on the second run. `<source>` is the inspected checkout at the
+revision above. The probe refuses Python socket connections.
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 <venv>/bin/python \
+  scripts/cooled_runtime_probe.py h3-transformers \
+  --source <source> --fixtures <scratch>/h3-fixtures --baseline
+```
+
+No production tokenizer/checkpoint, model weights, tensor inference, generation,
+output-quality evaluation or Windows/Linux execution is claimed. This slice
+does not complete #16047: Transformers in the other requested profiles and the
+separate Typer/Regex/Protobuf slices remain there. LTX CUDA's Transformers
+5.14.1 constraint and other documented exceptions are unchanged.
