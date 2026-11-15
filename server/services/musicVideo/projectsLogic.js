@@ -52,7 +52,7 @@ import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
 import { normalizeCreditsOutro } from '../../lib/musicVideoCreditsOutro.js';
 import { MUSIC_VIDEO_EDGED_WIPES, sceneWipe, varyWipes } from '../../lib/musicVideoWipes.js';
 import { carryTreatmentThroughSceneOrder, remapTreatmentForClone, scenesFingerprint } from './treatment.js';
-import { anchorShotsToSungLyrics, carryReviewThroughSceneOrder, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
+import { anchorShotsToSungLyrics, carryReviewThroughSceneOrder, carryStoryboardApproval, dropStaleStoryboardRows, slimProjectReview } from './productionReview.js';
 import { cuesSungWithin, lyricAnchorOnset, lyricWordCuts, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 import { normalizeShotSheet } from '../../lib/musicVideoShotSheet.js';
@@ -693,6 +693,17 @@ export function afterLoad(project) {
   const scenes = sceneListInTimeOrder(project?.scenes);
   if (scenes === project?.scenes) return project;
   return carryReviewThroughSceneOrder(project, carryTreatmentThroughSceneOrder(project, { ...project, scenes }));
+}
+
+/**
+ * Write-time clean-up both stores run on every persisted record (#16210): a
+ * review record from before slim snapshots shrinks at its next write. Reads
+ * never call it, so a pure read neither rewrites the record nor moves
+ * `updatedAt`; readers tolerate both shapes. Idempotent, and it leaves every
+ * approval as it was.
+ */
+export function beforeSave(project) {
+  return slimProjectReview(project);
 }
 
 /** Where a new scene goes: before the first timed scene that starts after it; untimed scenes go last. */
