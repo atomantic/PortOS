@@ -173,6 +173,8 @@ export function buildProjectRecord(input, { id, now, blender, sourceFilm }) {
       runwayModelId: videoSettings.runwayModelId ?? null,
       runwayDuration: videoSettings.runwayDuration ?? null,
       runwayResolution: videoSettings.runwayResolution ?? null,
+      ...(videoSettings.draftResolution ? { draftResolution: videoSettings.draftResolution } : {}),
+      ...(videoSettings.finalResolution ? { finalResolution: videoSettings.finalResolution } : {}),
       generationMode: videoSettings.generationMode ?? 'image',
       audioReactiveLora: videoSettings.audioReactiveLora ?? null,
       audioReactiveScale: videoSettings.audioReactiveScale ?? 1.2,

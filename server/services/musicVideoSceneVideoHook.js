@@ -111,6 +111,8 @@ const hook = createMediaJobImageHook({
     costUsd: job.params?.musicVideoCostUsd ?? null,
     costModelId: job.params?.musicVideoCostModelId ?? null,
     spendKind: job.params?.musicVideo?.revisionId ? 'autoReview' : 'manual',
+    // #16136: the shot card's Render draft / Render final.
+    tier: job.params?.musicVideo?.tier ?? null,
   }]);
   },
   onAttached: ({ projectId, sceneId, videoHistoryId }, { scene, appended }) => {

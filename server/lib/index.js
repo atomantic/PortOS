@@ -265,6 +265,7 @@ export * from './musicVideoSequenceCoverage.js';
 export * from './musicVideoSourceTake.js';
 export * from './musicVideoShotDownloadBasis.js';
 export * from './musicVideoShotTiming.js';
+export * from './musicVideoRenderTier.js';
 export * from './musicVideoSections.js';
 export * from './musicVideoSubjectLimits.js';
 export * from './reactorStartingFrame.js';
