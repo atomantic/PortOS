@@ -1,15 +1,19 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import express from 'express';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { join } from 'path';
-import { PATHS } from '../lib/fileUtils.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
-import { request } from '../lib/testHelper.js';
+import { expectAuthorizedWorkflows, expectRemoteRefusal } from './hostControlTestHarness.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-// The real authGate + hostControlRouteGate, pinned to a password-free install
-// so the developer's own settings cannot change what these cases observe.
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-families-update-') }));
+afterAll(cleanupTempDataRoots);
+
+// The refusal/principal matrix lives in services/authGate.test.js and
+// hostControlCoverage.test.js; this keeps one refusal before the self-update
+// effect and the authorized workflow of the brain-link and ask routers.
+const auth = vi.hoisted(() => ({ enabled: false }));
 vi.mock('../services/auth.js', async (importOriginal) => ({
   ...await importOriginal(),
-  isAuthEnabled: vi.fn().mockResolvedValue(false),
+  isAuthEnabled: vi.fn(async () => auth.enabled),
 }));
 
 const updateChecker = vi.hoisted(() => ({
@@ -62,88 +66,42 @@ vi.mock('../services/askService.js', () => ({
   VALID_MODES: askConversations.VALID_MODES,
 }));
 
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
+const { PATHS } = await import('../lib/fileUtils.js');
 import updateRoutes from './update.js';
 import brainLinksRoutes from './brainLinks.js';
 import askRoutes from './ask.js';
 
-// Mirrors the mount order server/index.js uses for these families.
-const buildGatedApp = (remoteAddress) => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress });
-    next();
-  });
-  app.use(authGate);
-  app.use(hostControlRouteGate);
-  app.use(express.json());
-  app.use('/api/update', updateRoutes);
-  app.use('/api/brain', brainLinksRoutes);
-  app.use('/api/ask', askRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
+const mounts = [
+  ['/api/update', updateRoutes],
+  ['/api/brain', brainLinksRoutes],
+  ['/api/ask', askRoutes],
+];
 
-const remote = () => buildGatedApp('192.0.2.10');
-const local = () => buildGatedApp('127.0.0.1');
-
-const call = (app, [method, path, body = {}]) => request(app)[method](path).send(body);
-
-const expectRefused = (response) => {
-  expect(response.status).toBe(403);
-  expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
-};
-
-describe('host-control gate on update, brain-link and ask promote writes (#8742)', () => {
+describe('host-control gate on update, brain-link and ask promote writes (#8742, #16114)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    auth.enabled = false;
     brainService.getLinkById.mockResolvedValue({
       id: 'link-1', isRepo: true, url: 'https://github.com/example-owner/example-repo',
       localPath: join(PATHS.repos, 'example-owner', 'example-repo'), cloneStatus: 'idle',
     });
     repoCloner.pullRepo.mockResolvedValue({ updated: true });
     askConversations.getConversation.mockResolvedValue({ id: 'conv-1' });
+    askConversations.setPromoted.mockResolvedValue({ id: 'conv-1', promoted: true });
     askPromote.promoteTurnById.mockResolvedValue({ target: 'task', taskId: 'task-1' });
   });
 
-  it('refuses a remote caller with no side effects', async () => {
-    const writes = [
-      ['post', '/api/update/execute', {}],
-      ['post', '/api/update/sync-fork', {}],
-      ['post', '/api/update/node-runtime', { version: 'v26.12.1' }],
-      ['post', '/api/update/pm2', {}],
-      ['post', '/api/update/node-runtime/startup', {}],
-      ['post', '/api/update/software/blender', {}],
-      ['post', '/api/brain/links/link-1/pull', {}],
-      ['post', '/api/ask/conv-1/turns/turn-1/promote', { target: 'task' }],
-    ];
-    for (const write of writes) {
-      expectRefused(await call(remote(), write));
-    }
-    expect(selfUpdate.startPortosSelfUpdate).not.toHaveBeenCalled();
-    expect(nodeRuntime.startNodeUpdate).not.toHaveBeenCalled();
-    expect(nodeRuntime.startPm2Update).not.toHaveBeenCalled();
-    expect(nodeRuntime.repairStartup).not.toHaveBeenCalled();
-    expect(updateChecker.getRemoteInfo).not.toHaveBeenCalled();
-    expect(repoCloner.pullRepo).not.toHaveBeenCalled();
-    expect(askPromote.promoteTurnById).not.toHaveBeenCalled();
+  it('refuses a remote caller before the self-update runs', async () => {
+    await expectRemoteRefusal(mounts, ['post', '/api/update/execute', {}, selfUpdate.startPortosSelfUpdate]);
   });
 
-  it('keeps a local caller able to run the pull and the turn promote', async () => {
-    const app = local();
-    expect((await call(app, ['post', '/api/brain/links/link-1/pull', {}])).status).toBe(200);
-    expect((await call(app, ['post', '/api/ask/conv-1/turns/turn-1/promote', { target: 'task' }])).status).toBe(200);
-    expect(repoCloner.pullRepo).toHaveBeenCalledTimes(1);
-    expect(askPromote.promoteTurnById).toHaveBeenCalledTimes(1);
-  });
-
-  it('refuses the conversation-level promote remotely and keeps it a flag-only write for a local caller', async () => {
-    askConversations.setPromoted.mockResolvedValue({ id: 'conv-1', promoted: true });
-    expectRefused(await call(remote(), ['post', '/api/ask/conv-1/promote', {}]));
-    expect(askConversations.setPromoted).not.toHaveBeenCalled();
-    const res = await call(local(), ['post', '/api/ask/conv-1/promote', {}]);
-    expect(res.status).toBe(200);
-    expect(askConversations.setPromoted).toHaveBeenCalledTimes(1);
-    expect(askPromote.promoteTurnById).not.toHaveBeenCalled();
+  it('keeps the pull, the turn promote and the flag-only conversation promote working for local and agent callers', async () => {
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: [
+      ['post', '/api/brain/links/link-1/pull', {}, repoCloner.pullRepo, 200],
+      ['post', '/api/ask/conv-1/turns/turn-1/promote', { target: 'task' }, askPromote.promoteTurnById, 200],
+      ['post', '/api/ask/conv-1/promote', {}, askConversations.setPromoted, 200],
+    ] });
+    // The conversation-level promote is a flag write, not a turn promotion.
+    expect(askPromote.promoteTurnById).toHaveBeenCalledTimes(2);
   });
 });

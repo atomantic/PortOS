@@ -1,9 +1,7 @@
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { callRoute, hostControlApp, REMOTE_ADDRESS } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { hashStackerNewsRules, POLICY_VERSION } from '../services/stackerNewsPolicy.js';
 
@@ -37,7 +35,6 @@ vi.mock('../integrations/stackerNews/index.js', () => ({
 
 // Mount the actual authorization middleware, router, and action service. Only
 // persistence/credentials and the external publication adapter are synthetic.
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import stackerNewsRoutes from './stackerNews.js';
 
@@ -105,25 +102,14 @@ beforeEach(() => {
   });
 });
 
-const appFor = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/stacker-news', stackerNewsRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
-const post = (app, path, body = {}, headers = {}) => {
-  const pending = request(app).post(path);
-  for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return pending.send(body);
-};
+const mounts = [['/api/stacker-news', stackerNewsRoutes]];
+const appFor = (address = REMOTE_ADDRESS) => hostControlApp(address, mounts);
+const post = async (app, path, body = {}, headers = {}) => callRoute(await app, ['post', path, body], headers);
 const actionPath = (suffix, id = action.id) => `/api/stacker-news/actions/${id}/${suffix}`;
 
-describe('Stacker News review and publication authority', () => {
+// The refusal/principal matrix lives in services/authGate.test.js and
+// hostControlCoverage.test.js; this keeps one refusal and the real consumer workflow.
+describe('Stacker News review and publication behind the default-deny gate (#16114)', () => {
   it('refuses a remote caller before approval persistence or saved-key execution, for any case or slash spelling', async () => {
     const app = appFor();
     const review = await post(app, `${actionPath('review').toUpperCase()}/`, { state: 'approved' });
@@ -170,17 +156,10 @@ describe('Stacker News review and publication authority', () => {
     expect(events.map((event) => event[2])).toEqual(['pending_review', 'approved', 'executing', 'completed']);
   });
 
-  it('keeps remote action reads available and lets a local caller prepare a draft without granting approval', async () => {
-    const app = appFor();
-    const read = await request(app).get(`/api/stacker-news/accounts/${account.id}/actions`);
-    expect(read.status).toBe(200);
-    const draftBody = {
+  it('lets a local caller prepare a draft without granting approval', async () => {
+    const draft = await post(appFor('127.0.0.1'), '/api/stacker-news/actions', {
       accountId: account.id, itemId: item.id, kind: 'draft_comment', payload: { body: 'Example local draft' },
-    };
-    const refused = await post(app, '/api/stacker-news/actions', draftBody);
-    expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    expect(events).toEqual([]);
-    const draft = await post(appFor('127.0.0.1'), '/api/stacker-news/actions', draftBody);
+    });
     expect(draft.status, JSON.stringify(draft.body)).toBe(201);
     expect(draft.body.state).toBe('pending_review');
     expect(executeStackerNewsOperation).not.toHaveBeenCalled();
