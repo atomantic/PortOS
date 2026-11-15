@@ -15,7 +15,7 @@
  *      widget; hand-rolled tracks must at least carry `role="switch"` +
  *      `aria-checked`.
  *   3. A `<input type="file">` hidden with `hidden`/`aria-hidden`/`tabIndex={-1}`
- *      and driven by a programmatic `ref.current.click()`. That is unreachable
+ *      and driven by a programmatic click on the ref's element. That is unreachable
  *      by keyboard and screen reader, and the synthetic click doesn't open the
  *      picker at all in WebKit-as-installed-PWA — the shape PortOS is opened in
  *      from a second machine over the tailnet. `components/ui/FilePickerButton.jsx`
