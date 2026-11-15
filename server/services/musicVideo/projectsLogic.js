@@ -667,7 +667,7 @@ function buildScene(input, { order }) {
  * their existing order, `order` equal to the index. Returns the SAME array when
  * it already holds that, so callers can detect a no-op by identity.
  */
-export function sceneListInTimeOrder(scenes) {
+function sceneListInTimeOrder(scenes) {
   const list = Array.isArray(scenes) ? scenes : [];
   const key = (s) => (Number.isFinite(s?.startSec) ? s.startSec : Infinity);
   const sorted = list.map((scene, i) => ({ scene, i })).sort((a, b) => key(a.scene) - key(b.scene) || a.i - b.i);
