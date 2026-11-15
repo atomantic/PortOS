@@ -104,7 +104,8 @@ describe('Node version contract has exactly one owner (issue #3863)', () => {
     });
 
     it('every CI setup-node pin is supported', () => {
-      const workflows = trackedFiles(REPO_ROOT, ['.github/workflows']);
+      // Composite actions (setup-server, setup-client) select Node for most jobs.
+      const workflows = trackedFiles(REPO_ROOT, ['.github/workflows', '.github/actions']);
       const pinsIn = (body) =>
         [...body.matchAll(/node-version:\s*['"]?v?(\d+(?:\.[\dx]+)*)/g)].map((m) => m[1]);
       const pins = workflows.flatMap((rel) => pinsIn(read(rel)).map((pin) => ({ rel, pin })));
