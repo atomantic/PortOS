@@ -1,0 +1,42 @@
+name: Install PostgreSQL client and audio verification tools
+description: >-
+  pg_dump/psql matching the Postgres service major, plus the audio tools the
+  DB and browser suites verify with, through a cache of APT package downloads.
+
+inputs:
+  pg-major:
+    description: The PostgreSQL service image's major version; pg_dump must match it.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Share only package downloads across DB/browser jobs. The helper checks
+    # restored bytes against fresh signed indexes; cache hits never skip setup.
+    - name: Identify APT package cache
+      id: apt-cache
+      shell: bash
+      env:
+        PG_MAJOR: ${{ inputs.pg-major }}
+      run: |
+        . /etc/os-release
+        prefix="apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-pg${PG_MAJOR}-${{ hashFiles('scripts/ci-install-db-tools.sh') }}-"
+        echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+        # Refresh immutable entries daily as signed package indexes evolve.
+        echo "key=${prefix}$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
+    - name: Cache APT package downloads
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/portos-apt-packages/*.deb
+        key: ${{ steps.apt-cache.outputs.key }}
+        restore-keys: ${{ steps.apt-cache.outputs.prefix }}
+
+    # Preserve bounded mirror fallback on a miss; the caller's step timeout
+    # backs up the helper's 390-second download budget.
+    - name: Run the DB tool installer
+      shell: bash
+      env:
+        PG_MAJOR: ${{ inputs.pg-major }}
+        APT_PACKAGE_CACHE: ${{ runner.temp }}/portos-apt-packages
+      run: bash scripts/ci-install-db-tools.sh

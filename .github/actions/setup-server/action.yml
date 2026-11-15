@@ -1,0 +1,125 @@
+name: Set up the server workspace
+description: >-
+  Node 26, a cached server/node_modules that is reused only when its trusted
+  native rebuild is stamped, and the Vitest transform-artifact cache. Shared by
+  every ci.yml job that runs the server workspace (Linux, Windows and macOS).
+
+inputs:
+  vitest-key-suffix:
+    description: >-
+      Appended to the transform-artifact cache key so jobs and shards that run
+      in parallel never race on one save (e.g. `-1of2`, `-browser-1of2`).
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Use Node.js 26.x
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 26.x
+        cache: npm
+        cache-dependency-path: server/package-lock.json
+
+    # setup-node's npm cache only preserves ~/.npm, the tarball cache: a clean
+    # install still wipes and repopulates a 570 MB node_modules on every job
+    # that runs this action. Cache the installed tree instead and skip the
+    # install on a hit.
+    #
+    # No restore-keys. The install below is skipped on a hit, so a near-miss
+    # restore would silently ship a node_modules built from a different
+    # lockfile. Exact key or nothing. package.json is in the hash alongside
+    # the lockfile so that skipping the install does not also skip its
+    # manifest-vs-lockfile check, and the key carries the Node *major* rather
+    # than the resolved patch, because NODE_MODULE_VERSION is stable across
+    # patches and keying on the patch would discard the entry on every Node
+    # 26.x release. The transform-artifact cache below keeps its own key and
+    # its own restore-keys; this one is about dependencies.
+    #
+    # Hit rate comes from the nightly full run: there is no push trigger on
+    # `main`, so the 09:17 UTC schedule is what seeds these caches on the
+    # default branch, which is the only scope every PR branch can read.
+    # See docs/GITHUB_ACTIONS.md.
+    - name: Cache server node_modules
+      id: server-modules
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: server/node_modules
+        key: server-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
+
+    # A restored tree is only reusable if it was rebuilt before it was saved,
+    # and that is not answerable by looking at the tree — with today's
+    # versions the rebuild is nearly a no-op, so every allowlisted package
+    # imports fine on a never-rebuilt one. The rebuild step below leaves an
+    # explicit mark; this reads it back.
+    #
+    # `continue-on-error` on purpose: a bad entry must not wedge every PR
+    # until a human clears the cache by hand. It fails, the two steps below
+    # see a non-success outcome, and the job builds the tree it needs. It does
+    # not *replace* the bad entry — cache keys are immutable and actions/cache
+    # skips the save on an exact hit — so that entry keeps costing each run a
+    # reinstall until the key moves or it ages out. That is precisely the
+    # pre-cache cost: the worst case degrades to the old behaviour, never to a
+    # red repo.
+    #
+    # `outcome != 'success'` covers all three cases in one expression: on a
+    # cache miss this step is skipped (outcome `skipped`), on a hit it is
+    # `success` or `failure`.
+    - name: Check the restored node_modules was rebuilt
+      id: server-modules-usable
+      if: steps.server-modules.outputs.cache-hit == 'true'
+      continue-on-error: true
+      shell: bash
+      run: node scripts/trusted-rebuild-stamp.js check server
+
+    - name: Install server dependencies
+      if: steps.server-modules-usable.outcome != 'success'
+      shell: bash
+      run: npm ci --prefix server
+
+    # server/.npmrc pins ignore-scripts=true, so the allowlisted packages need
+    # this explicit rebuild. Same condition as the install: whenever this job
+    # builds the tree it will cache, it must build a rebuilt one — and the
+    # mark is written in the same block, so a failed rebuild cannot leave one
+    # behind for a later job to trust.
+    #
+    # `shell: bash` is load-bearing, not style (composite steps must name a
+    # shell, but this one must be bash). Under pwsh — the windows-latest
+    # default — a *native* command's non-zero exit neither throws nor stops
+    # the block (`$PSNativeCommandUseErrorActionPreference` is false) and only
+    # the last command's code becomes the step result — so a failed rebuild
+    # would run the mark anyway, reset the exit code to 0, and publish a
+    # green, marked, un-rebuilt tree. Under `bash -e` the block stops at the
+    # rebuild, the job fails, and actions/cache (`post-if: success()`) never
+    # saves it.
+    - name: Rebuild trusted native dependencies
+      if: steps.server-modules-usable.outcome != 'success'
+      shell: bash
+      env:
+        # Skip onnxruntime-node's CUDA execution provider. Its postinstall
+        # downloads it on linux-x64 whenever the .so is absent — several
+        # hundred MB per job, every run — and no hosted runner has an NVIDIA
+        # GPU to use it with. The CPU binaries ship in the tarball, so
+        # inference still works; this is the single largest cost in the job.
+        ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+      run: |
+        node scripts/trusted-rebuilds.js server
+        node scripts/trusted-rebuild-stamp.js write server
+
+    # Reuse Vite/Vitest artifacts from checkout-owned .cache paths, outside
+    # node_modules (which may be shared by worktrees). Unlike the installed
+    # dependency tree above, these artifacts can safely use a near-miss
+    # restore and stay warm across a lockfile bump. Both server Vitest configs
+    # are hashed for every job, so one key shape serves the unit, DB, browser,
+    # Windows and macOS jobs; the suffix keeps their parallel saves apart.
+    - name: Cache Vitest transform artifacts
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          server/.cache/vitest
+          server/.cache/vitest-db
+        key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}${{ inputs.vitest-key-suffix }}
+        restore-keys: |
+          vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
+          vitest-server-${{ runner.os }}-

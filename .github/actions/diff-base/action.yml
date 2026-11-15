@@ -1,0 +1,17 @@
+name: Resolve the pull-request diff base
+description: >-
+  Export CI_BASE_SHA, the merge ref's first parent, for the planner's and the
+  test runner's `<base>...HEAD` diffs. Non-pull_request runs need no base and
+  get none.
+
+runs:
+  using: composite
+  steps:
+    # The caller's checkout must use `fetch-depth: 2`: a pull_request checkout
+    # is the merge ref, so depth 2 carries both of its parents — everything a
+    # three-dot diff against the base parent needs. The event payload's
+    # base.sha is not used: it can disagree with the merge ref's parent and
+    # needs history the shallow clone does not have (scripts/ci-base-sha.js).
+    - name: Resolve the pull-request diff base
+      shell: bash
+      run: node scripts/ci-base-sha.js

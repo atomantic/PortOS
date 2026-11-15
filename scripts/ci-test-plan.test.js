@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { staticImportClosure } from '../server/lib/staticImportGraph.js';
 import { TRUSTED_REBUILDS } from './trusted-rebuilds.js';
+import { readCiJobs } from './lib/ciWorkflowJobs.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 
 import {
@@ -106,7 +107,7 @@ it('selects checkout-cache contracts only in their installed-dependency runners'
   const serverContract = 'scripts/workspaceCaches.test.js';
   const clientContract = 'client/src/test/workspaceCaches.test.js';
   const shared = [
-    '.github/workflows/ci.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
+    '.github/workflows/ci.yml', '.github/actions/setup-server/action.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
     'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
     'scripts/lib/vitestWatch.js', 'scripts/lib/testProcessAttribution.js', 'scripts/lib/testOwnedProcesses.js', 'scripts/lib/darwinTestProcesses.py',
     'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/workspaceTests.js',
@@ -1667,6 +1668,11 @@ describe('CI test impact planner', () => {
       expect(plan.full, path).toBe(true);
       expect(plan.windowsMode, path).toBe('skip');
     }
+    // ci.yml's composite actions are part of its job definitions, windows-server's included.
+    for (const path of ['.github/actions/setup-server/action.yml', '.github/actions/test-memo/action.yml']) {
+      expect(windowsModeOf(path), path).toBe('files');
+      expect(buildCiTestPlan([path], { trackedFiles: TRACKED }).full, path).toBe(true);
+    }
     // Any matching trigger still wins: ci.yml next to a Linux-only script escalates.
     expect(windowsModeOf('.github/workflows/ci.yml')).toBe('files');
     expect(buildCiTestPlan(['scripts/ci-test-plan.js', '.github/workflows/ci.yml'], { trackedFiles: TRACKED }).windowsMode).toBe('files');
@@ -2291,7 +2297,8 @@ describe('dependency manifest Windows escalation', () => {
   });
 
   it('pins the Windows-installed workspaces to the windows-server install steps in ci.yml', () => {
-    const job = workflowJobs(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '.github', 'workflows', 'ci.yml'), 'utf8'))['windows-server'];
+    // The install steps live in the setup-server composite action.
+    const job = readCiJobs()['windows-server'];
     const installed = [...job.matchAll(/npm (?:ci|install)\b[^\n]*/g)].map(([cmd]) => cmd.match(/--prefix\s+(\S+)/)?.[1] ?? '.');
     expect(installed.sort()).toEqual([...WINDOWS_INSTALLED_WORKSPACES].sort());
   });
@@ -2489,12 +2496,12 @@ describe('path-gated single-purpose jobs', () => {
     for (const file of [
       'server/lib/windowsAgentProcess.js', 'server/lib/windowsAgentProcess.darwin.test.js', 'server/lib/darwinAgentSupervisor.py',
       'server/vitest.config.js', 'server/package-lock.json', 'server/.npmrc',
-      'scripts/trusted-rebuilds.js', '.github/workflows/ci.yml',
+      'scripts/trusted-rebuilds.js', '.github/workflows/ci.yml', '.github/actions/setup-server/action.yml',
     ]) expect(buildCiTestPlan([file]).macosNative, file).toBe(true);
     for (const file of [
       'server/lib/windowsAgentSupervisor.ps1', 'server/lib/linuxAgentSupervisor.py', 'server/lib/bufferedSpawn.js',
       'server/services/releasePreflight.js', 'server/services/releaseCandidateEvidence.js', 'client/src/App.jsx', 'docs/GITHUB_ACTIONS.md',
-      '.github/workflows/release.yml', 'package-lock.json', 'client/.npmrc',
+      '.github/workflows/release.yml', 'package-lock.json', 'client/.npmrc', '.github/actions/setup-client/action.yml',
     ]) expect(buildCiTestPlan([file]).macosNative, file).toBe(false);
     expect(buildCiTestPlan(['docs/README.md'], { forceFull: true }).macosNative).toBe(true);
 
