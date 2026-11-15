@@ -206,6 +206,24 @@ describe('creative setup', () => {
   });
 });
 
+describe('large canon pickers (#16205)', () => {
+  // Uniquely catches a 60+ entry cast being unsearchable in the plain select.
+  it('filters a long cast list by name and adds the filtered entry', async () => {
+    getUniverse.mockResolvedValue({ id: 'u1', name: 'Example universe', characters: Array.from({ length: 65 }, (_, i) => ({ id: `c${i}`, name: `Actor ${i}`, physicalDescription: 'Coat' })), places: [{ id: 'p1', name: 'Diner' }], objects: [] });
+    const onSave = open();
+    await screen.findByText('Example universe');
+    fireEvent.change(screen.getByLabelText('Universe'), { target: { value: 'u1' } });
+    const select = await screen.findByLabelText('Select cast');
+    expect(within(select).getAllByRole('option')).toHaveLength(66);
+    expect(screen.queryByLabelText('Filter places by name')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Filter cast by name'), { target: { value: 'actor 6' } });
+    expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['6 of 65 match…', 'Actor 6', ...Array.from({ length: 5 }, (_, i) => `Actor 6${i}`)]);
+    fireEvent.change(select, { target: { value: 'c60' } });
+    fireEvent.click(screen.getByText('Save creative setup'));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0][0].concept.subjects[0]).toMatchObject({ name: 'Actor 60', canonId: 'c60' });
+  });
+});
 describe('tools / policy conflict', () => {
   const render_ = (extra, onSave = vi.fn(async () => {})) => {
     render(<MemoryRouter><CreativeSetupPanel project={{ ...project, ...extra }} onSave={onSave} onPendingChange={vi.fn()} /></MemoryRouter>);
