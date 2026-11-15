@@ -1,3 +1,15 @@
+/**
+ * Page-level lightbox + gallery-metadata concern for the Universe Builder.
+ *
+ * Takes `{ draft, runsLength }`; hydrates a filename→sidecar map (prompt/seed/model), derives
+ * `previewItems` across variations, composite sheets, style probes, and canon/character-sheet refs
+ * (namespaced-key dedupe), and wires `usePreviewRoute` + `useMediaPreviewActions` +
+ * `useMediaAnnotations`. Returns `{ previewItems, preview, setPreview, previewActions,
+ * openPreviewByFilename, openVariationPreview, annotations, updateAnnotation, bumpGalleryRefresh }`.
+ * Use when: Universe Builder image lightbox — don't re-roll the gallery-sidecar/previewItems
+ * derivation.
+ */
+
 import { useState, useMemo, useCallback } from 'react';
 import { normalizeImage } from '../components/media/normalize';
 import { descriptorForCanonEntry } from '../lib/canonPrompt';

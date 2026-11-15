@@ -2,6 +2,9 @@
  * New cast, environment or object for a story, drafted from the user's prompt
  * (Casting / Environments / Objects › story filter › New from prompt).
  *
+ * New cast/environment/object for a story from the user's prompt: visible instructions block, prompt
+ * assembly from labeled context blocks, and the `{name, description}` answer parser.
+ *
  * The prompt is sent as the user wrote it. The instructions, the universe and
  * the story's context are labeled blocks listed beside it (#11317), so Show
  * full prompt names every word the model read. The answer is a preview: no

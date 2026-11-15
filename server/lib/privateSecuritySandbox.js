@@ -1,4 +1,9 @@
-/** OS containment for the private, tool-free assessment harness (macOS). */
+/**
+ *  OS containment for the private, tool-free assessment harness (macOS).
+ *
+ * Loopback-only local-provider gate and macOS Seatbelt launch with isolated CLI home and scratch
+ * workspace.
+ */
 import { access, mkdir, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname, delimiter, isAbsolute, join } from 'node:path';

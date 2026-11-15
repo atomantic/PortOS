@@ -1,3 +1,12 @@
+/**
+ * Strict scanner evidence/request/grant schemas with committed snapshot provenance
+ *
+ * ; `securityScanGrantFromArgs` resolves actual Codex launch pins, `parseRunnerSecurityScanEvidence`
+ * preserves ordered runner observations, `securityScanPRDisclosure` publishes bounded runner evidence
+ * independently of assistant summary truncation, and `parseSecurityScanEvidence` retains legacy agent
+ * reports.
+ */
+
 import { z } from 'zod';
 
 const PREFIX = 'SCANNER_STATUS_JSON:';

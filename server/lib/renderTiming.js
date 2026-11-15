@@ -1,6 +1,15 @@
 /**
  * Render timing — the wall-clock a media render actually took.
  *
+ * `renderTimingFields(startedAtMs, nowMs?)` → the `{ renderMs, renderStartedAt, renderCompletedAt }`
+ * spread every image/video backend stamps on the record it persists, measuring ingestion → finished
+ * artifact (not queue wait). Returns `{}` when no start instant was observed, so absence stays the
+ * explicit unknown sentinel for the history cards and `services/videoGen/eta.js`.
+ * `omitRenderTiming(record)` is the inverse. `HOSTED_PROVIDER_ID_FIELDS` lists the provider request
+ * ids (Runway task, fal.ai/Topaz request, Gemini chat). A DERIVED record built by spreading its source
+ * (an image variant, an upscale/trim) spreads `omitDerivedRenderFields(source)`, which strips both, so
+ * it inherits neither a duration it never took nor the source's provider request.
+ *
  * Every image/video backend stamps the same three fields on the record it
  * persists (an image sidecar, a video-history row) so the Create section's
  * history/preview cards can show "how long did this take" without re-deriving

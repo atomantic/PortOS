@@ -1,9 +1,16 @@
-// Chiptune score preview (#2911) — turns a track's LLM-generated chiptune
-// score into a seamlessly LOOPING WebAudio preview. Companion to the offline
-// renderer (server/lib/chiptuneRender.js): same score contract, same timing
-// semantics (MIRRORS server/lib/chiptuneScore.js buildScoreEvents — keep the
-// two in lockstep), synthesized live with OscillatorNodes + a noise buffer
-// instead of offline PCM.
+// Chiptune score preview (#2911) — turns a track's LLM-generated chiptune score into a seamlessly
+// LOOPING WebAudio preview.
+//
+// Looping WebAudio preview for LLM-generated chiptune scores (#2911) — `buildChiptuneSchedule(score)`
+// (pure pattern/order → absolute-time flatten, MIRRORS `server/lib/chiptuneScore.js` timing
+// semantics), `parseChiptunePitch("C5")` → MIDI, and `createChiptunePlayer(getScore, { onLoop })` — a
+// seamless-loop player over `createLookaheadTransport` (pulse-duty via PeriodicWave, triangle bass,
+// noise-buffer/sine-sweep drums), exposing `position()` (monotonic across loop passes) + `loopSec()`
+// for playhead UIs. No React — `ChiptunePanel` drives it.
+//
+// Companion to the offline renderer (server/lib/chiptuneRender.js): same score contract, same timing
+// semantics (MIRRORS server/lib/chiptuneScore.js buildScoreEvents — keep the two in lockstep),
+// synthesized live with OscillatorNodes + a noise buffer instead of offline PCM.
 //
 // No third-party audio library — built on the shared lookahead transport
 // (lookaheadTransport.js, #2493) like the other synth players. The schedule

@@ -1,3 +1,12 @@
+// Pure merge of a Universe Builder expansion into a draft: `mergeExpandIntoDraft`,
+// `extractPreservedFromDraft`, `mergeVariations`, `mergeCanonByName`, with lock/preserve/dedupe rules.
+//
+// Pure lock/preserve/dedupe merge of a Universe Builder expansion into a universe draft:
+// `mergeExpandIntoDraft(draft, result, {mergeInfluences, ensureDraftCategories})`,
+// `extractPreservedFromDraft`, `mergeVariations`, `mergeCanonByName` (existing wins;
+// name/alias/slugline identity). The one definition shared by the Universe Builder client
+// (`client/src/lib/universeBuilderExpand.js` re-exports it) and the Story Builder server step.
+//
 // Shared by the Universe Builder client (client/src/lib/universeBuilderExpand.js
 // re-exports it) and the Story Builder's server-side universeAesthetic step, so
 // both honor one lock/preserve/dedupe contract. The influence merge is injected

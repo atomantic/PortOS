@@ -1,3 +1,10 @@
+/**
+ * `{ presets, save(label, look), remove(id) }` — the install's saved film looks
+ * (`settings.filmLookPresets`), loaded once and shared by every caller on the page.
+ *
+ * Use when: Film look controls, the per-shot look picker.
+ */
+
 import { useCallback, useEffect, useState } from 'react';
 import { getSettings, updateSettings } from '../services/apiSystem.js';
 import { normalizeFilmLook } from '../lib/filmLook.js';

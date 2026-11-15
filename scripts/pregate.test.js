@@ -193,7 +193,7 @@ describe('resolvePlanStages', () => {
   });
 
   it.each(['related', 'full'])('runs shared guards before every costly %s stage without changing the broad selection', (mode) => {
-    const tracked = ['server/lib/index.test.js', ALWAYS_RUN_TESTS[0], 'client/src/fooConventions.test.js'];
+    const tracked = ['server/lib/moduleSummaries.test.js', ALWAYS_RUN_TESTS[0], 'client/src/fooConventions.test.js'];
     const plan = planWith({
       server: { mode, files: tracked.slice(0, 2), sources: ['server/lib/helper.js'] },
       client: { mode, files: tracked.slice(2), sources: [] },
@@ -253,7 +253,7 @@ describe('pregate hidden-content invocation', () => {
     // Docs-only changes select no test owners; full plans still have a native inventory.
     for (const path of [
       'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js', 'scripts/lib/githubActionsApi.js',
-      'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
+      'scripts/ci-test-plan.js', 'scripts/lib-catalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
       'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
       'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js',
       'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
@@ -315,17 +315,14 @@ describe('pregate hidden-content invocation', () => {
   }
 
   function prepareGuardFixture({ browser = false } = {}) {
-    write('server/lib/index.js', 'export {};\n');
-    write('server/lib/README.md', '# Shared helpers\n');
     // This fixture guard pins the catalog failure at the CLI boundary; the real
-    // catalog suite separately owns the complete barrel/README contract.
-    write('server/lib/index.test.js', `
+    // module-summary suite separately owns the complete header contract.
+    write('server/lib/moduleSummaries.test.js', `
       import { appendFileSync, existsSync, readFileSync } from 'fs';
       appendFileSync('.cache/events', 'catalog\\n');
       if (existsSync('server/lib/helper.js') &&
-          (!readFileSync('server/lib/index.js', 'utf8').includes('helper') ||
-           !readFileSync('server/lib/README.md', 'utf8').includes('helper'))) {
-        throw new Error('Missing helper barrel/catalog registration');
+          !readFileSync('server/lib/helper.js', 'utf8').startsWith('// ')) {
+        throw new Error('Missing helper module summary');
       }
     `);
     write('server/lib/expensive.test.js', 'export {};\n');
@@ -337,14 +334,14 @@ describe('pregate hidden-content invocation', () => {
       const excluded = JSON.parse(process.env.PORTOS_PREGATE_GUARDS || '{}').files || [];
       const broad = process.env.CI_TEST_MODE !== 'files' || files.includes('server/lib/expensive.test.js');
       appendFileSync('.cache/events', JSON.stringify({ broad, excluded }) + '\\n');
-      if (files.includes('server/lib/index.test.js') && !excluded.includes('server/lib/index.test.js')) {
-        await import(pathToFileURL(resolve('server/lib/index.test.js')));
+      if (files.includes('server/lib/moduleSummaries.test.js') && !excluded.includes('server/lib/moduleSummaries.test.js')) {
+        await import(pathToFileURL(resolve('server/lib/moduleSummaries.test.js')));
       }
     `);
     write('scripts/run-ci-lint.js', `
       import { appendFileSync, existsSync, writeFileSync } from 'fs';
       appendFileSync('.cache/events', 'lint\\n');
-      if (existsSync('.cache/mutate')) writeFileSync('server/lib/helper.js', 'export const helper = 2;\\n');
+      if (existsSync('.cache/mutate')) writeFileSync('server/lib/helper.js', '// Helper.\\nexport const helper = 2;\\n');
     `);
     write('scripts/smoke-boot.js', `
       import { appendFileSync } from 'fs';
@@ -421,17 +418,17 @@ describe('pregate hidden-content invocation', () => {
 
   // A structural refusal must precede both related-test dispatch and Chrome's
   // prerequisite probe, with the unfinished broad stages preserved in the receipt.
-  it('refuses a missing helper catalog registration before broad tests or browser probes start', () => {
+  it('refuses a missing helper module summary before broad tests or browser probes start', () => {
     prepareGuardFixture({ browser: true });
     const result = run('--skip-lint', '--full');
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('Missing helper barrel/catalog registration');
+    expect(result.stderr).toContain('Missing helper module summary');
     const events = readFileSync(join(root, '.cache/events'), 'utf8');
     expect(events).not.toContain('"broad":true');
     expect(existsSync(join(root, '.cache/probe-started'))).toBe(false);
     const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
     expect(report.passed).toBe(false);
-    expect(report.stages.find(stage => stage.guard)).toMatchObject({ status: 'failed', files: ['server/lib/index.test.js'] });
+    expect(report.stages.find(stage => stage.guard)).toMatchObject({ status: 'failed', files: ['server/lib/moduleSummaries.test.js'] });
     expect(report.stages.filter(stage => ['server tests', 'browser suites'].includes(stage.name)))
       .toEqual(expect.arrayContaining([
         expect.objectContaining({ name: 'server tests', status: 'not-run' }),
@@ -443,8 +440,7 @@ describe('pregate hidden-content invocation', () => {
   // modification between stages invalidates it even when the test file is stable.
   it.each([false, true])('rechecks guard inputs before broad dispatch (changed: %s)', (changed) => {
     prepareGuardFixture();
-    write('server/lib/index.js', "export { helper } from './helper.js';\n");
-    write('server/lib/README.md', '# Shared helpers\nhelper\n');
+    write('server/lib/helper.js', '// Helper.\nexport const helper = 1;\n');
     if (changed) write('.cache/mutate', 'mutate during lint');
     const result = run('--full');
     expect(result.status, result.stderr).toBe(0);
@@ -453,12 +449,12 @@ describe('pregate hidden-content invocation', () => {
     expect(events.indexOf('catalog')).toBeLessThan(events.indexOf('lint'));
     expect(events.at(-1)).toBe('smoke');
     const broad = events.filter(event => event.startsWith('{')).map(event => JSON.parse(event)).find(event => event.broad);
-    expect(broad.excluded).toEqual(changed ? [] : ['server/lib/index.test.js']);
+    expect(broad.excluded).toEqual(changed ? [] : ['server/lib/moduleSummaries.test.js']);
     const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
     expect(report.stages.every(stage => stage.status === 'passed')).toBe(true);
     expect(report.treeStable).toBe(!changed);
     expect(report.stages.find(stage => stage.name === 'server tests').guardReuse?.files)
-      .toEqual(changed ? undefined : ['server/lib/index.test.js']);
+      .toEqual(changed ? undefined : ['server/lib/moduleSummaries.test.js']);
   });
 
   // A branch and base can each be green while their combined route inventory fails.
@@ -1110,11 +1106,11 @@ describe('downgradeFullPlan', () => {
   });
 
   it('keeps structural guards selected by a large diff when downgrading a full plan', () => {
-    const tracked = [...ALWAYS_RUN_TESTS, 'server/lib/index.test.js'];
+    const tracked = [...ALWAYS_RUN_TESTS, 'server/lib/moduleSummaries.test.js'];
     const changedFiles = Array.from({ length: 31 }, (_, index) => `server/lib/module-${index}.js`);
     const downgraded = downgradeFullPlan(planWith({ full: true }), tracked, changedFiles);
 
-    expect(downgraded.server.files).toContain('server/lib/index.test.js');
+    expect(downgraded.server.files).toContain('server/lib/moduleSummaries.test.js');
   });
 });
 
@@ -1331,7 +1327,7 @@ describe('the gate end to end', () => {
       git('config', 'user.email', 'contributor@example.com');
       for (const path of [
         'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
-        'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
+        'scripts/ci-test-plan.js', 'scripts/lib-catalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
         'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
         'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js',
         'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',

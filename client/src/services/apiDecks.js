@@ -1,3 +1,8 @@
+/**
+ * Decks (playing-card / tarot designer) — deck + card CRUD, sample-design style analysis, universe
+ * casting + prompt generation (plus its SSE progress URL), single/batch card renders.
+ */
+
 import { request } from './apiCore.js';
 
 // Decks — playing-card / tarot deck designer (Create → Decks). Decks are

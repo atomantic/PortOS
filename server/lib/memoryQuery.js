@@ -1,6 +1,8 @@
 /**
  * Memory Query Helpers
  *
+ * Pure memory-index helpers: meta projection, filter/sort, search/hybrid meta filters, RRF fusion.
+ *
  * Pure, side-effect-free helpers used by the file-based memory service to
  * project index metadata, filter/sort index entries, apply post-search
  * metadata filters, and fuse BM25 + vector rankings via Reciprocal Rank

@@ -1,7 +1,13 @@
-// Provenance taxonomy for health / longevity insights — the trust model behind
-// the source-style chips on MeatSpace, genome, death-clock, and longevity views.
-// It mirrors the spirit of Ask's source chips: every number on screen declares
-// how it was derived, so a modeled projection never reads as a measured fact.
+// Provenance taxonomy for health / longevity insights — the trust model behind the source-style chips
+// on MeatSpace, genome, death-clock, and longevity views.
+//
+// `PROVENANCE_LEVELS` / `getProvenanceLevel(level)` — the
+// `data-backed`/`inferred`/`experimental`/`speculative` trust taxonomy (label, tone, description,
+// "what would change this?" copy) behind the `ProvenanceChip` source-style chips on MeatSpace / genome
+// / death-clock / longevity views. Pure data; the chip component maps tone→color and id→icon.
+//
+// It mirrors the spirit of Ask's source chips: every number on screen declares how it was derived, so
+// a modeled projection never reads as a measured fact.
 //
 // Pure data only (no React / lucide) so it stays unit-testable and reusable. The
 // `ProvenanceChip` component maps each level's `tone` to a color and `id` to an

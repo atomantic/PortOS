@@ -1,6 +1,13 @@
 /**
  * Browser-extension error detection.
  *
+ * `isExtensionError(payload)` — true when a client error report came from a browser extension's
+ * injected content script (extension URL scheme in `source`/`stack`/`message`, or a short list of
+ * vendor/runtime message signatures) rather than from PortOS. Consumed by `services/clientErrors.js`
+ * to keep un-actionable extension noise out of the Review Hub *and* out of the 1/sec throttle slot,
+ * where it would displace real errors. Re-exported by `client/src/lib/extensionErrors.js`, so both
+ * sides classify identically.
+ *
  * Content scripts injected by extensions (wallets, password managers, ad
  * blockers) run in the page's realm, so anything they throw surfaces through
  * OUR `window.onerror` / `unhandledrejection` handlers and lands in the Review

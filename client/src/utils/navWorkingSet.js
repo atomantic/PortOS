@@ -1,3 +1,13 @@
+// Recent/pinned nav persistence (`recordVisit`, `togglePin`, `isPinned`) plus
+// `resolveRecentNavEntries` for mapping stored deep links back to their longest matching nav-manifest
+// entry.
+//
+// Also `migrateLegacyNavPath(path, commands)` — maps a stored path onto the CURRENT path of the page
+// that used to answer to it, driven by each command's own `previousPaths` (declared in
+// `server/lib/navManifest.js` beside the page that moved, shipped whole in the palette manifest). A
+// pin is a stored route path, so without it a moved page's pin stops matching the manifest and the
+// sidebar row silently vanishes on update.
+//
 // Pure working-set helpers for the sidebar Pinned + Recent sections.
 // No DOM / localStorage access here — callers (useNavWorkingSet) own I/O so
 // this logic is testable in node. Lists are plain string[] of route paths,

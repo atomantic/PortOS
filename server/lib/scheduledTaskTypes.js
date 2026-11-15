@@ -1,4 +1,10 @@
-/** Registered scheduled task names, kept separate from schedule configuration. */
+/**
+ *  Registered scheduled task names, kept separate from schedule configuration.
+ *
+ * Registered scheduled task names (`SELF_IMPROVEMENT_TASK_TYPES`), shared by schedule configuration
+ * and authoritative skill routing; plus the retired-name map (`TASK_TYPE_RENAMES`,
+ * `currentTaskTypeName`, `taskExecutionKey`) for tasks and records written before a task rename.
+ */
 import { PRIVATE_SECURITY_TASK_TYPE } from './privateSecurityPolicy.js';
 import { currentTaskTypeName } from './taskTypeRenames.js';
 import { PROGRAMMATIC_SCHEDULED_TASK_TYPES } from './taskTargetScope.js';

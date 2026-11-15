@@ -1,3 +1,16 @@
+/**
+ * Registry hook for saved-default plus per-run override form options, owning state, dirty flags and
+ * hydrate-if-untouched from a spec row per option.
+ *
+ * Registry for "saved default + per-run override" form options: one spec row per option (`{
+ * defaultValue, read, clamp, persistOnEdit }`) owns the state, per-field dirty flag,
+ * hydrate-if-untouched pass and edited-only override collection. Returns `{ values, edit, hydrate,
+ * collectOverrides, inputProps }`, all identity-stable and ref-backed so a caller's `useCallback`
+ * needs one dep instead of one per option. Use when: Any panel where each option must load a saved
+ * default, persist edits, and send ONLY edited fields as per-run overrides (AutopilotPanel) — use this
+ * instead of hand-copying the state/editedRef/hydrate/collect scaffold per option.
+ */
+
 import { useCallback, useMemo, useRef, useState } from 'react';
 
 /**

@@ -2,6 +2,12 @@
  * What a provider is told when it creates or edits a Place's greybox, and the
  * parser for its answer.
  *
+ * What a provider is told when it creates or edits a Place's greybox (`greyboxContractInstructions`,
+ * `greyboxPlaceBlock`, `greyboxCurrentBlock`, `greyboxPrompt`) and `parseGreyboxAnswer`, which turns
+ * the text answer (fenced or not) into a validated scene or throws a message naming the first problem.
+ * The contract, place and current scene are separate visible blocks so "Show full prompt" lists every
+ * word sent.
+ *
  * The user's instruction is sent as written. The contract below is one visible
  * block the UI lists beside it, and the place's own description and (for an
  * edit) the current scene are two more, so "Show full prompt" names every word

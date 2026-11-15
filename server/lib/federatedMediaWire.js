@@ -1,3 +1,17 @@
+/**
+ * Versioned federated-media status schema/constants plus fail-closed consumer freshness checks (stale
+ * and clock-skewed snapshots are never assignable).
+ *
+ * `FEDERATED_MEDIA_FEATURES` + `federatedMediaSupports(status, feature, capability)` answer "does the
+ * peer BUILD speak this wire feature" from the status-root `features` list — the one place the "absent
+ * reads as the wire-v1 baseline" rule lives; a published list wins outright, with the `inputAssets`
+ * capability block retained as its only legacy overlap tell because it is genuinely per-model.
+ * `federatedMediaDeclaresFeatures(status)` and `federatedMediaDeniesFeature(status, feature,
+ * capability)` separate "positively denied" from "could not establish" for MESSAGE selection only —
+ * both gate identically, and which missing signal indicts the peer’s build is recorded per feature
+ * rather than at each call site.
+ */
+
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { isPlainObject } from './objects.js';

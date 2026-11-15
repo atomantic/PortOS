@@ -1,3 +1,7 @@
+/**
+ * macOS-correct memory accounting (handles "Pages free" quirk).
+ */
+
 import os from 'os';
 import { exec } from './childProcess.js';
 import { promisify } from 'util';

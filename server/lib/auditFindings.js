@@ -1,3 +1,8 @@
+/**
+ * Audit finding register schema, stable root-cause keys, per-agent checkpoints and fix-or-track
+ * delivery instructions.
+ */
+
 import { z } from 'zod';
 import { join } from 'node:path';
 import { safeJSONParse } from './jsonIo.js';

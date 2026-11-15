@@ -1,5 +1,9 @@
 // Resolve which script scene the writer's caret currently sits in.
 //
+// Resolve which script scene the editor caret sits in (`sceneAtCursor`, `sceneAnchorIndex`) — inverse
+// of WorkEditor's jump-to-scene text search; drives the live render preview's "scene at cursor"
+// target.
+//
 // Writers Room script analyses don't store prose offsets — scenes are matched
 // to the manuscript by text (this mirrors WorkEditor's jumpToScene, which
 // locates a scene by searching for its heading, then a summary/action snippet).

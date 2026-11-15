@@ -1,5 +1,10 @@
 // Agy (Antigravity CLI) session-model list.
 //
+// Live `agy models` probe (the AGENT models `--model` accepts) with
+// `models`/`error`/`loading`/`refresh`; opt-in via an `enabled` flag so it never spawns for a disabled
+// backend. Use when: Any Agy model picker — the Settings default or the per-render override. Don't
+// hardcode a model list: agy exits non-zero on an id outside this catalog.
+//
 // `agy models` enumerates the AGENT models the CLI's `--model` flag accepts —
 // the model that drives the session and calls the built-in `generate_image`
 // tool. Agy exposes no knob for the underlying *image* model (its

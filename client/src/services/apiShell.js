@@ -1,3 +1,9 @@
+/**
+ * Shell sessions over HTTP: hand a photo (plus a message) to the agent TUI running in a session.
+ *
+ * Keystrokes/output stay on the `shell:*` socket protocol.
+ */
+
 import { request } from './apiCore.js';
 
 /**

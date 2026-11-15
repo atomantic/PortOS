@@ -1,3 +1,8 @@
+/**
+ * Versioned POST LLM generation/scoring schemas, semantic-verdict validation, and secret-free
+ * generator/scorer provenance with explicit legacy normalization.
+ */
+
 import { z } from 'zod';
 
 export const POST_LLM_GENERATOR_SCHEMA_VERSION = '1';

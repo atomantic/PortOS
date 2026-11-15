@@ -1,3 +1,9 @@
+/**
+ * Deterministic overlap gate selecting at most three of a mind's own memories for a human message
+ *
+ * ; acknowledgements and unrelated messages select nothing. Pure.
+ */
+
 import { STOP_WORDS } from './bm25.js';
 
 export const PERSISTENT_MIND_RECALL_LIMITS = Object.freeze({

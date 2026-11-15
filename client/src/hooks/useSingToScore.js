@@ -1,6 +1,13 @@
 // useSingToScore — capture a sung melody from the mic and transcribe it into
 // PortOS lead-sheet notation.
 //
+// Capture a sung melody from the mic and transcribe it into lead-sheet notation. `start()` opens the
+// mic, counts in on the shared metronome, then accumulates a pitch track relative to beat 1; `stop()`
+// runs the `transcribePitchTrack` pipeline (segment → quantize at the song tempo → spell for the key)
+// and returns the lead-sheet body. Exposes `{ phase, beat, result, error, start, stop, reset }`; tears
+// down mic/analyser/tracker/metronome on stop and unmount. Use when: The Song editor's Sing-to-score
+// panel.
+//
 // Lifecycle: `start()` opens the mic (its own getUserMedia — sing-to-score is a
 // standalone capture, distinct from a recording take), counts in with the shared
 // metronome so the singer knows where beat 1 is, then runs a pitch tracker that

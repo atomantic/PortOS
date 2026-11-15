@@ -1,3 +1,11 @@
+/**
+ * Drag-to-resize split-pane width persisted to `localStorage`
+ *
+ * ; returns `{ containerRef, width, maxWidth, onMouseDown, reset }` and caps the drag at `maxFraction`
+ * of the measured container. Use when: A desktop sidebar/split pane with a draggable divider
+ * (WorkEditor's storyboard sidebar).
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 

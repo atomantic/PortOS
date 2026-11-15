@@ -1,9 +1,19 @@
-/** Supervised release-agent tree settlement: a native Windows Job
+/**
+ * Supervised release-agent process-tree settlement via a Windows Job, Linux subreaper or macOS launchd
+ * coalition, with single-launch ownership and supervisor-routed cancellation.
+ *
+ * Server-reserved release-agent supervision (Windows Job, Linux child subreaper or macOS launchd
+ * coalition), single-launch ownership, supervisor-routed cancellation and durable parent/descendant
+ * settlement receipts; legacy, helper-missing or unreadable proof stays blocked. Native
+ * implementations: `windowsAgentSupervisor.cs`, `linuxAgentSupervisor.py`, `darwinAgentSupervisor.py`.
+ *
+ *  Supervised release-agent tree settlement: a native Windows Job
  * (`windowsAgentSupervisor.cs`), a Linux child subreaper
  * (`linuxAgentSupervisor.py`) or a macOS launchd coalition
  * (`darwinAgentSupervisor.py`) writes the same reservation → started → settled
  * records. Reservations and receipts stay local and outlive agent-history
- * compaction; missing proof always retains the hold. */
+ * compaction; missing proof always retains the hold.
+ */
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';

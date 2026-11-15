@@ -1,3 +1,10 @@
+/**
+ * `appOperationErrorContext` projects bounded forge scope repair fields for failed update events and
+ * history
+ *
+ * ; all other error context is withheld.
+ */
+
 /** Bounded repair guidance only; arbitrary provider/error context stays server-side. */
 export const appOperationErrorContext = (error) => {
   const context = error?.context;

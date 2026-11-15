@@ -1,11 +1,16 @@
-// Helpers for resolving forge (GitHub/GitLab) identity from git remote and
-// PR/MR URLs. No child-process or network access — these are string parsers and
-// selectors. The one non-pure edge is `parseGitRemote`, which canonicalizes a
-// personal SSH `Host` alias through the user's `~/.ssh/config` (a cached,
-// guarded, synchronous read — see lib/sshHostAlias.js for why that has to happen
-// at parse time). The orchestration that shells out to `gh`/`glab` lives in
-// server/services/forgeAuth.js (account/token resolution) and
-// server/services/git.js (PR operations); both compose these helpers.
+// Helpers for resolving forge (GitHub/GitLab) identity from git remote and PR/MR URLs.
+//
+// `parseGitRemote`, `parseGitHubOwnerFromRemote`, `pickGhAccountForOwner`, `detectForgeCli`,
+// `parsePullRequestUrl` — GitHub/GitLab remote + PR/MR URL parsers and forge/account selectors used by
+// `git.js`. Pure except that `parseGitRemote` canonicalizes an ssh `Host` alias through
+// `sshHostAlias.js`.
+//
+// No child-process or network access — these are string parsers and selectors. The one non-pure edge
+// is `parseGitRemote`, which canonicalizes a personal SSH `Host` alias through the user's
+// `~/.ssh/config` (a cached, guarded, synchronous read — see lib/sshHostAlias.js for why that has to
+// happen at parse time). The orchestration that shells out to `gh`/`glab` lives in
+// server/services/forgeAuth.js (account/token resolution) and server/services/git.js (PR operations);
+// both compose these helpers.
 
 import { resolveSshHostAlias } from './sshHostAlias.js';
 

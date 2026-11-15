@@ -1,3 +1,15 @@
+/**
+ * Beeper Desktop bridge: saved conversation scopes (list/create/update/delete)
+ *
+ * ; status card and live connectivity check (#30), the connect flow (#31) — OAuth start,
+ * paste-a-token, disconnect — the mirrored chat surface (#35): conversations, thread pages, rail
+ * networks, archive/low-priority — the durable send outbox (#36): create an entry, send it (with the
+ * first-contact confirmation), list a conversation's entries, clear the runaway breaker; write paths
+ * never retry — and the attachment byte mirror (#37): `beeperAttachmentUrl` (a relative `/api/...`
+ * src, so an `<img loading="lazy">` IS the fetch-on-view), `fetchBeeperAttachment` ("fetch anyway"),
+ * `setBeeperAttachmentKeep`, the backfill census + run, and the per-conversation mirror purge.
+ */
+
 import { API_BASE, request, queryString } from './apiCore.js';
 
 // Beeper Desktop bridge — status card (#30). Read-only connection status

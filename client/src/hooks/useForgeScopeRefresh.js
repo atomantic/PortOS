@@ -1,3 +1,15 @@
+/**
+ * Hook for a managed app's forge-token scope refresh: `start(scopes)` runs `gh auth refresh` for the
+ * app's forge host via an SSE job slot.
+ *
+ * One forge-token scope-refresh slot for a managed app (`useSseJobSlot` over `POST
+ * /api/apps/:id/forge-auth/refresh`): `start(scopes)` runs `gh auth refresh` for the app's own forge
+ * host (server-derived, enterprise hosts included), `device` is the `{ code, url }` the user approves
+ * in a browser (null until gh prints it), `onRefreshed()` fires on confirmation. Returns `{ active,
+ * pending, device, start, cancel }`. Use when: Any surface that hits a `FORGE_TOKEN_SCOPE_MISSING`
+ * error — pair with `<ForgeScopeFix>`.
+ */
+
 import { startAppForgeRefresh, appForgeRefreshEventsUrl, cancelAppForgeRefresh } from '../services/apiApps.js';
 import useSseJobSlot from './useSseJobSlot.js';
 

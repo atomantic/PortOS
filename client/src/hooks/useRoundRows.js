@@ -1,3 +1,14 @@
+/**
+ * Row-level edit helpers for a Round draft: add, update and remove lyric sections, voice layers and
+ * references, plus `applyProposedPart`.
+ *
+ * Row-level edits on a Round draft — add/update/remove for lyric sections, voice layers and
+ * references, `applyProposedPart` (an analysis-proposed part into the base melody or the harmony
+ * parts, capped at `SCORE_PARTS_MAX`), and `remainingPresets` (foundation-first `VOICE_LAYERS` the
+ * draft hasn't added, matched on preset id). Nothing persists — the page's Save does. Use when: The
+ * Round edit form + the reference-analysis workbench.
+ */
+
 import { useCallback, useMemo } from 'react';
 import toast from '../components/ui/Toast';
 import { VOICE_LAYERS } from '../lib/songCraft';

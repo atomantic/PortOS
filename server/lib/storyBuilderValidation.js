@@ -1,3 +1,7 @@
+/**
+ * Unified Story Builder session/step schemas.
+ */
+
 import { z } from 'zod';
 import { STEP_IDS as STORY_STEP_IDS } from './storyBuilderSteps.js';
 import { emptyToUndefined } from './zodCompat.js';

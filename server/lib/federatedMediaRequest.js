@@ -1,3 +1,8 @@
+/**
+ * Builds and validates the versioned federated-media submission body for a visual kind, so every call
+ * site that persists a remote-job marker projects local params onto the wire identically.
+ */
+
 import { isDefaultA2vLoraStages } from './videoLoraStageValidation.js';
 /**
  * One builder for the versioned federated-media submission body.

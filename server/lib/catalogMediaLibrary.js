@@ -1,6 +1,10 @@
 /**
  * Cast reference library (Casting > References).
  *
+ * Normalize reference variants, reviews, exact feedback and refinement lineage; filter by
+ * age/era/look/tag/rating and select up to 4 compatible render guides, excluding bad images (a legacy
+ * or older-peer `rejected` reads as bad).
+ *
  * Each catalog media row carries an optional `library` JSONB describing how the
  * asset is used as a reference for the cast member: which variant it depicts
  * (age, era, wardrobe/look, free label), searchable tags, and whether it is a

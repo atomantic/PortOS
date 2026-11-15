@@ -1,6 +1,25 @@
 /**
  * Is a completed agent record an OUTCOME, or a handoff to its own continuation?
  *
+ * Is a completed CoS agent record an OUTCOME, or a HANDOFF to its own continuation?
+ * `isAgentHandoff(agent)` — `result.resumed === true`, what `resumeAgent`/`relaunchAgent` stamps when
+ * it retires a record and requeues the SAME task, typically because the user swapped providers after a
+ * usage limit. Every consumer that read `result.success` as the verdict booked a phantom failure per
+ * swap — a red history card, a failed task in the daily report and weekly digest, a dented success
+ * rate, a quota-burn denial recorded against "Relaunched by user", a feature agent flipped to `error`
+ * — so the rule task-learning already applied lives here once. Reads only `result`, so
+ * `completeAgent`'s stats writer can ask it before the record exists. Keyed on a field `resumeAgent`
+ * has always written, so archived relaunches reclassify retroactively with no migration. Also carries
+ * `agentHandoffReason(agent)` — `metadata.pauseReason` when a continuation was queued, else
+ * `result.error`, so an abandoned run is not captioned as a deliberate provider swap — and
+ * `isQueuedContinuation(agent)`, the narrower check for a caller about to SKIP its own completion
+ * handling because it expects a continuation run to fire it instead: `isAgentHandoff` alone is not
+ * proof a continuation exists (a stranded pause retirement also stamps `resumed: true` with nothing
+ * requeued), so use this one there. `client/src/lib/agentOutcome.js` re-exports this file rather than
+ * copying it. `normalizeTaskOutcome` validates explicit delivery evidence; `isTaskDeliveryComplete`
+ * admits completed/no-action-needed delivery only, and the server also resolves reported evidence
+ * against delivery checks with `resolveTaskOutcome`.
+ *
  * `resumeAgent` (and `relaunchAgent`, which composes a pause with a resume)
  * retires the old record with `success: false` and requeues the SAME task — most
  * often because the user swapped providers after a CLI hit a usage limit, not

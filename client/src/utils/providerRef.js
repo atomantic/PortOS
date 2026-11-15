@@ -1,4 +1,16 @@
 /**
+ * Parses provider id grammar: `parseProviderRef`, `isCompositeProviderId`, `isPresetProviderId`,
+ * `formatCompositeId`, distinguishing preset ids from composite harness ids.
+ *
+ * `parseProviderRef(id)` / `isCompositeProviderId(id)` / `isPresetProviderId(id)` /
+ * `formatCompositeId(parts)` / `PRESET_ID_RE` / `COMPOSITE_ID_RE` — the shared preset-vs-composite
+ * grammar (#7566): distinguishes a preset id from a
+ * `<harness>.<method>@<service-slug>[+<bootstrap-slug>]` composite so `useProviderCatalog`'s
+ * `resolveRef` and `ProviderComposePopover` recognize the same strings the server does. Re-exported
+ * from the pure leaf `server/lib/providerRef.js`, never copied.
+ */
+
+/**
  * Provider REFERENCE grammar (#7564, epic #7561), shared with the server.
  *
  * A `{ providerId, model, effort }` selection names its provider either by a

@@ -1,9 +1,15 @@
 /**
- * Which music video an Image Gen or Video Gen render is made for. The forms
- * keep it in the `musicVideo` URL param, so it survives a reload and rides a
- * handoff from one of the video's clips (Remix, Continue, a trim), and send it
- * as `musicVideoProjectId`: the server files the render into that video's
- * collection even when no shot keeps it.
+ * Which music video an Image Gen or Video Gen render is made for.
+ *
+ * Which music video an Image Gen / Video Gen render is for: `MUSIC_VIDEO_FILING_PARAM` (the
+ * `musicVideo` URL param), `musicVideoFilingFields(searchParams)` (the `musicVideoProjectId` request
+ * field), `musicVideoOf(item)` (a record's video). Used by
+ * `components/media/MusicVideoFilingSelect.jsx`, `hooks/useMediaPreviewActions.js` and the two
+ * generate pages.
+ *
+ * The forms keep it in the `musicVideo` URL param, so it survives a reload and rides a handoff from
+ * one of the video's clips (Remix, Continue, a trim), and send it as `musicVideoProjectId`: the server
+ * files the render into that video's collection even when no shot keeps it.
  */
 
 export const MUSIC_VIDEO_FILING_PARAM = 'musicVideo';

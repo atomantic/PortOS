@@ -1,3 +1,9 @@
+/**
+ * Frozen migration-443 helper retained for upgrading older installs
+ *
+ * ; no runtime consumers.
+ */
+
 import { createHash } from 'node:crypto';
 
 /** Migration 443 only. Frozen upgrade observations distinguish archive-era bookkeeping from new incidents. */

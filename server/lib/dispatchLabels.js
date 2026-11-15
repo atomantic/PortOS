@@ -1,6 +1,45 @@
 /**
  * slashdo-compatible dispatch-hint labels for planner-driven issue filing.
  *
+ * slashdo dispatch-hint contract: the `model:` capability and `effort:` reasoning-budget label
+ * vocabulary (the tiers themselves live in this module and are deliberately not re-enumerated here — a
+ * catalog copy of them is what drifted a tier behind), prescribed forge colors, validation
+ * (`normalizeDispatchModel` / `normalizeDispatchEffort`), the read-side inverse
+ * (`dispatchHintFromLabels` — recovers `{model, effort}` from a raw label-name list, used by
+ * branch-reconcile's per-branch routing hint), the per-forge label separator (`labelSeparator` /
+ * `forgeLabelName` — GitLab spells every prefixed label with its native scoped `::`, GitHub keeps `:`,
+ * and the read side accepts both; applied once at the `forgeIssueLabels` / `dispatchLabelSpec`
+ * boundary so the axis builders stay canonical; Jira keeps the hyphen form), optional contributor
+ * labels (`good first issue` / `help wanted`, never implied by `model:light`, and released at claim
+ * time by `formatContributorLabelReleaseCommands` — one best-effort command per label, since a forge
+ * fails the whole edit when a named label is absent), the one shared volunteer-claim policy
+ * (`volunteerClaimLabels` / `formatVolunteerClaimCommands` — a human comment claiming an unassigned
+ * issue is resolved by BOTH issueWatcher.js's deterministic pass and the claim prompt's Phase 1
+ * handoff, so both stamp `in-progress` and retire the invitations rather than writing opposite state),
+ * the open-ended planner-attribution axis (`planner:<model>`, `normalizePlannerId` /
+ * `resolvePlannerId` / `formatPlannerLabelGuidance` — records WHICH model wrote the plan,
+ * prefix-matched by `dispatchLabelSpec` so it lazily creates like the fixed labels; a filing agent
+ * takes the value from its prompt, never from self-identification), the workflow-state markers
+ * (`EPIC_LABEL`/`EPIC_DECOMPOSED_LABEL` and `IN_PROGRESS_LABEL` — state, not hints: shared with
+ * perpetualWork.js#isActionableIssue, issueReconcile.js's zombie scan, issueWatcher.js's volunteer
+ * assignment, and the claim prompts), lazy-create command text, the optional `--label` slots a
+ * rendered `issue create` example offers (`OPTIONAL_ISSUE_LABEL_FLAG_SLOTS` /
+ * `formatOptionalIssueLabelFlags` — one list so a new axis reaches every prompt template's
+ * copy-pasteable command, not just its prose), and shared dispatch plus issue-quality guidance
+ * (`ISSUE_QUALITY_GUIDANCE`, `DISPATCH_HINT_GUIDANCE`, `MANDATORY_DISPATCH_HINT_GUIDANCE`,
+ * `JIRA_DISPATCH_HINT_GUIDANCE`, `MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE`,
+ * `REFERENCE_WATCH_LABEL_CONTRACT`, plus the consumer-side pair `DISPATCH_HINT_READING_GUIDANCE` /
+ * `DISPATCH_HINT_FANOUT_GUIDANCE` — what the labels mean to an agent that RECEIVES them (the preloaded
+ * `open-issues` task data input) and, for an orchestrator only, how to route each sub-agent by its own
+ * issue (the swarm block); the fan-out form is the reading form plus one line, never a second copy of
+ * the vocabulary). All forge filing callers require both dispatch axes and verify labels after
+ * creation; hardware-bound help wanted also requires explicit `hardwareRequirements` labels
+ * (`windows`, `macos`, `linux`, `cuda`, `apple-silicon`), while user-perspective-only requests declare
+ * `helpWantedReason: user-perspectives`; independent platform targets are split rather than combined;
+ * never invent `medium`; reject future-only/speculative work while keeping useful current refactors
+ * claimable. Consumed by work-tracker instructions, quota-burn audits, Layered Intelligence filing,
+ * and claim follow-up prompts.
+ *
  * Two independent axes — capability (`model:`) and reasoning budget (`effort:`) —
  * plus the prescribed forge colors, validation, and label-formatting helpers.
  * Omit an axis when the evidence does not justify it; never stamp `medium` on

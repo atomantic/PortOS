@@ -1,3 +1,8 @@
+/**
+ * App CRUD + PM2 ops (start/stop/restart) + local open actions (editor, folder, Xcode) +
+ * `getAppIssues` (open GitHub/GitLab issues for the Issues tab).
+ */
+
 import toast from '../components/ui/Toast';
 import { request, API_BASE } from './apiCore.js';
 

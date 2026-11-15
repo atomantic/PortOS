@@ -1,6 +1,10 @@
 /**
  * FableLoom — pure graph analysis for branching-narrative episodes.
  *
+ * FableLoom branching-narrative graph analysis: `analyzeEpisodeGraph` (deterministic validation —
+ * reachability, dead ends, dangling paths, intent hygiene), `computeGraphLayers` (BFS layering),
+ * `describeGraphForPrompt` (compact text rendering for LLM stages), `GRAPH_ISSUE_CODES`.
+ *
  * A FableLoom episode is a directed graph of scene nodes. Each node carries
  * prose plus a list of intent-triggered transitions (the reader expresses an
  * intent in free text; the play LLM matches it to a transition). Ending nodes

@@ -1,3 +1,8 @@
+/**
+ * Strict Deep audit checkpoint schema, scope invalidation, server-assigned passes and mechanical
+ * completion rules.
+ */
+
 import { z } from 'zod';
 import { POLLUTING_KEYS } from './objects.js';
 import { canonicalSnapshotChecksum } from './snapshotChecksum.js';

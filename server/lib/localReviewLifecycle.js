@@ -1,3 +1,10 @@
+/**
+ * `localReviewLifecycle`, `localReviewReceiptEvidence` — durable pre-PR completion bound to the
+ * branch, origin, base and exact PR delivery
+ *
+ * ; separates completed and actual inspected heads, with explicit legacy uncertainty.
+ */
+
 import { readFile, writeFile, rename } from 'node:fs/promises';
 import { execGit } from './execGit.js';
 

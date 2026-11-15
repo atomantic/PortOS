@@ -1,3 +1,12 @@
+/**
+ * `{ values, saved, isDirty, set(path, value), load(values), markSaved(values?, submitted?) }` — one
+ * reducer holding a settings form's editable values and the saved snapshot they are diffed against
+ *
+ * ; a field is one entry in the loaded object, `set` takes a dotted path or an updater. Use when: A
+ * settings tab/drawer with many fields and a Save button (the Media settings drawer) — instead of one
+ * `useState` per field plus a hand-maintained `saved` mirror and dirty check.
+ */
+
 import { useCallback, useMemo, useReducer } from 'react';
 
 const sameJsonShape = (a, b) => JSON.stringify(a) === JSON.stringify(b);

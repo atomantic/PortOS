@@ -1,6 +1,13 @@
 /**
  * Named temporary thinking presets for the persistent CoS mind.
  *
+ * Also owns bounded self-thinking request schemas, durable request normalization, and fixed switching
+ * limits. Saved named temporary thinking presets for the persistent mind (exact provider/model/effort
+ * alternates to its one home profile): default-empty durable shape, normalization that drops
+ * half-pinned entries, strict API schema, whole-list replace merge, preset lookup, strict
+ * accepted-selection schema/normalization, and route equality independent of labels. Storage only —
+ * saving or selecting a preset starts no inference.
+ *
  * `persistentMindProfile.js` owns the mind's ONE home route — the identity it
  * wakes on by default. This module owns the user's saved alternates: exact
  * provider/model/effort routes that a single explicitly-selected message may

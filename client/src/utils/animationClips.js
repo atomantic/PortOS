@@ -1,5 +1,10 @@
 // Treadmill helpers for rigged GLB animation clips.
 //
+// Treadmill helpers for rigged GLB clips: `withInPlaceClips` synthesizes root-translation-stripped
+// ("in place") variants of root-motion walk/run clips so a fixed-frame avatar can't drift;
+// `inPlaceClipName` routes a clip name to its variant. Framework-agnostic (caller passes the
+// root-motion names + suffix).
+//
 // A "root-motion" clip (a walk/run cycle that translates the model forward)
 // drifts a fixed-frame avatar out of view. These helpers synthesize an
 // "in place" variant — the same clip with its root-translation (`.position`)

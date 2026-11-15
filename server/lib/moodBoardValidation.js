@@ -1,3 +1,7 @@
+/**
+ * Mood board + board-item create/update schemas.
+ */
+
 import { z } from 'zod';
 import { GENERATION_METADATA_LIMITS } from './pngMetadata.js';
 import { isValidKey, parseKey } from './mediaItemKey.js';

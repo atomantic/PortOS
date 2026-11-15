@@ -327,7 +327,7 @@ async function createRunnerSandbox(files) {
 }
 
 it.each(['files', 'full'])('validates the guard proof before the actual %s Vitest selection with the persistent memo off', async (mode) => {
-  const guard = 'server/lib/index.test.js';
+  const guard = 'server/lib/moduleSummaries.test.js';
   const { scratch: fixture, repo: root } = await createRunnerSandbox([guard, 'scripts/example.test.js']);
   try {
     installFakeNpm(fixture, 'if (process.env.PORTOS_PREGATE_GUARDS) throw new Error("Guard proof leaked to test process");\n' + REPORTING_NPM);
@@ -343,8 +343,8 @@ it.each(['files', 'full'])('validates the guard proof before the actual %s Vites
     if (mode === 'files') expect(result.stdout).toContain('Reused 1 structural guards');
     else expect(result.stdout).not.toContain('Reused');
     const { selection } = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('{"args"')));
-    if (mode === 'files') expect(selection.include).not.toContain('lib/index.test.js');
-    else expect(selection.include).toContain('lib/index.test.js');
+    if (mode === 'files') expect(selection.include).not.toContain('lib/moduleSummaries.test.js');
+    else expect(selection.include).toContain('lib/moduleSummaries.test.js');
     expect(selection.include).toContain('../scripts/example.test.js');
   } finally {
     await destroyGitSandbox(fixture);
@@ -507,7 +507,7 @@ it('partitions complete browser profiles before per-shard memo reuse and preserv
 }, 150_000);
 
 it('keeps explicit browser selectors with their owner after structural guard reuse', async () => {
-  const guard = 'server/lib/index.test.js';
+  const guard = 'server/lib/moduleSummaries.test.js';
   const browser = 'server/services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js';
   const ordinary = 'scripts/example.test.js';
   const { scratch: fixture, repo: root } = await createRunnerSandbox([guard, browser, ordinary]);
@@ -559,7 +559,7 @@ it('keeps explicit browser selectors with their owner after structural guard reu
 });
 
 it('keeps explicit DB selectors with the DB runner after structural guard reuse and test memo subtraction (#13455)', async () => {
-  const guard = 'server/lib/index.test.js';
+  const guard = 'server/lib/moduleSummaries.test.js';
   const dbTest = 'server/services/githubNotifications.db.test.js';
   const ordinary = 'scripts/example.test.js';
   const { scratch: fixture, repo: root } = await createRunnerSandbox([guard, dbTest, ordinary]);
@@ -729,8 +729,8 @@ describe('ci.yml shard wiring', () => {
 
 describe('toRunnerPath', () => {
   it('maps repo paths onto each workspace runner root', () => {
-    expect(toRunnerPath('client', 'client/src/lib/index.test.js')).toBe('./src/lib/index.test.js');
-    expect(toRunnerPath('server', 'server/lib/index.test.js')).toBe('./lib/index.test.js');
+    expect(toRunnerPath('client', 'client/src/lib/moduleSummaries.test.js')).toBe('./src/lib/moduleSummaries.test.js');
+    expect(toRunnerPath('server', 'server/lib/moduleSummaries.test.js')).toBe('./lib/moduleSummaries.test.js');
     expect(toRunnerPath('server', 'scripts/checkNodeVersion.test.js')).toBe('../scripts/checkNodeVersion.test.js');
     expect(toRunnerPath('client', 'server/lib/postScoring.js')).toBe('../server/lib/postScoring.js');
   });

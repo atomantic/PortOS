@@ -1,6 +1,11 @@
 /**
  * Run-scoped "ignore per-stage LLM pins" policy.
  *
+ * Run-scoped "ignore per-stage LLM pins" switch (AsyncLocalStorage) — `withStagePinsIgnored(ignore,
+ * fn)` marks an async subtree, `stagePinsIgnored()` reads it, and
+ * `services/stageRunner.js#effectiveStage` enumerates which stage-config fields it strips. Backs
+ * Series Autopilot's "use one provider/model for every stage" option.
+ *
  * Series Autopilot threads its run provider/model/effort as SOFT defaults
  * (stageRunner's `providerDefault`/`modelDefault`/`effortDefault`) so a
  * deliberate per-stage pin from the Prompts page keeps winning for that stage.

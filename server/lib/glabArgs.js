@@ -1,4 +1,11 @@
 /**
+ * `GLAB_JSON_ARGS`, `withGlabJson(args)` — pure `glab` argv conventions.
+ *
+ * The JSON output flag is `--output json`, NOT `-F json`: on `glab issue list` (and only there) `-F`
+ * is `--output-format` (details/ids/urls), so `-F json` is accepted, ignored, and answers with the
+ * human table at exit 0. Shared by all three `glab` runners so the spelling has one definition;
+ * guarded tree-wide by `services/gitlab.glabFlags.test.js`.
+ *
  * Pure argv conventions for the GitLab CLI (`glab`) — no child-process access,
  * so the three runners that drive `glab` (services/gitlab.js#execGlab,
  * perpetualWork.js#runCli, lib/runCliBounded.js) can share one

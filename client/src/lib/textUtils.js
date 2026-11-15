@@ -1,4 +1,16 @@
 /**
+ * Re-exports `escapeRegExp`, `countWords`, `isStr` and `isNonBlankStr` from the server text utilities
+ * for client use.
+ *
+ * `escapeRegExp(value)`, `countWords(text)`, `isStr(v)` and `isNonBlankStr(v)` re-exported from
+ * `server/lib/textUtils.js` — the two members the bundle has callers for (the Writers Room editor and
+ * exercise panel and the autobiography tab count words with the same `\S+` rule the server stores).
+ * Named exports rather than `export *`, so the file stays the list of what the browser actually uses.
+ * Also `pluralize(count, singular, pluralForm?)` — the shared "N item/items" phrasing helper for
+ * singular/plural counts.
+ */
+
+/**
  * Pure prose helpers, from the module that owns them on both sides.
  *
  * `escapeRegExp`, `countWords`, `isStr`, `isNonBlankStr` and `pluralize` are named

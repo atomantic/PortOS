@@ -1,4 +1,10 @@
 /**
+ * Storyboard ids (`isValidStoryboardId`, `newStoryboardId`, `isValidStoryboardRecipeId`), vocab
+ * (`STORYBOARD_MUSICAL_ROLES`, aspect ratios, art styles, framings, take sources) and
+ * `STORYBOARD_LIMITS`.
+ *
+ * Browser-safe: the client editor imports it.
+ *
  * Storyboard vocabulary — ids, enums and caps shared by the server record
  * normalizer (storyboardRecord.js), the route schemas and the client editor.
  * Kept free of node-only imports so the client can import it directly.

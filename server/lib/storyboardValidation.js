@@ -1,4 +1,8 @@
 /**
+ * Storyboards route schemas (board, beat, panel, move, take) built from `storyboardVocabulary.js` caps
+ *
+ * ; over-limit text is refused, never cut.
+ *
  * Zod schemas for the Storyboards routes. Caps and vocabularies come from
  * storyboardRecord.js (the sanitizer's constants) so the route check and the
  * normalizer cannot drift. Over-limit text is refused here, never cut.

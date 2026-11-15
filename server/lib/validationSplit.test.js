@@ -133,7 +133,6 @@ describe('exported validation schemas are wired (#5730)', () => {
 
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
   const libDir = path.join(repoRoot, 'server/lib');
-  const BARREL = 'server/lib/index.js';
   const IDENTIFIER = /[A-Za-z_$][A-Za-z0-9_$]*/g;
   const EXPORTED_SCHEMA = /export\s+const\s+([A-Za-z0-9_$]+(?:Schema|Enum))\b/g;
 
@@ -154,7 +153,6 @@ describe('exported validation schemas are wired (#5730)', () => {
     libDir = path.join(repoRoot, 'server/lib'),
     moduleFiles: files = moduleFiles,
     intentionallyUnwired = INTENTIONALLY_UNWIRED,
-    barrel = BARREL,
     trackedFiles,
     readFile = (p) => readFileSync(p, 'utf8'),
   } = {}) {
@@ -179,12 +177,10 @@ describe('exported validation schemas are wired (#5730)', () => {
 
     // One pass over the tree builds the identifier index for candidate schemas.
     // Per-module counts are kept (not just presence) so a schema's own `export const`
-    // line can be discounted; every other file only needs presence. The barrel is
-    // skipped entirely — it re-exports wholesale and would mark everything "used".
+    // line can be discounted; every other file only needs presence.
     const moduleCounts = new Map(); // 'server/lib/x.js' -> Map(candidate -> count)
     const externalIdentifiers = new Set();
     for (const rel of tracked) {
-      if (rel === barrel) continue;
       const isModule = rel.startsWith('server/lib/')
         && files.includes(rel.slice('server/lib/'.length));
       const content = readFile(path.join(repoRoot, rel));
@@ -236,10 +232,6 @@ describe('exported validation schemas are wired (#5730)', () => {
         export const parentSchema = z.object({ child: siblingComposedSchema });
         export const externalReferencedSchema = z.object({});
         export const allowlistedSchema = z.object({});
-        export const barrelOnlySchema = z.object({});
-      `,
-      'server/lib/index.js': `
-        export { barrelOnlySchema } from './testOneValidation.js';
       `,
       'server/routes/testRoute.js': `
         import { externalReferencedSchema, parentSchema } from '../lib/testOneValidation.js';
@@ -252,7 +244,6 @@ describe('exported validation schemas are wired (#5730)', () => {
       repoRoot: '/fake/root',
       moduleFiles: ['testOneValidation.js'],
       intentionallyUnwired: new Set(['testOneValidation.js:allowlistedSchema']),
-      barrel: 'server/lib/index.js',
       trackedFiles: Object.keys(fakeFiles),
       readFile: (p) => {
         const normalized = p.replaceAll('\\', '/');
@@ -262,7 +253,6 @@ describe('exported validation schemas are wired (#5730)', () => {
 
     expect(unwired).toEqual([
       'testOneValidation.js:unreferencedSchema',
-      'testOneValidation.js:barrelOnlySchema',
     ]);
   });
 

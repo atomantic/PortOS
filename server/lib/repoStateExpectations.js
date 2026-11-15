@@ -1,6 +1,15 @@
 /**
  * Post-completion repo-state expectations for CoS worktree agents — the pure half.
  *
+ * Post-completion repo-state audit, pure half. `resolveRepoStateExpectation({...})` answers whether
+ * one finished worktree agent should be audited — naming every not-audited path via `REPO_STATE_SKIPS`
+ * (a failed run is preserved for its retry; a review-loop follow-up or pr-watcher pending merge still
+ * owns the branch) — and returns just `staysOpen` + `prExpected`, from which
+ * `classifyRepoStateIssues(expectation, observed)` derives every check into `REPO_STATE_ISSUES` codes.
+ * Observations are tri-state: `null` ("could not ask") never produces an issue.
+ * `repoStateVerificationEnabled(app)` reads the per-app `verifyRepoStateOnCompletion` switch (unset =
+ * on). Probing + remediation live in `services/agentRepoStateVerification.js`.
+ *
  * Cleanup (`services/agentWorktreeCleanup.js`) reports only the steps it TRIED
  * and failed. A run whose steps were never attempted finishes with zero warnings
  * and still leaves debris: an agent that owns its own PR workflow merges the PR

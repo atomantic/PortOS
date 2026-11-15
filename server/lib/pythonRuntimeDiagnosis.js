@@ -1,6 +1,13 @@
 /**
  * Map Python setup/exec output onto a fixed operator-facing diagnosis.
  *
+ * `diagnosePythonRuntimeText(text, { subject, repairLabel, imports, fallback })` — maps raw
+ * pip/interpreter output onto the fixed operator-facing diagnosis vocabulary (`package-missing`,
+ * `certificate-failed`, `unsupported-platform`, `wheel-unavailable`, `dependency-conflict`,
+ * `disk-full`, `network-failed`), naming the specific pinned import when one is missing. Evidence is
+ * matched and DISCARDED: nothing from the subprocess output (tokens, authenticated index URLs, local
+ * paths) is ever returned. Shared by the Prompt Guard and jev installers. Pure.
+ *
  * Every managed Python runtime in PortOS (Prompt Guard, jev, and any future
  * pinned-model boundary) hits the same short list of real-world failures: a
  * missing module, a broken certificate chain, no wheel (or no lock) for this platform, an

@@ -1,3 +1,9 @@
+// Parse huggingface_hub gated-access errors: `isGatedRepoError(text)` classifies a failure as gated
+// (403/restricted), `extractGatedRepo(text)` → `owner/name` (or null) for the UI's license deep-link.
+//
+// Shared by the image runner and MIDI transcription (LoRA trainer keeps its own regex to also match
+// bare 401). Pure.
+//
 // Shared parsing of huggingface_hub gated-access error text. Both the image
 // runner (server/services/imageGen/local.js) and the LoRA trainer
 // (server/services/loraTraining/failure.js) hit gated-repo failures and want

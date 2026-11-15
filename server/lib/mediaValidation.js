@@ -2,11 +2,13 @@
  * Media-generation & local-model infrastructure Zod schemas (split out of
  * validation.js, issue #1831).
  *
+ * Media-generation & local-model infra schemas (LoRA training, local-LLM/Ollama/LM Studio management,
+ * media-collection bulk ops).
+ *
  * Covers LoRA training config + run params, the local-LLM (Ollama / LM Studio)
  * backend management routes, OpenWorld snapshot config/query, and the media-
  * collection bulk add/remove payloads. validation.js re-exports everything here
- * (flat) so existing deep imports keep working; the barrel surfaces it as the
- * `mediaValidation` namespace.
+ * (flat) so existing deep imports keep working.
  */
 import { z } from 'zod';
 import { PORTS } from './ports.js';

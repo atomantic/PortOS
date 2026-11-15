@@ -1,9 +1,17 @@
 /**
- * Land a synthesized 16-bit WAV on disk as game/library-ready audio:
- * `<dir>/<basename>.ogg` (Vorbis via the system ffmpeg) or, when ffmpeg is
- * missing or the encode fails, `<dir>/<basename>.wav`. Shared by the offline
- * renderers of LLM-authored music (chiptune scores, drawn wave sketches) and
- * the Music Designer code engine's browser-recorded takes.
+ * Land a synthesized 16-bit WAV on disk as game/library-ready audio: `<dir>/<basename>.ogg` (Vorbis
+ * via the system ffmpeg) or, when ffmpeg is missing or the encode fails, `<dir>/<basename>.wav`.
+ *
+ * `writeWavAudioFile(wav, dir, basename)` — land a synthesized WAV Buffer as `<basename>.ogg` via the
+ * system ffmpeg, falling back to `<basename>.wav` (and dropping a stale `.ogg`) when ffmpeg is missing
+ * or the encode fails; resolves to the filename used. Shared by the chiptune and drawn-waveform
+ * renderers and the code-engine take upload. `wavDurationMs(buffer)` reads a PCM WAV's duration from
+ * its RIFF header (0 for anything that is not a parseable WAV). `measureWavAudio(buffer)` decodes PCM
+ * 16/24/32-bit or float 32/64 (EXTENSIBLE included) into `{ channels, sampleRate, frames, durationMs,
+ * peak, rms, nonFinite }` so native renders are judged by their samples (null when undecodable).
+ *
+ * Shared by the offline renderers of LLM-authored music (chiptune scores, drawn wave sketches) and the
+ * Music Designer code engine's browser-recorded takes.
  */
 
 import { randomUUID } from 'crypto';

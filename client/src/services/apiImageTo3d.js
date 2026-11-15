@@ -1,3 +1,12 @@
+/**
+ * API client for image-to-3D: selectable targets (TRELLIS.2) with install status, and per-image model
+ * create/list/get/generate/delete plus GLB and OBJ downloads.
+ *
+ * Image-to-3D (`/3d`): selectable targets (TRELLIS.2) with host availability/install status, and
+ * per-image model records — create/list/get/generate/delete + GLB asset URL, the full-resolution OBJ
+ * download URL, and the AR Quick Look USDZ upload/download pair.
+ */
+
 import { request } from './apiCore.js';
 
 // Image-to-3D (the /3d page): the selectable targets (TRELLIS.2, …)

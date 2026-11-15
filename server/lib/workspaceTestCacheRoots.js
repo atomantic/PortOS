@@ -1,3 +1,8 @@
+/**
+ * canonical workspace/cache roots for test runners and scoped retirement verification, checked against
+ * the real configured cache publishers.
+ */
+
 /** Checkout-relative roots shared by test publishers, runners and retirement. */
 export const WORKSPACE_TEST_CACHE_ROOTS = Object.freeze({
   server: { workspace: 'server', cacheDir: '.cache/vitest' },

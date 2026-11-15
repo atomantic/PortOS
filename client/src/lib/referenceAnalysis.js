@@ -1,3 +1,22 @@
+// Reference-audio analysis for the Rounds workbench (#2106) — pure DSP + diff helpers behind the
+// "analyze a reference's attached audio" view.
+//
+// `extractPitchTrack(samples, sampleRate, { startMs, endMs, hopMs })` frames decoded PCM through
+// `detectFrequency` offline (faster than realtime) into the `[{ tMs, hz, clarity }]` shape
+// `singToScore` consumes; `proposeSegmentScore(samples, sampleRate, { startMs, endMs, bpm, key })`
+// runs the solo-segment pipeline (extract → `transcribePitchTrack` on the round's tempo/key grid) → `{
+// track, body, text }`; `buildScoreText({ key, tempo, body })` wraps a transcribed body in a
+// lead-sheet header; `barPitchClasses(scoreText)` / `diffScoreBars(proposed, existing)` compare a
+// proposed part against a stored scorePart per bar by octave-collapsed pitch-class sequence (drives
+// the review diff highlighting). Stacked-mix extraction (#2121, spectral diff v2):
+// `magnitudeSpectrum(frame, { fftSize })` (hand-rolled radix-2 FFT, Hann-windowed) /
+// `averageMagnitudeSpectrum(samples, sampleRate, { startMs, endMs })` build a backing profile;
+// `estimateSpectralF0(mag, sampleRate, fftSize)` picks the fundamental by weighted (1/k) harmonic sum
+// (octave-robust); `extractSpectralDiffTrack(samples, sampleRate, { startMs, endMs, bgStartMs, bgEndMs
+// })` subtracts the backing profile per frame and estimates f0 on the residual to recover a voice that
+// never plays solo; `proposeStackedSegmentScore(...)` is its `proposeSegmentScore` counterpart. Zero
+// LLM calls — pure local DSP.
+//
 // Reference-audio analysis (#2106) — pure helpers behind the Rounds
 // "analyze a reference's attached audio" view. Three concerns, all
 // side-effect-free and unit-tested (no Web Audio here — callers hand us the

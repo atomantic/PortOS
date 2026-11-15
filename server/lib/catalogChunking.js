@@ -1,6 +1,10 @@
 /**
  * Catalog scrap chunking — pure, side-effect-free.
  *
+ * Pure lossless scrap-text chunker (`chunkRawText`, `CATALOG_CHUNK_MAX_CHARS`) — splits a long paste
+ * into ≤maxChars chunks on paragraph/newline/sentence/whitespace boundaries so the catalog extractor
+ * processes each child and unions results.
+ *
  * A long scrap paste is split into chunks so the catalog extractor can process
  * each chunk independently (bounded concurrency) and union the per-chunk drafts.
  * Short inputs return a single chunk and behave exactly as the pre-chunking

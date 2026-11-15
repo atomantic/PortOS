@@ -1,4 +1,9 @@
 /**
+ * CoS task-learning bucket classifier (`extractTaskType`, `classifyUntypedTask`,
+ * `isSandboxedTaskType`)
+ *
+ * ; browser-safe, shared with the client ETA lookup via `client/src/lib/cosTaskType.js`.
+ *
  * CoS task-learning bucket classifier. Pure and browser-safe: the server's
  * outcome store and the client's ETA lookup (client/src/lib/cosTaskType.js
  * re-exports this) must resolve a task to the same bucket, so there is one copy.

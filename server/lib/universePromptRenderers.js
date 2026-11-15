@@ -1,4 +1,7 @@
 /**
+ * Renderers that turn a universe's `categories` map + canon into prompt context, including the
+ * authored character-engine block and the shared story canon digest.
+ *
  * Shared renderers that turn a Universe Builder universe's `categories` map and
  * `compositeSheets` array into prompt-friendly text blocks. Used by both
  * `universeBuilderRefine` (which needs `[LOCKED]` flags) and `arcPlanner` (which

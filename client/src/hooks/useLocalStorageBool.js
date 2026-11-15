@@ -1,3 +1,10 @@
+/**
+ * Boolean `useState` mirrored to `localStorage`
+ *
+ * ; returns `[value, setValue, toggle]`. Use when: Per-user UI preference toggle, and any remembered
+ * disclosure (the SongBook viewer's Audio / Sheet controls / Chords used cards).
+ */
+
 import { useCallback, useState } from 'react';
 import {
   safeReadJsonStorage,

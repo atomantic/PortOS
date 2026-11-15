@@ -1,3 +1,10 @@
+/**
+ * `[ref, resize]` — grows a `<textarea>` to fit its content (no scroll / hand-resize)
+ *
+ * ; recomputes before paint on value change. Use when: A textarea that should auto-fit content. Prefer
+ * the `AutoSizeTextarea` UI component, which wraps this.
+ */
+
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 
 /**

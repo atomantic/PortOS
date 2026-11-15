@@ -1,3 +1,7 @@
+/**
+ * Memory CRUD.
+ */
+
 import { request } from './apiCore.js';
 
 // Memory

@@ -1,4 +1,9 @@
-/** Authored city blocks using Eidoverse's existing gridded building component. */
+/**
+ *  Authored city blocks using Eidoverse's existing gridded building component.
+ *
+ * Native halls, rooftop landmark clearance and plinths, curated furniture, visitor chambers, and
+ * ordered signal bays for PortOS Commons.
+ */
 
 export function eidoverseDistrictYaw(district) {
   return Math.atan2(-district.anchor[0], -district.anchor[2]);

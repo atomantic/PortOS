@@ -1,4 +1,12 @@
 /**
+ * `isTransientProviderError(errOrText)` — a provider at capacity, overloaded, rate limited or briefly
+ * unavailable (by its words, or an explicit `err.transient`), never a hard usage limit
+ *
+ * ; `runWithTransientRetry(attempt, { isTransient, delaysMs, signal, onRetryWait })` resends after
+ * `TRANSIENT_RETRY_DELAYS_MS` (~15 min in all) with a countdown callback and stamps
+ * `transientRetriesExhausted` when it gives up; `formatRetryWait(ms)`. Wrap only a step whose failure
+ * means the provider did not render or charge.
+ *
  * Transient provider errors for media render lanes: a provider that is at
  * capacity, overloaded, rate limited or briefly unavailable will most likely
  * take the same request a few minutes later, so the lane waits and resends

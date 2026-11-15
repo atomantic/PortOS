@@ -1,3 +1,9 @@
+/**
+ * Body-scroll lock with ref-count.
+ *
+ * Use when: Modals, drawers, lightboxes.
+ */
+
 import { useEffect } from 'react';
 
 let lockCount = 0;

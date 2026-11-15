@@ -1,3 +1,7 @@
+/**
+ * Creative Director (video production).
+ */
+
 import { request } from './apiCore.js';
 import { fetchByIds } from './apiBatch.js';
 

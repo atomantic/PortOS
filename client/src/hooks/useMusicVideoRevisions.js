@@ -1,3 +1,18 @@
+/**
+ * Selective music-video section revision: open from a reviewed excerpt, resume from the server
+ * checkpoint, and regenerate only flagged sections.
+ *
+ * Selective section revision (#8987): open a revision from a reviewed draft excerpt (its flagged
+ * sections' takes are rejected, the rest kept), resume it from the server checkpoint — generating ONLY
+ * the sections the server reports as `needsGeneration` through the board's scene lanes, or adopting
+ * the draft re-render via `attachRender` once every revised section has a take — and cancel it. A
+ * server refusal toasts as a failure; a throw in the hook's own follow-up AFTER the server succeeded
+ * reloads the saved record instead (#9940), so an opened repair whose resume failed stays recoverable
+ * from the "Needs attention" banner. Returns `{ busy, revise(excerptId, sceneIds?), repair(basis),
+ * repairPerformance(sceneId, input), resume(revisionId), cancel(revisionId) }`. Use when: The Music
+ * Video excerpt panel.
+ */
+
 import { useState } from 'react';
 import toast from '../components/ui/Toast';
 import { toastWorkflowError } from '../components/musicVideo/workflowErrorToast.jsx';

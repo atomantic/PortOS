@@ -1,6 +1,13 @@
 /**
  * POST practice-streak math (pure, side-effect-free).
  *
+ * Pure DST-safe POST practice-streak math — the single `computePostStreaks` implementation shared by
+ * scored sessions and the training log, plus `computeUnifiedStreak` (a day is active with EITHER a
+ * session or a practice entry), `normalizeYmd` (day-key prefix for a date that may be a full ISO
+ * timestamp), and `recordDayKey` / `withDerivedDayKeys` (re-derive a record's day key from its
+ * `startedAt`/`completedAt`/`timestamp` instant, so readers ignore a `date` frozen in a
+ * previously-configured timezone).
+ *
  * Extracted from meatspacePost.js so BOTH scored sessions and the training log
  * (Morse / memory practice) compute streaks with ONE implementation — the DST-
  * safe `computePostStreaks` — instead of the two divergent copies that used to

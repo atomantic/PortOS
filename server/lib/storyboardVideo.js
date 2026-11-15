@@ -1,4 +1,12 @@
 /**
+ * `storyboardVideoPlan` converts a storyboard's panels into Video (Creative Director) treatment shots,
+ * reporting a `problem` when the board cannot start a video.
+ *
+ * Start a Video from a storyboard: `storyboardVideoPlan` turns a board's panels into Video (Creative
+ * Director) treatment shots (intent, prompt from action/framing/camera, whole seconds capped at 10,
+ * catalog ids) with the treatment text and a `problem` when the board can't make a Video;
+ * `STORYBOARD_VIDEO_LIMITS`. Shared by the drawer preview and the write. Browser-safe.
+ *
  * Start a Video from a storyboard — the board's panels as Video (Creative
  * Director) shots: one shot per panel in board order, its intent and prompt
  * from the panel's own words, its length from the panel's seconds (or the

@@ -2,6 +2,16 @@
  * Federated subscription-quota readings — the pure half of "one plan, several
  * machines".
  *
+ * Unifies subscription-quota readings across federated instances — one plan, several machines, each
+ * able to read only its own local CLI. `sanitizeQuotaCards` bounds a peer-supplied payload to the wire
+ * shape; `mergeFleetQuotaCards(localCards, peerEntries)` folds every peer's reading into this
+ * install's cards, taking the FRESHEST reading per limit key (the meters are account-wide, so summing
+ * them would multiply one allowance) and SUMMING activity counts (those are per-machine, which is why
+ * the provider captions them "does not include other devices"); `fleetNote` writes the caption naming
+ * what was combined. `metrics[]` is left local — its values are prose, not addends. Fed by
+ * `services/providerQuotaShare.js` (this machine's readings, persisted) and `services/peerUsage.js`
+ * (the `usage` sync category that carries them).
+ *
  * A PortOS user commonly runs several federated installs against the SAME
  * provider subscription, but each install can only read the quota panel of its
  * own local CLI. That made every card a partial view: this machine's reading,

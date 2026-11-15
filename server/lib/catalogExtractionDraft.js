@@ -1,4 +1,7 @@
 // Extraction-only graph validation and reconciliation. No records are written.
+//
+// Extraction-only six-type graph schema, strict grounded-output parsing, and conservative chunk
+// identity/edge reconciliation.
 import { z } from 'zod';
 import { catalogDraftRelationshipSchema } from './catalogValidation.js';
 import { CATALOG_TYPES, canonicalTagKey } from './catalogTypes.js';

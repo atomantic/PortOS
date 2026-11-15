@@ -2,6 +2,14 @@
  * Whether a project's song-derived state (beat grid and sections, lyric and
  * phrase timings) still belongs to the audio its linked track plays today.
  *
+ * `songAudioChange(project, currentMasterFilename)` says whether a project's beat grid
+ * (`audioAnalysis.masterFilename`) or lyric timing (`lyricTimingMasterFilename`) was derived from an
+ * older audio file than its linked track plays now (a take replaced in place, #14793);
+ * `songAudioChangeMessage` is the render refusal text and `keepSongTimingPatch` adopts the current
+ * master as the kept timing's basis. A record with no recorded filename is unknown, not stale.
+ * `audioRevisionOf(projectOrRevision)` reads the audio-source revision a final render settles against
+ * (absent = 0, #15154).
+ *
  * Replacing a track's audio in place (a new take of the same song) changes
  * `track.audioFilename` but not the project's `trackId`, so the link-change
  * invalidation in `applyProjectPatch` never fires. Each derived state records

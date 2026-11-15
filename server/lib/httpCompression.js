@@ -1,3 +1,8 @@
+/**
+ * `httpCompression` negotiates Brotli/gzip for API and static responses while preserving streaming,
+ * ranges, existing encodings, and `no-transform`.
+ */
+
 import compression from 'compression';
 import { constants } from 'node:zlib';
 

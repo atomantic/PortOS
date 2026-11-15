@@ -1,4 +1,9 @@
 /**
+ * Per-kind field-precedence rules
+ *
+ * ; SHORT/RICH/PREVIEW spec tables; `flattenCanonDescriptorFragments` / `mapCanonDescriptorFragments`
+ * / `descriptorForCanonEntry`.
+ *
  * Shared per-kind field-precedence rules for canon entries. Pure ESM, no
  * Node-only deps — `client/src/lib/canonPrompt.js` re-exports it for the client
  * bundle, so nothing here may import outside `server/lib`.

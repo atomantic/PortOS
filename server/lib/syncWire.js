@@ -1,3 +1,8 @@
+/**
+ * Single source of truth for what fields cross the federated-peer wire (snapshot loop + per-record
+ * push agree).
+ */
+
 import { festivalPacketSchema } from './musicVideoFestivalPacket.js';
 import {
   BIBLE_LIMITS,

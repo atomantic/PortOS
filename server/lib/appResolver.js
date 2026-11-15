@@ -1,3 +1,7 @@
+// Fuzzy-match a spoken/typed phrase to a managed app (`{ id, name }`).
+//
+// Tiered exact → prefix → substring, used by voice tools that target a specific app.
+//
 // Sibling of `navManifest.resolveNavCommand` but for managed apps (free-form
 // `{ id, name }` records, not a static alias table). Tier ordering matters:
 // an exact match must beat a prefix/substring overlap even when a later

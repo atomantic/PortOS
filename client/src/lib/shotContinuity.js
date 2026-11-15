@@ -1,3 +1,10 @@
+// The storyboards / episode-video stages' INLINE pre-render continuity warnings (#1468).
+//
+// `findAxisReversals` / `findShotTypeMonotony` are re-exported from
+// `server/lib/editorial/shotContinuity.js`, the same detectors the authoritative
+// `visual.shot-continuity` check runs; `sceneShotWarnings(scene, opts)` is the client-only composer
+// (the server emits findings in a different shape). Pure/DOM-free.
+//
 // The inline, render-gating shot-continuity warnings for the storyboards /
 // episode-video stages (#1468) — shown before a render so the user sees a
 // 180°-rule axis jump or shot-type monotony without a round-trip through an

@@ -1,6 +1,10 @@
 /**
  * Which Homebrew package supplies a CLI, and what Homebrew itself can deliver.
  *
+ * `homebrewPackageFor(executable)` names the cask or formula owning a CLI from its real path, and
+ * `fetchHomebrewLatestVersion(pkg)` reads what Homebrew has published, so a Homebrew-managed harness
+ * is compared against what its own updater can actually install rather than a newer npm release.
+ *
  * A vendor self-updater on a Homebrew install (`codex update` runs
  * `brew upgrade --cask codex`) can only reach the version Homebrew has
  * published, and that can lag the vendor's npm release by hours. Comparing such

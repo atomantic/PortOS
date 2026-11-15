@@ -1,6 +1,14 @@
 /**
  * Shared execGit utility — imported by both git.js and worktreeManager.js
  * to avoid a circular dependency (git.js imports worktreeManager.js).
+ *
+ * Shared Git process boundary: `execGit`, `execGitSafe`, `withGitMutationLifetime`, and
+ * `assertGitWorkSettled`. Requires a nonblank cwd, pins `LANGUAGE=en` so callers can classify git's
+ * English diagnostics under any locale, and preserves output bytes when requested. Mutation lifetimes
+ * drain admitted siblings and refuse detached commands after the group ends; fixture teardown also
+ * waits for containment startup. Cancellation waits up to five seconds for tree/pipe settlement,
+ * retaining mutation admission on uncertainty. The safe variant preserves bounded settlement metadata
+ * alongside `{ exitCode: 1, stdout: '', stderr }`.
  */
 
 import { startGit, windowsGitFailureMetadata } from './windowsGitProcess.js';

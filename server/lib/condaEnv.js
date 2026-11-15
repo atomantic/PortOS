@@ -1,6 +1,15 @@
 /**
  * Conda environment resolution.
  *
+ * Resolves a NAMED conda environment's interpreter: `condaEnvPythonCandidates(envName)` builds the
+ * ordered candidate list (`CONDA_PREFIX` — walking up two levels when it points at an `envs/<name>`
+ * rather than a root — then `CONDA_ROOT`, `~/miniconda3`, `~/anaconda3`, `~/miniforge3`,
+ * `~/mambaforge`, `/opt/conda`), and `resolveCondaEnvPython(envName, { exists })` returns the first
+ * that exists or `null`. Separate from `pythonSetup.js` (which probes *venv* layouts and computes
+ * candidates from `PATHS` at module load) so a conda lookup pulls in no eager path work. Used by the
+ * image-to-3D CUDA lanes, which each own a distinct env (`trellis2`, `pixal3d`) so one lane's pinned
+ * deps can't disturb the other's.
+ *
  * Where a NAMED conda environment's interpreter lives. Deliberately its own module
  * rather than part of `pythonSetup.js`: every resolver in that file probes *venv*
  * layouts (`~/.portos/venv-<name>/bin/python3`), and — more importantly — it computes

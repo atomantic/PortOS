@@ -1,3 +1,7 @@
+/**
+ * Private assessment task identity, immutable delivery posture, and report schema.
+ */
+
 import { z } from 'zod';
 
 export const PRIVATE_SECURITY_TASK_TYPE = 'private-security-assessment';

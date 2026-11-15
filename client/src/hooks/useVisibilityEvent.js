@@ -1,3 +1,10 @@
+/**
+ * Singleton-backed `document.visibilitychange` subscription (N subscribers share one listener).
+ *
+ * Use when: Reacting to tab show/hide without spawning a per-component listener. `useAutoRefetch`
+ * already builds on this.
+ */
+
 import { useEffect, useRef } from 'react';
 
 // Singleton emitter so N subscribers share one document-level

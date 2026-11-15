@@ -2,6 +2,21 @@
  * Context-window ladder for provider/model planning: the vendor constants, the
  * known-model regex table, and the per-provider fallback.
  *
+ * The context-window ladder for provider/model planning, split out of `services/stageRunner.js` so the
+ * browser shares it: the vendor constants (`DEFAULT_LARGE_CONTEXT_WINDOW` / `CODEX_CONTEXT_WINDOW` /
+ * `GEMINI_CONTEXT_WINDOW` / `GROK_CONTEXT_WINDOW` / `KIMI_CONTEXT_WINDOW`),
+ * `knownModelContextWindow(model)` (the known-model regex table),
+ * `knownProviderContextWindow(provider)` (the vendor window for a configured-default CLI/TUI provider)
+ * `catalogModelContextWindow(provider, model)` (the window the provider's own `/models` catalog
+ * reported, which outranks the table) and `mergeObservedContextWindows(provider, observed)` (folds a
+ * local daemon's LIVE `/v1/models` windows onto that catalog rung, so they outrank a stale refresh
+ * while an explicit `contextWindow` still wins; never persisted) and
+ * `aliasServedContextWindows(provider, runtime, served)` (re-keys a daemon's served windows by every
+ * spelling the provider could dispatch under, for a caller that already holds the listing). The Ollama
+ * `num_ctx` ceiling is deliberately NOT here — see `aiToolkit/`. `stageRunner.js` builds
+ * `effectiveContextWindow` on them; `client/src/utils/providerContextWindows.js` re-exports them for
+ * the provider-card budget meter, so the two ends can't resolve a different window. Pure.
+ *
  * Split out of `services/stageRunner.js` so the browser can import it: the
  * budget meter on a provider card and the manuscript chunker on the server
  * must resolve the same window, or the card promises a budget the budgeter

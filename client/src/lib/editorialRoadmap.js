@@ -1,3 +1,8 @@
+// `projectAnalyzedPoints` (aggregate roadmap → analyzed chart points with arc-position `frac`) +
+// `dominant` (most-frequent string).
+//
+// Shared by EditorialRoadmapPanel and the Reader Map page.
+//
 // Pure helpers for the editorial reader-emotion roadmap — shared by the
 // EditorialRoadmapPanel (Series page) and the Reader Map detail page so the
 // chart math and dominant-emotion logic live in exactly one place.

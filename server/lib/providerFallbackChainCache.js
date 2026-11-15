@@ -1,4 +1,10 @@
 /**
+ * Import-free process cache of the user's single ordered provider fallback list (`peekFallbackChain`
+ * sync read for routing, `setFallbackChainCache`, `normalizeFallbackChain`).
+ *
+ * Filled by `services/providerFallbackChain.js` from settings `providerFallbackChain`; read by the
+ * toolkit's `getFallbackProvider`.
+ *
  * Process cache of the user's ordered provider fallback list. Kept free of
  * imports so routing code (promptRunner, agent resolution, bootstrap) can read
  * it synchronously without pulling in settings or validation. The settings

@@ -1,5 +1,14 @@
 // Sample-accurate metronome — the shared timing grid for the song system.
 //
+// Sample-accurate Web Audio metronome — the shared timing grid for the song system and first consumer
+// of the song `tempo` field. `createMetronome({ bpm, beatsPerBar, countInBars, onBeat,
+// onCountInComplete })` lookahead-schedules accented click tones on the shared `AudioContext` clock
+// (same pattern as `songPlayback.js`), emits `{ beat, bar, accent, countIn, whenAudioTime }` per beat
+// (the beat-clock callback color-match/sing-to-score subscribe to), and tears down all timers on
+// `stop()`. Plus `clampBpm` (20–320), `secondsPerBeat`, `timeSignatureFromScore`, `beatDescriptor`,
+// and `normalizeBeatsPerBar` — the ONE reading of a time-signature numerator (garbled/zero/negative →
+// 4), shared by the scheduler and the visual `<BeatPulse>` so the dots can't disagree with the clicks.
+//
 // Why Web Audio and not setInterval: a beat that rides setInterval drifts by
 // tens of ms under load (same reason songPlayback.js stacks takes on one
 // AudioContext clock rather than N <audio> elements). So we use the classic

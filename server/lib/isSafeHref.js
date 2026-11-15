@@ -1,4 +1,12 @@
 /**
+ * Pure http(s)-only scheme check (`isSafeHref`) for user-supplied URL fields that get rendered as a
+ * clickable `<a href>` — rejects `javascript:`/`data:`/etc. stored-XSS payloads.
+ *
+ * `client/src/lib/isSafeHref.js` re-exports it, and `client/src/utils/urlNormalize.js` re-exports that
+ * as `isHttpUrl`.
+ */
+
+/**
  * Pure http(s)-only scheme check for user-supplied URL fields that later get
  * rendered as a clickable `<a href>` (privacy-org website/portal links,
  * broker opt-out/search URLs, screenshot evidence, …).

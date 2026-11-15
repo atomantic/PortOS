@@ -1,6 +1,10 @@
 /**
  * The IP-latitude clause every creative LLM request carries.
  *
+ * The IP-latitude clause every creative LLM request carries (`withCreativeLatitude`,
+ * `CREATIVE_LATITUDE_TOKENS`), plus the one creative-vs-operational table both stamp keys are matched
+ * against (`isCreativeStage` for stage names, `isCreativeRunSource` for run `source` tags).
+ *
  * PortOS is a production tool for working artists. Frontier models — CLI/TUI
  * agents especially — reflexively soften, rename, or genericize a request the
  * moment it names an existing character, world, brand, or artist style, and

@@ -2,6 +2,10 @@
  * Beats from a plot summary — the instructions an LLM gets to break the
  * user's plot into storyboard beats and panels, and the parser for its answer.
  *
+ * Beats from a plot summary: `beatExtractInstructions` (the visible block sent ahead of the plot),
+ * `beatExtractPrompt`, `parseExtractedBeats` (a model's JSON answer reduced to beats and panels a
+ * board holds), `BEAT_EXTRACT_LIMITS`. Browser-safe.
+ *
  * The plot is sent as the user wrote it; the instructions are one visible
  * block listed beside it (#11317), so Show full prompt names every word the
  * model read. The answer is a preview: nothing lands on the board until the

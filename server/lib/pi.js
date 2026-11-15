@@ -1,4 +1,13 @@
-/** Pi CLI argv conventions. See https://pi.dev/docs/latest/usage. */
+/**
+ *  Pi CLI argv conventions. See https://pi.dev/docs/latest/usage.
+ *
+ * Pi command identity, headless/TUI arguments, and positional prompt delivery. A Pi record with an
+ * OpenAI-compatible `endpoint` and no `--provider` pin (`isPiEndpointProvider`) runs against that
+ * endpoint through the shipped `pi/portosEndpointExtension.js`: the argv builders append `--extension
+ * <path> --provider portos-endpoint` and `buildPiEndpointEnvVars` (layered by
+ * `cliChildEnv.js#composeProviderEnv`) passes the base URL, models and key, so PortOS never writes
+ * Pi's user-owned `models.json`.
+ */
 import { fileURLToPath } from 'node:url';
 import { argvHasFlag, commandBasename, hasModelFlag, buildEffortArgs } from './providerModels.js';
 

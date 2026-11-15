@@ -1,3 +1,10 @@
+/**
+ * Shared canonical Actions snapshot, socket invalidation, reconnect/tab re-show reconciliation and
+ * explicit stale/error state.
+ *
+ * Use when: Bell, dashboard previews and Actions.
+ */
+
 import { useCallback, useSyncExternalStore } from 'react';
 import * as api from '../services/api';
 import socket from '../services/socket';

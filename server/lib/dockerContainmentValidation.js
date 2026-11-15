@@ -1,4 +1,10 @@
 /**
+ * Zod schemas for Docker containment: the machine-local `dockerContainment` settings slice (limits,
+ * extra egress hosts, digest-pinned image overrides) and the `/api/docker-containment` run/pull
+ * bodies.
+ *
+ * Kept out of `validation.js` to keep that closure narrow.
+ *
  * Route schemas for Docker containment (#12844): the machine-local
  * `dockerContainment` settings slice and the run/pull request bodies. Kept out
  * of `validation.js` so the containment profile does not join that module's

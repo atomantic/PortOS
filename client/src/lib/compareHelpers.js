@@ -1,3 +1,10 @@
+// `equalByKeys(a, b, keys)` / `equalListByKeys(a, b, keys)` — typed key-based equality for
+// `useAutoRefetch`'s `compare`.
+//
+// Keys are property names, dotted paths (`'context.running'`), or `(item) => value` accessors. The
+// typed alternative to `sameJsonShape` when a monotonic timestamp or unrendered field would break
+// stringify-equality dedup.
+//
 // Key-based equality helpers for `useAutoRefetch`'s `compare` option — the
 // "skip the re-render when nothing the widget renders changed" pattern. These
 // are the typed alternative to `sameJsonShape` (JSON.stringify equality):

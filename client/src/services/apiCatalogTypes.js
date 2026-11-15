@@ -1,3 +1,7 @@
+/**
+ * User-defined catalog ingredient types (list active registry + create/update/delete user types).
+ */
+
 import { request } from './apiCore.js';
 
 // User-defined catalog ingredient TYPE API surface. Mirrors apiCatalog.js

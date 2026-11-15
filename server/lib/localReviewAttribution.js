@@ -1,3 +1,10 @@
+/**
+ * Worktree-private completed local code-review model receipts: `resetLocalReviewAttribution`,
+ * `recordLocalReviewAttribution`, and `localReviewAttributionLabels`.
+ *
+ * Stores normalized model slugs only; no roster, provider IDs, findings or credentials.
+ */
+
 import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { execFile } from './childProcess.js';

@@ -1,3 +1,14 @@
+/**
+ * Subscription plan tier labels (for example Max 20x, Pro) per provider: `MAX_PLAN_TIER_LENGTH` and
+ * `normalizePlanTier` helpers.
+ *
+ * Which TIER of a subscription plan the user is on ("Max 20x", "Pro"), as a short free-text label per
+ * provider family — `MAX_PLAN_TIER_LENGTH` (the cap the Zod schema enforces), `normalizePlanTier` /
+ * `normalizePlanTiers` (trim, cap, and collapse empty/non-string to `null` = not recorded).
+ * Deliberately free text: tiers are vendor marketing names that change off the PortOS release cycle.
+ * Pure; persistence lives in `services/subscriptions.js`.
+ */
+
 import { trimTo } from './textUtils.js';
 
 /**

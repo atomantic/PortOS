@@ -2,6 +2,11 @@
  * Word-level diff core (Myers LCS) — the shared computation behind both the
  * stacked `InlineDiff` and the columnar `SideBySideDiff`. Pure / no React.
  *
+ * `diffWords(oldText, newText)` → `{ tooLarge, oldRuns, newRuns }` — word-level Myers LCS core
+ * (tokenize on whitespace, common prefix/suffix trim, collapse to `{ text, changed }` runs, 4M-cell
+ * `DIFF_CELL_CAP` guard on the trimmed middle). Shared by `InlineDiff` (stacked), `SideBySideDiff`
+ * (columnar), and `HunkDiff`'s change blocks.
+ *
  * `diffWords(oldText, newText)` tokenizes each side on whitespace (each word and
  * its trailing whitespace is its own token), finds the longest common
  * subsequence, and returns the two sides already collapsed into renderable runs:

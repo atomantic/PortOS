@@ -1,3 +1,10 @@
+/**
+ * Project an alternate age/look's appearance, clothing and height (its own, else a child age's median,
+ * as the Height stat) without copying canonical outfits
+ *
+ * ; retain shared facial identity. `characterHeightStat(payload)` reads a character's Height stat.
+ */
+
 import { formatHeight, typicalHeightCm } from './characterHeight.js';
 
 const isHeightStat = (s) => /^\s*height\s*$/i.test(String(s?.label || ''));

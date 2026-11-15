@@ -1,6 +1,11 @@
 /**
  * The resolution floor below which a delivered video clip is low-res.
  *
+ * `LOW_RES_VIDEO_SHORT_SIDE` (720) and `isLowResVideo({ width, height })` — a measured clip whose
+ * short side is under 720 px is low-res for a 1080p render; an unmeasured size is never flagged
+ * (#14491). Re-exported to `client/src/lib/videoResolution.js` for the media card, lightbox and shot
+ * card.
+ *
  * A music video renders at 1080p, so a clip whose short side is under 720 px
  * is visibly soft once it is scaled up. Grok's CLI `image_to_video` defaults
  * to 480p (a 16:9 request arrives at 720×416), which is how #14491 found this.

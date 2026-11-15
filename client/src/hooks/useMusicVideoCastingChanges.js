@@ -1,3 +1,12 @@
+/**
+ * Reads what changed in the video's linked Casting records since its idle Cast & Sets sheet was built.
+ *
+ * Returns `{ changes, loadError, retry }`: `changes` is `{ images, cast }` or null, a failed re-read
+ * keeps the last good changes for the same project and sets `loadError`, and results never carry
+ * across projects; re-reads on sheet/link changes, catalog socket events and tab return. Use when:
+ * Cast & Sets check-in rebuild offer and its Retry line.
+ */
+
 import { useCallback, useEffect, useState } from 'react';
 import socket from '../services/socket';
 import { getMusicVideoCastAndSetsCastingChanges } from '../services/apiMusicVideo.js';

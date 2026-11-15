@@ -1,6 +1,16 @@
 // Sing-to-score transcription — turn a sung pitch track into PortOS lead-sheet
 // notation. The pipeline is three pure stages, each independently unit-tested:
 //
+// Sing-to-score transcription for the song system — turns a sung pitch track into lead-sheet notation.
+// `segmentPitchTrack(track, opts)` groups `[{ tMs, hz, clarity }]` frames into note/rest segments
+// (median pitch per stable span, rests where clarity drops, sub-threshold note/rest filtering);
+// `quantizeSegments(segments, { bpm, beatValue })` snaps each duration to the nearest grid value
+// (w/h/q/e/s) at the song tempo; `segmentsToScoreDsl(quantized, { keySig, beatsPerBar, beatValue })`
+// spells notes enharmonically from the key signature and emits measure-grouped `| … |` body text;
+// `transcribePitchTrack(track, { bpm, key, beatsPerBar, beatValue })` runs all three. Round-trips
+// cleanly back through `parseScore`. Reuses `frequencyToNote` (pitchDetect) + the duration/key tables
+// (scoreNotation) — no DSP/notation library.
+//
 //   1. segmentPitchTrack — group a continuous `[{ tMs, hz, clarity }]` track
 //      into discrete note/rest segments (onset = pitch change or energy return,
 //      rest = a run of unclear/silent frames). Note pitch = median Hz over the

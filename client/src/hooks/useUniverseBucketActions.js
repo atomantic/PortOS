@@ -1,3 +1,15 @@
+/**
+ * Hook with the Universe Builder's bucket-scoped LLM actions: `handleGenerateInCategory`,
+ * `handlePromoteVariation` and `handleAutoSort`.
+ *
+ * The Universe Builder's three bucket-scoped LLM mutations — `handleGenerateInCategory` (eager local
+ * merge then best-effort save), `handlePromoteVariation`, `handleAutoSort` (both via
+ * `useUniverseAction`) — each with its own ref+state in-flight gate. Returns `{ autoSorting,
+ * handleAutoSort, handleGenerateInCategory, handlePromoteVariation, promoting }`. Use when: Universe
+ * Builder composition shell; keep the stale-snapshot merge rules out of the page and the trunk/Other
+ * panels.
+ */
+
 import { useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import {

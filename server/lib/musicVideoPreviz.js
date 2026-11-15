@@ -1,4 +1,23 @@
 /**
+ * The greybox previz (`project.previz`): cuts over the song (each linked to a shot, with its set,
+ * saved greybox camera, camera holder, visible cast and keep-in-frame aim) and per-set blocking
+ * tracks.
+ *
+ * `backfillPrevizFromShots(project, places)` builds or refreshes it from the shot list, keeping
+ * existing picks and tracks; `previzFrameAt(project, places, t)` is what the player draws at song time
+ * `t` (the set's greybox, every person with their pose, the cast objects the shot names as prop
+ * proxies, the story clock it is lit by, the camera riding on its holder or on its saved camera);
+ * `previzCoversShots` (the optional step is done), `previzCutTiming`, `previzCutVisibleIds`,
+ * `previzCutProblems`, `previzPlaceGreybox`, `updatePrevizCut(project, cut, places)` (a picker edit,
+ * seeding marks for anyone the cut now needs; a holder is never also its aim),
+ * `previzPawnColors(project)` (each character's and each vehicle's named pawn color, picked or next
+ * free), `previzSetGreyboxDraftInstruction` (composes an instruction from the set's shots to draft its
+ * greybox), and `applyPrevizGreybox` (links cuts to drafted cameras, drops old tracks, and re-seeds
+ * marks from figure anchors). On a world with a timeline, a cut's `storyMin` plays the simulated
+ * timeline at real speed in the whole world (`previzFrameAt(..., timelineWorld)`), its unheld camera
+ * at `cameraSpot` on a long lens; `placePrevizCutsOnTimeline(project, world)` gives cuts story times
+ * across the timeline's stays. Pure, browser-safe.
+ *
  * Greybox previz for a Music Video: one 3D blocking timeline over the song,
  * played in the browser over each linked place's greybox (catalog
  * `payload.greybox`), so cameras and blocking can be directed before any image

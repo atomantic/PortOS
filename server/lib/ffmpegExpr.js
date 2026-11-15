@@ -1,4 +1,11 @@
 /**
+ * `sumExpr(terms)` sums ffmpeg expression terms as a balanced tree, because ffmpeg refuses an
+ * expression nested about 100 levels deep and a flat `a+b+c` nests one level per term.
+ *
+ * Use it for an `enable` or `select` expression built per shot, cut or beat. Browser-safe.
+ */
+
+/**
  * The sum of ffmpeg expression terms as a balanced tree. ffmpeg refuses an
  * expression nested about 100 levels deep, and a flat `a+b+c` nests one level per
  * term, so an expression built per shot or per beat fails at filter init on a long

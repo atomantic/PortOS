@@ -1,3 +1,9 @@
+/**
+ * Frozen version 1 of the text-only photographic Reality starter
+ *
+ * ; migration-safe.
+ */
+
 /** Frozen shipped text, version 1. Future revisions get a new versioned module. */
 export const REALITY_STARTER_V1 = Object.freeze({
   starterPrompt: 'Our actual world: ordinary human lives, observed with the honesty of available-light photography and live-action cinema.',

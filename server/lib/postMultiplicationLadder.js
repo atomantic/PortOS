@@ -1,6 +1,11 @@
 /**
  * POST progressive multiplication ladder (pure, side-effect-free).
  *
+ * Pure progressive multiplication ladder — mastery-gated difficulty rungs (`[1,1]` → `[1,2]` →
+ * `[1,1,1]` → …). Resolves the user's current level from per-level speed+accuracy stats so the plain
+ * multiplication drill ramps up instead of starting at a fixed hard difficulty. On by default. Built
+ * on `postProgression.js`.
+ *
  * The plain multiplication drill used to start at a fixed 2-digit × 2-digit
  * difficulty (e.g. `56 × 91`) for everyone, which is far too hard as a warm-up.
  * This module replaces that with a mastery-gated difficulty ladder: a new user

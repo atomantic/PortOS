@@ -1,3 +1,10 @@
+/**
+ * `localModelSafety`, `ESTABLISHED_MODEL_PUBLISHERS`, `REVIEWED_SECURITY_MODELS` — reduced-safeguard
+ * warnings and dated publisher/build provenance
+ *
+ * ; never a malware-free certification.
+ */
+
 /** Publisher provenance is a curation signal, never a malware-free certificate. */
 export const ESTABLISHED_MODEL_PUBLISHERS = new Set([
   'ace-step', 'bartowski', 'cohereforai', 'cvssp', 'facebook', 'ggml-org',

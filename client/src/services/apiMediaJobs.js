@@ -1,3 +1,7 @@
+/**
+ * Media generation job tracking + `refineMediaPrompt` / `promptFromMedia` (vision reverse-prompt).
+ */
+
 import { request } from './apiCore.js';
 
 export const listMediaJobs = (filters = {}, options = {}) => {

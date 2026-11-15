@@ -1,6 +1,12 @@
 /**
  * Zod schemas for the OPTIONAL five-stage character evolution lens (#6440).
  *
+ * Zod schemas for the evolution lens — `characterEvolutionSchema` (one lens),
+ * `characterEvolutionStageSchema`, `characterEvolutionEvidenceSchema` and
+ * `characterEvolutionListSchema` (the FableLoom plan's per-character list). Its own module rather than
+ * a `sharedSchemas.js` fragment so `validation.js` (which nearly every suite reaches) doesn't grow an
+ * eager edge for a shape only two hosts validate.
+ *
  * Its own module rather than a fragment in `sharedSchemas.js` because that file
  * is pulled in by `validation.js`, which nearly every server suite reaches —
  * adding an eager edge there costs one module instantiation per suite for a

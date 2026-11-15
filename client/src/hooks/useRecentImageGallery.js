@@ -1,3 +1,9 @@
+/**
+ * Bounded recent-five reads, global totals, lazy hidden pages and exact preview lookup.
+ *
+ * Use when: Image Gen recent renders.
+ */
+
 import { useCallback, useEffect, useState } from 'react';
 import { listImageGalleryPage } from '../services/api';
 

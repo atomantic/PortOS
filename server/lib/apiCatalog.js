@@ -1,6 +1,10 @@
 /**
  * Searchable metadata projection of the HTTP route inventory.
  *
+ * Searchable projection of the Express route inventory (`getApiRouteCatalog()` from
+ * `apiRouteGraph.js`): domain, access, side-effect, contract coverage, summaries, and
+ * Express-to-OpenAPI path conversion.
+ *
  * `apiRouteGraph.js` answers what is mounted, derived from the route modules
  * on first use. This module adds stable, explicitly-inferred documentation
  * metadata without importing Express route modules or their service graphs.

@@ -1,9 +1,14 @@
 /**
- * Higgsfield image model catalog — the curated endpoints the `higgsfield`
- * image backend (services/imageGen/higgsfield.js) may call, with one request
- * builder. Dependency-free so the Settings picker, the Image Gen page and the
- * server validate against the same ids; a `cloudModel` naming anything else is
- * refused because every endpoint is billed differently.
+ * Higgsfield image model catalog — the curated endpoints the `higgsfield` image backend
+ * (services/imageGen/higgsfield.js) may call, with one request builder.
+ *
+ * Curated Higgsfield image catalog (dependency-free, shared with the client):
+ * `HIGGSFIELD_IMAGE_FAMILIES`, `HIGGSFIELD_IMAGE_MODEL_IDS`, `higgsfieldImageFamily` and
+ * `buildHiggsfieldImageRequest` (edit routing, aspect/tier mapping, prompt-rewrite knobs off, refuses
+ * over-limit prompts).
+ *
+ * Dependency-free so the Settings picker, the Image Gen page and the server validate against the same
+ * ids; a `cloudModel` naming anything else is refused because every endpoint is billed differently.
  *
  * Schemas were read from the per-workflow pages on docs.higgsfield.ai on
  * 2026-11-10. Higgsfield publishes no per-image list prices there, so the cost

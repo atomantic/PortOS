@@ -1,6 +1,15 @@
 /**
  * Branch coverage for the five-stage character evolution lens (#6444, epic #6418).
  *
+ * Branch coverage for the evolution lens (#6444): `analyzeCharacterEvolutionCoverage` walks every
+ * bounded playthrough and flags `EVOLUTION_UNEARNED_INHERITANCE` — a stage proved on one incoming
+ * branch of a reconvergence and not another, so a viewer inherits a change they never watched be
+ * earned — plus unproven declared endings, out-of-sequence stage anchors and dead evidence pointers
+ * (`EVOLUTION_COVERAGE_CODES`). Introduces `unreviewed` (`EVOLUTION_COVERAGE_STATUSES`): a bounded-out
+ * enumeration, a cycle or an unresolvable anchor is explicitly NOT `verified` and NOT a defect.
+ * Deterministic and provider-free; returns `null` when no lens is authored, so a loom that never opted
+ * in is byte-identical.
+ *
  * `characterEvolution.js` models what a story DECLARES about a character's
  * transformation. This module asks the branching question that declaration
  * cannot answer on its own: *on the path the viewer actually played*, was the

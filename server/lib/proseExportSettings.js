@@ -1,6 +1,9 @@
 /**
  * proseExportSettings.js — per-series prose-export settings sanitizer + presets.
  *
+ * Per-series prose-export settings (#2181): `sanitizeProseExportSettings` + `resolveExportSettings` +
+ * `TRIM_SIZES`/`INTERIOR_FONTS` for the manuscript/ePub/PDF exports.
+ *
  * A prose series can be exported as a compiled manuscript (Markdown), an ePub,
  * or a print-interior PDF (issue #2181). The knobs that shape those artifacts —
  * trim size, interior font, and title-page fields — live on the series record

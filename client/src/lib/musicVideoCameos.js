@@ -1,7 +1,12 @@
 /**
- * Client helpers for the Music Video cameo roster (#14821). The record rules
- * live in server/lib/musicVideoCameos.js; these shape the roster editor's input
- * and apply the server's answer to the open board.
+ * Client helpers for the Music Video cameo roster (#14821).
+ *
+ * Music Video cameo roster editor helpers (#14821): `mergeCameoScenes(current, answered)` (apply a
+ * roster answer's cameo link + start frame to the open board's shots) and `parseCameoLines(text)` (one
+ * cameo per line, `Name | label`). Rules live in `server/lib/musicVideoCameos.js`.
+ *
+ * The record rules live in server/lib/musicVideoCameos.js; these shape the roster editor's input and
+ * apply the server's answer to the open board.
  */
 
 // The scene fields a roster edit can change: the link and the still it fills.

@@ -1,3 +1,8 @@
+/**
+ * Shared project-store sync normalization, LWW batch decisions, and tombstone selection for file and
+ * PostgreSQL adapters.
+ */
+
 import { sanitizeSoftDeleteFields } from './syncWire.js';
 
 /**

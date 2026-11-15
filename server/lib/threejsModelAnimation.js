@@ -1,6 +1,19 @@
 /**
  * Clip inventory and playback gate for an already-validated Three.js scene spec.
  *
+ * `summarizeThreejsAnimation(spec)` — clip inventory *and* playback gate over an already-validated
+ * Three.js spec: `{ animated, clipCount, cueCount, sequenceCount, movingPartCount, longestClipSeconds,
+ * findings, warningCount, clips }`. The schema proves a declared `animation` block is well *formed*
+ * (sequences on real parts, inside their clip, never two on one channel at once, never a cue without
+ * motion); this reports what the model *declared* — one entry per clip with its role, duration,
+ * sequence and distinct-cue counts — plus the ways a well-formed clip still plays badly: a clip
+ * authored against a pose the assembly does not build (`clip-start-pose-mismatch`), a handover between
+ * sequences that do not meet (`clip-sequence-jump`), a `loop: true` clip that does not return to where
+ * it began, a one-shot `idle`, an unfired cue, a long dead tail, and an articulation graph with no
+ * clip at all. Advisory warnings only — a static assembly is a complete answer.
+ * `buildThreejsAnimationFeedback(animation)` turns those findings into default refinement feedback. A
+ * spec with no `animation` key summarizes as not animated — never as evaluated-and-empty.
+ *
  * The schema (`server/lib/threejsModel.js`) proves a declared `animation` block
  * is well FORMED: sequences point at real parts, stay inside their clip, never
  * fight each other for the same channel, and never fire a cue without moving

@@ -1,3 +1,8 @@
+/**
+ * Continuous-video episode generation: client-side-callable lint preview of a scene draft,
+ * queue-episode submit, and the SSE progress-events URL.
+ */
+
 import { request } from './apiCore.js';
 
 // Continuous-video episode generation (#6227) — submit a multi-scene script +

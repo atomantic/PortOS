@@ -1,4 +1,15 @@
 /**
+ * MTV-style opening title card (song, artist, year): `normalizeTitleCard`, `titleCardVisible`, and
+ * steady-card helpers for the opener.
+ *
+ * The MTV-style opening title card (song, artist, year over the opener): `normalizeTitleCard`,
+ * `titleCardVisible`, `titleCardSteady` / `titleCardSteadySupported` (whether the card is drawn over
+ * the film look, and whether the project's render style can), `titleCardPrefill` (a new card's text
+ * and a window ending before the first sung line), and `titleCardRuntimeSource` (the page script the
+ * live preview and the document render install to draw it per seek, with its fades, its slide in and
+ * its title-safe layout; a steady card's canvas joins the top layer, above the film look).
+ * Browser-safe.
+ *
  * Music Video — the opening title card: the small credit block an MTV video
  * opens with (song title, artist, year), fading in over the opener (optionally
  * sliding in from one side as it does) and out again in place. One record on

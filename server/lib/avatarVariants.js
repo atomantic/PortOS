@@ -1,6 +1,10 @@
 /**
  * Rigged-record avatar variants (issue #5894).
  *
+ * Rigged-record avatar variant spelling (`RIGGED_VARIANT_PREFIX`, `AVATAR_VARIANT_PATTERN`,
+ * `parseRiggedVariant`, `riggedVariantForId`, `isAnimatedRecordReady`) — the `rigged-<modelId>`
+ * namespace over `?variant=`, sharing the route's strict traversal guard.
+ *
  * A completed rigged + animated image-to-3D record is selectable as an avatar
  * through the SAME `?variant=` namespace as the file-backed variants in
  * `server/routes/avatar.js`, under the `rigged-<modelId>` spelling. The record

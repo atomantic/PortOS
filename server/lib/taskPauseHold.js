@@ -2,6 +2,19 @@
  * User-pause hold — the bookkeeping a `pauseAgent` stamps onto the paused agent's
  * task, and the single definition of when that pause is still live.
  *
+ * The user-PAUSE hold — pure metadata helpers shared by the writer (`pauseAgent`), the reader
+ * (`resumeAgent`), and the clearer (`updateTask`). `AGENT_PAUSED_CATEGORY` is the `blockedCategory` a
+ * pause stamps; `PAUSE_METADATA_KEYS` names every key it writes; `pauseMetadata({agentId, pausedAt,
+ * workspacePath, runId})` arms it and `clearedPauseMetadata()` releases it (undefined-valued, so
+ * `updateTask` deletes rather than serializing `"null"`); `isAgentPausedTask(task)` /
+ * `isResumablePausedTask(task, agentId)` answer whether a pause is still live and whether it is THIS
+ * agent's. `updateTask` clears the whole set whenever the task leaves `blocked`, so a revive by any
+ * path (dedupe, cooldown expiry, manual unblock) can't leave a task running under a stale pause. Also
+ * carries the cycle-safe RELEASE adapter (#3730) `agentManagement.js` registers at load —
+ * `resolvePausedTaskResume(task)` hands `updateTask` the paused run's resume pointer before the write
+ * (so any un-block resumes on the preserved worktree, not just the Resume dialog) and
+ * `retirePausedAgent(agentId, taskId, branchName)` retires the paused record after it.
+ *
  * A pause parks a task in `blocked` under the `agent-paused` category plus a small
  * set of pointer keys naming the run that parked it. Three parties read that state
  * and they must not drift into three different literals:

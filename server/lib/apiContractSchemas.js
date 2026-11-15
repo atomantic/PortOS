@@ -1,6 +1,10 @@
 /**
  * Shared request contracts for externally callable PortOS APIs.
  *
+ * Canonical Zod request contracts for externally callable APIs plus `zodToOpenApiSchema` (plain JSON
+ * Schema — the 3.0.3 conversion happens at the OpenAPI document boundary, not here); runtime routes
+ * and OpenAPI use the same schema objects.
+ *
  * Routes validate these schemas and OpenAPI converts the same schema objects
  * to JSON Schema, so runtime validation and published contracts cannot drift.
  */

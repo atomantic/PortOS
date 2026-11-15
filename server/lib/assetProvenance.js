@@ -1,6 +1,10 @@
 /**
  * Asset license provenance — stamp at finalize time, never re-read later.
  *
+ * Stamp-time model/LoRA license provenance (`buildProvenance` / `provenanceForRender` /
+ * `rollupProvenance`). Unknown stays `null` (displayed as "unknown") — never a permissive default.
+ * Mirrored byte-for-byte to `client/src/lib/assetProvenance.js`.
+ *
  * PortOS already resolves a model's license when it downloads one
  * (`licenseOf` in huggingFaceCatalog, Civitai/HF LoRA cards) and then drops
  * it on the floor. Create-suite outputs leave the machine (collections,

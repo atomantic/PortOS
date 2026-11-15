@@ -1,6 +1,11 @@
 /**
  * Print-ready infographic posters drawn from an indexed universe graph.
  *
+ * Print-ready infographic posters drawn from an `indexGraph` result: `POSTER_LAYOUTS` (cast roster,
+ * character dossier, place atlas, timeline strip, relationship web), `POSTER_SIZES`, `POSTER_THEMES`,
+ * `posterDimensions`, and `renderPoster(canvas, opts)` — the same call drives the on-screen preview
+ * (scale 1) and the 2× PNG download, so they can't diverge.
+ *
  * Pure canvas drawing over the same `indexGraph` result the Graph tab already
  * holds — no fetching, no React. `renderPoster` is called both for the on-screen
  * preview (scale 1) and the 2× download, so the two can never diverge.

@@ -1,3 +1,11 @@
+/**
+ * Resolve the active tab from the `:tab` URL param against a TABS list, falling back to a default on
+ * invalid/missing.
+ *
+ * Use when: Any tabbed page whose tab lives in the URL — don't re-roll the `new Set(TABS.map(...))`
+ * guard.
+ */
+
 import { useMemo } from 'react';
 import { useParams } from 'react-router';
 

@@ -1,3 +1,9 @@
+// `installStandaloneDownloadHandler(onDownload)` delegates same-origin download links on share-capable
+// touch browsers / Home Screen apps to `DownloadManager`
+//
+// ; `prepareDownload` fetches a File for a fresh Save tap, `assetDownloadUrl` requests an attachment
+// from static mounts, and `isStandalonePwa` detects Home Screen mode.
+//
 // Mobile downloads use a visible preparation step, followed by a fresh tap to
 // share/save. Fetching a large video can outlive Safari's transient activation;
 // never call navigator.share automatically after the network request.

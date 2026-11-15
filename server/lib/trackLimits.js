@@ -1,6 +1,8 @@
 // Length/count caps for tracks records. Pure constants so the server sanitizer
 // (services/tracks/logic.js) and the client editors import ONE definition —
 // see storyArcLimits.js for the same pattern.
+//
+// Track record length/count caps shared by the tracks sanitizer and client editors.
 export const TITLE_MAX = 200;
 export const ALBUM_ID_MAX = 80;
 export const ARTIST_ID_MAX = 80;

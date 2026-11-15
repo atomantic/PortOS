@@ -1,5 +1,22 @@
 // Dictation/IME bridge for the xterm.js terminal.
 //
+// Voice-dictation/IME bridge for the Shell's xterm.js terminal. Apple dictation streams progressively
+// refined guesses and *replaces* what it already typed; xterm forwards each insertion and drops the
+// matching deletions, so the PTY accumulates a garble (`determin` + `determine` + `determines`…).
+// `attachDictationBridge(terminal, sendData)` binds capture-phase listeners on `terminal.element` —
+// ahead of xterm's own textarea listeners, which it stops — and forwards a diff instead:
+// `TERMINAL_DEL` (`0x7f`) per dropped character, then the added text. `sendData` returns `false` to
+// report a dropped send, which leaves the mirror where the PTY actually is. Paths that reach the PTY
+// some other way (a keystroke xterm handles itself, paste, blur, composition end) resync the mirror
+// without emitting. In screen-reader mode xterm drops every `insertText` event and leaves handled
+// keydowns uncancelled, so the bridge is the only path dictation has to the PTY and a live keydown
+// counts as xterm's keystroke, like a keypress. `planFieldEdit(mirror, next, floor)` → `{ data,
+// committed }` is the pure core: `floor` is the prefix we did not write and must never rewind through,
+// and `committed` (what the PTY holds afterward, which is *not* the field's value when the floor
+// blocked a rewind) is what the caller must track. The prefix scan never splits a surrogate pair —
+// cutting between the halves of an astral character would send a lone surrogate that serializes to
+// `U+FFFD`. Wired in `useShellSession`; the test suite pins the seam against a real `Terminal`.
+//
 // ── The bug this fixes ─────────────────────────────────────────────────────────
 // Apple dictation (iOS "mic" key, macOS Fn Fn) does not emit one final phrase —
 // it streams progressively refined guesses and REPLACES what it previously wrote

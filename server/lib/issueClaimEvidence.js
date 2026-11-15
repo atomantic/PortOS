@@ -1,3 +1,8 @@
+/**
+ * Shared forge claim evidence: documented claim refs, PR/MR closing trailers, paginated GitHub commit
+ * messages, complete-page validation, and the new-issue claim grace.
+ */
+
 import { extractSlugFromRef } from './planIds.js';
 
 // `issueMinAgeMinutes` (claim-issue / claim-work task metadata): autonomous

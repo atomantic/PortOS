@@ -1,6 +1,12 @@
 /**
  * Storyboard panel recipes — the node graph the panel maker runs (Make tab).
  *
+ * Storyboard panel maker recipes: node types and ports (`RECIPE_NODE_PORTS`: text, system, llm,
+ * references, image, panel), `defaultPanelRecipe` (Text → Prompt writer + System prompt → Image +
+ * References → Panel), `sanitizeRecipe` (edges join matching ports, no cycles), `recipeRunOrder`,
+ * `nodeInputValue` / `nodeOutputValue` (what flows into a node for one panel), `sanitizePanelMake`
+ * (per-panel run state), `STORYBOARD_RENDER_SIZES`. Browser-safe.
+ *
  * A recipe is a small graph: input nodes (the panel's own words, a style,
  * reference images) feed an image node, whose frames land on the panel as
  * takes. The default sends the shot as written with the style after it; an

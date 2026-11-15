@@ -1,3 +1,10 @@
+/**
+ * `useMediaQuery(query)` returns whether a CSS media query currently matches, tracking live changes.
+ *
+ * Use when: A layout that must render exactly one of two trees (e.g. table at `lg`+, cards below) so
+ * ids and labels stay unique; use Tailwind variants when hiding with CSS is enough.
+ */
+
 import { useEffect, useState } from 'react';
 
 // A CSS media query as React state, tracking live changes. Use it when a

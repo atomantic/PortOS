@@ -1,7 +1,12 @@
-// Alternate forms of a cast record (other ages, eras, looks/styles). The
-// record's own fields are its canonical present-story form; `payload.forms`
-// holds the rest. A form's sheet is tagged `sheet:<variant>@<formId>` and a
-// reference is tied to a form by `library.variant.formId`.
+// Alternate forms of a cast record (other ages, eras, looks/styles).
+//
+// Alternate forms of a cast record (other ages, eras, looks/styles; `payload.forms`): `newFormId`,
+// `formsOf(payload)`, `formAgeField(type)` / `formAgeLabel(type)` (the canonical form's age/era
+// field), and `splitSheetRole(role)` for `sheet:<variant>@<formId>`.
+//
+// The record's own fields are its canonical present-story form; `payload.forms` holds the rest. A
+// form's sheet is tagged `sheet:<variant>@<formId>` and a reference is tied to a form by
+// `library.variant.formId`.
 import { uuidv4 } from './uuid';
 
 export const FORM_ROLE_SEPARATOR = '@';

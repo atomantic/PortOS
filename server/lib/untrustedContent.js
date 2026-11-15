@@ -1,3 +1,12 @@
+/**
+ * `jevPolicyPatchSchema` validates narrow scorer-management updates.
+ *
+ * Shared source policies, strict settings schema, data framing and API-only/local-private provider
+ * eligibility for untrusted GitHub and messaging content. `selectUntrustedContentProvider` is the one
+ * provider+model selection rule (automatic selection skips an eligible provider that resolves no
+ * model; a pinned provider fails closed).
+ */
+
 import { z } from 'zod';
 import { MODEL_ABUSE_GUARD_MAX_INPUT_CHARS } from './modelAbuseGuard.js';
 import { PRIVATE_UNTRUSTED_CONTENT_SOURCES, UNTRUSTED_CONTENT_SOURCES } from './untrustedContentSources.js';

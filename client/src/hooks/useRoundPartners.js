@@ -1,3 +1,13 @@
+/**
+ * Hook for a Round's quodlibet partners: all-rounds list, resolved `partnerSongs`, `otherSongs` pick
+ * list and capped `togglePartner`.
+ *
+ * A Round's quodlibet partners: the all-rounds list (re-fetched per open song, best-effort),
+ * `partnerSongs` (ids resolved to records, missing ones dropped), `otherSongs` (alphabetical pick
+ * list) and `togglePartner` (capped at `PARTNERS_MAX`). Use when: `/rounds/:id` — the "Sings with"
+ * editor and the stacked-parts view.
+ */
+
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { listRounds } from '../services/api';
 import { PARTNERS_MAX } from '../lib/roundDraft.js';

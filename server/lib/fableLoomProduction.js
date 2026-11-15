@@ -1,6 +1,10 @@
 /**
  * FableLoom production batch planning and topological orchestration.
  *
+ * FableLoom production batch planning and topological orchestration: shared still/video render-format
+ * presets and story-level image/video provider preferences (16:9 default), ordered episode storyboard
+ * gates, DAG resolution, asset enumeration, execution stages, and exact-input provenance verification.
+ *
  * Pure, side-effect-free helpers for enumerating planned production assets
  * across reachable graph nodes, computing topological execution batches,
  * evaluating readiness gates, and verifying exact-input provenance.

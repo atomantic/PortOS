@@ -1,3 +1,11 @@
+/**
+ * `useGoogleAuthStatus({ enabled })` → `{ status, state: 'loading'|'ready'|'error', error, reload,
+ * retry }` — Google OAuth status whose failed read stays distinct from "not configured"
+ *
+ * ; a superseded read is dropped. Use when: Calendar and Messages Google setup — render the
+ * credential/setup flow only on `'ready'`.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getGoogleAuthStatus } from '../services/api';
 

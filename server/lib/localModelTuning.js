@@ -1,6 +1,26 @@
 /**
  * Launch/runtime tuning knobs for the local model runtimes PortOS can measure.
  *
+ * Launch/runtime tuning knobs for the measurable local runtimes — ONLY knobs PortOS can actually
+ * apply. A knob is defined by its transport, and `applies` + the user-facing `note` are DERIVED from
+ * it: `config` (llama.cpp's
+ * `-b`/`-ub`/`-t`/`--parallel`/`--flash-attn`/`--cache-type-k|v`/`--spec-draft-n-max`, via
+ * `launchConfig`), `env` (Ollama's
+ * `OLLAMA_CONTEXT_LENGTH`/`_FLASH_ATTENTION`/`_KV_CACHE_TYPE`/`_NUM_PARALLEL`, via `launchEnv`), `cli`
+ * (a flag on the launch line of a daemon PortOS re-runs — LM Studio's `lms load
+ * --context-length`/`--gpu`/`--parallel`, and MTPLX's `mtplx serve
+ * --context-window`/`--depth`/`--generation-mode`/`--kv-quant`/`--batching-preset`/`--profile` — via
+ * `launchArgs`), or `wire` (a request-body field, via `requestBody` — currently no members). vLLM
+ * declares none: PortOS does not start it, so there is no launch line to put a flag on. Read the MTPLX
+ * verification note in the module before adding an `mtplx serve` flag — it exits before it binds on
+ * one it does not recognize. Also `normalizeTuning` (coerce + clamp + drop unknown keys),
+ * `tuningSignature` (stable identity — `''` for backend defaults, so pre-tuning store keys keep
+ * resolving), `describeTuning`, `launchTuning`, and `compareTunings` (which tuning won per model using
+ * exact tokens/s when all variants have tokenizer counts and chars/s otherwise, labelled from each
+ * record's persisted `tuningLabel`, with a `deltaPercent` against the winner), and `tuningGridFor`
+ * (the candidate grid a tuning sweep runs — backend defaults plus one variant per knob declaring a
+ * `sweep` value, capped by `maxVariants`; `sweepWith` carries a knob's documented prerequisite). Pure.
+ *
  * A measured assessment answers "how did this model behave here?". That question
  * is incomplete without "…configured how?" — the same GGUF on the same machine
  * streams at wildly different rates depending on the micro-batch size, whether

@@ -1,5 +1,10 @@
-// A person's height as a scale cue for image models. A full-height character
-// sheet composited onto an empty set plate carries no size of its own, so a
+// A person's height as a scale cue for image models.
+//
+// A person's height as an image-model scale cue: `typicalHeightCm(age)` (child medians),
+// `formatHeight`, `resolveHeight(height, age)` (parses cm, ft/in, m) and `heightScaleLine(who,
+// height)` (sizes against a car roof, an adult and a doorway).
+//
+// A full-height character sheet composited onto an empty set plate carries no size of its own, so a
 // child rendered from it comes out adult-sized beside a car or a door.
 
 // Median standing height (cm) by whole year of age, boys and girls averaged

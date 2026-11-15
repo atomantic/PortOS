@@ -1,3 +1,14 @@
+/**
+ * Viewport-clamped `{ left, top, width }` for a fixed-position portal popover anchored to a trigger
+ *
+ * ; re-measures on open and rAF-coalesced on capture-phase scroll/resize. Returns `{ triggerRef,
+ * popoverRef, style, reposition }`; pass `anchorRef` to follow a parent-owned trigger and `align` for
+ * start/center/end (default end); opt into `constrainHeight` to cap scrollable help to the roomier
+ * side of its trigger. Use when: Any portal-into-`<body>` menu/popover placed relative to a button
+ * (ThemeSwitcher, CollectionPickerShell) — use this instead of re-rolling the
+ * measure/flip/clamp/reflow plumbing.
+ */
+
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 // usePopoverPosition — shared fixed-position placement for portal popovers

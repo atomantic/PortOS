@@ -1,10 +1,15 @@
-// Client-side timezone day-key helpers — the browser mirror of the server's
-// `todayInTimezone` (server/lib/timezone.js). POST day-scoped surfaces (the
-// launcher's "completed today", history range bounds) must derive "today" in the
-// user's CONFIGURED timezone so they agree with the server, which now stamps and
-// windows POST records on the configured local day (issue #2681). Deriving the
-// key from `new Date().toISOString()` (UTC) instead would disagree around the
-// local/UTC midnight boundary — showing a just-saved POST as "not yet completed".
+// Client-side timezone day-key helpers — the browser mirror of the server's `todayInTimezone`
+// (server/lib/timezone.js).
+//
+// Timezone day-key helpers (`dayKeyInTimezone`, `todayKeyInTimezone`) — browser mirror of the server's
+// `todayInTimezone`, so date-scoped POST surfaces derive "today" in the user's configured timezone and
+// agree with the server (#2681).
+//
+// POST day-scoped surfaces (the launcher's "completed today", history range bounds) must derive
+// "today" in the user's CONFIGURED timezone so they agree with the server, which now stamps and
+// windows POST records on the configured local day (issue #2681). Deriving the key from `new
+// Date().toISOString()` (UTC) instead would disagree around the local/UTC midnight boundary — showing
+// a just-saved POST as "not yet completed".
 
 /**
  * `YYYY-MM-DD` for `date` evaluated in `timezone`. `en-CA` formats dates in

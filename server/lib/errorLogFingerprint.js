@@ -1,4 +1,14 @@
 /**
+ * stderr-log triage primitives for `error-log-triage` (#12851).
+ *
+ * `groupStderrEntries(text)` strips the PM2 date prefix and folds stack/continuation lines under their
+ * head line; `fingerprintEntry(entry, { extraTerms })` redacts the entry (home paths, hosts, IPs,
+ * UUIDs, credentials, quoted record names, plus install literals such as the hostname and OS user) and
+ * reduces the head to a template (timestamps, ids, SHAs, filesystem paths and numbers become
+ * placeholders; API routes stay distinct) with a stable 16-hex fingerprint;
+ * `templateSearchExcerpt(template)` picks a tracker search phrase, or null when too generic. Pure; the
+ * collector and tracker dedupe live in `services/errorLogTriage.js`.
+ *
  * Pure stderr-log triage primitives for the `error-log-triage` scheduled task
  * (#12851): split PM2 error-log text into entries, redact them, and reduce each
  * head line to a stable template + fingerprint so recurrences of one fault

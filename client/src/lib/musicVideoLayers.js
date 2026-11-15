@@ -1,3 +1,20 @@
+/**
+ * Client re-export of music-video per-scene visual layers: `MUSIC_VIDEO_VISUAL_LAYERS`, still moves,
+ * text zones, lyric roles and `sceneVisualLayer`.
+ *
+ * Music-video per-scene visual layers (#8985), re-exported from `server/lib/musicVideoLayers.js`:
+ * `MUSIC_VIDEO_VISUAL_LAYERS`, `MUSIC_VIDEO_STILL_MOVES`, `MUSIC_VIDEO_TEXT_ZONES` /
+ * `MUSIC_VIDEO_LYRIC_ROLES` (#10583 lyric type per shot), `sceneVisualLayer(scene, { layered })`,
+ * `sceneHasAuthoredSpan`, `sceneRenderReady(scene, { layered })`, and a footage shot's hand-set clip
+ * speed, offset and reverse (`clipSpeedRate`, `clipOffsetSec`, `clipReversed`).
+ * `stillFrameTransform(scene, songTime, { fps, startSec, endSec })` gives the animatic the composed
+ * render's frame-clamped push/pan transform (explicit Move before planned camera). Used by
+ * `components/musicVideo/SceneCard.jsx`, `StoryboardAnimatic.jsx`, `ProjectActionGroups.jsx` and
+ * `hooks/useMusicVideoSceneMedia.js`. `clipPlaybackWindow(scene, edit, duration)` / `clipLoops` /
+ * `clipCanLoop` share source timing and loop eligibility; `clipNeedsMoreFootage` and
+ * `COVERAGE_TOLERANCE_SEC` keep held-clip coverage identical in the card and render preflight.
+ */
+
 import { STILL_PAN_TRAVEL, STILL_PUSH_ZOOM } from '../../../server/lib/musicVideoLayers.js';
 import { stillMoveForCamera } from '../../../server/lib/cameraMovements.js';
 

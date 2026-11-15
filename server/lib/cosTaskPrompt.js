@@ -1,6 +1,15 @@
 /**
  * The CoS task prompt/note split (#4153).
  *
+ * The CoS task prompt/note split (#4153) — `metadata.prompt` is the full agent-facing payload,
+ * `metadata.context` the one-line human note. `isPromptPayload(value)` is the single discriminator (a
+ * newline means it's a prompt, not a note), shared by the store's write path and the on-disk migration
+ * so they can't classify the same task differently. `getTaskPrompt(task)` prefers `metadata.prompt`
+ * and falls back to a legacy `metadata.context`; `getTaskContextNote(task)` returns the note only on
+ * an already-split task; `taskContextBlock(task)` renders both as one block so prompt templates
+ * (including customized ones) never see the split; `splitTaskPromptFields(metadata)` routes a
+ * multi-line `context` to `prompt` at CREATE time only. Pure, dependency-free.
+ *
  * `metadata.context` used to carry two unrelated kinds of content:
  *
  *   1. A one-line human note ("Manually triggered autonomous job: …").

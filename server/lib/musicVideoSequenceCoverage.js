@@ -1,4 +1,21 @@
 /**
+ * `planSequenceCoverage` groups contiguous cutaway footage shots in a sequence-coverage section into
+ * single timed generations bounded by the model's maximum length.
+ *
+ * Sequence coverage (#14241, #15588): `planSequenceCoverage(scenes, { modelId, backend })` groups a
+ * `coverage: 'sequence'` section's cutaway footage shots (contiguous, split where both shots name a
+ * different set or lead, no performance shot, inside the model max) into one-request runs and reports
+ * why other shots stay per-shot; `_composeSequencePrompt()` (test-only export; contiguous time ranges
+ * + the model's own `Image n` / `@Imagen` naming); `_sequenceClipSpans()` (test-only export; each
+ * scene's in/out inside the generated clip, existing cut times only); fal.ai reference-to-video, Grok
+ * (one 6/10/15s request) and local (one frame count) (Kling and other backends stay per-shot, reason
+ * recorded); `SEQUENCE_PROMPT_EXPANSION` (`disabled`, passed as `buildFalVideoRequest({
+ * promptExpansion })`). Pure. `planProjectSequenceCoverage(project, { modelId })` (the same plan over
+ * stored scenes, resolving set/lead via `sequenceShotIdentity` from `setReference` / song map /
+ * `characterVariant`; the one entry both server and client use), `sequenceModelId(project)` +
+ * `sequenceGroupInput(project, group)` (the one run's prompt, frame order, prompt-expansion chip and
+ * clip spans — shared by the server submit and the shot card).
+ *
  * Music Video sequence coverage (#14241) — one timed generation for a run of
  * cutaway footage shots that share a set and protagonist, instead of one clip
  * per shot (where identity, light and geography drift at every cut).

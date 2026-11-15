@@ -1,3 +1,7 @@
+/**
+ * Strict API validation for optional universe photography and finishing profiles.
+ */
+
 import { z } from 'zod';
 import { filmLookSchema } from './filmLookValidation.js';
 import { PHOTOGRAPHY_FIELDS, VISUAL_PROFILE_TEXT_MAX } from './universeVisualProfile.js';

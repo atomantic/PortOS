@@ -1,4 +1,11 @@
 /**
+ * Expand leftover `__PORTOS_ROOT__` tokens in apps registry fields (`repoPath`, `appIconPath`, etc.)
+ * so a partial/restored `data/` tree cannot leave Apps → Git looking for a non-existent checkout.
+ *
+ * `PORTOS_ROOT_TOKEN`, `expandPortosRootToken`, `expandPortosRootInApp`, `containsPortosRootToken`.
+ * Used by `services/apps.js` on load and by `scripts/setup-data.js` /
+ * `scripts/lib/rewriteAppsPortosRoot.js` when seeding or rewriting `data/apps.json`.
+ *
  * `data.reference/apps.json` ships `__PORTOS_ROOT__` in fields like `repoPath`
  * and `appIconPath` so the seed is install-agnostic. `scripts/setup-data.js`
  * expands the token when seeding `data/`, and `server/services/apps.js`

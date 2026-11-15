@@ -1,3 +1,15 @@
+/**
+ * Hook sizing a canvas bitmap to its container with devicePixelRatio awareness, shared by the
+ * piano-roll renderers.
+ *
+ * DevicePixelRatio-aware canvas sizing shared by the piano-roll renderers (`<PianoRoll>`,
+ * `<MidiPianoRoll>`): sizes the bitmap to container-width × height (or the container height when
+ * `height` is `undefined`) at the DPR, applies the transform, and redraws via a `drawRef` on mount +
+ * every `ResizeObserver` resize (observer created once per height, never churned by draw-closure
+ * changes). Returns a ref holding the current CSS width so draw code doesn't measure the DOM per
+ * frame. Use when: Both piano-roll canvases.
+ */
+
 import { useEffect, useRef } from 'react';
 
 // DevicePixelRatio-aware canvas sizing shared by the piano-roll renderers

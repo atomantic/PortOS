@@ -1,4 +1,14 @@
 /**
+ * Grouping + search for the Sprite Manager sidebar's record picker (#2932).
+ *
+ * `groupSpriteRecords(records)` → ordered `[{ key, label, records }]` under **Characters / Places /
+ * Objects** (`props` folded into Objects alongside `object`, no migration).
+ * `filterSpriteRecords(records, query, limit=8)` is the autocomplete filter — multi-term (AND)
+ * substring over `name`/`id`/`kind`, capped at `limit`. `groupKeyForKind(kind)` maps a kind to its
+ * group key (unknown → `objects`). `SPRITE_RECORD_GROUPS` / `NEW_SPRITE_KINDS` back the browse
+ * disclosure and the create-panel kind selector. Pure — no React, no I/O; the page owns the per-group
+ * icons.
+ *
  * Sprite record grouping + search (#2932) — pure helpers that map a sprite
  * record's `kind` to one of the three noun groups the Sprite Manager sidebar
  * renders, and filter a record list for the autocomplete picker.
@@ -8,7 +18,7 @@
  * data migration and stay user-visibly identical to a UI-created object.
  *
  * Pure — no React, no I/O. The sidebar owns the per-group icons (a lib module
- * can't import lucide components without pulling React into the barrel), so the
+ * can't import lucide components without pulling React into pure code), so the
  * groups carry a stable `key` the page maps to an icon.
  */
 

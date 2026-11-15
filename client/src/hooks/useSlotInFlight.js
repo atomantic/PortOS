@@ -1,3 +1,12 @@
+/**
+ * Whether a render slot (`{ jobId, filename }`) has an in-flight render
+ *
+ * ; returns `{ inFlight, setStatus }`. A present `filename` (or 5s grace on a stale/expired job)
+ * clears `inFlight` so the render button never sticks "loading". Use when: A render button that should
+ * disable + spin only while its own slot is actually rendering (comic pages, covers). Wire `setStatus`
+ * to the slot's `MediaJobThumb` `onStatus`.
+ */
+
 import { useEffect, useState } from 'react';
 
 /**

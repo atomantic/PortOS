@@ -1,3 +1,12 @@
+/**
+ * Socket.IO iterm state for the Shell page's iTerm2 view: session list, URL-selected attach,
+ * byte-exact input and an xterm sized to iTerm2's grid.
+ *
+ * Socket.IO `iterm:*` state for the Shell page's iTerm2 view (#8114): list subscription, URL-selected
+ * attach with a strict pending-target guard, byte-exact input, and an xterm sized to iTerm2's own grid
+ * (never fit, never resized back). Never touches `shell:*`.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useSocket } from './useSocket';

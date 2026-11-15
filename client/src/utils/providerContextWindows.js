@@ -1,4 +1,25 @@
 /**
+ * Resolves a provider/model context window for planning and its source (override, reported, or assumed
+ * ladder guess) via `KNOWN_MODEL_CONTEXT_WINDOWS` and `knownModelContextWindow`.
+ *
+ * How large a context window a provider/model gets for planning and where the number came from: the
+ * vendor constants and the `KNOWN_MODEL_CONTEXT_WINDOWS` ladder (`knownModelContextWindow`,
+ * `knownProviderContextWindow`), `catalogModelContextWindow` (the window the provider's own `/models`
+ * catalog reported), `resolveModelContextWindow` → `{ tokens, source }` with `CONTEXT_WINDOW_SOURCE`
+ * (`override` / `reported` / `assumed` — the state a card has to label rather than print as fact),
+ * `effectiveModelContextWindow`, and `modelOptionLabel` ("id (32K ctx)"). The constants and the
+ * known-model / known-provider / catalog rungs are re-exported from the pure leaf
+ * `server/lib/providerContextWindows.js`, the same rungs the server's `effectiveContextWindow` budgets
+ * with — including `mergeObservedContextWindows`, which folds a local daemon's live window (off the
+ * readiness payload) onto the catalog rung so the card shows what the dispatch gate enforces, and
+ * holds every resolved window down to an Ollama daemon's launch `num_ctx` through
+ * `clampToRuntimeContextWindow` (applied internally, from
+ * `server/lib/aiToolkit/internal/ollamaBacked.js` — the same module the server's budgeter and
+ * pre-dispatch gate use), so the meter can't promise a budget a run would be refused for (#7466).
+ * `withRuntimeContextWindow(provider, ceiling)` stamps that ceiling's second rung — the ambient
+ * `OLLAMA_CONTEXT_LENGTH` the server launched the daemon with, which the browser cannot read and so
+ * takes off the readiness payload as `runtimeContextWindow` (#7472).
+ *
  * How large a context window a provider/model gets for planning, and where that
  * number came from (a user override, a reported window, or a ladder guess the
  * card must label as assumed) — plus the "(32K ctx)" option label built on it.

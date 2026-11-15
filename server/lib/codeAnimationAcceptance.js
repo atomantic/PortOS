@@ -1,9 +1,14 @@
 /**
- * Code Animation production acceptance (#9392). Pure: it separates the
- * measured evidence of a finished run into technical, visual, temporal and
- * sound dimensions, decides whether a run may be promoted, and detects when an
- * accepted output no longer matches the source, audio and render it was frozen
- * against. A dimension nothing measured is `unverified` and never a pass.
+ * Code Animation production acceptance (#9392).
+ *
+ * Code Animation production acceptance: splits run evidence into technical/visual/temporal/sound
+ * (unmeasured stays unverified), decides promotability, freezes source/audio/render hashes and detects
+ * stale acceptance. Pure.
+ *
+ * Pure: it separates the measured evidence of a finished run into technical, visual, temporal and
+ * sound dimensions, decides whether a run may be promoted, and detects when an accepted output no
+ * longer matches the source, audio and render it was frozen against. A dimension nothing measured is
+ * `unverified` and never a pass.
  */
 
 export const ACCEPTANCE_DIMENSIONS = ['technical', 'visual', 'temporal', 'sound'];

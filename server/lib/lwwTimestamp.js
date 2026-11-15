@@ -1,6 +1,12 @@
 /**
  * Last-writer-wins (LWW) timestamp comparison for cross-instance sync merges.
  *
+ * Last-writer-wins timestamp comparison for cross-instance sync merges. `parseTsMs(s)` (Date.parse →
+ * epoch ms or null), `compareNewerWins(candidate, incumbent)` (true iff candidate strictly newer;
+ * unparseable-loses, tie → incumbent — used to decide remote-overwrites-local), `compareEarlierWins(a,
+ * b)` (−1/0/1 earliest-wins tiebreak; unparseable-loses). Single source of the LWW polarity shared by
+ * `mergeMediaCollectionsFromSync` / `mergeAuthorsFromSync` etc.
+ *
  * Every per-record merge path (`mergeMediaCollectionsFromSync`,
  * `mergeAuthorsFromSync`, …) decides which side wins by comparing `updatedAt` /
  * `addedAt` strings. The sanitizers accept ANY `Date.parse`-able string (not

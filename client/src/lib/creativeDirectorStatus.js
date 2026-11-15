@@ -1,4 +1,12 @@
 /**
+ * `describeCreativeDirectorStatus` derives the one status line for a Creative Director project:
+ * headline, tone, facts and the user's next action.
+ *
+ * `describeCreativeDirectorStatus(project, { activeAgents, activeTab })` → `{ headline, tone, facts,
+ * next }` — the one "where it stands, what's next" status line for a CD project (stage in words,
+ * whether it waits on the user, a single `start`/`resume`/`edit-draft`/`goto`/`open-final` next
+ * action). Pure; rendered by `components/ui/RecordStatusLine`.
+ *
  * "Where does this Creative Director project stand, and what is the user's next
  * move" — the one status line under the project title (#9949), derived from the
  * project record alone so it can be tested without rendering the page.

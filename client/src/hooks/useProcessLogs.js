@@ -1,3 +1,15 @@
+/**
+ * Live PM2 log tail for one process over the shared socket: owns the
+ * `logs:subscribe`/`line`/`subscribed`/`error` lifecycle, per-`processName` frame filtering, and a
+ * 1000-line ring buffer.
+ *
+ * Pass `appId` so an app with its own PM2_HOME streams from the right home. Returns `{ logs,
+ * subscribed, status, statusDetail, retry, clear }`; `status` is
+ * `connecting`/`live`/`closed`/`error`/`disconnected`, shared by every consumer — a
+ * closed/errored/disconnected stream keeps its lines and `retry()` resubscribes once (#9959). Use
+ * when: Any surface showing a PM2 process's live output (Processes tab, desktop-app launch progress).
+ */
+
 import { useState, useEffect, useCallback, useRef } from 'react';
 import socket from '../services/socket';
 

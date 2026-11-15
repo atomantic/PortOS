@@ -1,6 +1,9 @@
 /**
  * Fetch-based HTTP client factory — axios.create() replacement.
  * Supports base URL, default headers, timeout, query params, and self-signed TLS.
+ *
+ * Fetch-based HTTP client factory (axios.create replacement). `insecureFetch` size-cap rejections
+ * carry `code: RESPONSE_TOO_LARGE`.
  */
 
 import https from 'https';

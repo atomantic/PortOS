@@ -1,6 +1,14 @@
 /**
  * Turning a 3D asset failure into something a person can act on.
  *
+ * Turns a 3D asset failure into an actionable sentence. `glbFailureHint(error)` matches the message
+ * against a shared table (an HTML body reaching the glTF parser, a WebGL context failure, a 404) and
+ * returns `null` when nothing recognizes it — so a caller can tell "we know the cause" from "we don't"
+ * and fall back to the raw text. `glbErrorText(error)` reads a message off whatever shape was thrown.
+ * Shared because the CoS avatars load remote GLBs too: every caught error there used to be reported as
+ * "this display has no WebGL", sending the user to change an unrelated setting (#4688). Consumed by
+ * `media/GlbViewer.jsx` and `cos/CoSCanvasGuard.jsx`.
+ *
  * The raw messages are useless on their own: the glTF parser JSON.parses
  * whatever bytes it is handed, so a 200 HTML body (an SPA fallback answering a
  * path that isn't really served) surfaces as a JSON syntax error naming a `<`

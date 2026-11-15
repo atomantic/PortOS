@@ -1,4 +1,12 @@
 /**
+ * Compose user prompt + negative with an optional style preset, or an array of presets layered in
+ * order.
+ *
+ * `stylePromptAdditions(preset)` lists what a compose folds in as labeled additions (#11317).
+ * Re-exported (unmodified) by `client/src/lib/composeStyledPrompt.js`.
+ */
+
+/**
  * Compose a user prompt + negative with an optional style preset — or several,
  * for a caller layering independent style sources (e.g. a universe style and a
  * built-in preset).

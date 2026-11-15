@@ -1,9 +1,32 @@
 /**
- * Parsers for the per-message token counts the coding CLIs already write to
- * disk. PortOS's own accounting (`services/usage.js`) can only *estimate*
- * tokens — output from captured stdout (a repainted screen for TUI providers)
- * and input from the initial prompt length, which misses the per-turn context
- * replay and prompt-cache traffic that dominate real API cost. These files are
+ * Parsers for the per-message token counts the coding CLIs already write to disk.
+ *
+ * Parsers for the session files the coding CLIs write to disk (0 tokens to read) —
+ * `parseClaudeTranscript` (`~/.claude/projects/<cwd-slug>/*.jsonl`), `parseCodexRollout`
+ * (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`),
+ * `parseGrokTurns`/`parseGrokChatHistory`/`decodeGrokSessionDir`
+ * (`~/.grok/sessions/<encodeURIComponent(cwd)>/<id>/`), `parseAgyTranscript`/`parseAgyHistory`
+ * (`~/.gemini/antigravity-cli/`), `parseKimiWireLog`/`parseKimiSessionIndex`
+ * (`~/.kimi-code/sessions/.../agents/<id>/wire.jsonl`, indexed by `~/.kimi-code/session_index.jsonl`),
+ * `claudeProjectSlug`, `totalTranscriptTokens`. Each de-duplicates a format hazard that otherwise
+ * inflates counts badly: Claude repeats one response across several lines sharing a `message.id`,
+ * Codex's `total_token_usage` is cumulative and repeated, grok's `turn_completed.usage` has shipped in
+ * both per-prompt and cumulative shapes (detected and delta'd, never summed raw) while its
+ * `_meta.totalTokens` is context occupancy and never billed. Antigravity parses measured tokens
+ * (`input_tokens`, `output_tokens`, `cache_read_tokens`) from planner responses when recorded, or
+ * falls back to chars for the caller to estimate from — including `contextChars`, the prompt each
+ * model call replays (priced as cache reads; omitting it made the plan read far cheaper than it was).
+ * Whole-machine daily history per app (sessions PortOS never launched included) is read by
+ * `services/nativeUsageHistory.js`. Kimi's `usage.record` lines are already discrete per-call deltas
+ * (no cumulative-snapshot trap), but split across one `wire.jsonl` per agent — a subagent's spend is
+ * never in its parent's file. Each parser returns per-model buckets (`byModel`) plus the message keys
+ * it counted (`countedKeys`), and accepts an `exclude` set — that is what stops two overlapping PortOS
+ * runs from both billing the same messages. Tolerant of truncated (mid-write) files; consumed by
+ * `services/usageReconciler.js`.
+ *
+ * PortOS's own accounting (`services/usage.js`) can only *estimate* tokens — output from captured
+ * stdout (a repainted screen for TUI providers) and input from the initial prompt length, which misses
+ * the per-turn context replay and prompt-cache traffic that dominate real API cost. These files are
  * ground truth, cost 0 tokens to read, and are written by the CLI itself:
  *
  *   Claude Code — ~/.claude/projects/<cwd-slug>/<session>.jsonl

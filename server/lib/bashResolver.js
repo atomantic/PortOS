@@ -2,6 +2,13 @@
  * POSIX `bash` resolution for running bundled `*.sh` scripts (notably
  * `scripts/db.sh`) on Windows.
  *
+ * `resolveBashBinary()` — resolves the POSIX `bash` for running bundled `*.sh` scripts (e.g.
+ * `scripts/db.sh`). On Windows a bare `bash` often resolves (via PM2's PATH) to WSL, which mounts
+ * drives at `/mnt/h` and can't see a `H:/...` drive path (exit 127); this prefers Git Bash
+ * (PORTOS_BASH override → standard install dirs → derived from `git` on PATH → bare `bash`). No-op
+ * (`bash`) on non-Windows. `toBashPath(p)` — the companion path rule: bash reads backslashes as
+ * escapes, so a Windows path must reach it with forward slashes.
+ *
  * THE PROBLEM. On a typical Windows dev box `bash` resolves, in PATH order, to
  * one of several interpreters:
  *   - C:\Program Files\Git\...\bash.exe  — Git Bash (MSYS2)

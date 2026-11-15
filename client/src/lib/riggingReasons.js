@@ -1,8 +1,15 @@
 /**
  * Client mirror of the character-rigging readiness reason labels in
- * `server/services/rigging/readiness.js`. The server returns stable kebab-case reason
- * codes (`unsupported-platform`, `module-unimportable`, …) whenever rigging is not
- * ready; this is the label side the UI renders.
+ * `server/services/rigging/readiness.js`.
+ *
+ * Client mirror of the character-rigging readiness reason labels in
+ * `server/services/rigging/readiness.js`: `RIGGING_UNAVAILABLE_REASONS` (reason code -> user-facing
+ * label), `RIGGING_REASON_FALLBACK`, and `riggingReasonLabel(code, fallback?)`. Render these anywhere
+ * a `GET /api/rigging/readiness` reason is shown; never re-declare the codes. Parity + code coverage
+ * enforced by `server/services/rigging/unavailableReasons.parity.test.js`.
+ *
+ * The server returns stable kebab-case reason codes (`unsupported-platform`, `module-unimportable`, …)
+ * whenever rigging is not ready; this is the label side the UI renders.
  *
  * The client can't import the server module (it reaches `node:fs` / `child_process`
  * through the runtime probe), so this is a hand-maintained mirror — drift is asserted
@@ -11,8 +18,7 @@
  * one side, change the other.
  *
  * Names are prefixed (`RIGGING_…`) rather than reusing the image-to-3D lane's generic
- * `UNAVAILABLE_REASONS`, because both modules are flat `export *` members of the same
- * `client/src/lib` barrel and a shared identifier there is a collision.
+ * `UNAVAILABLE_REASONS`, so a call site importing both never has to alias one.
  */
 
 export const RIGGING_UNAVAILABLE_REASONS = Object.freeze({

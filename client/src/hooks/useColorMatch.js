@@ -1,3 +1,13 @@
+// Hook driving a song color-match run: metronome count-in, walks the score in tempo, grades notes
+// against live mic pitch and exposes `noteColors`.
+//
+// Drives a song color-match run: counts the singer in with the metronome, walks the notated score in
+// tempo, grades each note against the live mic pitch (#1022 tracker + colorMatch lib), and exposes `{
+// running, countingIn, noteColors, summary, activeIndex, start, stop }` for the `<ScoreSheet>` + an
+// accuracy readout. Taps the passed recording stream (no second mic); tears down on stop/unmount. Use
+// when: The Song editor's color-match panel. Don't re-wire the metronome + tracker + grading loop by
+// hand.
+//
 // useColorMatch — drives a color-match session: count the singer in with the
 // metronome, walk the notated score in tempo, grade each note against the live
 // mic pitch, and expose `noteColors` for the <ScoreSheet> plus a per-take

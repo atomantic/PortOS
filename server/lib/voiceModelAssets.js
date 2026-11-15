@@ -1,3 +1,13 @@
+// Completion contract for downloaded voice model assets (Whisper `.bin`, Piper `.onnx` +
+// `.onnx.json`).
+//
+// `inspectVoiceAsset(kind, path)` is the read-only readiness check (`verified` / `unverified` /
+// `incomplete` / `missing` — stat plus one small JSON read, no hashing or network);
+// `verifyVoiceAssetHashes` and `writeVoiceAssetReceipt` are the script-side halves that re-hash and
+// record the `.portos-complete.json` receipt after promotion. `isManagedVoiceAsset` separates
+// setup-script-owned files from user-supplied ones. Shared by `voice/bootstrap.js`, `voice/health.js`
+// and `scripts/voice-asset.js`.
+//
 // Completion contract for downloaded voice model assets (Whisper .bin, Piper
 // .onnx + .onnx.json pair). The setup scripts download into temp siblings,
 // promote the verified files, and only then write a receipt next to the primary

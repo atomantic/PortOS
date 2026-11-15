@@ -1,8 +1,14 @@
 /**
- * Higgsfield video model catalog — the curated families the `higgsfield` video
- * backend (services/videoGen/higgsfield.js) may call, and the one request
- * builder. Dependency-free: the Video Gen picker re-exports it, so the browser
- * offers exactly the lengths, sizes and inputs the server sends.
+ * Higgsfield video model catalog — the curated families the `higgsfield` video backend
+ * (services/videoGen/higgsfield.js) may call, and the one request builder.
+ *
+ * Curated Higgsfield video families (dependency-free, shared with the client):
+ * `HIGGSFIELD_VIDEO_MODELS`, `getHiggsfieldVideoModel`, `higgsfieldCapabilityHint` (picker hint: refs,
+ * end frame, audio), `higgsfieldVideoLengths` and `buildHiggsfieldVideoRequest` (routes text /
+ * start-frame / reference endpoints from the inputs).
+ *
+ * Dependency-free: the Video Gen picker re-exports it, so the browser offers exactly the lengths,
+ * sizes and inputs the server sends.
  *
  * The user picks a FAMILY; the builder routes to its text-to-video,
  * image-to-video or reference-to-video endpoint from the inputs the render

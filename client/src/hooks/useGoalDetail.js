@@ -1,3 +1,11 @@
+/**
+ * All state + handlers backing the GoalDetailPanel (edit form, todos, milestones, plan/phases,
+ * check-ins, progress log, activity/calendar links).
+ *
+ * Loads activities + subcalendars on mount. Use when: GoalDetailPanel composition shell; not intended
+ * for reuse outside the goals panel.
+ */
+
 import { useState, useRef, useEffect } from 'react';
 import * as api from '../services/api';
 import useListResource from './useListResource';

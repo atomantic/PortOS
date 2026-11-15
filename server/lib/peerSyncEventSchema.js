@@ -1,7 +1,13 @@
 /**
- * Wire contract for realtime peer sync frames (`peer:sync:event`). Frames are
- * peer-controlled input: strict shape, bounded strings, a capped record, and an
- * explicit `v` so an older receiver ignores a frame shape it does not know.
+ * Wire contract for realtime peer sync frames (`peer:sync:event`).
+ *
+ * Strict Zod contract for realtime `peer:sync:event` frames (`peerSyncEventSchema`: `v: 1`,
+ * `videoHistory`/`imageHistory`, `upsert` with a record or `delete` with a tombstone,
+ * `originInstanceId`), the 64 KB serialized `PEER_SYNC_MAX_RECORD_BYTES` record cap, and
+ * `peerSyncTombstoneSchema` (`{ key, deletedAt }`, shared with remote-delete acks).
+ *
+ * Frames are peer-controlled input: strict shape, bounded strings, a capped record, and an explicit
+ * `v` so an older receiver ignores a frame shape it does not know.
  */
 import { z } from 'zod';
 import { isPlainObject } from './objects.js';

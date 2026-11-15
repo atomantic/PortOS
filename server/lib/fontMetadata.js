@@ -1,6 +1,10 @@
 /**
  * Read a font file's family name without a font library (#10345).
  *
+ * `fontContainer(buf)` (sfnt / woff2 / null) and `fontFamilyName(buf)` — a font file's family name
+ * read from its `name` table (TrueType, OpenType, and WOFF2's brotli stream) with no font library;
+ * null for anything unreadable (#10345).
+ *
  * The cover lettering names an uploaded typeface by the family the renderer
  * registers it under, which is the family inside the file, not its filename.
  * Handles TrueType/OpenType (`name` table, preferring the typographic family)

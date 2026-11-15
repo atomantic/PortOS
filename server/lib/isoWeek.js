@@ -1,6 +1,13 @@
 /**
  * ISO-8601 week identity (pure).
  *
+ * ISO-8601 week identity — the single source of the `YYYY-Www` week id. `getWeekId(date)` keys on the
+ * ISO week-numbering **year** (the calendar year of that week's Thursday), not `date.getFullYear()`,
+ * so one ISO week is never split across two ids and two weeks never collide on one (#3465). Also
+ * `isoWeekParts`, `getIsoWeekNumber`, `getIsoWeekYear`, `parseWeekId` (null on garbage),
+ * `weekStartFromWeekId` (local-midnight Monday of that id; null on garbage), and
+ * `isoWeeksInYear(year)` (52, or 53 in a leap-week year). Shared by weekly digest filenames.
+ *
  * The one place PortOS turns a date into a `YYYY-Www` week id. The weekly
  * digest (`services/weeklyDigest.js`) and the since-retired CoS productivity
  * aggregate each used to carry their own copy, and both paired the ISO week

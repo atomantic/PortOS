@@ -1,5 +1,9 @@
 // Shared easing functions for camera/animation interpolation. Pure math, no deps — safe to use
 // from inside useFrame loops. Extend here rather than re-defining easings inline per component.
+//
+// Interpolation easing curves — `linear`, `easeIn`, `easeOut`, `smoothstep` (ease in/out), plus the
+// `EASING_CURVES` map keyed by the declarative Three.js clip contract's easing enum. Extend here
+// rather than re-defining an easing inline.
 
 // Classic Hermite smoothstep: eases in and out, t clamped to [0,1] by the caller.
 export const smoothstep = (t) => t * t * (3 - 2 * t);

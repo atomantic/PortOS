@@ -1,3 +1,7 @@
+// Lyric-aware MiniMax Music 3 duration analysis and ending-cushioned auto-duration recommendation
+//
+// ; mirrors `client/src/lib/musicDuration.js`.
+//
 // The authoritative copy, re-exported by `client/src/lib/musicDuration.js`
 // (keep it pure: no Node built-in, nothing outside `server/lib`). MiniMax Music 3
 // treats audio_duration as a ceiling, so auto mode sizes that ceiling from the

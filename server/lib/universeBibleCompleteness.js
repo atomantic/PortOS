@@ -3,6 +3,10 @@
  * describe automation, the character/canon expand services, and the image jobs
  * all measure completeness against.
  *
+ * Is a universe bible entry actually described? The shared per-kind expand-field vocabulary
+ * (`BIBLE_EXPAND_FIELDS`, `BIBLE_CORE_FIELDS`) and the `core`/`full` completeness predicates the
+ * quota-burn describe job scans with. Pure.
+ *
  * A universe bible entry can be *present* without being *usable*: a character
  * row with a name and nothing else renders a generic figure, and a place with a
  * blank description renders whatever the model felt like. The quota-burn

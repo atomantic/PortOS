@@ -1,3 +1,8 @@
+/**
+ * Builds the local, Grok, and federated video-generation request bodies from validated form state,
+ * including prompt envelopes and empty-value wire sentinels.
+ */
+
 import { isDefaultA2vLoraStages } from './videoLoraStages.js';
 import { composeStyledPrompt, stylePromptAdditions } from './composeStyledPrompt';
 import { universeStylePreset, withUniverseLabel } from './universeStylePreset.js';

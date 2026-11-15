@@ -1,6 +1,12 @@
 /**
  * Upgrade fallback for HTTP servers sharing a port with Socket.IO.
  *
+ * `installUpgradeFallback(server, options)` bounds the lifetime of unclaimed HTTP upgrade requests
+ * (ending and destroying them after `timeoutMs`, default 1000ms) to replace engine.io's
+ * `destroyUpgrade` timer so reverse proxies with slow upstreams (e.g. Eidoverse `/ws`) can complete
+ * handshakes without being cut short (#12069). Exempts claimed upgrades (`socket.portosUpgradeClaimed
+ * = true` via `markUpgradeClaimed(socket)`) and requests matching Engine.IO's listener on the server.
+ *
  * Socket.IO's engine.io server attaches an `upgrade` listener that defaults
  * to destroying any upgrade socket that does not match Socket.IO's path after
  * 1000ms if bytesWritten <= 0 (`destroyUpgrade: true`).

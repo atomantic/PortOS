@@ -1,3 +1,10 @@
+/**
+ * Reads live catalog-only Cast & Sets items, blockers and approval basis
+ *
+ * ; refreshes on catalog changes/reconnect and keeps whole-project reference pickers in sync without
+ * persisting copied images. Use when: Catalog-only Look check-in.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import socket from '../services/socket.js';
 import { getMusicVideoCastAndSets, repairMusicVideoShotReference } from '../services/apiMusicVideo.js';

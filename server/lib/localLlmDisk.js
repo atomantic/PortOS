@@ -1,6 +1,10 @@
 // Pure on-disk reasoning for the Ollama↔LM Studio "copy weights locally instead
 // of re-downloading" migrate fast-path.
 //
+// Pure on-disk reasoning for the migrate "copy GGUF locally instead of re-downloading" fast-path
+// (Ollama manifest/blob parsing, LM Studio path layout, MLX/projector/shard detection) plus the
+// Hugging Face registry addressing used to finish an abandoned Ollama pull.
+//
 // Both backends store the SAME GGUF weights — only the on-disk *layout* differs:
 //   • LM Studio: plain files at  <models>/<publisher>/<repo>/<file>.gguf
 //                (and Apple **MLX** models, which are NOT GGUF and have no

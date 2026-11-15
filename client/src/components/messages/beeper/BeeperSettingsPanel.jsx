@@ -31,7 +31,7 @@ import {
 //
 // `realtime` is a PROP, not a subscription this panel opens itself. Several
 // Beeper surfaces may each pair their own useBeeperRealtime subscribe/
-// unsubscribe (client/src/hooks/README.md sanctions this — see
+// unsubscribe (client/src/hooks/useBeeperRealtime.js sanctions this — see
 // useBeeperOutbox, mounted inside BeeperChatSurface); the page-level instance
 // in BeeperTab is the one that owns the status card, so this drawer just
 // reads what it's handed rather than opening a second one.

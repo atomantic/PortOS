@@ -1,4 +1,7 @@
 /**
+ * Universe bible field size limits shared between server (sanitizer, pipeline) and client (form
+ * inputs).
+ *
  * Universe bible field size limits — shared between server (sanitizer,
  * pipeline) and client (form inputs). A universe bible field that must
  * carry distinct economies, jurisdictions, travel rules, route logistics,

@@ -1,4 +1,9 @@
-/** Frozen shipped text, version 2. No named canon or install-specific state. */
+/**
+ *  Frozen shipped text, version 2. No named canon or install-specific state.
+ *
+ * Frozen original natural-photography starter and optional preview recipe; V1 remains available to
+ * migrations.
+ */
 import { REALITY_STARTER_V1 } from './realityStarterV1.js';
 
 export const REALITY_STARTER_V2 = Object.freeze({

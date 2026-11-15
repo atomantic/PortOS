@@ -1,3 +1,10 @@
+/**
+ * Shared five-event CoS task lifecycle subscription
+ *
+ * ; re-subscribes on socket reconnect and forwards normalized task updates to the current callback.
+ * Use when: A CoS task surface with its own task-status reducer.
+ */
+
 import { useEffect, useRef } from 'react';
 import socket from '../services/socket';
 import { useSocketSubscription } from './useSocketSubscription';

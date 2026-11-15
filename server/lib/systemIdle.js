@@ -2,6 +2,13 @@
  * "Is this install doing anything right now?" — the single definition of system
  * idleness, derived from the `/api/system/processing` snapshot.
  *
+ * `summarizeSystemActivity(processingSnapshot)` → `{ idle, activeCount, queuedCount, blockers[] }` +
+ * `describeActivityBlockers` — the ONE definition of "is this install doing anything", derived from
+ * the `/api/system/processing` snapshot. Queued work counts as active. Rendered by the dashboard's
+ * Live activity widget and refused on by the unattended auto-updater, so the two can never disagree
+ * about a window in which PortOS may restart itself. Every blocker label is generated prose (a count
+ * and a noun); no snapshot content is echoed.
+ *
  * Two very different consumers need the SAME answer, which is why this is a
  * pure leaf rather than a field the widget computes for itself:
  *

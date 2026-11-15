@@ -1,3 +1,11 @@
+// `suppressIosFocusZoom` adds maximum-scale=1 to the viewport meta on iOS WebKit only, preventing
+// focus zoom on sub-16px inputs while keeping pinch-zoom.
+//
+// `suppressIosFocusZoom(win?)` adds `maximum-scale=1` to the viewport meta on iOS/iPadOS WebKit only
+// (feature-tested via `-webkit-touch-callout`), so focusing a sub-16px field no longer zooms the page
+// while pinch-zoom keeps working; other engines would treat it as a pinch-zoom lock and are left
+// alone. Called once from `main.jsx`.
+//
 // iOS Safari zooms the whole page when a focused field's font-size is under
 // 16px, and stays zoomed after blur — most PortOS fields are text-sm/text-xs, so
 // on an iPhone every focus pushed the layout (and the field's own Send/Save

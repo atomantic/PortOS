@@ -1,3 +1,8 @@
+/**
+ * Owner-coordinated shared identity preview, creation, import, acceptance, progress, abort and guarded
+ * recovery.
+ */
+
 import { request } from './apiCore.js';
 
 export const listCatalogIdentities = ({ ingredientId, limit = 10, offset = 0, ...options } = {}) => {

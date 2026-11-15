@@ -1,3 +1,7 @@
+/**
+ * Notes vault.
+ */
+
 import { request } from './apiCore.js';
 
 // Notes - Vault Management

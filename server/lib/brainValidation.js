@@ -1,3 +1,7 @@
+/**
+ * Brain/memory route schemas (search, ingest, edit).
+ */
+
 import { z } from 'zod';
 import { partialWithoutDefaults, optionalBooleanMap } from './zodCompat.js';
 import { REPO_INTAKE_KEYS } from './repoIntakeActions.js';

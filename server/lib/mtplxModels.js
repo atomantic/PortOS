@@ -1,6 +1,25 @@
 /**
  * What MTPLX has in its own model cache, and which entry PortOS may serve.
  *
+ * `services/localCachedModels.js` owns provider-refresh discovery and gates it on runtime readiness
+ * without loading the process manager. `listMtplxCachedModels({command?})` → `{models, error}` from
+ * `mtplx models --json` (walks local directories — pulls no weights, loads no model, but see
+ * `mtplxRuntime.js`: on an un-warmed Homebrew wrapper the spawn ITSELF is a several-hundred-megabyte
+ * runtime download, so poll callers must gate on `describeMtplxRuntime().ready` first)
+ * `servableMtplxCachedModels(models)` → the rows MTPLX itself calls complete, and
+ * `pickMtplxCachedModel(models)` → the one repo id to hand `mtplx serve --model`. `models: null` means
+ * the cache could not be READ (no binary, command failed, unparseable) and is deliberately distinct
+ * from `[]` (read, and empty), because `services/localRuntimeSetup.js` starts MTPLX on its own default
+ * in the first case and refuses with the `mtplx pull` command in the second. Exists because `mtplx
+ * serve` defaults `--model` to one hard-coded checkpoint and exits 1 before binding when that repo is
+ * not cached — even on a host holding a different MTP model that serves fine. Picks only entries MTPLX
+ * itself calls complete (`validation.ok !== false`, so a half-finished pull is not served), preferring
+ * one with a recorded `mtplx_runtime.json` exactness contract. `describeMtplxCache(cache)` → `{state:
+ * 'unknown'|'empty'|'partial'|'ready', model, count, error}` folds both into the one value
+ * `services/providerReadiness.js` puts on the checklist and `describeRuntimeSetup` picks a button from
+ * — so an empty cache is named up front instead of only inside the failure of a Start that could never
+ * work.
+ *
  * `mtplx serve` takes NO model from its config — the CLI hard-codes its default
  * checkpoint (`Youssofal/Qwen3.8-27B-…`) as the `--model` default. On a machine
  * where that exact repo was never pulled the server prints

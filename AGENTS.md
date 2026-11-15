@@ -134,7 +134,7 @@ In that source, `!read lib/<name>.md` means read `lib/slashdo/lib/<name>.md` whe
 
 ## Module Organization
 
-Every directory of reusable code has a catalog `README.md` and an `index.js` barrel. **Search the catalog before writing a helper** (`rg -i` in the `README.md` of `server/lib/`, `client/src/lib/`, `client/src/hooks/`, `client/src/utils/` or `client/src/services/`) and extend or reuse a close match.
+**Search the catalog before writing a helper** (`node scripts/lib-catalog.js <term> [--dir <dir>]`, covering `server/lib/`, `client/src/lib/`, `client/src/hooks/`, `client/src/utils/` and `client/src/services/`) and extend or reuse a close match. The catalog is derived on demand from module headers; nothing is checked in.
 
 ### Where new code lives
 
@@ -152,11 +152,7 @@ Use the shared boundaries: the clipboard helpers (insecure-origin support), `use
 
 ### Adding a public module
 
-A new file in `server/lib/`, `client/src/lib/`, `client/src/hooks/`, `client/src/utils/`, or a new `apiX.js` in `client/src/services/` **must** be re-exported from that directory's `index.js` barrel (`api.js` for services) and get a one-line row in its `README.md` (alphabetical in `server/lib/`). `server/lib/index.test.js` and its client counterparts enforce this.
-
-Catalogs and barrels merge with git's `union` driver (`.gitattributes`): right for parallel insertions, wrong for an edit or deletion beside one, so after a rebase `scripts/catalog-merge-union.test.js` flags doubled or resurrected rows; keep one. Never give a file with real code paths the `union` attribute; the guard rejects any `.js` that isn't a pure re-export barrel.
-
-When two modules in one directory export the same name, the barrel uses `export * as <name>` (callers write `brainValidation.settingsUpdateInputSchema`); catch-alls like `validation.js` stay flat, and a collision test fails on two flat exports sharing a name. Deep imports keep working; the barrel is for discovery (example: `server/lib/aiToolkit/index.js`).
+A new module in one of those directories opens with a comment whose first paragraph is a one-sentence summary of at most 200 characters; longer rationale follows in the same comment. `<dir>/moduleSummaries.test.js` fails on a missing or over-length summary. There are no barrels or catalog tables to update, so a new module needs no edit outside its own file and test; import modules directly. The one exception is `client/src/services/api.js`, a real import path: re-export a new `apiX.js` from it (`client/src/services/index.test.js` enforces this).
 
 ### Generated manifests
 

@@ -1,3 +1,13 @@
+/**
+ * `fullDiskAccessDetails()` reports whether macOS Full Disk Access is granted and names the exact
+ * binary the user must add.
+ *
+ * `fullDiskAccessDetails()` → `{ fullDiskAccess, remediation }` — names the exact binary macOS Full
+ * Disk Access must list (walks `ps` ancestry: a terminal `.app` when one started the server, else the
+ * server's own node binary plus a distinct pm2 daemon node under a LaunchAgent), with
+ * `FULL_DISK_ACCESS_SETTINGS_URL`. Used by the iMessage and Contacts setup checks.
+ */
+
 import { runCliBounded } from './runCliBounded.js';
 
 // macOS never prompts for Full Disk Access; the operator must add the exact

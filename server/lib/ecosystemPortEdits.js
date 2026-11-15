@@ -1,5 +1,11 @@
-/** Non-executing ecosystem analysis. Unknown values remain opaque; they never
- * supply a process identity, object spread, or writable port source. */
+/**
+ *  Non-executing ecosystem analysis. Unknown values remain opaque; they never
+ * supply a process identity, object spread, or writable port source.
+ *
+ * `analyzeEcosystemPorts` and `planEcosystemPortEdits` — non-executing AST analysis of process
+ * identities and runtime port source spans; rejects ambiguous mutations, opaque spreads and partial
+ * batches before file or registry writes.
+ */
 import { parse } from '@babel/parser';
 
 function walk(node, visit, parent = null, parentKey = null) {

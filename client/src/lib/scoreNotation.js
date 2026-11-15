@@ -1,3 +1,12 @@
+// Parser for the PortOS lead-sheet notation — a dependency-free text format for melody + chords +
+// lyrics that the `<ScoreSheet>` SVG renderer draws (no abcjs / VexFlow / OSMD).
+//
+// `parseScore(text)` → `{ clef, key, keySig, time, tempo, measures, errors }`, with each parsed note
+// carrying its raw token and source offsets; `replaceNotePitch(text, note, pitch)` uses those spans to
+// rewrite only one pitch while preserving the rest byte-for-byte. Plus `parsePitch`, `diatonicStep`,
+// `durationBeats`, `keySignature`, `DURATIONS`, and `scoreHasMusic(text)`. Forgiving: bad tokens
+// collect into `errors` and are skipped, never thrown. Pure — the renderer only does geometry.
+//
 // PortOS lead-sheet notation — a tiny, dependency-free text format for melody +
 // chords + lyrics, and the pure parser that turns it into a structured score the
 // <ScoreSheet> SVG renderer draws. We render our own staff rather than pulling

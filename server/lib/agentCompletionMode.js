@@ -1,6 +1,16 @@
 /**
  * The ONE completion-contract decision for an agent prompt.
  *
+ * The ONE completion-contract decision behind every agent prompt: `resolveCompletionMode(flags)`
+ * returns a single `COMPLETION_MODES` key (`tool-free`, `sentinel-payload`, `action-output`,
+ * `external-repository`, `discard-worktree`, `claim-flow`, `read-only`, `review-loop-follow-up`,
+ * `release-flow`, `audit-flow`, `reconcile-flow`, `checkout-recovery`, `tui-slashdo-free`, `tui`,
+ * `portos-merges`, `worktree-no-push`, `commit-and-push`) from an ordered rule list, plus
+ * `portosMergesBranchOnExit`. Replaces the five independent flag ladders in `agentPromptBuilder.js`
+ * that each re-derived it in a different order — two had drifted far enough to render a prompt telling
+ * a tool-free or read-only task both to commit and that it had no git at all (#6616). Call sites
+ * branch on the key and render per mode; they never re-test the flags.
+ *
  * A task's completion contract — what its deliverable is, and therefore
  * whether it may commit, push, open a PR, write a sentinel, or simply reply —
  * used to be re-derived by five separate flag ladders in

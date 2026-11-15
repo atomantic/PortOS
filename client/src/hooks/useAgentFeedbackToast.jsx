@@ -1,3 +1,9 @@
+/**
+ * Agent completion toast with thumbs-up/down UI.
+ *
+ * Use when: Show actionable agent-run completion feedback.
+ */
+
 import { useState, useEffect, useCallback, useRef } from 'react';
 import toast from '../components/ui/Toast';
 import { ThumbsUp, ThumbsDown, Loader2, AlertTriangle } from 'lucide-react';

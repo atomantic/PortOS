@@ -1,6 +1,40 @@
 // Per-app "work tracker" resolution — where a managed app's autonomous work
 // items live: PLAN.md, a GitHub issue tracker, a GitLab issue tracker, or JIRA.
 //
+// `WORK_TRACKERS`/`CONCRETE_WORK_TRACKERS`/`DEFAULT_WORK_TRACKER`, `workTrackerLabel`,
+// `hostToWorkTracker`, `isGithubHost` (GitHub-family host test — github.com + enterprise github.*;
+// enterprise-aware replacement for the github.com-only `isGithub` gate), `githubRepoSpec(origin)`
+// (host-qualified `HOST/OWNER/REPO` selector for `gh --repo`, or null for a non-GitHub origin — pairs
+// the isGithubHost gate with the selector so prWatcher/branchReconcile/issueReconcile share one
+// "resolvable GitHub repo" definition), `forgeCliForTracker`, `isFileTracker` (true when the tracker
+// records work as repo files — PLAN.md — so an agent's proposal necessarily dirties the worktree;
+// false for github/gitlab/jira), `trackerToClaimTaskType`, `hostFromOriginUrl` (subgroup-tolerant,
+// ssh-alias-aware host parse), pure `resolveWorkTracker({configured,host})`, async
+// `resolveAppWorkTracker(app)` — resolves a managed app's autonomous work source (PLAN.md / GitHub /
+// GitLab / JIRA), defaulting `'auto'` to the git origin host and checking the `gh` and `glab` host
+// configs for otherwise-unmatched hosts. Async `resolveRepoForgeTarget(repoPath)` — the ONE definition
+// of "which forge can we query for this checkout", returning `{ forge, fullName, repoSpec, apiHost }`
+// (enterprise-aware `gh --repo` selector for GitHub; `repoSpec: null` for GitLab, which `glab`
+// resolves from its cwd) or null for a non-forge origin; shared by `issueReconcile.js` and
+// `appIssues.js`. Async `resolveAppForgeTarget(app, {repoPath})` — the composed
+// `resolveAppWorkTracker` + `resolveRepoForgeTarget` for callers holding the managed-app record,
+// returning `{ tracker, target }` with the app's github/gitlab pin threaded in as `preferredForge` (so
+// a self-hosted forge on a hostname matching neither pattern still resolves); use this instead of
+// re-threading the pin by hand. Also owns the `{trackerInstructions}` prompt block shared by
+// TRACKER-FILING task types (types that read the app read-only and deliver findings as tracker items,
+// not a commit): `TRACKER_FILING_PRESETS` (per-task-type PLAN.md id prefix / legacy forge-title marker
+// / labels / body requirements — PLAN.md ids remain; old forge markers are read only for
+// de-duplication), `TRACKER_FILING_TASK_TYPES` (derived from the presets, so a gated type always has
+// wording), `extraIssueLabels` / `formatForgeCategoryLabelFlags` (category + metric labels + `plan` as
+// repeated `--label` flags), and `formatTrackerInstructions(tracker, options)` which renders
+// plan/github/gitlab/jira blocks (forge titles use plain human-readable text and issue numbers are
+// IDs; PLAN.md IDs retain their lowercase kebab-case, prefix, maximum-length, and uniqueness rules;
+// GitLab inventories use the paginated API; free-form titles and multiline bodies use file-based
+// transport). Consumed by the `claim-work` router in `cosTaskGenerator.js`, `referenceRepos.js`, and
+// `routes/apps.js`. Also `repoIssueUrlBase(target)` — the browsable issue-tracker base URL for a
+// resolved forge target (`/-/issues` on GitLab, `/issues` elsewhere), so a caller stamps a finished
+// base onto its record and nothing downstream has to classify a host.
+//
 // Each managed app carries a `workTracker` field (default `'auto'`). `'auto'`
 // resolves to a concrete tracker from the app's git `origin` host: a github.com
 // remote → GitHub issues, a gitlab.* remote → GitLab issues, and a custom host

@@ -1,3 +1,11 @@
+/**
+ * `useSceneClipPlayback(scene)` owns the native clip ref, filename resolution, clip-ID-keyed metadata,
+ * dimensions, legacy loop state and speed/offset-adjusted coverage
+ *
+ * ; returns those values and `onLoadedMetadata`. Use when: Keep unconditional in SceneCard so hiding
+ * its preview preserves measurements, while a replacement clip invalidates them.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import { useVideoFileSrc } from './useVideoFileSrc.js';
 import { clipCanLoop, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipSpeedRate, sceneUsesAuthoredTiming, sharedTakeExtraSec } from '../lib/musicVideoLayers.js';

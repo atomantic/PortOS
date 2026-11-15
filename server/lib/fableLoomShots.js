@@ -1,3 +1,7 @@
+/**
+ * Short-shot grouping, spoken-dialogue timing estimates and 5–10 second render validation.
+ */
+
 /** Pure timing and grouping contracts for short, individually rendered shots. */
 export const FABLELOOM_SHOT_MIN_SECONDS = 5;
 export const FABLELOOM_SHOT_MAX_SECONDS = 10;

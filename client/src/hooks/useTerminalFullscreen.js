@@ -1,3 +1,13 @@
+/**
+ * `useTerminalFullscreen(isFullscreen, exitFullscreen)` gives a focus trap, Escape-to-exit and focus
+ * return for a fullscreen terminal.
+ *
+ * `useTerminalFullscreen(isFullscreen, exitFullscreen)` → `{ containerRef, toggleRef }` — focus trap +
+ * Escape-to-exit (ignored while typing inside the terminal) + focus return to the toggle button
+ * (unmounted while fullscreen, so `useFocusTrap`'s own restore misses it). Use when: The Shell and
+ * iTerm fullscreen overlays; any terminal-style surface that swaps its own trigger out when maximized.
+ */
+
 import { useEffect, useRef } from 'react';
 import useFocusTrap from './useFocusTrap.js';
 

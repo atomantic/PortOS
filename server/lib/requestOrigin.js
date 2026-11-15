@@ -1,5 +1,9 @@
 // Only the listener can mark a request remote. HTTP headers cannot grant local
 // authority, even when a transport such as Tailcat connects through localhost.
+//
+// `remoteRequestHandler`, `markRemoteServer` (covers the Socket.IO handshake and upgrade a handler
+// never sees) and `isRemoteRequest` preserve remote transport identity across a localhost hop without
+// trusting client headers; the host-control gates refuse a marked request as non-local.
 const remoteRequests = new WeakSet();
 
 export function remoteRequestHandler(handler) {

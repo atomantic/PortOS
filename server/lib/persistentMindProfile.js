@@ -1,6 +1,10 @@
 /**
  * Durable provider profile for the persistent CoS mind.
  *
+ * Versioned, default-off persistent-mind provider profile (`enabled`, provider/model/effort, text
+ * interface, maximum quiet interval), its strict API schema, duration resolver, and safe
+ * partial-update merge that clears model/effort on a provider switch.
+ *
  * This is deliberately separate from persistentMind.js: that module owns
  * runtime wake state, while this one owns the user's stable, default-off
  * provider choice. A profile never implies that a mind is running.

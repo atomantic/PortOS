@@ -1,3 +1,8 @@
+/**
+ * `selectPersistentMindContextEvents`, `renderPersistentMindContextEvent` — retain useful conversation
+ * evidence without diagnostic ledger noise.
+ */
+
 /** Prompt projection only: diagnostics and raw evidence remain intact in the ledger. */
 const CONTENT_KINDS = new Set([
   'mind.message.accepted', 'mind.annotation.accepted', 'mind.reply', 'mind.memory.created',

@@ -2,6 +2,17 @@
  * Which of a provider's advertised catalog this install is entitled to run —
  * the browser half of the model-access policy.
  *
+ * Which of a provider's advertised catalog this install is entitled to run (free tier, plan,
+ * hand-picked allowlist). Re-exports the policy rules the browser consumes from the pure leaf
+ * `server/lib/aiToolkit/internal/modelAccess.js` — `MODEL_ACCESS_MODES`, `MAX_MODEL_ACCESS_PATTERNS`,
+ * `CONFIGURED_MODEL_KEYS`, `normalizeModelAccess`, `modelMatchesAccessPatterns` — so the editor's live
+ * preview and the server's own scoping cannot disagree. Adds `providerModelCatalog(provider)` (the
+ * FULL list, off `modelCatalog` when the payload was scoped — seed a model editor from this or a Save
+ * persists the narrowed list), `previewModelAccess(catalog, policy, configuredModels)` → `{ total,
+ * visibleCount, hidden, inert }`, `configuredModelsOf`, `NO_MODEL_ACCESS` and
+ * `MODEL_ACCESS_MODE_LABELS`. `applyModelAccess` is deliberately NOT re-exported: a client payload is
+ * already scoped, and re-scoping would overwrite `modelCatalog` with the narrowed list.
+ *
  * Every rule comes from the server module that declares it
  * (`server/lib/aiToolkit/internal/modelAccess.js`), reached at the toolkit's
  * dependency-free `internal/` leaf exactly as `providerContextWindows.js`

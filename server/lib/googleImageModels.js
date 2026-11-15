@@ -1,9 +1,14 @@
 /**
- * Google Cloud Agent Platform image model catalog — the curated publisher models the
- * `google` image backend (services/imageGen/google.js) may call, with one
- * request builder. Dependency-free so the Settings picker, the Image Gen page
- * and the server validate against the same ids; a `cloudModel` naming anything
- * else is refused because every model is billed differently.
+ * Google Cloud Agent Platform image model catalog — the curated publisher models the `google` image
+ * backend (services/imageGen/google.js) may call, with one request builder.
+ *
+ * Curated Google image catalog (dependency-free, shared with the client): `GOOGLE_IMAGE_FAMILIES`
+ * (Gemini image models on generateContent, Imagen 4 on predict), `GOOGLE_IMAGE_MODEL_IDS`,
+ * `googleImageFamily`, `googleImagePriceLabel` and `buildGoogleImageRequest` (aspect/size mapping,
+ * Imagen prompt rewrite off, negative prompt folded as "Avoid:").
+ *
+ * Dependency-free so the Settings picker, the Image Gen page and the server validate against the same
+ * ids; a `cloudModel` naming anything else is refused because every model is billed differently.
  *
  * Two request shapes:
  *  - `gemini` — the Gemini image models (generateContent): the prompt plus up to

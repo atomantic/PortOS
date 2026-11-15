@@ -1,3 +1,22 @@
+/**
+ * `resolveAppPrCompletion(app, metadata)` supplies the reviewed automatic merge default for new tasks
+ * while preserving explicit managed-app choices and legacy review toggles.
+ *
+ * `PR_MISSING_CATEGORY` shares the missing-PR verdict between finalization and cleanup.
+ * `resolvePrCompletion(metadata)` resolves the explicit `review-then-merge` / `merge-on-green` /
+ * `leave-open` policy, with legacy `reviewLoop` fallback; `explicitPrCompletion(task)` retains only
+ * explicit authority (defaults never release a handoff); `leavesPrForHuman(task)` +
+ * `PR_STAYS_OPEN_TASK_TYPES` keep JIRA hand-offs open; `prStaysOpen(task)` is the combined
+ * policy-or-human verdict; `prHeldForOperator(task)` adds the read-only and review-loop leave-open
+ * holds and is the one guard every merge, handoff, recovery and cleanup path uses.
+ * `agentPrHeldForOperator(agent, task)` adds the leave-open policy an agent pinned at spawn. Shared by
+ * the agent prompt builder and `agentWorktreeCleanup` so both halves agree.
+ * `resolvePrCreation({taskOpenPR, agentOpensOwnPr, prClaimVerified})` → a `PR_CREATION` tri-state
+ * (`never` / `if-missing` / `always`) naming who opens the change request for a completing worktree
+ * agent, so the runner, TUI, and direct-CLI completion paths cannot drift into double-firing `gh pr
+ * create`.
+ */
+
 import { PORTOS_APP_ID } from './appIdentity.js';
 import { isFalsyMeta, isTruthyMeta } from './metadataFlags.js';
 /**

@@ -1,4 +1,12 @@
 /**
+ * `shellQuote(value)` — POSIX single-quote escaping for values interpolated into shell command strings
+ * (display command lines, copy-paste blocks in agent prompts).
+ *
+ * Bare-safe tokens pass through; everything else is single-quoted. Canonical escaper — don't
+ * hand-roll.
+ */
+
+/**
  * POSIX single-quote shell escaping for values interpolated into shell command
  * strings (display command lines, copy-paste command blocks in agent prompts).
  *

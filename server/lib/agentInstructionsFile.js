@@ -1,6 +1,12 @@
 /**
  * The agent-instructions file pair a repository carries (#4852).
  *
+ * The `AGENTS.md` + bridge `CLAUDE.md` pair a repo carries (#4852). `writeAgentInstructions(repoPath,
+ * content)` writes the body to `AGENTS.md` and the one-line `@AGENTS.md` import beside it — use it in
+ * scaffolders instead of a bare `writeFile(join(repoPath, 'CLAUDE.md'), …)`, since a generated repo
+ * carrying only one name is unreadable to half the CLIs PortOS can point at it. Constants:
+ * `AGENT_INSTRUCTIONS_FILENAME`, `CLAUDE_BRIDGE_FILENAME`, `AGENT_INSTRUCTIONS_IMPORT`.
+ *
  * `AGENTS.md` is the cross-vendor standard every CLI PortOS drives reads —
  * except Claude Code, whose memory discovery hardcodes `CLAUDE.md` with no
  * configurable filename. So a repo needs both, and the second one is a

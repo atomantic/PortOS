@@ -1,4 +1,9 @@
-/** Machine-local graceful drain. The same journal fences the server and runner. */
+/**
+ *  Machine-local graceful drain. The same journal fences the server and runner.
+ *
+ * Durable machine-local workflow drain, cross-process admission permits, continuation ownership and
+ * stale-resume fencing.
+ */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';

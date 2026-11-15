@@ -1,4 +1,15 @@
 /**
+ * `killWithEscalation(proc, {label, stillRunning, delayMs=8000})` — shared SIGTERM→grace→SIGKILL
+ * cancel-escalation for spawn-based media jobs.
+ *
+ * Sends SIGTERM, then escalates to SIGKILL after `delayMs` only when `stillRunning()` holds and the
+ * child hasn't exited (`exitCode===null && signalCode===null`). The timer is unref'd and the callback
+ * is try/catch-wrapped (runs outside the request lifecycle). Converges musicVideo/render,
+ * videoTimeline, imageGen local+codex, videoGen, loraTraining, and the yt-dlp track import cancel
+ * paths.
+ */
+
+/**
  * Shared SIGTERM→grace→SIGKILL cancel-escalation for spawn-based media jobs.
  *
  * Every spawn-based job service (musicVideo/render, videoTimeline/local,

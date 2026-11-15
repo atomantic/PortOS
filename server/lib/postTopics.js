@@ -1,6 +1,12 @@
 /**
  * POST practice-topic registry (issue #3252).
  *
+ * Pure POST practice-topic registry — `POST_TOPICS` (`{ id, label, module, surface, drillTypes }`) is
+ * the single source of truth for "what am I studying?", plus `resolveTopicForDrillType` /
+ * `isTopicEnabled` / `isMemoryItemEnabled`. Gates session composition and recommendations, including
+ * Memory's composed and dedicated practice routes plus standalone Morse. A pure leaf: the client's
+ * post `constants.js` re-exports it and layers the UI-only `TOPIC_UI` on top.
+ *
  * The single, enumerable answer to "what am I actually studying?" — one entry
  * per practice area, each owning the drill types that belong to it. Every
  * composition/recommendation path gates on this registry, so adding the next

@@ -1,3 +1,9 @@
+/**
+ * AI providers + two-step provider→model selection.
+ *
+ * Use when: Any UI that picks a provider + model.
+ */
+
 import { getCreatedExecutionSelection } from '../services/executionSelectionCache.js';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as api from '../services/api';

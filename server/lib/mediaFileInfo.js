@@ -1,4 +1,9 @@
-/** Actual original-media sizes, enriched only after a page has been selected. */
+/**
+ *  Actual original-media sizes, enriched only after a page has been selected.
+ *
+ * `withMediaFileSize(kind, record)` / `withMediaFileSizes(items, kind?)` add current original-file
+ * byte sizes to bounded image/video pages; missing or unreadable files have no size.
+ */
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PATHS } from './paths.js';

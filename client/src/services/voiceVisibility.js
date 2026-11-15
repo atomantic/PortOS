@@ -1,3 +1,7 @@
+/**
+ * Voice UI state manager.
+ */
+
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 
 export const HIDDEN_KEY = 'portos.voice.hidden';

@@ -2,6 +2,26 @@
  * Claim-flow relaunch — continue the worktree the previous run of this task
  * already created, instead of treating that claim as someone else's.
  *
+ * Claim-flow relaunch pointer. `claimContinuationBranch(claimTarget)` is the `claim/issue-<n>` or
+ * `claim/<key>` branch a pinned target checks out. `claimContinuationPointer(...)` names the `claim-*`
+ * worktree already holding that branch when a relaunch should finish it in place (locked, prunable,
+ * unmanaged, or occupied by another running/paused agent → null). `claimContinuationWorkspace(...)`
+ * turns a still-on-disk pointer into the cwd the next agent uses without moving the directory.
+ * `reconcileAssignmentForTask`, `reconcileAssignedTarget`, and `reconcileMergeTarget` preserve
+ * scheduler assignments and match their registered/live branch, checkout, and completion policy for
+ * reconciliation admission; `claimOwnershipBinding(task)` is the branch (or "picks its own", for a
+ * swarm orchestrator; a pinned run is also "still choosing" until it binds) a claim run registers on
+ * its agent record; `bindClaimBranch` / `releaseClaimBranch` patch the concrete branches a run binds
+ * before cutting them (an epic's child, a picked issue), `ownsClaimBranch(agent, branch)` is explicit
+ * registered/bound ownership only (never a picker's "may pick"), `liveClaimBranches(agents, repo)`
+ * lists every branch live runs in a repository own that way (the claim-issue detector counts them in
+ * flight), `claimCheckoutOwnerReason(...)` names a live/possible claim owner for branch-reconcile
+ * (`claimCheckoutOwner(...)` adds the holder run ids a blocked cleanup records), and
+ * `claimBranchAdmission(...)` gates coordinator adoption and detach with the same branch/repository
+ * owners; `claimContinuationAdmission(...)` is the launch-time ownership check that re-reads holder,
+ * branch and live owners before a cached pointer may be entered (anything unreadable or changed →
+ * refuse, the caller defers; a possible swarm owner holds the launch until that run ends).
+ *
  * A claim agent cuts `claim/issue-<n>` (or `claim/<key>`) itself, under
  * `data/cos/worktrees/claim-*`, and stamps `in-progress`. PortOS does not own
  * that directory as an `agent-*` worktree, so a provider relaunch used to

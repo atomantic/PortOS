@@ -1,3 +1,14 @@
+/**
+ * `streamAttachment(res,stream,{filename,contentType,failure,label})` — pipe a readable to a response
+ * as a file download.
+ *
+ * Sets the attachment headers plus `X-Content-Type-Options:nosniff`, and owns the teardown every
+ * attachment route needs: a pre-stream failure drops the download headers and returns `failure` via
+ * `sendErrorResponse`, a mid-stream failure destroys the socket (the envelope no-ops once headers are
+ * sent), and a client disconnect calls `stream.abort?.()` so an upstream child process is torn down.
+ * Shared by `routes/imageTo3d.js` (GLB, full-mesh) and `routes/backup.js` (snapshot tarball).
+ */
+
 import { sendErrorResponse } from './errorHandler.js';
 import { onClientDisconnect } from './sseDownload.js';
 

@@ -1,6 +1,9 @@
 /**
  * Model Personality validation schemas (issue #2610).
  *
+ * LLM personality self-profile test schemas: trait taxonomy (versioned), self-eval + twin-alignment
+ * response schemas, run/settings route inputs.
+ *
  * Zod schemas for the LLM personality self-profile test: the structured
  * self-evaluation response, the twin-alignment scorer response, and the
  * route input/settings shapes. Kept a LEAF module (zod only — no imports

@@ -1,3 +1,11 @@
+/**
+ * The knobs a `repo-study` dispatch takes — target managed app, the free-form brief, and an optional
+ * provider/model/effort pin — plus `studyPayload()` for the request body.
+ *
+ * Use when: Any surface that dispatches a repo study: the capture-time opt-in (via `useRepoIntake`)
+ * and the Links tab's on-demand "Update & study". Render with `components/brain/RepoStudyFields`.
+ */
+
 import { useEffect, useState } from 'react';
 import useProviderModels from './useProviderModels.js';
 import * as api from '../services/api.js';

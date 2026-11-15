@@ -1,4 +1,8 @@
-/** Dependency-free transaction shared with the updater while npm replaces dependencies. */
+/**
+ *  Dependency-free transaction shared with the updater while npm replaces dependencies.
+ *
+ * Dependency-free shared journal transactions for server admission and offline update bootstrap.
+ */
 import * as fs from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';

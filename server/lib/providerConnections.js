@@ -1,3 +1,22 @@
+/**
+ * `providerConnectionProfile` reads a provider record as a connection-graph node: kind, protocol,
+ * transports, server-only credentials, owned field/env split and reasons.
+ *
+ * Provider CONNECTION identity for the connection graph (#6366) —
+ * `providerConnectionProfile(provider)` reads one record as the backend it describes (`kind`,
+ * `protocol`, `transports`, RAW server-only `credentials`, the `owned` field/env split, and `reasons`
+ * from `CONNECTION_ISOLATION_REASONS` when the config is dynamic, external, unparsable or
+ * endpoint-less). `sameConnectionIdentity` compares real credential values and refuses once any is the
+ * `REDACTED_CREDENTIAL` sentinel, so a sanitized record can never merge two connections;
+ * `compareBackendEndpoints` is the looser same-daemon test that only ever produces a link SUGGESTION,
+ * applying the recognized OpenAI-compatible `/v1` conversion (never DNS resolution, loopback/remote
+ * equivalence or arbitrary path trimming). `projectConnectionOwnedFields(provider, connection)`
+ * projects a stored backend through the reader's protocol and env-ownership rules for the graph
+ * service; `withoutConnectionOwnedFields` / `withConnectionOwnedFields` are the lossless
+ * split/materialize pair that keeps a downgraded install runnable from `data/providers.json` alone.
+ * Pure: no I/O.
+ */
+
 import { isDeepStrictEqual } from 'node:util';
 import { localRuntimeKind, normalizeOpenAiBaseUrl } from './localProviderRuntime.js';
 import { PROVIDER_GATEWAYS, gatewayIdForProvider } from './providerGateways.js';

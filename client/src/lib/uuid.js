@@ -1,6 +1,12 @@
 /**
  * uuid v4 that also works on insecure origins.
  *
+ * `uuidv4()` — spec-valid v4 uuid that also works on **insecure origins**. Reach for this instead of
+ * `crypto.randomUUID()`, which only exists in a secure context (HTTPS / localhost) and throws
+ * `crypto.randomUUID is not a function` for the many users who reach PortOS over plain HTTP via
+ * Tailscale. Falls back to `crypto.getRandomValues` (available on insecure origins), then
+ * `Math.random`.
+ *
  * `crypto.randomUUID` only exists in a SECURE context (HTTPS / localhost).
  * PortOS is commonly reached over plain HTTP via Tailscale, where it is
  * undefined — so a bare `crypto.randomUUID()` throws `crypto.randomUUID is not

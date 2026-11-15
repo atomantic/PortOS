@@ -1,3 +1,8 @@
+/**
+ * Shared pinned/inherited shot-look resolution and the song-frame document film-look runtime used by
+ * renders and previews.
+ */
+
 import { filmLookRuntimeSource, isFilmLookNeutral, normalizeFilmLook } from './filmLook.js';
 export { documentShotColorMatchRuntime, hasMusicVideoColorMatch } from './shotColorMatch.js';
 

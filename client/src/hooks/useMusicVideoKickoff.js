@@ -1,3 +1,16 @@
+/**
+ * Music Video autopilot kickoff sequence (analyze, lyrics, vocal separation, word alignment, cast
+ * check-in, plan), skipping steps whose results exist.
+ *
+ * The Music Video autopilot kickoff sequence — analyze → import track lyrics → separate vocals → align
+ * words → Cast & Sets check-in → plan — each step skipped when its result already exists and handed
+ * the freshest project. A failed analysis stops the run; a failed lyric/vocal/align step still plans;
+ * the check-in gates the plan (a sheet waiting for review ends the run until the director approves). A
+ * step that throws is toasted by name, a failed or interrupted check-in ends the run with a note, and
+ * `cancel()` (#9940) stops it. Returns `{ step, stepLabel, running, run(project), cancel() }`. Use
+ * when: The Music Video "Analyze & plan" button.
+ */
+
 import { useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import useMounted from './useMounted.js';

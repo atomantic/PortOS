@@ -1,3 +1,7 @@
+/**
+ * Bilateral canonical catalog identity operator and peer evidence schemas.
+ */
+
 import { z } from 'zod';
 const id = z.string().min(1).max(160);
 const digest = z.string().regex(/^[a-f0-9]{64}$/);

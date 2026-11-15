@@ -1,3 +1,14 @@
+/**
+ * Hook for the Music Video Cast & Sets check-in: applies pushed project updates and exposes start,
+ * regenerate, resume, approve, skip and `runToCheckpoint`.
+ *
+ * The Cast & Sets check-in before the plan: applies the project pushed on `music-video:cast-and-sets`
+ * / `music-video:dev-artifact` and exposes start / regenerate(notes?) / resume / approve / skip, plus
+ * `runToCheckpoint(project)` (start if absent, resolve at review/approved/skipped/failed — or
+ * `interrupted` by a restart, which would otherwise never settle) for the kickoff and `cancelWait()`
+ * to abandon that wait. Use when: The Music Video autopilot card and sheet viewer.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';

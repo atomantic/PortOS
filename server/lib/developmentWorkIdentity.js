@@ -1,3 +1,7 @@
+/**
+ * Canonical development task identity and cross-producer ownership matching.
+ */
+
 import { isTruthyMeta } from './metadataFlags.js';
 /** Structured work ownership shared by scheduler, manual actions and watchdog. */
 export const DEVELOPMENT_ACTIVE_STATUSES = new Set(['pending', 'queued', 'running', 'in_progress', 'finalizing', 'blocked', 'paused']);

@@ -1,3 +1,9 @@
+// `dndTransformToCss(transform)` — render a dnd-kit `useSortable` transform (`{ x, y, scaleX, scaleY
+// }` or `null`) as a CSS `transform` string.
+//
+// Owned replacement for `@dnd-kit/utilities`' `CSS.Transform.toString()`; use it in every
+// `useSortable` style object instead of re-adding that dependency.
+//
 // Owned replacement for `@dnd-kit/utilities`' `CSS.Transform.toString()`.
 // dnd-kit's `useSortable` hands back a `{ x, y, scaleX, scaleY }` transform (or
 // `null` when the node isn't being dragged); every PortOS call site feeds that

@@ -3,6 +3,12 @@
  * background keying / subject framing) — the client mirror of the server's accepted
  * bounds.
  *
+ * Image-to-3D per-run render options — the client mirror of the server bounds (`SEED_MAX`), the
+ * `STEPS_PRESETS` / `DETAIL_PRESETS` / `ALPHA_MODE_PRESETS` select options, `renderOptionsBody`
+ * (fields → API body), `fieldsFromRun` (carry-over from the last run), and `runWantsTransparency`
+ * (mirrors the server's alpha gating — the viewer's force-opaque pass must agree with it). Pinned by
+ * `renderOptions.parity.test.js`.
+ *
  * `SEED_MAX` is a hand-maintained mirror of the server's `RENDER_SEED_MAX`
  * (`server/services/imageTo3d/renderOptions.js`) pinned by
  * `server/services/imageTo3d/renderOptions.parity.test.js` — same mechanism as

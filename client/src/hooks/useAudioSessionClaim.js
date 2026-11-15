@@ -1,3 +1,14 @@
+// `useAudioSessionClaim(type)` returns `{ claim, release }` to hold one arbitrated iOS audio session
+// slot for surfaces owning their own AudioContext or mic stream.
+//
+// `useAudioSessionClaim(type)` → `{ claim, release }` — one arbitrated `acquireAudioSession(type)`
+// slot with a React lifecycle: `claim()` drops this instance's previous claim before taking a fresh
+// one, `release()` is idempotent, and unmount releases whatever is still held. Use when: A surface
+// owning its OWN `AudioContext` (MorseTrainer, the Security monitor) or `getUserMedia` stream
+// (`useSingToScore`/`useSingToVerify`) needs the iOS session. An output-only player on the shared
+// transport passes `audioSession: 'playback'` to `createLookaheadTransport` instead — don't hand-roll
+// either.
+//
 // useAudioSessionClaim — hold the document's iOS audio session for a surface
 // that owns its OWN AudioContext or `getUserMedia` stream, rather than driving
 // the shared lookahead transport (output-only players get the same behavior for

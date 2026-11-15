@@ -1,10 +1,18 @@
-// Built-in Music Video character styles: a named, fixed-identity performer a
-// project can load as its base concept and character reference. Picking one
-// (`concept.characterStyleId`) snapshots the style text into the project,
-// casts the character as the protagonist, and — when this install has rendered
-// or chosen a character sheet for the style — adds that sheet as a conditioning
-// character reference. The catalog is static; the sheet image is per install
-// (settings `musicVideoCharacterStyles[id].referenceImageId`) because gallery
+// Built-in Music Video character styles: a named, fixed-identity performer a project can load as its
+// base concept and character reference.
+//
+// Built-in Music Video character styles (a fixed-identity performer a project loads as its base
+// concept and cast): `MUSIC_VIDEO_CHARACTER_STYLES` / `_IDS`, `getMusicVideoCharacterStyle`,
+// `summarizeMusicVideoCharacterStyle` (picker projection), `musicVideoCharacterStyleSnapshot` (the
+// `concept.characterStyle` text), `musicVideoCharacterStyleSubject` / `…SubjectId` / `…ReferenceId`
+// (the protagonist and character-sheet reference a pick adds), `musicVideoCharacterSheetPrompt`
+// (renders the style's own sheet). Pure; `services/musicVideo/characterStyles.js` keeps each install's
+// sheet image.
+//
+// Picking one (`concept.characterStyleId`) snapshots the style text into the project, casts the
+// character as the protagonist, and — when this install has rendered or chosen a character sheet for
+// the style — adds that sheet as a conditioning character reference. The catalog is static; the sheet
+// image is per install (settings `musicVideoCharacterStyles[id].referenceImageId`) because gallery
 // images are local to each install.
 
 const deepFreeze = (value) => {

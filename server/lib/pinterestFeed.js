@@ -1,6 +1,11 @@
 /**
  * Pinterest board RSS — pure URL normalization + feed parsing (no I/O).
  *
+ * Pure Pinterest board RSS helpers: `isPinterestHost(host)` (explicit domain allow-list) +
+ * `normalizePinterestFeedUrl(input)` (board URL or `.rss` → `{ feedUrl, boardUrl }`, host/path-gated)
+ * + `parsePinterestRss(xml)` (per-pin `pinUrl`/`imageUrl`/title/description, 736x size upgrade). Feeds
+ * the mood-board Pinterest importer.
+ *
  * A public Pinterest board exposes an RSS feed at `<board-url>.rss` (e.g.
  * `https://www.pinterest.com/user/board.rss`). The feed returns the board's
  * most-recent pins only (Pinterest caps it at ~the latest 25), NOT the full

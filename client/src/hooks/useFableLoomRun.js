@@ -1,3 +1,10 @@
+/**
+ * Revisioned editorial/production snapshots, identity-safe mutation replies and entry/reconnect/reshow
+ * recovery.
+ *
+ * Use when: FableLoom run views.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
 import { useSocketSubscription } from './useSocketSubscription';

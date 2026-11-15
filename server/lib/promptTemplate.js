@@ -1,6 +1,8 @@
 /**
  * Enhanced prompt template engine — Mustache-flavored, dot-notation aware.
  *
+ * Mustache-flavored, dot-notation-aware prompt template engine.
+ *
  * This replaces the templating in `portos-ai-toolkit`'s prompts service so
  * PortOS templates can reference nested objects naturally:
  *

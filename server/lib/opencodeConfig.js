@@ -1,6 +1,20 @@
 /**
  * OpenCode configuration helpers.
  *
+ * OpenCode config builder — `buildOpencodeEnvVars(provider, model)` builds dynamic
+ * `OPENCODE_CONFIG_CONTENT` declaring model ids under the namespace the provider's marker selects: a
+ * local runtime (`ollama` / `mtplx` / `llama` / `vllm` / `sglang`, bare ids) or a hosted gateway from
+ * `providerGateways.js` (`vendor/model` ids kept whole). Fixes --model rejection. Also attaches the
+ * key for a key-bearing namespace, and pins `small_model` to the run model for a gateway so OpenCode's
+ * own side calls (titles, summarization) can't land on its built-in default — a billed model the
+ * operator never chose. Under a `no-tool` public-review profile it also applies
+ * `hardenOpencodeConfigForNoTool` — root `permission: deny`, an emptied tool map on every agent,
+ * `tool_call: false` on every declared model, and no MCP/plugins/share/autoupdate — which IS
+ * OpenCode's enforced tool-free recipe, since it ships no read-only argv flag (`providerVendors.js`
+ * pairs it with `run --agent` + `OPENCODE_PUBLIC_REVIEW_AGENT`). The harden step also copies
+ * `agent.build`'s generation settings onto that agent, so the stage's configured thinking effort
+ * reaches the model that actually runs.
+ *
  * OpenCode (the CLI) requires every model addressable via `--model` to be
  * declared in its config. For a custom `@ai-sdk/openai-compatible` provider
  * (how we wire the local Ollama daemon and MTPLX), models live UNDER the

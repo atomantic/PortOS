@@ -1,3 +1,12 @@
+/**
+ * `runCliBounded(cmd, args, { timeoutMs = 15000, ...spawnOptions })` — never-rejecting, never-hanging
+ * CLI runner resolving `{ code, stdout, stderr }`
+ *
+ * ; kills a child still running at `timeoutMs` and resolves `code: -1` (stderr preserved, else `timed
+ * out`); pins PWD via `withSpawnCwdEnv`. Use it for every `gh`/`glab`/`git` call a scheduled job
+ * awaits (#11678).
+ */
+
 import { spawn } from './childProcess.js';
 import { withSpawnCwdEnv } from './spawnCwd.js';
 

@@ -1,5 +1,9 @@
-/** Shared song vocabulary for AI prompts, editor pickers, and bundled scores.
+/**
+ *  Shared song vocabulary for AI prompts, editor pickers, and bundled scores.
  * Pure data with no imports; presentation and teaching notes stay client-side.
+ *
+ * Pure shared rhythm-shape, voice-layer, and harmony-part vocabulary used by AI prompts, browser
+ * pickers, and bundled scores.
  */
 
 export const RHYTHM_SHAPES = [

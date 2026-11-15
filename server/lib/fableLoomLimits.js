@@ -1,4 +1,9 @@
 /**
+ * FableLoom record caps (`LOOM_LIMITS`) — the single source of truth shared by the route schemas and
+ * the record sanitizer.
+ *
+ * A leaf module, below both.
+ *
  * FableLoom record caps — the single source of truth shared by the sanitizer
  * (`records.js`, enforcement) and the route schemas
  * (`server/lib/fableLoomValidation.js`, door check). A leaf module so the lib

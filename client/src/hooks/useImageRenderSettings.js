@@ -1,3 +1,12 @@
+/**
+ * Load settings and project shared record → target → install render preferences
+ *
+ * ; returns `{ imageCfg, backends }`. `imageCfg.inheritedBackend` distinguishes inherited
+ * display/runtime preferences from explicit form overrides; local model admission stays server-side.
+ * Pass `includeExternal` to also list an enabled external image service. Use when: Single-image render
+ * slots; pass record and target, and retain the owning record tag on submission.
+ */
+
 import { useState, useEffect, useMemo } from 'react';
 import { getSettings } from '../services/api';
 import { resolveRenderCfg } from '../lib/pipelineImageDefaults';

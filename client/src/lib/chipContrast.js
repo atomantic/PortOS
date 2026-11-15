@@ -1,6 +1,19 @@
 // Contrast-safe chip colors for arbitrary, externally-supplied colors — forge
 // issue-label hexes being the first consumer (`IssuesTab`).
 //
+// Contrast-safe chip colors for data-supplied colors the app did not pick — forge issue-label hexes
+// (`apps/tabs/IssuesTab.jsx`), Google Calendar subcalendar colors (`calendar/calendarUtils.js`), and
+// fixed category palettes rendered on theme-following surfaces (`brain/tabs/BrainGraph.jsx`,
+// `cos/TerminalCoSPanel.jsx`). `chipColors(color, mode)` → `{ color, borderColor, backgroundColor }`
+// for an inline `style` (null when the color is missing/unparseable, so the caller falls back to a
+// neutral chip): the wash keeps the label's own color, while the text/border keep its HUE and move
+// only its LIGHTNESS, by the smallest step that clears WCAG AA against the chip's own tint on the
+// ACTIVE theme mode. Memoized per (color, mode). Graded against `SURFACES` — the worst-case surface
+// per mode (darkest `day`, lightest `night`), which the test re-derives from `THEMES` so a new theme
+// can't silently escape the grading. Plus the primitives: `parseColor` (`#rgb`/`#rrggbb`/bare
+// hex/`rgb()`), `relativeLuminance`, `contrastRatio`, `blend`, `chipBackdrop`, `rgbToHsl`/`hslToRgb`,
+// `ensureReadable`. Pure — the caller passes `theme.mode`, nothing here reads the DOM.
+//
 // The problem this solves: a forge label color is repo data, picked by whoever
 // created the label with no idea which PortOS theme it will land on. Rendering
 // it verbatim as chip text works on the night themes it was eyeballed against

@@ -103,14 +103,13 @@ export const TEST_MEMO_TOOLS = Object.freeze(['chrome', 'ffmpeg', 'python']);
  * fail closed on their own. Naming them keeps the reason explicit.
  */
 export const TEST_MEMO_NEVER = Object.freeze({
-  'scripts/catalog-merge-union.test.js': 'reads every catalog README and barrel through git ls-files',
   'scripts/setup-data-drift.test.js': 'sweeps every migration export against prompt-hash baselines',
   'scripts/direct-invocation-drift.test.js': 'scans every tracked .js file',
   'scripts/repo-scan-guards.test.js': 'scans every tracked test file',
   'server/lib/importScoping.test.js': 'base-relative import-growth comparison against git history',
   'server/lib/layering.test.js': 'scans every server/lib source for upward service imports',
   'server/lib/generatedManifests.test.js': 'scans scripts/generate-*.js and their sibling tests',
-  'server/lib/index.test.js': 'enumerates the server/lib directory against its README and barrel',
+  'server/lib/moduleSummaries.test.js': 'reads every server/lib module header',
   'server/lib/apiAccessPolicy.test.js': 'walks server/lib and server/services source trees',
   'server/lib/creativeLatitude.sources.test.js': 'walks server sources to collect source literals',
   'server/lib/dispatchLabels.audit.test.js': 'walks repository instructions and source trees',
@@ -128,10 +127,11 @@ export const TEST_MEMO_NEVER = Object.freeze({
   'server/routeValidationConventions.test.js': 'scans every route module',
   'server/floatingAsyncConventions.test.js': 'scans the whole server tree',
   'server/timerCallbackConventions.test.js': 'scans the whole server tree',
-  'client/src/lib/index.test.js': 'enumerates the client/src/lib directory against its README and barrel',
-  'client/src/hooks/index.test.js': 'enumerates the client/src/hooks directory against its README and barrel',
-  'client/src/utils/index.test.js': 'enumerates the client/src/utils directory against its README and barrel',
-  'client/src/services/index.test.js': 'enumerates the client/src/services directory against its catalog',
+  'client/src/lib/moduleSummaries.test.js': 'reads every client/src/lib module header',
+  'client/src/hooks/moduleSummaries.test.js': 'reads every client/src/hooks module header',
+  'client/src/utils/moduleSummaries.test.js': 'reads every client/src/utils module header',
+  'client/src/services/moduleSummaries.test.js': 'reads every client/src/services module header',
+  'client/src/services/index.test.js': 'enumerates the client/src/services directory against api.js',
   'scripts/lib/workspaceTests.test.js': 'enumerates the server workspace against vitest list',
   'client/src/test/workspaceTests.test.js': 'enumerates the client workspace against vitest list',
 });

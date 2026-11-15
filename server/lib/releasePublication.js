@@ -1,3 +1,7 @@
+/**
+ * Validated request for forge-verified release publication milestones.
+ */
+
 import { z } from 'zod';
 
 const sha = z.string().regex(/^[a-f0-9]{40}$/);

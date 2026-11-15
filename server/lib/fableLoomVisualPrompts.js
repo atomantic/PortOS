@@ -1,7 +1,12 @@
 /**
  * Pure render-text composition for resolved FableLoom canon.
- * Admission, asset allocation and durable provenance belong to the compiler;
- * this step only formats their resolved inputs, preserving Reactor errors.
+ *
+ * Pure `buildFableLoomVisualPrompts` render-text composition from resolved scene bindings and
+ * allocated references, including shared visual style, continuity, negative tokens and complete
+ * Reactor shot validation.
+ *
+ * Admission, asset allocation and durable provenance belong to the compiler; this step only formats
+ * their resolved inputs, preserving Reactor errors.
  */
 
 import { ServerError } from './errorHandler.js';

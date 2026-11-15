@@ -1,4 +1,9 @@
-/** Deterministic paving and physical signs, uploaded through Eidoverse's GLB door. */
+/**
+ *  Deterministic paving and physical signs, uploaded through Eidoverse's GLB door.
+ *
+ * Deterministic GLB island scenery, pedestrian paths, gathering terraces, and physical district signs,
+ * stored through Eidoverse's content-addressed upload API.
+ */
 import { createHash } from 'node:crypto';
 import { eidoverseDistrictPoint, eidoverseDistrictYaw } from './eidoverseCityLayout.js';
 import { appendEidoverseIslandLandscape } from './eidoverseIslandLandscape.js';

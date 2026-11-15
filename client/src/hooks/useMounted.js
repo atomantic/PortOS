@@ -1,3 +1,9 @@
+/**
+ * `mountedRef` whose `.current` is true while mounted.
+ *
+ * Use when: Async deferred work that must abort on unmount.
+ */
+
 import { useEffect, useRef } from 'react';
 
 // Returns a ref whose `.current` is true while the component is mounted.

@@ -1,6 +1,8 @@
 // Coalesce event bursts into one trailing call with the latest arguments, so
 // refreshes converge without duplicate requests. Call .cancel() on teardown
 // to prevent a pending flush after unmount.
+//
+// Trailing-edge coalescer: wraps a function so rapid calls collapse into one deferred invocation.
 export function coalesce(fn, waitMs = 100) {
   let timer = null;
   let lastArgs = [];

@@ -1,6 +1,9 @@
 /**
  * Per-CLI conventions for Kilo Code's coding agent (binary: `kilo`).
  *
+ * Kilo Code command identity (`kilo`/`kilocode`), `run` headless argv, `--auto` approval posture, and
+ * TUI arguments.
+ *
  * Kilo CLI (`@kilocode/cli`, MIT) is a FORK of OpenCode, and its argv is
  * OpenCode's with one addition, so PortOS drives it the same way:
  *   - `kilo-cli` (type `cli`) — headless one-shot via `kilo run`, prompt on stdin.

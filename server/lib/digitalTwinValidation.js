@@ -1,3 +1,8 @@
+/**
+ * Digital twin document/category schemas, including `documentFilenameSchema` for safe Markdown
+ * basenames across imports, federation and stored document access.
+ */
+
 import { z } from 'zod';
 import {
   COMM_DELTA_MIN,

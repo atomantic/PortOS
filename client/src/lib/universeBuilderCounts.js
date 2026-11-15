@@ -1,3 +1,13 @@
+/**
+ * Pure prompt-count helpers for Universe Builder render buttons (`totalVariationCount`,
+ * `countCanonWithContent`, `renderPromptCount`) mirroring the server's compile and skip rules.
+ *
+ * Pure prompt-count helpers for the Universe Builder render buttons (#2374), mirroring the server's
+ * compile/skip rules so inline counts match what `/render` will enqueue: `totalVariationCount`,
+ * `canonEntryHasContent`, `countCanonWithContent`, `renderPromptCount`, `scopedPromptCount`. The
+ * server `compilePrompts`/`synthesizeCanonPrompt` copy is authoritative — keep in sync.
+ */
+
 import { hasCanonDescriptorContent } from './canonPrompt.js';
 import { getCategoryKeys } from './universeBuilderShared.js';
 import { isNonBlankStr } from './textUtils';

@@ -1,4 +1,9 @@
-/** Source-derived Socket.IO event inventory, cached once per server process. */
+/**
+ *  Source-derived Socket.IO event inventory, cached once per server process.
+ *
+ * Cached source-derived Socket.IO event inventory: event names and directions only, with no checked-in
+ * manifest or positional source metadata.
+ */
 
 import { readFile, readdir } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';

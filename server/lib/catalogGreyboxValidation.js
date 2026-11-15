@@ -1,4 +1,9 @@
-/** Request schemas owned by the catalog's greybox endpoints. */
+/**
+ *  Request schemas owned by the catalog's greybox endpoints.
+ *
+ * Endpoint-specific greybox request schemas, kept outside general catalog validation to avoid loading
+ * scene validation for unrelated catalog operations.
+ */
 import { z } from 'zod';
 import { GREYBOX_LIMITS, greyboxSceneSchema } from './greyboxScene.js';
 import { GREYBOX_INSTRUCTION_MAX, GREYBOX_SHOT_ID_MAX } from './greyboxVocabulary.js';

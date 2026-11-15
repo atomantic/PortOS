@@ -1,3 +1,6 @@
+// Time-of-day window math (`isInTimeWindow`, `timeStringToMinutes`) and morning-layout auto-switch
+// helpers (`pickActiveLayoutId`, `recordManualLayoutPick`).
+//
 // Time-window helpers for dashboard layout auto-activation.
 // Predicate logic (`isInTimeWindow`) mirrors the server's `isWithinTimeWindow`
 // in `server/lib/timezone.js`; the regex below mirrors that file's strict,

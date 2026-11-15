@@ -1,3 +1,12 @@
+/**
+ * Universe Builder batch-render settings, scoped render payload compilation, canon-selection defaults,
+ * per-entry job queue, and run-list refresh.
+ *
+ * Returns the shared `runRender`/`handleRender` action used by the Render tab and inline bucket/canon
+ * controls. Use when: Universe Builder composition shell and presentational panels; don't fork render
+ * payload semantics per tab.
+ */
+
 import { useState } from 'react';
 import toast from '../components/ui/Toast';
 import { listWorldRuns, renderWorld } from '../services/api';

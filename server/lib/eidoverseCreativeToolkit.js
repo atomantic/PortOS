@@ -2,6 +2,22 @@
  * The documented creative toolkit for minds building Eidoverse vernacular
  * content (#7459, part of the stigmergic-federation epic #7453).
  *
+ * The documented creative toolkit for minds building Eidoverse vernacular content (#7459, wired
+ * end-to-end in #7627): a closed catalog of `EIDOVERSE_CREATIVE_MATERIALS` and
+ * `EIDOVERSE_CREATIVE_MOTIFS` (cosmetics — style-layer only) plus `EIDOVERSE_CREATIVE_LAYOUTS` (named
+ * generative placement algorithms — `radial-ring`/`grid-plot`/`arc-row`/`grove-cluster`).
+ * `generateDistrictTemplatePlacement` is deterministic and seeded (mulberry32, no `Math.random`, no AI
+ * call) so the same `{layoutId, anchor, seed}` always reproduces the same geometry —
+ * `services/eidoverseFoundationLedger.js`'s `recordEidoverseFoundation()` replays it server-side to
+ * derive a `district-template`'s `body.placement`, never trusting a caller-supplied one.
+ * `buildDistrictTemplateAugmentOperations` turns a placement into ready-to-submit `eidoverse.augment`
+ * `spawn` operations (the `eidoverse.place-layout` tool); `buildDistrictTemplateFoundationDraft`
+ * shapes a placement plus a material/motif choice into an `eidoverseFoundationInputSchema`-ready
+ * `district-template` input, keeping the generative substance in `body` and the material/motif
+ * cosmetics in `style` (the `eidoverse.draft-foundation` tool). `describeCreativeCatalog()` is the
+ * prompt-safe catalog projection, including each material's `colorHex`. Pure: no I/O, no clock, no
+ * provider calls.
+ *
  * `eidoverseFoundations.js` already gives an install a place to keep a build
  * ({ body, style }, vernacular by default, promotion explicit) and
  * `eidoverseWorld.js`'s `eidoverse.augment` already lets a mind place bounded

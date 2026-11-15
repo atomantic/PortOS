@@ -1,3 +1,9 @@
+/**
+ * Request-correlated Google OAuth setup progress with HTTP settlement and listener cleanup.
+ *
+ * Use when: Calendar and Messages automated setup.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
 import { runGoogleAutoConfig } from '../services/apiCalendar';

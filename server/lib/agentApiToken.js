@@ -1,4 +1,16 @@
 /**
+ * Provides `AGENT_API_TOKEN_ENV`, `AGENT_API_AUTH_CURL_ARG`, `agentApiCurl` and `agentApiAuthNote` for
+ * injecting and using the loopback API token in agent-facing curl snippets.
+ *
+ * `AGENT_API_TOKEN_ENV` (`PORTOS_API_TOKEN`) + `AGENT_API_AUTH_CURL_ARG` — the name of the loopback
+ * session token PortOS injects into a spawned agent's environment (`services/agentApiAuth.js`) and the
+ * quoted `curl` argument that spends it, so the prompt builders writing agent-facing `curl` snippets
+ * and the spawn sites injecting the variable cannot drift. `agentApiCurl({ apiBase, path, payload })`
+ * and `agentApiAuthNote({ alsoCovering })` assemble the whole call and the paragraph that must travel
+ * with it — one shape for every agent-facing API call in the tree, after two hand-written copies had
+ * already drifted on whether the install "gates" or "may gate" `/api/*` (it is opt-in and off by
+ * default). Pure, zero-import.
+ *
  * The name of the loopback API credential PortOS hands its own agents, and the
  * `curl` argument that spends it — one source of truth for the two halves,
  * which live far apart: the spawn sites that inject the variable

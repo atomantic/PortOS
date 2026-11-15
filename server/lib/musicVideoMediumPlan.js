@@ -1,3 +1,14 @@
+/**
+ * Music video medium planning: `normalizeMusicVideoProductionPolicy`, `planMusicVideoMedia`,
+ * `summarizeMusicVideoMediumPlan` and `codeFirstProductionAssets` for pinned shot media and preflight.
+ *
+ * `normalizeMusicVideoProductionPolicy`, `planMusicVideoMedia`, `summarizeMusicVideoMediumPlan`, and
+ * `codeFirstProductionAssets`: pinned shot media, union-of-intervals video allowance, and
+ * selected-asset preflight shared by planning and Board review. `musicVideoBriefTools`,
+ * `musicVideoBriefAllowsVideo` and `musicVideoToolPolicyConflict` read the brief's selected tools
+ * against the policy (the setup warning and the video-dispatch refusal).
+ */
+
 import { musicVideoAllowsMedia } from './musicVideoMediaPolicy.js';
 import { applyShotSheetMedium, isAutomaticLayerPin, VISUAL_LAYER_PIN_RATIONALE } from './musicVideoShotSheet.js';
 import { performanceCapability } from './musicVideoShotTiming.js';

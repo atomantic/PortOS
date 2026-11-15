@@ -1,6 +1,13 @@
 /**
  * Shared image/video render-backend alphabets.
  *
+ * Shared immutable image/video render-backend alphabets (`IMAGE_GEN_MODE[S]`, `QUEUEABLE_IMAGE_MODES`,
+ * `VIDEO_GEN_MODE[S]`, and cloud subsets) plus `mediaJobExecutionLane({ kind, mode, remote })` /
+ * `MEDIA_JOB_EXECUTION_LANES` — THE media-queue lane rule — and `mediaJobSwimlane(...)`, the
+ * per-provider / per-peer / local swim-lane key that owns slots and queue positions, the scheduler and
+ * the public job projection share, kept below both validation and generation services so schemas never
+ * import orchestration modules.
+ *
  * These constants sit below both validation and the generation services so a
  * schema can enumerate a backend without importing service-layer orchestration.
  * The service mode modules re-export the same bindings for compatibility.

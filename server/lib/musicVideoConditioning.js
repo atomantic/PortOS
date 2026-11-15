@@ -1,3 +1,13 @@
+/**
+ * Selects music-video frame and clip reference images, including approved character assets from the
+ * catalog, and defines renderer reference capacities.
+ *
+ * Shared music-video frame and clip reference selection and renderer capacities: a shot's pickers also
+ * offer every approved asset of each character linked from the catalog (portrait, sheets, guides,
+ * references rated good), which never join the automatic set; clip picks are independent of frame
+ * picks, and model limits determine how many extra images accompany a source frame.
+ */
+
 import { activeMusicVideoSubjects, isActiveMusicVideoReference } from './musicVideoCastSelection.js';
 import { isGoodReference, pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from './catalogMediaLibrary.js';
 import { isEditCapableMode, maxInputImages } from './imageGenCapabilities.js';

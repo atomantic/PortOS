@@ -1,4 +1,9 @@
-/** Filesystem identity distinguishes checkouts recreated at the same path/head. */
+/**
+ *  Filesystem identity distinguishes checkouts recreated at the same path/head.
+ *
+ * Reads a checkout's filesystem identity and verifies its live branch/head before the schedule writer
+ * admits a recreated checkout's obligation.
+ */
 import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';

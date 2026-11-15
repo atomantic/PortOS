@@ -1,6 +1,13 @@
 /**
  * Shared `vi.mock` factory for the "PATHS.data → temp dir" pattern.
  *
+ * Best-effort bounded `recordTempRootOwner` sidecar observations and shared Vitest helpers for
+ * `PATHS.data → temp dir`, no-peer record creation guards, deterministic federation-identity doubles
+ * (`mockTestIdentity`), and `ownFixtureWork()` for setup/test/Git/write settlement, bounded phase
+ * timings and cleanup failure retention; `ownTestBodies(it)` → `{ it, drain }`, which owns each test
+ * body so teardown can `await drain()` before removing a fixture root — a body left running by
+ * Vitest's fail-fast cancellation otherwise recreates the removed root (`test temp leak:`).
+ *
  * Eight (and growing) test files duplicated the same Proxy-over-fileUtils
  * mock to redirect `PATHS.data` at a per-test temp directory:
  *

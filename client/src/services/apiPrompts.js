@@ -1,3 +1,8 @@
+/**
+ * Prompt Manager: stage templates, variables, and job-skill templates (providers list reuses
+ * `apiProviders.getProviders`).
+ */
+
 import { request } from './apiCore.js';
 
 // Prompt stages, variables, and job skills for the Prompt Manager and the

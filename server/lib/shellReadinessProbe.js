@@ -3,6 +3,15 @@
  * the shell a PTY session is actually running (see `createShellSession`'s
  * `waitForPromptReady` in `services/shell.js`).
  *
+ * `buildReadinessProbe(nonce, shell)` — the round-trip "can this shell actually run commands yet?"
+ * probe `createShellSession`'s `waitForPromptReady` sends and watches for, in the dialect the session
+ * speaks: POSIX `printf '%s\n' 'PORTOSRDY''<nonce>'` (unchanged), PowerShell `Write-Output
+ * ('PORTOSRDY' + '<nonce>')`, `cmd.exe` → `null` (no split-literal concatenation operator exists
+ * there, so the caller skips straight to the bounded fallback timer instead of risking an
+ * always-matching probe). The split-literal property is load-bearing in every dialect: the probe
+ * source never contains the assembled marker, so seeing it in the output can only mean the shell
+ * executed the probe.
+ *
  * The probe prints a unique nonce and the caller waits to SEE it in the PTY
  * output before injecting the real command — proof the shell is executing,
  * not just echoing keystrokes. The split-literal property is load-bearing and

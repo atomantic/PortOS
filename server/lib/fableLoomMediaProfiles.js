@@ -1,3 +1,7 @@
+/**
+ * Versioned portable media presets with resolution, bitrate, frame-rate and loudness targets.
+ */
+
 /** Version changes invalidate cached encodes when the recipe changes. */
 export const FABLELOOM_MEDIA_PROFILES = Object.freeze({
   source: Object.freeze({ id: 'source', version: 1 }),

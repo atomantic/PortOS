@@ -1,6 +1,11 @@
 /**
  * Is a peer reachable ONLY over the tailnet — as a security gate.
  *
+ * `isTailnetPeer(peer)` — fail-closed security predicate for "is this peer reachable only over the
+ * tailnet". Deliberately separate from `instances.js`'s `peerRequiresTailscale()` probe-deferral
+ * heuristic so a polling-noise tweak can't widen a privacy boundary; required by the
+ * unattended-routing gate in ADR 2026-08-20-federated-visual-prompts.
+ *
  * This deliberately duplicates the shape of `peerRequiresTailscale()` in
  * `server/services/instances.js` instead of re-exporting it, because the two
  * answer different questions and must be free to diverge:

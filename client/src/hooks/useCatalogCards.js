@@ -1,3 +1,10 @@
+/**
+ * Bounded visible catalog-card hydration, socket/reconnect refresh, safe flag-only optimistic updates
+ * and unavailable context.
+ *
+ * Use when: Shared Casting and Universe character grids.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import { getCatalogIngredientCards } from '../services/apiCatalog';
 import socket from '../services/socket';

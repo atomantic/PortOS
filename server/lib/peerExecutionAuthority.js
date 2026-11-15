@@ -1,4 +1,9 @@
-/** Non-rewound machine authority. No grants, adapter, or HTTP route is installed. */
+/**
+ *  Non-rewound machine authority. No grants, adapter, or HTTP route is installed.
+ *
+ * Non-rewound receiver execution epoch and restore-owner journal; default-deny on stale evidence or
+ * pending/conflicting recovery. Invalidates grants on identity changes and refuses stale epochs.
+ */
 import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';

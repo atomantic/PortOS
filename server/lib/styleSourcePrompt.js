@@ -1,4 +1,9 @@
 /**
+ * `universeStyleLines(universe)` / `moodBoardSection(board)` — a resolved universe style guide or mood
+ * board (`services/creativeStyleSources.js`) as prompt text
+ *
+ * ; shared by Code Animation and Creative Commissions.
+ *
  * Style-source prompt renderers — a resolved universe style guide or mood
  * board (`services/creativeStyleSources.js`) as prompt text. Shared by every
  * surface that uses a universe / mood board as its look (Code Animation's

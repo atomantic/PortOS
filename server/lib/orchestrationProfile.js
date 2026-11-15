@@ -1,6 +1,13 @@
 /**
  * Orchestration profiles for CoS agent runs (issue #5992).
  *
+ * Orchestrated CoS execution (#5992) — `ORCHESTRATION_MODES` / `ORCHESTRATION_ROLES` (architect,
+ * implementer, reviewer), `normalizeOrchestrationProfile` / `normalizeOrchestrationMode`,
+ * `isOrchestratedTask` / `roleAssignment` (both inert on a `direct` task, so a stored profile stays
+ * opt-in), the six-part `SPEC_PARTS` contract a delegated context-free lane needs, plus
+ * `parseReasoningDirective` / `resolveStepEffort` (spec rung → role default → run effort; an
+ * unsupported rung is an error, never a silent downgrade).
+ *
  * A CoS task normally resolves ONE provider and ONE model for its whole run, so
  * a user who wants strong reasoning for the planning also pays that model's rate
  * for the mechanical editing. An orchestration profile splits the run into three

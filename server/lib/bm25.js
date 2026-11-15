@@ -1,6 +1,8 @@
 /**
  * BM25 (Best Matching 25) Algorithm Implementation
  *
+ * BM25 ranking + inverted-index helpers.
+ *
  * A ranking function used for text retrieval that considers:
  * - Term frequency (TF): How often a term appears in a document
  * - Inverse document frequency (IDF): How rare/important a term is across all documents

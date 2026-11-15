@@ -1,3 +1,7 @@
+/**
+ * Shared character limit for music-video subject descriptions and linked catalog looks.
+ */
+
 /** The editable subject description shared by a music video and its catalog look. */
 export const MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX = 1000;
 

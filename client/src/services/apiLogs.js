@@ -1,3 +1,8 @@
+/**
+ * PM2 system logs: fetch a process's recent log tail (process list comes from
+ * `apiCommands.getProcessesList`).
+ */
+
 import { request } from './apiCore.js';
 
 // Fetch the recent tail of a PM2 process's system log. Returns

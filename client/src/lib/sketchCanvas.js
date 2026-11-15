@@ -1,3 +1,9 @@
+// Pure stroke model + 2D-context renderer for the media annotation canvas (`createStroke`,
+// `appendPoint`, `undoStrokes`, `drawStrokes`, `clampSize`).
+//
+// Points stored in natural-pixel space; erase strokes use `destination-out`. Used by
+// `AnnotationCanvas.jsx` / `MediaAnnotate.jsx` (#2036).
+//
 // Pure stroke model + 2D-context renderer for the media Sketch & Annotation
 // Canvas (issue #2036, phase 1). Kept free of React/DOM lookups so the drawing
 // and undo logic is unit-testable with a mock 2D context.

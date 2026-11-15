@@ -1,4 +1,9 @@
 /**
+ * Re-export of `server/lib/videoReferenceModes.js` — the i2v reference-mode vocabulary and its
+ * per-mode rules.
+ */
+
+/**
  * Video reference-mode vocabulary and its per-mode rules.
  *
  * Re-export of `server/lib/videoReferenceModes.js` — the one definition of this rule,

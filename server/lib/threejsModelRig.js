@@ -1,6 +1,15 @@
 /**
  * Rig-readiness report for an already-validated Three.js scene spec.
  *
+ * `evaluateThreejsRigReadiness(spec)` — honest rig-readiness report over an already-validated Three.js
+ * spec: `{ articulationReady, reasons, jointCount, socketCount, attachmentCount,
+ * anchoredAttachmentCount, unanchoredAttachmentCount, rootJointId, subjectType }`. The schema proves
+ * the optional `articulation` graph is well *formed* (one root, no cycles or forward refs, joints and
+ * pivots pointed at real parts/sockets); this reports whether it is *useful* (more than a lone root,
+ * every child joint carrying a pivot axis, every declared attachment naming what it hangs from) and
+ * names the reason when it is not. It reports rather than rejects, and never claims skinning: PortOS
+ * generates static assemblies and declared articulation intent, not skeletons or bind poses.
+ *
  * PortOS generates static assemblies. It does not skin a mesh, bind a bind pose,
  * or export a skeleton, and the honest thing to publish is therefore not "this
  * model is animation-ready" but "this model declares an articulation graph a

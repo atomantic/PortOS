@@ -1,8 +1,14 @@
 /**
  * Client-side preview of applying editorial fix edits to a manuscript section.
- * Mirrors the server splice in `server/services/pipeline/manuscriptFix.js`
- * (`acceptManuscriptFix`): locate each `find` (nearest the anchor when it
- * recurs), then replace from the bottom up so earlier offsets stay valid.
+ *
+ * `applyEditsToContent(content, edits, anchorQuote)` — PREVIEW-ONLY client mirror of the server's
+ * accept splice (`server/services/pipeline/manuscriptFix.js`): locate each `find` (nearest the anchor
+ * when recurring), drop overlaps, replace bottom-up. Powers the Manuscript editor's whole-manuscript
+ * impact preview.
+ *
+ * Mirrors the server splice in `server/services/pipeline/manuscriptFix.js` (`acceptManuscriptFix`):
+ * locate each `find` (nearest the anchor when it recurs), then replace from the bottom up so earlier
+ * offsets stay valid.
  *
  * PREVIEW ONLY — the server route remains authoritative for the real accept.
  * This exists so the impact-preview modal can show before/after without

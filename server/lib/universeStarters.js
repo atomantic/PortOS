@@ -1,4 +1,8 @@
-/** Current shipped starters. Only text fields are eligible for restoration. */
+/**
+ *  Current shipped starters. Only text fields are eligible for restoration.
+ *
+ * Latest shipped universe starter text patches for explicit restoration.
+ */
 import { REALITY_STARTER_V2 } from './realityStarterV2.js';
 
 export const REALITY_STARTER_ID = 'universe-reality';

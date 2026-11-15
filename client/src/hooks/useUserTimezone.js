@@ -1,3 +1,11 @@
+/**
+ * Resolve the user's configured IANA timezone (`settings.timezone`) once, falling back to the browser
+ * zone then UTC
+ *
+ * ; returns the tz string. Use when: A date-scoped surface that must derive "today" the same way the
+ * server does (POST launcher/history day keys, #2681).
+ */
+
 import { useState, useEffect } from 'react';
 import { getSettings } from '../services/api';
 import { isValidTimezone } from '../utils/timezone.js';

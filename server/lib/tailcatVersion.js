@@ -1,6 +1,12 @@
 /**
  * Tailcat CLI version floor for PortOS-managed install/detect.
  *
+ * Tailcat CLI version floor for managed install/detect: `MIN_TAILCAT_VERSION` (`0.6.0` — PSK on by
+ * default in modern `serve`), `parseTailcatVersion` (handles the CLI's `v0.6.0` banner that
+ * `parseHarnessVersion` cannot), `isTailcatVersionAtLeast`, and `tailcatVersionTooOldMessage` for
+ * operator-facing upgrade guidance. Consumed by `services/tailcatPeer.js` so Dial-them and
+ * They-dial-us refuse ≤0.5.x rather than silently timing out on TCP.
+ *
  * Modern `tailcat serve` defaults `--psk` to true (documented since v0.6.0).
  * Clients on ≤0.5.x can still DERP-ping (`--key=new` pong) while TCP
  * `forward` / PortOS health probes time out with `context deadline exceeded`.

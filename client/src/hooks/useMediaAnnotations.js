@@ -1,3 +1,9 @@
+/**
+ * Per-entry `own`/`others` annotations with back-compat aliases.
+ *
+ * Use when: Showing media annotations + ownership.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { listMediaAnnotations, setMediaAnnotation } from '../services/api';
 import socket from '../services/socket';

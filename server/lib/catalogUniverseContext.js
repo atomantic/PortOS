@@ -1,5 +1,8 @@
 // Ownership is explicit; legacy consumption links are evidence for review,
 // never a reason to select an arbitrary style context.
+//
+// Explicit catalog owning-universe role and visible legacy/missing/conflicting ownership
+// classification, independent of usage.
 export const CATALOG_OWNER_ROLE = 'owner';
 
 export function catalogUniverseContext(refs = []) {

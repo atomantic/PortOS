@@ -1,3 +1,7 @@
+/**
+ * Ask page (chat-like).
+ */
+
 import { request, API_BASE } from './apiCore.js';
 
 export const listAskConversations = () => request('/ask');

@@ -3,6 +3,19 @@
  * service gathers metadata with `gh` and this module turns it into a trust
  * level, spam signals and one decision.
  *
+ * `TRIAGE_DECISIONS`, `TRUST_LEVELS`, `MASS_MENTION_THRESHOLD`, `computeThreadTrust`, `spamSignals`,
+ * `parseCiBranch`, `decideThread`, `ASSIST_VERDICTS`, `decisionFromVerdict`,
+ * `learnedDecisionForAction`, `applyLearnedRule`, `assistAction`, `selectNotificationProvider`,
+ * `notificationAgentAccountBinding`, `agentHandoff`, `autopilotHandoff`, `agentRuleScope`,
+ * `agentRunPin`, `GENERIC_AGENT_LANE`, `APP_FREE_AGENT_LANES`, `AGENT_RULE_KINDS`,
+ * `AGENT_RULE_ACTIONS`, `GENERIC_RULE_KINDS`, `threadAgentKind`, `KIND_SQL`, `normalizeAgentRules`,
+ * `ruleAction`, `ruleActionScope`, `PINNED_TRIAGE_RULES` — the GitHub inbox's fixed trust, spam and
+ * routing rules plus Assist's verdict enum, learned rules, allowed actions and Private-account
+ * provider allow-list, plus agent lanes (with the generic `notification-resolve` lane's trust gate),
+ * per-repo automation rules (kind × agent/done/mute/leave, legacy `agent` booleans read as actions)
+ * and run-pin precedence; trust comes only from accounts, repo ownership and forge permissions, never
+ * from content.
+ *
  * Security boundary: trust comes only from configured accounts, repository
  * ownership and forge permissions, never from a title, comment body, label or
  * GitHub's self-reported `author_association`. Content may only ADD suspicion

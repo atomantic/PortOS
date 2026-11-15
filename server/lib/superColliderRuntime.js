@@ -1,9 +1,19 @@
 /**
- * The managed SuperCollider runtime contract (#9412, epic #9407) — pure: no
- * filesystem, no docker, no clock. `services/superColliderRuntime.js` does the
- * I/O; the render service and the Music Designer UI import the constants and
- * `evaluateSuperColliderStatus` from here so every surface agrees on what
- * "ready" means.
+ * The managed SuperCollider runtime contract (#9412, epic #9407) — pure: no filesystem, no docker, no
+ * clock.
+ *
+ * Managed SuperCollider runtime contract (#9412), pure: image/runtime/policy version constants,
+ * `buildSuperColliderRunArgs` (the one contained `docker run` for untrusted `sclang` source: no
+ * network/caps, read-only root, limits, ro input, private output), `buildSuperColliderBuildArgs`, the
+ * shipped synthetic probe, `evaluateSuperColliderStatus` (docker-missing … ready, with stale
+ * image/evidence invalidation), and the render contract (#9413): `SUPERCOLLIDER_RENDER` bounds, the
+ * trusted NRT `SUPERCOLLIDER_RENDER_WRAPPER_SOURCE`, `classifySuperColliderRenderLog`
+ * (syntax/source/pattern/score/synthesis failures) and `parseDockerContainerList` for orphan sweeps.
+ * I/O lives in `services/superColliderRuntime.js`.
+ *
+ * `services/superColliderRuntime.js` does the I/O; the render service and the Music Designer UI import
+ * the constants and `evaluateSuperColliderStatus` from here so every surface agrees on what "ready"
+ * means.
  *
  * Three things decide readiness, and each invalidates the next:
  *   1. a reachable Linux Docker engine on a supported architecture,

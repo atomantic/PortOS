@@ -1,8 +1,22 @@
 /**
- * Per-model API billing rates for informational cost estimates. Subscription
- * plans and local providers do not expose a bill per benchmark run, so these
- * rates answer "what would the recorded tokens cost under API billing," never
- * the actual subscription allowance consumed or a local inference bill.
+ * Per-model API billing rates for informational cost estimates.
+ *
+ * Per-model API billing rates for informational cost estimates — `resolveModelRates(providerId,
+ * model)` (exact → family regex → provider default → blended fallback, with a `matched` tier; also
+ * derives cache tiers), `pricingAsOfForModel(model)`, `isFreeProvider`, `estimateCostUsd(tokensIn,
+ * tokensOut, rates, cache?)` (uncached input plus separately priced cache tokens),
+ * `estimateGrokImagineCost(model, units)` (published Imagine image / second / input-image rates;
+ * longest model id wins), `estimateAgyImageCost(model, units)` (published Imagen rates for
+ * Antigravity-driven generation), `GROK_LONG_CONTEXT_PROMPT_TOKENS` (200k — the usage report adds one
+ * extra base-rate charge for that per-request subset), `serviceTierExtra(rateModel, tier)` (published
+ * Fast/Ultrafast increment for a transcript-confirmed subset; 0 when that model has no schedule),
+ * `SPEED_LEDGER_FIELDS`, and baseline `PRICING_AS_OF`. Subscription allowance and local inference
+ * bills remain unknown; batch discounts, subscription credit multipliers, and non-Grok long-context
+ * tiers are not modeled.
+ *
+ * Subscription plans and local providers do not expose a bill per benchmark run, so these rates answer
+ * "what would the recorded tokens cost under API billing," never the actual subscription allowance
+ * consumed or a local inference bill.
  *
  * Rates are USD per 1M tokens. Standard input/output come from the table below;
  * the prompt-cache tiers are derived from the input rate by the multipliers in

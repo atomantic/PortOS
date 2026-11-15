@@ -1,8 +1,13 @@
 /**
- * A shot's real-world scale cue: how tall each person in it is and how big its
- * sets and props are. Sheets and plates composited into one frame carry no size
- * of their own, so without it a model sizes a person against a fence or a sign
- * by guesswork (one figure towering over both a 4 ft fence and a 7 ft sign).
+ * A shot's real-world scale cue: how tall each person in it is and how big its sets and props are.
+ *
+ * `musicVideoSubjectScaleText(concept, sizes)`: a shot still's "Real-world scale" addition, each
+ * active subject's height or size (from `services/musicVideo/subjectScale.js`, read live from Casting)
+ * so people, props and sets stay to scale against each other. Pure.
+ *
+ * Sheets and plates composited into one frame carry no size of their own, so without it a model sizes
+ * a person against a fence or a sign by guesswork (one figure towering over both a 4 ft fence and a 7
+ * ft sign).
  *
  * `sizes` is `{ [subjectId]: text }` from the catalog (loadMusicVideoSubjectSizes);
  * this module only picks the shot's subjects and words the line.

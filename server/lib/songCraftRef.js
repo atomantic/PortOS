@@ -1,5 +1,9 @@
-/** Song vocabulary injected into the generate/evaluate/derive prompts.
+/**
+ *  Song vocabulary injected into the generate/evaluate/derive prompts.
  * The browser enriches the same pure data with guide-only presentation fields.
+ *
+ * Shared song vocabulary re-exports plus derived dirge and derivable-harmony subsets for AI prompts
+ * and bundled scores.
  */
 import { RHYTHM_SHAPES, VOICE_LAYERS, HARMONY_PARTS } from './songCraftParts.js';
 

@@ -1,3 +1,17 @@
+/**
+ * Brain capture box repository state: the parsed `{host,owner,repo}` when the whole text is a GitHub
+ * or GitLab repo URL the server will clone.
+ *
+ * The Brain capture boxes' repository state: `repo` (the parsed `{host,owner,repo}` when the ENTIRE
+ * capture text is a github.com/gitlab.com repo URL — i.e. exactly when the server will clone it), the
+ * two sticky post-clone agent opt-ins (`options`/`toggle`, persisted to `localStorage`), the
+ * `useRepoStudyConfig` knobs it composes, and `intakeFor(submittedText)` which re-derives at submit
+ * time so a sticky tick can't ride along on a capture retyped into a plain thought. Also exports the
+ * pure `capturedRepo(text)`. Use when: Any capture surface that should offer the malware-scan /
+ * repo-study runs. Render with `components/brain/RepoIntakeOptions`; don't re-parse the text in the
+ * component.
+ */
+
 import { useEffect, useMemo, useRef } from 'react';
 import { useLocalStorageBool } from './useLocalStorageBool.js';
 import { useRepoStudyConfig } from './useRepoStudyConfig.js';

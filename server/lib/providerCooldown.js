@@ -2,6 +2,13 @@
  * Provider cooldown policy — "this run failed; should the provider be benched,
  * and for how long?"
  *
+ * Provider bench policy — `resolveProviderBench(analysis)` → `null` (don't bench) / a `usage-limit`
+ * marker / an `unavailable` marker with the per-category cooldown from `COOLDOWN_MS_BY_CATEGORY`.
+ * Declines to bench request/response-specific categories (`isRequestSpecificCategory` /
+ * `isSchemaTypeCategory`) so one bad model id or off-shape response can't take a healthy provider
+ * offline. Shared by `services/promptRunner.js` (prompt cascade) and `services/agentFinalization.js`
+ * (finished CoS agent run) so both bench a category for the same window. Pure.
+ *
  * One answer, shared by both paths that can observe a provider failing:
  *   - `promptRunner.js` (a one-shot prompt cascade), and
  *   - `agentFinalization.js` (a finished CoS agent run).

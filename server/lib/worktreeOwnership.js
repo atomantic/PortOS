@@ -2,6 +2,19 @@
  * Worktree ownership — the one policy for whether PortOS may move or remove a
  * worktree.
  *
+ * Pure ownership gate for destructive worktree operations. `worktreeOwnershipReason()` applies root,
+ * agent-id, lock, active-agent, liveness and claim policies IN THAT ORDER, so an unconditional hold
+ * always outranks a claim and callers never re-derive the precedence from the slug; the claim hold has
+ * two opt-outs (`allowStaleClaim` for reapers, `allowLiveClaim` for the dispatch side).
+ * `knownAgentIds()` is the one live-agent sentinel: a Set (even empty) is authoritative, anything else
+ * is unknown liveness and must never be coerced to an empty Set. `worktreeAgentId()` is
+ * separator-safe; `isHumanClaimWorktree()` and `isAgentWorktreeId()` make the protected namespaces
+ * explicit; `worktreeHoldExpiresAt()` names when a hold lapses on its own (the stale-claim window) so
+ * callers can wait exactly that long. `appWorktreeSlug(app)` is the per-app segment (`<name-slug>-<8
+ * id chars>`) that claim prompts render INSIDE the `claim-` prefix — `data/cos/worktrees/` is one
+ * directory shared by every managed app, so a work-item-only name collides whenever two apps carry the
+ * same issue number or PLAN slug.
+ *
  * Worktree operations are destructive: adoption moves a directory and reapers
  * remove one. The callers therefore share this pure gate instead of carrying
  * slightly different copies of "managed root, agent id, lock, liveness, claim".

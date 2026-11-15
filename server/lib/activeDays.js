@@ -1,6 +1,17 @@
 /**
  * Cross-domain "active days" set math (#4120).
  *
+ * Cross-domain "days active" set math (#4120) — `unionActiveDayKeys(sources, timezone)` unions several
+ * domains' stored date values into one sorted array of user-local `YYYY-MM-DD` keys (`.length` is the
+ * honest day count; summing per-domain counts would double-count any day logged in two domains), and
+ * `toUserDayKey(value, timezone)` is its per-value normalizer. Owns the day-boundary reconciliation
+ * between POST (stamps `userLocalToday()`) and the health logs (stamp the server-local
+ * `getDateString()`): a value carrying an INSTANT (the pre-#2681 full-ISO shape some legacy training
+ * entries still store) is re-keyed into the user's timezone rather than `split('T')[0]`'d to the UTC
+ * day, while a value that is already a bare day LABEL is taken as authored — there is no instant left
+ * to re-derive from, so retro-normalizing stored health keys is out of scope by construction, not by
+ * omission. Non-day values are dropped rather than coerced. Pure.
+ *
  * A truthful "days active" is the UNION of the per-day date sets each domain contributes —
  * never the SUM of per-domain day counts, which double-counts every day the user logged in two
  * domains. This module owns that union, plus the one thing that makes it meaningful: agreeing

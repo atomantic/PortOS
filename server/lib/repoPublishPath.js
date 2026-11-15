@@ -1,4 +1,12 @@
 /**
+ * `isSymlinkFreeRepoPath(realRepoRoot, absPath, { leaf: 'dir' | 'file' })` — symlink-aware containment
+ * for publishing generated files into a managed app's repo.
+ *
+ * `lstat`-walks every existing component below the real root and refuses any symlink (dangling or
+ * contained), a wrong-kind leaf, or a realpath outside the root; a missing tail is allowed below a
+ * verified ancestor. The lexical `isPathInsideDir` cannot see a redirecting directory link (#10894,
+ * after #9668). Shared by the chiptune and sprite publishers.
+ *
  * Symlink-aware containment for writing generated files into a managed app's
  * repository. The lexical `isPathInsideDir` guard cannot see that
  * `<repo>/linked-assets` is a symlink to a directory elsewhere, so a publish

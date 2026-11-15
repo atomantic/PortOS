@@ -1,3 +1,51 @@
+/**
+ * Shared mechanism for optional local daemons run as PM2 processes (llama server, mtplx, etc.): start,
+ * stop, status and health handling.
+ *
+ * Shared mechanism for the local daemons PortOS runs as optional PM2 processes
+ * (`services/llamaServerManager.js` → `portos-llama-server`, `services/mtplxServerManager.js` →
+ * `portos-mtplx`, `services/slotstreamServerManager.js` → `portos-slotstream`). Owns their PM2 process
+ * names — `LLAMA_APP`, `MTPLX_APP`, and `SLOTSTREAM_APP`; the managers re-export those names.
+ * `createDaemonWatcher({...})` supplies the common PM2 launch-line re-adoption, endpoint probe, status
+ * skeleton, bounded log view, and port-release wait while managers retain daemon-specific parsing and
+ * lifecycle policy. `createDaemonLogBuffer({maxLines?})` is the bounded timestamped ring buffer of
+ * what PortOS logged around a launch, plus `withPm2Logs(output)` → that buffer followed by anything
+ * `pm2 logs` has which it doesn't already hold, deduped and re-capped (PM2's lines are a VIEW, never
+ * folded into the buffer — PM2 owns them and re-reads them every status call). `pm2ArgValue(args,
+ * flag)` reads one value back out of a PM2 process's recorded argv so a manager can recover a
+ * still-online daemon's launch config after a PortOS restart; `null` means the flag was absent, which
+ * a relaunch must leave off rather than defaulting. Also the shared **idle reaper**, for a daemon that
+ * cannot release its weights any other way: `registerIdleDaemon({name, getIdleMs, isPinned?,
+ * isRunning?, stop})` (seeds `lastUsedAt` to NOW, so a hand-started daemon gets a full window;
+ * `isPinned` exempts user-pinned servers), `markDaemonUsed(name)` — call on real traffic, NEVER on a
+ * status poll — `daemonLastUsedAt(name)`, `daemonReleaseReason(name)`, `idleWindowMs(minutes)`
+ * (minutes → ms; `0` = never, `null` = not configured, kept distinct),
+ * `evaluateMemoryPressurePolicy({...})` (pure policy function evaluating current state, pressure
+ * reading, and recent history), `reapIdleDaemons(now?, options?)` → the names stopped (stops idle
+ * daemons whose window elapsed, and runs a pressure-aware pass releasing the least recently used
+ * unpinned daemon under sustained host memory pressure; at most one daemon stopped per tick), and
+ * `startIdleReaper({intervalMs?})` / `stopIdleReaper()` (ONE interval for all registrants, `unref`'d,
+ * idempotent). `mtplxServerManager` and `slotstreamServerManager` register: llama.cpp releases its
+ * checkpoint in place via `--sleep-idle-seconds` and must NOT be stopped for it.
+ * `createOnDemandDaemon({appName, label, emoji, readSection, endpointFor, probe, start, stop,
+ * getStatusStrict, clearStatusCache?, exitTail?, resolveLaunch, getConfig?, sleep,
+ * getRelaunchReadyTimeoutMs, getRelaunchPollMs})` is the shared ON-DEMAND WAKE mechanism (#8105) —
+ * `ensureRunning()` (mark used → already online? → resolve the launch line via the manager's
+ * `resolveLaunch(current, saved)` → probe → start → wait), `runStart(fn)` (runs an explicit start/stop
+ * sequence in the same exclusive start slot as the wake, so a user-clicked Start or tuning relaunch
+ * queues behind an in-flight wake instead of deleting it, #12723; `fn` calls the raw start, never
+ * `ensureRunning`/`runStart`), `registerIdle()` (wraps `registerIdleDaemon` with the
+ * idle-minutes/keep-loaded reads, including the legacy `pinned` fallback and their own
+ * `set*OverrideForTests` seams), `waitForReady(endpoint)` (the death-detecting readiness poll, with
+ * `exitTail` folded in), `servesPort(provider, managedPort)` (the numeric port-match arm —
+ * `Number(localEndpointPort(...))`, fixing a `===` string/number mismatch that made the MTPLX arm
+ * permanently dead), and `idleMinutes` / `keepLoaded` / `savedLaunch` for a status card's reads.
+ * `createPm2ExitTail({appName, execPm2, appendLog, lines?, tailLines?})` is the shared "what did the
+ * dead process print" diagnosis both `waitForReady` and a manager's own startup-window failure can
+ * share. Both mechanisms only — what a launch line means and when a daemon may start is exactly what
+ * differs between the two.
+ */
+
 import { getMemoryStats } from './memoryStats.js';
 import { localEndpointPort } from './localEndpoint.js';
 import { isLocalEndpointBusy, localEndpointsSharePort, onLocalEndpointSettled } from './localLlmConcurrency.js';

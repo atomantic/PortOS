@@ -1,3 +1,10 @@
+/**
+ * Composes the Image Gen form and gallery with backend probes, job/SSE progress, batch submission,
+ * cancellation, result/error state, federated targets, and regeneration.
+ *
+ * Use when: The Image Gen page runtime when its route should remain presentational.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { composeStyledPrompt, stylePromptAdditions } from '../lib/composeStyledPrompt';

@@ -1,8 +1,13 @@
 /**
- * DistroKid upload form (distrokid.com/new/): the in-page steps of the
- * release recipe (#10337). Each function runs INSIDE the page through
- * Playwright's `page.evaluate(fn, arg)`, so it is self-contained: it reads
- * only `document` and its argument, never this module's scope. The same
+ * DistroKid upload form (distrokid.com/new/): the in-page steps of the release recipe (#10337).
+ *
+ * The in-page steps of the DistroKid upload recipe (#10337): `fillDistrokidFields` (genre, language,
+ * store profiles, credits, preview start, the track's normal answers), `discloseDistrokidAi` (inline
+ * AI checkboxes, gate then parts) and `untickDistrokidExtras` (paid extras). Self-contained so
+ * `page.evaluate` can ship them, and tested against a fixture form in the client's DOM tests.
+ *
+ * Each function runs INSIDE the page through Playwright's `page.evaluate(fn, arg)`, so it is
+ * self-contained: it reads only `document` and its argument, never this module's scope. The same
  * functions run against a fixture document in the client's DOM tests.
  *
  * Per-track fields carry a random suffix per page load (`title_<uuid>`), so

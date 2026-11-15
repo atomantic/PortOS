@@ -1,3 +1,10 @@
+/**
+ * Reducer-backed CoS task form orchestration: draft reconciliation, provider/app/feature loading,
+ * template and reviewer defaults, uploads, submit gating, and immutable task payload construction.
+ *
+ * Use when: `TaskAddForm` and any future surface that needs the same task-entry state machine.
+ */
+
 import { useEffect, useMemo, useReducer, useRef } from 'react';
 import { shortClaudeModelName } from '../utils/formatters';
 import toast from '../components/ui/Toast';

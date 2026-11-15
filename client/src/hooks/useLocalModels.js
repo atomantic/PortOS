@@ -1,3 +1,14 @@
+/**
+ * Live installed Ollama and LM Studio model ids per backend, capability badges, and the server's
+ * recommendation, with `null` meaning not yet fetched.
+ *
+ * Live installed Ollama/LM Studio model ids per backend, runtime capability badges, the server's
+ * editorial recommendation, and `installed` per backend (`null` until fetched) — the app-level verdict
+ * that counts a macOS bundle with no CLI shim. Use when: Model pickers that must show
+ * currently-installed local models (not just a provider's stale stored `models`), or explain a
+ * selected model's live capabilities. Fold in via `mergeModelLists` + `localBackendForProvider`.
+ */
+
 import { useEffect, useState } from 'react';
 import { getLocalLlmStatus } from '../services/apiLocalLlm';
 

@@ -1,3 +1,13 @@
+/**
+ * `useMidiTranscription` bound to the music-video API surface, plus the MuScriptor model-size picker
+ * state (read fresh at each kickoff).
+ *
+ * Returns the slot
+ * (`active`/`stage`/`stageLabel`/`context`/`start(projectId)`/`cancel`/`installGate`/`gatedGate`) plus
+ * `{ model, setModel }`; `onTranscribed(projectId, midiTranscription)` fires on a non-discarded
+ * terminal frame. Use when: The Music Video MIDI button + model select.
+ */
+
 import { useState } from 'react';
 import toast from '../components/ui/Toast';
 import {

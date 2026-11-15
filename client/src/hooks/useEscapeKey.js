@@ -1,3 +1,9 @@
+/**
+ * `useEscapeKey(active, handler)` — call `handler` on Escape while `active`.
+ *
+ * Use when: Non-modal dismissables (in-context popovers/cards); Modal owns Esc for true modals.
+ */
+
 import { useEffect, useRef } from 'react';
 
 /**

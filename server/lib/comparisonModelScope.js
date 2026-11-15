@@ -1,6 +1,11 @@
 /**
  * Map a PortOS provider model id onto a canonical model identity.
  *
+ * `catalogSlugForProviderModel(id)` / `providerCatalogSlugs(inventory)` — map provider model ids
+ * (Bedrock region prefixes, gateway namespaces, effort/quantization suffixes, dashed versions) onto
+ * canonical model identities for scoping shipped reference-price rows to models PortOS can dispatch.
+ * Pure.
+ *
  * The reference catalog can cover models PortOS cannot dispatch (retired
  * generations, research checkpoints, and models behind unsupported harnesses).
  * Shipped reference rows are scoped to models the user can actually select in

@@ -1,3 +1,23 @@
+/**
+ * Explicit vision diagnostics (`getProviderVisionHealth`, `testProviderVision`,
+ * `runProviderVisionSuite`)
+ *
+ * ; AI provider configuration, plus provider-runtime (CLI) install readiness for the per-card Install
+ * buttons, and the Codex / ChatGPT-subscription account calls (`getCodexAccount`, `startCodexLogin`,
+ * `cancelCodexLogin`, `codexLogout`) — sign-in STATE only, never a token. `getProviderCatalog` (`GET
+ * /providers/catalog`, #7566) is the composition surface `useProviderCatalog` fetches;
+ * `createProviderPreset` (`POST /providers/presets`) is the compose popover's "Save as preset". The AI
+ * Providers page's three axes (#7567): `setProviderHarnessEnabled` (per-harness enablement; the read
+ * rides `getProviderCatalog`), `getProviderBootstraps` / `saveProviderBootstraps`
+ * (credential-bootstrap apps), and the service-instance calls (`getProviderServiceDefinitions`,
+ * `getProviderServices`, `createProviderService`, `updateProviderService`, `deleteProviderService`,
+ * `refreshProviderServiceCatalog`) — every response credential-free, and only the explicit catalog
+ * refresh contacts a provider. The dedicated-host calls are `getFleetLlmHost` / `getFleetLlmHostUsage`
+ * (who is using this machine's GPU right now, and what each caller has spent) / `stopFleetLlmHost`
+ * (close the queue, clear the enable marker, drop the Windows login task, remove the container) /
+ * `revealFleetLlmHostKey`, plus the peer-side `getFleetPeerHosts` and `revealFleetPeerHostKey`.
+ */
+
 import { rememberExecutionSelection } from './executionSelectionCache.js';
 import { request } from './apiCore.js';
 import socket from './socket.js';

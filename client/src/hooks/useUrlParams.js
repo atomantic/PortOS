@@ -1,3 +1,12 @@
+/**
+ * `[searchParams, updateParams]` — `updateParams(patch, { replace })` merges a patch into the query
+ * string and deletes keys set to `null`/`undefined`/`''` so a cleared filter leaves the URL clean.
+ *
+ * Reads the live params off a ref (react-router's functional updater is closure-stale) and is
+ * referentially stable. Use when: Any page whose filter/sort/selection state lives in the URL
+ * (Catalog, MediaCollections, Media3D) — don't re-roll the merge-and-prune loop.
+ */
+
 import { useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router';
 

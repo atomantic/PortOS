@@ -1,6 +1,15 @@
-// Fully-autonomous Music Video — client half. Re-exports the server's stage
-// vocabulary and brief normalizer (a dependency-light leaf) and owns the start
-// form's draft ↔ wire mapping and the run's display helpers.
+// Fully-autonomous Music Video — client half.
+//
+// Fully-autonomous Music Video, client half: re-exports the server stage vocabulary
+// (`AUTONOMOUS_STAGES`, checkpoint ids, default tools/limits, `autonomousMedium`), the
+// status/checkpoint labels, and owns the start form's `emptyAutonomousDraft` /
+// `autonomousRequestFromDraft` mapping (including the Suno form options and `isSunoModelValid`) plus
+// `autonomousStageRows(run)` and `isAutonomousLive(run)` for the run panel, and
+// `autopilotDraftFromParams` / `autopilotParamsFromDraft` for the music-video-autopilot Schedule
+// settings form.
+//
+// Re-exports the server's stage vocabulary and brief normalizer (a dependency-light leaf) and owns the
+// start form's draft ↔ wire mapping and the run's display helpers.
 
 import { musicVideoMediaMode } from '../../../server/lib/musicVideoMediaPolicy.js';
 import { llmStagesDraftFrom, llmStagesFromDraft } from './musicVideoAutomation.js';

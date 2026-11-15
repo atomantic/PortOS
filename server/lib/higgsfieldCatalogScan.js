@@ -1,4 +1,7 @@
 /**
+ * Parses Higgsfield's public model catalog page and lists the video families the curated picker lacks:
+ * `parseHiggsfieldCatalog`, `findUnsupportedHiggsfieldFamilies`.
+ *
  * Reads Higgsfield's public model catalog (the server-rendered pricing page, open.higgsfield.ai/pricing)
  * and reports video endpoints PortOS has no curated family for. Dependency-free.
  * Only names what exists: each family still needs its schema read from the

@@ -1,3 +1,8 @@
+/**
+ * Non-transforming authored input schemas and character limits for Music Designer composition and
+ * routes.
+ */
+
 import { z } from 'zod';
 import { CONCEPT_MAX, PROMPT_MAX, LYRICS_MAX } from './trackLimits.js';
 import { isNonBlankStr } from './textUtils.js';

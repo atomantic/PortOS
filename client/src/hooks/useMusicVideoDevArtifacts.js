@@ -1,3 +1,11 @@
+/**
+ * A project's development files ("ingredients"): import a file or a new version, add/resolve notes,
+ * approve / request changes, remove
+ *
+ * ; applies the returned project. Returns `{ busy, upload, addNote, resolveNote, review, remove }`.
+ * Use when: The Music Video Development section and viewer drawer.
+ */
+
 import { useState } from 'react';
 import toast from '../components/ui/Toast';
 import {

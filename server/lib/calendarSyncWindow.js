@@ -1,4 +1,13 @@
 /**
+ * `overlapsSyncWindow(event, dateRange)` tells whether a cached calendar event lies in a sync's
+ * window, so reconcile-prune spares out-of-window events.
+ *
+ * `overlapsSyncWindow(event, dateRange)`: whether a cached calendar event falls in the window a sync
+ * covered, so reconcile-prune never deletes history or far-future events a windowed fetch could not
+ * return. Shared by the Google and Outlook paths. Pure.
+ */
+
+/**
  * True when a cached event could have been returned by a sync that covered
  * `dateRange` ({ pastDate, futureDate } Dates), i.e. its absence from the batch
  * means an upstream deletion. No range means the batch is the complete calendar.

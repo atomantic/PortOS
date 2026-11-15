@@ -2,6 +2,19 @@
  * Pure pose evaluator for the declarative clip contract in
  * `server/lib/threejsModel.js`, used by the Three.js Models preview.
  *
+ * Pure pose evaluator for the declarative clip contract in `server/lib/threejsModel.js`, used by the
+ * Three.js Models preview transport; the pose comes from the shared
+ * `server/lib/threejsModelClipPose.js` leaf the physical audit also measures.
+ * `evaluateThreejsClipPose(clip, timeSeconds)` → `{ timeSeconds, pose, activeSequenceIds,
+ * activePartIds }` where `pose` is a null-prototype partId → `{ position?, rotationDegrees?, scale?,
+ * opacity?, visible? }` map: each part+channel resolves from the one sequence that owns the instant
+ * (the window containing it, else the most recent behind it, else the next ahead), `visible` steps at
+ * the window's end rather than interpolating, and a part no sequence drives is absent so the spec
+ * renders as authored. `collectThreejsCues(clip, from, to)` returns the data-only sound cues a play
+ * loop crossed in the half-open `[from, to)` interval — a scrub calls it never, which is what makes
+ * scrubbing silent. `listThreejsClips` / `listThreejsCues` / `resolveThreejsClip` /
+ * `getThreejsClipDuration` read a spec that may have no `animation` key at all.
+ *
  * A clip is data, never code: named sequences carry one part between two
  * authored endpoints inside a bounded window, and the easing is a NAME resolved
  * against a fixed curve map. So the pose at time T is a pure function

@@ -1,4 +1,11 @@
 /**
+ * `rowOwnerCandidates(row, hostedIndex)` — ordered, de-duplicated instance ids that may hold a media
+ * row's bytes (`originInstanceId`, peer-hosted index hits for the filename, `suppliedByInstanceId`)
+ *
+ * ; `[]` means unknowable.
+ */
+
+/**
  * Candidate instances that may hold a media row's bytes, most authoritative first.
  * `hostedIndex` is the peer-hosted-media entries map: `{ '<kind>:<filename>': { peerId } }`.
  * Returns a de-duplicated list; empty means the owner is unknowable.

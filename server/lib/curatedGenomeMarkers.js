@@ -1,6 +1,10 @@
 /**
  * Curated SNP database with classification logic for known health/longevity markers.
  * Each marker includes rsid, gene info, category, description, and genotype → status rules.
+ *
+ * SNP classification logic (`classifyGenotype`, `formatGenotype`, `resolveApoeHaplotype`) +
+ * `MARKER_CATEGORIES`; loads the ~116-marker dataset from the co-located `curatedGenomeMarkers.json`
+ * at module init.
  */
 
 export const MARKER_CATEGORIES = {

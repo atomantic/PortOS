@@ -1,4 +1,12 @@
 /**
+ * A person holding the camera: one seeded motion model (sway, roll, tremor and footsteps) with the
+ * zoom that keeps every edge covered.
+ *
+ * `handheldFfmpegFilter` bakes it into a clip (`POST /api/video-gen/history/:id/handheld`),
+ * `handheldCssTransform` previews a bake, and `documentHandheld` / `applyDocumentHandheld` drive the
+ * layered template additions Handheld shake and footsteps (the engine repeats the latter as
+ * `handheldView`, pinned by `musicVideoDocumentCamera.test.js`). Browser-safe.
+ *
  * Handheld camera: the unsteady, walking, unprofessional operator a clip was
  * not shot with. The picture is zoomed in just enough that the margin it
  * gains can sway, jitter, bob with footsteps and roll without ever showing an

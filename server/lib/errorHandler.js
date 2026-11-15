@@ -1,6 +1,9 @@
 /**
  * Error handling utilities for graceful server error management
  * Catches errors in async routes and emits Socket.IO events for UI alerting
+ *
+ * `ServerError` + `asyncHandler` middleware, plus `sendErrorResponse`/`buildErrorEnvelope` for the
+ * standard `{ error, code, timestamp }` body outside a handler's catch.
  */
 
 import { EventEmitter } from 'events';

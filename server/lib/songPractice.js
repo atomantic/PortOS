@@ -2,6 +2,20 @@
  * SongBook practice scheduling — the pure core behind `POST
  * /api/brain/songbook/:id/practice` (#4102).
  *
+ * SongBook repertoire practice scheduling (#4102) — the pure core behind `POST
+ * /api/brain/songbook/:id/practice`. `applySongPractice(song, quality, now, timezone)` → `{ stage,
+ * practice }`, the exact partial to hand `brainStorage.updateWith`: it advances the shared
+ * `spacedRepetition` schedule from a 0..5 self-grade and moves the song's `stage` along
+ * `SONG_STAGE_ORDER` (≥ `SONG_PROMOTE_MIN_QUALITY` promotes, ≤ `SONG_REGRESS_MAX_QUALITY` regresses, a
+ * 3 holds). Promotion is gated to once per practice day (regression never is), and a practiced song
+ * floors at `learning` — `new` means "never picked up", which stops being true after one session.
+ * `songPracticeOrDefault(song)` derives the schedule on READ for every song predating the feature
+ * (nothing is backfilled to disk: a migration would restamp `updatedAt` on every record and spray
+ * federation churn, and would break the `data.reference/` seeds' byte-identity). `nextSongStage`
+ * no-ops on a stage this install doesn't recognize, so a practice log can't rewrite a value synced
+ * from a newer peer. `isSongDue(song, now)` mirrors the client's `isSongDue` in
+ * `client/src/components/songbook/constants.js`. Pure.
+ *
  * A repertoire song's `stage` (`new → learning → learned → memorized`) was
  * manual in SongBook v1: nothing moved it, and nothing told the user WHICH song
  * to pick up today. Logging a practice session now does both — it grades the

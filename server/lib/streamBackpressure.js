@@ -1,5 +1,9 @@
 // Socket backpressure helper for streaming HTTP responses (SSE / NDJSON).
 //
+// `awaitWritableDrain(res)` — park a streaming-response producer on the socket's next `drain` (or
+// `close`) when `res.write()` returned false, so SSE/NDJSON writes stay bounded for a slow reader.
+// Shared by `routes/ask.js` (SSE) and `routes/localLlm.js` (NDJSON).
+//
 // `res.write()` returns false when the kernel/send buffer is full. A producer
 // that ignores that return value buffers the whole response in memory when the
 // reader is slower than the writer (a fast local model streaming to a slow

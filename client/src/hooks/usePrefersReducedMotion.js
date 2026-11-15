@@ -1,3 +1,10 @@
+/**
+ * The user's `prefers-reduced-motion` setting as a boolean, tracking live changes.
+ *
+ * Use when: An imperative animation (a rAF canvas loop, a three.js frameloop) that must stop
+ * scheduling frames itself — CSS animations honor the media query on their own.
+ */
+
 import { useEffect, useState } from 'react';
 
 const QUERY = '(prefers-reduced-motion: reduce)';

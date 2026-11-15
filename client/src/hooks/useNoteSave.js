@@ -1,3 +1,15 @@
+/**
+ * `useNoteSave({ vaultId, notePath, content })` saves an Obsidian note and offers an iCloud force-save
+ * escape after repeated refusals.
+ *
+ * `useNoteSave({ vaultId, notePath, content })` → `{ saving, save({ force }), forceOffered,
+ * dismissForce }` — writes an Obsidian note and owns the iCloud force-save escape hatch:
+ * `forceOffered` turns on only after the server has twice refused the SAME note with a `stalled`
+ * (retrying-cannot-help) verdict. Use when: Any editor that saves a vault note. Render
+ * `<ForceSaveNoteRow offered={forceOffered}>` next to the editor; never call `save({ force: true })`
+ * from anything but that row's confirm.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../services/api';
 

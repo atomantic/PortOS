@@ -3,6 +3,12 @@
  * working set (running agents plus finished ones not yet archived to
  * `data/cos/agents/<date>/`).
  *
+ * Row model for `cos_agents`, the CoS agent working set: `agentRowColumns(agent)` (the
+ * task/status/start/completion/pid projections the queries read) and `planAgentSave({ persisted, next,
+ * changedAgentIds })` (turn "the whole agents map" into "only these rows changed" by comparing each
+ * record's JSON text with the one last stored, serializing only dirty/added records when hinted).
+ * Shared by `cosState.saveState` and the repository backends
+ *
  * The record is stored as its exact JSON text, so a read returns the same bytes
  * (key order included) that the caller wrote. `planAgentSave` turns "here is the
  * whole agents map" into "only these rows changed" by comparing each record's

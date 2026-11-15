@@ -1,4 +1,11 @@
-/** MIME tables, extension policy, and lightweight media format detection. */
+/**
+ *  MIME tables, extension policy, and lightweight media format detection.
+ *
+ * MIME tables and extension allowlists (incl. `UPLOAD_AUDIO_EXTENSIONS`, the playable-audio subset of
+ * `/api/uploads`), image/video format detection (`detectImageFormat`, `detectVideoFormat`),
+ * `detectMediaManifest` (names bytes ffmpeg would open as an HLS/DASH/IMF/concat/SDP manifest that
+ * pulls in other files) with `id3v2TagLength`, and filename sanitization.
+ */
 import { basename, extname } from 'path';
 
 /**

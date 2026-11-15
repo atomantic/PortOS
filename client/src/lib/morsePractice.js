@@ -1,5 +1,10 @@
 // Pure adaptive Morse-practice selection. The trainer owns the UI and audio
 // lifecycle; this module only decides bounded, reproducible material.
+//
+// Pure deterministic adaptive Morse sampler — `selectMorsePrompt` combines bounded
+// weak-character/confusion weighting with a non-zero exploration floor and only emits material valid
+// for the active Koch pool; `canAdvanceMorseLevel` guards level advancement on sample count, accuracy,
+// and effective speed.
 
 export const MORSE_SAMPLER_VERSION = 'adaptive-v1';
 export const MORSE_MATERIAL_MODES = ['groups', 'words', 'callsigns', 'qso'];

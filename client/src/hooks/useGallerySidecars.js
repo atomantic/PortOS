@@ -1,3 +1,13 @@
+/**
+ * Hook hydrating a list of gallery filenames into their image-metadata sidecars (prompt, model, seed,
+ * size) with a `setSidecar` splice.
+ *
+ * Hydrates a known filename list into its image-metadata sidecars (the prompt actually sent, negative,
+ * model, seed, size), keyed on contents rather than array identity, with a `setSidecar` splice for a
+ * freshly written record. Use when: Any page showing renders it owns the refs for (universe draft,
+ * deck cards) that must open the lightbox on the real render prompt.
+ */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getGalleryImages } from '../services/apiImageVideo';
 

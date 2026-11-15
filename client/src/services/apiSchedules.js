@@ -1,3 +1,7 @@
+/**
+ * Automation schedules.
+ */
+
 import { request } from './apiCore.js';
 
 // Automation Schedules

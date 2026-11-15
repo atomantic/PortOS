@@ -1,3 +1,11 @@
+/**
+ * The immutable LightX2V CUDA/MLX and Pika Flex MLX contracts and model/runtime/revision, canvas, mode
+ * and sampler-conflict checks.
+ *
+ * Shares `minimaxH3Lightx2v.json` with the Python helper; incompatible explicit selections are refused
+ * without fallback.
+ */
+
 import { isDeepStrictEqual } from 'node:util';
 import contract from './minimaxH3Lightx2v.json' with { type: 'json' };
 import mlxContract from './minimaxH3Lightx2vMlx.json' with { type: 'json' };

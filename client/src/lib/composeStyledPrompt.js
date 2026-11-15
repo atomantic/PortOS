@@ -1,3 +1,9 @@
+// `composeStyledPrompt` re-exported from `server/lib/composeStyledPrompt.js` (accepts a single preset
+// or an array).
+//
+// `composeCanonStyledPrompt` (client-only) builds the `"<name>: <description>"` + universe-preset
+// render the canon section and characters step share.
+//
 // `composeStyledPrompt` (single preset or an array of presets) is a pure leaf
 // re-exported from server/lib/composeStyledPrompt.js so the browser and the
 // server compose style presets with identical logic (#8442).

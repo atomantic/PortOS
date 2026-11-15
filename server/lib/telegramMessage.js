@@ -1,6 +1,19 @@
 /**
  * Telegram notification message builder (pure — no I/O).
  *
+ * Pure builder for the Telegram notification wire message, shared by both transports
+ * (`services/telegram.js` and `services/telegramBridge.js`, which drifted apart while each kept a copy
+ * — #5688). `buildNotificationMessage(notification, { approvalBody })` → `{ text, options }`: emoji +
+ * escaped title, the body truncated to `TELEGRAM_MAX_RAW_CHARS` (2800) BEFORE escaping so the escaped
+ * result stays under Telegram's 4096 cap and a slice can't split an entity, the priority line, and the
+ * memory approve/reject `reply_markup` as a plain OBJECT (both transports post JSON, so a
+ * pre-serialized string would arrive as a literal string). `approvalBody` is resolved by the caller
+ * because the memory lookup is I/O. Also exports `escapeHtml`, `truncateForTelegram`,
+ * `isMemoryApprovalNotification`, the `NOTIFICATION_EMOJI`/`PRIORITY_EMOJI` maps (keyed by literal
+ * `NOTIFICATION_TYPES` values to stay a dependency-free leaf; pinned to the real enum by a parity
+ * test), and the `CALLBACK_APPROVE`/`CALLBACK_REJECT` prefixes the bot's `callback_query` handler
+ * parses back out.
+ *
  * Single source of truth for the wire message both Telegram transports send:
  * `services/telegram.js` (the direct polling bot) and
  * `services/telegramBridge.js` (the MCP-plugin HTTP bridge). They are never both

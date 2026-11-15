@@ -1,3 +1,7 @@
+// Local input draft that commits on blur.
+//
+// Use when: Bible-editor-style single-field input that must dedupe sibling races.
+//
 // Local draft buffer that commits on blur. Bible-editor inputs buffer
 // keystrokes locally so a textarea keystroke doesn't fire a universe-wide
 // round-trip per character. `onChange` accepts either a synthetic event or

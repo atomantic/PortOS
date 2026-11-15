@@ -1,3 +1,5 @@
+// `isFullWidthRoute(pathname)` classifies routes that own their scrolling layout.
+//
 // Routes whose main content owns its own internal scroll region and needs the
 // bare full-width `<main>` (relative overflow-hidden) instead of the default
 // padded+scrolling one. Checked in order: exact path, then prefix, then

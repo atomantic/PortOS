@@ -1,3 +1,10 @@
+/**
+ * Global Code Review Defaults (Review Loop reviewer chain + every per-reviewer `<reviewer>Model` /
+ * `<reviewer>Effort` pin scalar) via a small Provider/hook pair.
+ *
+ * Use when: TaskAddForm, ScheduleTab, anywhere a default reviewer picker is shown.
+ */
+
 import { createContext, useContext, useEffect, useState } from 'react';
 import * as api from '../services/api';
 import { DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, EFFORT_SELECTABLE_REVIEWERS, MODEL_SELECTABLE_REVIEWERS } from '../components/cos/constants';

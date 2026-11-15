@@ -1,3 +1,9 @@
+// `BROWSER_UNSAFE_PORTS` / `isBrowserUnsafePort(port)` — the WHATWG Fetch "bad ports" browsers refuse
+// (`ERR_UNSAFE_PORT`, incl. X11's 6000).
+//
+// Port allocators (`findAvailablePorts`, `services/ports.js`, the PM2 standardizer) must skip these so
+// a managed app's UI is never unreachable.
+//
 // WHATWG Fetch "bad ports": browsers refuse to connect to these (ERR_UNSAFE_PORT),
 // so a managed app bound to one has a UI nobody can open. Mirrors
 // https://fetch.spec.whatwg.org/#port-blocking (Chrome and Firefox add X11's 6000

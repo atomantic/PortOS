@@ -1,3 +1,9 @@
+/**
+ * Generic toast dispatch + socket-subscribed notification list.
+ *
+ * Use when: You need to read / dispatch the global notification stream.
+ */
+
 import { useState, useEffect, useCallback, useRef } from 'react';
 import socket from '../services/socket';
 import { useSocketSubscription } from './useSocketSubscription';

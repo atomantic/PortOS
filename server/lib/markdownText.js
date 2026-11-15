@@ -3,6 +3,12 @@
  * to something that has no idea what markdown is (a model's text encoder, a
  * slug builder, a TTS engine).
  *
+ * `stripMarkdownEmphasis(text)` — unwrap `**bold**` / `~~struck~~` / `` `code` `` / `[text](url)` and
+ * drop HTML comments, keeping the words. For strings handed to something that can't read markdown (a
+ * model's text encoder, a slug builder, TTS); leftover lone `*_~` become spaces so an unbalanced
+ * marker can't fuse two words. Does not collapse whitespace — callers that need that normalize
+ * themselves.
+ *
  * The motivating case: prompts authored in a markdown-ish textarea reach a
  * text-to-audio sidecar with their `**emphasis**` intact, and the encoder
  * tokenizes the asterisks as literal content — conditioning noise the author

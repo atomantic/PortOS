@@ -1,5 +1,13 @@
 // Shared resolver for "is this a local gallery image, and what's its filename?"
 //
+// `localImageFilename(urlOrPath)` resolves a stored image reference to the bare gallery-image filename
+// under `data/images/` (or null for empty/external-URL/non-image-path) — the unit the peer-sync asset
+// pipeline hashes + transfers. Single source of truth for the authors/artists/albums/Creative-Director
+// filename resolvers
+// (`headshotImageFilename`/`portraitImageFilename`/`coverImageFilename`/`startingImageFilename` are
+// thin wrappers). Also exports `assetBasename(pathOrName)`, the shared strip-querystring→basename
+// primitive (reused by moodBoard's `imageUrlToAppAsset`).
+//
 // Several federated-record domains (authors `headshotImageUrl`, artists
 // `portraitImageUrl`, albums `coverImageUrl`, Creative Director projects
 // `startingImageFile`) need to reduce a stored image reference to the bare

@@ -1,3 +1,11 @@
+/**
+ * Universe Builder LLM expansion + holistic refine lifecycle, including lock-preserving request
+ * payloads, deletion-wins pending-canon auto-save, provider selection, and refine-panel state.
+ *
+ * Use when: Universe Builder Bible panel; keep provider calls and canon-aware auto-save out of
+ * presentation components.
+ */
+
 import { useCallback, useEffect, useState } from 'react';
 import toast from '../components/ui/Toast';
 import {

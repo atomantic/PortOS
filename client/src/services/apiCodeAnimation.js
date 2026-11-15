@@ -1,3 +1,14 @@
+/**
+ * Client API wrapper for Code Animation: briefs, prompts, generation gallery, provider jobs,
+ * frame-exact export, package download and Production settings.
+ *
+ * Code Animation: host-contract options, LLM-written briefs from a universe, universe-styled prompt
+ * building, a persistent generation gallery with poster thumbnails, provider jobs, frame-exact export,
+ * portable package download, and opt-in Production project settings, immutable candidate/accepted
+ * source imports, brief handoff paged run history, and bounded production stage runs (start, cancel,
+ * resume).
+ */
+
 import { request } from './apiCore.js';
 
 export const listCodeAnimationProjects = ({ cursor, signal, limit = 50 } = {}) =>

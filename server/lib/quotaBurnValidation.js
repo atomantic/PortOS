@@ -1,3 +1,7 @@
+/**
+ * Zod schemas for the Quota Burn routes (partial config PUT, manual-run body, `run once` re-arm body).
+ */
+
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 /**
  * Zod schemas for the Quota Burn routes.

@@ -1,3 +1,7 @@
+/**
+ * Exact saved Cast & Sets image inputs, current vision evidence and acknowledged approval admission.
+ */
+
 /** Exact saved inputs for one generated Cast & Sets image; shared by cards and admission. */
 export function castSetsInspectionInputs(stage, key) {
   const image = stage?.images?.[key];

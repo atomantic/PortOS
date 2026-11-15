@@ -1,3 +1,7 @@
+/**
+ * Code Review Defaults (Review Loop reviewer chain + per-backend local-LLM model).
+ */
+
 import { request } from './apiCore.js';
 
 // Code Review Defaults — the global default reviewer chain + per-backend

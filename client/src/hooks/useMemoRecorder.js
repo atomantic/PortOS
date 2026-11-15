@@ -1,3 +1,10 @@
+/**
+ * Owns one memo recorder through permission prompts, stop/cancel, and unmount
+ *
+ * ; exposes `{ recording, starting, start, stop, cancel, stream }`. Use when: Catalog voice memos and
+ * song takes.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { startMemoRecording } from '../lib/audioRecorder.js';
 import useMounted from './useMounted.js';

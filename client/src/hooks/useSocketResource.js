@@ -1,3 +1,10 @@
+/**
+ * Initial resource read plus global/room-event, reconnect and tab-show reconciliation
+ *
+ * ; single-flight reads, identity guards, an enabled gate and immediate mutation updates. Use when:
+ * Views replacing content polls with existing socket invalidations.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
 import { useSocketSubscription } from './useSocketSubscription';

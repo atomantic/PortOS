@@ -1,3 +1,9 @@
+/**
+ * `⌘K` open/close state.
+ *
+ * Use when: Anywhere that needs to toggle the palette.
+ */
+
 import { useState, useEffect } from 'react';
 
 export const CMD_K_SEARCH_OPEN_EVENT = 'portos:open-command-palette';

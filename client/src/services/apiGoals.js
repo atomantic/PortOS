@@ -1,3 +1,7 @@
+/**
+ * Identity / goals tracking.
+ */
+
 import { request } from './apiCore.js';
 
 // Digital Twin - Identity & Goals

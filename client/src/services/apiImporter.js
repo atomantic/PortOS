@@ -1,3 +1,7 @@
+/**
+ * Manuscript / chat importer.
+ */
+
 import { request } from './apiCore.js';
 
 // Per-content-type radio values mirror server/lib/validation.js

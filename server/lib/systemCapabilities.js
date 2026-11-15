@@ -1,6 +1,11 @@
 /**
  * Host capabilities and the shared hardware-requirement evaluator.
  *
+ * Machine-local capability snapshot plus the shared three-state hardware requirement evaluator.
+ * Captures coarse platform, architecture, Apple Silicon, memory, CPU, and cached CUDA facts; derives
+ * requirements for media models, local-LLM catalog entries, and provider runtimes; hides only
+ * known-incompatible choices while preserving `unknown` probe results.
+ *
  * This module deliberately reports coarse, machine-local facts only. It never
  * includes a hostname, path, account, or network identity. Consumers use the
  * evaluator's three-state result to hide only a known mismatch; a failed probe

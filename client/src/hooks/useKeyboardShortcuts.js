@@ -1,3 +1,14 @@
+/**
+ * `useKeyboardShortcuts(active, bindings, opts?)` — fire a `{ key: handler }` map while `active`
+ *
+ * ; ignores whatever the shared `shouldIgnoreGlobalKey` predicate (`lib/a11yKeyboard.js`) rules out —
+ * editable fields, Space on a focused button, ⌘/Ctrl/Alt chords, OS key auto-repeat (`{ ignoreRepeat:
+ * false }` to opt back in), and any keystroke while an `aria-modal` dialog is open (`{
+ * enabledInDialog: true }` for a modal-owned shortcut); a falsy handler disables that key. Use when:
+ * Single-surface action shortcuts (editorial comment card prev/next + accept/dismiss/generate, #1603).
+ * Not for held-key game input.
+ */
+
 import { useEffect, useRef } from 'react';
 import { shouldIgnoreGlobalKey } from '../lib/a11yKeyboard.js';
 

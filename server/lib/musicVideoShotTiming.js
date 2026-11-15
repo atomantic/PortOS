@@ -1,6 +1,27 @@
 /**
  * Music Video shot modes and provider-aware timing (#8977).
  *
+ * Music Video shot modes (#8977): `MUSIC_VIDEO_SHOT_MODES` (`cutaway`/`performance`),
+ * `isPerformanceScene`, `MUSIC_VIDEO_PERFORMANCE_STYLES` (`lipsync`/`music`) + `isLipSyncScene`,
+ * `selectedPerformanceInstruction(scene)` (the selected take's shot instruction, performance scenes
+ * only), `clipAudioOffsetSec(instruction)` (provider lead padding a landed take's edit points were
+ * moved by, #11210), `SOURCE_AUDIO_LIPSYNC` (verified source-audio lip-sync lanes — only fal.ai
+ * MiniMax H3 lip-sync, 5–30s per take, default 1080P), `SOURCE_AUDIO_MUSIC` (music-driven lanes —
+ * fal.ai audio-to-video models, picked by `videoSettings.falMusicModelId`, default OmniHuman v1.5 at
+ * 1080p), `falSceneTake()` (the fal model/length/resolution a scene take requests and its estimated
+ * cost — shared by the board, the submit path and the autopilot spend cap) +
+ * `falTakeRequestFields(take)` (that take as `/api/video-gen` fields), `performanceCapability(backend,
+ * { scene, videoSettings })` (lip-sync lane, or the music-driven one for a music-driven scene),
+ * `performanceBlockedReason(backend)` (Grok is cutaway-only), `planPerformanceWindow()`
+ * (provider-bounded audio window + clip-relative edit in/out points; refuses over-long shots instead
+ * of relying on provider truncation), `planPerformanceRepair()` (complete measured suffix evidence,
+ * safe word-gap boundary, source/clip timebases and next spend), `clipRelativeCues()`,
+ * `grokCoverage(spanSec)` (covering 6/10/15 s request, flags spans needing a split),
+ * `approximateMotionCues()`, `shotSplitLimit(scene, backend)` (per-take limit: lip-sync window or
+ * Grok's longest clip), `planShotSplit()` (contiguous pieces cut at lyric pauses → line/phrase
+ * boundaries → beats; one extra piece at most to avoid cutting a sung line). Dependency-free; the
+ * client re-exports it.
+ *
  * A scene is either a CUTAWAY (the default — any image-to-video lane animates
  * the reference frame; the master song is laid under it at render time) or a
  * PERFORMANCE shot: a visible singer whose mouth must follow the actual master

@@ -1,3 +1,5 @@
+// Execute voice `ui_click` / `ui_fill` / `ui_select` against live DOM.
+//
 // Executes voice UI commands (click / fill / select) against the live DOM.
 // Resolves targets via the stable ref assigned by domIndex.js, falling back
 // to label-based lookup when the ref is stale (DOM mutated between the

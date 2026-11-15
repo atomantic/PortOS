@@ -1,5 +1,8 @@
 // Shared saved-setting defaults for the Series Autopilot panel and runtime.
 // Keep these keyed by the existing pipelineEditorialChecks setting names.
+//
+// `SERIES_AUTOPILOT_DEFAULTS`, the immutable `pipelineEditorialChecks` defaults shared by Series
+// Autopilot's runtime resolvers, foundation judge, and options panel.
 export const SERIES_AUTOPILOT_DEFAULTS = Object.freeze({
   maxArcVerifyRounds: 3,
   maxEditorialRounds: 2,

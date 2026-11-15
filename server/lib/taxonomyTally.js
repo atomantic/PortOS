@@ -1,6 +1,17 @@
 /**
  * Generic taxonomy tally + top-N-line renderer (extracted for #2800).
  *
+ * Generic taxonomy tally + top-N-line render engine shared by the two Layered Intelligence leaf
+ * taxonomies (`services/layeredIntelligenceRejections.js`, `layeredIntelligenceExecutionFailures.js`).
+ * `createTaxonomyTally({predicate, select, field, vocabulary, sentinel, glossFn, gapWording})` is the
+ * single composed seam — it binds a taxonomy config into `{summarize, format}`, where
+ * `summarize(records)` yields the three-bucket `{entries, unknown, unclassified, diagnosed, total}`
+ * tally (commonest-first + taxonomy-order tie-break) and `format(records, limit)` renders one prompt
+ * line naming every non-zero gap. Also exports the two leaf utilities the classifiers use directly:
+ * `normalizeToken(value)` (lowercase + separator-collapse for label/category matching) and
+ * `formatTaxonomyToken(token, labels)` (gloss-map render, nullish→'', unglossed passthrough). Pure
+ * leaf — imports nothing from the LI graph.
+ *
  * Two Layered Intelligence leaf modules —
  * `services/layeredIntelligenceRejections.js` (proposal-REJECTION taxonomy, #2689)
  * and `services/layeredIntelligenceExecutionFailures.js` (execution-FAILURE

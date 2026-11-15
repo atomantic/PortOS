@@ -1,3 +1,10 @@
+/**
+ * Sidebar Pinned + Recent working set (localStorage MRU + pins)
+ *
+ * ; resolves stored paths to `{ path, label, icon }` rows via a `resolveNavEntry` arg. Use when:
+ * Rendering the sidebar's Pinned/Recent sections.
+ */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router';
 import {

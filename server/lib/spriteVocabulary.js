@@ -1,6 +1,10 @@
 /**
  * Sprite identifier and direction vocabulary.
  *
+ * Sprite id pattern, record kinds, the canonical 8-direction order + derived anchor set,
+ * `TURNAROUND_ID`, and the animation provider ids — the alphabets the sprite route schemas enumerate,
+ * kept below the sprite services.
+ *
  * The alphabets the sprite route schemas enumerate, kept below both validation
  * and the sprite services so `lib/spriteValidation.js` can name a direction or a
  * record kind without importing service orchestration (issue #4901). Each

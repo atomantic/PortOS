@@ -1,3 +1,10 @@
+/**
+ * Reads a URL-selected vault note with a sequence guard
+ *
+ * ; returns `{ note, setNote, loading, error, retry, clear, sequenceRef }` and reports failed reads
+ * separately from empty selection. Use when: Brain Notes and Wiki Browse detail panes.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../services/api';
 

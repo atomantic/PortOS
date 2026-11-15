@@ -1,6 +1,12 @@
 /**
  * Which OTHER processes still hold a set of files open?
  *
+ * `findOpenFileHolders(files, { canary })` → `{ known: true, pids }` (other processes holding any of
+ * `files` open, via `lsof -F pn`) or `{ known: false, reason }`. Fails CLOSED: the probe holds
+ * `canary` open itself and rejects any listing that does not report its own PID, so a missing `lsof`,
+ * an unsupported platform or a truncated listing never reads as "nobody holds it". Gates the
+ * staged-checkpoint cleanup in `services/ollamaSafetensorsImport.js`.
+ *
  * Used before deleting staged input another process (an `ollama create` CLI,
  * the Ollama daemon) may still be reading. The answer is tri-state and fails
  * CLOSED: `known: false` whenever the probe cannot prove its own listing is

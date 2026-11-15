@@ -1,3 +1,13 @@
+/**
+ * Poll-based refetch on an interval, single-flight per instance (ticks during a pending fetch are
+ * dropped; mid-flight `refetch()` calls share one trailing fetch).
+ *
+ * `{ pollOnly: true }` skips internal data/loading state for side-effect-only callers (returns `{
+ * refetch }` only). Use when: Only a sanctioned poll — a source that cannot push (hardware telemetry,
+ * an external system with no callback). Polling is an anti-pattern: prefer a socket event, adding the
+ * server emit if it is missing.
+ */
+
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useVisibilityEvent } from './useVisibilityEvent.js';
 

@@ -1,3 +1,9 @@
+/**
+ * Horizontal swipe prev/next.
+ *
+ * Use when: Mobile swipe between siblings.
+ */
+
 import { useRef, useCallback } from 'react';
 
 // Horizontal swipe ≥ 50px and dominantly horizontal (dx > dy × 1.2) — keeps

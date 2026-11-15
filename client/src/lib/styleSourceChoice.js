@@ -1,4 +1,9 @@
 /**
+ * `BOARD_FOLLOW_UNIVERSE` / `BOARD_NONE` — the mood-board choice sentinels shared by the
+ * universe/mood-board style pickers (Code Animation, Creative Commissions).
+ */
+
+/**
  * Mood-board choice sentinels shared by every universe/mood-board style picker
  * (`components/media/UniverseMoodBoardPicker.jsx`): follow the universe's
  * linked board, or none. Form-only values — each surface maps them onto its

@@ -1,4 +1,11 @@
 /**
+ * `locateFind` / `locateFindSpan` — the manuscript `find` locator (nearest-to-`anchorQuote`
+ * occurrence, then whitespace-tolerant regex fallback).
+ *
+ * The one implementation behind both the server accept path (`services/pipeline/manuscriptFix.js`) and
+ * the client highlight/impact preview (`client/src/lib/manuscriptAnchors.js` re-exports it), so the
+ * preview selects the span an accept replaces. Pure / browser-safe.
+ *
  * Manuscript `find` locator shared by the server (accepted editorial edits,
  * `services/pipeline/manuscriptFix.js`) and the client (highlighting and the
  * impact preview, via `client/src/lib/manuscriptAnchors.js`). One implementation

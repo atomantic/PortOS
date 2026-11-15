@@ -1,9 +1,31 @@
-// The shared lazy Web Audio AudioContext for the song-system playback stack
-// (songPlayback, scorePlayback, metronome, midiPlayback). Browsers cap the
-// number of live contexts (~6), and modules sharing one context also share
-// one sample clock — so features that sound together (metronome + score
-// synth, MIDI preview) stay aligned for free. New audio features should
-// import this instead of growing another module-level singleton.
+// The shared lazy Web Audio AudioContext for the song-system playback stack (songPlayback,
+// scorePlayback, metronome, midiPlayback).
+//
+// `getAudioContext()` + `resumeAudioContext(c)` + `acquireAudioSession(type)` + `getNoiseBuffer(c)`
+// (the app-wide 1s white-noise buffer every noise voice loops over — chiptune drums, the drum kit's
+// snare/hats/cymbals; don't grow a third copy) — the ONE app-wide lazy Web Audio `AudioContext`
+// singleton every playback feature shares (`songPlayback`, `scorePlayback`, `metronome`,
+// `midiPlayback`). Browsers cap live contexts and one context = one sample clock, so simultaneous
+// features stay aligned. **Every playback entry point resumes via `resumeAudioContext(c)`, never by
+// hand** (it takes any context, so per-mount ones use it too) — it gates on `state !== 'running'`, not
+// `state === 'suspended'`, because iOS Safari also parks a context in the non-standard `'interrupted'`
+// (a call/Siri/screen lock) which a suspended-only check walks past into silent "playback".
+// **`acquireAudioSession(type)` ARBITRATES `navigator.audioSession.type`, which is document-wide, and
+// returns an idempotent release** — `playback` keeps the hardware ring/silent switch from muting a
+// pure-synth page but REFUSES capture, and the VoiceWidget is mounted on every page, so a
+// last-writer-wins assignment trades one platform's silence for a dead mic. Each feature claims for
+// exactly as long as it needs (`play-and-record` while a `getUserMedia` stream is open, `playback`
+// while a player sounds) and the arbiter declares the union — capture always wins, since
+// `play-and-record` also ignores the silent switch. Output-only players don't call it directly: pass
+// `audioSession: 'playback'` to `createLookaheadTransport`, which claims on play and releases on
+// teardown; a React surface owning its own context/stream uses `hooks/useAudioSessionClaim.js`, which
+// adds the release-on-unmount backstop. Constructor resolved lazily (`window` → `globalThis`) so
+// node-env test runs import cleanly; tests inject a fake via `vi.stubGlobal('AudioContext', …)` before
+// first call.
+//
+// Browsers cap the number of live contexts (~6), and modules sharing one context also share one sample
+// clock — so features that sound together (metronome + score synth, MIDI preview) stay aligned for
+// free. New audio features should import this instead of growing another module-level singleton.
 //
 // Known holdouts, on purpose: components/openworld/audio/openWorldAudioEngine.js keeps
 // its own context (it owns a persistent gain graph and its own — differently

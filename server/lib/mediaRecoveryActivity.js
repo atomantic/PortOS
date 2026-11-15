@@ -1,3 +1,7 @@
+/**
+ * Identify recoverable media jobs, segment processes and completed accelerator claims.
+ */
+
 /** A queued or terminal-looking job can still own an interrupted provider. */
 export const isEmptyLegacyMediaJob = job => Boolean(job) && typeof job === 'object'
   && !Array.isArray(job) && Object.keys(job).length === 0;

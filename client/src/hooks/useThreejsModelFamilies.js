@@ -1,3 +1,12 @@
+/**
+ * Three.js subject-family options served by `/api/threejs-models/families` as `{ families, status,
+ * retry }` (`status`: `loading` / `ready` / `error`), plus the exported `GENERAL_FAMILY_ID` default.
+ *
+ * Use when: Any surface picking a subject family — the taxonomy is served, never mirrored client-side,
+ * so the picker and the generation prompt cannot drift. Pass `status` and `retry` to
+ * `SubjectFamilySelect`, which hides while loading and shows a Retry on error.
+ */
+
 import { useCallback, useEffect, useState } from 'react';
 import { listThreejsModelFamilies } from '../services/api';
 

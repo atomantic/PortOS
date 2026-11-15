@@ -1,4 +1,6 @@
 /**
+ * Per-issue size targets fed into text stages.
+ *
  * Issue length profiles — per-issue size targets fed into every text stage
  * prompt (idea / prose / comicScript / teleplay) so the LLM scales the beat
  * sheet, prose word count, comic page count, and TV runtime to match.

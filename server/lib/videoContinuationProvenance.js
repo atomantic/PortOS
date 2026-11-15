@@ -1,3 +1,8 @@
+/**
+ * `sanitizeContinuation` projects bounded requested/effective strategies, actual history length,
+ * runtime pin/capability, refusal reason and frame/audio hop intervals without worker paths.
+ */
+
 import { continuationContract, MAX_CONTEXT_FRAMES } from './videoContinuity.js';
 
 // Queue/history projections carry contract evidence, never worker-owned paths.

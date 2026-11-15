@@ -1,4 +1,9 @@
 /**
+ * Re-export of `server/lib/proseExportSettings.js` — `TRIM_SIZES`, `DEFAULT_TRIM_SIZE`,
+ * `INTERIOR_FONTS`, `DEFAULT_INTERIOR_FONT` for the Export page's selects.
+ */
+
+/**
  * Prose export settings — re-export of server/lib/proseExportSettings.js.
  *
  * The client and server share the trim-size and font enums so they cannot drift.

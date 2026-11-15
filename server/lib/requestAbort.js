@@ -1,3 +1,9 @@
+// `abortSignalFromResponse(res)` — AbortSignal that fires only when an Express client disconnects
+// *before the response finishes* (keyed off `res` close + `writableEnded`).
+//
+// Plus `anyAbortSignal(signals)` — combine several signals into one (native `AbortSignal.any` with a
+// Node-18 fallback).
+//
 // Derive an AbortSignal from an Express response that fires only when the client
 // disconnects *before the response is finished* — i.e. a genuine cancel (browser
 // fetch aborted, tab closed, network drop) rather than the normal end of a

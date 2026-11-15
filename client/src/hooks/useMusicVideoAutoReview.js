@@ -1,3 +1,13 @@
+/**
+ * Opt-in automatic review/retries (#8988): start a run over a draft window with explicit review
+ * (`maxAttempts`) and paid-generation (`maxGenerations`) limits plus a vision reviewer
+ *
+ * ; applies the project pushed on `music-video:auto-review` and reports outcomes; the server generates
+ * a run's revised sections itself (#10014), so the board never submits them and a run completes with
+ * no tab open. Returns `{ busy, action, start(startSec, endSec, limits, reviewer), resume(runId,
+ * limits?), stop(runId), cancel(runId) }`. Use when: The Music Video excerpt panel.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';

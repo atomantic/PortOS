@@ -1,4 +1,8 @@
-/** Public input for standalone films; authored sources use the shared film contract. */
+/**
+ *  Public input for standalone films; authored sources use the shared film contract.
+ *
+ * Standalone Production film creation, timeline and explicit local soundtrack-attachment validation.
+ */
 import { z } from 'zod';
 import { musicVideoBlenderSettingsSchema } from './musicVideoBlenderValidation.js';
 

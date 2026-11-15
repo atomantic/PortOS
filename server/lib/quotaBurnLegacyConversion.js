@@ -1,4 +1,17 @@
 /**
+ * The ONE rule turning a LEGACY quota-burn step (copied prompt + quota-only `jobType`) into a
+ * scheduled-task reference, shared by migration 359 and the live compat path so the two cannot drift.
+ *
+ * `planQuotaBurnStepConversion` decides between three outcomes — a recognized unmodified shipped
+ * preset onto its scheduled audit counterpart with issues-only pinned explicitly
+ * (`AUDIT_TASK_TYPE_BY_PRESET_ID`, inverted from `auditCatalog.js`), the two programmatic types onto
+ * their scheduled handlers, and anything customized or targetless onto a `buildQuotaBurnCustomJob`
+ * on-demand custom task addressed by the deterministic `quotaBurnCustomJobId` (which is what makes a
+ * repeated or resumed conversion create no duplicate). `legacyAgentTaskMetadata` reproduces the
+ * retired executor's dispatch posture; `applyQuotaBurnStepConversion` rewrites the step, preserving
+ * id, label, enabled and run-once state. Recognition is `matchStoredAuditPreset`, never a label or a
+ * partial match.
+ *
  * The ONE rule that turns a LEGACY quota-burn step into a scheduled-task
  * reference — read by the migration that rewrites `data/cos/quota-burn.json`
  * and by the runtime compat path that normalizes an old client's PUT before it

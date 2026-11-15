@@ -1,3 +1,10 @@
+/**
+ * Cursor-to-word mapping plus privacy-preserving Rapid Reader progress persistence keyed by a text
+ * fingerprint
+ *
+ * ; stores position/settings without storing pasted source text.
+ */
+
 import {
   safeReadJsonStorage,
   safeWriteJsonStorage,

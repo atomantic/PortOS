@@ -1,3 +1,8 @@
+/**
+ * MeatSpace POST (Power On Self Test) schemas — drill config (incl. adaptive toggle), drill
+ * generation/scoring, sessions, memory builder, training log.
+ */
+
 import { z } from 'zod';
 import { CACHEABLE_TYPES, COGNITIVE_DRILL_TYPES, LLM_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from './postDrillTypes.js';
 import { validateCognitivePair } from './postCognitiveConfig.js';

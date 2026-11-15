@@ -1,4 +1,9 @@
 /**
+ * Re-export of `server/lib/grokVideoClip.js` — `GROK_VIDEO_DURATIONS` (`[6, 10, 15]`) +
+ * `GROK_VIDEO_DEFAULT_DURATION`, the clip lengths grok's `image_to_video` actually delivers.
+ */
+
+/**
  * The clip lengths grok’s image_to_video actually delivers.
  *
  * Re-export of `server/lib/grokVideoClip.js` — the one definition of this rule,

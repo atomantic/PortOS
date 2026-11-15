@@ -1,3 +1,9 @@
+/**
+ * Canonical gloss for the Layered Intelligence loop's run-outcome reason tokens, shared by the
+ * on-demand toast and the durable "Last run" line (`formatLiReason`, `liReasonTone`,
+ * `LI_NEUTRAL_REASONS`).
+ */
+
 import { REJECTION_REASON_LABELS } from '../../../server/lib/layeredIntelligenceRejectionLabels.js';
 
 // Canonical gloss for the Layered Intelligence loop's run-outcome reason tokens.

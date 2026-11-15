@@ -2,6 +2,12 @@
  * The projection that turns a generated autonomous-job task back into the
  * top-level fields `cos.addTask` maps onto `metadata`.
  *
+ * `generatedJobTaskFields` — (+ `isExpectedUnpersistedMiss`: a scheduled fire never persists its task,
+ * so the spawn/finalize status writes miss by design and stay quiet) flattens a `generateTaskFromJob`
+ * result into the top-level keys the non-raw `cos.addTask` path maps onto metadata. One allowlist
+ * shared by the manual "Run now" endpoint and the quota-burn lane, so a key added to the generator
+ * cannot reach one and not the other. Pure.
+ *
  * `generateTaskFromJob` (`services/autonomousJobs/skillTemplates.js`) builds the
  * task the SCHEDULED fire emits straight onto `task:ready`, metadata and all.
  * Every other caller queues it through the non-raw `addTask` path instead, which
