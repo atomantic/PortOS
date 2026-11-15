@@ -227,7 +227,7 @@ export async function updateReleaseSynchronizationOwnership(agentId, action) {
       let resumePath;
       if (action === 'sync-reserve') {
         const { releasePreflight } = await import('./releasePreflight.js');
-        const preflight = await releasePreflight({ repoPath, agentId, agents: Object.values(state.agents), continuingPublication: true })
+        const preflight = await releasePreflight({ repoPath, agentId, agents: Object.values(state.agents) })
           .catch(() => ({ ok: false, reason: 'release-preflight-unavailable' }));
         if (!preflight.ok) return { reserved: false, reason: preflight.reason };
         const [{ listWorktrees }, { execGit }] = await Promise.all([import('./worktreeManager.js'), import('../lib/execGit.js')]);

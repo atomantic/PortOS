@@ -90,12 +90,21 @@ release-sync agent in the same repository. Wait for active work or verify an
 already published version; never move an existing tag.
 
 PortOS performs these checks before dispatch and when reserving a candidate.
-Read/authentication failures refuse that attempt and can be retried once the
-underlying service is available; historical lineage or private review files do
-not create a persistent hold. Interrupted unpublished attempts may start a new
-candidate from current `main` after pre-flight passes. Leave old checkouts and
-branches intact for normal branch reconciliation; do not reset them or reuse
-their validation. Published releases retain their synchronization obligations.
+The tag check needs a proposed version, so it runs only on the reserve that names
+one: before that, `main`'s `package.json` carries the version already published,
+and its tag is expected to exist. Read/authentication failures refuse that attempt
+and can be retried once the underlying service is available; historical lineage or
+private review files do not create a persistent hold. Interrupted unpublished
+attempts may start a new candidate from current `main` after pre-flight passes.
+Leave old checkouts and branches intact for normal branch reconciliation; do not
+reset them or reuse their validation. Published releases retain their
+synchronization obligations.
+
+A release task refused at dispatch stays `pending` and logs
+`⏸️ Task <id> stays pending: <reason>: <what clears it>` on each attempt; it
+dispatches by itself once that condition clears. Diagnose from that line and the
+GitHub state it names. Do not start, publish or tag a release to test a hold, and
+do not delete the task, reset its spawn budget or retire another run's checkout.
 
 For a **new** candidate, the first fetch of `main` is the cutoff. If the launcher
 supplied a verified exact kickoff SHA, use that instead. A timestamp cannot recover

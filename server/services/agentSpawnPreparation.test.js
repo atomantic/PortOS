@@ -99,6 +99,19 @@ describe('createAgentSpawnContext — failed bookkeeping writes', () => {
     expect(release).toHaveBeenCalledWith('agent-9');
     expect(cosEvents.emit).toHaveBeenCalledWith('agent:error', expect.objectContaining({ taskId: 'task-9' }));
   });
+
+  it('records why an unpersisted hold leaves the task pending (#16177)', async () => {
+    updateTask.mockReset().mockResolvedValue({}); releaseAppReviewMarker.mockResolvedValue(); emitLog.mockClear(); release.mockClear();
+    const context = createAgentSpawnContext({ id: 'task-10', taskType: 'internal', status: 'pending', metadata: {} });
+    Object.assign(context, { laneAcquired: true, agentId: 'agent-10' });
+
+    expect(await context.blockAndBail({ reason: 'release-promotion-active: a pull request targeting the release branch is still open', persist: false })).toBeNull();
+
+    expect(emitLog).toHaveBeenCalledWith('info',
+      '⏸️ Task task-10 stays pending: release-promotion-active: a pull request targeting the release branch is still open', { taskId: 'task-10' });
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledWith('agent-10');
+  });
 });
 
 describe('cleanupOnError — a server-provisioned claim checkout (#15517)', () => {

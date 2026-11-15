@@ -7,7 +7,7 @@ const f = vi.hoisted(() => ({ registerGate: null, prep: null, updateResult: { ok
 const releaseDisposition = vi.hoisted(() => vi.fn(async () => null));
 const releaseObservations = vi.hoisted(() => vi.fn(async () => new Map()));
 const releasePreflight = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
-vi.mock('./releasePreflight.js', () => ({ releasePreflight }));
+vi.mock('./releasePreflight.js', () => ({ releasePreflight, describeReleasePreflightHold: ({ reason }) => `described ${reason}` }));
 vi.mock('./releaseSynchronization.js', () => ({ releaseTaskDispatchDisposition: releaseDisposition, observeReleaseDeliveries: releaseObservations }));
 vi.mock('./cos.js', () => ({}));
 vi.mock('./cosState.js', () => ({ getConfig: async () => ({}) }));
@@ -165,7 +165,7 @@ describe('dispatchAgentRun ownership window', () => {
     context.task = { ...task, metadata: { analysisType: 'do-release', app: 'portos-default' } };
     releasePreflight.mockResolvedValueOnce({ ok: false, reason: 'release-promotion-active' });
     await dispatchAgentRun(context);
-    expect(context.blockAndBail).toHaveBeenCalledWith({ reason: 'release-promotion-active', persist: false });
+    expect(context.blockAndBail).toHaveBeenCalledWith({ reason: 'described release-promotion-active', persist: false });
     expect(registerAgent).not.toHaveBeenCalled();
     expect(spawnDirectly).not.toHaveBeenCalled();
     expect(getActiveAgentIds()).not.toContain(context.agentId);

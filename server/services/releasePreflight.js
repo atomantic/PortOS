@@ -10,9 +10,30 @@ const unfinished = ['queued', 'in_progress', 'waiting', 'requested', 'pending'];
 const repository = agent => agent.sourceWorkspace || agent.metadata?.sourceWorkspace || agent.workspacePath || agent.metadata?.workspacePath;
 const commonDirectory = async cwd => (await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], cwd)).stdout.trim();
 
+const HOLD_DESCRIPTIONS = {
+  'release-repository-unavailable': 'the release repository could not be resolved',
+  'release-forge-unavailable': 'the repository has no readable GitHub origin',
+  'release-ownership-unavailable': 'CoS agent ownership could not be verified',
+  'release-agent-active': 'another release or release-sync agent is running in this repository',
+  'release-promotion-active': 'a pull request targeting the release branch is still open',
+  'release-tag-present': 'the proposed version is already tagged',
+  'release-workflow-active': 'a release.yml workflow run is unfinished',
+  'release-preflight-unavailable': 'publication activity could not be read from Git or GitHub',
+};
+
+/** One log-ready sentence naming a refusal and what clears it; dispatch retries on its own. */
+export function describeReleasePreflightHold({ reason, detail } = {}) {
+  const description = HOLD_DESCRIPTIONS[reason] || 'release pre-flight refused';
+  return `${reason}: ${description}${detail ? ` (${detail})` : ''}`;
+}
+
 /** Called at dispatch and again when reserving a candidate. Read failures refuse
- * this attempt; they never persist a hold requiring an operator to retire it. */
-export async function releasePreflight({ repoPath, agentId, agents, version, forgeAccount = null, continuingPublication = false }) {
+ * this attempt; they never persist a hold requiring an operator to retire it.
+ * Only an explicitly proposed `version` is checked against existing tags: the
+ * development head's package.json carries the version that was last published
+ * (release synchronization lands it on main), so before the coordinator chooses
+ * the next version that tag is expected to exist (#16177). */
+export async function releasePreflight({ repoPath, agentId, agents, version, forgeAccount = null }) {
   if (!repoPath) return { ok: false, reason: 'release-repository-unavailable' };
   const common = await commonDirectory(repoPath);
   const origin = await getOriginInfo(repoPath);
@@ -42,11 +63,10 @@ export async function releasePreflight({ repoPath, agentId, agents, version, for
   const pulls = await api('pulls?state=open&base=release&per_page=1');
   if (!Array.isArray(pulls)) throw new Error('Invalid release promotion response');
   if (pulls.length) return { ok: false, reason: 'release-promotion-active' };
-  if (!continuingPublication) {
-    const proposedVersion = version ?? JSON.parse((await execGit(['show', 'HEAD:package.json'], repoPath)).stdout).version;
-    if (!/^\d+\.\d+\.\d+$/.test(proposedVersion || '')) throw new Error('Invalid proposed release version');
-    const tag = `refs/tags/v${proposedVersion}`;
-    const tags = await api(`git/matching-refs/tags/v${proposedVersion}`);
+  if (version !== undefined) {
+    if (!/^\d+\.\d+\.\d+$/.test(version || '')) throw new Error('Invalid proposed release version');
+    const tag = `refs/tags/v${version}`;
+    const tags = await api(`git/matching-refs/tags/v${version}`);
     if (!Array.isArray(tags)) throw new Error('Invalid release tag response');
     if (tags.some(row => row.ref === tag)) return { ok: false, reason: 'release-tag-present' };
   }
