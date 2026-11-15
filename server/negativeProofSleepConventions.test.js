@@ -41,7 +41,6 @@ const SELF = 'server/negativeProofSleepConventions.test.js';
 const BURN_DOWN = [
   'server/services/agentCliSpawning.test.js',
   'server/services/musicVideo/autonomousService.test.js',
-  'server/services/runner.test.js',
 ];
 
 const REAL_SLEEP = /await\s+new\s+Promise\s*\(\s*\(?\s*\w*\s*\)?\s*=>\s*setTimeout\s*\(\s*\w+\s*,\s*\d+\s*\)\s*\)/;
