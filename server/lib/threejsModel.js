@@ -1,36 +1,6 @@
 /**
  * Declarative procedural-model contract used by the Three.js Models workspace.
  *
- * Validated declarative procedural-model schema plus deterministic standalone Three.js factory export
- * for the Three.js Models workspace. Also the cross-section gate: `evaluateThreejsFlatness(spec)`
- * counts distinct vertex planes per axis — relative to the mesh's own size, with a rotation-invariant
- * zero-volume check behind it — and treats an `extrude` with no bevel thickness as the two-plane slab
- * it is to report when the majority of identity-priority features are built only from flat parts — a
- * model that reads right head-on and like cardboard when orbited.
- * `buildThreejsFlatnessFeedback(flatness)` turns that into default refinement feedback;
- * `listSpecNames(names)` is the shared capped name-list formatter both gates use in finding messages.
- * Also the material-plausibility gate: `evaluateThreejsMaterialPlausibility(spec)` keys a bounded
- * per-family prior table (metal, wood, plastic, glass, fabric, ceramic, rubber, stone, leather, paper)
- * off tokens in each material's id and reports channels whose values the named substance does not
- * support — metalness 0.9 oak, transmission 1.0 steel — skipping any id that names no family or two,
- * and any channel the material's `type` never forwards to Three.js. Advisory only: it never clamps,
- * because a stylized model may legitimately break every prior.
- * `buildThreejsMaterialFeedback(plausibility)` turns that into default refinement feedback. The same
- * pass emits a `reflective-material-without-environment` note when a spec authors reflective channels
- * (metalness above 0.6, or any transmission/clearcoat/iridescence) while `environment.preset` is
- * `none` — those channels read off an environment, so in that scene their values cannot be judged at
- * all. Attachments are declared in two forms — the original anchor-less `attachmentPartIds` and the
- * anchored `attachments: [{ partId, anchorPartId | anchorSocket, maxOffset }]` — and
- * `resolveThreejsAttachments(articulation)` merges them into one canonical list (an anchored entry
- * wins over a bare id) so every gate reads the same set; `isThreejsAttachmentAnchored(attachment)` is
- * the shared anchored/unanchored predicate and `DEFAULT_ATTACHMENT_MAX_OFFSET` the default tolerance.
- * The spec-level refinement rejects an anchor that does not resolve, one that is the attachment
- * itself, an anchor chain that cycles, and the model root (the sole top-level part) — which carries no
- * relationship to any body part. The spec carries an optional `environment` block (see
- * `threejsModelEnvironment.js`), and `buildThreejsFactorySource()` stamps its render profile onto
- * `root.userData.sculptRuntime.render` and exports it as `renderProfile`, so a consumer wiring their
- * own `WebGLRenderer` reproduces the model instead of a differently tone-mapped approximation.
- *
  * AI providers author this bounded JSON scene spec instead of executable
  * JavaScript. The browser renders only allowlisted Three.js primitives (plus a
  * bounded custom BufferGeometry), and this module deterministically exports the

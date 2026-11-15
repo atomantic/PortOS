@@ -1,51 +1,6 @@
 /**
  * Shared sentinel and helpers for provider model resolution.
  *
- * Provider model resolution sentinels + helpers (`CODEX_CONFIGURED_DEFAULT` /
- * `ANTIGRAVITY_CONFIGURED_DEFAULT` / `GROK_CONFIGURED_DEFAULT` / `KIMI_CONFIGURED_DEFAULT`,
- * `resolveCliModel`, `filterSelectableModels`, Bedrock/OpenCode model mappers,
- * `localRuntimeNamespace(provider)` — the OpenCode namespace only when it names a LOCAL daemon, i.e.
- * the composed "namespace and not a hosted gateway" test that `cliChildEnv.js`,
- * `localProviderRuntime.js` and `providerVendors.js` all key on, `CODEX_OSS_LOCAL_PROVIDERS` /
- * `CODEX_OSS_MIN_VERSION` / `codexOssLocalProvider` / `codexUnsupportedLocalRuntime` — the codex half
- * of that same axis: which local runtimes Codex's `--local-provider` can serve, and which marked
- * runtime it cannot, kept here beside the namespace they wrap so `providerPrerequisites.js` classifies
- * a codex record without importing `codex.js` (the argv emitter, `buildCodexOssArgs`, stays there),
- * `OPENCODE_PUBLIC_REVIEW_AGENT` — the read-only OpenCode agent a no-tool public-review stage runs as,
- * kept in this leaf because `providerVendors.js` must not import `opencodeConfig.js`,
- * `parseOpencodeConfigContent` — the shared "is this stored OPENCODE_CONFIG_CONTENT usable?" read —
- * plus `opencodeConfigIsLocalOnly` / `opencodeProviderIsLocalOnly`, the ONE locality rule
- * `providerVendors.js` (gate eligibility) and `cliChildEnv.js` (public-review env allowlist) must not
- * disagree about: if eligibility says yes where the allowlist strips the config, the stage spawns
- * against the user's own ~/.config/opencode with tools intact while still reporting an enforced
- * tool-free gate, `normalizeClaudeModelId` / `resolveClaudeCliModel` — the Claude-argv chokepoint that
- * rewrites a dotted first-party version (`claude-fable-5.1`) to the dashed id Claude Code actually
- * serves before the Bedrock mapping runs, model-flag scan helpers incl. `stripBrokenModelFlags` and
- * `stripProviderPinArgs` (explicit per-run selections override baked CLI pins), `isCodexProvider`,
- * `isKimiProvider`, `isAntigravityProvider`, `isCursorProvider`) plus the agy catalog family, which
- * reads an `agy models` list as base ids paired with effort tiers (`splitAntigravityModel`,
- * `antigravityBaseModels`, `antigravityModelEffortLevels`, `antigravityCatalogListsModel` — is a
- * stored pin still served? — and `pickAntigravityRelayModel` — the cheapest tier to relay one tool
- * call on when a vendor retires the pin PortOS shipped) plus reasoning-effort helpers for the
- * claude/codex/agy/cursor CLIs (`CLAUDE_EFFORT_LEVELS` / `CODEX_EFFORT_LEVELS` /
- * `ANTIGRAVITY_EFFORT_LEVELS` / `CURSOR_EFFORT_LEVELS` / `EFFORT_LEVELS`, `effortLevelsForProvider`,
- * `resolveCliEffort` — clamps an out-of-range effort to the nearest level the target CLI accepts
- * rather than dropping it, so a value saved against a wider ladder survives a provider switch —
- * `clampEffortToLadder` (that clamp over an explicit ladder; the client's own `resolveCliEffort` runs
- * its published-field ladder through it), `hasEffortFlag`, `buildEffortArgs` — the one emitter of
- * `--effort <level>` / `-c model_reasoning_effort=<level>`, and deliberately silent for cursor — and
- * `foldCursorEffortIntoModel`, which carries a cursor level inside `--model` as Cursor’s own variant
- * syntax (`gpt-5[effort=max]`) because `cursor-agent` has no `--effort` flag) plus codex startup-arg
- * helpers (`CODEX_EFFORT_KEY`, `CODEX_UPDATE_CHECK_KEY`, `hasCodexUpdateCheckConfig`,
- * `buildCodexStartupArgs` — the one emitter of `-c check_for_update_on_startup=false`, spread by every
- * codex spawn builder to disable the blocking startup update modal) plus `PORTOS_CLI_CONFIG_KEYS` /
- * `isPortosSuppliedConfigKey` — the exhaustive list of `-c <key>=<value>` config keys PortOS injects,
- * read by the `cli-config-invalid` error analyzer to tell a rejected PortOS override apart from a bad
- * line in the user's own CLI config file.; `isOpencodeLocalProvider` (the
- * OpenCode-on-a-local-backend-or-gateway gate behind the OpenCode effort ladder) and
- * `isCodexSubscriptionProvider` (the ChatGPT-subscription readiness key, housed here so the browser
- * re-export skips `codexAccount.js`'s protocol tables)
- *
  * Pure leaf (no Node built-ins, nothing outside server/lib), so the browser
  * imports it: client/src/utils/providerModels.js re-exports the sentinels,
  * effort ladders and the Antigravity split, and delegates its own ladder
