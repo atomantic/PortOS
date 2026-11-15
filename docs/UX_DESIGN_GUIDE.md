@@ -282,6 +282,19 @@ A growing collection must remain usable with hundreds, thousands, or more record
 
 Adoption is incremental. CoS uses the shared request and footer primitives; Media History reuses the footer with its existing `useGalleryPage` server-filtered adapter; existing collection surfaces require scoped migrations rather than a claim that this document alone makes them conform.
 
+## Config drawers
+
+Settings-over-a-feature surfaces use the shared `client/src/components/Drawer.jsx`, never a hand-rolled `fixed inset-y-0 right-0` clone (design record: `docs/plans/2026-07-01-drawer-ux-redesign.md`).
+
+- **Size**: `size` is `sm` 520px, `md` 640px, `lg` 720→880px, `xl` up to 1100px; widen large forms so they lay out in columns, keep small dialogs `sm`. Mobile is always full-width. `widthClass` is a back-compat override.
+- **Tabs**: a large surface (many fields or groups, e.g. Edit App) uses `tabs={[{ id, label, icon?, count? }]}` + `activeTab`/`onTabChange` and renders only the active tab. A medium form that should stay fully visible uses labeled sections instead (`ImageGenSettingsForm`'s `grouped` prop).
+- **Per-tab scroll** remounts the body on switch, so **all mutable form state lives in the parent**, never in uncontrolled inputs (see `EditAppDrawer.jsx`). Validate unmounted tabs at Save and `setActiveTab()` to the failing one.
+- **Tab bar**: the built-in layout wires `TabPills` (`mobileCompact` under `sm`). A surface hosted in both a drawer and a page (like `ImageGenTab`) renders its own `<TabPills variant="pills" mobileCompact>`.
+- **Deep-linkable tab**: drive `activeTab` from `useDrawerTab(paramName, defaultTab, tabIds)` (`client/src/hooks/useDrawerTab.js`); the caller names the param (`appTab`, `mediaTab`) and passes the id list so a stale link falls back to `defaultTab`.
+- **Long-lived forms** set `closeOnEsc={false}` / `closeOnBackdrop={false}`.
+- **The overlay is always portaled to `<body>`**; never re-nest it. A `filter`/`backdrop-filter`/`transform` ancestor (glass themes give `.bg-port-card` a `backdrop-filter`) becomes a fixed element's containing block (#4150). Any new hand-rolled `fixed inset-0` overlay is portaled too (`Modal`'s `usePortal`, `GalleryImagePicker.jsx`).
+- **Examples**: `client/src/components/apps/EditAppDrawer.jsx` (built-in tabs, `size="lg"`, `useDrawerTab('appTab', …)`) and `client/src/components/settings/ImageGenTab.jsx` (internal pill sub-tabs, `useDrawerTab('mediaTab', …)`).
+
 ## Narrow monitors and embedded containers
 
 Responsive acceptance is based on **available content width**, not just screen width. An expanded sidebar, inspector, drawer or dashboard grid can leave a 240–480px panel on a desktop monitor. A viewport `sm:` row still activates there and can push controls outside its card.
