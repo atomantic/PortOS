@@ -18,7 +18,6 @@ import {
   sanitizeProjectForSync,
   mergeProjectRecord,
   putScenesInTimeOrder,
-  scenesInTimeOrder,
 } from './projectsLogic.js';
 
 import { productionReviewBasis } from './productionReview.js';
@@ -1393,10 +1392,10 @@ describe('board time order', () => {
       { sceneId: 's1', label: 'S1', startSec: 1, order: 4 },
       { sceneId: 'c2', label: 'C2', preMusic: { durationSec: 3 }, order: 5 },
     ];
-    expect(scenesInTimeOrder(scenes).map((scene) => [scene.sceneId, scene.order]))
+    const ordered = putScenesInTimeOrder({ scenes });
+    expect(ordered.scenes.map((scene) => [scene.sceneId, scene.order]))
       .toEqual([['c1', 0], ['c2', 1], ['s1', 2], ['s2', 3], ['u1', 4], ['u2', 5]]);
-    const ordered = scenesInTimeOrder(scenes);
-    expect(scenesInTimeOrder(ordered)).toBe(ordered);
+    expect(putScenesInTimeOrder(ordered)).toBe(ordered);
   });
 
   // Uniquely catches the one-time repair changing a shot's content or staling a review that held.

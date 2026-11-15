@@ -673,7 +673,7 @@ const timeRank = (scene) => (isPreMusicShot(scene) ? -Infinity : Number.isFinite
  * stored order. `order` is rewritten to match the index; nothing else on a
  * scene changes. Returns the same array when it is already in order.
  */
-export function scenesInTimeOrder(scenes) {
+function scenesInTimeOrder(scenes) {
   const list = Array.isArray(scenes) ? scenes : [];
   // Two shots of the same infinite rank subtract to NaN, which falls through to their stored order.
   const sorted = list.map((scene, index) => ({ scene, index }))
