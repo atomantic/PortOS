@@ -1,16 +1,6 @@
 /**
  * The mounted HTTP route graph, derived from source at first use.
  *
- * Static scan of the mounted HTTP route graph — `server/index.js` `app.use('/api/…', router)` mounts →
- * route-module imports → `router.use(prefix, child)` → `router.<method>('<path>')`, including aliased
- * mounts, local subrouters, factory returns and composed `toolkit.routes.<x>` routers.
- * `buildApiRouteCatalog({ repoRoot? })` → `{ derivedFrom, mounts, routes: [{ method, path, mountPath,
- * sources }], stats }`; `getApiRouteCatalog()` derives it on first use and caches it for the process
- * (read by the API Explorer, the internal OpenAPI document and `apiRouteParity.test.js`);
- * `scanRouteGraph()` adds `declarationKeys` / `duplicateDeclarationKeys` (`routeDeclarationKey`) for
- * the coverage guard in `apiRouteGraph.test.js`. Never committed — see "Generated manifests" in
- * `server/AGENTS.md`.
- *
  * Express routers are the runtime source of truth, but Express 5 deliberately
  * hides a nested router's mount path inside a matcher closure. Introspecting
  * private router internals would lose paths such as `/api/brain/songbook/*`

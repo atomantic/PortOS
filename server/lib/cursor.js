@@ -1,14 +1,6 @@
 /**
  * Per-CLI conventions for Cursor's agentic coding CLI (binary: `cursor-agent`).
  *
- * Cursor Agent (`cursor-agent`) provider helpers — the `CURSOR_COMMAND` binary constant, the
- * `isCursorCommand` predicate, and the `ensureCursorHeadlessArgs` (`--print --force`, folding any
- * pinned reasoning effort into `--model`) / `ensureCursorTuiArgs` (`--force`) argv builders. `--force`
- * is load-bearing beyond approvals: it also clears cursor's workspace-trust gate, which otherwise
- * EXITS a headless run before any work happens. The prompt rides raw stdin (like claude/codex, unlike
- * grok/kimi), and cursor needs no configured-default sentinel — its `auto` router is a real model id
- * passed straight to `--model`.
- *
  * Cursor ships two PortOS process-provider shapes:
  *   - `cursor-cli`  (type `cli`) — headless one-shot via `cursor-agent --print`.
  *   - `cursor-tui`  (type `tui`) — the interactive Cursor Agent TUI over a PTY.

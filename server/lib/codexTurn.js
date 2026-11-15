@@ -1,20 +1,6 @@
 /**
  * The INFERENCE half of the Codex ChatGPT-subscription provider (#5590), pure.
  *
- * The INFERENCE half of the Codex ChatGPT-subscription provider (#5590), pure. The `thread/start` /
- * `turn/start` / `turn/interrupt` / `model/list` method names and the turn notifications,
- * `CODEX_TEXT_TRANSPORT` plus `providerDeclaresCodexTextTransport` (advertises, reusing
- * `codexAccount.isCodexSubscriptionProvider` so the two halves cannot drift) vs
- * `isCodexTextTransportEnabled` (requires both the explicit opt-in and the Providers-UI read-risk
- * acknowledgement), the `CODEX_TEXT_THREAD_CONFIG` safety envelope a generic text call runs under
- * (empty throwaway cwd, no writes, no network, fail-closed approvals, no MCP servers, no web search —
- * Codex can still read local files by absolute path; see the module docstring), `normalizeCodexModels`
- * / `normalizeCodexTokenUsage` / `resolveCodexEffort`, the `createTurnAccumulator` →
- * `applyCodexTurnEvent` → `finalizeCodexTurn` projection (a non-`completed` turn yields an error,
- * NEVER the partial text), and `classifyCodexTurnError` / `classifyCodexTransportError`, which fold
- * both failure shapes onto the shared `ERROR_CATEGORIES` the cooldown policy reads. `models: null` =
- * never fetched, `[]` = fetched-and-empty. The process half is `services/codexAppServer.js`.
- *
  * `codexAccount.js` answers "is this subscription usable"; this module answers
  * "what can it run, and what did a run produce". It owns the thread/turn/model
  * slice of the documented Codex app-server protocol: which methods and

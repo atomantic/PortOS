@@ -2,23 +2,6 @@
  * The window in which one CoS task is BOTH pending and active, and the single
  * settlement every reader that pairs the task list with the agent list makes.
  *
- * The one settlement for the window in which a CoS task is BOTH pending and active.
- * `spawnAgentForTask` registers an agent as `running` before it flips that agent's task off `pending`,
- * so a surface counting the task list and the agent list independently reports the same task as queued
- * AND active — "1 pending, 1 active" for a queue of one, clearing only on a later poll. Reversing the
- * two writes would not close it (two stores, and the UI joins the lists from two separate HTTP reads
- * anyway). `runningAgentsByTaskId(agents)` → `Map<taskId, agent>` (keyed by `taskId` or
- * `metadata.taskId`, matching `agentManagement.js`), `isSpawningTask` / `withoutSpawningTasks` /
- * `countSpawningTasks` / `unclaimedTaskIds` (the id-list form) and
- * `settleTaskSourceSpawnWindow(source, …)`, which stamps `spawning` and moves the task from
- * `grouped.pending` to `grouped.in_progress` for a RESPONSE — that is how `GET /api/cos/tasks` spares
- * its consumers from knowing the window exists, while the dispatch readers of `getAllTasks()` keep the
- * raw truth. **Bounded by `SPAWN_CLAIM_GRACE_MS`** (60s, shared with
- * `services/cos.js#forceSpawnTask`): past it a `pending` task under a `running` agent is a zombie, and
- * settling it as active forever would hide the stuck task from every count AND from the list that
- * renders its "Run now" recovery. Pure leaf with no imports, so `client/src/lib/cosSpawnWindow.js`
- * re-exports it.
- *
  * `spawnAgentForTask` (services/agentLifecycle.js) registers an agent as
  * `running` BEFORE it flips that agent's task off `pending`. Between those two
  * writes the task reads `pending` on the task list and `running` on the agent

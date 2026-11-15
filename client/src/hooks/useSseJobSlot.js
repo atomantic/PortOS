@@ -1,18 +1,6 @@
 /**
  * Generic single-slot SSE job hook: tracks target through completion, handles complete/error/canceled
  * frames and recovers when the stream closes without a terminal frame.
- *
- * Generic single-slot SSE job: captured target from preparation through completion, terminal-frame
- * handling (`complete`/`error`/`canceled`), and `sse.closed`-without-terminal-frame recovery in one
- * place. Returns `{ active, pending, jobId, percent, stage, context, start, attach, cancel }`
- * (`attach(jobId, context)` adopts a job another request already started into the idle slot); reserves
- * synchronously, exposes context during kickoff and ignores unmounted responses. Optional
- * `readPercent` adapts other progress scales; `connected` distinguishes a live stream from
- * reconnecting, and `onSettled(reason, context)` refreshes persisted state after completion, failure,
- * cancellation or a terminal disconnect. Pass `startRequest`/`eventsUrl`/`cancelRequest` + per-feature
- * toast copy. Use when: Any "kick off a job → stream SSE → settle on terminal frame" hook. The
- * reference-audio/YouTube/video-download/MIDI/music-video-render hooks all wrap this — don't re-roll
- * the terminal-frame + lost-connection dance.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';

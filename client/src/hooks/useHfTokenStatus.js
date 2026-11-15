@@ -2,15 +2,6 @@
  * Read the CENTRAL HuggingFace token status (`GET /image-gen/setup/hf-token-status`,
  * backed by `server/services/hfToken.js`: stored token → env vars → `hf auth login` file).
  *
- * Reads the central HuggingFace token status (`GET /image-gen/setup/hf-token-status` →
- * `server/services/hfToken.js`: stored → env → `hf auth login`). Returns `{ present, source, refresh
- * }` where `present` is TRI-state — `null` means "unknown/failed", not "absent" — so a slow fetch
- * can't flash a token nag at a user who has one. `{ enabled }` gates the fetch (false resets to
- * unknown, so a modal re-checks per open); `{ errorAs: 'absent' }` opts a surface into offering the
- * paste form when the status call fails. Use when: Any gated-HuggingFace surface (3D page, MIDI gated
- * modal, Image Gen banners) — use this instead of re-rolling the fetch, or the same blip renders
- * differently per page.
- *
  * Every gated-model surface needs the same three-state answer — token present / not
  * present / not yet known — and each one had grown its own copy with its own failure
  * policy, so the same offline blip rendered a nag on one page and nothing on another.

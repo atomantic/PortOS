@@ -1,23 +1,6 @@
 /**
  * Child-environment composition for every AI-CLI spawn.
  *
- * The one place the AI-CLI child environment is composed, replacing the hand-rolled copy every spawn
- * site carried — which made each env-level fix an N-file sweep (#3194). `buildCliChildEnv({ baseEnv,
- * before, provider, model, cwd, extra, guard })` returns a COMPLETE env for `spawn`: filters the
- * inherited base to runtime essentials/provider auth, then layers `baseEnv → before → Ollama-Claude
- * defaults → provider.envVars → buildOpencodeEnvVars → extra`, pins `PWD` to `cwd`, strips
- * `CLAUDECODE`, and (with `guard: true`) prepends the pm2 guard shim onto the final `PATH`. The
- * Ollama-Claude layer raises Claude Code's default output ceiling to 65,536 tokens so a
- * thinking-capable local model cannot finish its reasoning past the stock 32K ceiling and die before
- * its final tool call; an explicit provider env value wins. `composeProviderEnv({ before, provider,
- * model, extra })` returns just the ordered provider layers, for sites that build a DELTA someone else
- * bases and spawns (the CoS runner payload, a shell-session overlay). The two slots are not
- * interchangeable: `before` sits UNDER `provider.envVars` (forgeTokenEnv/claudeSettingsEnv, so a
- * provider override still wins), `extra` sits OVER it (TERM/COLORTERM for a PTY).
- * `cliChildEnv.test.js` asserts the composed order per call site and **discovers** any new site that
- * hand-rolls the tuple instead of calling these — so the call-site list stays in the test, not in
- * prose here.
- *
  * Ten sites independently rebuilt the same env layering, and three separate
  * fixes each paid an N-file sweep to keep them in step: the OpenCode
  * declared-models map (#2190/#2243), the `CLAUDECODE` strip, and the `PWD` pin

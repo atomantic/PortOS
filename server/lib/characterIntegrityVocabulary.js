@@ -2,15 +2,6 @@
  * Pure vocabulary for cast-integrity reports: finding kinds, review statuses, depths, dimensions, plus
  * `castIntegrityPassed` and the machine-repairable `AUGMENTABLE_FINDING` kinds.
  *
- * The vocabulary the cast-integrity contract (#6415) reports in, as a pure leaf:
- * `INTEGRITY_FINDING_KINDS` (`missing` / `underspecified` / `contradictory`) and the
- * machine-repairable `AUGMENTABLE_FINDING_KINDS`, the five `INTEGRITY_DIMENSIONS` (+
- * `INTEGRITY_DIMENSION_IDS`), `CHARACTER_REVIEW_STATUSES` (`passed` vs `not-reviewed` / `truncated` /
- * `stale`) and the `INCOMPLETE_REVIEW_STATUSES` that can never read as clean, `INTEGRITY_DEPTHS`, and
- * `castIntegrityPassed(report)`. Split out of `characterIntegrity.js` (which reaches `crypto` through
- * `storyBible.js`) so `client/src/lib/characterIntegrity.js` re-exports one definition for the report
- * UI.
- *
  * The cast-integrity vocabulary (#6415): the finding kinds, review statuses,
  * depths and semantic dimensions a report is stated in, plus the one predicate
  * that reads a whole report (`castIntegrityPassed`).

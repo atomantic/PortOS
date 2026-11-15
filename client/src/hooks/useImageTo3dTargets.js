@@ -2,12 +2,6 @@
  * The image-to-3D target registry (`GET /api/image-to-3d/targets`), fetched once
  * per mount.
  *
- * The image-to-3D target registry (`GET /api/image-to-3d/targets`), fetched once per mount. Returns `{
- * targets, loading, error, reload }` — `error` is first-class, because a failed registry read is NOT
- * an empty registry and both call sites render that distinction. Use when: The `/3d` render flow
- * (target picker + readiness summary) and Models → 3D (install/repair). Don't re-roll the fetch in a
- * third surface.
- *
  * Two surfaces read the same list and neither can be derived from the other:
  * `/3d` needs it to pick a render target and report how many runtimes are ready,
  * and Models → 3D needs it to install/repair them (#4728). The descriptor is

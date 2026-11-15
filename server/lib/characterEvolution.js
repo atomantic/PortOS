@@ -1,18 +1,6 @@
 /**
  * The OPTIONAL five-stage character evolution lens (#6440, epic #6418).
  *
- * The OPTIONAL five-stage character evolution lens (#6440): `EVOLUTION_STAGES` / `EVOLUTION_OUTCOMES`
- * / `EVOLUTION_STAGE_LABELS` / `CHARACTER_EVOLUTION_LIMITS`, `sanitizeCharacterEvolution` +
- * `sanitizeCharacterEvolutionList` (null when unauthored, unknown stage/outcome rejected not coerced),
- * `evolutionEvidenceStatus` (derived on read — only `anchored` counts as verified, a pointer to a
- * deleted beat reports `stale`), `isDeclaredEvolution`, `renderCharacterEvolutionForPrompt` +
- * `renderCharacterEvolutionListForPrompt` (a whole cast as one prompt block), and the per-character
- * story-list primitives the three hosts share (`isCanonCharacterId`, `isStoryBeatId`,
- * `characterIdentityKey`, `optIssueNumber`, `EVOLUTION_EVIDENCE_FIELDS` — Pipeline series, FableLoom,
- * and the Writers Room `segmentId` + `anchorQuote` pair whose quote is what keeps a positional segment
- * anchor from reading as verified after a draft edit). A pure leaf over `bibleLimits.js` +
- * `textUtils.js` so `client/src/lib/characterEvolution.js` mirrors it into the browser bundle.
- *
  * A story-scoped craft lens layered over the universe-level psychology profile
  * in `characterFramework.js` (Ghost → Wound → Lie → Want → Need, theory of
  * control, drives). That profile is the character's baseline IDENTITY and is

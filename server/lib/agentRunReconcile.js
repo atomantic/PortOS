@@ -1,14 +1,6 @@
 /**
  * CoS run reconciliation — the ledger read BACK against the run record.
  *
- * CoS run reconciliation (#4540) — pure diff between a ledger projection (`projectRunStates`) and the
- * durable run record. Closed finding vocabulary `RUN_RECONCILE_FINDINGS` (`record-open`,
- * `record-missing`, `verdict-mismatch`, `ledger-open`), `diffRunRecord()`, `reconcileRunRecords()`
- * with a zero-filled per-kind summary, and `planRunRecordRepair()` — the metadata patch that closes a
- * record the ledger proves is finished. Repairs are one-directional (ledger → record) by design: a
- * record closed while the ledger missed the close is reported, never back-filled, so the stream stays
- * an audit of the record rather than a copy of it. I/O half: `services/agentRunReconciler.js`.
- *
  * Slices 1 and 2 of #4540 made the lifecycle observable: every boundary appends
  * to `data/cos/run-events.jsonl`, and `projectRunStates` folds that stream into
  * "what this run is now". But the fold has been write-only so far — the ledger

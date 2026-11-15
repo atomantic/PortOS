@@ -2,17 +2,6 @@
  * Catalog scrap SOURCE-KIND registry — one entry per ingest path that mints a
  * `catalog_scraps` row, and the extraction lens that path implies.
  *
- * Catalog scrap SOURCE-KIND registry — one `{ id, label, factual }` entry per ingest path that mints a
- * `catalog_scraps` row. A pure leaf (no zod, no db) so the extractor can read a path's lens without
- * pulling the validation layer in behind it. `SCRAP_SOURCE_KIND_IDS` is the id list
- * `catalogValidation.js` builds its local-ingest Zod enum from; `isFactualSourceKind(id)` answers "is
- * this lived material rather than invented fiction?" and gates the `{{#factual}}` sections in the four
- * catalog extraction prompts — an unknown kind (including one a newer peer synced in) reads as
- * non-factual, which is the pre-#7609 behavior. The universe record carries its own federated
- * `factual` flag (#7616, set on the shipped `universe-reality` world); it becomes the primary signal
- * once ingest is bound to a universe (#7615). Declaring the lens beside the id is what stops a new
- * ingest source silently extracting a memoir as fictional role tags.
- *
  * A pure leaf (no zod, no db) so both the validation layer and the extractor
  * can read it. That split is the point: the lens used to live as a private
  * two-element Set inside `catalogExtraction.js`, so adding an ingest source

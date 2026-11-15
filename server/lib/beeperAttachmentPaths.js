@@ -1,14 +1,6 @@
 /**
  * Pure layout rules for the Beeper attachment byte mirror (#37, decided on #13).
  *
- * Layout rules for the Beeper attachment byte mirror (#37): `BEEPER_ATTACHMENT_MAX_BYTES` (32 MiB,
- * matching `FEDERATED_MEDIA_ASSET_MAX_BYTES` — a constant, not a setting), `attachmentExtension({
- * mimeType, fileName })`, `attachmentRelativePath(sha256, ext)` (`<sha256[0..2]>/<sha256>.<ext>`,
- * `null` for anything that is not a 64-hex digest) and `isSafeAttachmentRelativePath(p)`.
- * Content-addressed, so one forwarded photo is one file and every delete path owes a reference check
- * first; the extension is cosmetic because `GET /v1/assets/serve` sends no `Content-Type` and the
- * mirror serves from the stored `mimeType` instead.
- *
  * No I/O — the service (`services/beeperAttachments.js`), the serving route and the GC sweep all
  * derive the same path from the same two facts, so the rule lives in one place rather than three.
  *

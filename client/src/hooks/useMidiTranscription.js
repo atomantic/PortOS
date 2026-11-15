@@ -1,15 +1,6 @@
 /**
  * One audio-to-MIDI transcription job slot: start, cancel, SSE stage progress and terminal-frame
  * handling, generic over the request endpoints supplied.
- *
- * One audio → MIDI transcription job slot (MuScriptor): start/cancel + SSE stage progress +
- * terminal-frame handling, generic over the Rounds and Music Video API surfaces (pass
- * `startRequest`/`eventsUrl`/`cancelRequest`). Returns `{ active, stage, stageLabel, context,
- * start(context), cancel }` (`stageLabel` is the ready-to-render human label for the current STAGE —
- * including a distinct "Downloading model…" for the first-use weight download, which also fires a
- * one-time toast; `context` is the in-flight job's captured target, for per-target UI gates);
- * `onComplete(frame, context)` fires with the terminal frame (`filename`, `model`, any server-merged
- * extras). Use when: The Rounds reference "Transcribe MIDI" control and the Music Video MIDI button.
  */
 
 import { useEffect, useRef, useState } from 'react';

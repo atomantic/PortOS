@@ -1,18 +1,6 @@
 /**
  * Hook for the Beeper composer's send lifecycle: `submit` creates the durable outbox row, sends it,
  * and surfaces first-contact refusals as an inline confirmation.
- *
- * The Beeper composer's send lifecycle (#36): `submit(body, { clearsDraft = true })` creates the
- * durable outbox row then sends it, surfaces the server's first-contact refusal as an inline
- * `confirmation` (never a toast, never `window.confirm`), and refetches when a confirmation
- * invalidation lands. Never retries a send that touched the wire, and latches `submit` so two calls in
- * one render cannot create two rows. `retry(entry)` is the narrow exception — it re-dispatches a row
- * still `approved`, i.e. one refused before the server could claim it (`OUTBOX_BREAKER_OPEN`), where
- * nothing reached Beeper; `dismiss(entry)` gives up on such a row, discarding it server-side. `onSent`
- * fires only for a send whose text IS the draft (`clearsDraft`), so a failed row's retry cannot clear
- * a newly typed message. Returns `{ entries, sending, error, confirmation, submit, confirmAndSend,
- * cancelConfirmation, retry, dismiss, refresh }`. Use when: The Beeper thread composer (#35's Send
- * action, wired on #53).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';

@@ -1,16 +1,6 @@
 /**
  * Read-only view of the user's own `~/.codex/config.toml` model routing.
  *
- * READ-ONLY probe of the user's own `~/.codex/config.toml` (honoring `CODEX_HOME`), so PortOS can SAY
- * when a third-party bridge has re-pointed Codex model routing away from the account its cards report
- * on. `parseCodexRoutingOverride` (pure) reports which of the top-level `openai_base_url` /
- * `model_provider` / `model_catalog_json` keys are assigned and the base URL they name — top-level
- * ONLY, since the same key inside a `[table]` is per-provider configuration and must not trip the
- * badge. `readCodexRoutingOverride` adds a short TTL cache and the load-bearing sentinel: `null` =
- * could not read (never paint that as "not overridden"), an ABSENT file = a definite `overridden:
- * false`. PortOS never writes this file, and `baseUrl` is machine-local — render it, never log or
- * federate it.
- *
  * WHY THIS EXISTS. Third-party bridges re-point the Codex CLI by writing
  * top-level routing keys — a base URL, a named model provider, a model catalog
  * — into that file. Every `codex` invocation on the machine then runs through

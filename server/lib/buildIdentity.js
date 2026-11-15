@@ -2,18 +2,6 @@
  * Build identity of the RUNNING install — which git commit this process was
  * started from (#4694).
  *
- * `getBuildIdentity()` / `getCachedBuildIdentity()` / `formatBuildIdentity()` / `parsePorcelainV2()` —
- * which git commit the RUNNING server process was started from (#4694): `{ commit, shortCommit,
- * branch, dirty }` from ONE `git status --porcelain=v2 --branch` spawn, cached per process (the
- * promise, so concurrent first callers share it). Answers "is this the code I am testing?" on a
- * machine where one PM2 server serves :5555 while many worktrees hold different code — `version`
- * cannot, since package.json's version is identical across every development commit. Served on its own
- * `GET /api/system/build`, NOT on `/health/details`: peers scrape that payload and persist it
- * verbatim, and this stays machine-local. Complements `buildId.js` (bundle hash, not commit), which
- * travels separately on the `build:id` socket frame — the socket path reaches peer relays, so the
- * commit does not use it. Non-throwing, every field independently nullable (no `.git` → `commit:
- * null`, never `''`).
- *
  * The hazard this closes: one PM2-managed `portos-server` serves :5555 for the
  * whole machine while any number of worktrees (CoS agents, `/do:next` claims,
  * the primary checkout) hold different code. Anyone verifying a change by

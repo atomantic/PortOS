@@ -1,20 +1,6 @@
 /**
  * Hook sharing one fetch of `GET /api/providers/catalog` for the preset-first `ProviderModelSelector`
  * and `ProviderComposePopover`.
- *
- * The composition catalog behind the preset-first `ProviderModelSelector` and `ProviderComposePopover`
- * (#7566): one module-shared fetch of `GET /api/providers/catalog` (harnesses + enablement, service
- * instances, bootstrap apps, per-harness/per-model effort ladders, compatibility map, sanitized
- * presets), plus `compatiblePairs(harnessId)`, `methodsFor(harnessId)`, `modelsFor(serviceSlug)`,
- * `effortLevelsFor(harnessId, model)`, `resolveRef(id)` (a preset record, or a synthesized display
- * record for a composite id — no server round trip, so a saved value renders instantly), and
- * `savePreset(input)` (`POST /providers/presets`, "Save as preset"). Gate the fetch with the popover's
- * `open` so a picker that never composes pays nothing. `invalidateProviderCatalog()` drops the shared
- * cache and makes every mounted hook re-read — the AI Providers page calls it after a harness toggle,
- * a service write or a bootstrap save (#7567), so an open picker's compose flow reflects the change
- * without a reload. Use when: `ProviderComposePopover`; any picker that needs to resolve/display a
- * composite id or list harnesses/services/effort ladders without a fresh `/providers/composites/:id`
- * round trip.
  */
 
 import { useCallback, useEffect, useState } from 'react';

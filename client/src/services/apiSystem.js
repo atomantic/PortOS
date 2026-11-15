@@ -1,23 +1,6 @@
 /**
  * API client for system info (CPU, memory, ports, alerts, activity) and atomic partial settings saves
  * via `patchSettingsSlice`.
- *
- * Atomic partial settings saves (`patchSettingsSlice`, server-queued PATCH with no browser GET/merge),
- * system info (CPU/memory/ports/alerts/active processing (`getSystemActivity` for the bounded
- * snapshot, `getGpuTelemetry` for visible-only GPU samples) and local hardware capabilities) +
- * D&D-style character sheet getter, plus the usage cost report and explicit historical reconciliation
- * (`getUsage`, `getClaudeCodeModelUsage` (per-model token totals for all local Claude Code use, from
- * CLI transcripts), `getUsageRollingCost` (trailing-30-day API cost across every instance, stacked by
- * plan), `getProviderUsage`, `getUsageBackfillStatus`/`startUsageBackfill`, `updateSubscriptionCosts`
- * for the subscription-vs-API savings comparison, `getSubscriptions` / `updateSubscriptions` /
- * `setSubscriptionEnabled` for the Subscriptions page's plan rows (PortOS-side enablement and
- * plan-tier tracking only, never vendor billing), `updateUsageFleetBilling` to exclude an API-billed
- * federated instance from Across Instances totals). Also `saveCredential` (write-only integration key
- * save/clear) and `getCredentialInventory` (`GET /settings/credentials`) — presence and source of each
- * PortOS credential, never a value. Also the Eidoverse world controls and its foundation ledger
- * (`listEidoverseFoundations`, `recordEidoverseFoundation`, `packageEidoverseFoundationCandidate`,
- * `promoteEidoverseFoundation`, `getEidoverseContributions`) — the last three answer 200 with a
- * refusal verdict when a promote gate says no, so callers read `outcome` rather than catching.
  */
 
 import { uploadBody, request, singleFlightRead, API_BASE, throwApiError } from './apiCore.js';

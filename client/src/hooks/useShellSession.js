@@ -1,21 +1,6 @@
 /**
  * All Socket.IO `shell:*` session and terminal state for the Shell page: xterm instance, attach/detach
  * generation guard and lifecycle.
- *
- * All Socket.IO `shell:*` session/terminal state + lifecycle for the Shell page: owns the xterm
- * instance, the attach/detach/generation-guard contract (`pendingAttachRef {target,generation}`,
- * `claim`, `suppressAutoStartRef`, `mountedRef`), URL sync, and every session action. Returns `{
- * terminalRef, connected, sessions, activeSessionId, activeSession, interactiveCount, liveRunCount,
- * isLiveRun, emitShellInput, sendImage, sendCommand, sendCd, sendCtrlB, sendCtrlC, sendEsc, sendAltM,
- * sendNavKey, scrollPage, restartSession, stopSession, startNewSession, switchToSession,
- * killOtherSession }` so the route stays presentational. `sendCd(path)` sends a FOLDER over `shell:cd`
- * rather than composing a `cd` line — the server renders it for the session's actual shell
- * (`server/lib/shellCd.js`), which is the only form that works on a Windows cmd.exe session.
- * `sendCommand(cmd)` submits with CR, never `\n` (see `SUBMIT_KEY` in `server/lib/tuiHandshake.js`).
- * `sendImage(file, message)` is the one operation that leaves the socket — it POSTs to
- * `/api/shell/sessions/:id/image` so a running agent TUI gets the photo's path pasted into its prompt.
- * Use when: The Shell page (`pages/Shell.jsx`) — don't re-roll the single-subscriber PTY attach
- * lifecycle.
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';

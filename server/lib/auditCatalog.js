@@ -1,16 +1,5 @@
 /**
  * `getAuditScheduleMetadata` derives upgrade-safe display names and cluster labels.
- *
- * `AUDIT_RUN_GUIDANCE` supplies advisory sequencing. Shared catalog of scheduled AUDIT task types
- * (`AUDIT_DEFINITIONS` / `AUDIT_TASK_TYPES`) that can either implement a fix or file tracker issues.
- * Filing presets carry `issueLabel` (category) plus `metricLabel`/`extraLabels` so forge issues can be
- * filtered by focus without putting ids in titles. `DO_BETTER_SCOPE_COVERAGE` maps scheduled task
- * types to the bundled slashdo scope table; `DO_BETTER_LENS_COVERAGE` remains a compatibility alias.
- * `metricLabelFromSlugPrefix`, `isFileIssuesMode`, `isExplicitFileIssuesRequest`,
- * `FILE_ISSUES_DELIVERY_SETTINGS` (the one delivery posture every file-issues lane stamps),
- * `auditDoWorkRequiresWorktree`, `getAuditFilingPreset`, `modeContractFor`, `applyAuditModeWrapper`.
- * Each quota-burn audit preset maps to a scheduled type here (guarded by `auditCatalog.test.js`). Pure
- * — no I/O.
  */
 
 import { isTruthyMeta } from './metadataFlags.js';

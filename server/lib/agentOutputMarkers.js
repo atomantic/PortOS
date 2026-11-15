@@ -1,16 +1,6 @@
 /**
  * Status lines PortOS writes INTO an agent's output buffer.
  *
- * Status lines PortOS itself appends to an agent's output buffer: `SENTINEL_COMPLETION_MARKER` (the
- * line `ingestDoneSentinel` writes just before the agent's `.agent-done` summary), `LIFECYCLE_LINES`
- * (every TUI lifecycle line, declared once as a tagged template — the emitter writes
- * `LIFECYCLE_LINES.<id>(values)` and the reader's pattern derives from the same text), plus
- * `isAgentLifecycleLine(line)`/`stripLifecycleLines(lines)`, which match PortOS's telemetry on its
- * actual message shapes rather than on a leading emoji (an agent's own summary may well start a line
- * with `✅`). Pure — shared by the emitters (`services/agentTuiSpawning.js` and its `agentTuiSpawning/`
- * modules) and by readers that must show only the agent's own words (notably the generated PR
- * description).
- *
  * A TUI agent's `output.txt` is not a transcript — the live PTY stream goes to
  * `raw.txt` and the Shell tab. What lands in `output.txt` is a mix of two very
  * different things:

@@ -1,20 +1,6 @@
 /**
  * NVIDIA CUDA host-capability probe.
  *
- * NVIDIA CUDA host probe — the one place that shells to `nvidia-smi`. `detectCudaGpus()` / cached
- * `getCudaCapability()` return `{ available, status, gpus, maxVramGb }` where `status` is three-way:
- * `'available'`, `'absent'` (no driver, or driver present with zero GPUs), or `'unknown'` (nvidia-smi
- * exists but wouldn't answer — `available` is `null`, never `false`, so callers can say "couldn't
- * detect" instead of lying about the hardware). `unknown` is not memoized so a transient driver hiccup
- * retries. `parseNvidiaSmiGpus(stdout)` is the pure CSV parser (a `[N/A]` VRAM column yields `vramGb:
- * null`, not a dropped GPU). Gates the image-to-3D `local-cuda` lane. `detectCudaComputeCapability()`
- * / cached `getCudaComputeCapability()` are a SEPARATE `nvidia-smi` query
- * (`--query-gpu=name,compute_cap,memory.total`, parsed by `parseNvidiaSmiComputeCaps`) returning
- * `primaryComputeCap` — the arch of the LARGEST card, since a render uses one GPU — for build flags
- * like NATTEN's `NATTEN_CUDA_ARCH` and SGLang provider filtering; kept separate because an older
- * driver rejects `compute_cap` and would fail the whole VRAM query with it. `detectCudaUtilization()`
- * / `getCudaUtilization()` add live per-GPU utilization on a short TTL.
- *
  * The single place PortOS asks "does this machine have a usable NVIDIA GPU, and
  * how much VRAM does its biggest card have?". Consumed by the image-to-3D target
  * registry (to gate the `local-cuda` execution lane) and by the FLUX.2 installer

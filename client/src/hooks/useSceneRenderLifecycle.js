@@ -1,17 +1,6 @@
 /**
  * Hook for one Music Video board lane's async render lifecycle: per-scene spinner state, job-to-scene
  * correlation, orphan reconcile and completion handling.
- *
- * One Music Video board lane's async-render lifecycle: owns the per-scene spinner state (`genScenes`),
- * job-id→scene correlation, orphan-terminal reconcile, and the durable-attach +
- * `*-gen:completed/failed/canceled` socket subscription (with running-cancel toast disambiguation).
- * Optional `startedEvent` / `progressEvent` feed `sceneProgress` (queued → running + fraction) and
- * `onSettled({ jobId, sceneId, outcome })` reports each tracked job's terminal outcome; failure toasts
- * name the scene + the failed event's `error` and a batch collapses into one summary toast;
- * `restoreJobs([{ jobId, sceneId }])` re-lights spinners after a reload (#10154). Returns `{
- * genScenes, sceneProgress, failedScenes, startScene, clearScene, trackJob, restoreJobs }`. Use when:
- * A board lane that kicks media-job renders per scene and clears spinners from terminal events
- * (reference frame, i2v clip). One call per lane.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
