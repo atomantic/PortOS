@@ -17,9 +17,9 @@ import { realpath, rm } from 'node:fs/promises';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { join, resolve } from 'path';
 import { emitLog } from './cosEvents.js';
-import { addTask, updateTask } from './cosTaskStore.js';
+import { addTask, updateTask, getTaskById, getAllTasks } from './cosTaskStore.js';
 import { forceSpawnTask } from './cos.js';
-import { getAgents } from './cosAgentLifecycle.js';
+import { getAgents, getAgentRecord, getAgent, updateAgent, recordRepoStateVerification, recordCleanupOutcome } from './cosAgentLifecycle.js';
 import * as git from './git.js';
 import { resolveTaskHookType } from './taskTypeHooks.js';
 import { removeWorktree, classifyWorktreeDirt, listWorktrees } from './worktreeManager.js';
@@ -38,6 +38,9 @@ import { detectForgeCli } from '../lib/gitForge.js';
 import { normalizeForkHead } from '../lib/forkHead.js';
 import { PR_COMPLETIONS, resolvePrCompletion, PR_COMPLETION_VALUES, PR_CREATION, PR_MISSING_CATEGORY, leavesPrForHuman, prClaimWasVerified, prHeldForOperator } from '../lib/prDisposition.js';
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, isProviderReviewer, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, prioritizeToolFreeReviewers } from '../lib/reviewerConfig.js';
+import { findPullRequestForBranch } from './github.js';
+import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
+import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
 
 // In-flight cleanup per agentId, so two completion paths racing to clean the
 // SAME agent coalesce onto one run instead of tripping over each other.
@@ -133,7 +136,6 @@ async function auditRepoState(agentId, success, originalTask, warnings) {
   const { verifyAgentRepoState } = await import('./agentRepoStateVerification.js');
   // `getAgentRecord`, not `getAgent` — the audit reads three worktree metadata
   // fields and has no use for the run's whole output.txt.
-  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const agentState = await getAgentRecord(agentId).catch(() => null);
   if (publicationHolds.has(agentId) || ['running', 'blocked'].includes(agentState?.metadata?.publicationValidation?.status)) return;
   await verifyAgentRepoState({
@@ -184,7 +186,6 @@ export function resolveWorktreeDisposition({ isWorktree, success, prCreation, di
 }
 
 async function worktreeCleanupContext(agentId, options) {
-  const { getAgent } = await import('./cosAgentLifecycle.js');
   const agentState = await getAgent(agentId).catch(() => null);
   const metadata = agentState?.metadata;
   const claimBranches = [...new Set([
@@ -400,7 +401,6 @@ async function probeWorktreePr(context, success) {
     return verifyPrClaim({ task: context.originalTask, workspacePath: worktreePath, success: true, prExpected: true, agentSummary })
       .catch(err => ({ ok: false, category: 'forge-unreachable', message: err.message }));
   }
-  const { findPullRequestForBranch } = await import('./github.js');
   const forge = await git.resolveForgeForRepo(worktreePath).catch(() => null);
   if (!forge) return { status: 'unavailable' };
   const found = await findPullRequestForBranch(worktreeBranch, { cwd: worktreePath, env: forge.env || null })
@@ -417,7 +417,6 @@ async function probeWorktreePr(context, success) {
 async function runCleanupAgentWorktree(agentId, success, options = {}) {
   const context = await worktreeCleanupContext(agentId, options);
   if (context.dependencyWaitRequested) {
-    const { getTaskById } = await import('./cosTaskStore.js');
     // Completion callers still hold the pre-finalize task snapshot. Only the
     // fresh accepted wait can retain this exact investigator generation,
     // including the interval between ready dispatch and successor claiming.
@@ -430,7 +429,6 @@ async function runCleanupAgentWorktree(agentId, success, options = {}) {
       && wait.instanceId === context.instanceId) return [];
   }
   if (context.runtimeVerificationRequested) {
-    const { getTaskById } = await import('./cosTaskStore.js');
     const held = context.taskId ? await getTaskById(context.taskId) : null;
     if (held?.metadata?.runtimeVerificationId === `${held.id}:${agentId}`
       && held.metadata.runtimeVerification?.agentId === agentId) return [];
@@ -522,7 +520,6 @@ async function openWorktreePullRequest(context) {
   emitLog('info', `🌳 Opening PR for worktree agent ${agentId} branch ${worktreeBranch}`, { agentId, branchName: worktreeBranch });
 
   if (context.originalTask?.metadata?.app === PORTOS_APP_ID) {
-    const { updateAgent } = await import('./cosAgentLifecycle.js');
     try {
       publicationHolds.set(agentId, { status: 'running' });
       await updateAgent(agentId, { metadata: { publicationValidation: { status: 'running', startedAt: new Date().toISOString() } } });
@@ -1190,8 +1187,6 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata, 
   if (!agentId || !task?.id) return {};
   if (success && !isLegacyDeepAudit(task.metadata)) return {};
 
-  const { getTaskById } = await import('./cosTaskStore.js');
-  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const persisted = await getTaskById(task.id).catch(err => {
     emitLog('warn', `Skipping resume pointer for task ${task.id} — status unreadable: ${err.message}`, { taskId: task.id, agentId });
     return null;
@@ -1246,7 +1241,6 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata, 
   // Cleanup may already have handed this exact deliverable to a durable
   // review/merge coordinator. Releasing a second implementation retry races
   // that coordinator for the same branch and spends another task budget.
-  const { getAllTasks } = await import('./cosTaskStore.js');
   const queues = await getAllTasks();
   const followUps = (queues.cos?.tasks || []).filter(candidate => candidate.id !== persisted.id
     && isTruthyMeta(candidate.metadata?.reviewLoopFollowUp)
@@ -1260,7 +1254,6 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata, 
     const current = await getAgentRecord(agentId);
     if (current?.status !== 'completed' || current.taskId !== persisted.id
       || current.result?.executionSuccess !== true || current.result?.validationPassed === false) return {};
-    const { recordRepoStateVerification, updateAgent } = await import('./cosAgentLifecycle.js');
     const recorded = await recordRepoStateVerification(agentId, { status: 'pending', reason: 'existing-delivery-follow-up',
       followUpTaskId: followUps[0].id, checkedAt: new Date().toISOString() });
     if (recorded !== true) throw new Error('Delivery follow-up receipt could not be recorded');
@@ -1678,7 +1671,6 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
 }
 
 async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch, reviewTarget = null) {
-  const { getTaskById } = await import('./cosTaskStore.js');
   const task = await getTaskById(taskId);
   if (!task || task.taskType !== 'internal' || !isTruthyMeta(task.metadata?.reviewLoopFollowUp)
     || task.metadata.reviewLoopPRUrl !== prUrl || task.metadata.reviewLoopPRBranch !== prBranch) {
@@ -1689,7 +1681,6 @@ async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch, reviewTarget
   }
   // Finalization can mark the task complete before its worker finishes cleanup.
   // Keep the receipt until that owner releases, including across daemon restarts.
-  const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
   const agents = await readClaimOwnershipAgents();
   if (!agents) return { id: taskId, deferred: true };
   if (task.status === 'in_progress' || agents.some(agent => (agent.taskId === taskId
@@ -1699,7 +1690,6 @@ async function resumeReviewLoopCoordinator(taskId, prUrl, prBranch, reviewTarget
   }
   if (task.status === 'pending') return { id: taskId, duplicate: true };
   if (task.status !== 'completed') return { id: taskId, blocked: `Review coordinator is ${task.status}` };
-  const { MAX_TOTAL_SPAWNS } = await import('../lib/cosValidation.js');
   const count = Number(task.metadata.totalSpawnCount);
   if (!Number.isInteger(count) || count < 1 || count >= MAX_TOTAL_SPAWNS) {
     return { id: taskId, blocked: 'Review coordinator retry budget exhausted or unreadable' };
@@ -1728,7 +1718,6 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
   // Draft/review-only delivery remains with its explicit owner. A warning
   // cannot grant the completion sweep authority to retire that checkout.
   if (resolvePrCompletion(task?.metadata) === PR_COMPLETIONS.LEAVE_OPEN) return null;
-  const { getAgentRecord, recordCleanupOutcome, recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
   const agent = await getAgentRecord(agentId);
   const branch = agent?.metadata?.worktreeBranch || agent?.metadata?.claimBranch
     || cleanupWarnings.map(warning => warning.match(/(?:Auto-merge failed|PR creation failed) for branch (\S+?)(?=:|\s|$)/)?.[1]).find(Boolean);
