@@ -58,6 +58,7 @@ export const DB_TEST_INCLUDE = [
   'services/catalogRefResolver.test.js',
   'lib/db/schema/beeper.db.test.js',
   'lib/db/schema/catalogMediaLibrarySeed.db.test.js',
+  'lib/db/schema/initDbSql.db.test.js',
   'services/beeperConversations.db.test.js',
   'services/beeperTribe.db.test.js',
   'services/tribe.db.test.js',

@@ -10,6 +10,7 @@ import {
   applySceneUpdate,
   removeScene,
   reorderScenes,
+  afterLoad,
   mergeNextScene,
   mergePreviousScene,
   splitScene,
@@ -721,6 +722,61 @@ describe('scene board operations', () => {
     ]);
     // The revised-song verdict was about the first slot's lyric, now under the cave shot.
     expect(next.songRevision.sceneReview).toEqual({ [ids[1]]: { status: 'changed' } });
+  });
+
+  // Uniquely catches the board drifting out of startSec order across retime and reorder (#16117).
+  describe('stored scene order is time order (#16117)', () => {
+    const timedBoard = () => {
+      let p = baseProject();
+      const ids = [];
+      for (const [label, startSec, endSec] of [['one', 0, 4], ['two', 4, 8], ['three', 8, 12]]) {
+        const r = addScene(p, { prompt: label, label, startSec, endSec });
+        p = r.project; ids.push(r.scene.sceneId);
+      }
+      return { p, ids };
+    };
+    const view = (project) => project.scenes.map((s) => [s.label, s.startSec, s.order]);
+
+    it('re-sorts after a retime that moves a shot past its neighbour', () => {
+      const { p, ids } = timedBoard();
+      const next = applySceneUpdate(p, ids[0], { startSec: 9, endSec: 11 }).project;
+      expect(view(next)).toEqual([['two', 4, 0], ['three', 8, 1], ['one', 9, 2]]);
+    });
+
+    it('retime after reorder keeps the board sorted', () => {
+      const { p, ids } = timedBoard();
+      const reordered = reorderScenes(p, [ids[2], ids[0], ids[1]]);
+      const next = applySceneUpdate(reordered, ids[2], { startSec: 12, endSec: 14 }).project;
+      const starts = next.scenes.map((s) => s.startSec);
+      expect(starts).toEqual([...starts].sort((a, b) => a - b));
+      expect(next.scenes.map((s) => s.order)).toEqual([0, 1, 2]);
+    });
+
+    it('reorder after retime sorts a board a retime left out of step', () => {
+      const { p, ids } = timedBoard();
+      const skewed = { ...p, scenes: [p.scenes[1], p.scenes[0], p.scenes[2]] };
+      const next = reorderScenes(skewed, [ids[0], ids[1], ids[2]]);
+      expect(next.scenes.map((s) => s.startSec)).toEqual([0, 4, 8]);
+      expect(next.scenes.map((s) => s.order)).toEqual([0, 1, 2]);
+    });
+
+    it('repairs a stored out-of-order project on load without changing labels, times or selections', () => {
+      const { p, ids } = timedBoard();
+      const withPick = applySceneUpdate(p, ids[2], { referenceImageId: 'x.png' }).project;
+      const stored = { ...withPick, scenes: [withPick.scenes[2], withPick.scenes[0], withPick.scenes[1]].map((s, i) => ({ ...s, order: i })) };
+      const loaded = afterLoad(stored);
+      expect(loaded.scenes.map((s) => [s.label, s.startSec, s.endSec, s.order])).toEqual([['one', 0, 4, 0], ['two', 4, 8, 1], ['three', 8, 12, 2]]);
+      expect(loaded.scenes[2].referenceImageId).toBe('x.png');
+      expect(afterLoad(loaded)).toBe(loaded);
+    });
+
+    it('keeps an untimed lead-in shot in place while timed shots are sorted around it', () => {
+      const { p } = timedBoard();
+      const lead = { ...p.scenes[0], sceneId: 'lead', label: 'lead', startSec: null, endSec: null };
+      const stored = { ...p, scenes: [lead, p.scenes[2], p.scenes[0], p.scenes[1]].map((s, i) => ({ ...s, order: i })) };
+      const loaded = afterLoad(stored);
+      expect(loaded.scenes.map((s) => s.startSec)).toEqual([null, 0, 4, 8]);
+    });
   });
 
   it('rejects a reorder that is not an exact permutation', () => {

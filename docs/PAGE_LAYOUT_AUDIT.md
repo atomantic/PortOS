@@ -3,7 +3,7 @@
 Base: `040c183c31b5b7398e4b700e67c14363a1577566` (fetched `origin/main`).
 Scope: page-level outer margins/padding and section navigation, using Code Animation as the reference. “Zero margin/padding” means no **outer gutter around the title and nav bars**; their intrinsic text/button padding is necessary for readable labels and touch targets. Content gutters, bounded reading columns, cards, editor panes and viewport surfaces remain intentional.
 
-`PageLayout` shares the flush chrome / bounded scroll-body contract without a global CSS reset. `layoutRoutes.js` only adds full-width classification where the route now owns its scroll. Existing responsive tab icons, keyboard handling, deep links, feature gates and panel ARIA references are preserved. CoS's avatar titles become h2 beneath the single page h1.
+`PageLayout` shares the flush chrome / bounded scroll-body contract without a global CSS reset. A route moves into App.jsx's `FullWidthMain` shell (it was then `layoutRoutes.js`; #16106 replaced that pathname table with the route grouping) only where it now owns its scroll. Existing responsive tab icons, keyboard handling, deep links, feature gates and panel ARIA references are preserved. CoS's avatar titles become h2 beneath the single page h1.
 
 ## Chief of Staff matrix
 

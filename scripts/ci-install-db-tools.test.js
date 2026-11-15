@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { workflowJobs } from './lib/workflowJobs.js';
+import { readCiJobs } from './lib/ciWorkflowJobs.js';
 
 const script = fileURLToPath(new URL('./ci-install-db-tools.sh', import.meta.url));
 const PACKAGE_FILE = 'libcodec2_1_amd64.deb';
@@ -202,12 +202,15 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     const workflow = readFileSync(fileURLToPath(new URL('../.github/workflows/ci.yml', import.meta.url)), 'utf8');
     const serviceMajor = workflow.match(/image: pgvector\/pgvector:pg(\d+)@/)?.[1];
     expect(serviceMajor).toBeTruthy();
-    const jobs = workflowJobs(workflow);
+    // Both jobs install through the db-tools action; expanded, its steps carry
+    // each caller's `pg-major` input.
+    const jobs = readCiJobs();
     for (const id of ['database', 'browser']) {
       const body = jobs[id];
+      expect(body, id).toContain('uses: ./.github/actions/db-tools');
       const identify = body.split('- name: Identify APT package cache\n')[1].split('\n      - name:')[0];
       const cache = body.split('- name: Cache APT package downloads\n')[1].split('\n      - name:')[0];
-      const install = body.split('- name: Install PostgreSQL client and audio verification tools\n')[1].split('\n      - name:')[0];
+      const install = body.split('- name: Run the DB tool installer\n')[1].split('\n      - name:')[0];
       expect(identify).toContain(`PG_MAJOR: '${serviceMajor}'`);
       expect(install).toContain(`PG_MAJOR: '${serviceMajor}'`);
       expect(identify).toContain('. /etc/os-release');
@@ -221,7 +224,7 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
       expect(install).toContain('APT_PACKAGE_CACHE: ${{ runner.temp }}/portos-apt-packages');
       expect(install).toContain('run: bash scripts/ci-install-db-tools.sh');
       expect(install).not.toContain('if:');
-      expect(body.indexOf('- name: Cache APT package downloads')).toBeLessThan(body.indexOf('- name: Install PostgreSQL client'));
+      expect(body.indexOf('- name: Cache APT package downloads')).toBeLessThan(body.indexOf('- name: Run the DB tool installer'));
     }
   });
 });

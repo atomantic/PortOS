@@ -273,8 +273,6 @@ export const catalogDdl = [
     // + a seed row on create; pruned to the last CATALOG_REVISION_RETENTION per
     // ingredient at the app layer. No sync_sequence — revisions stay local; the
     // synced ingredient row already LWW-merges the latest state across peers.
-    // Mirrors the catalog_ingredient_revisions block in init-db.sql (parity is
-    // asserted by db.ddlParity.test.js).
     `CREATE TABLE IF NOT EXISTS catalog_ingredient_revisions (
       id TEXT PRIMARY KEY,
       ingredient_id TEXT NOT NULL REFERENCES catalog_ingredients(id) ON DELETE CASCADE,
@@ -296,9 +294,7 @@ export const catalogDdl = [
     // app-layer enum (MEDIA_KINDS in catalogTypes.js), not a DB CHECK. Soft-
     // delete from day one so detaches tombstone + propagate. `metadata` stores
     // bounded generation provenance (prompt, negative prompt, sampler, etc.)
-    // when an image carries it. Mirrors the
-    // catalog_ingredient_media block in init-db.sql (parity is asserted by
-    // db.ddlParity.test.js).
+    // when an image carries it.
     `CREATE TABLE IF NOT EXISTS catalog_ingredient_media (
       ingredient_id TEXT NOT NULL REFERENCES catalog_ingredients(id) ON DELETE CASCADE,
       media_key TEXT NOT NULL,
@@ -545,8 +541,7 @@ export const catalogUserTypesDdl = [
     // (a soft-deleted type is KEPT as a tombstone row so the deletion federates
     // — setUserCatalogTypes filters tombstones out of the active registry).
     // ≤64 rows, read whole on every warm/sync, so no secondary index (an unused
-    // index is just write amplification). Mirrors the catalog_user_types block
-    // in init-db.sql.
+    // index is just write amplification).
     `CREATE TABLE IF NOT EXISTS catalog_user_types (
       id TEXT PRIMARY KEY,
       data JSONB NOT NULL DEFAULT '{}'::jsonb,

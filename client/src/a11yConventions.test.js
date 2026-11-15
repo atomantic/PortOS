@@ -4260,6 +4260,7 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
 
   const HEADINGLESS_ROUTE_ELEMENTS = new Set([
     'src/components/Layout.jsx',    // the app chrome — <Outlet/> children own the page h1
+    'src/components/PageShell.jsx', // the <main> shells — <Outlet/> children own the page h1
     'src/pages/IMessage.jsx',       // redirect-only: renders <Navigate> to /messages/imessage
     'src/pages/SyncView.jsx',       // deep link that mounts SyncDetailDrawer over the prior page
   ]);
@@ -4625,10 +4626,10 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
   });
 
   it('renders exactly one <main> landmark — the app shell owns it (#9163)', () => {
-    // Layout.jsx renders the skip-link target <main id="main-content">; a page
-    // rendering its own <main> nests a second landmark inside it (WCAG 1.3.1).
-    // Layout-free entry pages own their <main>.
-    const OWN_MAIN = new Set(['src/components/Layout.jsx', 'src/pages/EidoverseGuest.jsx', 'src/pages/FableLoomHostedJoin.jsx']);
+    // PageShell.jsx renders the skip-link target <main id="main-content"> for
+    // every Layout route; a page rendering its own <main> nests a second
+    // landmark inside it (WCAG 1.3.1). Layout-free entry pages own their <main>.
+    const OWN_MAIN = new Set(['src/components/PageShell.jsx', 'src/pages/EidoverseGuest.jsx', 'src/pages/FableLoomHostedJoin.jsx']);
     const offenders = [];
     for (const file of trackedJsxFiles()) {
       if (OWN_MAIN.has(file.replace(/^.*?(src\/)/, '$1'))) continue;

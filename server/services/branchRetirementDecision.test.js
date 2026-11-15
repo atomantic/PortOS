@@ -105,14 +105,13 @@ describe('decideBranchRetirement — merged named branches', () => {
 
   it('retires a branch with no checkout from the merge evidence alone', () => {
     expect(decide(mergedCase('fix/ref-only', null, { scan: { worktreePath: null } }))).toMatchObject({
-      admit: { worktreePath: null, archiveTree: null, claimCompletion: null }, asked: ['agents', 'defaultBranch', 'head', 'policyHold', 'holders', 'mergedAtHead'],
+      admit: { worktreePath: null, claimCompletion: null }, asked: ['agents', 'defaultBranch', 'head', 'policyHold', 'holders', 'mergedAtHead'],
     });
   });
 
   it('reports which completion evidence admitted a claim and what removal must re-prove', () => {
     const receipt = decide(mergedCase('claim/issue-11', `${MANAGED}/claim-issue-11`, { facts: { receipt: true } }));
-    expect(receipt.admit).toMatchObject({ claimCompletion: 'receipt', expectedHead: HEAD, requireCleanWorktree: true,
-      archiveTree: { path: `${MANAGED}/claim-issue-11`, head: HEAD } });
+    expect(receipt.admit).toMatchObject({ claimCompletion: 'receipt', expectedHead: HEAD, requireCleanWorktree: true, worktreePath: `${MANAGED}/claim-issue-11` });
     const forge = decide(mergedCase('claim/issue-21', `${MANAGED}/claim-issue-21`, { facts: { forgeMerge: { mergedAt: new Date(NOW - 3 * HOUR).toISOString() } } }));
     expect(forge.admit.claimCompletion).toBe('forge-merged');
     const disposable = decide(mergedCase('fix/merged-pr', '/work/elsewhere/merged', { disposableHead: HEAD, facts: { dirty: true } }));

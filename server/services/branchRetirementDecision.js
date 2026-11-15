@@ -104,7 +104,7 @@ function manualClaimShipped({ worktreeAgeMs, openPr, prStateUnavailable, nowMs }
  * @param {number} [input.nowMs]
  * @param {object} input.facts - inspected so far: agents, defaultBranch, head, policyHold,
  *   holders, mergedAtHead, dirty, completionRecords, receipt, forgeMerge, githubOrigin, idleMs
- * @returns {{ need: string } | { hold: { reason: string, retryAt?: string } } | { admit: { activeAgentIds: Set<string>|null, expectedHead: string, worktreePath: string|null, worktreeLocked: boolean, archiveTree: object|null, claimCompletion: 'receipt'|'forge-merged'|null, requireCleanWorktree: boolean } }}
+ * @returns {{ need: string } | { hold: { reason: string, retryAt?: string } } | { admit: { activeAgentIds: Set<string>|null, expectedHead: string, worktreePath: string|null, worktreeLocked: boolean, claimCompletion: 'receipt'|'forge-merged'|null, requireCleanWorktree: boolean } }}
  */
 export function decideBranchRetirement({
   repoPath, branch, scan = {}, activeAgentIds, mergedRetirement = false, headMustMatchScan = false,
@@ -142,8 +142,8 @@ export function decideBranchRetirement({
     worktreeLocked = holder?.locked || false;
   }
   const disposable = disposableHead === expectedHead;
-  const admit = (archiveTree = null, claimCompletion = null) => ({ admit: {
-    activeAgentIds: ownerIds, expectedHead, worktreePath, worktreeLocked, archiveTree, claimCompletion,
+  const admit = (claimCompletion = null) => ({ admit: {
+    activeAgentIds: ownerIds, expectedHead, worktreePath, worktreeLocked, claimCompletion,
     requireCleanWorktree: requireCleanWorktree && !disposable,
   } });
   if (!worktreePath) return admit();
@@ -180,7 +180,7 @@ export function decideBranchRetirement({
   }
   const tree = facts.holders.find(wt => wt.path === worktreePath);
   if (!tree || tree.head !== expectedHead) return holdOn('worktree-holder-changed');
-  return admit(tree, claimCompletion);
+  return admit(claimCompletion);
 }
 
 /**

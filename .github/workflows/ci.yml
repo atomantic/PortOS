@@ -273,117 +273,17 @@ jobs:
           # the planner needs to identify changed sources.
           fetch-depth: 2
 
-      - name: Resolve the pull-request diff base
-        run: node scripts/ci-base-sha.js
+      - uses: ./.github/actions/diff-base
 
-      - name: Use Node.js 26.x
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: ./.github/actions/setup-server
         with:
-          node-version: 26.x
-          cache: npm
-          cache-dependency-path: server/package-lock.json
-
-      # setup-node's npm cache only preserves ~/.npm, the tarball cache: `npm ci`
-      # still wipes and repopulates a 570 MB node_modules on all three server
-      # jobs. Cache the installed tree instead and skip the install on a hit.
-      #
-      # No restore-keys. The install below is skipped on a hit, so a near-miss
-      # restore would silently ship a node_modules built from a different
-      # lockfile. Exact key or nothing. package.json is in the hash alongside
-      # the lockfile so that skipping `npm ci` does not also skip its
-      # manifest-vs-lockfile check, and the key carries the Node *major* rather
-      # than the resolved patch, because NODE_MODULE_VERSION is stable across
-      # patches and keying on the patch would discard the entry on every Node
-      # 26.x release. The transform-artifact cache below keeps its own key and
-      # its own restore-keys; this one is about dependencies.
-      #
-      # Hit rate comes from the nightly full run: there is no push trigger on
-      # `main`, so the 09:17 UTC schedule is what seeds these caches on the
-      # default branch, which is the only scope every PR branch can read.
-      # See docs/GITHUB_ACTIONS.md.
-      - name: Cache server node_modules
-        id: server-modules
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: server/node_modules
-          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
-
-      # A restored tree is only reusable if it was rebuilt before it was saved,
-      # and that is not answerable by looking at the tree — with today's
-      # versions the rebuild is nearly a no-op, so every allowlisted package
-      # imports fine on a never-rebuilt one. The rebuild step below leaves an
-      # explicit mark; this reads it back.
-      #
-      # `continue-on-error` on purpose: a bad entry must not wedge every PR
-      # until a human clears the cache by hand. It fails, the two steps below
-      # see a non-success outcome, and the job builds the tree it needs. It does
-      # not *replace* the bad entry — cache keys are immutable and actions/cache
-      # skips the save on an exact hit — so that entry keeps costing each run a
-      # reinstall until the key moves or it ages out. That is precisely the
-      # pre-cache cost: the worst case degrades to the old behaviour, never to a
-      # red repo.
-      #
-      # `outcome != 'success'` covers all three cases in one expression: on a
-      # cache miss this step is skipped (outcome `skipped`), on a hit it is
-      # `success` or `failure`.
-      - name: Check the restored node_modules was rebuilt
-        id: server-modules-usable
-        if: steps.server-modules.outputs.cache-hit == 'true'
-        continue-on-error: true
-        run: node scripts/trusted-rebuild-stamp.js check server
-
-      - name: Install server dependencies
-        if: steps.server-modules-usable.outcome != 'success'
-        run: npm ci --prefix server
+          vitest-key-suffix: -${{ matrix.shard }}of${{ strategy.job-total }}
 
       # The server runner also globs ../autofixer/**/*.test.js (ui.js imports
       # express, resolved from autofixer/node_modules). Shards are separate
       # checkouts, so the impact job's resolution check does not reach them.
       - name: Install autofixer dependencies
         run: npm ci --prefix autofixer
-
-      # server/.npmrc pins ignore-scripts=true, so the allowlisted packages need
-      # this explicit rebuild. Same condition as the install: whenever this job
-      # builds the tree it will cache, it must build a rebuilt one — and the
-      # mark is written in the same block, so a failed rebuild cannot leave one
-      # behind for a later job to trust.
-      #
-      # `shell: bash` is load-bearing, not style. windows-server would default
-      # to pwsh, where a *native* command's non-zero exit neither throws nor
-      # stops the block (`$PSNativeCommandUseErrorActionPreference` is false)
-      # and only the last command's code becomes the step result — so a failed
-      # rebuild would run the mark anyway, reset the exit code to 0, and publish
-      # a green, marked, un-rebuilt tree. Under `bash -e` the block stops at
-      # the rebuild, the job fails, and actions/cache (`post-if: success()`)
-      # never saves it.
-      - name: Rebuild trusted native dependencies
-        if: steps.server-modules-usable.outcome != 'success'
-        shell: bash
-        env:
-          # Skip onnxruntime-node's CUDA execution provider. Its postinstall
-          # downloads it on linux-x64 whenever the .so is absent — several
-          # hundred MB, on two jobs, every run — and no hosted runner has an
-          # NVIDIA GPU to use it with. The CPU binaries ship in the tarball, so
-          # inference still works; this is the single largest cost in the job.
-          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
-        run: |
-          node scripts/trusted-rebuilds.js server
-          node scripts/trusted-rebuild-stamp.js write server
-
-      # Reuse Vite/Vitest artifacts from checkout-owned .cache paths, outside
-      # node_modules (which may be shared by worktrees). Unlike the installed
-      # dependency tree above, these artifacts can safely use a near-miss
-      # restore and stay warm across a lockfile bump.
-      - name: Cache Vitest transform artifacts
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            server/.cache/vitest
-            server/.cache/vitest-db
-          key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'scripts/vitestCiPool.js') }}-${{ matrix.shard }}of${{ strategy.job-total }}
-          restore-keys: |
-            vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
-            vitest-server-${{ runner.os }}-
 
       # The submodule ships no source into this checkout by default (see
       # AGENTS.md "Slashdo Commands"), so the planner's `slashdo` output is
@@ -408,22 +308,14 @@ jobs:
           echo "PORTOS_TEST_PYTHON=$RUNNER_TEMP/ctc-venv/bin/python" >> "$GITHUB_ENV"
           echo "CI_EXPECT_NUMPY_PYTHON=true" >> "$GITHUB_ENV"
 
-      # The test memo (docs/GITHUB_ACTIONS.md "Test memo"): the runner skips a
-      # selected test file whose every input — loaded modules, fixtures,
-      # package versions, Node/platform, gating env — is byte-identical to one
-      # a trusted green run verified. Pull requests only read. The scheduled,
-      # dispatched and called full runs save, so the cache holds nothing a PR
-      # branch wrote. Prefer the same shard's lineage, then any shard of this
-      # job: scoped 1of1 plans have no full-run seed of their own. Per-test
-      # content keys still decide reuse; unmatched files run normally.
+      # The test memo (docs/GITHUB_ACTIONS.md "Test memo"): pull requests only
+      # read; trusted full runs save (see the action for the key lineage).
       - name: Restore the test memo
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: test-memo
+        uses: ./.github/actions/test-memo
         with:
-          path: ${{ runner.temp }}/portos-test-memo
-          key: test-memo-${{ runner.os }}-${{ runner.arch }}-server-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
-          restore-keys: |
-            test-memo-${{ runner.os }}-${{ runner.arch }}-server-${{ matrix.shard }}of${{ strategy.job-total }}-
-            test-memo-${{ runner.os }}-${{ runner.arch }}-server-
+          suite: server
+          partition: server-${{ matrix.shard }}of${{ strategy.job-total }}
 
       - name: Run server tests
         id: server-tests
@@ -453,7 +345,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo
-          key: test-memo-${{ runner.os }}-${{ runner.arch }}-server-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
+          key: ${{ steps.test-memo.outputs.key }}
 
       # Smoke-boot does not need Postgres: NODE_ENV=test selects the file
       # backend. It does need the native rebuild (server boot loads node-pty),
@@ -464,16 +356,9 @@ jobs:
 
       - name: Retain frozen candidate invocation evidence
         if: always() && env.PORTOS_CI_TEST_POLICY == 'release-candidate'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: ./.github/actions/candidate-evidence
         with:
           name: candidate-diagnostics-server-${{ strategy.job-index || 0 }}
-          retention-days: 7
-          if-no-files-found: warn
-          path: |
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/invocation.json
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/run.json
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/failures.json
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/processes.json
 
   client:
     # Sharded like the server job; the build and the bundle budget run on shard 1.
@@ -499,41 +384,9 @@ jobs:
           # the planner needs to identify changed sources.
           fetch-depth: 2
 
-      - name: Resolve the pull-request diff base
-        run: node scripts/ci-base-sha.js
+      - uses: ./.github/actions/diff-base
 
-      - name: Use Node.js 26.x
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 26.x
-          cache: npm
-          cache-dependency-path: client/package-lock.json
-
-      # `setup-node`'s npm cache only preserves ~/.npm, the tarball cache, so
-      # `npm ci` still wipes and repopulates client/node_modules (393 MB, 21k
-      # files — MORE files than the server tree the sibling cache already
-      # serves) on every one of the four jobs that install this workspace.
-      # Same exact-key/no-restore-keys shape as `Cache server node_modules`, and
-      # for the same reason: a near-miss tree is not safe to reuse.
-      #
-      # No rebuild half, unlike the server: client/.npmrc pins
-      # ignore-scripts=true AND `scripts/trusted-rebuilds.js` deliberately lists
-      # nothing for this workspace, so a restored tree is usable as-is and the
-      # install can be skipped outright on a hit. That premise is HASHED, not
-      # assumed: `trusted-rebuilds.js` is in the key, so the day a client
-      # dependency does need a rebuild the key moves and no job can keep
-      # restoring a never-rebuilt tree on an exact hit — which neither job here
-      # has a stamp check to notice.
-      - name: Cache client node_modules
-        id: client-modules
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: client/node_modules
-          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
-
-      - name: Install client dependencies
-        if: steps.client-modules.outputs.cache-hit != 'true'
-        run: npm ci --prefix client
+      - uses: ./.github/actions/setup-client
 
       - name: Cache Vitest transform artifacts
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -553,16 +406,13 @@ jobs:
         if: needs.impact.outputs.client_mode != 'skip'
         run: bash scripts/ci-warm-test-chrome.sh
 
-      # Same contract as the server job's memo steps.
       - name: Restore the test memo
+        id: test-memo
         if: needs.impact.outputs.client_mode != 'skip'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: ./.github/actions/test-memo
         with:
-          path: ${{ runner.temp }}/portos-test-memo
-          key: test-memo-${{ runner.os }}-${{ runner.arch }}-client-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
-          restore-keys: |
-            test-memo-${{ runner.os }}-${{ runner.arch }}-client-${{ matrix.shard }}of${{ strategy.job-total }}-
-            test-memo-${{ runner.os }}-${{ runner.arch }}-client-
+          suite: client
+          partition: client-${{ matrix.shard }}of${{ strategy.job-total }}
 
       - name: Run client tests
         id: client-tests
@@ -581,7 +431,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo
-          key: test-memo-${{ runner.os }}-${{ runner.arch }}-client-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
+          key: ${{ steps.test-memo.outputs.key }}
 
       - name: Build client
         if: needs.impact.outputs.build == 'true' && matrix.shard == 1
@@ -589,16 +439,9 @@ jobs:
 
       - name: Retain frozen candidate invocation evidence
         if: always() && env.PORTOS_CI_TEST_POLICY == 'release-candidate'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: ./.github/actions/candidate-evidence
         with:
           name: candidate-diagnostics-client-${{ strategy.job-index || 0 }}
-          retention-days: 7
-          if-no-files-found: warn
-          path: |
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/invocation.json
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/run.json
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/failures.json
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/processes.json
 
   lint:
     # Its own job rather than a step on client shard 1, for cost and latency —
@@ -614,8 +457,8 @@ jobs:
     # on every impact-scoped pull request.
     #
     # It installs `client/` because Biome and its GritQL plugins are client
-    # devDependencies. That install is shared with the client job through
-    # `Cache client node_modules` below, so on a hit it is skipped entirely.
+    # devDependencies. That install is shared with the client job through the
+    # setup-client action's cache, so on a hit it is skipped entirely.
     name: Lint client
     needs: impact
     if: needs.impact.outputs.lint_mode != 'skip'
@@ -631,38 +474,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Use Node.js 26.x
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 26.x
-          cache: npm
-          cache-dependency-path: client/package-lock.json
-
-      # `setup-node`'s npm cache only preserves ~/.npm, the tarball cache, so
-      # `npm ci` still wipes and repopulates client/node_modules (393 MB, 21k
-      # files — MORE files than the server tree the sibling cache already
-      # serves) on every one of the four jobs that install this workspace.
-      # Same exact-key/no-restore-keys shape as `Cache server node_modules`, and
-      # for the same reason: a near-miss tree is not safe to reuse.
-      #
-      # No rebuild half, unlike the server: client/.npmrc pins
-      # ignore-scripts=true AND `scripts/trusted-rebuilds.js` deliberately lists
-      # nothing for this workspace, so a restored tree is usable as-is and the
-      # install can be skipped outright on a hit. That premise is HASHED, not
-      # assumed: `trusted-rebuilds.js` is in the key, so the day a client
-      # dependency does need a rebuild the key moves and no job can keep
-      # restoring a never-rebuilt tree on an exact hit — which neither job here
-      # has a stamp check to notice.
-      - name: Cache client node_modules
-        id: client-modules
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: client/node_modules
-          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
-
-      - name: Install client dependencies
-        if: steps.client-modules.outputs.cache-hit != 'true'
-        run: npm ci --prefix client
+      - uses: ./.github/actions/setup-client
 
       - name: Lint client
         env:
@@ -739,136 +551,27 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Use Node.js 26.x
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 26.x
-          cache: npm
-          cache-dependency-path: server/package-lock.json
-
-      # Same entry and same contract as the server job — see it for the key, and
-      # for why the install and rebuild below are gated on the mark rather than
-      # on the cache hit.
-      - name: Cache server node_modules
-        id: server-modules
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: server/node_modules
-          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
-
-      # A restored tree is only reusable if it was rebuilt before it was saved,
-      # and that is not answerable by looking at the tree — with today's
-      # versions the rebuild is nearly a no-op, so every allowlisted package
-      # imports fine on a never-rebuilt one. The rebuild step below leaves an
-      # explicit mark; this reads it back.
-      #
-      # `continue-on-error` on purpose: a bad entry must not wedge every PR
-      # until a human clears the cache by hand. It fails, the two steps below
-      # see a non-success outcome, and the job builds the tree it needs. It does
-      # not *replace* the bad entry — cache keys are immutable and actions/cache
-      # skips the save on an exact hit — so that entry keeps costing each run a
-      # reinstall until the key moves or it ages out. That is precisely the
-      # pre-cache cost: the worst case degrades to the old behaviour, never to a
-      # red repo.
-      #
-      # `outcome != 'success'` covers all three cases in one expression: on a
-      # cache miss this step is skipped (outcome `skipped`), on a hit it is
-      # `success` or `failure`.
-      - name: Check the restored node_modules was rebuilt
-        id: server-modules-usable
-        if: steps.server-modules.outputs.cache-hit == 'true'
-        continue-on-error: true
-        run: node scripts/trusted-rebuild-stamp.js check server
-
-      - name: Install server dependencies
-        if: steps.server-modules-usable.outcome != 'success'
-        run: npm ci --prefix server
-
-      # server/.npmrc pins ignore-scripts=true, so the allowlisted packages need
-      # this explicit rebuild. Same condition as the install: whenever this job
-      # builds the tree it will cache, it must build a rebuilt one — and the
-      # mark is written in the same block, so a failed rebuild cannot leave one
-      # behind for a later job to trust.
-      #
-      # `shell: bash` is load-bearing, not style. windows-server would default
-      # to pwsh, where a *native* command's non-zero exit neither throws nor
-      # stops the block (`$PSNativeCommandUseErrorActionPreference` is false)
-      # and only the last command's code becomes the step result — so a failed
-      # rebuild would run the mark anyway, reset the exit code to 0, and publish
-      # a green, marked, un-rebuilt tree. Under `bash -e` the block stops at
-      # the rebuild, the job fails, and actions/cache (`post-if: success()`)
-      # never saves it.
-      - name: Rebuild trusted native dependencies
-        if: steps.server-modules-usable.outcome != 'success'
-        shell: bash
-        env:
-          # Skip onnxruntime-node's CUDA execution provider. Its postinstall
-          # downloads it on linux-x64 whenever the .so is absent — several
-          # hundred MB, on two jobs, every run — and no hosted runner has an
-          # NVIDIA GPU to use it with. The CPU binaries ship in the tarball, so
-          # inference still works; this is the single largest cost in the job.
-          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
-        run: |
-          node scripts/trusted-rebuilds.js server
-          node scripts/trusted-rebuild-stamp.js write server
-
-      # Reuse Vite/Vitest artifacts from checkout-owned .cache paths, outside
-      # node_modules (which may be shared by worktrees). Unlike the installed
-      # dependency tree above, these artifacts can safely use a near-miss
-      # restore and stay warm across a lockfile bump.
-      - name: Cache Vitest transform artifacts
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            server/.cache/vitest
-            server/.cache/vitest-db
-          key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}
-          restore-keys: |
-            vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
-            vitest-server-${{ runner.os }}-
+      - uses: ./.github/actions/setup-server
 
       - name: Provision test database (portos_test)
         run: npm run setup:db:test --prefix server
 
-      # Share only package downloads across DB/browser jobs. The helper checks
-      # restored bytes against fresh signed indexes; cache hits never skip setup.
-      - name: Identify APT package cache
-        id: apt-cache
-        env:
-          PG_MAJOR: '17'
-        run: |
-          . /etc/os-release
-          prefix="apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-pg${PG_MAJOR}-${{ hashFiles('scripts/ci-install-db-tools.sh') }}-"
-          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
-          # Refresh immutable entries daily as signed package indexes evolve.
-          echo "key=${prefix}$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache APT package downloads
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/portos-apt-packages/*.deb
-          key: ${{ steps.apt-cache.outputs.key }}
-          restore-keys: ${{ steps.apt-cache.outputs.prefix }}
-
-      # pg_dump must match the service major. Preserve bounded mirror fallback
-      # on a miss; this timeout backs up the helper's 390-second download budget.
+      # pg_dump must match the service major. The step timeout backs up the
+      # helper's 390-second download budget; cache hits never skip setup.
       - name: Install PostgreSQL client and audio verification tools
         timeout-minutes: 9
-        env:
-          PG_MAJOR: '17'
-          APT_PACKAGE_CACHE: ${{ runner.temp }}/portos-apt-packages
-        run: bash scripts/ci-install-db-tools.sh
-
-      # Same contract as the server job's memo steps. The Postgres schema is
-      # not visible to a key; scripts/lib/testMemo.js lists the tracked files
-      # that build it as db base inputs.
-      - name: Restore the test memo
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: ./.github/actions/db-tools
         with:
-          path: ${{ runner.temp }}/portos-test-memo
-          key: test-memo-${{ runner.os }}-${{ runner.arch }}-db-${{ github.run_id }}
-          restore-keys: |
-            test-memo-${{ runner.os }}-${{ runner.arch }}-db-
+          pg-major: '17'
+
+      # The Postgres schema is not visible to a cache key; scripts/lib/testMemo.js
+      # lists the tracked files that build it as db base inputs.
+      - name: Restore the test memo
+        id: test-memo
+        uses: ./.github/actions/test-memo
+        with:
+          suite: db
+          partition: db
 
       # A real pg_dump from the service's pinned image, checked by
       # inspectDatabaseDump, prepared by prepareDatabaseReplay and replayed into
@@ -898,20 +601,13 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo
-          key: test-memo-${{ runner.os }}-${{ runner.arch }}-db-${{ github.run_id }}
+          key: ${{ steps.test-memo.outputs.key }}
 
       - name: Retain frozen candidate invocation evidence
         if: always() && env.PORTOS_CI_TEST_POLICY == 'release-candidate'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: ./.github/actions/candidate-evidence
         with:
           name: candidate-diagnostics-database-${{ strategy.job-index || 0 }}
-          retention-days: 7
-          if-no-files-found: warn
-          path: |
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/invocation.json
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/run.json
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/failures.json
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/processes.json
 
   browser:
     # Owns the registered browser suites; the Linux unit job excludes that
@@ -937,122 +633,17 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Use Node.js 26.x
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: ./.github/actions/setup-server
         with:
-          node-version: 26.x
-          cache: npm
-          cache-dependency-path: server/package-lock.json
+          vitest-key-suffix: -browser-${{ matrix.shard }}of${{ strategy.job-total }}
 
-      # Same entry and same contract as the server job — see it for the key, and
-      # for why the install and rebuild below are gated on the mark rather than
-      # on the cache hit.
-      - name: Cache server node_modules
-        id: server-modules
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: server/node_modules
-          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
-
-      # A restored tree is only reusable if it was rebuilt before it was saved,
-      # and that is not answerable by looking at the tree — with today's
-      # versions the rebuild is nearly a no-op, so every allowlisted package
-      # imports fine on a never-rebuilt one. The rebuild step below leaves an
-      # explicit mark; this reads it back.
-      #
-      # `continue-on-error` on purpose: a bad entry must not wedge every PR
-      # until a human clears the cache by hand. It fails, the two steps below
-      # see a non-success outcome, and the job builds the tree it needs. It does
-      # not *replace* the bad entry — cache keys are immutable and actions/cache
-      # skips the save on an exact hit — so that entry keeps costing each run a
-      # reinstall until the key moves or it ages out. That is precisely the
-      # pre-cache cost: the worst case degrades to the old behaviour, never to a
-      # red repo.
-      #
-      # `outcome != 'success'` covers all three cases in one expression: on a
-      # cache miss this step is skipped (outcome `skipped`), on a hit it is
-      # `success` or `failure`.
-      - name: Check the restored node_modules was rebuilt
-        id: server-modules-usable
-        if: steps.server-modules.outputs.cache-hit == 'true'
-        continue-on-error: true
-        run: node scripts/trusted-rebuild-stamp.js check server
-
-      - name: Install server dependencies
-        if: steps.server-modules-usable.outcome != 'success'
-        run: npm ci --prefix server
-
-      # server/.npmrc pins ignore-scripts=true, so the allowlisted packages need
-      # this explicit rebuild. Same condition as the install: whenever this job
-      # builds the tree it will cache, it must build a rebuilt one — and the
-      # mark is written in the same block, so a failed rebuild cannot leave one
-      # behind for a later job to trust.
-      #
-      # `shell: bash` is load-bearing, not style. windows-server would default
-      # to pwsh, where a *native* command's non-zero exit neither throws nor
-      # stops the block (`$PSNativeCommandUseErrorActionPreference` is false)
-      # and only the last command's code becomes the step result — so a failed
-      # rebuild would run the mark anyway, reset the exit code to 0, and publish
-      # a green, marked, un-rebuilt tree. Under `bash -e` the block stops at
-      # the rebuild, the job fails, and actions/cache (`post-if: success()`)
-      # never saves it.
-      - name: Rebuild trusted native dependencies
-        if: steps.server-modules-usable.outcome != 'success'
-        shell: bash
-        env:
-          # Skip onnxruntime-node's CUDA execution provider. Its postinstall
-          # downloads it on linux-x64 whenever the .so is absent — several
-          # hundred MB, on two jobs, every run — and no hosted runner has an
-          # NVIDIA GPU to use it with. The CPU binaries ship in the tarball, so
-          # inference still works; this is the single largest cost in the job.
-          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
-        run: |
-          node scripts/trusted-rebuilds.js server
-          node scripts/trusted-rebuild-stamp.js write server
-
-      # Reuse Vite/Vitest artifacts from checkout-owned .cache paths, outside
-      # node_modules (which may be shared by worktrees). Unlike the installed
-      # dependency tree above, these artifacts can safely use a near-miss
-      # restore and stay warm across a lockfile bump.
-      - name: Cache Vitest transform artifacts
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            server/.cache/vitest
-            server/.cache/vitest-db
-          key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}-browser-${{ matrix.shard }}of${{ strategy.job-total }}
-          restore-keys: |
-            vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
-            vitest-server-${{ runner.os }}-
-
-      # Share only package downloads across DB/browser jobs. The helper checks
-      # restored bytes against fresh signed indexes; cache hits never skip setup.
-      - name: Identify APT package cache
-        id: apt-cache
-        env:
-          PG_MAJOR: '17'
-        run: |
-          . /etc/os-release
-          prefix="apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-pg${PG_MAJOR}-${{ hashFiles('scripts/ci-install-db-tools.sh') }}-"
-          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
-          # Refresh immutable entries daily as signed package indexes evolve.
-          echo "key=${prefix}$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache APT package downloads
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/portos-apt-packages/*.deb
-          key: ${{ steps.apt-cache.outputs.key }}
-          restore-keys: ${{ steps.apt-cache.outputs.prefix }}
-
-      # pg_dump must match the service major. Preserve bounded mirror fallback
-      # on a miss; this timeout backs up the helper's 390-second download budget.
+      # pg_dump must match the service major. The step timeout backs up the
+      # helper's 390-second download budget; cache hits never skip setup.
       - name: Install PostgreSQL client and audio verification tools
         timeout-minutes: 9
-        env:
-          PG_MAJOR: '17'
-          APT_PACKAGE_CACHE: ${{ runner.temp }}/portos-apt-packages
-        run: bash scripts/ci-install-db-tools.sh
+        uses: ./.github/actions/db-tools
+        with:
+          pg-major: '17'
 
       # Read the runner's Chrome tree into the page cache before any suite
       # launches it (#9641). The recurring startup hang was captured with the
@@ -1065,29 +656,18 @@ jobs:
       - name: Warm the Chrome install
         run: bash scripts/ci-warm-test-chrome.sh
 
-      # Same client cache entry as the `client` job (see it for the key and why
-      # an exact hit needs no rebuild).
-      - name: Cache client node_modules
-        id: client-modules
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/setup-client
         with:
-          path: client/node_modules
-          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
+          setup-node: 'false'
 
-      - name: Install client dependencies
-        if: steps.client-modules.outputs.cache-hit != 'true'
-        run: npm ci --prefix client
-
-      # Same contract as the server job's memo steps. The browser profile is
-      # part of every key, so a smoke verdict never stands in for a full one.
+      # The browser profile is part of every per-test memo key, so a smoke
+      # verdict never stands in for a full one.
       - name: Restore the test memo
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: test-memo
+        uses: ./.github/actions/test-memo
         with:
-          path: ${{ runner.temp }}/portos-test-memo
-          key: test-memo-${{ runner.os }}-${{ runner.arch }}-browser-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
-          restore-keys: |
-            test-memo-${{ runner.os }}-${{ runner.arch }}-browser-${{ matrix.shard }}of${{ strategy.job-total }}-
-            test-memo-${{ runner.os }}-${{ runner.arch }}-browser-
+          suite: browser
+          partition: browser-${{ matrix.shard }}of${{ strategy.job-total }}
 
       # Fail-closed: PORTOS_REQUIRE_BROWSER_SUITES makes the suites' canRun guard
       # throw (see server/lib/browserSuiteGate.js) when Chrome, ffmpeg or the
@@ -1114,7 +694,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo
-          key: test-memo-${{ runner.os }}-${{ runner.arch }}-browser-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
+          key: ${{ steps.test-memo.outputs.key }}
 
       - name: Preserve browser test failure diagnostics
         if: failure()
@@ -1150,16 +730,9 @@ jobs:
 
       - name: Retain frozen candidate invocation evidence
         if: always() && env.PORTOS_CI_TEST_POLICY == 'release-candidate'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: ./.github/actions/candidate-evidence
         with:
           name: candidate-diagnostics-browser-${{ strategy.job-index || 0 }}
-          retention-days: 7
-          if-no-files-found: warn
-          path: |
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/invocation.json
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/run.json
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/failures.json
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/processes.json
 
   windows-server:
     # Native CLI/TUI, process and filesystem contracts; application suites run
@@ -1185,110 +758,22 @@ jobs:
           # the planner needs to identify changed sources.
           fetch-depth: 2
 
-      - name: Resolve the pull-request diff base
-        run: node scripts/ci-base-sha.js
+      - uses: ./.github/actions/diff-base
 
-      - name: Use Node.js 26.x
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: ./.github/actions/setup-server
         with:
-          node-version: 26.x
-          cache: npm
-          cache-dependency-path: server/package-lock.json
-
-      # Same entry and same contract as the server job — see it for the key, and
-      # for why the install and rebuild below are gated on the mark rather than
-      # on the cache hit.
-      - name: Cache server node_modules
-        id: server-modules
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: server/node_modules
-          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
-
-      # A restored tree is only reusable if it was rebuilt before it was saved,
-      # and that is not answerable by looking at the tree — with today's
-      # versions the rebuild is nearly a no-op, so every allowlisted package
-      # imports fine on a never-rebuilt one. The rebuild step below leaves an
-      # explicit mark; this reads it back.
-      #
-      # `continue-on-error` on purpose: a bad entry must not wedge every PR
-      # until a human clears the cache by hand. It fails, the two steps below
-      # see a non-success outcome, and the job builds the tree it needs. It does
-      # not *replace* the bad entry — cache keys are immutable and actions/cache
-      # skips the save on an exact hit — so that entry keeps costing each run a
-      # reinstall until the key moves or it ages out. That is precisely the
-      # pre-cache cost: the worst case degrades to the old behaviour, never to a
-      # red repo.
-      #
-      # `outcome != 'success'` covers all three cases in one expression: on a
-      # cache miss this step is skipped (outcome `skipped`), on a hit it is
-      # `success` or `failure`.
-      - name: Check the restored node_modules was rebuilt
-        id: server-modules-usable
-        if: steps.server-modules.outputs.cache-hit == 'true'
-        continue-on-error: true
-        run: node scripts/trusted-rebuild-stamp.js check server
-
-      - name: Install server dependencies
-        if: steps.server-modules-usable.outcome != 'success'
-        run: npm ci --prefix server
-
-      # server/.npmrc pins ignore-scripts=true, so the allowlisted packages need
-      # this explicit rebuild. Same condition as the install: whenever this job
-      # builds the tree it will cache, it must build a rebuilt one — and the
-      # mark is written in the same block, so a failed rebuild cannot leave one
-      # behind for a later job to trust.
-      #
-      # `shell: bash` is load-bearing, not style. windows-server would default
-      # to pwsh, where a *native* command's non-zero exit neither throws nor
-      # stops the block (`$PSNativeCommandUseErrorActionPreference` is false)
-      # and only the last command's code becomes the step result — so a failed
-      # rebuild would run the mark anyway, reset the exit code to 0, and publish
-      # a green, marked, un-rebuilt tree. Under `bash -e` the block stops at
-      # the rebuild, the job fails, and actions/cache (`post-if: success()`)
-      # never saves it.
-      - name: Rebuild trusted native dependencies
-        if: steps.server-modules-usable.outcome != 'success'
-        shell: bash
-        env:
-          # Skip onnxruntime-node's CUDA execution provider. Its postinstall
-          # downloads it on linux-x64 whenever the .so is absent — several
-          # hundred MB, on two jobs, every run — and no hosted runner has an
-          # NVIDIA GPU to use it with. The CPU binaries ship in the tarball, so
-          # inference still works; this is the single largest cost in the job.
-          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
-        run: |
-          node scripts/trusted-rebuilds.js server
-          node scripts/trusted-rebuild-stamp.js write server
-
-      # Reuse Vite/Vitest artifacts from checkout-owned .cache paths, outside
-      # node_modules (which may be shared by worktrees). Unlike the installed
-      # dependency tree above, these artifacts can safely use a near-miss
-      # restore and stay warm across a lockfile bump.
-      - name: Cache Vitest transform artifacts
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            server/.cache/vitest
-            server/.cache/vitest-db
-          key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'scripts/vitestCiPool.js') }}-${{ matrix.shard }}of${{ strategy.job-total }}
-          restore-keys: |
-            vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
-            vitest-server-${{ runner.os }}-
+          vitest-key-suffix: -${{ matrix.shard }}of${{ strategy.job-total }}
 
       - name: Check server entry-point syntax
         run: node --check server/index.js
 
-      # Same contract as the server job's memo steps; the platform is part of
-      # every key, so Windows reads only Windows verdicts.
+      # The platform is part of every memo key, so Windows reads only Windows verdicts.
       - name: Restore the test memo
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: test-memo
+        uses: ./.github/actions/test-memo
         with:
-          path: ${{ runner.temp }}/portos-test-memo
-          key: test-memo-${{ runner.os }}-${{ runner.arch }}-windows-server-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
-          restore-keys: |
-            test-memo-${{ runner.os }}-${{ runner.arch }}-windows-server-${{ matrix.shard }}of${{ strategy.job-total }}-
-            test-memo-${{ runner.os }}-${{ runner.arch }}-windows-server-
+          suite: windows-server
+          partition: windows-server-${{ matrix.shard }}of${{ strategy.job-total }}
 
       - name: Run server tests on Windows
         id: windows-tests
@@ -1320,7 +805,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo
-          key: test-memo-${{ runner.os }}-${{ runner.arch }}-windows-server-${{ matrix.shard }}of${{ strategy.job-total }}-${{ github.run_id }}
+          key: ${{ steps.test-memo.outputs.key }}
 
       - name: Preserve Windows test failure diagnostics
         if: failure()
@@ -1332,16 +817,9 @@ jobs:
 
       - name: Retain frozen candidate invocation evidence
         if: always() && env.PORTOS_CI_TEST_POLICY == 'release-candidate'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: ./.github/actions/candidate-evidence
         with:
           name: candidate-diagnostics-windows-server-${{ strategy.job-index || 0 }}
-          retention-days: 7
-          if-no-files-found: warn
-          path: |
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/invocation.json
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/run.json
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/failures.json
-            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/processes.json
 
   node-minimum:
     name: Node minimum compatibility
@@ -1459,51 +937,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      # The PTY cases need node-pty's native addon, which only setup-server's
+      # trusted rebuild builds.
+      - uses: ./.github/actions/setup-server
         with:
-          node-version: 26.x
-          cache: npm
-          cache-dependency-path: server/package-lock.json
-
-      # Same cache, stamp and rebuild contract as the server and windows-server
-      # jobs (see them for why each condition reads the stamp). The PTY cases
-      # need node-pty's native addon, which only the trusted rebuild builds.
-      - name: Cache server node_modules
-        id: server-modules
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: server/node_modules
-          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
-
-      - name: Check the restored node_modules was rebuilt
-        id: server-modules-usable
-        if: steps.server-modules.outputs.cache-hit == 'true'
-        continue-on-error: true
-        run: node scripts/trusted-rebuild-stamp.js check server
-
-      - name: Install server dependencies
-        if: steps.server-modules-usable.outcome != 'success'
-        run: npm ci --prefix server
-
-      - name: Rebuild trusted native dependencies
-        if: steps.server-modules-usable.outcome != 'success'
-        shell: bash
-        env:
-          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
-        run: |
-          node scripts/trusted-rebuilds.js server
-          node scripts/trusted-rebuild-stamp.js write server
-
-      - name: Cache Vitest transform artifacts
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            server/.cache/vitest
-            server/.cache/vitest-db
-          key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'scripts/vitestCiPool.js') }}-macos-native
-          restore-keys: |
-            vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
-            vitest-server-${{ runner.os }}-
+          vitest-key-suffix: -macos-native
 
       # The supervisor bootstraps a single-use launchd job; without a domain
       # that accepts it every release agent stays held. Fail here, by name,
