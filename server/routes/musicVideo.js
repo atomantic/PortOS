@@ -79,9 +79,10 @@ router.use(writeOriginScope);
 const projectCreateSchema = musicVideoProjectCreateSchema.extend(recordRenderPinFields);
 const projectUpdateSchema = musicVideoProjectUpdateSchema.extend(recordRenderPinFields);
 
-// Backward-compatible by default: returns the full projects array. When a client
+// Unpaged, the list is every project's summary projection (#16210): full records of every
+// project ran past 100 MB, and nothing reads them; a full record is GET /:id. When a client
 // passes `limit`/`offset`, the response becomes the bounded
-// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+// `{ items, total, limit, offset }` envelope every paginated PortOS list shares, of full records.
 // `summary=1` (#10169) swaps each record for its bounded summary projection —
 // newest first, with a `nextCursor` — for the project index and header picker, so
 // they never load every project's scenes, runs and reviews.
@@ -137,7 +138,8 @@ router.get('/', asyncHandler(async (req, res) => {
     const next = Math.min(page.offset + page.limit, page.total);
     return res.json({ ...page, items, ...(summary ? { nextCursor: next < page.total ? String(next) : null } : {}) });
   }
-  res.json(await Promise.all((await listProjects()).map((project) => presentProjectForRead(project))));
+  const presented = await Promise.all((await listProjects()).map((project) => presentProjectForRead(project)));
+  res.json(presented.map((project) => summarizeMusicVideoProject(project, project.productionReadiness)));
 }));
 
 // Sidebar sub-nav rows; registered before /:id so "names" is not read as an id.

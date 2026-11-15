@@ -386,8 +386,9 @@ describe('Cast & Sets restart presentation (#9940)', () => {
     // The client has no way to know the server's process id, so the read must say it.
     const one = await request(app).get(`/api/music-video/${project.id}`);
     expect(one.body.castAndSets).toMatchObject({ status: 'imaging', interrupted: true });
-    const list = await request(app).get('/api/music-video');
-    expect(list.body.find((p) => p.id === project.id).castAndSets.interrupted).toBe(true);
+    // The paged list carries full records, presented the same way.
+    const list = await request(app).get('/api/music-video?limit=50');
+    expect(list.body.items.find((p) => p.id === project.id).castAndSets.interrupted).toBe(true);
 
     await pin(service.__castAndSetsProcessId());
     const live = await request(app).get(`/api/music-video/${project.id}`);
