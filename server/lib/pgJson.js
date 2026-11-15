@@ -19,7 +19,7 @@
 
 const REPLACEMENT = '�';
 
-const isPlainObject = (value) => {
+const isStrictPlainObject = (value) => {
   if (value === null || typeof value !== 'object') return false;
   const proto = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
@@ -39,7 +39,7 @@ function normalizeKeys(value) {
 
 function repairJsonValue(_key, value) {
   if (typeof value === 'string') return normalizePgString(value);
-  return isPlainObject(value) ? normalizeKeys(value) : value;
+  return isStrictPlainObject(value) ? normalizeKeys(value) : value;
 }
 
 /** `JSON.stringify` for a `json`/`jsonb` parameter: strings and object keys are repaired first. */
@@ -51,7 +51,7 @@ const normalizeParam = (param) => {
   if (typeof param === 'string') return normalizePgString(param);
   if (Array.isArray(param)) return param.map(normalizeParam);
   // Mirrors node-postgres, which JSON-serializes a plain object parameter itself.
-  return isPlainObject(param) ? toPgJson(param) : param;
+  return isStrictPlainObject(param) ? toPgJson(param) : param;
 };
 
 /**

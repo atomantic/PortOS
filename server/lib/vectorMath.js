@@ -116,3 +116,8 @@ export function clusterBySimilarity(items, threshold = 0.9) {
 
   return clusters;
 }
+
+/**
+ * Clamp `value` into `[min, max]`. Propagates NaN (returns NaN) so callers' finite checks still see it.
+ */
+export const clamp = (value, min, max) => Math.min(max, Math.max(min, value));

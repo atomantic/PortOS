@@ -40,6 +40,7 @@
  */
 
 import { pitchToMidi, midiToFreq } from './pitchMath.js';
+import { clamp } from './vectorMath.js';
 import { PAINTED_CANVAS_VERSION, normalizePaintedCanvas, synthesizePaintedCanvas } from './paintedCanvas.js';
 
 export const WAVE_SKETCH_VERSION = 1;
@@ -82,7 +83,6 @@ const DEFAULT_ATTACK_SEC = 0.005;
 const DEFAULT_RELEASE_SEC = 0.04;
 const DECLICK_SEC = 0.002;
 
-const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 const isNum = (n) => typeof n === 'number' && Number.isFinite(n);
 // Keep stored numbers short — the sketch is sent back to the LLM on revision.
 const round = (n, places = 4) => Math.round(n * 10 ** places) / 10 ** places;

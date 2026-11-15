@@ -21,9 +21,7 @@
  * code. `personaTraitBlend.test.js` is the contract.
  */
 
-// Local rather than imported: this leaf is loaded by the browser bundle through
-// the client re-export, so it must not reach outside `server/lib`.
-const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
+import { clamp } from './vectorMath.js';
 
 // communicationProfile.formality / .verbosity live on a 1..10 scale; a persona
 // nudges them with a relative integer delta in this range.

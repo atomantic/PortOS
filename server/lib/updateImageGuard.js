@@ -5,6 +5,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PATHS } from './paths.js';
+import { isPlainObject } from './objects.js';
 
 /** Disk-only preflight also works while the API is offline. Never default corrupt state. */
 export function assertUpdateImageSafety({ dataDir = PATHS.data, acknowledged = false } = {}) {
@@ -25,19 +26,18 @@ export function assertUpdateImageSafety({ dataDir = PATHS.data, acknowledged = f
  * work; completed historical assets do not make rollback unsafe.
  */
 export function persistentMindImageWorkGuard(raw) {
-  const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
   const hasValidImages = (value) => value.images === undefined || Array.isArray(value.images);
   const source = raw == null ? {} : raw;
   const queuedMessages = source?.queuedMessages;
   const activeTurn = source?.activeTurn;
   const activeMessage = activeTurn?.wake?.kind === 'message' ? activeTurn.wake.message : null;
-  const trusted = isRecord(source)
+  const trusted = isPlainObject(source)
     && (queuedMessages === undefined || (
       Array.isArray(queuedMessages)
-      && queuedMessages.every((message) => isRecord(message) && hasValidImages(message))
+      && queuedMessages.every((message) => isPlainObject(message) && hasValidImages(message))
     ))
-    && (activeTurn == null || isRecord(activeTurn))
-    && (activeMessage == null || (isRecord(activeMessage) && hasValidImages(activeMessage)));
+    && (activeTurn == null || isPlainObject(activeTurn))
+    && (activeMessage == null || (isPlainObject(activeMessage) && hasValidImages(activeMessage)));
   if (!trusted) {
     return { safe: false, trusted: false, queuedImageMessages: 0, activeImageMessage: false };
   }
