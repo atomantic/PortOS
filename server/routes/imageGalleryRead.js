@@ -1,7 +1,7 @@
 // Shared production collection reads; safe to mount without generation routes.
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 
 export function createImageGalleryHandlers(listGallery = async () => (await import('../services/imageGen/local.js')).listGallery()) {
   const galleryQuerySchema = z.object({

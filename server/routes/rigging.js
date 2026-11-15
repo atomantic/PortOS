@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { rigImageTo3dModel } from '../services/rigging/autoSkin.js';
 import { AUTO_SKIN_DEFAULTS, AUTO_SKIN_LIMITS } from '../services/rigging/autoSkinReport.js';
 import { buildClipCoverage } from '../services/rigging/clipCapabilities.js';

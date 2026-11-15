@@ -5,7 +5,7 @@
 import { Router } from 'express';
 import * as digitalTwinService from '../../services/digital-twin.js';
 import { asyncHandler } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { exportInputSchema } from '../../lib/digitalTwinValidation.js';
 
 const router = Router();

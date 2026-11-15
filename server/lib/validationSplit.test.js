@@ -326,3 +326,31 @@ describe('exported validation schemas are wired (#5730)', () => {
     expect(missing, 'stale allowlist entries — the export was renamed or removed').toEqual([]);
   });
 });
+
+// #16096: validateRequest has its own leaf so routes that need only it do not
+// load the validation.js schema graph. A file importing ONLY that name from the
+// barrel would silently pay the whole closure again, so it is forbidden.
+describe('validateRequest imports go to the leaf (#16096)', () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+  const validationPath = path.join(repoRoot, 'server/lib/validation.js');
+  const IMPORT_RE = /import\s+([\s\S]*?)\s+from\s+(['"])([^'"\n]+)\2/g;
+
+  it('no server file imports only validateRequest from validation.js', () => {
+    const offenders = [];
+    for (const rel of trackedFiles(repoRoot, ['server/**/*.js', 'server/**/*.jsx'])) {
+      const src = readFileSync(path.join(repoRoot, rel), 'utf8');
+      for (const m of src.matchAll(IMPORT_RE)) {
+        if (!m[3].startsWith('.') || !m[3].endsWith('validation.js')) continue;
+        if (path.resolve(path.dirname(path.join(repoRoot, rel)), m[3]) !== validationPath) continue;
+        if (/^\{\s*validateRequest\s*\}$/.test(m[1].trim())) offenders.push(rel);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('the leaf stays a single hop from errorHandler.js', () => {
+    const src = readFileSync(path.join(repoRoot, 'server/lib/validateRequest.js'), 'utf8');
+    const specs = [...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]);
+    expect(specs).toEqual(['./errorHandler.js']);
+  });
+});

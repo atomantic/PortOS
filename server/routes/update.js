@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
 import * as updateChecker from '../services/updateChecker.js';
 import { getNodeRuntimeStatus, repairStartup, startNodeUpdate, startPm2Update } from '../services/nodeRuntime.js';

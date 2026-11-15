@@ -25,7 +25,7 @@ import {
 } from '../services/auth.js';
 import { getAgentKeyStatus, rotateAgentKey, setAgentKeyEnabled } from '../services/agentKey.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { logSecurityEvent } from '../lib/securityAuditLog.js';
 import { isRemoteRequest } from '../lib/requestOrigin.js';
 

@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { join } from 'path';
 import { z } from 'zod';
 import { asyncHandler, sendErrorResponse, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { assertSafeFilename } from '../lib/fileUtils.js';
 import { refuseRetiredTraining, TRAINING_RETIRED_MESSAGE } from '../lib/retiredLoraTraining.js';
 import { attachSseClient, cancelJob } from '../services/mediaJobQueue/index.js';

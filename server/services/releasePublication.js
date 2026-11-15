@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { execGit } from '../lib/execGit.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { releasePublicationRequestSchema } from '../lib/releasePublication.js';
 import { execGh } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';

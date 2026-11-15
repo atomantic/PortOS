@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, createServiceErrorMapper } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { pipelineStageRecoverySchema } from '../../lib/pipelineValidation.js';
 import { TEXT_STAGE_IDS, ERR_NOT_FOUND } from '../../services/pipeline/issuesShared.js';
 import { getStageRecovery, recoverLegacyStage } from '../../services/pipeline/textStages.js';

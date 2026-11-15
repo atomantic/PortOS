@@ -2,7 +2,7 @@
 import { randomUUID } from 'crypto';
 import { codeAnimationPackageSchema, summarizeCodeAnimationPackage } from '../../lib/codeAnimationPackage.js';
 import { codeAnimationProjectSchema, codeAnimationProjectPatchSchema } from '../../lib/codeAnimationProjects.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { emitCodeAnimationChanged } from '../socket.js';

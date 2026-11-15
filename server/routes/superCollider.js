@@ -16,7 +16,7 @@ import { Router } from 'express';
 import { randomInt } from 'crypto';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { openSseStream } from '../lib/sseDownload.js';
 import { SUPERCOLLIDER_RENDER } from '../lib/superColliderRuntime.js';
 import { MUSIC_CODE_MAX } from '../services/musicCode.js';

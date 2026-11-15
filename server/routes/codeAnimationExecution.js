@@ -13,7 +13,7 @@
  */
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { codeAnimationExecutionToolsSchema } from '../lib/codeAnimationContainment.js';
 import {
   getCodeAnimationExecution, probeCodeAnimationExecution, setCodeAnimationExecutionTools,

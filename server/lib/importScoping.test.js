@@ -606,6 +606,17 @@ describe('server suite import growth (#7993)', () => {
   }, 60_000);
 });
 
+// #16096: request validation is its own leaf. ~113 route/service files import
+// only validateRequest; if this grows past errorHandler.js, every one of them
+// pays for the new edge again.
+it('keeps the validateRequest leaf to itself and errorHandler.js', () => {
+  const closure = staticImportClosure(abs('lib/validateRequest.js')).files;
+  expect([...closure].map((file) => relative(SERVER_DIR, file)).sort()).toEqual([
+    'lib/errorHandler.js',
+    'lib/validateRequest.js',
+  ]);
+});
+
 // The shared compiler must remain usable without loading project mutations.
 it('keeps Video compilation independent of project storage and execution', () => {
   const closure = staticImportClosure(abs('lib/creativeDirectorVideoCompiler.js')).files;

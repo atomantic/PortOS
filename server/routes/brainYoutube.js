@@ -9,7 +9,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { youtubeIngestSchema, youtubeIngestSettingsSchema, youtubeIngestsQuerySchema } from '../lib/brainValidation.js';
 import * as ingest from '../services/youtubeIngest.js';
 

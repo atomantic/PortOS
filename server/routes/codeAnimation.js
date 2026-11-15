@@ -28,7 +28,7 @@ import { ensureCodeAnimationSoundtrackTrack, startCodeAnimationSoundtrack } from
 import { preflightProductionProject } from '../services/codeAnimation/preflight.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { emptyToNull } from '../lib/zodCompat.js';
 import { filmStyleIdSchema } from '../lib/filmStyleGrammarValidation.js';

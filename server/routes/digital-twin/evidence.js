@@ -8,7 +8,7 @@
 import { Router } from 'express';
 import * as twinEnrichment from '../../services/twinEnrichment.js';
 import { asyncHandler } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import {
   twinEvidenceRecomputeInputSchema,
   twinEvidenceInterpretInputSchema,

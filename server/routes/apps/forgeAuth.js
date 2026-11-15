@@ -14,7 +14,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { resolveAppForgeTarget } from '../../lib/workTracker.js';
 import { resolveForgeForRepo } from '../../services/forgeAuth.js';
 import {

@@ -10,7 +10,7 @@
 import { Router } from 'express';
 import * as digitalTwinService from '../../services/digital-twin.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import {
   createPersonaInputSchema,
   updatePersonaInputSchema,

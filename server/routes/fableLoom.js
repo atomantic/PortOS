@@ -11,7 +11,7 @@
 import { Router } from 'express';
 import { startEpisodeShotRun, getEpisodeShotRun, cancelEpisodeShotRun, planEpisodeShotRun } from '../services/fableLoom/shotRuns.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
   shotRunStartSchema,
   shotApplySchema,

@@ -10,7 +10,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { humanActionPlanSchema } from '../lib/humanActions.js';
 import { listHumanActions, scheduleHumanActionPlan } from '../services/humanActions.js';
 

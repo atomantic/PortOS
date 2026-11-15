@@ -2,7 +2,7 @@
 import { PATHS } from '../../lib/paths.js';
 import { makePathResolver } from '../../lib/pathSafety.js';
 import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { promoteFilmSchema } from '../../lib/codeAnimationFilms.js';
 import { normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
 import { blenderRefusal } from '../film/workspace.js';

@@ -10,7 +10,7 @@ import { Router } from 'express';
 import { universeVisualProfileSchema } from '../../lib/universeVisualProfileValidation.js';
 import { z } from 'zod';
 import { asyncHandler, failValidation, ServerError } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { parseUniverseMarkdown, universeMarkdownFilename, universeToMarkdown } from '../../lib/universeMarkdown.js';
 import * as svc from '../../services/universeBuilder.js';
 import { findSameNameUniverses } from '../../services/duplicateDetection.js';

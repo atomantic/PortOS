@@ -12,7 +12,7 @@ import { Router, raw } from 'express';
 import { z } from 'zod';
 import sharp from 'sharp';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { cleanImageBuffer, CLEAN_LEVELS, compositeIgnoreZone, IGNORE_ZONE_FEATHER_DEFAULT } from '../lib/imageClean.js';
 import { applyLightRegen, computePixelDelta, REGEN_STRENGTH_MIN, REGEN_STRENGTH_MAX } from '../services/imageGen/regen.js';
 import { enqueueGpuClean, readGpuCleanResult, getGpuCleanStatus, saveGpuCleanToGallery } from '../services/imageGen/cleanGpu.js';

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { filmStyleParamsSchema, filmStylePromptQuerySchema } from '../lib/filmStyleGrammarValidation.js';
 import {
   FILM_STYLE_GRAMMARS, getFilmStyleGrammar, renderFilmStyleGrammarPrompt, summarizeFilmStyleGrammar,

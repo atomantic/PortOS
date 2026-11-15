@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { catalogPrimitiveOwnerSchema, catalogPrimitiveForkSchema, catalogRefinementSchema, catalogMediaRefineSchema, catalogDesignSpreadSchema, catalogDesignRenderSchema } from '../lib/catalogValidation.js';
 import { getIngredient } from '../services/catalogDB/ingredients.js';
 import { getPrimitiveContext, setPrimitiveOwner, forkPrimitive } from '../services/catalogPrimitives.js';

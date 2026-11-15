@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
   musicVideoCameoCreateSchema, musicVideoCameoLinkSchema, musicVideoCameoReferenceRemoveSchema,
   musicVideoCameoReferencesAddSchema, musicVideoCameoStillFromShotSchema, musicVideoCameoUnlinkSchema, musicVideoCameoUpdateSchema,
