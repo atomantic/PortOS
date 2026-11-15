@@ -1271,7 +1271,9 @@ Debian snapshot or an image digest merely to silence a scanner.
 The initial entries (#15662) were triaged at package level from the scanned
 image, not advisory by advisory; re-triage an entry when its package version
 changes. The [November 11 review](RUNTIME_ADVISORY_TRIAGE.md) records individual
-Kerberos/OpenSSL paths, source-range mismatches and upstream blockers for #15768.
+Kerberos/OpenSSL paths, source-range mismatches and upstream blockers for #15768;
+the [November 14 review](RUNTIME_ADVISORY_TRIAGE.md#runtime-advisory-review-2026-11-14)
+covers #16049.
 Two dispositions are used:
 
 - `not-reachable`: upstream explicitly excludes the installed version from the
