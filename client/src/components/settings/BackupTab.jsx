@@ -1,5 +1,6 @@
 import { MIN_RETENTION_COUNT, MAX_RETENTION_COUNT, DEFAULT_RETENTION_COUNT } from '../../../../server/lib/backupConfig.js';
 import { useState, useEffect, useId, useRef } from 'react';
+import useSettingsForm from '../../hooks/useSettingsForm';
 import { AlertTriangle, Archive, CalendarClock, CheckCircle2, Database, Play, Plus, Save, ShieldOff, Trash2, X, ChevronDown, ChevronRight } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
@@ -19,6 +20,14 @@ import { anchorUserExclude, anchorUserExcludes, isSafeExcludePattern } from '../
 // Set equality — rsync --exclude flags are order-independent, so reordering
 // is NOT a dirty state; only membership changes (added/removed entries) are.
 const sameSet = (a, b) => a.length === b.length && a.every(x => b.includes(x));
+const FORM_COMPARATORS = { excludePaths: sameSet, disabledDefaultExcludes: sameSet };
+
+// Schedule fields stay null/undefined until the API's resolved values land.
+// `null` retentionCount = unlimited; undefined only before the initial load.
+const INITIAL_FORM = {
+  destPath: '', enabled: null, cronExpression: null, retentionCount: undefined,
+  excludePaths: [], disabledDefaultExcludes: [],
+};
 
 // settings.json is hand-editable and the GET /settings endpoint is unvalidated,
 // so an incoming `excludePaths`/`disabledDefaultExcludes` value can be a string,
@@ -73,23 +82,18 @@ export function BackupTab() {
   // fields stay null and the form is replaced by an error panel, so an unreachable
   // API can't be saved back as invented values (#6632).
   const [loadFailed, setLoadFailed] = useState(false);
-  const [statusLoadFailed, setStatusLoadFailed] = useState(false);
-  const [exclusionsLoadFailed, setExclusionsLoadFailed] = useState(false);
-  const [snapshotsLoadFailed, setSnapshotsLoadFailed] = useState(false);
+  const [loadFailures, setLoadFailures] = useState({ status: false, exclusions: false, snapshots: false });
+  const patchLoadFailures = (patch) => setLoadFailures(prev => ({ ...prev, ...patch }));
   const [saving, setSaving] = useState(false);
-  const [destPath, setDestPath] = useState('');
-  const [savedDestPath, setSavedDestPath] = useState('');
   // Schedule state is seeded ONLY from the API's resolved values. The server
   // owns how a sparse backup config resolves (server/lib/backupConfig.js); a
   // client-side fallback here would be a second, conflicting interpretation —
   // which is exactly what silently cancelled destination-only schedules (#6632).
-  const [enabled, setEnabled] = useState(null);
-  const [savedEnabled, setSavedEnabled] = useState(null);
-  const [cronExpression, setCronExpression] = useState(null);
-  const [savedCronExpression, setSavedCronExpression] = useState(null);
-  // `null` = unlimited. Undefined only before the initial load resolves.
-  const [retentionCount, setRetentionCount] = useState(undefined);
-  const [savedRetentionCount, setSavedRetentionCount] = useState(undefined);
+  const { values: form, saved, isDirty: dirty, set, load, markSaved } = useSettingsForm(INITIAL_FORM, { comparators: FORM_COMPARATORS });
+  const { destPath, enabled, cronExpression, retentionCount, excludePaths, disabledDefaultExcludes } = form;
+  const savedDestPath = saved.destPath;
+  const savedEnabled = saved.enabled;
+  const savedCronExpression = saved.cronExpression;
   // The number input's own DISPLAYED text, decoupled from the committed
   // `retentionCount`. A controlled `value` bound directly to a clamped
   // number snaps back to the old value the instant the field is cleared
@@ -97,19 +101,15 @@ export function BackupTab() {
   // a replacement. Free-typing lives here; `retentionCount` (used for dirty
   // checking and the save payload) only updates once the text parses.
   const [retentionInputText, setRetentionInputText] = useState('');
-  const [excludePaths, setExcludePaths] = useState([]);
-  const [savedExcludePaths, setSavedExcludePaths] = useState([]);
-  const [disabledDefaultExcludes, setDisabledDefaultExcludes] = useState([]);
-  const [savedDisabledDefaultExcludes, setSavedDisabledDefaultExcludes] = useState([]);
   const [defaultExcludes, setDefaultExcludes] = useState([]);
   const [newExclude, setNewExclude] = useState('');
   const [pgBackup, setPgBackup] = useState(null);
   const [backupStatus, setBackupStatus] = useState('never');
   const [restoreWarning, setRestoreWarning] = useState(null);
   const [snapshots, setSnapshots] = useState([]);
-  const [showAllSnapshots, setShowAllSnapshots] = useState(false);
-  const [showExclusions, setShowExclusions] = useState(false);
-  const [showSnapshots, setShowSnapshots] = useState(false);
+  // Disclosure open/closed flags for the collapsible panels, all collapsed by default.
+  const [disclosure, setDisclosure] = useState({});
+  const toggleDisclosure = (key, next) => setDisclosure(prev => ({ ...prev, [key]: typeof next === 'function' ? next(!!prev[key]) : next }));
   const [restoreTarget, setRestoreTarget] = useState(null); // source-bound request pending confirm
   const [restorePreview, setRestorePreview] = useState(null); // dry-run result
   // A committed database restore awaiting recovery (#9725): the server keeps
@@ -123,10 +123,8 @@ export function BackupTab() {
   // The default-exclusions catalog is a 15+ row reference list the user rarely
   // edits — collapsed by default so the fields they came to change (destination,
   // enabled, schedule) and the action bar are what the tab actually shows.
-  const [showDefaultExcludes, setShowDefaultExcludes] = useState(false);
   // Same reasoning as the catalog above: the effective list is defaults + user
   // entries, so it is longer still. Collapsed by default, one click from visible.
-  const [showEffectiveExcludes, setShowEffectiveExcludes] = useState(false);
 
   useEffect(() => {
     Promise.allSettled([
@@ -142,14 +140,10 @@ export function BackupTab() {
         const status = statusLoadError ? null : statusResult.value;
         const snaps = snapshotsLoadError ? null : snapshotsResult.value;
         const backup = settings?.backup || {};
-        const saved = backup.destPath || '';
+        const savedDest = backup.destPath || '';
         const savedExcludes = asExcludeArray(backup.excludePaths);
         const savedDisabled = asArray(backup.disabledDefaultExcludes);
-        setStatusLoadFailed(statusLoadError);
-        setExclusionsLoadFailed(statusLoadError);
-        setSnapshotsLoadFailed(snapshotsLoadError);
-        setDestPath(saved);
-        setSavedDestPath(saved);
+        patchLoadFailures({ status: statusLoadError, exclusions: statusLoadError, snapshots: snapshotsLoadError });
         // The GET projects the effective schedule, so these are always present.
         // Anything else is an unresolved response and is treated as a load failure
         // rather than being papered over with a locally invented default.
@@ -164,20 +158,16 @@ export function BackupTab() {
         if (!('retentionCount' in backup)) {
           throw new Error('Settings response did not include a resolved backup schedule');
         }
-        const savedEnabledValue = backup.enabled;
-        const savedCron = backup.cronExpression;
         const savedRetention = backup.retentionCount;
-        setEnabled(savedEnabledValue);
-        setSavedEnabled(savedEnabledValue);
-        setCronExpression(savedCron);
-        setSavedCronExpression(savedCron);
-        setRetentionCount(savedRetention);
-        setSavedRetentionCount(savedRetention);
+        load({
+          destPath: savedDest,
+          enabled: backup.enabled,
+          cronExpression: backup.cronExpression,
+          retentionCount: savedRetention,
+          excludePaths: savedExcludes,
+          disabledDefaultExcludes: savedDisabled,
+        });
         setRetentionInputText(savedRetention === null ? '' : String(savedRetention));
-        setExcludePaths(savedExcludes);
-        setSavedExcludePaths(savedExcludes);
-        setDisabledDefaultExcludes(savedDisabled);
-        setSavedDisabledDefaultExcludes(savedDisabled);
         setDefaultExcludes(asArray(status?.defaultExcludes));
         setPgBackup(status?.pgBackup ?? null);
         setBackupStatus(status?.status ?? 'never');
@@ -195,13 +185,11 @@ export function BackupTab() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await updateSettings({ backup: { destPath, enabled, cronExpression, retentionCount, excludePaths, disabledDefaultExcludes } }, { silent: true });
-      setSavedDestPath(destPath);
-      setSavedEnabled(enabled);
-      setSavedCronExpression(cronExpression);
-      setSavedRetentionCount(retentionCount);
-      setSavedExcludePaths(excludePaths);
-      setSavedDisabledDefaultExcludes(disabledDefaultExcludes);
+      const submitted = { destPath, enabled, cronExpression, retentionCount, excludePaths, disabledDefaultExcludes };
+      await updateSettings({ backup: submitted }, { silent: true });
+      // Acknowledge only the submitted snapshot; edits made while the request
+      // was pending stay dirty.
+      markSaved(submitted, submitted);
       toast.success('Settings saved');
     } catch (err) {
       toast.error(err.message || 'Failed to save settings');
@@ -211,7 +199,7 @@ export function BackupTab() {
   };
 
   const toggleDefaultExclude = (path) => {
-    setDisabledDefaultExcludes(prev => prev.includes(path)
+    set('disabledDefaultExcludes', prev => prev.includes(path)
       ? prev.filter(p => p !== path)
       : [...prev, path]);
   };
@@ -220,18 +208,18 @@ export function BackupTab() {
     setPgBackup(result?.pgBackup ?? null);
     setBackupStatus(result?.status ?? 'ok');
     setRestoreWarning(result?.restoreWarning ?? null);
-    setStatusLoadFailed(false);
+    patchLoadFailures({ status: false });
     // A completed run establishes health, but does not include the exclusion
     // catalog. Recover that separately before enabling its controls.
     return Promise.all([
       getBackupSnapshots({ silent: true }).then(s => {
         setSnapshots(Array.isArray(s) ? s : []);
-        setSnapshotsLoadFailed(false);
+        patchLoadFailures({ snapshots: false });
       }).catch((err) => { console.warn(`⚠️ Failed to refresh snapshots: ${err?.message || err}`); }),
-      exclusionsLoadFailed
+      loadFailures.exclusions
         ? getBackupStatus({ silent: true }).then(status => {
           setDefaultExcludes(asArray(status?.defaultExcludes));
-          setExclusionsLoadFailed(false);
+          patchLoadFailures({ exclusions: false });
         }).catch((err) => { console.warn(`⚠️ Failed to refresh backup exclusions: ${err?.message || err}`); })
         : Promise.resolve(),
     ]);
@@ -243,12 +231,12 @@ export function BackupTab() {
   const addExclude = () => {
     const anchored = anchorUserExclude(newExclude);
     if (!anchored) return;
-    if (!excludePaths.includes(anchored)) setExcludePaths([...excludePaths, anchored]);
+    if (!excludePaths.includes(anchored)) set('excludePaths', [...excludePaths, anchored]);
     setNewExclude('');
   };
 
   const removeExclude = (index) => {
-    setExcludePaths(excludePaths.filter((_, i) => i !== index));
+    set('excludePaths', excludePaths.filter((_, i) => i !== index));
   };
 
   if (loading) {
@@ -264,12 +252,6 @@ export function BackupTab() {
     );
   }
 
-  const dirty = destPath !== savedDestPath
-    || enabled !== savedEnabled
-    || cronExpression !== savedCronExpression
-    || retentionCount !== savedRetentionCount
-    || !sameSet(excludePaths, savedExcludePaths)
-    || !sameSet(disabledDefaultExcludes, savedDisabledDefaultExcludes);
   const canRun = !!savedDestPath && !running && !saving && !dirty;
   const runDisabledReason = running
     ? null
@@ -303,19 +285,19 @@ export function BackupTab() {
   const scheduleSummary = savedEnabled
     ? (describeCron(savedCronExpression) || savedCronExpression)
     : 'Scheduled backups are off';
-  const snapshotSummary = snapshotsLoadFailed
+  const snapshotSummary = loadFailures.snapshots
     ? 'Unavailable — reload to retry'
     : snapshots.length > 0
     ? `${snapshots.length} ${snapshots.length === 1 ? 'snapshot' : 'snapshots'}`
     : 'No snapshots yet';
-  const exclusionsSummary = exclusionsLoadFailed
+  const exclusionsSummary = loadFailures.exclusions
     ? 'Unavailable — reload to retry'
     : excludePaths.length > 0
     ? `${excludePaths.length} custom · ${effectiveExcludes.length} active patterns`
     : `${effectiveExcludes.length} active patterns`;
 
   const renderPgStatus = () => {
-    if (statusLoadFailed) return <span className="text-port-warning">Backup status unavailable — reload to retry</span>;
+    if (loadFailures.status) return <span className="text-port-warning">Backup status unavailable — reload to retry</span>;
     if (!pgBackup) return <span className="text-gray-500">No backup run yet</span>;
     if (pgBackup.status === 'ok') {
       return <span className="text-port-success">✅ {formatBytes(pgBackup.sizeBytes || 0)} · {pgBackup.tableCount} tables</span>;
@@ -500,22 +482,22 @@ export function BackupTab() {
                 id={destPathId}
                 type="text"
                 value={destPath}
-                onChange={e => setDestPath(e.target.value)}
+                onChange={e => set('destPath', e.target.value)}
                 className="flex-1 min-w-[12rem] bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
                 placeholder="/path/to/backups"
               />
-              <FolderPicker value={destPath} onChange={setDestPath} />
+              <FolderPicker value={destPath} onChange={(value) => set('destPath', value)} />
             </div>
           </div>
 
           <div className="space-y-4 min-w-0">
             <div className="flex items-center gap-3">
               <span className="text-sm text-gray-400">Enabled</span>
-              <ToggleSwitch size="sm" enabled={enabled} onChange={() => setEnabled(!enabled)} ariaLabel="Scheduled backups" />
+              <ToggleSwitch size="sm" enabled={enabled} onChange={() => set('enabled', !enabled)} ariaLabel="Scheduled backups" />
             </div>
             <div className="space-y-1">
               <span className="block text-sm text-gray-400">Schedule</span>
-              <CronSchedulePicker value={cronExpression} onChange={setCronExpression} cronAriaLabel="Schedule (cron)" />
+              <CronSchedulePicker value={cronExpression} onChange={(value) => set('cronExpression', value)} cronAriaLabel="Schedule (cron)" />
               <p className="text-xs text-gray-500">Default: 2:00 AM daily. Times use the configured timezone.</p>
             </div>
             <div className="space-y-1">
@@ -537,7 +519,7 @@ export function BackupTab() {
                     setRetentionInputText(raw);
                     const parsed = Number.parseInt(raw, 10);
                     if (Number.isNaN(parsed)) return;
-                    setRetentionCount(Math.min(MAX_RETENTION_COUNT, Math.max(MIN_RETENTION_COUNT, parsed)));
+                    set('retentionCount', Math.min(MAX_RETENTION_COUNT, Math.max(MIN_RETENTION_COUNT, parsed)));
                   }}
                   onBlur={() => {
                     // Reconcile the displayed text with the committed (clamped)
@@ -552,7 +534,7 @@ export function BackupTab() {
                     enabled={retentionCount === null}
                     onChange={() => {
                       const next = retentionCount === null ? DEFAULT_RETENTION_COUNT : null;
-                      setRetentionCount(next);
+                      set('retentionCount', next);
                       setRetentionInputText(next === null ? '' : String(next));
                     }}
                     size="sm"
@@ -603,13 +585,13 @@ export function BackupTab() {
           icon={ShieldOff}
           summary={exclusionsSummary}
           id={exclusionsPanelId}
-          open={showExclusions}
-          onOpenChange={setShowExclusions}
+          open={!!disclosure.exclusions}
+          onOpenChange={(next) => toggleDisclosure('exclusions', next)}
           size="bar"
           className="space-y-3"
           bodyClassName="space-y-4 pt-2"
         >
-          {exclusionsLoadFailed ? (
+          {loadFailures.exclusions ? (
             <p className="text-sm text-port-warning">Backup exclusion details are unavailable — reload to retry before editing these rules.</p>
           ) : (
             <>
@@ -619,16 +601,16 @@ export function BackupTab() {
             <div className="space-y-2">
               <button
                 type="button"
-                onClick={() => setShowDefaultExcludes(v => !v)}
-                aria-expanded={showDefaultExcludes}
+                onClick={() => toggleDisclosure('defaultExcludes', v => !v)}
+                aria-expanded={!!disclosure.defaultExcludes}
                 aria-controls={defaultExcludesPanelId}
                 className="flex items-center gap-2 w-full text-left text-sm text-gray-400 hover:text-white transition-colors min-h-[44px]"
               >
-                {showDefaultExcludes ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
+                {disclosure.defaultExcludes ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
                 <ShieldOff size={14} className="text-gray-500 shrink-0" />
                 <span>Default exclusions — {enabledDefaultCount} enabled, {disabledDefaultCount} disabled</span>
               </button>
-              {showDefaultExcludes && (
+              {disclosure.defaultExcludes && (
                 <div id={defaultExcludesPanelId} className="space-y-2">
                   <p className="text-xs text-gray-500">Built-in exclusion rules keep snapshots small. Switch on to disable an overridable default rule; fixed rules remain enabled.</p>
                   <ul className="space-y-1.5 mt-1">
@@ -699,15 +681,15 @@ export function BackupTab() {
               <div className="space-y-2 pt-1">
                 <button
                   type="button"
-                  onClick={() => setShowEffectiveExcludes(v => !v)}
-                  aria-expanded={showEffectiveExcludes}
+                  onClick={() => toggleDisclosure('effectiveExcludes', v => !v)}
+                  aria-expanded={!!disclosure.effectiveExcludes}
                   aria-controls={effectiveExcludesPanelId}
                   className="flex items-center gap-2 w-full text-left text-sm text-gray-400 hover:text-white transition-colors min-h-[44px]"
                 >
-                  {showEffectiveExcludes ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
+                  {disclosure.effectiveExcludes ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
                   <span>Effective exclude list — {effectiveExcludes.length} rsync {effectiveExcludes.length === 1 ? 'pattern' : 'patterns'}</span>
                 </button>
-                {showEffectiveExcludes && (
+                {disclosure.effectiveExcludes && (
                   <div id={effectiveExcludesPanelId} className="space-y-2">
                     <p className="text-xs text-gray-500">The exact <code>--exclude</code> filters the next snapshot will use: enabled default rules plus your anchored patterns. Saved changes above are reflected here.</p>
                     <ul className="flex flex-wrap gap-1.5">
@@ -733,20 +715,20 @@ export function BackupTab() {
           icon={Archive}
           summary={snapshotSummary}
           id={snapshotsPanelId}
-          open={showSnapshots}
-          onOpenChange={setShowSnapshots}
+          open={!!disclosure.snapshots}
+          onOpenChange={(next) => toggleDisclosure('snapshots', next)}
           size="bar"
           className="space-y-3"
           bodyClassName="space-y-2 pt-2"
         >
-          {snapshotsLoadFailed ? (
+          {loadFailures.snapshots ? (
             <p className="text-sm text-port-warning">Snapshot history is unavailable — reload to retry.</p>
           ) : snapshots.length === 0 ? (
             <p className="text-sm text-gray-500">No snapshots have been recorded on this machine yet.</p>
           ) : (
             <>
               <ul className="space-y-1.5">
-                {(showAllSnapshots ? snapshots : snapshots.slice(0, 10)).map((snap) => {
+                {(disclosure.allSnapshots ? snapshots : snapshots.slice(0, 10)).map((snap) => {
                   const identity = snapshotIdentity(snap);
                   return (
                     <li key={identity}>
@@ -805,11 +787,11 @@ export function BackupTab() {
               {snapshots.length > 10 && (
                 <button
                   type="button"
-                  onClick={() => setShowAllSnapshots(value => !value)}
-                  aria-expanded={showAllSnapshots}
+                  onClick={() => toggleDisclosure('allSnapshots', v => !v)}
+                  aria-expanded={!!disclosure.allSnapshots}
                   className="text-xs text-port-accent hover:text-port-accent/80 transition-colors min-h-[32px]"
                 >
-                  {showAllSnapshots ? 'Show newest 10 snapshots' : `Show all ${snapshots.length} snapshots`}
+                  {disclosure.allSnapshots ? 'Show newest 10 snapshots' : `Show all ${snapshots.length} snapshots`}
                 </button>
               )}
             </>

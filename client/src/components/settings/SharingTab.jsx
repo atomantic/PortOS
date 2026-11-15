@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import useSettingsForm from '../../hooks/useSettingsForm';
 import { Save, Loader2, Users, ShieldCheck, Network } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
@@ -56,12 +57,20 @@ function modelReady(engine, model) {
   return true;
 }
 
+const PROFILE_INITIAL = { displayName: '', bio: '' };
+const PROVIDER_INITIAL = { enabled: false, maxQueuedJobs: 2, models: [], visualModels: { image: [], video: [] } };
+// Model selections are a set: order and duplicates are not a change.
+const PROVIDER_COMPARATORS = {
+  models: (a, b) => stableModels(a) === stableModels(b),
+  visualModels: (a, b) => VISUAL_KINDS.every(({ kind }) => stableModels(a[kind]) === stableModels(b[kind])),
+};
+
 export function SharingTab() {
   const [loading, setLoading] = useState(true);
-  const [displayName, setDisplayName] = useState('');
-  const [bio, setBio] = useState('');
-  const [savedDisplayName, setSavedDisplayName] = useState('');
-  const [savedBio, setSavedBio] = useState('');
+  const { values: profile, isDirty: dirty, set: setProfileField, load: loadProfile, markSaved: markProfileSaved } = useSettingsForm(PROFILE_INITIAL);
+  const { displayName, bio } = profile;
+  const setDisplayName = (value) => setProfileField('displayName', value);
+  const setBio = (value) => setProfileField('bio', value);
   const [saving, setSaving] = useState(false);
   const [strictPull, setStrictPull] = useState(false);
   const [strictPullSaving, setStrictPullSaving] = useState(false);
@@ -71,19 +80,17 @@ export function SharingTab() {
   const [authEnabled, setAuthEnabled] = useState(false);
   const { items: musicEngines, state: musicEnginesState, error: musicEnginesError, retry: retryMusicEngines } = useListResource(fetchMusicEngines);
   const [providerSettings, setProviderSettings] = useState({});
-  const [providerEnabled, setProviderEnabled] = useState(false);
-  const [providerMaxQueuedJobs, setProviderMaxQueuedJobs] = useState(2);
-  const [providerModels, setProviderModels] = useState([]);
+  const { values: providerForm, isDirty: providerDirty, set: setProviderField, load: loadProvider, markSaved: markProviderSaved } = useSettingsForm(PROVIDER_INITIAL, { comparators: PROVIDER_COMPARATORS });
+  const { enabled: providerEnabled, maxQueuedJobs: providerMaxQueuedJobs, models: providerModels, visualModels: providerVisualModels } = providerForm;
+  const setProviderEnabled = (value) => setProviderField('enabled', value);
+  const setProviderMaxQueuedJobs = (value) => setProviderField('maxQueuedJobs', value);
+  const setProviderModels = (update) => setProviderField('models', update);
+  const setProviderVisualModels = (update) => setProviderField('visualModels', update);
   // `undefined` per kind = still loading; `null` = the candidate list could not be fetched, which is NOT the
   // same as a genuinely empty local catalog — reporting "no models installed"
   // for a transient API failure would send the user hunting for a model they
   // already have.
   const [visualCandidates, setVisualCandidates] = useState({ image: undefined, video: undefined });
-  const [providerVisualModels, setProviderVisualModels] = useState({ image: [], video: [] });
-  const [savedProviderVisualModels, setSavedProviderVisualModels] = useState({ image: [], video: [] });
-  const [savedProviderEnabled, setSavedProviderEnabled] = useState(false);
-  const [savedProviderMaxQueuedJobs, setSavedProviderMaxQueuedJobs] = useState(2);
-  const [savedProviderModels, setSavedProviderModels] = useState([]);
   const [providerSaving, setProviderSaving] = useState(false);
 
   useEffect(() => {
@@ -102,10 +109,7 @@ export function SharingTab() {
       .then(([settings, auth]) => {
         const display = settings?.sharingDisplayName || '';
         const b = settings?.sharingBio || '';
-        setDisplayName(display);
-        setBio(b);
-        setSavedDisplayName(display);
-        setSavedBio(b);
+        loadProfile({ displayName: display, bio: b });
         const federation = isRecord(settings?.federation) ? settings.federation : {};
         setStrictPull(federation.strictPullAuthorization === true);
         setAuthEnabled(auth?.enabled === true);
@@ -116,25 +120,11 @@ export function SharingTab() {
         const visual = Object.fromEntries(VISUAL_KINDS.map(({ kind, field }) =>
           [kind, normalizeSelectedModels(provider[field])]));
         setProviderSettings(provider);
-        setProviderEnabled(enabled);
-        setProviderMaxQueuedJobs(maxQueuedJobs);
-        setProviderModels(models);
-        setSavedProviderEnabled(enabled);
-        setSavedProviderMaxQueuedJobs(maxQueuedJobs);
-        setSavedProviderModels(models);
-        setProviderVisualModels(visual);
-        setSavedProviderVisualModels(visual);
+        loadProvider({ enabled, maxQueuedJobs, models, visualModels: visual });
       })
       .catch(() => toast.error('Failed to load settings'))
       .finally(() => setLoading(false));
   }, []);
-
-  const dirty = displayName !== savedDisplayName || bio !== savedBio;
-  const providerDirty = providerEnabled !== savedProviderEnabled
-    || providerMaxQueuedJobs !== savedProviderMaxQueuedJobs
-    || stableModels(providerModels) !== stableModels(savedProviderModels)
-    || VISUAL_KINDS.some(({ kind }) =>
-      stableModels(providerVisualModels[kind]) !== stableModels(savedProviderVisualModels[kind]));
 
   const handleSave = async () => {
     setSaving(true);
@@ -145,10 +135,7 @@ export function SharingTab() {
     const merged = await updateSettings(patch).catch(() => null);
     setSaving(false);
     if (!merged) return;
-    setDisplayName(patch.sharingDisplayName);
-    setBio(patch.sharingBio);
-    setSavedDisplayName(patch.sharingDisplayName);
-    setSavedBio(patch.sharingBio);
+    markProfileSaved({ displayName: patch.sharingDisplayName, bio: patch.sharingBio }, profile);
     toast.success('Saved');
   };
 
@@ -244,11 +231,12 @@ export function SharingTab() {
       return;
     }
     setProviderSettings(mediaProvider);
-    setProviderMaxQueuedJobs(maxQueuedJobs);
-    setSavedProviderEnabled(providerEnabled);
-    setSavedProviderMaxQueuedJobs(maxQueuedJobs);
-    setSavedProviderModels(normalizeSelectedModels(providerModels));
-    setSavedProviderVisualModels(visualSelections);
+    markProviderSaved({
+      enabled: providerEnabled,
+      maxQueuedJobs,
+      models: mediaProvider.audioModels,
+      visualModels: visualSelections,
+    }, providerForm);
     toast.success(providerEnabled ? 'Media provider enabled' : 'Media provider disabled');
   };
 
