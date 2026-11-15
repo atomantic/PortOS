@@ -123,6 +123,7 @@ import { planProject } from '../services/musicVideo/planner.js';
 import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
 import { verifyPrerequisites, verifyLyricSheet } from '../services/musicVideo/lyricVerify.js';
 import musicVideoRoutes from './musicVideo.js';
+import { MUSIC_VIDEO_MAX_SUBJECTS } from '../lib/musicVideoLimits.js';
 
 describe('musicVideo routes', () => {
   let app;
@@ -350,7 +351,7 @@ describe('musicVideo routes', () => {
     const saved = await request(app).patch('/api/music-video/mv-1').send({ concept });
     expect(saved.status).toBe(200);
     expect(saved.body.concept).toEqual(concept);
-    const rejected = await request(app).patch('/api/music-video/mv-1').send({ concept: { subjects: Array(25).fill(concept.subjects[0]) } });
+    const rejected = await request(app).patch('/api/music-video/mv-1').send({ concept: { subjects: Array(MUSIC_VIDEO_MAX_SUBJECTS + 1).fill(concept.subjects[0]) } });
     expect(rejected.status).toBe(400);
     const invalidKind = await request(app).patch('/api/music-video/mv-1').send({ concept: { subjects: [{ ...concept.subjects[0], kind: 'unknown' }] } });
     expect(invalidKind.status).toBe(400);
