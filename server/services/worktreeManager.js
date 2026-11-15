@@ -25,7 +25,7 @@ import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { forkRemoteName, normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';
 import { isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
 import { ensureInstanceId } from './instanceIdentity.js';
-import { decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideMergedWorktreeRemoval, decideMergedWorktreeReap, decideWith } from './branchRetirementDecision.js';
+import { decideCleanPushedDetach, decideIdleNextHolderRelease, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideMergedWorktreeRemoval, decideMergedWorktreeReap, decideWith } from './branchRetirementDecision.js';
 import { provisionWorkspaceNodeModules, removeProvisionedNodeModules } from '../lib/worktreeNodeModules.js';
 import { withGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 
@@ -1181,22 +1181,17 @@ async function releaseIdleSiblingNextHolderAdmitted(sourceWorkspace, branchName,
   }).admit) return null;
   const holderIndex = worktrees.findIndex(wt => wt.branch?.replace('refs/heads/', '') === branchName);
   // Index 0 is the main worktree — the user's own checkout is never released.
-  if (holderIndex <= 0) return null;
   const holder = worktrees[holderIndex];
-  if (holder.locked || holder.prunable || !existsSync(holder.path)) return null;
-  if (isPathInsideDir(WORKTREES_DIR, holder.path)) return null;
-  if (activeWorkspacePaths.some(p => p && (pathsEqual(p, holder.path) || isPathInsideDir(holder.path, p)))) return null;
-
-  const git = (args) => execGit(args, holder.path).then(r => r.stdout.trim());
-  // Idleness first; `--no-optional-locks` keeps `status` from refreshing the
-  // index and so resetting the very clock this reads on a refused attempt.
-  const gitDir = await git(['rev-parse', '--absolute-git-dir']).catch(() => null);
-  if (!gitDir) return null;
-  const mtimes = await Promise.all(['index', 'HEAD', join('logs', 'HEAD')]
-    .map(f => stat(join(gitDir, f)).then(s => s.mtimeMs, () => 0)));
-  if (nowMs - Math.max(...mtimes) < idleMs) return null;
-
-  if (!await detachCleanPushedHolder(holder.path, branchName, { allowUntracked })) return null;
+  const decision = await decideWith(facts => decideIdleNextHolderRelease({
+    branchName, holderIndex, holder: { ...holder, exists: holder.path ? existsSync(holder.path) : false }, worktreesDir: WORKTREES_DIR,
+    activeWorkspacePaths, samePath: pathsEqual, idleMs, nowMs, allowUntracked, facts,
+  }), {
+    // Idleness first: the status read below could otherwise refresh the index and reset the clock.
+    lastTouchMs: () => readHolderLastTouchMs(holder.path),
+    ...cleanPushedReaders(holder.path, branchName),
+  });
+  if (!decision.admit) return null;
+  if (!await detachHolder(holder.path, branchName)) return null;
   console.log(`🌳 Released ${branchName} from idle /do:next worktree ${holder.path} (HEAD detached in place)`);
   return { path: holder.path };
 }
@@ -1209,26 +1204,37 @@ async function releaseIdleSiblingNextHolderAdmitted(sourceWorkspace, branchName,
  * restores it. Any unreadable check refuses (false).
  */
 async function detachCleanPushedHolder(holderPath, branchName, { allowUntracked = false } = {}) {
-  const git = (args) => execGit(args, holderPath).then(r => r.stdout.trim());
   // Stricter than `classifyWorktreeDirt` on purpose: this tree isn't PortOS's,
   // so no path counts as disposable scratch.
-  const porcelain = await git(['--no-optional-locks', 'status', '--porcelain', '--untracked-files=all']).catch(() => null);
-  if (porcelain === null) return false;
-  if (allowUntracked ? porcelain.split('\n').some(l => l && !l.startsWith('?? ')) : porcelain !== '') return false;
-  const remoteRef = await git(['rev-parse', '--verify', '--quiet', `${branchName}@{upstream}`])
-    .catch(() => git(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branchName}`]))
-    .catch(() => null);
-  if (!remoteRef) return false;
-  const pushed = await execGit(['merge-base', '--is-ancestor', 'HEAD', remoteRef], holderPath)
-    .then(() => true, () => false);
-  if (!pushed) return false;
-
-  const detached = await execGit(['switch', '--detach', '--quiet'], holderPath).then(() => true, (err) => {
-    console.warn(`⚠️ Could not detach ${holderPath} to release ${branchName}: ${err.message}`);
-    return false;
-  });
-  return detached;
+  const decision = await decideWith(facts => decideCleanPushedDetach({ allowUntracked, facts }), cleanPushedReaders(holderPath, branchName));
+  return decision.admit ? detachHolder(holderPath, branchName) : false;
 }
+
+/** Newest mtime of the git-dir files a commit, checkout or index refresh touches; null when the git directory is unreadable. */
+async function readHolderLastTouchMs(holderPath) {
+  const gitDir = await execGit(['rev-parse', '--absolute-git-dir'], holderPath).then(r => r.stdout.trim(), () => null);
+  if (!gitDir) return null;
+  const mtimes = await Promise.all(['index', 'HEAD', join('logs', 'HEAD')]
+    .map(f => stat(join(gitDir, f)).then(s => s.mtimeMs, () => 0)));
+  return Math.max(...mtimes);
+}
+
+// `--no-optional-locks` keeps `status` from refreshing the index and so resetting the idle clock.
+const cleanPushedReaders = (holderPath, branchName) => {
+  const git = (args) => execGit(args, holderPath).then(r => r.stdout.trim());
+  return {
+    porcelain: () => git(['--no-optional-locks', 'status', '--porcelain', '--untracked-files=all']).catch(() => null),
+    remoteRef: () => git(['rev-parse', '--verify', '--quiet', `${branchName}@{upstream}`])
+      .catch(() => git(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branchName}`]))
+      .catch(() => null),
+    pushed: ({ remoteRef }) => execGit(['merge-base', '--is-ancestor', 'HEAD', remoteRef], holderPath).then(() => true, () => false),
+  };
+};
+
+const detachHolder = (holderPath, branchName) => execGit(['switch', '--detach', '--quiet'], holderPath).then(() => true, (err) => {
+  console.warn(`⚠️ Could not detach ${holderPath} to release ${branchName}: ${err.message}`);
+  return false;
+});
 
 /**
  * Free `branchName` from a worktree PortOS did not create and nothing owns

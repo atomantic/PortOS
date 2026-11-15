@@ -10,7 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   decideBranchRetirement, decideDetachedRetirement, decideHeldCheckoutRetirement, decideInventoriedBranchRetirement, decideMergedCheckoutOwner,
-  decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideMergedDelivery, decideMergedWorktreeReap, decideMergedWorktreeRemoval, decidePendingMergeReceipt, decideWith, gatheredHoldReason,
+  decideCleanPushedDetach, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideIdleNextHolderRelease, decideMergedDelivery, decideMergedWorktreeReap, decideMergedWorktreeRemoval, decidePendingMergeReceipt, decideWith, gatheredHoldReason,
   recoveryWorktreeReason, supersededPolicyHold,
   SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS,
 } from './branchRetirementDecision.js';
@@ -680,6 +680,55 @@ describe('decideExternalWorktreeRemoval', () => {
   it('judges ownership by the directory under the worktrees root, not Git\'s spelling of it', () => {
     // The registration's own path is outside the root's spelling; the managed directory is not.
     expect(verdict(remove({ facts: { agents: [{ id: 'agent-live', status: 'running', workspacePath: scanned.path, sourceWorkspace: '/work/managed-app' }] } }))).toBe('retire');
+  });
+});
+
+describe('decideIdleNextHolderRelease', () => {
+  const WT = '/data/cos/worktrees';
+  const HOLDER = '/work/next-issue-1';
+  const IDLE = 10 * 60 * 1000;
+  const holder = (extra = {}) => ({ path: HOLDER, locked: false, prunable: false, exists: true, ...extra });
+  /** An idle, clean, pushed sibling `/do:next` checkout unless overridden. */
+  const release = ({ facts = {}, ...input } = {}) => drive(decideIdleNextHolderRelease, {
+    branchName: 'next/issue-1', holderIndex: 1, holder: holder(), worktreesDir: WT, idleMs: IDLE, nowMs: 100 * IDLE, ...input,
+  }, { lastTouchMs: 0, porcelain: '', remoteRef: 'origin/next/issue-1', pushed: true, ...facts });
+
+  it.each([
+    // [removed real-git case, overrides, verdict]
+    ['an idle, clean, pushed sibling tree is released', {}, 'retire'],
+    ['a tree touched within the idle window', { facts: { lastTouchMs: 99.5 * IDLE } }, 'recently-touched'],
+    ['a tree touched exactly at the idle boundary is released', { facts: { lastTouchMs: 99 * IDLE } }, 'retire'],
+    ['an unreadable git directory', { facts: { lastTouchMs: null } }, 'git-dir-unreadable'],
+    ['a tree a running agent works in', { activeWorkspacePaths: [HOLDER] }, 'worktree-active-agent'],
+    ['a tree containing a running agent\'s workspace', { activeWorkspacePaths: [`${HOLDER}/sub`] }, 'worktree-active-agent'],
+    ['the primary checkout', { holderIndex: 0 }, 'primary-checkout'],
+    ['a branch with no holder', { holderIndex: -1 }, 'primary-checkout'],
+    ['a non-/do:next branch', { branchName: 'feature/x' }, 'not-a-next-branch'],
+    ['a locked tree', { holder: holder({ locked: true }) }, 'worktree-locked'],
+    ['a prunable registration', { holder: holder({ prunable: true }) }, 'worktree-missing'],
+    ['a directory that is gone', { holder: holder({ exists: false }) }, 'worktree-missing'],
+    ['a tree under the managed root', { holder: holder({ path: `${WT}/agent-1` }) }, 'managed-worktree'],
+    ['an untracked file', { facts: { porcelain: '?? notes.txt' } }, 'uncommitted'],
+    ['an untracked file when untracked is allowed', { allowUntracked: true, facts: { porcelain: '?? notes.txt' } }, 'retire'],
+    ['a staged file when untracked is allowed', { allowUntracked: true, facts: { porcelain: '?? a.txt\nA  tracked.txt' } }, 'uncommitted'],
+    ['an unreadable status', { facts: { porcelain: null } }, 'status-failed'],
+    ['a branch with no remote ref', { facts: { remoteRef: null } }, 'no-remote-ref'],
+    ['a commit that exists only locally', { facts: { pushed: false } }, 'unpushed'],
+    ['a failed ancestry probe', { facts: { pushed: null } }, 'unpushed'],
+  ])('%s', (_name, overrides, expected) => {
+    expect(verdict(release(overrides))).toBe(expected);
+  });
+
+  it('reads the idle clock before status, and nothing when an earlier gate holds', () => {
+    expect(release().asked).toEqual(['lastTouchMs', 'porcelain', 'remoteRef', 'pushed']);
+    expect(release({ holder: holder({ locked: true }) }).asked).toEqual([]);
+    expect(release({ facts: { lastTouchMs: 99.5 * IDLE } }).asked).toEqual(['lastTouchMs']);
+    expect(release({ facts: { porcelain: 'M a' } }).asked).toEqual(['lastTouchMs', 'porcelain']);
+  });
+
+  it('shares the clean-and-pushed gate with the ownerless release', () => {
+    expect(decideCleanPushedDetach({ facts: {} })).toEqual({ need: 'porcelain' });
+    expect(decideCleanPushedDetach({ facts: { porcelain: '', remoteRef: 'r', pushed: true } })).toEqual({ admit: true });
   });
 });
 
