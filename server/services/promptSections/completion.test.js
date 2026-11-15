@@ -234,3 +234,51 @@ describe('claim flow workflow-scope handoff', () => {
     }
   });
 });
+
+describe('publish_reviewed_branch tag scope', () => {
+  // The wrapper lives in a manual-completion template literal list; read the shipped line from source.
+  const wrapper = readFileSync(new URL('./completion.js', import.meta.url), 'utf8').split('\n').find(line => line.includes('publish_reviewed_branch() {')).trim().replace(/^'/, '').replace(/',$/, '');
+  const setup = () => {
+    const root = mkdtempSync(join(tmpdir(), 'portos-publish-'));
+    const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, encoding: 'utf8' }).trim();
+    const remote = join(root, 'remote.git');
+    const work = join(root, 'work');
+    execFileSync('git', ['init', '--bare', '-q', remote]);
+    execFileSync('git', ['init', '-q', '-b', 'feature', work]);
+    git(work, 'config', 'push.followTags', 'true');
+    writeFileSync(join(work, 'a.txt'), '1');
+    git(work, 'add', '.');
+    git(work, 'commit', '-qm', 'one');
+    git(work, 'tag', '-a', 'unrelated-tag', '-m', 'tag');
+    git(work, 'remote', 'add', 'origin', remote);
+    return { root, work, remote, git };
+  };
+  const publish = (work, ...args) => execFileSync('bash', ['-c', `${wrapper}\nPUBLISH_ERROR=failed\npublish_reviewed_branch ${args.join(' ')}`], { cwd: work, encoding: 'utf8', stdio: 'pipe' });
+
+  it('publishes only the branch despite ambient push.followTags=true', () => {
+    const { root, work, remote, git } = setup();
+    try {
+      publish(work, 'origin', 'HEAD:refs/heads/feature');
+      expect(git(remote, 'for-each-ref', '--format=%(refname)')).toBe('refs/heads/feature');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('still fails when the branch update itself is rejected', () => {
+    const { root, work, remote, git } = setup();
+    try {
+      publish(work, 'origin', 'HEAD:refs/heads/feature');
+      git(work, 'reset', '-q', '--hard', 'HEAD');
+      writeFileSync(join(work, 'b.txt'), '2');
+      git(work, 'add', '.');
+      git(work, 'commit', '-qm', 'two');
+      const diverged = git(work, 'rev-parse', 'HEAD');
+      git(work, 'reset', '-q', '--hard', 'HEAD~1');
+      writeFileSync(join(work, 'c.txt'), '3');
+      git(work, 'add', '.');
+      git(work, 'commit', '-qm', 'three');
+      git(work, 'push', '-q', 'origin', `${diverged}:refs/heads/feature`);
+      expect(() => publish(work, 'origin', 'HEAD:refs/heads/feature')).toThrow();
+      expect(git(remote, 'rev-parse', 'feature')).toBe(diverged);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});

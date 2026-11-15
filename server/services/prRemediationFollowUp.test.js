@@ -91,7 +91,7 @@ describe('spawnPrRemediationFollowUp', () => {
 
     const { context } = addTaskMock.mock.calls[0][0];
     expect(context).toContain('with `fork/contributor/contributor/update` checked out');
-    expect(context).toContain('git push fork-contributor HEAD:refs/heads/contributor/update');
+    expect(context).toContain('git push --no-follow-tags fork-contributor HEAD:refs/heads/contributor/update');
     expect(context).toContain('ALREADY in an isolated worktree');
     expect(context).not.toContain('gh pr checkout');
     expect(context).not.toContain('worktree add');

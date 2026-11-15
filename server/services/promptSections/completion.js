@@ -1083,7 +1083,7 @@ function buildManualPrCreateStep(step, { branchName, baseBranch, forgeCli = 'gh'
     '   if [ -z "$PUSH_REMOTE" ] || [ "$PUSH_REMOTE" = "." ]; then PUSH_REMOTE=origin; PUSH_REMOTE_SOURCE=default; fi',
     '   PUSH_REF=$(git config --get "branch.${BRANCH}.merge")',
     '   PUBLISH_ERROR="publish failed; refusing PR/MR"',
-    '   publish_reviewed_branch() { git push "$@" || { echo "$PUBLISH_ERROR" >&2; exit 1; }; }',
+    '   publish_reviewed_branch() { git push --no-follow-tags "$@" || { echo "$PUBLISH_ERROR" >&2; exit 1; }; }',
     '   if [ "$PUSH_REMOTE_SOURCE" = "branch.remote" ] && [ -n "$PUSH_REF" ]; then',
     '     if [ "$PUSH_REF" != "refs/heads/$BRANCH" ] && [ "$PUSH_REF" != "$BRANCH" ]; then echo "Configured upstream $PUSH_REMOTE/$PUSH_REF does not name $BRANCH; refusing to publish" >&2; exit 1; fi',
     '   fi',
