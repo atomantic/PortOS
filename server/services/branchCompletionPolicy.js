@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { forkLocalBranch } from '../lib/forkHead.js';
 import { PR_COMPLETIONS, explicitPrCompletion } from '../lib/prDisposition.js';
 
 const samePath = (a, b) => typeof a === 'string' && typeof b === 'string'
@@ -79,6 +80,10 @@ function dropDanglingIndexRows(ids) {
     .catch(error => console.error(`❌ Failed to drop dangling agent-index rows: ${error.message}`));
 }
 
+// A fork review target keeps the contributor's remote branch name while the
+// checkout is registered under the fork-qualified local name (forkLocalBranch).
+const reviewTargetBranches = target => [target?.branch, target?.fork && forkLocalBranch(target.branch, target.fork.forkHead)].filter(Boolean);
+
 /** Exact repo/branch identity. A known PR receipt never applies to another PR
  * on the same branch. Without a PR read (offline retirement), preserve it.
  * Only a later, completed, explicit policy for this exact PR and current tip
@@ -108,7 +113,7 @@ function completionDecision({ repoPath, branch, prUrl, tip, agents }) {
     // A review run is bound to the one PR it was assigned. Without that scope a
     // reused branch (the quality-snapshot publisher) inherits every past run's
     // obligation on every later PR, and none of them can ever be released.
-    const target = meta.reviewLoopMergeTarget?.branch === branch ? meta.reviewLoopMergeTarget.url : undefined;
+    const target = reviewTargetBranches(meta.reviewLoopMergeTarget).includes(branch) ? meta.reviewLoopMergeTarget.url : undefined;
     const policy = receipt?.branch === branch ? receipt : {
       branch: scopes.includes(branch) ? branch : null,
       completion,
