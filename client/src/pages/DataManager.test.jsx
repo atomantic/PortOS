@@ -103,6 +103,35 @@ describe('DataManager tombstone GC peer-refusal subscription (#8110)', () => {
   });
 });
 
+describe('DataManager tombstone GC status resource', () => {
+  beforeEach(() => {
+    getDataOverview.mockReset().mockResolvedValue(overview);
+    getTombstoneSweepStatus.mockReset().mockResolvedValue({ refused: [] });
+    socket.on.mockClear();
+  });
+
+  it('re-reads refusal status when a peer update event arrives', async () => {
+    render(<DataManager />);
+    const button = await screen.findByRole('button', { name: 'Clean up deleted records now' });
+    await waitFor(() => expect(button).toBeEnabled());
+
+    getTombstoneSweepStatus.mockResolvedValue({ refused: ['universe', 'series', 'mediaCollection'] });
+    await waitFor(() => expect(socket.on).toHaveBeenCalledWith('instances:peers:updated', expect.any(Function)));
+    const onPeers = socket.on.mock.calls.find(([event]) => event === 'instances:peers:updated')[1];
+    await act(async () => onPeers({}));
+
+    await waitFor(() => expect(button).toBeDisabled());
+  });
+
+  it('shows an error and keeps cleanup off when the status read fails instead of assuming no peer holds a deletion', async () => {
+    getTombstoneSweepStatus.mockRejectedValue(new Error('503'));
+    render(<DataManager />);
+
+    expect(await screen.findByText(/Could not read peer sync status/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clean up deleted records now' })).toBeDisabled();
+  });
+});
+
 describe('DataManager unclassified rows (#3285)', () => {
   beforeEach(() => {
     getDataOverview.mockReset().mockResolvedValue(overview);

@@ -1,8 +1,8 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { CalendarDays, Calendar as CalendarIcon, ClipboardList, Clock, Columns, LayoutGrid, RefreshCw, Settings } from 'lucide-react';
-import { useState, useEffect, useCallback, useRef } from 'react';
 import * as api from '../services/api';
-import socket from '../services/socket';
+import { useSocketResource } from '../hooks/useSocketResource';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
@@ -36,55 +36,29 @@ const TAB_PRESENTATION = {
   config: { icon: Settings },
 };
 
+const CALENDAR_EVENTS = ['calendar:changed'];
+
+const fetchAccountList = async () => {
+  const data = await api.getCalendarAccounts({ silent: true });
+  if (!Array.isArray(data)) throw new Error('Invalid calendar accounts response');
+  return data;
+};
+
 export const TABS = buildPageNavTabs(getPageNavTabs('calendar'), TAB_PRESENTATION, 'Calendar');
 
 export default function Calendar() {
   const navigate = useNavigate();
   const activeTab = useValidTab(TABS, 'agenda');
   const [searchParams] = useUrlParams();
-  const [accounts, setAccounts] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  const [accountsError, setAccountsError] = useState(false);
-  const requestGeneration = useRef(0);
-
-  const fetchAccounts = useCallback(async () => {
-    const generation = ++requestGeneration.current;
-    setLoading(true);
-    // This persistent boundary owns read failures; avoid a second toast layer.
-    await api.getCalendarAccounts({ silent: true }).then(data => {
-      if (!Array.isArray(data)) throw new Error('Invalid calendar accounts response');
-      if (generation !== requestGeneration.current) return;
-      setAccounts(data);
-      setAccountsError(false);
-    }).catch(() => {
-      if (generation === requestGeneration.current) setAccountsError(true);
-    }).finally(() => {
-      if (generation === requestGeneration.current) setLoading(false);
-    });
-  }, []);
-
-  useEffect(() => {
-    fetchAccounts();
-    return () => { requestGeneration.current += 1; };
-  }, [fetchAccounts]);
-
-  // Mutation responses supersede any older configuration read.
-  const updateAccounts = useCallback(updater => {
-    requestGeneration.current += 1;
-    setLoading(false);
-    setAccounts(updater);
-  }, []);
-
-  useEffect(() => {
-    socket.on('calendar:changed', fetchAccounts);
-    socket.on('connect', fetchAccounts);
-    return () => {
-      socket.off('calendar:changed', fetchAccounts);
-      socket.off('connect', fetchAccounts);
-    };
-  }, [fetchAccounts]);
-
+  // This persistent boundary owns read failures; avoid a second toast layer.
+  const { data: accounts, loading, error, refetch: fetchAccounts, updateData: updateAccounts } = useSocketResource(fetchAccountList, { events: CALENDAR_EVENTS });
+  const accountsError = error != null;
+  const [retrying, setRetrying] = useState(false);
+  const retry = async () => {
+    setRetrying(true);
+    await fetchAccounts();
+    setRetrying(false);
+  };
   const accountsReady = accounts !== null && !accountsError;
 
   const handleTabChange = (tabId) => {
@@ -142,11 +116,11 @@ export default function Calendar() {
                 : 'Could not refresh calendar accounts. The last loaded snapshot is stale; sync and configuration actions are paused until Retry succeeds.'}
             </p>
             <button
-              onClick={fetchAccounts}
-              disabled={loading}
+              onClick={retry}
+              disabled={retrying}
               className="mt-3 px-3 py-2 bg-port-accent/10 text-port-accent rounded-lg text-sm hover:bg-port-accent/20 disabled:opacity-50"
             >
-              {loading ? 'Retrying…' : 'Retry'}
+              {retrying ? 'Retrying…' : 'Retry'}
             </button>
           </div>
         )}
