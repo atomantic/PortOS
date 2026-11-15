@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import {
-  MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoClipReferenceChoices, musicVideoOfferedReferences, musicVideoSceneCastIds,
+  MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoClipReferenceChoices, musicVideoOfferedReferences, musicVideoSceneCastIds, resolvedFramePickIds,
 } from '../../../../server/lib/musicVideoConditioning.js';
 import MediaImage from '../MediaImage';
 import SceneReferencePicker from './SceneReferencePicker.jsx';
@@ -20,7 +20,8 @@ export default function SceneClipReferences({ project, scene, castMedia, backend
   const chosen = musicVideoClipConditioningReferences(project, scene, castMedia);
   const chosenIds = chosen.map((ref) => ref.id);
   const unresolved = (scene.clipReferenceIds || []).filter((id) => !allChoices.some((ref) => ref.id === id));
-  const retained = (scene.clipReferenceIds || []).filter((id) => !chosenIds.includes(id));
+  // Resolved, so a saved id that moved to a chosen reference is not kept and saved back after its removal.
+  const retained = Array.isArray(scene.clipReferenceIds) ? resolvedFramePickIds(project, { ...scene, frameReferenceIds: scene.clipReferenceIds }, castMedia).filter((id) => !chosenIds.includes(id)) : [];
   const others = choices.filter((ref) => !chosenIds.includes(ref.id));
   const auto = !Array.isArray(scene.clipReferenceIds);
   const capacity = capacityOverride ?? musicVideoClipReferenceCapacity(backend, model, { startFrameLayout });
