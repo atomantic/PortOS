@@ -1,122 +1,35 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
+import { expectAuthorizedWorkflows } from './hostControlTestHarness.js';
 
+// Instruction-store writes (prompts, mind recipes, personas, tools, twin settings)
+// are plain writes under the default-deny gate (#16018), whose principal matrix lives
+// in services/authGate.test.js; hostControlCoverage.test.js pins every mounted one.
+// This suite keeps the twin-settings router's authorized workflow and what it persists.
 const auth = vi.hoisted(() => ({ enabled: false }));
 vi.mock('../services/auth.js', async (original) => ({
-  ...await original(),
-  isAuthEnabled: vi.fn(async () => auth.enabled),
-  verifyRequestSession: vi.fn(async req => req.headers.authorization === 'Bearer example-operator'),
+  ...await original(), isAuthEnabled: vi.fn(async () => auth.enabled),
 }));
 vi.mock('../services/settings.js', async (original) => ({
   ...await original(), getSettings: vi.fn(async () => ({})),
 }));
-const twin = vi.hoisted(() => ({
-  current: {},
-  loadMeta: vi.fn(),
-  updateSettings: vi.fn(),
-}));
+const twin = vi.hoisted(() => ({ current: {}, loadMeta: vi.fn(), updateSettings: vi.fn() }));
 vi.mock('../services/digital-twin.js', () => twin);
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
-import settingsRoutes from './digital-twin/settings.js';
+const mounts = [['/api/digital-twin', (await import('./digital-twin/settings.js')).default]];
 
-const writes = [
-  ['post', '/api/prompts'], ['put', '/api/prompts/cd-plan'],
-  ['post', '/api/prompts/variables'], ['put', '/api/prompts/variables/example'],
-  ['post', '/api/cos/mind/bundle/apply'],
-  ['post', '/api/cos/mind/recipes'], ['put', '/api/cos/mind/recipes/example'],
-  ['post', '/api/cos/mind/recipes/example/restore'],
-  ['post', '/api/cos/mind/messages'], ['post', '/api/cos/mind/annotations'],
-  ['post', '/api/cos/mind/journal/example/correct'], ['post', '/api/cos/mind/attachments'],
-  ['post', '/api/cos/goal-fidelity/false-positive'],
-  ['post', '/api/cos/mind/maintainer/watchdog'],
-  ['post', '/api/digital-twin/personas'], ['put', '/api/digital-twin/personas/active'],
-  ['put', '/api/digital-twin/personas/example'],
-  ['post', '/api/tools'], ['put', '/api/tools/example'],
-];
-// Sentinel store handlers prove the real gates refuse before any write.
-// The actual settings router shows what an authorized update persists.
-const persisted = [];
-const appFor = (address) => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  for (const [method, path] of writes) app[method](path, (req, res) => {
-    persisted.push(req.body);
-    res.json({ saved: true });
-  });
-  app.use('/api/digital-twin', settingsRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
-const call = (address, [method, path], body = {}, headers = {}) => {
-  const pending = request(appFor(address))[method](path);
-  for (const [key, value] of Object.entries(headers)) pending.set(key, value);
-  return pending.send(body);
-};
-const refused = response => {
-  expect(response.status).toBe(403);
-  expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
-};
 beforeEach(() => {
   vi.clearAllMocks();
   auth.enabled = false;
-  persisted.length = 0;
   twin.current = { autoInjectToCoS: true, includePrivacyContext: false, activePersonaId: null, maxContextTokens: 4000 };
   twin.loadMeta.mockImplementation(async () => ({ settings: { ...twin.current } }));
   twin.updateSettings.mockImplementation(async data => Object.assign(twin.current, data));
 });
-describe('prompt store operator authority (#9040)', () => {
-  it('refuses every instruction-store write from a remote socket or forwarded remote browser without changing stores', async () => {
-    for (const write of writes) {
-      refused(await call('192.0.2.10', write, { content: 'untrusted directive' }));
-      refused(await call('127.0.0.1', write, {}, { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }));
-    }
-    expect(persisted).toEqual([]);
-  });
-  it('allows all instruction-store writes from loopback and authenticated remote operator sessions', async () => {
-    for (const enabled of [false, true]) {
-      auth.enabled = enabled;
-      for (const write of writes) {
-        const response = await call(enabled ? '192.0.2.10' : '127.0.0.1', write, {},
-          enabled ? { Authorization: 'Bearer example-operator' } : {});
-        expect(response.status).toBe(200);
-      }
-    }
-    expect(persisted).toHaveLength(writes.length * 2);
-  });
-  it('refuses a remote form that resends unchanged protected values, and applies the same form locally', async () => {
-    const original = { ...twin.current };
-    const form = { ...original, maxContextTokens: 5000 };
-    refused(await call('192.0.2.10', ['put', '/api/digital-twin/settings'], form));
-    refused(await call('192.0.2.10', ['put', '/api/digital-twin/settings'], { maxContextTokens: 5000 }));
-    expect(twin.updateSettings).not.toHaveBeenCalled();
-    expect(twin.current).toEqual(original);
-    const response = await call('127.0.0.1', ['put', '/api/digital-twin/settings'], form);
-    expect(response.status).toBe(200);
-    expect(twin.updateSettings).toHaveBeenCalledTimes(1);
-    expect(twin.current).toEqual(form);
-  });
-  it('gates changed twin instruction settings, including the alternate active-persona path', async () => {
-    const original = { ...twin.current };
-    for (const data of [
-      { autoInjectToCoS: false }, { includePrivacyContext: true },
-      { activePersonaId: '00000000-0000-4000-8000-000000000001' },
-    ]) refused(await call('192.0.2.10', ['put', '/api/digital-twin/settings'], data));
-    expect(twin.current).toEqual(original);
-    expect(twin.updateSettings).not.toHaveBeenCalled();
-    for (const enabled of [false, true]) {
-      auth.enabled = enabled;
-      expect((await call(enabled ? '192.0.2.10' : '127.0.0.1', ['put', '/api/digital-twin/settings'],
-        { autoInjectToCoS: enabled, includePrivacyContext: !enabled },
-        enabled ? { Authorization: 'Bearer example-operator' } : {})).status).toBe(200);
-    }
-    expect(twin.current).toMatchObject({ autoInjectToCoS: true, includePrivacyContext: false });
-    expect(twin.updateSettings).toHaveBeenCalledTimes(2);
+
+describe('twin instruction settings behind the default-deny gate (#16114)', () => {
+  it('still updates the settings for a local operator and a delegated agent session', async () => {
+    const form = { autoInjectToCoS: false, includePrivacyContext: true, maxContextTokens: 5000 };
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: [
+      ['put', '/api/digital-twin/settings', form, twin.updateSettings, 200],
+    ] });
+    expect(twin.current).toMatchObject(form);
   });
 });
