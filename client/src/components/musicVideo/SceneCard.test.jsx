@@ -1680,6 +1680,25 @@ describe('Render draft and Render final', () => {
     expect(screen.getAllByTestId('take-tier').map((el) => el.textContent)).toEqual(['Draft', 'Final']);
   });
 
+  // Uniquely catches a failed Render final retrying at the saved resolution (#16178).
+  it('Retry repeats the failed tier, defaulting to draft, and sends none on a local model', () => {
+    const fal = { lipSyncBackend: 'fal', falVideoSettings: { backend: 'fal', falModelId: 'bytedance/seedance-2.5/image-to-video' } };
+    const failed = (tier) => ({ ...scene, lastFailure: { lane: 'video', error: 'boom', at: '2026-10-05T00:00:00.000Z', ...(tier ? { tier } : {}) } });
+    const onGenerateVideo = vi.fn();
+    const renderCard = (sceneProp, extra) => render(<SceneCard scene={sceneProp} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()} onGenerateVideo={onGenerateVideo} {...extra} />);
+    const first = renderCard(failed('final'), fal);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onGenerateVideo).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ tier: 'final' }));
+    first.unmount();
+    const second = renderCard(failed(null), fal);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onGenerateVideo).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ tier: 'draft' }));
+    second.unmount();
+    renderCard(failed('final'), { lipSyncBackend: 'local', falVideoSettings: { backend: 'local' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onGenerateVideo.mock.calls.at(-1)[1]).not.toHaveProperty('tier');
+  });
+
   it('keeps the single Render on a local model', () => {
     const onGenerateVideo = vi.fn();
     render(<SceneCard scene={scene} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()} onGenerateVideo={onGenerateVideo}

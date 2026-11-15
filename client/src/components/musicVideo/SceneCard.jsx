@@ -1013,7 +1013,8 @@ export default function SceneCard({
         </span>
         <button type="button"
           onClick={() => {
-            if (failure.lane === 'video') { generateVideo(); return; }
+            // #16178: repeat the failed tier; a failure with none recorded retries the cheap draft on a tiered lane.
+            if (failure.lane === 'video') { generateVideo(tierChoices ? failure.tier || 'draft' : null); return; }
             if (sourceWindow) return;
             const options = withFrameTarget(null);
             if (options) onGenerateFrame?.(scene, options);

@@ -365,6 +365,18 @@ describe('music-video scene completion hooks → takes', () => {
       expect(stored.lastFailure).toMatchObject({ lane: 'video', error: 'provider timed out' });
     });
 
+    // Uniquely catches Retry losing which tier failed (#16178).
+    it('records the tier a failed clip rendered at, and none for an untiered clip', async () => {
+      const tiered = videoJob(project.id, scene.sceneId, 'clip-t');
+      tiered.params.musicVideo.tier = 'final';
+      mediaJobEvents.emit('failed', { ...tiered, status: 'failed', error: 'final broke' });
+      await waitFor(() => emitted.some((e) => e.event === 'scene-failure' && e.lastFailure?.tier === 'final'));
+      expect((await sceneOf(project.id, scene.sceneId)).lastFailure).toMatchObject({ lane: 'video', tier: 'final' });
+      mediaJobEvents.emit('failed', { ...videoJob(project.id, scene.sceneId, 'clip-u'), status: 'failed', error: 'plain broke' });
+      await waitFor(() => emitted.some((e) => e.event === 'scene-failure' && e.lastFailure?.error === 'plain broke'));
+      expect((await sceneOf(project.id, scene.sceneId)).lastFailure).not.toHaveProperty('tier');
+    });
+
     it('does not record a cancel as a failure', async () => {
       mediaJobEvents.emit('canceled', { ...imageJob(project.id, scene.sceneId, 'x.png'), status: 'canceled', error: 'Canceled' });
       // A later failure for the surviving scene proves the cancel was processed first.

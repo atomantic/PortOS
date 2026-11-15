@@ -27,6 +27,7 @@ import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { musicVideoCastInputsRecord } from '../../lib/musicVideoCastLook.js';
 import { captureImageFrameDependencies, captureTakeDependencies, musicVideoTakeChanges, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { extendTakeRecord, sequenceTakeRecord, sequenceTakeSelectionPatch } from '../../lib/musicVideoSequenceTake.js';
+import { isMusicVideoRenderTier } from '../../lib/musicVideoRenderTier.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
@@ -220,6 +221,7 @@ export function setSceneLastFailure(project, sceneId, failure) {
       lane: failure.lane === 'video' ? 'video' : 'image',
       error: trimTo(String(failure.error || '').replace(/\s+/g, ' ').trim(), MAX_FAILURE_ERROR_CHARS) || 'Render failed',
       at: failure.at || new Date().toISOString(),
+      ...(failure.lane === 'video' && isMusicVideoRenderTier(failure.tier) ? { tier: failure.tier } : {}),
     } }
     : rest;
   return { project: replaceScene(project, idx, scene), scene };

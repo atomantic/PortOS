@@ -308,20 +308,32 @@ describe('production scene dispatch (#9066)', () => {
   it('submits a fal clip as exactly the take the step was priced for (falSceneTake)', async () => {
     const clipTag = { ...tag, productionStepKey: 'clip:mvs-a:base:1' };
     const falProject = { ...project, videoSettings: { backend: 'fal', falModelId: 'fal-ai/veo3.1/fast/image-to-video', falResolution: '1080p' } };
-    // A 4s cutaway on Veo 3.1 Fast (4/6/8s clips) renders 4s at the pinned resolution.
+    // A 4s cutaway on Veo 3.1 Fast (4/6/8s clips) renders 4s at the draft tier's resolution (#16178), not the pinned 1080p.
     await dispatchProductionStep({ stepKind: 'clip', project: falProject, scene, route: { kind: 'video', mode: 'fal', model: null }, tag: clipTag, settings });
     expect(submitVideoGenJob.mock.calls[0][0]).toMatchObject({
-      backend: 'fal', falModelId: 'fal-ai/veo3.1/fast/image-to-video', falDuration: 4, falResolution: '1080p',
+      backend: 'fal', falModelId: 'fal-ai/veo3.1/fast/image-to-video', falDuration: 4, falResolution: '720p',
     });
-    // A performance take sends only its lip-sync resolution: its length follows the song slice.
+    // A performance take sends only its lip-sync resolution (also at the draft tier): its length follows the song slice.
     await dispatchProductionStep({
       stepKind: 'clip', project: falProject, scene: { ...scene, shotMode: 'performance' },
       route: { kind: 'video', mode: 'fal', model: null }, tag: clipTag, settings,
     });
     const performance = submitVideoGenJob.mock.calls[1][0];
-    expect(performance).toMatchObject({ backend: 'fal', falResolution: '1080P' });
+    expect(performance).toMatchObject({ backend: 'fal', falResolution: '480P' });
     expect(performance).not.toHaveProperty('falDuration');
     expect(performance).not.toHaveProperty('falModelId');
+  });
+
+  // Uniquely catches a production run rendering a tiered lane at the saved resolution untagged (#16178).
+  it('renders a tiered fal clip at the draft tier and tags the job, leaving an untiered lane untagged', async () => {
+    const clipTag = { ...tag, productionStepKey: 'clip:mvs-a:base:1' };
+    const falProject = { ...project, videoSettings: { backend: 'fal', falModelId: 'bytedance/seedance-2.5/image-to-video', falResolution: '1080p' } };
+    await dispatchProductionStep({ stepKind: 'clip', project: falProject, scene, route: { kind: 'video', mode: 'fal', model: null }, tag: clipTag, settings });
+    const tiered = submitVideoGenJob.mock.calls[0][0];
+    expect(tiered.falResolution).toBe('480p');
+    expect(tiered.musicVideo.tier).toBe('draft');
+    await dispatchProductionStep({ stepKind: 'clip', project, scene, route: { kind: 'video', mode: 'grok', model: null }, tag: clipTag, settings });
+    expect(submitVideoGenJob.mock.calls[1][0].musicVideo).not.toHaveProperty('tier');
   });
 
   // Uniquely catches a style-break end frame (#11173) never reaching fal, or
