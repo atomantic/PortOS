@@ -22,13 +22,13 @@ import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { advanceCandidateLifecycle } from './releaseCandidateLifecycle.js';
 import { withGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 
-import { withClaimOwnershipLock, readClaimOwnershipAgents, checkoutRetirementFenceReason } from './cosClaimOwnershipState.js';
+import { withClaimOwnershipLock, readClaimOwnershipAgents } from './cosClaimOwnershipState.js';
 
 const normalize = (p) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
 const samePath = (a, b) => typeof a === 'string' && typeof b === 'string' && normalize(a) === normalize(b);
 const branchOf = (wt) => String(wt?.branch || '').replace(/^refs\/heads\//, '');
 
-export { withClaimOwnershipLock, readClaimOwnershipAgents, checkoutRetirementFenceReason, reserveCheckoutRetirementFence, retireWithUnlockedArchive } from './cosClaimOwnershipState.js';
+export { withClaimOwnershipLock, readClaimOwnershipAgents } from './cosClaimOwnershipState.js';
 
 // Match merge admission's pre-start budget, across BOTH queues. A deadline is
 // cancellation only until the state callback starts; afterwards it diagnoses
@@ -120,10 +120,6 @@ export async function updateClaimOwnership({ agentId, action, branch }) {
     wakeRecovery = action === 'release' ? !released.includes(branch)
       : isTruthyMeta(agent.claimSelectionPending ?? meta.claimSelectionPending)
         || (isTruthyMeta(agent.claimPicksOwnBranch ?? meta.claimPicksOwnBranch) && !bound.length && !released.length);
-    // Binding a checkout that is mid-archive would hand it to a run that the
-    // retirement then removes; releasing a branch never needs the fence.
-    const fenced = action === 'bind' && checkoutRetirementFenceReason({ repoPath, branch });
-    if (fenced) return { [done]: false, reason: fenced };
     return withGitMutationLifetime(async () => {
       const patch = action === 'bind' ? bindClaimBranch(agent, branch, Object.values(state.agents)) : releaseClaimBranch(agent, branch);
       if (patch.refused) return { [done]: false, reason: patch.refused };
@@ -157,7 +153,6 @@ export async function updateReleaseCandidateOwnership(agentId, action, { version
       || agent.metadata.isWorktree !== false || !Number.isFinite(Date.parse(agent.startedAt))) return { [done]: false, reason: 'release-owner-unverified' };
     const repoPath = agent.sourceWorkspace || agent.metadata?.sourceWorkspace || agent.workspacePath || agent.metadata?.workspacePath;
     if (!repoPath) return { [done]: false, reason: 'ownership-unreadable' };
-    if (checkoutRetirementFenceReason({ repoPath, branch })) return { [done]: false, reason: 'checkout-retirement-reserved' };
     return withGitMutationLifetime(async () => {
       if (action === 'reserve') {
         const { releasePreflight } = await import('./releasePreflight.js');
@@ -222,7 +217,6 @@ export async function updateReleaseSynchronizationOwnership(agentId, action) {
     const branch = inlineSynchronizationBranch(publication.identity);
     const repoPath = agent.sourceWorkspace || agent.metadata.sourceWorkspace || agent.workspacePath || agent.metadata.workspacePath;
     if (!repoPath) return { [done]: false, reason: 'ownership-unreadable' };
-    if (checkoutRetirementFenceReason({ repoPath, branch })) return { [done]: false, reason: 'checkout-retirement-reserved' };
     return withGitMutationLifetime(async () => {
       const prior = agent.metadata.releaseSynchronizationCheckout;
       if (prior && (prior.version !== 1 || prior.branch !== branch || prior.identity !== publication.identity
@@ -323,8 +317,6 @@ export async function checkReconcileOwnership(input, deps = {}) {
       .catch(() => 'pr-completion-policy-unavailable');
     if (completionHold) return { admitted: false, reason: completionHold };
     if (worktreePath && !samePath(holder?.path, worktreePath)) return { admitted: false, reason: 'holder-changed' };
-    const fenced = checkoutRetirementFenceReason({ repoPath, branch, path: holder?.path || null });
-    if (fenced) return { admitted: false, reason: fenced };
     const others = agentId ? agents.filter((a) => a?.id !== agentId) : agents;
     const reason = resolveLiveOwnerReason({
       branch, path: holder?.path || null, locked: Boolean(holder?.locked),
@@ -333,7 +325,7 @@ export async function checkReconcileOwnership(input, deps = {}) {
     return reason ? { admitted: false, reason } : { admitted: true };
   };
   if (!agentId || deps.reserve === false) return withGitMutationLifetime(admit)
-    .catch(() => ({ admitted: false, reason: 'checkout-retirement-reserved' }));
+    .catch(() => ({ admitted: false, reason: 'ownership-unreadable' }));
 
   const { cosEvents } = await import('./cosEvents.js');
   // Decided inside the lock a bind takes, so no bind can land between
@@ -367,7 +359,7 @@ export async function checkReconcileOwnership(input, deps = {}) {
     await save();
     cosEvents.emit('agent:updated', state.agents[agentId]);
     return admission;
-  }).catch(() => ({ admitted: false, reason: 'checkout-retirement-reserved' })));
+  }).catch(() => ({ admitted: false, reason: 'ownership-unreadable' })));
 }
 
 /** Read-only snapshot publication gate. Registered review work remains owned

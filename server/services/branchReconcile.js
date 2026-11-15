@@ -41,7 +41,7 @@ import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { ledgerPath, readVerdictLedger, partitionSuperseded, recordVerdictInstruction, recordVerdict, sameDirtyPaths } from './supersededLedger.js';
 import { claimCheckoutOwnerReason, RECONCILE_AGENT_ID_PLACEHOLDER } from '../lib/claimContinuation.js';
-import { withClaimOwnershipLock, readClaimOwnershipAgents, retireWithUnlockedArchive } from './cosClaimOwnership.js';
+import { withClaimOwnershipLock, readClaimOwnershipAgents } from './cosClaimOwnership.js';
 import { agentApiCurl } from '../lib/agentApiToken.js';
 import { localApiBaseUrl } from '../lib/networkExposure.js';
 
@@ -1193,7 +1193,8 @@ async function claimIssueUnreserved(target, issue, forgeExec) {
  *      SHIPPED_CLAIM_IDLE_MS, or (no PR at that head) the forge reports no open
  *      PR for the branch and the checkout has been untouched that long (see
  *      manualClaimShippedHold).
- *   5. recovery archives verify before removal and exact-head ref deletion.
+ *   5. removal re-checks holder, owners, content and merge evidence, and the
+ *      branch delete is pinned to its exact head.
  * A failed gate skips the branch with a reason. Age, an absent upstream, and
  * a cached merged flag never substitute for successful completion evidence.
  *
@@ -1336,13 +1337,12 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
  *
  * @param {string} repoPath
  * @param {object} b - a gathered branch entry
- * @param {{ activeAgentIds?: Set<string>, staleClaimIdleMs?: number, allowLiveClaim?: boolean, label: string, requireCleanWorktree?: boolean, unmanagedIdleMs?: number, prepare?: () => Promise<any> }} opts
+ * @param {{ activeAgentIds?: Set<string>, staleClaimIdleMs?: number, allowLiveClaim?: boolean, label: string, requireCleanWorktree?: boolean, unmanagedIdleMs?: number, prepare?: () => Promise<{ error: string }|null> }} opts
  *   `prepare` runs after every gate has passed and before the first irreversible
  *   step, and aborts the retirement by resolving to `{ error }`. That is the only
  *   place a last recheck belongs: earlier it is paid for branches that are
- *   then refused, later it is too late to matter. It runs
- *   with the claim-ownership lock released and the branch fenced, and removal
- *   then refuses a worktree whose dirty paths no longer match `b.dirtyPaths`.
+ *   then refused, later it is too late to matter. It runs inside the
+ *   claim-ownership section, so it must stay a local read (no fetch or forge call).
  *
  *   `requireCleanWorktree` (default true) is the caller's answer to "could this
  *   tree hold work that is not accounted for?". For `cleanupMerged` it can, so a
@@ -1354,7 +1354,7 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
  *   once it has sat idle that long (see SUPERSEDED_UNMANAGED_IDLE_MS).
  *   Merged retirement instead admits the actual holder of the named branch
  *   regardless of location after re-proving integration at its current head.
- * @returns {Promise<{ ok: true, prepared?: any } | { ok: false, reason: string, retryAt?: string }>}
+ * @returns {Promise<{ ok: true } | { ok: false, reason: string, retryAt?: string }>}
  */
 async function retireBranch(repoPath, b, opts) {
   const supplied = opts.claimOwners;
@@ -1388,42 +1388,30 @@ async function retireBranch(repoPath, b, opts) {
       if (await isMergedPrHead(repoPath, b.branch, head)) opts = { ...opts, disposableHead: head };
     }
   }
-  // A merged checkout's archive runs between two ownership critical sections
-  // (#12682) so it cannot starve the shared queue; removal re-proves everything.
-  return retireWithUnlockedArchive({
-    busy: () => ({ ok: false, reason: 'checkout-retirement-reserved' }),
-    admit: async () => {
-      const agents = await readAgents().catch(() => null);
-      const reason = claimCheckoutOwnerReason({
-        branchName: b.branch, holderPath: b.worktreePath, sourceWorkspace: repoPath, agents,
-      });
-      if (reason) return { result: { ok: false, reason } };
-      // Refresh workspace owners from the registry read under the binding lock
-      // (not only explicit claim bindings). The caller's `allowLiveClaim` stands:
-      // a merged claim's hold is waived only by completion evidence, below.
-      const gated = await admitBranchRetirement(repoPath, b, {
-        ...opts,
-        activeAgentIds: buildActiveOwnerIds(opts.activeAgentIds, agents),
-      });
-      if (gated.result) return gated;
-      if (!gated.archiveTree && !gated.prepare) return { result: await finishBranchRetirement(repoPath, gated) };
-      return { fence: { repoPath, path: gated.archiveTree?.path ?? gated.b.worktreePath, branch: gated.b.branch }, gated };
-    },
-    // The superseded backup copies dirty files, so it takes this window too (#12748).
-    archive: async ({ gated }) => {
-      const prepared = gated.prepare ? await gated.prepare() : null;
-      if (prepared?.error) return { result: { ok: false, reason: prepared.error } };
-      if (!gated.archiveTree) return { archive: { prepared, preservation: prepared?.preservation || null } };
-      // Removal re-proves merge evidence and ownership, and checks ignored content.
-      const status = await execGit(['status', '--porcelain'], gated.archiveTree.path).then(r => r.stdout, () => null);
-      if (status === null) return { result: { ok: false, reason: 'worktree-status-unavailable' } };
-      return { archive: { prepared, preservation: null } };
-    },
-    finish: ({ gated }, { prepared, preservation }) => finishBranchRetirement(repoPath, gated, { prepared, preservation }),
+  // One ownership critical section re-reads owners, gates and removes, so a bind
+  // lands before the owner read or after the removal. The forge reads above and
+  // the caller's fetch stay outside it.
+  return withClaimOwnershipLock(async () => {
+    const agents = await readAgents().catch(() => null);
+    const reason = claimCheckoutOwnerReason({
+      branchName: b.branch, holderPath: b.worktreePath, sourceWorkspace: repoPath, agents,
+    });
+    if (reason) return { ok: false, reason };
+    // Refresh workspace owners from the registry read under the binding lock
+    // (not only explicit claim bindings). The caller's `allowLiveClaim` stands:
+    // a merged claim's hold is waived only by completion evidence, below.
+    const gated = await admitBranchRetirement(repoPath, b, {
+      ...opts,
+      activeAgentIds: buildActiveOwnerIds(opts.activeAgentIds, agents),
+    });
+    if (gated.result) return gated.result;
+    const prepared = gated.prepare ? await gated.prepare() : null;
+    if (prepared?.error) return { ok: false, reason: prepared.error };
+    return finishBranchRetirement(repoPath, gated);
   });
 }
 
-/** Every gate before the archive. Returns `{ result }` to stop, else the context removal needs. */
+/** Every gate before removal. Returns `{ result }` to stop, else the context removal needs. */
 async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null, appId = null, disposableHead = null, superseded = false }) {
   const stop = result => ({ result });
   if (PROTECTED_BRANCHES.includes(b.branch)) return stop({ ok: false, reason: 'protected-branch' });
@@ -1446,7 +1434,6 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
   if (prepare && expectedHead !== b.tip) return stop({ ok: false, reason: 'branch-head-changed' });
   const policyHold = await readPolicyHold();
   if (policyHold) return stop({ ok: false, reason: policyHold });
-  let archiveTree = null;
   let claimCompletion = null;
   let holders = null;
   if (mergedRetirement) {
@@ -1515,9 +1502,8 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
     }
     const tree = holders ? holders.find(wt => wt.path === b.worktreePath) : (await listWorktrees(repoPath)).find(wt => wt.path === b.worktreePath);
     if (!tree || tree.head !== expectedHead) return stop({ ok: false, reason: 'worktree-holder-changed' });
-    archiveTree = tree;
   }
-  return { b, expectedHead, readPolicyHold, archiveTree, mergeTarget, label, requireCleanWorktree: requireCleanWorktree && disposableHead !== expectedHead, prepare, claimOwners, mergedRetirement, claimCompletion, appId };
+  return { b, expectedHead, readPolicyHold, mergeTarget, label, requireCleanWorktree: requireCleanWorktree && disposableHead !== expectedHead, prepare, claimOwners, mergedRetirement, claimCompletion, appId };
 }
 
 /**
@@ -1560,11 +1546,11 @@ export async function checkoutIdleMs(worktreePath) {
 }
 
 /**
- * Removal and branch deletion. `preservation` is an optional held-checkout record
- * (production removal does not create one) and `prepared` is the `prepare` result,
- * taken after admission with the ownership lock released.
+ * Removal and branch deletion, in the same ownership section as admission. Agent
+ * registration and checkout content change without that lock, so removal
+ * re-checks them at Git's mutation boundary.
  */
-async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHold, mergeTarget, label, requireCleanWorktree, claimOwners, mergedRetirement, claimCompletion, appId }, { prepared = null, preservation = null } = {}) {
+async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHold, mergeTarget, label, requireCleanWorktree, claimOwners, mergedRetirement, claimCompletion, appId }) {
   let removal = null;
   let checkoutIdentity = null;
   if (b.worktreePath) {
@@ -1593,7 +1579,7 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
       if (dirtyPaths === null) return 'worktree-status-unavailable';
       if (requireCleanWorktree && dirtyPaths.length) return 'worktree-dirty';
       if (mergedRetirement && !await hasBranchMergeEvidence(repoPath, expectedHead, mergeTarget).catch(() => false)) return 'not-merged-on-recheck';
-      return preservation ? preservation.verify(holder) : null;
+      return null;
     };
     // Merge evidence does not cover ignored local content; removal checks it separately.
     removal = await forceRemoveWorktreeDir(repoPath, b.worktreePath, { label, log: 'all', verifyRemoval });
@@ -1639,7 +1625,7 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
     },
   }).catch(() => false);
   if (!deleted) return { ok: false, reason: 'branch-ref-changed-or-delete-failed' };
-  return { ok: true, prepared };
+  return { ok: true };
 }
 
 /**
@@ -1786,36 +1772,20 @@ async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { active
       if (dirty) return 'worktree-dirty';
       return await isStillDetachedOnMerged(repoPath, tree.path, defaultBranch) ? null : 'worktree-head-changed';
     };
-    // The archive runs between two ownership critical sections (#12682) so it
-    // cannot starve the shared ownership queue; removal re-proves everything.
-    const removal = await retireWithUnlockedArchive({
-      busy: () => ({ removed: false, reason: 'checkout-retirement-reserved' }),
-      admit: async () => {
-        const current = (await listWorktrees(repoPath).catch(() => null))?.find(holder => holder.path === tree.path);
-        if (!current || current.head !== tree.head || current.branch) return { result: { removed: false, reason: 'worktree-holder-changed' } };
-        const initialHold = await verifyRemoval(current);
-        if (initialHold) return { result: { removed: false, reason: initialHold } };
-        return { fence: { repoPath, path: tree.path }, current };
-      },
-      // Removal independently checks ignored local content.
-      archive: async ({ current }) => ({ archive: {
-        verify: async holder => {
-          if (!holder || holder.head !== current.head || holder.branch) return 'worktree-holder-changed';
-          const status = await execGit(['status', '--porcelain'], current.path).then(r => r.stdout, () => null);
-          if (status === null || !classifyWorktreeDirt(status).clean) return 'worktree-dirty';
-          return null;
-        },
-      } }),
-      finish: async (_admitted, preservation) => {
-        const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path).catch(() => null);
-        const removed = await forceRemoveWorktreeDir(repoPath, tree.path, {
-          label: '🔀 branch-reconcile: remove detached worktree', log: 'all',
-          verifyRemoval: async holder => await verifyRemoval(holder) || await preservation.verify(holder),
-        });
-        if (!removed.removed) return removed;
-        await recordDetachedRetirement(repoPath, appId, { path: tree.path, head: tree.head, checkoutIdentity });
-        return removed;
-      },
+    // One ownership section: a bind lands before the owner read or after removal.
+    const removal = await withClaimOwnershipLock(async () => {
+      const current = (await listWorktrees(repoPath).catch(() => null))?.find(holder => holder.path === tree.path);
+      if (!current || current.head !== tree.head || current.branch) return { removed: false, reason: 'worktree-holder-changed' };
+      const initialHold = await verifyRemoval(current);
+      if (initialHold) return { removed: false, reason: initialHold };
+      const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path).catch(() => null);
+      const removed = await forceRemoveWorktreeDir(repoPath, tree.path, {
+        label: '🔀 branch-reconcile: remove detached worktree', log: 'all',
+        verifyRemoval: async holder => (holder && holder.head !== current.head ? 'worktree-holder-changed' : verifyRemoval(holder)),
+      });
+      if (!removed.removed) return removed;
+      await recordDetachedRetirement(repoPath, appId, { path: tree.path, head: tree.head, checkoutIdentity });
+      return removed;
     });
     if (!removal.removed) {
       hold(tree, removal.reason || 'worktree-remove-failed');

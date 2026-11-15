@@ -22,7 +22,6 @@ vi.mock('./prProbe.js', async original => ({
 import { cleanupAgentWorktree } from './agentWorktreeCleanup.js';
 import { readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
 import { verifyAgentRepoState } from './agentRepoStateVerification.js';
-import { reserveCheckoutRetirementFence, withClaimOwnershipLock } from './cosClaimOwnershipState.js';
 
 describe('claim coordinator cleanup', () => {
   let sandbox, checkout, head;
@@ -135,16 +134,6 @@ describe('claim coordinator cleanup', () => {
       expect(result).toEqual([]);
       expect(existsSync(checkout)).toBe(false);
     }
-  });
-
-  it('respects a checkout retirement reserved through another repository spelling', async () => {
-    const alias = join(sandbox.scratch, 'repo-alias');
-    await symlink(sandbox.repo, alias, 'dir');
-    const release = await withClaimOwnershipLock(() => reserveCheckoutRetirementFence({ repoPath: alias, path: checkout, branch }));
-    try {
-      expect(await run()).toEqual([expect.stringContaining('checkout-retirement-reserved')]);
-      expect(existsSync(checkout)).toBe(true);
-    } finally { await withClaimOwnershipLock(release); }
   });
 
   it.each(['present', 'absent', 'unreadable'])('uses Git’s non-forced removal for a clean unmerged stand-down with remote %s', async remote => {

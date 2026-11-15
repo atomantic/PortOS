@@ -140,7 +140,6 @@ import {
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
 import { recordHeldCheckoutRetirement, recordWorkspaceCheckoutRetirement } from './branchReconcileOutcome.js';
-import { withClaimOwnershipLock, checkoutRetirementFenceReason } from './cosClaimOwnership.js';
 import { hasCompletedCheckoutEvidence } from './completedCheckoutEvidence.js';
 import { execGit } from '../lib/execGit.js';
 import { execGh } from './github.js';
