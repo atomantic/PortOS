@@ -1,3 +1,11 @@
+/**
+ * `useMediaUsages()` → `{ '<kind>:<ref>': usages[] }`, the records using each media file (`GET
+ * /media/usages`), shared by every mounted consumer and fetched on mount/reconnect.
+ *
+ * `refreshMediaUsages()` after a delete. Use when: A media card or viewer that shows where an item
+ * is used, or guards its delete.
+ */
+
 import { useEffect, useSyncExternalStore } from 'react';
 import socket from '../services/socket';
 import { getMediaUsages } from '../services/api';

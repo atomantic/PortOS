@@ -1,6 +1,10 @@
 // Layered a cappella playback — decode N recorded vocal takes and start them
 // together on one AudioContext so they stack into a multi-part performance.
 //
+// `createLayeredPlayer(takes)` — decode N recorded vocal takes and start them together on one shared
+// `AudioContext` so they stack into a layered a cappella performance (sample-aligned, per-layer mute).
+// Used by the Song editor's recording mixer.
+//
 // Web Audio (not N <audio> elements) because only a shared AudioContext clock
 // lets us start every buffer on the same `when` timestamp — <audio> elements
 // drift by tens of ms, which is audible on a tight harmony. Each take gets its

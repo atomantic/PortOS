@@ -1,4 +1,13 @@
 /**
+ * `spawnSetupScript`, `stopSetupScript` and `SETUP_IMAGE_VIDEO_SCRIPT` run and cancel the shared
+ * image/video setup installer script.
+ *
+ * `spawnSetupScript(envVars)` / `stopSetupScript(child)` / `SETUP_IMAGE_VIDEO_SCRIPT` — the one way to
+ * run `scripts/setup-image-video.sh` (shared by the Video Gen BYOV runtimes, the music engines and the
+ * MuScriptor venv). Runs it under `resolveBashBinary()` with a `toBashPath` script path, and on
+ * Windows presets the `PYTHON_BIN` the script would otherwise default to `python3` for. Cancel via
+ * `stopSetupScript`, which tree-kills so uv / pip / git die with bash.
+ *
  * Spawn (and cancel) `scripts/setup-image-video.sh` — the single installer the
  * Video Gen BYOV runtimes, the music engines and the MuScriptor MIDI venv all
  * shell out to, each with a different `INSTALL_*` env var set.

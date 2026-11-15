@@ -1,3 +1,7 @@
+/**
+ * Per-project working-context save/restore (branch, shells, tasks).
+ */
+
 import { request } from './apiCore.js';
 
 // Workspace Contexts (#902) — per-project working-context save/restore.

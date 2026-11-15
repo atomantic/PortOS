@@ -3,6 +3,23 @@
  * `childProcess.guards.test.js`, `timerCallbackConventions.test.js` and
  * `sockets/asyncHandlerGuard.test.js`.
  *
+ * Lexer-assisted primitives shared by the whole-tree source-scan guard suites, so the timer rule and
+ * the socket rule cannot drift on what "owns its rejection" means. `blankLiterals(src)` blanks
+ * comment/string/template/regex CONTENT to spaces while preserving length, so a brace inside a literal
+ * cannot skew a bracket walk and a caller can still read a literal (a socket event name) out of the
+ * original string at the same offset; `matchBracket(src, open)` returns the index past the matching
+ * `)`/`]`/`}`; `parseCallbackAt(blanked, from, limit)` parses the function expression at `from`
+ * (`async`/`function`/either arrow spelling, skipping the parameter list as a unit so a `= {}` default
+ * is not mistaken for the body) and returns `{isAsync, start, text}`; `unguardedAwaits(body)` returns
+ * the awaited chains that neither sit inside a `try`/`catch` nor END in `.catch(…)`.
+ * `blankComments(src)` is the weaker LINE-based stripper the per-line `child_process` rule needs.
+ * `blankLiterals(src, { includeCommentOnly: true })` returns `{ code, blanked }` (the comment-only and
+ * fully blanked views) in one lexer traversal for guards needing both. `blankCommentBodies(src)` is
+ * the complement — comments blanked, literal TEXT kept — for a caller that reads a message string and
+ * must not see a marker written in a comment beside it. Callers: `childProcess.guards.test.js`,
+ * `server/timerCallbackConventions.test.js`, `server/logLevelConventions.test.js`,
+ * `server/sockets/asyncHandlerGuard.test.js`, `server/process-safety-net.test.js`.
+ *
  * Those guards enforce structural rules no runtime test can reach ("every spawn
  * goes through the wrapper", "every await outside the request lifecycle owns its
  * rejection"), so each one reads source as text and each one needs the same

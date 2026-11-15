@@ -1,5 +1,8 @@
 // Casting > Design: rounds of face variations for one cast member.
 //
+// Casting Design rounds: `design:<roundId>:<n>` take roles (`designTakeRole`, `designRoundId`,
+// `designTakeIndex`), framings, feature grids (`featureLines`) and blend steps (`blendLines`).
+//
 // A take is an ordinary catalog reference whose role is `design:<roundId>:<n>`
 // (n = its place in the round, since takes finish out of order),
 // left out of likeness (so sheets, guides and conditioning never pick it) and

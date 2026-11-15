@@ -1,3 +1,8 @@
+/**
+ * `appendEidoverseIslandLandscape` appends deterministic coastline, ocean, and distant mountain-island
+ * geometry to the Commons asset.
+ */
+
 /** Bounded, deterministic island scenery. No textures, downloads, or AI calls. */
 export function appendEidoverseIslandLandscape(quad) {
   const steps = 128;

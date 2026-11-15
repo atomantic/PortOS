@@ -1,3 +1,9 @@
+/**
+ * MeatSpace POST drill-run state, refresh snapshots, scoring, and idempotent test/training saves.
+ *
+ * Use when: POST launcher and drill runners.
+ */
+
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTrainingRun } from '../services/api';
 import toast from '../components/ui/Toast';

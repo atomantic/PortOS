@@ -1,6 +1,12 @@
 /**
  * Pure manuscript text normalizer for the Manuscript editor's "Format" button.
  *
+ * `formatManuscript(text, stageId)` / `REFLOW_STAGES` — normalize a manuscript section's text for the
+ * editor's "Format" button: undo PDF-paste artifacts (stylized drop-cap split onto its own line,
+ * hyphen-split words, trailing whitespace, runaway blank lines) for every stage, and additionally
+ * reflow soft-wrapped lines back into paragraphs for `prose` only (scripts keep their structural line
+ * breaks). Pure/DOM-free.
+ *
  * The motivating mess: text pasted out of a PDF export arrives hard-wrapped at
  * the page margin (every visual line is a real `\n`), with stylized drop-caps
  * split onto their own line ("T\nhe dawn …"), words hyphenated across the wrap

@@ -1,4 +1,11 @@
 /**
+ * Re-export of `server/lib/goalFeatureMap.js` — deterministic goal `category` → PortOS feature-area
+ * deep-link map (Daily Driver).
+ *
+ * `getGoalFeatureAreas(goal)` honors the per-goal `featureAreas` override.
+ */
+
+/**
  * Goal → instance-feature mapping.
  *
  * Re-export of `server/lib/goalFeatureMap.js` — the one definition of this rule,

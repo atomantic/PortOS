@@ -1,3 +1,17 @@
+/**
+ * `LOCAL_REVIEW_BRIDGE_SCRIPT`: absolute path of the stdin bridge script that invokes the local
+ * code-review service with the same reviewers.
+ *
+ * `LOCAL_REVIEW_BRIDGE_SCRIPT` — absolute path of `server/scripts/run-local-code-review.mjs`, the
+ * stdin bridge into the local-review service (same reviewers and `timeoutMs` forwarding as `POST
+ * /api/code-review/local`, no HTTP and so no instance-password gate).
+ * `localReviewAttributionErrorGate` retains completed review evidence and blocks publication
+ * separately from reviewer availability when receipt persistence fails. `localReviewBridgeRequest`
+ * preserves claim-review isolation even if its redundant `toolFree` flag is cleared. Shared by the two
+ * prompt builders that hand it to agents, so renaming the script cannot break one while the other
+ * keeps working.
+ */
+
 import { join } from 'path';
 import { PATHS } from './fileUtils.js';
 

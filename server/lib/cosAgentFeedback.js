@@ -1,6 +1,9 @@
 /**
  * Shared CoS feedback eligibility rules.
  *
+ * Pure shared eligibility, rating, update-target, and archive-locator predicates for durable CoS
+ * feedback actions; mirrored to the client so the queue and Agents tab use the server contract.
+ *
  * The queue, pending-feedback store, server submission boundary, and Agents
  * tab must agree on exactly which completed runs can receive a human rating.
  * Keep this module pure so the client can re-export the same predicates.

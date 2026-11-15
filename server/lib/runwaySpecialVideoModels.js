@@ -1,3 +1,8 @@
+/**
+ * Aleph 2 video-edit and Act-Two character-performance capabilities, schema compatibility and request
+ * validation.
+ */
+
 /** Runway workflows with video inputs, separate from text/start-frame model choices. */
 export const RUNWAY_SPECIAL_VIDEO_MODELS = Object.freeze([
   { id: 'aleph2', label: 'Aleph 2', mode: 'video-edit', endpoint: 'video_to_video', promptMaxChars: 1000, prompt: 'optional', minSec: 2, maxSec: 30 },

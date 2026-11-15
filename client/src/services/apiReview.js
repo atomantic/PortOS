@@ -1,3 +1,7 @@
+/**
+ * Review hub.
+ */
+
 import { request, queryString } from './apiCore.js';
 import { ACTION_QUEUE_CHANGED } from '../constants/events.js';
 

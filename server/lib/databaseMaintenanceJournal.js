@@ -1,3 +1,15 @@
+/**
+ * Database maintenance coordination: `databaseMaintenanceEndpointSchema`, a cross-process admission
+ * fence, and a durable operation journal with exclusive coordinator and worker reservations.
+ *
+ * Shared `databaseMaintenanceEndpointSchema` plus durable cross-process database admission fence and
+ * operation journal with exclusive coordinator ownership, one-use detached worker reservations,
+ * exit-receipt-gated ownership recovery, worker process-group records, immutable recovery-dump and
+ * import receipts, durable forward-only stages through `verified`, per-pid target proofs from a
+ * restarted server, token-persisting same-operation recovery, and `releaseAdmission` (authority
+ * record, then completed archive); source-only cancellation archives an unowned accepted operation.
+ */
+
 import { existsSync, lstatSync, mkdirSync, linkSync, unlinkSync, openSync, closeSync, fsyncSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';

@@ -2,6 +2,11 @@
  * Line-block diff (Myers LCS over lines) — the structural layer behind the
  * hunked manuscript diffs. Pure / no React.
  *
+ * `diffLineBlocks(oldText, newText)` → `{ blocks }` (`{ type: 'same', lines }` / `{ type: 'change',
+ * oldLines, newLines }`) — line-level Myers LCS with common prefix/suffix trim and a 4M-cell
+ * `LINE_DIFF_CELL_CAP` guard. The structural layer behind `HunkDiff` (collapse same-blocks to context,
+ * word-diff each change-block).
+ *
  *   diffLineBlocks(oldText, newText) → { blocks }
  *   block = { type: 'same', lines } | { type: 'change', oldLines, newLines }
  *

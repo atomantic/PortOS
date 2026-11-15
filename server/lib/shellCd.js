@@ -1,6 +1,19 @@
 /**
  * Build a `cd` command line for the shell a PTY session is actually running.
  *
+ * `buildCdCommand(path, shell)` + `formatShellCommandLine(command, args, shell)` +
+ * `detectShellFlavor(shell, platform?)` + `quoteForShell(value, flavor, position?)` — build `cd` and
+ * arbitrary command-token lines for the shell a PTY session is ACTUALLY running (`cmd.exe` →
+ * Windows-escaped double quotes, PowerShell → doubled single quotes with `&` for a quoted command
+ * token, everything else → POSIX `shellQuote`). The Shell page's "cd to app" picker used to hard-code
+ * the POSIX form, which on Windows both mis-quoted the path and silently refused to cross drives (a
+ * bare `cd` does not switch drive). Flavor comes from the shell binary name, not the platform, so
+ * git-bash on Windows still gets POSIX quoting. `formatShellCommandLine` joins a command + argv into
+ * one quoted line and is shared by `agentTuiSpawning.js#buildTuiSpawnConfig` and the AI Providers
+ * page's "Launch in Shell" deep link, so a hand-launched TUI provider is quoted exactly the way the
+ * CoS runner would quote it. Renders the LINE only; the Enter byte that submits it is `SUBMIT_KEY` in
+ * `tuiHandshake.js`.
+ *
  * The Shell page's "cd to app" picker used to send a hard-coded POSIX
  * `cd '<path>'` to every session. On Windows that fails twice over, because the
  * default shell is `cmd.exe` (`COMSPEC`):

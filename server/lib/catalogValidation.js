@@ -1,6 +1,9 @@
 /**
  * Zod validation schemas for the Creative Ingredients Catalog routes.
  *
+ * Creative ingredients catalog route schemas (scraps, ingredients, links, relations, tags, revisions,
+ * sync envelope).
+ *
  * Domain-namespaced (imported as `catalogValidation.X` from the lib barrel)
  * so cross-domain identifier collisions never bite. The route handler in
  * server/routes/catalog.js uses `validateRequest(schema, body)` against these.

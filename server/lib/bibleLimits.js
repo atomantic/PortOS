@@ -3,6 +3,10 @@
  * limits every story-bible sanitizer, Zod schema, and catalog payload upgrade
  * measures against.
  *
+ * `BIBLE_LIMITS` — the canon field length/count caps every story-bible sanitizer, Zod schema, and
+ * catalog payload upgrade measures against. A pure leaf split out of `storyBible.js` (which pulls
+ * `crypto` + `fileUtils`) so `catalogTypes.js` and the browser bundle can read the numbers alone.
+ *
  * A pure leaf on purpose: `server/lib/storyBible.js` (which owns the
  * sanitizers) pulls `crypto` and `fileUtils`, and `server/lib/catalogTypes.js`
  * plus the browser bundle need only the numbers. Keeping the table here lets

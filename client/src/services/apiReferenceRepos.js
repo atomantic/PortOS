@@ -1,3 +1,7 @@
+/**
+ * Per-app reference-repo registry.
+ */
+
 import { request } from './apiCore.js';
 
 // Reference repos — upstream code we borrow from. Each entry is per-app.

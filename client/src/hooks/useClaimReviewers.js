@@ -1,3 +1,12 @@
+/**
+ * The reviewers a `/do:next` claim will ACTUALLY run for one app — claim-work task metadata resolved
+ * OVER the Code Review Defaults, with `source` naming the layer that won.
+ *
+ * Stays `resolved: false` on a failed lookup so "couldn't ask" never reads as "nothing configured".
+ * Use when: Any claim launcher (SlashDoRunDrawer, IssuesTab). `useCodeReviewDefaults` can't see a
+ * claim-work override and would show reviewers the run won't use.
+ */
+
 import { useEffect, useState } from 'react';
 import * as api from '../services/api';
 

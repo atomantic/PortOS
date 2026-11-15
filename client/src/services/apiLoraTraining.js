@@ -1,4 +1,9 @@
-/** Retained checkpoint inspection and character-to-inference-adapter lookup. */
+/**
+ *  Retained checkpoint inspection and character-to-inference-adapter lookup.
+ *
+ * Retained checkpoint inspection and character→adapter lookup. Retired training/dataset mutation
+ * wrappers are removed.
+ */
 import { request } from './apiCore.js';
 
 export const listLoraTrainingCheckpoints = (runId, options = {}) =>

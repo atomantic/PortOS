@@ -1,3 +1,10 @@
+/**
+ * Best-effort server-owned audit launch revision and committed-tree inventory digest/count.
+ *
+ * Mutable workspace state is observed separately; this is not reviewed-file coverage or score
+ * certification.
+ */
+
 import { createHash } from 'node:crypto';
 import { execGit } from './execGit.js';
 

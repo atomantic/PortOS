@@ -1,8 +1,14 @@
 /**
- * Lane-health metrics (#12088): what happened to the issues each audit lane
- * filed. Pure — the forge and git reads live in `services/appLaneHealth.js`;
- * this module only counts and matches, so revert and re-file detection can be
- * pinned with fixtures.
+ * Lane-health metrics (#12088): what happened to the issues each audit lane filed.
+ *
+ * Lane-health metrics (#12088): `computeLaneHealth` counts, per audit lane (metric label,
+ * `auditLanes`), the issues filed in a window and how they ended — completed, not planned/duplicate,
+ * fix reverted (a `Revert` commit naming the PR or a SHA of it), re-filed (a new issue citing a
+ * `path/to/file.ext` a closed one cited within 30 days); `laneHealthFor` picks one lane,
+ * `describeLaneFlag` words a flag. Pure; `services/appLaneHealth.js` supplies the forge and git reads.
+ *
+ * Pure — the forge and git reads live in `services/appLaneHealth.js`; this module only counts and
+ * matches, so revert and re-file detection can be pinned with fixtures.
  *
  * A lane is an audit definition's metric label (`auditCatalog.js`). An issue
  * belongs to every lane whose metric label it carries, except that a shared

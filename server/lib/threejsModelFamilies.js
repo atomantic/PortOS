@@ -1,6 +1,12 @@
 /**
  * Subject-family checklists for Three.js model generation.
  *
+ * Curated subject-family checklists for Three.js generation. `THREEJS_MODEL_FAMILY_OPTIONS` /
+ * `THREEJS_MODEL_FAMILY_IDS` drive the picker and route validation; `buildThreejsFamilyChecklist(id)`
+ * returns the prompt block spliced into generation (`''` for the default `general`, so an un-narrowed
+ * subject keeps the unchanged general-purpose prompt); `findMissingFamilyComponents(spec, id)` reports
+ * which required components the spec never mentions.
+ *
  * `evaluateThreejsPartCoverage` proves a spec built what it promised, never that
  * it promised enough — a component nobody noticed is never inventoried, never
  * specified, and passes every structural gate. A family checklist closes that

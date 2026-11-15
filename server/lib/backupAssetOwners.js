@@ -1,4 +1,11 @@
 /**
+ * `BACKUP_ASSET_OWNERS` inventories every durable file-plus-row owner as `admitted`, `reference-only`,
+ * or `outstanding`.
+ *
+ * `backupAssetConsistency()` derives the consistency a backup snapshot may claim (`global` only when
+ * nothing is outstanding, otherwise `admitted-owners` with the outstanding ids). Its test keeps
+ * admitted entries and `withBackupAssetPublication` call sites in step.
+ *
  * Inventory of durable asset owners for backup snapshot consistency (#9923).
  * Scope: enumerated managed runtime writers using the shared install protocol.
  * External tools and preexisting corruption are outside this concurrency claim.

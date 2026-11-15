@@ -1,3 +1,11 @@
+/**
+ * Per-app scheduled-task override mutations (`{ handleUpdateOverride, handleBulkToggleOverride }`)
+ * with shared toast copy + silent flag.
+ *
+ * Pass the tab's `refetch`. Use when: Any surface hosting `PerAppOverrideList` (Schedule tab,
+ * Timeline tab) — don't re-copy the write-plus-toast-plus-refetch handlers.
+ */
+
 import { useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';

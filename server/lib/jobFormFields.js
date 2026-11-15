@@ -1,6 +1,18 @@
 /**
  * Custom configuration fields for a scheduled agent job.
  *
+ * A scheduled agent job's own configuration form (pure). `JOB_FORM_FIELD_TYPES`
+ * (text/textarea/number/select/checkbox), the `jobFormFieldsSchema` / `jobFormValuesSchema` pair
+ * Zod-validates the job payload against, and the prompt projection `formatJobFormValues(fields,
+ * values)` / `appendJobFormValues(job, prompt)`. Definitions and values are stored separately so
+ * re-aiming a job (a new value) is not an edit to its design (a new field), and the projection
+ * iterates DEFINITIONS — a value whose field was deleted is inert. A field the user left blank is
+ * omitted rather than passed as an empty line, but a `false` checkbox is a real answer and is kept.
+ * Consumed by `services/autonomousJobs/skillTemplates.js`; the values reach the agent as the prompt's
+ * `## Run configuration` section. `describeReaimedValues(fields, saved, run)` names the values a
+ * manual run changed, as the one-line description suffix that keeps a re-aimed run from colliding with
+ * a differently-aimed twin in `addTask`'s first-line dedupe.
+ *
  * A job's prompt says what to do; these say what to do it *with*. A job may
  * declare its own small form — a subject line, extra instructions, a variant to
  * pick, a flag to set — so one prompt can be re-aimed without rewriting it, and

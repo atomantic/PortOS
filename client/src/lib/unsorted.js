@@ -1,3 +1,5 @@
+// Synthetic "Unsorted" collection from media not filed in any real collection.
+//
 // Synthetic "Unsorted" collection: every image/video that isn't filed in at
 // least one real collection. Derived client-side from the three list
 // endpoints that both /media/collections and /media/collections/:id already

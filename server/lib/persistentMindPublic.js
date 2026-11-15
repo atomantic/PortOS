@@ -1,4 +1,12 @@
-/** Safe client projection for the machine-local persistent-mind state. */
+/**
+ *  Safe client projection for the machine-local persistent-mind state.
+ *
+ * `publicPersistentMindState(state)` — the sole client/socket projection of durable mind state:
+ * exposes lifecycle fields, queue count, and the derived next wake time; drops queued message
+ * bodies/active wake payloads, and replaces free-form provider errors with coarse safe reasons.
+ * Non-user pause reasons pass through (credential-scrubbed) instead of reading "Paused by user", and
+ * `lastError` (coarse last-wake failure: killed/OOM, canceled, …) stays separate from `pauseReason`.
+ */
 
 import { nextPersistentMindWakeAt } from './persistentMind.js';
 import { normalizePersistentMindThinkingSelection } from './persistentMindThinkingPresets.js';

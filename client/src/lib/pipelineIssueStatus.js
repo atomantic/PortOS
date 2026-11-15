@@ -1,3 +1,13 @@
+/**
+ * `describePipelineIssueStatus(issue, opts)` returns `{ headline, tone, facts, next }` for a pipeline
+ * issue's status line.
+ *
+ * `describePipelineIssueStatus(issue, { stages, labels, autoRunActive, latest, activeStage })` → `{
+ * headline, tone, facts, next }` — the pipeline issue's status line (failed / generating /
+ * needs-review / next-empty stage, or the live auto-run frame in words) with the one next action.
+ * Pure; rendered by `components/ui/RecordStatusLine`.
+ */
+
 import { formatCount } from '../utils/formatters.js';
 
 /**

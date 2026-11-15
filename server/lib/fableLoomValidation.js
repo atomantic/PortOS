@@ -1,4 +1,7 @@
 /**
+ * FableLoom branching-narrative route schemas (loom/episode/node/transition CRUD, weave/branch/review,
+ * play turns).
+ *
  * Zod schemas for the FableLoom routes. Length caps come straight from
  * LOOM_LIMITS (the sanitizer's constants) so the door check and the
  * enforcement layer can never drift — the sprite/creative-commission

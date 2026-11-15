@@ -1,4 +1,15 @@
 /**
+ * Client re-export of music-video image effects (camera flash developing over a still): effect labels,
+ * develop lengths, and `sceneImageEffect`.
+ *
+ * Music-video image effects (a camera flash that develops over a still shot), re-exported from
+ * `server/lib/musicVideoImageEffects.js`: the effects, labels and develop lengths, `sceneImageEffect`,
+ * `imageEffectState`. Used by `components/musicVideo/SceneImageEffect.jsx` and the storyboard
+ * animatic. Also exports the still-photo sequence limits, frame-grid compiler `scenePhotoSequence` and
+ * absolute-time selector `photoSequenceIndex`.
+ */
+
+/**
  * Music Video image effects — re-export of `server/lib/musicVideoImageEffects.js`,
  * so the shot card's picker and the animatic paint the same effect as the final render.
  */

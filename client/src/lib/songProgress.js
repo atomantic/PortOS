@@ -1,6 +1,17 @@
 // Song training progress — the pure core for the "memorize / learn / track"
 // training mode (#1028, the capstone of the #1021 song-system umbrella).
 //
+// Pure training-progress core for the song system's memorize/learn/track mode.
+// `deriveTrainingSections(score, lyricSections?)` slices a lead-sheet score into blank-line-separated
+// trainable sections (each a self-contained header+block score, positional stable id, lyric-matched
+// label); `recordAttempt(progress, scope, summary)` appends a graded take to a scope's bounded rolling
+// history (drops zero-note takes); `scopeStats(progress, scope)`/`wholeSongStats` derive `{ attempts,
+// best, average, last, streak, learned }` (learned = streak of ≥`LEARNED_PERCENT` takes
+// ≥`LEARNED_STREAK`); `weakestSections(progress, sections)` ranks weak/un-attempted sections for
+// spaced-repetition; `memorizationPercent` is the learned-section share; `hideLevelFor(average)` maps
+// a rolling average to a progressive lyric/note-hiding level (`show`/`dim`/`hide`/`blind`). No
+// React/audio — `useSongTraining` drives it.
+//
 // This module is deliberately PURE (no React, no Web Audio, no notation/DSP
 // library): it slices a lead-sheet score into trainable SECTIONS, appends a
 // graded take to a rolling per-scope accuracy HISTORY, and derives the

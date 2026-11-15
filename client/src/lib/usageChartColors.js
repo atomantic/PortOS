@@ -1,4 +1,6 @@
 // Keep provider colors consistent across the rolling and calendar-month charts.
+//
+// `seriesColors(series)` — shared provider palette for rolling and monthly usage charts.
 const FAMILY_COLORS = {
   claude: 'rgb(var(--port-chart-3))',
   codex: 'rgb(var(--port-chart-2))',

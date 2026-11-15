@@ -1,6 +1,11 @@
 /**
  * One-line audit trail for security-relevant events — who/what/where, no secrets.
  *
+ * `logSecurityEvent(event, { refused, ...fields })` — one-line `🔐`/`⛔ Security [event] key=value`
+ * audit trail for sign-ins, password/session/agent-key changes and refused host-control or
+ * browser-relay requests. Flattens control characters and truncates values so a caller-controlled
+ * path/Host can't forge a log line; refusals use `console.warn`.
+ *
  * PortOS holds host-control authority, so a sign-in, a password change, a
  * revoked session, or a refused host-control call must leave a line an operator
  * can find later in `pm2 logs`. Refusals go to `console.warn` (a deliberate

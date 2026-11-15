@@ -1,4 +1,23 @@
 /**
+ * Which MODEL and EFFORT a run resolves to, and what a picker may list.
+ *
+ * `sortProviderModels` alphabetizes display options by name/id without mutating the catalog. The
+ * configured-default sentinels (`CODEX_CONFIGURED_DEFAULT` …, `isConfiguredDefaultModel`,
+ * `configuredDefaultIn` — so a picker can render an option matching a sentinel-valued tier instead of
+ * a blank select) and `filterSelectableModels`; the per-CLI effort ladders, `effortLevelsForProvider`,
+ * `resolveCliEffort` (what a stored effort actually runs as, so the picker can name a clamped level),
+ * `effortSurvivingModel` and `seedModelEffort`; the Antigravity base-model ↔ effort-suffix split
+ * (`splitAntigravityModel`, `antigravityBaseModels`, `antigravityModelEffortLevels`,
+ * `withStaleAntigravityPin`); the account-aware option list (`providerModelList`,
+ * `resolveProviderModelOptions`, `effortAwareModelOptions`, `MODEL_SOURCE` — the one place a
+ * Codex-subscription account catalog enters a picker); `effectiveModelFor`; `mergeModelLists` /
+ * `mergeProviderUpdate`; and `generationControlsFor` (which temperature / top-p / thinking controls a
+ * provider forwards at all). The sentinels, effort ladders and the Antigravity split are re-exported
+ * from the pure leaf `server/lib/providerModels.js`; `effortLevelsForProvider` / `resolveCliEffort`
+ * delegate to the server's and add the ladder a sanitized provider inventory publishes, clamped
+ * through the server's `clampEffortToLadder`. The generation-control tables still mirror
+ * `server/lib/opencodeConfig.js`.
+ *
  * Which MODEL and EFFORT a provider actually runs, and what a picker may offer:
  * the "use the CLI's own default" sentinels, the per-CLI reasoning-effort
  * ladders and the clamp a stored effort resolves through, the Antigravity

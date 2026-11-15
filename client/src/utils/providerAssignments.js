@@ -1,4 +1,16 @@
 /**
+ * Resolves which provider/model a record uses (`resolveEffectiveProvider`, `resolveSeriesRunLlm`) plus
+ * shared option helpers for assignment editors.
+ *
+ * Which provider/model a RECORD resolves to, and the option helpers the assignment editors share:
+ * `resolveEffectiveProvider` (its pin, else the active provider, plus whether it fell back so a
+ * "Default" option can name what it resolves to), `resolveSeriesRunLlm` (mirror of
+ * `server/lib/seriesLlmOverride.js`: per-run override → `series.llm` → active provider),
+ * `getProviderTimeout`, `providerDisplayName` and `providerModelLabel` (the one "Provider / model"
+ * phrasing), and `assignmentProviderOptions` / `assignmentModelOptions` / `assignmentDefaultModel` /
+ * `assignmentToolUseState` over the `getAiAssignments` payload shape — shared by the global AI
+ * Assignments table and every per-record override drawer so none of them derives the rule differently.
+ *
  * Which provider/model a RECORD resolves to, and the option helpers the
  * assignment editors share: a record's pin else the active provider
  * (`resolveEffectiveProvider`), a Pipeline series run's provider/model

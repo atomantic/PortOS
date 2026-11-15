@@ -1,3 +1,9 @@
+/**
+ * Live analyze-phase stage checklist via the `importer:progress` socket (runId-filtered).
+ *
+ * Exports `stageStatusIcon` for the status→icon lookup. Use when: Importer analyze progress UI only.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, AlertTriangle, Loader2, Circle } from 'lucide-react';
 import socket from '../services/socket';

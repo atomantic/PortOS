@@ -1,3 +1,19 @@
+/**
+ * API client for local LLM backends (Ollama, LM Studio): status, catalog, model install and delete,
+ * Prompt Guard classifier and entailment scorer lifecycles.
+ *
+ * Local LLM backends (Ollama / LM Studio): status (incl. installed models), catalog, model
+ * install/delete, the managed Prompt Guard model-abuse classifier lifecycle, the jev entailment scorer
+ * lifecycle (status / install / cancel / score / unload / integration policies) plus its
+ * project-specific trained heads (list / train / adopt / discard, where adoption is gated server-side
+ * on beating both the stock zero-shot and the majority-class baseline), backend install
+ * (Homebrew/script), switch/migrate, playground test/compare, and measured per-model assessments (run
+ * + persisted results + intent ranking + the server-side "measure everything" sweep). Also the
+ * PM2-managed runtime servers (llama.cpp, MTPLX, Slotstream) and their checkpoint catalogs —
+ * `searchMtplxModels` / `pullMtplxModel` / `removeMtplxModel` and `downloadSlotstreamModel` /
+ * `cancelSlotstreamModelDownload`, so weights are managed in-app rather than from a terminal.
+ */
+
 import { request, API_BASE, throwApiError } from './apiCore.js';
 
 // Local LLM backends (Ollama / LM Studio) — status, model management, migrate.

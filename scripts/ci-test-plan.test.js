@@ -60,8 +60,7 @@ let realTreeInputs;
 const realTree = () => (realTreeInputs ??= collectPlanInputs({ baseSha: 'HEAD', changedFiles: REAL_TREE_SOURCES, cwd: REPO_ROOT }));
 
 const TRACKED = [
-  'server/lib/index.js',
-  'server/lib/index.test.js',
+  'server/lib/moduleSummaries.test.js',
   'server/lib/bufferedSpawn.js',
   'server/routes/auth.test.js',
   'server/routes/sprites.test.js',
@@ -103,7 +102,7 @@ const TRACKED = [
   'client/src/components/sprites/WalkWorkflow.test.jsx',
   'client/src/hooks/useAsyncAction.js',
   'client/src/lib/catalogLinks.js',
-  'client/src/lib/index.test.js',
+  'client/src/lib/moduleSummaries.test.js',
   'client/src/services/apiSprites.test.js',
   'scripts/migrations/210-example.js',
   'scripts/migrations/210-example.test.js',
@@ -950,30 +949,19 @@ describe('CI test impact planner', () => {
     expect(plan.reason).toMatch(/composition root changed/);
   });
 
-  it('uses only the structural contract for a server barrel edit', () => {
-    const plan = buildCiTestPlan(['server/lib/index.js'], { trackedFiles: TRACKED });
-
-    expect(plan.full).toBe(false);
-    expect(plan.server.mode).toBe('files');
-    expect(plan.server.sources).toEqual([]);
-    expect(plan.server.files).toContain('server/lib/index.test.js');
-    expect(plan.client.mode).toBe('skip');
-    expect(plan.db).toBe(false);
-    expect(plan.windows).toBe(false);
-  });
-
   // One row per structural trigger in structuralTestsFor. Each diff pairs the
   // trigger with an unrelated path, so a rule that only fires when every changed
   // file matches (`.some` → `.every`) drops its guard and fails here.
   const STRUCTURAL_GUARD_ROWS = [
     { changed: 'server/sockets/chat.js', runner: 'server', guards: ['server/sockets/asyncHandlerGuard.test.js'] },
-    { changed: 'server/lib/bufferedSpawn.js', runner: 'server', guards: ['server/lib/index.test.js'] },
+    { changed: 'server/lib/bufferedSpawn.js', runner: 'server', guards: ['server/lib/moduleSummaries.test.js'] },
     { changed: 'server/routes/sprites.js', runner: 'server', guards: ['server/lib/apiRouteGraph.test.js', 'server/lib/apiRouteParity.test.js', 'scripts/generate-prompt-stage-call-sites.test.js'] },
     { changed: 'server/scripts/init-db.sql', runner: 'server', guards: ['server/lib/db.ddlParity.test.js'] },
     { changed: 'server/scripts/init-db.base.sql', runner: 'server', guards: ['server/lib/db.ddlParity.test.js'] },
-    { changed: 'client/src/lib/catalogLinks.js', runner: 'client', guards: ['client/src/lib/index.test.js'] },
-    { changed: 'client/src/hooks/useAsyncAction.js', runner: 'client', guards: ['client/src/hooks/index.test.js'] },
-    { changed: 'client/src/utils/formatters.js', runner: 'client', guards: ['client/src/utils/index.test.js'] },
+    { changed: 'client/src/lib/catalogLinks.js', runner: 'client', guards: ['client/src/lib/moduleSummaries.test.js'] },
+    { changed: 'client/src/hooks/useAsyncAction.js', runner: 'client', guards: ['client/src/hooks/moduleSummaries.test.js'] },
+    { changed: 'client/src/utils/formatters.js', runner: 'client', guards: ['client/src/utils/moduleSummaries.test.js'] },
+    { changed: 'client/src/services/apiSprites.js', runner: 'client', guards: ['client/src/services/moduleSummaries.test.js'] },
     { changed: 'client/src/components/catalog/CatalogCard.jsx', runner: 'client', guards: ['client/src/a11y/controlNames.conventions.test.js', 'client/src/a11y/dnd.conventions.test.js', 'client/src/a11y/fileInputsToasts.conventions.test.js', 'client/src/a11y/hitAreas.conventions.test.js', 'client/src/a11y/landmarks.conventions.test.js', 'client/src/a11y/overlays.conventions.test.js', 'client/src/a11y/routeHeadings.conventions.test.js', 'client/src/a11y/scanner.conventions.test.js'] },
   ];
   it.each(STRUCTURAL_GUARD_ROWS)('schedules the structural guards for $changed in a mixed diff', ({ changed, runner, guards }) => {
@@ -1097,7 +1085,7 @@ describe('CI test impact planner', () => {
       'client/src/components/catalog/CatalogCard.jsx',
       'client/src/lib/catalogLinks.js',
     ]);
-    expect(plan.client.files).toContain('client/src/lib/index.test.js');
+    expect(plan.client.files).toContain('client/src/lib/moduleSummaries.test.js');
     expect(plan.client.files).toContain('client/src/a11y/controlNames.conventions.test.js');
     expect(plan.client.files).toContain('client/src/a11y/dnd.conventions.test.js');
     expect(plan.client.files).toContain('client/src/a11y/fileInputsToasts.conventions.test.js');
@@ -1588,15 +1576,6 @@ describe('CI test impact planner', () => {
       const exact = buildCiTestPlan(tests, { trackedFiles });
       expect(exact.server.mode).toBe('files');
       expect(exact.shards.server).toEqual([1]);
-
-      // A barrel-only edit keeps exact-file selection; over the cap it fans out.
-      const barrel = 'server/lib/index.js';
-      const named = featureTests('server/consumers', MAX_TARGETED_TEST_FILES + 1);
-      const barrelPlan = buildCiTestPlan([barrel], { trackedFiles: [...TRACKED, ...named],
-        pathContractTests: { [barrel]: named } });
-      expect(barrelPlan.server.mode).toBe('files');
-      expect(barrelPlan.server.files).toEqual(expect.arrayContaining(named));
-      expect(barrelPlan.shards.server).toEqual(SERVER_FANOUT);
     });
 
     it("stays on one runner when Vitest's shard guard could see fewer files than shards", () => {

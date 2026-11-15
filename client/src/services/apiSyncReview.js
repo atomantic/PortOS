@@ -1,3 +1,10 @@
+/**
+ * Sync hygiene: duplicate-record detection + smart merge (universe/series) and the non-blocking
+ * edit-conflict journal (list/resolve).
+ *
+ * Surfaced in Sharing → Duplicates / Conflicts.
+ */
+
 import { request } from './apiCore.js';
 
 // ---- Duplicate resolution ----

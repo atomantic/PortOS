@@ -1,3 +1,11 @@
+/**
+ * File-boundary code-review batching with byte-exact diff hashes, candidate revision,
+ * reviewed/remaining file identifiers, bounded calls and one shared wall-clock budget.
+ *
+ * Preserves validated findings when coverage is incomplete and classifies explicit context-capacity
+ * refusals without retaining vendor event streams.
+ */
+
 import { createHash } from 'node:crypto';
 
 // A conservative transport bound, not a claim about any model's token window.

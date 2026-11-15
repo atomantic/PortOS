@@ -1,3 +1,9 @@
+// Canonical `PORTS` object (mirroring `ecosystem.config.cjs`, pinned by `ports.test.js`),
+// `DEFAULT_PEER_PORT`, and `resolvePostgresPort(pgMode)`.
+//
+// A pure leaf: `client/src/lib/ports.js` re-exports it, so nothing here may read `process.env` at
+// module scope — the env-derived origins live in `portosUrls.js`.
+//
 // Importable mirror of the `PORTS` object in ecosystem.config.cjs (the source of
 // truth — see docs/PORTS.md). ESM server code can't require() the CommonJS
 // ecosystem config, so these literals are duplicated here and must stay in sync

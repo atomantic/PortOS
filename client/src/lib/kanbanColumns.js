@@ -1,3 +1,11 @@
+// `bucketTickets` / `ticketInColumn` / `columnConfig` / `FALLBACK_COLUMNS` — pure column logic for the
+// Jira Kanban board (`components/KanbanBoard.jsx`).
+//
+// Buckets tickets into resolved workflow columns (by status name, or statusCategory for the fallback
+// board), assigns each column a stable unique `id` (Jira `name` is not unique — same-named columns map
+// to different statuses), appends an orphan column for any unmatched status, and precomputes
+// per-column Tailwind color config (Blocked→red, Review/QA→purple, else by category).
+//
 // Pure column logic for the Jira Kanban board (client/src/components/KanbanBoard.jsx).
 // Extracted so the bucketing / matching / coloring rules are unit-testable
 // without React or dnd-kit. No side effects, no imports.

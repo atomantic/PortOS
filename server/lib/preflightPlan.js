@@ -1,6 +1,16 @@
 /**
  * The programmatic phase of a user-triggered pipeline run, as a renderable plan.
  *
+ * The programmatic phase of a user-triggered pipeline run, as renderable data.
+ * `preflightStepPlan(taskType)` is the step list (generic queued/prepare/dispatch, plus pr-reviewer's
+ * own cadence → list-PRs → in-flight → hidden-Unicode/prompt-injection screening → snapshot);
+ * `createPreflightState` opens it, `applyPreflightStep` advances one step and closes every earlier
+ * unfinished one, `finalizePreflight` closes it
+ * `handed-off`/`programmatic`/`nothing-to-do`/`failed`/`interrupted` (first close wins), and
+ * `preflightHeadline` names where the run is. Persisted onto a task card by
+ * `services/preflightTaskCard.js` and rendered by the Tasks page, so a Run Now is visible before any
+ * agent exists. Pure.
+ *
  * A "Run Now" — the scheduled-task Run button, or the PR/MR row's "Review this
  * PR" — does not become an agent task immediately. The request is queued, a
  * drain engine picks it up, and for some task types a deterministic preflight

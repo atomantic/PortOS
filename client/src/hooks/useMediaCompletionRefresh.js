@@ -1,3 +1,9 @@
+/**
+ * Refetch on image/video completion and `media:history:changed` socket events.
+ *
+ * Use when: A list view that needs to refresh when new media lands.
+ */
+
 import { useEffect, useRef } from 'react';
 import socket from '../services/socket';
 

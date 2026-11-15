@@ -1,4 +1,11 @@
 /**
+ * Browser-safe `fitFades()` proportionally fits a fade pair to its visible duration.
+ *
+ * Shared by timeline normalization/export and the editor preview/trim controls; legacy import paths
+ * re-export it.
+ */
+
+/**
  * Shrink a fade pair that no longer fits `duration`, scaling both
  * proportionally so the author's balance survives. Non-throwing twin of
  * `clampFades` in services/videoTimeline/segments.js: that one rejects an

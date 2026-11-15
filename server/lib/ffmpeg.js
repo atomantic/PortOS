@@ -1,6 +1,67 @@
 /**
  * Shared ffmpeg helpers used by both videoGen and videoTimeline services.
  *
+ * `probeVideoPixelAspect()` measures the sample aspect ratio and `probeSquareVideoPixels()` reports
+ * whether it is square (or unknown) for display-geometry checks; `probeVideoAudioPresence()`
+ * distinguishes silence from a failed probe. `findFfmpeg({ requiredEncoder })` — cached discovery of
+ * ffmpeg binaries in precedence order (fixed platform paths, then `whichFirst('ffmpeg')`, then PATH
+ * directories), selecting the first candidate with verified codec support when `requiredEncoder` (e.g.
+ * `libx264`) is requested, or any existing binary for decode/copy callers; `resetFfmpegCache()` clears
+ * discovery and capability caches for in-place upgrades. `runFfmpegProcess({ bin, args, signal,
+ * timeoutMs })` — `timeoutMs` (opt-in; `FFMPEG_FRAME_TIMEOUT_MS` for one frame,
+ * `FFMPEG_SCAN_TIMEOUT_MS` for a full-file pass) SIGTERMs then SIGKILLs a stalled child and resolves
+ * `{ ok:false, reason:'timed out after <n>s' }`; the `signal` abort path escalates the same way. Long
+ * encodes pass no ceiling. `probeMediaTags` reads container/stream tags, returning null when
+ * inspection fails. Shared ffmpeg helpers (videoGen + videoTimeline). `vfrSyncArgs(bin)` probes/caches
+ * supported VFR output flags per binary (fps_mode on current builds, vsync on older builds);
+ * inconclusive probes stay uncached. `probeVideoGeometry(videoPath)` measures a finished clip's `{
+ * width, height, fps, numFrames, durationSec }` (null when any axis is unreadable) for hosted renders
+ * that record no frame count. `generateThumbnail(videoPath, jobId, { atSec } = {})` accepts a clamped
+ * poster seek while preserving the single-clip default. Includes `probeFrameCount(videoPath)`
+ * (metadata `nb_frames`, falling back to a real `-count_frames` pass — expensive, so call it once per
+ * file) and `trimVideoFromFrame(videoPath, outPath, {startFrame, fps})` — a frame-EXACT head cut via
+ * the `trim` filter (an `-ss` seek can drift a frame, which reads as a stutter at a stitch seam),
+ * keeping audio in sync with `atrim` when the clip has a soundtrack and taking `-an` when it doesn't.
+ * Re-encodes by necessity, so a later concat must re-encode too; `outPath` may equal the input
+ * (temp-file + rename install). Used by the chained-render context window — see `videoContinuity.js`.
+ * `cutVideoSegment(videoPath, outPath, {startSec, endSec})` cuts one time range into a new file the
+ * same way (re-encoded, audio kept in sync) — the music-video sequence split (#14241).
+ * `buildTrimConcatArgs({inputs, outPath, width, height, fps, withAudio})` builds the argv for the
+ * other half of that job: a concat that drops leading frames from some of its inputs inside a
+ * `filter_complex` graph, so the cuts ride along with the timeline encode instead of costing one
+ * pre-encode per clip (pass `withAudio` only when EVERY input has an audio stream — check with
+ * `hasAudioStream`). `buildExtendSpliceArgs({sourcePath, generatedPath, outPath, keepFrames,
+ * newStartFrame, width, height, fps, audio, sourceAudioPath, masterOutPath})` is the plain-Extend
+ * counterpart: source frames `[0, keep)` + render frames from `newStartFrame`, one encode, audio
+ * crossfaded (~40 ms linear) at the seam; `sourceAudioPath` swaps the source span's audio for a
+ * lossless master and `masterOutPath` also writes the mix as a 24-bit FLAC master, so the delivered
+ * AAC is encoded once from PCM. Its stream-copy sibling is `buildExtendNewSpanArgs` (encode only the
+ * render's new span) + `buildExtendConcatList` + `buildExtendCopyArgs` (join it to the untouched
+ * source with `-c:v copy`); `probeVideoCodecSignature` gates it and `videoFrameHashes` (per-frame MD5)
+ * proves the join before anything is replaced; `audioFingerprint` / `sealAudioMaster` /
+ * `readAudioMasterFingerprint` bind a master to the exact decoded soundtrack it was mixed for so a
+ * replaced soundtrack invalidates it — driven by `services/videoGen/extendSplice.js`.
+ * `H264_ENCODE_ARGS` / `AAC_ENCODE_ARGS` are the shared encode profile: clips produced by different
+ * paths here get concatenated together, so a mismatch shows up as one segment graded differently from
+ * its neighbours — spread these rather than re-typing the flags. The film-look finishing pass can use
+ * WebCodecs only after its GPU, sampled encoded-quality and output codec/timing checks pass; it
+ * otherwise uses this profile. Every re-encode here also pins BT.709: `BT709_CONTAINER_ARGS` (the
+ * `colr` atom, always emitted) plus `bt709TagFilter()` → the `BT709_TAG_FILTER` `setparams=…` string,
+ * or `null` on an ffmpeg without that filter (`supportsSetparamsFilter()` probes `-filters` once per
+ * process; `null` = not probed, and a probe that couldn't run stays uncached). Both halves are
+ * required — from ffmpeg 8 the encoder reads color properties off the FRAMES, silently overriding the
+ * container flags, so a flags-only output decodes washed-out. `buildTrimConcatArgs` takes the filter
+ * as its `colorTagFilter` option rather than probing, to stay pure. `installEncodedVideo(tmpPath,
+ * targetPath, label)` is the shared in-place install: move the original aside to a `.bak` on Windows
+ * (where `fs.rename` refuses an existing destination), rename the new file over it, and restore the
+ * backup — plus unlink the temp — on any failure, returning `{ok:true,outPath}` / `{ok:false,reason}`
+ * so the worst case is "skipped", never "the video is gone". Use it for EVERY
+ * replace-a-video-with-its-re-encode path; `pipeline/audioMux.js` is the out-of-module caller.
+ * `edgeFadeFilter(durationSec)` is the `-af` fade-in/fade-out fragment a mid-song clip (a social cut)
+ * appends to its trim. Loudness mastering (#10249): `MASTER_LOUDNESS` (-14 LUFS / -1.5 dBTP / LRA 11),
+ * `planLoudnessMaster` (measure then build the linear apply filter; throws on a silent source),
+ * `reportMasteredLoudness` (post-encode before/after numbers).
+ *
  * Keeps a single ffmpeg-binary discovery path and the streaming/thumbnail
  * primitives in one place so the two services can't drift on quoting,
  * caching, or rename-safety semantics.

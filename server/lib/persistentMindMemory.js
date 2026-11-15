@@ -1,3 +1,8 @@
+/**
+ * Persistent Mind memory protection schema, durable tag encoding, public projection, and
+ * protected-first context ordering.
+ */
+
 import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
 import { PERSISTENT_MIND_CHOSEN_NAME_TAG } from './persistentMindChosenName.js';

@@ -1,6 +1,10 @@
 /**
  * PostgreSQL TIMESTAMPTZ bind-safety helper.
  *
+ * `mirrorTimestamp(value, fallback)` — coerce a hand-editable timestamp into a value Postgres
+ * TIMESTAMPTZ always accepts (or fall back), guarding boot-time binds against `Date.parse` rollover +
+ * out-of-range years.
+ *
  * A TIMESTAMPTZ column rejects a bind value that isn't a calendar-valid,
  * in-range timestamp — and when that bind happens inside boot-time schema
  * init / data import, one bad legacy value can throw and block the whole

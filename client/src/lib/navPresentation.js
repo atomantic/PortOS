@@ -1,3 +1,7 @@
+/**
+ * Sidebar icon presentation and section ordering, separate from the Layout React refresh boundary.
+ */
+
 import { AudioLines,
   Wrench,
   Trash2,

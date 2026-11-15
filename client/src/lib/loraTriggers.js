@@ -2,6 +2,12 @@
  * The client-side `+ trigger` append, over the trigger-word predicates in
  * `server/lib/loraTriggers.js` (#4665).
  *
+ * The picker's `+ trigger` append (#4665). `firstTriggerWord` / `promptHasTriggerWord` /
+ * `separatorFor` are re-exported from `server/lib/loraTriggers.js`, so the hint reads the rule the
+ * render enforces. `appendTriggerWords(prompt, words, effectivePrompt?)` is client-only: it adds ALL
+ * of a LoRA's words (the server only ever weaves the first) and judges presence against the composed
+ * prompt the page will actually submit.
+ *
  * `firstTriggerWord` / `promptHasTriggerWord` / `separatorFor` are re-exported
  * from the server leaf rather than copied: the server is the enforcement point
  * (it weaves each selected LoRA's first activation token into the prompt at

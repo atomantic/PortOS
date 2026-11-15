@@ -1,3 +1,12 @@
+/**
+ * `useAssignableInstances()` → `{ instances, loading, error, isFederated, refresh }` — this install's
+ * assignable federated instances (self + identified peers) for pinning a CoS task to one machine.
+ *
+ * Silent fetch; a rejected read sets `error` and leaves `instances` null (never `[]`); `isFederated`
+ * is false on a single-instance install so callers can hide their picker. Use when: Any surface
+ * offering "which machine should run this?" — the CoS task add form and the task editor.
+ */
+
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { getAssignableInstances } from '../services/apiSystem';
 import useMounted from './useMounted';

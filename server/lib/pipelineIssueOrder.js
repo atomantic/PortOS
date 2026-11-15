@@ -1,4 +1,7 @@
 /**
+ * Volume-based renumbering and `compareIssuesInSeries` for globally ordered manuscripts and
+ * production.
+ *
  * Pure renumber algorithm for pipeline issues. Lives in `lib/` so the
  * one-shot migration (`scripts/migrations/010-…js`) and the live service
  * (`server/services/pipeline/issues.js`) share one implementation —

@@ -1,6 +1,14 @@
 /**
  * Mouth-lead correction for local audio-to-video (a2v) renders (#15409).
  *
+ * Post-render mouth-lead correction for local a2v renders (#15409). `alignLipsyncLead({ videoPath,
+ * label })` cross-correlates mouth-region frame-difference energy with the rate of change of the
+ * clip's speech-band audio envelope, and on a confident mouth-first lead (gated on peak score, Fisher
+ * z and gain over zero lag, up to `LIPSYNC_MAX_LEAD_FRAMES`) installs a `tpad` frame hold that keeps
+ * the frame count and stream-copies the soundtrack. Resolves `{ shiftFrames, lag, peakScore, reason }`
+ * with a fixed-token `reason`; any failure keeps the render untouched. `_planLipsyncShift` is the
+ * planner's test hook. Driven by `services/videoGen/spawnWatch.js`.
+ *
  * a2v models (the LTX-2 family, MiniMax H3 Ref2VA) tend to move the mouth
  * 0–6 frames (typically ~2) ahead of the conditioning audio, and the lead
  * varies per clip, so no fixed offset fixes it. After the render, measure it:

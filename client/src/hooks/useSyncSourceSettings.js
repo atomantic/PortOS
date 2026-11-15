@@ -1,3 +1,11 @@
+/**
+ * Shared enabled/interval scheduler settings lifecycle for a machine-local sync source, including
+ * status loading, dirty tracking, interval clamping, and save state.
+ *
+ * Use when: Source settings tabs that use `getSettings` / `updateSettings` with a source-specific
+ * status endpoint.
+ */
+
 import { useCallback, useEffect, useState } from 'react';
 import { getSettings, updateSettings } from '../services/api';
 

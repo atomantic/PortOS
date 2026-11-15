@@ -1,6 +1,12 @@
 /**
  * Buffer-backed ZIP reader driven by the central directory.
  *
+ * Buffer-backed ZIP reader over the central directory — `readZipArchive(buffer, { maxEntries })` lists
+ * members with their raw names, `isDirectory`/`isSymlink` (Unix mode bits) and a lazy CRC-checked
+ * `read()`; `unsafeZipEntryName(name)` names why a member path is not a plain relative path (absolute,
+ * `..`, backslash, NUL). For imports that must refuse traversal and symlink members rather than
+ * rewrite them.
+ *
  * `zipStream.js` streams local headers and silently strips `..` segments, which
  * suits imports that match members by name. An import that unpacks a whole
  * tree needs the opposite: the authoritative names and the Unix mode bits the

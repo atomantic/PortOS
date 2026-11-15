@@ -1,3 +1,9 @@
+/**
+ * Subscribes to AI operation status events.
+ *
+ * Use when: Wire once to surface AI run lifecycle as toasts.
+ */
+
 import { useEffect, useRef } from 'react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';

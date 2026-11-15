@@ -2,6 +2,10 @@
  * Pure raw-source-to-signal boundary for Eidoverse.
  * Only bounded aggregates and opaque identities leave this module; private
  * record contents never become world labels or signal payloads.
+ *
+ * Pure raw-source-to-signal shaping: `buildEidoverseWorldSignals`, stable opaque host/peer IDs,
+ * storage and Jira aggregates; optional local-observation reason metadata and the closed
+ * `EIDOVERSE_ATTENTION_REASON_CODES` vocabulary; no service reads.
  */
 
 import { createHash } from 'node:crypto';

@@ -1,3 +1,9 @@
+/**
+ * `publishExportLabel`: measured export presentation with explicit unknown dimensions for legacy kits.
+ *
+ * Shared with the publishing UI.
+ */
+
 /** Measured publish-kit export presentation, including kits predating dimension metadata. */
 function publishExportDimensions(asset) {
   return Number.isInteger(asset?.width) && asset.width > 0 && Number.isInteger(asset?.height) && asset.height > 0

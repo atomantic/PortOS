@@ -1,10 +1,15 @@
-// Build the durable section-local render tag that converges canon/character
-// reference renders onto the same server-side auto-filing path batch renders
-// use. When this tag rides a `generateImage` call as `universeRun`, the route
-// (server/routes/imageGen.js) resolves the universe's media collection and tags
-// the queued job, so `universeBuilderCollectionHook` files the finished render
-// into that collection AND `appendEntryImageRef` durably appends the filename to
-// the entry's `imageRefs[]` — even if the originating page unmounts mid-render.
+// Build the durable section-local render tag that converges canon/character reference renders onto the
+// same server-side auto-filing path batch renders use.
+//
+// `buildUniverseSectionRenderTag(universe, kindKey, entry)` — the durable `universeRun` job tag the
+// canon-render call sites (UniverseCanonSection, NounsStage, Story Builder characters step) pass to
+// `generateImage` so the server auto-files the render into the universe collection AND appends it to
+// the entry's `imageRefs[]` (no client follow-up PATCH).
+//
+// When this tag rides a `generateImage` call as `universeRun`, the route (server/routes/imageGen.js)
+// resolves the universe's media collection and tags the queued job, so `universeBuilderCollectionHook`
+// files the finished render into that collection AND `appendEntryImageRef` durably appends the
+// filename to the entry's `imageRefs[]` — even if the originating page unmounts mid-render.
 //
 // This is the front-end half of the generate-then-attach removal (#1362): the
 // three canon-render call sites (UniverseCanonSection, NounsStage, the Story

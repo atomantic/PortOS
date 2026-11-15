@@ -2,6 +2,8 @@
  * Civitai integration — pure helpers for parsing Civitai URLs, fetching
  * model metadata, and picking the right file/version to download.
  *
+ * Civitai URL parsing + API client.
+ *
  * All metadata calls go to civitai.com regardless of which mirror frontend
  * the user pasted (civitai.com / civitai.red / civitai.green) — the API is
  * only published on civitai.com, and going through the mirrors' frontends

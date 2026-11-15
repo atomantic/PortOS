@@ -1,6 +1,12 @@
 /**
  * OpenAI-compatible `usage` objects do not all include tokens the same way.
  *
+ * `normalizeChatCompletionUsage(usage, { model, endpoint })` splits an OpenAI-compatible
+ * chat-completions usage body. Cached tokens are removed from fresh input. xAI (`api.x.ai`,
+ * `us.api.x.ai`, or a `grok*` model when the endpoint has no host) adds `reasoning_tokens` to output;
+ * every other host keeps output as `completion_tokens` only, even for a grok-named model. A prompt at
+ * `GROK_LONG_CONTEXT_PROMPT_TOKENS` sets `longContext` for xAI only.
+ *
  * xAI's chat-completions example is prompt_tokens 32 + completion_tokens 9 +
  * reasoning_tokens 94 = total_tokens 135, so reasoning is OUTSIDE completion
  * and has to be added. OpenAI includes reasoning inside completion_tokens;

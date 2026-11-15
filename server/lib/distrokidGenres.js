@@ -1,8 +1,14 @@
 /**
- * DistroKid's store genres, and a first guess at a song's from its own style
- * words (the song's Suno style, and the style and musical description an
- * autonomous run wrote). Pure: project in, `{ primary, secondary }` out. The director can
- * always pick another; the adapter matches DistroKid's option by its text.
+ * DistroKid's store genres, and a first guess at a song's from its own style words (the song's Suno
+ * style, and the style and musical description an autonomous run wrote).
+ *
+ * DistroKid's store genre list (`DISTROKID_GENRES`) and `suggestDistrokidGenres(project)`, a first
+ * primary/secondary genre guess from the song's own style words, and `DISTROKID_REMEMBERED_OPTIONS`
+ * (the release answers kept in settings and refilled on every project). Shared by the DistroKid
+ * publish payload and the publish panel's genre pickers.
+ *
+ * Pure: project in, `{ primary, secondary }` out. The director can always pick another; the adapter
+ * matches DistroKid's option by its text.
  */
 
 import { parseSongStyle } from './musicVideoCreativeContext.js';

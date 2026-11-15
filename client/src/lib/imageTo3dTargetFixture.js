@@ -1,4 +1,11 @@
 /**
+ * `imageTo3dTarget(overrides)` — one representative image-to-3D target descriptor for tests.
+ *
+ * Shared by the `/3d` and Models → 3D suites so a server-side descriptor change is one edit, not two
+ * fixtures that can half-update.
+ */
+
+/**
  * A representative image-to-3D target descriptor, for tests.
  *
  * Two suites render the same server descriptor from different hosts (the `/3d`

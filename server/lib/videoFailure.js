@@ -1,4 +1,9 @@
-/** Bounded, local-only video failure summaries shared by the runner and queue. */
+/**
+ *  Bounded, local-only video failure summaries shared by the runner and queue.
+ *
+ * `normalizeVideoFailure` classifies and scrubs local video causes; `createVideoDiagnosticTail`
+ * retains bounded stdout/stderr diagnostics without grouping bare exit codes.
+ */
 import { createHash } from 'crypto';
 import { scrubSecretTokens } from './secretText.js';
 

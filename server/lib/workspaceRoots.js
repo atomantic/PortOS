@@ -1,3 +1,21 @@
+/**
+ * Shared allow-list for routes that take a caller-supplied filesystem path.
+ *
+ * `isWithinAllowedRoots(realPath)` is the single complete test — on Windows it also allows any
+ * lettered non-system drive (`D:\code`), which appears in no root, so never render
+ * `ALLOWED_WORKSPACE_ROOTS` as "the directories you may use". `outsideAllowedRootsMessage(realPath, {
+ * field })` formats a redacted server-only diagnostic with the rejected realpath and every checked
+ * root. Also `ALLOWED_WORKSPACE_ROOTS` (defaults + `PORTOS_WORKSPACE_ROOTS`, split on the platform
+ * path delimiter — `;` on Windows — and symlink-resolved), `isWithinRoot(resolvedPath, root)`
+ * (separator-safe containment), and `WORKSPACE_ROOTS_CONFIGURED` (true when the operator set the env
+ * var — lets a permissive-by-default route like `routes/detect.js` opt into confinement). Defaults
+ * cover home plus wherever the platform mounts secondary volumes: `/tmp` + `/Users` + `/Volumes` +
+ * `/mnt` + `/media` + `/opt` on POSIX; home + the temp dir plus the non-system-drive rule on Windows,
+ * where those POSIX literals would resolve to whatever drive the process happens to be on. Used by
+ * `routes/commands.js`, `routes/scaffold.js`, and `routes/git.js` (always scoped) and
+ * `routes/detect.js` (scoped only when configured).
+ */
+
 import { realpathSync } from 'fs';
 import { resolve, relative, isAbsolute, delimiter, basename } from 'path';
 import { homedir, tmpdir } from 'os';

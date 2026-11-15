@@ -1,3 +1,9 @@
+/**
+ * Editorial-roadmap aggregate + batch lifecycle (load, re-attach, SSE, start/cancel, reload).
+ *
+ * Use when: Any view of the editorial roadmap (panel or Reader Map page).
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   getSeriesEditorial, getSeriesEditorialStatus,

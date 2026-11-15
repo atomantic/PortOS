@@ -1,6 +1,23 @@
 /**
  * Music Video — per-scene visual layers (#8985, part of #8966).
  *
+ * Music Video per-scene visual layers (#8985): `MUSIC_VIDEO_VISUAL_LAYERS`
+ * (`footage`/`still`/`card`/`code`), `MUSIC_VIDEO_STILL_MOVES` (`hold`/`push`/`pan`),
+ * `STILL_PUSH_ZOOM` / `STILL_PAN_TRAVEL` (shared render/animatic motion amounts),
+ * `MUSIC_VIDEO_FRAME_FITS` (`fill`/`still`/`vhs`/`black`: how an off-shape clip fills the frame),
+ * `sceneVisualLayer(scene, { layered })` (only a composed render honors a still/card),
+ * `sceneHasAuthoredSpan`, `sceneUsesAuthoredTiming` (a pacing cut, word cut, beat alignment or planner
+ * section provenance owns its saved span), `wordTimedScenes(project, scenes)` (once the board is cut
+ * on sung words, every timed shot renders its exact saved span, #14820), and `sceneRenderReady(scene,
+ * { layered })`. `clipSpeedRate(scene)` / `clipOffsetSec(scene)` / `clipReversed(scene)` read a
+ * footage shot's hand-set `speedFps`, `offsetFrames` and `reverse` on the 24 fps grid
+ * (`CLIP_TIMING_FPS`, `CLIP_SPEED_FPS_RANGE`, `CLIP_OFFSET_FRAMES_RANGE`). Pure leaf shared by
+ * `services/musicVideo/render.js` and the client board (`client/src/lib/musicVideoLayers.js`).
+ * `clipPlaybackWindow(scene, edit, duration)` / `clipLoops` / `clipCanLoop` share source timing and
+ * loop eligibility; `clipNeedsMoreFootage` and `COVERAGE_TOLERANCE_SEC` keep held-clip coverage
+ * identical in the card and render preflight; `sharedTakeExtraSec(scene, scenes)` adds the footage
+ * later shots that reuse the same take need (#15541).
+ *
  * In a composed render a scene can show its generated footage (the default,
  * and every scene saved before the field existed), its selected still frame
  * with a deterministic camera move, a code-rendered title card (a solid

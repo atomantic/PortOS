@@ -1,3 +1,11 @@
+/**
+ * Rename/delete state machine for one sprite record: `view`/`rename`/`confirm` mode, name draft,
+ * busy/inline-error, silent PATCH/DELETE.
+ *
+ * Use when: A surface that renames or deletes a sprite record (the Library catalog card, the detail
+ * header) — share this so both stay in lock-step.
+ */
+
 import { useState } from 'react';
 import { updateSpriteRecord, deleteSpriteRecord } from '../services/apiSprites.js';
 

@@ -1,6 +1,13 @@
 /**
  * Containment contract for Code Animation production workers (#9388).
  *
+ * Code Animation production worker containment contract: the contained no-GPU notice, a worker-failure
+ * sentence, per-platform enforced mechanism (macOS Seatbelt or Linux bubblewrap, otherwise refusal),
+ * deny-by-default profiles and a process-denying Linux seccomp filter, from-scratch worker
+ * environment, operator tool-root rules, and the tool configuration, checked-configuration record
+ * (what a restart may re-check unasked) and worker limit schemas. Pure; the runner is
+ * `services/codeAnimation/containedWorker.js`.
+ *
  * A job directory is not a boundary. Generated or imported package code runs
  * under an enforced OS mechanism by default; unavailable containment never
  * automatically falls back. An explicit operator-owned trusted-local Blender

@@ -1,6 +1,15 @@
 /**
  * Block-streaming mode vocabulary for LTX-2/2.5 MLX local video renders (#6499).
  *
+ * Block-streaming request vocabulary for LTX-2/2.5 MLX local video renders (#6499) —
+ * `VIDEO_STREAMING_MODES` (`auto` | `resident` | `stream`), `DEFAULT_VIDEO_STREAMING_MODE` (`'auto'`),
+ * `VIDEO_STREAMING_MODE_OPTIONS` (label + description for the picker), `isDefaultVideoStreamingMode` /
+ * `isKnownVideoStreamingMode` / `videoStreamingModeLabel` / `videoStreamingModeFromRecord`. This
+ * module carries only the REQUEST-side enum — `scripts/generate_ltx2.py#resolve_streaming_policy()`
+ * inspects the pinned pipeline's actual constructor and this machine's physical RAM to decide whether
+ * `auto` streams, and an explicit `stream` request the pinned pipeline cannot honor (Extend) is a
+ * refusal there, not a downgrade here. Pure, mirrored to `client/src/lib/videoStreamingMode.js`.
+ *
  * "Block streaming" mmaps the transformer's safetensors and streams blocks in
  * per-forward instead of materializing all 48 in unified memory — the roughly
  * 10-12x transformer-RSS cut ltx-2-mlx exposes as the `low_ram_streaming`

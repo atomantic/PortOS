@@ -1,3 +1,21 @@
+/**
+ * Drum play-along transport for a SongBook `drum` chart (#3115): parses the chart
+ * (`lib/drumNotation.js`), owns one `createDrumPlayer` per chart plus the practice settings and the
+ * sheet playhead.
+ *
+ * Returns `{ chart, barCount, writtenTempo, bpm, setBpm, setBpmPercent, countInBars, setCountInBars,
+ * loopEnabled, setLoopEnabled, loopFrom, loopTo, setLoopRange, clickEnabled, setClickEnabled,
+ * clickVolume, setClickVolume, kitId, setKitId, playing, activeStep, currentBar, toggle, stop }`. The
+ * practice tempo persists per song in `safeStorage` (never into the record) while the selected kit
+ * (`songbook:drumKit`), the click toggle (`songbook:drumClick`) and the click level
+ * (`songbook:drumClickVolume`) persist per MACHINE; a timing-critical edit (tempo / count-in / loop)
+ * STOPS playback rather than re-timing already-scheduled audio, while the click toggle, the click
+ * level and the kit swap apply live (raising the level off silence also unmutes, so the slider is
+ * never a dead control); the player + its interval + scheduled hits tear down on stop, chart change
+ * and unmount. Use when: The SongBook viewer and snapshot-based drum previews. Don't hand-wire
+ * `createDrumPlayer` + BPM persistence + playhead state again.
+ */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parseDrumChart, chartHasMusic } from '../lib/drumNotation.js';
 import {

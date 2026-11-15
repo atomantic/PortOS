@@ -1,3 +1,22 @@
+/**
+ * `buildProviderGraphPreview({providers, activeProvider})` makes a read-only preview of proposed
+ * connections, harness bindings and routes from existing provider records.
+ *
+ * READ-ONLY import preview for the provider connection graph (#6366) —
+ * `buildProviderGraphPreview({providers, activeProvider})` projects the records an install already
+ * runs into proposed connections, harness bindings and executable routes, grouping ONLY the proven
+ * same-harness CLI/TUI siblings from `providerModeGroups` and surfacing a cross-harness daemon match
+ * as a `suggestedLinks` entry requiring an explicit link. `toManagementPreviewDto` sanitizes and
+ * validates the version-1 DTOs (`managementPreviewSchema`, `PROVIDER_GRAPH_SCHEMA_VERSION`) that `GET
+ * /api/providers/management/preview` returns; `projectPreviewToProviders` re-materializes every
+ * original record (pins, secrets, consent flags and unknown custom fields included) as the
+ * import-fidelity and downgrade proof; `providerGraphUniquenessViolations` checks the UNIQUE
+ * constraints #6367 will enforce; `routeModeEligibility` is the pure declarative half of mode
+ * eligibility (harness support + enabled + caller-allowed mode + text-transport consent), with the
+ * prerequisite/fallback policy left to #6368. Persists nothing and makes no generation call or runtime
+ * launch.
+ */
+
 import { z } from 'zod';
 import { providerModeGroups } from './aiToolkit/internal/providerModes.js';
 import {

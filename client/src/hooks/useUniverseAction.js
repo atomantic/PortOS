@@ -1,3 +1,9 @@
+/**
+ * LLM-driven universe mutation scaffolding.
+ *
+ * Use when: Universe Builder action UIs.
+ */
+
 import { useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import { upsertByIdPrepend } from '../lib/upsertByIdPrepend';

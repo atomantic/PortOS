@@ -2,6 +2,11 @@
  * Manuscript anchor location + highlight segmentation for the in-context
  * editorial-feedback editor. Pure / no React.
  *
+ * `locateFind` / `locateAnchors` / `buildHighlightSegments` — resolve editorial-comment `anchorQuote`s
+ * to spans in manuscript text and tile the text into plain + highlighted (severity-toned) segments for
+ * the Manuscript editor's in-context feedback. Shares the nearest-occurrence `locateFind` in
+ * `server/lib/manuscriptLocate.js` with the server accept path.
+ *
  * Editorial comments anchor to manuscript text by VERBATIM substring
  * (`anchorQuote`), not character offsets — mirroring the server. `locateFind`
  * is re-exported from `server/lib/manuscriptLocate.js` — the same implementation

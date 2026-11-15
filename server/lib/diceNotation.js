@@ -1,4 +1,10 @@
 /**
+ * Dice notation (`NdM[+-K]`) bounds shared by the character routes and `rollDice`: 1–100 dice, 2–1000
+ * sides (#13088).
+ *
+ * `parseDiceNotation` (null when out of range), the `diceNotationSchema` Zod refinement, and
+ * `requireDiceNotation` (400 `ServerError`).
+ *
  * Dice notation (`NdM` with an optional `+K`/`-K` modifier) shared by the
  * character routes and `rollDice`. The count and sides are bounded because
  * `rollDice` materialises one array entry per die: an unbounded `NdM` lets one

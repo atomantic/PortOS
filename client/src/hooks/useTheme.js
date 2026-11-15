@@ -1,3 +1,9 @@
+/**
+ * Dark/light theme + paired-theme switching.
+ *
+ * Use when: Theme picker.
+ */
+
 import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   THEMES,

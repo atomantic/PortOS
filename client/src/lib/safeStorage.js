@@ -1,8 +1,18 @@
-// Guarded localStorage access. `localStorage` can throw (Safari private mode,
-// blocked storage, disabled cookies) or be entirely absent (SSR, sandboxed
-// iframes). These helpers make persistence best-effort so a storage failure
-// never crashes a `useState` initializer or a write path — in-memory state stays
-// the source of truth. Use these instead of touching `localStorage` inline.
+// Guarded localStorage access.
+//
+// `safeReadStorage` / `safeReadJsonStorage` / `safeWriteStorage` / `safeWriteJsonStorage` /
+// `safeRemoveStorage` — guarded `localStorage` access that swallows throws (Safari private mode,
+// blocked storage), with fallback-safe JSON parsing for structured entries. Use instead of touching
+// `localStorage` inline so a storage failure never crashes init or a write path (#2387). Consumed by
+// `useTheme`, `useNavWorkingSet`, and the command palette. Also `safeReadJsonSession` /
+// `safeWriteJsonSession` / `safeRemoveSession` — the same guarantees over `sessionStorage`, for
+// tab-scoped crash-recovery buffers of edits the server has not accepted yet (QuotaBurn's
+// unsaved-patch stash).
+//
+// `localStorage` can throw (Safari private mode, blocked storage, disabled cookies) or be entirely
+// absent (SSR, sandboxed iframes). These helpers make persistence best-effort so a storage failure
+// never crashes a `useState` initializer or a write path — in-memory state stays the source of truth.
+// Use these instead of touching `localStorage` inline.
 
 // Returns the stored string, or null on any failure / missing storage. Callers
 // distinguish absent (null) from a legitimately-empty value and fall through to

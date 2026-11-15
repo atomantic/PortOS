@@ -1,3 +1,16 @@
+/**
+ * Run with" agent picker hook for app-detail surfaces: owns provider, model and effort state and
+ * returns `{ selectorProps, pin }` for ProviderModelSelector.
+ *
+ * Consolidates "Run with" agent picker for app-detail surfaces: owns provider/model/effort state, the
+ * process-provider filter, the provider-change effort-reset rule, and returns `{ selectorProps, pin }`
+ * where `selectorProps` spreads onto `ProviderModelSelector` and `pin` is the request fragment `{
+ * provider?, model?, effort? }` with empty values dropped. `seed` prefills a saved pin once the
+ * catalog loads. Use when: Any surface dispatching a CoS task (Issues tab, Pull Requests tab,
+ * LaunchVideoPanel, SlashDoRunDrawer) — don't re-assemble the picker setup. Consolidates four
+ * duplicate implementations.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import useProviderModels from './useProviderModels.js';
 import { enabledProcessProviderFilter } from '../utils/providers.js';

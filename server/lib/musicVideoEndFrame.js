@@ -1,6 +1,11 @@
 /**
  * Music Video style-break end frames (#11173).
  *
+ * Style-break end frames (#11173): `sceneEndFramePlan(scene, { backend, falModelId })` says whether a
+ * clip sends the scene's end frame (only fal models with an end image, never a performance shot) and
+ * why not; `sceneEndFrameRequestFields` turns it into `lastImageFile`; `sceneActiveEndImageId` is the
+ * end frame unless the shot switched it off (`endFrameOff`). Shared by the board and production.
+ *
  * A scene may carry an optional end frame (`scene.endImageId`, the selected
  * `endImage` take): a stylized still the clip moves into from its photographic
  * start frame, such as a pencil-sketch or magazine-cutout version. fal models

@@ -1,4 +1,14 @@
 /**
+ * `lossSparklineGeometry(series, box)` projects a training-loss series into SVG polyline coordinates
+ * normalized to its own min and max.
+ *
+ * `lossSparklineGeometry(series, box)` — projects an unbounded training-loss series (`{step,loss}[]`)
+ * into SVG polyline coords, normalized to its own min/max (unlike
+ * `editorialHealth.sparklineGeometry`'s fixed 0–100 axis). Returns `{ points, coords, last, min, max
+ * }`. Drives the Render Queue's training-row loss curve (#1408). No React.
+ */
+
+/**
  * Pure geometry for an unbounded-value (training-loss) sparkline.
  *
  * Unlike `sparklineGeometry` in `editorialHealth.js` — which maps a fixed

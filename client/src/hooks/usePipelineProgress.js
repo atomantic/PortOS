@@ -1,3 +1,11 @@
+/**
+ * Id-derived runner SSE stream: builds the URL from `(urlBuilder, ids)`, connects only when every id
+ * is truthy.
+ *
+ * Use when: Any runner SSE keyed by record ids (pipeline auto-run, editorial, manuscript completeness,
+ * volume beats, story steps).
+ */
+
 import { useSseProgress } from './useSseProgress';
 
 /**

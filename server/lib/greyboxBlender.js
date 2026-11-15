@@ -2,6 +2,11 @@
  * Greybox → Blender blockout. PortOS owns this Python; the place's greybox only
  * enters as JSON data (`greybox-blender.json`), so a render runs no caller code.
  *
+ * Environments › Photoreal: `GREYBOX_BLENDER_PY` (PortOS-owned Blender script that rebuilds a greybox
+ * at exact scale, adds its cameras, saves a .blend and renders chosen shots),
+ * `greyboxBlenderJob(scene, opts)` (its JSON input), `photorealShotRole`/`photorealShotFile`,
+ * engine/sample constants.
+ *
  * Geometry follows the three.js viewer exactly (GreyboxViewer.jsx): meters, Y up,
  * box/cylinder centered on `position`, planes lying flat, extrudes swept up from
  * the part's origin, and Euler XYZ rotations in three.js order (Rx·Ry·Rz). Every

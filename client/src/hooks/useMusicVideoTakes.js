@@ -1,3 +1,15 @@
+/**
+ * Hook for Music Video scene-take review and external asset handoff: select, reject, note, gallery
+ * import, manifest download and handoff import.
+ *
+ * Scene-take review + external-asset handoff for the Music Video board (#8965): serialized select /
+ * reject / note / gallery-import take mutations folded back as scene patches, the handoff manifest
+ * download, and the handoff import (gallery upload per file, then scene association by file tag with
+ * provider provenance). Returns `{ busy, selectTake, reviewTake, importTake, exportHandoff,
+ * importHandoffFiles }`. Use when: The Music Video board's take strips, contact sheet and handoff row
+ * — don't re-sequence take mutations per call site.
+ */
+
 import { useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import {

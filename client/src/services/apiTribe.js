@@ -1,3 +1,9 @@
+/**
+ * Tribe people (relationship rings + contacts), plus `getTribeDuplicateIdentifiers()` (`GET
+ * /tribe/duplicate-identifiers`): a non-blocking report of emails/phones shared by more than one
+ * person.
+ */
+
 import { request } from './apiCore.js';
 
 export const getTribePeople = (options = {}) => {

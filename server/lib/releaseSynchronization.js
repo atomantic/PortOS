@@ -1,3 +1,8 @@
+/**
+ * Frozen continuation policy fields, the inline sync branch name, and the back-merge synchronization
+ * obligations shared by publication enrollment, verification and task update guards.
+ */
+
 import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 

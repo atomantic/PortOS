@@ -1,6 +1,10 @@
 /**
  * The throwing form of the canonical YouTube single-video URL rule.
  *
+ * `assertYoutubeVideoUrl(url)` — the throwing form of the `youtubeUrl.js` rule: returns the video id,
+ * else throws 400 `YOUTUBE_URL_INVALID`. Separate because it needs `ServerError` (and so Node's
+ * `events`), which must stay out of the pure leaf the client re-exports.
+ *
  * Split out of `youtubeUrl.js` so that module stays a pure leaf the browser
  * bundle can import (`client/src/lib/youtubeUrl.js` re-exports it):
  * `ServerError` reaches for Node's `events`, which has no place in the client

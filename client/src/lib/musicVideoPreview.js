@@ -1,3 +1,14 @@
+/**
+ * `selectMusicVideoPreview` picks the representative produced asset (final video, excerpt, clip,
+ * frame) for a Music Video project card.
+ *
+ * Pick the representative produced asset for a Music Video project card (`selectMusicVideoPreview`:
+ * final video → latest excerpt → latest rendered scene clip → latest scene reference frame → visual
+ * spec reference) for the main project grid. Pure, computed off the project record, with image path
+ * and fallback helpers (`musicVideoImageSrc`, `musicVideoImageFallback`, `scenePosterSrc`: a scene's
+ * frame or its clip's poster).
+ */
+
 import { videoSrcForJob, videoPosterForJob } from './creativeDirectorPreview.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 import { resolveSourceTake } from '../../../server/lib/musicVideoSourceTake.js';

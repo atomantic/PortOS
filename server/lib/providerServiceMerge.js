@@ -1,3 +1,15 @@
+/**
+ * Folds duplicate SERVICE INSTANCES into one (epic #7561) — the graph import gave each harness its own
+ * connection, so `opencode-nvidia-nim` and `nvidia-nim` became two NVIDIA NIM services.
+ *
+ * `planServiceInstanceMerges(graph, providers)` groups rows by definition (a generic
+ * `openai-compatible` row on a named definition's default endpoint counts as that definition), folds
+ * those sharing an endpoint, credential mode, plan and non-conflicting credentials whose legacy routes
+ * stay contained, and picks the survivor and its label; `presetPatchesForMerge` re-derives the derived
+ * presets onto the survivor, keeping each preset's model list. Pure; the reconcile pass
+ * (`providerGraph.js`) applies it.
+ */
+
 import { isDeepStrictEqual } from 'node:util';
 import { providerConnectionProfile } from './providerConnections.js';
 import { isDerivedPreset, routeBelongsOnConnection } from './providerGraphRecords.js';

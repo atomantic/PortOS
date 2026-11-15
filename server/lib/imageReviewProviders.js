@@ -1,4 +1,12 @@
 /**
+ * `canReviewImages(provider)`: whether a provider can run a Music Video frame check, i.e. see an image
+ * one-shot with no host-writing tool (#15576).
+ *
+ * That covers a tool-free vision API, Codex on its subscription (`-i` under its read-only sandbox),
+ * and Claude Code or Grok Build, which open the staged image with their one read tool
+ * (`imageReadOneShotArgs` in `providerVendors.js`). The providers route reports it as `imageReview`,
+ * and the Frame check picker filters on it.
+ *
  * Which providers can review an image one-shot without host-writing tools
  * (Music Video frame checks, #15576). Pure over the provider record, so the
  * providers route can report it and the Frame check picker can filter on it.

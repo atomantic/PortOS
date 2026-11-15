@@ -1,6 +1,12 @@
 /**
  * Shot color match for a music video, before the film look.
  *
+ * Music-video shot color match before the film look: group by camera, location and time of day;
+ * measure luma percentiles and chroma; solve a clamped black, white, gamma, white-balance and
+ * saturation correction; `activeShotColorMatch` (off or zero strength is no change);
+ * `colorMatchVideoFilter`, `colorMatchSvgParts`, `hasMusicVideoColorMatch` and
+ * `documentShotColorMatchRuntime` for the render, the animatic and document pages. Browser-safe.
+ *
  * Shots rendered one at a time drift in exposure and white balance even inside
  * one scene on one camera. This measures each take and solves a small
  * per-pixel correction (black, white, gamma, white balance, saturation). The

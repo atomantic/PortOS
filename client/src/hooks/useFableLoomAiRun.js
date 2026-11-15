@@ -1,3 +1,9 @@
+/**
+ * Tracks one FableLoom AI operation, including the attachable shell handoff for TUI providers.
+ *
+ * Use when: FableLoom series or episode AI actions.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { uuidv4 } from '../lib/uuid.js';
 import socket from '../services/socket';

@@ -1,4 +1,12 @@
 /**
+ * The one owner of the persisted metadata-boolean rule — `isTruthyMeta(v)` (`true`/`'true'` = set) and
+ * `isFalsyMeta(v)` (`false`/`'false'` = cleared).
+ *
+ * Anything else is unset. TASKS.md round-trips flags as strings, so a bare `if (metadata.x)` is a
+ * bug. Pure leaf; import directly, never inject.
+ */
+
+/**
  * Persisted task-metadata boolean flags.
  *
  * Contract: a metadata boolean is `true`/`'true'` when set and `false`/`'false'`

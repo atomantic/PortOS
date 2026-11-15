@@ -1,3 +1,12 @@
+/**
+ * `useStickToBottom(containerRef, { enabled, revision })` keeps an `overflow-y-auto` container pinned
+ * to its bottom as content grows.
+ *
+ * A user scroll up unpins, scrolling back to the bottom re-pins, and enabling opens at the tail. Use
+ * when: A live log or transcript panel (the CoS agent card's running output). Pass the growing array
+ * as `revision`.
+ */
+
 import { useLayoutEffect, useRef } from 'react';
 
 // Within this many pixels of the bottom still counts as "at the bottom", so a

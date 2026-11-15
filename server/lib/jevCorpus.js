@@ -1,6 +1,15 @@
 /**
  * The training corpus a project-specific jev head is fit on.
  *
+ * The weakly-labelled training corpus a project-specific jev head is fit on, in open-jev Route A shape
+ * (`{context, options, label}`) so `openjev eval` stays usable as an independent cross-check.
+ * `splitCorpus` assigns train/gold by the example's own content hash — deterministic across machines
+ * and rebuilds — and `assertSplitDisjoint` REFUSES a split whose halves share a key or whose gold set
+ * is too small to separate three numbers. `dedupeCorpus` drops the duplicate question a goal re-stated
+ * across PRD.md and GOALS.md produces, which is contamination arriving through the front door. Also
+ * `corpusHash` (order-independent), `majorityClassAccuracy` (one of the two adoption baselines) and
+ * `summarizeCorpusSources`. Pure; the forge reads live in `services/jevCorpusBuilder.js`.
+ *
  * Schema is daseinlabs/open-jev's **Route A**: one JSON object per line,
  * `{"context": str, "options": [str, ...], "label": int}`, where `label`
  * indexes `options`. Adopted deliberately rather than invented — it keeps

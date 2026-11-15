@@ -1,6 +1,10 @@
 /**
  * Music Video continuing shots: where the previous shot's clip ends on screen.
  *
+ * Continuing shots: `sceneClipOutFrameSec(scene, clipDurationSec, fps)` is the time in a shot's clip
+ * of the last frame the cut shows (performance edit in/out, loop wrap, hold past the clip's end);
+ * `previousShot(project, sceneId)` is the shot before it by start time.
+ *
  * A clip is usually longer than the shot that plays it (a 5.9 s fal clip under
  * a 4.04 s shot), and the cut stops it at the shot's out-point. A continuing
  * shot must start from the frame the viewer last saw, not from the clip's true

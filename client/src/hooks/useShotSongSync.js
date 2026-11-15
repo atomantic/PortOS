@@ -1,3 +1,13 @@
+/**
+ * Plays the master song under a silent, looping shot video: the audio sits at `startSec +
+ * video.currentTime`, is re-seeked on a seek, a loop or more than 80 ms of drift, and pauses with the
+ * video.
+ *
+ * `useShotSongSync({ startSec, enabled, sourceKey, onTime })` returns `{ videoRef, audioRef }`;
+ * `onTime(songSec)` reports the song position. Binds no keys. Use when: The Blender film shot player;
+ * any looping clip that should be heard against its place in a longer track.
+ */
+
 import { useEffect, useRef } from 'react';
 
 // Past this gap between where the song is and where the picture says it should be, the song is re-seeked.

@@ -1,3 +1,8 @@
+/**
+ * Named narrative event kinds, absolute onset/word/frame resolution and deterministic silence/reactive
+ * state for composition documents.
+ */
+
 /** Named graphics on the absolute document clock. No media or provider I/O. */
 export const NARRATIVE_EVENT_KINDS = ['reveal', 'impact', 'silence', 'counter-change', 'motif-transformation'];
 

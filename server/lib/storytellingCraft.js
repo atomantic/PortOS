@@ -1,6 +1,15 @@
 /**
  * Storytelling craft rubric — pure: no I/O, no clock, no provider call.
  *
+ * The storytelling rubric the autobiography feature scores a story against — pure (no I/O, no clock,
+ * no provider call): `STORY_CRAFT_MOVES` (the seven moves — curiosity, tension, specificity, pace, the
+ * unexpected, the warmth-closing personal detail, the takeaway), `CART_STAGES`
+ * (Context/Action/Result/Takeaway), `buildStoryCraftEvaluationPrompt({question, story})` and
+ * `normalizeStoryCraftEvaluation(parsed)`. Rubric source: Shannon Jenkins, [How to Tell Stories Better
+ * Than 99% of People](https://youtu.be/lghSjBl9yGM). The normalizer emits every move and stage in
+ * canonical order whether or not the model returned it, so a truncated answer reads as uncredited
+ * rather than silently shortening the rubric.
+ *
  * Declares the seven moves and the CART structure the autobiography feature
  * scores a written story against, plus the prompt builder and the normalizer
  * that turns an LLM's JSON answer into a shape the UI can render without

@@ -1,4 +1,9 @@
 /**
+ * Dependency-free `LAYERED_INTELLIGENCE_SOURCE_KEYS` leaf shared by the server schema,
+ * layered-intelligence reader, and client settings form.
+ */
+
+/**
  * Built-in Layer-1 telemetry source keys shared by the server schema and the
  * client settings form. Kept in a dependency-free leaf so importing the
  * broad layered-intelligence reader is not required to build a route schema.

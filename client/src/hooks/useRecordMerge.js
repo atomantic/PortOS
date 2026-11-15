@@ -1,3 +1,11 @@
+/**
+ * Duplicate Universe/Series merge flow: open → dry-run preview → resolve field conflicts → execute,
+ * with an `onMerged` refresh callback.
+ *
+ * Drives `<MergeModal>`. Use when: Surfacing the merge-duplicates UI anywhere (Sharing → Duplicates,
+ * Universes page). Don't re-implement the preview/execute dance.
+ */
+
 import { useState, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import {

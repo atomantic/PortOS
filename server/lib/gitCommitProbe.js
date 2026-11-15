@@ -2,6 +2,16 @@
  * Run-window git probes — the machine-checkable "what did this run leave
  * behind?" primitives (#3637).
  *
+ * `commitsSince(workspacePath, sinceMs)` / `committedDuringRun(workspacePath, sinceMs)` count commits
+ * by COMMITTER date for completion criteria. `runWindowDiff(workspacePath, sinceMs, {maxChars, head})`
+ * returns accumulated `<base>..HEAD` text, advancing the pre-window base to the remote-default merge
+ * base when ancestry proves it newer, so absorbed upstream changes are not graded as agent work
+ * (#7690). It uses local refs only; already-upstream agent commits are intentionally excluded. Old
+ * agent records still need only their timestamp, and an unavailable remote-default ref retains the
+ * time-window fallback. A failed comparison or unordered bases returns a `reason` with a `null` diff;
+ * `''` means a valid empty diff. The returned `base` names the actual comparison commit; an optional
+ * pinned `head` keeps published review references reproducible.
+ *
  * Two questions share one module: `did it
  * commit anything?` (the success criterion) and `what did it commit?` (the
  * accumulated diff the goal-fidelity review reads, #5994). The count uses

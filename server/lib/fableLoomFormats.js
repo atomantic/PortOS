@@ -2,6 +2,9 @@
  * FableLoom scene formats — how a loom's scene text is WRITTEN, and therefore
  * how every generative stage is told to write it.
  *
+ * FableLoom scene formats (`LOOM_FORMATS`, `asLoomFormat`, `sceneFormatContract`, …) — how a loom
+ * writes scene text, read by validation, the sanitizer, and every generative stage.
+ *
  * A loom is either narrated prose (second-person interactive fiction) or a
  * teleplay (sluglines, action lines, character cues). The choice is one field
  * on the record, and each stage that produces scene text renders the matching

@@ -1,3 +1,17 @@
+/**
+ * `fitModelToHeight(object, { targetHeight, feetOnGround, yOffset })` normalizes a loaded GLB to a
+ * fixed on-screen height and anchors it vertically.
+ *
+ * `fitModelToHeight(object, { targetHeight, feetOnGround, yOffset })` — normalize a loaded GLB to a
+ * fixed on-screen height and anchor it vertically, either by bounding-box center (portrait framing) or
+ * by its lowest point (a figure standing on a ground plane). Recenters x/z, guards a zero-height model
+ * against an infinite scale, leaves a geometry-less object or a non-finite `targetHeight` untouched
+ * rather than writing `NaN`/`Infinity` through the transform, and resets to identity before measuring
+ * so a repeat call (StrictMode's double mount effect) converges instead of blowing the model back up.
+ * Call from an effect, never during render — a skinned mesh measures wrong before `useAnimations`
+ * binds the skeleton.
+ */
+
 import * as THREE from 'three';
 
 // Normalize a loaded model to a fixed on-screen height so different source GLBs

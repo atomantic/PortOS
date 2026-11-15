@@ -1,4 +1,14 @@
 /**
+ * `mediaDeleteOutcome(result, kind)` interprets a video or image delete response (deleted, pending,
+ * cancelled, etc.) into what the list should do with the row.
+ *
+ * `mediaDeleteOutcome(result, kind)` — what a video or gallery-image delete response (`deleted`,
+ * `deleted-remote`, `pending`, `owner-unknown`, `cancelled`) means for the list holding the row: `{
+ * remove, pendingDelete, notice, tone }`. Shared by Media History, Image Gen, Video Gen and collection
+ * pages so none reports a delete that did not happen.
+ */
+
+/**
  * What a video or gallery-image delete response means for the list showing
  * the row (server/services/mediaRemoteDelete.js): whether the row leaves the
  * list, the pending marker to keep on it, and the notice to show.

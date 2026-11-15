@@ -1,6 +1,17 @@
 /**
  * The shared TTL cache in front of `probeOpenAiModels`.
  *
+ * `probeOpenAiModelsCached(endpoint, apiKey)` and `resetOpenAiModelsProbeCache()` — the shared 15s TTL
+ * cache in front of `openAiModelsProbe.js`, keyed `endpoint\napiKey` (two providers on one
+ * authenticated endpoint must not inherit each other’s 401) and storing the PROMISE so N providers
+ * sharing a daemon share one socket. It lives BELOW its two readers —
+ * `services/providerReadiness.js`’s checklist and `services/observedContextWindows.js`’s pre-dispatch
+ * context gate — so a page poll and a run starting in the same window cost one listing and can never
+ * disagree about a daemon that restarted between them. An unexpected throw drops the entry rather than
+ * poisoning it for the TTL; expired entries are swept on every miss.
+ * `services/providerReadiness.js#resetProviderReadinessCache` clears it for the llama-server lifecycle
+ * routes.
+ *
  * Two independent readers ask the same local daemons the same question: the
  * Providers page's readiness checklist (`services/providerReadiness.js`) and the
  * pre-dispatch context gate (`services/observedContextWindows.js`). Giving each

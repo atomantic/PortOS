@@ -1,3 +1,13 @@
+// Hook driving a song training run over a scope on top of `useColorMatch`: count-in, graded walk, and
+// recording the take into progress history.
+//
+// Drives a song training run over one scope (whole song or a sliced section) on top of
+// `useColorMatch`: counts in, walks + grades the scope's score, then folds the finished take into the
+// rolling progress history (`songProgress.recordAttempt`) and surfaces the next aggregate via
+// `onProgress`. Supports looping (auto-restart after a run) and keeps a `lastSummary`. Exposes `{
+// running, countingIn, noteColors, activeIndex, lastSummary, start, stop }`; cancels pending loop
+// relaunches on stop/unmount. Use when: The Song editor's Training panel.
+//
 // useSongTraining — drives a song training run: pick a scope (the whole song or
 // one section), count the singer in, walk that scope's notated score in tempo,
 // grade it against the live mic (reusing useColorMatch), and — when the run

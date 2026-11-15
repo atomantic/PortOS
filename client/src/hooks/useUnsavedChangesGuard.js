@@ -1,3 +1,17 @@
+/**
+ * `useUnsavedChangesGuard(isDirty, opts)` returns `{ blocked, proceed, reset }`, parking router
+ * navigation behind a prompt while a form has unsaved edits.
+ *
+ * `useUnsavedChangesGuard(isDirty, { beforeUnload, scopePath })` → `{ blocked, proceed, reset }` —
+ * parks router navigation (sidebar link, ⌘K, voice nav, browser Back) behind react-router's
+ * `useBlocker` while a draft is dirty, and arms `beforeunload` for tab close/reload. Auto-proceeds
+ * once the draft goes clean. `scopePath` is the path prefix the editor owns, exempting its own
+ * pathname-changing in-page moves (a splat route's tab switch). Requires the data router in
+ * `main.jsx`; tests must mount `createMemoryRouter` + `<RouterProvider>`. Use when: Any editor holding
+ * an unsaved draft (SongBookViewer, PipelineManuscriptEditor, writers-room WorkEditor) — render the
+ * confirm with `<UnsavedChangesConfirm guard={…} when={!saving}>`, never `window.confirm`.
+ */
+
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useBlocker } from 'react-router';
 

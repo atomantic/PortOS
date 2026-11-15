@@ -1,5 +1,11 @@
 // Generic AbortController + timeout lifecycle helper.
 //
+// `awaitWithAbort(promise, signal)` cancels a caller's wait while owning eventual rejection of shared
+// preparation; `withAbortTimeout(timeoutMs, fn)` — runs `fn(signal)` under an `AbortController` that
+// aborts after `timeoutMs` and always clears the timer on settle. Generic lifecycle helper for callers
+// that need the insecure-agent `peerFetch` (so can't use `fetchWithTimeout`) or one signal across
+// parallel fetches.
+//
 // `peerFetch` (and Node's `fetch` generally) has no built-in timeout, so callers
 // repeatedly hand-rolled the `new AbortController()` + `setTimeout(abort)` +
 // `finally{clearTimeout}` triple. `withAbortTimeout` encapsulates that lifecycle

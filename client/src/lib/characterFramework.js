@@ -1,6 +1,18 @@
 /**
  * Shared narrative-character framework definitions for the client editors.
  *
+ * The narrative-character framework as the editors consume it. Re-exports `CHARACTER_ARC_TYPES` /
+ * `CHARACTER_FRAMEWORK_FIELDS` / `CHARACTER_FRAMEWORK_TEXT_FIELDS` / `CHARACTER_FRAMEWORK_LIMITS` /
+ * `CHARACTER_PSYCHOLOGY_LIMITS` / `CHARACTER_SLIDER_AXES` / `PSYCHOLOGY_ASSESSMENTS` /
+ * `PSYCHOLOGY_DRIVE_AXES` / `RELATIONSHIP_LINK_TYPES` from the pure leaf
+ * `server/lib/characterFramework.js`, and adds the editor descriptors
+ * `CHARACTER_FRAMEWORK_EDITOR_FIELDS` (Ghost → Wound → Lie → Need → Want, with
+ * labels/placeholders/caps), `CHARACTER_MOTIVATIONS_FIELD`, `CHARACTER_SECRETS_FIELD`,
+ * `CHARACTER_PSYCHOLOGY_EDITOR_FIELDS` / `CHARACTER_PSYCHOLOGY_NOTE_FIELD` /
+ * `CHARACTER_PSYCHOLOGY_DRIVE_HINTS` (#6414), and `CHARACTER_SLIDER_MIN` / `CHARACTER_SLIDER_MAX`.
+ * Shared by the Universe cast editor and the Writers Room bible so the two never restate the same
+ * field copy (#6417).
+ *
  * Re-exports the canonical field list from the pure server leaf
  * `server/lib/characterFramework.js` (so the store's `editableFields`, the
  * route Zod schemas and the UI can never drift apart) and adds the editor-only

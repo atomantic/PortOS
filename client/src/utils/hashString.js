@@ -1,3 +1,5 @@
+// Deterministic string → 32-bit hash (stable colors, keys, seeds).
+//
 // Stable, non-negative DJB2-style string hash. Used to derive deterministic
 // per-entity variation (process seeds, neon accent colors, flow-link jitter)
 // without Math.random, so renders are reproducible across reloads and frames.

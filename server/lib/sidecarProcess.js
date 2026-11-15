@@ -1,6 +1,11 @@
 /**
  * Shared Python-sidecar process runner — the STAGE:/RESULT: wire protocol.
  *
+ * `runSidecarProcess({bin,args,env,signal,onStage,onProcess})` + `parseSidecarResult(stdout)` — the
+ * shared Python-sidecar STAGE:/RESULT: wire-protocol runner (spawn, tail-capped stdout/stderr,
+ * per-STAGE-line callback, abort/SIGTERM → `canceled`, non-zero exit → stderr-tail reason). Used by
+ * `pipeline/musicGen.js` (all music backends) and `audioMidiTranscription.js` (MuScriptor).
+ *
  * Every media sidecar (scripts/generate_musicgen.py, generate_audioldm2.py,
  * generate_acestep.py, transcribe_muscriptor.py, …) speaks the same contract:
  * `STAGE:<name>[:detail]` lines on stderr drive the JS-side phase/progress

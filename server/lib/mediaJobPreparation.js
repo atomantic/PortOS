@@ -1,3 +1,10 @@
+/**
+ * `createMediaJobPreparation()` tracks per-job cancellation before cloud providers install a render
+ * handle.
+ *
+ * `run`, `cancel`, `take`, and `ids` cover preparation, handoff, and bulk cancellation.
+ */
+
 import { randomUUID } from 'node:crypto';
 
 /** Track per-job cancellation until a provider installs its render handle. */

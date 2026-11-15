@@ -1,3 +1,16 @@
+/**
+ * Canonical a cappella song-craft reference data for the Songs Guide and Song editor: `RHYTHM_SHAPES`,
+ * `DIRGE_RHYTHM_SHAPES` and `VOICE_LAYERS`.
+ *
+ * Canonical a cappella song-craft reference data rendered by the Songs Guide (`/songs/guide`) and
+ * reused by the Song editor: `RHYTHM_SHAPES` / `DIRGE_RHYTHM_SHAPES` (dirge & ballad pulse feels with
+ * BPM bands), `VOICE_LAYERS` (foundation-first harmony build ladder), `LEARNING_STEPS` (practice
+ * sequence), `NOTATION_HELP` (lead-sheet/notation primers), `SOLFEGE_DEGREES` + `solfegeForDegree(n)`,
+ * and `rhythmShapeLabel(id)` (human-readable "Slow 4/4 ballad · dirge (56–76 BPM)" label shared by the
+ * editor's picker and read view). Pure data; pickers and docs read the same source so they can't
+ * drift.
+ */
+
 import {
   RHYTHM_SHAPES as SHARED_RHYTHM_SHAPES,
   VOICE_LAYERS as SHARED_VOICE_LAYERS,

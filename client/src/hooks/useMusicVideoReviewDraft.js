@@ -1,3 +1,10 @@
+/**
+ * Sequential exact-version availability checks for implicit imported draft selection.
+ *
+ * Stale requests abort, unavailable newer drafts are disclosed, explicit review versions remain
+ * pinned.
+ */
+
 import { useEffect, useState } from 'react';
 import { musicVideoReviewDrafts } from '../../../server/lib/musicVideoReviewDraft.js';
 

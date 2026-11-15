@@ -1,3 +1,9 @@
+/**
+ * Optimistic-PATCH lock toggle.
+ *
+ * Use when: New "lock this field/stage/arc" button — use this, do not re-implement.
+ */
+
 import { useState } from 'react';
 import toast from '../components/ui/Toast';
 

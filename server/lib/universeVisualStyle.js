@@ -1,6 +1,19 @@
 /**
  * The one definition of the style a universe contributes to an IMAGE prompt.
  *
+ * The style a universe contributes to an IMAGE prompt: `buildVisualStyleClause(universe, {override,
+ * mode})` (curated `influences.embrace` tokens + a series `stylePromptOverride`, NEVER the free-text
+ * `styleNotes`, which is writing-stage direction), `universeStylePreset(universe, series)` (the
+ * `{prompt, negativePrompt}` preset `composeStyledPrompt` consumes — the one definition shared by the
+ * browser and the FableLoom visual-canon compiler, `client/src/lib/universeStylePreset.js` re-exports
+ * it), `universeAestheticLine` (the labeled variant canon sheet/LoRA renders lead with),
+ * `universeVisualStyleTokens`, `joinInfluenceList` (thin trim+join over one chip-token list,
+ * re-exported by `server/services/universeBuilder/compile.js`), `splitPromptTokens`,
+ * `stripStyleClause(text, clause)` (removes the copy the browser already prefixed, so the compiler
+ * keeps the LEADING one — matched on the joined clause so a token with its own punctuation like `M.C.
+ * Escher` still matches) and `mergeNegativePromptTokens` (token-level union of comma-joined
+ * negatives).
+ *
  * A universe carries two different style surfaces and they are NOT
  * interchangeable:
  *

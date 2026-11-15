@@ -1,6 +1,11 @@
 /**
  * X.com (Twitter) post URL + media — pure helpers (no I/O).
  *
+ * Pure x.com/twitter.com post helpers: `parseXPostUrl(input)` (post URL → `{ statusId, canonicalUrl
+ * }`, host-gated) + `buildSyndicationUrl`/`syndicationToken` (Twitter's public unauthenticated
+ * tweet-syndication endpoint) + `extractXPostMedia(json)` (→ `{ images, video }`). Feeds the
+ * mood-board X post importer.
+ *
  * `parseXPostUrl` validates a pasted post URL and reduces it to a status id
  * plus a username-independent canonical URL (the mood-board importer's
  * per-item dedupe key). `buildSyndicationUrl`/`syndicationToken` build the

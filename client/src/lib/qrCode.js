@@ -1,4 +1,7 @@
 /**
+ * Standards QR Code encoder (byte mode, versions 1–40, Reed–Solomon, mask scoring): `encodeQr` matrix
+ * and `generateQrCodeSvg` markup.
+ *
  * QR Code encoder (ISO/IEC 18004, byte mode, versions 1–40) with an SVG
  * renderer. Pure JavaScript, no dependencies. Follows the reference
  * structure of Nayuki's QR Code generator (MIT): data codewords, Reed–Solomon

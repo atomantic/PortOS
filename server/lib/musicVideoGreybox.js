@@ -1,3 +1,12 @@
+/**
+ * `musicVideoGreyboxReference` resolves a catalog set camera into a plate, capture or blocking layout
+ * reference; `musicVideoGreyboxReferences` lists them for a greybox.
+ *
+ * `musicVideoGreyboxReference(project, scene, places)` resolves a selected catalog set camera into its
+ * plate or capture, an optional figure-blocking layout, visible figure additions, or a
+ * missing-reference error; `musicVideoGreyboxReferences(greybox)` lists the images it sends.
+ */
+
 import { GREYBOX_SHOT_ROLE_PREFIX, greyboxFigurePromptLines, greyboxInfrastructurePromptLines } from './greyboxVocabulary.js';
 
 /** Older records only have the flag; compare live captures when available and otherwise keep the gate. */

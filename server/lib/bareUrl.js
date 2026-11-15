@@ -1,6 +1,12 @@
 /**
  * Bare-URL detection for capture surfaces.
  *
+ * `parseBareUrl(text)` — returns the normalized URL when a captured string is nothing *but* a URL
+ * (bare host gets `https://`), else null. Drives the brain-capture short-circuit that files a pasted
+ * URL straight to Links instead of running the classifier. Stricter than the client's
+ * `urlNormalize.js` `isUrl` (needs a plausible TLD; http/https/`git@` only) because it picks a storage
+ * destination rather than a hint.
+ *
  * A brain capture whose ENTIRE text is a URL is a bookmark, not a thought — the
  * capture path files it straight to the links collection instead of spending a
  * classifier LLM call on it. This module owns that decision so every capture

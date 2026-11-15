@@ -1,3 +1,7 @@
+/**
+ * Lazy, single-flight WebP previews for flat gallery PNG files, refreshed when the source changes.
+ */
+
 import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import sharp from 'sharp';

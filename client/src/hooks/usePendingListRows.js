@@ -1,3 +1,9 @@
+// List-of-rows where a new row is held client-side until a required column fills, then promoted to
+// `onChange`.
+//
+// Use when: Editable list whose nameless rows would otherwise be dropped by the server sanitizer
+// (WardrobeSection, CharacterDetailEditor list sections).
+//
 // Pending-row buffer for "list of records where a new row is held client-side
 // until a required column fills, then promoted to onChange." Mirrors the
 // pattern previously inlined in CanonCard's WardrobeSection and

@@ -1,4 +1,11 @@
-/** Cross-cutting filesystem, time, formatting, and hashing helpers. */
+/**
+ *  Cross-cutting filesystem, time, formatting, and hashing helpers.
+ *
+ * Cross-cutting filesystem primitives (`atomicWrite`, `writeFileGuarded`, `appendFileGuarded`,
+ * `copyFileGuarded`, `renameGuarded`, `rmGuarded`, `unlinkGuarded`, `createWriteStreamGuarded`,
+ * directory helpers, `parseFilesystemStats(stats)` → canonical/byte-alias metrics or `null`, bounded
+ * tail reads/watchers), time/format helpers, directory sizing, and SHA-256 helpers.
+ */
 import { access, appendFile, chmod, copyFile, mkdir, open, readFile, readdir, stat, writeFile, rename, unlink, rm } from 'fs/promises';
 import { createReadStream, createWriteStream, existsSync, statSync, watch as watchFileSystem } from 'fs';
 import { createHash, randomUUID } from 'crypto';

@@ -2,6 +2,16 @@
  * Build the CoS task payload for the "Queue agent to investigate" action on an
  * installer failure (#5981).
  *
+ * Build the CoS task payload behind the installer-failure "Queue agent to investigate" button (#5981):
+ * `buildInstallFailureTask({ label, stage, error, logs, surface })` → `{ description, prompt }`
+ * carrying the installer name, failing stage, error text and a bounded log tail, and
+ * `installLogTail(logs)` (the `useInstallStream` `{ kind, text }` entries rendered as text, capped at
+ * `INSTALL_FAILURE_LOG_TAIL_LINES` / `INSTALL_FAILURE_LOG_TAIL_CHARS` so a 1000-line pip stream cannot
+ * push a huge body through `POST /api/cos/tasks`, cutting on a line boundary, redacting the
+ * home-directory paths pip/git echo, and neutralizing a log line that would close the prompt fence).
+ * Shared by both install modals and `LocalSetupPanel` so every surface queues the same reproducible
+ * context.
+ *
  * Every installer failure surface (`Flux2InstallModal`, `RuntimeInstallModal`
  * and its six call sites, `LocalSetupPanel`) reaches this one builder so the
  * queued task always carries the same reproducible context: which installer

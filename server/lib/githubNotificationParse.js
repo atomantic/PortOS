@@ -1,8 +1,14 @@
 /**
- * Pure parsing for the GitHub notifications inbox (#12870): `gh api --include`
- * output and the thread records GitHub returns. Every field here is external
- * data — titles are shown as text, and the only link kept is one rebuilt from
- * GitHub's own API url that lands on the account's own web host.
+ * Pure parsing for the GitHub notifications inbox (#12870): `gh api --include` output and the thread
+ * records GitHub returns.
+ *
+ * `parseGhIncludeOutput`, `linkHeaderHasNext`, `pollIntervalSeconds`, `repoApiPath`,
+ * `advisoryIdFromUrl`, `GHSA_RE`, `notificationHtmlUrl`, `toNotificationRecord` — pure parsing for the
+ * GitHub notifications inbox: `gh api --include` output and thread records, with links rebuilt only
+ * onto the account's own GitHub host.
+ *
+ * Every field here is external data — titles are shown as text, and the only link kept is one rebuilt
+ * from GitHub's own API url that lands on the account's own web host.
  */
 import { z } from 'zod';
 

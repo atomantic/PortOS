@@ -1,4 +1,8 @@
-/** Canonical install/source roots and path construction helpers. */
+/**
+ *  Canonical install/source roots and path construction helpers.
+ *
+ * Canonical source/install `PATHS`, `dataPath`, and home-directory expansion.
+ */
 import { homedir } from 'os';
 import { join } from 'path';
 import { resolveCodeRootForModule, resolveInstallRoot } from './dataRoot.js';

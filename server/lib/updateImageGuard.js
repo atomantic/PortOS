@@ -1,3 +1,7 @@
+/**
+ * Disk-only Persistent Mind image-state safety check for online and offline updates.
+ */
+
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PATHS } from './paths.js';

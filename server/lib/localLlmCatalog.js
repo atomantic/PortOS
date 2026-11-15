@@ -1,5 +1,8 @@
 // Curated cross-backend catalog of popular local LLMs.
 //
+// Curated cross-backend (Ollama↔LM Studio) local-LLM catalog + install-id mapping for the migrate
+// flow. Pure.
+//
 // PortOS supports two local-LLM backends — Ollama (content-addressed blob
 // store) and LM Studio (plain GGUF files). Their model identifiers differ
 // (`llama3.2` vs `lmstudio-community/Llama-3.2-3B-Instruct-GGUF`). The GGUF

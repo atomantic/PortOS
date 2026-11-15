@@ -1,6 +1,18 @@
 /**
  * Video draft → delivery ("Finish") profiles (issue #3696).
  *
+ * Draft → delivery ("Finish") relationships between video models (#3696). `VIDEO_FINISH_PROFILES`
+ * declares each fast draft entry id → `{ shippedRepo, finishModelId }`, only for pairs that share a
+ * runtime, base repo and supported modes (the same weights at a different step budget), so
+ * re-rendering the draft's seed reproduces its composition instead of re-rolling it.
+ * `applyVideoFinishProfiles(list)` is the load-time backfill (twin of migration 238) with the usual
+ * preservation guards (existing key wins, custom id skipped, forked `repo` skipped);
+ * `validateFinishProfileGraph(list)` returns the graph problems (missing / self-referencing / chained
+ * target, runtime / repo / supportedModes mismatch) and `sanitizeFinishProfiles(list)` warns + strips
+ * them at load so a typo can never surface a Finish button targeting nothing.
+ * `finishTargetForModel(model, availableModels)` resolves the delivery entry scoped to what this
+ * install can run.
+ *
  * A *draft* model is a fast, low-step variant a user composes with; a
  * *delivery* model is the slower sibling that renders the same composition at
  * full quality. When the two share identical base weights, re-rendering the

@@ -1,3 +1,12 @@
+/**
+ * Client API wrapper for the Privacy Center: PII Vault, Trusted Organizations, org holdings,
+ * social-account links and household subjects with consent audit.
+ *
+ * Privacy Center — encrypted PII Vault + Trusted Organizations registry (status, vault CRUD + reveal,
+ * org CRUD, org holdings replace-set) + Digital Twin social-account cross-link + household subjects
+ * (subject CRUD, consent audit, and a `subjectId` scope passed in each wrapper's trailing `options`).
+ */
+
 import { request } from './apiCore.js';
 
 // Privacy Center — encrypted PII Vault + Trusted Organizations registry

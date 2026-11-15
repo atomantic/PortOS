@@ -1,4 +1,9 @@
-/** Bounded, deterministic offline sound; no browser clock or authored code execution. */
+/**
+ *  Bounded, deterministic offline sound; no browser clock or authored code execution.
+ *
+ * Versioned frame/sample timelines, deterministic impact/reveal WAV synthesis and decoded event
+ * measurements.
+ */
 import { createHash } from 'crypto';
 import { canonicalStringify } from './objects.js';
 import { pcmToWavBuffer } from './chiptuneRender.js';

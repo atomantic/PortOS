@@ -1,3 +1,8 @@
+/**
+ * Shared deterministic canvas painter for music-video transition and in-shot effect frames, plus the
+ * sandboxed document runtime source.
+ */
+
 import { blockBox, edgeGlows } from './musicVideoTransitions.js';
 
 /** Create a deterministic painter for a selected transition or in-shot effect. */

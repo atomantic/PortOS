@@ -1,3 +1,15 @@
+/**
+ * Music Video pre-production treatment state: serialized brief, arc and shot-direction saves carrying
+ * the latest revision, reloading on 409 conflicts.
+ *
+ * The Music Video pre-production treatment (#8980): serialized brief/arc/shot-direction saves that
+ * each carry the latest known treatment revision (a 409 from a newer copy reloads the project),
+ * explicit compile (AI or deterministic) with skip-reason feedback, the Apply review (`loadPreview` →
+ * `apply({ overwrite, addTextCues })`) and proof verdicts. Returns `{ compiling, preview, previewing,
+ * applying, save, compile, loadPreview, apply, reviewProof, clearPreview }`. Use when: The Music Video
+ * treatment panel — don't re-derive the revision bookkeeping per call site.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import {

@@ -1,6 +1,8 @@
 // Length/count caps for albums records. Pure constants so the server sanitizer
 // (services/albums/logic.js) and the client editors import ONE definition —
 // see storyArcLimits.js for the same pattern.
+//
+// Album record length/count caps shared by the albums sanitizer and client editors.
 export const TITLE_MAX = 200;
 export const ARTIST_ID_MAX = 80;
 export const ARTIST_NAME_MAX = 120;

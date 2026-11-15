@@ -1,6 +1,12 @@
 /**
  * Anchoring rules for USER-entered backup exclude patterns.
  *
+ * CLIENT MIRROR of the backup-exclude block in `server/lib/sharedSchemas.js` (#7241) —
+ * `anchorUserExclude` / `anchorUserExcludes` / `isSafeExcludePattern` / `EXCLUDE_PATTERN_MAX_LENGTH`.
+ * The Backup settings tab anchors a newly added exclude and renders the effective list with these, so
+ * the chip the user sees is the rsync filter the server will actually run instead of an unanchored
+ * pattern that matches at any depth.
+ *
  * The backup exclude list is rsync FILTER syntax, not a glob list. rsync anchors
  * a pattern to the transfer root only when it starts with `/`; anything else
  * matches at EVERY level of the tree. So a user who types `cache/` to skip

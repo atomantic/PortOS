@@ -1,3 +1,9 @@
+/**
+ * `{ visible, showOnFirstTouch }` — reveals a brief one-time touch gesture hint, then auto-hides it.
+ *
+ * Use when: 3D canvases whose primary one-finger gesture needs an initial explanation.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 export const FIRST_TOUCH_HINT_DURATION_MS = 2500;

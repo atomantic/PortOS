@@ -1,3 +1,14 @@
+/**
+ * Hook `useDeckRenderTarget` resolving a deck's next card render backend, size, summary, local runtime
+ * state and blocked status in one call.
+ *
+ * What a deck's next card render runs on — `{ backends, size, summary, localRuntime, blocked }` —
+ * resolving the `RENDER_TARGET.DECK` pin ladder, the card trim, and the local runtime's verdict in one
+ * call. Use when: Any deck surface that queues a render or names the options it will use (the render
+ * bar, the card grid's per-card re-render) — resolve it once on the page and pass it down rather than
+ * probing per consumer.
+ */
+
 import useImageRenderSettings from './useImageRenderSettings';
 import useLocalImageRuntime from './useLocalImageRuntime';
 import { deckCardSize } from '../lib/decks';

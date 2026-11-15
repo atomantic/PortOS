@@ -1,3 +1,13 @@
+/**
+ * API client for the SongBook repertoire tracker: song CRUD, stage patch, `practiceSong` graded
+ * practice logging, URL import drafts and attachments.
+ *
+ * SongBook repertoire tracker (`/songbook` — Brain `songs` entity): song CRUD + stage PATCH,
+ * `practiceSong(id, quality)` (logs a 0..5-graded practice run; the server owns the SM-2 advance and
+ * the resulting `stage`/`practice`), URL import draft, and attachments (base64 upload, present-flag
+ * list, raw serve URL via `songAttachmentUrl`).
+ */
+
 import { request } from './apiCore.js';
 
 // SongBook API surface (Brain repertoire tracker — guitar tabs / chord sheets /

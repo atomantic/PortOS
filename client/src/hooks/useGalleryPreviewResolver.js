@@ -1,3 +1,11 @@
+/**
+ * Builds the stable `resolveItem` callback that resolves a `?preview=` param the host's own items list
+ * does not contain, by looking the record up in the gallery and normalizing it.
+ *
+ * `usePreviewRoute` uses it as its DEFAULT. Use when: Call it directly only to narrow the lookup —
+ * `collectionId` scopes it to one collection.
+ */
+
 import { useCallback } from 'react';
 import { listMediaGalleryPage } from '../services/apiImageVideo';
 import { normalizeMediaRow } from '../components/media/normalize';

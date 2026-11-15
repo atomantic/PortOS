@@ -449,7 +449,7 @@ PostgreSQL itself is not PM2-managed — it runs as the system service (`:5432`)
    - React state and lifecycle hooks → `client/src/hooks/` (prefix with `use`)
    - Pure formatting and mathematical helpers → `client/src/utils/`
    - API / network / WebSocket clients → `client/src/services/` (prefix with `api*`)
-2. **Catalog Parity Rule**: Every new module MUST be re-exported in that directory's `index.js` barrel (or `services/api.js`) AND documented in that directory's `README.md` table. This invariant is enforced by unit tests (e.g., `server/lib/index.test.js`, `client/src/lib/index.test.js`).
+2. **Module summary rule**: Every module opens with a comment whose first paragraph is a one-sentence summary of at most 200 characters; `node scripts/lib-catalog.js <term>` derives the catalog from these headers, and each directory's `moduleSummaries.test.js` enforces them. A new `apiX.js` is also re-exported from `client/src/services/api.js`.
 
 ### Adding a Data Store
 1. Determine the storage tier according to `docs/STORAGE.md`.

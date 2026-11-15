@@ -1,4 +1,9 @@
-/** Save schema for an Environment's world map (lib/worldMap.js), kept apart so the browser-safe half has no zod. */
+/**
+ *  Save schema for an Environment's world map (lib/worldMap.js), kept apart so the browser-safe half has no zod.
+ *
+ * `worldMapSchema`, the zod save schema for a world map (unique set and path ids), apart from the
+ * browser-safe `worldMap.js`.
+ */
 import { z } from 'zod';
 import { WORLD_LIMITS, WORLD_PATH_KINDS, WORLD_PATH_SIDES, WORLD_POLE_SIDES, WORLD_POLE_SPACING, WORLD_ROAD_INFRASTRUCTURE, WORLD_SETTINGS, WORLD_VERSION } from './worldMap.js';
 

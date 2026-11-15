@@ -2,6 +2,11 @@
  * The repository metadata a Brain link carries, and the compatibility shim that
  * keeps it readable across PortOS versions.
  *
+ * `deriveRepoLinkFields(url)` / `normalizeRepoLinkFields(link)` / `linkIsRepo(link)` /
+ * `repoLinkLabel(link)` — the repository metadata a Brain link carries, plus the
+ * dual-write/tolerant-read shim that keeps the pre-multi-host `isGitHubRepo` field names readable
+ * across federated peers.
+ *
  * The fields used to be GitHub-only (`isGitHubRepo` / `gitHubOwner` /
  * `gitHubRepo`). They are now host-generic (`isRepo` / `repoHost` / `repoOwner`
  * / `repoName`) so gitlab.com repos are first-class, and migration 330 rewrites

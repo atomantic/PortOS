@@ -1,6 +1,16 @@
 /**
  * Quota-burn configuration — shape, defaults, and normalization.
  *
+ * Quota-burn plan shape: the provider families, the burn-job type alphabet + catalog the config page
+ * renders its form from, `QUOTA_BURN_BOUNDS` (the one bounds table the normalizer clamps to, the Zod
+ * schemas reject against, and the catalog descriptors publish as min/max), and total normalization
+ * (`normalizeQuotaBurnConfig`). Owns the dispatch-cap sentinel too (`QUOTA_BURN_UNLIMITED_DISPATCHES`
+ * / `isUnlimitedDispatchCap`) — -1 means the window is not counted, and is the default. Also owns the
+ * retired executor's task-description parser (`QUOTA_BURN_TASK_PREFIX` /
+ * `quotaBurnFamilyOfDescription`), kept for migration 225, and the `run once` vocabulary
+ * (`quotaBurnJobKey` / `jobIsSpent`, plus the two family predicates `familyIsConfigured` and
+ * `familyHasRunnableJobs`). Pure — no storage, no provider I/O.
+ *
  * Quota-burn is ONE machine-local loop that lives in PortOS itself, not a
  * per-managed-app scheduled CoS task type (it used to be the latter; migration
  * 221 moves installs over). The work it dispatches may still target a managed

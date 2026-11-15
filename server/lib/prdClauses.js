@@ -1,6 +1,13 @@
 /**
  * Chop a product-requirements document into addressable clauses.
  *
+ * Chops `PRD.md` / `GOALS.md` into addressable clauses — one per paragraph, top-level list item,
+ * blockquote or table data row — each carrying its heading path, source file and line. Clause ids are
+ * `<file>#<heading-slug>:<content-hash>` with NO line number and NO document ordinal, so a clause
+ * keeps its id when an unrelated paragraph is inserted above it. `indexClausesById` /
+ * `formatClauseCitation` render a verdict back to a citation a human can go read. Pure; the files are
+ * read by `services/scopeAdherence.js`.
+ *
  * `PRD.md` and `GOALS.md` state what the product is supposed to be. Nothing
  * reads them. This module turns that prose into the premise corpus the local
  * entailment scorer needs: a flat list of short, self-contained statements,

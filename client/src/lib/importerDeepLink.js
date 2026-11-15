@@ -1,3 +1,6 @@
+// The Importer deep-link contract both ways: `buildImporterLink({ universeId, seriesId, seriesName })`
+// builds the `/importer?…` URL a Series Pipeline page navigates to
+//
 // The Importer deep-link contract, both directions:
 //   - `buildImporterLink` produces the `/importer?…` URL a Series Pipeline page
 //     navigates to so the importer opens pre-targeted at a universe/series.

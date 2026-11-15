@@ -1,6 +1,10 @@
 /**
  * Persona trait-blending (Digital Twin M34 P7).
  *
+ * Digital-twin persona trait-blending (M34 P7). Blends a persona's `traitAdjustments` against the base
+ * twin's communication profile + Big-Five into a "Communication Calibration" directive. A pure leaf —
+ * `client/src/lib/personaTraitBlend.js` re-exports it for the Personas UI preview.
+ *
  * A persona is a named context (Professional, Casual, Family…). Beyond its
  * free-text `instructions`, a persona may carry structured `traitAdjustments`
  * that modulate the *base* twin's quantitative profile for that context —

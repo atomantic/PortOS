@@ -1,5 +1,8 @@
 // Loop interval grammar shared by services/loops.js and the loop route schema,
 // so the route rejects exactly what the service would.
+//
+// Loop interval grammar (`MIN_INTERVAL_MS`, `parseInterval`, `isValidLoopInterval`) shared by
+// `services/loops.js` and `createLoopSchema` so the route rejects what the service would.
 export const MIN_INTERVAL_MS = 10_000;
 // Node timers overflow above 2^31-1 ms (~24.8 days) and fire every 1 ms instead.
 export const MAX_INTERVAL_MS = 2 ** 31 - 1;

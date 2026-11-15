@@ -1,3 +1,12 @@
+/**
+ * Bounded image or mixed-media browsing with debounced server search, scopes, totals, stale-response
+ * cancellation and retryable next pages.
+ *
+ * `preserveLoadedOnRefresh` reloads the retained window in compact pages while keeping existing cards
+ * mounted. Use when: Gallery grids and pickers; `getGalleryImages` hydrates known references
+ * separately.
+ */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { listImageGalleryPage, listMediaGalleryPage } from '../services/apiImageVideo';
 

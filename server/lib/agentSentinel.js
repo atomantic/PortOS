@@ -1,6 +1,26 @@
 /**
  * The `.agent-done` completion sentinel — shared naming + parser.
  *
+ * The `.agent-done` completion sentinel: `DONE_SENTINEL_NAME`, `doneSentinelName(agentId)` → the
+ * per-instance filename `.agent-done-<agentId>` (worktree-less agents share one workspace, so a shared
+ * name lets concurrent runs clobber — and finalize on — each other's signal),
+ * `doneSentinelCandidateNames(agentId)` → the canonical name plus the bounded one-character truncation
+ * recovery candidate for generated ids, `doneSentinelPath(workspacePath, agentId)` → the canonical
+ * path every producer resolves, `doneSentinelAgentId(filename)` → its inverse (`''` for the bare
+ * unscoped name, `null` for a non-sentinel), so the stale-sentinel sweep in
+ * `services/agentSentinelSweep.js` matches leftovers to runs the same way the producer named them, +
+ * pure `parseSentinelPayload(contents)` → `{ summary, payload }`. Back-compat — a plain-markdown
+ * sentinel yields `payload: null`; a JSON object yields its structured `payload` for a
+ * programmatic-I/O task type's `processTaskOutput` hook. `salvageSentinelPayload(contents)` (async) is
+ * the lenient second tier — runs `jsonExtract` over a fenced/prose-trailed/control-char-corrupted
+ * envelope so a less-capable model's near-valid output still surfaces its `payload` instead of being
+ * dropped. `extractSentinelPayloadFromTranscript(transcript, isPayload)` (async) is the third tier for
+ * programmatic-I/O types ONLY — scans the ANSI-stripped PTY transcript, newest balanced JSON block
+ * first, for a payload the model PRINTED instead of writing, and adopts it only if the owning hook's
+ * shape predicate accepts it (#3640). `PROGRAMMATIC_OUTPUT_COMPLETION_HEADING` names the briefing
+ * section that prints this run's absolute sentinel path — a task-type hook renders its prompt before
+ * spawn, so it points the agent at that section by name rather than at a filename it cannot know.
+ *
  * A finishing agent writes this file into its workspace to signal completion
  * (see agentTuiSpawning's sentinel watcher). The file is named per agent instance
  * (`.agent-done-<agentId>`, see `doneSentinelName`) because worktree-less runs

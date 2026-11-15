@@ -1,5 +1,9 @@
 // Pure helpers for server/scripts/moltworld-explore.mjs, kept importable so a test
 // can pin that the Moltworld credential never reaches stdout or a PortOS URL.
+//
+// Pure helpers for `server/scripts/moltworld-explore.mjs`: `pickMoltworldAccount`, `buildQueueUrl`
+// (keyed by the PortOS personality id, never the Moltworld credential), `explorerBanner`,
+// `portosAuthHeaders`.
 
 /** Pick the active Moltworld account. `personalityId` is the PortOS agent the UI queues under. */
 export function pickMoltworldAccount(accounts) {

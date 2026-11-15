@@ -1,3 +1,7 @@
+/**
+ * Platform accounts.
+ */
+
 import { request } from './apiCore.js';
 
 // Platform Accounts

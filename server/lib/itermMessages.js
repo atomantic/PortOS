@@ -1,3 +1,11 @@
+// Clean-room iTerm2 API message schemas (sessions, notifications, buffer, send text, variables) with
+// `encode`/`decode` helpers for client and server messages.
+//
+// PortOS-authored (clean-room, no vendored `api.proto`) schemas for the iTerm2 API subset the Shell
+// page's iTerm2 view uses — list sessions, notifications, get buffer, send text, variables — plus
+// `encode/decodeItermClientMessage`, `encode/decodeItermServerMessage` and `flattenItermLayout`
+// (window → tab → pane order).
+//
 // PortOS-authored message declarations for the subset of the iTerm2 scripting
 // API the Shell page's iTerm2 view uses (#8114): list sessions, notification
 // subscribe/unsubscribe, get buffer, send text and get variable.

@@ -1,3 +1,13 @@
+/**
+ * Hook loading verified animated avatar records plus state-to-clip resolvers (`resolveStateClip`,
+ * `resolvePlaybackClip`, `coverageSummary`) for avatar selectors.
+ *
+ * Verified animated records for the avatar selectors (`GET /avatar/rigged`) plus the honest state→clip
+ * resolvers (`resolveStateClip`, `resolvePlaybackClip`, `coverageSummary`): an uncovered CoS state
+ * falls back to a clip the character actually has, never a pretended one. Use when: Any surface
+ * offering or playing a rigged-record avatar (CoS avatar selector, CoS playback).
+ */
+
 import { useCallback, useEffect, useState } from 'react';
 import { getRiggedAvatars } from '../services/api';
 

@@ -2,6 +2,16 @@
  * Safe public-URL fetch — SSRF-guarded text/binary fetch for "go grab this
  * remote thing the user pointed us at" flows (RSS feeds, remote images, …).
  *
+ * SSRF-guarded public-URL fetch: `isPublicHttpUrlSafe`/`assertPublicHttpUrl` (scheme +
+ * blocked-host-literal via `catalogValidation.isBlockedIngestHost` + DNS-resolve), exported strict
+ * `isPrivateAddress`, plus `fetchPublicText`/`fetchPublicBinary`/`fetchPublicResponse`
+ * (status-preserving raw Response) (timeout, redirect revalidation, size cap), and `resolvePublicUrl`
+ * (bounded, pinned short-link resolution with an optional hop allow-list) and
+ * `buildPinnedLookup`/`buildPinnedDispatcher` (the connect-time IP pin that closes the DNS-rebinding
+ * TOCTOU). Reuse instead of copying the SSRF guard for any "fetch this remote thing the user pointed
+ * us at" flow. Also `readBodyCapped(response, maxBytes)` bounds streamed bodies without choosing a
+ * network policy.
+ *
  * Centralizes the guard so new callers reuse ONE implementation instead of
  * copying the host-parsing logic a fourth time (it already lives, subtly
  * differently, in feeds.js `fetchFeedXml` and catalogIngestSources.js

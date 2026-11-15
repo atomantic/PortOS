@@ -1,3 +1,12 @@
+// Shared canvas helpers for the two piano-roll renderers (`<PianoRoll>` falling-note +
+// `<MidiPianoRoll>` DAW-style, #2477).
+//
+// `layerColor(index)` — the per-layer/track palette (8 hues, wraps both directions) used by note bars,
+// keyboards, and legends; `roundRect(ctx, x, y, w, h, r)` — rounded-rect path with `ctx.roundRect`
+// feature-detect and arcTo fallback; `rollPalette()` — resolves the theme-following `{ bg, accent,
+// accentRgb }` from `--port-accent` via `getComputedStyle` (canvas can't read CSS vars); `ROLL_BG` —
+// the shared near-black bg literal. Pure canvas math/palette, no React.
+//
 // Shared canvas helpers for the two piano-roll renderers — the Synthesia
 // falling-note <PianoRoll> (score playback) and the DAW-style <MidiPianoRoll>
 // (transcribed .mid inspection, #2477). Pure canvas math/palette, no React.

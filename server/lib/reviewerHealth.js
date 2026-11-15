@@ -1,4 +1,15 @@
 /**
+ * Dependency-free reviewer health helpers: `activeReviewerGroupIndex`, malformed-review diagnostics,
+ * configuration-fault vocabulary and `reviewerCommandPermissionFailureCode`.
+ *
+ * Dependency-free `activeReviewerGroupIndex` (shared runtime/editor pause selection), bounded
+ * malformed-review diagnostics and finish metadata, reviewer configuration-fault vocabulary,
+ * `reviewerCommandPermissionFailureCode` for explicit headless command-permission refusals, and
+ * `reviewerAccessFailureCode`, which recognizes explicit structured OpenCode access refusals without
+ * treating generic HTTP or transport failures as permanent faults.
+ */
+
+/**
  * Bounded reviewer-failure vocabulary. Keep this leaf independent of provider
  * configuration: health readers must not load a runner or probe a provider.
  */

@@ -1,3 +1,15 @@
+/**
+ * Hook running lyric word alignment as an SSE job slot: `run(projectId, cueId?)` resolves with the
+ * aligned project or rejects with the server message.
+ *
+ * Lyric word alignment as a `useSseJobSlot` (#10155): `run(projectId, cueId?)` is a promise resolving
+ * with the aligned project (null on cancel/dropped stream, rejecting with the server message on
+ * failure), `attach(jobId, projectId)` adopts a running job after a reload, `stageLabel`/`percent` for
+ * model-download and per-phrase progress, `onAligned(projectId, project)` on success. Slot context is
+ * `{ projectId, cueId }`. Use when: Music Video Setup Align words / Re-align and the autopilot
+ * kickoff.
+ */
+
 import { useEffect, useRef } from 'react';
 import toast from '../components/ui/Toast';
 import useSseJobSlot from './useSseJobSlot.js';

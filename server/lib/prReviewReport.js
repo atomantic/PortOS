@@ -2,6 +2,17 @@
  * Structured pr-reviewer report → GitHub markdown, plus the prompt contract
  * that asks for it.
  *
+ * Owns the structured PR-decision contract end to end: `PR_REVIEW_DECISION_CONTRACT` is the envelope
+ * both review producers (pr-reviewer stage 3, issue-watcher reasoning pass) interpolate into their
+ * prompts, `normalizeReviewReport` bounds what comes back, `reviewReportText` hands every
+ * model-authored string to the abuse scan, and `renderReviewBody`/`renderFinding` turn it into the
+ * markdown a human reads on the PR page — verdict banner, scope line, blocking-finding index anchored
+ * to `path:line`, test-evidence bullets (`TEST_EVIDENCE_STATUSES` keeps `fail` for "the change is
+ * broken", with `expected-fail` and `blocked` for the non-zero exits that say nothing about it),
+ * notes, collapsed verified-claims list, and inline comments with an optional GitHub suggestion block.
+ * Bounded by `MAX_REVIEW_BODY_CHARS`, dropping whole low-priority sections instead of truncating
+ * mid-sentence. Pure.
+ *
  * Stage 3 of the pr-reviewer pipeline used to hand the coordinator one
  * `summary` string, which was posted verbatim as the review body: a single
  * unbroken wall of prose mixing the verdict, the test evidence, every verified

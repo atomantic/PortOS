@@ -1,3 +1,8 @@
+/**
+ * `markdownImages(content, limit)` — bounded, deduplicated safe markdown image previews for Brain
+ * cards and import archives.
+ */
+
 /** Bounded image projection for cards; accepts the same URL schemes as MarkdownOutput. */
 export function markdownImages(content, limit = 4) {
   const images = [];

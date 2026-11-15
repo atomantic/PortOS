@@ -1,6 +1,23 @@
 /**
  * MiniMax H3 memory profiles (issue #5420).
  *
+ * The declared weight-placement table for the three MiniMax H3 entries (#5420) — H3 is the one video
+ * model family whose components fit nowhere unassisted, so "does this box have enough" is a render
+ * gate, not a UI fact. `MINIMAX_H3_MEMORY_PROFILES` maps entry id → `{ shippedRepo, shippedRevision,
+ * profiles }`, each profile carrying an honest `minMemoryGb` host floor and (CUDA only) a `minVramGb`
+ * device floor, ordered best-first. Every capacity number is HOISTED from what already existed — the
+ * CUDA tiers are `resolve_offload_profile()`'s own thresholds in
+ * `scripts/generate_minimax_h3_cuda.py`, the host floors are the entries' `memoryGb` — the sole new
+ * number being `MINIMAX_H3_HOST_RESERVE_GB`, a policy reserve held back for the OS.
+ * `applyMiniMaxH3MemoryProfiles(list)` is the load-time backfill (twin of migration 317) and guards
+ * BOTH `repo` and `revision`, like the speed-profile decorator. `selectMiniMaxH3MemoryProfile({ model,
+ * totalMemoryGb })` picks the best profile the HOST can hold (VRAM is the runner's call — the server
+ * has no synchronous device view); `miniMaxH3MemoryDeclineReason()` RETURNS the fail-closed reason so
+ * the render path can 400 it and a status surface can show it, and returns `null` on an UNMEASURED
+ * host — "not measured" is a deferral to the runner, never the same as zero.
+ * `validateMiniMaxH3MemoryProfileTable` / `sanitizeMiniMaxH3MemoryProfiles` warn + strip a hand-edited
+ * table (NaN floor, duplicate/reserved id, mis-ordered tiers) at load.
+ *
  * A *memory profile* is one runner-proven weight-placement recipe together with
  * the capacity it honestly needs: a host-RAM floor, and — on the CUDA lane — a
  * device-VRAM floor. H3 is the one video model in the catalog whose components

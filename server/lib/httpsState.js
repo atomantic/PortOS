@@ -1,4 +1,6 @@
 /**
+ * Captures whether PortOS booted with HTTPS active.
+ *
  * Captures whether PortOS booted with HTTPS active. The decision is made once
  * at server start (see lib/tailscale-https.js) — `createTailscaleServers`
  * inspects cert presence and returns an http or https server accordingly.

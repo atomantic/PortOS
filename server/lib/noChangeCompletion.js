@@ -1,6 +1,14 @@
 /**
  * No-change completion contract.
  *
+ * `permitsNoChangeCompletion(task)` — the single predicate for "this run may finish successfully with
+ * an empty branch": the persisted `noChangeSuccess` marker AND (`autonomousJob` OR `isInvestigation`
+ * OR built-in quality audit OR a type in the exported `NO_CHANGE_SCHEDULED_TYPES` allowlist —
+ * `dependency-updates`, whose ordinary outcome is "already current"; `taskSchedule.test.js` keeps the
+ * list and the schedule defaults' `noChangeSuccess` markers in parity). Read by both the prompt
+ * builder and finalization so the agent is never told a contract finalize will not honour; whether the
+ * branch was really empty is the post-run `branchProvenEmpty` verdict.
+ *
  * A task may complete successfully with an empty branch only when it opted in
  * (the persisted `noChangeSuccess` metadata marker) and is an autonomous job,
  * investigation, built-in quality audit, or an allow-listed scheduled type;

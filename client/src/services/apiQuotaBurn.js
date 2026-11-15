@@ -1,3 +1,12 @@
+/**
+ * API client for Quota Burn: plan and live status, job-type catalog, save, manual runs
+ * (`getQuotaBurn`, `saveQuotaBurn`, `runQuotaBurn`) and `rearmQuotaBurn`.
+ *
+ * Quota Burn plan + live status, the job-type catalog its config form renders, and manual runs
+ * (`getQuotaBurn`/`getQuotaBurnCatalog`/`saveQuotaBurn`/`runQuotaBurn`), plus `rearmQuotaBurn` to put
+ * spent `run once` steps back into the rotation.
+ */
+
 import { request } from './apiCore.js';
 
 // Quota Burn — the install-level burn plan (one loop in PortOS; jobs may target

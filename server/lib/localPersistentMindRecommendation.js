@@ -1,6 +1,10 @@
 /**
  * Curated Persistent Mind defaults for CPU-only / low-RAM hosts (Grok Bot boxes).
  *
+ * CPU-only / low-RAM Persistent Mind defaults (Grok-box path): recommended Ollama + Qwen2.5 7B
+ * instruct profile, model aliases, and host gates so GPU coding-agent presets are not steered here.
+ * Pure.
+ *
  * HardwareLlmRecommendation owns GPU coding-agent presets (Apple 48GB+, RTX 3090
  * + Qwen3.8-27B). Those hosts must not be steered toward a 7B Ollama mind as the
  * primary story. This module is the complementary path: a free local mind on

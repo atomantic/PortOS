@@ -1,6 +1,12 @@
 /**
  * Film style grammar catalog (#10252, phase 1 of #10251).
  *
+ * Curated film style grammar catalog (`FILM_STYLE_GRAMMARS`, eight code-rendered media with rendering,
+ * colour, type, motion, camera, sound and native-move guidance), `getFilmStyleGrammar`,
+ * `summarizeFilmStyleGrammar` (picker projection) and `knownFilmStyleIdSchema` (request-field id
+ * check) and `renderFilmStyleGrammarPrompt(id, { parts })` — one prompt section capped at
+ * `FILM_STYLE_PROMPT_MAX_CHARS`; unknown id or bad parts is a 400.
+ *
  * A grammar is a curated description of a code-rendered medium — how it is
  * imitated procedurally, its colour and type logic, how it moves, the camera
  * vocabulary it speaks, what it sounds like, and the moves only it can make —

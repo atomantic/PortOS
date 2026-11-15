@@ -2,6 +2,25 @@
  * Which LOCAL daemon backs a provider, and whether a stored model pin is one
  * that provider may still be handed.
  *
+ * THE model-pin membership rule, and the local-daemon classification it rests on —
+ * `modelPinIsOffered(provider, model)` (may this provider be handed this model? a configured-default
+ * sentinel, an empty catalog and a local daemon's cached snapshot are all pass-throughs, so a freshly
+ * pulled Ollama model is never rejected as "not offered"; beyond those the match is exact, with two
+ * same-model-spelled-differently tolerances: agy compares on BASE ids, since `--effort` carries the
+ * tier and the spawner splits a suffixed pin into exactly that, and OpenCode's `namespace/model` form
+ * matches a bare pin, since pins are stored bare and namespaced at spawn), plus
+ * `localRuntimeKind(provider)` (the `*Backed` markers first, then the endpoint/name classifier;
+ * `orcarouter` excluded as a remote API) and `localBackendForProvider`. Split out of
+ * `localProviderRuntime.js` — which re-exports all three, so existing importers are untouched —
+ * because the browser needs this rule for a picker and must not pull that module's endpoint graph
+ * (`opencodeConfig.js` → `zod`, not a client dependency) to get it. Carries
+ * `LOCAL_RUNTIME_MANAGE_URLS` for the same reason (#7414): the route that manages each local runtime —
+ * Models → Runtimes for the servers, Models → LLMs for the weights catalog, `null` for the
+ * operator-owned compose projects — read by `LOCAL_RUNTIMES[*].manageUrl` and by the client surfaces
+ * that must name the same page. Consumed by `cliProviderRun.js`, `routes/brainSettings.js`,
+ * `services/agentProviderResolution.js`, `modelPinReconcile.js` and
+ * `client/src/utils/providerModels.js` — one answer for all five (#7327).
+ *
  * Split out of `localProviderRuntime.js` (which re-exports every name here, so
  * its existing importers are untouched) for one reason: the browser needs this
  * rule. A picker that renders a stored pin has to know whether the catalog

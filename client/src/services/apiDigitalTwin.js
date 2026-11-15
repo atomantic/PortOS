@@ -1,3 +1,7 @@
+/**
+ * Digital twin status + summary.
+ */
+
 import { request } from './apiCore.js';
 
 // Digital Twin - Status & Summary

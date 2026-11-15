@@ -1,3 +1,12 @@
+/**
+ * Zod schemas and bounds for the opt-in read-only agent-context MCP surface, plus
+ * `advertiseAgentContextTools(scopes)` to list the tools a caller's scopes allow.
+ *
+ * Shared settings, MCP request/tool input/output schemas, result + approximate-token bounds,
+ * source-freshness status, and `advertiseAgentContextTools(scopes)` for the opt-in read-only
+ * agent-context surface.
+ */
+
 import { z } from 'zod';
 import {
   createDefaultPortosSemanticToolGrants,

@@ -1,3 +1,11 @@
+/**
+ * `useProviderList({ enabled })` → the `useListResource` shape (`{ items, state, error, retry,
+ * setItems }`) over `GET /providers`, silent so the caller owns the error UI.
+ *
+ * Use when: Any picker or tab that needs the provider list — render `<ListLoadError what="AI
+ * providers" onRetry={retry}>` on `error`, and gate "no providers" copy on `state === 'ready'`.
+ */
+
 import * as api from '../services/api';
 import useListResource from './useListResource.js';
 

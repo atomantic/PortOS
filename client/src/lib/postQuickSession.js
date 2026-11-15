@@ -1,3 +1,6 @@
+// Pure Quick POST duration presets, local-observation estimator, deterministic budget composer, and
+// preview metadata.
+//
 // Pure planning helpers for the composed POST Quick session. Keeping the
 // estimator and composer side-effect free makes the time-budget contract easy
 // to test and keeps provider calls out of the planning path.

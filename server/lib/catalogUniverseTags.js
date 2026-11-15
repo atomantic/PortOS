@@ -2,6 +2,11 @@
  * Friendly universe-tag transforms for catalog ingredients backfilled from
  * universe canon.
  *
+ * Pure transform that rewrites legacy machine universe tags (`from-universe`, `universe:<id>`) on
+ * backfilled catalog ingredients into friendly universe-NAME tags, preserving user tags + the
+ * structured `catalog_ingredient_refs` link. Used by the boot-time repair and the bible→catalog
+ * backfill.
+ *
  * The original bible→catalog backfill stamped MACHINE tags onto every promoted
  * character/place/object: a literal `from-universe` marker plus a
  * `universe:<universeId>` id tag. Those are unreadable in the Catalog UI (a raw

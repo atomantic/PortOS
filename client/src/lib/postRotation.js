@@ -1,4 +1,9 @@
 /**
+ * Re-export of `server/lib/postRotation.js` — `orderByRecencyRotation` sorts POST practice candidates
+ * fresh-before-recently-practiced, then by priority, rotating equivalent ones by local day.
+ */
+
+/**
  * Deterministic day-based rotation for POST practice selection.
  *
  * Re-export of `server/lib/postRotation.js` — the one definition of this rule,

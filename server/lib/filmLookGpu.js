@@ -1,4 +1,12 @@
 /**
+ * `filmLookGpuRuntimeSource`: page script defining a WebGL2 renderer that reproduces the
+ * `filmLookFilterMarkup` SVG film look on the GPU for faster footage finishing.
+ *
+ * `filmLookGpuRuntimeSource`: the page script defining `__portosFilmLookGpu`, a WebGL2 renderer that
+ * draws `filmLookFilterMarkup`'s filter primitive by primitive the way Chrome's Skia raster backend
+ * does (three-box blurs, Skia's feTurbulence, 8-bit premultiplied intermediates), for the footage
+ * film-look finishing pass.
+ *
  * Film look on the GPU — the same picture `filmLookFilterMarkup` (lib/filmLook.js)
  * describes, drawn with WebGL2 fragment shaders instead of Chrome's CPU SVG
  * filter, so the footage finishing pass costs milliseconds a frame instead of

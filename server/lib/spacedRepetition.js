@@ -1,6 +1,24 @@
 /**
  * Spaced repetition (SM-2 inspired) — the shared scheduling core.
  *
+ * The shared SM-2-inspired review scheduler, extracted from `services/meatspacePostMemory.js` when
+ * SongBook practice became its second consumer (#4102). One four-field schedule shape (`{ ease,
+ * intervalDays, nextReview, lastReviewed }`, no `repetitions` counter — the 0 → 1 → 6 → `round(prev *
+ * ease)` ladder derives from the previous interval, so a schedule round-trips through
+ * import/export/federation on those four fields alone). `advanceSchedule(schedule, ratio, now)` is the
+ * core (ease clamped to `MIN_EASE`..`MAX_EASE`, interval capped at `MAX_INTERVAL_DAYS` so `new
+ * Date(now + interval*DAY)` can't overflow into an Invalid Date; quality < 3 zeroes the interval to
+ * resurface the record but still applies the ease penalty). `mergeScheduleAdvance(prev, advanced, now,
+ * timezone)` gates interval GROWTH to once per review day in the user's IANA `timezone` (UTC when
+ * omitted; a shrink always applies) for UIs that submit per chunk/section; `isSameReviewDay` is that
+ * gate's own predicate, reusable by callers gating their own once-a-day progression.
+ * `scheduleOrDefault(record, schedule?)` is the read-path fallback — a record with no schedule derives
+ * one anchored to its `updatedAt`/`createdAt` (stable and in the past → due now), so "due" can't flap
+ * between two reads a millisecond apart. `ratioToQuality` / `qualityToRatio` are exact inverses over
+ * the integers, so a self-graded 0..5 review lands on the quality the user picked. `isScheduleDue`
+ * treats an absent/unparseable `nextReview` as due — a record we can't schedule is one to surface,
+ * never one to hide forever. Pure.
+ *
  * Every record that wants to resurface on a review cadence carries the same
  * four-field schedule:
  *

@@ -1,4 +1,12 @@
 /**
+ * Untrusted-content source display labels.
+ *
+ * `UNTRUSTED_CONTENT_SOURCES` / `PRIVATE_UNTRUSTED_CONTENT_SOURCES` are re-exported from
+ * `server/lib/untrustedContentSources.js`, so the Abuse Guard panel always offers every source the
+ * server screens; `UNTRUSTED_CONTENT_SOURCE_LABELS` is the client-only select (#7680).
+ */
+
+/**
  * Untrusted-content source display labels, over the ingress vocabulary in
  * `server/lib/untrustedContentSources.js` (#7680).
  *

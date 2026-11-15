@@ -1,3 +1,10 @@
+/**
+ * `retainVideoCuts` preserves rendered cut references on invalidation.
+ *
+ * Video checkpoint fingerprints, owner-only review actions, feedback, and targeted revision
+ * invalidation.
+ */
+
 import { canonicalSnapshotChecksum } from './snapshotChecksum.js';
 import { ServerError } from './errorHandler.js';
 

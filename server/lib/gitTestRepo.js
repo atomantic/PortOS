@@ -1,6 +1,19 @@
 /**
  * Shared real-git sandboxes for integration tests (#4394).
  *
+ * Shared real-git sandbox for integration tests (#4394): one initialized template (working tree + bare
+ * origin) per worker, then `fs.cp` into a fresh temp dir. `makeGitSandbox({ origin })`,
+ * `attachBareOrigin(scratch, repo)`, `materializeGitRepo(dest)`, `destroyGitSandbox`, plus
+ * `SKIP_HEAVY_INTEGRATION` (`VITEST_FAST=1`). `resetGitSandbox({ scratch, repo, initialHead })` /
+ * `resetGitWorktreeSandbox(repo, initialHead)` restore a sandbox in place (branches, worktrees,
+ * remote) so a `describe` can build one sandbox in `beforeAll` and reset between tests instead of
+ * paying the fs.cp/rm cycle per test (#5902). Every entry point runs `assertTempPath` first, so a path
+ * outside `os.tmpdir()` throws instead of `git init`-ing or `rm -rf`-ing a real checkout (#4554).
+ * Fixture-local maintenance/GC detachment is disabled so awaited Git operations retain their writers
+ * through teardown. Primary fixtures pin `core.autocrlf=false` and `core.eol=lf` so
+ * copied/materialized checkouts preserve exact text bytes under host CRLF defaults. Still real git —
+ * just not rebuilt from `init`+`commit`+`push` in every `beforeEach`.
+ *
  * Suites that pin git's own defaults (autoSetupMerge, cherry/patch-id,
  * worktree list spelling) must keep talking to a real repository — a mocked
  * `execGit` would only assert the author's belief. What they do NOT need is

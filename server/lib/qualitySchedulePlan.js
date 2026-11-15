@@ -1,6 +1,16 @@
 /**
  * Lay the quality audits out across a week, around whatever else already runs.
  *
+ * Lays a managed app's schedulable quality audits out across a week. `planQualitySchedule({taskTypes,
+ * fileIssuesByType, busy, options})` → one weekly cron per check plus ONE daily cron for the
+ * issue-claim drain that follows each check by `claimOffsetHours` (placed forward-only, so a drain
+ * never precedes the audit it works for); `orderQualityChecks` topologically sorts the selection by
+ * `AUDIT_SUGGESTED_AFTER`; `buildBusySlots(occupancies, options)` turns expanded crons into the
+ * occupied `"<day>:<hour>"` cells the placement avoids (which is how a 03:30 release job keeps audits
+ * out of its window); `resolveQualityScheduleOptions` is the ONE default/window/claim-type resolver
+ * the planner and its service caller share. Which repo shape each audit needs is catalog-owned
+ * (`auditCapabilityRequirement`), not declared here. Pure: no schedule read, no repo read, no clock.
+ *
  * The problem this solves: an app has ~26 schedulable audit types
  * (`AUDIT_DEFINITIONS`), each of which would otherwise need a hand-picked cron
  * expression, in an order that respects `AUDIT_SUGGESTED_AFTER`, in hours that

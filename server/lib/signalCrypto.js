@@ -2,6 +2,13 @@
  * Signal Desktop database crypto (#2154) — pure, dependency-free helpers for
  * reading Signal's local SQLCipher-encrypted chat database.
  *
+ * Pure, dependency-free crypto for Signal Desktop (#2154, #11149): SQLCipher-4 page decryption
+ * (`decryptSqlcipherDatabase`, `deriveSqlcipherKeys`, `sqlcipherPageHmac`) and Chromium/Electron
+ * `safeStorage` unwrap (`decryptSafeStorageValue`, `deriveSafeStorageKey`). Live sync does not decrypt
+ * a raw main-file copy — that misses committed WAL frames — and instead uses
+ * `services/signalSnapshot.js`. `isRawHexKey` still gates the key. All functions return `{ ok, ... }`
+ * reports (never throw).
+ *
  * Two independent crypto schemes live here, both implemented against Node's
  * built-in `node:crypto` (zero new dependencies, per the PortOS dependency
  * policy — see docs/plans/2026-07-04-human-activity-tracking.md):

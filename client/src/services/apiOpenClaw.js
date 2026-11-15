@@ -1,3 +1,7 @@
+/**
+ * File browser / picker backend.
+ */
+
 import { API_BASE, request } from './apiCore.js';
 
 export const getOpenClawStatus = () => request('/openclaw/status', { silent: true });

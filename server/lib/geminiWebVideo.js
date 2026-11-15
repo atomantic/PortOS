@@ -1,4 +1,7 @@
 /**
+ * Gemini Omni 1.2 Flash as the Gemini web app serves it: clip length, reference limit and the
+ * composer's aspect choice.
+ *
  * Gemini Omni 1.2 Flash as the Gemini web app serves it. There is no API on this
  * route: PortOS drives gemini.google.com in the signed-in PortOS Browser, so the
  * app's composer sets what a render can ask for. It offers only two aspect

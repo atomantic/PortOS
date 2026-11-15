@@ -1,6 +1,9 @@
 /**
  * Editable identity and operating prompt for the persistent Chief-of-Staff mind.
  *
+ * Editable persistent-mind identity and operating-instructions schema/defaults; saving it never starts
+ * inference.
+ *
  * This is durable configuration, not lifecycle consent. Reading or saving it
  * never starts the mind or calls a provider.
  */

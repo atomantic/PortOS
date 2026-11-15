@@ -1,3 +1,9 @@
+/**
+ * OpenClaw SSE chat stream.
+ *
+ * Use when: OpenClaw file-browser chat surface only.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../services/apiOpenClaw';
 

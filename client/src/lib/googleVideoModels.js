@@ -1,4 +1,11 @@
 /**
+ * Re-export of `server/lib/googleVideoModels.js` — the curated Google Veo models with their lengths,
+ * sizes, end-frame and reference-image support.
+ *
+ * Used by the Video Gen page's Google backend.
+ */
+
+/**
  * Curated Google Cloud Agent Platform video model catalog (Veo).
  *
  * Re-export of `server/lib/googleVideoModels.js`, the one definition of each

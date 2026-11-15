@@ -1,3 +1,12 @@
+/**
+ * The cutting room floor outro's clock: `start()` plays it for `seconds` on its own rAF clock and
+ * fetches the tally afresh.
+ *
+ * With `audioRef` it also starts when the song ends; a new project or length stops it. Returns `{
+ * seconds, t, stats, active, paused, start, stop, pause }`; `pause` freezes the displayed outro for
+ * frame capture. Use when: The storyboard animatic's ending and the board's Ending card.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getMusicVideoOutroStats } from '../services/apiMusicVideo.js';
 

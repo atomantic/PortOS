@@ -1,6 +1,14 @@
 /**
  * One paste-and-submit driver for both TUI runners (#16105).
  *
+ * `createPasteSubmitDriver({ prompt, command, write, paste, isFinalized, onFail, settleRule, mcpBoot,
+ * promptGate, … })` — the one paste-and-submit sequence both TUI runners drive (#16105): bracketed
+ * paste → commit evidence (marker / collapsed chip / rendered prefix) → verify window → MCP-boot-aware
+ * retry of a swallowed paste → Codex settle (`settleRule: 'codex'`) → spaced submit Enters →
+ * re-pressed Enter while the prompt sits unsubmitted. Owns every paste/Enter timer; readiness and
+ * startup dialogs stay with each runner. Returns `{ start, ingest, resubmit, pressUnsubmittedEnter,
+ * cancel }`.
+ *
  * The one-shot prompt runner (`services/tuiPromptRunner.js`) and the CoS agent
  * session controller (`services/agentTuiSpawning/sessionController.js`) used to
  * hand-implement the same PTY sequence with their own timers, and the copies

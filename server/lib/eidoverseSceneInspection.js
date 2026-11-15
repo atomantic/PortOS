@@ -1,4 +1,9 @@
-/** Local authored geometry projection, not a renderer or a world-log export. */
+/**
+ *  Local authored geometry projection, not a renderer or a world-log export.
+ *
+ * Typed bounded local scene query, sequence-checked authored geometry view, safe asset references, and
+ * conservative world AABBs with explicit completeness and unknown extents.
+ */
 import { z } from 'zod';
 import { eidoverseModelBounds } from './eidoverseCityLayout.js';
 

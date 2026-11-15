@@ -1,5 +1,10 @@
 /**
  * Passing a long ffmpeg filter graph by file instead of on the command line.
+ *
+ * `filterGraphViaFile(bin, args, path)` moves a `-filter_complex` or `-vf` graph over
+ * `FILTER_GRAPH_ARG_LIMIT` into a file (`-/filter_complex` or `-/vf`, or their `*_script` options
+ * before ffmpeg 7), since Linux and Windows cap argument length. Used by the music video render and
+ * excerpt encodes and the HTML composition encoder.
  */
 import { writeFile } from 'fs/promises';
 import { promisify } from 'util';

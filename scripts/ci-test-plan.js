@@ -8,6 +8,7 @@ import { staticImportClosure, toModuleKey } from '../server/lib/staticImportGrap
 import { escapeRegExp } from '../server/lib/textUtils.js';
 import { moduleImports } from './lib/sourceTokens.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { CATALOG_DIRS } from './lib-catalog.js';
 import { SERVER_LINT_RE } from './lib/serverLintSurface.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
@@ -370,9 +371,6 @@ export const EXPLICIT_ALWAYS_RUN_TESTS = [
   'scripts/doc-code-pointers.test.js',
   // A newly added shared selector has no import edge to its documentation inventory.
   'server/lib/executionOptions.consumers.test.js',
-  // The union-merged catalogs are `.md` to the planner, so a rebase that
-  // doubled a row would otherwise never be re-checked.
-  'scripts/catalog-merge-union.test.js',
   // Base-relative: a rename or deletion of a shipped migration touches no file
   // the planner would select for it (#16094).
   'scripts/migrations/migrationFilenames.guard.test.js',
@@ -802,8 +800,10 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
   if (changedFiles.some((path) => ENSURE_DEPS_INPUTS.has(path))) {
     add('scripts/ensure-deps.test.js');
   }
-  if (changedFiles.some((path) => /^server\/lib\//.test(path))) {
-    add('server/lib/index.test.js');
+  // The module-summary guards readdir-scan their directory instead of importing
+  // it, so no import edge selects them for a newly added module.
+  for (const dir of CATALOG_DIRS) {
+    if (changedFiles.some((path) => path.startsWith(`${dir}/`))) add(`${dir}/moduleSummaries.test.js`);
   }
   // These guards read the tree rather than importing it, so no import edge
   // selects them: the route-graph guard catches a route file nothing mounts,
@@ -826,15 +826,6 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
   // checked on a full suite.
   if (changedFiles.some((path) => /^server\/sockets\//.test(path))) {
     add('server/sockets/asyncHandlerGuard.test.js');
-  }
-  if (changedFiles.some((path) => /^client\/src\/lib\//.test(path))) {
-    add('client/src/lib/index.test.js');
-  }
-  if (changedFiles.some((path) => /^client\/src\/hooks\//.test(path))) {
-    add('client/src/hooks/index.test.js');
-  }
-  if (changedFiles.some((path) => /^client\/src\/utils\//.test(path))) {
-    add('client/src/utils/index.test.js');
   }
   if (changedFiles.some((path) => /^client\/src\/.*\.jsx$/.test(path))) {
     add('client/src/a11y/controlNames.conventions.test.js');
@@ -900,22 +891,6 @@ const hasWindowsRiskFile = (paths) => paths.some((path) => (
 ));
 
 const skippedRunner = () => ({ mode: 'skip', files: [], sources: [] });
-
-// Catalog barrels are validated by structural export guards. Feeding one to
-// Vitest's import graph selects nearly every consumer even though the barrel
-// contains no behavior; PR #5296 changed server/lib/index.js and consequently
-// selected 1,244 files / 27,491 tests. Behavioral source files in the same diff
-// still drive related-test selection normally.
-//
-// Also the set `.gitattributes` merges with `union` — scripts/catalog-merge-union.test.js
-// pins the two lists to each other.
-export const STRUCTURAL_BARRELS = [
-  'server/lib/index.js',
-  'client/src/lib/index.js',
-  'client/src/hooks/index.js',
-  'client/src/utils/index.js',
-];
-const isStructuralBarrel = (path) => STRUCTURAL_BARRELS.includes(path);
 
 /**
  * A route declaration is a safe, client-only subset of the App composition
@@ -1213,31 +1188,26 @@ function buildSuitePlan(changedFiles, {
   const hasServerSource = jsSources.some(isServerRunnerFile);
   const hasClientSource = jsSources.some(isClientSource);
 
-  const serverSources = jsSources
-    .filter(isServerRunnerFile)
-    .filter((path) => !isStructuralBarrel(path));
-  const clientSources = jsSources
-    .filter(isClientSource)
-    .filter((path) => clientDependencySet.has(path) || !isStructuralBarrel(path));
+  const serverSources = jsSources.filter(isServerRunnerFile);
+  const clientSources = jsSources.filter(isClientSource);
 
   // Feature-name matches, basename contracts, direct tests and guards are
   // additive explicit selectors; they never replace import-graph traversal. A
   // nested feature leaf can be consumed by a differently named test in another
   // area, so any behavioral source in a runner takes one 'related' invocation.
-  // Only a barrel-only edit (fully covered by the structural export guard) or a
-  // test-only diff keeps exact-file selection.
+  // Only a test-only diff keeps exact-file selection.
   const serverMode = serverSources.length > 0 ? 'related' : 'files';
   const clientMode = clientSources.length > 0 ? 'related' : 'files';
 
   const server = serverFiles.length > 0
     ? { mode: serverMode, files: serverFiles, sources: serverMode === 'related' ? serverSources : [] }
     : hasServerSource
-      ? { mode: serverSources.length > 0 ? 'related' : 'files', files: [], sources: serverSources }
+      ? { mode: 'related', files: [], sources: serverSources }
       : skippedRunner();
   const client = clientFiles.length > 0
     ? { mode: clientMode, files: clientFiles, sources: clientMode === 'related' ? clientSources : [] }
     : hasClientSource
-      ? { mode: clientSources.length > 0 ? 'related' : 'files', files: [], sources: clientSources }
+      ? { mode: 'related', files: [], sources: clientSources }
       : skippedRunner();
 
   const dbTests = new Set(resolveDbTestFiles(trackedFiles));
@@ -1658,7 +1628,7 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
     : {};
 
   const hasRelatedServerSource = collectedChangedFiles.some((path) => isServerRunnerFile(path)
-    && MODULE_SOURCE_RE.test(path) && !isTestFile(path) && !isStructuralBarrel(path));
+    && MODULE_SOURCE_RE.test(path) && !isTestFile(path));
   const dbDependencies = hasRelatedServerSource
     ? collectTestDependencies(resolveDbTestFiles(dependencyFiles), snapshot.testDependencies)
     : [];

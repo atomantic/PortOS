@@ -1,3 +1,12 @@
+/**
+ * Returns the value from the previous render — snapshot updated in a `useEffect`.
+ *
+ * `usePreviousSync` has the same shape, but its snapshot is updated *during* render. Use when:
+ * Compare-and-act on prop/state change from inside a `useEffect`. The prior value gates an in-render
+ * `setState` (React's "adjusting state on prop change" pattern); the during-render update avoids an
+ * extra discard/rerun cycle.
+ */
+
 import { useEffect, useRef } from 'react';
 
 /**

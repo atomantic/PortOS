@@ -1,3 +1,9 @@
+/**
+ * Esc closes, even from inputs/textareas.
+ *
+ * Use when: Help/cheatsheet modals.
+ */
+
 import { useState, useEffect } from 'react';
 
 export function useKeyboardHelp() {

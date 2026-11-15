@@ -1,3 +1,17 @@
+/**
+ * Chord-sheet play-along transport for SongBook tab/chordpro sheets: parses transposed text, owns a
+ * chord player and persisted tempo and beats-per-chord settings.
+ *
+ * Chord-sheet play-along transport for a SongBook `tab`/`chordpro` sheet (#4104) — the chord
+ * counterpart of `useDrumPlayer`: parses the (already-transposed) text, owns one `createChordPlayer`,
+ * the practice settings (tempo + beats-per-chord persisted per song, count-in, machine-global click)
+ * and the sounding-chord highlight read off the audio clock. Returns `{ chordCount, hasChords,
+ * writtenTempo, bpm, setBpm, setBpmPercent, beatsPerBar, setBeatsPerBar, countInBars, setCountInBars,
+ * clickEnabled, setClickEnabled, playing, pulse, sounding, getPlayhead, toggle, stop }`. Timing edits
+ * stop playback rather than re-time a running schedule. Use when: `<ChordTransportBar>` +
+ * `<ChordPreview>` (SongBook viewer/editor/importer).
+ */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parseTabSheet } from '../lib/tabNotation.js';
 import {

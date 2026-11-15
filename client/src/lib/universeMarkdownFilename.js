@@ -1,6 +1,9 @@
 /**
  * Build the client-side filename for a Universe Markdown world-bible export.
  *
+ * `slugifyUniverseName` / `universeMarkdownFilename` — client-side safe filename helpers for Universe
+ * Markdown world-bible downloads, kept in step with the server attachment name.
+ *
  * This mirrors the server's `universeMarkdownFilename` contract so a file
  * saved by the browser has the same safe name as the response attachment.
  * Contract cases live in `universeMarkdownFilename.cases.js` and are shared

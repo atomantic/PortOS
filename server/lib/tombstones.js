@@ -1,6 +1,18 @@
 /**
  * Generic TOMBSTONE helpers for add-only cross-machine merges.
  *
+ * Generic timestamped tombstones (`{ <keyField>, deletedAt }`) that let an otherwise add-only peer
+ * merge represent a DELETE, so a record removed on one machine is not resurrected by a peer that still
+ * has it (#3530). `normalizeTombstones` / `recordTombstone` / `clearTombstone` / `tombstoneTimestamp`
+ * maintain the list; `mergeTombstones` unions it in both directions (newest deletion per key wins) so
+ * a delete propagates rather than only defending locally; `isTombstoned(list, key, createdAt)`
+ * suppresses a record unless its own creation stamp is strictly NEWER than the deletion;
+ * `pruneTombstones(list, records)` drops tombstones a re-created record has superseded (otherwise a
+ * stale peer copy keeps reaping it); `supersedingTimestamp(deletedAt)` stamps a re-create that lands
+ * in the same millisecond (or behind a skewed peer clock). Comparison goes through `lwwTimestamp.js`,
+ * so polarity matches every other sync merge. Key on a field that means the same thing on every
+ * machine — locally-minted ids usually do not. `DEFAULT_TOMBSTONE_LIMIT` (200) caps growth.
+ *
  * Most PortOS peer merges are union/add-only: a record present on either side
  * survives. That is the right default for edits (no data is ever lost), but it
  * makes DELETES unrepresentable — the peer that still holds the record simply

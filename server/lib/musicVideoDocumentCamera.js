@@ -1,3 +1,13 @@
+/**
+ * Camera math for the music video document template outside its engine: `documentCameraView` computes
+ * a clip's cover transform and `documentCameraCss` renders it as CSS.
+ *
+ * The layered document template's camera outside its engine: `documentCameraView(rig, scene, t, …)`
+ * gives a clip's or still's cover transform as the document draws it, `documentCameraCss` writes it as
+ * a CSS transform, `documentSceneIndexes` numbers scenes the engine's way. Parity with the shipped
+ * engine is pinned by its test. Browser-safe.
+ */
+
 import { templateEffects } from './musicVideoTemplateEffects.js';
 import { applyDocumentHandheld, documentHandheld } from './handheldCamera.js';
 

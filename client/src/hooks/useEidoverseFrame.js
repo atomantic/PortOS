@@ -1,3 +1,10 @@
+/**
+ * Per-load Eidoverse handshake with origin/window/session validation and browser-only label
+ * preferences.
+ *
+ * Use when: Embedding the managed Eidoverse renderer.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import {

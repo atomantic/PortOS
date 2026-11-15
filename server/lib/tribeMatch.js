@@ -2,6 +2,19 @@
  * Tribe identity matcher — pure, deterministic mapping of a calendar attendee /
  * message counterpart ({ email, name }) back to a tracked Tribe person (#2033).
  *
+ * Pure, deterministic matcher mapping a calendar attendee / message counterpart (`{ email, phone, name
+ * }`) to a tracked Tribe person for auto-logged touchpoints (#2033, #2151):
+ * `buildPersonMatchIndex(people)` → `{ byIdentifier, byPhone, byName }`, `matchPerson(identity,
+ * index)` (email/handle authoritative, then E.164 phone, then exact unique name fallback — no fuzzy
+ * matching), `matchPeople(identities, index)` → de-duplicated Set of personIds,
+ * `normalizeIdentifier(value)`, `normalizePhone(value)` (E.164 normalization for iMessage/Signal
+ * handles), `identityFromHandle(handle)` (classify a raw `chat.db` handle into email-or-phone). Also
+ * `resolveLinkedPersonId(tribePersonId, tribePersonDeleted)` — the shared soft-delete predicate a
+ * `beeper_participants` row's `tribe_person_id` cache must pass through everywhere it is shaped, so a
+ * soft-deleted Tribe person reads as unlinked in both `services/beeperConversations.js` and
+ * `services/beeperTribe.js`. Consumed by `autoLogTouchpoints` in `services/tribe.js` from the
+ * calendar, message, and iMessage sync producers.
+ *
  * Matching is intentionally deterministic (no LLM, no fuzzy string distance):
  *   1. Email / handle — authoritative. Compared case-insensitively against the
  *      identifiers the user stored on the person record (`person.emails`).

@@ -2,6 +2,13 @@
  * Build the CoS task payload for the "Investigate & fix" action on a failing
  * DOM-selector test (Settings > Messages > Sync tab > DOM Selectors).
  *
+ * Build the CoS task payload behind the DOM-selector-test "Investigate & fix" action (Settings >
+ * Messages > Sync tab): `buildSelectorTestFailureTask({ provider, status, results, error })` → `{
+ * description, prompt }` naming the provider, the `testSelectors()` status, the per-selector match
+ * counts, and the relevant source files. Fed to the generic `QueueInvestigationButton`
+ * (`components/ui/QueueInvestigationButton.jsx`), the same queueing primitive `installFailureTask.js`
+ * uses.
+ *
  * Pure: no React, no network. The caller hands the result straight to
  * `QueueInvestigationButton`.
  */

@@ -1,3 +1,7 @@
+/**
+ * "Get Stuff Done" integration.
+ */
+
 import { request } from './apiCore.js';
 
 // GSD (Get Stuff Done) Integration

@@ -1,3 +1,11 @@
+/**
+ * `usePagedCollection(fetchPage, { enabled })` — bounded cursor pages, deduplication by id,
+ * single-flight loading, abort/stale-query protection, retry, reset, and local mutation via setItems.
+ *
+ * An optional `meta` returned by `fetchPage` is exposed as the latest page's response-level data.
+ * Use when: Growing cursor-based collections; pair with `InfiniteScrollFooter`.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 const emptyPage = () => ({ items: [], total: null, meta: null, nextCursor: null, loaded: false, loading: false, error: null });

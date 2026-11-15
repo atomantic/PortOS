@@ -2,6 +2,11 @@
  * The report windows every usage-cost surface offers, and the one `?period`
  * means when the URL carries none.
  *
+ * The report windows every usage-cost surface offers — `USAGE_PERIOD_OPTIONS`, `DEFAULT_USAGE_PERIOD`
+ * (what a URL with no `?period` means) and `resolveUsagePeriod`. Shared because `?period` is a URL
+ * param the user carries between the Usage and Subscriptions pages; two copies had already disagreed
+ * on the default.
+ *
  * Shared because the value is a URL param the user carries BETWEEN these pages.
  * Two copies had already disagreed on the default, so the same `?period=`-less
  * URL resolved to a different window depending on which page read it — and a

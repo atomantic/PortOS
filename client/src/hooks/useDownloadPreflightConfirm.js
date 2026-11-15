@@ -1,3 +1,10 @@
+/**
+ * `{ confirm, request({ title, preview, run }), cancel, confirmRun }` — shows a loading modal,
+ * resolves a disk-preflight assessment, and holds `run` until confirmed.
+ *
+ * Use when: Any weight/LoRA download confirm step — pair with `<DownloadPreflightConfirm>`.
+ */
+
 import { useCallback, useRef, useState } from 'react';
 
 // Shared "preview a weight download, then confirm" state machine. Two near-

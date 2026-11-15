@@ -1,3 +1,10 @@
+/**
+ * `request()` and `uploadBody()` (stream File/Blob multipart; legacy base64 JSON) + stable PortOS-app
+ * id.
+ *
+ * Shared error / toast handling.
+ */
+
 import toast from '../components/ui/Toast';
 import { trackRequest } from './actionFeedback.js';
 

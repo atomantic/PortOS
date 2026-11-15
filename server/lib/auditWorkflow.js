@@ -1,3 +1,7 @@
+/**
+ * versioned extended Deep execution and historical certification classification.
+ */
+
 /** Deep execution policy; absent markers on saved Deep records remain historical. */
 export const EXTENDED_AUDIT_WORKFLOW = 'extended-v1';
 

@@ -1,3 +1,7 @@
+/**
+ * Exact displayed catalog-basis schema for catalog-only Cast & Sets approval/reconfirmation.
+ */
+
 import { z } from 'zod';
 
 // Legacy approvals have no body; catalog approvals carry the displayed basis.

@@ -1,3 +1,11 @@
+/**
+ * Derives keyframe errors and all VideoGen submit-blocking predicates from the current fields and
+ * model capabilities.
+ *
+ * Use when: Internal validation slice composed by `useVideoGenForm`; also exports
+ * `validateVideoKeyframes` for focused tests.
+ */
+
 import { useMemo } from 'react';
 import { isAudioToVideoRuntime, isLtx2FamilyRuntime } from '../lib/runnerFamilies.js';
 import {

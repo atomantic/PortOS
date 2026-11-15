@@ -1,3 +1,7 @@
+/**
+ * Music artist personas (name, genre, bio, musical style, portrait description/style).
+ */
+
 import { request } from './apiCore.js';
 
 // ---- Music artists ----

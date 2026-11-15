@@ -1,4 +1,7 @@
 /**
+ * Pure voice-echo detection helpers — tokenization, trigram building, thresholds shared by server and
+ * client echo gates.
+ *
  * Pure voice-echo detection helpers — tokenization, trigram building, and
  * thresholds shared between server echo filtering (`server/services/voice/echo.js`)
  * and client STT echo cancellation (`client/src/services/voiceClient.js`).

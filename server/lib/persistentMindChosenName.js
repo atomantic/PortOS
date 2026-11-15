@@ -1,7 +1,13 @@
 /**
- * Validated machine-local chosen identity, with legacy conversational-memory
- * recognition. Also used to suggest (not force) an Eidoverse CoS join id.
- * Renaming the mind never changes an active Eidoverse presence.
+ * Validated machine-local chosen identity, with legacy conversational-memory recognition.
+ *
+ * Validate and resolve an authoritative chosen-name identity memory, frame first-wake naming, and
+ * extract legacy chosen names from protected identity memories (`extractPersistentMindChosenName`,
+ * `resolvePersistentMindChosenName`) to drive the Eidoverse CoS join id (e.g. Helm). Presence
+ * reconnects on its next world action when the chosen name changes.
+ *
+ * Also used to suggest (not force) an Eidoverse CoS join id. Renaming the mind never changes an active
+ * Eidoverse presence.
  */
 
 import { z } from 'zod';

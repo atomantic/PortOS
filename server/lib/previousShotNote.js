@@ -1,6 +1,9 @@
 // A new camera angle starts from its own plate, not the prior clip's last
 // frame (#14245). The only carry-over is one sentence of text so the new shot
 // still knows where the previous one ended.
+//
+// `appendPreviousShotNote(prompt, previousDescription)` — the "Previous shot ended with: …" text a
+// fresh-start video shot carries instead of the prior clip's last frame (#14245).
 
 const MAX_ENDING_CHARS = 240;
 

@@ -1,3 +1,9 @@
+/**
+ * Selection-keyed graph record loading with render-time identity gating and late-response disposal.
+ *
+ * Use when: Brain and CoS graph detail panels.
+ */
+
 import { useEffect, useState } from 'react';
 
 /** Load a selected graph record without rendering a previous selection's detail. */

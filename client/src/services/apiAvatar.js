@@ -1,3 +1,10 @@
+/**
+ * Avatar surfaces.
+ *
+ * `getRiggedAvatars()` (`GET /avatar/rigged`): the install's verified animated records, each with its
+ * `?variant=` spelling, serving URL, retargeted clip name, and server-computed CoS-state coverage.
+ */
+
 import { request } from './apiCore.js';
 
 // Selectable rigged + animated records for the avatar surfaces (#5894).

@@ -1,3 +1,8 @@
+// `buildMediaHaystack`, `tokenizeQuery`, `matchHaystack`, `filterByQuery` — client-side AND-token
+// search over normalized media items (prompt/model/seed/LoRA/universe tags).
+//
+// Shared by MediaHistory + the Image Gen gallery picker.
+//
 // Shared client-side search over normalized media items (images + videos).
 // Extracted from MediaHistory's inline haystack/token logic so the Image Gen
 // gallery picker (GalleryImagePicker) and any future media browser share one

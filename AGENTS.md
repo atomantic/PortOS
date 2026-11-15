@@ -120,7 +120,7 @@ Read the nested instructions before editing these trees (each an `AGENTS.md` wit
 
 ## Module Organization
 
-Every reusable-code directory (`server/lib/`, `client/src/lib/`, `client/src/hooks/`, `client/src/utils/`, `client/src/services/`) has a catalog `README.md` and an `index.js` barrel. **Search the catalog (`rg -i`) before writing a helper** and reuse a close match. Before adding a file there, read [portos-add-module](.claude/skills/portos-add-module/SKILL.md) (placement, barrel + README row, `union` merges, name collisions). Decide Postgres vs a `data/` file with `docs/STORAGE.md` *before* adding a `data/*.json`. One concern per file; tests sit beside their source.
+Every reusable-code directory (`server/lib/`, `client/src/lib/`, `client/src/hooks/`, `client/src/utils/`, `client/src/services/`) is cataloged from module headers. **Search the catalog (`node scripts/lib-catalog.js <term>`) before writing a helper** and reuse a close match. Before adding a file there, read [portos-add-module](.claude/skills/portos-add-module/SKILL.md) (placement and the one-sentence summary header). Decide Postgres vs a `data/` file with `docs/STORAGE.md` *before* adding a `data/*.json`. One concern per file; tests sit beside their source.
 
 **Scope boundary**: work on managed apps outside PortOS (research, plans, docs, code) goes in that app's repository.
 

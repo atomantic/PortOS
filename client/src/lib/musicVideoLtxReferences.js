@@ -1,3 +1,12 @@
+// LTX 2.5 References mode for Music Video clips: `LTX_REFERENCES_GENERATION_MODE`,
+// `ltxReferenceSheetPrefix(labels)` and reasons a shot card cannot use it.
+//
+// LTX 2.5 References (`ic-ingredients-25`) for Music Video clips: the project `generationMode` value
+// `LTX_REFERENCES_GENERATION_MODE`, `ltxReferenceSheetPrefix(labels)` (the prompt lead-in the card
+// previews and the request sends), `isLtx25Model`, and `ltxReferencesUnavailableReason(...)` (why a
+// shot card cannot offer it). Used by `SceneCard.jsx`, `VideoRenderSettings.jsx` and
+// `hooks/useMusicVideoSceneMedia.js`.
+//
 // LTX 2.5 References (Ingredients IC-LoRA, mode `ic-ingredients-25`) for Music Video clips:
 // the project-wide `generationMode` value, the card's shared prompt prefix, and the reasons
 // the shot card cannot offer the option.

@@ -1,3 +1,17 @@
+/**
+ * Hook `useMediaJobSse` owning a media render's lifecycle: kickoff, job adoption, terminal SSE frame
+ * wait, cancel, and error handling.
+ *
+ * The one owner of a displayed media render's lifecycle: `start(kickoff, handlers, { jobIdOf, ifIdle,
+ * onKickoffError })` runs the POST (or an active-job read), adopts the acknowledged job and awaits its
+ * `/{kind}-gen/:id/events` terminal frame; `cancel()` cancels only that job (before the
+ * acknowledgement it cancels the eventual job once, opening no stream); `dispose()` (also on unmount)
+ * detaches without cancelling durable work. A cancelled/detached/superseded run settles once with an
+ * error `isMediaRunEnded()` recognises. `attach()` stays the bare transport. Use when:
+ * POST-then-attach (or resume-then-attach) media render flows — Video Gen, Image Gen, Settings Test
+ * Render. Don't keep a page-local job id / run token / reject ref / raw `EventSource` close.
+ */
+
 import { useCallback, useEffect, useRef } from 'react';
 import { safeParseJSON } from '../lib/genUtils';
 

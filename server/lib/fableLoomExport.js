@@ -1,3 +1,9 @@
+/**
+ * Portable package schema/limits, graph/outline/production preflight, canonical cast and
+ * approved-voice projections, required media roles and explicit path-free playback/occupancy
+ * projections.
+ */
+
 import { BIBLE_LIMITS } from './bibleLimits.js';
 import { narrationFormatContract } from './fableLoomFormats.js';
 import { analyzeEpisodeGraph, computeGraphLayers } from './fableLoomGraph.js';

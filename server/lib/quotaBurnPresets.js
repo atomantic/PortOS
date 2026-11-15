@@ -1,6 +1,14 @@
 /**
  * Ready-made work prompts for `agent-prompt` burn jobs.
  *
+ * FROZEN compatibility-and-migration input (#6381). `QUOTA_BURN_PROMPT_PRESETS` — ready-made
+ * single-focus audit prompts for `agent-prompt` burn jobs (UX, a11y, mobile, failure paths, perf, test
+ * gaps, dead code, data safety, docs, security), each filing GitHub issues and changing no code.
+ * Templates: picking one COPIES its prompt into the job, so editing them never rewrites a configured
+ * job. `findQuotaBurnPreset(id)`; `matchStoredAuditPreset` is migration 305's recognition rule (match
+ * the MISSION half, gated on the shipped contract anchors + headings) and `upgradeStoredAuditPrompt`
+ * is the refresh built on it.
+ *
  * A burn window is a use-it-or-lose-it budget, and the thing it is worst at is
  * open-ended "do something useful" work: an agent with a vague prompt spends a
  * whole window rediscovering the repo. These presets are the opposite — each is

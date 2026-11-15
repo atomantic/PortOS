@@ -1,5 +1,11 @@
 // Graceful request drain for the HTTP listeners at shutdown (#8323, #8350).
 //
+// `createHttpDrain(servers)` tracks every ordinary request the HTTP listeners accept;
+// `begin(windowMs)` is the synchronous shutdown step that stops intake on all of them
+// (`server.close()` plus a 503 `Connection: close` gate for requests arriving on still-open keep-alive
+// sockets), turns off keep-alive on in-flight responses, drops open SSE streams, and resolves `{
+// remaining }` once accepted requests finish or the window ends (#8323).
+//
 // `createHttpDrain(servers)` starts tracking every ordinary request the given
 // servers accept. `begin(windowMs)` is the synchronous "stop intake" step the
 // signal handler calls before it first awaits:

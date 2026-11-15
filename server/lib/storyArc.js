@@ -1,6 +1,9 @@
 /**
  * Canonical Arc + Season shapes for the Pipeline Story Arc Planning feature.
  *
+ * Canonical Arc + Season + Reader-Map shapes, plus sanitizeSeriesDesign/renderSeriesDesign for
+ * author-owned series intent.
+ *
  * Sibling to `storyBible.js` — same role, different scope. Story bibles describe
  * the *characters, settings, and objects* that recur across an arc; this module
  * describes the *temporal spine*: the multi-season story arc and its season

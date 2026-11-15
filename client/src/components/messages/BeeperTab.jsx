@@ -20,7 +20,7 @@ import BeeperSettingsPanel from './beeper/BeeperSettingsPanel';
  *     own `beeper:subscribe`/`beeper:unsubscribe` per mount, and several
  *     subscribers may be live at once — `useBeeperOutbox`, reached through
  *     `BeeperChatSurface`, mounts its own instance to refetch the outbox on a
- *     `message.upserted` invalidation (`client/src/hooks/README.md` sanctions
+ *     `message.upserted` invalidation (`client/src/hooks/useBeeperRealtime.js` sanctions
  *     this). This is the ONE that owns the status card: its liveness snapshot
  *     plus an invalidation counter (and the frames behind it, for
  *     `BeeperChatSurface`'s own frame-scoped thread refetch) are handed down

@@ -1,3 +1,16 @@
+/**
+ * Cron helpers: presets, friendly parse/build, anchored recurrence, `isCronExpression`, `describeCron`
+ * human text, and `cronFromIntervalMs`.
+ *
+ * Cron preset list, friendly cron parsing/building, anchored recurrence parsing/building/description,
+ * `isCronExpression` detection, `describeCron` human-readable rendering, `cronFromIntervalMs`
+ * numeric-interval → expression conversion (mirrors the server helper), `summarizeAppSchedules`
+ * rendering of the per-app cron cadences a task's global row cannot express, and
+ * `JOB_INTERVAL_OPTIONS` / `ON_DEMAND_INTERVAL` — the interval-mode cadences for autonomous jobs,
+ * derived from the server's `INTERVAL_OPTIONS` (`on-demand` = stays enabled and manually runnable, but
+ * arms no timer). Import it rather than re-declaring the list in a scheduling component.
+ */
+
 import { INTERVAL_OPTIONS } from '../../../server/lib/autonomousJobIntervals.js';
 export { ON_DEMAND_INTERVAL } from '../../../server/lib/autonomousJobIntervals.js';
 export { scheduleAnchorKindForInterval } from '../../../server/lib/scheduleAnchor.js';

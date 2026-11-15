@@ -1,6 +1,10 @@
 /**
  * Pure integrity diff for federated record lists.
  *
+ * Pure diff of local vs remote manifest lists. `computeRecordIntegrity` reports record status and, for
+ * differently written clocks that tie at LWW precision, an `unknown` assessment with a conservative
+ * `diverged` status for older clients. No I/O.
+ *
  * Compares local vs remote manifest lists and classifies each record by
  * synchronisation status. No I/O — all logic is pure so it can be called
  * from any service without side effects.

@@ -1,6 +1,12 @@
 /**
  * Render a deterministic cast-integrity report into a prompt block (#6415).
  *
+ * The prompt-facing render of a `characterIntegrity.js` report (#6415): `renderCastIntegrity` (gap
+ * rows first, header always kept, so a budget-truncated block can never read as a clean cast) and
+ * `INTEGRITY_DEPTH_NOTES` (the `explained` / `light` / `full` rulings in the reviewer's own words).
+ * Shared by the Series foundation judge and the FableLoom whole-series editor so the two cannot drift
+ * on what a `light` character owes.
+ *
  * The report itself comes from `characterIntegrity.js` and makes zero provider
  * calls. This module is only the prompt-facing projection of it, and it lives
  * in `lib/` because more than one reviewing surface needs the SAME block:

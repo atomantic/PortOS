@@ -1,9 +1,16 @@
 // Route-pattern helpers for NAV_COMMANDS[].previousPaths (server/lib/navManifest.js).
-// App.jsx generates one redirect <Route> per previous path, and the sidebar maps a
-// stored Pinned/Recent path onto where its page lives now. Both read the patterns
-// the way React Router does — segment by segment, case-insensitive — so a stored
-// path migrates exactly when the router would redirect it, and a paramless previous
-// path (`/ai`) never captures a live sibling (`/ai/harnesses`).
+//
+// Route-pattern helpers for `NAV_COMMANDS[].previousPaths`: `previousPathRedirects(commands)` flattens
+// them into `{ from, to, preserveSuffix }` records App.jsx turns into redirect routes,
+// `matchesPreviousPath(from, pathname)` matches like React Router (`:param`, trailing `*`,
+// case-insensitive), `previousPathStaticDepth(from)` ranks them, and `previousPathTarget(redirect,
+// location)` builds the landing URL (suffix, query and hash carried; a destination query's keys win).
+// Shared with the sidebar's stored-pin migration (`utils/navWorkingSet.js`).
+//
+// App.jsx generates one redirect <Route> per previous path, and the sidebar maps a stored
+// Pinned/Recent path onto where its page lives now. Both read the patterns the way React Router does —
+// segment by segment, case-insensitive — so a stored path migrates exactly when the router would
+// redirect it, and a paramless previous path (`/ai`) never captures a live sibling (`/ai/harnesses`).
 
 const segmentsOf = (path) => String(path || '').split(/[?#]/)[0].split('/').filter(Boolean);
 const isDynamic = (segment) => segment.startsWith(':') || segment === '*';

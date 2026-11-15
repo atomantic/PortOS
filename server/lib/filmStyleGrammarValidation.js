@@ -1,8 +1,13 @@
 /**
- * Zod contract for a film style grammar (#10252) — the record shape the
- * authoring prompts of later phases consume. A grammar describes how a medium
- * is imitated procedurally (layers, mark stepping, camera vocabulary, sound
- * palette); every field is bounded so the rendered prompt section stays small.
+ * Zod contract for a film style grammar (#10252) — the record shape the authoring prompts of later
+ * phases consume.
+ *
+ * Zod contract for a film style grammar record (`filmStyleGrammarSchema`), its field caps
+ * (`FILM_STYLE_LIMITS`), categories, renderable `FILM_STYLE_PARTS`, the `parts` selector, and the
+ * `/api/film-styles/:id` params and `?parts=` prompt-preview query schemas.
+ *
+ * A grammar describes how a medium is imitated procedurally (layers, mark stepping, camera vocabulary,
+ * sound palette); every field is bounded so the rendered prompt section stays small.
  */
 import { z } from 'zod';
 

@@ -2,6 +2,14 @@
  * Local image-runtime vocabulary — readiness verdicts, runtime ids, and the
  * remedy kinds that name the ONE action that fixes each unavailable state.
  *
+ * Local image-runtime vocabulary, a dependency-free leaf beside `imageGenCapabilities.js`:
+ * `IMAGE_RUNTIME_READINESS` (ready/unavailable/unknown), `IMAGE_RUNTIME` + `IMAGE_RUNTIME_LABELS` (the
+ * shared torch venv vs. the configurable mflux interpreter), `IMAGE_RUNTIME_REMEDY` (the one action
+ * that fixes each unavailable state), and `IMAGE_RUNTIME_UNAVAILABLE_CODE`.
+ * `services/imageGen/localRuntime.js` builds the diagnosis from these, `services/imageGen/local.js`
+ * tags its pre-flight render refusal with the same remedy, and `client/src/lib/imageGenModes.js`
+ * re-exports them so no component hand-copies a remedy kind.
+ *
  * Lives in `lib/` rather than beside the image-gen service because several
  * layers have to agree and none can afford the others' import closure: the
  * diagnosis (`services/imageGen/localRuntime.js`), the renderer

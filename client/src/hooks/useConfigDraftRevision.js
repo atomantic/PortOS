@@ -1,3 +1,11 @@
+/**
+ * Revision protocol for an editable config draft a server response may overwrite: `draftDirty` plus
+ * `markDirty`/`markSaved`/`supersede`/`reset` and `snapshot()` → `{ wasClean, isStillCurrent() }`.
+ *
+ * Use when: A form draft with in-flight save/action requests whose responses must not clobber newer
+ * edits — pair with `shouldReplaceDraft` (Eidoverse world controls).
+ */
+
 import { useCallback, useRef, useState } from 'react';
 
 // The revision protocol behind an editable config draft that a server response

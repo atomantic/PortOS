@@ -1,3 +1,7 @@
+/**
+ * Human-activity timeline: `/timeline/day`.
+ */
+
 import { request } from './apiCore.js';
 
 // Human-activity timeline (#2150). Day view + filtered event list.

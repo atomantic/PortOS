@@ -1,4 +1,10 @@
 /**
+ * `requireDbOrSkip(label, dbReady, reason)` keeps a missing local test database as a visible skipped
+ * suite, but throws when `PORTOS_REQUIRE_DB` is set so CI cannot pass after DB-backed suites
+ * disappear.
+ */
+
+/**
  * Keep locally unavailable database suites visible as skips, while letting CI
  * fail fast when its required test database was not provisioned correctly.
  */

@@ -2,6 +2,19 @@
  * Pure comparison between the BUNDLE this browser loaded and the SERVER build it
  * is talking to (#4694).
  *
+ * Does the bundle this browser loaded come from the same git commit the API is running (#4694)?
+ * `SERVED_BUILD_ID` (the server-injected build-id meta tag; null under `npm run dev`) is the trust
+ * gate — `BUNDLE_STAMP` is the raw `__BUILD_STAMP__` Vite define, `TRUSTED_BUNDLE_STAMP` is it only
+ * when the page came from a real build, since the define is frozen at dev-server start while HMR
+ * serves every commit since. **Display or compare `TRUSTED_BUNDLE_STAMP`, never `BUNDLE_STAMP`.**
+ * `compareBuildStamps(bundle, server)` → `match`/`mismatch`/`unknown` (absent on either side is always
+ * `unknown`); `resolveBuildFrame(signals, {embeddedBuildId})` → `reload`/`drift`/`null`, the two
+ * staleness kinds that need different remedies; `createBuildDriftWatcher({embeddedBuildId,
+ * fetchIdentity, onShow, onClear})` is the tested state machine that merges the pushed bundle hash
+ * with the fetched commit and latches once per kind; `describeBuild({commit, branch, dirty})` renders
+ * one line. Consumed by `services/socket.js`, `components/Layout.jsx`, and
+ * `components/system-resources/BuildStampPanel.jsx`.
+ *
  * The failure this catches: the dashboard is served from a `client/dist` built
  * from one commit while `portos-server` was restarted from a different checkout
  * at a different commit. Both halves look perfectly healthy, so a UI change that

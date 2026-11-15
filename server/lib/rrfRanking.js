@@ -1,6 +1,9 @@
 /**
  * Reciprocal Rank Fusion (RRF) scoring helper.
  *
+ * Pure `reciprocalRankFusion(textResults, vectorResults, options)` — merges two ranked lists via RRF
+ * scoring (Cormack 2009). Used by `catalogDB.hybridSearchIngredients`.
+ *
  * Pure function — no imports from services. Extracted from
  * server/services/catalogDB.js hybridSearchIngredients (inline ~64 lines).
  *

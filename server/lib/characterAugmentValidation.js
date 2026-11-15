@@ -1,6 +1,11 @@
 /**
  * Route schemas for selective character augmentation (#6415 / #6417).
  *
+ * Zod schemas for selective character augmentation (#6417): `characterAugmentProposeSchema` and
+ * `characterAugmentApplySchema`, both pinned to `AUGMENTABLE_FIELD_PATHS`. Shared by the Universe cast
+ * routes and the Writers Room work-bible routes so the two surfaces cannot drift on which field paths
+ * a proposal may name.
+ *
  * The Universe cast editor and the Writers Room work bible expose the same two
  * endpoints over the same field contract, so they validate against the same two
  * schemas — a second hand-written copy is how one surface ends up accepting a

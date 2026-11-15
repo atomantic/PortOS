@@ -1,6 +1,10 @@
 /**
  * Storyboard records — the shared planning board under Create › Storyboards.
  *
+ * Shared Storyboard record (Create › Storyboards): `sanitizeStoryboard` (beats → panels → art takes,
+ * catalog refs by id), `sanitizeTake`, `summarizeStoryboard` (with runtime), `sanitizeSavedRecipe` (a
+ * saved recipe library entry).
+ *
  * A storyboard holds beats, and a beat holds panels; a panel is one planned
  * shot. Productions (music videos, Creative Director videos, FableLoom,
  * Series Pipeline) link a board rather than keeping a private plan, so the

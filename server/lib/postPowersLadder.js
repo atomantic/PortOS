@@ -1,6 +1,9 @@
 /**
  * Technique-anchored progressive ladder for the POST Powers drill.
  *
+ * Pure technique-anchored Powers ladder — cumulative named-method pools, full supported-pair registry,
+ * and speed+accuracy mastery progression built on `postProgression.js`.
+ *
  * Every pair in this module has a named fast mental path. Progressive
  * generation derives its candidate pool from this table, so unsupported
  * base/exponent combinations can never leak into a laddered drill.

@@ -1,3 +1,12 @@
+/**
+ * Previz limits and vocabularies: `PREVIZ_POSES`, `PREVIZ_PAWN_COLORS`, and `PREVIZ_CAMERA_STYLES` for
+ * music-video story previsualization.
+ *
+ * Previz limits, `PREVIZ_POSES` (`stand`, `walk`, `run`, `crouch`, `sit`, `ride`), the named
+ * `PREVIZ_PAWN_COLORS` and `PREVIZ_CAMERA_STYLES` (`steady`, `handheld`, `still`, `documentary`: how a
+ * story camera moves in the previz), a leaf so `musicVideoValidation.js` stays narrow.
+ */
+
 /** Greybox previz limits and vocabulary (lib/musicVideoPreviz.js), a leaf so validation stays narrow. */
 export const PREVIZ_CUTS_MAX = 600;
 export const PREVIZ_TRACKS_MAX = 240;

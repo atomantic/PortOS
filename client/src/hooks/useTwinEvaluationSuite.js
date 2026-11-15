@@ -1,3 +1,16 @@
+/**
+ * Shared lifecycle for Digital Twin evaluation-suite panels: loads suite and history, runs selected
+ * providers in parallel and handles stale results.
+ *
+ * Shared lifecycle for the three Digital Twin evaluation-suite panels (Values-Alignment,
+ * Adversarial-Boundary, Multi-Turn): loads suite + recent history (silenced), runs every selected
+ * provider/model in parallel, prepends fresh runs, and handles the stale-persona / partial-failure
+ * toast fan-out. `countField` names the suite's pass-count key so history stays generic. Returns `{
+ * items, history, loading, running, results, expanded, setExpanded, run, reload }`. Use when: The
+ * Digital Twin `TwinEvaluationSuitePanel` presentation shell — don't re-roll the load/run/history
+ * dance per suite.
+ */
+
 import { useState, useEffect, useRef } from 'react';
 import toast from '../components/ui/Toast';
 import useMounted from './useMounted';

@@ -1,4 +1,15 @@
 /**
+ * Film look model for music videos and stills: `FILM_LOOK_CONTROLS`, `FILM_LOOK_PRESETS`,
+ * normalize/compare/scale helpers and prompt wording for grain, halation, fade and vignette.
+ *
+ * The film look: `FILM_LOOK_CONTROLS` (sliders, colors, toggles with their photography terms and
+ * prompt words), `FILM_LOOK_PRESETS`, `normalizeFilmLook`, `isFilmLookNeutral`, `sameFilmLook`,
+ * `scaleFilmLook` (a look at a fraction of its strength), `describeFilmLook` (the look as prompt
+ * vocabulary), `filmLookFilterMarkup` (the one SVG filter the live preview, the document render and
+ * gallery bakes apply, frame-seeded), `filmLookMotionLayers` (the same look as CSS filter functions
+ * plus blended overlays a playing video can afford) and `filmLookRuntimeSource` (the page script that
+ * applies and re-seeds it per seek). Browser-safe.
+ *
  * Film look — the finishing filter a music video (or a single still) is viewed
  * through: soft focus, halation, color bleed, grain, fade, vignette, light
  * leaks, gate weave and the rest of the analog toolbox, as a stack of tunable

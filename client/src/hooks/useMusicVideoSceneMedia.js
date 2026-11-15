@@ -1,3 +1,22 @@
+/**
+ * Per-scene generation lanes (reference frame and clip) for Music Video over the scene render
+ * lifecycle, with prompt builders and visual-spec reference conditioning.
+ *
+ * Both per-scene generation lanes (reference frame + scene clip) over `useSceneRenderLifecycle`, the
+ * frame/shot prompt builders (concept-style + visual-spec direction suffix), visual-spec
+ * reference-image conditioning with explicit unsupported-backend feedback (#8965), the batch "generate
+ * the missing ones" actions, restores in-flight scene renders from the server queue on mount
+ * (`getMusicVideoSceneJobs`) so a reload doesn't invite duplicate submits, and folds the persisted
+ * `scene.lastFailure` (socket `music-video:scene-failure`) onto the scene (#10154). Loads the Casting
+ * media of each cast member a shot names in `characterVariant` (#12763) so frame conditioning leads
+ * with their guides. Returns `{ genScenes, genVideoScenes, conditioning, castMedia, buildFramePrompt,
+ * buildShotPrompt, generateFrame, generateSceneVideo, continueSceneVideo, generateMissingFrames,
+ * generateMissingVideos, planMissingFrames, planMissingVideos, frameBatch, videoBatch, sceneProgress,
+ * videoSceneProgress }` (the batches run counted via `useSceneBatch`; the board confirms count +
+ * estimate before calling `generateMissing*`). Use when: The Music Video scene board — don't re-wire
+ * the two lanes or re-derive the i2v/a2v/extend payloads.
+ */
+
 import { higgsfieldShotRequestFields } from '../../../server/lib/higgsfieldVideoModels.js';
 import { googleShotRequestFields } from '../../../server/lib/googleVideoModels.js';
 import { renderTierVideoSettings } from '../../../server/lib/musicVideoRenderTier.js';

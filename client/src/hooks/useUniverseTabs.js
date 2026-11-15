@@ -1,3 +1,13 @@
+/**
+ * `useUniverseTabs(categories)` → `{ activeTab, activeBucket, bucketsByKind, hasOtherBuckets, setTab,
+ * setBucket }`.
+ *
+ * URL-backed (`?tab=&bucket=`) tab + sub-bucket state for the Universe Builder, including the
+ * self-healing effects that `replace`-strip a tab/bucket the current categories no longer support. Use
+ * when: Universe Builder composition shell — don't re-roll the tab/bucket search-param plumbing or the
+ * stale-param cleanup.
+ */
+
 import { useCallback, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
 import {

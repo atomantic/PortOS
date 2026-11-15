@@ -1,3 +1,9 @@
+/**
+ * Live diffusion progress for an image-gen call.
+ *
+ * Use when: Showing per-call image-gen progress.
+ */
+
 import { useState, useEffect, useRef, useCallback } from 'react';
 import socket from '../services/socket';
 

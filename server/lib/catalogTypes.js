@@ -1,6 +1,12 @@
 /**
  * Creative Ingredients Catalog — shared TYPE REGISTRY.
  *
+ * Shared catalog ingredient TYPE REGISTRY — one entry per type drives validation enum, ID prefix, FTS
+ * field set, extraction shape, per-record `payloadSchemaVersion` + upgraders, per-type `defaultTags`.
+ * Also exports the relation-kind registry and the tag-taxonomy helpers (`canonicalTagKey`,
+ * `tagIdForKey`, `defaultTagsForType`). The client projects its UI registry from this one
+ * (`client/src/lib/catalogTypes.js`) rather than copying it.
+ *
  * Single source of truth for the catalog's ingredient types. Every place that
  * used to hard-code the six types (`catalogValidation.js` Zod enum,
  * `catalogExtraction.js` light-shape sanitizer, `catalogDB.js` ID prefix +

@@ -1,3 +1,8 @@
+/**
+ * Music tracks (title, album/artist FKs, lyrics, prompt, gen metadata, audio-library pointer) + shared
+ * music-library list + audio upload/attach + saving drawn-waveform and code-engine takes.
+ */
+
 import { request } from './apiCore.js';
 
 // Static-asset URL for a track's audio bytes in the shared music library

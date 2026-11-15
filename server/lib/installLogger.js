@@ -1,3 +1,12 @@
+// `createInstallLogger({installer,target})` → `{start,onEvent,success,failure,cancel}` —
+// server-console chokepoint for install/venv-setup SSE flows (the install-side analogue of
+// `sseDownload.js`).
+//
+// Logs a START line, throttled heartbeats + `stage` milestones (not every raw pip/bash line), and the
+// OUTCOME (success/fail/cancel) with elapsed time. `onEvent(ev)` auto-detects terminal
+// `complete`/`error` SSE events. Used by the music/video runtime installers and the FLUX.2 venv
+// bootstrap.
+//
 // Server-console visibility for install / environment-setup SSE flows. The
 // runtime installers that spawn `setup-image-video.sh` (music + video gen) and
 // the FLUX.2 venv bootstrap stream multi-GB pip/git progress to the browser via

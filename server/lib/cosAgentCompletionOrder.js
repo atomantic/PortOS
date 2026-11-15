@@ -1,6 +1,13 @@
 /**
  * Wire format for the CoS archive's completion-order projection.
  *
+ * Wire format + projection rule for the CoS archive completion-order sidecar
+ * (`data/cos/agents/index.order.json`). `projectArchivedAgent` reduces an archived record to its
+ * completion timestamp plus a completed / still-needs-feedback bitfield; `encodeCompletionOrder` /
+ * `decodeCompletionOrder` round-trip the versioned document, decoding anything unrecognized as empty
+ * so the readers repair it by re-reading the day. Shared by the runtime index and the one-shot
+ * backfill migration so the two cannot drift.
+ *
  * `data/cos/agents/index.json` maps agentId → YYYY-MM-DD and nothing else, so
  * ordering a page of completed runs meant reading every `metadata.json` in each
  * visited day. The sidecar this module encodes carries the two facts the readers

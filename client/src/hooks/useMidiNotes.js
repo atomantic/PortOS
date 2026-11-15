@@ -1,3 +1,15 @@
+/**
+ * Fetches and parses a transcribed `.mid` file into piano-roll notes, with a per-URL module cache so
+ * remounts do not refetch.
+ *
+ * Fetch + parse a transcribed `.mid` file into the piano-roll view-model (`parseMidiFile` in
+ * `lib/midiNotes.js`), with a module-level per-URL cache so remounts (collapse, tab switches) don't
+ * refetch/reparse. Returns `{ status: 'idle'|'loading'|'ready'|'error', data, error, reload }`; a
+ * generation counter drops stale in-flight responses on URL change/unmount. Plain `fetch` of the
+ * static file URL — errors surface inline, never as toasts (#2477). Use when: `<MidiVisualization>`
+ * (Rounds ReferenceAnalysis + Music Video).
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { parseMidiFile } from '../lib/midiNotes.js';
 

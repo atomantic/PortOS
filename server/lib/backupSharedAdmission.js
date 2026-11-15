@@ -1,4 +1,8 @@
-/** Cross-process publication admission on the install's shared local filesystem. */
+/**
+ *  Cross-process publication admission on the install's shared local filesystem.
+ *
+ * Durable cross-process backup cuts and publication leases, with fail-closed owner recovery.
+ */
 import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';

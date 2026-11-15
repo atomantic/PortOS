@@ -1,3 +1,8 @@
+/**
+ * Pure shared `isCliProvider`, `isTuiProvider`, `isApiProvider`, `isProcessProvider`, and type-gated
+ * `isClaudeHarnessProvider` predicates.
+ */
+
 import { PROVIDER_TYPES } from './aiToolkit/constants.js';
 import { isClaudeCommand, isGrokProvider } from './providerModels.js';
 

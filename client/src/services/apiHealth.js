@@ -1,3 +1,7 @@
+/**
+ * Apple Health.
+ */
+
 import { request } from './apiCore.js';
 
 // Apple Health

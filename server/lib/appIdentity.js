@@ -1,6 +1,9 @@
 /**
  * The managed-apps registry's baseline identity — PortOS itself.
  *
+ * The baseline managed-app id (`PORTOS_APP_ID`) — importable without pulling in the `services/apps.js`
+ * graph (pm2, scheduler, settings) behind it. Re-exported by `apps.js`.
+ *
  * Split out of `services/apps.js` so a module that only needs to SAY "this work
  * targets PortOS" (a CoS task's `metadata.app`, a scope check) doesn't have to
  * import the apps service — which drags in pm2, the task scheduler, streaming

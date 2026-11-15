@@ -1,3 +1,7 @@
+/**
+ * Telegram bot config + test schemas.
+ */
+
 import { z } from 'zod';
 
 export const telegramConfigSchema = z.object({

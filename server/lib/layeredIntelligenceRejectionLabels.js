@@ -1,7 +1,12 @@
-// Human-readable gloss for the Layered Intelligence proposal-rejection taxonomy
-// (#2689). A pure leaf so the server (prompt blocks) and the client (outcomes
-// dashboard) read ONE table. Keys are the REJECTION_REASONS tokens plus the
-// `unknown-reason` sentinel from services/layeredIntelligenceRejections.js.
+// Human-readable gloss for the Layered Intelligence proposal-rejection taxonomy (#2689).
+//
+// `REJECTION_REASON_LABELS` — the one token→prose gloss table for the Layered Intelligence
+// proposal-rejection taxonomy, shared by `services/layeredIntelligenceRejections.js` (prompt blocks)
+// and the client outcomes dashboard (`utils/layeredIntelligenceReasons.js`). Pure leaf.
+//
+// A pure leaf so the server (prompt blocks) and the client (outcomes dashboard) read ONE table. Keys
+// are the REJECTION_REASONS tokens plus the `unknown-reason` sentinel from
+// services/layeredIntelligenceRejections.js.
 export const REJECTION_REASON_LABELS = Object.freeze({
   'duplicate': 'already tracked elsewhere (duplicate)',
   'user-rejected': 'the user declined it (closed as not planned)',

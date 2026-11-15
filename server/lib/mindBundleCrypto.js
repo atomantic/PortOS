@@ -1,6 +1,11 @@
 /**
  * Mind bundle container — passphrase-sealed, install-agnostic AES-256-GCM.
  *
+ * Persistent Mind portable-bundle container (#7621) — `sealMindBundle` / `openMindBundle` /
+ * `readMindBundleHeader`, scrypt-from-passphrase + AES-256-GCM with the cleartext header as AAD.
+ * Passphrase-derived, never `PRIVACY_VAULT_KEY`: that key is machine-bound and a bundle sealed with it
+ * could not open on the destination install. Format names live in `mindBundleFormat.js`.
+ *
  * This is the format half of Persistent Mind portability (#7621, epic #7620):
  * one file the user downloads on the install their Mind grew up on and opens on
  * another one. It deliberately does NOT reuse `vaultCrypto.js` key resolution —

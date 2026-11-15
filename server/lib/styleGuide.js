@@ -1,6 +1,9 @@
 /**
  * Per-series style guide (house style) — #1303.
  *
+ * Per-series house style (tense/POV/audience/rating/reading-level/tone/conventions):
+ * `sanitizeStyleGuide` + `renderStyleGuide` generation block + enums.
+ *
  * A structured companion to the free-text `series.styleNotes`. Where styleNotes
  * is tonal/visual prose, the style guide captures the *mechanical* house style —
  * tense, POV person, target audience, content rating, reading level, tone words,

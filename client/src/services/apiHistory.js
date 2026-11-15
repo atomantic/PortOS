@@ -1,3 +1,7 @@
+/**
+ * Historical logs / runs.
+ */
+
 import { request } from './apiCore.js';
 
 // History

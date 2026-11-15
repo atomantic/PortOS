@@ -1,3 +1,8 @@
+/**
+ * FableLoom branching narratives — loom/episode/scene-node/transition CRUD, deterministic graph
+ * validation, AI authoring lanes, and the bounded editorial/playthrough autopilot lifecycle.
+ */
+
 import { request } from './apiCore.js';
 
 const loomPath = (id, rest = '') => `/fableloom/${encodeURIComponent(id)}${rest}`;

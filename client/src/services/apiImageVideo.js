@@ -1,3 +1,11 @@
+/**
+ * `checkHiggsfieldNewModels` (Higgsfield families the picker lacks), Image-gen local backend extras.
+ *
+ * Bounded image/mixed gallery pages, global facets and collection summaries, exact-reference
+ * `getGalleryImages`, one image's original-vs-cleaned variant set via `listImageVariants`, plus
+ * models, LoRAs, cancel and delete.
+ */
+
 import { uploadBody, request, API_BASE, throwApiError } from './apiCore.js';
 import { filterHardwareCompatibleModels } from '../utils/systemCapabilities.js';
 

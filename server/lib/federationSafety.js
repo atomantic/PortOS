@@ -1,4 +1,18 @@
 /**
+ * Refusal-side check that a JSON-shaped payload carries no secrets, PII or machine identity before
+ * leaving the install, scanning both values and keys.
+ *
+ * "Does this JSON-shaped payload carry anything that must not leave the install?" — the structured,
+ * REFUSAL-side counterpart to the scrubbers (`secretText.js`, `homePath.js`) that rewrite text for a
+ * log. `federationSafetyFindings(value, { limit })` walks every string AND every object key, returning
+ * `{ code, path, detail }` for a home/Windows path, IPv4 or IPv6 literal, `.ts.net`/`.local` host,
+ * MAC, email, phone number, labelled GPS coordinate (the shared table is `piiRedactionPatterns.js`),
+ * credential-shaped value (`scrubSecretTokens`) or credential-NAMED key (`secretKeys.js#isSecretKey` —
+ * the half no value-shape scan can see). Deliberately over-refuses rather than under-detects: a
+ * payload leaving the machine should fail on "looks like an address", and the finding names the exact
+ * JSON path to fix. `walkJsonText` / `describeJsonPath` are the reusable path-reporting walk. Pure;
+ * reads no environment.
+ *
  * "Does this JSON-shaped payload carry anything that must not leave the
  * install?" — the structured, refusal-side reading of the federation privacy
  * rule, over both the values a payload holds and the keys it names them with.

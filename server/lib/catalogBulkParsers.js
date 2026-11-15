@@ -1,4 +1,7 @@
 /**
+ * Dependency-free markdown/CSV/JSON parsers for `POST /api/catalog/bulk-import` and YAML/markdown
+ * serializers for `GET /api/catalog/export`.
+ *
  * Pure parsers for the catalog bulk-import path. Dependency-free —
  * markdown / CSV / JSON each normalize to a list of
  * `{ type, name, payload, tags }` entries that the route then validates

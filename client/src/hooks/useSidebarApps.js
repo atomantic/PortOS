@@ -1,3 +1,9 @@
+/**
+ * Apps list for sidebar nav: socket-driven (`apps:changed`), archived filtered out, name-sorted.
+ *
+ * Use when: The sidebar apps section.
+ */
+
 import { useState, useEffect } from 'react';
 import * as api from '../services/api';
 import socket from '../services/socket';

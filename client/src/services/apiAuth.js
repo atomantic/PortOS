@@ -1,3 +1,8 @@
+/**
+ * Optional login password — status, login, set/clear password, list/revoke sessions, and read-only
+ * password-risk status.
+ */
+
 import { request } from './apiCore.js';
 
 // Public — no token required. Callers use this to decide whether to render

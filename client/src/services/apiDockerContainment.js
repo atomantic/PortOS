@@ -1,3 +1,12 @@
+/**
+ * Docker containment (#12844).
+ *
+ * `getDockerContainmentStatus()` (`GET /docker-containment/status`): engine verdict (Docker Desktop vs
+ * native Engine, context, version) and which pinned Node images are pulled — no Docker call while the
+ * feature is off. `pullDockerContainmentImage(major)` (`POST /docker-containment/pull`): the explicit
+ * operator pull.
+ */
+
 import { request } from './apiCore.js';
 
 // Docker containment (#12844): the engine verdict and pinned-image presence for

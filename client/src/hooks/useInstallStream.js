@@ -1,3 +1,14 @@
+/**
+ * Lifecycle hook for a BYO-runtime install log stream: stage/log/complete/error frames, capped log
+ * accumulation, connection-lost handling and auto-scroll.
+ *
+ * BYO-runtime install-log stream lifecycle: `stage`/`log`/`complete`/`error` frame dispatch, capped +
+ * optionally-debounced log accumulation, "connection lost" handling, ref-stashed `onComplete`,
+ * auto-scroll. `method: 'GET'` uses EventSource; `method: 'POST'` reads one fetch stream for a
+ * non-idempotent install. Use when: A streamed install/setup modal that shows live SSE log lines
+ * (FLUX.2, video runtimes, OpenCode). Don't re-roll the teardown/onComplete-ref dance.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import { safeParseJSON } from '../lib/genUtils';
 import { throwApiError } from '../services/apiCore';

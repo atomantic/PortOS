@@ -1,3 +1,7 @@
+/**
+ * Meatspace (location/health log) schemas.
+ */
+
 import { z } from 'zod';
 import { partialWithoutDefaults } from './zodCompat.js';
 

@@ -1,5 +1,13 @@
 // Resolve a mood-board item to display sources (issue #911 / #1455 / #4188).
 //
+// `moodBoardItemSrc(item)` resolves a mood-board item to a display image/poster src (`imageUrl` →
+// served `image:<file>` bytes → derived video thumbnail → null); `moodBoardPosterSrc(board)` resolves
+// the board's canonical poster filename to `/data/images/…`; `moodBoardCollageSrc(board)` resolves the
+// persisted collage (`collageImageRef`) the same way; `moodBoardItemVideoSrc(item)` resolves a
+// `type:'video'` item's playback URL; `moodBoardItemAnalysisSource(item)` resolves an item to a
+// prompt-from-media source (null when not a local gallery asset). Shared by MoodBoardDetail +
+// MoodBoardReferenceStrip.
+//
 // A board item is renderable as an image when it carries either an explicit
 // `imageUrl` (external or absolute app path) or a pinned `image:<file>`
 // media-key — the served bytes live at `/data/images/<file>`.

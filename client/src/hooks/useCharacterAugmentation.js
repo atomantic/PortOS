@@ -1,3 +1,15 @@
+/**
+ * Propose, tick and selectively apply loop for cast-integrity character augmentation, owning preview,
+ * accepted, proposing and applying state.
+ *
+ * The propose → tick → selectively-apply loop for cast-integrity character augmentation (#6417): owns
+ * `preview`/`accepted`/`proposing`/`applying` and enforces the rules both surfaces share — nothing
+ * accepted until ticked, "no improvement offered" is a success not an error, and a lock stops the flow
+ * at propose AND at apply. Caller supplies only the two request thunks and an `onApplied`. Use when: A
+ * surface that augments character framework fields — Universe cast panel and the Writers Room Cast
+ * pane both use it; do not re-roll the state machine.
+ */
+
 import { useCallback, useState } from 'react';
 import toast from '../components/ui/Toast';
 import useMounted from './useMounted';

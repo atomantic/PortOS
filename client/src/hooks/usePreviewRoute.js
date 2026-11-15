@@ -1,3 +1,9 @@
+/**
+ * URL-driven `[preview, setPreview]` via `?preview=<filename>`.
+ *
+ * Use when: Any page hosting `<MediaPreview>` — gives the preview a deep-link.
+ */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import useGalleryPreviewResolver from './useGalleryPreviewResolver';

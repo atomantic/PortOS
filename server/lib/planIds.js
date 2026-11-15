@@ -1,4 +1,6 @@
 /**
+ * Utilities for PLAN.md `[slug]` IDs.
+ *
  * Plan-item IDs — utilities for giving every `- [ ]` checkbox in PLAN.md a
  * stable slug ID so concurrent agents can claim distinct items by encoding
  * the ID in their worktree branch name (`cos/<task.id>/<planId>/<agentId>`).

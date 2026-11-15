@@ -1,6 +1,17 @@
 /**
  * PortOS schema-version contract for cross-instance sync.
  *
+ * Cross-instance sync version contract. `PORTOS_SCHEMA_VERSIONS` (frozen map of `{ category:
+ * layoutVersion }`), `RECORD_KIND_SCHEMA_CATEGORIES` (frozen map of federated record kind → the schema
+ * categories it writes), `buildPortosMeta()` (envelope for every outbound sync payload),
+ * `compareSchemaVersions(sender, receiver)` returning `{ ahead, behind, compatible }`,
+ * `scopeVersionDiff(diff, categories)` (restrict that diff to the categories a specific transfer
+ * touches), `catalogEnvelopeHasLiveRows()` (shared live-row versus tombstone gate for catalog
+ * transfers), and `formatVersionGap()` for UI/log lines. Receivers gate `applyIncomingPush` /
+ * share-bucket import / snapshot apply per-category on the scoped comparator result so an upgraded
+ * sender can't corrupt a downstream peer — and a bump to one category doesn't sever sync of the
+ * others.
+ *
  * Two PortOS instances that exchange data (federated peer push, snapshot
  * sync, share-bucket manifests) need a way to detect a version mismatch
  * BEFORE applying records the receiver can't parse. Without this, an

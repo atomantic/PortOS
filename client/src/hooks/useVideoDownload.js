@@ -1,3 +1,11 @@
+/**
+ * One full-video-download job slot (#1946): start/cancel + SSE progress + terminal-frame handling via
+ * `POST /api/devtools/video-download`.
+ *
+ * Returns `{ active, percent, stage, context, start(url, context), cancel }`; `onComplete(video)`
+ * fires with the finished video-history entry. Use when: The Dev Tools Video Downloader page.
+ */
+
 import { startVideoDownload, cancelVideoDownload, videoDownloadEventsUrl } from '../services/apiVideoDownload.js';
 import useSseJobSlot from './useSseJobSlot.js';
 

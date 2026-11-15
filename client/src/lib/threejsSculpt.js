@@ -2,6 +2,19 @@
  * Three.js construction helpers for the validated procedural sculpt spec
  * (`server/lib/threejsModel.js`).
  *
+ * Three.js construction helpers for the validated procedural sculpt spec
+ * (`server/lib/threejsModel.js`) used by the Three.js Models preview.
+ * `createSculptBufferGeometry(definition)` builds the schema forms r3f has no direct element for —
+ * `custom` (indexed BufferGeometry), `extrude` (closed 2D outline + holes swept to `depth`, optional
+ * bevel) and `tube` (CatmullRom path swept at `radius`) — returning null for primitives, which stay
+ * declarative; callers own disposal. `needsSculptBufferGeometry(definition)` is the matching
+ * predicate. `sculptMaterialProps(definition, envMapIntensity)` maps a material definition to its
+ * Three.js props, forwarding the physical-only channels (`clearcoat`, `ior`, `transmission`,
+ * `thickness`, `sheen`, `iridescence`, `anisotropy`) only for `type: physical`, and the spec-level
+ * `environment.intensity` as `envMapIntensity` on every lit material (`basic` is unlit and takes
+ * none). Mirrors the `createGeometry`/`createMaterial` bodies `buildThreejsFactorySource()` emits, so
+ * the preview and the exported standalone factory render the same scene.
+ *
  * These mirror the `createGeometry` / `createMaterial` bodies that
  * `buildThreejsFactorySource()` emits into the downloadable standalone factory,
  * so the in-browser preview and the exported source render the same scene.

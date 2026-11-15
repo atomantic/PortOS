@@ -1,7 +1,13 @@
 /**
- * Hard-cut detection in a video file, by ffmpeg's scene-change score. Used to
- * hand a code model a reference clip's cut rhythm (codeAnimation/referenceVideo.js)
- * and to place a multi-shot Music Video take on its shots (#16128).
+ * Hard-cut detection in a video file, by ffmpeg's scene-change score.
+ *
+ * Hard-cut detection by ffmpeg scene score: `_parseSceneCutTimes(stderr)` (test-only export; pure
+ * showinfo parse), `detectVideoSceneCuts(path, { threshold, bin })` (null, never `[]`, when ffmpeg is
+ * missing or fails), `SCENE_CUT_THRESHOLD`. Used by code-animation reference videos and Music Video
+ * sequence takes.
+ *
+ * Used to hand a code model a reference clip's cut rhythm (codeAnimation/referenceVideo.js) and to
+ * place a multi-shot Music Video take on its shots (#16128).
  */
 import { FFMPEG_SCAN_TIMEOUT_MS, findFfmpeg, runFfmpegProcess } from './ffmpeg.js';
 

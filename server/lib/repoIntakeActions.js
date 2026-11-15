@@ -1,4 +1,12 @@
 /**
+ * `REPO_INTAKE_KEYS` + `normalizeRepoIntake(input)` — the opt-in post-clone agent actions a Brain
+ * capture can request for a GitHub repo URL (`malwareScan` → `/do:scan`, `learn` → a `repo-study`
+ * review).
+ *
+ * Pure half of `services/repoIntake.js` (which pulls the CoS task graph), so the link write path and
+ * the Zod schemas can import it freely. Normalizes to null when nothing was ticked, so "no intake" is
+ * never persisted onto a link.
+ *
  * The opt-in post-clone agent actions a Brain capture can request for a
  * repo URL. Pure — the queueing itself lives in `services/repoIntake.js`, which
  * pulls the whole CoS task graph; this half is safe to import from the link

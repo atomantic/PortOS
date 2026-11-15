@@ -1,3 +1,13 @@
+/**
+ * API client for on-device music generation: engines and readiness, designer AI describe/lyrics steps,
+ * Strudel and waveform LLM calls, and previews.
+ *
+ * On-device music generation (MusicGen / AudioLDM2 / ACE-Step): list engines (+ readiness), the
+ * stepped designer's AI describe/lyrics steps, the drawn-waveform and Strudel-code engines' LLM calls,
+ * preview the local caption and labeled additions, generate a track from a prompt/lyrics, and the
+ * SuperCollider runtime (status, setup, render, cancel).
+ */
+
 import { request, maybeRedirectToLogin } from './apiCore.js';
 
 // ---- Music generation (on-device) ----

@@ -1,4 +1,9 @@
 /**
+ * Hand-authored roller rink, plain room and outdoor plaza scenes (`GREYBOX_STARTERS`), shared by the
+ * client picker and validated against the scene schema in the server tests.
+ */
+
+/**
  * Hand-authored scene data, in metres with Y up. Validated by greyboxStarters.test.js.
  * The roller rink follows Southgate Roller Rink (White Center, Seattle) as a plan,
  * with north at -Z and east at +X: doors, check-in and video games on the

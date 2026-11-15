@@ -1,6 +1,12 @@
 /**
  * Shared XML / HTML entity decoder.
  *
+ * Shared dependency-free XML/HTML entity decoder. `decodeXmlEntities(str, extraEntities?)` —
+ * single-pass (double-decode-safe) decode of the five predefined named entities + decimal/hex numeric
+ * refs, with an optional caller-supplied extra-entity map (e.g. `{ nbsp: ' ', zwnj: '' }`).
+ * Unknown/out-of-range refs left untouched. Used by the Apple Health XML parser, Claude changelog
+ * feed, Pinterest RSS, generic feeds, and Gmail HTML-to-text.
+ *
  * A single dependency-free decoder for the entity references that appear in the
  * various feeds and exports PortOS parses (Apple Health `export.xml`, GitHub
  * release Atom feeds, Pinterest/RSS/Atom feeds, Gmail HTML bodies). It replaces

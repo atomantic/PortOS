@@ -1,4 +1,12 @@
 /**
+ * Allowlist + path helpers for the same-origin Eidoverse reverse-proxy on `:5555` (`/eidoverse-host`
+ * prefix strip and root routes like `/ws` / `/version` while the host is active).
+ *
+ * Shared by `services/eidoverseProxy.js` so the main server and the optional `:5563` bridge stay in
+ * sync with the eidoverse-worlds route table.
+ */
+
+/**
  * Root paths the Eidoverse Worlds sequencer owns (from its routes.ts
  * matchers: exact + prefix). Import-free leaf so Vite, drift guards, and the
  * reverse-proxy can share one list without dragging Express into the graph.

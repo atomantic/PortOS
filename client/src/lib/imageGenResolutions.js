@@ -1,3 +1,7 @@
+/**
+ * Shared resolution presets for image generation.
+ */
+
 import { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from '../../../server/lib/imageLimits.js';
 export { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from '../../../server/lib/imageLimits.js';
 // Shared resolution presets for image generation. Used by the standalone

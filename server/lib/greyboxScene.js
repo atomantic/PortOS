@@ -1,9 +1,16 @@
 /**
- * Greybox layout contract for a Place (catalog type `place`, shown as
- * Environments). A greybox is a coarse, untextured 3D layout of a location that
- * keeps object and figure placement consistent across the shots of a music
- * video: named landmarks, floor anchors for people and props, and saved cameras
- * whose captures become reference images.
+ * Greybox layout contract for a Place (catalog type `place`, shown as Environments).
+ *
+ * Declarative greybox layout contract for a Place (`payload.greybox`): allowlisted parts
+ * (box/cylinder/plane/extrude), zones, landmarks, floor anchors for figures and props, and saved
+ * camera shots, in meters with Y up. `greyboxSceneSchema` rejects duplicate ids, dangling zone/anchor
+ * references and a camera sitting on its target; `resolveGreybox(payload)` reads an absent or
+ * no-longer-valid blob as `null`; Derived data (bounds, per-shot prompt lines) is computed by its
+ * consumer, never stored.
+ *
+ * A greybox is a coarse, untextured 3D layout of a location that keeps object and figure placement
+ * consistent across the shots of a music video: named landmarks, floor anchors for people and props,
+ * and saved cameras whose captures become reference images.
  *
  * Declarative only. Parts are allowlisted primitives the client maps to Three.js
  * (same trust boundary as `threejsModel.js`); nothing here is executed.

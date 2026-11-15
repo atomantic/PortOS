@@ -1,6 +1,16 @@
 /**
  * Whether MTPLX's own Python runtime is on disk yet — decided WITHOUT running it.
  *
+ * `describeMtplxRuntime(binaryPath, {env?})` → `{ready, wrapper, venvPath}` — is MTPLX's own Python
+ * runtime on disk, decided by READING the binary rather than running it. Homebrew's `mtplx` is a shell
+ * wrapper that lazily bootstraps a version-keyed Python venv (a multi-hundred-megabyte pip install) on
+ * its first invocation, and `brew upgrade` re-arms it, so a status poll or an 8s-judged PM2 start is
+ * really a package download. This parses the wrapper's own `VENV=` assignment, honours
+ * `$MTPLX_BREW_VENV` the way `${MTPLX_BREW_VENV:-…}` does, and tests `<venv>/bin/mtplx` for
+ * executability — the wrapper's own `[ ! -x … ]` guard, so the two cannot disagree. Anything
+ * unrecognisable (a pip install, a compiled binary, an unparseable script) reports `ready: true,
+ * wrapper: false`, i.e. the status quo — never a block over a parse failure.
+ *
  * The `mtplx` Homebrew installs is not MTPLX. It is a few-line shell wrapper
  * that lazily bootstraps a version-keyed Python venv the first time anybody
  * invokes it:

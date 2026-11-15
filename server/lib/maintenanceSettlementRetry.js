@@ -1,4 +1,6 @@
 // A short journal conflict must not turn finished work into a permanent blocker.
+//
+// Retry local admission settlement until it completes or ownership changes.
 const pending = new WeakMap();
 const RETRY_MS = 30000;
 

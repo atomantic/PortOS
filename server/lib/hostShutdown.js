@@ -1,6 +1,15 @@
 /**
  * Host-shutdown signal + durable marker.
  *
+ * Tells "PortOS was restarted out from under a running agent" apart from "the agent failed" (#3202).
+ * `markHostShuttingDown()` / `isHostShuttingDown()` are the in-process latch the SIGTERM/SIGINT
+ * handler sets first thing; `shouldAbandonForHostShutdown({sentinelPresent,terminatedByUser,paused})`
+ * keeps every spawn path on the same preserve-vs-finalize policy.
+ * `writeHostShutdownMarker({agentIds,signal})` / `readHostShutdownMarker()` /
+ * `clearHostShutdownMarker()` persist that verdict to `data/cos/host-shutdown.json` so the NEXT boot's
+ * orphan sweep can requeue those agents as *interrupted* — no orphan-retry charge, no 30-minute
+ * cooldown. All non-throwing: a missing marker degrades to the ordinary orphan path.
+ *
  * `portos-server` is restarted routinely — pm2's memory ceiling, a manual
  * `pm2 restart`, a code deploy. pm2's TreeKill signals every descendant of the
  * server, so a CoS TUI agent whose PTY the server owns dies WITH the server

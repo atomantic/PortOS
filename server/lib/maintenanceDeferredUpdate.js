@@ -1,3 +1,7 @@
+/**
+ * Automatic/manual update ownership, stop-first shutdown and process settlement in the shared journal.
+ */
+
 import { join } from 'node:path';
 
 const record = value => value && typeof value === 'object' && !Array.isArray(value);

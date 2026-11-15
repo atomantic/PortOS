@@ -1,3 +1,5 @@
+// Pure focus-trail (breadcrumb) transitions for BrainGraph re-focus navigation.
+//
 // Pure focus-trail transitions for the Brain Graph's re-focus navigation.
 // The trail is the breadcrumb path from the overview to the current focus:
 // [] = overview, and the last entry is always the node currently focused.

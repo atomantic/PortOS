@@ -1,4 +1,9 @@
-/** Detailed OpenAPI contracts layered over the exhaustive generated inventory. */
+/**
+ *  Detailed OpenAPI contracts layered over the exhaustive generated inventory.
+ *
+ * Detailed operation metadata for intentionally public APIs. It consumes the canonical route Zod
+ * contracts and feeds both public and internal OpenAPI documents.
+ */
 
 import {
   sdapiTxt2imgBodySchema,

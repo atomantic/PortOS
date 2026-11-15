@@ -1,4 +1,15 @@
 /**
+ * Client re-export of music-video cut transitions (VHS glitches): styles, labels,
+ * `sceneTransitionSections`, `transitionGlitchFrames` and in-shot glitch helpers.
+ *
+ * Music-video cut transitions (VHS glitches over a cut), re-exported from
+ * `server/lib/musicVideoTransitions.js`: the styles and labels, `sceneTransitionSections`,
+ * `transitionGlitchFrames`, `transitionFrameAt`, in-shot glitches (`sceneShotGlitchFrames`),
+ * `blockBox` and `edgeGlows` for painting. Used by `components/musicVideo/SceneTransitions.jsx`,
+ * `SceneGlitches.jsx` and the storyboard animatic.
+ */
+
+/**
  * Music Video cut transitions — re-export of `server/lib/musicVideoTransitions.js`,
  * so the shot card's pickers (cut transitions and in-shot glitches) and the animatic's glitch frames follow the same
  * styles and frame placement as the final render.

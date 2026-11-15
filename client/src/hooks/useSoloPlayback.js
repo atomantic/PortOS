@@ -1,3 +1,13 @@
+/**
+ * One player at a time among the players that join: `useSoloPlayback(pause)` returns stable `{
+ * started, stopped, busy }`.
+ *
+ * `started()` (this player began playing) pauses every other joined player that is playing,
+ * `stopped()` marks it paused or ended, and `busy()` says whether another one is playing, so a player
+ * that starts by itself can hold off. Use when: A page showing two players that would sound together:
+ * the Music Video preview dock and the Blender film shot player both play the song.
+ */
+
 import { useEffect, useMemo, useRef } from 'react';
 
 // The players on the page that agreed to play one at a time.

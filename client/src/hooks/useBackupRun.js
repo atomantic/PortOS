@@ -1,3 +1,9 @@
+/**
+ * Manual backup pending state, result feedback, and completion callback.
+ *
+ * Use when: Dashboard and Settings backup actions.
+ */
+
 import { useAsyncAction } from './useAsyncAction';
 import { triggerBackup } from '../services/api';
 import toast from '../components/ui/Toast';

@@ -3,6 +3,10 @@
  * (`'mflux' | 'flux2' | 'z-image' | 'ernie'`) that distinguish which Python
  * runner backs an image-gen model entry.
  *
+ * Image-runner family constants (`RUNNER_FAMILIES`, `loraCompatKey`), video LoRA families, MiniMax H3
+ * runtime predicates, and the shared `AUDIO_TO_VIDEO_RUNTIMES` / `isAudioToVideoRuntime` capability
+ * gate (LTX plus H3 Ref2VA). Mirrored to `client/src/lib/runnerFamilies.js`.
+ *
  * Bare-string runner ids previously sprawled across `server/lib/civitai.js`,
  * `server/lib/mediaModels.js`, `client/src/pages/ImageGen.jsx`, and the
  * `RUNNER_LABEL` / `RUNNER_BADGE_CLASS` maps in `client/src/pages/Loras.jsx`.

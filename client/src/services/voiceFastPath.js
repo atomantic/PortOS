@@ -1,6 +1,9 @@
 // Voice fast-resolution cascade. A spoken/typed turn is triaged CLIENT-SIDE
 // through three tiers so common turns never wait on the (slow) server LLM:
 //
+// Voice fast-resolution cascade: trigger nav → on-device Nano → server LLM. Decides how each
+// spoken/typed turn is resolved.
+//
 //   tier 1  trigger  — deterministic nav/command matching (instant, offline).
 //                      "go to tasks" → navigate, no LLM at all.
 //   tier 2  nano     — Chrome's on-device "Gemini Nano" answers simple/chatty

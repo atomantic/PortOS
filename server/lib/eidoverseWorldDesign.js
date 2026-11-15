@@ -1,6 +1,9 @@
 /**
  * Versioned, install-portable PortOS world design contract for Eidoverse.
  *
+ * Immutable Eidoverse World Design V1/V2/V3 registry, override migration, semantic districts,
+ * 48-signal ceiling, and install-local asset locks for PortOS Commons.
+ *
  * PortOS ships only this small recipe. Eidoverse keeps the model library and
  * cached bytes; each PortOS install resolves the recipe once and persists the
  * resulting paths in its machine-local world state.

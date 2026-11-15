@@ -1,4 +1,9 @@
 /**
+ * Pure catalog and persisted ids for deterministic context sources that scheduled agent tasks can
+ * preload before dispatch.
+ */
+
+/**
  * Pure catalog for deterministic context sources available to scheduled agents.
  *
  * `carriesDispatchLabels` marks an input whose rows can arrive already routed by

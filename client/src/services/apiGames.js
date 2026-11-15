@@ -1,3 +1,8 @@
+/**
+ * Game studio records, managed-app binding, reusable sprite/music bindings, deterministic asset-bundle
+ * compilation/integrity preflight, and AI feedback history.
+ */
+
 import { request } from './apiCore.js';
 
 export const listGames = (options = {}) => request('/games', options);

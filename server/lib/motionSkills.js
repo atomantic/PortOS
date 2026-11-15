@@ -1,3 +1,12 @@
+/**
+ * Catalog of optional motion-design agent skill packs (`MOTION_SKILL_PACKS`) and
+ * `detectMotionSkills()` to find which are installed, shared by setup and the launch-video form.
+ *
+ * Optional motion-design agent skill packs (HyperFrames, Remotion, Claude Animation) —
+ * `MOTION_SKILL_PACKS` catalog shared by `npm run setup:motion` and the launch-video form,
+ * `detectMotionSkills()` finds installed skills under `~/.agents/skills` / `~/.claude/skills`.
+ */
+
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';

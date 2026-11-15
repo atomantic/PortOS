@@ -3,6 +3,17 @@
  * Lie → Want → Need chain plus the declared arc type, secrets, motivations,
  * and structured relationship links.
  *
+ * The narrative-character framework as one definition: `CHARACTER_ARC_TYPES`,
+ * `CHARACTER_FRAMEWORK_TEXT_FIELDS` / `CHARACTER_FRAMEWORK_FIELDS` (the Ghost→Wound→Lie→Need→Want
+ * chain plus motivations, arc type, secrets, relationship links, the psychology profile and the Three
+ * Sliders), `CHARACTER_FRAMEWORK_LIMITS`, the psychology/slider/link vocabularies re-exported by
+ * `storyBible.js` (`PSYCHOLOGY_DRIVE_AXES`, `PSYCHOLOGY_ASSESSMENTS`,
+ * `CHARACTER_PSYCHOLOGY_TEXT_FIELDS`, `CHARACTER_PSYCHOLOGY_LIMITS`, `CHARACTER_SLIDER_AXES`,
+ * `RELATIONSHIP_LINK_TYPES`), and `pickCharacterFramework` / `pickCastFramework` (framework-only
+ * projection for an author-side review prompt, empty entries dropped). A pure leaf over
+ * `bibleLimits.js` so the store editableFields, the Zod schemas, and the client editors share one list
+ * (#6417).
+ *
  * A PURE LEAF (imports only `bibleLimits.js`) so three otherwise-unrelated
  * consumers can share one definition instead of three hand-mirrored copies:
  *

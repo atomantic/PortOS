@@ -1,3 +1,8 @@
+/**
+ * Versioned shot intent shape/timing validation and clip-relative frame/motion prompt compilation,
+ * shared by treatment and the board.
+ */
+
 import { phoneticLipSyncSummary } from './musicVideoLyricAnchors.js';
 
 /** Versioned dramatic intent shared by treatment, generation and shot inspection. */

@@ -1,4 +1,10 @@
-/** OpenAPI 3.0.3 builders for PortOS's exposed and complete HTTP API surfaces. */
+/**
+ *  OpenAPI 3.0.3 builders for PortOS's exposed and complete HTTP API surfaces.
+ *
+ * Builds two OpenAPI 3.0.3 documents: the Settings-controlled exposed public surface and the complete
+ * internal HTTP inventory. Detailed operations reuse canonical Zod contracts; generated operations are
+ * visibly labeled rather than claiming unmodeled schemas.
+ */
 
 import { API_OPERATION_CONTRACTS } from './apiOperationContracts.js';
 import {

@@ -1,6 +1,10 @@
 // Render one iTerm2 get-buffer snapshot (decoded by lib/itermMessages.js) into
 // a single ANSI string that repaints an xterm.js viewer in place (#8114).
 //
+// `renderItermFrame({ lines, cursor, firstVisibleLine, cols, rows })` — one iTerm2 screen snapshot →
+// an in-place ANSI repaint (SGR truecolor/palette/attributes, code-point cell runs for wide chars,
+// scrollback cursor offset, control chars neutralized); `itermStyleToSgr`.
+//
 // Frame layout: hide the cursor and home, then for each screen row
 // `CSI r;1H` + SGR runs + text + `CSI 0m CSI K`, then park the cursor at
 // iTerm's cursor position and show it again. Rows past the snapshot are

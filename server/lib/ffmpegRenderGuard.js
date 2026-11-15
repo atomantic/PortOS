@@ -1,4 +1,16 @@
 /**
+ * `attachFfmpegRenderGuard(proc, opts)` tracks spawn state and enforces an exactly-once terminal
+ * callback for SSE ffmpeg render runs.
+ *
+ * `attachFfmpegRenderGuard(proc, {label, onSpawnError, onProcessError, onClose})` — shared spawn-state
+ * tracking + exactly-once `terminal` guard + pre-vs-post-spawn dispatch for the SSE ffmpeg render
+ * runners (musicVideo/render + videoTimeline/local). Owns the 'spawn'/'error'/'close' wiring (only the
+ * pre-spawn 'error' or 'close' finalizes; a post-spawn 'error' records only) and takes the
+ * service-specific finalize bodies as callbacks so each renderer keeps its own project-status/history
+ * behavior.
+ */
+
+/**
  * Shared ffmpeg render-process lifecycle guard (#2398).
  *
  * The two SSE render runners — `server/services/musicVideo/render.js` and

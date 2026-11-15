@@ -1,6 +1,9 @@
 /**
  * Deterministic Markdown serializer for a Universe Builder world bible.
  *
+ * `universeToMarkdown(record)` / `parseUniverseMarkdown(text)` for the Universe Builder's Markdown
+ * world-bible export and import, plus safe download filename helpers.
+ *
  * This module is intentionally pure: it reads a universe-shaped record and
  * returns text without touching storage, the filesystem, or the network.
  * Filename normalization mirrors client/src/lib/universeMarkdownFilename.js;

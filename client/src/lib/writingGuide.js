@@ -1,7 +1,13 @@
-// Canonical Writers Room reference data: length targets, book-length
-// estimates, and craft principles. The Guide page renders directly from these
-// arrays, and forthcoming editor features (word-count gauges, the emotional-
-// roadmap evaluator) read the same source so targets never drift between the
+// Canonical Writers Room reference data: length targets, book-length estimates, and craft principles.
+//
+// Canonical Writers Room reference data + craft principles rendered by the Guide page
+// (`/writers-room/guide`): `WRITING_LENGTH_TARGETS` (microfiction→novel word/char bands),
+// `BOOK_LENGTH_ESTIMATES` (page-based), `WRITING_PRINCIPLES`, `PLANNED_ANALYSES` (e.g. the
+// emotional-roadmap evaluator), and `classifyByWordCount(n)` for labelling a draft's length. Future
+// word-count gauges / length checks read from here so targets don't drift from the docs.
+//
+// The Guide page renders directly from these arrays, and forthcoming editor features (word-count
+// gauges, the emotional- roadmap evaluator) read the same source so targets never drift between the
 // docs and the tools that enforce them.
 //
 // Character ranges follow the conventional English estimate of ~5–6 characters

@@ -2,6 +2,22 @@
  * Disassembly + part-picking maths for the procedural sculpt spec
  * (`server/lib/threejsModel.js`), shared by the Three.js Models preview.
  *
+ * Disassembly + part-picking maths for the procedural sculpt spec, shared by the Three.js Models
+ * preview so explode and the picker agree on what "a part" is. `computeExplodeLayout(parts, amount)` →
+ * `{ offsets, meshOffsets, unitIds, growth }`: separation is a layout **scale about the model centre**
+ * (≈2× at full explode) plus a base clearance for parts sitting at the centre — never a uniform
+ * outward push, which slides the arrangement without opening gaps — where `offsets` add to a unit's
+ * own `position` and `meshOffsets` apply to a group around a container's own geometry (moving its
+ * group instead would drag its child units along), and `growth` measures how much the layout actually
+ * grew so the camera re-fits on real change. `buildPartSelectionIndex(parts)` → `{ owners, ancestry,
+ * names }` for click resolution, subtree highlight, and the selection label. All maps are
+ * null-prototype — part ids are provider-authored and `idSchema` accepts `toString`. `isReliefPart` /
+ * `isContainerPart` expose the shared part definition: a part flagged `explodeWithParent` is surface
+ * relief that rides its parent and resolves selection up to it (unless it has no parent to ride),
+ * every other geometry-bearing part is both a movable unit and a selectable component, a part whose
+ * descendants carry geometry is additionally descended through, and a part with no geometry in its
+ * subtree moves nothing.
+ *
  * Explode and the picker MUST agree on what "a part" is — if they disagree,
  * both are wrong (you separate one thing and select another). That single
  * definition lives here:

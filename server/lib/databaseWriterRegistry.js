@@ -1,3 +1,15 @@
+/**
+ * `createDatabaseWriterRegistry` keeps durable reservations and observations for detached database
+ * writer launches, with `retire` for quiescent records.
+ *
+ * `createDatabaseWriterRegistry(dataDir?)` supplies durable detached launch reservations and inventory
+ * observations (reservation, POSIX launcher group, job PID, abandonment, completion) plus `retire(id,
+ * archiveDir?)` for proven-quiescent records; `reserveDatabaseWriter` is the mandatory `spawnDetached`
+ * admission boundary. `classifyWriterQuiescence(row, processes)` classifies a row against a
+ * process-table snapshot (quiescent / running / orphaned / pending / ambiguous) without probing PIDs.
+ * Legacy compacted history and Windows completions stay unresolved.
+ */
+
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, writeFileSync, linkSync, rmSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';

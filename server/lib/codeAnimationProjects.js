@@ -1,4 +1,9 @@
-/** Machine-local Production persistence contracts; no execution authority. */
+/**
+ *  Machine-local Production persistence contracts; no execution authority.
+ *
+ * Machine-local Production project, patch and independent budget schemas; package imports grant no
+ * execution authority.
+ */
 import { z } from 'zod';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { codeAnimationManifestSchema } from './codeAnimationPackage.js';

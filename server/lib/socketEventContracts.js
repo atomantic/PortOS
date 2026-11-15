@@ -1,4 +1,9 @@
-/** Runtime-backed payload contracts for modeled Socket.IO events. */
+/**
+ *  Runtime-backed payload contracts for modeled Socket.IO events.
+ *
+ * Payload contracts for modeled Socket.IO events, reusing live Zod validation for inbound events and
+ * documenting public outbound snapshots.
+ */
 
 import { zodToOpenApiSchema } from './apiContractSchemas.js';
 import { generatedPreviewPlaybackSchema } from './generatedPreviewPlaybackSchema.js';

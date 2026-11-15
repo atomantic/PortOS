@@ -2,6 +2,13 @@
  * The caps on creative brief text: the commission brief fields, and the
  * Creative Director directive `goal` a commission's brief is composed into.
  *
+ * `COMMISSION_NAME_MAX` / `COMMISSION_INTENT_MAX` / `COMMISSION_STYLE_SPEC_MAX` /
+ * `COMMISSION_BRIEF_TAG_MAX` and `CREATIVE_DIRECTOR_GOAL_MAX` — the creative brief caps
+ * `creativeCommissionValidation.js` and `creativeDirectorValidation.js` enforce and the browser forms
+ * use as a silent input `maxLength`. A pure leaf (the schemas pull `zod`) so
+ * `client/src/components/creative-commission/commissionForm.js` and
+ * `client/src/lib/creativeDirectorPlan.js` re-export one definition instead of copying the numbers.
+ *
  * A pure leaf on purpose. The Zod schemas that enforce these
  * (`creativeCommissionValidation.js`, `creativeDirectorValidation.js`) pull
  * `zod`, which the browser bundle is not handed — while the commission form and

@@ -1,3 +1,7 @@
+/**
+ * Creative Commissions (Autonomous Creation Engine — standing recurring briefs).
+ */
+
 import { request } from './apiCore.js';
 
 // Client API for the Autonomous Creation Engine (#2657) — standing, recurring

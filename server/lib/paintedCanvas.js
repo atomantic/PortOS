@@ -1,6 +1,14 @@
 /**
  * Painted-spectrogram canvas — wave sketch `version: 2` (#8464).
  *
+ * Painted-spectrogram canvas, wave sketch v2 (#8464, browser-safe): stereo time × log-frequency canvas
+ * painted with strokes (`path` keyframes `{t, hz, a}`, per-keyframe `overtones`, noise `width`,
+ * `pan`), plus optional `sections` and tempo grid. `normalizePaintedCanvas(raw, { durationSec, limits
+ * })` is the lenient idempotent validator; `synthesizePaintedCanvas(canvas)` → deterministic `[left,
+ * right]` PCM using only IEEE-exact math (series sine table, log2/exp2), so server WAV and browser
+ * preview match on any engine; render work bounded by `PAINTED_CANVAS_LIMITS.WORK_MAX_PARTIAL_SEC`;
+ * `paintedCanvasStats(canvas)` → stroke/keyframe/noise/work totals.
+ *
  * The model paints sound onto a stereo time × log-frequency canvas with one
  * brush. A stroke is a `path` of keyframes `{t, hz, a}`; between keyframes
  * pitch moves on the log axis and amplitude moves linearly. Optional brush

@@ -1,3 +1,10 @@
+/**
+ * Music Video projects + scene board + audio analysis.
+ *
+ * Includes render cleanup inventory/apply with optional unused film-look purging, and shot color-match
+ * measure, take correction and group reference.
+ */
+
 import { request } from './apiCore.js';
 
 export const getMusicVideoMakingOfCatalog = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/making-of/catalog`, options);

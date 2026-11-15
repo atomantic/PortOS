@@ -1,3 +1,13 @@
+/**
+ * Vocal separation (demucs) as an SSE job slot: `start`, promise-returning `run`, `stageLabel`
+ * progress and an `onSeparated` callback.
+ *
+ * "Separate vocals" (demucs) as a `useSseJobSlot`: `start(projectId)` for the button, `run(projectId)`
+ * as a promise resolving with the project carrying its new stem (or null on failure/cancel),
+ * `stageLabel` for install/separation progress, `onSeparated(projectId, project)` on success. Use
+ * when: The Music Video vocal-stem control and the autopilot kickoff.
+ */
+
 import { useEffect, useRef } from 'react';
 import useSseJobSlot from './useSseJobSlot.js';
 import {

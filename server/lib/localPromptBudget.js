@@ -1,6 +1,16 @@
 /**
  * What a large prompt costs on a LOCAL inference endpoint (#6117).
  *
+ * What a large prompt costs to PREFILL on a model server running on this machine (#6117).
+ * `planLocalPromptBudget({ prompt, endpoint, baseDurationMs })` → `{ promptTokens, prefillMs,
+ * expectedDurationMs, longPrefill, … }`, or `null` for a cloud endpoint / no prompt to measure — a
+ * sentinel a caller must read as "no estimate", never as a small one. `estimateLocalPrefillMs` and
+ * `describeLocalPromptBudget` are the token→ms and plan→sentence halves;
+ * `LOCAL_PREFILL_TOKENS_PER_SECOND` is a deliberately pessimistic constant, since over-estimating only
+ * widens the window a healthy run gets. Never refuses a dispatch: it raises the run's duration
+ * estimate so a ~100K-token public-review envelope reads as a long silent prefill instead of a wedged
+ * run. Pure.
+ *
  * A public-review Stage 3 dispatch inlines the whole screened
  * `<cleared-public-review-input>` envelope, which routinely runs to ~100K
  * tokens. A hosted provider prefills that in seconds; a model server on this

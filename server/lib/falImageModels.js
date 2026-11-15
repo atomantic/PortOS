@@ -3,6 +3,13 @@
  * `fal` image backend (services/imageGen/fal.js) may call, with one request
  * builder and one cost estimator per model family.
  *
+ * Curated fal.ai image model catalog, a dependency-free leaf the client imports: `FAL_IMAGE_FAMILIES`
+ * (text + `/edit` endpoint per family, per-model reference cap, sizing alphabet, pricing),
+ * `FAL_IMAGE_DEFAULT_MODEL`, `FAL_IMAGE_MODEL_IDS` (the only ids a fal `cloudModel` may name),
+ * `falImageFamily`/`isFalImageModel`, `falImagePriceLabel`, `buildFalImageRequest` (routes to `/edit`
+ * when input images are present; maps width/height to aspect-ratio + resolution tier or pixel
+ * `image_size`) and `estimateFalImageCostUsd` (with `FAL_MEGAPIXEL`, fal.ai's binary megapixel).
+ *
  * A dependency-free leaf (like `imageGenCapabilities.js`, which reads the
  * per-model reference caps from here) so the Settings model picker and the
  * Image Gen page offer exactly the ids the server accepts — `cloudModel` for a

@@ -1,3 +1,16 @@
+/**
+ * `useVideoGenForm(...)` returns every VideoGen form field and setter, including URL-param prefills
+ * (ImageGen handoff, Continue, Remix, lora) and mode/backend rules.
+ *
+ * `useVideoGenForm({ models, modelContext, availableLoras, grokEnabled })` → every VideoGen form field
+ * + setter, the URL-param prefill paths (ImageGen handoff, Continue, Remix, `?lora=`), the
+ * mode/backend transitions that clear stale inputs, the derived model/keyframe/IC gates
+ * (`extendModeBlocked`, `a2vModeBlocked`, `icLoraModeBlocked`, `keyframesError`), `applyRemix` /
+ * `applyResumedParams`, and `buildGeneratePayload()`. Use when: The /media/video form — the single
+ * client-side source of truth for the payload `server/routes/videoGen.js` validates. Reuse it for any
+ * second entry point that generates video.
+ */
+
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useSearchParams } from 'react-router';
 import toast from '../components/ui/Toast';

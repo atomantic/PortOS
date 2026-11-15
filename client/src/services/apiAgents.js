@@ -1,3 +1,14 @@
+/**
+ * API client for running-agent process management, CoS run-event diagnostics, task schedule, and
+ * maintenance runs (`getMaintenanceRuns`, `startMaintenanceRun`).
+ *
+ * Running-agent process management, CoS run-event diagnostics, the CoS task schedule (intervals,
+ * on-demand triggers, manual maintenance runs via
+ * `getMaintenanceRuns`/`startMaintenanceRun`/`stopMaintenanceRun`), and persistent-mind conversation,
+ * lifecycle, context, runtime-telemetry calls, and versioned tool recipe library CRUD, validation,
+ * archive, and restore calls.
+ */
+
 import { request } from './apiCore.js';
 
 // Running Agents (Process Management)

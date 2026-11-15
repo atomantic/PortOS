@@ -1,8 +1,14 @@
 /**
- * Song brief — a storyboard's beats as a song map to write or generate the
- * song from (Suno, the Music Designer): sections in order, the target length
- * of each, its energy, mood and lyric theme. Built from the board alone, with
- * no model call, so it is the same text every time the beats are the same.
+ * Song brief — a storyboard's beats as a song map to write or generate the song from (Suno, the Music
+ * Designer): sections in order, the target length of each, its energy, mood and lyric theme.
+ *
+ * A storyboard's beats as a song map: `storyboardSongSections` (role, target length, energy, mood,
+ * lyric theme per beat), `storyboardSongBriefText` (the paste-ready brief), `storyboardTimeline` (the
+ * animatic's timing: panel holds, beats pinned to temp-track marks, the runs before them fitted) /
+ * `STORYBOARD_DEFAULT_HOLD_SEC`. No model call. Browser-safe.
+ *
+ * Built from the board alone, with no model call, so it is the same text every time the beats are the
+ * same.
  *
  * `storyboardTimeline` is the animatic's timing, shared by Play and the
  * brief so they agree on length: a panel holds for its estimated seconds (the

@@ -1,3 +1,10 @@
+/**
+ * Loads catalog places and their media by id (`null` for one that failed or is gone), refreshing on
+ * return to the tab.
+ *
+ * Use when: World map and Music Video greybox places.
+ */
+
 import { useEffect, useState } from 'react';
 import { listCatalogIngredientsByIds, listCatalogIngredientMedia } from '../services/apiCatalog.js';
 import { useVisibilityEvent } from './useVisibilityEvent.js';

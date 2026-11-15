@@ -3,6 +3,11 @@
  * (issue #7624): a small always-on core plus family-scoped explicit
  * activation with a short, turn-scoped retention lease.
  *
+ * Pure lease-state helpers for progressive Persistent Mind tool exposure: the
+ * `TOOL_ACTIVATION_FAMILIES` vocabulary, `tools.activate`/`tools.deactivate` input schemas, and
+ * default/normalize/age/activate/renew/deactivate over a `{family: turnsLeft}` lease map. Retention is
+ * a selection hint only — every consumer still re-checks the real capability grant.
+ *
  * Retention here is a SELECTION HINT, never an authority grant. Every helper
  * in this module only decides what tool schemas are SHOWN to the mind on its
  * next prompt. The capability/`granted` gate in cosToolRegistry.js runs

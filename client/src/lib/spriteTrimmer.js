@@ -1,6 +1,22 @@
 /**
  * Loop Trimmer helpers for the Sprite Manager (#2933).
  *
+ * Pure geometry + source-list math behind the Sprite Manager's Loop Trimmer workspace (#2933).
+ * `buildTrimmerSources(walk, assets)` → the ordered animation sources the trimmer can load (every
+ * preview-strip run first, then saved trims read from the asset listing), each `{ id, kind:
+ * 'run'|'trim', runId, direction, label, stripPath, frameCount, fps, trimmable }` — every packed-strip
+ * run is `trimmable` (layout-agnostic), while saved trims are preview-only, mirroring
+ * `spriteCollectionActions`' gate. `stripFrameGeometry(stripPreview)` → `{ frameCount, fps, cellWidth,
+ * cellHeight }` with the native 8-phase / 12fps fallback; `phaseLabelFor(index, frameCount)` names the
+ * 8 walk phases (bare `frame N` for any other length); `sanitizeTrimSlug(name)` → the server's
+ * `[a-z0-9-]+` output slug; `allColumns(n)` / `invertColumns(n, enabled)` for the frame-toggle set.
+ * `WALK_PHASES` is the shared phase-label constant (WalkWorkflow imports it here). Also holds the
+ * walk-cycle authoring knobs mirrored from `walkBounds.js` — `WALK_DEFAULT_FRAME_COUNT` /
+ * `WALK_DEFAULT_FPS`, the `WALK_FRAME_COUNT_OPTIONS` list and `walkFpsOptionsFor(fps)` (splices a
+ * current odd fps into the even-step list so the `<select>` never lies) — feeding the shared
+ * `CycleTarget` control used by both the walk workflow and the trimmer's re-derive panel (#2980). Pure
+ * — no React, no canvas, no I/O.
+ *
  * Pure geometry + source-list math behind the deep-linkable Loop Trimmer
  * workspace: turn a record's walk state (+ its on-disk asset listing) into the
  * ordered set of animation sources the trimmer can load, derive a strip's frame

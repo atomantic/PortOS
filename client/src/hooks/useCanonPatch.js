@@ -1,3 +1,15 @@
+/**
+ * Optimistic canon-entry field patch hook: queues edits in click order, preserves newer field edits on
+ * acknowledgement and rolls failed fields back to confirmed values.
+ *
+ * Optimistic canon-entry field patch: the API queues accepted edits in click order, the server merges
+ * against the latest entry, and acknowledgements preserve newer field edits and roll failed fields
+ * back to their last confirmed value. Visit identity prevents a mid-flight universe swap from
+ * resurrecting stale state. `apply` is `setUniverse` or `onUniverseChange`. Use when: Inline
+ * canon-field edits on a universe (UniverseCanonSection, NounsStage). Don't re-roll the
+ * optimistic-then-confirm dance.
+ */
+
 import { useCallback, useRef } from 'react';
 import toast from '../components/ui/Toast';
 import { patchUniverseCanonEntry } from '../services/apiUniverseBuilder';

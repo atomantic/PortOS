@@ -1,3 +1,5 @@
+// Curated style presets for storyboards + universe.
+//
 // Curated style presets shared by the Writers Room storyboard and the
 // standalone Image / Video gen pages. Each Work records the *resolved* prompt
 // text, not just the id — editing a preset here can't retroactively change

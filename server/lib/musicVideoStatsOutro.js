@@ -1,4 +1,10 @@
 /**
+ * The cutting room floor outro: an optional scene after the song tallying the director's choices.
+ *
+ * `normalizeStatsOutro`, `statsOutroSeconds`, `musicVideoOutroStats` (the counts from the project's
+ * takes, selections, marks and media collection), `drawStatsOutro` (the one canvas painter the
+ * animatic and the final render share; the page is `musicVideoEnding.js`). Browser-safe.
+ *
  * Music Video — the cutting room floor outro: an optional closing scene that
  * plays after the song ends under a heading ("Human Directed") and an orange
  * subheading ("Human Imagined") and tallies the work behind the video (every

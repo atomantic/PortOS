@@ -1,3 +1,12 @@
+/**
+ * Chief-of-Staff task/job/loop/learning schemas, the Code-Review settings slice, and the task-metadata
+ * sanitizer.
+ *
+ * `createCosTaskSchema`'s metadata-bound fields are carried onto the task by
+ * `services/cosTaskIntake.js` (parity-checked by its test). The Review-Loop reviewer vocabulary lives
+ * in `reviewerConfig.js` (#5702) and is re-exported flat from here.
+ */
+
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 import { auditWorkflow } from './auditWorkflow.js';
 import { PREFETCHED_ISSUE_CONTEXT_MAX_CHARS } from '../../lib/issueContext.js';
@@ -10,7 +19,7 @@ export { PREFETCHED_ISSUE_CONTEXT_MAX_CHARS } from '../../lib/issueContext.js';
  * vocabulary + helpers (`normalizeReviewers` / `buildReviewWithArgs`) moved to
  * `reviewerConfig.js` (issue #5702) and are re-exported flat from here, so
  * existing deep imports keep working. validation.js re-exports everything here
- * (flat); the barrel surfaces it as the `cosValidation` namespace.
+ * (flat).
  */
 import { z } from 'zod';
 import { MALFORMED_REVIEW_REASONS, REVIEW_FINISH_REASONS, MAX_REVIEW_RESPONSE_LENGTH, CLI_REVIEW_PHASES, CLI_REVIEW_METRICS } from './reviewerHealth.js';

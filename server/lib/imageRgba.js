@@ -1,6 +1,9 @@
 /**
  * Small sharp-backed RGBA helpers shared by image-processing lanes.
  *
+ * Sharp-backed RGBA boundary: `decodeRgbaFrame` decodes an image to `{ data, width, height }`, and
+ * `encodePng` turns a raw frame into PNG bytes for the caller's destination/hash policy.
+ *
  * Pixel algorithms belong in sharp-free modules; this file is the deliberate
  * boundary for decoding encoded images and producing PNG bytes.
  */

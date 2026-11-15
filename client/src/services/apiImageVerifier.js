@@ -1,6 +1,9 @@
 /**
  * apiImageVerifier.js — Client API service for on-demand image evaluations
  * and manual overrides.
+ *
+ * On-demand image quality verification and operator overrides (`verifyImageNow`,
+ * `overrideVerification`).
  */
 
 import { request } from './apiCore.js';

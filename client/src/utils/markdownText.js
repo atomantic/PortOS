@@ -1,5 +1,15 @@
 // Markdown → plain text, for clamped previews.
 //
+// `markdownToPlainText(md)` — flatten markdown source to one plain-text string for a clamped preview:
+// strips heading/list/blockquote/fence markers, unwraps emphasis, inline code and links, images →
+// `[alt]`, collapses blank-line runs. Use whenever a card previews arbitrary agent-authored markdown —
+// `line-clamp-N` does not clamp a subtree of block elements, and foreign `##` headings would otherwise
+// join the page's heading outline. Underscore emphasis is word-boundary gated and `__…__` needs
+// interior whitespace, so stack frames and user-agent strings (`10_15_7`, `__init__`) are never
+// silently rewritten. `dropsMarkupWhenFlattened(md)` — did the flatten lose actual markup, as opposed
+// to only normalizing whitespace? Gates a "Show more" disclosure so a short-but-lossy body stays
+// reachable without putting a toggle on every body that merely lost a trailing newline.
+//
 // A queue card's body is arbitrary agent-authored markdown (CoS task prompts,
 // stack traces, error payloads). Rendering it through the markdown renderer in
 // a collapsed card is wrong twice over: `line-clamp-N` does not clamp a subtree

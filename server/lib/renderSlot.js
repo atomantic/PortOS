@@ -3,6 +3,8 @@
  * image render: comic issue covers / back covers, comic page renders, and
  * volume (season) covers / back covers.
  *
+ * Render-slot helpers for `(proof|final)Image` per stage.
+ *
  * The slot record is the in-flight + completed-render state for one image:
  *
  *   { jobId, filename, prompt, width, height, createdAt, fromProof? }

@@ -1,5 +1,8 @@
 // Keeps the voice server's UI index in sync with the current page.
 //
+// Keeps voice server's UI index in sync with current page. Use when: Wire once at root for voice agent
+// support.
+//
 // Runs only when voice is enabled. Pushes a fresh index:
 // - On route change (useLocation dependency).
 // - On DOM mutations, debounced so burst renders only send one update.

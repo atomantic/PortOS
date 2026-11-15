@@ -1,3 +1,7 @@
+/**
+ * Calendar events.
+ */
+
 import { request } from './apiCore.js';
 
 // Calendar

@@ -1,3 +1,8 @@
+/**
+ * Shared fixed capture dimensions, aspect parsing and 35mm-equivalent lens field of view
+ * (`greyboxCaptureSettings`), used by both the interactive viewer and its isolated headless renderer.
+ */
+
 /** Camera and output contract shared by the interactive and headless viewer. */
 export const DEFAULT_FOCAL_LENGTH_MM = 35;
 const CAPTURE_LONG_EDGE = 1280;

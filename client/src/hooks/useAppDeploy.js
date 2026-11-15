@@ -1,3 +1,10 @@
+/**
+ * Stream one app's `deploy.sh` output via Socket.IO.
+ *
+ * Reattaches to a running deploy after a reload or reconnect. Use when: App deployment surfaces
+ * only.
+ */
+
 import { useState, useCallback, useEffect, useRef } from 'react';
 import socket from '../services/socket';
 

@@ -1,6 +1,12 @@
 /**
  * Shared takes for music-video shots (#15588).
  *
+ * Shared takes (#15588): `isContinuingScene` / `resolveSourceTake` (a return plays a window of another
+ * scene's clip; omitted offset is song time since that shot started; cycles and missing sources are
+ * null), `sourceClipNeedSec` (how long the owner's clip must run), `scenePlayableClipId` (the owner's
+ * history id, never the return's own), `sharedTakeOffers` / `sharedTakePatches` (board suggestions for
+ * an adjacent sequence run or a later return). Pure; shot timing imports the length helper.
+ *
  * A non-adjacent return names the scene whose clip it plays (`sourceTake`).
  * The offset is seconds into that clip; when it is omitted, song time since
  * the clip owner started is the window, so time keeps passing while other

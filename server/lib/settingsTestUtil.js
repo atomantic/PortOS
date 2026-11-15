@@ -2,6 +2,10 @@
  * Test-only helpers for suites that write `data/settings.json` DIRECTLY on disk
  * (bypassing `saveSettings`/`updateSettings`).
  *
+ * `bindSettingsFile(dataRoot)` → `writeSettingsFile`/`mergeSettingsFile`: direct settings.json disk
+ * writes that also drop the `getSettings()` read cache (dynamic-import reset) so a stale cache can't
+ * survive a bypass-`save()` write.
+ *
  * Why this exists: `getSettings()` in `server/services/settings.js` memoizes the
  * parsed settings.json in a module-level cache and only refreshes it off the
  * `settings:updated` event that `save()`/`updateSettings()`/`updateSettingsWith()`

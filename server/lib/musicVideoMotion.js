@@ -1,4 +1,15 @@
 /**
+ * `MOTION_CONTINUITY_CLAUSE`: the clause every Music Video motion (i2v) prompt ends with, pinning the
+ * reference frame's lighting, time of day and palette.
+ *
+ * Shared by `handoff.js` and the client board. `AUDIO_REACTIVE_PERFORMANCE_GUARD`: the clause an
+ * audio-reactive shot's prompt ends with. `silentMotionPrompt(prompt, { styleParts })`: the same
+ * prompt as plain physical motion (no lyric/beat cues, song times or look words) for a take that hears
+ * no audio; applied at video submit only to a request sent before `musicVideoShotPrompt.js` composed
+ * clips.
+ */
+
+/**
  * Music Video motion-prompt constants shared by the server (handoff.js
  * sceneShotPrompt, the production run) and the client board.
  *

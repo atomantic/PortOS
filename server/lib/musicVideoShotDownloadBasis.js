@@ -1,3 +1,7 @@
+/**
+ * Shared snapshot used to reject shot downloads based on unsaved inputs.
+ */
+
 import { resolveSourceTake } from './musicVideoSourceTake.js';
 
 // Compare the displayed inputs with the persisted inputs before encoding.

@@ -2,6 +2,18 @@
  * Tool-call / reasoning parser flags every local runtime MUST carry to serve a
  * Qwen3-family model to a CoS coding agent.
  *
+ * The tool-call / reasoning parser flags a local runtime MUST carry to serve a Qwen3-family model to a
+ * coding agent — one table PortOS owns instead of three docs. `QWEN_AGENT_PARSERS` maps runtime →
+ * `{toolCallParser, reasoningParser, enableAutoToolChoice}` (vLLM `qwen3_xml` +
+ * `--enable-auto-tool-choice`, SGLang `qwen3_coder` + `--reasoning-parser qwen3`, llama both `null` —
+ * a positive "no such flag today", not a placeholder). `parserFlagsFor(runtime)` returns the argv
+ * fragment (always an array, so no caller type-checks) and `vllmExtraArgs()` its string form for the
+ * compose project's `.env` `EXTRA_ARGS`; an unknown runtime THROWS, because the failure it prevents is
+ * silent — a parser-less server answers fluently and returns tool markup as ordinary text with
+ * `tool_calls: null`, so the agent never touches a file. Spellings are empirical
+ * (`docs/research/2026-08-21-qwen38-rtx3090-vllm.md`, `…-sglang-qwen38-27b.md`); never auto-detect one
+ * from the chat template — that is how `hermes` got picked. Pure.
+ *
  * ## Why this is a table and not prose
  *
  * The spelling is runtime-specific and the failure is SILENT. The server starts,

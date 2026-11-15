@@ -1,3 +1,10 @@
+/**
+ * `useMediaHideToggle(onHidden)` → `toggle(item)`, the one hide/unhide action for a gallery image or
+ * video (toasts; `onHidden(item, hidden)` after the server accepts).
+ *
+ * Use when: A media card or lightbox offering Hide/Unhide.
+ */
+
 import { useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import { setImageHidden, setVideoHidden } from '../services/apiImageVideo';

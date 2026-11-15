@@ -1,3 +1,9 @@
+/**
+ * Shows explicitly opted-in POST reminders only after a durable server delivery claim.
+ *
+ * Use when: Wire once high in the tree; reloads and tabs share the same occurrence/generation marker.
+ */
+
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import toast from '../components/ui/Toast';

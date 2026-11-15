@@ -1,5 +1,11 @@
 // The one way a page builds its own tab bar from the nav manifest.
 //
+// `buildPageNavTabs(manifestTabs, presentation, pageName)` — merges `getPageNavTabs(group)`
+// (nav-manifest, owns id/label/order) with a page-owned presentation map (icon, layout flags),
+// throwing at import time when a manifest tab has no entry. `buildSectionNavTabs(sectionTabs,
+// presentation, section)` does the same for `getSectionNavTabs(section)`, resolving icons by path out
+// of `NAV_PRESENTATION`. The one way a tabbed page or section builds its tab bar.
+//
 // `server/lib/navManifest.js` is the single registry of navigable destinations,
 // so a tabbed page must not restate its tab ids, labels or order in a local
 // array — that second list drifts, and a tab that exists only there is

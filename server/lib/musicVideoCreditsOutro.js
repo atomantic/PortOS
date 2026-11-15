@@ -1,13 +1,18 @@
 /**
- * Music Video — the credits ending: an optional film-style credits page after
- * the song (and after the cutting room floor, when that is on too). It names
- * the song and who performed it, then a list of credit lines (role over name:
- * Directed by, Music by, Produced by, …) and an optional closing line, in
- * white serif and spaced capitals on black. In the `roll` layout the block
- * fades in and holds when it fits the frame and rolls up like a film's end
- * credits when it is taller; in the `grid` layout everything shows on one
- * fixed frame, the credits laid out in columns and sized to fit. One record on the project (`project.creditsOutro`,
- * null = never set up) turns it on and holds every line exactly as edited.
+ * Music Video — the credits ending: an optional film-style credits page after the song (and after the
+ * cutting room floor, when that is on too).
+ *
+ * The film credits ending after the song: `normalizeCreditsOutro`, `creditsOutroSeconds`,
+ * `creditsOutroPrefill` (song, artist, Directed/Music/Produced by and album from the project, its
+ * track and the track's artist) and `drawCreditsOutro` (the one canvas painter: a held card, or a roll
+ * when it is taller than the frame). Browser-safe.
+ *
+ * It names the song and who performed it, then a list of credit lines (role over name: Directed by,
+ * Music by, Produced by, …) and an optional closing line, in white serif and spaced capitals on black.
+ * In the `roll` layout the block fades in and holds when it fits the frame and rolls up like a film's
+ * end credits when it is taller; in the `grid` layout everything shows on one fixed frame, the credits
+ * laid out in columns and sized to fit. One record on the project (`project.creditsOutro`, null =
+ * never set up) turns it on and holds every line exactly as edited.
  *
  * `creditsOutroPrefill` fills a new record from the project, its track, the
  * track's artist (Create › Music › Artists: the "Name for credits", else the

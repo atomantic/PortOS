@@ -1,3 +1,8 @@
+/**
+ * `healthPointOrigin` and `healthPointKey`: legacy-aware importer/source identity shared by health
+ * ingestion and daily source selection.
+ */
+
 /** Legacy XML points carry src (including null); legacy HAE points do not. */
 export function healthPointOrigin(point) {
   return point.origin ?? (Object.prototype.hasOwnProperty.call(point, 'src') ? 'xml' : 'hae');

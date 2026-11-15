@@ -1,6 +1,13 @@
 // Per-endpoint cap and in-flight slot tracking for concurrent local-LLM work.
-// Own dependency-free leaf so CoS slot accounting and the managed-daemon idle
-// reaper can read it without loading the prompt runner's import graph.
+//
+// `LOCAL_LLM_MAX_CONCURRENCY` plus the per-endpoint local-LLM slot gate (`acquireLocalSlot`,
+// `releaseLocalSlot`), in-flight activity predicate (`isLocalEndpointBusy`), scheme-optional port
+// match (`localEndpointsSharePort`), and settle observer (`onLocalEndpointSettled`) — a
+// dependency-free leaf so `cosLocalEndpointSlots.js` and `managedDaemon.js` avoid importing
+// `promptRunner.js`.
+//
+// Own dependency-free leaf so CoS slot accounting and the managed-daemon idle reaper can read it
+// without loading the prompt runner's import graph.
 export const LOCAL_LLM_MAX_CONCURRENCY = Math.max(1, Number(process.env.LOCAL_LLM_MAX_CONCURRENCY) || 1);
 
 const localEndpointGates = new Map(); // endpoint -> { active: number, queue: (()=>void)[] }

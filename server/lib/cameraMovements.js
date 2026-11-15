@@ -1,4 +1,13 @@
 /**
+ * Shared camera-movement vocabulary `CAMERA_MOVEMENTS` with normalizers (`normalizeCameraMovement`,
+ * `cameraMovementId`) and four-part movement prose for storyboards and i2v prompts.
+ *
+ * Shared camera-movement vocabulary (#10589): `CAMERA_MOVEMENTS` (stable ids with `family`, `energy`,
+ * `snap`/`still` flags, start/end framing and the four-part movement/speed/framing/end prose),
+ * `normalizeCameraMovement`/`cameraMovementId`/`cameraMovementFromText`, `shotCameraPrompt(camera)`
+ * (the four-part i2v camera block for a structured shot camera) and `cameraMovementCatalogForPrompt`.
+ * Used by FableLoom, Music Video planning/review and the layered template's `cameraRig.js`.
+ *
  * Shared camera-movement vocabulary (#10589) — FableLoom's cut direction, the
  * Music Video storyboard's structured `camera` field, the four-part i2v camera
  * block, and the layered document template's camera rig all key off these ids.

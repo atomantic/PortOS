@@ -1,3 +1,11 @@
+/**
+ * Shared socket instance.
+ *
+ * The caller re-renders on connect/disconnect. `useSocketConnected` (same file) returns the live
+ * connected flag as a boolean. Use when: You need to subscribe to a socket event, or show connection
+ * state (`components/SocketReconnectingPill.jsx`).
+ */
+
 import { useEffect, useState } from 'react';
 import socket from '../services/socket';
 

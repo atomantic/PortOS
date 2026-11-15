@@ -1,5 +1,8 @@
 // Path-segment guards for pipeline snapshots. Keep the historical safe charset:
 // these assertions do not require the stricter ser-/iss- prefixes used on import.
+//
+// Shared `assertValidSeriesId` / `assertValidIssueId` path-segment guards for pipeline snapshots,
+// preserving the safe charset and domain-specific errors.
 const SAFE_ID = /^[a-zA-Z0-9_-]+$/;
 
 export function assertValidSeriesId(id) {

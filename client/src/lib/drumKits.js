@@ -1,5 +1,20 @@
 // Synthesized drum-kit voice recipes for the SongBook play-along (#3115).
 //
+// The three selectable synth kits for the SongBook drum play-along — `DRUM_KIT_LIST` (the one ordered
+// source of truth, first entry = default; the picker renders it directly) plus the derived `DRUM_KITS`
+// / `DRUM_KIT_IDS` / `DEFAULT_DRUM_KIT` (`909` punchy, `808` deep-sub, `acoustic`),
+// `resolveDrumKit(id)` (unknown/stale id → the default, never silence), `kitVoiceLayers(kit, sound)`
+// (unmapped piece → the snare, never silence) and the kit-independent `CLICK_VOICE`. Pure DATA: each
+// voice is a list of LAYERS — `tone` (`wave, from, to, pitchDecay, drive`), `noise` (`filter`), or
+// `metal` (N square `partials` summed into one filter+envelope) — that `drumPlayback.js` realizes in
+// Web Audio. Three properties carry the kit's punch and are easy to undo by accident: `pitchDecay` is
+// INDEPENDENT of the amplitude `decay` (a membrane snaps to its fundamental in ~30–60ms then holds
+// while the tail runs on — coupling the two is what made the original kick sound weak), `drive`
+// tanh-saturates a layer so a sub-50 Hz kick generates the harmonics a phone/laptop speaker can
+// actually reproduce, and a `metal` layer's high-pass cutoffs are far LOWER (and gains far higher)
+// than the noise voices beside them because a square's harmonics fall off 6 dB/octave — see the
+// calibration warning in the file before "harmonizing" those numbers.
+//
 // PortOS ships no drum samples (repo size + sample licensing), so the play-along
 // kit is synthesized. The original recipe was a generic "noise burst + sine
 // sweep" click-with-groove, and its kick read as weak: the pitch sweep ran across

@@ -1,3 +1,7 @@
+/**
+ * Shared Runway model catalog capabilities and cached model selection.
+ */
+
 import { useEffect, useSyncExternalStore } from 'react';
 import { getRunwayCatalogSnapshot, subscribeRunwayCatalog, loadRunwayCatalog } from '../services/apiRunwayCatalog.js';
 import { RUNWAY_IMAGE_MODELS } from '../lib/imageGenModes.js';

@@ -1,3 +1,8 @@
+/**
+ * `validateLaunchVideoAssets` checks frozen launch composition text, storyboard reading time,
+ * duration, and poster position before rendering.
+ */
+
 import { extname } from 'node:path';
 import { ServerError } from './errorHandler.js';
 import { PII_PATTERNS, redactPii } from './piiRedactionPatterns.js';

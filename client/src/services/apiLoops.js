@@ -1,3 +1,7 @@
+/**
+ * Scheduled loops.
+ */
+
 import { request } from './apiCore.js';
 
 // Loops

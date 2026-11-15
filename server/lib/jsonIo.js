@@ -1,4 +1,11 @@
-/** JSON, JSONL, and cached-store file IO helpers. */
+/**
+ *  JSON, JSONL, and cached-store file IO helpers.
+ *
+ * JSON/JSONL parsing and file IO, strict read sentinels, append/read/write helpers, and
+ * `createCachedStore` — a TTL-cached mutable JSON document with serialized `save`/`mutate`; its
+ * `load()` is strict (#4115) so a corrupt file rejects instead of being overwritten by the next
+ * `mutate`.
+ */
 import { open, readFile, readdir, stat } from 'fs/promises';
 import { basename, dirname } from 'path';
 import { appendFileGuarded, atomicWrite, ensureDir, sleep } from './fileCore.js';

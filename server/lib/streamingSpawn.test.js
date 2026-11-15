@@ -92,7 +92,7 @@ describe('runStreamingCommand — stream separation', () => {
   it('keeps stdout and stderr lines intact when partial chunks interleave', async () => {
     // One buffer shared by both streams splices a half-written stdout line into
     // the next stderr chunk: the caller sees `OUT-ERR-one` and loses both real
-    // lines. `server/lib/README.md` states the rule this pins — one line reader
+    // lines. The `server/lib/streamingSpawn.js` header states the rule this pins — one line reader
     // per stream.
     const lines = [];
     const result = await runStreamingCommand(

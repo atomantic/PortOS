@@ -1,3 +1,13 @@
+/**
+ * `readSyncCursorState(path, cursorKey)`: strict reader for iMessage/Signal/Spotify incremental cursor
+ * files; missing starts at 0, corrupt throws `UNREADABLE_STORE`.
+ *
+ * `readSyncCursorState(path, cursorKey)` strict reader for iMessage/Signal/Spotify incremental cursor
+ * files: missing file starts at 0, unreadable/corrupt/non-integer cursor throws `UNREADABLE_STORE`
+ * instead of rewinding; `readSyncCursorStateForStatus` returns a null-cursor state plus `stateError`
+ * for status endpoints.
+ */
+
 import { readJSONFileStrict, unreadableStoreError } from './jsonIo.js';
 
 /**

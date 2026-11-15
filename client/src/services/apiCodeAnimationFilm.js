@@ -1,3 +1,9 @@
+/**
+ * Standalone Production film projects: timeline/audio attachment and the shared film-panel transport.
+ *
+ * Exported as the `codeAnimationFilm` namespace to preserve the existing Music Video API names.
+ */
+
 import { request } from './apiCore.js';
 
 const blenderPath = (id) => `/code-animation/films/${encodeURIComponent(id)}/blender`;
