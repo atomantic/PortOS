@@ -27,12 +27,12 @@ const NotesTab = (await import('./NotesTab')).default;
 // jsdom has no layout engine and Tailwind is never compiled for the test run,
 // so touch-target size is asserted from the utility tokens the element renders
 // with rather than from measured geometry — the same approach as the repo-wide
-// guard in src/a11yConventions.test.js and Layout.test.jsx. Reverting
+// guard in src/a11y/*.conventions.test.js and Layout.test.jsx. Reverting
 // NotesTab.jsx to its pre-fix state fails every case in this file.
 //
 // Tailwind `min-h-`/`min-w-`/`h-`/`w-` token → px, for both the arbitrary value
 // (`min-h-[44px]`) and the spacing scale (`h-11` = 11 * 4px = 44px). Mirrors
-// `tokenPx` in src/a11yConventions.test.js.
+// `tokenPx` in src/test/a11yScanNames.js.
 const tokenPx = token => {
   const arb = token.match(/^(?:min-)?[hw]-\[(\d+(?:\.\d+)?)px\]$/);
   if (arb) return parseFloat(arb[1]);

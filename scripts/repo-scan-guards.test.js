@@ -57,7 +57,14 @@ const STRUCTURALLY_SELECTED = new Map([
   // structuralTestsFor() in ci-test-plan.js adds these whenever any
   // client/src/**.jsx (a11y) or .js/.jsx (mounted-ref) file changes, which is
   // the only way either can start failing.
-  ['client/src/a11yConventions.test.js', 'structuralTestsFor: client/src/**.jsx'],
+  ['client/src/a11y/controlNames.conventions.test.js', 'structuralTestsFor: client/src/**.jsx'],
+  ['client/src/a11y/dnd.conventions.test.js', 'structuralTestsFor: client/src/**.jsx'],
+  ['client/src/a11y/fileInputsToasts.conventions.test.js', 'structuralTestsFor: client/src/**.jsx'],
+  ['client/src/a11y/hitAreas.conventions.test.js', 'structuralTestsFor: client/src/**.jsx'],
+  ['client/src/a11y/landmarks.conventions.test.js', 'structuralTestsFor: client/src/**.jsx'],
+  ['client/src/a11y/overlays.conventions.test.js', 'structuralTestsFor: client/src/**.jsx'],
+  ['client/src/a11y/routeHeadings.conventions.test.js', 'structuralTestsFor: client/src/**.jsx'],
+  ['client/src/a11y/scanner.conventions.test.js', 'structuralTestsFor: client/src/**.jsx'],
   // Reads update.sh/update.ps1 and the lockfiles; behavioural, so it does not ride every push (#16086).
   ['scripts/ensure-deps.test.js', 'structuralTestsFor: ENSURE_DEPS_INPUTS'],
   ['client/src/apiWrapperOptionsConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],

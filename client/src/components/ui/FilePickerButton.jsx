@@ -20,7 +20,7 @@ const FOCUS_RING = 'peer-focus-visible:outline-none peer-focus-visible:ring-2 pe
  * accessibility tree (it is the labelled control) — do NOT hide a file input
  * with `className="hidden"` (`display: none` drops it from the tab order and
  * the a11y tree) or with `aria-hidden`/`tabIndex={-1}`. The visible label
- * carries the focus ring via `peer-focus-visible:`. `a11yConventions.test.js`
+ * carries the focus ring via `peer-focus-visible:`. `a11y/fileInputsToasts.conventions.test.js`
  * enforces this repo-wide.
  *
  * The input's value is cleared after every change — deferred until an async
