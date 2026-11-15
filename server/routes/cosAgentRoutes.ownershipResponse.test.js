@@ -8,7 +8,14 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 const fixture = vi.hoisted(() => ({ state: null, apiBase: '', unreadable: false, stateGate: null, onStateQueued: null }));
 vi.mock('../services/cosAgentArchive.js', () => ({}));
 vi.mock('../services/cosAgentFeedback.js', () => ({}));
-vi.mock('../services/cosAgentIndex.js', () => ({}));
+// Complete archived-record cache contract (always a miss) so the branch-completion policy lookup runs its normal path.
+vi.mock('../services/cosAgentIndex.js', () => ({
+  archivedRecordCacheEpoch: () => 0,
+  getCachedArchivedRecord: () => undefined,
+  cacheArchivedRecord: () => {},
+  pruneArchivedRecordCache: () => {},
+  invalidateArchivedRecord: () => {},
+}));
 vi.mock('../services/cosAgentLifecycle.js', () => ({}));
 vi.mock('../services/cosHealthMonitor.js', () => ({}));
 vi.mock('../services/agentOrchestrator.js', () => ({}));
