@@ -999,7 +999,7 @@ const REVIEWED_SCENE_FIELDS = ['sceneId', 'order', 'label', 'sectionIndex', 'sta
 const REVIEWED_SCENE_FIELD_SET = new Set(REVIEWED_SCENE_FIELDS);
 
 /** One shot as a reviewed revision stores it: the plan a reviewer saw, without takes or render bookkeeping. */
-export function reviewedSceneSnapshot(scene) {
+function reviewedSceneSnapshot(scene) {
   if (!scene || typeof scene !== 'object') return scene;
   return structuredClone(Object.fromEntries(REVIEWED_SCENE_FIELDS.filter(k => scene[k] !== undefined).map(k => [k, scene[k]])));
 }
@@ -1031,7 +1031,7 @@ function slimApprovalHistory(history) {
  * approval current before is current after. Returns the same object when there
  * is nothing to slim, so it is idempotent and cheap on every write.
  */
-export function slimProductionReview(review) {
+function slimProductionReview(review) {
   if (!review || typeof review !== 'object') return review;
   let revisions = review.reviewedRevisions;
   if (revisions && typeof revisions === 'object' && Object.values(revisions).some(r => Array.isArray(r?.scenes) && !r.scenes.every(sceneIsSlim))) {

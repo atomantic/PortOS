@@ -2,8 +2,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { approveProductionStage, productionAlignmentBasis, productionReadiness, recordProductionFeedback,
-  reviewedSceneSnapshot, slimProductionReview } from './productionReview.js';
+import { approveProductionStage, productionAlignmentBasis, productionReadiness, recordProductionFeedback } from './productionReview.js';
 import * as logic from './projectsLogic.js';
 import { createProjectFileStore } from '../projectFileStore.js';
 
@@ -55,8 +54,10 @@ function oldShape(project) {
 
 describe('reviewed revision snapshots (#16210)', () => {
   it('keeps the reviewed shot plan and drops takes and render bookkeeping', () => {
-    const scene = readyProject().scenes[0];
-    const slim = reviewedSceneSnapshot({ ...scene, camera: { move: 'push-in' }, direction: { emotion: 'calm' }, visualLayer: 'footage' });
+    const ready = readyProject();
+    ready.scenes[0] = { ...ready.scenes[0], camera: { move: 'push-in' }, direction: { emotion: 'calm' }, visualLayer: 'footage' };
+    const art = approve(ready, 'art');
+    const [slim] = art.productionReview.reviewedRevisions[productionReadiness(ready).basis.art].scenes;
     expect(slim).toEqual({ sceneId: 's1', order: 0, label: 'Verse', startSec: 0, endSec: 4, visualIntent: 'She looks up from the monitor',
       framePrompt: 'Medium shot, desk lamp', prompt: 'She looks up', shotSheet: { characters: ['Lead'] }, referenceImageId: 'img-1', videoHistoryId: 'vid-1',
       camera: { move: 'push-in' }, direction: { emotion: 'calm' }, visualLayer: 'footage' });
@@ -116,12 +117,12 @@ describe('slimming a review record written before #16210', () => {
     expect(history.filter(e => 'inputs' in e || 'values' in e).map(e => e.stage)).toEqual(['art', 'storyboard']);
     for (const [basis, revision] of Object.entries(slimmed.productionReview.reviewedRevisions)) {
       expect(revision.draft).toEqual(old.productionReview.reviewedRevisions[basis].draft);
-      expect(revision.scenes).toEqual(old.productionReview.reviewedRevisions[basis].scenes.map(reviewedSceneSnapshot));
+      expect(revision.scenes).toEqual(current.productionReview.reviewedRevisions[basis].scenes);
     }
   });
 
   it('passes through a record without a review untouched', () => {
-    expect(slimProductionReview(undefined)).toBeUndefined();
+    expect(logic.beforeSave({ id: 'p', productionReview: undefined }).productionReview).toBeUndefined();
     const bare = { id: 'p', scenes: [] };
     expect(logic.beforeSave(bare)).toBe(bare);
   });
