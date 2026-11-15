@@ -2484,7 +2484,7 @@ describe('durable completion replay', () => {
     const alreadyRepaired = Array.from({ length: 12 }, (_, index) => ({ ...settled, id: `repaired-${index}` }));
     readBranchCompletionPolicies.mockResolvedValue([...ineligible, receipt('write-failed'), receipt('settle-next'), ...alreadyRepaired, settled]);
     recordRepoStateVerification.mockRejectedValueOnce(new Error('fixture receipt write failed'));
-    expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 0 });
+    expect(await resumeDeferredRepoStateVerifications(async () => null)).toMatchObject({ checked: 0 });
     expect(recordRepoStateVerification.mock.calls).toEqual([
       ['write-failed', { status: 'completed' }], ['settle-next', { status: 'completed' }],
       ['settled-run-projection', { status: 'completed' }],
@@ -2509,7 +2509,7 @@ describe('durable completion replay', () => {
     if (scenario === 'registered') listWorktrees.mockResolvedValue([{ path, branch: 'some-other-branch' }]);
     if (scenario === 'ref-present') readLocalBranchPresence.mockResolvedValue(true);
     if (scenario === 'unreadable') readCheckoutPathPresence.mockResolvedValue(null);
-    expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 0 });
+    expect(await resumeDeferredRepoStateVerifications(async () => null)).toMatchObject({ checked: 0 });
     if (scenario === 'absent') expect(recordCleanupOutcome).toHaveBeenCalledWith('agent-1', {
       branch, path, status: 'verified', reason: 'released-selection-no-local-artifacts',
     });
@@ -2532,7 +2532,7 @@ describe('durable completion replay', () => {
     recordCleanupOutcome.mockRejectedValueOnce(new Error('fixture ledger write failed'));
     getTaskById.mockResolvedValue(task());
     findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: 'MERGED', url: 'https://github.com/example/repo/pull/7' });
-    expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 1 });
+    expect(await resumeDeferredRepoStateVerifications(async () => null)).toMatchObject({ checked: 1 });
     expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'completed' }));
     expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('Released-selection ledger repair deferred'));
     expect(addTask).not.toHaveBeenCalled();
@@ -2631,8 +2631,21 @@ describe('durable completion replay', () => {
       completionCleanup: { version: 1, status: 'completed', stages: Object.fromEntries(
         ['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report', 'worktree'].map(key => [key, { status: 'done' }])) } } });
     readBranchCompletionPolicies.mockResolvedValue(Array.from({ length: 12 }, (_, index) => receipt(`receipt-${index}`)));
-    await sweepRepoStateVerifications();
+    await resumeDeferredRepoStateVerifications(async () => null);
     expect(recordRepoStateVerification).toHaveBeenCalledTimes(10);
+  });
+
+  it('runs the legacy-record repairs on the startup wake only, not on the periodic sweep', async () => {
+    const legacy = { id: 'legacy-1', status: 'completed', result: { success: true }, metadata: {} };
+    readBranchCompletionPolicies.mockResolvedValue([legacy]);
+    const recovery = await import('./deliveryRecovery.js');
+    const recover = vi.spyOn(recovery, 'recoverLegacyDeliveryBlocks').mockResolvedValue(undefined);
+    try {
+      await sweepRepoStateVerifications();
+      expect(recover).not.toHaveBeenCalled();
+      await resumeDeferredRepoStateVerifications(async () => null);
+      expect(recover).toHaveBeenCalledTimes(1);
+    } finally { recover.mockRestore(); }
   });
 
   it('skips a backed-off audit on recheck unless a claim owner holds it', async () => {

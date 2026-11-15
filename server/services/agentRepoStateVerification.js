@@ -899,7 +899,7 @@ export function resumeDeferredRepoStateVerifications(blocked) {
       while (true) {
         const reason = await blocked();
         if (reason) return { checked, pendingAtStart, skipReason: reason };
-        const result = await resumeCompletionAudits({ onlyAgentIds: remaining, skipPrelude: remaining !== undefined, recheckClaimHolds: true });
+        const result = await resumeCompletionAudits({ onlyAgentIds: remaining, skipPrelude: remaining !== undefined, recheckClaimHolds: true, legacyRepairs: true });
         if (!remaining) {
           pendingAtStart = result.pendingAtStart;
           remaining = new Set(result.pendingAgentIds);
@@ -1058,19 +1058,22 @@ async function resumeVerifiedFollowUpParents(agents) {
   for (const task of followUps) await resumeCompletedDeliveryParent(task);
 }
 
-async function runCompletionAuditPrelude(agents) {
+// legacyRepairs: repairs for records written by older versions. Upgraded
+// installs need them once per start, so only the startup/resume wake runs them.
+async function runCompletionAuditPrelude(agents, { legacyRepairs }) {
   const { recoverReleaseSynchronizationHandoffs } = await import('./releaseSynchronization.js');
   await recoverReleaseSynchronizationHandoffs(agents).catch(error => {
     emitLog('warn', `Release synchronization handoffs retained: ${error.code || 'outbox-unavailable'}`);
   });
-  await reconcileReleasedSelectionHistory(agents);
+  if (legacyRepairs) await reconcileReleasedSelectionHistory(agents);
   await replayPendingCheckoutRetirements(agents);
-  await replayDeferredDeliverySettlements(agents);
+  if (legacyRepairs) await replayDeferredDeliverySettlements(agents);
   await replaySwarmCleanupContinuations(agents);
   await acknowledgeIssuedSwarmRefills(agents);
   await resumeVerifiedFollowUpParents(agents);
   const { reconcileCleanupThreads } = await import('./brainTaskThreads.js');
   await reconcileCleanupThreads({ dryRun: false }).catch(error => emitLog('warn', `Cleanup thread reconciliation deferred: ${error.message}`));
+  if (!legacyRepairs) return;
   const { recoverLegacyDeliveryBlocks } = await import('./deliveryRecovery.js');
   await recoverLegacyDeliveryBlocks(agents);
 }
@@ -1154,11 +1157,11 @@ async function resumePendingCompletionAudit(original, getTaskById) {
   return true;
 }
 
-async function resumeCompletionAudits({ onlyAgentIds, skipPrelude = false, recheckClaimHolds = false } = {}) {
+async function resumeCompletionAudits({ onlyAgentIds, skipPrelude = false, recheckClaimHolds = false, legacyRepairs = false } = {}) {
   const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
   const { getTaskById } = await import('./cosTaskStore.js');
   const agents = await readBranchCompletionPolicies({ repairIndex: false });
-  if (!skipPrelude) await runCompletionAuditPrelude(agents);
+  if (!skipPrelude) await runCompletionAuditPrelude(agents, { legacyRepairs });
   const pending = selectPendingCompletionAudits(agents, { onlyAgentIds, recheckClaimHolds });
   let checked = 0;
   const selected = pending.slice(0, COMPLETION_RECOVERY_BATCH_SIZE);

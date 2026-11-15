@@ -22,7 +22,7 @@ import { atomicWrite, ensureDir, readFileTail, safeJSONParse, tryReadFile } from
 import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
-import { loadAgentIndex, saveAgentIndex, getAgentDir, recordArchivedAgentOrder, moveAgentDir } from './cosAgentIndex.js';
+import { loadAgentIndex, saveAgentIndex, getAgentDir, recordArchivedAgentOrder, moveAgentDir, invalidateArchivedRecord } from './cosAgentIndex.js';
 import { hasClaimCheckoutBindings, hasReleaseCandidateBinding } from './completedCheckoutEvidence.js';
 import { isAgentHandoff } from '../lib/agentOutcome.js';
 import { collectProtectedCleanupOwners } from '../lib/taskRetryHold.js';
@@ -260,6 +260,7 @@ export async function updateAgent(agentId, updates) {
       const { output: _output, ...metadata } = updatedAgent;
       const dateStr = updatedAgent.completedAt.slice(0, 10);
       await atomicWrite(join(getAgentDir(agentId, dateStr), 'metadata.json'), metadata);
+      invalidateArchivedRecord(agentId);
     }
 
     cosEvents.emit('agent:updated', updatedAgent);
@@ -533,6 +534,7 @@ async function updateCompletionReceipt(agentId, update, { preserveResult = false
     if (date && (!state.agents[agentId] || await tryReadFile(join(getAgentDir(agentId, date), 'metadata.json')))) {
       const { output: _output, ...record } = updated;
       await atomicWrite(join(getAgentDir(agentId, date), 'metadata.json'), record);
+      invalidateArchivedRecord(agentId);
     }
     if (state.agents[agentId]) { state.agents[agentId] = updated; await saveState(state, { changedAgentIds: [agentId] }); }
     cosEvents.emit('agent:updated', updated);

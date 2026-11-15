@@ -16,6 +16,13 @@ const held = 'pr-completion-human-handoff';
 const unavailable = 'pr-completion-policy-unavailable';
 
 const unavailableBecause = cause => new Error(unavailable, { cause });
+// An unparsable record cannot say which branch it governs, so it still holds
+// every branch; naming it keeps one bad record diagnosable (#11848).
+const unreadableRecord = (id, error) => {
+  const message = `archived agent record ${id} is unreadable: ${error.message}`;
+  console.error(`❌ ${message}`);
+  return unavailableBecause(Object.assign(new Error(message), { code: error.code }));
+};
 
 /** Read once per gather, freshly again at mutation. Missing old policy fields
  * are unknown history, not invented leave-open instructions. Corrupt records
@@ -49,22 +56,32 @@ async function readPolicies(repairIndex) {
   });
   const index = JSON.parse(raw);
   if (!isPlainObject(index)) throw unavailableBecause(new Error('agent index is not an object'));
+  const { archivedRecordCacheEpoch, cacheArchivedRecord, getCachedArchivedRecord, pruneArchivedRecordCache } = await import('./cosAgentIndex.js');
+  pruneArchivedRecordCache(new Set(Object.keys(index)));
   const entries = Object.entries(index).filter(([id]) => !agents.has(id));
   const dangling = [];
   // Bounded parallelism; never read transcripts or archive records here.
+  // Parsed records are memoized across reads (cosAgentIndex.js); archive writers invalidate them.
   for (let offset = 0; offset < entries.length; offset += 50) {
     await Promise.all(entries.slice(offset, offset + 50).map(async ([id, date]) => {
       if (!/^[A-Za-z0-9_-]+$/.test(id) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw unavailableBecause(new Error('agent index has a malformed row'));
+      const cached = getCachedArchivedRecord(id, date);
+      if (cached) {
+        if (cached.agent) agents.set(id, cached.agent); else dangling.push(id);
+        return;
+      }
+      const epoch = archivedRecordCacheEpoch();
       const recordDir = join(dir, date, id);
       const content = await readFile(join(recordDir, 'metadata.json'), 'utf8').catch(async error => {
         // A row with no record directory at all is a legacy dangling pointer,
         // not a record that exists but cannot be trusted: it holds no policy.
         if (error.code === 'ENOENT' && await stat(recordDir).then(() => false, missing => missing.code === 'ENOENT')) return null;
-        throw error;
+        throw unreadableRecord(id, error);
       });
-      if (content === null) { dangling.push(id); return; }
-      const agent = JSON.parse(content);
-      if (!isPlainObject(agent) || (agent.id || agent.agentId) !== id) throw unavailableBecause(new Error('archived agent record id mismatch'));
+      if (content === null) { dangling.push(id); cacheArchivedRecord(id, date, null, epoch); return; }
+      const agent = (() => { try { return JSON.parse(content); } catch (error) { throw unreadableRecord(id, error); } })();
+      if (!isPlainObject(agent) || (agent.id || agent.agentId) !== id) throw unavailableBecause(new Error(`archived agent record ${id} id mismatch`));
+      cacheArchivedRecord(id, date, agent, epoch);
       agents.set(id, agent);
     }));
   }

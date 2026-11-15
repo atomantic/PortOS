@@ -39,7 +39,10 @@ vi.mock('./github.js', () => ({
 vi.mock('./cosTaskStore.js', () => ({ addTask: async task => ({ ...parseTasksMarkdown(generateTasksMarkdown([task]))[0], taskType: 'internal' }), updateTask: vi.fn() }));
 vi.mock('./cos.js', () => ({ forceSpawnTask: vi.fn() }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
-vi.mock('./cosAgentIndex.js', () => ({ removeDanglingAgentIndexEntries: vi.fn(async ids => ids.length) }));
+vi.mock('./cosAgentIndex.js', () => ({
+  removeDanglingAgentIndexEntries: vi.fn(async ids => ids.length),
+  archivedRecordCacheEpoch: () => 0, getCachedArchivedRecord: () => null, cacheArchivedRecord: () => {}, pruneArchivedRecordCache: () => {},
+}));
 vi.mock('./git.js', () => ({ parsePullRequestUrl, getBranches: async () => [{ name: 'feature/handoff', tracking: 'origin/feature/handoff' }], getDefaultBranch: async () => 'main', hasBranchMergeEvidence: async () => runtime.merged }));
 vi.mock('./worktreeManager.js', () => ({ listWorktrees: async () => [], classifyWorktreeDirt: () => ({ hasRealChanges: false, realChangePaths: [] }) }));
 
