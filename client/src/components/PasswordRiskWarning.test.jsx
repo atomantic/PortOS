@@ -17,6 +17,7 @@ const renderWarning = () => render(<MemoryRouter><PasswordRiskWarning /><Link to
 beforeEach(() => {
   vi.resetAllMocks();
   localStorage.clear();
+  sessionStorage.clear();
   getAuthStatus.mockResolvedValue({ enabled: false });
   getPasswordRiskStatus.mockResolvedValue({ enabled: false, revision: 'initial' });
 });
@@ -95,7 +96,9 @@ describe('password risk warning', () => {
   it('persists check-error dismissal across focus, navigation and remount without accepting known risk', async () => {
     getPasswordRiskStatus.mockResolvedValue({ unexpected: true });
     renderWarning();
-    fireEvent.click(await screen.findByRole('button', { name: 'Dismiss and don’t show again' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Dismiss' }));
+    expect(sessionStorage.getItem('portos-password-check-dismissed-v1')).toBe('true');
     fireEvent(window, new Event('focus'));
     await waitFor(() => expect(getAuthStatus).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole('link', { name: 'Apps' }));
@@ -114,6 +117,8 @@ describe('password risk warning', () => {
     getPasswordRiskStatus.mockRejectedValueOnce(new Error('offline'));
     renderWarning();
     expect(await screen.findByRole('alert')).toHaveTextContent('could not confirm');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Security settings' })).toHaveAttribute('href', '/settings/security');
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('checkbox')).toBeInTheDocument();
