@@ -271,6 +271,7 @@ describe('AppDetailView fetch lifecycle', () => {
     await act(async () => socketHandlers.get('apps:changed')({ appId: APP.id }));
     fireEvent.click(screen.getByRole('button', { name: 'View second app' }));
     expect(screen.queryByTestId('overview-app')).toBeNull();
+    await act(async () => {});
     await act(async () => resolveNew({ ...APP, id: 'app-2', name: 'Second App' }));
     expect(screen.getByTestId('overview-app')).toHaveTextContent('app-2');
     await act(async () => resolveOld(APP));
@@ -283,6 +284,8 @@ describe('AppDetailView fetch lifecycle', () => {
     api.getApp.mockImplementationOnce(() => new Promise((_, reject) => { rejectOld = reject; }))
       .mockResolvedValueOnce({ ...APP, id: 'app-2', name: 'Second App' });
     renderDetail();
+    // The read starts on a microtask; let the first route's request go out before navigating away.
+    await act(async () => {});
     fireEvent.click(screen.getByRole('button', { name: 'View second app' }));
     await screen.findByRole('heading', { name: 'Second App' });
     await act(async () => rejectOld(new Error('Old request failed')));
@@ -296,7 +299,7 @@ describe('AppDetailView fetch lifecycle', () => {
     expect(screen.getByRole('heading', { name: 'Recovered App' })).toBeInTheDocument();
   });
 
-  it('filters other-app events, preserves fleet invalidation, and keeps the newest refresh', async () => {
+  it('filters other-app events, preserves fleet invalidation, and coalesces to the newest refresh', async () => {
     let resolveOlder;
     api.getApp.mockResolvedValueOnce(APP)
       .mockImplementationOnce(() => new Promise(resolve => { resolveOlder = resolve; }))
@@ -310,9 +313,13 @@ describe('AppDetailView fetch lifecycle', () => {
     });
     expect(api.getApp).toHaveBeenCalledTimes(1);
     await act(async () => changed({ action: 'update', appId: APP.id }));
+    expect(api.getApp).toHaveBeenCalledTimes(2);
+    // Events during an in-flight read coalesce into one trailing read; the
+    // superseded older result never lands.
     await act(async () => changed({ action: 'update-task-types' }));
-    expect(api.getApp).toHaveBeenCalledTimes(3);
+    expect(api.getApp).toHaveBeenCalledTimes(2);
     await act(async () => resolveOlder(APP));
+    expect(api.getApp).toHaveBeenCalledTimes(3);
     expect(screen.getByRole('heading', { name: 'Updated App' })).toBeInTheDocument();
     api.getApp.mockResolvedValueOnce(APP);
     await act(async () => changed());

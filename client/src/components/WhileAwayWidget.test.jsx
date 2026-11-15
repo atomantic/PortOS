@@ -1,5 +1,5 @@
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockGetCosWhileAwayActivity, mockSocket } = vi.hoisted(() => ({
@@ -57,5 +57,31 @@ describe('WhileAwayWidget run links', () => {
 
     fireEvent.click(firstRun);
     expect(await screen.findByTestId('current-path')).toHaveTextContent('/cos/agents/run%2Fone');
+  });
+});
+
+describe('WhileAwayWidget live reads', () => {
+  const renderWidget = () => render(<MemoryRouter><WhileAwayWidget /></MemoryRouter>);
+
+  it('re-reads activity when an agent run completes', async () => {
+    renderWidget();
+    expect(await screen.findByText('3 agent runs since', { exact: false })).toBeInTheDocument();
+
+    mockGetCosWhileAwayActivity.mockResolvedValueOnce({ ...activity, stats: { ...activity.stats, completed: 4 } });
+    const [, onCompleted] = mockSocket.on.mock.calls.find(([event]) => event === 'cos:agent:completed');
+    await act(async () => { onCompleted({ id: 'run-new' }); });
+
+    expect(await screen.findByText('4 agent runs since', { exact: false })).toBeInTheDocument();
+  });
+
+  it('shows an error with retry, not an empty card, when the read fails', async () => {
+    mockGetCosWhileAwayActivity.mockRejectedValueOnce(new Error('503'));
+    renderWidget();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load recent agent activity');
+    expect(screen.queryByText('No agent activity while you were away.')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('3 agent runs since', { exact: false })).toBeInTheDocument();
   });
 });
