@@ -85,17 +85,20 @@ export function staticImportSpecifiers(file) {
  * these guards assert a negative ("nothing here reaches sharp"), so a resolver
  * gap must not be able to make the walk *look* clean. Pair every such guard
  * with a positive control that pins a known-reaching entry point.
+ *
+ * `specifiers(file)` and `exists(path)` default to a fresh disk read per call; a
+ * suite walking many entries over an unchanging tree passes memoized ones.
  */
-export function staticImportClosure(entry) {
+export function staticImportClosure(entry, { specifiers = staticImportSpecifiers, exists = existsSync } = {}) {
   const files = new Set();
   const packages = new Set();
   const walk = (file) => {
     if (files.has(file)) return;
     files.add(file);
-    for (const spec of staticImportSpecifiers(file)) {
+    for (const spec of specifiers(file)) {
       if (!spec.startsWith('.')) { packages.add(spec); continue; }
       const next = resolve(dirname(file), spec);
-      if (existsSync(next)) walk(next);
+      if (exists(next)) walk(next);
     }
   };
   walk(entry);

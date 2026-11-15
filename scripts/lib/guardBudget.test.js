@@ -3,23 +3,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { getAlwaysRunTests } from '../ci-test-plan.js';
-import { GUARD_BUDGET_MS, hostTooBusyForBudget, OVER_BUDGET_CEILINGS_MS, overBudgetGuards, readGuardDurations } from './guardBudget.js';
+import { GUARD_BUDGET_MS, hostTooBusyForBudget, overBudgetGuards, readGuardDurations } from './guardBudget.js';
 
 describe('guard budget', () => {
-  it('names each guard over budget, slowest first, and holds known-slow ones at their ceiling', () => {
-    const slowKnown = 'server/deadExports.test.js';
+  it('names each guard over budget, slowest first', () => {
     const over = overBudgetGuards({
       'docs/api-doc.test.js': GUARD_BUDGET_MS,
       'scripts/new-scanner.test.js': GUARD_BUDGET_MS + 1,
-      [slowKnown]: OVER_BUDGET_CEILINGS_MS[slowKnown] - 1,
-      'server/logLevelConventions.test.js': OVER_BUDGET_CEILINGS_MS['server/logLevelConventions.test.js'] + 500,
+      'server/slow-scanner.test.js': GUARD_BUDGET_MS + 500,
     });
-    expect(over.map(({ file }) => file)).toEqual(['server/logLevelConventions.test.js', 'scripts/new-scanner.test.js']);
+    expect(over.map(({ file }) => file)).toEqual(['server/slow-scanner.test.js', 'scripts/new-scanner.test.js']);
   });
 
-  it('keeps ensure-deps out of the always-run list and only ceilings real always-run guards', () => {
+  it('keeps ensure-deps out of the always-run list', () => {
     expect(getAlwaysRunTests()).not.toContain('scripts/ensure-deps.test.js');
-    for (const file of Object.keys(OVER_BUDGET_CEILINGS_MS)) expect(getAlwaysRunTests(), file).toContain(file);
   });
 
   it('skips enforcement only while load exceeds the core count', () => {

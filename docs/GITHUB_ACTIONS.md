@@ -241,9 +241,9 @@ Successful guards are reused within this invocation only when the working tree,
 index, HEAD and refs remain unchanged; otherwise the broad runner executes them
 again. The receipt records guard outcomes, reuse proofs and per-file guard
 durations (`fileDurations`). A guard file over 3s fails the stage by name
-(`scripts/lib/guardBudget.js`; five known-slow scanners are held at a ceiling
-until sped up, and enforcement is skipped while host load exceeds the core
-count, since Vitest wall time is then meaningless). `scripts/ensure-deps.test.js`
+(`scripts/lib/guardBudget.js`; there are no per-file exceptions, and enforcement
+is skipped while host load exceeds the core count, since Vitest wall time is
+then meaningless). `scripts/ensure-deps.test.js`
 is not always-run: it is selected by changes to `ensure-deps.js`, `update.sh`,
 `update.ps1` and the lockfiles. Persistent test
 memo rules, required stages and worker caps remain the same. Downgraded full

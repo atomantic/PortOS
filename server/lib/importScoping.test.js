@@ -25,10 +25,10 @@
  */
 
 import { beforeAll, describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { dirname, join, posix, relative, sep } from 'path';
 import { fileURLToPath } from 'url';
-import { staticImportClosure } from './staticImportGraph.js';
+import { staticImportClosure as walkImportClosure, staticImportSpecifiers } from './staticImportGraph.js';
 import {
   evaluateWorkingTreeImportGrowth,
   formatImportGrowthReport,
@@ -38,6 +38,18 @@ import {
 import { importSpecifiersFromSource } from '../../scripts/lib/importReach.js';
 
 const SERVER_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
+
+// The tree is read-only here, so every closure below shares one read and one
+// existence probe per file instead of repeating them for each entry.
+const memoize = (fn) => {
+  const cache = new Map();
+  return (key) => {
+    if (!cache.has(key)) cache.set(key, fn(key));
+    return cache.get(key);
+  };
+};
+const closureIo = { specifiers: memoize(staticImportSpecifiers), exists: memoize(existsSync) };
+const staticImportClosure = (entry) => walkImportClosure(entry, closureIo);
 
 // Server-relative POSIX paths, so a failure names `lib/db.js` rather than the
 // absolute path of whoever's checkout is running the suite.
