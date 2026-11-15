@@ -40,7 +40,7 @@ regex==2026.11.7
 
 # Coordinated model transport and tokenizer pins.
 tokenizers==0.23.3
-typer==0.27.3
+typer==0.28.0
 hf-xet==1.6.0
 networkx==3.7
 glcontext==3.1.0

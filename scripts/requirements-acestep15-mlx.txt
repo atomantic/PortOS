@@ -6,14 +6,14 @@
 # ACE-Step 1.5 is cloned from ace-step/ACE-Step-1.5 at ACESTEP15_PIN and installed with
 # `pip install --no-deps --no-build-isolation --ignore-requires-python ~/.portos/acestep15` after the lock
 # is installed. Dependencies match the foundation music generation stack with
-# OSV-clean pins (torch 2.15.0, transformers 5.22.1, diffusers 0.42.1,
+# OSV-clean pins (torch 2.15.0, transformers 5.22.2, diffusers 0.42.1,
 # accelerate 1.15.0, filelock >= 4.2.1, pillow 13.0.0; diskcache and unused gradio omitted).
 torch==2.15.0
 torchvision==0.29.2
 torchaudio==2.11.1
 accelerate==1.15.0
 diffusers==0.42.1
-transformers==5.22.1
+transformers==5.22.2
 huggingface-hub[hf_xet]==2.4.0
 sentencepiece==0.2.3
 peft==0.21.2

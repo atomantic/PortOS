@@ -3002,3 +3002,53 @@ Remaining under #16047: Transformers 5.22.2 in the other requested profiles,
 Typer 0.28.0 for Pixal/TRELLIS/H3, and Protobuf 7.36.2 for H3 MLX, each as its
 own slice. LTX CUDA's Transformers 5.14.1 and documented retained exceptions are
 unchanged.
+
+## Final #16047 slices: Transformers, Typer and Protobuf (2026-11-15)
+
+Three independent commits finish #16047. Each changes exactly one package block
+per lock; every companion version, marker and artifact hash is retained.
+
+- **Transformers 5.22.1 → 5.22.2** in the ACE-Step, ACE-Step 1.5, AudioLDM2,
+  FLUX.2 (MLX and CUDA source recipes), FLUX.3, FastVideo, MusicGen, MiniMax
+  H3 CUDA, MiniMax Music3 and Wan 2.2 CUDA source recipes and all 22 of their
+  locks, plus the recipe-pinned Wan 2.2 MLX, LTX 2.3/2.5 MLX, mflux,
+  mflux-video and AuK MLX locks (`docs/MLX_VIDEO_LOCKS.md` helper pin updated).
+- **Typer 0.27.3 → 0.28.0** for MiniMax H3 MLX, Pixal3D and TRELLIS.2 Metal.
+- **Protobuf 7.35.1 → 7.36.2** for MiniMax H3 MLX.
+
+Compatibility evidence:
+
+- Fresh PyPI metadata shows identical `Requires-Dist` (outside extras) and
+  `Requires-Python` for each old/new pair, so no companion pin can change.
+  Every pinned package's declared constraint on Transformers (47 across the
+  source-recipe locks, 18 across the recipe-pinned MLX and CUDA 3D locks), Typer (3)
+  and Protobuf (10) accepts the new version; the only exception is
+  `datasets`' unused `benchmarks` extra.
+- The SHA-256-verified 5.22.1 and 5.22.2 wheels differ only in version
+  initialization, the dependency table, distributed device binding and
+  chat-template sandboxing. The new chat-template floor (Jinja2 3.1.6) is
+  already the pin in every changed lock. Typer 0.28.0's only runtime change is
+  a metavar/default option-name fix; Protobuf stays within its 7.x runtime.
+- Constrained to their own pins, `uv pip compile` with each header's
+  platform, interpreter and wheel-only flags (cutoff 2026-11-07T00:00:00Z)
+  reproduces the identical identity set for the eight universal and
+  platform-specific MLX source recipes, Pixal3D, TRELLIS.2 and H3 MLX. The CUDA
+  locks were not re-resolved: their PyTorch CUDA index was unreachable from
+  the regenerating host, so they rely on the metadata evidence above.
+- Each new block lists the new release's equivalent of every previously
+  retained artifact kind (2 for Transformers and Typer, 8 for Protobuf); every
+  hash is a non-yanked file uploaded before the cutoff. No hash is composed by
+  hand.
+- The full OSV PyPI export (26,924 records, including 12,053 `MAL-` records)
+  returned **zero findings across 305 distinct identities** in the 31 changed
+  locks. The OSV API was unreachable, so the export was evaluated locally.
+- Focused installer, adapter and lock-profile suites pass (19 files, 886 tests).
+
+No native installation, model inference or Windows/Linux execution was run
+for these slices.
+
+Retained: Pixal3D CUDA and TRELLIS.2 CUDA keep Transformers 5.22.1 because
+their immutable profile identities (`scripts/*-cuda-profile.json`, registry
+cutoff 2026-11-04) and setup assertion pin it. Moving them is a new profile
+revision with CUDA validation, not part of this refresh. LTX CUDA's
+Transformers 5.14.1 and the other documented exceptions are unchanged.

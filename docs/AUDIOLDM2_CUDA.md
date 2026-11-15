@@ -17,7 +17,7 @@ libraries, has an exact version and SHA-256 hashes. Repair removes packages
 outside the lock. No pip/bootstrap upgrades run on this path.
 
 The stack uses torch 2.14.1+cu126 (the build the other cu126 runtimes share),
-diffusers 0.42.1, transformers 5.22.1, huggingface-hub 2.4.0 with hf-xet,
+diffusers 0.42.1, transformers 5.22.2, huggingface-hub 2.4.0 with hf-xet,
 sentencepiece 0.2.3, accelerate 1.15.0, numpy 2.4.6 and scipy 1.17.1, matching
 the Apple Silicon lock's direct pins. The CUDA torch build also runs on a host
 without an NVIDIA GPU, so AudioLDM2 keeps its CPU fallback; the readiness probe

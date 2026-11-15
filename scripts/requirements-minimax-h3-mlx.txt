@@ -45,7 +45,7 @@ opencv-python==5.0.0.93
 opentelemetry-api==1.45.2
 packaging==26.3
 pillow==13.0.0
-protobuf==7.35.1
+protobuf==7.36.2
 pycparser==3.12
 pydantic==2.14.3
 pydantic-core==2.50.4
@@ -65,7 +65,7 @@ tokenizers==0.23.3
 tqdm==4.70.1
 transformers==5.22.2
 truststore==0.10.5
-typer==0.27.3
+typer==0.28.0
 typing-extensions==4.16.0
 typing-inspection==0.4.5
 urllib3==2.8.0
