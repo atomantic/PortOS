@@ -383,12 +383,25 @@ function currentLinkedPickIds(project, ids, castMedia, linked) {
   }))];
 }
 
-/** The cast members whose media this scene's saved references need before they can resolve or render. */
+/**
+ * The cast members whose media this scene's saved references need before they can resolve or render:
+ * its look variant, plus (when it saved a catalog-linked pick) the linked subjects the shot names.
+ * A pick names its asset by hash only, so when the shot names no linked subject every linked member
+ * is needed to find the owner.
+ */
 export function musicVideoSceneCastIds(project, scene) {
   const variant = sceneCastVariant(scene);
   const picksLinked = [scene?.frameReferenceIds, scene?.clipReferenceIds]
     .some((ids) => Array.isArray(ids) && ids.some((id) => String(id).startsWith('mvr-linked-')));
-  return [...new Set([...(variant ? [variant.ingredientId] : []), ...(picksLinked ? musicVideoLinkedCastIds(project) : [])])];
+  let linked = [];
+  if (picksLinked) {
+    const all = musicVideoLinkedCastIds(project);
+    const named = new Set(sceneCatalogSubjectIds(project, scene));
+    const narrowed = activeMusicVideoSubjects(project?.concept)
+      .filter((subject) => named.has(subject.id) && all.includes(subject.ingredientId)).map((subject) => subject.ingredientId);
+    linked = narrowed.length ? narrowed : all;
+  }
+  return [...new Set([...(variant ? [variant.ingredientId] : []), ...linked])];
 }
 
 /**

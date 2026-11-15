@@ -62,6 +62,7 @@ import {
   catalogVideoSubjectSaveSchema,
   catalogVideoDescriptionRestoreSchema,
   REF_KINDS,
+  catalogBatchMediaQuerySchema,
 } from '../lib/catalogValidation.js';
 import { getActiveCatalogTypes, setUserCatalogTypes } from '../lib/catalogTypes.js';
 import { updateUserTypes } from '../services/catalogUserTypes/store.js';
@@ -335,6 +336,13 @@ router.patch('/ingredients/:id/lock', asyncHandler(async (req, res) => {
   await projectToCanon(updated.id, updated);
   catalogEvents.emit('primitive-changed', { ingredientId: updated.id });
   res.json(updated);
+}));
+
+// One request for the media of N ingredients ({ [id]: media[] }); registered before /:id so "media" is not read as an id.
+router.get('/ingredients/media', asyncHandler(async (req, res) => {
+  const { ids } = validateRequest(catalogBatchMediaQuerySchema, req.query);
+  const byId = await catalogDB.listMediaForIngredients(ids);
+  res.json(Object.fromEntries(ids.map((id) => [id, byId.get(id) ?? []])));
 }));
 
 router.get('/ingredients/:id', asyncHandler(async (req, res) => {

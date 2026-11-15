@@ -486,6 +486,12 @@ export const catalogMediaFromMoodBoardSchema = z.object({
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
   inferAge: z.boolean().optional(),
 }).strict();
+// ids=a,b,c — the batched media read a music-video board makes for its cast (#16076).
+export const catalogBatchMediaQuerySchema = z.object({
+  ids: z.string().trim().min(1).transform((v) => [...new Set(v.split(',').map((id) => id.trim()).filter(Boolean))])
+    .pipe(z.array(z.string().min(1).max(200)).min(1).max(100)),
+});
+
 export const catalogMediaLibraryQuerySchema = z.object({
   age: z.coerce.number().int().min(0).max(150).optional(),
   era: z.enum(['child', 'teen', 'adult', 'elder']).optional(),

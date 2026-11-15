@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import { addMusicVideoSceneTake, getMusicVideoSceneJobs, renderMusicVideoSceneClip, renderMusicVideoSceneFrame } from '../services/apiMusicVideo.js';
-import { listCatalogIngredientMedia } from '../services/apiCatalog.js';
+import { listCatalogIngredientsMedia } from '../services/apiCatalog.js';
 import { generateVideo } from '../services/apiImageVideo.js';
 import useMusicVideoGreyboxPlaces from './useMusicVideoGreyboxPlaces.js';
 import useSceneBatch from './useSceneBatch.js';
@@ -76,6 +76,8 @@ export const isOutsideReference = isOutsideMusicVideoReference;
  * fills an unselected slot — so a late render never replaces the frame or clip
  * the director chose.
  */
+const CAST_RELOAD_MIN_MS = 30_000;
+
 export default function useMusicVideoSceneMedia({ project, videoSettings, applyScenePatch, onReconciled } = {}) {
   const frameBatch = useSceneBatch();
   const videoBatch = useSceneBatch();
@@ -186,19 +188,27 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const [castMedia, setCastMedia] = useState({});
   const greyboxPlaces = useMusicVideoGreyboxPlaces(project);
   const [castRefresh, setCastRefresh] = useState(0);
-  useVisibilityEvent((state) => { if (state === 'visible') setCastRefresh((n) => n + 1); });
+  const castLoadedAt = useRef(0);
+  // Returning to the tab refetches only when the last load is stale; a failed-member retry forces one (reloadCastMedia).
+  useVisibilityEvent((state) => { if (state === 'visible' && Date.now() - castLoadedAt.current > CAST_RELOAD_MIN_MS) setCastRefresh((n) => n + 1); });
   useEffect(() => {
     if (!castIds) return undefined;
     let active = true;
-    Promise.all(castIds.split(',').map((id) => listCatalogIngredientMedia(id, { silent: true })
-      .then((media) => [id, Array.isArray(media) ? media : null], () => [id, null])))
-      // A failed reload keeps the media already loaded; only a never-loaded member is marked failed (null).
-      .then((entries) => { if (active) setCastMedia((prev) => Object.fromEntries(entries.map(([id, media]) => [id, media ?? prev[id] ?? null]))); });
+    const ids = castIds.split(',');
+    // One batched read for every cast member (#16076); a failed read marks only never-loaded members failed (null).
+    listCatalogIngredientsMedia(ids, { silent: true })
+      .catch(() => ({}))
+      .then((byId) => {
+        if (!active) return;
+        castLoadedAt.current = Date.now();
+        setCastMedia((prev) => Object.fromEntries(ids.map((id) => [id, (Array.isArray(byId?.[id]) ? byId[id] : null) ?? prev[id] ?? null])));
+      });
     return () => { active = false; };
   }, [castIds, castRefresh]);
   // Failed members return to "loading" while the retry is in flight, so a render waits instead of being told the read failed.
   const reloadCastMedia = () => {
     setCastMedia((prev) => Object.fromEntries(Object.entries(prev).map(([id, media]) => [id, media === null ? undefined : media])));
+    castLoadedAt.current = 0;
     setCastRefresh((n) => n + 1);
   };
   // A render before the shot's cast guides load, or after a failed read (null), would silently go out without them.

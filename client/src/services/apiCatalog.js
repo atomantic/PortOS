@@ -230,6 +230,10 @@ export const unlinkCatalogIngredientRelation = (id, body, options) =>
 export const listCatalogIngredientMedia = (id, options) =>
   request(`/catalog/ingredients/${enc(id)}/media`, options);
 
+/** Media for several ingredients in one request: `{ [ingredientId]: media[] }`. */
+export const listCatalogIngredientsMedia = (ids, options) =>
+  request(`/catalog/ingredients/media?ids=${enc([...ids].join(','))}`, options);
+
 export const attachCatalogIngredientMedia = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/media`, { method: 'POST', body: JSON.stringify(body), ...options });
 
