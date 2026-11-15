@@ -1,30 +1,25 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import express from 'express';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
-import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
+import { callRoute, expectAuthorizedWorkflows, expectRemoteRefusal, hostControlApp } from './hostControlTestHarness.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-// Real routes, schemas and authorization, with every runtime/store boundary
-// doubled: no package, process, provider, peer or live-state effects.
-const auth = vi.hoisted(() => ({
-  isAuthEnabled: vi.fn(),
-  verifyPassword: vi.fn(async () => true),
-  verifyRequestSession: vi.fn(async req => req.headers.authorization === 'Bearer example-session'),
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-runtime-authority-') }));
+afterAll(cleanupTempDataRoots);
+
+// Browser, harness and local-runtime writes are plain writes under the
+// default-deny gate (#16018, #8798); the principal matrix lives in
+// services/authGate.test.js. Real routes and schemas run with every
+// runtime/store boundary doubled.
+const auth = vi.hoisted(() => ({ enabled: false }));
+vi.mock('../services/auth.js', async (importOriginal) => ({
+  ...await importOriginal(), isAuthEnabled: vi.fn(async () => auth.enabled),
 }));
-vi.mock('../services/auth.js', () => auth);
 vi.mock('../services/settings.js', () => ({
   settingsEvents: new EventEmitter(),
   getSettings: vi.fn(async () => ({})),
   readSettingsStrict: vi.fn(async () => ({ settings: {} })),
   updateSettingsWith: vi.fn(async update => update({})),
-}));
-vi.mock('../services/instanceIdentity.js', () => ({
-  loadData: vi.fn(async () => ({ peers: [{
-    id: 'example-peer', instanceId: 'example-instance', enabled: true,
-    syncSecret: 'example-pair-secret-for-tests-only-123456',
-  }] })),
 }));
 vi.mock('../services/browserService.js', () => ({
   updateConfig: vi.fn(async body => body),
@@ -172,7 +167,6 @@ vi.mock('../services/lmStudioManager.js', () => ({
   getLoadedModels: vi.fn(),
 }));
 
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import browserRoutes from './browser.js';
 import harnessRoutes from './harnesses.js';
 import localLlmRoutes from './localLlm.js';
@@ -185,19 +179,11 @@ import { runLocalLlmTest } from '../services/localLlmPlayground.js';
 import { runCapabilityTest } from '../services/modelCapabilityTests.js';
 import { getMeasuredFits } from '../services/localModelAssessmentStore.js';
 
-const buildApp = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/browser', browserRoutes);
-  app.use('/api/harnesses', harnessRoutes);
-  app.use('/api/local-llm', localLlmRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
+const mounts = [
+  ['/api/browser', browserRoutes],
+  ['/api/harnesses', harnessRoutes],
+  ['/api/local-llm', localLlmRoutes],
+];
 
 const writes = [
   ['post', '/api/local-llm/capability-tests/run', { backend: 'ollama', modelId: 'example-model', testId: 'sandbox-repair' }, runCapabilityTest],
@@ -209,16 +195,10 @@ const writes = [
   ['put', '/api/local-llm/jev/policy', { scopeAdherenceEnabled: false }, updateSettingsWith],
 ];
 
-const call = (app, [method, path, body], headers = {}) => {
-  const pending = request(app)[method](path);
-  for (const [key, value] of Object.entries(headers)) pending.set(key, value);
-  return pending.send(body);
-};
-
-describe('operator authority for browser, harness and local-runtime management (#8798)', () => {
+describe('operator authority for browser, harness and local-runtime management', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    auth.isAuthEnabled.mockResolvedValue(false);
+    auth.enabled = false;
     installBackend.mockResolvedValue({ success: true });
     runOpenCodeAgentBenchmark.mockResolvedValue({ completed: true });
     runCapabilityTest.mockResolvedValue({ passed: true });
@@ -229,71 +209,22 @@ describe('operator authority for browser, harness and local-runtime management (
     runLocalLlmTest.mockResolvedValue({ text: 'example answer' });
   });
 
-  it('refuses direct and Vite-proxied remote mutations before any side effect', async () => {
-    for (const write of writes) {
-      for (const [address, headers] of [
-        ['192.0.2.10', {}],
-        ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
-        ['192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }],
-      ]) {
-        const res = await call(buildApp(address), write, headers);
-        expect([res.status, res.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
-      expect(write[3]).not.toHaveBeenCalled();
-    }
+  it('refuses a remote caller before a runtime install', async () => {
+    await expectRemoteRefusal(mounts, ['post', '/api/local-llm/install-backend', { backend: 'ollama' }, installBackend]);
   });
 
-  it('retains direct/local-proxy access without a password and remote operator-session access with one', async () => {
-    for (const [enabled, address, headers] of [
-      [false, '127.0.0.1', {}],
-      [false, '127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '::ffff:127.0.0.1' }],
-      [true, '192.0.2.10', { Authorization: 'Bearer example-session' }],
-    ]) {
-      auth.isAuthEnabled.mockResolvedValue(enabled);
-      for (const write of writes) expect((await call(buildApp(address), write, headers)).status).toBe(200);
-    }
-    for (const write of writes) expect(write[3]).toHaveBeenCalledTimes(3);
+  it('preserves local and delegated-agent runtime management and inference', async () => {
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: [
+      ...writes.map(([method, path, body, effect]) => [method, path, body, effect, 200]),
+      ['post', '/api/local-llm/install', { backend: 'ollama', modelId: 'example-model' }, installModel, 200],
+      ['post', '/api/local-llm/test', { backend: 'ollama', modelId: 'example-model', prompt: 'Example' }, runLocalLlmTest, 200],
+    ] });
   });
 
-  it('does not let anonymous, Basic or scoped peer credentials acquire runtime authority', async () => {
-    auth.isAuthEnabled.mockResolvedValue(true);
-    for (const write of writes) {
-      for (const [headers, status, code] of [
-        [{}, 401, 'AUTH_REQUIRED'],
-        [{ Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403, 'HOST_CONTROL_FORBIDDEN'],
-        [{
-          [PEER_INSTANCE_HEADER]: 'example-instance',
-          [PEER_AUTH_HEADER]: derivePeerAuthToken('example-pair-secret-for-tests-only-123456', 'example-instance'),
-        }, 403, 'PEER_SCOPE_FORBIDDEN'],
-      ]) {
-        const res = await call(buildApp(), write, headers);
-        expect([res.status, res.body.code]).toEqual([status, code]);
-      }
-      expect(write[3]).not.toHaveBeenCalled();
-    }
-  });
-
-  it('preserves remote status/catalog reads and runs model downloads and configured-model inference for a local caller', async () => {
-    const app = buildApp();
+  it('keeps remote status and catalog reads open', async () => {
+    const app = await hostControlApp('192.0.2.10', mounts);
     for (const path of ['/api/browser/config', '/api/harnesses', '/api/local-llm/status', '/api/local-llm/catalog?backend=ollama']) {
-      expect((await request(app).get(path)).status).toBe(200);
+      expect((await callRoute(app, ['get', path])).status, path).toBe(200);
     }
-    const inference = [
-      ['post', '/api/local-llm/install', { backend: 'ollama', modelId: 'example-model' }],
-      ['post', '/api/local-llm/test', { backend: 'ollama', modelId: 'example-model', prompt: 'Example' }],
-      ['post', '/api/local-llm/capability-tests/run', { backend: 'ollama', modelId: 'example-model', testId: 'story-outline' }],
-    ];
-    for (const operation of inference) {
-      const refused = await call(app, operation);
-      expect([refused.status, refused.body.code], operation[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    expect(runCapabilityTest).not.toHaveBeenCalled();
-    expect(installModel).not.toHaveBeenCalled();
-    expect(runLocalLlmTest).not.toHaveBeenCalled();
-    const local = buildApp('127.0.0.1');
-    for (const operation of inference) expect((await call(local, operation)).status, operation[1]).toBe(200);
-    expect(runCapabilityTest).toHaveBeenCalledTimes(1);
-    expect(installModel).toHaveBeenCalledTimes(1);
-    expect(runLocalLlmTest).toHaveBeenCalledTimes(1);
   });
 });

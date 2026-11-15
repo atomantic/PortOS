@@ -1,23 +1,14 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
+import { callRoute, expectAuthorizedWorkflows, expectRemoteRefusal, hostControlApp } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-mv-post-ai-') }));
 afterAll(cleanupTempDataRoots);
 afterEach(() => vi.restoreAllMocks());
-vi.mock('../services/instanceIdentity.js', () => ({
-  loadData: vi.fn(async () => ({ peers: [{
-    id: 'example-peer', instanceId: 'example-instance', enabled: true, syncSecret: 'a'.repeat(32),
-  }] })),
-}));
-
 // Music Video cover design/generation, promotion plans, and POST LLM drills
-// (#10989). Real routers behind the real auth and host-control gates. Cover
+// (#10989). Real routers behind the real auth and host-control gates; the
+// principal matrix lives in services/authGate.test.js (#16018, #16114). Cover
 // design runs for real against a synthetic CLI provider so the prompt-runner
 // sink can be asserted; cover generation's image queue is the same doubled
 // enqueueJob. The other families double their AI service so no provider, run
@@ -42,7 +33,6 @@ const DRAFT = {
 vi.mock('../services/auth.js', async (importOriginal) => ({
   ...await importOriginal(),
   isAuthEnabled: vi.fn(async () => auth.enabled),
-  verifyPassword: vi.fn(async () => true),
 }));
 vi.mock('../services/settings.js', () => ({
   settingsEvents: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
@@ -79,8 +69,6 @@ vi.mock('../services/meatspacePostAdaptive.js', async (importOriginal) => ({
   resolveDrillConfig: vi.fn(async (_type, config) => ({ config: config ?? {}, adaptive: null, progression: null })),
 }));
 
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
-import { createSession } from '../services/auth.js';
 import musicVideoRoutes from './musicVideo.js';
 import meatspaceRoutes from './meatspacePostRoutes.js';
 import { __setCoverArtDepsForTests } from '../services/musicVideo/coverArt.js';
@@ -108,23 +96,8 @@ const operations = () => [
 ];
 const sinks = () => [...new Set([...operations().map(([, , service]) => service), triggerReplenish])];
 
-const appFor = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/music-video', musicVideoRoutes);
-  app.use('/api/meatspace', meatspaceRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
-const post = (app, [path, body], headers = {}) => {
-  const pending = request(app).post(path);
-  for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return pending.send(body);
-};
+const mounts = [['/api/music-video', musicVideoRoutes], ['/api/meatspace', meatspaceRoutes]];
+
 const expectNoEffects = () => {
   for (const service of sinks()) expect(service).not.toHaveBeenCalled();
 };
@@ -163,72 +136,23 @@ beforeEach(() => {
 });
 
 describe('Music Video cover/promotion and POST LLM operator authority (#10989)', () => {
-  it('refuses a remote password-free caller, including spoofed-proxy variants, before any provider call', async () => {
-    for (const operation of operations()) {
-      for (const [address, headers] of [
-        ['192.0.2.10', {}],
-        ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
-        ['192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }],
-      ]) {
-        const response = await post(appFor(address), operation, headers);
-        expect([response.status, response.body.code], operation[0]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
-    }
+  it('refuses a remote caller before any provider call', async () => {
+    const [path, body, effect] = operations()[0];
+    await expectRemoteRefusal(mounts, ['post', path, body, effect]);
     expectNoEffects();
   });
 
-  it('requires authentication with a password, denies legacy Basic and scoped-peer credentials', async () => {
-    auth.enabled = true;
-    for (const operation of operations()) {
-      for (const [headers, status, code] of [
-        [{}, 401, 'AUTH_REQUIRED'],
-        [{ Authorization: 'Bearer invalid-session' }, 401, 'AUTH_REQUIRED'],
-        [{ Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403, 'HOST_CONTROL_FORBIDDEN'],
-        [{
-          [PEER_AUTH_HEADER]: derivePeerAuthToken('a'.repeat(32), 'example-instance'),
-          [PEER_INSTANCE_HEADER]: 'example-instance',
-        }, 403, 'PEER_SCOPE_FORBIDDEN'],
-      ]) {
-        const response = await post(appFor(), operation, headers);
-        expect([response.status, response.body.code], operation[0]).toEqual([status, code]);
-      }
-    }
-    expectNoEffects();
+  it('keeps working for local callers and delegated agent sessions', async () => {
+    await expectAuthorizedWorkflows({
+      auth, mounts,
+      workflows: operations().map(([path, body, effect, status]) => ['post', path, body, effect, status]),
+    });
   });
 
-  it('matches case and trailing-slash variants before any provider call', async () => {
-    for (const operation of operations()) {
-      const variant = [operation[0].toUpperCase() + '/', operation[1]];
-      const response = await post(appFor(), variant);
-      expect([response.status, response.body.code], operation[0]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    expectNoEffects();
-  });
-
-  it('keeps working for local callers, operator sessions and delegated agent sessions', async () => {
-    const operator = await createSession();
-    const agent = await createSession({ label: 'agent' });
-    for (const [enabled, address, headers] of [
-      [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Authorization: `Bearer ${operator.token}` }],
-      [true, '192.0.2.10', { Cookie: `portos_auth=${agent.token}` }],
-      [true, '192.0.2.10', { Authorization: `Bearer ${agent.token}` }],
-    ]) {
-      auth.enabled = enabled;
-      for (const operation of operations()) {
-        const response = await post(appFor(address), operation, headers);
-        expect(response.status, `${operation[0]}: ${JSON.stringify(response.body)}`).toBe(operation[3]);
-        expect(operation[2], operation[0]).toHaveBeenCalled();
-      }
-    }
-  });
-
-  it('lets an authorized cover design reach the chosen CLI provider and nobody else', async () => {
-    const operation = operations()[0];
-    expect((await post(appFor('192.0.2.10'), operation)).status).toBe(403);
-    expect(sink.runPromptThroughProvider).not.toHaveBeenCalled();
-
-    expect((await post(appFor('127.0.0.1'), operation)).status).toBe(200);
+  it('lets an authorized cover design reach the chosen CLI provider with the typed direction', async () => {
+    const [path, body] = operations()[0];
+    const response = await callRoute(await hostControlApp('127.0.0.1', mounts), ['post', path, body]);
+    expect(response.status).toBe(200);
     expect(sink.runPromptThroughProvider).toHaveBeenCalledTimes(1);
     expect(sink.runPromptThroughProvider.mock.calls[0][0]).toEqual(expect.objectContaining({
       provider: cliProvider, source: 'music-video-cover-design', model: 'example-model',
@@ -237,43 +161,29 @@ describe('Music Video cover/promotion and POST LLM operator authority (#10989)',
   });
 
   it('lets an authorized cover image reach enqueueJob', async () => {
-    const operation = operations()[1];
-    expect((await post(appFor('192.0.2.10'), operation)).status).toBe(403);
-    expect(sink.enqueueJob).not.toHaveBeenCalled();
-
-    expect((await post(appFor('127.0.0.1'), operation)).status).toBe(200);
+    const [path, body] = operations()[1];
+    const response = await callRoute(await hostControlApp('127.0.0.1', mounts), ['post', path, body]);
+    expect(response.status).toBe(200);
     expect(sink.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'image', owner: `music-video-cover-art:${projectId}`,
     }));
   });
 
-  it('generates a non-LLM drill for a local caller without a provider, and refuses it remotely', async () => {
-    const drill = ['/api/meatspace/post/drill', { type: 'doubling-chain' }];
-    const refused = await post(appFor(), drill);
-    expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    const response = await post(appFor('127.0.0.1'), drill);
+  it('generates a non-LLM drill for a local caller without a provider', async () => {
+    const response = await callRoute(await hostControlApp('127.0.0.1', mounts),
+      ['post', '/api/meatspace/post/drill', { type: 'doubling-chain' }]);
     expect(response.status, JSON.stringify(response.body)).toBe(200);
     expect(response.body.questions?.length).toBeGreaterThan(0);
     expectNoEffects();
   });
 
-  it('keeps promotion reads remote, and runs cover compose and lettering saves for host control without AI', async () => {
-    const remote = appFor();
+  it('keeps promotion reads remote, and runs lettering saves for host control without AI', async () => {
     const coverArt = `/api/music-video/${projectId}/publish-kit/cover-art`;
-    const letteringBody = { design: { layout: 'top-center' } };
-    for (const pending of [request(remote).post(coverArt).send({}), request(remote).put(`${coverArt}/design`).send(letteringBody)]) {
-      const refused = await pending;
-      expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-
-    const local = appFor('127.0.0.1');
-    const compose = await request(local).post(coverArt).send({});
-    expect([compose.status, compose.body.code]).toEqual([422, 'VALIDATION_ERROR']);
-
-    const lettering = await request(local).put(`${coverArt}/design`).send(letteringBody);
+    const local = await hostControlApp('127.0.0.1', mounts);
+    const lettering = await callRoute(local, ['put', `${coverArt}/design`, { design: { layout: 'top-center' } }]);
     expect(lettering.status, JSON.stringify(lettering.body)).toBe(200);
 
-    const plan = await request(remote).get(`/api/music-video/${projectId}/publish/promotion-plan`);
+    const plan = await callRoute(await hostControlApp('192.0.2.10', mounts), ['get', `/api/music-video/${projectId}/publish/promotion-plan`]);
     expect(plan.status).toBe(200);
     expect(promotionPlanSteps).toHaveBeenCalled();
     expectNoEffects();

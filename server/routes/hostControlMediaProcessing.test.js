@@ -1,9 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { callRoute, expectAuthorizedWorkflows, expectRemoteRefusal, hostControlApp } from './hostControlTestHarness.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-media-processing-') }));
+afterAll(cleanupTempDataRoots);
+
+// Process-spawning media routes are plain writes under the default-deny gate
+// (#16018, #12493); the principal matrix lives in services/authGate.test.js.
 const state = vi.hoisted(() => ({ enabled: false }));
 const effects = vi.hoisted(() => ({
   startVideoDownload: vi.fn(async () => ({ jobId: 'dl-1' })),
@@ -18,10 +23,8 @@ const effects = vi.hoisted(() => ({
   addCoverFont: vi.fn(async () => ({ id: 'font-1' })),
 }));
 
-vi.mock('../services/auth.js', () => ({
-  isAuthEnabled: vi.fn(async () => state.enabled),
-  verifyRequestSession: vi.fn(async (req) => req.headers.authorization === 'Bearer example-session'),
-  verifyPassword: vi.fn(async () => true),
+vi.mock('../services/auth.js', async (importOriginal) => ({
+  ...await importOriginal(), isAuthEnabled: vi.fn(async () => state.enabled),
 }));
 
 vi.mock('../services/settings.js', () => ({
@@ -135,8 +138,6 @@ vi.mock('../services/loras.js', () => ({
   assertSafeLoraFilename: vi.fn(),
 }));
 
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
-import { isHostControlRoute } from '../lib/hostControlRoutes.js';
 import videoDownloadRoutes from './videoDownload.js';
 import tracksRoutes from './tracks.js';
 import roundsRoutes from './rounds.js';
@@ -157,34 +158,14 @@ const routes = [
   ['/api/video-timeline/projects/proj-1/render', {}, effects.renderTimelineProject],
 ];
 
-const appFor = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/devtools/video-download', videoDownloadRoutes);
-  app.use('/api/tracks', tracksRoutes);
-  app.use('/api/rounds', roundsRoutes);
-  app.use('/api/music-video', musicVideoRoutes);
-  app.use('/api/loras', lorasRoutes);
-  app.use('/api/video-timeline', videoTimelineRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
-
-const post = (app, path, body = {}, headers = {}) => {
-  const pending = request(app).post(path);
-  for (const [k, v] of Object.entries(headers)) pending.set(k, v);
-  return pending.send(body);
-};
-
-const expectNoEffects = () => {
-  for (const [, , effect] of routes) {
-    expect(effect).not.toHaveBeenCalled();
-  }
-};
+const mounts = [
+  ['/api/devtools/video-download', videoDownloadRoutes],
+  ['/api/tracks', tracksRoutes],
+  ['/api/rounds', roundsRoutes],
+  ['/api/music-video', musicVideoRoutes],
+  ['/api/loras', lorasRoutes],
+  ['/api/video-timeline', videoTimelineRoutes],
+];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -192,83 +173,29 @@ beforeEach(() => {
 });
 
 describe('media process execution operator authority', () => {
-  it('lists every media process execution endpoint as a host-control route', () => {
-    for (const [path] of routes) {
-      expect(isHostControlRoute('POST', path), path).toBe(true);
-    }
-  });
-
-  it('refuses remote password-free callers before spawning any host processes', async () => {
-    const app = appFor();
-    for (const [path, body] of routes) {
-      const res = await post(app, path, body);
-      expect([res.status, res.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      expect(res.headers['content-type']).toMatch(/^application\/json/);
-    }
-    expectNoEffects();
-  });
-
-  it('rejects anonymous (401) and legacy Basic (403) callers on a password-enabled install', async () => {
-    state.enabled = true;
-    const basic = { Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') };
-    const app = appFor();
-    for (const [path, body] of routes) {
-      const anon = await post(app, path, body);
-      expect([anon.status, anon.body.code], path).toEqual([401, 'AUTH_REQUIRED']);
-      const legacy = await post(app, path, body, basic);
-      expect([legacy.status, legacy.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    expectNoEffects();
-  });
-
-  it('admits local callers when auth is off, and operator sessions when auth is on', async () => {
-    const local = appFor('127.0.0.1');
+  it('refuses a remote caller before spawning a host process', async () => {
     const [path, body, effect] = routes[0];
-    const resLocal = await post(local, path, body);
-    expect(resLocal.status).toBe(202);
-    expect(effect).toHaveBeenCalledTimes(1);
-
-    state.enabled = true;
-    const operator = appFor();
-    const resOp = await post(operator, path, body, { Authorization: 'Bearer example-session' });
-    expect(resOp.status).toBe(202);
-    expect(effect).toHaveBeenCalledTimes(2);
+    await expectRemoteRefusal(mounts, ['post', path, body, effect]);
   });
 
-  it('gates the cover font install (host-wide font folder) while local and operator callers reach the handler (#12493)', async () => {
-    const path = '/api/music-video/publish/cover-fonts';
-    const remote = await post(appFor(), path, {});
-    expect([remote.status, remote.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+  it('keeps every process-starting route working for local and delegated-agent callers', async () => {
+    await expectAuthorizedWorkflows({
+      auth: state, mounts,
+      workflows: routes.map(([path, body, effect]) => ['post', path, body, effect, path.endsWith('/render') || path.endsWith('/effect') ? 200 : 202]),
+    });
+  });
+
+  it('reaches the cover font upload handler for a local caller (#12493)', async () => {
     // Past the gate, the upload middleware rejects a JSON body (not multipart).
-    const local = await post(appFor('127.0.0.1'), path, {});
+    const local = await callRoute(await hostControlApp('127.0.0.1', mounts), ['post', '/api/music-video/publish/cover-fonts', {}]);
     expect([local.status, local.body.code]).toEqual([400, 'INVALID_CONTENT_TYPE']);
-    state.enabled = true;
-    const operator = await post(appFor(), path, {}, { Authorization: 'Bearer example-session' });
-    expect([operator.status, operator.body.code]).toEqual([400, 'INVALID_CONTENT_TYPE']);
     expect(effects.addCoverFont).not.toHaveBeenCalled();
   });
 
-  it('keeps timeline render available to local and operator callers', async () => {
-    const [path, body, effect] = routes.at(-1);
-    const resLocal = await post(appFor('127.0.0.1'), path, body);
-    expect(resLocal.status).toBe(200);
-    expect(effect).toHaveBeenCalledTimes(1);
-
-    state.enabled = true;
-    const resOp = await post(appFor(), path, body, { Authorization: 'Bearer example-session' });
-    expect(resOp.status).toBe(200);
-    expect(effect).toHaveBeenCalledTimes(2);
-  });
-
   it('keeps reads and status endpoints open to remote callers', async () => {
-    const app = appFor();
-    const downloads = await request(app).get('/api/devtools/video-download/downloads');
-    expect(downloads.status).toBe(200);
-
-    const ytdlp = await request(app).get('/api/devtools/video-download/yt-dlp');
-    expect(ytdlp.status).toBe(200);
-
-    const loras = await request(app).get('/api/loras');
-    expect(loras.status).toBe(200);
+    const app = await hostControlApp('192.0.2.10', mounts);
+    for (const path of ['/api/devtools/video-download/downloads', '/api/devtools/video-download/yt-dlp', '/api/loras']) {
+      expect((await callRoute(app, ['get', path])).status, path).toBe(200);
+    }
   });
 });
