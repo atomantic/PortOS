@@ -6,11 +6,9 @@ import { pluralize } from '../lib/textUtils';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import { SkeletonRegion, SkeletonRows } from '../components/ui/Skeleton';
 import toast from '../components/ui/Toast';
-import socket from '../services/socket';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
-import { useSocketSubscription } from '../hooks/useSocketSubscription';
-import useMounted from '../hooks/useMounted';
+import { useSocketResource } from '../hooks/useSocketResource';
 import CollapsibleListItem from '../components/ui/CollapsibleListItem';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -63,63 +61,37 @@ function waitingSentence(refusedLabel) {
   return `Still waiting on ${refusedLabel}. Open Instances, select the peer, and turn on that category under Sync Categories so it receives the deletion, or remove the peer. Pausing does not release the hold.`;
 }
 
+const PEER_EVENTS = ['instances:peers:updated'];
+
 // Manual "clean up deleted records now" trigger. The orchestrator sweep keeps
 // its 24h grace — this button passes graceMs:0 so a user who just mass-deleted
 // doesn't wait a day for the bytes to leave disk. The button disables only
 // when every snapshot cohort is refused: partial progress is still useful.
 function TombstoneGcSection() {
-  const [refused, setRefused] = useState(null); // null = still loading
-  const [heldByPausedPeers, setHeldByPausedPeers] = useState([]);
-  const mountedRef = useMounted();
-  const backfillTimerRef = useRef(null);
+  const followUpTimerRef = useRef(null);
+  const refetchRef = useRef(null);
 
-  const fetchStatus = useCallback(() => {
-    api.getTombstoneSweepStatus({ silent: true })
-      .then((r) => {
-        if (!mountedRef.current || !Array.isArray(r?.refused)) return;
-        setRefused(r.refused);
-        setHeldByPausedPeers(Array.isArray(r.heldByPausedPeers) ? r.heldByPausedPeers : []);
-      })
-      .catch(() => { if (mountedRef.current) setRefused((prev) => prev ?? []); });
-  }, [mountedRef]);
-
-  // Subscribe to peer-state changes so a category change, resume, or removal
-  // re-evaluates who is holding deletes. Pausing a peer does not release them.
-  // Without this the button stays stuck disabled after the hold is resolved.
-  //
-  // This is DataManager's only `instances:*` consumer, so it must hold its
-  // own `instances:subscribe` — it previously only listened for
-  // `instances:peers:updated` without ever subscribing, and the server sends
-  // that event only to the `instances` subscriber Set (registerSubscriber in
-  // server/services/socket.js), so the handler below could never fire; only
-  // the Instances page (which unsubscribes when you navigate away) held that
-  // subscription. `useSocketSubscription` also re-subscribes on reconnect and
-  // refetches via `onResubscribe`, so a peer change missed while disconnected
-  // is caught up on the next connect.
-  //
   // `instances:peers:updated` fires from `updatePeer` BEFORE the async
-  // `autoSubscribePeerToAllRecords` backfill creates per-record subs, so an
-  // immediate fetch sees the pre-backfill state. Schedule a follow-up fetch
-  // after a short delay to capture the post-backfill subs; debounce so a
-  // rapid burst of peer updates collapses to one delayed fetch.
-  useSocketSubscription('instances', { onResubscribe: fetchStatus });
-
-  useEffect(() => {
-    const refreshAfterPeerChange = () => {
-      fetchStatus();
-      if (backfillTimerRef.current) clearTimeout(backfillTimerRef.current);
-      backfillTimerRef.current = setTimeout(() => {
-        backfillTimerRef.current = null;
-        if (mountedRef.current) fetchStatus();
-      }, 1500);
-    };
-    fetchStatus();
-    socket.on('instances:peers:updated', refreshAfterPeerChange);
-    return () => {
-      if (backfillTimerRef.current) clearTimeout(backfillTimerRef.current);
-      socket.off('instances:peers:updated', refreshAfterPeerChange);
-    };
-  }, [fetchStatus, mountedRef]);
+  // `autoSubscribePeerToAllRecords` backfill creates per-record subs, so the
+  // read it triggers sees the pre-backfill state. An event-triggered read
+  // schedules one debounced follow-up read to capture the post-backfill subs.
+  // The hook holds the `instances` subscription (the server sends the event
+  // only to that room) and re-reads on reconnect, so a peer change missed
+  // while disconnected is caught up. Pausing a peer does not release holds.
+  const { data: status, error, refetch, updateData } = useSocketResource(async ({ events }) => {
+    const r = await api.getTombstoneSweepStatus({ silent: true });
+    if (!Array.isArray(r?.refused)) throw new Error('Invalid tombstone sweep status');
+    if (events.length) {
+      clearTimeout(followUpTimerRef.current);
+      followUpTimerRef.current = setTimeout(() => refetchRef.current?.(), 1500);
+    }
+    return { refused: r.refused, heldByPausedPeers: Array.isArray(r.heldByPausedPeers) ? r.heldByPausedPeers : [] };
+  }, { namespace: 'instances', events: PEER_EVENTS });
+  refetchRef.current = refetch;
+  useEffect(() => () => clearTimeout(followUpTimerRef.current), []);
+  // null = not read yet or the read failed; cleanup stays off rather than assuming no peer holds a deletion.
+  const refused = status?.refused ?? null;
+  const heldByPausedPeers = status?.heldByPausedPeers ?? [];
 
   const [runSweep, sweeping] = useAsyncAction(async () => {
     const result = await api.sweepTombstonesNow({ graceMs: 0 }, { silent: true });
@@ -144,7 +116,7 @@ function TombstoneGcSection() {
     } else if (heldSentence) {
       toast.warning(heldSentence);
     }
-    setRefused(refusedKinds);
+    updateData(prev => ({ ...prev, refused: refusedKinds }));
     return result;
   }, { errorMessage: 'Deleted-record cleanup failed' });
 
@@ -173,6 +145,12 @@ function TombstoneGcSection() {
         <p className="mt-1 text-gray-500 text-xs">
           Remove the leftover record of Universes, Pipeline series and issues, and Media Collections you already deleted. Automatic cleanup waits 24 hours. This runs it now.
         </p>
+        {error && !status && (
+          <p className="mt-1 text-xs text-port-error">
+            Could not read peer sync status, so cleanup is paused.{' '}
+            <button type="button" onClick={refetch} className="underline">Retry</button>
+          </p>
+        )}
         {(allRefused || heldSentence) && (
           <p className="mt-1 text-gray-500 text-xs">
             {allRefused ? `${waiting}${heldSentence ? ` ${heldSentence}` : ''}` : heldSentence}

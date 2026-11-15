@@ -62,6 +62,7 @@ describe('FeatureAgentDetail load race', () => {
         <Harness />
       </MemoryRouter>,
     );
+    await act(async () => {}); // the resource hook starts its read one microtask after mount
 
     // A's fetch is in flight; the loading skeleton is up.
     expect(api.getFeatureAgent).toHaveBeenCalledWith('agent-a', { silent: true });
@@ -93,6 +94,7 @@ describe('FeatureAgentDetail load race', () => {
         <Harness />
       </MemoryRouter>,
     );
+    await act(async () => {}); // the resource hook starts its read one microtask after mount
     await act(async () => {
       deferreds['agent-a'].resolve({ id: 'agent-a', name: 'Agent Alpha', appId: 'app1' });
     });
@@ -113,6 +115,7 @@ describe('FeatureAgentDetail load race', () => {
         <Harness />
       </MemoryRouter>,
     );
+    await act(async () => {}); // the resource hook starts its read one microtask after mount
     await waitFor(() => expect(screen.getByText('Couldn’t load this feature agent')).toBeInTheDocument());
     expect(screen.queryByText('Feature agent not found')).not.toBeInTheDocument();
 
@@ -130,6 +133,7 @@ describe('FeatureAgentDetail load race', () => {
         <Harness />
       </MemoryRouter>,
     );
+    await act(async () => {}); // the resource hook starts its read one microtask after mount
     await act(async () => {
       deferreds['agent-a'].resolve({ id: 'agent-a', name: 'Agent Alpha', appId: 'app1' });
     });
@@ -150,8 +154,8 @@ describe('FeatureAgentDetail load race', () => {
         </MemoryRouter>
       </StrictMode>,
     );
-    // StrictMode fires setup→cleanup→setup; the last in-flight fetch is the
-    // current one. Resolve every fetch id we saw so the current seq resolves.
+    await act(async () => {}); // the resource hook starts its read one microtask after mount
+    // StrictMode fires setup→cleanup→setup; resolve every fetch we saw.
     await act(async () => {
       for (const d of Object.values(deferreds)) d.resolve({ id: 'agent-a', name: 'Agent Alpha', appId: 'app1' });
     });

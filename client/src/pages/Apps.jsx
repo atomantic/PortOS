@@ -1,5 +1,5 @@
 import AppQuality from '../components/apps/AppQuality';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useRef } from 'react';
 import { Link } from 'react-router';
 import { ExternalLink, Gamepad2, Play, Square, RotateCcw, RefreshCw, Archive, ArchiveRestore, Trash2, AlertTriangle } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -13,14 +13,19 @@ import AppOperationBanner from '../components/apps/AppOperationBanner';
 import { useAppOperation } from '../hooks/useAppOperation';
 import useUrlParams from '../hooks/useUrlParams';
 import * as api from '../services/api';
-import socket from '../services/socket';
+import { useSocketResource } from '../hooks/useSocketResource';
 import { getLaunchUrls } from '../services/appUrls';
 import { NON_PM2_TYPES, getAppTypeLabel } from '../components/apps/constants';
 
+const APP_EVENTS = ['apps:changed'];
+
+const fetchAppList = async () => {
+  const data = await api.getApps({ includeQuality: true, silent: true });
+  if (!Array.isArray(data)) throw new Error('Invalid apps response');
+  return data;
+};
+
 export default function Apps() {
-  const [apps, setApps] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(null);
   const [retrying, setRetrying] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(null);
   const [actionLoading, setActionLoading] = useState({});
@@ -37,46 +42,16 @@ export default function Apps() {
   // focus back to the control that opened it instead of dropping it on <body>.
   const menuTriggerRefs = useRef({});
   const menuTriggerRef = (id) => (menuTriggerRefs.current[id] ||= { current: null });
-  const fetchSeqRef = useRef(0);
 
-  const fetchApps = useCallback(async ({ retry = false } = {}) => {
-    const seq = ++fetchSeqRef.current;
-    if (retry) {
-      setRetrying(true);
-      setLoading(true);
-    }
-    const result = await api.getApps({ includeQuality: true, silent: true })
-      .then(data => ({ data }))
-      .catch(error => ({ error }));
-    if (seq !== fetchSeqRef.current) return false;
-    if (result.error) {
-      setLoadError(result.error);
-      setRetrying(false);
-      setLoading(false);
-      return false;
-    }
-    setApps(Array.isArray(result.data) ? result.data : []);
-    setLoadError(null);
+  const { data, loading, error: loadError, refetch: fetchApps, updateData: setApps } = useSocketResource(fetchAppList, { events: APP_EVENTS });
+  const apps = data ?? [];
+  const retry = async () => {
+    setRetrying(true);
+    await fetchApps();
     setRetrying(false);
-    setLoading(false);
-    return true;
-  }, []);
+  };
 
   const { operations, restarting, dismiss } = useAppOperation({ onComplete: fetchApps });
-
-  useEffect(() => {
-    fetchApps();
-
-    // Listen for apps changes via WebSocket instead of polling
-    const handleAppsChanged = () => {
-      fetchApps();
-    };
-    socket.on('apps:changed', handleAppsChanged);
-
-    return () => {
-      socket.off('apps:changed', handleAppsChanged);
-    };
-  }, [fetchApps]);
 
   const handleDelete = async (app) => {
     const removed = await api.deleteApp(app.id).then(() => true, () => false);
@@ -180,7 +155,7 @@ export default function Apps() {
                 The registered app collection could not be loaded. {loadError.message || 'Check the connection and try again.'}
               </p>
               <button
-                onClick={() => fetchApps({ retry: true })}
+                onClick={() => retry()}
                 disabled={retrying}
                 aria-busy={retrying}
                 className="mt-4 inline-flex min-h-[40px] items-center gap-2 rounded-lg bg-port-accent px-4 py-2 text-sm text-white hover:bg-port-accent/80 disabled:opacity-50"
@@ -235,7 +210,7 @@ export default function Apps() {
               Apps are unavailable — showing the last loaded collection. {loadError.message || 'Retry when the connection recovers.'}
             </span>
             <button
-              onClick={() => fetchApps({ retry: true })}
+              onClick={() => retry()}
               disabled={retrying}
               aria-busy={retrying}
               className="inline-flex min-h-[40px] items-center gap-2 rounded-lg bg-port-border px-3 py-1.5 text-xs text-white hover:bg-port-border/80 disabled:opacity-50"

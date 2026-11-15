@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import {
   ClipboardList,
@@ -51,7 +51,7 @@ import { markdownToPlainText, dropsMarkupWhenFlattened } from '../utils/markdown
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 import { useActionQueue } from '../hooks/useActionQueue';
 import * as api from '../services/api';
-import socket from '../services/socket';
+import { useSocketResource } from '../hooks/useSocketResource';
 
 // Cross-domain queue source → icon + accent (M42 P5 inbox-zero aggregator).
 const QUEUE_SOURCE_CONFIG = {
@@ -155,16 +155,16 @@ function isActionableItem(item) {
   return false;
 }
 
+const REVIEW_ITEM_EVENTS = ['review:item:created', 'review:item:updated', 'review:item:deleted', 'review:items:bulk-updated'];
+const EMPTY_ITEMS = [];
+
 export default function Review() {
   const navigate = useNavigate();
   const { actionId } = useParams();
   const [searchParams, updateParams] = useUrlParams();
   const requestedActionView = searchParams.get('view');
   const actionView = ACTION_VIEW_IDS.has(requestedActionView) ? requestedActionView : 'today';
-  const [items, setItems] = useState([]);
   const [briefing, setBriefing] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [itemsError, setItemsError] = useState(false);
   const [newTodo, setNewTodo] = useState('');
   const [editingId, setEditingId] = useState(null);
   const [filter, setFilter] = useState('pending');
@@ -173,9 +173,6 @@ export default function Review() {
   // Fullscreen acts as a modal: trap Tab, dismiss on Escape, and hand focus back to the toggle.
   useFocusTrap(briefingFullscreen, briefingRef);
   useEscapeKey(briefingFullscreen, () => setBriefingFullscreen(false));
-  const [counts, setCounts] = useState(null);
-  const countsRequestId = useRef(0);
-  const itemsRequestId = useRef(0);
 
   // Cross-domain live queue (M42 P5). Source payloads remain live projections;
   // presentation decisions are durable server-side markers keyed by the row's
@@ -196,80 +193,17 @@ export default function Review() {
     safeWriteStorage(HARNESS_WARNING_KEY, String(days));
   };
 
-  const fetchItems = useCallback(() => {
-    const requestId = ++itemsRequestId.current;
-    const params = filter === 'all' ? {} : { status: filter };
-    setLoading(true);
-    setItemsError(false);
-    return api.getReviewItems(params, { silent: true }).then(data => {
-      if (requestId !== itemsRequestId.current) return;
-      setItems(data);
-      setLoading(false);
-    }).catch(() => {
-      if (requestId !== itemsRequestId.current) return;
-      setItems([]);
-      setItemsError(true);
-      setLoading(false);
-    });
-  }, [filter]);
-
-  const fetchCounts = useCallback(() => {
-    const requestId = ++countsRequestId.current;
-    api.getReviewCounts({ silent: true }).then(data => {
-      if (requestId === countsRequestId.current) setCounts(data);
-    }).catch(() => null);
-  }, []);
-
-  const fetchBriefing = useCallback(async () => {
-    const data = await api.getReviewBriefing().catch(() => null);
-    setBriefing(data);
-  }, []);
+  // The stored list is keyed by the status filter; global counts are one read independent of it.
+  const { data: itemsData, loading, error: itemsError, refetch: fetchItems } = useSocketResource(
+    () => api.getReviewItems(filter === 'all' ? {} : { status: filter }, { silent: true }),
+    { events: REVIEW_ITEM_EVENTS, resourceKey: filter }
+  );
+  const items = itemsData ?? EMPTY_ITEMS;
+  const { data: counts } = useSocketResource(() => api.getReviewCounts({ silent: true }), { events: REVIEW_ITEM_EVENTS });
 
   useEffect(() => {
-    fetchItems();
-    fetchCounts();
-    fetchBriefing();
-    return () => { itemsRequestId.current += 1; };
-  }, [fetchItems, fetchCounts, fetchBriefing]);
-
-  useEffect(() => {
-    const handleCreated = (item) => {
-      fetchCounts();
-      if (item.metadata?.privateSecurity) { fetchItems(); return; }
-      setItems(prev => {
-        if (prev.some(i => i.id === item.id)) return prev;
-        return [item, ...prev];
-      });
-    };
-    const handleUpdated = (item) => {
-      fetchCounts();
-      if (item.metadata?.privateSecurity) { fetchItems(); return; }
-      setItems(prev => prev.map(i => i.id === item.id ? item : i));
-    };
-    const handleDeleted = (item) => {
-      fetchCounts();
-      setItems(prev => prev.filter(i => i.id !== item.id));
-    };
-    // Bulk status change ("Mark all read" / "Complete all") — one state
-    // update for every affected id instead of N per-item events.
-    const handleBulkUpdated = ({ ids, status, updatedAt }) => {
-      fetchCounts();
-      const idSet = new Set(ids);
-      setItems(prev => prev.map(i => idSet.has(i.id) ? { ...i, status, updatedAt } : i));
-    };
-
-    socket.on('review:item:created', handleCreated);
-    socket.on('review:item:updated', handleUpdated);
-    socket.on('review:item:deleted', handleDeleted);
-    socket.on('review:items:bulk-updated', handleBulkUpdated);
-
-    return () => {
-      socket.off('review:item:created', handleCreated);
-      socket.off('review:item:updated', handleUpdated);
-      socket.off('review:item:deleted', handleDeleted);
-      socket.off('review:items:bulk-updated', handleBulkUpdated);
-    };
-  }, [fetchCounts, fetchItems]);
+    api.getReviewBriefing().catch(() => null).then(setBriefing);
+  }, []);
 
   const handleCreateTodo = async (e) => {
     e.preventDefault();

@@ -1,39 +1,29 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback } from 'react';
 import { Link } from 'react-router';
 import { Wand2, Plus, RefreshCw } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
-import socket from '../services/socket';
+import { useSocketResource } from '../hooks/useSocketResource';
 import FeatureAgentCard from '../components/feature-agents/FeatureAgentCard';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
 import ListLoadError from '../components/ui/ListLoadError';
 import { formatCount } from '../utils/formatters';
 
+const AGENT_EVENTS = ['cos:feature-agent:status', 'cos:feature-agent:run-complete'];
+
+const fetchAgentList = async () => {
+  const data = await api.getFeatureAgents({ silent: true });
+  if (!Array.isArray(data)) throw new Error('Invalid feature agents response');
+  return data;
+};
+
 export default function FeatureAgents() {
-  const [agents, setAgents] = useState([]);
-  const [loading, setLoading] = useState(true);
   // Only a successful zero-record read counts as empty; a failed read keeps the header action.
-  const [loadFailed, setLoadFailed] = useState(false);
-
-  const fetchAgents = useCallback(() => {
-    api.getFeatureAgents({ silent: true }).then(data => {
-      setAgents(data || []);
-      setLoadFailed(false);
-      setLoading(false);
-    }).catch(() => { setLoadFailed(true); setLoading(false); });
-  }, []);
-
-  useEffect(() => {
-    fetchAgents();
-    const handler = () => fetchAgents();
-    socket.on('cos:feature-agent:status', handler);
-    socket.on('cos:feature-agent:run-complete', handler);
-    return () => {
-      socket.off('cos:feature-agent:status', handler);
-      socket.off('cos:feature-agent:run-complete', handler);
-    };
-  }, [fetchAgents]);
+  const { data, loading, error, refetch: fetchAgents, updateData } = useSocketResource(fetchAgentList, { events: AGENT_EVENTS });
+  const agents = data ?? [];
+  const loadFailed = error != null;
+  const setAgents = useCallback(updater => updateData(prev => updater(prev ?? [])), [updateData]);
 
   const handleStart = useCallback((id) => {
     api.startFeatureAgent(id, { silent: true }).then(agent => {
