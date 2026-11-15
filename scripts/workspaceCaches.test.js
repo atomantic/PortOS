@@ -1,11 +1,9 @@
 import { existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { checkWorkspaceCacheIsolation } from './lib/workspaceCacheFixture.js';
 import { readCiJobs } from './lib/ciWorkflowJobs.js';
 import { createTestPhaseDiagnostics } from '../server/test/testPhaseDiagnostics.js';
 
-const REPO = fileURLToPath(new URL('../', import.meta.url));
 
 describe('checkout-owned server Vite caches with shared dependencies', () => {
   it('keeps CI artifact-cache restores pointed at the owned test cache roots', () => {
