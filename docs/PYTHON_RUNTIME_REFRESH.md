@@ -99,6 +99,10 @@ version, marker, hash block and provenance comment stays byte-identical.
    `scripts/_minimax_h3_mlx_pins.test.js`) and hash-required dry install plans
    for each declared target. Dry plans select artifacts without executing those
    runtimes; native or model execution claims need their own validation.
+   `scripts/cooled_runtime_probe.py` is an opt-in offline probe (SentencePiece,
+   Reactor SDK, Pydantic) that enforces exact baseline/candidate versions: run it
+   only in isolated scratch environments, baseline first (`--baseline`), then the
+   candidate with the same fixtures directory, never in an installed runtime.
 9. Update the lock header's bounded-regeneration line with the uv version and
    cutoff used.
 
