@@ -31,11 +31,11 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   setProjectAnalysis: vi.fn(async (id, analysis) => ({ id, audioAnalysis: analysis, status: 'analyzed' })),
   setProjectSections: vi.fn(async (id, sections) => ({ id, audioAnalysis: { sections } })),
   addProjectScene: vi.fn(async (_id, s) => ({ sceneId: 'mvs-1', order: 0, ...s })),
-  updateScene: vi.fn(async (_id, sceneId, p) => ({ sceneId, ...p })),
-  deleteScene: vi.fn(async (id) => ({ id, scenes: [] })),
-  reorderProjectScenes: vi.fn(async (id, ids) => ({ id, scenes: ids.map((sceneId, order) => ({ sceneId, order })) })),
+  updateScene: vi.fn(async (_id, sceneId, p) => ({ scene: { sceneId, ...p }, edit: { updatedAt: 't1', sceneIds: [sceneId], scenes: [{ sceneId, ...p }], project: {}, removed: [] } })),
+  deleteScene: vi.fn(async (id) => ({ project: { id, scenes: [] }, edit: { updatedAt: 't1', sceneIds: [], scenes: [], project: {}, removed: [] } })),
+  reorderProjectScenes: vi.fn(async (id, ids) => ({ project: { id }, edit: { updatedAt: 't1', sceneIds: ids, scenes: ids.map((sceneId, order) => ({ sceneId, order })), project: {}, removed: [] } })),
   // Vary wipes (#14831) — the run itself is exercised in services/musicVideo/transitions.test.js.
-  varyProjectWipes: vi.fn(async () => ({ project: { updatedAt: 't1' }, scenes: [{ sceneId: 'a', wipeOut: { style: 'star' }, transitionOut: null, takes: [] }] })),
+  varyProjectWipes: vi.fn(async () => ({ project: { updatedAt: 't1' }, scenes: [{ sceneId: 'a', wipeOut: { style: 'star' }, transitionOut: null, takes: [] }], edit: { updatedAt: 't1', sceneIds: ['a'], scenes: [], project: {}, removed: [] } })),
   // Scene split (#8977) — exercised against the real store in musicVideoSceneSplit.test.js.
   splitProjectScene: vi.fn(),
   mergeProjectNextScene: vi.fn(),
@@ -470,7 +470,7 @@ describe('musicVideo routes', () => {
   it('PATCH /:id/scenes/:sceneId sets a scene to a performance shot and rejects an unknown shot mode (#8977)', async () => {
     const ok = await request(app).patch('/api/music-video/mv-1/scenes/mvs-1').send({ shotMode: 'performance' });
     expect(ok.status).toBe(200);
-    expect(svc.updateScene).toHaveBeenCalledWith('mv-1', 'mvs-1', { shotMode: 'performance' });
+    expect(svc.updateScene).toHaveBeenCalledWith('mv-1', 'mvs-1', { shotMode: 'performance' }, { edit: true });
     const bad = await request(app).patch('/api/music-video/mv-1/scenes/mvs-1').send({ shotMode: 'karaoke' });
     expect(bad.status).toBe(400);
     expect(svc.updateScene).toHaveBeenCalledTimes(1);
@@ -983,25 +983,31 @@ describe('musicVideo routes', () => {
       const r = await request(app).patch('/api/music-video/mv-1/scenes/mvs-1').send({ prompt: 'new' });
       expect(r.status).toBe(200);
       expect(r.body.prompt).toBe('new');
+      // The saved scene stays the reply; the edit result rides beside its fields.
+      expect(r.body.edit).toMatchObject({ updatedAt: 't1', sceneIds: ['mvs-1'] });
     });
 
     it('DELETE /:id/scenes/:sceneId removes a scene', async () => {
       const r = await request(app).delete('/api/music-video/mv-1/scenes/mvs-1');
       expect(r.status).toBe(200);
       expect(svc.deleteScene).toHaveBeenCalledWith('mv-1', 'mvs-1');
+      // Only the edit result goes back, never the whole project.
+      expect(Object.keys(r.body)).toEqual(['edit']);
     });
 
     it('POST /:id/scenes/reorder reorders', async () => {
       const r = await request(app).post('/api/music-video/mv-1/scenes/reorder').send({ sceneIds: ['b', 'a'] });
       expect(r.status).toBe(200);
-      expect(r.body.scenes.map((s) => s.sceneId)).toEqual(['b', 'a']);
+      expect(r.body.edit.sceneIds).toEqual(['b', 'a']);
+      expect(r.body).not.toHaveProperty('project');
     });
 
     it('POST /:id/scenes/vary-wipes returns only the changed wipes', async () => {
       const r = await request(app).post('/api/music-video/mv-1/scenes/vary-wipes').send({ fromSceneId: 'a', count: 4, styles: ['star', 'iris'], seed: 9 });
       expect(r.status).toBe(200);
       expect(svc.varyProjectWipes).toHaveBeenCalledWith('mv-1', { fromSceneId: 'a', count: 4, styles: ['star', 'iris'], seed: 9 });
-      expect(r.body).toEqual({ scenes: [{ sceneId: 'a', wipeOut: { style: 'star' }, transitionOut: null }], updatedAt: 't1' });
+      expect(r.body).toEqual({ scenes: [{ sceneId: 'a', wipeOut: { style: 'star' }, transitionOut: null }], updatedAt: 't1',
+        edit: { updatedAt: 't1', sceneIds: ['a'], scenes: [], project: {}, removed: [] } });
     });
 
     it('POST /:id/scenes/vary-wipes refuses an unknown style', async () => {

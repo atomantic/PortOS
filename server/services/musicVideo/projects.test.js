@@ -389,7 +389,7 @@ describe('automatic shot clean-up (#15317)', () => {
       { startSec: 4, endSec: 6, label: 'Shot 3' },
       { startSec: 6, endSec: 8, label: 'Fence run' },
     ]);
-    const deleted = await projects.deleteScene(p.id, b.sceneId);
+    const { project: deleted } = await projects.deleteScene(p.id, b.sceneId);
     expect(deleted.scenes.map(scene => scene.label)).toEqual(['Shot 1', 'Shot 2', 'Fence run']);
     const { scenes: pieces } = await projects.splitProjectScene(p.id, a.sceneId, { atSec: 1 });
     expect(pieces.map(scene => scene.label)).toEqual(['Shot 1', 'Shot 2']);

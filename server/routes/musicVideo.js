@@ -18,8 +18,6 @@ import festivalPacketRoutes from './musicVideoFestivalPacket.js';
 import researchSeedRoutes from './musicVideoResearchSeed.js';
 import blenderRoutes from './musicVideoBlender.js';
 import { musicVideoColdOpenAudioSchema, musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema } from '../lib/musicVideoValidation.js';
-import { productionReadiness } from '../services/musicVideo/productionReview.js';
-import { presentMusicVideoDependencies } from '../lib/musicVideoDependencies.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, musicVideoAudioTimingPreviewSchema, musicVideoAudioTimingApplySchema, musicVideoProjectCreateSchema, musicVideoProjectCloneSchema, musicVideoProjectUpdateSchema, musicVideoPacingRecutSchema, musicVideoPlanRequestSchema, musicVideoManualAnalysisSchema, musicVideoSectionsEditSchema, musicVideoTranscribeMidiRequestSchema, musicVideoLyricsImportSchema, musicVideoLyricsImportTrackSchema, musicVideoLyricsAlignSchema, musicVideoLyricsVerifySchema, musicVideoSongPrepareSchema, musicVideoTakeInputSchema, musicVideoHandoffImportSchema, musicVideoTreatmentUpdateSchema, musicVideoTreatmentCompileSchema, musicVideoTreatmentApplySchema, musicVideoTreatmentSyncShotSheetSchema, musicVideoSequenceRenderSchema, musicVideoSequenceTakeSchema, musicVideoTreatmentProofReviewSchema, musicVideoCodeGenerateSchema, isPaginationRequested, parsePagination } from '../lib/validation.js';
@@ -42,7 +40,6 @@ import { renderMusicVideo, attachRenderSseClient, cancelRender, getActiveRenderJ
 import { prepareCodeRender } from '../services/musicVideo/codeRender.js';
 import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../services/musicVideo/codeGeneration.js';
 import { getActivePublishKitBuild } from '../services/musicVideo/publishKit.js';
-import { presentProjectAutonomousRun } from '../services/musicVideo/autonomousService.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import { parseLyricCues } from '../services/musicVideo/timedText.js';
 import { attachLyricAlignSseClient, cancelLyricAlign, getActiveLyricAlignJobId, startLyricAlign } from '../services/musicVideo/lyricAlignJob.js';
@@ -51,7 +48,7 @@ import { importTrackLyrics, MAX_LYRIC_CUES } from '../services/musicVideo/trackL
 import { offsetLyricMarkers } from '../lib/lyricMarkers.js';
 import { updateTreatment, compileTreatment, previewTreatmentApply, applyTreatment, syncTreatmentFromShotSheet, reviewProof } from '../services/musicVideo/treatmentService.js';
 import { writeOriginScope } from '../lib/writeOrigin.js';
-import { presentProjectCastAndSets } from '../services/musicVideo/castAndSetsService.js';
+import { presentProjectForRead } from '../services/musicVideo/projectPresentation.js';
 import { summarizeMusicVideoProject, compareMusicVideoProjectsNewestFirst } from '../lib/musicVideoSummary.js';
 import { takeAssetExists } from '../services/musicVideo/takeAsset.js';
 import sceneRoutes from './musicVideoScenes.js';
@@ -62,7 +59,6 @@ import devArtifactRoutes from './musicVideoDevArtifacts.js';
 import runRoutes from './musicVideoRuns.js';
 import deliveryRoutes from './musicVideoDelivery.js';
 import compositionRoutes from './musicVideoComposition.js';
-import { withCatalogCheckin } from '../services/musicVideo/catalogCheckin.js';
 import { getMusicVideoMediaPool, searchMusicVideoMediaPool, importMusicVideoPool, searchMediaLibraryForPool, addLibraryMediaToPool, deleteMusicVideoPoolAssets } from '../services/musicVideo/mediaPool.js';
 import { getMusicVideoOutroStats } from '../services/musicVideo/statsOutro.js';
 
@@ -89,42 +85,6 @@ const projectUpdateSchema = musicVideoProjectUpdateSchema.extend(recordRenderPin
 // `summary=1` (#10169) swaps each record for its bounded summary projection —
 // newest first, with a `nextCursor` — for the project index and header picker, so
 // they never load every project's scenes, runs and reviews.
-// Both pins are process-local, so only the server can say which stages a restart orphaned.
-// Approvals decide stage completion and only the server computes them (#10136), so the read
-// response carries `productionReadiness` — stages derive from one record, never "not done" while a
-// second request is in flight. GET /:id/production-review still serves the full review payload.
-// A restart archives a thumbnail paint without clearing `pending`. Heal on read,
-// and only when one is present, so a project list does not load the image stack.
-// `catalogCheckinResolved`: the project came from getProject in this request, which already
-// resolved its catalog check-in; resolving it again only repeats every linked catalog read (#16210).
-async function presentProjectForRead(project, { catalogCheckinResolved = false } = {}) {
-  let current = project;
-  if (project?.publishKit?.youtubeThumbnail?.pending) {
-    const { reconcileInterruptedYoutubeThumbnail } = await import('../services/musicVideo/youtubeThumbnail.js');
-    current = await reconcileInterruptedYoutubeThumbnail(project);
-  }
-  if (current?.castAndSets?.source === 'catalog' && !(catalogCheckinResolved && current.castAndSets.catalogCheckin)) {
-    current = await withCatalogCheckin(current);
-  }
-  // A Blender film's Shots step is decided by renders on this machine's disk, which only the server can read.
-  let filmFinalStale = false;
-  if (current?.composition?.mode === 'blender') {
-    const { blenderFilmReadState } = await import('../services/musicVideo/blender/renderIndex.js');
-    const film = await blenderFilmReadState(current);
-    current = { ...current, blenderShots: film.shots };
-    filmFinalStale = film.finalStale === true;
-  }
-  const dependencies = presentMusicVideoDependencies(current);
-  // The final video is joined from shot renders the record does not hold, so its evidence cannot
-  // see a shot that went out of date or was rendered again since: the film's own reading adds that.
-  const presented = presentProjectAutonomousRun(presentProjectCastAndSets(filmFinalStale ? { ...dependencies, renderDependencyState: {
-    status: 'stale', reasons: [...new Set([...(dependencies.renderDependencyState?.reasons || []), 'Blender shots changed or were rendered again after this final was joined'])],
-  } } : dependencies));
-  // The track's audio can be replaced in place, so only the server can say the timing predates it (#14793).
-  const { projectSongAudioChange } = await import('../services/musicVideo/songAudio.js');
-  return { ...presented, productionReadiness: productionReadiness(presented), songAudioChange: await projectSongAudioChange(presented) };
-}
-
 router.get('/', asyncHandler(async (req, res) => {
   const query = validateRequest(musicVideoProjectListQuerySchema, req.query);
   const summary = query.summary === '1' || query.summary === 'true';

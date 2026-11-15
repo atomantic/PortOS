@@ -21,8 +21,11 @@ const findScene = (project, sceneId) => {
   return scene;
 };
 
-/** Approve or clear `sceneIds`; returns the project's tier counts and the changed shots. */
-export async function approveFinal(projectId, { sceneIds, approved }) {
+/**
+ * Approve or clear `sceneIds`; returns the project's tier counts and the changed shots, and with
+ * `{ edit: true }` the edit result (editResult.js) between the record before and after.
+ */
+export async function approveFinal(projectId, { sceneIds, approved }, { edit = false } = {}) {
   const project = await requireProject(projectId);
   const patches = sceneIds.map((sceneId) => {
     const outcome = finalApprovalPatch(findScene(project, sceneId), approved);
@@ -32,7 +35,9 @@ export async function approveFinal(projectId, { sceneIds, approved }) {
   const scenes = [];
   for (const { sceneId, patch } of patches) scenes.push(await updateScene(projectId, sceneId, patch));
   const latest = await requireProject(projectId);
-  return { scenes, counts: finalTierCounts(latest.scenes) };
+  if (!edit) return { scenes, counts: finalTierCounts(latest.scenes) };
+  const { presentEditResult } = await import('./editResult.js');
+  return { scenes, counts: finalTierCounts(latest.scenes), edit: await presentEditResult({ before: project, after: latest }) };
 }
 
 /** One shot's upgrade plan: `{ sceneId, status, ... }` where `status` is `ready` or the reason it is skipped. */

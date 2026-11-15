@@ -93,7 +93,7 @@ const STAGE_VIEWS = {
 export default function ProjectWorkspace({
   selected, tracks, trackLibrary, trackName, youtube, separation, lyricAlign, midi, renderJob, videoSettings, publishing, analyzing, cloning,
   replaceProject, patchProject, patchScene, openProject, prepareSong, onAnalyze, onClone, onTrackImported,
-  onRename, renameForm, deletion, unsavedSceneFields, takesRef, mergeFetchedProject,
+  onRename, renameForm, deletion, unsavedSceneFields, takesRef, mergeFetchedProject, applyEdit, reloadOpenProject,
 }) {
   const { projectId: routeProjectId, artifactId: routeArtifactId, stage: routeStage, sceneId: routeSceneId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -187,7 +187,7 @@ export default function ProjectWorkspace({
     selected, tracks, midi, lyricAlign, renderTargetsSelected, replaceProject, patchProject, openProject, prepareSong, navigate, onClone,
   });
   const produce = useProduceStageWiring({
-    selected, videoSettings, renderJob, productionReview, excerpts: review.excerpts, unsavedSceneFields, takesRef, mergeFetchedProject,
+    selected, videoSettings, renderJob, productionReview, excerpts: review.excerpts, unsavedSceneFields, takesRef, mergeFetchedProject, applyEdit, reloadOpenProject,
     replaceProject, patchProject, patchScene, editProjectLocal, saveProjectFields, seekToScene, routeSceneId, navigate,
   });
   const castSetsStage = useCastSetsStageWiring({ selected, replaceProject, patchProject, productionReview });

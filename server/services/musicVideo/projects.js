@@ -401,35 +401,59 @@ export async function addProjectScenes(id, sceneInputs, { source = null } = {}) 
 // check-in to drop stale catalog picks) but does not present the saved project afterwards.
 const SCENES_REPLY = Object.freeze({ presentProject: false });
 
-/** Edit against the fresh record so concurrent changes are not overwritten. */
-export async function updateScene(id, sceneId, patch) {
-  const { applySceneUpdate } = await import('./projectsLogic.js');
-  const { updated } = await mutateProjectRecord(id, (current) => applySceneUpdate(current, sceneId, patch), SCENES_REPLY);
-  return updated;
+// Board edits answer with an edit result (editResult.js, #16247): the shots and read-time state the
+// edit changed, so the editing tab patches its copy instead of reading the whole project again.
+// `edit` is filled by mutateProjectRecord; `after` replaces its saved record when a board write followed.
+async function editWrite(id, transform, options = {}) {
+  const edit = {};
+  const outcome = await mutateProjectRecord(id, transform, { ...options, presentProject: false, edit });
+  return { outcome, edit };
+}
+async function withEditResult(outcome, edit, after = edit.after) {
+  const { presentEditResult } = await import('./editResult.js');
+  return { ...outcome, edit: await presentEditResult({ before: edit.before, after }) };
 }
 
-/** "Vary wipes" over a run of shots (projectsLogic.varySceneWipes). Returns `{ project, scenes }`. */
+/**
+ * Edit against the fresh record so concurrent changes are not overwritten. Returns the scene, or
+ * with `{ edit: true }` `{ scene, edit }` where `edit` is the edit result.
+ */
+export async function updateScene(id, sceneId, patch, { edit: answerEdit = false } = {}) {
+  const { applySceneUpdate } = await import('./projectsLogic.js');
+  if (!answerEdit) {
+    const { updated } = await mutateProjectRecord(id, (current) => applySceneUpdate(current, sceneId, patch), SCENES_REPLY);
+    return updated;
+  }
+  const { outcome, edit } = await editWrite(id, (current) => applySceneUpdate(current, sceneId, patch));
+  const { edit: result } = await withEditResult({}, edit);
+  return { scene: outcome.updated, edit: result };
+}
+
+/** "Vary wipes" over a run of shots (projectsLogic.varySceneWipes). Returns `{ project, scenes, edit }`. */
 export async function varyProjectWipes(id, options) {
   const { varySceneWipes } = await import('./projectsLogic.js');
-  return mutateProjectRecord(id, (current) => varySceneWipes(current, options), SCENES_REPLY);
+  const { outcome, edit } = await editWrite(id, (current) => varySceneWipes(current, options));
+  return withEditResult(outcome, edit);
 }
 
+/** Remove a shot. Returns `{ project, edit }`. */
 export async function deleteScene(id, sceneId) {
   const { removeScene } = await import('./projectsLogic.js');
-  const { project } = await mutateProjectRecord(id, (current) => ({ project: removeScene(current, sceneId) }));
-  return project;
+  const { outcome, edit } = await editWrite(id, (current) => ({ project: removeScene(current, sceneId) }));
+  return withEditResult(outcome, edit);
 }
 
+/** Put the shots in `orderedIds` order (each slot keeps its timing). Returns `{ project, edit }`. */
 export async function reorderProjectScenes(id, orderedIds) {
   const { reorderScenes } = await import('./projectsLogic.js');
-  const { project } = await mutateProjectRecord(id, (current) => ({ project: reorderScenes(current, orderedIds) }));
-  return project;
+  const { outcome, edit } = await editWrite(id, (current) => ({ project: reorderScenes(current, orderedIds) }));
+  return withEditResult(outcome, edit);
 }
 
 /**
  * Split a shot longer than its backend renders in one take into contiguous
  * scenes on lyric/phrase boundaries (#8977, projectsLogic.splitScene), or in
- * two at `options.atSec`. A locked still stays locked on every piece. Returns `{ project, scenes }` — the persisted project and the pieces.
+ * two at `options.atSec`. A locked still stays locked on every piece. Returns `{ project, scenes, edit }`: the persisted project, the pieces and the edit result (editResult.js).
  */
 export async function splitProjectScene(id, sceneId, options = {}) {
   const [{ splitScene }, { carryShotLocks }, followShots] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js'), import('../storyboards/followShots.js')]);
@@ -438,7 +462,7 @@ export async function splitProjectScene(id, sceneId, options = {}) {
   if (!stored) throw new ServerError('Music video not found', { status: 404, code: 'NOT_FOUND' });
   const panelIds = followShots.boardFollowsShots(stored)
     ? await followShots.reservePanelsForSplit(stored, sceneId, splitScene(stored, sceneId, options).scenes.length - 1) : [];
-  const outcome = await mutateProjectRecord(id, (current) => {
+  const { outcome, edit } = await editWrite(id, (current) => {
     const split = splitScene(current, sceneId, options);
     const from = Object.fromEntries(split.scenes.slice(1).map((piece) => [piece.sceneId, sceneId]));
     if (!panelIds.length) return { ...split, project: carryShotLocks(current, split.project, { from }) };
@@ -449,52 +473,54 @@ export async function splitProjectScene(id, sceneId, options = {}) {
     const project = carryShotLocks(current, { ...split.project, scenes }, { from });
     return { project, scenes: split.scenes.map((piece) => (ownPanel.has(piece.sceneId) ? { ...piece, panelId: ownPanel.get(piece.sceneId) } : piece)) };
   });
-  if (!panelIds.length) return outcome;
+  if (!panelIds.length) return withEditResult(outcome, edit);
   const [first, ...later] = outcome.scenes;
   await followShots.applyShotEditToBoard(outcome.project, {
     lengths: [followShots.panelLength(first)].filter(Boolean),
     copies: later.map((piece) => ({ fromPanelId: first.panelId, id: piece.panelId, seconds: followShots.panelLength(piece)[1] })),
   });
-  return afterBoardWrite(id, outcome);
+  return afterBoardWrite(id, outcome, edit);
 }
 
-// The board write's sync may have touched the shots, so answer with the record as it is now.
-async function afterBoardWrite(id, outcome) {
-  const project = await getProject(id);
+// The board write's sync may have touched the shots, so answer with the record as it is now. Its read
+// reuses the write's catalog reads, and the edit result is taken against it.
+async function afterBoardWrite(id, outcome, edit) {
+  const project = await getProject(id, edit.reads ? { catalogReads: edit.reads } : {});
   const fresh = (scene) => project.scenes?.find((entry) => entry.sceneId === scene?.sceneId) ?? scene;
-  return { ...outcome, project,
+  return withEditResult({ ...outcome, project,
     ...(outcome.scene ? { scene: fresh(outcome.scene) } : {}),
     ...(outcome.scenes ? { scenes: outcome.scenes.map(fresh) } : {}),
     ...(outcome.previous ? { previous: fresh(outcome.previous) } : {}),
     ...(outcome.next ? { next: fresh(outcome.next) } : {}),
-  };
+  }, edit, project);
 }
 
 /** A merge's panels: the kept shot's takes the joined length and the removed shot's goes. */
-async function mergeIntoBoard(id, before, outcome) {
+async function mergeIntoBoard(id, before, outcome, edit) {
   const followShots = await import('../storyboards/followShots.js');
-  if (!followShots.boardFollowsShots(outcome.project)) return outcome;
+  if (!followShots.boardFollowsShots(outcome.project)) return withEditResult(outcome, edit);
   const stillThere = new Set(outcome.project.scenes.map((scene) => scene.sceneId));
   const removed = before.filter((scene) => !stillThere.has(scene.sceneId) && scene.panelId && scene.panelId !== outcome.scene.panelId).map((scene) => scene.panelId);
   await followShots.applyShotEditToBoard(outcome.project, { lengths: [followShots.panelLength(outcome.scene)].filter(Boolean), remove: removed });
-  return afterBoardWrite(id, outcome);
+  return afterBoardWrite(id, outcome, edit);
 }
 
 /** A moved cut's panels: both shots beside it take their new lengths. */
-async function moveCutOnBoard(id, outcome, shots) {
+async function moveCutOnBoard(id, outcome, shots, edit) {
   const followShots = await import('../storyboards/followShots.js');
-  if (!followShots.boardFollowsShots(outcome.project)) return outcome;
+  if (!followShots.boardFollowsShots(outcome.project)) return withEditResult(outcome, edit);
   await followShots.applyShotEditToBoard(outcome.project, { lengths: shots.map(followShots.panelLength).filter(Boolean) });
-  return afterBoardWrite(id, outcome);
+  return afterBoardWrite(id, outcome, edit);
 }
 
 /** Cut shots on sung words over the chosen lyric lines, or lay them out on an empty board (projectsLogic.cutScenesOnLyricWords, #14820). */
 export async function cutProjectScenesOnLyrics(id, options) {
   const [{ cutScenesOnLyricWords }, { carryShotLocks }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
-  return mutateProjectRecord(id, (current) => {
+  const { outcome, edit } = await editWrite(id, (current) => {
     const { project, scenes, skipped, from, laidOut } = cutScenesOnLyricWords(current, options);
     return { project: carryShotLocks(current, project, { from }), scenes, skipped, laidOut };
   });
+  return withEditResult(outcome, edit);
 }
 
 /** Read the raw record so preview and the serialized apply hash identical inputs. */
@@ -513,35 +539,35 @@ export async function recutProjectToPacing(id, revision) {
 
 /**
  * Join a scene with the next one (projectsLogic.mergeNextScene) — the inverse
- * of the split. Returns `{ project, scene }`.
+ * of the split. Returns `{ project, scene, edit }`.
  */
 export async function mergeProjectNextScene(id, sceneId, options = {}) {
   const [{ mergeNextScene }, { assertBoardHoldsShotLengths }] = await Promise.all([import('./projectsLogic.js'), import('../storyboards/followShots.js')]);
   let before = [];
-  const outcome = await mutateProjectRecord(id, (current) => {
+  const { outcome, edit } = await editWrite(id, (current) => {
     before = current.scenes || [];
     const merged = mergeNextScene(current, sceneId, options);
     assertBoardHoldsShotLengths(current, [merged.scene]);
     return merged;
   });
-  return mergeIntoBoard(id, before, outcome);
+  return mergeIntoBoard(id, before, outcome, edit);
 }
 
 /**
  * Merge a scene over the one before it (projectsLogic.mergePreviousScene): this
  * scene starts where the previous one did and the previous one is removed.
- * Returns `{ project, scene }`.
+ * Returns `{ project, scene, edit }`.
  */
 export async function mergeProjectPreviousScene(id, sceneId, options = {}) {
   const [{ mergePreviousScene }, { assertBoardHoldsShotLengths }] = await Promise.all([import('./projectsLogic.js'), import('../storyboards/followShots.js')]);
   let before = [];
-  const outcome = await mutateProjectRecord(id, (current) => {
+  const { outcome, edit } = await editWrite(id, (current) => {
     before = current.scenes || [];
     const merged = mergePreviousScene(current, sceneId, options);
     assertBoardHoldsShotLengths(current, [merged.scene]);
     return merged;
   });
-  return mergeIntoBoard(id, before, outcome);
+  return mergeIntoBoard(id, before, outcome, edit);
 }
 
 // A shot looked up by id after an edit: a retime re-sorts the board, so its old index may name another shot.
@@ -549,11 +575,11 @@ const sceneById = (project, sceneId) => (project.scenes || []).find((scene) => s
 
 /**
  * Move the cut before a shot: the shot starts at `startSec` and the shot
- * before it ends there, so the two stay joined. Returns `{ project, scene, previous }`.
+ * before it ends there, so the two stay joined. Returns `{ project, scene, previous, edit }`.
  */
 export async function moveProjectSceneStart(id, sceneId, { startSec }) {
   const [{ applySceneUpdate }, { assertBoardHoldsFirstStart, assertBoardHoldsShotLengths }] = await Promise.all([import('./projectsLogic.js'), import('../storyboards/followShots.js')]);
-  const outcome = await mutateProjectRecord(id, (current) => {
+  const { outcome, edit } = await editWrite(id, (current) => {
     const scenes = current.scenes || [];
     const index = scenes.findIndex((scene) => scene.sceneId === sceneId);
     if (index < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
@@ -573,7 +599,7 @@ export async function moveProjectSceneStart(id, sceneId, { startSec }) {
     assertBoardHoldsShotLengths(current, [moved, prior]);
     return { project, scene: moved, previous: prior };
   });
-  return moveCutOnBoard(id, outcome, [outcome.previous, outcome.scene]);
+  return moveCutOnBoard(id, outcome, [outcome.previous, outcome.scene], edit);
 }
 
 // The shortest shot a moved end leaves behind it (projectsLogic MIN_SPLIT_PIECE_SEC).
@@ -582,11 +608,11 @@ const MIN_SHOT_SEC = 0.1;
 /**
  * Move the cut after a shot: the shot ends at `endSec` and the next shot starts
  * there, growing or shrinking to meet it while its own end stays put. The last
- * shot just ends there, inside the song. Returns `{ project, scene, next }`.
+ * shot just ends there, inside the song. Returns `{ project, scene, next, edit }`.
  */
 export async function moveProjectSceneEnd(id, sceneId, { endSec }) {
   const [{ applySceneUpdate }, { assertBoardHoldsLastEnd, assertBoardHoldsShotLengths }] = await Promise.all([import('./projectsLogic.js'), import('../storyboards/followShots.js')]);
-  const outcome = await mutateProjectRecord(id, (current) => {
+  const { outcome, edit } = await editWrite(id, (current) => {
     const scenes = current.scenes || [];
     const index = scenes.findIndex((scene) => scene.sceneId === sceneId);
     if (index < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
@@ -611,7 +637,7 @@ export async function moveProjectSceneEnd(id, sceneId, { endSec }) {
     assertBoardHoldsShotLengths(current, [moved, nextShot]);
     return { project, scene: moved, next: nextShot };
   });
-  return moveCutOnBoard(id, outcome, [outcome.scene, outcome.next]);
+  return moveCutOnBoard(id, outcome, [outcome.scene, outcome.next], edit);
 }
 
 // Take decisions (select, reject, mark, swap) touch only scenes and marks and answer with
@@ -683,8 +709,8 @@ export async function selectSceneTake(id, sceneId, takeId, options = {}) {
  * `withAssetId` brings its partner too: a still's clip, or a clip's still.
  * `kind: 'endImage'` puts a still on the shot's end frame instead.
  * The take keeps the prompt and provider of the take it came from, and the
- * shot's start or end frame prompt becomes the one that still was made from. A shot
- * Returns the updated scene.
+ * shot's start or end frame prompt becomes the one that still was made from.
+ * Returns `{ scene, edit }`: the updated scene and the edit result (editResult.js).
  */
 export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAssetId = null }) {
   const [{ appendSceneTakes: append, selectSceneTake: select }, { projectTakeAssets }, { authoredFramePrompt }] = await Promise.all([
@@ -696,7 +722,7 @@ export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAsset
     ? await import('../imageGen/local.js').then(({ readImageSidecar }) => readImageSidecar(placedStill))
       .then(({ metadata }) => (typeof metadata?.prompt === 'string' ? metadata.prompt : null)).catch(() => null)
     : null;
-  const { scene } = await mutateProjectRecord(id, (current) => {
+  const { outcome: placed, edit } = await editWrite(id, (current) => {
     const origin = new Map(projectTakeAssets(current).filter(asset => asset.take).map(asset => [`${asset.kind}:${asset.ref}`, asset.take]));
     const still = kind === 'video' ? withAssetId : assetId;
     const clip = kind === 'video' ? assetId : withAssetId;
@@ -724,8 +750,9 @@ export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAsset
       outcome = { ...outcome, project: { ...outcome.project, scenes }, scene: scenes.find((scene) => scene.sceneId === sceneId) };
     }
     return outcome;
-  }, SCENES_REPLY);
-  return scene;
+  });
+  const { edit: result } = await withEditResult({}, edit);
+  return { scene: placed.scene, edit: result };
 }
 
 /** Reject every take of a shot that is not its selected frame, end frame or clip. Returns `{ scene, rejected }`. */
@@ -804,6 +831,12 @@ async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate =
   // A mutator that answers with shots, never the project, skips presenting the saved record:
   // nothing reads its catalog descriptions or check-in, which re-read every linked record (#16210).
   const presentProject = options.presentProject !== false;
+  // `options.edit` (an object): fill it with the record before and after the write, both with their
+  // catalog check-in, so the caller can answer with an edit result (editResult.js) instead of the project.
+  // Both check-ins share one set of catalog reads, so the edit result adds none of its own.
+  const edit = options.edit && !sceneOnly ? options.edit : null;
+  const reads = edit ? (await import('./catalogCheckin.js')).createCatalogReads() : null;
+  let presentedConcept = null;
   const outcome = await write(id, async (stored, context = {}) => {
     if (sceneOnly) {
       const outcome = await transform(stored, { ...context, storedProject: stored });
@@ -817,8 +850,9 @@ async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate =
     let current = descriptions ? await descriptions.resolveProjectCatalogDescriptions(stored, { client: context.client }) : stored;
     if (current?.castAndSets?.source === 'catalog') {
       const { withCatalogCheckin } = await import('./catalogCheckin.js');
-      current = await withCatalogCheckin(current, { client: context.client });
+      current = await withCatalogCheckin(current, { client: context.client, ...(reads ? { reads } : {}) });
     }
+    if (edit) edit.before = current;
     // A transform may be async: the thumbnail heal re-checks job liveness under the lock.
     const outcome = await transform(current, { ...context, storedProject: stored });
     // Automatic clean-up in the same write (#15317): default "Shot N" labels follow the
@@ -840,6 +874,8 @@ async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate =
       ? await descriptions.syncEditedSubjectDescriptions(current, outcome.project, { client: context.client, bases, includeNewLinks: options.includeNewLinks })
       : { project: outcome.project, records: [] };
     catalogRecords = [...(outcome.catalogRecords || []), ...synced.records];
+    // The saved record keeps unchanged description snapshots; GET shows the live ones, as `synced` has them.
+    presentedConcept = descriptions ? synced.project?.concept ?? null : null;
     const next = descriptions ? descriptions.preserveUnchangedDescriptionSnapshots(stored, current, synced.project, options.commitSubjectIds) : synced.project;
     await assertNewMediaSelections(stored, next);
     dropped = { project: stored, assets: droppedTakeAssets(stored, next) };
@@ -862,6 +898,16 @@ async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate =
   if (!sceneOnly && presentProject && outcome.project?.castAndSets?.source === 'catalog') {
     const { withCatalogCheckin } = await import('./catalogCheckin.js');
     outcome.project = await withCatalogCheckin(outcome.project);
+  }
+  if (edit && outcome.project) {
+    let after = presentedConcept ? { ...outcome.project, concept: presentedConcept } : outcome.project;
+    if (after.castAndSets?.source === 'catalog' && !after.castAndSets.catalogCheckin) {
+      const { withCatalogCheckin } = await import('./catalogCheckin.js');
+      // A write that also edited catalog records reads them again; otherwise the write's reads still hold.
+      after = await withCatalogCheckin(after, catalogRecords.length ? {} : { reads });
+    }
+    edit.after = after;
+    edit.reads = catalogRecords.length ? null : reads;
   }
   return outcome;
 }

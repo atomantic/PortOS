@@ -526,7 +526,25 @@ export function installMusicVideoPageHooks() {
   });
 }
 
+// A board edit reply's edit result (server/services/musicVideo/editResult.js) for the shots a test changed:
+// `scenes` are the board after the edit, `changed` the ids whose presentation changed.
+const editResult = (scenes, changed = scenes.map((scene) => scene.sceneId), { updatedAt = null, project = {} } = {}) => ({
+  updatedAt, sceneIds: scenes.map((scene) => scene.sceneId), scenes: scenes.filter((scene) => changed.includes(scene.sceneId)), project, removed: [],
+});
+// An updateMusicVideoScene implementation that saves each patch onto a running copy of `project`'s shots
+// (object fields merge one level, as the server merges the shot sheet) and answers like the route.
+const savedSceneReplies = (project) => {
+  let scenes = project.scenes || [];
+  return async (_id, sceneId, patch) => {
+    scenes = scenes.map((scene) => (scene.sceneId !== sceneId ? scene : Object.fromEntries([...Object.entries(scene), ...Object.entries(patch).map(([key, value]) => [key,
+      value && typeof value === 'object' && !Array.isArray(value) && scene[key] && typeof scene[key] === 'object' ? { ...scene[key], ...value } : value])])));
+    return { ...scenes.find((scene) => scene.sceneId === sceneId), edit: editResult(scenes, [sceneId], { updatedAt: project.updatedAt ?? null }) };
+  };
+};
+
 export {
+  editResult,
+  savedSceneReplies,
   PROJECT_WITH_CLIP,
   PROJECT_NO_CLIP,
   sseState,

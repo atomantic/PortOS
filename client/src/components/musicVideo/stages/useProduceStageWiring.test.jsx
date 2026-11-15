@@ -21,13 +21,15 @@ import {
   LocationProbe,
   showFrames,
   installMusicVideoPageHooks,
+  editResult,
+  savedSceneReplies,
 } from '../../../test/musicVideoPageMocks.jsx';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { findEnabledByRole } from '../../../test/enabledBarrier.js';
 import { MemoryRouter } from 'react-router';
 import toast from '../../ui/Toast';
 import { createTestPhaseDiagnostics } from '../../../../../server/test/testPhaseDiagnostics.js';
-import { approveMusicVideoFinal, listMusicVideoProjects, renderMusicVideoProject, updateMusicVideoProject, updateMusicVideoScene, proposeMusicVideoShotSheet, splitMusicVideoScene, moveMusicVideoSceneStart, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff, addMusicVideoSceneTake, getMusicVideoHandoffBundle, getMusicVideoProject, startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision, renderMusicVideoSceneFrame, getMusicVideoBlender } from '../../../services/apiMusicVideo.js';
+import { approveMusicVideoFinal, listMusicVideoProjects, renderMusicVideoProject, reorderMusicVideoScenes, updateMusicVideoProject, updateMusicVideoScene, proposeMusicVideoShotSheet, splitMusicVideoScene, moveMusicVideoSceneStart, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff, addMusicVideoSceneTake, getMusicVideoHandoffBundle, getMusicVideoProject, startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision, renderMusicVideoSceneFrame, getMusicVideoBlender } from '../../../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../../../services/apiSystem.js';
 import { generateVideo, getVideoGenStatus, getVideoHistoryItem, previewVideoPrompt, trimVideo } from '../../../services/apiImageVideo.js';
 import { downloadBlob } from '../../../lib/downloadBlob.js';
@@ -460,10 +462,11 @@ describe('MusicVideo project video renderer', () => {
     it('approves a draft clip for final from the shot card and badges its board thumbnail', async () => {
       const take = { takeId: 'tk1', kind: 'video', assetId: 'h1', tier: 'draft', status: 'candidate' };
       const project = { ...PROJECT_WITH_CLIP, scenes: [{ ...PROJECT_WITH_CLIP.scenes[0], label: 'Opening', takes: [take] }] };
-      approveMusicVideoFinal.mockImplementation(async (_id, { sceneIds, approved }) => ({
-        scenes: sceneIds.map((sceneId) => ({ sceneId, finalApproval: approved ? finalApprovalPatch(project.scenes[0], true).patch.finalApproval : null })),
-        counts: { draft: 1, approved: approved ? 1 : 0, final: 0, missing: 0 },
-      }));
+      approveMusicVideoFinal.mockImplementation(async (_id, { sceneIds, approved }) => {
+        const scenes = project.scenes.map((scene) => (sceneIds.includes(scene.sceneId)
+          ? { ...scene, finalApproval: approved ? finalApprovalPatch(project.scenes[0], true).patch.finalApproval : null } : scene));
+        return { scenes: scenes.filter((scene) => sceneIds.includes(scene.sceneId)), counts: { draft: 1, approved: approved ? 1 : 0, final: 0, missing: 0 }, edit: editResult(scenes, sceneIds) };
+      });
       await openProject(project, 'produce');
       fireEvent.click(within(await screen.findByLabelText('Storyboard thumbnails')).getByRole('button', { name: /Opening/ }));
       fireEvent.click(await screen.findByLabelText(/Approve for final/));
@@ -491,7 +494,7 @@ describe('MusicVideo project video renderer', () => {
         { ...longShot, label: 'Verse · 1/2', endSec: 21 },
         { ...longShot, sceneId: 's1b', order: 1, label: 'Verse · 2/2', startSec: 21, videoHistoryId: null },
       ];
-      splitMusicVideoScene.mockResolvedValue({ project: { ...project, scenes: pieces }, scenes: pieces });
+      splitMusicVideoScene.mockResolvedValue({ scenes: pieces, edit: editResult(pieces) });
       await openProject(project, 'produce');
 
       // The too-long refusal stays, now with a way out that never loops or stretches.
@@ -507,7 +510,7 @@ describe('MusicVideo project video renderer', () => {
     it('splits a shot in two at the time picked on its slider', async () => {
       const scene = { ...PROJECT_NO_CLIP.scenes[0], startSec: 10, endSec: 14 };
       const pieces = [{ ...scene, endSec: 11.5, label: 'Shot · 1/2' }, { ...scene, sceneId: 's1b', order: 1, startSec: 11.5, label: 'Shot · 2/2' }];
-      splitMusicVideoScene.mockResolvedValue({ project: { ...PROJECT_NO_CLIP, scenes: pieces }, scenes: pieces });
+      splitMusicVideoScene.mockResolvedValue({ scenes: pieces, edit: editResult(pieces) });
       await openProject({ ...PROJECT_NO_CLIP, scenes: [scene] }, 'produce');
 
       fireEvent.click(await screen.findByRole('button', { name: /Split shot/ }));
@@ -524,7 +527,7 @@ describe('MusicVideo project video renderer', () => {
       const first = { ...PROJECT_NO_CLIP.scenes[0], startSec: 0, endSec: 10 };
       const second = { ...first, sceneId: 's2', order: 1, startSec: 10, endSec: 14, label: 'Second' };
       const moved = [{ ...first, endSec: 10.042 }, { ...second, startSec: 10.042 }];
-      moveMusicVideoSceneStart.mockResolvedValue({ project: { ...PROJECT_NO_CLIP, scenes: moved }, scene: moved[1], previous: moved[0] });
+      moveMusicVideoSceneStart.mockResolvedValue({ scene: moved[1], previous: moved[0], edit: editResult(moved) });
       await openProject({ ...PROJECT_NO_CLIP, scenes: [first, second] }, 'produce');
 
       await act(async () => fireEvent.click(await screen.findByRole('button', { name: /^Open Shot 2/ })));
@@ -595,7 +598,7 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
         { sceneId: 's2', order: 1, prompt: 'b', referenceImageId: 'img1', videoHistoryId: 'h2', beatAligned: true, startSec: 12, endSec: 30 },
       ],
     };
-    updateMusicVideoScene.mockResolvedValue({});
+    updateMusicVideoScene.mockImplementation(savedSceneReplies(project));
     await openProject(project, 'produce');
     // The card's summary row and its editor both quote the lyric.
     expect(screen.getAllByText(/first line/).length).toBeGreaterThan(0);
@@ -685,7 +688,7 @@ describe('MusicVideo section layers (#8985)', () => {
   const composition = (mode) => ({ version: 1, mode, textCues: [], style: { color: '#ffffff', font: 'sans' }, posterSec: null });
 
   it('makes a footage-less scene a title card so a composed project can render', async () => {
-    updateMusicVideoScene.mockResolvedValue({});
+    updateMusicVideoScene.mockImplementation(savedSceneReplies({ ...PROJECT_WITH_CLIP, scenes }));
     await openProject({ ...PROJECT_WITH_CLIP, scenes, composition: composition('composed') }, 'review');
     const renderBtn = await screen.findByRole('button', { name: /^Render final$/ });
     expect(renderBtn).toBeDisabled();
@@ -1361,7 +1364,7 @@ it('shares Done between editor, board and sheet, and accepts remote changes afte
   await openProject(project, 'produce');
   fireEvent.click(screen.getByRole('checkbox', { name: 'Done', exact: true }));
   expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-1', project.scenes[0].sceneId, { shotSheet: { checked: true } }, { silent: true });
-  await act(async () => settle({}));
+  await act(async () => settle(await savedSceneReplies(project)(project.id, project.scenes[0].sceneId, { shotSheet: { checked: true } })));
   expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).toBeChecked();
   expect(within(screen.getByLabelText('Storyboard thumbnails')).getByRole('button', { name: 'Open Shot 1' })).toHaveClass('border-port-success');
   fireEvent.click(screen.getByRole('button', { name: 'Close shot' }));
@@ -1376,4 +1379,83 @@ it('shares Done between editor, board and sheet, and accepts remote changes afte
   await pushSocket('music-video:project:changed', { id: project.id });
   await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).not.toBeChecked());
   expect(screen.getByRole('combobox', { name: 'Location' })).toHaveValue('Station');
+});
+
+// #16247: a shot edit from this tab patches the board from its reply and never reads the whole project again.
+describe('shot edits apply their reply without a project read', () => {
+  const first = { ...PROJECT_NO_CLIP.scenes[0], label: 'First', startSec: 0, endSec: 10 };
+  const second = { ...first, sceneId: 's2', order: 1, startSec: 10, endSec: 14, label: 'Second' };
+  const board = { ...PROJECT_NO_CLIP, updatedAt: '2026-01-01T00:00:00.000Z', scenes: [first, second] };
+  const ownOrigin = { silent: true, headers: { 'X-PortOS-Origin': 'tab-socket' } };
+  const asThisTab = async () => { (await import('../../../services/socket.js')).default.id = 'tab-socket'; };
+  const reads = () => getMusicVideoProject.mock.calls.length;
+
+  // Uniquely catches an own edit that still reloads the project, from its reply or from its own broadcast.
+  it('moves a cut from the reply, skips its own broadcast and still reloads for another tab', async () => {
+    await asThisTab();
+    const moved = [{ ...first, endSec: 10.042 }, { ...second, startSec: 10.042 }];
+    moveMusicVideoSceneStart.mockResolvedValue({ scene: moved[1], previous: moved[0], edit: editResult(moved, ['s1', 's2'], { updatedAt: '2026-01-01T00:00:01.000Z' }) });
+    await openProject(board, 'produce');
+    const loaded = reads();
+    await act(async () => fireEvent.click(await screen.findByRole('button', { name: /^Open Shot 2/ })));
+    fireEvent.click(screen.getByRole('button', { name: 'Start one frame later' }));
+    await waitFor(() => expect(moveMusicVideoSceneStart).toHaveBeenCalledWith('mv-2', 's2', 10.042, ownOrigin));
+    await waitFor(() => expect(screen.getByLabelText('Start frame').value).toBe('241'));
+    await pushSocket('music-video:project:changed', { id: 'mv-2', origin: 'tab-socket' });
+    await settle();
+    expect(reads()).toBe(loaded);
+    getMusicVideoProject.mockResolvedValue({ ...board, updatedAt: '2026-01-01T00:00:03.000Z', scenes: moved });
+    await pushSocket('music-video:project:changed', { id: 'mv-2', origin: 'another-tab' });
+    await waitFor(() => expect(reads()).toBe(loaded + 1));
+  });
+
+  it('marks a shot done from the reply alone', async () => {
+    await asThisTab();
+    updateMusicVideoScene.mockImplementation(savedSceneReplies(board));
+    await openProject(board, 'produce');
+    const loaded = reads();
+    await act(async () => fireEvent.click(await screen.findByRole('button', { name: /^Open Shot 1/ })));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Done', exact: true }));
+    await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', { shotSheet: { checked: true } }, ownOrigin));
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).toBeChecked());
+    await settle();
+    expect(reads()).toBe(loaded);
+  });
+
+  // Uniquely catches readiness or approval staying as it was before an edit that changed it.
+  it('takes readiness from the reply: a reorder that stales the storyboard approval stops asking to re-approve', async () => {
+    await asThisTab();
+    const readiness = (approved) => ({ readyForProduction: approved, basis: {}, art: { approved: true, problems: [] }, storyboard: { approved, problems: [] }, proof: { approved: false, problems: [] } });
+    const approvedBoard = { ...board, productionReadiness: readiness(true) };
+    const success = vi.spyOn(toast, 'success');
+    reorderMusicVideoScenes.mockImplementation(async (_id, ids) => {
+      const order = ids.map((id) => board.scenes.find((scene) => scene.sceneId === id));
+      const retimed = order.map((scene, i) => ({ ...scene, order: i, startSec: board.scenes[i].startSec, endSec: board.scenes[i].endSec }));
+      return { edit: editResult(retimed, ids, { updatedAt: '2026-01-01T00:00:02.000Z', project: { productionReadiness: readiness(false) } }) };
+    });
+    await openProject(approvedBoard, 'produce');
+    const loaded = reads();
+    await act(async () => fireEvent.click(await screen.findByRole('button', { name: /^Open Shot 1/ })));
+    fireEvent.click(await screen.findByRole('button', { name: /Move later/ }));
+    await waitFor(() => expect(success).toHaveBeenLastCalledWith(expect.stringMatching(/re-approve the storyboard/)));
+    fireEvent.click(await findEnabledByRole('button', { name: /Move earlier/ }));
+    await waitFor(() => expect(success).toHaveBeenCalledTimes(2));
+    expect(success.mock.calls.at(-1)[0]).not.toMatch(/re-approve/);
+    expect(reads()).toBe(loaded);
+  });
+
+  it('reloads after a refused (409) edit, and after a reply older than the board', async () => {
+    await asThisTab();
+    const conflict = Object.assign(new Error('The shot changed'), { status: 409 });
+    moveMusicVideoSceneStart.mockRejectedValueOnce(conflict);
+    await openProject(board, 'produce');
+    const loaded = reads();
+    await act(async () => fireEvent.click(await screen.findByRole('button', { name: /^Open Shot 2/ })));
+    fireEvent.click(screen.getByRole('button', { name: 'Start one frame later' }));
+    await waitFor(() => expect(reads()).toBe(loaded + 1));
+    // A reply computed before the record the board already shows is a diff against an older base.
+    moveMusicVideoSceneStart.mockResolvedValueOnce({ edit: editResult(board.scenes, ['s2'], { updatedAt: '2025-12-31T00:00:00.000Z' }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Start one frame later' }));
+    await waitFor(() => expect(reads()).toBe(loaded + 2));
+  });
 });
