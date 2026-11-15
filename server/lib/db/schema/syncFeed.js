@@ -33,8 +33,7 @@
 // above the peer's reported maximum rewinds to 0.
 //
 // The db-migration `009-commit-ordered-sync-feed.js` backfills rows that
-// predate the feed. Mirrored in server/scripts/init-db.sql (parity-locked by
-// db.ddlParity.test.js).
+// predate the feed.
 
 export const SYNC_FEED_POSITION_BASE = '1000000000000000';
 

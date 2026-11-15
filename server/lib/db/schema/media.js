@@ -40,7 +40,7 @@ export const mediaDdl = [
     // image reference, provider/model attribution, validated scene spec, status,
     // and refinement history) lives in JSONB; generated image bytes remain in
     // data/images and are referenced by filename. Soft deletes keep recovery and
-    // future peer-sync additive. Mirrors init-db.sql.
+    // future peer-sync additive.
     `CREATE TABLE IF NOT EXISTS threejs_models (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -60,7 +60,7 @@ export const mediaDdl = [
     // live in JSONB; the binary GLB stays on disk at data/image-to-3d/<id>/
     // model.glb and is referenced by path. Soft deletes keep recovery and future
     // peer-sync additive (the GLB is a local, host-specific render, so this is
-    // NOT federated in this phase — like threejs_models). Mirrors init-db.sql.
+    // NOT federated in this phase — like threejs_models).
     `CREATE TABLE IF NOT EXISTS image_to_3d_models (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -128,7 +128,7 @@ export const mediaDdl = [
     // art takes inline in `data` JSONB (a board is read and written whole).
     // name/universe_id/updated_at mirror for the list sort and universe filter;
     // the tombstone pair carries peer-sync deletes (record kind `storyboard`). Panel art
-    // bytes stay in data/images and data/media-sketches. Mirrors init-db.sql.
+    // bytes stay in data/images and data/media-sketches.
     `CREATE TABLE IF NOT EXISTS storyboards (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -142,7 +142,7 @@ export const mediaDdl = [
     `CREATE INDEX IF NOT EXISTS idx_storyboards_updated ON storyboards (updated_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_storyboards_live ON storyboards (deleted) WHERE deleted = FALSE`,
     // Saved storyboard recipes (the Make tab's library): one named node graph
-    // per row in `data` JSONB, loaded onto any board as a copy. Mirrors init-db.sql.
+    // per row in `data` JSONB, loaded onto any board as a copy.
     `CREATE TABLE IF NOT EXISTS storyboard_recipes (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,

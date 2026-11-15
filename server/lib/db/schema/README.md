@@ -13,13 +13,17 @@ to the pre-split inline version. **Order is load-bearing** (FK references, the
 original post-media position), so if you add a table, append it in the domain
 module and keep the composer order in `index.js` intact.
 
-Parity with `server/scripts/init-db.sql` (the fresh-install path) is locked by
-`server/lib/db.ddlParity.test.js`, which auto-discovers every table declared in both
-sources and compares its columns, index definitions (UNIQUE, access method, column
-list, partial predicate), non-audit triggers and CHECK literal sets. Two tolerance
-lists hold the one-sided tables: `SQL_ONLY_TOLERATED` for tables in init-db.sql but
-not JS (the memory system, #1337), and `BOOT_BACKFILL_ONLY` for tables in JS but not
-init-db.sql, each with a one-line reason.
+**These modules are the single DDL source.** `server/scripts/init-db.sql` (the
+fresh-install path Docker, `scripts/db.sh`, `setup-db-test.mjs` and
+`rehearsal-scratch-db.js` apply) is generated from `buildUpgradeDdl()` +
+`buildCatalogDdl()` and the hand-written `server/scripts/init-db.base.sql`
+(extensions and the memory system's own `memories` / `memory_links` tables, #1337)
+by `node scripts/generate-init-db-sql.js` (#16092). Adding a column means editing
+one module and running the generator; never edit `init-db.sql` by hand.
+`server/lib/db.ddlParity.test.js` fails when the committed file is stale and pins
+contracts a single source can still drop, and `initDbSql.db.test.js` proves a
+database built from the generated file and one built by these statements have
+identical catalogs.
 
 | Module | Export(s) | Domain |
 |---|---|---|

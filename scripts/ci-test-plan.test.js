@@ -961,6 +961,8 @@ describe('CI test impact planner', () => {
     { changed: 'server/sockets/chat.js', runner: 'server', guards: ['server/sockets/asyncHandlerGuard.test.js'] },
     { changed: 'server/lib/bufferedSpawn.js', runner: 'server', guards: ['server/lib/index.test.js'] },
     { changed: 'server/routes/sprites.js', runner: 'server', guards: ['server/lib/apiRouteGraph.test.js', 'server/lib/apiRouteParity.test.js', 'scripts/generate-prompt-stage-call-sites.test.js'] },
+    { changed: 'server/scripts/init-db.sql', runner: 'server', guards: ['server/lib/db.ddlParity.test.js'] },
+    { changed: 'server/scripts/init-db.base.sql', runner: 'server', guards: ['server/lib/db.ddlParity.test.js'] },
     { changed: 'client/src/lib/catalogLinks.js', runner: 'client', guards: ['client/src/lib/index.test.js'] },
     { changed: 'client/src/hooks/useAsyncAction.js', runner: 'client', guards: ['client/src/hooks/index.test.js'] },
     { changed: 'client/src/utils/formatters.js', runner: 'client', guards: ['client/src/utils/index.test.js'] },
