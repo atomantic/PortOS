@@ -39,9 +39,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SELF = 'server/negativeProofSleepConventions.test.js';
 
 const BURN_DOWN = [
-  'client/src/components/meatspace/post/PostSessionLauncher.test.jsx',
   'server/services/agentCliSpawning.test.js',
-  'server/services/backupScheduler.test.js',
   'server/services/musicVideo/autonomousService.test.js',
   'server/services/runner.test.js',
 ];

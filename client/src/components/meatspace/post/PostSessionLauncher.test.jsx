@@ -378,7 +378,10 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     await waitFor(() => expect(screen.getByText('Re-verify Multiplication')).toBeTruthy());
     fireEvent.click(screen.getByText('Re-verify Multiplication').closest('button'));
     // A missing rep must NOT fall back to a normal Full POST.
-    await new Promise(r => setTimeout(r, 0));
+    // Positive signal: the on-demand fetch (the second call after mount) ran;
+    // then drain the promise chain that would have started the session.
+    await waitFor(() => expect(getPostReviewReps).toHaveBeenCalledTimes(2));
+    await act(async () => {});
     expect(onStart).not.toHaveBeenCalled();
   });
 
