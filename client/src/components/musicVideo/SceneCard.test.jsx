@@ -1194,6 +1194,24 @@ describe('a still picture in the clip column', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Still' }));
     expect(screen.queryByRole('checkbox', { name: 'Use end frame' })).toBeNull();
   });
+
+  // Catches a plain Still image shot hiding the end frame, so a start+end double still could never be set up.
+  it('offers Use end frame on a plain still and switches it to the end fade', () => {
+    const onSave = vi.fn();
+    function Harness() {
+      const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 3, visualLayer: 'still', referenceImageId: 'start.png', takes: [] });
+      return <SceneCard scene={scene} index={0} layered onGenerateEndFrame={() => {}}
+        onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Still' }));
+    const toggle = screen.getByRole('checkbox', { name: 'Use end frame' });
+    expect(toggle.checked).toBe(false);
+    expect(screen.queryByRole('textbox', { name: 'End frame prompt' })).toBeNull();
+    fireEvent.click(toggle);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { endFrameOff: null, visualLayer: 'still', imageEffect: 'end-fade', imageEffectSec: null });
+    expect(screen.getByRole('textbox', { name: 'End frame prompt' })).toBeTruthy();
+  });
 });
 
 describe('clip speed and offset by hand', () => {
