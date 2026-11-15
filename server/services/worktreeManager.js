@@ -25,6 +25,7 @@ import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { forkRemoteName, normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';
 import { isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
 import { ensureInstanceId } from './instanceIdentity.js';
+import { decideMergedWorktreeRemoval, decideMergedWorktreeReap, decideWith } from './branchRetirementDecision.js';
 import { provisionWorkspaceNodeModules, removeProvisionedNodeModules } from '../lib/worktreeNodeModules.js';
 import { withGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 
@@ -2242,12 +2243,9 @@ export async function reapMergedWorktrees(sourceWorkspace, {
     .then(r => r.stdout.trim())
     .catch(() => '');
 
-  const protectedBranches = new Set([...PROTECTED_BRANCHES, defaultBranch]);
   const claudeTreesRoot = join(sourceWorkspace, '.claude', 'worktrees');
-  const managedRoots = [
-    { path: WORKTREES_DIR, requireAgentId: true },
-    { path: claudeTreesRoot, requireAgentId: false },
-  ];
+  const roots = { worktreesDir: WORKTREES_DIR, claudeTreesRoot };
+  const readDirty = path => readWorktreeStatus(path).then(status => status === null ? null : !classifyWorktreeDirt(status).clean);
 
   // An unreadable inventory is not an empty successful sweep: callers must
   // retain work rather than falling through to receipt-free orphan cleanup.
@@ -2258,64 +2256,37 @@ export async function reapMergedWorktrees(sourceWorkspace, {
   for (const wt of worktrees) {
     // Never touch the primary worktree (the main repo checkout).
     if (pathsEqual(wt.path, sourceWorkspace)) continue;
-    if (wt.bare || wt.detached || !wt.branch) { skipped.push({ path: wt.path, reason: 'no-branch' }); continue; }
-
-    const branchName = wt.branch.replace(/^refs\/heads\//, '');
-    if (!branchName) { skipped.push({ path: wt.path, reason: 'no-branch' }); continue; }
-    // Named so a caller can say WHICH branch a hold kept, not just which path.
-    const hold = (reason) => skipped.push({ path: wt.path, branch: branchName, reason });
-    if (protectedBranches.has(branchName) || branchName === currentBranch) {
-      hold('protected');
+    // Read only after the decision has proven the entry names a branch.
+    const scannedBranch = wt.branch?.replace(/^refs\/heads\//, '');
+    const activeAgentIds = readActiveIds();
+    const scan = await decideWith(facts => decideMergedWorktreeReap({
+      tree: wt, defaultBranch, currentBranch, includeClaudeTrees, activeAgentIds, ...roots, facts,
+    }), {
+      dirty: () => readDirty(wt.path),
+      // A merged PR at this exact head makes uncommitted and untracked files disposable.
+      disposableHead: async () => (await import('./prProbe.js')).isMergedPrHead(sourceWorkspace, scannedBranch, wt.head),
+      mergeEvidence: () => hasBranchMergeEvidence(sourceWorkspace, scannedBranch, target).catch(() => false),
+    });
+    if (scan.hold) {
+      // Named so a caller can say WHICH branch a hold kept, not just which path.
+      skipped.push({ path: wt.path, ...(scan.branch && { branch: scan.branch }), reason: scan.hold.reason });
       continue;
     }
-
-    const isClaudeTree = isPathInsideDir(claudeTreesRoot, wt.path);
-    const ownershipReason = worktreeOwnershipReason({
-      path: wt.path,
-      locked: wt.locked,
-      activeAgentIds: readActiveIds(),
-      roots: managedRoots,
-      requireKnownLiveness: true,
-    });
-    if (ownershipReason) { hold(ownershipReason); continue; }
-    if (isClaudeTree && !includeClaudeTrees) { hold('claude-tree-excluded'); continue; }
-
-    // Gate 1: working tree must be completely clean. Unlike removeWorktree(),
-    // the background reaper does not discard even lockfile-only edits: an
-    // uncommitted fresh-from-main worktree may be an active agent that has not
-    // made its first commit yet.
-    //
-    // Only a proven-absent directory is empty. A prunable registration may
-    // instead be an existing checkout with a broken .git pointer and unique work.
-    const status = await readWorktreeStatus(wt.path);
-    if (status === null) { hold('status-failed'); continue; }
-    // A merged PR at this exact head makes uncommitted and untracked files disposable.
-    const dirty = !classifyWorktreeDirt(status).clean;
-    const { isMergedPrHead } = await import('./prProbe.js');
-    const disposableHead = dirty && await isMergedPrHead(sourceWorkspace, branchName, wt.head);
-    if (dirty && !disposableHead) { hold('uncommitted'); continue; }
-
-    // Gate 2: branch fully merged into the default branch (regular, squash, or rebase).
-    const hasMergeEvidence = await hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => false);
-    if (!hasMergeEvidence) { hold('unmerged'); continue; }
+    const { branch: branchName, disposable } = scan.admit;
+    const hold = (reason) => skipped.push({ path: wt.path, branch: branchName, reason });
 
     // The early reconcile pass must see the SAME registered owners and branch
     // reservations as later retirement. Binding stays excluded until removal and
     // branch deletion settle: both run in one ownership section.
-    const verifyRemoval = async (holder) => {
-      if (!holder || holder.branch !== wt.branch) return 'worktree-holder-changed';
-      const agents = await readOwners();
-      const ownerReason = claimCheckoutOwnerReason({ branchName, holderPath: wt.path, sourceWorkspace, agents });
-      if (ownerReason) return ownerReason;
-      const policyHold = await readBranchCompletionHold({ repoPath: sourceWorkspace, branch: branchName, tip: wt.head, retirement: true });
-      if (policyHold) return policyHold;
-      const reason = worktreeOwnershipReason({ path: wt.path, locked: holder.locked, activeAgentIds: readActiveIds(), roots: managedRoots, requireKnownLiveness: true });
-      if (reason) return reason;
-      const freshStatus = await readWorktreeStatus(wt.path);
-      if (freshStatus === null) return 'worktree-status-unavailable';
-      if (!classifyWorktreeDirt(freshStatus).clean && !(disposableHead && holder.head?.toLowerCase() === wt.head.toLowerCase())) return 'worktree-dirty';
-      return await hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => false) ? null : 'unmerged';
-    };
+    const verifyRemoval = async (holder) => (await decideWith(facts => decideMergedWorktreeRemoval({
+      tree: wt, holder, sourceWorkspace, disposable, ...roots, facts,
+    }), {
+      agents: () => readOwners(),
+      policyHold: () => readBranchCompletionHold({ repoPath: sourceWorkspace, branch: branchName, tip: wt.head, retirement: true }),
+      activeAgentIds: () => readActiveIds(),
+      dirty: () => readDirty(wt.path),
+      mergeEvidence: () => hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => false),
+    })).hold?.reason ?? null;
     await withClaimOwnershipLock(async () => {
       const initialHold = await verifyRemoval(wt);
       if (initialHold) { hold(initialHold); return; }
