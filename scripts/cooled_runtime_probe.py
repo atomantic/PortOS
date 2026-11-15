@@ -1,7 +1,8 @@
-"""Opt-in native probes for #15988; run in isolated, hash-installed environments.
+"""Opt-in native probes for #15988/#16047; run in isolated, hash-installed environments.
 
 No downloads, model weights, provider sessions or application data are used.
 Consumer roots must be extracted, inspected, hash-verified upstream wheels.
+The H3 probe also takes the inspected, immutable source checkout.
 """
 import argparse
 import ast
@@ -185,14 +186,99 @@ def pydantic_probe(vlm, gradio, client, baseline):
     print("Pydantic: actual VLM/Gradio schema definitions validate, serialize, round-trip and reject invalid inputs; package initializers/inference not executed")
 
 
+def h3_transformers_probe(source, directory, baseline):
+    import importlib.util
+    import numpy as np
+    from PIL import Image
+    from tokenizers import Tokenizer, models, pre_tokenizers
+    from transformers import PreTrainedTokenizerFast, Qwen2VLImageProcessorPil
+    import generate_minimax_h3 as runner
+
+    expect_version("transformers", baseline, "5.22.1", "5.22.2")
+    assert not any(importlib.util.find_spec(name) for name in ("torch", "torchvision"))
+    runner.register_source_namespace("minimax_h3_mlx", source / "minimax_h3_mlx")
+    from minimax_h3_mlx.text_encoder import MiniMaxH3TextEncoder
+    from minimax_h3_mlx.config import TAG_TEXT, TAG_VIDEO
+
+    runner.verify_pinned_encode_source(MiniMaxH3TextEncoder.encode)
+    if baseline:
+        assert not directory.exists(), "Reuse the original baseline fixtures; do not overwrite them"
+        directory.mkdir(parents=True)
+        tokenizer = Tokenizer(models.WordLevel({
+            "[UNK]": 0, "<|vision_start|>": 1, "<|image_pad|>": 2,
+            "<|vision_end|>": 3, "paper": 4, "boat": 5, "café": 6,
+        }, unk_token="[UNK]"))
+        tokenizer.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
+        PreTrainedTokenizerFast(
+            tokenizer_object=tokenizer, unk_token="[UNK]",
+            additional_special_tokens=["<|vision_start|>", "<|image_pad|>", "<|vision_end|>"],
+        ).save_pretrained(directory / "tokenizer")
+        Qwen2VLImageProcessorPil(
+            patch_size=16, temporal_patch_size=2, merge_size=2,
+            size={"shortest_edge": 4096, "longest_edge": 16384},
+        ).save_pretrained(directory / "processor")
+        config_path = directory / "processor" / "preprocessor_config.json"
+        config = json.loads(config_path.read_text())
+        config["image_processor_type"] = "Qwen2VLImageProcessorFast"
+        config_path.write_text(json.dumps(config))
+
+    # Bypass weight construction only; request presentation, local tokenizer
+    # loading and the PortOS PIL adapter all execute their real implementations.
+    encoder = MiniMaxH3TextEncoder.__new__(MiniMaxH3TextEncoder)
+    encoder._model_dir = directory / "text_encoder"
+    encoder._tokenizer = encoder._processor = None
+    runner.install_pil_image_processor()
+    assert not runner.torch_image_stack_available()
+    images = [Image.fromarray(np.arange(96 * 64 * 3, dtype=np.uint8).reshape(64, 96, 3))]
+    images.append(images[0].transpose(Image.Transpose.FLIP_LEFT_RIGHT))
+    actual = {}
+    for index, (prompt, keyframes) in enumerate([
+        ("paper boat", None), ("  café\tboat\n🦊  ", None), ("", None),
+        ("paper " * 1200, None), ("paper boat", images[:1]), ("café", images),
+    ]):
+        ids, tags, vision = encoder.build_request(prompt, keyframes)
+        ids = np.asarray(ids)
+        assert ids.shape == (1, len(tags))
+        if keyframes:
+            values, grid = vision
+            assert np.isfinite(values).all() and len(grid) == len(keyframes)
+            assert np.count_nonzero(tags == TAG_VIDEO) == sum(
+                int(row.prod()) // encoder.processor.image_processor.merge_size ** 2 + 2
+                for row in grid
+            )
+            actual[f"{index}_pixels"] = values
+            actual[f"{index}_grid"] = grid
+        else:
+            assert vision is None and np.all(tags == TAG_TEXT)
+            assert ids.tolist() == [encoder.tokenizer(prompt, add_special_tokens=False)["input_ids"]]
+        actual[f"{index}_ids"] = ids
+        actual[f"{index}_tags"] = tags
+    try:
+        encoder.build_request(None)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Non-string prompt accepted")
+    expected_path = directory / "h3-transformers.npz"
+    if baseline:
+        np.savez(expected_path, **actual)
+    else:
+        with np.load(expected_path, allow_pickle=False) as expected:
+            assert set(actual) == set(expected.files)
+            for key, value in actual.items():
+                np.testing.assert_array_equal(value, expected[key], err_msg=key)
+    print("H3: real tokenizer, PIL adapter and pinned request builder passed six text/keyframe cases; no weights or inference")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("probe", choices=["sentencepiece", "reactor", "pydantic"])
+    parser.add_argument("probe", choices=["sentencepiece", "reactor", "pydantic", "h3-transformers"])
     parser.add_argument("--fixtures", type=pathlib.Path)
     parser.add_argument("--baseline", action="store_true")
     parser.add_argument("--vlm", type=pathlib.Path)
     parser.add_argument("--gradio", type=pathlib.Path)
     parser.add_argument("--client", type=pathlib.Path)
+    parser.add_argument("--source", type=pathlib.Path)
     args = parser.parse_args()
     socket.create_connection = refuse_network
     socket.socket.connect = refuse_network
@@ -202,6 +288,10 @@ if __name__ == "__main__":
         sentencepiece_probe(args.fixtures, args.baseline)
     elif args.probe == "reactor":
         asyncio.run(reactor_probe(args.baseline))
+    elif args.probe == "h3-transformers":
+        if not all([args.source, args.fixtures]):
+            parser.error("--source and --fixtures are required")
+        h3_transformers_probe(args.source, args.fixtures, args.baseline)
     else:
         if not all([args.vlm, args.gradio, args.client]):
             parser.error("--vlm, --gradio and --client extracted wheel roots are required")
