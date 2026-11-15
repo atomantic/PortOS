@@ -152,6 +152,8 @@ function referenceLine(name, ref) {
   if (ref.role === 'set') return `${name} is the set "${label}": keep its place, period and light.`;
   if (ref.role === 'prop') return `${name} is the prop sheet: objects from it look exactly as shown.`;
   if (ref.role === 'wardrobe') return `${name} is the wardrobe sheet "${label}": dress the people as shown.`;
+  // A shared comparison sheet (musicVideoLinkedCastReferences `comparison`) shows two or more people.
+  if (ref.comparison?.names?.length > 1) return `${name} is ${label}: keep each person's exact face, hair and wardrobe from their own figure on it in every shot.`;
   return `${name} is ${label}: keep this exact face, hair and wardrobe in every shot.`;
 }
 

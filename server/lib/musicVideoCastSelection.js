@@ -42,7 +42,7 @@ export function isActiveMusicVideoReference(project, reference) {
 }
 
 /**
- * The ids of the concept subjects a reference image shows: its catalog subject,
+ * The ids of the concept subjects a reference image shows: its catalog subject (every owner of a shared comparison sheet),
  * the Cast & Sets subject its generated sheet or plate was made for, or the
  * catalog-linked subject its image or ingredient belongs to. [] when the image
  * names no subject (a director's own upload, a mood image, a storyboard sketch).
@@ -51,7 +51,8 @@ export function musicVideoReferenceSubjectIds(project, reference) {
   if (!reference) return [];
   const subjects = project?.concept?.subjects || [];
   const known = (ids) => [...new Set(ids)].filter((id) => subjects.some((subject) => subject.id === id));
-  const direct = [reference.catalogSubjectId, reference.subjectId].filter(Boolean);
+  // `subjectIds`: every owner of a shared comparison sheet (musicVideoLinkedCastReferences).
+  const direct = [reference.catalogSubjectId, reference.subjectId, ...(Array.isArray(reference.subjectIds) ? reference.subjectIds : [])].filter(Boolean);
   if (direct.length) return known(direct);
   const id = String(reference.id || '');
   if (['mvr-cs-character', 'mvr-cs-expressions'].includes(id)) {

@@ -144,6 +144,10 @@ export async function musicVideoShotReferenceChecks(project, media) {
     const missing = [...new Set([...starts, ...ends])].filter(subject => !frame.some(ref => owns(ref, subject.id)));
     const extraCast = (field, picks) => listed && Array.isArray(scene[field]) ? picks.filter(ref => ref.role === 'character'
       && ownersOf(ref).some(id => cast.some(subject => subject.id === id)) && !ownersOf(ref).some(id => needed.has(id))) : [];
+    // A pick is extra only when none of its owners belongs in the shot. A shared comparison sheet owned by
+    // two characters (musicVideoReferenceSubjectIds) therefore covers both in a two-person shot, and in a
+    // one-person shot it is not reported for also showing the other person: it is a likeness sheet, and
+    // the reference map tells the image model to show only the people the shot calls for.
     const unexpected = extraCast(FRAME, frame);
     const preferred = subject => choices.find(ref => ref.role === 'character' && owns(ref, subject.id));
     const rows = missing.map((subject) => {

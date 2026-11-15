@@ -261,6 +261,14 @@ function musicVideoReferenceMapText(references = []) {
     if (!ref || ref.panelArt) return [];
     const label = typeof ref.label === 'string' && ref.label.trim() ? ref.label : 'a reference';
     const note = typeof ref.note === 'string' ? ref.note : '';
+    // A shared comparison sheet (musicVideoLinkedCastReferences `comparison`) shows two people side by side.
+    const pair = ref.role === 'character' && Array.isArray(ref.comparison?.names) && ref.comparison.names.length > 1 ? ref.comparison : null;
+    if (pair) {
+      const who = pair.sides && pair.names.length === 2
+        ? `${pair.names[0]} on its left half and ${pair.names[1]} on its right half`
+        : `${pair.names.slice(0, -1).join(', ')} and ${pair.names.at(-1)}`;
+      return [`Reference image ${n} is a comparison sheet of ${who}: these exact people side by side at their true relative height. Match each person's face, hair, skin, build and age exactly to their own figures on it; never blend one person's face with another's. It is a likeness sheet, not a layout: show only the people this shot calls for.`];
+    }
     if (ref.role === 'character') {
       return [`Reference image ${n} is ${label}: this exact person. Match their face, hair, skin, build and age exactly${note ? ` (${note})` : ''}; never blend their face with anyone else's.`];
     }

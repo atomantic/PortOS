@@ -32,7 +32,7 @@ async function gatherReferences(project, members, model) {
   const extras = [];
   for (const [i, scene] of members.entries()) {
     const refs = await musicVideoClipReferences({ projectId: project.id, sceneId: scene.sceneId }, MUSIC_VIDEO_MAX_REFERENCE_CHOICES, { project, excludePath: frames[i].key });
-    extras.push(refs.map((ref) => ({ key: ref.path, label: ref.label, role: ref.role || 'character', imageId: basename(ref.path) })));
+    extras.push(refs.map((ref) => ({ key: ref.path, label: ref.label, role: ref.role || 'character', imageId: basename(ref.path), ...(ref.comparison ? { comparison: ref.comparison } : {}) })));
   }
   return unionSequenceTakeReferences({ frames, extras, max: model.referenceImages.max });
 }

@@ -2,7 +2,8 @@ import { musicVideoFrameModelInput } from './musicVideoShotPrompt.js';
 import { shotSheetCast } from './musicVideoShotSheet.js';
 import { musicVideoConceptSchema } from './musicVideoValidation.js';
 import { describe, it, expect } from 'vitest';
-import { resolvedFramePickIds, musicVideoCastGuideReferences, musicVideoCatalogPickPlans, musicVideoReferenceChoices, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoLinkedReferenceId, musicVideoMissingFrameLinkedPicks, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
+import { musicVideoReferenceSubjectIds } from './musicVideoCastSelection.js';
+import { musicVideoLinkedCastReferences, resolvedFramePickIds, musicVideoCastGuideReferences, musicVideoCatalogPickPlans, musicVideoReferenceChoices, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoLinkedReferenceId, musicVideoMissingFrameLinkedPicks, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
 import { getFalVideoModel } from './falVideoModels.js';
 
 const CAST_ID = 'cat-chr-example';
@@ -483,4 +484,47 @@ it('preserves all explicit clip selections for Higgsfield cap validation', () =>
   const choices = musicVideoReferenceChoices(p);
   const scene = { clipReferenceIds: choices.map((ref) => ref.id) };
   expect(musicVideoClipConditioningReferences(p, scene)).toHaveLength(31);
+});
+
+// A comparison sheet is one image on both characters' records; its reference must name both owners
+// whichever record is read first, and never an inactive alternate that also holds it (#16185).
+describe('linked comparison sheet owners', () => {
+  const sheet = (extra = {}) => ({ kind: 'reference', role: 'sheet:comparison', mediaKey: 'pair-sheet.png', ...extra });
+  const castMedia = {
+    'chr-a': [sheet({ library: { comparedWith: 'chr-b' } }), { kind: 'reference', role: 'sheet:comparison-solo', mediaKey: 'a-half.png' }],
+    'chr-b': [sheet(), { kind: 'reference', role: 'sheet:comparison-solo', mediaKey: 'b-half.png' }],
+    'chr-b-alt': [sheet()],
+  };
+  const a = { id: 'a', ingredientId: 'chr-a', name: 'Alpha', kind: 'character' };
+  const b = { id: 'b', ingredientId: 'chr-b', name: 'Beta', kind: 'character' };
+  const linked = (subjects) => musicVideoLinkedCastReferences({ concept: { subjects } }, castMedia);
+  const shared = (subjects) => linked(subjects).find((ref) => ref.imageId === 'pair-sheet.png');
+
+  it('names both owners, left half first, in either record order', () => {
+    for (const subjects of [[a, b], [b, a]]) {
+      expect(shared(subjects)).toMatchObject({ id: musicVideoLinkedReferenceId('pair-sheet.png'), subjectId: 'a', subjectIds: ['a', 'b'],
+        label: 'Alpha and Beta · Comparison sheet', comparison: { names: ['Alpha', 'Beta'], sides: true } });
+      expect(linked(subjects).filter((ref) => ref.imageId === 'pair-sheet.png')).toHaveLength(1);
+    }
+    const project = { concept: { subjects: [b, a] } };
+    expect(musicVideoReferenceSubjectIds(project, shared([b, a]))).toEqual(['a', 'b']);
+  });
+
+  it('keeps each solo half to its own character', () => {
+    const refs = linked([a, b]);
+    expect(refs.find((ref) => ref.imageId === 'a-half.png')).toMatchObject({ subjectId: 'a' });
+    expect(refs.find((ref) => ref.imageId === 'b-half.png')).toMatchObject({ subjectId: 'b' });
+    expect(refs.filter((ref) => ref.subjectIds)).toHaveLength(1);
+  });
+
+  it('never makes an inactive alternate an owner', () => {
+    const alternate = { id: 'b-alt', ingredientId: 'chr-b-alt', name: 'Beta', kind: 'character', active: true };
+    const ref = shared([a, { ...b, active: false }, alternate]);
+    expect(ref).toMatchObject({ subjectIds: ['a', 'b-alt'], comparison: { sides: false } });
+    // With the alternate's record not holding the sheet, the lead owns it alone.
+    const solo = musicVideoLinkedCastReferences({ concept: { subjects: [a, { ...b, active: false }, { ...alternate, ingredientId: 'chr-none' }] } }, castMedia)
+      .find((candidate) => candidate.imageId === 'pair-sheet.png');
+    expect(solo).toMatchObject({ subjectId: 'a', label: 'Alpha · Comparison sheet' });
+    expect(solo.subjectIds).toBeUndefined();
+  });
 });
