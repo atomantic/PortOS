@@ -283,7 +283,8 @@ describe('PromptManager stage list', () => {
     expect(screen.getByText('Creative Director — Treatment')).toBeTruthy();
     expect(screen.queryByText('Brain Classifier')).toBeNull();
     expect(screen.getByText('1 of 4')).toBeTruthy();
-    expect(screen.getAllByText('System')).toHaveLength(1);
+    // The Settings header's "System" group label is not a stage badge.
+    expect(screen.getAllByText('System').filter((el) => !el.closest('nav'))).toHaveLength(1);
   });
 
   // An older server (or a failed load) sends no list: badge nothing, filter to

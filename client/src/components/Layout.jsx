@@ -452,7 +452,10 @@ export default function Layout() {
       const children = item.children.filter((child) => isFeatureEnabled(child.feature));
       if (children.length === item.children.length) return [item];
       const navigable = item.dynamic || children.some((child) => child.to || child.href);
-      return navigable ? [{ ...item, children }] : [];
+      const groups = item.groups
+        ?.map((group) => ({ ...group, children: group.children.filter((child) => isFeatureEnabled(child.feature)) }))
+        .filter((group) => group.children.length > 0);
+      return navigable ? [{ ...item, children, ...(groups ? { groups } : {}) }] : [];
     });
 
     return gatedItems.map((item) => {

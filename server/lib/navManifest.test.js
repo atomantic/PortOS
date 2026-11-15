@@ -186,6 +186,16 @@ describe('nav contract — generated section child navigation', () => {
     ]);
   });
 
+  it('groups every Settings tab into the four design sections', () => {
+    expect(getSectionNavGroups('Settings').map(({ label, tabs }) => [label, tabs.map((tab) => tab.label)])).toEqual([
+      ['Access', ['API Access', 'Credentials', 'Security', 'Sharing']],
+      ['Agents', ['AI Assignments', 'Autofixer', 'Orchestration Profiles', 'Prompts']],
+      ['Integrations', ['MortalLoom', 'OpenClaw', 'Telegram', 'Voice']],
+      ['System', ['Backup', 'Data Maintenance', 'Database', 'Features', 'General', 'Software']],
+    ]);
+    expect(getSectionNavTabs('Settings').every((tab) => tab.navGroup)).toBe(true);
+  });
+
   it('resolves a promoted drill-down as itself instead of its LLM parent', () => {
     expect(getSectionNavTabForPath('Models', '/models/llms/abuse')).toMatchObject({ id: 'abuse', label: 'Abuse Guard' });
     expect(getNavCommandForPath('/models/decision-classifiers/jev')).toMatchObject({ path: '/models/decision-classifiers/jev', label: 'Jev' });
