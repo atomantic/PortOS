@@ -6,7 +6,7 @@ import { createReadStream, createWriteStream, promises as fs } from 'fs';
 import { uploadSingle } from '../lib/multipart.js';
 import { parseZip, collectZipEntry, createZipBudget, createZipByteLimit } from '../lib/zipStream.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { healthIngestSchema, appleHealthLatestMetricsQuerySchema } from '../lib/appleHealthValidation.js';
 import { ingestHealthData } from '../services/appleHealthIngest.js';
 import { importAppleHealthXml } from '../services/appleHealthXml.js';

@@ -9,7 +9,7 @@ import { universeVisualProfileSchema } from '../../lib/universeVisualProfileVali
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { cloudModelIdString } from '../../lib/sharedSchemas.js';
 import { RECORD_RENDER_MODEL_MAX } from '../../lib/renderTargets.js';
 import { BIBLE_LIMITS } from '../../lib/storyBible.js';

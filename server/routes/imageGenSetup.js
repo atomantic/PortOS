@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { join } from 'node:path';
 import { realpathSync } from 'node:fs';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { getHfToken, getHfTokenInfo, HF_TOKEN_REGEX } from '../services/hfToken.js';
 import { getImageModels, isFlux2 } from '../lib/mediaModels.js';

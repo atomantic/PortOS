@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { maintenance, maintenanceBeginSchema, maintenanceResumeSchema } from '../lib/maintenanceAdmission.js';
 import { resumeMaintenance } from '../services/maintenanceControl.js';
 

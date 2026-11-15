@@ -9,7 +9,7 @@ import {
 } from '../lib/cosToolContracts.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { canonicalStringify } from '../lib/objects.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { loadState } from '../services/cosState.js';
 import { getSettings } from '../services/settings.js';
 import {

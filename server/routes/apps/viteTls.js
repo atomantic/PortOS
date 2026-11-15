@@ -15,7 +15,7 @@ import { PORTOS_APP_ID } from '../../services/apps.js';
 import { addTask } from '../../services/cosTaskStore.js';
 import { isRunning } from '../../services/cos.js';
 import { z } from 'zod';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { checkViteHost, findViteConfig, rewriteAllowedHosts } from '../../lib/viteAllowedHosts.js';
 import { certPaths } from '../../../lib/certPaths.js';

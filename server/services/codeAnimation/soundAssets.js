@@ -7,7 +7,7 @@ import { PATHS } from '../../lib/paths.js';
 import { makePathResolver } from '../../lib/pathSafety.js';
 import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
 import { createCodeAnimationPackage, CODE_ANIMATION_PACKAGE_LIMITS } from '../../lib/codeAnimationPackage.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { SUPPORTED_AUDIO_EXTENSIONS, statMusicTrack } from '../pipeline/musicLibrary.js';
 import { exportProductionPackage, importProductionPackage } from './projects.js';

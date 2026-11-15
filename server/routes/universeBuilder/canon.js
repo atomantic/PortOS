@@ -10,7 +10,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import * as canonSvc from '../../services/universeCanon.js';
 import { expandUniverseCharacter } from '../../services/universeCharacterExpand.js';
 import {

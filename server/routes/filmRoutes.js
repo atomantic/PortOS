@@ -1,7 +1,7 @@
 /** Shared film routes; the owner resolver verifies domain membership before every operation. */
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { normalizeBlenderRecord } from '../lib/musicVideoBlender.js';
 import {
   musicVideoBlenderCutSchema, musicVideoBlenderFileQuerySchema, musicVideoBlenderFileWriteSchema, musicVideoBlenderMediaQuerySchema,

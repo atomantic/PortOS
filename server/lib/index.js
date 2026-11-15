@@ -109,6 +109,7 @@ export * as storyboardValidation from './storyboardValidation.js';
 export * as telegramValidation from './telegramValidation.js';
 export * from './terminalReplay.js';
 export * from './validation.js';
+export * from './validateRequest.js';
 // Cross-domain Zod fragments both `validation.js` and the per-domain files
 // import (leaf module, no cycle). Flat because `validation.js` re-exports the
 // same objects — same identity, so the collision detector is satisfied.

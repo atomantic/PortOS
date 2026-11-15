@@ -13,7 +13,7 @@ import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import {
   CONTAINED_BLENDER_GPU_NOTICE, codeAnimationExecutionArmedSchema, codeAnimationExecutionToolsSchema, codeAnimationToolRoots,
   codeAnimationWorkerEnv, codeAnimationWorkerLimitsSchema,

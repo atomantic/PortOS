@@ -6,7 +6,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { catalogSheetRenderSchema } from '../lib/catalogValidation.js';
 import { getIngredient, listMediaForIngredient } from '../services/catalogDB.js';
 import { listJobs } from '../services/mediaJobQueue/index.js';

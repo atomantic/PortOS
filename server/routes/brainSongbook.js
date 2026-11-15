@@ -22,7 +22,7 @@ import { Router } from 'express';
 import { join, resolve } from 'path';
 import { createHash } from 'crypto';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
   songInputSchema,
   songUpdateSchema,

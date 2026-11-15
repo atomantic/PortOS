@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { join } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { PATHS, pathExists } from '../lib/fileUtils.js';
 import {
   musicVideoCharacterStyleParamsSchema, musicVideoCharacterStyleReferenceSchema,

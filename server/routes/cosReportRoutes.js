@@ -9,7 +9,7 @@ import { getScript, listScripts } from '../services/cos.js';
 import * as appActivity from '../services/appActivity.js';
 import * as claudeChangelog from '../services/claudeChangelog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 
 const router = Router();
 

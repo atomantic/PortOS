@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { requireHostControl } from '../services/authGate.js';
 import { identityPreviewSchema, identityCreateSchema, identityImportSchema, identityAcceptSchema,
   identityEmptySchema, identitySnapshotQuerySchema, identityStatusQuerySchema, identityListQuerySchema } from '../lib/catalogIdentityValidation.js';

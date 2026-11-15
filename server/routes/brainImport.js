@@ -20,7 +20,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { unlink } from 'fs/promises';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { parseExport, stripPreview, importConversations, readArchivedConversation } from '../services/chatgptImport.js';
 import { importChatgptZip } from '../services/chatgptZipImport.js';

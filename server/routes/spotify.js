@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import * as spotifyAuth from '../services/spotifyAuth.js';
 import * as spotifySync from '../services/spotifySync.js';
 import * as spotifyPlaylists from '../services/spotifyPlaylists.js';

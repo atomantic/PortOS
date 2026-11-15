@@ -10,7 +10,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { resolveGalleryImage } from '../../lib/fileUtils.js';
 import * as svc from '../../services/universeBuilder.js';
 import { expandWorldTemplate, generateCategoryVariations } from '../../services/universeBuilderExpand.js';

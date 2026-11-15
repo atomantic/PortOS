@@ -8,7 +8,7 @@ import { Router } from 'express';
 import * as brainService from '../services/brain.js';
 import { getProviderById } from '../services/providers.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { settingsUpdateInputSchema } from '../lib/brainValidation.js';
 import { modelPinIsOffered } from '../lib/localProviderRuntime.js';
 

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { unlink } from 'fs/promises';
 
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { uploadSingle } from '../lib/multipart.js';
 import * as humanActivity from '../services/humanActivity.js';
 import { importSpotifyHistory } from '../services/spotifyImport.js';

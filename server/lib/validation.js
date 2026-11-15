@@ -1939,23 +1939,8 @@ export const agentToolsRelevantPostsQuerySchema = z.object({
   maxResults: z.coerce.number().int().min(1).max(100).default(10),
 });
 
-/**
- * Validate data against a Zod schema, throwing on failure.
- * Returns parsed data on success, throws ServerError on failure.
- */
-export function validateRequest(schema, data) {
-  const result = schema.safeParse(data);
-  if (result.success) return result.data;
-  const errors = result.error.issues.map(e => ({
-    path: e.path.join('.'),
-    message: e.message
-  }));
-  throw new ServerError('Validation failed', {
-    status: 400,
-    code: 'VALIDATION_ERROR',
-    context: { details: errors }
-  });
-}
+// validateRequest lives in its own leaf (#16096); re-exported for existing deep imports.
+export { validateRequest } from './validateRequest.js';
 
 // Media cancellation bodies (#9932). An OMITTED jobId keeps the legacy
 // "newest/running job" selection; a SUPPLIED jobId must be a usable id — a
