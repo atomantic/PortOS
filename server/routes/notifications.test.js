@@ -1,198 +1,134 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
+import { mkdir, writeFile } from 'fs/promises';
+import { join } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-const fileUtils = vi.hoisted(() => ({
-  ensureDir: vi.fn().mockResolvedValue(),
-  readJSONFile: vi.fn(),
-  atomicWrite: vi.fn().mockResolvedValue()
-}));
+// Real notifications service (JSON file) over a temp data root.
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-notifications-routes-') }));
+afterAll(cleanupTempDataRoots);
 
-const notificationMocks = vi.hoisted(() => ({
-  getUnreadCount: vi.fn(),
-  getCountsByType: vi.fn(),
-  markAsRead: vi.fn(),
-  markAllAsRead: vi.fn(),
-  removeNotification: vi.fn(),
-  clearAll: vi.fn()
-}));
+const notifications = await import('../services/notifications.js');
+const { PATHS } = await import('../lib/fileUtils.js');
+const { default: notificationsRoutes } = await import('./notifications.js');
 
-vi.mock('../lib/fileUtils.js', async (importOriginal) => {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    PATHS: { ...actual.PATHS, data: '/mock/data' },
-    ensureDir: fileUtils.ensureDir,
-    readJSONFile: fileUtils.readJSONFile,
-    atomicWrite: fileUtils.atomicWrite
-  };
-});
+const { MEMORY_APPROVAL, TASK_APPROVAL, BRIEFING_READY } = notifications.NOTIFICATION_TYPES;
 
-// Keep the route's mutation/count endpoints isolated, but retain the real list
-// service so this boundary test cannot document a response shape the service
-// does not return.
-vi.mock('../services/notifications.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  ...notificationMocks
-}));
+const note = (id, type, timestamp, read = false) => ({ id, type, title: id, read, timestamp });
 
-import * as notifications from '../services/notifications.js';
-import notificationsRoutes from './notifications.js';
-
-const NOTIFICATION_FIXTURE = {
-  version: 1,
-  notifications: [
-    {
-      id: 'n1',
-      type: 'memory_approval',
-      title: 'Memory review',
-      read: false,
-      timestamp: '2025-01-01T00:00:00.000Z'
-    },
-    {
-      id: 'n2',
-      type: 'memory_approval',
-      title: 'Older memory review',
-      read: true,
-      timestamp: '2025-01-02T00:00:00.000Z'
-    },
-    {
-      id: 'n3',
-      type: 'task_approval',
-      title: 'Task review',
-      read: false,
-      timestamp: '2025-01-03T00:00:00.000Z'
-    },
-    {
-      id: 'n4',
-      type: 'memory_approval',
-      title: 'Newest memory review',
-      read: false,
-      timestamp: '2025-01-04T00:00:00.000Z'
-    }
-  ]
+// Write the file the service reads, then drop its cache so the next request loads it.
+const seed = async (list) => {
+  await mkdir(PATHS.data, { recursive: true });
+  await writeFile(join(PATHS.data, 'notifications.json'), JSON.stringify({ version: 1, notifications: list }));
+  notifications.invalidateCache();
 };
 
-const buildApp = () => {
-  const app = express();
-  app.use(express.json());
-  app.use('/api/notifications', notificationsRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
+const app = express();
+app.use(express.json());
+app.use('/api/notifications', notificationsRoutes);
+app.use(errorMiddleware);
+
+const get = (path = '') => request(app).get(`/api/notifications${path}`);
+const ids = (res) => res.body.map(({ id }) => id);
 
 describe('notifications routes', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    fileUtils.readJSONFile.mockResolvedValue(JSON.parse(JSON.stringify(NOTIFICATION_FIXTURE)));
-    notifications.invalidateCache();
+  beforeEach(async () => {
+    await seed([
+      note('n1', MEMORY_APPROVAL, '2025-01-01T00:00:00.000Z'),
+      note('n2', MEMORY_APPROVAL, '2025-01-02T00:00:00.000Z', true),
+      note('n3', TASK_APPROVAL, '2025-01-03T00:00:00.000Z'),
+      note('n4', MEMORY_APPROVAL, '2025-01-04T00:00:00.000Z'),
+      note('n5', BRIEFING_READY, '2025-01-05T00:00:00.000Z'),
+    ]);
   });
 
   describe('GET /api/notifications', () => {
-    it('returns the real service list as a bare array with default options', async () => {
-      const res = await request(buildApp()).get('/api/notifications');
+    it('lists a bare array, newest first', async () => {
+      const res = await get();
       expect(res.status).toBe(200);
-      expect(Array.isArray(res.body)).toBe(true);
-      expect(res.body.map(({ id }) => id)).toEqual(['n4', 'n3', 'n2', 'n1']);
+      expect(ids(res)).toEqual(['n5', 'n4', 'n3', 'n2', 'n1']);
     });
 
-    it('applies type and unreadOnly filters through the real service', async () => {
-      const type = notifications.NOTIFICATION_TYPES.MEMORY_APPROVAL;
-      const res = await request(buildApp()).get(`/api/notifications?type=${type}&unreadOnly=true`);
-
-      expect(res.status).toBe(200);
-      expect(res.body.map(({ id }) => id)).toEqual(['n4', 'n1']);
+    it('applies type and unreadOnly filters, then limit', async () => {
+      expect(ids(await get(`?type=${MEMORY_APPROVAL}&unreadOnly=true`))).toEqual(['n4', 'n1']);
+      expect(ids(await get(`?type=${MEMORY_APPROVAL}&unreadOnly=true&limit=1`))).toEqual(['n4']);
     });
 
-    it('applies limit after the type and unreadOnly filters', async () => {
-      const type = notifications.NOTIFICATION_TYPES.MEMORY_APPROVAL;
-      const res = await request(buildApp()).get(`/api/notifications?type=${type}&unreadOnly=true&limit=1`);
-
-      expect(res.status).toBe(200);
-      expect(res.body.map(({ id }) => id)).toEqual(['n4']);
-    });
-  });
-
-  describe('GET /api/notifications query validation', () => {
     it.each(['limit=-1', 'limit=0', 'limit=1001', 'limit=abc', 'limit=1.5', 'type=invalid', 'type=a&type=b', 'unreadOnly=yes'])(
       'rejects %s with VALIDATION_ERROR',
       async (qs) => {
-        const res = await request(buildApp()).get(`/api/notifications?${qs}`);
+        const res = await get(`?${qs}`);
         expect(res.status).toBe(400);
         expect(res.body.code).toBe('VALIDATION_ERROR');
       }
     );
   });
 
-  describe('GET /api/notifications/count', () => {
-    it('returns the unread count', async () => {
-      notifications.getUnreadCount.mockResolvedValue(7);
-      const res = await request(buildApp()).get('/api/notifications/count');
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual({ count: 7 });
-    });
-  });
-
-  describe('GET /api/notifications/counts', () => {
-    it('returns counts grouped by type', async () => {
-      const grouped = {
-        [notifications.NOTIFICATION_TYPES.MEMORY_APPROVAL]: 3,
-        [notifications.NOTIFICATION_TYPES.TASK_APPROVAL]: 2
-      };
-      notifications.getCountsByType.mockResolvedValue(grouped);
-      const res = await request(buildApp()).get('/api/notifications/counts');
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual(grouped);
+  describe('counts', () => {
+    it('reports the unread count and the counts grouped by type', async () => {
+      expect((await get('/count')).body).toEqual({ count: 4 });
+      expect((await get('/counts')).body).toEqual({
+        total: 5,
+        unread: 4,
+        byType: { [MEMORY_APPROVAL]: 3, [TASK_APPROVAL]: 1, [BRIEFING_READY]: 1 },
+      });
     });
   });
 
   describe('POST /api/notifications/:id/read', () => {
-    it('marks a notification read on success', async () => {
-      notifications.markAsRead.mockResolvedValue({ success: true, id: 'n1' });
-      const res = await request(buildApp()).post('/api/notifications/n1/read');
+    it('marks one notification read, persisting it and lowering the unread count', async () => {
+      const res = await request(app).post('/api/notifications/n1/read');
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
-      expect(notifications.markAsRead).toHaveBeenCalledWith('n1');
+
+      expect(ids(await get('?unreadOnly=true'))).toEqual(['n5', 'n4', 'n3']);
+      expect((await get('/count')).body).toEqual({ count: 3 });
+
+      // The change reached disk, not just the in-memory cache.
+      notifications.invalidateCache();
+      expect((await get('/count')).body).toEqual({ count: 3 });
     });
 
     it('returns 404 when the notification is missing', async () => {
-      notifications.markAsRead.mockResolvedValue({ success: false, error: 'Not found' });
-      const res = await request(buildApp()).post('/api/notifications/missing/read');
-      expect(res.status).toBe(404);
+      expect((await request(app).post('/api/notifications/missing/read')).status).toBe(404);
     });
   });
 
   describe('POST /api/notifications/read-all', () => {
-    it('marks all notifications read', async () => {
-      notifications.markAllAsRead.mockResolvedValue({ success: true, marked: 5 });
-      const res = await request(buildApp()).post('/api/notifications/read-all');
+    it('marks every notification read', async () => {
+      const res = await request(app).post('/api/notifications/read-all');
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ success: true, marked: 5 });
+      expect(res.body).toEqual({ success: true, updated: 4 });
+      expect((await get('/count')).body).toEqual({ count: 0 });
+      expect(ids(await get('?unreadOnly=true'))).toEqual([]);
     });
   });
 
   describe('DELETE /api/notifications/:id', () => {
-    it('removes the notification on success', async () => {
-      notifications.removeNotification.mockResolvedValue({ success: true });
-      const res = await request(buildApp()).delete('/api/notifications/n1');
+    it('removes the notification from later lists and counts', async () => {
+      const res = await request(app).delete('/api/notifications/n5');
       expect(res.status).toBe(200);
-      expect(notifications.removeNotification).toHaveBeenCalledWith('n1');
+      expect(ids(await get())).toEqual(['n4', 'n3', 'n2', 'n1']);
+      expect((await get('/counts')).body.total).toBe(4);
     });
 
     it('returns 404 when the notification is missing', async () => {
-      notifications.removeNotification.mockResolvedValue({ success: false, error: 'gone' });
-      const res = await request(buildApp()).delete('/api/notifications/missing');
-      expect(res.status).toBe(404);
+      expect((await request(app).delete('/api/notifications/missing')).status).toBe(404);
     });
   });
 
   describe('DELETE /api/notifications', () => {
-    it('clears all notifications', async () => {
-      notifications.clearAll.mockResolvedValue({ success: true, cleared: 12 });
-      const res = await request(buildApp()).delete('/api/notifications');
+    // Notifications whose source still owns an obligation (approvals) stay as hidden
+    // history; everything else is dropped. Both leave the visible list empty.
+    it('clears the visible list and the counts', async () => {
+      const res = await request(app).delete('/api/notifications');
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ success: true, cleared: 12 });
+      expect(res.body).toEqual({ success: true, cleared: 5 });
+      expect(ids(await get())).toEqual([]);
+      expect((await get('/counts')).body).toEqual({ total: 0, unread: 0, byType: {} });
     });
   });
 });

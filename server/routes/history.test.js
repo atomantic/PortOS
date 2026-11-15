@@ -1,138 +1,118 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import historyRoutes from './history.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-// Mock the history service
-vi.mock('../services/history.js', () => ({
-  getHistory: vi.fn(),
-  getHistoryStats: vi.fn(),
-  getActionTypes: vi.fn(),
-  deleteEntry: vi.fn(),
-  clearHistory: vi.fn()
-}));
+// Real history service (JSONL file) over a temp data root.
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-history-routes-') }));
+afterAll(cleanupTempDataRoots);
 
-// Import mocked modules
-import * as history from '../services/history.js';
+const { default: historyRoutes } = await import('./history.js');
+const { logAction, clearHistory } = await import('../services/history.js');
 
-const buildApp = () => {
-  const app = express();
-  app.use(express.json());
-  app.use('/api/history', historyRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
+const app = express();
+app.use(express.json());
+app.use('/api/history', historyRoutes);
+app.use(errorMiddleware);
+
+const get = (query = '') => request(app).get(`/api/history${query}`);
 
 describe('History Routes', () => {
-  let app;
-
-  beforeEach(() => {
-    app = buildApp();
-
-    // Reset all mocks
-    vi.clearAllMocks();
+  beforeEach(async () => {
+    await clearHistory();
   });
 
   describe('GET /api/history', () => {
-    it('should respect limit parameter', async () => {
-      history.getHistory.mockResolvedValue({ entries: [], total: 0, limit: 50, offset: 0 });
+    it('lists newest first with the default window and filters by action, target and success', async () => {
+      await logAction('start', 'app', 'Alpha');
+      await logAction('stop', 'app', 'Alpha', {}, false, 'boom');
+      await logAction('start', 'cos', 'Beta');
 
-      await request(app).get('/api/history?limit=50');
+      const all = await get();
+      expect(all.status).toBe(200);
+      expect(all.body.total).toBe(3);
+      expect(all.body.entries.map((e) => e.targetName)).toEqual(['Beta', 'Alpha', 'Alpha']);
 
-      expect(history.getHistory).toHaveBeenCalledWith(expect.objectContaining({ limit: 50 }));
+      expect((await get('?action=start')).body.total).toBe(2);
+      expect((await get('?target=cos')).body.entries.map((e) => e.targetName)).toEqual(['Beta']);
+      const failed = await get('?success=false');
+      expect(failed.body.entries).toEqual([expect.objectContaining({ action: 'stop', error: 'boom' })]);
     });
 
-    it('should respect offset parameter', async () => {
-      history.getHistory.mockResolvedValue({ entries: [], total: 0, limit: 100, offset: 10 });
+    it('applies limit and offset to the newest-first window', async () => {
+      for (const name of ['a', 'b', 'c', 'd']) await logAction('start', 'app', name);
 
-      await request(app).get('/api/history?offset=10');
-
-      expect(history.getHistory).toHaveBeenCalledWith(expect.objectContaining({ offset: 10 }));
+      const page = await get('?limit=2&offset=1');
+      expect(page.body.total).toBe(4);
+      expect(page.body.entries.map((e) => e.targetName)).toEqual(['c', 'b']);
     });
 
-    it('should filter by success status', async () => {
-      history.getHistory.mockResolvedValue({ entries: [], total: 0, limit: 100, offset: 0 });
-
-      await request(app).get('/api/history?success=true');
-
-      expect(history.getHistory).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    it('rejects an out-of-range limit', async () => {
+      expect((await get('?limit=0')).status).toBe(400);
+      expect((await get('?limit=1001')).status).toBe(400);
     });
+  });
 
-    it('should use default limit and offset', async () => {
-      history.getHistory.mockResolvedValue({ entries: [], total: 0 });
+  describe('GET /api/history/stats and /actions', () => {
+    it('reports counts, success rate and the sorted unique action types', async () => {
+      await logAction('stop', 'app', 'A');
+      await logAction('start', 'app', 'A');
+      await logAction('start', 'app', 'B', {}, false);
 
-      await request(app).get('/api/history');
-
-      expect(history.getHistory).toHaveBeenCalledWith(expect.objectContaining({
-        limit: 100,
-        offset: 0
-      }));
-    });
-
-    it('should propagate service errors as 500', async () => {
-      history.getHistory.mockRejectedValue(new Error('DB unavailable'));
-
-      const response = await request(app).get('/api/history');
-
-      expect(response.status).toBe(500);
+      const stats = (await request(app).get('/api/history/stats')).body;
+      expect(stats).toMatchObject({ total: 3, byAction: { stop: 1, start: 2 }, successRate: '66.7', last24h: 3 });
+      expect((await request(app).get('/api/history/actions')).body).toEqual(['start', 'stop']);
     });
   });
 
   describe('DELETE /api/history/:id', () => {
-    it('should delete a history entry', async () => {
-      history.deleteEntry.mockResolvedValue({ success: true, deleted: 'h1' });
+    it('deletes one entry and leaves the rest', async () => {
+      const keep = await logAction('start', 'app', 'Keep');
+      const drop = await logAction('start', 'app', 'Drop');
 
-      const response = await request(app).delete('/api/history/h1');
-
+      const response = await request(app).delete(`/api/history/${drop.id}`);
       expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-      expect(history.deleteEntry).toHaveBeenCalledWith('h1');
+      expect((await get()).body.entries.map((e) => e.id)).toEqual([keep.id]);
     });
 
-    it('should handle deletion of non-existent entry', async () => {
-      history.deleteEntry.mockResolvedValue(null);
-
+    it('returns 404 for an unknown entry', async () => {
+      await logAction('start', 'app', 'Keep');
       const response = await request(app).delete('/api/history/h-nonexistent');
-
       expect(response.status).toBe(404);
       expect(response.body.error).toMatch(/not found/i);
-      expect(history.deleteEntry).toHaveBeenCalledWith('h-nonexistent');
-    });
-
-    it('should propagate service errors as 500', async () => {
-      history.deleteEntry.mockRejectedValue(new Error('DB connection lost'));
-
-      const response = await request(app).delete('/api/history/h-err');
-
-      expect(response.status).toBe(500);
+      expect((await get()).body.total).toBe(1);
     });
   });
 
   describe('DELETE /api/history', () => {
     it.each(['abc', '-5', '0', '1e'])('rejects olderThanDays=%s with 400 and clears nothing', async (v) => {
-      const response = await request(app).delete(`/api/history?olderThanDays=${v}`);
-
-      expect(response.status).toBe(400);
-      expect(history.clearHistory).not.toHaveBeenCalled();
+      await logAction('start', 'app', 'Keep');
+      expect((await request(app).delete(`/api/history?olderThanDays=${v}`)).status).toBe(400);
+      expect((await get()).body.total).toBe(1);
     });
 
-    it('should clear all history', async () => {
-      history.clearHistory.mockResolvedValue({ success: true, deletedCount: 150 });
-
-      const response = await request(app).delete('/api/history');
-
-      expect(response.status).toBe(200);
-      expect(history.clearHistory).toHaveBeenCalledWith(null);
+    it('clears all history', async () => {
+      await logAction('start', 'app', 'A');
+      await logAction('start', 'app', 'B');
+      expect((await request(app).delete('/api/history')).status).toBe(200);
+      expect((await get()).body).toEqual({ total: 0, entries: [] });
     });
 
-    it('should clear history older than specified days', async () => {
-      history.clearHistory.mockResolvedValue({ success: true, deletedCount: 50 });
+    it('clears only entries older than the cutoff', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        vi.setSystemTime(new Date(Date.now() - 10 * 86400000));
+        await logAction('start', 'app', 'Old');
+        vi.useRealTimers();
+        await logAction('start', 'app', 'Fresh');
+      } finally {
+        vi.useRealTimers();
+      }
 
-      const response = await request(app).delete('/api/history?olderThanDays=7');
-
-      expect(response.status).toBe(200);
-      expect(history.clearHistory).toHaveBeenCalledWith(7);
+      expect((await request(app).delete('/api/history?olderThanDays=7')).status).toBe(200);
+      expect((await get()).body.entries.map((e) => e.targetName)).toEqual(['Fresh']);
     });
   });
 });
