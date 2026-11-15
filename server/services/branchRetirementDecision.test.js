@@ -1,8 +1,8 @@
 /**
  * Hold/retire permutations for checkout retirement, decided over inspected
  * state (#16115, #16153). The real-git contract for each outcome stays in
- * branchReconcile.ownership.test.js, heldCheckoutRecovery.test.js and
- * worktreeReap.test.js; these pin
+ * branchReconcile.ownership.test.js, heldCheckoutRecovery.test.js,
+ * worktreeReap.test.js and worktreeExternalCleanup.test.js; these pin
  * every combination of holder, head, merge, dirt, lock, owner and completion
  * evidence, plus the order facts are read in (a hold must not pay for a later,
  * costlier read).
@@ -10,7 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   decideBranchRetirement, decideDetachedRetirement, decideHeldCheckoutRetirement, decideInventoriedBranchRetirement, decideMergedCheckoutOwner,
-  decideMergedDelivery, decideMergedWorktreeReap, decideMergedWorktreeRemoval, decidePendingMergeReceipt, decideWith, gatheredHoldReason,
+  decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideMergedDelivery, decideMergedWorktreeReap, decideMergedWorktreeRemoval, decidePendingMergeReceipt, decideWith, gatheredHoldReason,
   recoveryWorktreeReason, supersededPolicyHold,
   SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS,
 } from './branchRetirementDecision.js';
@@ -564,6 +564,122 @@ describe('decideMergedWorktreeRemoval', () => {
     expect(remove({ holder: { ...scanned, locked: true } }).asked).toEqual(['agents', 'policyHold', 'activeAgentIds']);
     expect(remove().asked).toEqual(['agents', 'policyHold', 'activeAgentIds', 'dirty', 'mergeEvidence']);
     expect(remove({ facts: { dirty: true } }).asked).not.toContain('mergeEvidence');
+  });
+});
+
+// The external (managed-app) orphan cleanup (#16153). Every row was a real-git
+// case in worktreeExternalCleanup.test.js; that suite keeps one real-git
+// contract per outcome and destructive refusal.
+describe('decideExternalWorktreeCleanup', () => {
+  const COS = '/data/cos/worktrees';
+  const APP = '/work/managed-app';
+  const dir = name => `${COS}/${name}`;
+  const registered = (name, extra = {}) => ({ path: dir(name), branch: `refs/heads/${name}-br`, head: HEAD, locked: false, ...extra });
+  const primary = { path: APP, branch: 'refs/heads/main', head: MAIN_HEAD };
+  /** One agent checkout of a managed app with every fact clean and merged. */
+  const scan = ({ name = 'agent-merged', facts = {}, registrations, ...input } = {}) => drive(decideExternalWorktreeCleanup, {
+    path: dir(name), worktreesDir: COS, activeAgentIds: new Set(), retainedPaths: new Set(), ...input,
+  }, {
+    gitFile: true, commonDir: `${APP}/.git`, topLevel: dir(name), registrations: registrations ?? [primary, registered(name)],
+    parentCommonDir: `${APP}/.git`, defaultBranch: 'main', dirty: false, disposableHead: false, mergeEvidence: true, ...facts,
+  });
+
+  it.each([
+    // [removed real-git case, overrides, verdict]
+    ['a merged clean agent checkout is reclaimed', {}, 'retire'],
+    ['a dirty checkout is retained', { facts: { dirty: true } }, 'uncommitted'],
+    ['a dirty checkout whose PR merged at its exact head is reclaimed', { facts: { dirty: true, disposableHead: true } }, 'retire'],
+    ['an unmerged checkout is retained', { facts: { mergeEvidence: false } }, 'unmerged'],
+    ['a failed cherry probe is not merge evidence', { facts: { mergeEvidence: null } }, 'unmerged'],
+    ['a locked checkout is retained', { registrations: [primary, registered('agent-merged', { locked: true })] }, 'worktree-locked'],
+    ['a detached checkout is retained', { registrations: [primary, registered('agent-merged', { branch: undefined, detached: true })] }, 'not-a-branch-registration'],
+    ['a prunable registration is retained', { registrations: [primary, registered('agent-merged', { prunable: true })] }, 'not-a-branch-registration'],
+    ['a checkout Git does not list is retained', { registrations: [primary] }, 'not-a-branch-registration'],
+    ['an unreadable registry is retained', { facts: { registrations: null } }, 'not-a-branch-registration'],
+    ['the parent repository\'s own checkout is never reclaimed', { registrations: [registered('agent-merged'), primary] }, 'primary-checkout'],
+    ['an active agent\'s checkout is retained', { activeAgentIds: new Set(['agent-merged']) }, 'worktree-active-agent'],
+    ['liveness that cannot be established retains every checkout', { activeAgentIds: null }, 'worktree-agent-liveness-unknown'],
+    ['a claim-shaped checkout in the CoS root lacks an agent id', { name: 'claim-issue-42' }, 'worktree-missing-agent-id'],
+    ['a non-agent directory is retained', { name: 'other-work' }, 'worktree-missing-agent-id'],
+    ['gh-pages is protected even when clean and merged', { registrations: [primary, registered('agent-pages', { branch: 'refs/heads/gh-pages' })], name: 'agent-pages' }, 'protected'],
+    ['the parent\'s default branch is protected', { facts: { defaultBranch: 'agent-merged-br' } }, 'protected'],
+    ['a parent repository that disappeared is retained', { facts: { parentCommonDir: null } }, 'foreign-common-dir'],
+    ['a parent with another common directory is retained', { facts: { parentCommonDir: '/work/other/.git' } }, 'foreign-common-dir'],
+    ['an unreadable default branch is retained', { facts: { defaultBranch: null } }, 'default-branch-unreadable'],
+    ['an unreadable git pointer is retained', { facts: { commonDir: null } }, 'git-common-dir-unreadable'],
+    ['a failed top-level read is retained', { facts: { topLevel: null } }, 'git-toplevel-unreadable'],
+    ['a plain directory (no .git file) is retained', { facts: { gitFile: false } }, 'not-a-linked-checkout'],
+    ['a checkout kept by an earlier phase of the sweep', { retainedPaths: new Set([dir('agent-merged')]) }, 'retained-by-sweep'],
+    ['an unreadable status is retained', { facts: { dirty: null } }, 'status-failed'],
+  ])('%s', (_name, overrides, expected) => {
+    expect(verdict(scan(overrides))).toBe(expected);
+  });
+
+  it('matches Git\'s registration spelling through the injected path comparison', () => {
+    const alias = registered('agent-merged', { path: 'C:/DATA~1/agent-merged' });
+    const samePath = (a, b) => a === b || [a, b].sort().join() === [dir('agent-merged'), 'C:/DATA~1/agent-merged'].sort().join();
+    expect(verdict(scan({ samePath, registrations: [primary, alias] }))).toBe('retire');
+    expect(verdict(scan({ registrations: [primary, alias] }))).toBe('not-a-branch-registration');
+  });
+
+  it('admits the registration, its repository and whether dirt is disposable', () => {
+    expect(scan().admit).toEqual({ tree: registered('agent-merged'), repoPath: APP, branch: 'agent-merged-br', disposable: false });
+    expect(scan({ facts: { dirty: true, disposableHead: true } }).admit.disposable).toBe(true);
+  });
+
+  it('reads facts lazily: a lock or live owner reads nothing, dirt reads no merge evidence, a clean tree asks no forge', () => {
+    expect(scan({ activeAgentIds: new Set(['agent-merged']) }).asked).toEqual([]);
+    expect(scan({ name: 'claim-issue-42' }).asked).toEqual([]);
+    expect(scan({ registrations: [primary, registered('agent-merged', { locked: true })] }).asked)
+      .toEqual(['gitFile', 'commonDir', 'topLevel', 'registrations']);
+    expect(scan().asked).toEqual(['gitFile', 'commonDir', 'topLevel', 'registrations', 'parentCommonDir', 'defaultBranch', 'dirty', 'mergeEvidence']);
+    expect(scan({ facts: { dirty: true } }).asked).toEqual(['gitFile', 'commonDir', 'topLevel', 'registrations', 'parentCommonDir', 'defaultBranch', 'dirty', 'disposableHead']);
+    expect(scan({ facts: { dirty: null } }).asked).not.toContain('mergeEvidence');
+  });
+
+  it('names the parent repository, branch and head on the reads that need them', () => {
+    const base = { path: dir('agent-merged'), worktreesDir: COS, activeAgentIds: new Set(), retainedPaths: new Set() };
+    const facts = { gitFile: true, commonDir: `${APP}/.git`, topLevel: dir('agent-merged'), registrations: [primary, registered('agent-merged')] };
+    expect(decideExternalWorktreeCleanup({ ...base, facts })).toEqual({ need: 'parentCommonDir', repo: APP });
+    Object.assign(facts, { parentCommonDir: `${APP}/.git` });
+    expect(decideExternalWorktreeCleanup({ ...base, facts })).toEqual({ need: 'defaultBranch', repo: APP });
+    Object.assign(facts, { defaultBranch: 'main', dirty: true });
+    expect(decideExternalWorktreeCleanup({ ...base, facts })).toEqual({ need: 'disposableHead', repo: APP, branch: 'agent-merged-br', head: HEAD });
+    Object.assign(facts, { disposableHead: true });
+    expect(decideExternalWorktreeCleanup({ ...base, facts })).toEqual({ need: 'mergeEvidence', repo: APP, branch: 'agent-merged-br' });
+  });
+});
+
+describe('decideExternalWorktreeRemoval', () => {
+  const COS = '/data/cos/worktrees';
+  const PATH = `${COS}/agent-merged`;
+  const scanned = { path: '/private/data/cos/worktrees/agent-merged', branch: 'refs/heads/agent-merged-br', head: HEAD };
+  const remove = ({ holder = { ...scanned, locked: false }, disposable = false, facts = {} } = {}) => drive(decideExternalWorktreeRemoval, {
+    tree: scanned, path: PATH, holder, repoPath: '/work/managed-app', disposable, worktreesDir: COS,
+  }, { agents: [], policyHold: null, activeAgentIds: new Set(), dirty: false, mergeEvidence: true, ...facts });
+
+  it.each([
+    ['the scanned registration still merged and clean is removed', {}, 'retire'],
+    ['a registration Git no longer lists', { holder: null }, 'worktree-holder-changed'],
+    ['a holder that switched branch', { holder: { ...scanned, branch: 'refs/heads/other' } }, 'worktree-holder-changed'],
+    ['a holder whose head moved since the scan', { holder: { ...scanned, head: 'e'.repeat(40) } }, 'worktree-holder-changed'],
+    ['a run registered in the checkout', { facts: { agents: [{ id: 'agent-live', status: 'running', workspacePath: PATH, sourceWorkspace: '/work/managed-app' }] } }, 'claim-owner-active'],
+    ['an unreadable owner registry', { facts: { agents: null } }, 'claim-ownership-unreadable'],
+    ['an unreadable durable completion policy', { facts: { policyHold: 'completion-policy-unreadable' } }, 'completion-policy-unreadable'],
+    ['a lock taken since the scan', { holder: { ...scanned, locked: true } }, 'worktree-locked'],
+    ['an agent dispatched into the tree since the scan', { facts: { activeAgentIds: new Set(['agent-merged']) } }, 'worktree-active-agent'],
+    ['liveness lost since the scan', { facts: { activeAgentIds: null } }, 'worktree-agent-liveness-unknown'],
+    ['fresh status that cannot be read', { facts: { dirty: null } }, 'worktree-status-unavailable'],
+    ['a clean tree that became dirty', { facts: { dirty: true } }, 'worktree-dirty'],
+    ['disposable dirt while the registration is still at the merged head', { disposable: true, facts: { dirty: true } }, 'retire'],
+    ['merge evidence that no longer holds', { facts: { mergeEvidence: false } }, 'unmerged'],
+  ])('%s', (_name, overrides, expected) => {
+    expect(verdict(remove(overrides))).toBe(expected);
+  });
+
+  it('judges ownership by the directory under the worktrees root, not Git\'s spelling of it', () => {
+    // The registration's own path is outside the root's spelling; the managed directory is not.
+    expect(verdict(remove({ facts: { agents: [{ id: 'agent-live', status: 'running', workspacePath: scanned.path, sourceWorkspace: '/work/managed-app' }] } }))).toBe('retire');
   });
 });
 

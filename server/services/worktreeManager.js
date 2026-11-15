@@ -25,7 +25,7 @@ import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { forkRemoteName, normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';
 import { isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
 import { ensureInstanceId } from './instanceIdentity.js';
-import { decideMergedWorktreeRemoval, decideMergedWorktreeReap, decideWith } from './branchRetirementDecision.js';
+import { decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideMergedWorktreeRemoval, decideMergedWorktreeReap, decideWith } from './branchRetirementDecision.js';
 import { provisionWorkspaceNodeModules, removeProvisionedNodeModules } from '../lib/worktreeNodeModules.js';
 import { withGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 
@@ -2330,70 +2330,59 @@ export async function reapMergedWorktrees(sourceWorkspace, {
 async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readOwners, retainedPaths) {
   const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
   const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+  const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
   const entries = await readdir(WORKTREES_DIR, { withFileTypes: true }).catch(() => []);
   let cleaned = 0;
+
+  // Git's own answer, never one inferred from the spelling of a .git file:
+  // relative pointers, separate git directories and Windows separators are all valid.
+  const readCommonDir = cwd => execGit(['rev-parse', '--git-common-dir'], cwd)
+    .then(r => r.stdout.trim() ? resolve(cwd, r.stdout.trim()) : null).catch(() => null);
 
   for (const entry of entries) {
     if (!entry.isDirectory() || alreadyHandled.has(entry.name)) continue;
     const worktreePath = join(WORKTREES_DIR, entry.name);
-    const ownership = (extra = {}) => worktreeOwnershipReason({
-      path: worktreePath,
-      activeAgentIds: readActiveIds(),
-      roots: [{ path: WORKTREES_DIR, requireAgentId: true }],
-      requireKnownLiveness: true,
-      ...extra,
+    const readStatus = () => execGit(['status', '--porcelain'], worktreePath).then(r => r.stdout, () => null);
+    let target;
+    // One liveness snapshot for the scan: an agent dispatched while it inspects
+    // the tree is for the ownership section's fresh read to catch (#11858).
+    const activeAgentIds = readActiveIds();
+    const scan = await decideWith(facts => decideExternalWorktreeCleanup({
+      path: worktreePath, worktreesDir: WORKTREES_DIR, activeAgentIds, retainedPaths, samePath: pathsEqual, facts,
+    }), {
+      gitFile: async () => (await lstat(join(worktreePath, '.git')).catch(() => null))?.isFile() === true,
+      commonDir: () => readCommonDir(worktreePath),
+      // Git expands Windows short (8.3) aliases even where Node's realpath
+      // keeps them. Compare Git's own spelling with its registration output.
+      topLevel: () => execGit(['rev-parse', '--show-toplevel'], worktreePath).then(r => r.stdout.trim(), () => null),
+      registrations: () => listWorktrees(worktreePath).catch(() => null),
+      parentCommonDir: (_facts, { repo }) => readCommonDir(repo),
+      defaultBranch: (_facts, { repo }) => getDefaultBranch(repo, { strict: true }).catch(() => null),
+      dirty: () => readStatus().then(status => status === null ? null : !classifyWorktreeDirt(status).clean),
+      disposableHead: async (_facts, { repo, branch, head }) => (await import('./prProbe.js')).isMergedPrHead(repo, branch, head),
+      mergeEvidence: async (facts, { repo, branch }) => {
+        target = await resolveMergeTarget(repo, facts.defaultBranch);
+        return hasBranchMergeEvidence(repo, branch, target).catch(() => false);
+      },
     });
-    if (ownership()) continue;
-    const gitFile = await lstat(join(worktreePath, '.git')).catch(() => null);
-    if (!gitFile?.isFile()) continue;
-
-    // Ask Git for its common directory and actual registration, rather than
-    // inferring a parent from the spelling of a .git file. Relative pointers,
-    // separate git directories and Windows separators are all valid.
-    const commonDir = await execGit(['rev-parse', '--git-common-dir'], worktreePath)
-      .then(r => r.stdout.trim() ? resolve(worktreePath, r.stdout.trim()) : null).catch(() => null);
-    if (!commonDir) continue;
-    // Git expands Windows short (8.3) aliases even where Node's realpath
-    // keeps them. Compare Git's own spelling with its registration output.
-    const gitWorktreePath = await execGit(['rev-parse', '--show-toplevel'], worktreePath)
-      .then(r => r.stdout.trim()).catch(() => null);
-    if (!gitWorktreePath || retainedPaths.has(gitWorktreePath)) continue;
-    const registrations = await listWorktrees(worktreePath).catch(() => []);
-    const wt = registrations.find(candidate => pathsEqual(candidate.path, gitWorktreePath));
-    const primary = registrations[0];
-    if (!wt || wt.bare || wt.detached || wt.prunable || !wt.branch) continue;
-    if (!primary || primary.bare || pathsEqual(primary.path, gitWorktreePath)) continue;
-    if (ownership({ locked: wt.locked })) continue;
-
-    const parentRepo = primary.path;
-    const parentCommonDir = await execGit(['rev-parse', '--git-common-dir'], parentRepo)
-      .then(r => r.stdout.trim() ? resolve(parentRepo, r.stdout.trim()) : null).catch(() => null);
-    if (!parentCommonDir || !pathsEqual(commonDir, parentCommonDir)) continue;
-
-    const branchName = wt.branch.replace(/^refs\/heads\//, '');
-    const defaultBranch = await getDefaultBranch(parentRepo, { strict: true }).catch(() => null);
-    if (!defaultBranch || PROTECTED_BRANCHES.includes(branchName) || branchName === defaultBranch) continue;
-    const status = await execGit(['status', '--porcelain'], worktreePath).then(r => r.stdout).catch(() => null);
-    if (status === null) continue;
-    const { isMergedPrHead } = await import('./prProbe.js');
-    const externalDisposable = !classifyWorktreeDirt(status).clean && await isMergedPrHead(parentRepo, branchName, wt.head);
-    if (!classifyWorktreeDirt(status).clean && !externalDisposable) continue;
-    const target = await resolveMergeTarget(parentRepo, defaultBranch);
-    const merged = await hasBranchMergeEvidence(parentRepo, branchName, target).catch(() => false);
-    if (!merged) continue;
+    if (scan.hold) continue;
+    const { tree: wt, repoPath: parentRepo, branch: branchName, disposable: externalDisposable } = scan.admit;
 
     // Non-force removal is a final Git guard against newly dirty or locked
     // trees. A refusal must never fall through to recursive filesystem removal.
     // One ownership section re-reads liveness and the registry before removing.
     const removed = await withGitMutationLifetime(() => withClaimOwnershipLock(async () => {
-      const latest = (await listWorktrees(parentRepo)).find(holder => pathsEqual(holder.path, worktreePath));
-      if (!latest || latest.head !== wt.head || latest.branch !== wt.branch || ownership({ locked: latest.locked })
-        || claimCheckoutOwnerReason({ branchName, holderPath: worktreePath, sourceWorkspace: parentRepo, agents: await readOwners() })) return false;
-      const latestStatus = await execGit(['status', '--porcelain'], worktreePath).then(r => r.stdout, () => null);
-      if (latestStatus === null || (!classifyWorktreeDirt(latestStatus).clean && !externalDisposable)) return false;
-      if (!await hasBranchMergeEvidence(parentRepo, wt.head, target).catch(() => false)) return false;
-      const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
-      if (await readBranchCompletionHold({ repoPath: parentRepo, branch: branchName, retirement: true })) return false;
+      const latest = (await listWorktrees(parentRepo)).find(holder => pathsEqual(holder.path, worktreePath)) ?? null;
+      const recheck = await decideWith(facts => decideExternalWorktreeRemoval({
+        tree: wt, path: worktreePath, holder: latest, repoPath: parentRepo, disposable: externalDisposable, worktreesDir: WORKTREES_DIR, facts,
+      }), {
+        agents: () => readOwners(),
+        policyHold: () => readBranchCompletionHold({ repoPath: parentRepo, branch: branchName, retirement: true }),
+        activeAgentIds: () => readActiveIds(),
+        dirty: () => readStatus().then(status => status === null ? null : !classifyWorktreeDirt(status).clean),
+        mergeEvidence: () => hasBranchMergeEvidence(parentRepo, wt.head, target).catch(() => false),
+      });
+      if (recheck.hold) return false;
       const { readRetirementCheckoutIdentity } = await import('../lib/retirementCheckoutObservation.js');
       const checkoutIdentity = await readRetirementCheckoutIdentity(worktreePath).catch(() => null);
       const ok = await execGit(['worktree', 'remove', ...(externalDisposable ? ['--force'] : []), worktreePath], parentRepo).then(() => true).catch(err => {
