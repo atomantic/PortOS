@@ -35,6 +35,8 @@
 // hands each member back to its own normal resolution (detector, then
 // `defaultEnabled`). See resolveOne in services/instanceFeatures.js. An
 // ungrouped feature is completely unaffected — this is additive.
+import { isPlainObject } from './objects.js';
+
 export const INSTANCE_FEATURES = Object.freeze([
   Object.freeze({
     id: 'post',
@@ -219,10 +221,7 @@ export const APP_FEATURE_IDS = Object.freeze(['datadog', 'jira', 'gsd']);
  */
 export const countConfiguredInstances = (config, label = 'instance config') => {
   const instances = config?.instances;
-  const isPlainObject = instances !== null
-    && typeof instances === 'object'
-    && !Array.isArray(instances);
-  if (!isPlainObject) {
+  if (!isPlainObject(instances)) {
     throw new Error(`Malformed ${label}: "instances" must be an object`);
   }
   return Object.keys(instances).length;

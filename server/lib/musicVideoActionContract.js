@@ -4,6 +4,7 @@
  */
 
 import { phoneticLipSyncSummary } from './musicVideoLyricAnchors.js';
+import { isPlainObject } from './objects.js';
 
 /** Versioned dramatic intent shared by treatment, generation and shot inspection. */
 export const SHOT_ACTION_TEXT_LIMITS = Object.freeze({
@@ -12,14 +13,13 @@ export const SHOT_ACTION_TEXT_LIMITS = Object.freeze({
 export const SHOT_ACTION_LIST_FIELDS = Object.freeze(['cameraConstraints', 'continuityRequirements', 'acceptanceCriteria']);
 const CONTRACT_KEYS = new Set(['version', ...Object.keys(SHOT_ACTION_TEXT_LIMITS), ...SHOT_ACTION_LIST_FIELDS, 'actions', 'reactions']);
 const EVENT_KEYS = new Set(['startSec', 'endSec', 'subject', 'description']);
-const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const isTime = (value) => Number.isFinite(value) && value >= 0 && value <= 36000;
 const isText = (value, max) => typeof value === 'string' && value.length <= max;
 
 /** Shape validation; null means an explicit clear. Returns a human-readable problem or null. */
 export function shotActionContractProblem(contract, scene = null) {
   if (contract == null) return null;
-  if (!isObject(contract) || contract.version !== 1 || Object.keys(contract).some((key) => !CONTRACT_KEYS.has(key))) return 'Shot intent must be a version 1 action contract';
+  if (!isPlainObject(contract) || contract.version !== 1 || Object.keys(contract).some((key) => !CONTRACT_KEYS.has(key))) return 'Shot intent must be a version 1 action contract';
   if (!isText(contract.purpose, 1000) || !contract.purpose.trim()) return 'Shot intent needs a purpose';
   for (const [key, max] of Object.entries(SHOT_ACTION_TEXT_LIMITS)) {
     if (contract[key] !== undefined && !isText(contract[key], max)) return `Invalid ${key} in shot intent`;
@@ -34,7 +34,7 @@ export function shotActionContractProblem(contract, scene = null) {
     const events = contract[key] ?? [];
     if (!Array.isArray(events) || events.length > 24) return `Invalid ${key} in shot intent`;
     for (const event of events) {
-      if (!isObject(event) || Object.keys(event).some((field) => !EVENT_KEYS.has(field))
+      if (!isPlainObject(event) || Object.keys(event).some((field) => !EVENT_KEYS.has(field))
         || !isTime(event.startSec) || !isTime(event.endSec) || !(event.endSec > event.startSec)
         || !isText(event.subject, 120) || !event.subject.trim()
         || !isText(event.description, 1000) || !event.description.trim()) return 'Actions and reactions need a subject, description and finite increasing times';

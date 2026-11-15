@@ -38,6 +38,8 @@
  * server (musicWaveform.js) through lib/waveSketch.js.
  */
 
+import { clamp } from './vectorMath.js';
+
 export const PAINTED_CANVAS_VERSION = 2;
 export const PAINTED_CANVAS_SAMPLE_RATE = 44100;
 
@@ -75,7 +77,6 @@ export const PAINTED_CANVAS_DECLICK_SEC = 0.003;
 const BLOCK = 64;
 const NYQUIST_GUARD = 0.49; // cycles per sample above which a partial is silent
 
-const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 const isNum = (n) => typeof n === 'number' && Number.isFinite(n);
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 // Keep stored numbers short — the painting is sent back to the model on revision.
