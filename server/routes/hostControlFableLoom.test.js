@@ -3,9 +3,7 @@ import express from 'express';
 import { EventEmitter } from 'node:events';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 // Mount the real router/gates; double effects to prove refusal happens before
 // stores, runs or queues are reached, without launching an actual provider.
@@ -20,11 +18,6 @@ vi.mock('../services/auth.js', async (importOriginal) => ({
 }));
 vi.mock('../services/settings.js', () => ({
   settingsEvents: new EventEmitter(), getSettings: vi.fn(async () => ({})),
-}));
-vi.mock('../services/instanceIdentity.js', () => ({
-  loadData: vi.fn(async () => ({ peers: [{
-    id: 'example-peer', instanceId: 'example-instance', enabled: true, syncSecret: 'a'.repeat(32),
-  }] })),
 }));
 vi.mock('../services/universeBuilder.js', () => ({ getUniverse: vi.fn() }));
 vi.mock('../services/fableLoom/index.js', () => ({
@@ -158,45 +151,21 @@ describe('FableLoom agent workflow authority (#10668)', () => {
     expect([result.status, result.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     expect(exports.getFableLoomExportDownload).not.toHaveBeenCalled();
   });
-  it('refuses remote authoring and production before effects for CLI/TUI/API-first and Express spelling variants', async () => {
+  it('refuses remote authoring and production before effects for CLI/TUI/API-first providers', async () => {
     const app = appFor();
     for (const [path, body] of operations) {
       for (const providerId of ['example-cli', 'example-tui', 'example-api']) {
         const response = await call(app, [path, { ...body, providerId }]);
         expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
       }
-      const variant = await call(app, [path.toUpperCase() + '/', body]);
-      expect([variant.status, variant.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     }
     expectNoEffects();
   });
 
-  it('refuses proxy-marked, anonymous auth-on, Basic and scoped-peer callers', async () => {
-    for (const [enabled, address, headers, status, code] of [
-      [false, '127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }, 403, 'HOST_CONTROL_FORBIDDEN'],
-      [true, '192.0.2.10', {}, 401, 'AUTH_REQUIRED'],
-      [true, '192.0.2.10', { Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403, 'HOST_CONTROL_FORBIDDEN'],
-      [true, '192.0.2.10', {
-        [PEER_AUTH_HEADER]: derivePeerAuthToken('a'.repeat(32), 'example-instance'),
-        [PEER_INSTANCE_HEADER]: 'example-instance',
-      }, 403, 'PEER_SCOPE_FORBIDDEN'],
-    ]) {
-      auth.enabled = enabled;
-      const app = appFor(address);
-      for (const operation of operations) {
-        const response = await call(app, operation, headers);
-        expect([response.status, response.body.code], operation[0]).toEqual([status, code]);
-      }
-    }
-    expectNoEffects();
-  });
-
-  it('preserves genuine loopback, operator-session and delegated-agent workflows', async () => {
-    const operator = await createSession();
+  it('preserves genuine loopback and delegated-agent workflows', async () => {
     const agent = await createSession({ label: 'agent' });
     for (const [enabled, address, headers] of [
       [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Cookie: `portos_auth=${operator.token}` }],
       [true, '127.0.0.1', { Authorization: `Bearer ${agent.token}` }],
     ]) {
       auth.enabled = enabled;

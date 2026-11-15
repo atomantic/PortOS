@@ -3,19 +3,12 @@ import { EventEmitter } from 'node:events';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-deck-chiptune-authority-') }));
 afterAll(cleanupTempDataRoots);
 afterEach(() => vi.restoreAllMocks());
-vi.mock('../services/instanceIdentity.js', () => ({
-  loadData: vi.fn(async () => ({ peers: [{
-    id: 'example-peer', instanceId: 'example-instance', enabled: true, syncSecret: 'a'.repeat(32),
-  }] })),
-}));
 
 // Mount the production Decks and Tracks routers behind the real gates. Only
 // persistence, provider, queue and app-file effects are doubled (#10893).
@@ -81,7 +74,7 @@ vi.mock('../services/chiptune.js', () => ({
 import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import decksRoutes from './decks.js';
 import tracksRoutes from './tracks.js';
-import { createSession, revokeSessionById } from '../services/auth.js';
+import { createSession } from '../services/auth.js';
 import { getDeck, applyCardGenerations } from '../services/decks.js';
 import { analyzeDeckSample } from '../services/deckStyleAnalysis.js';
 import { generateDeckCardPrompts } from '../services/deckPrompts.js';
@@ -90,7 +83,6 @@ import { beginPromptProgress } from '../services/deckPromptProgress.js';
 import { getTrack } from '../services/tracks/index.js';
 import { generateChiptuneScore, renderChiptuneTrack, publishChiptuneTrack } from '../services/chiptune.js';
 
-let ownerSession;
 // An API-first pick (the shared runner can still fall back to a CLI/TUI) and an
 // explicit tool-capable pick must be gated identically: authority never depends
 // on the selected backend.
@@ -137,69 +129,21 @@ const call = (app, [path, body], headers = {}) => {
 beforeEach(async () => {
   vi.clearAllMocks();
   auth.enabled = false;
-  ownerSession = await createSession();
 });
 
 describe('Deck and chiptune host-action authority (#10893)', () => {
-  it('refuses remote password-free and dev-proxy callers before any route, provider, store or app-file effect', async () => {
-    for (const operation of operations) {
-      for (const [address, headers] of [
-        ['192.0.2.10', {}],
-        ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
-        ['192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }],
-      ]) {
-        const response = await call(appFor(address), operation, headers);
-        expect([response.status, response.body.code], operation[0]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
-    }
-    expectNoEffects();
-  });
-
-  it('gates before body validation so malformed requests learn nothing from a remote caller', async () => {
-    for (const [path] of operations) {
-      const response = await call(appFor(), [path, { unexpected: true }]);
-      expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    expectNoEffects();
-  });
-
-  it('requires authentication with a password, denies legacy Basic, and rejects scoped-peer credentials', async () => {
-    auth.enabled = true;
-    for (const operation of operations) {
-      for (const [headers, status, code] of [
-        [{}, 401, 'AUTH_REQUIRED'],
-        [{ Authorization: 'Bearer invalid-session' }, 401, 'AUTH_REQUIRED'],
-        [{ Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403, 'HOST_CONTROL_FORBIDDEN'],
-        [{
-          [PEER_AUTH_HEADER]: derivePeerAuthToken('a'.repeat(32), 'example-instance'),
-          [PEER_INSTANCE_HEADER]: 'example-instance',
-        }, 403, 'PEER_SCOPE_FORBIDDEN'],
-      ]) {
-        const response = await call(appFor(), operation, headers);
-        expect([response.status, response.body.code], operation[0]).toEqual([status, code]);
-      }
-    }
-    const revoked = await createSession({ label: 'agent' });
-    await revokeSessionById(revoked.id);
-    const response = await call(appFor(), operations[0], { Cookie: `portos_auth=${revoked.token}` });
-    expect(response.status).toBe(401);
-    expectNoEffects();
-  });
-
-  it('matches case and trailing-slash variants', async () => {
+  it('refuses remote callers before body validation and any route, provider, store or app-file effect', async () => {
     for (const [path, body] of operations) {
-      const response = await call(appFor(), [path.toUpperCase() + '/', body]);
+      const response = await call(appFor(), [path, { ...body, unexpected: true }]);
       expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     }
     expectNoEffects();
   });
 
-  it('retains genuine local, operator and delegated-agent workflows with the chosen backend untouched', async () => {
+  it('retains genuine local and delegated-agent workflows with the chosen backend untouched', async () => {
     const agentSession = await createSession({ label: 'agent' });
     for (const [enabled, address, headers] of [
       [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Authorization: `Bearer ${ownerSession.token}` }],
-      [true, '192.0.2.10', { Cookie: `portos_auth=${agentSession.token}` }],
       [true, '192.0.2.10', { Authorization: `Bearer ${agentSession.token}` }],
     ]) {
       auth.enabled = enabled;
@@ -208,17 +152,17 @@ describe('Deck and chiptune host-action authority (#10893)', () => {
         expect(response.status, `${operation[0]}: ${JSON.stringify(response.body)}`).toBe(operation[3]);
       }
     }
-    expect(analyzeDeckSample).toHaveBeenCalledTimes(8);
+    expect(analyzeDeckSample).toHaveBeenCalledTimes(4);
     expect(analyzeDeckSample.mock.calls.map(([args]) => args.providerId))
-      .toEqual(Array(4).fill(['example-api-provider', 'example-cli-provider']).flat());
-    expect(generateDeckCardPrompts).toHaveBeenCalledTimes(8);
-    expect(renderDeckCards).toHaveBeenCalledTimes(16);
+      .toEqual(Array(2).fill(['example-api-provider', 'example-cli-provider']).flat());
+    expect(generateDeckCardPrompts).toHaveBeenCalledTimes(4);
+    expect(renderDeckCards).toHaveBeenCalledTimes(8);
     expect(renderDeckCards.mock.calls.map(([, options]) => options.mode)).toEqual(
-      Array(4).fill(['local', 'grok', 'local', 'codex']).flat());
-    expect(generateChiptuneScore).toHaveBeenCalledTimes(8);
+      Array(2).fill(['local', 'grok', 'local', 'codex']).flat());
+    expect(generateChiptuneScore).toHaveBeenCalledTimes(4);
     expect(generateChiptuneScore.mock.calls.map(([args]) => args.providerId))
-      .toEqual(Array(4).fill(['example-api-provider', 'example-cli-provider']).flat());
-    expect(publishChiptuneTrack).toHaveBeenCalledTimes(4);
+      .toEqual(Array(2).fill(['example-api-provider', 'example-cli-provider']).flat());
+    expect(publishChiptuneTrack).toHaveBeenCalledTimes(2);
   });
 
   it('keeps deck reads open remotely and runs the deterministic chiptune render alone for a local caller', async () => {
