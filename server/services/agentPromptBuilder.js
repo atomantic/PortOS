@@ -396,6 +396,15 @@ async function pinAutoMergeChoice(task) {
   return { ...task, metadata: { ...task.metadata, useAutoMerge } };
 }
 
+// Checkout recovery gets the live sessions and PortOS-authored commits PortOS
+// observed in the checkout, so its blocker names the real owner (#16075).
+async function attachCheckoutOwnership(task, workspaceDir) {
+  const { isCheckoutRecoveryTask, describeCheckoutOwnership } = await import('./checkoutOwnership.js');
+  if (!isCheckoutRecoveryTask(task) || !workspaceDir) return task;
+  const checkoutOwnership = await describeCheckoutOwnership(workspaceDir).catch(() => null);
+  return checkoutOwnership ? { ...task, metadata: { ...task.metadata, checkoutOwnership } } : task;
+}
+
 // A claim that merges its own PR needs to know up front whether the forge token
 // can merge workflow-file changes (#15680). Probe only for claim flows.
 async function attachWorkflowScope(task, workspaceDir) {
@@ -420,6 +429,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
 
   task = await pinAutoMergeChoice(task);
   task = await attachWorkflowScope(task, workspaceDir);
+  task = await attachCheckoutOwnership(task, workspaceDir);
 
   // Feature-agent tasks carry only a compact queue description. Expand the
   // persisted persona briefing at spawn time so scheduled and manually
@@ -652,7 +662,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     }),
     [COMPLETION_MODES.AUDIT_FLOW]: () => buildAuditFlowCompletionSection({ isTui, sentinelPath }),
     [COMPLETION_MODES.RECONCILE_FLOW]: () => buildReconcileFlowCompletionSection({ sentinelPath }),
-    [COMPLETION_MODES.CHECKOUT_RECOVERY]: () => buildCheckoutRecoveryCompletionSection({ sentinelPath }),
+    [COMPLETION_MODES.CHECKOUT_RECOVERY]: () => buildCheckoutRecoveryCompletionSection({ sentinelPath, ownership: task.metadata?.checkoutOwnership }),
     [COMPLETION_MODES.RELEASE_FLOW]: () => buildReleaseFlowCompletionSection({ isTui, isCli: providerType === PROVIDER_TYPES.CLI, sentinelPath }),
   }[completionMode] || (() => ''))();
   const tuiCompletionSection = [completionSection, buildAuditOutputCompletionSection(task, sentinelPath)]
@@ -1245,7 +1255,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
     },
     [COMPLETION_MODES.AUDIT_FLOW]: () => contractSections.push(buildAuditFlowCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.RECONCILE_FLOW]: () => contractSections.push(buildReconcileFlowCompletionSection({ sentinelPath: lightSentinelPath() })),
-    [COMPLETION_MODES.CHECKOUT_RECOVERY]: () => contractSections.push(buildCheckoutRecoveryCompletionSection({ sentinelPath: lightSentinelPath() })),
+    [COMPLETION_MODES.CHECKOUT_RECOVERY]: () => contractSections.push(buildCheckoutRecoveryCompletionSection({ sentinelPath: lightSentinelPath(), ownership: task.metadata?.checkoutOwnership })),
     [COMPLETION_MODES.RELEASE_FLOW]: () => contractSections.push(buildReleaseFlowCompletionSection({ isTui, isCli: !isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.TUI_SLASHDO_FREE]: pushTuiCompletion,
     [COMPLETION_MODES.TUI]: pushTuiCompletion,

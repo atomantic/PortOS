@@ -52,6 +52,7 @@ import { isUpdateInProgress } from './updateChecker.js';
 import { loadState } from './cosState.js';
 import { acquireLocalEndpointSpawnSlot } from './cosLocalEndpointSlots.js';
 import { forgeSpawnHoldReason } from './cosForgeSpawnGate.js';
+import { checkoutOwnerHoldReason } from './checkoutOwnership.js';
 import { acquireCosGlobalSlot } from './cosAdmissionReservations.js';
 import { releaseAgentReservation } from './agentMaintenanceReservations.js';
 // This module's own event wiring drives three LIFECYCLE TRANSITIONS, so it takes
@@ -203,6 +204,11 @@ async function handleTaskReady(task) {
   //    the silent wedge a wrong hold would be.
   const forgeHold = await forgeSpawnHoldReason(task);
   if (forgeHold) return holdTask(task, forgeHold);
+  // 3b. Checkout recovery while the operator's own interactive agent session
+  //     owns that checkout (#16075). Every run could only report the same
+  //     blocker, and each retry re-ran the full inventory and backups.
+  const ownerHold = await checkoutOwnerHoldReason(task);
+  if (ownerHold) return holdTask(task, ownerHold);
   // 4. Global capacity. Reserve across the spawn window so direct persistent
   //    turns and ordinary agents cannot both pass a stale pre-registration
   //    snapshot.

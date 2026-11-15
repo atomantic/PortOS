@@ -479,11 +479,26 @@ export function buildExternalRepositoryCompletionSection({ isTui = false, sentin
   );
 }
 
-export function buildCheckoutRecoveryCompletionSection({ sentinelPath } = {}) {
+function checkoutOwnershipLines(ownership) {
+  if (!ownership) return [];
+  const sessions = Array.isArray(ownership.sessions) ? ownership.sessions : [];
+  const commits = Array.isArray(ownership.portosCommits) ? ownership.portosCommits : [];
+  return [
+    '### Checkout ownership observed by PortOS',
+    sessions.length
+      ? `- Live interactive agent sessions with this checkout as their working directory: ${sessions.map(s => `pid ${s.pid} (status ${s.status})`).join('; ')}. Treat each as the operator's own session, not an unknown writer: do not change its work. If it blocks recovery, report blocked and name it as an interactive operator session with its status; PortOS holds recovery until it exits or the checkout settles.`
+      : '- No live interactive agent session has this checkout as its working directory.',
+    `- Commits whose reflog entry carries a \`portos-commit-\` action were made by PortOS itself, not by another writer${commits.length ? `: ${commits.join(', ')}` : ''}.`,
+    '',
+  ];
+}
+
+export function buildCheckoutRecoveryCompletionSection({ sentinelPath, ownership = null } = {}) {
   return [
     '## App Checkout Recovery Handoff',
     CHECKOUT_RECOVERY_GUIDANCE,
     '',
+    ...checkoutOwnershipLines(ownership),
     'After recovery reaches its verified final outcome or a precise blocker, write the completion sentinel and stop:',
     '',
     ...buildSentinelWriteSteps(1, sentinelPath, '   ## Recovery outcome\n   <verified checkout and preservation PR outcomes, or INCOMPLETE with the first unverified checkpoint>'),
