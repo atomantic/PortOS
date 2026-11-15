@@ -152,6 +152,7 @@ async function openEnvironment(fixture, { warmup = false } = {}) {
     if (url.pathname === '/api/media/holders') return route.fulfill({ json: { self: 'example-instance', items: {} } });
     if (url.pathname === '/api/media/usages') return route.fulfill({ json: { items: {} } });
     if (url.pathname === '/api/catalog/ingredients/example-place/details') return route.fulfill({ json: { ingredient, media, relations: { outbound: [], inbound: [] }, refs: [], sources: [], missingMedia: [] } });
+    if (url.pathname === '/api/catalog/ingredients/example-place/look-around') return route.fulfill({ json: { motions: [], models: [], configured: false, mainPlate: null, clips: [], pending: [] } });
     if (url.pathname === '/api/catalog/ingredients/example-place/greybox' && route.request().method() === 'PUT') {
       mark('save-request');
       ingredient.payload.greybox = route.request().postDataJSON().greybox;
