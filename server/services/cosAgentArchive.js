@@ -16,7 +16,7 @@ import { join } from 'path';
 import { cosEvents } from './cosEvents.js';
 import { loadState, saveState, withStateLock, AGENTS_DIR } from './cosState.js';
 import { atomicWrite, ensureDir } from '../lib/fileUtils.js';
-import { loadAgentIndex, saveAgentIndex, recordArchivedAgentOrder, moveAgentDir } from './cosAgentIndex.js';
+import { loadAgentIndex, saveAgentIndex, recordArchivedAgentOrder, moveAgentDir, invalidateArchivedRecord } from './cosAgentIndex.js';
 import { readProtectedCleanupOwners } from './cosAgentLifecycle.js';
 import { releaseAgentReservation } from './agentMaintenanceReservations.js';
 
@@ -65,6 +65,7 @@ export async function archiveStaleAgents() {
         } else if (!existsSync(targetDir)) {
           await ensureDir(targetDir);
           await atomicWrite(join(targetDir, 'metadata.json'), agentWithoutOutput).catch(() => {});
+          invalidateArchivedRecord(id);
         }
 
         idx.set(id, dateStr);

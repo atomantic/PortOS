@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { loadState, saveState, withStateLock } from './cosState.js';
 import { atomicWrite, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
-import { loadAgentIndex, getAgentDir } from './cosAgentIndex.js';
+import { loadAgentIndex, getAgentDir, invalidateArchivedRecord } from './cosAgentIndex.js';
 import {
   loadCompletionOrderIndex,
   markCompletionFeedbackResolved,
@@ -316,6 +316,7 @@ export async function submitAgentFeedback(agentId, feedback) {
       const archived = await readArchivedAgent(agentId, dateBucket);
       if (archived.kind === 'found') {
         await atomicWrite(archived.metadataPath, { ...archived.agent, feedback: feedbackData });
+        invalidateArchivedRecord(agentId);
       }
 
       emitLog('info', `Feedback received for agent ${agentId}: ${feedback.rating}`, { agentId, rating: feedback.rating });
@@ -334,6 +335,7 @@ export async function submitAgentFeedback(agentId, feedback) {
 
     const updated = { ...archived.agent, feedback: feedbackData };
     await atomicWrite(archived.metadataPath, updated);
+    invalidateArchivedRecord(agentId);
 
     emitLog('info', `Feedback received for agent ${agentId}: ${feedback.rating}`, { agentId, rating: feedback.rating });
     return { success: true, agent: { ...updated, id: agentId }, feedbackData, clearPendingRef: true };
