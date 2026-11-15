@@ -202,7 +202,6 @@ it('reserves a release branch before creation and captures its actual locked che
     agent.metadata.releaseCandidateLifecycle = { version: 1, agentId, taskId: agent.taskId, startedAt: agent.startedAt, stage: 'registered' };
     expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'candidate-reservation-missing' });
     agent.metadata.resumedFromAgentId = 'agent-interrupted';
-    agent.metadata.releaseCandidateRecovery = { version: 1, status: 'held', predecessorAgentId: 'agent-interrupted', reason: 'candidate-contemporaneous-lineage-missing' };
     releasePreflight.mockResolvedValueOnce({ ok: false, reason: 'release-tag-present' });
     expect(await updateReleaseCandidateOwnership(agentId, 'reserve', { version: '1.2.3' }))
       .toEqual({ reserved: false, reason: 'release-tag-present' });
