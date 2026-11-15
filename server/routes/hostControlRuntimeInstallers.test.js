@@ -1,6 +1,11 @@
-import { beforeEach, describe, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { expectAuthorizedWorkflows } from './hostControlTestHarness.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-runtime-installers-authority-') }));
+afterAll(cleanupTempDataRoots);
 
 // Runtime installers (#9555) are plain writes under the default-deny gate (#16018),
 // whose principal matrix lives in services/authGate.test.js. This suite keeps one

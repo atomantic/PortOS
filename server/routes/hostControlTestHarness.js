@@ -10,7 +10,10 @@
  * and the refusal of any HOST_CONTROL_GET_ROUTES read it serves.
  *
  * The calling suite owns its mocks; it must double `services/auth.js` so that
- * `isAuthEnabled()` reads the `auth.enabled` flag it passes here. Gates and the
+ * `isAuthEnabled()` reads the `auth.enabled` flag it passes here, and redirect
+ * the data root (`makePathsProxy` + `lazyTempDataRoot`), because the agent
+ * session is persisted to `auth-sessions.json`. A CoS worktree's own `data/`
+ * is exempt from the real-data write guard, so only CI catches a missing redirect. Gates and the
  * session store load lazily so a suite's `vi.doMock` calls apply first.
  */
 import express from 'express';

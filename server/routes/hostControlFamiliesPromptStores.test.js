@@ -1,5 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { expectAuthorizedWorkflows } from './hostControlTestHarness.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-prompt-stores-authority-') }));
+afterAll(cleanupTempDataRoots);
 
 // Instruction-store writes (prompts, mind recipes, personas, tools, twin settings)
 // are plain writes under the default-deny gate (#16018), whose principal matrix lives
