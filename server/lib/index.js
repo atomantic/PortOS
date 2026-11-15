@@ -366,6 +366,7 @@ export * as runners from './runners.js';
 export * from './stagePinPolicy.js';
 export * from './stageModelTiers.js';
 export * from './tuiHandshake.js';
+export * from './tuiPasteSubmitDriver.js';
 export * from './tuiShellLaunch.js';
 export * from './tuiUsageScrape.js';
 

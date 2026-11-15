@@ -440,9 +440,9 @@ describe('anchoring shots to the sung lyrics', () => {
 });
 
 describe('board time order (#16117)', () => {
-  // Uniquely catches a board saved out of time order reading out of order, staying that way after a
-  // write, or a cut move taking the stored neighbour instead of the shot that plays before it.
-  it('reads a board saved out of order in time order and saves the repair with its next write', async () => {
+  // Uniquely catches a cut move on a board saved out of time order taking the stored neighbour
+  // instead of the shot that plays before it.
+  it('reads a board saved out of order in time order and moves a cut against the real previous shot', async () => {
     const p = await projects.createProject({ name: 'Out of order' });
     const { scenes: [a, b, c] } = await projects.addProjectScenes(p.id, [
       { startSec: 0, endSec: 2, prompt: 'First' },
@@ -459,7 +459,6 @@ describe('board time order (#16117)', () => {
     expect(ids(read)).toEqual([a.sceneId, b.sceneId, c.sceneId]);
     expect(read.scenes.map((scene) => scene.order)).toEqual([0, 1, 2]);
     expect(read.updatedAt).toBe(saved.updatedAt);
-    expect(ids(await file.getProject(p.id))).toEqual([c.sceneId, a.sceneId, b.sceneId]);
     const moved = await projects.moveProjectSceneStart(p.id, c.sceneId, { startSec: 3 });
     expect(moved.previous.sceneId).toBe(b.sceneId);
     expect((await file.getProject(p.id)).scenes.map((scene) => [scene.sceneId, scene.startSec, scene.endSec, scene.order]))

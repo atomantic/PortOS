@@ -62,7 +62,7 @@ export const libraryDdl = [
     // engine/modelId/durationSec gen metadata, audioFilename pointing into the
     // shared music library at data/music/) in `data` JSONB. `title` mirrors a
     // column for queries. db-primary and registered in peerSync (record kind
-    // `track`, sync category `tracks`). Mirrors init-db.sql.
+    // `track`, sync category `tracks`).
     `CREATE TABLE IF NOT EXISTS tracks (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,

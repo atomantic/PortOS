@@ -18,8 +18,8 @@ export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel
 
   function rowToProject(row) {
     if (!row) return null;
-    if (row.data && !row.data.id) return { ...row.data, id: row.id };
-    return row.data;
+    const project = row.data && !row.data.id ? { ...row.data, id: row.id } : row.data;
+    return logic.afterLoad && project ? logic.afterLoad(project) : project;
   }
 
   async function persist(exec, project) {

@@ -110,10 +110,8 @@ async function withCatalogDescriptions(project) {
 
 /** Null when missing; linked descriptions come from the catalog when usable. */
 export async function getProject(id, options = {}) {
-  const [backend, { putScenesInTimeOrder }] = await Promise.all([selectBackend(), import('./projectsLogic.js')]);
-  // Read in time order like every write stores it (#16117), so a board saved out of
-  // order reads right before its first write repairs it; updatedAt is untouched.
-  return presentMusicVideoDependencies(putScenesInTimeOrder(await withCatalogDescriptions(await backend.getProject(id, options))));
+  const backend = await selectBackend();
+  return presentMusicVideoDependencies(await withCatalogDescriptions(await backend.getProject(id, options)));
 }
 
 /** Live project ids (or all when includeDeleted) — used by tombstone GC sweeps. */
@@ -490,10 +488,10 @@ export async function cutProjectScenesOnLyrics(id, options) {
   });
 }
 
-/** Read the stored record, in time order as the apply's write sees it, so preview and the serialized apply hash identical inputs. */
+/** Read the raw record so preview and the serialized apply hash identical inputs. */
 export async function previewProjectPacingRecut(id) {
-  const [{ previewPacingRecut }, { putScenesInTimeOrder }] = await Promise.all([import('./pacingRecut.js'), import('./projectsLogic.js')]);
-  return previewPacingRecut(putScenesInTimeOrder(await (await selectBackend()).getProject(id)));
+  const { previewPacingRecut } = await import('./pacingRecut.js');
+  return previewPacingRecut(await (await selectBackend()).getProject(id));
 }
 
 export async function recutProjectToPacing(id, revision) {
@@ -794,13 +792,10 @@ async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate =
   let descriptions = null;
   const write = mutate || (await selectBackend()).mutateProjectRecord;
   const sceneOnly = options.sceneOnly === true;
-  const { putScenesInTimeOrder } = await import('./projectsLogic.js');
-  const outcome = await write(id, async (saved, context = {}) => {
-    // A board stored out of time order (#16117) is repaired before the transform reads neighbours by index.
-    const stored = putScenesInTimeOrder(saved);
+  const outcome = await write(id, async (stored, context = {}) => {
     if (sceneOnly) {
       const outcome = await transform(stored, { ...context, storedProject: stored });
-      const cleaned = renumberShotLabels(putScenesInTimeOrder(outcome.project));
+      const cleaned = renumberShotLabels(outcome.project);
       if (cleaned !== outcome.project) Object.assign(outcome, withCleanedScenes(outcome, cleaned));
       await assertNewMediaSelections(stored, outcome.project);
       dropped = { project: stored, assets: droppedTakeAssets(stored, outcome.project) };
@@ -819,7 +814,7 @@ async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate =
     if (outcome.project && !outcome.skipPersist) {
       const picked = current?.castAndSets?.catalogCheckin
         ? (await import('./catalogCheckin.js')).dropStaleCatalogPicks(current, outcome.project) : outcome.project;
-      const cleaned = renumberShotLabels(putScenesInTimeOrder(picked));
+      const cleaned = renumberShotLabels(picked);
       if (cleaned !== outcome.project) Object.assign(outcome, withCleanedScenes(outcome, cleaned));
     }
     if (outcome.project?.castAndSets?.catalogCheckin) {

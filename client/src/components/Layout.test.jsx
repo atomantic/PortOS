@@ -101,7 +101,7 @@ import { __resetInstanceFeatureCache } from '../hooks/useInstanceFeatures.js';
 
 import { NAV_COMMANDS } from '../../../server/lib/navManifest.js';
 import Layout from './Layout';
-import { isFullWidthRoute } from '../lib/layoutRoutes.js';
+import { PaddedMain } from './PageShell';
 import { RECONNECTING_PILL_DELAY_MS } from './SocketReconnectingPill.jsx';
 import {
   NAV_PRESENTATION,
@@ -639,46 +639,6 @@ describe('Layout — nav footer', () => {
   });
 });
 
-describe('Layout — Game workspace scroll mode', () => {
-  it('makes the Game index and detail full-bleed', async () => {
-    const detail = await renderLayout('/game/example-game');
-    expect(detail.container.querySelector('#main-content')?.className).toContain('overflow-clip-safe');
-    detail.unmount();
-
-    const index = await renderLayout('/game');
-    const main = index.container.querySelector('#main-content');
-    expect(main?.className).toContain('overflow-clip-safe');
-    expect(main?.className).not.toContain('p-4');
-    index.unmount();
-
-    // A trailing slash is not the registered index path.
-    const trailingSlashIndex = await renderLayout('/game/');
-    const trailingSlashMain = trailingSlashIndex.container.querySelector('#main-content');
-    expect(trailingSlashMain?.className).toContain('overflow-auto');
-    expect(trailingSlashMain?.className).toContain('p-4');
-  });
-});
-
-// Data Manager renders its own bordered title bar over a `flex-1 overflow-auto`
-// body, so it needs the bare full-width main. While it was missing from the
-// tables it nested that scroller inside `<main>`'s own `overflow-auto p-4
-// md:p-6` — two scrollbars, doubled padding (#4145).
-describe('Layout — Data Manager scroll mode', () => {
-  it('gives /data the bare full-width main, and keeps the /datadog redirect route padded', async () => {
-    const dataManager = await renderLayout('/data');
-    const dataMain = dataManager.container.querySelector('#main-content');
-    expect(dataMain?.className).toContain('overflow-clip-safe');
-    expect(dataMain?.className).not.toContain('overflow-auto');
-    expect(dataMain?.className).not.toContain('p-4');
-    dataManager.unmount();
-
-    const dataDog = await renderLayout('/datadog');
-    const dataDogMain = dataDog.container.querySelector('#main-content');
-    expect(dataDogMain?.className).toContain('overflow-auto');
-    expect(dataDogMain?.className).toContain('p-4');
-  });
-});
-
 describe('Layout — dynamic third-level navigation', () => {
   it('collapses and expands the Series and Universes children', async () => {
     api.listPipelineSeriesNames.mockResolvedValue([{ id: 'series-1', name: 'Example Series' }]);
@@ -768,82 +728,6 @@ describe('Layout — dynamic third-level navigation', () => {
   });
 });
 
-// `isFullWidthRoute` decides whether a page gets the bare full-width <main>
-// (owns its own scroll) or the default padded+scrolling one. It encodes 41
-// rules across three tables, and the only other coverage is the /game
-// integration case above — so a dropped or retyped entry would silently
-// change a page's layout with nothing failing. Every expectation below was
-// verified against the pre-refactor OR-chain, so this locks behavior rather
-// than merely restating the current tables.
-describe('Layout — isFullWidthRoute classification', () => {
-  it.each([
-    // Exact matches must NOT leak to longer paths that merely share the prefix.
-    ['/shell', true], ['/shell/abc', true], ['/shellx', false],
-    ['/ask', true], ['/ask/1', true], ['/asking', false],
-    ['/timeline', true], ['/timeline/2026-08-12', true],
-    ['/tribe', true], ['/rapid-reader', true], ['/rapid-reader/r1', true], ['/openclaw', true],
-    ['/review', true], ['/review/a1', true], ['/reviewing', false],
-    ['/stacker-news', true], ['/stacker-news/a1/review', true], ['/x', true], ['/x/a1/posts', true], ['/xyz', false],
-    ['/privacy', true], ['/privacy/vault', true], ['/privacy-policy', false],
-    ['/code-animation', true], ['/code-animation/j1', true], ['/code-animation/production/p1', true],
-    ['/code-animations', false], ['/apps', true],
-    ['/eidoverse', true], ['/eidoverse/world', false],
-    // Create indexes own a PageHeader shell (#10994). Detail routes that
-    // already owned their scroll stay full-width; a different-component
-    // detail that was padded stays padded.
-    ['/catalog', true], ['/catalog/book/1', true],
-    ['/universes', true], ['/universes/u1', true],
-    ['/rounds', true], ['/rounds/guide', true],
-    ['/story-builder', true], ['/story-builder/s1/step', true],
-    // AI Providers: the index AND its editor sub-routes (a drawer over the same
-    // page) are full-width, but a sibling path sharing the `/ai` prefix is not.
-    ['/ai', true], ['/ai/presets', true], ['/ai/presets/codex', true], ['/ai/harnesses', true], ['/ai/services/ollama', true], ['/ai/edit/codex', true], ['/airlock', false],
-    ['/pipeline', true], ['/pipeline/series/s1', true], ['/pipeline/editorial-checks', true],
-    ['/local-llm', false], ['/local-llm/m', true],
-    // Music owns the same full-bleed title/tab/body shell as Media Gen; Music
-    // Video has its own full-width rule, which a sibling prefix must not hit.
-    ['/music', true], ['/music/generate', true], ['/music-video', true], ['/music-video/p1/board', true], ['/music-videos', false],
-    // Video workspace index owns its own scroll; Generate Video uses the
-    // Media Gen tab shell and must stay full-width with it. `/video-gen` is
-    // a legacy redirect, not a page with an internal scroller.
-    ['/video', true], ['/video/generate', true], ['/video-gen', false],
-    // Game index is the PageHeader shell; detail stays one segment.
-    ['/game', true], ['/game/', false], ['/game/g1', true], ['/game/g1/x', false],
-    // Create indexes added with #10994. Param siblings of a different
-    // component stay on the padded main.
-    ['/3d', true], ['/3d/m1', false],
-    ['/decks', true], ['/decks/d1', false],
-    ['/fableloom', true], ['/fableloom/l1', true],
-    ['/mood-boards', true], ['/mood-boards/b1', false],
-    ['/sprites', true], ['/sprites/s1', true],
-    ['/authors', true], ['/authors/a1', true],
-    ['/sharing', true], ['/sharing/duplicates', true], ['/sharing/buckets/b1', true],
-    ['/voices', true], ['/voices/v1', true],
-    ['/creative-commission', true], ['/creative-commission/new', true], ['/creative-commission/c1', false],
-    ['/importer', true],
-    ['/start-story', true],
-    // Apps: detail editor is full-width, but the Add App form is explicitly excluded
-    // (it has no internal scroll container and would clip below the fold).
-    ['/apps/create', false], ['/apps/create/', false], ['/apps/a1', true], ['/apps/a1/tab', true],
-    // Data Manager owns its own bar+scroll shell, and is registered EXACT so
-    // it can't leak onto the DataDog routes that share the `/data` prefix.
-    ['/data', true], ['/datadog', false], ['/devtools/datadog', true],
-    // Models owns the same header/tabs/scroll shell as Settings — registered as
-    // a whole-section prefix, so the bare path and every tab classify alike.
-    ['/models', true], ['/models/performance', true], ['/models/llms', true],
-    // Whole-section prefixes, and the default for an unlisted route.
-    ['/songbook', true], ['/', false],
-    ['/devtools/runner', true], ['/devtools/runner/', true], ['/devtools/usage', true], ['/devtools/usage/', true], ['/devtools/usage-extra', false],
-    ['/devtools/quota-burn', true], ['/devtools/quota-burn/example', true], ['/devtools/quota-burner', false],
-    ['/system-resources/overview', true], ['/system-resources/storage', true], ['/system-resources/queues', true],
-    ['/workspace-contexts', true], ['/workspace-contexts/example', true], ['/workspace-contexts-other', false],
-    ['/instances', true], ['/capabilities', true], ['/loops', true], ['/templates', true],
-    ['/cos/agents', true], ['/cos/mind', true], ['/cos/agents/example', true],
-  ])('%s -> %s', (pathname, expected) => {
-    expect(isFullWidthRoute(pathname)).toBe(expected);
-  });
-});
-
 // The sidebar's section grouping used to be three numeric slices into a single
 // flat SECTION_ORDER array, so inserting a section at its alphabetical position
 // silently pushed a real section (e.g. Settings) past the "More" divider with
@@ -885,7 +769,19 @@ describe('Layout — sidebar section grouping', () => {
 
 describe('Layout — keyboard navigation shell', () => {
   it('moves skip-link focus into main content', async () => {
-    await renderLayout();
+    // <main> belongs to the route's shell (PageShell.jsx), not to Layout itself.
+    render(
+      <MemoryRouter initialEntries={['/brain/inbox']}>
+        <Routes>
+          <Route element={<Layout />}>
+            <Route element={<PaddedMain />}>
+              <Route path="*" element={<div>Page</div>} />
+            </Route>
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+    await act(async () => {});
     const skipLink = screen.getByRole('link', { name: 'Skip to main content' });
     skipLink.focus();
     fireEvent.click(skipLink);
@@ -986,8 +882,10 @@ describe('Layout — page error containment', () => {
     const router = createMemoryRouter([{ path: '*', element: (
         <Routes>
           <Route element={<Layout />}>
-            <Route path="broken" element={<Page />} />
-            <Route index element={<div>Dashboard page</div>} />
+            <Route element={<PaddedMain />}>
+              <Route path="broken" element={<Page />} />
+              <Route index element={<div>Dashboard page</div>} />
+            </Route>
           </Route>
         </Routes>
     ) }], { initialEntries: ['/broken'] });

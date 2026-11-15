@@ -222,6 +222,9 @@ const FULL_TRIGGER_RULES = [
   // ci.yml defines the windows-server job itself. The other workflows (release,
   // acceptance, cancel recovery) never run on windows-latest.
   { re: /^\.github\/workflows\/ci\.yml$/, reason: 'workflow definition changed', windowsRelevant: true },
+  // ci.yml's composite actions (setup-server, diff-base, test-memo, …) are part
+  // of its job definitions, windows-server included.
+  { re: /^\.github\/actions\//, reason: 'workflow definition changed', windowsRelevant: true },
   { re: /^\.github\/workflows\//, reason: 'workflow definition changed', windowsRelevant: false },
   { re: DEPENDENCY_MANIFEST_RE, reason: 'dependency manifest changed', windowsRelevant: 'dependencies' },
   // Every workspace's .npmrc pins ignore-scripts and install behavior; npm reads
@@ -500,6 +503,7 @@ export const ALWAYS_RUN_TESTS = [
 
 const DB_RISK_RULES = [
   /^scripts\/rehearsal-scratch-db(?:[.\/]|$)/i,
+  /^scripts\/generate-init-db-sql(?:[.\/]|$)/i,
   /^scripts\/lib\/migrationFiles(?:[.\/]|$)/i,
   /^scripts\/lib\/dbImage(?:[.\/]|$)/i,
   /^server\/lib\/databaseMaintenanceSchema(?:[.\/]|$)/i,
@@ -705,8 +709,9 @@ export const MACOS_NATIVE_TESTS = [
   'server/lib/windowsAgentProcess.darwin.test.js',
 ];
 // The supervision path itself, the dependency manifests and Vitest harness the
-// job installs and loads, and ci.yml so a workflow edit proves the job runs.
-export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml)$/;
+// job installs and loads, and ci.yml plus the setup-server action it installs
+// through, so a workflow edit proves the job runs.
+export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml|\.github\/actions\/setup-server\/action\.yml)$/;
 
 /**
  * Repository-relative static import closure of `entries` in `cwd`, or null
@@ -832,7 +837,7 @@ const featureDirectory = (path) => {
 // import graph; select their shared contract explicitly instead of running its
 // subprocesses on every unrelated or documentation-only change.
 const WORKSPACE_CACHE_COMMON_INPUTS = new Set([
-  '.github/workflows/ci.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
+  '.github/workflows/ci.yml', '.github/actions/setup-server/action.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
   'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
   'scripts/lib/vitestWatch.js', 'scripts/lib/testProcessAttribution.js', 'scripts/lib/testOwnedProcesses.js', 'scripts/lib/darwinTestProcesses.py',
   'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/workspaceTests.js',
@@ -880,6 +885,12 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
     add('server/lib/apiRouteGraph.test.js');
     add('server/lib/apiRouteParity.test.js');
     add('scripts/generate-prompt-stage-call-sites.test.js');
+  }
+  // The fresh-install schema check reads init-db.sql and its base file rather
+  // than importing them, so a hand edit to either would otherwise select only
+  // the DB suite, which never compares the file with its generator (#16092).
+  if (changedFiles.some((path) => /^server\/scripts\/init-db(?:\.base)?\.sql$/.test(path))) {
+    add('server/lib/db.ddlParity.test.js');
   }
   // The socket guard readdir-scans server/sockets/ rather than importing it, so
   // no import edge reaches it — a handler added there would otherwise only be

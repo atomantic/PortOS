@@ -73,7 +73,7 @@ export const universesDdl = [
     // a soft ref (no FK): the cascade-clean on universe delete is handled in the
     // service exactly as the file backend did, and a soft ref keeps the table
     // independent of universe-row insert ordering during the one-time import.
-    // `data` holds jobIds[]/promptCount/collectionId. Mirrors init-db.sql.
+    // `data` holds jobIds[]/promptCount/collectionId.
     `CREATE TABLE IF NOT EXISTS universe_runs (
       id TEXT PRIMARY KEY,
       universe_id TEXT NOT NULL,
