@@ -2,7 +2,7 @@
 
 No downloads, model weights, provider sessions or application data are used.
 Consumer roots must be extracted, inspected, hash-verified upstream wheels.
-The H3 probe also takes the inspected, immutable source checkout.
+The H3 and Metal probes also take inspected, immutable source checkouts.
 """
 import argparse
 import ast
@@ -270,15 +270,105 @@ def h3_transformers_probe(source, directory, baseline):
     print("H3: real tokenizer, PIL adapter and pinned request builder passed six text/keyframe cases; no weights or inference")
 
 
+def metal_transformers_probe(pixal, trellis, directory, baseline):
+    import numpy as np
+    from PIL import Image
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torchvision import transforms
+    from transformers import DINOv3ViTConfig, DINOv3ViTModel, AutoModelForImageSegmentation
+
+    expect_version("transformers", baseline, "5.22.1", "5.22.2")
+    assert version("torch") == "2.15.0" and version("torchvision") == "0.29.2"
+    assert torch.backends.mps.is_available(), "Run this probe on Apple Silicon with MPS"
+    assert AutoModelForImageSegmentation is not None
+    directory.mkdir(parents=True, exist_ok=True)
+    model_path = directory / "tiny-dinov3"
+    if baseline:
+        assert not model_path.exists(), "Reuse the saved baseline model; do not regenerate it"
+        torch.manual_seed(16047)
+        model = DINOv3ViTModel(DINOv3ViTConfig(
+            hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+            num_attention_heads=4, patch_size=16, image_size=32,
+            num_register_tokens=4,
+        ))
+        model.save_pretrained(model_path)
+    namespace = {
+        "torch": torch, "nn": nn, "F": F, "np": np,
+        "transforms": transforms, "Image": Image, "DINOv3ViTModel": DINOv3ViTModel,
+    }
+    definitions(pixal / "pixal3d/trainers/flow_matching/mixins/image_conditioned_proj.py", [
+        "project_points_to_image_batch", "sample_features", "ProjGrid", "DinoV3ProjFeatureExtractor",
+    ], namespace)
+    definitions(trellis / "trellis2/modules/image_feature_extractor.py", ["DinoV3FeatureExtractor"], namespace)
+    # TRELLIS's installer applies its pinned mps_compat.py patch before rendering.
+    extractor_class = namespace["DinoV3FeatureExtractor"]
+    assert hasattr(extractor_class, "device"), "Apply the pinned TRELLIS MPS patches first"
+    pixels = np.arange(32 * 32 * 3, dtype=np.uint8).reshape(32, 32, 3)
+    image = Image.fromarray(pixels)
+    inputs = [
+        [image], [image.convert("L"), image.convert("RGBA")],
+        torch.from_numpy(pixels.copy()).permute(2, 0, 1).float().unsqueeze(0) / 255,
+    ]
+    actual = {}
+    for device in ["cpu", "mps"]:
+        pixal_extractor = namespace["DinoV3ProjFeatureExtractor"](
+            str(model_path), image_size=32, grid_resolution=2, use_naf_upsample=False,
+        ).to(device)
+        trellis_extractor = extractor_class(str(model_path), image_size=32)
+        trellis_extractor.to(device)
+        for index, value in enumerate(inputs):
+            batch = len(value)
+            if isinstance(value, torch.Tensor):
+                value = value.to(device)
+            with torch.no_grad():
+                features = trellis_extractor(value)
+                global_features, projection = pixal_extractor(
+                    value, camera_angle_x=torch.full((batch,), 0.8, device=device),
+                    distance=torch.full((batch,), 3.0, device=device),
+                    mesh_scale=torch.ones(batch, device=device),
+                )
+            assert features.shape == (batch, 9, 32)
+            assert global_features.shape == (batch, 5, 32)
+            assert projection.shape == (batch, 8, 32)
+            for name, output in [("trellis", features), ("global", global_features), ("projection", projection)]:
+                assert torch.isfinite(output).all() and output.abs().max() > 0
+                actual[f"{device}_{index}_{name}"] = output.detach().cpu().numpy()
+        for extractor in [pixal_extractor, trellis_extractor]:
+            try:
+                extractor("invalid image")
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("Invalid image type accepted")
+        try:
+            pixal_extractor([image])
+        except ValueError as error:
+            assert "camera_angle_x" in str(error)
+        else:
+            raise AssertionError("Missing camera parameters accepted")
+    expected_path = directory / "metal-transformers.npz"
+    if baseline:
+        np.savez(expected_path, **actual)
+    else:
+        with np.load(expected_path, allow_pickle=False) as expected:
+            assert set(actual) == set(expected.files)
+            for key, value in actual.items():
+                np.testing.assert_allclose(value, expected[key], rtol=1e-6, atol=1e-6, err_msg=key)
+        print("Metal: baseline/candidate DINOv3 features and Pixal projections agree on CPU/MPS; no production weights or NAF")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("probe", choices=["sentencepiece", "reactor", "pydantic", "h3-transformers"])
+    parser.add_argument("probe", choices=["sentencepiece", "reactor", "pydantic", "h3-transformers", "metal-transformers"])
     parser.add_argument("--fixtures", type=pathlib.Path)
     parser.add_argument("--baseline", action="store_true")
     parser.add_argument("--vlm", type=pathlib.Path)
     parser.add_argument("--gradio", type=pathlib.Path)
     parser.add_argument("--client", type=pathlib.Path)
     parser.add_argument("--source", type=pathlib.Path)
+    parser.add_argument("--trellis-source", type=pathlib.Path)
     args = parser.parse_args()
     socket.create_connection = refuse_network
     socket.socket.connect = refuse_network
@@ -292,6 +382,10 @@ if __name__ == "__main__":
         if not all([args.source, args.fixtures]):
             parser.error("--source and --fixtures are required")
         h3_transformers_probe(args.source, args.fixtures, args.baseline)
+    elif args.probe == "metal-transformers":
+        if not all([args.source, args.trellis_source, args.fixtures]):
+            parser.error("--source, --trellis-source and --fixtures are required")
+        metal_transformers_probe(args.source, args.trellis_source, args.fixtures, args.baseline)
     else:
         if not all([args.vlm, args.gradio, args.client]):
             parser.error("--vlm, --gradio and --client extracted wheel roots are required")
