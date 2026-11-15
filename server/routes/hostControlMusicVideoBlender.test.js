@@ -1,7 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { expectAuthorizedWorkflows, expectRemoteRefusal } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 vi.mock('../lib/paths.js', async (importOriginal) =>
@@ -11,7 +9,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) =>
 afterAll(cleanupTempDataRoots);
 
 // A Blender film is operator Python that runs with host access. Real router
-// behind the real host-control gate; every route that writes the source Blender
+// behind the real gates (principal matrix: services/authGate.test.js); every route that writes the source Blender
 // will run, runs Blender or ffmpeg, opens the Blender application or deletes
 // rendered frames is a spy, so an unauthorized caller that reaches one is visible.
 const state = vi.hoisted(() => ({ enabled: false }));
@@ -34,8 +32,6 @@ const open = vi.hoisted(() => ({
 vi.mock('../services/auth.js', async (importOriginal) => ({
   ...await importOriginal(),
   isAuthEnabled: vi.fn(async () => state.enabled),
-  verifyRequestSession: vi.fn(async (req) => req.headers.authorization === 'Bearer example-session'),
-  verifyPassword: vi.fn(async () => true),
 }));
 vi.mock('../services/settings.js', () => ({
   settingsEvents: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
@@ -60,84 +56,36 @@ vi.mock('../services/film/record.js', async (importOriginal) => ({
   ...await importOriginal(), saveBlenderSettings: open.saveBlenderSettings, saveBlenderShotNote: open.saveBlenderShotNote,
 }));
 
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import musicVideoRoutes from './musicVideo.js';
 
 const FILM = '/api/music-video/example-project/blender';
-const operations = [
-  ['post', `${FILM}/workspace`, { template: 'starter' }, sink.scaffoldBlenderWorkspace],
-  ['put', `${FILM}/file`, { path: 'film.py', content: 'print("example")\n' }, sink.writeBlenderFile],
-  ['delete', `${FILM}/file?path=film.py`, undefined, sink.deleteBlenderFile],
-  ['post', `${FILM}/sync`, {}, sink.startBlenderSync],
-  ['post', `${FILM}/frames/clear`, {}, sink.clearBlenderFrames],
-  ['post', `${FILM}/render`, { quality: 'preview' }, sink.enqueueBlenderRenders],
-  ['post', `${FILM}/cut`, { quality: 'preview' }, sink.startBlenderCut],
-  ['post', `${FILM}/shots/s010/open`, {}, sink.openBlenderShot],
+const mounts = [['/api/music-video', musicVideoRoutes]];
+const workflows = [
+  ['post', `${FILM}/workspace`, { template: 'starter' }, sink.scaffoldBlenderWorkspace, 201],
+  ['put', `${FILM}/file`, { path: 'film.py', content: 'print("example")\n' }, sink.writeBlenderFile, 200],
+  ['delete', `${FILM}/file?path=film.py`, undefined, sink.deleteBlenderFile, 200],
+  ['post', `${FILM}/sync`, {}, sink.startBlenderSync, 202],
+  ['post', `${FILM}/frames/clear`, {}, sink.clearBlenderFrames, 200],
+  ['post', `${FILM}/render`, { quality: 'preview' }, sink.enqueueBlenderRenders, 202],
+  ['post', `${FILM}/cut`, { quality: 'preview' }, sink.startBlenderCut, 202],
+  ['post', `${FILM}/shots/s010/open`, {}, sink.openBlenderShot, 200],
+  // Records and cancellation: nothing here chooses or starts what runs.
+  ['put', `${FILM}/settings`, { fps: 30 }, open.saveBlenderSettings, 200],
+  ['put', `${FILM}/shots/s010/note`, { text: 'Example note' }, open.saveBlenderShotNote, 200],
+  ['post', `${FILM}/cancel`, {}, open.cancelBlenderProjectJobs, 200],
 ];
-// Records and cancellation: nothing here chooses or starts what runs.
-const recordOperations = [
-  ['put', `${FILM}/settings`, { fps: 30 }, open.saveBlenderSettings],
-  ['put', `${FILM}/shots/s010/note`, { text: 'Example note' }, open.saveBlenderShotNote],
-  ['post', `${FILM}/cancel`, {}, open.cancelBlenderProjectJobs],
-];
-
-const appFor = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/music-video', musicVideoRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
-const send = (app, method, path, body, headers = {}) => {
-  const pending = request(app)[method](path);
-  for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return body === undefined ? pending : pending.send(body);
-};
 
 beforeEach(() => {
   vi.clearAllMocks();
   state.enabled = false;
 });
 
-describe('Music Video Blender film host control', () => {
-  it('refuses a remote password-free caller, before any source write or process', async () => {
-    for (const [method, path, body] of operations) {
-      const response = await send(appFor(), method, path, body);
-      expect([response.status, response.body.code], `${method} ${path}`).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    for (const [, , , service] of operations) expect(service).not.toHaveBeenCalled();
+describe('Music Video Blender film behind the default-deny gate (#16114)', () => {
+  it('refuses a remote caller before any source write or process', async () => {
+    await expectRemoteRefusal(mounts, workflows[1]);
   });
 
-  it('still runs for a local connection and for a delegated agent session with a password set', async () => {
-    for (const [enabled, address, headers] of [
-      [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Authorization: 'Bearer example-session' }],
-    ]) {
-      state.enabled = enabled;
-      for (const [method, path, body, service] of operations) {
-        const response = await send(appFor(address), method, path, body, headers);
-        expect(response.status, `${method} ${path}: ${JSON.stringify(response.body)}`).toBeLessThan(300);
-        expect(service, `${method} ${path}`).toHaveBeenCalledTimes(1);
-        service.mockClear();
-      }
-    }
-  });
-
-  it('refuses remote settings, notes and cancellation, and saves them for a local caller without running anything', async () => {
-    for (const [method, path, body, service] of recordOperations) {
-      const refused = await send(appFor(), method, path, body);
-      expect([refused.status, refused.body.code], `${method} ${path}`).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      expect(service, `${method} ${path}`).not.toHaveBeenCalled();
-    }
-    for (const [method, path, body, service] of recordOperations) {
-      const response = await send(appFor('127.0.0.1'), method, path, body);
-      expect(response.status, `${method} ${path}: ${JSON.stringify(response.body)}`).toBe(200);
-      expect(service, `${method} ${path}`).toHaveBeenCalledTimes(1);
-    }
-    for (const [, , , service] of operations) expect(service).not.toHaveBeenCalled();
+  it('still runs every film route for a local connection and a delegated agent session', async () => {
+    await expectAuthorizedWorkflows({ auth: state, mounts, workflows });
   });
 });

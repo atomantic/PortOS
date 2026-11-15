@@ -1,8 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import express from 'express';
 import { EventEmitter } from 'node:events';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { callRoute, expectAuthorizedWorkflows, expectRemoteRefusal, hostControlApp } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 // Mount the real router/gates; double effects to prove refusal happens before
@@ -86,8 +84,6 @@ vi.mock('../services/fableLoom/exports.js', () => ({
 import * as shotRuns from '../services/fableLoom/shotRuns.js';
 import * as exports from '../services/fableLoom/exports.js';
 import * as fableLoom from '../services/fableLoom/index.js';
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
-import { createSession } from '../services/auth.js';
 import routes from './fableLoom.js';
 
 const base = '/api/fableloom';
@@ -95,47 +91,29 @@ const loom = `${base}/example-loom`;
 const episode = `${loom}/episodes/example-episode`;
 const node = `${episode}/nodes/example-node`;
 const picker = { providerId: 'example-cli', model: 'example-model' };
-const operations = [
-  [`${loom}/export`, {}, exports.startFableLoomExport, 202],
-  [`${loom}/plan/generate`, picker, fableLoom.generateSeriesPlan],
-  [`${loom}/plan/review`, picker, fableLoom.reviewSeriesPlan],
-  [`${loom}/plan/feedback`, { ...picker, feedback: 'Example feedback' }, fableLoom.feedbackSeriesPlan],
-  [`${loom}/review-teleplay`, picker, fableLoom.reviewSeriesTeleplay],
-  [`${loom}/editorial/remediate`, picker, fableLoom.evaluateAndRemediateFableLoom],
-  [`${loom}/playtest`, picker, fableLoom.reviewFableLoomPlaythroughs],
-  [`${loom}/editorial/autopilot/start`, picker, fableLoom.startFableLoomEditorialAutopilot, 202],
-  [`${episode}/weave`, picker, fableLoom.weaveEpisode],
-  [`${episode}/shots/plan`, picker, shotRuns.planEpisodeShotRun],
-  [`${episode}/shots/start`, picker, shotRuns.startEpisodeShotRun, 202],
-  [`${episode}/outline/generate`, picker, fableLoom.generateEpisodeOutline],
-  [`${episode}/outline/review`, picker, fableLoom.reviewEpisodeOutline],
-  [`${node}/branch`, picker, fableLoom.branchNode],
-  [`${episode}/review`, picker, fableLoom.reviewEpisode],
-  [`${episode}/feedback`, { ...picker, feedback: 'Example feedback' }, fableLoom.feedbackEpisode],
-  [`${episode}/play`, { ...picker, nodeId: 'example-node', message: 'Example choice' }, fableLoom.playTurn],
-  [`${episode}/reformat`, { ...picker, format: 'teleplay' }, fableLoom.reformatEpisodeScenes],
-  [`${episode}/production/batch`, { imageMode: 'codex' }, fableLoom.startEpisodeProductionBatch, 201],
-  [`${episode}/production/batch/example-run/resume`, {}, fableLoom.resumeEpisodeProductionBatch],
+const generation = [
+  ['post', `${loom}/export`, {}, exports.startFableLoomExport, 202, 200],
+  ['post', `${loom}/plan/generate`, picker, fableLoom.generateSeriesPlan, 200],
+  ['post', `${loom}/plan/review`, picker, fableLoom.reviewSeriesPlan, 200],
+  ['post', `${loom}/plan/feedback`, { ...picker, feedback: 'Example feedback' }, fableLoom.feedbackSeriesPlan, 200],
+  ['post', `${loom}/review-teleplay`, picker, fableLoom.reviewSeriesTeleplay, 200],
+  ['post', `${loom}/editorial/remediate`, picker, fableLoom.evaluateAndRemediateFableLoom, 200],
+  ['post', `${loom}/playtest`, picker, fableLoom.reviewFableLoomPlaythroughs, 200],
+  ['post', `${loom}/editorial/autopilot/start`, picker, fableLoom.startFableLoomEditorialAutopilot, 202, 200],
+  ['post', `${episode}/weave`, picker, fableLoom.weaveEpisode, 200],
+  ['post', `${episode}/shots/plan`, picker, shotRuns.planEpisodeShotRun, 200],
+  ['post', `${episode}/shots/start`, picker, shotRuns.startEpisodeShotRun, 202, 200],
+  ['post', `${episode}/outline/generate`, picker, fableLoom.generateEpisodeOutline, 200],
+  ['post', `${episode}/outline/review`, picker, fableLoom.reviewEpisodeOutline, 200],
+  ['post', `${node}/branch`, picker, fableLoom.branchNode, 200],
+  ['post', `${episode}/review`, picker, fableLoom.reviewEpisode, 200],
+  ['post', `${episode}/feedback`, { ...picker, feedback: 'Example feedback' }, fableLoom.feedbackEpisode, 200],
+  ['post', `${episode}/play`, { ...picker, nodeId: 'example-node', message: 'Example choice' }, fableLoom.playTurn, 200],
+  ['post', `${episode}/reformat`, { ...picker, format: 'teleplay' }, fableLoom.reformatEpisodeScenes, 200],
+  ['post', `${episode}/production/batch`, { imageMode: 'codex' }, fableLoom.startEpisodeProductionBatch, 201, 200],
+  ['post', `${episode}/production/batch/example-run/resume`, {}, fableLoom.resumeEpisodeProductionBatch, 200],
 ];
-const appFor = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use(base, routes);
-  app.use(errorMiddleware);
-  return app;
-};
-const call = (app, [path, body], headers = {}, method = 'post') => {
-  const pending = request(app)[method](path);
-  for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return pending.send(body);
-};
-const expectNoEffects = () => {
-  for (const effect of [...Object.values(fableLoom), ...Object.values(shotRuns), ...Object.values(exports)]) expect(effect).not.toHaveBeenCalled();
-};
+const mounts = [[base, routes]];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -145,69 +123,40 @@ beforeEach(() => {
   });
 });
 
-describe('FableLoom agent workflow authority (#10668)', () => {
+// Principal matrix: services/authGate.test.js. Kept: the private-download read
+// refusal, one remote refusal ahead of the effects, and every route working for
+// local and agent callers.
+describe('FableLoom agent workflows behind the default-deny gate (#10668, #16114)', () => {
   it('protects private package downloads before reading an artifact', async () => {
-    const result = await call(appFor(), [`${loom}/export/example-export/download`], {}, 'get');
+    const result = await callRoute(await hostControlApp('192.0.2.10', mounts), ['get', `${loom}/export/example-export/download`]);
     expect([result.status, result.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     expect(exports.getFableLoomExportDownload).not.toHaveBeenCalled();
   });
-  it('refuses remote authoring and production before effects for CLI/TUI/API-first providers', async () => {
-    const app = appFor();
-    for (const [path, body] of operations) {
-      for (const providerId of ['example-cli', 'example-tui', 'example-api']) {
-        const response = await call(app, [path, { ...body, providerId }]);
-        expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
-    }
-    expectNoEffects();
+
+  it('refuses a remote caller before effects, even for an API-first provider', async () => {
+    const [, path, body, effect] = generation[1];
+    await expectRemoteRefusal(mounts, ['post', path, { ...body, providerId: 'example-api' }, effect]);
+    for (const e of [...Object.values(fableLoom), ...Object.values(shotRuns), ...Object.values(exports)]) expect(e).not.toHaveBeenCalled();
   });
 
-  it('preserves genuine loopback and delegated-agent workflows', async () => {
-    const agent = await createSession({ label: 'agent' });
-    for (const [enabled, address, headers] of [
-      [false, '127.0.0.1', {}],
-      [true, '127.0.0.1', { Authorization: `Bearer ${agent.token}` }],
-    ]) {
-      auth.enabled = enabled;
-      const app = appFor(address);
-      for (const [path, body, effect, status = 200] of operations) {
-        const before = effect.mock.calls.length;
-        const response = await call(app, [path, body], headers);
-        expect(response.status, `${path}: ${JSON.stringify(response.body)}`).toBe(status);
-        expect(effect, path).toHaveBeenCalledTimes(before + 1);
-      }
-    }
+  it('still runs authoring, production, record edits, planning and cancellation for local and agent callers, with reads open remotely', async () => {
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: [
+      ...generation,
+      ['post', base, { name: 'Example Loom' }, fableLoom.createLoom, 201],
+      ['patch', loom, { premise: 'Example premise' }, fableLoom.updateLoom, 200],
+      ['post', `${loom}/episodes`, { title: 'Example episode' }, fableLoom.addEpisode, 201],
+      ['patch', node, { prose: 'Example prose' }, fableLoom.updateNode, 200],
+      ['post', `${episode}/outline/validate`, {}, fableLoom.validateEpisodeOutline, 200],
+      ['post', `${episode}/shots/cancel`, {}, shotRuns.cancelEpisodeShotRun, 200],
+      ['post', `${episode}/production/plan`, {}, fableLoom.planEpisodeProduction, 200],
+      ['post', `${episode}/continuity/review`, {}, fableLoom.reviewEpisodeContinuity, 200],
+      ['post', `${episode}/production/batch/example-run/cancel`, {}, fableLoom.cancelEpisodeProductionBatch, 200],
+    ] });
     expect(fableLoom.weaveEpisode).toHaveBeenLastCalledWith('example-loom', 'example-episode', picker);
     expect(fableLoom.resumeEpisodeProductionBatch).toHaveBeenLastCalledWith('example-run');
-  });
-
-  it('keeps record edits, deterministic validation/planning and cancellation local-only, with reads open remotely', async () => {
-    const remote = appFor();
-    const local = appFor('127.0.0.1');
-    const records = [
-      ['post', base, { name: 'Example Loom' }, fableLoom.createLoom, 201],
-      ['patch', loom, { premise: 'Example premise' }, fableLoom.updateLoom],
-      ['post', `${loom}/episodes`, { title: 'Example episode' }, fableLoom.addEpisode, 201],
-      ['patch', node, { prose: 'Example prose' }, fableLoom.updateNode],
-      ['post', `${episode}/outline/validate`, {}, fableLoom.validateEpisodeOutline],
-      ['post', `${episode}/shots/cancel`, {}, shotRuns.cancelEpisodeShotRun],
-      ['get', `${episode}/shots/status`, undefined, shotRuns.getEpisodeShotRun],
-      ['post', `${episode}/production/plan`, {}, fableLoom.planEpisodeProduction],
-      ['post', `${episode}/continuity/review`, {}, fableLoom.reviewEpisodeContinuity],
-      ['post', `${episode}/production/batch/example-run/cancel`, {}, fableLoom.cancelEpisodeProductionBatch],
-      ['get', `${episode}/production/batch`, undefined, fableLoom.getLatestEpisodeProductionBatch],
-    ];
-    for (const [method, path, body] of records.filter(([method]) => method !== 'get')) {
-      const refused = await call(remote, [path, body], {}, method);
-      expect([refused.status, refused.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    expectNoEffects();
-    for (const [method, path, body, effect, status = 200] of records) {
-      const before = effect.mock.calls.length;
-      const response = await call(method === 'get' ? remote : local, [path, body], {}, method);
-      expect(response.status, `${path}: ${JSON.stringify(response.body)}`).toBe(status);
-      expect(effect).toHaveBeenCalledTimes(before + 1);
-    }
-    for (const [, , effect] of operations) expect(effect).not.toHaveBeenCalled();
+    auth.enabled = false;
+    const read = await callRoute(await hostControlApp('192.0.2.10', mounts), ['get', `${episode}/shots/status`]);
+    expect(read.status).toBe(200);
+    expect(shotRuns.getEpisodeShotRun).toHaveBeenCalledTimes(1);
   });
 });
