@@ -3,8 +3,7 @@
  */
 
 import { CAST_SETS_IMAGE_EDIT_MAX } from './musicVideoCastSetsImageEdit.js';
-import { MUSIC_VIDEO_RENDER_TIERS } from './musicVideoRenderTier.js';
-import { MUSIC_VIDEO_UPGRADE_METHODS } from './musicVideoFinalApproval.js';
+import { MUSIC_VIDEO_RENDER_TIERS, MUSIC_VIDEO_UPGRADE_METHODS } from './musicVideoRenderTier.js';
 import {
   ROUTE_MAP_FEATURE_KINDS, ROUTE_MAP_FEATURE_LABEL_MAX, ROUTE_MAP_FEATURE_SIDES, ROUTE_MAP_FEATURES_MAX, ROUTE_MAP_HEADINGS, ROUTE_MAP_MAX, ROUTE_MAP_NAME_MAX, ROUTE_MAP_NOTE_MAX, ROUTE_MAP_STOPS_MAX, ROUTE_MAP_TRAVEL_MAX,
 } from './musicVideoRouteMapLimits.js';

@@ -9,7 +9,7 @@
 
 import { authoredShotPrompt } from './musicVideoShotPrompt.js';
 
-export const MUSIC_VIDEO_UPGRADE_METHODS = Object.freeze(['upscale', 'rerender']);
+import { MUSIC_VIDEO_UPGRADE_METHODS } from './musicVideoRenderTier.js';
 
 // FNV-1a: a short stable fingerprint, not a security boundary.
 function fingerprint(text) {
