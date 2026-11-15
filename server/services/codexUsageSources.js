@@ -6,6 +6,7 @@ import { join, relative } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import * as zlib from 'node:zlib';
 import { SPEED_LEDGER_FIELDS } from '../lib/modelPricing.js';
+import { isPlainObject as isObject } from '../lib/objects.js';
 import { parseCodexRollout } from '../lib/providerTranscriptUsage.js';
 import { fingerprintRecords, readInventorySource, trimInventoryCache, writeInventorySource } from './codexInventoryCache.js';
 
@@ -58,7 +59,6 @@ const emptyTotals = () => ({
 });
 const problem = code => Object.assign(new Error(code), { code });
 const hash = value => createHash('sha256').update(value).digest('hex');
-const isObject = value => value != null && typeof value === 'object' && !Array.isArray(value);
 
 function codexPreviewRange(from, to) {
   const day = value => {
