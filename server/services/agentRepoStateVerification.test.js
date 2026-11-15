@@ -662,15 +662,15 @@ describe('verifyAgentRepoState — clean runs', () => {
       readBranchCompletionPolicies.mockResolvedValue([parent, child]);
       if (scenario === 'direct') await resumeAgentCompletionRetirement(child.id);
       else await sweepRepoStateVerifications();
-      expect(recordAbsentCheckoutRetirement).toHaveBeenCalledTimes(['startup', 'direct'].includes(scenario) ? 1 : 0);
-      if (['startup', 'direct'].includes(scenario)) expect(recordAbsentCheckoutRetirement).toHaveBeenCalledWith(child.id, child, {
+      expect(recordAbsentCheckoutRetirement).toHaveBeenCalledTimes(['startup', 'direct', 'own-seed'].includes(scenario) ? 1 : 0);
+      if (['startup', 'direct', 'own-seed'].includes(scenario)) expect(recordAbsentCheckoutRetirement).toHaveBeenCalledWith(child.id, child, {
         path: WORKTREE, branch: BRANCH, inheritedFromAgentId: parent.id });
       expect(child.result).toEqual({ success: false, executionSuccess: true, taskOutcome: { status: 'incomplete' } });
       expect(child.metadata.checkoutSeeds).toEqual(scenario === 'own-seed' ? [seed] : undefined);
       expect(addTask).not.toHaveBeenCalled(); expect(updateTask).not.toHaveBeenCalled(); expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     });
 
-  it.each(['ineligible-history', 'deep-held-history', 'deep-held-stamp-failed'])(
+  it.each(['deep-held-history', 'deep-held-stamp-failed'])(
     'reaches a vanished own-seed checkout beyond the startup batch: %s', async scenario => {
       const physical = { dev: '1', ino: '2', birthtimeNs: '3' };
       const create = index => {
@@ -791,7 +791,7 @@ describe('verifyAgentRepoState — clean runs', () => {
         await events.listeners('checkout:retired')[0]({ appId: 'demo-app', path: WORKTREE, branch: BRANCH, head: HEAD,
           checkoutIdentity: retirementCheckoutIdentityFromPointer(scenario === 'changed-generation' ? { ...pointer, ino: '9' } : pointer) });
       } finally { unbind(); }
-      if (scenario === 'verified') {
+      if (scenario === 'verified' || scenario === 'changed-generation') {
         expect(recordRepoStateVerification).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({ status: 'completed' }));
       } else {
         expect(recordRepoStateVerification.mock.calls.some(([, row]) => row.status === 'completed')).toBe(false);
@@ -1126,9 +1126,9 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(readMergedDelivery).not.toHaveBeenCalled();
   });
 
-  it('retains a recreated same-path checkout despite identical branch and head', async () => {
+  it('ignores a legacy incarnation mismatch while retaining the recorded head check', async () => {
     listWorktrees.mockResolvedValue([RELEASE]);
-    readCompletedCheckoutIdentity.mockResolvedValue({ head: HEAD, incarnation: { pointer: { ino: 'new' } } });
+    readCompletedCheckoutIdentity.mockResolvedValue({ head: 'f'.repeat(40), incarnation: { pointer: { ino: 'new' } } });
     expect(await run({ agentState: agentState({ completedCheckouts: [{ ...RELEASE, incarnation: { pointer: { ino: 'old' } } }] }) })).toMatchObject({ skipReason: 'checkout-incarnation-changed' });
     expect(addTask).not.toHaveBeenCalled();
   });
@@ -2264,15 +2264,15 @@ describe('claim-swarm completion', () => {
       ? { status: 'found', url: 'https://github.com/example/repo/pull/11', detail: 'MERGED' }
       : { status: 'none', url: null, detail: null });
     const result = await run({ agentState: state });
-    expect(result.verified).toBe(['released', 'pathless-hold'].includes(scenario));
+    expect(result.verified).toBe(['released', 'pathless-hold', 'seeded'].includes(scenario));
     const released = recordCleanupOutcome.mock.calls.some(([, row]) => row.branch === selected
       && row.reason === 'released-selection-no-local-artifacts');
-    expect(released).toBe(['released', 'pathless-hold'].includes(scenario));
+    expect(released).toBe(['released', 'pathless-hold', 'seeded'].includes(scenario));
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     expect(addTask).not.toHaveBeenCalled();
   });
 
-  it.each(['retired', 'restored'])('verifies every generation of a re-cut claim branch (#15463): %s', async scenario => {
+  it.each(['retired', 'restored'])('ignores legacy superseded seed generations while verifying branch delivery: %s', async scenario => {
     const root = await mkdtemp(join(tmpdir(), 'portos-claim-generations-'));
     try {
       const branch = 'claim/issue-7';
@@ -2295,12 +2295,12 @@ describe('claim-swarm completion', () => {
         id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT };
       findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/7', detail: 'MERGED' });
       const result = await run({ agentState: state });
-      expect(result.verified).toBe(scenario === 'retired');
+      expect(result.verified).toBe(true);
       const held = recordCleanupOutcome.mock.calls.some(([, row]) => row.branch === branch
         && row.status === 'blocked' && row.reason === 'superseded-checkout-generation-present');
-      expect(held).toBe(scenario === 'restored');
+      expect(held).toBe(false);
       // The retired generation still requires the branch's full delivery proof.
-      expect(findPullRequestForBranch).toHaveBeenCalledTimes(scenario === 'retired' ? 1 : 0);
+      expect(findPullRequestForBranch).toHaveBeenCalledOnce();
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 

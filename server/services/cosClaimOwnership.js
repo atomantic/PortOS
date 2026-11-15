@@ -17,7 +17,7 @@
  *     while the worker mutates it; the run's completion releases it.
  */
 import { resolve } from 'path';
-import { bindClaimBranch, releaseClaimBranch, reserveReconcileBranch, reconcileAssignedTarget, reconcileMergeTarget, claimCheckoutOwnerReason, ownsClaimBranch } from '../lib/claimContinuation.js';
+import { bindClaimBranch, releaseClaimBranch, reserveReconcileBranch, reconcileAssignedTarget, reconcileMergeTarget, claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { advanceCandidateLifecycle } from './releaseCandidateLifecycle.js';
 import { withGitMutationLifetime } from '../lib/gitMutationLifetime.js';
@@ -101,62 +101,6 @@ export async function ownershipTransaction(operation, done, work) {
 
 const agentRepoPath = agent => agent?.sourceWorkspace || agent?.metadata?.sourceWorkspace || agent?.workspacePath || agent?.metadata?.workspacePath;
 
-// Whether nothing local or on origin still carries `branch`: no worktree, no
-// local ref and (with `remote`) no origin head. Every unreadable answer is
-// "still present". An open PR needs its origin head and unpushed work its
-// local ref, so an absent branch has no delivery left to protect.
-async function claimBranchArtifactsGone(repoPath, branch, { remote = true } = {}) {
-  const [{ listWorktrees }, { readLocalBranchPresence }, { execGit }] = await Promise.all([
-    import('./worktreeManager.js'), import('./repoCleanupObservation.js'), import('../lib/execGit.js')]);
-  const trees = await listWorktrees(repoPath).catch(() => null);
-  if (!Array.isArray(trees) || trees.some(tree => branchOf(tree) === branch)) return false;
-  if (await readLocalBranchPresence(repoPath, branch).catch(() => null) !== false) return false;
-  if (!remote) return true;
-  // `--exit-code` answers 2 only for "no such ref"; any other failure proves nothing.
-  const listed = await execGit(['ls-remote', '--exit-code', '--heads', 'origin', `refs/heads/${branch}`], repoPath, { ignoreExitCode: true })
-    .catch(() => null);
-  return listed?.exitCode === 2;
-}
-
-// Live runs other than `agent` (and its predecessor) whose binding of
-// `branch` outlived the delivery (#15459): each recorded a physical checkout
-// of it (a seed) and every recorded checkout path is gone. A binding with no
-// seed may name a checkout about to be cut, so it stays an owner. Null when a
-// holder does not qualify — the bind then keeps its `owner-active` refusal.
-async function retiredBranchHolders(state, agent, branch, repoPath) {
-  const { readCheckoutPathPresence } = await import('./repoCleanupObservation.js');
-  const ignore = new Set([agent.id, agent.metadata?.resumedFromAgentId].filter(Boolean));
-  const holders = Object.values(state.agents).filter(other => other && !ignore.has(other.id)
-    && (other.status === 'running' || other.status === 'paused') && ownsClaimBranch(other, branch)
-    && samePath(agentRepoPath(other), repoPath));
-  for (const holder of holders) {
-    const seeds = (holder.metadata?.checkoutSeeds || []).filter(seed => seed?.branch === branch);
-    if (!seeds.length || seeds.some(seed => typeof seed.path !== 'string' || !seed.path)) return null;
-    for (const seed of seeds) if (await readCheckoutPathPresence(seed.path) !== false) return null;
-  }
-  return holders.length ? holders : null;
-}
-
-/**
- * A bind refused only because live runs still hold a branch whose checkout they
- * retired takes the name from them in the same transaction. Bound runs are
- * told to release on delivery; this keeps a run that forgot from stranding the
- * name until it ends.
- */
-async function bindOverRetiredHolders(state, agent, branch, repoPath) {
-  const holders = await retiredBranchHolders(state, agent, branch, repoPath);
-  if (!holders || !await claimBranchArtifactsGone(repoPath, branch, { remote: false })) return null;
-  const released = [];
-  for (const holder of holders) {
-    const patch = releaseClaimBranch(holder, branch);
-    if (patch.refused) return null;
-    released.push({ ...holder, metadata: { ...holder.metadata, ...patch } });
-  }
-  const agents = { ...state.agents, ...Object.fromEntries(released.map(holder => [holder.id, holder])) };
-  const patch = bindClaimBranch(agent, branch, Object.values(agents));
-  return patch.refused ? null : { patch, released };
-}
-
 /**
  * @param {{ agentId: string, action: 'bind'|'release', branch: string }} input
  * @returns {Promise<{ bound: true, branch: string }|{ released: true, branch: string }|{ bound?: false, released?: false, reason: string }>}
@@ -165,13 +109,11 @@ export async function updateClaimOwnership({ agentId, action, branch }) {
   const done = action === 'bind' ? 'bound' : 'released';
   const { cosEvents } = await import('./cosEvents.js');
   let wakeRecovery = false;
-  let repository;
-  const attempt = retiredRemoteGone => ownershipTransaction(action === 'bind' ? 'bind' : 'release', done, async (state, save) => {
+  const result = await ownershipTransaction(action === 'bind' ? 'bind' : 'release', done, async (state, save) => {
     const agent = state.agents?.[agentId];
     if (!agent || agent.id !== agentId) return { [done]: false, reason: 'owner-unknown' };
     const repoPath = agentRepoPath(agent);
     if (!repoPath) return { [done]: false, reason: 'ownership-unreadable' };
-    repository = repoPath;
     const meta = agent.metadata || {};
     const released = meta.claimReleasedBranches ?? agent.claimReleasedBranches ?? [];
     const bound = meta.claimBranches ?? agent.claimBranches ?? [];
@@ -183,41 +125,20 @@ export async function updateClaimOwnership({ agentId, action, branch }) {
     const fenced = action === 'bind' && checkoutRetirementFenceReason({ repoPath, branch });
     if (fenced) return { [done]: false, reason: fenced };
     return withGitMutationLifetime(async () => {
-      let patch = action === 'bind' ? bindClaimBranch(agent, branch, Object.values(state.agents)) : releaseClaimBranch(agent, branch);
-      let released = [];
-      if (patch.refused === 'owner-active' && retiredRemoteGone) {
-        const taken = await bindOverRetiredHolders(state, agent, branch, repoPath);
-        if (taken) ({ patch, released } = taken);
-      }
+      const patch = action === 'bind' ? bindClaimBranch(agent, branch, Object.values(state.agents)) : releaseClaimBranch(agent, branch);
       if (patch.refused) return { [done]: false, reason: patch.refused };
       const updated = { ...agent, metadata: { ...agent.metadata, ...patch } };
-      if (action === 'bind') {
-        const { captureCheckoutSeeds, supersedeReleasedCheckoutSeed } = await import('./completedCheckoutEvidence.js');
-        // Judged on the pre-bind record: the bind patch drops the release mark.
-        Object.assign(updated.metadata, await supersedeReleasedCheckoutSeed(agent, branch));
-        try { updated.metadata.checkoutSeeds = await captureCheckoutSeeds(updated); }
-        catch { return { [done]: false, reason: 'checkout-seed-unavailable' }; }
-      }
-      for (const holder of released) state.agents[holder.id] = holder;
       state.agents[agentId] = updated;
       await save();
-      for (const holder of released) {
-        console.log(`🔓 Claim ownership: ${holder.id} retired ${branch}; released its binding for ${agentId}`);
-        cosEvents.emit('agent:updated', holder);
-      }
       cosEvents.emit('agent:updated', state.agents[agentId]);
-      return { [done]: true, branch };
+      return { [done]: true, branch, repository: repoPath };
     });
   });
-  let result = await attempt(false);
-  // The origin read is network I/O, so it runs outside both locks and only for
-  // a bind another live run refused; the retry rechecks everything local.
-  if (action === 'bind' && result.reason === 'owner-active' && repository
-    && await claimBranchArtifactsGone(repository, branch)) result = await attempt(true);
   // Wake completion recovery only after the ownership transaction releases its
   // locks. A picker settling its selection can unblock unrelated old claims.
-  if (result[done] && wakeRecovery) cosEvents.emit('claim:ownership-changed', { agentId, repository });
-  return result;
+  if (result[done] && wakeRecovery) cosEvents.emit('claim:ownership-changed', { agentId, repository: result.repository });
+  const { repository: _repository, ...outcome } = result;
+  return outcome;
 }
 
 /** Reserve a new scheduled release candidate before its branch or checkout
@@ -261,16 +182,13 @@ export async function updateReleaseCandidateOwnership(agentId, action, { version
           ...(lifecycle && { releaseCandidateLifecycle: lifecycle }) } };
       } else {
         if (!prior) return { captured: false, reason: 'candidate-reservation-missing' };
-        const { captureCheckoutSeeds } = await import('./completedCheckoutEvidence.js');
-        let seeds;
-        try { seeds = await captureCheckoutSeeds(agent, { allowUncreated: false }); }
-        catch { return { captured: false, reason: 'checkout-seed-unavailable' }; }
-        if (seeds.length !== 1 || seeds[0].agentId !== agentId || seeds[0].startedAt !== agent.startedAt
-          || seeds[0].branch !== branch) return { captured: false, reason: 'checkout-seed-unavailable' };
+        const { captureCompletedCheckouts } = await import('./completedCheckoutEvidence.js');
+        const rows = await captureCompletedCheckouts(agent, { success: true, strict: true }).catch(() => null);
+        if (rows?.filter(row => row.branch === branch).length !== 1) return { captured: false, reason: 'checkout-unavailable' };
         let lifecycle;
         try { lifecycle = advanceCandidateLifecycle(agent, 'captured', prior); }
         catch { return { captured: false, reason: 'candidate-lifecycle-conflict' }; }
-        state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, checkoutSeeds: seeds,
+        state.agents[agentId] = { ...agent, metadata: { ...agent.metadata,
           ...(lifecycle && { releaseCandidateLifecycle: lifecycle }) } };
       }
       await save();
@@ -333,14 +251,9 @@ export async function updateReleaseSynchronizationOwnership(agentId, action) {
         } } };
       } else {
         if (!prior) return { captured: false, reason: 'synchronization-reservation-missing' };
-        const { captureCheckoutSeeds } = await import('./completedCheckoutEvidence.js');
-        let seeds;
-        try { seeds = await captureCheckoutSeeds(agent, { allowUncreated: false }); }
-        catch { return { captured: false, reason: 'checkout-seed-unavailable' }; }
-        if (seeds.filter(seed => seed.branch === branch && seed.agentId === agentId && seed.startedAt === agent.startedAt).length !== 1) {
-          return { captured: false, reason: 'checkout-seed-unavailable' };
-        }
-        state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, checkoutSeeds: seeds } };
+        const { captureCompletedCheckouts } = await import('./completedCheckoutEvidence.js');
+        const rows = await captureCompletedCheckouts(agent, { success: true, strict: true }).catch(() => null);
+        if (rows?.filter(row => row.branch === branch).length !== 1) return { captured: false, reason: 'checkout-unavailable' };
       }
       await save();
       cosEvents.emit('agent:updated', state.agents[agentId]);

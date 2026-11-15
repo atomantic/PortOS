@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execGit } from '../lib/execGit.js';
 import { materializeGitRepo } from '../lib/gitTestRepo.js';
-import { captureCheckoutSeeds, captureCompletedCheckouts, captureSeededCompletionCheckouts, hasCompletedCheckoutEvidence, readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
+import { captureCompletedCheckouts, hasCompletedCheckoutEvidence, readCompletedCheckoutIdentity, completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
 
 describe('completed claim checkout evidence', () => {
   let scratch, repoPath, path, head, agent;
@@ -34,7 +34,8 @@ describe('completed claim checkout evidence', () => {
       ...(pinned ? { claimBranch: branch, claimPicksOwnBranch: false } : {}) };
     const receipts = await captureCompletedCheckouts(agent, { success: true });
     expect(receipts).toHaveLength(1);
-    expect(receipts[0]).toMatchObject({ branch, head, incarnation: { pointer: { ino: expect.any(String) } } });
+    expect(receipts[0]).toMatchObject({ branch, head });
+    expect(receipts[0]).not.toHaveProperty('incarnation');
     expect(await hasCompletedCheckoutEvidence([completed(receipts)], target())).toBe(false);
     expect(await captureCompletedCheckouts({ ...agent, metadata: { ...agent.metadata, workspacePath: repoPath } }, { success: true })).toEqual([]);
   });
@@ -57,15 +58,16 @@ describe('completed claim checkout evidence', () => {
     expect((await execGit(['worktree', 'list', '--porcelain'], repoPath)).stdout).toContain('locked owned operator checkout');
   });
 
-  it('rejects a new checkout reusing the completed branch, path and exact head', async () => {
+  it('ignores legacy incarnation fields when the checkout still has the recorded branch, path and head', async () => {
     const receipts = await captureCompletedCheckouts(agent, { success: true });
     expect(receipts).toHaveLength(1);
+    receipts[0].incarnation = { obsolete: true };
     const record = completed(receipts);
     expect(await hasCompletedCheckoutEvidence([record], target())).toBe(true);
     await execGit(['worktree', 'remove', path], repoPath);
     await execGit(['worktree', 'add', path, branch], repoPath);
     expect((await execGit(['rev-parse', 'HEAD'], path)).stdout.trim()).toBe(head);
-    expect(await hasCompletedCheckoutEvidence([record], target())).toBe(false);
+    expect(await hasCompletedCheckoutEvidence([record], target())).toBe(true);
   });
 
   it('captures the remaining claimed checkouts when another claimed branch has no checkout (#14103)', async () => {
@@ -92,6 +94,16 @@ describe('completed claim checkout evidence', () => {
     expect(await hasCompletedCheckoutEvidence([record], target())).toBe(false);
   });
 
+  it('loads legacy late v2 captures without consulting obsolete seeds or incarnation fields', () => {
+    const record = completed([]);
+    const receipt = { version: 2, agentId: agent.id, startedAt: agent.startedAt,
+      capturedAt: new Date().toISOString(), ...target(), incarnation: { obsolete: true } };
+    record.completedAt = agent.startedAt;
+    record.metadata.checkoutSeeds = [{ obsolete: true }];
+    expect(completedCheckoutReceiptValid(record, receipt)).toBe(true);
+    expect(completedCheckoutReceiptValid(record, { ...receipt, agentId: 'other' })).toBe(false);
+  });
+
   it('does not let an older success authorize the unchanged checkout after a newer claim fails', async () => {
     const record = completed(await captureCompletedCheckouts(agent, { success: true }));
     expect(await hasCompletedCheckoutEvidence([record], target())).toBe(true);
@@ -106,12 +118,5 @@ describe('completed claim checkout evidence', () => {
     }
   });
 
-  it('withholds late capture when only a physical seed survived and no terminal head was observed', async () => {
-    const checkoutSeeds = await captureCheckoutSeeds(agent);
-    const record = { ...completed([]), metadata: { ...agent.metadata, checkoutSeeds,
-      checkoutCapture: { status: 'pending', targets: [], unknown: true } } };
-    await execGit(['commit', '--allow-empty', '-m', 'later writer in the same physical checkout'], path);
-    expect(await captureSeededCompletionCheckouts(record)).toBeNull();
-    expect(await hasCompletedCheckoutEvidence([record], { ...target(), head: (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim() })).toBe(false);
-  });
+
 });

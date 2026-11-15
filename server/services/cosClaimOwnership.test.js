@@ -78,11 +78,10 @@ it('binds an inline synchronization checkout to the same release owner and captu
     expect(await updateReleaseSynchronizationOwnership(id, 'sync-reserve')).toEqual({ reserved: true, branch });
     expect(claimCheckoutOwnerReason({ branchName: branch, sourceWorkspace: repo, agents: Object.values(store.state.agents) }))
       .toBe('claim-owner-active');
-    expect(await updateReleaseSynchronizationOwnership(id, 'sync-capture')).toEqual({ captured: false, reason: 'checkout-seed-unavailable' });
+    expect(await updateReleaseSynchronizationOwnership(id, 'sync-capture')).toEqual({ captured: false, reason: 'checkout-unavailable' });
     await execGit(['worktree', 'add', '-b', branch, sync, 'main'], repo);
     expect(await updateReleaseSynchronizationOwnership(id, 'sync-capture')).toEqual({ captured: true, branch });
-    const seeds = store.state.agents[id].metadata.checkoutSeeds;
-    expect(seeds.map(seed => seed.branch)).toEqual([`codex/release-${id}`, branch]);
+    expect(store.state.agents[id].metadata.checkoutSeeds).toBeUndefined();
     expect((await captureCompletedCheckouts(store.state.agents[id], { success: true, strict: true })).map(row => row.branch))
       .toEqual([`codex/release-${id}`, branch]);
     store.state.agents[id].status = 'completed';
@@ -95,9 +94,9 @@ it('binds an inline synchronization checkout to the same release owner and captu
     await writeFile(join(sync, 'unfinished-sync.txt'), 'Preserve synchronization work');
     expect(await updateReleaseSynchronizationOwnership(successorId, 'sync-reserve')).toEqual({ reserved: true, branch, path: await realpath(sync) });
     expect(await updateReleaseSynchronizationOwnership(successorId, 'sync-capture')).toEqual({ captured: true, branch });
-    expect(store.state.agents[successorId].metadata.checkoutSeeds).toMatchObject([{ agentId: successorId, branch, path: await realpath(sync) }]);
+    expect(store.state.agents[successorId].metadata.checkoutSeeds).toBeUndefined();
     expect(await readFile(join(sync, 'unfinished-sync.txt'), 'utf8')).toBe('Preserve synchronization work');
-    expect(store.state.agents[id].metadata.checkoutSeeds).toEqual(seeds);
+    expect(store.state.agents[id].metadata.checkoutSeeds).toBeUndefined();
 
   } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
 });
@@ -105,91 +104,15 @@ it('binds an inline synchronization checkout to the same release owner and captu
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('updateClaimOwnership', () => {
-  it('reserves before creation, seeds the exact physical checkout on rebind, and refuses a replacement generation', async () => {
-    const { mkdtemp, readFile, writeFile, rename, rm } = await import('node:fs/promises');
-    const { tmpdir } = await import('node:os');
-    const { join } = await import('node:path');
-    const { materializeGitRepo } = await import('../lib/gitTestRepo.js');
-    const { execGit } = await import('../lib/execGit.js');
-    const scratch = await mkdtemp(join(tmpdir(), 'portos-claim-seed-'));
-    try {
-      const repo = join(scratch, 'repo');
-      const checkout = join(scratch, 'claim');
-      await materializeGitRepo(repo);
-      store.state.agents['agent-epicrun'] = { id: 'agent-epicrun', status: 'running',
-        startedAt: new Date().toISOString(), metadata: { sourceWorkspace: repo, workspacePath: repo,
-          claimPicksOwnBranch: true, claimBranches: [] } };
-      const bind = () => updateClaimOwnership({ agentId: 'agent-epicrun', action: 'bind', branch: 'claim/issue-101' });
-      expect(await bind()).toEqual({ bound: true, branch: 'claim/issue-101' });
-      expect(store.state.agents['agent-epicrun'].metadata.checkoutSeeds).toEqual([]);
-      await execGit(['worktree', 'add', '-b', 'claim/issue-101', checkout, 'main'], repo);
-      expect(await bind()).toEqual({ bound: true, branch: 'claim/issue-101' });
-      const seed = store.state.agents['agent-epicrun'].metadata.checkoutSeeds[0];
-      expect(seed).toMatchObject({ branch: 'claim/issue-101', incarnation: { pointer: { ino: expect.any(String) } } });
-      await writeFile(join(checkout, 'wanted.txt'), 'wanted work');
-      expect(await bind()).toEqual({ bound: true, branch: 'claim/issue-101' });
-      expect(store.state.agents['agent-epicrun'].metadata.checkoutSeeds).toEqual([seed]);
-      const pointer = join(checkout, '.git');
-      const contents = await readFile(pointer);
-      await rename(pointer, join(scratch, 'original-pointer'));
-      await writeFile(pointer, contents);
-      expect(await bind()).toEqual({ bound: false, reason: 'checkout-seed-unavailable' });
-      expect(store.state.agents['agent-epicrun'].metadata.checkoutSeeds).toEqual([seed]);
-      expect(await readFile(join(checkout, 'wanted.txt'), 'utf8')).toBe('wanted work');
-    } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
-  });
-
-  it('re-cuts a released branch only after its seeded checkout is retired, keeping the first generation (#15463)', async () => {
-    const { mkdtemp, rm } = await import('node:fs/promises');
-    const { tmpdir } = await import('node:os');
-    const { join } = await import('node:path');
-    const { materializeGitRepo } = await import('../lib/gitTestRepo.js');
-    const { execGit } = await import('../lib/execGit.js');
-    const scratch = await mkdtemp(join(tmpdir(), 'portos-claim-recut-'));
-    try {
-      const repo = join(scratch, 'repo');
-      const checkout = join(scratch, 'claim');
-      const branch = 'claim/issue-7';
-      await materializeGitRepo(repo);
-      store.state.agents['agent-epicrun'] = { id: 'agent-epicrun', status: 'running',
-        startedAt: new Date().toISOString(), metadata: { sourceWorkspace: repo, workspacePath: repo,
-          claimPicksOwnBranch: true, claimBranches: [] } };
-      const meta = () => store.state.agents['agent-epicrun'].metadata;
-      const bind = () => updateClaimOwnership({ agentId: 'agent-epicrun', action: 'bind', branch });
-      const release = () => updateClaimOwnership({ agentId: 'agent-epicrun', action: 'release', branch });
-      const cut = () => execGit(['worktree', 'add', '-b', branch, checkout, 'main'], repo);
-      const retire = async () => {
-        await execGit(['worktree', 'remove', '--force', checkout], repo);
-        await execGit(['branch', '-D', branch], repo);
-      };
-      expect(await bind()).toEqual({ bound: true, branch });
-      await cut();
-      expect(await bind()).toEqual({ bound: true, branch });
-      const [first] = meta().checkoutSeeds;
-
-      // Released while its checkout still exists: a re-cut is a replacement.
-      expect(await release()).toEqual({ released: true, branch });
-      expect(await bind()).toEqual({ bound: true, branch });
-      expect(meta().checkoutSeeds).toEqual([first]);
-      await retire();
-      await cut();
-      expect(await bind()).toEqual({ bound: false, reason: 'checkout-seed-unavailable' });
-      expect(meta().checkoutSeeds).toEqual([first]);
-      expect(meta().supersededCheckoutSeeds).toBeUndefined();
-
-      // Delivered, retired, then released: the next bind supersedes it.
-      await retire();
-      expect(await release()).toEqual({ released: true, branch });
-      expect(await bind()).toEqual({ bound: true, branch });
-      expect(meta().checkoutSeeds).toEqual([]);
-      expect(meta().supersededCheckoutSeeds).toEqual([{ ...first, supersededAt: expect.any(String) }]);
-      await cut();
-      expect(await bind()).toEqual({ bound: true, branch });
-      const [second] = meta().checkoutSeeds;
-      expect(second).toMatchObject({ branch, path: first.path });
-      expect(second.incarnation).not.toEqual(first.incarnation);
-      expect(meta().supersededCheckoutSeeds).toEqual([{ ...first, supersededAt: expect.any(String) }]);
-    } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
+  it('binds without capturing seeds and ignores legacy seed metadata', async () => {
+    store.state.agents['agent-epicrun'].metadata.checkoutSeeds = [{ obsolete: true }];
+    expect(await updateClaimOwnership({ agentId: 'agent-epicrun', action: 'bind', branch: 'claim/issue-101' }))
+      .toEqual({ bound: true, branch: 'claim/issue-101' });
+    expect(store.state.agents['agent-epicrun'].metadata.checkoutSeeds).toEqual([{ obsolete: true }]);
+    delete store.state.agents['agent-epicrun'].metadata.checkoutSeeds;
+    expect(await updateClaimOwnership({ agentId: 'agent-epicrun', action: 'bind', branch: 'claim/issue-101' }))
+      .toEqual({ bound: true, branch: 'claim/issue-101' });
+    expect(store.state.agents['agent-epicrun'].metadata.checkoutSeeds).toBeUndefined();
   });
 
   it('persists the bound child branch on the run record and settles its selection', async () => {
@@ -206,7 +129,7 @@ describe('updateClaimOwnership', () => {
     expect(cosEvents.emit).toHaveBeenCalledWith('claim:ownership-changed', { agentId: 'agent-epicrun', repository: SOURCE });
   });
 
-  it('frees a live holder\'s binding only once its recorded checkout, local and origin branch are all retired (#15459)', async () => {
+  it('preserves a live holder until it explicitly releases even after checkout retirement', async () => {
     const { mkdtemp, rm } = await import('node:fs/promises');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -234,6 +157,8 @@ describe('updateClaimOwnership', () => {
       await execGit(['branch', '-D', branch], repo);
       expect(await bind('agent-next')).toEqual(refused);
       await execGit(['push', 'origin', '--delete', branch], repo);
+      expect(await bind('agent-next')).toEqual(refused);
+      expect(await updateClaimOwnership({ agentId: 'agent-swarm', action: 'release', branch })).toEqual({ released: true, branch });
       expect(await bind('agent-next')).toEqual({ bound: true, branch });
       expect(store.state.agents['agent-swarm'].metadata).toMatchObject({ claimBranches: [], claimReleasedBranches: [branch] });
       expect(store.state.agents['agent-next'].metadata.claimBranches).toEqual([branch]);
@@ -289,7 +214,7 @@ it('reserves a release branch before creation and captures its actual locked che
     expect(await updateReleaseCandidateOwnership(agentId, 'reserve')).toEqual({ reserved: true, branch });
     expect(store.state.agents[agentId].metadata.releaseCandidateLifecycle).toEqual(reserved);
     expect(claimCheckoutOwnerReason({ branchName: branch, sourceWorkspace: repo, agents: Object.values(store.state.agents) })).toBe('claim-owner-active');
-    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'checkout-seed-unavailable' });
+    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'checkout-unavailable' });
     await execGit(['worktree', 'add', '-b', branch, checkout, 'main'], repo);
     await execGit(['worktree', 'lock', '--reason', 'Active release candidate', checkout], repo);
     store.state.agents[agentId].metadata.releaseCandidateLifecycle = { ...reserved, taskId: 'wrong-task' };
@@ -301,21 +226,20 @@ it('reserves a release branch before creation and captures its actual locked che
     expect(lifecycle).toMatchObject({ ...reserved, stage: 'captured', capturedAt: expect.any(String) });
     expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: true, branch });
     expect(store.state.agents[agentId].metadata.releaseCandidateLifecycle).toEqual(lifecycle);
-    const seed = store.state.agents[agentId].metadata.checkoutSeeds[0];
-    expect(seed).toMatchObject({ agentId, branch, path: await (await import('node:fs/promises')).realpath(checkout) });
-    expect(await captureCompletedCheckouts(store.state.agents[agentId], { success: true, strict: true })).toMatchObject([{ branch, path: seed.path }]);
+    expect(store.state.agents[agentId].metadata.checkoutSeeds).toBeUndefined();
+    expect(await captureCompletedCheckouts(store.state.agents[agentId], { success: true, strict: true })).toMatchObject([{ branch, path: await (await import('node:fs/promises')).realpath(checkout) }]);
     const pointer = join(checkout, '.git');
     const contents = await readFile(pointer);
     await rename(pointer, join(scratch, 'original-pointer'));
     await writeFile(pointer, contents);
-    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'checkout-seed-unavailable' });
-    expect(store.state.agents[agentId].metadata.checkoutSeeds).toEqual([seed]);
+    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: true, branch });
+    expect(store.state.agents[agentId].metadata.checkoutSeeds).toBeUndefined();
     await rm(pointer);
     await rename(join(scratch, 'original-pointer'), pointer);
     await execGit(['worktree', 'unlock', checkout], repo);
     await execGit(['worktree', 'remove', checkout], repo);
-    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'checkout-seed-unavailable' });
-    expect(store.state.agents[agentId].metadata.checkoutSeeds).toEqual([seed]);
+    expect(await updateReleaseCandidateOwnership(agentId, 'capture')).toEqual({ captured: false, reason: 'checkout-unavailable' });
+    expect(store.state.agents[agentId].metadata.checkoutSeeds).toBeUndefined();
   } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
 });
 
