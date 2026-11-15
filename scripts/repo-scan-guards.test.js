@@ -56,8 +56,8 @@ const STRUCTURALLY_SELECTED = new Map([
   // ci-test-plan.test.js pins explicit selection into their respective runners.
   // structuralTestsFor() in ci-test-plan.js adds these whenever any
   // client/src/**.jsx (a11y) or .js/.jsx (mounted-ref) file changes, which is
-  // the only way either can start failing.
-  ['client/src/a11yConventions.test.js', 'structuralTestsFor: client/src/**.jsx'],
+  // the only way either can start failing. The a11y guards import their scanner
+  // from src/test/a11yScan*.js, so they are not detected as scanners themselves.
   // Reads update.sh/update.ps1 and the lockfiles; behavioural, so it does not ride every push (#16086).
   ['scripts/ensure-deps.test.js', 'structuralTestsFor: ENSURE_DEPS_INPUTS'],
   ['client/src/apiWrapperOptionsConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],

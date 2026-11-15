@@ -1,7 +1,7 @@
 /**
  * Shared file walker for the repo-hygiene test suites.
  *
- * Several guards (`src/a11yConventions.test.js`, `src/hooks/mountedRefConventions.test.js`)
+ * Several guards (`src/a11y/*.conventions.test.js`, `src/hooks/mountedRefConventions.test.js`)
  * enforce a rule across the whole client tree by grepping its sources. They all
  * need the same answer to "which files count", and that answer has been revised
  * before — the a11y guard originally scanned only `.jsx` and had to grow a `.js`
