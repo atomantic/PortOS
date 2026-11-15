@@ -1,5 +1,6 @@
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
+import { STALE_CLAIM_IDLE_MS, SHIPPED_CLAIM_IDLE_MS, buildActiveOwnerIds, decideBranchRetirement, decideDetachedRetirement, gatheredHoldReason, recoveryWorktreeReason, supersededPolicyHold, teardownGate } from './branchRetirementDecision.js';
 /**
  * Branch & PR Reconciler — deterministic core (Tier 1).
  *
@@ -108,19 +109,12 @@ export function prioritizeBranches(branches) {
 // we err far toward preservation: a paused session returned-to within 7 days keeps
 // its worktree, while a genuinely-leaked one (which persists indefinitely) is
 // reaped on the daily recheck once it crosses the threshold.
-export const STALE_CLAIM_IDLE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+export { STALE_CLAIM_IDLE_MS, SHIPPED_CLAIM_IDLE_MS, buildActiveOwnerIds };
 
 // The same window, for a claim that has demonstrably SHIPPED (see SHIPPED_CLAIM
-// on cleanupMerged). Proof of completion collapses the wait but does not remove
-// it: the one thing "merged + clean + remote branch gone" does NOT prove is that
-// the local /claim PROCESS has exited. A session that just merged its own PR —
-// or whose PR was merged from a peer machine, which PortOS users routinely run —
-// sits in exactly that state for the seconds-to-minutes it spends on teardown,
-// and reaping there deletes a directory a live process is still standing in.
-// Without a fresh claim registry read, mtime remains the liveness proxy,
-// so keep a short idle floor over it. An hour is far longer than any
-// teardown and still turns a week-long park into a single recheck.
-export const SHIPPED_CLAIM_IDLE_MS = 60 * 60 * 1000; // 1 hour
+// on cleanupMerged): proof of completion collapses the wait to an idle floor
+// over the checkout mtime, because it does not prove the local /claim process
+// has exited. Both windows live with the retirement decision that applies them.
 
 // The idle floor a verified-SUPERSEDED branch's worktree must clear before the
 // reap may take it from OUTSIDE the managed roots (an agent's `/tmp` checkout).
@@ -384,22 +378,6 @@ export function worktreeProtectionReason(input) {
   return worktreeOwnershipReason(teardownGate(input));
 }
 
-/** The teardown posture both protection helpers share: stale claims reclaimable, unknown liveness held. */
-function teardownGate({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, roots = [], unmanagedIdleMs }) {
-  return {
-    path,
-    locked,
-    activeAgentIds,
-    roots,
-    allowStaleClaim: true,
-    allowLiveClaim,
-    ageMs,
-    staleClaimIdleMs,
-    unmanagedIdleMs,
-    requireKnownLiveness: true,
-  };
-}
-
 /**
  * Managed roots for detached-checkout cleanup and superseded-branch retirement.
  * Detached checkouts outside these roots stay inventoried; superseded branches
@@ -435,32 +413,6 @@ export function worktreeProtectionExpiresAt(input) {
 }
 
 /**
- * The live-owner context branch-reconcile classifies against: the runtime ids,
- * plus every running or paused record's id and its workspace basename (a claim
- * tree uses a branch-shaped directory name, not the run's `agent-*` id). Pure.
- *
- * Unknown stays unknown: a `runtimeIds` that is not a Set (see `knownAgentIds`)
- * or an unreadable registry returns null, never an empty Set — `new Set(null)`
- * would read as "nobody is running" and release every `agent-*` tree.
- *
- * @param {Set<string>|null|undefined} runtimeIds - `new Set(getActiveAgentIds())`
- * @param {object[]|null} liveAgents - the agent registry
- * @returns {Set<string>|null}
- */
-export function buildActiveOwnerIds(runtimeIds, liveAgents) {
-  const known = knownAgentIds(runtimeIds);
-  if (!known || !Array.isArray(liveAgents)) return null;
-  const ids = new Set(known);
-  for (const agent of liveAgents) {
-    if (agent?.status !== 'running' && agent?.status !== 'paused') continue;
-    if (agent.id) ids.add(agent.id);
-    const worktreeId = worktreeAgentId(agent.workspacePath || agent.metadata?.workspacePath);
-    if (worktreeId) ids.add(worktreeId);
-  }
-  return ids;
-}
-
-/**
  * A claim run that cut a `claim-*` checkout itself still lists the source
  * repository as its workspace, so neither `activeAgentIds` nor the branch name
  * proves it gone. The registry's branch/repository bindings do: a pinned or
@@ -483,26 +435,6 @@ function resolveClaimOwnerReason({ branch, path, claimOwners, sourceWorkspace })
     sourceWorkspace,
     agents: claimOwners?.agents ?? null,
   });
-}
-
-/**
- * A branch queued for the pr-watcher's deterministic merge coordinator (an
- * agent handoff receipt or a merge-on-green PR) has an open PR and no live
- * agent, yet the coordinator owns its merge: a reconcile agent waiting on CI or
- * rebasing would race it and invalidate the handoff's head binding.
- *
- * `pendingMergeBranches` is a Set of queued branch names, `null` when the app
- * record could not be read (holds every branch — fail closed), and undefined
- * when the caller has no app to ask (nothing added).
- *
- * @param {Set<string>|null|undefined} pendingMergeBranches
- * @param {string} branch
- * @returns {string|null}
- */
-function pendingMergeReason(pendingMergeBranches, branch) {
-  if (pendingMergeBranches === undefined) return null;
-  if (pendingMergeBranches === null) return 'pending-merge-unavailable';
-  return pendingMergeBranches.has(branch) ? 'pending-merge-queued' : null;
 }
 
 /**
@@ -1045,9 +977,15 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
       // A registered claim owner counts too: a run that cut its own claim tree
       // keeps the source repository as its workspace, so neither the basename
       // set nor the branch name can see it (#10089).
-      liveOwnerReason: resolveLiveOwnerReason({
-        branch: b.name, path: worktreePath, locked: worktreeLocked, activeAgentIds
-      }) || claimOwnerReason || pendingMergeReason(pendingMergeBranches, b.name) || (worktreeStatusUnavailable ? 'worktree-status-unavailable' : null),
+      //
+      // A branch queued for the pr-watcher's merge coordinator (an agent handoff
+      // receipt or a merge-on-green PR) has an open PR and no live agent, yet the
+      // coordinator owns its merge: a reconcile agent waiting on CI or rebasing
+      // would race it and invalidate the handoff's head binding.
+      liveOwnerReason: gatheredHoldReason({
+        liveOwnerReason: resolveLiveOwnerReason({ branch: b.name, path: worktreePath, locked: worktreeLocked, activeAgentIds }),
+        claimOwnerReason, pendingMergeBranches, branch: b.name, worktreeStatusUnavailable,
+      }),
       claimOwnerReason,
       behind: divergence.behind,
       ahead: divergence.ahead,
@@ -1393,18 +1331,10 @@ async function retireBranch(repoPath, b, opts) {
   return retireWithUnlockedArchive({
     busy: () => ({ ok: false, reason: 'checkout-retirement-reserved' }),
     admit: async () => {
-      const agents = await readAgents().catch(() => null);
-      const reason = claimCheckoutOwnerReason({
-        branchName: b.branch, holderPath: b.worktreePath, sourceWorkspace: repoPath, agents,
-      });
-      if (reason) return { result: { ok: false, reason } };
-      // Refresh workspace owners from the registry read under the binding lock
-      // (not only explicit claim bindings). The caller's `allowLiveClaim` stands:
-      // a merged claim's hold is waived only by completion evidence, below.
-      const gated = await admitBranchRetirement(repoPath, b, {
-        ...opts,
-        activeAgentIds: buildActiveOwnerIds(opts.activeAgentIds, agents),
-      });
+      // Owners are re-read under the binding lock (not only explicit claim
+      // bindings). The caller's `allowLiveClaim` stands: a merged claim's hold
+      // is waived only by completion evidence.
+      const gated = await admitBranchRetirement(repoPath, b, opts);
       if (gated.result) return gated;
       if (!gated.archiveTree && !gated.prepare) return { result: await finishBranchRetirement(repoPath, gated) };
       return { fence: { repoPath, path: gated.archiveTree?.path ?? gated.b.worktreePath, branch: gated.b.branch }, gated };
@@ -1423,130 +1353,57 @@ async function retireBranch(repoPath, b, opts) {
   });
 }
 
-/** Every gate before the archive. Returns `{ result }` to stop, else the context removal needs. */
+/**
+ * Every gate before the archive. Returns `{ result }` to stop, else the context
+ * removal needs. The gates and their order are `decideBranchRetirement`'s; this
+ * only reads each fact when the decision asks for it.
+ */
 async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null, appId = null, disposableHead = null, superseded = false }) {
-  const stop = result => ({ result });
-  if (PROTECTED_BRANCHES.includes(b.branch)) return stop({ ok: false, reason: 'protected-branch' });
-  const defaultBranch = await getDefaultBranch(repoPath, { strict: true }).catch(() => null);
-  if (!defaultBranch) return stop({ ok: false, reason: 'default-branch-unavailable' });
-  if (b.branch === defaultBranch) return stop({ ok: false, reason: 'protected-branch' });
-  const expectedHead = (await execGit(['rev-parse', '--verify', `refs/heads/${b.branch}`], repoPath).catch(() => null))?.stdout?.trim();
-  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHead || '')) return stop({ ok: false, reason: mergedRetirement ? 'not-merged-on-recheck' : 'branch-head-unavailable' });
   const completionPolicy = await import('./branchCompletionPolicy.js');
-  const readPolicyHold = async (tip = expectedHead) => {
+  const completionEvidence = () => import('./completedCheckoutEvidence.js');
+  const readPolicyHold = async (tip) => {
     const hold = await completionPolicy.readBranchCompletionHold({ repoPath, branch: b.branch, tip, retirement: mergedRetirement });
-    if (!superseded || b.openPr || hold !== 'pr-completion-review-required') return hold;
-    // A verified-superseded branch is never merged, so a review-then-merge
-    // obligation that never recorded a PR has no merge left to gate. A recorded
-    // PR, a human handoff and unreadable policy records still hold.
+    const step = supersededPolicyHold({ hold, superseded, openPr: b.openPr });
+    if (!step.need) return step.hold;
     const agents = await completionPolicy.readBranchCompletionPolicies().catch(() => null);
     const detail = agents && await completionPolicy.readBranchCompletionHoldDetail({ repoPath, branch: b.branch, tip, agents }).catch(() => null);
-    return detail?.reason === hold && detail.unshipped === true ? null : hold;
+    return supersededPolicyHold({ hold, superseded, openPr: b.openPr, detail: detail || null }).hold;
   };
-  if (prepare && expectedHead !== b.tip) return stop({ ok: false, reason: 'branch-head-changed' });
-  const policyHold = await readPolicyHold();
-  if (policyHold) return stop({ ok: false, reason: policyHold });
-  let archiveTree = null;
-  let claimCompletion = null;
-  let holders = null;
-  if (mergedRetirement) {
-    // Completion audits may know only the branch. Resolve its actual holder,
-    // and pin merge evidence to its current commit rather than the scan's flag.
-    holders = await listWorktrees(repoPath).catch(() => null);
-    if (!holders) return stop({ ok: false, reason: 'worktree-ownership-unreadable' });
-    const holder = holders.find(wt => wt.branch === `refs/heads/${b.branch}`);
-    if (!await hasBranchMergeEvidence(repoPath, expectedHead, mergeTarget).catch(() => false)) return stop({ ok: false, reason: 'not-merged-on-recheck' });
-    if (b.worktreePath && b.worktreePath !== holder?.path) return stop({ ok: false, reason: 'worktree-holder-changed' });
-    if (holder?.path === repoPath) return stop({ ok: false, reason: 'currently-checked-out' });
-    b = { ...b, worktreePath: holder?.path || null, worktreeLocked: holder?.locked || false };
-  }
-  if (b.worktreePath) {
-    // A named branch's actual holder and current merged head were re-read above.
-    // Location adds no completion evidence: apply the same owner, lock, claim
-    // and content checks to external checkouts as to PortOS-managed checkouts.
-    // External sessions retain a clean checkout with `git worktree lock`; an
-    // arbitrary directory or unregistered process alone is not a cleanup hold.
-    const gate = {
-      path: b.worktreePath,
-      locked: b.worktreeLocked,
-      activeAgentIds,
-      ageMs: b.worktreeAgeMs,
-      staleClaimIdleMs,
-      allowLiveClaim,
-      roots: mergedRetirement ? [] : reconcileWorktreeRoots(repoPath),
-      unmanagedIdleMs,
-    };
-    let protectedReason = worktreeProtectionReason(gate);
-    // The claim gate runs LAST, so `worktree-human-claim` means every other hold
-    // already cleared. For a merged claim that one hold is waivable, but only by
-    // the exact completion evidence required below — never by the claim name or
-    // the registry's silence (#12990).
-    if (protectedReason === 'worktree-human-claim' && mergedRetirement) protectedReason = null;
-    if (protectedReason) {
-      // Carry WHEN the hold lifts when it lifts on a clock (a claim worktree
-      // still inside its grace window). Without it the caller can only park on
-      // the recheck cadence and the two waits stack — see boundParkedUntil.
-      const retryAt = worktreeProtectionExpiresAt(gate);
-      return stop({ ok: false, reason: protectedReason, ...(retryAt ? { retryAt } : {}) });
+  const readers = {
+    agents: () => claimOwners.readAgents().catch(() => null),
+    defaultBranch: () => getDefaultBranch(repoPath, { strict: true }).catch(() => null),
+    head: async () => (await execGit(['rev-parse', '--verify', `refs/heads/${b.branch}`], repoPath).catch(() => null))?.stdout?.trim(),
+    policyHold: facts => readPolicyHold(facts.head),
+    // Completion audits may know only the branch: resolve its actual holder.
+    holders: () => listWorktrees(repoPath).catch(() => null),
+    // Merge evidence pinned to the current commit rather than the scan's flag.
+    mergedAtHead: facts => hasBranchMergeEvidence(repoPath, facts.head, mergeTarget).catch(() => false),
+    dirty: (facts, path) => isWorktreeDirty(path),
+    completionRecords: () => completionPolicy.readBranchCompletionPolicies({ repairIndex: false }).catch(() => null),
+    receipt: async (facts, path) => (await completionEvidence()).hasCompletedCheckoutEvidence(facts.completionRecords, {
+      repoPath, branch: b.branch, path, head: facts.head, worktrees: facts.holders,
+    }),
+    forgeMerge: async facts => (await completionEvidence()).readMergedClaimEvidence({ repoPath, branch: b.branch, head: facts.head, forgeAccount }).catch(() => null),
+    githubOrigin: async () => Boolean(githubRepoSpec(await getOriginInfo(repoPath).catch(() => null))),
+    idleMs: (facts, path) => checkoutIdleMs(path),
+  };
+  const facts = {};
+  for (;;) {
+    const step = decideBranchRetirement({
+      repoPath, branch: b.branch, scan: b, activeAgentIds, mergedRetirement, headMustMatchScan: Boolean(prepare),
+      requireCleanWorktree, disposableHead, roots: reconcileWorktreeRoots(repoPath),
+      staleClaimIdleMs, unmanagedIdleMs, allowLiveClaim, nowMs: Date.now(), facts,
+    });
+    if (step.hold) return { result: { ok: false, ...step.hold } };
+    if (step.admit) {
+      const { expectedHead, worktreePath, worktreeLocked, archiveTree, claimCompletion, requireCleanWorktree: requireClean } = step.admit;
+      return { b: { ...b, worktreePath, worktreeLocked }, expectedHead, readPolicyHold: (tip = expectedHead) => readPolicyHold(tip), archiveTree, mergeTarget, label, requireCleanWorktree: requireClean, prepare, claimOwners, mergedRetirement, claimCompletion, appId };
     }
-    const dirty = await isWorktreeDirty(b.worktreePath);
-    if (dirty === null) return stop({ ok: false, reason: 'worktree-status-unavailable' });
-    if (requireCleanWorktree && dirty && disposableHead !== expectedHead) return stop({ ok: false, reason: 'worktree-dirty' });
+    // Checkout reads follow the holder the decision resolved, not the scan's path.
+    const path = mergedRetirement ? facts.holders?.find(wt => wt.branch === `refs/heads/${b.branch}`)?.path || null : b.worktreePath;
+    // An undefined answer would be asked for again forever; it is a failed read.
+    facts[step.need] = (await readers[step.need](facts, path)) ?? null;
   }
-  if (mergedRetirement && b.worktreePath) {
-    if (isHumanClaimWorktree(worktreeAgentId(b.worktreePath))) {
-      const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
-      const records = await readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);
-      // Registry absence cannot prove a manual CLI or external task finished.
-      // Waive the claim hold only on a recorded completed owner or, for a
-      // manual session that records none, the forge's merged exact head (or,
-      // with no PR at that head, a forge-confirmed idle checkout).
-      const { hasCompletedCheckoutEvidence } = await import('./completedCheckoutEvidence.js');
-      if (!records) return stop({ ok: false, reason: 'claim-ownership-unreadable' });
-      if (await hasCompletedCheckoutEvidence(records, {
-        repoPath, branch: b.branch, path: b.worktreePath, head: expectedHead, worktrees: holders,
-      })) claimCompletion = 'receipt';
-      else {
-        const hold = await manualClaimShippedHold(repoPath, b, expectedHead, forgeAccount);
-        if (hold) return stop(hold);
-        // Removal re-proves merge evidence and refuses a checkout that became dirty.
-        claimCompletion = 'forge-merged';
-      }
-    }
-    const tree = holders ? holders.find(wt => wt.path === b.worktreePath) : (await listWorktrees(repoPath)).find(wt => wt.path === b.worktreePath);
-    if (!tree || tree.head !== expectedHead) return stop({ ok: false, reason: 'worktree-holder-changed' });
-    archiveTree = tree;
-  }
-  return { b, expectedHead, readPolicyHold, archiveTree, mergeTarget, label, requireCleanWorktree: requireCleanWorktree && disposableHead !== expectedHead, prepare, claimOwners, mergedRetirement, claimCompletion, appId };
-}
-
-/**
- * Why a merged manual `claim-*` checkout without a run receipt is still held, or
- * null once the forge proves it shipped (#12849). A manual /claim session never
- * records the receipt a CoS claim run does, so without this its checkouts were
- * held forever. The forge must report a merged PR whose head is exactly
- * `head`; the clean-tree, lock, owner and merge gates have already run. What
- * neither proof shows is a session still tearing down, so SHIPPED_CLAIM_IDLE_MS
- * must have passed since the checkout was created AND since the merge.
- */
-async function manualClaimShippedHold(repoPath, b, head, forgeAccount) {
-  // No retryAt: the idle window is not the only gate, so no clock lifts this.
-  const unverified = { ok: false, reason: 'claim-completion-unverified' };
-  if (!Number.isFinite(b.worktreeAgeMs) || b.worktreeAgeMs < SHIPPED_CLAIM_IDLE_MS) return unverified;
-  const { readMergedClaimEvidence } = await import('./completedCheckoutEvidence.js');
-  const merged = await readMergedClaimEvidence({ repoPath, branch: b.branch, head, forgeAccount }).catch(() => null);
-  if (merged) return Date.now() - Date.parse(merged.mergedAt) < SHIPPED_CLAIM_IDLE_MS ? unverified : null;
-  // A reused claim branch, or a checkout left behind while the branch shipped
-  // from elsewhere, has no PR at its exact head. Its head is already on the
-  // default branch (re-proven by the caller), so the remaining question is
-  // whether a session is still live: no open PR for the branch on a forge read
-  // this cycle, and no checkout activity (directory, index, HEAD log) for the
-  // idle window. A session tearing down or waiting on CI fails one of those.
-  // Only a GitHub origin's PR read is evidence: elsewhere "no open PR" is the default, not an answer.
-  if (b.openPr !== null || b.prStateUnavailable !== false) return unverified;
-  if (!githubRepoSpec(await getOriginInfo(repoPath).catch(() => null))) return unverified;
-  const idle = await checkoutIdleMs(b.worktreePath);
-  return Number.isFinite(idle) && idle >= SHIPPED_CLAIM_IDLE_MS ? null : unverified;
 }
 
 /** Time since the checkout last changed: its directory, index or HEAD log. Null when unreadable. */
@@ -1693,8 +1550,7 @@ async function gatherRecoveryWorktrees(repoPath, preloadedTrees = null) {
       locked: Boolean(tree.locked),
       lockReason: tree.lockReason ?? null,
       managed,
-      reason: tree.prunable ? 'worktree-prunable' : tree.locked ? 'worktree-locked'
-        : !managed ? 'worktree-unmanaged-location' : 'checkout-retained',
+      reason: recoveryWorktreeReason({ prunable: tree.prunable, locked: tree.locked, managed }),
     };
   }));
 }
@@ -1749,25 +1605,15 @@ async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { active
     if (managed) skipped.push({ branch: tree.path, path: tree.path, detached: true, reason, ...(retryAt ? { retryAt } : {}) });
   };
   for (const tree of detached) {
-    if (claimOwners !== undefined && !Array.isArray(claimOwners?.agents)) {
-      hold(tree, 'claim-ownership-unreadable');
-      continue;
-    }
-    const gate = {
+    const decide = facts => decideDetachedRetirement({
+      ownersReadable: claimOwners === undefined || Array.isArray(claimOwners?.agents),
       path: tree.path, locked: tree.locked, activeAgentIds, ageMs: tree.worktreeAgeMs, roots,
-    };
-    const protectedReason = worktreeProtectionReason(gate);
-    if (protectedReason) {
-      hold(tree, protectedReason, worktreeProtectionExpiresAt(gate));
-      continue;
-    }
-    const dirty = await isWorktreeDirty(tree.path);
-    if (tree.dirtyPaths === null || dirty === null) {
-      hold(tree, 'worktree-status-unavailable');
-      continue;
-    }
-    if (tree.dirtyPaths.length > 0 || dirty) {
-      hold(tree, 'worktree-dirty');
+      scanDirtyPaths: tree.dirtyPaths, nowMs: Date.now(), facts,
+    });
+    let step = decide({});
+    if (step.need) step = decide({ dirty: await isWorktreeDirty(tree.path) });
+    if (step.hold) {
+      hold(tree, step.hold.reason, step.hold.retryAt);
       continue;
     }
     // Re-verify at action time against what the tree holds NOW: its HEAD may have
@@ -1844,7 +1690,7 @@ async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { active
  *   caller must pass it. `readAgents` re-reads the registry right before each
  *   retirement, because a claim run can bind a branch after the scan.
  *   `pendingMergeBranches` (Set, or null for an unreadable app record) holds the
- *   branches queued for the pr-watcher merge coordinator — see `pendingMergeReason`.
+ *   branches queued for the pr-watcher merge coordinator — see `gatheredHoldReason`.
  *   `forgeAccount` is the managed app record's explicit gh
  *   account pin, so an app whose repo belongs to another GitHub account is
  *   polled with a credential that can actually see it (#7540); unset, the
