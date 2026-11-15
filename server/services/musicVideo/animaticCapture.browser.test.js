@@ -513,6 +513,63 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     expect(await page.locator('[data-film-look="exact"]').count()).toBe(1);
   });
 
+  it('saves a settled dissolve when animation frames arrive slower than the settle deadline (#16180)', async () => {
+    onTestFinished(async () => {
+      await page.reload();
+      await page.waitForFunction(() => typeof window.show === 'function');
+    });
+    await show(project([
+      { ...still, visualLayer: 'footage', videoHistoryId: 'smpte170m', cutEffect: { style: 'dissolve', enabled: true, overlapSec: 1 } },
+      { ...still, sceneId: 'incoming', order: 1, startSec: 4, endSec: 8, visualLayer: 'footage', videoHistoryId: 'bt709' },
+    ], { filmLook: filmLookPreset('vhs') }), 3.5);
+    await enableFilmLook();
+    // A loaded runner rasterizing the VHS look can deliver frames over a
+    // second apart. capture() waits for the settled preview before clicking,
+    // so only a deadline expiring between the settle wait's frames fails it.
+    await page.evaluate(() => {
+      const frame = window.requestAnimationFrame;
+      window.requestAnimationFrame = callback => frame(() => setTimeout(() => callback(performance.now()), 1100));
+    });
+    await capture('slow frames');
+    expect(await page.locator('canvas[data-paused-video]:visible').count()).toBe(2);
+  });
+
+  it('refuses a save at the settle deadline when a hidden tab suspends animation frames', async () => {
+    onTestFinished(async () => {
+      await page.reload();
+      await page.waitForFunction(() => typeof window.show === 'function');
+    });
+    await show(project(), 1);
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+      window.requestAnimationFrame = () => 0;
+    });
+    await page.getByRole('button', { name: 'Save frame', exact: true }).click();
+    await page.waitForFunction(() => window.captureErrors.length > 0, null, { timeout: 10000 });
+    expect(await page.evaluate(() => window.uploads.length)).toBe(0);
+    expect(await page.evaluate(() => window.captureErrors.at(-1))).toContain('Preview did not settle');
+  });
+
+  it('keeps a visible save waiting past the deadline for a frame, then refuses it once the tab hides', async () => {
+    onTestFinished(async () => {
+      await page.reload();
+      await page.waitForFunction(() => typeof window.show === 'function');
+    });
+    await show(project(), 1);
+    await page.evaluate(() => { window.requestAnimationFrame = () => 0; });
+    await page.getByRole('button', { name: 'Save frame', exact: true }).click();
+    // Visible frames that have not arrived yet are slow, not a failed preview.
+    await page.waitForTimeout(2500);
+    expect(await page.evaluate(() => window.captureErrors)).toEqual([]);
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.waitForFunction(() => window.captureErrors.length > 0, null, { timeout: 2000 });
+    expect(await page.evaluate(() => window.uploads.length)).toBe(0);
+    expect(await page.evaluate(() => window.captureErrors.at(-1))).toContain('Preview did not settle');
+  });
+
   it('isolates a deferred filter commit from box, song and both paused footage revisions', async () => {
     onTestFinished(async () => {
       await page.reload();

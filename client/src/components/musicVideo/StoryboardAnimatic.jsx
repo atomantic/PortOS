@@ -802,13 +802,26 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     }
     // Pause swaps the live film look for its exact filter and catches the shot up
     // to the audio clock. Effects/clip seeks then get a paint before freezing.
+    // The deadline only arms the error: a frame must still observe an unsettled
+    // preview after it. Frames can arrive over a second apart on a loaded host
+    // rasterizing the film look, so expiring between them would reject a
+    // preview that settled in time (#16180). A hidden tab gets no frames at
+    // all, so once the deadline has passed, hiding rejects on its own.
     await new Promise((resolve, reject) => {
       let handle;
       let clips = [];
-      const timer = setTimeout(() => {
+      let expired = false;
+      const finish = (error) => {
+        clearTimeout(timer);
         cancelAnimationFrame(handle);
-        reject(new Error(clips.some(video => video.readyState < 2) ? 'Video frame is still loading' : 'Preview did not settle'));
-      }, 2000);
+        document.removeEventListener('visibilitychange', hidden);
+        if (error) reject(error);
+        else resolve();
+      };
+      const unsettled = () => new Error(clips.some(video => video.readyState < 2) ? 'Video frame is still loading' : 'Preview did not settle');
+      const hidden = () => { if (expired && document.hidden) finish(unsettled()); };
+      const timer = setTimeout(() => { expired = true; hidden(); }, 2000);
+      document.addEventListener('visibilitychange', hidden);
       let paints = 0;
       const settle = () => {
         clips = [...(figureRef.current?.querySelectorAll('video[data-preview-video]') || [])]
@@ -817,10 +830,10 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
           .filter((video) => Number(getComputedStyle(video.parentElement).opacity) > 0
             || video.matches('[data-ready]:not([aria-hidden="true"])'));
         const failedClip = clips.find((video) => video.dataset.previewError);
-        if (failedClip) { clearTimeout(timer); reject(new Error(failedClip.dataset.previewError)); return; }
-        if (++paints >= 2 && clips.every((video) => !video.seeking && video.dataset.pausedFrame === String(video.currentTime))) {
-          clearTimeout(timer); resolve(); return;
-        }
+        if (failedClip) { finish(new Error(failedClip.dataset.previewError)); return; }
+        const current = clips.every((video) => !video.seeking && video.dataset.pausedFrame === String(video.currentTime));
+        if (++paints >= 2 && current) { finish(); return; }
+        if (expired && !current) { finish(unsettled()); return; }
         handle = requestAnimationFrame(settle);
       };
       handle = requestAnimationFrame(settle);
