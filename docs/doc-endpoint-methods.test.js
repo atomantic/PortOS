@@ -1,8 +1,9 @@
 /**
- * Method guard for `METHOD /api/...` mentions outside docs/API.md.
+ * Method guard for `METHOD /api/...` mentions in prose.
  *
- * `api-doc.test.js` guards API.md's tables, but feature docs and instruction
- * files name endpoints in prose too, and nothing checked those. Two of them
+ * `api-doc.test.js` guards API.md's route-domain index and peer-probe table, but
+ * feature docs and instruction files name endpoints in prose too, and nothing
+ * checked those. Two of them
  * told callers to `PATCH /api/cos/config` and `PATCH /api/providers/:id`, which
  * only accept PUT — a script following the doc got a 404.
  *
@@ -26,7 +27,7 @@ const mdIn = (dir) => readdirSync(join(REPO_ROOT, dir))
   .map((name) => `${dir}/${name}`);
 
 const DOC_FILES = [
-  ...mdIn('docs').filter((file) => file !== 'docs/API.md'),
+  ...mdIn('docs'),
   ...mdIn('docs/features'),
   'AGENTS.md',
   'server/AGENTS.md',
@@ -79,7 +80,7 @@ const isRoutable = ({ method, path }) => live.has(`${method} ${normalizePath(pat
 const mentions = DOC_FILES.flatMap((file) => findMentions(file, readFileSync(join(REPO_ROOT, file), 'utf8')));
 const isAllowed = (m) => DELIBERATE_NON_ROUTES.some((a) => a.file === m.file && a.method === m.method && a.path === m.path);
 
-describe('endpoint mentions outside API.md name a route the server mounts', () => {
+describe('endpoint mentions in docs name a route the server mounts', () => {
   it('parses a meaningful number of mentions', () => {
     // A regex that silently matches nothing would pass every assertion below.
     expect(mentions.length).toBeGreaterThan(50);

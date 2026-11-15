@@ -18,7 +18,7 @@ node scripts/portos-api.js post /api/human-actions/plans @plan.json   # schedule
 node scripts/portos-api.js get /api/api-docs/catalog.json   # discover endpoints
 ```
 
-- When the user has to do something by hand later (post, reply, upload, sign), schedule it with `POST /api/human-actions/plans` instead of only saying so in chat: each step gets a due time with a UTC offset, explicit `instructions`, and the exact text to paste in `content`. It lands in Review Hub › Actions and notifies them when due. Reuse the same `planKey` to replace a plan. Shape: [docs/API.md › Human Actions](../../../docs/API.md#human-actions).
+- When the user has to do something by hand later (post, reply, upload, sign), schedule it with `POST /api/human-actions/plans` instead of only saying so in chat: each step gets a due time with a UTC offset, explicit `instructions`, and the exact text to paste in `content`. It lands in Review Hub › Actions and notifies them when due. Reuse the same `planKey` to replace a plan. Shape: the `/api/human-actions` operations in the API Explorer (`/api-reference/catalog`) or `GET /api/api-docs/catalog.json`.
 
 - URL order: `PORTOS_URL`, then the agent key file’s URL, then the configured local HTTP listener. With a usable TLS certificate, the fallback uses the loopback HTTP mirror and honors `PORTOS_HTTP_PORT` (exported value, then `.env`, then the shared default). Explicit URLs are never retried against a different listener.
 - Credential order: `PORTOS_API_TOKEN` (set inside PortOS-spawned agents), then `~/.portos/agent-key.json` (the agent API key).
