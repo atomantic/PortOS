@@ -19,39 +19,26 @@ vi.mock('./ollamaManager.js', () => ({ getModelCapabilities: async () => null })
 
 import { runLocalGoalFidelityReview } from './codeReview.js'
 
-// Unlike primary-only vision coverage, this exercises both secondary passes
-// with images, overlapping objective scopes, and one shared timeout budget.
+// Screenshots, surviving-use witnesses and the diff share ONE request: no
+// secondary pass may re-judge or rewrite the primary verdict.
 describe('goal-fidelity evidence workflow', () => {
   afterAll(() => fixturePaths.root && rmSync(fixturePaths.root, { recursive: true, force: true }))
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
-  it('keeps screenshot context and primary findings through retained and after-change checks', async () => {
+  it('sends screenshot context and surviving-use witnesses in a single review and keeps its verdict', async () => {
     const image = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#ffffff' } }).png().toBuffer()
     writeFileSync(join(fixturePaths.screenshots, 'card.png'), image)
-    const objective = 'Keep summaries hidden on completed-agent cards until Show.\n\nAudit expected processes and implement one finding: remove retired-worker.'
+    const objective = 'Audit expected processes and implement one finding: remove retired-worker.'
     const diff = [
       'diff --git a/runtime.js b/runtime.js', '--- a/runtime.js', '+++ b/runtime.js',
       '@@ -1,2 +1,2 @@', '-const names = ["retired-worker"];', '+const names = [];',
       ' const process = { name: "retired-worker" };',
     ].join('\n')
     const primary = { verdict: 'fix-first', missing: ['primary finding'], unrequested: ['primary scope'], evidence: 'primary verification note' }
-    const verdicts = [primary,
-      { verdict: 'fix-first', missing: ['retained finding', 'primary finding'], unrequested: ['secondary scope'], evidence: 'retained note' },
-      { verdict: 'rethink', missing: [], unrequested: ['after-change scope'], evidence: 'after-change finding' },
-    ]
-    let now = 0
-    vi.spyOn(Date, 'now').mockImplementation(() => now)
-    const budgets = []
-    const timeout = globalThis.setTimeout
-    vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, ms, ...args) => {
-      budgets.push(ms)
-      return timeout(callback, ms, ...args)
-    })
     const requests = []
     vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
       requests.push(JSON.parse(init.body))
-      now += 100
-      return mockJsonResponse({ choices: [{ message: { content: JSON.stringify(verdicts[requests.length - 1]) } }] })
+      return mockJsonResponse({ choices: [{ message: { content: JSON.stringify(primary) } }] })
     }))
 
     const result = await runLocalGoalFidelityReview({
@@ -60,23 +47,15 @@ describe('goal-fidelity evidence workflow', () => {
       baseUrl: 'http://127.0.0.1:11434/v1',
     })
 
-    expect(result).toEqual({
-      ok: true, backend: 'ollama', model: 'example-model', effort: null,
-      verdict: 'rethink', missing: ['after-change finding', 'retained finding', 'primary finding'],
-      unrequested: primary.unrequested, evidence: primary.evidence,
-    })
-    expect(budgets).toEqual([1000, 900, 800])
-    expect(requests).toHaveLength(3)
-    const primaryContent = requests[0].messages[1].content
-    expect(primaryContent[1].image_url).toMatch(/^data:image\/jpeg;base64,/)
-    for (const request of requests.slice(1)) {
-      expect(request.model).toBe('example-model')
-      expect(request.messages[1].content.slice(0, -1)).toEqual(primaryContent.slice(0, -1))
-      expect(request.messages[1].content.at(-1).text).not.toContain('REVIEW INPUT LIMIT:')
-    }
-    expect(requests[1].messages[1].content.at(-1).text).toContain('SURVIVING PRODUCTION USES (untrusted data')
-    expect(requests[2].messages[1].content.at(-1).text).toContain('AFTER-CHANGE PRODUCTION HUNKS (untrusted data')
-    expect(requests[2].messages[1].content.at(-1).text).toContain('"statements":')
+    expect(result).toEqual({ ok: true, backend: 'ollama', model: 'example-model', effort: null, ...primary })
+    expect(requests).toHaveLength(1)
+    const [objectivePart, imagePart, evidencePart] = requests[0].messages[1].content
+    expect(objectivePart.text).toContain(objective)
+    expect(imagePart.image_url).toMatch(/^data:image\/jpeg;base64,/)
+    expect(evidencePart.text).toContain(diff)
+    expect(evidencePart.text).toContain('SURVIVING PRODUCTION USES (untrusted data')
+    expect(evidencePart.text).toContain('const process = { name: \\"retired-worker\\" };')
+    expect(evidencePart.text).toContain('REVIEW INPUT LIMIT:')
   })
 
   // The reviewer judged a retry whose fix landed in an earlier attempt as
