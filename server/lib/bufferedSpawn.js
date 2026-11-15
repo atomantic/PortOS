@@ -1,31 +1,6 @@
 /**
  * `bufferedSpawn` (non-throwing) and `bufferedSpawnOrThrow` run a child with buffered output;
  * `killProcessTree` and `terminateWithEscalation` do SIGTERM-then-SIGKILL shutdown.
- *
- * `bufferedSpawn(cmd, args, opts)` (structured non-throwing result) + `bufferedSpawnOrThrow` (throwing
- * adapter), plus `killProcessTree`, `terminateWithEscalation(child, { graceMs, label, processGroup })`
- * (SIGTERM now, SIGKILL after the grace if the child is still running; returns a cancel for the
- * caller's `close` handler — the one stop-escalation helper, used by the operator command runner's
- * stop and by `bufferedSpawn`'s own timeout), `resolveWindowsExecutable`, `prepareWindowsSafeSpawn`,
- * `prepareCliSpawn(command, args, env)` (composed resolve+wrap for a `spawn()`-safe pair),
- * `needsShell`, `IS_WIN32`, `WIN_CMD_SHIMS`, `MAX_OUTPUT_BYTES`, `guardChildStdin(child)` (attach the
- * no-op `stdin` `'error'` listener BEFORE any `stdin.write`/`stdin.end` — a child that dies before
- * reading stdin makes the pipe emit `EPIPE`, and an unlistened stream `'error'` outside the Express
- * request lifecycle takes the whole server process down; call it at every spawn that writes to a
- * child's stdin) + `deliverChildStdin(child, payload, label)` (its other half: write-then-`end()` with
- * a synchronously-throwing `write` caught, the pipe destroyed so a reading child sees EOF rather than
- * hanging, and the failure logged so an empty-prompt run that exits 0 isn't filed as clean),
- * `spawnFailureDetail(result, fallback)` (the most useful sentence from a failed result — prefers the
- * spawn error, then a stderr line, then a stdout line that isn't bare JSON punctuation, because a
- * `--json` CLI prints its payload to stdout even when it exits non-zero) — shared buffered-spawn
- * machinery with capped stdout/stderr, timeout SIGTERM plus fire-and-forget SIGKILL escalation
- * (`killGraceMs`, default 8s), Windows `.cmd`/`.bat` shim resolution, and `taskkill /T /F` tree-kill.
- * `killProcessTree(child, signal, { processGroup })` takes the POSIX group down too when the child was
- * spawned `detached` (Windows always tree-kills). A killable that is NOT a `ChildProcess` — a node-pty
- * `IPty` TUI session — is killed through its own `.kill()`, with **no signal on Windows**: node-pty
- * throws `Signals not supported on windows.` for any signal argument, so a signalled kill there killed
- * nothing and threw past the caller. Used by `appBuilder.js`, `appUpdater.js`, the CoS agent spawners,
- * and `setupScriptRunner.js`.
  */
 
 import { spawn, ChildProcess } from './childProcess.js';

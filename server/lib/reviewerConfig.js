@@ -2,35 +2,6 @@
  * Review-Loop reviewer vocabulary: roster, aliases, `DEFAULT_REVIEWER`, per-reviewer CLI/model
  * contracts, and `buildReviewWithArgs` for slashdo argv.
  *
- * Review-Loop reviewer vocabulary (split out of `cosValidation.js`, #5702; Zod-free): the reviewer
- * roster + aliases (`REVIEWER_VALUES` / `REVIEWER_ALIASES` / `DEFAULT_REVIEWER`), the local-LLM /
- * PortOS-only / model-capable / effort-selectable subsets, the slug→CLI-binary map
- * (`REVIEWER_CLI_BINARIES`, `isCliReviewer`, `reviewerCliBinary`), the keyed model/effort/max-rounds
- * pin normalizers + resolvers (`normalizeReviewers`, `normalizeReviewerModels`,
- * `normalizeReviewerEfforts`, `resolveReviewerGroup` — task reviewer overrides fall back through
- * system tiers when paused, `resolveReviewerConfig`, `resolveReviewPolicy` — the whole reviewer config
- * plus stop-mode and the public-forge `reviewerApplies` clamp as ONE frozen `reviewPolicy` the prompt
- * builders take, `resolveClaimReviewerConfig`, `KEYED_REVIEWER_PINS`), the override-key rosters that
- * say when a task has pinned its own reviewers (`REVIEWER_OVERRIDE_KEYS` — everything the picker
- * writes and its reset clears; `REVIEWER_LIST_OVERRIDE_KEYS` / `hasReviewerOverride` — only the keys
- * that can change the resolved LIST), and the emitters that render a reviewer set into slashdo argv
- * (`buildReviewWithArgs` — which emits `--reviewer-applies` only alongside an
- * `APPLY_CAPABLE_REVIEWERS` slug, the reviewers slashdo lets edit the tree, `buildReviewersCsv`) and
- * into agent-prompt notes (`buildReviewerPinNote`, `buildReviewerEffortNote`,
- * `buildReviewerMaxRoundsNote` — the claim flows' prose round budgets). Re-exported flat by
- * `cosValidation.js`, so existing `validation.js` imports keep resolving. Provider-backed identities
- * use `provider:<id>` (`isProviderReviewer`, `isReviewer`, `isToolFreeReviewer`) and additive
- * `providerModels` defaults; legacy scalar pins stay compatible. `REVIEWER_CONFIG_FAULT_CODES` /
- * `isReviewerConfigFault` name the refusals a caller fixes by changing configuration (no model,
- * missing/disabled provider, missing CLI command or unsupported explicitly restricted transport)
- * rather than by retrying, so a reviewer that can never answer is not mistaken for a transient outage.
- *
- * Review-Loop reviewer vocabulary: which reviewers exist, what each one's
- * CLI/model/effort contract is, and how a reviewer set renders into slashdo's
- * `--review-with` argv (`buildReviewWithArgs`) and into the human-readable
- * reviewer notes spliced into agent prompts (`buildReviewerPinNote` /
- * `buildReviewerEffortNote`).
- *
  * Split out of cosValidation.js (issue #5702), which keeps the CoS Zod schemas
  * and re-exports everything here (`export * from './reviewerConfig.js'`) so
  * existing deep imports of cosValidation.js / validation.js keep working.

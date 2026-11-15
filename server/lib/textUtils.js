@@ -1,38 +1,5 @@
 // Shared, dependency-free text helpers for server-side prose analysis.
 //
-// Pure dependency-free prose helpers. `isStr(v)` and `isNonBlankStr(v)` are the ONLY string predicates
-// under `server/` (#6837) — the bare type check, and type check plus a non-empty `trim()` for ids,
-// keys, hosts, model names and prose fields where whitespace-only is already invalid; the "no private
-// string predicate or bounder" guard in `textUtils.test.js` fails the suite when a copy of either, or
-// a `trimTo`-shaped bounder, is re-declared in any non-test source under `server/` or any source under
-// `client/src/` (`client/src/lib/textUtils.js` re-exports both for the browser bundle).
-// `countWords(text)` is the canonical whitespace-token count (`\S+`) and the only one — every server
-// word count (Writers Room, lettering density, rapid reader, autobiography, script-video beats) and
-// the client's (`client/src/lib/textUtils.js` re-exports it) resolve here, and the "no private
-// countWords" guard in `textUtils.test.js` fails the suite when a re-spelled count (the
-// whitespace-token match, a split-and-filter, or a helper under either conventional name) reappears in
-// any non-test source under `server/` or any source under `client/src/`; the editorial prose-analysis
-// checks deliberately count LETTER words instead, through `editorial/proseTics.js#tokenizeWords`,
-// which owns that tokenizer the same way; `trimTo(value, max)` trims and bounds strings without
-// coercing non-strings, and is safe for shared modules consumed by the browser; `escapeRegExp(value)`
-// is the one to import instead of re-inlining the escape (the sibling guard in `textUtils.test.js`
-// fails the suite when a copy reappears in any non-test source under `server/`, or in ANY source under
-// `client/src/`, tests and `.jsx` included — `client/src/lib/textUtils.js` re-exports this module for
-// the browser bundle); `trimToClause(v, max)` is its boundary-aware twin for PROSE fields — it backs
-// off to the last sentence terminator, then the last clause boundary, then the last whole word, so a
-// capped field never ends mid-thought (it lives here rather than in `storyBible.js`, which re-exports
-// it, so the pure story-model leaves the browser bundle shares can cap prose without pulling `crypto`
-// / `fileUtils`); `kebabCase(text)` is the canonical ASCII slug transform (PLAN.md `[slug]` ids and
-// `planner:<model>` labels), and `truncateOnBoundary(slug, max)` is its bounder — back off to the last
-// `-` at or before `max` so a slug a human reads (a PLAN.md id, the app segment of a CoS worktree
-// directory) is never cut mid-word, which `trimTo` would reintroduce; `clampToCharLimit(text, max)` is
-// `trimTo`'s reader-facing twin — it cuts on a sentence end (when one sits 60%+ into the allowance) or
-// a word boundary rather than mid-word and returns `{ text, truncated }` so the caller can say the
-// text was cut, which is what bounds an AI-enhanced render prompt to a backend's hard cap (reactor.inc
-// fast-h3 rejects an over-length prompt outright). `firstLine(text)` is the first non-blank line,
-// trimmed — the CoS task headline `addTask` dedupes on, declared here rather than in the task store so
-// a closure-sensitive caller can reach it (`cosTaskStore.js` re-exports it).
-//
 // `countWords` was previously re-implemented three times with subtly different
 // regexes (`server/services/writersRoom/local.js`, `server/lib/issueLength.js`,
 // and the client's `client/src/utils/formatters.js`). They all converge on the
