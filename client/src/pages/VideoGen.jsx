@@ -1707,6 +1707,24 @@ export default function VideoGen() {
             </div>
           )}
 
+          {isFal && falModel?.referenceImages && (
+            <div className="space-y-1">
+              <ReferenceImagesPanel
+                maxImages={falModel.referenceImages.max}
+                withInputImage={mode === 'image' && !falModel.image}
+                files={referenceImageFiles}
+                onAdd={addReferenceImage}
+                onBrowse={(index) => setGalleryPicker({ kind: 'reference', index })}
+                onRemove={removeReferenceImage}
+              />
+              <p className="text-xs text-port-text-muted">
+                Optional. {falModel.label} reads these in order
+                {falModel.referenceImages.promptName ? ` as ${falModel.referenceImages.promptName.replace(/1$/, '1, 2, …')}` : ''}.
+                {mode === 'image' && !falModel.image ? ' Your start frame is the first image.' : ''}
+              </p>
+            </div>
+          )}
+
           {isHiggsfield && mode === 'text' && higgsfieldModel.maxReferenceImages > 0 && (
             <div className="space-y-1">
               <ReferenceImagesPanel
