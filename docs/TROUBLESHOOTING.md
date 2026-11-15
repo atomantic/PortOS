@@ -797,102 +797,41 @@ platform-dependent question, not a production bug. Three recurring shapes:
 
 ## Known Issues
 
-### GPU watchdog kernel panic during LoRA training
+### GPU watchdog kernel panic during local MLX video renders
 
-**Symptom**: The whole machine hard-reboots while an mflux LoRA training run is
-active. After reboot you may see downstream PortOS errors — training failed with
-`SIGINT`/`KeyboardInterrupt`, `Tombstone sweep failed: timeout … connect`, CoS
-`xhr poll error`. The crash report under `/Library/Logs/DiagnosticReports/` reads:
+**Symptom**: The whole machine hard-reboots while a local MLX video render (FastVideo,
+Wan 2.2, MiniMax H3, LTX) is active. The crash report under
+`/Library/Logs/DiagnosticReports/` reads:
 
 ```
 panic(cpu N caller 0x…): watchdog timeout: no checkins from watchdogd in 90 seconds
 ```
 
-**Cause**: A system-level hang (not a PortOS or training-script bug) — the machine
-stopped making forward progress long enough that the hardware watchdog
-force-rebooted it. On new Apple Silicon (M5 / `Mac17,7`) under sustained Metal/GPU
-load this is most likely a GPU/Metal driver hang; thermal/power or severe swap
-thrash are secondary possibilities. First observed 2026-06-13 (twice in one day).
-
-**Upstream root cause (mlx #3267 / #3186)**: This is an Apple Metal/IOGPU driver
-behavior, confirmed across M2/M3/M4/M5 hardware, not a PortOS bug. Two related
-forms: the GPU watchdog kills a training process whose command buffers compete
-with **active-display WindowServer compositing**
+**Cause**: An Apple Metal/IOGPU driver behavior, not a PortOS bug
 ([mlx #3267](https://github.com/ml-explore/mlx/issues/3267),
-`kIOGPUCommandBufferCallbackErrorImpactingInteractivity`), escalating on M5-class
-silicon to the full `watchdogd` kernel panic above; and a separate IOGPU
-memory-management panic ([mlx #3186](https://github.com/ml-explore/mlx/issues/3186),
-filed with Apple as FB22091885). The MLX maintainer's confirmed workaround is the
-`AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` env var — **PortOS now sets this automatically**
-for the trainer and FastVideo MLX runner (`scripts/train_mflux_lora.py`,
-`scripts/generate_fastvideo.py`). Note per #3267 the kill is at the
-IOGPU layer *above* the process boundary, so process-teardown segmentation alone
-does not prevent it; the env var attacks the actual cause.
-
-**Strongest user-side mitigation — keep the display off the GPU.** The watchdog
-fires hardest when training competes with the active display. Run training with the
-display asleep / lid closed under `caffeinate -s &`, or drive the box headless over
-SSH from another machine. With no WindowServer compositing the watchdog has nothing
-to protect and largely stops firing.
-
-> **Validated on M5 Max (2026-06-27) — keeping the display off is what works.**
-> A clean A/B on the *same* 9B-bf16 segmentation-OFF config, both with
-> `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` set:
-> - **Display active** → hard-rebooted within minutes (at step 0). Telemetry: Nominal
->   thermal pressure (a GPU **driver hang**, not heat); paniclog top-CPU thread was
->   `WindowServer` (active-display contention).
-> - **Display asleep** (`pmset displaysleepnow`, lid open) → **reached step 302**,
->   clearing the documented 150–300 panic window with no panic.
->
-> So for a **9B / heavy bf16 run, the env var is necessary but not sufficient — you
-> must also keep the display off**: drive the box over SSH (cleanest), or run
-> `pmset displaysleepnow` right after launching. `caffeinate -s` alone does *not*
-> turn the display off; it only prevents system sleep, and **closing the lid sleeps
-> the whole machine** (suspending the run) unless an external display is attached.
-> Also prefer **segmentation ON** (the shipped default), which completed a full 4B
-> run cleanly on this box.
+[mlx #3186](https://github.com/ml-explore/mlx/issues/3186)). The GPU watchdog kills a
+process whose command buffers compete with **active-display WindowServer compositing**
+(`kIOGPUCommandBufferCallbackErrorImpactingInteractivity`), escalating on M5-class
+silicon to the full `watchdogd` kernel panic. The kill happens above the process
+boundary, so process-level mitigations alone do not prevent it.
 
 **Mitigations already in place**:
-- `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` is set automatically by the trainer (the
-  maintainer-confirmed workaround for mlx #3267); the run log shows
-  `STATUS:watchdog mitigation · AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` so a paniclog
-  records whether it was active. Set it to `0` in the environment to disable.
-- Video Gen sleeps the display automatically for local MLX runtimes (FastVideo,
-  Wan 2.2, MiniMax H3, and LTX) while keeping the system awake. This is on by
-  default; disable **Sleep display during local MLX video renders** in Settings
-  > Image Gen > Defaults only when another headless workflow manages it.
-- The mlx/mlx-metal backend is pinned in `scripts/setup-image-video.sh` (the
-  original panics were on 0.30.6 during LoRA training, bisected to a 0.31.2 trio;
-  the shared runtime moved to mflux 0.24 · mlx 0.32.4 for Pillow 13 in #15479,
-  after training was retired). On Apple Silicon the trio installs from the
-  hash-pinned `scripts/requirements-mflux-mlx.lock.txt`.
-- Training checkpoints at least every `ceil(totalSteps/4)` steps
-  (`MFLUX_MIN_CHECKPOINTS`), so a crash loses at most ~¼ of a run. Resume from the
-  newest `checkpoints/*.zip` via the UI's resume action or `--resume-checkpoint`.
-- Each run captures GPU/thermal/power telemetry to `<run>/powermetrics.log` (a
-  resume rolls to a timestamped `powermetrics.<ts>.log` so the pre-crash log is
-  preserved) when passwordless `powermetrics` is configured (see the incident
-  record for the sudoers rule).
-- Memory pressure is bounded before each run (`memoryPrep.js`): resident Ollama /
-  LM Studio models on loopback-local backends are unloaded to free unified memory
-  (a remote LAN backend is left untouched), the encoded-dataset cache
-  always spills to disk (`low_ram`), the quantize tier is sized to *available*
-  memory rather than total RAM, and a run refuses to start when under ~24 GB is
-  free — so an oversubscribed run can't swap-thrash the box into a reboot. If a
-  run won't start with a "not enough free memory" error, stop other model servers
-  or close apps and retry.
-- The frozen base is **never auto-trained as unquantized bf16** (issue #1321):
-  the top tier is now 8-bit QLoRA even on a ≥96 GB box. Auto-bf16-9B was both
-  pathologically slow and the exact config that panicked this machine three
-  times, so it's opt-in only — a run that genuinely wants it sets **Base quant →
-  16** in the training panel (or `LORA_TRAIN_MAX_QUANT_BITS=8`/`=4` still forces
-  an even lighter ceiling install-wide).
+- `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` is set automatically by the FastVideo MLX runner
+  (`scripts/generate_fastvideo.py`); the run log shows
+  `STATUS:watchdog mitigation · AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1`. Set it to `0` in the
+  environment to disable.
+- Video Gen sleeps the display automatically for local MLX runtimes while keeping the
+  system awake. This is on by default; disable **Sleep display during local MLX video
+  renders** in Settings > Image Gen > Defaults only when another headless workflow
+  manages it.
 
-**What to do / how to investigate**: see the full incident record and checklist in
+**What to do**: keep the display off the GPU. If the automatic display sleep is
+disabled, run `pmset displaysleepnow` after launching, or drive the box headless over
+SSH. `caffeinate -s` alone does not turn the display off, and closing the lid sleeps
+the whole machine (suspending the render) unless an external display is attached.
+Update macOS and the MLX runtime if panics persist. The historical incident record
+(from the retired LoRA trainer) is in
 [`docs/research/2026-06-13-mflux-training-watchdog-panic.md`](research/2026-06-13-mflux-training-watchdog-panic.md).
-Short version: read the run's newest `powermetrics*.log` (climbing GPU temp → cooling/power;
-log just stops at normal temps → driver hang), reduce batch size/resolution/rank as
-a test, and update macOS + `mflux`/`mlx`.
 
 ## Getting Help
 
