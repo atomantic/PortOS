@@ -154,3 +154,8 @@ PROMPT_VERSIONS['claim-issue-gitlab'] = 51; // v51: same failed-CI recovery cont
 
 PROMPT_VERSIONS['claim-issue'] = 60; // v60: Phase 1 skips issues younger than the configured new-issue grace ({issueMinAgeRule}, default 5 minutes) so a scheduled run never snipes an issue its filing agent is about to claim; Phase 3b checks linked issues and PRs and screens a non-collaborator's linked diff through the abuse guard + security-model check before building on it.
 PROMPT_VERSIONS['claim-issue-gitlab'] = 52; // v52: same new-issue grace and linked issue/MR check.
+
+// Shared issue-filing contract: `effort:` means per-step reasoning depth, `medium` is the normal level, and breadth is not effort.
+PROMPT_VERSIONS['claim-issue'] = 61; // v61: shared effort-label calibration.
+PROMPT_VERSIONS['claim-issue-gitlab'] = 53; // v53: shared effort-label calibration.
+PROMPT_VERSIONS['issue-reconcile'] = 11; // v11: shared effort-label calibration.

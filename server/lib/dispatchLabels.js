@@ -728,13 +728,23 @@ export const HARDWARE_REQUIREMENT_GUIDANCE = [
 ].join('\n');
 const HELP_WANTED_GUIDANCE = `Apply \`help wanted\` (color 008672) ${HELP_WANTED_CRITERIA}`;
 
+/**
+ * What the `effort:` axis means, shared by the forge and Jira contracts (`p` is
+ * the label prefix, `levels` the axis spelled for that tracker). Effort sets how much a model THINKS per step, and
+ * current models think more at each level than the ones these labels were
+ * first written for (Opus 5.5 at `medium` matches Opus 5 at `high`), so a
+ * label inflated by breadth buys cost and latency, not care. Breadth is
+ * diligence: an enumerated checklist in the body, not a higher level.
+ */
+const effortAxisGuidance = (p, levels) => `\`${levels}\` — how hard each step is to reason through, independent of model and of how much work there is. \`${p}medium\` is the normal level. Use \`${p}low\` when every step is mechanical, \`${p}high\` when a step hinges on a hard argument (concurrency, cross-version compatibility, an invariant), and \`${p}xhigh\`/\`${p}max\` only when that reasoning is the whole difficulty; higher levels multiply cost and latency. Breadth is not effort: a mechanical sweep across 40 call sites is light capability at \`${p}low\`, with the call sites enumerated in the body.`;
+
 /** Canonical filing contract for every autonomous issue producer. */
 export const MANDATORY_DISPATCH_HINT_GUIDANCE = [
   'If you file issues, follow this contract even when older task text or examples describe dispatch labels as optional. This does not authorize issue creation on its own.',
   'Dispatch labels are REQUIRED on every issue you file: exactly one `model:` and exactly one `effort:`. They are two independent axes describing HOW to run the work, not how big it is — pick each from the code you just read. If evidence is insufficient, investigate before filing rather than guessing or omitting an axis.',
   '- `model:light|medium|heavy|ultra` — capability: light is mechanical (rename, config, a well-specified single-file edit); medium is routine multi-file work; heavy is genuinely hard reasoning (concurrency, schema/compatibility design, redesign); ultra is exceptional frontier reasoning, explicitly requested.',
-  '- `effort:low|medium|high|xhigh|max` — reasoning budget per step, independent of model. `model:light` + `effort:max` is a mechanical sweep across many call sites; `model:heavy` + `effort:low` is a two-line change that hinges on one idea.',
-  'Never derive one axis from the other, and do NOT stamp `medium` on both by reflex — where that genuinely is the answer, justify it in one line of the body. Do NOT put `[model:…]` / `[effort:…]` / `[category]` / `[SEVERITY]` in the title; those belong in labels.',
+  `- ${effortAxisGuidance('effort:', `effort:${DISPATCH_EFFORT_LEVELS.join('|')}`)}`,
+  'Never derive one axis from the other, and choose `model:` from the evidence rather than defaulting to `medium`. Do NOT put `[model:…]` / `[effort:…]` / `[category]` / `[SEVERITY]` in the title; those belong in labels.',
   'On GitLab, write every prefixed label with a DOUBLE colon (`model::heavy`, `effort::max`, `planner::opus-5`): GitLab renders `key::value` as a native scoped label, so only one value per key can sit on an issue at a time. GitHub has no equivalent and keeps the single colon (`model:heavy`). Use the separator the repo\'s own tracker uses, and match an existing `area` label\'s spelling rather than re-separating it — a mismatched separator is a different, unfilterable label.',
   // Whole commands, not a `name color` list: an agent copying `model:light D4C5F9`
   // out of a list minted that string as a label name (#9056).
@@ -758,8 +768,8 @@ export const DISPATCH_HINT_GUIDANCE = MANDATORY_DISPATCH_HINT_GUIDANCE;
 export const JIRA_DISPATCH_HINT_GUIDANCE = [
   'Dispatch hints are optional, independent Jira labels recommending HOW to run the work — not a size estimate:',
   '- `model-light|model-medium|model-heavy|model-ultra` — capability (mechanical, routine, complex, exceptional frontier reasoning).',
-  '- `effort-low|effort-medium|effort-high|effort-xhigh|effort-max` — reasoning budget per step, independent of model.',
-  'Choose each axis only when the work you just inspected justifies it. Omit an axis rather than guessing. Do NOT stamp `medium` on both by reflex, and do NOT put `[model-…]` / `[effort-…]` / `[category]` / `[SEVERITY]` in the summary — those belong in labels.',
+  `- ${effortAxisGuidance('effort-', DISPATCH_EFFORT_LEVELS.map((level) => `effort-${level}`).join('|'))}`,
+  'Choose each axis only when the work you just inspected justifies it. Omit an axis rather than guessing. Choose `model-*` from the evidence rather than defaulting to `model-medium`, and do NOT put `[model-…]` / `[effort-…]` / `[category]` / `[SEVERITY]` in the summary — those belong in labels.',
   'Also apply contributor labels when the work actually fits them — independently of the dispatch axes: `good-first-issue` (self-contained, a new contributor can ship it) and `help-wanted` under the criteria below. A `model-light` 40-file sweep is NOT a good-first-issue.',
   `Apply \`help-wanted\` ${HELP_WANTED_CRITERIA}`,
   HARDWARE_REQUIREMENT_GUIDANCE,
