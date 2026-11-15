@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -51,6 +51,7 @@ import { evaluateSuccessCriteria, finalizeAgent, retireDeadAgent } from './agent
 import { prepareAgentSpawn } from './agentSpawnPreparation.js';
 import { settleRetirementReviewRun } from './branchReconcileCompletion.js';
 import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
+import { repositoryCleanupRecoveryMetadata } from './cleanupOnlyCompletion.js';
 
 vi.mock('./repoCleanupObservation.js', async original => {
   const actual = await original();
@@ -65,6 +66,10 @@ let release;
 let target;
 let startedAt;
 let originalHead;
+const OBSERVATION = 'b'.repeat(64);
+// The exact metadata the divergence producer persists (agentRepoStateVerification).
+const producerMetadata = (target = null) => repositoryCleanupRecoveryMetadata({ parentAgentId: 'example-parent',
+  parentTaskId: 'sys-original', attempt: 1, observation: OBSERVATION, target });
 
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -86,8 +91,7 @@ beforeEach(async () => {
   startedAt = Date.now();
   store.task = { id: 'sys-receipt-example', taskType: 'internal', status: 'in_progress', description: 'Finish exact cleanup', priority: 'HIGH',
     metadata: { app: store.app.id, isRecovery: true, useWorktree: false, totalSpawnCount: 2, failureCount: 1,
-      recoveryOrigin: { subsystem: 'repository-cleanup', parentAgentId: 'example-parent', parentTaskId: 'sys-original', observation: 'b'.repeat(64) },
-      retirementReview: target } };
+      ...producerMetadata(target) } };
   store.parent = { id: 'example-parent', taskId: 'sys-original', status: 'completed', startedAt: new Date(startedAt - 2000).toISOString(),
     completedAt: new Date(startedAt - 1).toISOString(), metadata: {
     // No retirement backlink or completed-checkout receipt.
@@ -196,5 +200,71 @@ describe('cleanup-only recovery public completion flow', () => {
     await retire();
     store.task.metadata.recoveryMergeTarget = { branch: release.branch, url: 'https://github.com/example/repo/pull/1' };
     expect(await evaluateSuccessCriteria({ task: store.task, workspacePath: repo, startedAt: Date.now() + 1000, success: true })).toBe(false);
+  });
+});
+
+// Recoveries filed while the producer omitted retirementReview (#16059).
+describe('targetless cleanup recovery resolved from parent evidence', () => {
+  const capture = (overrides = {}) => ({ version: 1, agentId: 'example-parent', startedAt: store.parent.startedAt,
+    capturedAt: new Date(startedAt - 1000).toISOString(), repoPath: repo, ...release, ...overrides });
+  const backlink = (overrides = {}) => ({ observation: OBSERVATION, observations: [OBSERVATION], attempt: 1,
+    phase: 'dispatched', taskId: store.task.id, ...overrides });
+  beforeEach(() => {
+    store.task.metadata = { app: store.app.id, isRecovery: true, useWorktree: false, totalSpawnCount: 2, failureCount: 1, ...producerMetadata() };
+    store.agent.metadata = { workspacePath: repo, ...store.task.metadata };
+    store.parent.metadata = { repoCleanupRecoveries: { [release.branch]: backlink() },
+      checkoutCapture: { status: 'captured' }, completedCheckouts: [capture()] };
+  });
+
+  it('completes API-only cleanup without a commit and records the exact target, not a null/null hold', async () => {
+    await retire();
+    await finish('completed');
+    expect(store.agent.result).toMatchObject({ success: true, validationPassed: true });
+    expect(await settleRetirementReviewRun(store.agent)).toEqual({ verified: true });
+    expect(store.agent.metadata.cleanupOutcome).toMatchObject({ status: 'verified', reason: 'cleanup-local-target-absent',
+      branch: release.branch, path: release.path });
+    expect((await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim()).toBe(originalHead);
+  });
+
+  it('matches the captured repository through a symlinked managed-app path', async () => {
+    await retire();
+    const alias = join(scratch, 'repo-alias');
+    await symlink(repo, alias);
+    store.app = { ...store.app, repoPath: alias };
+    await finish('completed');
+    expect(store.agent.result).toMatchObject({ success: true, validationPassed: true });
+  });
+
+  it('settles a queued retry before another provider dispatch, keeping its failed run and budget', async () => {
+    await retire();
+    const failedRun = { success: false, validationPassed: false, taskOutcome: { status: 'incomplete', reason: 'Delivery checks did not pass.' } };
+    Object.assign(store.agent, { status: 'completed', result: structuredClone(failedRun) });
+    store.task.status = 'pending';
+    expect(await prepareAgentSpawn(store.task)).toBeNull();
+    expect(store.task.status).toBe('completed');
+    expect(store.task.metadata).toMatchObject({ totalSpawnCount: 2, failureCount: 1,
+      retirementCompletion: { status: 'verified', target: { appId: store.app.id, release } } });
+    expect(store.agent.result).toEqual(failedRun);
+  });
+
+  it.each([
+    ['missing backlink', 'cleanup-backlink-missing', () => { store.parent.metadata.repoCleanupRecoveries = {}; }],
+    ['backlink to another task', 'cleanup-backlink-missing', () => { store.parent.metadata.repoCleanupRecoveries[release.branch].taskId = 'sys-other'; }],
+    ['ambiguous backlink', 'cleanup-backlink-ambiguous', () => { store.parent.metadata.repoCleanupRecoveries['fix/another'] = backlink(); }],
+    ['changed observation', 'cleanup-observation-mismatch', () => { store.parent.metadata.repoCleanupRecoveries[release.branch].observation = 'c'.repeat(64); }],
+    ['changed attempt', 'cleanup-observation-mismatch', () => { store.parent.metadata.repoCleanupRecoveries[release.branch].attempt = 2; }],
+    ['missing capture', 'cleanup-capture-missing', () => { store.parent.metadata.completedCheckouts = []; }],
+    ['foreign capture', 'cleanup-capture-missing', () => { store.parent.metadata.completedCheckouts = [capture({ agentId: 'example-other' })]; }],
+    ['ambiguous capture', 'cleanup-capture-ambiguous', () => { store.parent.metadata.completedCheckouts.push(capture({ path: join(scratch, 'elsewhere') })); }],
+    ['missing app scope', 'cleanup-app-scope-unavailable', () => { delete store.task.metadata.app; }],
+    ['mismatched app repository', 'cleanup-app-scope-mismatch', () => { store.app = { ...store.app, repoPath: scratch }; }],
+    ['recreated checkout', 'cleanup-checkout-present', () => mkdir(release.path)],
+  ])('leaves the %s case unresolved with a specific reason', async (_name, reason, fault) => {
+    await retire();
+    await fault();
+    await finish('completed');
+    expect(store.agent.result).toMatchObject({ success: false, validationPassed: false, taskOutcome: { status: 'incomplete' } });
+    expect(await settleRetirementReviewRun(store.agent)).toEqual({ verified: false });
+    expect(store.agent.metadata.cleanupOutcome).toMatchObject({ status: 'blocked', reason });
   });
 });
