@@ -1476,7 +1476,9 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
   // ('merged-pr-not-matching'); the forge still reports it MERGED, so the
   // captured head's ancestry in the fetched default branch proves delivery.
   const noPrToProve = !proofUrl && delivery?.readable === true && !delivery.prState;
-  const mergedForkPr = !!proofUrl && delivery?.prState === 'MERGED' && forgeRefusal === 'merged-pr-not-matching';
+  // Only the task's own recorded PR identity qualifies: a PR inferred from a
+  // branch-name probe could be unrelated, so ancestry alone must not settle it.
+  const mergedForkPr = !!originalPrUrl && delivery?.prState === 'MERGED' && forgeRefusal === 'merged-pr-not-matching';
   const unpublishedContained = !integrated && capturedHead && (noPrToProve || mergedForkPr)
     && observed.remoteBranchPresent === false && await containedInDefaultBranch(sourceWorkspace, capturedHead);
   if (!staysOpen && integrated && observed.remoteBranchPresent !== false) {
