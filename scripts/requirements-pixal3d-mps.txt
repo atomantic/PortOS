@@ -71,7 +71,7 @@ python-dateutil==4.0.0
 python-multipart==0.0.33
 pytz==2026.6
 pyyaml==6.0.3
-regex==2026.9.29
+regex==2026.11.7
 requests==2.34.2
 rich==15.0.0
 safehttpx==0.1.7

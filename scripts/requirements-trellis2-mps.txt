@@ -36,7 +36,7 @@ typing-extensions==4.16.0
 click==8.5.1
 markupsafe==3.0.4
 pygments==2.21.0
-regex==2026.9.29
+regex==2026.11.7
 
 # Coordinated model transport and tokenizer pins.
 tokenizers==0.23.3

@@ -2975,3 +2975,30 @@ Remaining under #16047: Transformers in the other requested profiles, then
 the independent Typer/Regex slices for Pixal/TRELLIS/H3 and Protobuf for H3.
 LTX CUDA's Transformers 5.14.1 and all documented retained exceptions remain
 unchanged.
+
+## Regex slice for H3 MLX, Pixal3D and TRELLIS.2 Metal (2026-11-15, #16047)
+
+Fourth independent slice of #16047: **regex 2026.9.29 → 2026.11.7** in the
+MiniMax H3 MLX, Pixal3D and TRELLIS.2 Metal source recipes and locks. Every other
+package block, marker and hash in the three locks is unchanged; Transformers,
+Typer, Protobuf, interpreters, source revisions and optional extras are untouched.
+
+Regex 2026.11.7 (wheels uploaded 2026-11-06, `Requires-Python >=3.11`, no runtime
+dependencies) still satisfies the 3.11 (H3) and 3.13 (Pixal/TRELLIS) interpreters.
+Regex is a leaf consumed through Transformers/tokenizer pattern compilation; the
+release only drops the retired CPython 3.10 wheels. Its block is regenerated from
+the registry's complete wheel set: **113 non-yanked wheels**, every one verified
+pre-cutoff (**2026-11-07T00:00:00Z**) from fresh PyPI version JSON, replacing the
+previous 130 hashes (which included the 3.10 wheels). No hash is composed by hand,
+and no relay, index override or source distribution ships. Fresh OSV (including
+`MAL-` records) returned no records for the new identity.
+
+Evidence is limited to registry metadata, hash-verified installation of the new
+lock block into an isolated Python 3.13 environment, and a Unicode
+property-class pattern probe; the H3 pins test (18 tests) passes. No Transformers
+tokenization, model inference or native install is claimed.
+
+Remaining under #16047: Transformers 5.22.2 in the other requested profiles,
+Typer 0.28.0 for Pixal/TRELLIS/H3, and Protobuf 7.36.2 for H3 MLX, each as its
+own slice. LTX CUDA's Transformers 5.14.1 and documented retained exceptions are
+unchanged.
