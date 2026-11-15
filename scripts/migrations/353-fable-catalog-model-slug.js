@@ -11,8 +11,8 @@
  * The observation *id* stays frozen — it is the merge key `importModelComparison`
  * uses, and that merge rejects an id whose identity fields changed (409). So an
  * install still holding the old spelling would fail its next sync against the
- * corrected identity table in `server/services/artificialAnalysis.js`; this
- * rewrites the stored row to match before that can happen.
+ * corrected identity table in the Artificial Analysis sync that wrote the catalog
+ * (since removed, #16099); this rewrites the stored row to match before that can happen.
  */
 import { join } from 'node:path';
 import { atomicWrite, readJSONFileStrict } from '../../server/lib/fileUtils.js';

@@ -880,7 +880,7 @@ mounted under the HTTP asset routes. Filesystem backups include it: protect back
 access as carefully as the install. This is permission-protected storage, not
 application-level encryption.
 
-Settings > Credentials manages Artificial Analysis, Hugging Face, CivitAI, fal.ai,
+Settings > Credentials manages Hugging Face, CivitAI, fal.ai,
 and reactor.inc keys through a write-only endpoint. Existing integration settings
 screens use the same store. Server-side settings readers retain their legacy shape;
 public settings and inventory responses never contain these values. Stored keys
@@ -891,8 +891,7 @@ Migration 357 copies existing settings keys before removing their old fields and
 preserves keys already in the private store on retry. There is no seed file. The
 runtime also reads legacy settings until their next save, so independently updated
 installs do not need to re-enter keys. Environment credentials remain supported and
-are not copied automatically. Artificial Analysis saves a supplied key after a
-successful API fetch and subsequent syncs can omit it. Downgrades to versions before
+are not copied automatically. Downgrades to versions before
 this store require re-entering keys through the older settings UI or environment.
 Other credentials (provider connections, account-specific logins, and auth) retain
 their existing dedicated stores and management flows.
