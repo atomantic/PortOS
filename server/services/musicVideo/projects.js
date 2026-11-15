@@ -110,8 +110,10 @@ async function withCatalogDescriptions(project) {
 
 /** Null when missing; linked descriptions come from the catalog when usable. */
 export async function getProject(id, options = {}) {
-  const backend = await selectBackend();
-  return presentMusicVideoDependencies(await withCatalogDescriptions(await backend.getProject(id, options)));
+  const [backend, { putScenesInTimeOrder }] = await Promise.all([selectBackend(), import('./projectsLogic.js')]);
+  // Read in time order like every write stores it (#16117), so a board saved out of
+  // order reads right before its first write repairs it; updatedAt is untouched.
+  return presentMusicVideoDependencies(putScenesInTimeOrder(await withCatalogDescriptions(await backend.getProject(id, options))));
 }
 
 /** Live project ids (or all when includeDeleted) — used by tombstone GC sweeps. */
@@ -488,10 +490,10 @@ export async function cutProjectScenesOnLyrics(id, options) {
   });
 }
 
-/** Read the raw record so preview and the serialized apply hash identical inputs. */
+/** Read the stored record, in time order as the apply's write sees it, so preview and the serialized apply hash identical inputs. */
 export async function previewProjectPacingRecut(id) {
-  const { previewPacingRecut } = await import('./pacingRecut.js');
-  return previewPacingRecut(await (await selectBackend()).getProject(id));
+  const [{ previewPacingRecut }, { putScenesInTimeOrder }] = await Promise.all([import('./pacingRecut.js'), import('./projectsLogic.js')]);
+  return previewPacingRecut(putScenesInTimeOrder(await (await selectBackend()).getProject(id)));
 }
 
 export async function recutProjectToPacing(id, revision) {
@@ -535,6 +537,9 @@ export async function mergeProjectPreviousScene(id, sceneId, options = {}) {
   return mergeIntoBoard(id, before, outcome);
 }
 
+// A shot looked up by id after an edit: a retime re-sorts the board, so its old index may name another shot.
+const sceneById = (project, sceneId) => (project.scenes || []).find((scene) => scene.sceneId === sceneId) || null;
+
 /**
  * Move the cut before a shot: the shot starts at `startSec` and the shot
  * before it ends there, so the two stay joined. Returns `{ project, scene, previous }`.
@@ -556,8 +561,10 @@ export async function moveProjectSceneStart(id, sceneId, { startSec }) {
     }
     let project = applySceneUpdate(current, sceneId, { startSec }).project;
     if (previous) project = applySceneUpdate(project, previous.sceneId, { endSec: startSec }).project;
-    assertBoardHoldsShotLengths(current, [project.scenes[index], previous ? project.scenes[index - 1] : null]);
-    return { project, scene: project.scenes[index], previous: previous ? project.scenes[index - 1] : null };
+    const moved = sceneById(project, sceneId);
+    const prior = previous ? sceneById(project, previous.sceneId) : null;
+    assertBoardHoldsShotLengths(current, [moved, prior]);
+    return { project, scene: moved, previous: prior };
   });
   return moveCutOnBoard(id, outcome, [outcome.previous, outcome.scene]);
 }
@@ -592,8 +599,10 @@ export async function moveProjectSceneEnd(id, sceneId, { endSec }) {
     if (!next) assertBoardHoldsLastEnd(current, endSec);
     let project = applySceneUpdate(current, sceneId, { endSec }).project;
     if (next) project = applySceneUpdate(project, next.sceneId, { startSec: endSec }).project;
-    assertBoardHoldsShotLengths(current, [project.scenes[index], next ? project.scenes[index + 1] : null]);
-    return { project, scene: project.scenes[index], next: next ? project.scenes[index + 1] : null };
+    const moved = sceneById(project, sceneId);
+    const nextShot = next ? sceneById(project, next.sceneId) : null;
+    assertBoardHoldsShotLengths(current, [moved, nextShot]);
+    return { project, scene: moved, next: nextShot };
   });
   return moveCutOnBoard(id, outcome, [outcome.scene, outcome.next]);
 }
@@ -785,10 +794,13 @@ async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate =
   let descriptions = null;
   const write = mutate || (await selectBackend()).mutateProjectRecord;
   const sceneOnly = options.sceneOnly === true;
-  const outcome = await write(id, async (stored, context = {}) => {
+  const { putScenesInTimeOrder } = await import('./projectsLogic.js');
+  const outcome = await write(id, async (saved, context = {}) => {
+    // A board stored out of time order (#16117) is repaired before the transform reads neighbours by index.
+    const stored = putScenesInTimeOrder(saved);
     if (sceneOnly) {
       const outcome = await transform(stored, { ...context, storedProject: stored });
-      const cleaned = renumberShotLabels(outcome.project);
+      const cleaned = renumberShotLabels(putScenesInTimeOrder(outcome.project));
       if (cleaned !== outcome.project) Object.assign(outcome, withCleanedScenes(outcome, cleaned));
       await assertNewMediaSelections(stored, outcome.project);
       dropped = { project: stored, assets: droppedTakeAssets(stored, outcome.project) };
@@ -807,7 +819,7 @@ async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate =
     if (outcome.project && !outcome.skipPersist) {
       const picked = current?.castAndSets?.catalogCheckin
         ? (await import('./catalogCheckin.js')).dropStaleCatalogPicks(current, outcome.project) : outcome.project;
-      const cleaned = renumberShotLabels(picked);
+      const cleaned = renumberShotLabels(putScenesInTimeOrder(picked));
       if (cleaned !== outcome.project) Object.assign(outcome, withCleanedScenes(outcome, cleaned));
     }
     if (outcome.project?.castAndSets?.catalogCheckin) {

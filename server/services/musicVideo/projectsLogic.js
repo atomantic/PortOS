@@ -51,8 +51,8 @@ import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
 import { normalizeCreditsOutro } from '../../lib/musicVideoCreditsOutro.js';
 import { MUSIC_VIDEO_EDGED_WIPES, sceneWipe, varyWipes } from '../../lib/musicVideoWipes.js';
-import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
-import { anchorShotsToSungLyrics, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
+import { carryTreatmentThroughSceneOrder, remapTreatmentForClone, scenesFingerprint } from './treatment.js';
+import { anchorShotsToSungLyrics, carryReviewThroughSceneOrder, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
 import { cuesSungWithin, lyricAnchorOnset, lyricWordCuts, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 import { normalizeShotSheet } from '../../lib/musicVideoShotSheet.js';
@@ -662,11 +662,38 @@ function buildScene(input, { order }) {
   };
 }
 
-/** Where a new scene goes: before the first timed scene that starts after it; untimed scenes go last. */
-function insertByTime(scenes, scene) {
-  const at = scene.startSec;
-  const idx = typeof at === 'number' ? scenes.findIndex((s) => typeof s.startSec === 'number' && s.startSec > at) : -1;
-  return idx < 0 ? [...scenes, scene] : [...scenes.slice(0, idx), scene, ...scenes.slice(idx)];
+// Where a shot sits on the board: the cold open first, then song shots by start, untimed song shots last.
+const timeRank = (scene) => (isPreMusicShot(scene) ? -Infinity : Number.isFinite(scene?.startSec) ? scene.startSec : Infinity);
+
+/**
+ * The board in time order (#16117), the order every reader that walks
+ * `project.scenes` by index assumes: cold-open shots first, then song shots by
+ * `startSec`, then untimed song shots. The sort is stable, so shots that tie
+ * (two cold-open shots, two untimed ones, or two starting together) keep their
+ * stored order. `order` is rewritten to match the index; nothing else on a
+ * scene changes. Returns the same array when it is already in order.
+ */
+export function scenesInTimeOrder(scenes) {
+  const list = Array.isArray(scenes) ? scenes : [];
+  // Two shots of the same infinite rank subtract to NaN, which falls through to their stored order.
+  const sorted = list.map((scene, index) => ({ scene, index }))
+    .sort((a, b) => (timeRank(a.scene) - timeRank(b.scene)) || (a.index - b.index))
+    .map(({ scene }, i) => (scene.order === i ? scene : { ...scene, order: i }));
+  return sorted.every((scene, i) => scene === list[i]) ? scenes : sorted;
+}
+
+/**
+ * The project with its board in time order and every review binding that held
+ * before still holding: the repair moves no shot in the cut, so it must not
+ * stale an approval, the rendered proof or the treatment. Pure and idempotent:
+ * `updatedAt` is left alone and the same record comes back when nothing moves,
+ * so the store runs it on every read and write.
+ */
+export function putScenesInTimeOrder(project) {
+  if (!project || !Array.isArray(project.scenes)) return project;
+  const scenes = scenesInTimeOrder(project.scenes);
+  if (scenes === project.scenes) return project;
+  return carryReviewThroughSceneOrder(project, carryTreatmentThroughSceneOrder(project, { ...project, scenes }));
 }
 
 /**
@@ -684,21 +711,15 @@ export function addScene(project, sceneInput) {
  * Add several scenes to the board in one pass (the autonomous planner,
  * #1855) — a single `touch`/persist instead of N sequential addScene calls, so
  * a 10-section plan is one write (and one peer-sync emit) instead of ten.
- * A timed scene goes in at its time, so the board stays in song order; an
- * untimed one is appended. Returns `{ project, scenes }` (the newly-created
- * scenes, in input order).
+ * The board stays in time order (`scenesInTimeOrder`): a timed scene goes in
+ * at its time, after any shot that starts with it, and an untimed one goes
+ * last. Returns `{ project, scenes }` (the newly-created scenes, in input order).
  */
 export function addScenes(project, sceneInputs) {
   const list = Array.isArray(sceneInputs) ? sceneInputs : [];
-  let scenes = project.scenes || [];
-  const ids = [];
-  for (const input of list) {
-    const data = parseSceneOrThrow(musicVideoSceneCreateSchema, input);
-    const scene = buildScene(data, { order: 0 });
-    ids.push(scene.sceneId);
-    scenes = insertByTime(scenes, scene);
-  }
-  scenes = scenes.map((s, i) => (s.order === i ? s : { ...s, order: i }));
+  const built = list.map((input) => buildScene(parseSceneOrThrow(musicVideoSceneCreateSchema, input), { order: 0 }));
+  const ids = built.map((scene) => scene.sceneId);
+  const scenes = scenesInTimeOrder([...(project.scenes || []), ...built]);
   const next = touch(project, { scenes });
   return { project: next, scenes: ids.map((id) => scenes.find((s) => s.sceneId === id)) };
 }
@@ -926,8 +947,10 @@ export function applySceneUpdate(project, sceneId, patch) {
   }
   const recorded = markDirectionStale(scenes[idx], updated);
   assertMusicVideoMediaSelections({ ...project, scenes: [recorded], visualSpec: null });
-  const nextScenes = scenes.slice();
-  nextScenes[idx] = recorded;
+  const edited = scenes.slice();
+  edited[idx] = recorded;
+  // A new start, or a shot moving into or out of the cold open, can pass a neighbour: the board follows the time.
+  const nextScenes = 'startSec' in data || 'preMusic' in data ? scenesInTimeOrder(edited) : edited;
   const next = retimed ? anchorShotsToSungLyrics(touch(project, { scenes: nextScenes }), [sceneId]) : touch(project, { scenes: nextScenes });
   // Retiming or rewording a shot, or picking another take, keeps the storyboard approval it was judged on.
   const shotEdit = Object.keys(data).every((key) => SCENE_SHOT_EDIT_FIELDS.includes(key));
