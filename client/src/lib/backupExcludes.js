@@ -16,7 +16,7 @@
  * cannot be fixed.
  *
  * `DEFAULT_EXCLUDES` has always been anchored by hand (and a test in
- * `backup.test.js` fails if one entry is not). This module applies the same rule
+ * `backup.snapshots.test.js` fails if one entry is not). This module applies the same rule
  * to the one list a user actually edits.
  *
  * Anchoring happens at READ time (`computeEffectiveExcludes`), never by

@@ -479,7 +479,7 @@ Deployed LoRA weights in `data/loras/` and their metadata sidecars are included 
 
 Everything under `data/jev/` is machine-local (ADR [privacy records machine-local](decisions/2026-08-08-privacy-records-machine-local.md)), so a snapshot that carries a head is the only copy that survives a rebuild. Retaining it costs kilobytes; excluding it would silently discard the decision.
 
-The effective exclude list is computed by the pure `computeEffectiveExcludes()` helper (unit-tested in `backup.test.js`). The scheduled cron handler in `backupScheduler.js` re-reads settings on every run, so `destPath`, `excludePaths`, `disabledDefaultExcludes`, and `enabled` all take effect on the next run without a restart. See [Scheduling & status](#scheduling--status) for how the cron registration itself tracks settings.
+The effective exclude list is computed by the pure `computeEffectiveExcludes()` helper (unit-tested in `server/services/backup.snapshots.test.js`). The scheduled cron handler in `backupScheduler.js` re-reads settings on every run, so `destPath`, `excludePaths`, `disabledDefaultExcludes`, and `enabled` all take effect on the next run without a restart. See [Scheduling & status](#scheduling--status) for how the cron registration itself tracks settings.
 
 #### Why every exclude must be anchored with a leading `/`
 
