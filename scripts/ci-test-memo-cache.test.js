@@ -1,9 +1,10 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { FULL_SUITE_SHARDS } from './ci-test-plan.js';
-import { workflowJobs } from './lib/workflowJobs.js';
+import { readCiJobs } from './lib/ciWorkflowJobs.js';
 
-const jobs = workflowJobs(readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'));
+// The key lineage lives once, in the test-memo action; expanding it with each
+// job's `suite`/`partition` inputs gives the keys that job actually uses.
+const jobs = readCiJobs();
 const step = (job, name) => job.split(`- name: ${name}\n`)[1].split('\n      - name:')[0];
 const expand = (template, context) => template.replace(/\$\{\{\s*([^}]+?)\s*\}\}/g, (_, key) => {
   if (!(key in context)) throw new Error(`Unknown cache input: ${key}`);
@@ -17,9 +18,11 @@ describe('trusted CI test-memo cache reuse', () => {
     ['client', 'client', 'Linux'],
     ['windows-server', 'windows', 'Windows'],
   ])('%s can restore a full-run shard without crossing runtime or job families', (jobId, family, os) => {
-    const restore = step(jobs[jobId], 'Restore the test memo');
+    const restore = step(jobs[jobId], 'Restore from the trusted memo cache');
     const save = step(jobs[jobId], 'Save the test memo');
-    const key = save.match(/^ +key: (.+)$/m)[1];
+    // The save reuses the restore's primary key rather than restating it.
+    expect(save).toContain('key: ${{ steps.test-memo.outputs.key }}');
+    const key = restore.match(/^ +key: (.+)$/m)[1];
     const prefixes = restore.match(/restore-keys: \|\n((?: +test-memo-[^\n]+\n?)+)/)[1].trim().split('\n').map(line => line.trim());
     const context = {
       'runner.os': os, 'runner.arch': 'X64', 'matrix.shard': 1,

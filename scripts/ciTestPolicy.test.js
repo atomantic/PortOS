@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { releaseCandidateDiagnostics } from './ciTestPolicy.js';
-import { workflowJobs } from './lib/workflowJobs.js';
+import { readCiJobs } from './lib/ciWorkflowJobs.js';
 import { spawnNpm } from './run-ci-tests.js';
 
 const policyEnv = {
@@ -141,7 +141,7 @@ describe('release-only assertion collection (#13759)', () => {
     const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
     expect(workflow).toContain("github.base_ref == 'release' && startsWith(github.head_ref, 'codex/release-')");
     expect(workflow).toContain('github.event.pull_request.head.repo.full_name == github.repository');
-    const jobs = workflowJobs(workflow);
+    const jobs = readCiJobs();
     for (const job of ['server', 'client', 'database', 'browser', 'windows-server']) {
       expect(jobs[job]).toContain("if: always() && env.PORTOS_CI_TEST_POLICY == 'release-candidate'");
       expect(jobs[job]).toMatch(/PORTOS_CI_DIAGNOSTICS_DIR:.*portos-ci-diagnostics/);

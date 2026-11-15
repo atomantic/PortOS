@@ -6,7 +6,9 @@ import { describe, expect, it } from 'vitest';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const WORKFLOWS_DIR = join(REPO_ROOT, '.github/workflows');
-function listWorkflowFiles(directory = WORKFLOWS_DIR) {
+// Composite actions run external actions too; their `uses:` lines get the same pin contract.
+const ACTIONS_DIR = join(REPO_ROOT, '.github/actions');
+function listWorkflowFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) return listWorkflowFiles(path);
@@ -14,7 +16,8 @@ function listWorkflowFiles(directory = WORKFLOWS_DIR) {
   }).sort();
 }
 
-const WORKFLOW_FILES = listWorkflowFiles();
+const WORKFLOW_FILES = listWorkflowFiles(WORKFLOWS_DIR);
+const ACTION_FILES = listWorkflowFiles(ACTIONS_DIR);
 const FULL_COMMIT_REF = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*@[a-f0-9]{40}$/i;
 const RELEASE_VERSION_COMMENT = /^v\d+\.\d+\.\d+$/;
 
@@ -54,7 +57,8 @@ function findUnpinnedUses(yaml) {
 
 describe('GitHub Actions immutable pin contract', () => {
   it('pins every external action and keeps its exact version beside the SHA', () => {
-    for (const filename of WORKFLOW_FILES) {
+    expect(ACTION_FILES.length).toBeGreaterThan(0);
+    for (const filename of [...WORKFLOW_FILES, ...ACTION_FILES]) {
       const yaml = readFileSync(filename, 'utf8');
       expect(findUnpinnedUses(yaml), relative(REPO_ROOT, filename)).toEqual([]);
     }
@@ -65,6 +69,7 @@ describe('GitHub Actions immutable pin contract', () => {
     expect(findUnpinnedUses('      - uses: actions/checkout@v7')).toHaveLength(1);
     expect(findUnpinnedUses('      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1')).toEqual([]);
     expect(findUnpinnedUses('    uses: ./.github/workflows/ci.yml')).toEqual([]);
+    expect(findUnpinnedUses('      - uses: ./.github/actions/setup-server')).toEqual([]);
   });
 
   it('keeps the contents write grant in the release workflow', () => {
