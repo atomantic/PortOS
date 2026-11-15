@@ -203,7 +203,6 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 - [Claude on Ollama](./docs/features/claude-ollama.md) — Run agent tasks on a local model
 - [Fleet LLM Host](./docs/features/fleet-llm-host.md) — Dedicated GPU host serving OpenAI-compatible models to a PortOS fleet
 - [CoS Agent Runner](./docs/features/cos-agent-runner.md) — Isolated agent process architecture
-- [CoS Enhancement](./docs/features/cos-enhancement.md) — Hybrid search, proactive execution, error recovery
 - [MTPLX](./docs/features/mtplx.md) — Native multi-token-prediction Qwen runtime on Apple Silicon, managed as a PM2 process from Models → Runtimes
 - [DFlash 2 / DSpark](./docs/features/dflash2.md) — Speculative drafting acceleration for local llama-server
 - [vLLM RTX 3090](./docs/features/qwen38-rtx3090.md) — Docker compose setup for Qwen 27B on NVIDIA RTX 3090 GPUs
@@ -219,7 +218,6 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 - [Autofixer](./docs/features/autofixer.md) — Autonomous crash detection and repair
 - [Browser](./docs/features/browser.md) — Headless browser automation
 - [Eidoverse Worlds](./docs/features/eidoverse.md) — private 3D systems world and PortOS resource projection
-- [OpenWorld historical reference](./docs/features/openworld.md) — retired compatibility surface
 - [Prompt Manager](./docs/features/prompt-manager.md) — Customizable AI prompt templates
 - [JIRA Sprint Manager](./docs/features/jira-sprint-manager.md) — Autonomous JIRA triage and implementation
 - [Writers Room](./docs/features/writers-room.md) — Prose-to-media writing environment with explicit AI passes
