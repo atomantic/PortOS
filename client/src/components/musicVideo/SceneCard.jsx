@@ -18,7 +18,7 @@ import ShotEditorGroup from './ShotEditorGroup.jsx';
 import ShotSheetFields from './ShotSheetFields.jsx';
 import { normalizeShotSheet, shotSheetDrivesPrompt, shotSheetPromptLines } from '../../../../server/lib/musicVideoShotSheet.js';
 import TabPills from '../ui/TabPills.jsx';
-import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
+import BlurCommitTextarea from '../ui/BlurCommitTextarea.jsx';
 import InfoTooltip from '../ui/InfoTooltip';
 import { LTX_REFERENCES_GENERATION_MODE, isLtx25Model, ltxReferenceSheetPrefix, ltxReferencesUnavailableReason } from '../../lib/musicVideoLtxReferences.js';
 import SceneStoryboardClip, { storyboardClipOffered } from './SceneStoryboardClip.jsx';
@@ -463,10 +463,10 @@ export default function SceneCard({
             : 'Describes the shot. The frame renders from it only when its own frame prompt is empty.'}
         </InfoTooltip>
       </div>
-      <AutoSizeTextarea
+      <BlurCommitTextarea
         id={fieldId('prompt')}
         value={followsBoard ? boardDirection : scene.prompt || ''} rows={3}
-        onChange={(e) => { markDirty('prompt'); onEditLocal(scene.sceneId, { prompt: e.target.value }); }}
+        onCommit={(text) => { markDirty('prompt'); onEditLocal(scene.sceneId, { prompt: text }); }}
         onBlur={(e) => saveIfDirty('prompt', { prompt: boardDirection && e.target.value.trim() === boardDirection ? '' : e.target.value })}
         placeholder={layer === 'footage' ? 'What happens in this shot' : 'What this shot shows'}
         className="block w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
