@@ -35,7 +35,7 @@ import usePendingDeletePeerNames from '../hooks/usePendingDeletePeerNames';
 import { refreshMediaUsages } from '../hooks/useMediaUsages';
 import { getMediaJob } from '../services/apiMediaJobs';
 import {
-  deleteVideoHistoryItem, cancelVideoPendingDelete, cancelImagePendingDelete, stitchVideos, deleteImage,
+  deleteVideoHistoryItem, cancelVideoPendingDelete, cancelImagePendingDelete, stitchVideos, makeVideoVertical, deleteImage,
 } from '../services/api';
 
 const FILTERS = [
@@ -292,6 +292,15 @@ export default function MediaHistory() {
     setItems((all) => [normalizeVideo(video), ...all]);
     refresh();
   }, [setItems, refresh]);
+  // The export is a media job; the new row appears in history when it finishes.
+  const handleMakeVertical = useCallback(async (item, ratio) => {
+    try {
+      const { job } = await makeVideoVertical(item.id, ratio, { silent: true });
+      toast(job.deduplicated ? 'That vertical copy is already queued' : `Vertical ${ratio} copy queued — it lands in history when it finishes`);
+    } catch (err) {
+      toast.error(err.message || 'Vertical export failed');
+    }
+  }, []);
   const handleAnnotate = useCallback((item) => {
     navigate(`/media/annotate/${encodeURIComponent(item.key)}`);
   }, [navigate]);
@@ -456,6 +465,7 @@ export default function MediaHistory() {
                   onSendTo3d={!selectionActive ? handleSendTo3d : undefined}
                   onContinue={!selectionActive ? handleContinue : undefined}
                   onUpscale={!selectionActive && it.kind === 'video' ? handleUpscale : undefined}
+                  onMakeVertical={!selectionActive && it.kind === 'video' ? handleMakeVertical : undefined}
                   onDelete={!selectionActive ? handleDelete : undefined}
                   onCancelPendingDelete={!selectionActive ? handleCancelPendingDelete : undefined}
                   onToggleHidden={!selectionActive ? handleToggleHidden : undefined}

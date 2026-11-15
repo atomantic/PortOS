@@ -150,6 +150,10 @@ vi.mock('../services/videoGen/stitchJob.js', () => ({
   enqueueStitch: vi.fn(),
 }));
 
+vi.mock('../services/videoGen/verticalJob.js', () => ({
+  enqueueVertical: vi.fn(),
+}));
+
 vi.mock('../services/videoGen/trim.js', () => ({
   trimHistoryItem: vi.fn(),
 }));
@@ -352,6 +356,7 @@ import * as videoGenService from '../services/videoGen/local.js';
 import * as mediaRemoteDelete from '../services/mediaRemoteDelete.js';
 import * as upscaleJobService from '../services/videoGen/upscaleJob.js';
 import * as stitchJobService from '../services/videoGen/stitchJob.js';
+import { enqueueVertical } from '../services/videoGen/verticalJob.js';
 import { trimHistoryItem } from '../services/videoGen/trim.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
@@ -3814,6 +3819,24 @@ describe('videoGen routes', () => {
       const r = await request(app).post('/api/video-gen/stitch').send({ videoIds: [uploadId, validId(2)] });
       expect(r.status).toBe(200);
       expect(stitchJobService.enqueueStitch).toHaveBeenCalledWith([uploadId, validId(2)]);
+    });
+  });
+
+  describe('POST /history/:id/vertical', () => {
+    const id = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaa1';
+
+    it('rejects an unknown ratio', async () => {
+      const r = await request(app).post(`/api/video-gen/history/${id}/vertical`).send({ ratio: '16:9' });
+      expect(r.status).toBe(400);
+      expect(enqueueVertical).not.toHaveBeenCalled();
+    });
+
+    it('queues the export and returns the job', async () => {
+      enqueueVertical.mockResolvedValue({ jobId: 'job-v1', position: 1, status: 'queued' });
+      const r = await request(app).post(`/api/video-gen/history/${id}/vertical`).send({ ratio: '4:5' });
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ ok: true, job: { jobId: 'job-v1', position: 1, status: 'queued' } });
+      expect(enqueueVertical).toHaveBeenCalledWith(id, '4:5');
     });
   });
 

@@ -1175,11 +1175,13 @@ export const trimVideoFromFrame = async (videoPath, outPath, { startFrame, endFr
 // shake) into a NEW file, copying any audio untouched: the filter keeps every
 // frame and its timing, so the soundtrack still lines up.
 // Returns `{ ok: true, outPath }` or `{ ok: false, reason }`.
-export const filterVideoFrames = async (videoPath, outPath, { filter, label = 'filter' } = {}) => {
+export const filterVideoFrames = async (videoPath, outPath, { filter, filterComplex, signal, label = 'filter' } = {}) => {
   if (typeof videoPath !== 'string' || !videoPath) return { ok: false, reason: 'invalid video path' };
   if (typeof outPath !== 'string' || !outPath || resolvePath(videoPath) === resolvePath(outPath)) return { ok: false, reason: 'invalid output path' };
   if (!existsSync(videoPath)) return { ok: false, reason: 'video file missing' };
-  if (typeof filter !== 'string' || !filter) return { ok: false, reason: 'no filter' };
+  // `filterComplex` is a full graph whose single video output is labelled
+  // `[outv]` (lib/verticalReframe.js); the audio stream is mapped through as is.
+  if (typeof (filterComplex || filter) !== 'string' || !(filterComplex || filter)) return { ok: false, reason: 'no filter' };
   let ffmpeg;
   try {
     ffmpeg = await findFfmpeg({ requiredEncoder: 'libx264' });
@@ -1189,11 +1191,16 @@ export const filterVideoFrames = async (videoPath, outPath, { filter, label = 'f
   if (!ffmpeg) return { ok: false, reason: 'ffmpeg not found' };
   await ensureDir(dirname(outPath));
   const audio = await hasAudioStream(videoPath);
+  const tag = await bt709TagFilter();
+  const filterArgs = filterComplex
+    ? ['-filter_complex', tag ? filterComplex.replace(/\[outv\]$/, `,${tag}[outv]`) : filterComplex, '-map', '[outv]', ...(audio ? ['-map', '0:a'] : [])]
+    : ['-vf', appendFilter(filter, tag)];
   const result = await runFfmpegProcess({
     bin: ffmpeg,
+    signal,
     args: [
       '-i', videoPath,
-      '-vf', appendFilter(filter, await bt709TagFilter()),
+      ...filterArgs,
       ...(audio ? ['-c:a', 'copy'] : ['-an']),
       ...H264_ENCODE_ARGS,
       ...BT709_CONTAINER_ARGS,

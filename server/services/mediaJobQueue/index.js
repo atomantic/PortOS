@@ -259,6 +259,14 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
     modules: { default: () => import('../videoGen/stitchJob.js') },
     invoke: (mod, request) => mod.runVideoStitch(request),
   },
+  // "Make it vertical": ffmpeg only, local-only, same lane rules as the stitch.
+  'video-vertical': {
+    events: videoGenEvents,
+    verb: 'Reframing',
+    watchdogMs: flatWatchdog(WATCHDOG_VIDEO_MS),
+    modules: { default: () => import('../videoGen/verticalJob.js') },
+    invoke: (mod, request) => mod.runVideoVertical(request),
+  },
   'video-sharing': {
     events: videoGenEvents,
     verb: 'Generating',

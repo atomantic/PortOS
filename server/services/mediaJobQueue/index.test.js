@@ -106,6 +106,7 @@ const stubs = {
   runTopazUpscale: vi.fn(() => new Promise(() => {})),
   cancelTopazUpscale: vi.fn(() => true),
   runVideoStitch: vi.fn(() => new Promise(() => {})),
+  runVideoVertical: vi.fn(() => new Promise(() => {})),
   cancelVideoStitch: vi.fn(),
   runSharingCopy: vi.fn(async () => ({})),
   cancelSharingCopy: vi.fn(() => true),
@@ -153,6 +154,11 @@ vi.mock('../videoGen/topazJob.js', () => ({
   runVideoUpscale: (...args) => stubs.runTopazUpscale(...args),
   cancel: (...args) => stubs.cancelTopazUpscale(...args),
   cleanupPreparedTopaz: vi.fn(async () => {}),
+}));
+
+vi.mock('../videoGen/verticalJob.js', () => ({
+  runVideoVertical: (...args) => stubs.runVideoVertical(...args),
+  cancel: () => false,
 }));
 
 vi.mock('../videoGen/stitchJob.js', () => ({
@@ -303,6 +309,7 @@ beforeEach(async () => {
   stubs.runTopazUpscale.mockImplementation(() => new Promise(() => {}));
   stubs.cancelTopazUpscale.mockReturnValue(true);
   stubs.runVideoStitch.mockImplementation(() => new Promise(() => {}));
+  stubs.runVideoVertical.mockImplementation(() => new Promise(() => {}));
   if (moduleGraphDirty) await importFresh();
   else {
     await mediaJobQueue.__resetForTests();
@@ -5439,6 +5446,7 @@ describe('mediaJobQueue per-kind runtime wiring', () => {
     { kind: 'video', params: {}, entry: 'generateVideo', bus: 'video', verb: 'Rendering', window: WINDOWS.VIDEO },
     { kind: 'video-upscale', params: {}, entry: 'runVideoUpscale', bus: 'video', verb: 'Upscaling', window: WINDOWS.VIDEO },
     { kind: 'video-stitch', params: {}, entry: 'runVideoStitch', bus: 'video', verb: 'Stitching', window: WINDOWS.VIDEO },
+    { kind: 'video-vertical', params: {}, entry: 'runVideoVertical', bus: 'video', verb: 'Reframing', window: WINDOWS.VIDEO },
     { kind: 'video-sharing', params: { sharingProjectId: 'mv-example', renderHistoryId: 'final-example', sourceHash: 'a'.repeat(64) },
       entry: 'runSharingCopy', bus: 'video', verb: 'Generating', window: WINDOWS.VIDEO },
     { kind: 'html-composition', params: { directory: 'compositions/example' }, entry: 'renderComposition', bus: 'video', verb: 'Generating', window: WINDOWS.IMAGE },
