@@ -1,160 +1,146 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-// Stub the service layer so we can assert the route's request → svc-call
-// → response wiring without standing up the real file-backed store.
-const stubs = {
-  bulkUpdateCollectionItems: vi.fn(),
-  updateCollection: vi.fn(async (id, patch) => ({ id, ...patch })),
-  createCollection: vi.fn(async (input) => ({ id: 'new', ...input })),
-  listCollections: vi.fn(async () => []),
-};
+// Real mediaCollections service (collection store on disk) over a temp data root.
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-media-collections-') }));
+afterAll(cleanupTempDataRoots);
 
-vi.mock('../services/mediaCollections.js', async () => {
-  const actual = await vi.importActual('../services/mediaCollections.js');
-  return {
-    ...actual,
-    bulkUpdateCollectionItems: (...args) => stubs.bulkUpdateCollectionItems(...args),
-    updateCollection: (...args) => stubs.updateCollection(...args),
-    createCollection: (...args) => stubs.createCollection(...args),
-    listCollections: (...args) => stubs.listCollections(...args),
-  };
+// Only POST /:id/localize uses the peer-pull module, and it is network-bound. Stubbing it also
+// keeps the whole peer-sync import graph out of this suite's load time.
+vi.mock('../services/sharing/peerSyncAssets.js', () => ({
+  pullMissingAssetsFromPeer: vi.fn(),
+  collectionVideoRefToFilename: (ref) => ref,
+}));
+
+const { default: router } = await import('./mediaCollections.js');
+
+const app = express();
+app.use(express.json());
+app.use('/api/media/collections', router);
+app.use(errorMiddleware);
+
+const BASE = '/api/media/collections';
+const api = (method, path = '', body) => request(app)[method](`${BASE}${path}`).send(body);
+const create = async (name = 'Concept Art') => (await api('post', '', { name })).body;
+const keysOf = (collection) => collection.items.map((i) => `${i.kind}:${i.ref}`);
+
+describe('mediaCollections routes — create / read / patch / delete', () => {
+  it('creates a collection that reads back by id and in the list, then patches and soft-deletes it', async () => {
+    const created = await api('post', '', { name: 'Concept Art', description: 'refs' });
+    expect(created.status).toBe(201);
+    const { id } = created.body;
+
+    const fetched = await api('get', `/${id}`);
+    expect(fetched.body).toMatchObject({ id, name: 'Concept Art', description: 'refs', items: [] });
+    expect((await api('get')).body.map((c) => c.id)).toContain(id);
+
+    expect((await api('patch', `/${id}`, { name: 'Renamed' })).status).toBe(200);
+    expect((await api('get', `/${id}`)).body).toMatchObject({ name: 'Renamed', description: 'refs' });
+
+    expect((await api('delete', `/${id}`)).status).toBe(200);
+    expect((await api('get', `/${id}`)).status).toBe(404);
+    expect((await api('get')).body.map((c) => c.id)).not.toContain(id);
+  });
+
+  it('404s for an unknown collection and rejects an empty patch', async () => {
+    expect((await api('get', '/mc-ghost')).status).toBe(404);
+    const { id } = await create('Patchable');
+    expect((await api('patch', `/${id}`, {})).status).toBe(400);
+  });
 });
 
-const router = (await import('./mediaCollections.js')).default;
+describe('mediaCollections routes — provenance (#3311)', () => {
+  it('persists a valid source through PATCH and rejects an unknown one', async () => {
+    const { id } = await create('Provenance');
+    expect((await api('patch', `/${id}`, { source: 'auto' })).status).toBe(200);
+    expect((await api('get', `/${id}`)).body.source).toBe('auto');
 
-function makeApp() {
-  const app = express();
-  app.use(express.json());
-  app.use('/api/media/collections', router);
-  app.use(errorMiddleware);
-  return app;
-}
+    expect((await api('patch', `/${id}`, { source: 'robot' })).status).toBe(400);
+    expect((await api('get', `/${id}`)).body.source).toBe('auto');
+  });
+
+  it('strips source from a create body so a client cannot claim provenance', async () => {
+    const created = await api('post', '', { name: 'Claimed', source: 'auto' });
+    expect(created.status).toBe(201);
+    expect((await api('get', `/${created.body.id}`)).body.source).toBe('user');
+  });
+});
+
+describe('mediaCollections routes — items', () => {
+  it('adds and removes single items, 409s on a duplicate and 404s on a missing one', async () => {
+    const { id } = await create('Items');
+    expect((await api('post', `/${id}/items`, { kind: 'image', ref: 'a.png' })).status).toBe(200);
+    expect((await api('post', `/${id}/items`, { kind: 'video', ref: 'v1' })).status).toBe(200);
+    expect(keysOf((await api('get', `/${id}`)).body)).toEqual(['image:a.png', 'video:v1']);
+
+    expect((await api('post', `/${id}/items`, { kind: 'image', ref: 'a.png' })).status).toBe(409);
+
+    expect((await api('delete', `/${id}/items/${encodeURIComponent('image:a.png')}`)).status).toBe(200);
+    expect(keysOf((await api('get', `/${id}`)).body)).toEqual(['video:v1']);
+    expect((await api('delete', `/${id}/items/${encodeURIComponent('image:a.png')}`)).status).toBe(404);
+  });
+});
 
 describe('mediaCollections routes — POST /:id/items/bulk', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
   it('400s when both add and remove are empty', async () => {
-    const r = await request(makeApp()).post('/api/media/collections/c1/items/bulk').send({});
-    expect(r.status).toBe(400);
-    expect(stubs.bulkUpdateCollectionItems).not.toHaveBeenCalled();
+    const { id } = await create('Bulk empty');
+    expect((await api('post', `/${id}/items/bulk`, {})).status).toBe(400);
   });
 
-  it('400s for unknown body fields (strict schema)', async () => {
-    const r = await request(makeApp()).post('/api/media/collections/c1/items/bulk').send({
-      add: [{ kind: 'image', ref: 'a.png' }],
-      bogus: true,
-    });
-    expect(r.status).toBe(400);
-    expect(stubs.bulkUpdateCollectionItems).not.toHaveBeenCalled();
+  it('400s for unknown body fields, an invalid kind or a ref containing ":" and adds nothing', async () => {
+    const { id } = await create('Bulk invalid');
+    const bodies = [
+      { add: [{ kind: 'image', ref: 'a.png' }], bogus: true },
+      { add: [{ kind: 'movie', ref: 'x.mp4' }] },
+      { add: [{ kind: 'image', ref: 'bad:ref.png' }] },
+    ];
+    for (const body of bodies) expect((await api('post', `/${id}/items/bulk`, body)).status).toBe(400);
+    expect((await api('get', `/${id}`)).body.items).toEqual([]);
   });
 
-  it('400s when an add item carries an invalid kind', async () => {
-    const r = await request(makeApp()).post('/api/media/collections/c1/items/bulk').send({
-      add: [{ kind: 'movie', ref: 'x.mp4' }],
-    });
-    expect(r.status).toBe(400);
-  });
+  it('returns { collection, added, removed } and persists the combined change', async () => {
+    const { id } = await create('Bulk');
+    await api('post', `/${id}/items`, { kind: 'image', ref: 'b.png' });
 
-  it('400s when an add ref contains ":"', async () => {
-    const r = await request(makeApp()).post('/api/media/collections/c1/items/bulk').send({
-      add: [{ kind: 'image', ref: 'bad:ref.png' }],
-    });
-    expect(r.status).toBe(400);
-  });
-
-  it('200s and returns { collection, added, removed } on success', async () => {
-    stubs.bulkUpdateCollectionItems.mockResolvedValueOnce({
-      collection: { id: 'c1', name: 'A', items: [], coverKey: null },
-      added: 2,
-      removed: 1,
-    });
-    const r = await request(makeApp()).post('/api/media/collections/c1/items/bulk').send({
+    const r = await api('post', `/${id}/items/bulk`, {
       add: [{ kind: 'image', ref: 'a.png' }, { kind: 'video', ref: 'v1' }],
       remove: ['image:b.png'],
     });
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({ added: 2, removed: 1 });
-    expect(stubs.bulkUpdateCollectionItems).toHaveBeenCalledWith('c1', {
-      add: [{ kind: 'image', ref: 'a.png' }, { kind: 'video', ref: 'v1' }],
-      remove: ['image:b.png'],
-    });
+    expect(keysOf(r.body.collection)).toEqual(['image:a.png', 'video:v1']);
+    expect(keysOf((await api('get', `/${id}`)).body)).toEqual(['image:a.png', 'video:v1']);
+
+    // Re-adding what is already present is an idempotent no-op, not a 409.
+    const again = await api('post', `/${id}/items/bulk`, { add: [{ kind: 'image', ref: 'a.png' }] });
+    expect(again.body).toMatchObject({ added: 0, removed: 0 });
   });
 
-  it('404s when the service throws NOT_FOUND', async () => {
-    stubs.bulkUpdateCollectionItems.mockRejectedValueOnce(
-      Object.assign(new Error('not found'), { code: 'NOT_FOUND' }),
-    );
-    const r = await request(makeApp()).post('/api/media/collections/ghost/items/bulk').send({
-      add: [{ kind: 'image', ref: 'a.png' }],
-    });
+  it('404s for an unknown collection', async () => {
+    const r = await api('post', '/mc-ghost/items/bulk', { add: [{ kind: 'image', ref: 'a.png' }] });
     expect(r.status).toBe(404);
-  });
-
-  it('409s when the service throws DUPLICATE (defensive — bulk path is idempotent today)', async () => {
-    stubs.bulkUpdateCollectionItems.mockRejectedValueOnce(
-      Object.assign(new Error('dup'), { code: 'DUPLICATE' }),
-    );
-    const r = await request(makeApp()).post('/api/media/collections/c1/items/bulk').send({
-      add: [{ kind: 'image', ref: 'a.png' }],
-    });
-    expect(r.status).toBe(409);
-  });
-});
-
-describe('mediaCollections routes — provenance (#3311)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('passes a valid source through PATCH and rejects an unknown one', async () => {
-    const ok = await request(makeApp()).patch('/api/media/collections/c1').send({ source: 'user' });
-    expect(ok.status).toBe(200);
-    expect(stubs.updateCollection).toHaveBeenCalledWith('c1', { source: 'user' });
-
-    const bad = await request(makeApp()).patch('/api/media/collections/c1').send({ source: 'robot' });
-    expect(bad.status).toBe(400);
-  });
-
-  it('strips source from a create body so a client cannot claim provenance', async () => {
-    await request(makeApp()).post('/api/media/collections').send({ name: 'Concept Art', source: 'auto' });
-    // Zod drops the unknown key → the service applies its own 'user' default.
-    expect(stubs.createCollection).toHaveBeenCalledWith({ name: 'Concept Art', description: '' });
   });
 });
 
 describe('mediaCollections routes — GET / pagination', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
   // Regression guard: every client caller (apiImageVideo.listMediaCollections)
   // calls this with no query params. If it ever returns an envelope instead of
   // a bare array, those pickers silently render empty.
-  it('without pagination params returns the unbounded bare array', async () => {
-    stubs.listCollections.mockResolvedValueOnce(
-      Array.from({ length: 120 }, (_, i) => ({ id: `c-${i}`, name: `C${i}` }))
-    );
-    const r = await request(makeApp()).get('/api/media/collections');
-    expect(r.status).toBe(200);
-    expect(Array.isArray(r.body)).toBe(true);
-    expect(r.body).toHaveLength(120);
-  });
+  it('returns the unbounded bare array by default and a bounded envelope when pagination is requested', async () => {
+    for (let i = 0; i < 4; i++) await create(`Paged ${i}`);
 
-  it('returns a bounded envelope when pagination is requested', async () => {
-    stubs.listCollections.mockResolvedValueOnce(
-      Array.from({ length: 5 }, (_, i) => ({ id: `c-${i}`, name: `C${i}` }))
-    );
-    const r = await request(makeApp()).get('/api/media/collections?limit=2&offset=1');
-    expect(r.status).toBe(200);
-    expect(r.body.items).toHaveLength(2);
-    expect(r.body.items[0].id).toBe('c-1');
-    expect(r.body.total).toBe(5);
-    expect(r.body.limit).toBe(2);
-    expect(r.body.offset).toBe(1);
+    const bare = await api('get');
+    expect(Array.isArray(bare.body)).toBe(true);
+    const total = bare.body.length;
+    expect(total).toBeGreaterThanOrEqual(4);
+
+    const page = await api('get', '?limit=2&offset=1');
+    expect(page.status).toBe(200);
+    expect(page.body).toMatchObject({ total, limit: 2, offset: 1 });
+    expect(page.body.items.map((c) => c.id)).toEqual(bare.body.slice(1, 3).map((c) => c.id));
   });
 });
