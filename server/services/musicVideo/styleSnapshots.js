@@ -5,6 +5,7 @@
 // only `concept.universeId` / `visualSpec.moodBoardId`; the create/update
 // dispatcher fills the snapshot text in here.
 
+import { MUSIC_VIDEO_MAX_SUBJECTS, MUSIC_VIDEO_MAX_VISUAL_REFERENCES } from '../../lib/musicVideoLimits.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { collectBoardStyleContext } from '../../lib/moodBoardStyleContext.js';
 import {
@@ -138,7 +139,7 @@ function castCharacterStyle(subjects, previous, style) {
   const rest = subjects.filter((s) => !drop.has(s.id));
   if (style) {
     return [musicVideoCharacterStyleSubject(style),
-      ...rest.map((s) => (s.role === 'protagonist' ? { ...s, role: 'supporting' } : s))].slice(0, 24);
+      ...rest.map((s) => (s.role === 'protagonist' ? { ...s, role: 'supporting' } : s))].slice(0, MUSIC_VIDEO_MAX_SUBJECTS);
   }
   if (!previous || rest.some((s) => s.role === 'protagonist')) return rest;
   const lead = rest.findIndex((s) => s.kind === 'character');
@@ -161,7 +162,7 @@ async function syncCharacterStyleSheet(visualSpec, existing, previous, style) {
     const same = references.findIndex((ref) => ref.imageId === imageId);
     if (same >= 0) {
       references = references.map((ref, i) => (i === same ? { ...ref, role: 'character', condition: true } : ref));
-    } else if (references.length < 24) {
+    } else if (references.length < MUSIC_VIDEO_MAX_VISUAL_REFERENCES) {
       references = [...references, {
         id: musicVideoCharacterStyleReferenceId(style),
         imageId,

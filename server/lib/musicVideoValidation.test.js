@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { musicVideoPublishPrepareSchema, musicVideoSceneCreateSchema, musicVideoSceneUpdateSchema } from './musicVideoValidation.js';
+import { musicVideoConceptSchema, musicVideoPublishPrepareSchema, musicVideoSceneCreateSchema, musicVideoSceneUpdateSchema, musicVideoVisualSpecSchema } from './musicVideoValidation.js';
+import { MUSIC_VIDEO_MAX_SUBJECTS } from './musicVideoLimits.js';
 
 describe('musicVideoPublishPrepareSchema (DistroKid release answers)', () => {
   const parse = (body) => musicVideoPublishPrepareSchema.safeParse(body);
@@ -46,5 +47,17 @@ describe('scene camera (#10589)', () => {
     for (const camera of [{ move: 'teleport' }, { move: 'whip-pan', speed: 'warp' }, { move: 'whip-pan', endFraming: 'huge' }, { move: 'whip-pan', lens: '35mm' }, { speed: 'snap' }]) {
       expect(musicVideoSceneUpdateSchema.safeParse({ camera }).success).toBe(false);
     }
+  });
+});
+
+describe('per-video limits above the old 24 cap (#16196)', () => {
+  const subject = (i) => ({ id: `s${i}`, kind: i % 3 === 0 ? 'place' : 'character', name: `Subject ${i}` });
+  const reference = (i) => ({ id: `r${i}`, imageId: `img-${i}.png`, role: 'mood' });
+
+  it('accepts 60 subjects and 60 references, rejects past the sanity bound', () => {
+    const subjects = Array.from({ length: 60 }, (_, i) => subject(i));
+    expect(musicVideoConceptSchema.safeParse({ subjects }).success).toBe(true);
+    expect(musicVideoConceptSchema.safeParse({ subjects: Array.from({ length: MUSIC_VIDEO_MAX_SUBJECTS + 1 }, (_, i) => subject(i)) }).success).toBe(false);
+    expect(musicVideoVisualSpecSchema.safeParse({ references: Array.from({ length: 60 }, (_, i) => reference(i)) }).success).toBe(true);
   });
 });

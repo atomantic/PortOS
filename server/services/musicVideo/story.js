@@ -1,4 +1,5 @@
 import { activeMusicVideoSubjects } from '../../lib/musicVideoCastSelection.js';
+import { MUSIC_VIDEO_MAX_SUBJECTS } from '../../lib/musicVideoLimits.js';
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
@@ -91,7 +92,7 @@ export async function applyStory(id, { basis: expected, proposal }) {
         if (index >= 0) subjects[index] = { ...subjects[index], ...fields, id: subjectId };
         else subjects.push({ ...fields, id: `mvc-${randomUUID()}`, localOnly: true });
       }
-      if (subjects.length > 24) throw new ServerError('A video can have at most 24 subjects.', { status: 409 });
+      if (subjects.length > MUSIC_VIDEO_MAX_SUBJECTS) throw new ServerError(`A video can have at most ${MUSIC_VIDEO_MAX_SUBJECTS} subjects.`, { status: 409 });
       concept.subjects = subjects;
     }
     if (Object.keys(concept).length) next = applyProjectPatch(next, { concept });

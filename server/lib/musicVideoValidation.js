@@ -85,6 +85,7 @@ import { BEAT_TOGGLE_OVERLAP, BEAT_TOGGLE_RATES, MUSIC_VIDEO_CUT_EFFECTS } from 
 import { MUSIC_VIDEO_WIPE_SEC, MUSIC_VIDEO_WIPES } from './musicVideoWipes.js';
 import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS, PHOTO_LAYOUT_RANGES, PHOTO_SEQUENCE_LIMIT, PHOTO_SEQUENCE_OVERLAP_MAX_FRAMES, PHOTO_SEQUENCE_RATES } from './musicVideoImageEffects.js';
 import { PRE_MUSIC_DURATION_RANGE, PRE_MUSIC_EFFECT_IDS, PRE_MUSIC_LAYER_LIMIT, PRE_MUSIC_VOLUME_RANGE } from './musicVideoColdOpen.js';
+import { MUSIC_VIDEO_MAX_SUBJECTS, MUSIC_VIDEO_MAX_VISUAL_REFERENCES } from './musicVideoLimits.js';
 import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
 import { CAST_ERAS } from './catalogMediaLibrary.js';
 import { STORYBOARD_ID_PATTERN } from './storyboardVocabulary.js';
@@ -178,7 +179,7 @@ export const musicVideoConceptSchema = z.object({
     // What every frame of this character must show (a watch, a bracelet, a camera
     // on a strap); the frame check adds one requirement per line.
     requiredDetails: z.array(z.string().trim().min(1).max(200)).max(8).optional(),
-  }).strict()).max(24).optional(),
+  }).strict()).max(MUSIC_VIDEO_MAX_SUBJECTS).optional(),
 }).strict();
 
 // Renderer settings travel with the project so reopening a director board (or
@@ -523,7 +524,7 @@ export const musicVideoStyleReferencesSchema = z.array(z.object({
 // The project's reusable visual specification. A patch merges per sub-field
 // (like `concept`), and `references` / `palette` replace their list whole.
 export const musicVideoVisualSpecSchema = z.object({
-  references: z.array(musicVideoVisualReferenceSchema).max(24).optional(),
+  references: z.array(musicVideoVisualReferenceSchema).max(MUSIC_VIDEO_MAX_VISUAL_REFERENCES).optional(),
   palette: z.array(z.string().regex(/^#[0-9a-f]{6}$/i, 'palette colors are #rrggbb')).max(12).optional(),
   typography: z.string().max(1000).optional(),
   cameraRules: z.string().max(2000).optional(),
@@ -1862,7 +1863,7 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
     owner: castSetsText(120).optional(),
     description: castSetsText(1000).min(1),
   }).strict()).max(6).optional(),
-  // Every catalog-linked supporting character (the 24-subject cap) plus 4 invented ones.
+  // Every catalog-linked supporting character (up to the per-video subject limit) plus 4 invented ones.
   cast: z.array(z.object({
     id: z.string().min(1).max(64),
     remove: z.literal(true).optional(),
@@ -2039,7 +2040,7 @@ const musicVideoPlateReviewerSchema = z.object({
 export const musicVideoProjectUpdateSchema = z.object({
   plateReviewer: musicVideoPlateReviewerSchema.nullable().optional(),
   // The descriptions the editor started from, used only for conflict checks.
-  catalogDescriptionBases: z.array(z.object({ subjectId: z.string().min(1).max(64), description: z.string().max(16000) }).strict()).max(24).optional(),
+  catalogDescriptionBases: z.array(z.object({ subjectId: z.string().min(1).max(64), description: z.string().max(16000) }).strict()).max(MUSIC_VIDEO_MAX_SUBJECTS).optional(),
   festivalPacket: festivalPacketSchema.nullable().optional(),
   storySummary: z.string().max(20000).optional(),
   mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
