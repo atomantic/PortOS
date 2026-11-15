@@ -1,7 +1,8 @@
 /**
  * Hold/retire permutations for checkout retirement, decided over inspected
  * state (#16115, #16153). The real-git contract for each outcome stays in
- * branchReconcile.ownership.test.js and heldCheckoutRecovery.test.js; these pin
+ * branchReconcile.ownership.test.js, heldCheckoutRecovery.test.js and
+ * worktreeReap.test.js; these pin
  * every combination of holder, head, merge, dirt, lock, owner and completion
  * evidence, plus the order facts are read in (a hold must not pay for a later,
  * costlier read).
@@ -9,7 +10,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   decideBranchRetirement, decideDetachedRetirement, decideHeldCheckoutRetirement, decideInventoriedBranchRetirement, decideMergedCheckoutOwner,
-  decideMergedDelivery, decidePendingMergeReceipt, gatheredHoldReason, recoveryWorktreeReason, supersededPolicyHold,
+  decideMergedDelivery, decideMergedWorktreeReap, decideMergedWorktreeRemoval, decidePendingMergeReceipt, decideWith, gatheredHoldReason,
+  recoveryWorktreeReason, supersededPolicyHold,
   SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS,
 } from './branchRetirementDecision.js';
 import { classifyBranches } from './branchReconcile.js';
@@ -466,5 +468,117 @@ describe('decideInventoriedBranchRetirement', () => {
     expect(inventoried().admit).toEqual({ missing: false });
     expect(inventoried({ delivered: true }).asked).not.toContain('mergeEvidence');
     expect(inventoried({ facts: { presence: false } }).asked).toEqual(['inventoryRow', 'defaultBranch', 'holders', 'presence']);
+  });
+});
+
+// The early merged-worktree reaper (#16153). Every row was a real-git case in
+// worktreeReap.test.js; that suite keeps one real-git contract per outcome and
+// destructive refusal.
+describe('decideMergedWorktreeReap', () => {
+  const COS = '/data/cos/worktrees';
+  const tree = (name, branch, extra = {}) => ({ path: `${MANAGED}/${name}`, branch: `refs/heads/${branch}`, head: HEAD, locked: false, ...extra });
+  const reap = ({ tree: t = tree('merged', 'merged-br'), facts = {}, ...input } = {}) => drive(decideMergedWorktreeReap, {
+    tree: t, defaultBranch: 'main', currentBranch: 'main', worktreesDir: COS, claudeTreesRoot: MANAGED, includeClaudeTrees: true,
+    activeAgentIds: new Set(), ...input,
+  }, { dirty: false, disposableHead: false, mergeEvidence: true, ...facts });
+
+  it.each([
+    // [removed real-git case, overrides, verdict]
+    ['a merged clean .claude tree is reaped', {}, 'retire'],
+    ['a merged branch whose checkout vanished (its status reads empty) is reaped', { facts: { dirty: false } }, 'retire'],
+    ['an unmerged tree is preserved', { facts: { mergeEvidence: false } }, 'unmerged'],
+    ['a merged tree with uncommitted changes is preserved', { facts: { dirty: true } }, 'uncommitted'],
+    ['a dirty tree whose PR merged at its exact head is reaped', { facts: { dirty: true, disposableHead: true } }, 'retire'],
+    ['a dirty tree whose PR merged at another head is preserved', { facts: { dirty: true, disposableHead: false } }, 'uncommitted'],
+    ['a fresh-from-main tree with uncommitted changes is preserved', { facts: { dirty: true, mergeEvidence: false } }, 'uncommitted'],
+    ['a locked merged tree is preserved', { tree: tree('locked', 'locked-br', { locked: true }) }, 'worktree-locked'],
+    ['an active agent\'s merged tree is skipped', { tree: tree('agent-active', 'active-br'), activeAgentIds: new Set(['agent-active']) }, 'worktree-active-agent'],
+    ['an agent tree holds while liveness is unknown', { tree: tree('agent-abc12345', 'cos/task-1/agent-abc12345'), activeAgentIds: null }, 'worktree-agent-liveness-unknown'],
+    ['a merged clean agent tree is reaped', { tree: tree('agent-abc12345', 'cos/task-1/agent-abc12345') }, 'retire'],
+    ['a human /claim tree is never reaped, even merged and clean', { tree: tree('claim-issue-42', 'claim/issue-42') }, 'worktree-human-claim'],
+    ['a claim-shaped tree in the CoS root lacks an agent id', { tree: { ...tree('x', 'claim/issue-42'), path: `${COS}/claim-issue-42` } }, 'worktree-missing-agent-id'],
+    ['a merged tree outside the managed roots is preserved', { tree: { ...tree('x', 'loose-br'), path: '/work/elsewhere/loose' } }, 'worktree-unmanaged-location'],
+    ['a merged clean gh-pages tree is protected', { tree: tree('pages', 'gh-pages') }, 'protected'],
+    ['a custom default branch is protected', { tree: tree('trunk', 'trunk'), defaultBranch: 'trunk' }, 'protected'],
+    ['the source workspace\'s checked-out branch is protected', { currentBranch: 'merged-br' }, 'protected'],
+    ['.claude trees are excluded on request', { includeClaudeTrees: false }, 'claude-tree-excluded'],
+    ['a CoS agent tree is still reaped when .claude trees are excluded', { tree: { ...tree('x', 'cos/task-1/agent-abc12345'), path: `${COS}/agent-abc12345` }, includeClaudeTrees: false }, 'retire'],
+    ['an unreadable status holds', { facts: { dirty: null } }, 'status-failed'],
+    ['a detached checkout has no branch', { tree: tree('detached', 'x', { branch: undefined, detached: true }) }, 'no-branch'],
+    ['a bare entry has no branch', { tree: tree('bare', 'x', { bare: true }) }, 'no-branch'],
+  ])('%s', (_name, overrides, expected) => {
+    expect(verdict(reap(overrides))).toBe(expected);
+  });
+
+  it('names the held branch only when the entry has one, and admits dirt only at an exact merged head', () => {
+    expect(reap({ tree: tree('detached', 'x', { branch: undefined, detached: true }) }).branch).toBeNull();
+    expect(reap({ tree: tree('locked', 'locked-br', { locked: true }) }).branch).toBe('locked-br');
+    expect(reap().admit).toEqual({ branch: 'merged-br', disposable: false });
+    expect(reap({ facts: { dirty: true, disposableHead: true } }).admit).toEqual({ branch: 'merged-br', disposable: true });
+  });
+
+  it('reads facts lazily: a lock or live owner reads nothing, a clean tree asks no forge, dirt reads no merge evidence', () => {
+    expect(reap({ tree: tree('locked', 'locked-br', { locked: true }) }).asked).toEqual([]);
+    expect(reap({ tree: tree('agent-active', 'active-br'), activeAgentIds: new Set(['agent-active']) }).asked).toEqual([]);
+    expect(reap().asked).toEqual(['dirty', 'mergeEvidence']);
+    expect(reap({ facts: { dirty: true } }).asked).toEqual(['dirty', 'disposableHead']);
+    expect(reap({ facts: { dirty: null } }).asked).toEqual(['dirty']);
+  });
+
+  it('counts lockfile-only churn as uncommitted work', () => {
+    // The reaper never discards lockfiles the way removeWorktree() does.
+    expect(classifyWorktreeDirt(' M package-lock.json\n').clean).toBe(false);
+  });
+});
+
+describe('decideMergedWorktreeRemoval', () => {
+  const PATH = `${MANAGED}/merged`;
+  const scanned = { path: PATH, branch: 'refs/heads/merged-br', head: HEAD };
+  const remove = ({ holder = { ...scanned, locked: false }, disposable = false, facts = {} } = {}) => drive(decideMergedWorktreeRemoval, {
+    tree: scanned, holder, sourceWorkspace: REPO, disposable, worktreesDir: '/data/cos/worktrees', claudeTreesRoot: MANAGED,
+  }, { agents: [], policyHold: null, activeAgentIds: new Set(), dirty: false, mergeEvidence: true, ...facts });
+
+  it.each([
+    ['the scanned holder still merged and clean is removed', {}, 'retire'],
+    ['a holder Git no longer lists', { holder: null }, 'worktree-holder-changed'],
+    ['a holder that switched branch', { holder: { ...scanned, branch: 'refs/heads/other' } }, 'worktree-holder-changed'],
+    ['a run registered in the checkout', { facts: { agents: [{ id: 'agent-live', status: 'running', workspacePath: PATH }] } }, 'claim-owner-active'],
+    ['a live claim bound to the branch', { facts: { agents: [live('new-owner', { claimBranches: ['merged-br'] })] } }, 'claim-owner-active'],
+    ['an unreadable owner registry', { facts: { agents: null } }, 'claim-ownership-unreadable'],
+    ['a completion handoff', { facts: { policyHold: 'pr-completion-human-handoff' } }, 'pr-completion-human-handoff'],
+    ['a lock taken since the scan', { holder: { ...scanned, locked: true } }, 'worktree-locked'],
+    ['an agent dispatched into the tree since the scan', { facts: { activeAgentIds: new Set(['merged']) } }, 'worktree-active-agent'],
+    ['fresh status that cannot be read', { facts: { dirty: null } }, 'worktree-status-unavailable'],
+    ['a clean tree that became dirty', { facts: { dirty: true } }, 'worktree-dirty'],
+    ['disposable dirt while the holder is still at the merged head', { disposable: true, facts: { dirty: true } }, 'retire'],
+    ['disposable dirt at the merged head spelled in another case', { disposable: true, holder: { ...scanned, head: HEAD.toUpperCase() }, facts: { dirty: true } }, 'retire'],
+    ['disposable dirt after the holder\'s head moved', { disposable: true, holder: { ...scanned, head: 'e'.repeat(40) }, facts: { dirty: true } }, 'worktree-dirty'],
+    ['merge evidence that no longer holds', { facts: { mergeEvidence: false } }, 'unmerged'],
+  ])('%s', (_name, overrides, expected) => {
+    expect(verdict(remove(overrides))).toBe(expected);
+  });
+
+  it('reads facts lazily: a changed holder reads nothing, an owner reads no policy, a lock reads no status', () => {
+    expect(remove({ holder: null }).asked).toEqual([]);
+    expect(remove({ facts: { agents: null } }).asked).toEqual(['agents']);
+    expect(remove({ holder: { ...scanned, locked: true } }).asked).toEqual(['agents', 'policyHold', 'activeAgentIds']);
+    expect(remove().asked).toEqual(['agents', 'policyHold', 'activeAgentIds', 'dirty', 'mergeEvidence']);
+    expect(remove({ facts: { dirty: true } }).asked).not.toContain('mergeEvidence');
+  });
+});
+
+describe('decideWith', () => {
+  it('reads each asked fact once, in order, and records a failed read as null', async () => {
+    const reads = [];
+    const step = await decideWith(facts => {
+      if (facts.first === undefined) return { need: 'first' };
+      if (facts.second === undefined) return { need: 'second' };
+      return { done: [facts.first, facts.second] };
+    }, {
+      first: async () => { reads.push('first'); return undefined; },
+      second: (facts, asking) => { reads.push(`${asking.need}:${facts.first}`); return false; },
+    });
+    expect(step).toEqual({ done: [null, false] });
+    expect(reads).toEqual(['first', 'second:null']);
   });
 });

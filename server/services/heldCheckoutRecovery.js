@@ -24,7 +24,7 @@ import { lstat, readlink, stat, symlink, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execGit } from '../lib/execGit.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
-import { decideHeldCheckoutRetirement, decideInventoriedBranchRetirement, decideMergedCheckoutOwner, decideMergedDelivery, decidePendingMergeReceipt } from './branchRetirementDecision.js';
+import { decideHeldCheckoutRetirement, decideInventoriedBranchRetirement, decideMergedCheckoutOwner, decideMergedDelivery, decidePendingMergeReceipt, decideWith } from './branchRetirementDecision.js';
 import { listWorktrees, forceRemoveWorktreeDir, deleteCompletedLocalBranch, classifyWorktreeDirt } from './worktreeManager.js';
 import { getDefaultBranch, getStatusPorcelain, hasBranchMergeEvidence, resolveForgeForRepo } from './git.js';
 import { withClaimOwnershipLock, readClaimOwnershipAgents } from './cosClaimOwnership.js';
@@ -96,20 +96,6 @@ export async function readMergedDelivery(repoPath, { branch, path, head }) {
     delivery: () => readForgeDelivery(repoPath, branch, head),
   });
   return step.merged;
-}
-
-/**
- * Drive a decide-or-ask decision: read each fact only when it is asked for.
- * A reader gets the facts so far and the asking step; an undefined answer is a
- * failed read (null), so the decision never asks for it again.
- */
-async function decideWith(decide, readers) {
-  const facts = {};
-  for (;;) {
-    const step = decide(facts);
-    if (!step.need) return step;
-    facts[step.need] = (await readers[step.need](facts, step)) ?? null;
-  }
 }
 
 /** Readers for `decideMergedCheckoutOwner`'s facts. */

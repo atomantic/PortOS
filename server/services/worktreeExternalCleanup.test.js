@@ -64,9 +64,9 @@ let initialHead;
 // Per-test phase evidence (quiet unless the test fails). Only the relative-pointer case
 // labels its steps; the reset phase times the shared sandbox setup it depends on.
 let phase;
-async function addTree(name, { committed = false, detached = false } = {}) {
+async function addTree(name, { committed = false, detached = false, branch = name } = {}) {
   const path = join(PATHS.worktrees, name);
-  await execGit(['worktree', 'add', ...(detached ? ['--detach'] : ['-b', name]), path, 'main'], external);
+  await execGit(['worktree', 'add', ...(detached ? ['--detach'] : ['-b', branch]), path, 'main'], external);
   if (committed) {
     await writeFile(join(path, 'recovery.txt'), `recover ${name}\n`);
     await execGit(['add', '.'], path);
@@ -123,7 +123,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
   afterEach(async () => { await phase.settle(); });
   afterAll(cleanupTempDataRoots);
 
-  it('retains dirty, unmerged, locked, detached, active, human and non-agent work while reclaiming merged clean work', async () => {
+  // gh-pages is a publishing branch: a sweep that copied the protected list and
+  // dropped it removed a clean merged checkout. agent-merged is the same shape
+  // on an unprotected name, so protecting every branch would fail here too.
+  it('retains dirty, unmerged, locked, detached, active, human, non-agent and protected work while reclaiming merged clean work', async () => {
     const dirty = await addTree('agent-dirty');
     await writeFile(join(dirty, 'private-recovery.txt'), 'dirty recovery\n');
     const unmerged = await addTree('agent-unmerged', { committed: true });
@@ -134,11 +137,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     const active = await addTree('agent-active');
     const human = await addTree('claim-issue-42');
     const nonAgent = await addTree('other-work');
+    // At main's head, so it is clean and merged: only the protected list holds it.
+    const pages = await addTree('agent-pages', { branch: 'gh-pages' });
     const merged = await addTree('agent-merged', { committed: true });
     await execGit(['merge', '--no-ff', 'agent-merged', '--no-edit'], external);
 
     expect(await cleanupOrphanedWorktrees(primary, new Set(['agent-active']), NO_OWNERS)).toBe(1);
-    for (const path of [dirty, unmerged, locked, detached, active, human, nonAgent]) expect(existsSync(path)).toBe(true);
+    for (const path of [dirty, unmerged, locked, detached, active, human, nonAgent, pages]) expect(existsSync(path)).toBe(true);
+    expect(await branchExists('gh-pages')).toBe(true);
     expect(await readFile(join(dirty, 'private-recovery.txt'), 'utf8')).toBe('dirty recovery\n');
     expect(await readFile(join(locked, 'private-recovery.txt'), 'utf8')).toBe('locked recovery\n');
     expect(await branchExists('agent-unmerged')).toBe(true);

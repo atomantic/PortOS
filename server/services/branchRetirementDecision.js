@@ -1,10 +1,11 @@
 /**
  * Pure hold/retire decisions for checkout retirement (#16115, #16153): branch
- * reconciliation and held-checkout recovery.
+ * reconciliation, held-checkout recovery and the early merged-worktree reaper.
  *
  * Each decision is "decide or ask": given the facts inspected so far it returns
  * a hold, an admission, or `{ need }` naming the ONE fact it needs next. The
- * production drivers (branchReconcile.js, heldCheckoutRecovery.js) read that
+ * production drivers (branchReconcile.js, heldCheckoutRecovery.js,
+ * worktreeManager.js's reapMergedWorktrees) read that
  * fact and ask again, so the I/O order and short-circuits stay exactly as the
  * gates are listed here (a lock or live owner costs no status read), while every
  * permutation of holder, head, merge, dirt, lock and owner can be tested without
@@ -16,6 +17,7 @@
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 import { resolve } from 'node:path';
+import { isPathInsideDir } from '../lib/fileUtils.js';
 import { isAgentWorktreeId, isHumanClaimWorktree, knownAgentIds, worktreeAgentId, worktreeHoldExpiresAt, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
 
 // Why seven days: a claim tree at the default commit loses nothing recoverable
@@ -498,4 +500,113 @@ export function decideInventoriedBranchRetirement({ repoPath, branch, head, deli
   }
   const owner = decideMergedCheckoutOwner({ repoPath, path: null, branch, facts });
   return owner.admit ? { admit: { missing: !facts.presence } } : owner;
+}
+
+/**
+ * Drive a decide-or-ask decision: read each fact only when it is asked for.
+ * A reader gets the facts so far and the asking step; an undefined answer is a
+ * failed read (null), so the decision never asks for it again.
+ */
+export async function decideWith(decide, readers) {
+  const facts = {};
+  for (;;) {
+    const step = decide(facts);
+    if (!step.need) return step;
+    facts[step.need] = (await readers[step.need](facts, step)) ?? null;
+  }
+}
+
+/** The early reaper's managed roots: CoS trees need an agent id, `.claude/worktrees` trees do not. */
+const reapRoots = (worktreesDir, claudeTreesRoot) => [
+  { path: worktreesDir, requireAgentId: true },
+  { path: claudeTreesRoot, requireAgentId: false },
+];
+
+/**
+ * Whether the early reaper (`reapMergedWorktrees`) may take one listed
+ * non-primary checkout into its ownership section. Gates, in order:
+ *
+ * 1. a bare, detached or branchless entry has nothing to merge (`no-branch`);
+ * 2. protected, default and currently checked-out branches;
+ * 3. the checkout's protection gate under the reaper's managed roots. It passes
+ *    no claim age on purpose, so a `claim-*` tree always holds: only
+ *    branch-reconcile knows whether a claim shipped or went idle;
+ * 4. the `.claude/worktrees` opt-out;
+ * 5. content: unreadable holds, and dirt (lockfiles included) holds unless a PR
+ *    merged at exactly this head (`disposableHead`);
+ * 6. merge evidence for the branch.
+ *
+ * @param {object} input
+ * @param {{ path: string, branch?: string, head?: string, locked?: boolean, bare?: boolean, detached?: boolean }} input.tree
+ * @param {string} input.defaultBranch
+ * @param {string} input.currentBranch - the source workspace's checked-out branch
+ * @param {string} input.worktreesDir
+ * @param {string} input.claudeTreesRoot
+ * @param {boolean} [input.includeClaudeTrees=true]
+ * @param {Set<string>|null|undefined} input.activeAgentIds - anything but a Set is unknown and holds
+ * @param {object} input.facts - `dirty` (null unreadable; lockfile churn counts), `disposableHead`, `mergeEvidence`
+ * @returns {{ need: string } | { hold: { reason: string }, branch: string|null } | { admit: { branch: string, disposable: boolean } }}
+ */
+export function decideMergedWorktreeReap({ tree, defaultBranch, currentBranch, worktreesDir, claudeTreesRoot, includeClaudeTrees = true, activeAgentIds, facts }) {
+  const branch = tree.bare || tree.detached ? null : shortBranch(tree.branch) || null;
+  const hold = reason => ({ hold: { reason }, branch });
+  if (!branch) return hold('no-branch');
+  if (PROTECTED_BRANCHES.includes(branch) || branch === defaultBranch || branch === currentBranch) return hold('protected');
+  const ownership = worktreeOwnershipReason({
+    path: tree.path, locked: tree.locked, activeAgentIds, roots: reapRoots(worktreesDir, claudeTreesRoot), requireKnownLiveness: true,
+  });
+  if (ownership) return hold(ownership);
+  if (!includeClaudeTrees && isPathInsideDir(claudeTreesRoot, tree.path)) return hold('claude-tree-excluded');
+  // Only a proven-absent directory reads as empty: a prunable registration may
+  // be a live checkout with a broken .git pointer and unique work.
+  if (facts.dirty === undefined) return { need: 'dirty' };
+  if (facts.dirty === null) return hold('status-failed');
+  // Unlike removeWorktree(), the background reaper keeps even lockfile-only
+  // edits: a fresh-from-main checkout may be an agent before its first commit.
+  if (facts.dirty) {
+    if (facts.disposableHead === undefined) return { need: 'disposableHead' };
+    if (!facts.disposableHead) return hold('uncommitted');
+  }
+  if (facts.mergeEvidence === undefined) return { need: 'mergeEvidence' };
+  if (!facts.mergeEvidence) return hold('unmerged');
+  return { admit: { branch, disposable: facts.dirty } };
+}
+
+/**
+ * The early reaper's recheck inside its ownership section, asked once on
+ * entry and again by the removal (`verifyRemoval`) with the fresh holder.
+ * Gates, in order: the holder still holds the branch, registered claim owners,
+ * completion policy, the protection gate with the holder's lock and fresh
+ * liveness, fresh content (dirt is disposable only while the holder is still at
+ * the head whose PR merged), then merge evidence.
+ *
+ * @param {object} input
+ * @param {{ path: string, branch: string, head: string }} input.tree - the scanned registration
+ * @param {{ branch?: string, head?: string, locked?: boolean }|null} input.holder - the fresh one
+ * @param {string} input.sourceWorkspace
+ * @param {boolean} input.disposable - the scan admitted dirt at an exact merged-PR head
+ * @param {string} input.worktreesDir
+ * @param {string} input.claudeTreesRoot
+ * @param {object} input.facts - `agents`, `policyHold`, `activeAgentIds`, `dirty` (null unreadable), `mergeEvidence`
+ * @returns {{ need: string } | { hold: { reason: string } } | { admit: true }}
+ */
+export function decideMergedWorktreeRemoval({ tree, holder, sourceWorkspace, disposable, worktreesDir, claudeTreesRoot, facts }) {
+  if (!holder || holder.branch !== tree.branch) return holdOn('worktree-holder-changed');
+  const branchName = shortBranch(tree.branch);
+  if (facts.agents === undefined) return { need: 'agents' };
+  const owner = claimCheckoutOwnerReason({ branchName, holderPath: tree.path, sourceWorkspace, agents: facts.agents });
+  if (owner) return holdOn(owner);
+  if (facts.policyHold === undefined) return { need: 'policyHold' };
+  if (facts.policyHold) return holdOn(facts.policyHold);
+  if (facts.activeAgentIds === undefined) return { need: 'activeAgentIds' };
+  const ownership = worktreeOwnershipReason({
+    path: tree.path, locked: holder.locked, activeAgentIds: facts.activeAgentIds, roots: reapRoots(worktreesDir, claudeTreesRoot), requireKnownLiveness: true,
+  });
+  if (ownership) return holdOn(ownership);
+  if (facts.dirty === undefined) return { need: 'dirty' };
+  if (facts.dirty === null) return holdOn('worktree-status-unavailable');
+  const atMergedHead = disposable && holder.head?.toLowerCase() === tree.head?.toLowerCase();
+  if (facts.dirty && !atMergedHead) return holdOn('worktree-dirty');
+  if (facts.mergeEvidence === undefined) return { need: 'mergeEvidence' };
+  return facts.mergeEvidence ? { admit: true } : holdOn('unmerged');
 }
