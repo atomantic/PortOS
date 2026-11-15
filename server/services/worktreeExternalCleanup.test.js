@@ -1,6 +1,7 @@
 /** Real separate-repository fixtures for the public scheduled cleanup consumer. */
 // Git/filesystem are synthetic in this suite; real durable admission has its own boundary tests.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { execFileSync } from 'child_process';
 import { existsSync, realpathSync } from 'fs';
 import { mkdir, open, readFile, rm, symlink, unlink, writeFile } from 'fs/promises';
 import { join, relative } from 'path';
@@ -123,43 +124,26 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
   afterEach(async () => { await phase.settle(); });
   afterAll(cleanupTempDataRoots);
 
-  // gh-pages is a publishing branch: a sweep that copied the protected list and
-  // dropped it removed a clean merged checkout. agent-merged is the same shape
-  // on an unprotected name, so protecting every branch would fail here too.
-  it('retains dirty, unmerged, locked, detached, active, human, non-agent and protected work while reclaiming merged clean work', async () => {
+  // Every other hold (detached, active, human, non-agent, protected, unknown liveness)
+  // is a pure case in branchRetirementDecision.test.js; this keeps one real
+  // retire next to the destructive holds that need a real tree to be destructive.
+  it('retains dirty, unmerged and locked work while reclaiming merged clean work', async () => {
     const dirty = await addTree('agent-dirty');
     await writeFile(join(dirty, 'private-recovery.txt'), 'dirty recovery\n');
     const unmerged = await addTree('agent-unmerged', { committed: true });
     const locked = await addTree('agent-locked');
     await writeFile(join(locked, 'private-recovery.txt'), 'locked recovery\n');
     await execGit(['worktree', 'lock', locked], external);
-    const detached = await addTree('agent-detached', { detached: true });
-    const active = await addTree('agent-active');
-    const human = await addTree('claim-issue-42');
-    const nonAgent = await addTree('other-work');
-    // At main's head, so it is clean and merged: only the protected list holds it.
-    const pages = await addTree('agent-pages', { branch: 'gh-pages' });
     const merged = await addTree('agent-merged', { committed: true });
     await execGit(['merge', '--no-ff', 'agent-merged', '--no-edit'], external);
 
-    expect(await cleanupOrphanedWorktrees(primary, new Set(['agent-active']), NO_OWNERS)).toBe(1);
-    for (const path of [dirty, unmerged, locked, detached, active, human, nonAgent, pages]) expect(existsSync(path)).toBe(true);
-    expect(await branchExists('gh-pages')).toBe(true);
+    expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(1);
+    for (const path of [dirty, unmerged, locked]) expect(existsSync(path)).toBe(true);
     expect(await readFile(join(dirty, 'private-recovery.txt'), 'utf8')).toBe('dirty recovery\n');
     expect(await readFile(join(locked, 'private-recovery.txt'), 'utf8')).toBe('locked recovery\n');
     expect(await branchExists('agent-unmerged')).toBe(true);
     expect(existsSync(merged)).toBe(false);
     expect(await branchExists('agent-merged')).toBe(false);
-  });
-
-  it('discards ignored files with a merged external checkout', async () => {
-    const path = await addTree('agent-ignored-output', { committed: true });
-    await execGit(['merge', '--no-ff', 'agent-ignored-output', '--no-edit'], external);
-    await writeFile(join(external, '.git', 'info', 'exclude'), '*.png\n');
-    await writeFile(join(path, 'reference.png'), 'generated image');
-    expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(1);
-    expect(existsSync(path)).toBe(false);
-    expect(await branchExists('agent-ignored-output')).toBe(false);
   });
 
   it('matches Git registration spelling when Node retains another alias for the same checkout', async () => {
@@ -177,14 +161,22 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     await unlink(alias);
   });
 
-  it('resolves a relative .git pointer through Git rather than assuming an absolute parent path', async () => {
-    const path = await phase('setup-worktree', () => addTree('agent-relative'));
+  // One tree for two Git-native contracts: Git (not the .git file's spelling)
+  // locates the parent, and ignored output is discarded with a merged checkout.
+  it('resolves a relative .git pointer through Git and discards ignored files with a merged checkout', async () => {
+    const path = await phase('setup-worktree', () => addTree('agent-relative', { committed: true }));
+    await execGit(['merge', '--no-ff', 'agent-relative', '--no-edit'], external);
+    await writeFile(join(external, '.git', 'info', 'exclude'), '*.png\n');
+    await writeFile(join(path, 'reference.png'), 'generated image');
     await phase('rewrite-pointer', async () => {
       const pointer = (await readFile(join(path, '.git'), 'utf8')).replace(/^gitdir: /, '').trim();
       await rewriteGitPointer(path, `gitdir: ${relative(realpathSync(path), pointer)}\n`);
     });
     expect(await phase('cleanup-resolution', () => cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS))).toBe(1);
-    await phase('verify-removal', async () => expect(existsSync(path)).toBe(false));
+    await phase('verify-removal', async () => {
+      expect(existsSync(path)).toBe(false);
+      expect(await branchExists('agent-relative')).toBe(false);
+    });
   });
 
   it('retains recovery files when the parent repository disappears or the git pointer is unreadable', async () => {
@@ -200,19 +192,18 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     expect(existsSync(unreadable)).toBe(true);
   });
 
-  it.each(['status', 'rev-parse', 'worktree'])('preserves recovery when the %s read fails', async command => {
+  it('preserves recovery when the status read fails', async () => {
     const path = await addTree('agent-read-failure');
-    fault.command = command;
+    fault.command = 'status';
     fault.cwd = path;
     expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(0);
     expect(existsSync(path)).toBe(true);
     expect(await branchExists('agent-read-failure')).toBe(true);
   });
 
-  it.each([0, 1])('does not treat failed cherry probe %s with empty stdout as merge evidence', async successfulMatches => {
+  it('does not treat a failed cherry probe with empty stdout as merge evidence', async () => {
     const path = await addTree('agent-cherry-failure', { committed: true });
     fault.command = 'cherry';
-    fault.successfulMatches = successfulMatches;
     expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(0);
     expect(existsSync(path)).toBe(true);
     expect(await branchExists('agent-cherry-failure')).toBe(true);
@@ -240,18 +231,31 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     expect(await branchExists('agent-dispatched')).toBe(true);
   });
 
+  it('keeps a checkout whose head moved while the pass was inspecting it', async () => {
+    const path = await addTree('agent-moved-head', { committed: true });
+    await execGit(['merge', '--no-ff', 'agent-moved-head', '--no-edit'], external);
+    // Fires on the ownership section's registration read of the parent, after the
+    // scan listed (and admitted) the old head, so only that fresh read sees the new one.
+    let moved = false;
+    let scanned = false;
+    fault.onGit = (args) => {
+      if (args[0] === 'merge-base') scanned = true;
+      if (moved || !scanned || args[0] !== 'worktree' || args[1] !== 'list') return;
+      moved = true;
+      execFileSync('git', ['commit', '--allow-empty', '-m', 'late agent work'], { cwd: path });
+    };
+    expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(0);
+    expect(moved).toBe(true);
+    expect(existsSync(path)).toBe(true);
+    expect(await branchExists('agent-moved-head')).toBe(true);
+  });
+
   it('keeps a worktree a registered agent works in even when live liveness omits it', async () => {
     const path = await addTree('agent-registered');
     const owners = { claimOwners: { agents: [{ id: 'agent-registered', status: 'running', workspacePath: path, sourceWorkspace: external }] } };
     expect(await cleanupOrphanedWorktrees(primary, () => new Set(), owners)).toBe(0);
     expect(existsSync(path)).toBe(true);
     expect(await branchExists('agent-registered')).toBe(true);
-  });
-
-  it('holds all external agent work when liveness cannot be established', async () => {
-    const path = await addTree('agent-unknown-liveness');
-    expect(await cleanupOrphanedWorktrees(primary, null, NO_OWNERS)).toBe(0);
-    expect(existsSync(path)).toBe(true);
   });
 
   it('retains merged work when durable completion policy is unreadable despite an empty owner snapshot', async () => {

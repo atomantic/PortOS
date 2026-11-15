@@ -1,11 +1,12 @@
 /**
  * Pure hold/retire decisions for checkout retirement (#16115, #16153): branch
- * reconciliation, held-checkout recovery and the early merged-worktree reaper.
+ * reconciliation, held-checkout recovery, the early merged-worktree reaper and
+ * the external (managed-app) orphan cleanup.
  *
  * Each decision is "decide or ask": given the facts inspected so far it returns
  * a hold, an admission, or `{ need }` naming the ONE fact it needs next. The
  * production drivers (branchReconcile.js, heldCheckoutRecovery.js,
- * worktreeManager.js's reapMergedWorktrees) read that
+ * worktreeManager.js's reapMergedWorktrees and cleanupExternalRepoWorktrees) read that
  * fact and ask again, so the I/O order and short-circuits stay exactly as the
  * gates are listed here (a lock or live owner costs no status read), while every
  * permutation of holder, head, merge, dirt, lock and owner can be tested without
@@ -587,10 +588,11 @@ export function decideMergedWorktreeReap({ tree, defaultBranch, currentBranch, w
  * @param {boolean} input.disposable - the scan admitted dirt at an exact merged-PR head
  * @param {string} input.worktreesDir
  * @param {string} input.claudeTreesRoot
+ * @param {Array<{ path: string, requireAgentId: boolean }>} [input.roots] - overrides the reaper's managed roots
  * @param {object} input.facts - `agents`, `policyHold`, `activeAgentIds`, `dirty` (null unreadable), `mergeEvidence`
  * @returns {{ need: string } | { hold: { reason: string } } | { admit: true }}
  */
-export function decideMergedWorktreeRemoval({ tree, holder, sourceWorkspace, disposable, worktreesDir, claudeTreesRoot, facts }) {
+export function decideMergedWorktreeRemoval({ tree, holder, sourceWorkspace, disposable, worktreesDir, claudeTreesRoot, roots = reapRoots(worktreesDir, claudeTreesRoot), facts }) {
   if (!holder || holder.branch !== tree.branch) return holdOn('worktree-holder-changed');
   const branchName = shortBranch(tree.branch);
   if (facts.agents === undefined) return { need: 'agents' };
@@ -600,7 +602,7 @@ export function decideMergedWorktreeRemoval({ tree, holder, sourceWorkspace, dis
   if (facts.policyHold) return holdOn(facts.policyHold);
   if (facts.activeAgentIds === undefined) return { need: 'activeAgentIds' };
   const ownership = worktreeOwnershipReason({
-    path: tree.path, locked: holder.locked, activeAgentIds: facts.activeAgentIds, roots: reapRoots(worktreesDir, claudeTreesRoot), requireKnownLiveness: true,
+    path: tree.path, locked: holder.locked, activeAgentIds: facts.activeAgentIds, roots, requireKnownLiveness: true,
   });
   if (ownership) return holdOn(ownership);
   if (facts.dirty === undefined) return { need: 'dirty' };
@@ -609,4 +611,90 @@ export function decideMergedWorktreeRemoval({ tree, holder, sourceWorkspace, dis
   if (facts.dirty && !atMergedHead) return holdOn('worktree-dirty');
   if (facts.mergeEvidence === undefined) return { need: 'mergeEvidence' };
   return facts.mergeEvidence ? { admit: true } : holdOn('unmerged');
+}
+
+/**
+ * Whether the scheduled cleanup (`cleanupExternalRepoWorktrees`) may take one
+ * directory of the shared worktrees root into its ownership section. These
+ * checkouts belong to managed apps' repositories, so the registration is
+ * resolved through Git itself. Gates, in order:
+ *
+ * 1. the protection gate (agent-shaped, unlocked, not live, liveness known);
+ * 2. a linked checkout: `.git` is a file;
+ * 3. Git's common directory and top level, and a path the sweep retains;
+ * 4. the registration: a branch checkout that is not the repository's primary;
+ * 5. the protection gate again with the registration's lock;
+ * 6. the primary's common directory matches the checkout's;
+ * 7. protected and default branches;
+ * 8. content: unreadable holds, and dirt holds unless a PR merged at exactly
+ *    this head (`disposableHead`);
+ * 9. merge evidence for the branch.
+ *
+ * @param {object} input
+ * @param {string} input.path - the directory under the shared worktrees root
+ * @param {string} input.worktreesDir
+ * @param {Set<string>|null|undefined} input.activeAgentIds - anything but a Set is unknown and holds
+ * @param {Set<string>} input.retainedPaths - checkouts a prior phase of this sweep keeps
+ * @param {(a: string, b: string) => boolean} [input.samePath] - Git's spelling vs Node's (symlinks, 8.3 aliases)
+ * @param {object} input.facts - `gitFile`, `commonDir`, `topLevel`, `registrations`, `parentCommonDir`, `defaultBranch`, `dirty`, `disposableHead`, `mergeEvidence`; null is a failed read
+ * @returns {{ need: string, repo?: string, branch?: string, head?: string } | { hold: { reason: string } } | { admit: { tree: object, repoPath: string, branch: string, disposable: boolean } }}
+ */
+export function decideExternalWorktreeCleanup({ path, worktreesDir, activeAgentIds, retainedPaths, samePath = (a, b) => a === b, facts }) {
+  const roots = [{ path: worktreesDir, requireAgentId: true }];
+  const owned = locked => worktreeOwnershipReason({ path, locked, activeAgentIds, roots, requireKnownLiveness: true });
+  const initial = owned();
+  if (initial) return holdOn(initial);
+  if (facts.gitFile === undefined) return { need: 'gitFile' };
+  if (!facts.gitFile) return holdOn('not-a-linked-checkout');
+  if (facts.commonDir === undefined) return { need: 'commonDir' };
+  if (!facts.commonDir) return holdOn('git-common-dir-unreadable');
+  if (facts.topLevel === undefined) return { need: 'topLevel' };
+  if (!facts.topLevel) return holdOn('git-toplevel-unreadable');
+  if (retainedPaths.has(facts.topLevel)) return holdOn('retained-by-sweep');
+  if (facts.registrations === undefined) return { need: 'registrations' };
+  const registrations = facts.registrations ?? [];
+  const tree = registrations.find(candidate => samePath(candidate.path, facts.topLevel));
+  const primary = registrations[0];
+  if (!tree || tree.bare || tree.detached || tree.prunable || !tree.branch) return holdOn('not-a-branch-registration');
+  if (!primary || primary.bare || samePath(primary.path, facts.topLevel)) return holdOn('primary-checkout');
+  const owner = owned(tree.locked);
+  if (owner) return holdOn(owner);
+  const repoPath = primary.path;
+  if (facts.parentCommonDir === undefined) return { need: 'parentCommonDir', repo: repoPath };
+  if (!facts.parentCommonDir || !samePath(facts.commonDir, facts.parentCommonDir)) return holdOn('foreign-common-dir');
+  const branch = shortBranch(tree.branch);
+  if (facts.defaultBranch === undefined) return { need: 'defaultBranch', repo: repoPath };
+  if (!facts.defaultBranch) return holdOn('default-branch-unreadable');
+  if (PROTECTED_BRANCHES.includes(branch) || branch === facts.defaultBranch) return holdOn('protected');
+  if (facts.dirty === undefined) return { need: 'dirty' };
+  if (facts.dirty === null) return holdOn('status-failed');
+  if (facts.dirty) {
+    if (facts.disposableHead === undefined) return { need: 'disposableHead', repo: repoPath, branch, head: tree.head };
+    if (!facts.disposableHead) return holdOn('uncommitted');
+  }
+  if (facts.mergeEvidence === undefined) return { need: 'mergeEvidence', repo: repoPath, branch };
+  if (!facts.mergeEvidence) return holdOn('unmerged');
+  return { admit: { tree, repoPath, branch, disposable: facts.dirty } };
+}
+
+/**
+ * The external cleanup's recheck inside its ownership section: the registration
+ * must still be exactly the scanned branch at the scanned head, then the same
+ * owner, policy, protection, content and merge gates as the early reaper's
+ * recheck (`decideMergedWorktreeRemoval`) under the shared worktrees root.
+ *
+ * @param {object} input
+ * @param {{ branch: string, head: string }} input.tree - the scanned registration
+ * @param {string} input.path - the directory under the worktrees root; Git's registration spelling can differ and would read as unmanaged
+ * @param {{ branch?: string, head?: string, locked?: boolean }|null} input.holder - the fresh one
+ * @param {string} input.repoPath - the checkout's primary repository
+ * @param {boolean} input.disposable - the scan admitted dirt at an exact merged-PR head
+ * @param {string} input.worktreesDir
+ * @param {object} input.facts - as `decideMergedWorktreeRemoval`
+ */
+export function decideExternalWorktreeRemoval({ tree, path, holder, repoPath, disposable, worktreesDir, facts }) {
+  if (holder && holder.head !== tree.head) return holdOn('worktree-holder-changed');
+  return decideMergedWorktreeRemoval({
+    tree: { ...tree, path }, holder, sourceWorkspace: repoPath, disposable, roots: [{ path: worktreesDir, requireAgentId: true }], facts,
+  });
 }
