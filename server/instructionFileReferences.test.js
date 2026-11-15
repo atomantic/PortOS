@@ -33,9 +33,7 @@ const gitLines = (...args) => git(...args).split('\n').filter(Boolean);
  * list may only shrink — a new stale name gets fixed in the prose, not parked
  * here — and `pins the retired allowlist` below enforces that.
  */
-export const RETIRED_NAMES = Object.freeze([
-  'apiRouteCatalog.generated.json', // server/AGENTS.md: derive-at-first-use rationale names the manifest it replaced
-]);
+export const RETIRED_NAMES = Object.freeze([]);
 
 const FILE_TOKEN = /^(?:\.\/|~\/|<repo-root>\/)?([\w.][\w./-]*\.(?:jsx?|[cm]js|md|json|ya?ml))$/;
 /** Example names the prose uses as stand-ins (`foo.js:412`), never real files. */
@@ -133,7 +131,7 @@ describe('instruction file references', () => {
     const noSource = findStaleReferences({ files: ['server/AGENTS.md'], tracked: new Set(), mentions: () => false, retired: [] });
     expect(noSource.length).toBeGreaterThan(0);
     expect(noSource.every((s) => /^server\/AGENTS\.md:\d+ `[^`]+` \(no tracked file has this basename and no tracked source names it\)$/.test(s))).toBe(true);
-    expect(noSource.some((s) => s.includes('`apiRouteCatalog.generated.json`'))).toBe(true);
+    expect(noSource.some((s) => s.includes('`server/lib/pgJson.js`'))).toBe(true);
     expect(findStaleReferences({ files: ['server/AGENTS.md'], tracked: new Set(), mentions: () => true, retired: [] })).toEqual([]);
   });
 });
