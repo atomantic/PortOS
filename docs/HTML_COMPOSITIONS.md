@@ -409,12 +409,14 @@ by `toString()` into sandboxed pages, which is why `filmLookFilterMarkup` must
 stay self-contained; the runtime wraps `portosComposition.seek()` to advance
 the frame before the page paints. A neutral look emits no filter at all.
 
-**Continuous film motion vs timed film events.** The look's *Continuous film
-motion* group holds gate weave and flicker plus their speeds (`weaveRate`,
+**Continuous film motion vs timed film events.** The look's *Shake &
+flicker* group holds gate weave (labelled Frame shake) and flicker plus their speeds (`weaveRate`,
 0.25–3, and `flickerRate`, 0.1–1, both defaulting to 1): a speed multiplies the
 song frame the drift is computed from, so it never moves a shot or the audio,
-and a look saved without them draws exactly as before. The *Home movie* preset
-is the restrained starting recipe (slow weave, a breathing flicker). Timed film
+and a look saved without them draws exactly as before. No preset turns frame
+shake on: it reads as camera shake, so it is opt-in, and each shot shows it
+beside its Film look picker. The *Home movie* preset is the restrained flicker
+recipe (a breathing flicker). Timed film
 events are each shot's **Effects** (`scene.glitches`, `musicVideoTransitions.js`):
 a gate jump, shutter, film burn, light leak or any glitch at a moment, each with
 an optional `strength` (0 switches it off, 1 or absent is the style as declared),

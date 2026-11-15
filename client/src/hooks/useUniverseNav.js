@@ -1,3 +1,9 @@
+/**
+ * `goToWorld(id)` → navigate to `/universes/:id`, preserve `location.search`.
+ *
+ * Use when: Any Universe Builder caller that needs to switch worlds via URL.
+ */
+
 import { useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 

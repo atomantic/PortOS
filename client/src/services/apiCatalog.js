@@ -1,3 +1,14 @@
+/**
+ * API client for creative catalog ingredients (CRUD, facets, by-id cards, lock toggle) and scrap
+ * ingest.
+ *
+ * Creative catalog ingredients (list/create/update/delete + `listCatalogIngredientsByIds` / facets,
+ * bounded `getCatalogIngredientCards` and flag-only `setCatalogIngredientLock`) scrap ingest
+ * (create/extract/commit + url/file/voice/brain), reference sheets (`listCatalogSheetVariants` /
+ * `previewCatalogSheet` / `renderCatalogSheet`), and local consolidation
+ * preview/apply/history/recovery.
+ */
+
 import { request } from './apiCore.js';
 import { fetchByIds, normalizeIds } from './apiBatch.js';
 
@@ -230,6 +241,10 @@ export const unlinkCatalogIngredientRelation = (id, body, options) =>
 export const listCatalogIngredientMedia = (id, options) =>
   request(`/catalog/ingredients/${enc(id)}/media`, options);
 
+/** Media for several ingredients in one request: `{ [ingredientId]: media[] }`. */
+export const listCatalogIngredientsMedia = (ids, options) =>
+  request(`/catalog/ingredients/media?ids=${enc([...ids].join(','))}`, options);
+
 export const attachCatalogIngredientMedia = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/media`, { method: 'POST', body: JSON.stringify(body), ...options });
 
@@ -384,3 +399,14 @@ export const refineCatalogDraft = (id, body, { preview = false, ...options } = {
 
 export const renderCatalogGreyboxShot = (id, shotId, options) =>
   request(`/catalog/ingredients/${enc(id)}/greybox/shots/${enc(shotId)}/render`, { method: 'POST', body: JSON.stringify({}), ...options });
+
+// Place look-around (#16145): one rotating-camera clip of the main plate → matching angle plates.
+// `dryRun: true` on the render returns the exact prompt, request body and price; on angles, the labels and clean-up prompt.
+export const getCatalogLookAround = (id, options = {}) =>
+  request(`/catalog/ingredients/${enc(id)}/look-around`, options);
+export const startCatalogLookAround = (id, body, options = {}) =>
+  request(`/catalog/ingredients/${enc(id)}/look-around`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const scoreCatalogLookAroundClip = (id, clipId, options = {}) =>
+  request(`/catalog/ingredients/${enc(id)}/look-around/${enc(clipId)}/frames`, { method: 'POST', body: '{}', ...options });
+export const saveCatalogLookAroundAngles = (id, clipId, body, options = {}) =>
+  request(`/catalog/ingredients/${enc(id)}/look-around/${enc(clipId)}/angles`, { method: 'POST', body: JSON.stringify(body), ...options });

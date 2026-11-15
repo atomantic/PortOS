@@ -3,11 +3,12 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X, Copy, Sparkles, Film, Image as ImageIcon, Download, Eraser, Wand2,
-  ChevronLeft, ChevronRight, Maximize2, Minimize2, Star, Box, ScanEye, Aperture, ThumbsUp, ThumbsDown, Pencil, Trash2, Eye, EyeOff,
+  ChevronLeft, ChevronRight, Maximize2, Minimize2, Star, Box, ScanEye, Aperture, ThumbsUp, ThumbsDown, Pencil, Trash2, Eye, EyeOff, ShieldCheck,
 } from 'lucide-react';
 import VideoTrimControl from './VideoTrimControl';
 import PromptRefineModal from './PromptRefineModal';
 import QuickImageEdit from './QuickImageEdit';
+import ImageVerificationDetails from './ImageVerificationDetails.jsx';
 import { PromptFromMediaModal } from './PromptFromMedia';
 import AddToCollectionMenu from './AddToCollectionMenu';
 import SharingDownloadButton from './SharingDownloadButton';
@@ -51,7 +52,7 @@ import { isLowResVideo } from '../../lib/videoResolution.js';
 // Opting out means owning the dialog semantics Modal would have supplied:
 // the overlay carries role="dialog"/aria-modal, runs useFocusTrap itself, and
 // portals to <body> in place of Modal's `usePortal` (see the render below);
-// `a11yConventions.test.js` allowlists it on that basis.
+// `a11y/overlays.conventions.test.js` allowlists it on that basis.
 
 const NOTE_MAX = 2000;
 
@@ -177,6 +178,7 @@ export default function MediaLightbox({
   onSelectVariant,
   onFilmLookComplete,
   filmLookProject = null,
+  onVerificationChange = null,
   pageActions = null,
   ratingControl = null,
   quickEditParams = null,
@@ -187,6 +189,14 @@ export default function MediaLightbox({
   const [refineOpen, setRefineOpen] = useState(false);
   const [promptFromOpen, setPromptFromOpen] = useState(false);
   const [filmLookOpen, setFilmLookOpen] = useState(false);
+  const [verificationOverride, setVerificationOverride] = useState(null);
+  useEffect(() => {
+    setVerificationOverride(null);
+  }, [item?.key]);
+
+  const currentItem = verificationOverride
+    ? { ...item, verification: verificationOverride }
+    : item;
   // Videos never take the live look: an SVG filter over playing video drops
   // phones below 1 fps (see FilmLookFrame). The pane stays open across
   // prev/next and simply hides on a video.
@@ -526,9 +536,13 @@ export default function MediaLightbox({
         )}
         {!fullScreen && !filmLookShown && (
           <SettingsPane
-            item={item}
+            item={currentItem}
             meta={meta}
             isVideo={isVideo}
+            onVerificationChange={(updated) => {
+              setVerificationOverride(updated);
+              onVerificationChange?.(item, updated);
+            }}
             onClose={onClose}
             onRemix={onRemix}
             onSendToImage={onSendToImage}
@@ -616,7 +630,7 @@ function SettingsPane({
   copy, onRefine, onPromptFrom,
   annotation, onAnnotationChange, onPromptChange, onPosterChange, getPlayhead, onTrimClip, onDelete, onToggleHidden, videoRef,
   variantGroup, onSelectVariant, onFilmLook, pageActions, rating,
-  quickEditParams, onQuickEditQueued, quickEditReferenceChoices,
+  quickEditParams, onQuickEditQueued, quickEditReferenceChoices, onVerificationChange,
 }) {
   const [posterSaving, setPosterSaving] = useState(false);
   // Keyed to the item so the confirm never carries over to the next one on
@@ -758,7 +772,24 @@ function SettingsPane({
     >
       {item.raw?.appId && <a className="block p-3 text-port-accent" href={`/apps/${encodeURIComponent(item.raw.appId)}/overview`}>Open source app</a>}
       <header className="shrink-0 flex items-center justify-between p-3 border-b border-port-border">
-        <span className="text-xs uppercase tracking-wide text-gray-400">{isVideo ? 'Video' : 'Image'} settings</span>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-xs uppercase tracking-wide text-gray-400 truncate">{isVideo ? 'Video' : 'Image'} settings</span>
+          {item?.verification && (
+            <span
+              className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${
+                item.verification.overridden
+                  ? 'bg-purple-600/20 text-purple-300'
+                  : item.verification.verdict === 'pass'
+                    ? 'bg-port-success/20 text-port-success'
+                    : 'bg-port-error/20 text-port-error'
+              }`}
+              title={item.verification.summary || (item.verification.verdict === 'pass' ? 'Verification passed' : 'Defect detected')}
+            >
+              <ShieldCheck className="w-3 h-3" />
+              {item.verification.overridden ? 'Override' : item.verification.verdict === 'pass' ? 'Verified' : 'Defect'}
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-1">
           {rating && [['good', ThumbsUp, 'bg-port-success/90 text-white'], ['bad', ThumbsDown, 'bg-port-error/90 text-white']].map(([value, Icon, on]) => {
             const active = rating.value === value;
@@ -949,10 +980,34 @@ function SettingsPane({
           </dl>
         )}
 
+        {!isVideo && item.filename && (
+          <div id="image-verification-section" className="pt-2 border-t border-port-border/60">
+            <ImageVerificationDetails
+              item={item}
+              onVerificationChange={onVerificationChange}
+            />
+          </div>
+        )}
+
         <HostedCopyRow key={item.key} item={item} />
       </div>
 
       <footer className="shrink-0 flex flex-wrap gap-1.5 p-3 border-t border-port-border">
+        {!isVideo && item.filename && (
+          <button
+            type="button"
+            onClick={() => {
+              const el = document.getElementById('image-verification-section');
+              if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }
+            }}
+            title="Inspect or run verification checks (anatomy, digits, composition, text)"
+            className="flex-1 min-h-[44px] min-w-[80px] flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent/80 text-white hover:opacity-90 rounded"
+          >
+            <ShieldCheck className="w-3.5 h-3.5" /> Verify
+          </button>
+        )}
         {onRefine && item.prompt && item.prompt !== '(no prompt)' && (
           <button
             type="button"

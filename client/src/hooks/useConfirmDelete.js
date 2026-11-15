@@ -1,3 +1,11 @@
+/**
+ * Single-at-a-time `{ confirmingId, isConfirming, requestDelete, cancelDelete, confirmDelete }` for
+ * arming one list/card row at a time.
+ *
+ * Use when: New destructive list action — pair with `<InlineConfirmRow>` / `<ConfirmButtonPair>`
+ * instead of deleting on the raw trash click.
+ */
+
 import { useCallback, useState } from 'react';
 
 /**

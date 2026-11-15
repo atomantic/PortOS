@@ -1,6 +1,9 @@
 /**
  * Zod validation schemas for the Creative Ingredients Catalog routes.
  *
+ * Creative ingredients catalog route schemas (scraps, ingredients, links, relations, tags, revisions,
+ * sync envelope).
+ *
  * Domain-namespaced (imported as `catalogValidation.X` from the lib barrel)
  * so cross-domain identifier collisions never bite. The route handler in
  * server/routes/catalog.js uses `validateRequest(schema, body)` against these.
@@ -29,6 +32,7 @@ import { GENERATION_METADATA_LIMITS } from './pngMetadata.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 
 import { isTruthyMeta } from './metadataFlags.js';
+import { LOOK_AROUND_MAX_ANGLES, LOOK_AROUND_MOTION_IDS } from './catalogLookAround.js';
 import { STORY_DRAFT_LIMITS } from './catalogStoryDraft.js';
 import { BLEND_MAX_STRENGTH_TAKES, DESIGN_FEATURES, DESIGN_FRAMINGS, DEFAULT_DESIGN_FRAMING, DESIGN_LINE_MAX, DESIGN_MAX_BLEND_REFS, DESIGN_MAX_TAKES, DESIGN_NOTE_MAX } from './catalogDesign.js';
 // Derived from the shared type registry (`catalogTypes.js`) — adding a SYSTEM
@@ -486,6 +490,12 @@ export const catalogMediaFromMoodBoardSchema = z.object({
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
   inferAge: z.boolean().optional(),
 }).strict();
+// ids=a,b,c — the batched media read a music-video board makes for its cast (#16076).
+export const catalogBatchMediaQuerySchema = z.object({
+  ids: z.string().trim().min(1).transform((v) => [...new Set(v.split(',').map((id) => id.trim()).filter(Boolean))])
+    .pipe(z.array(z.string().min(1).max(200)).min(1).max(100)),
+});
+
 export const catalogMediaLibraryQuerySchema = z.object({
   age: z.coerce.number().int().min(0).max(150).optional(),
   era: z.enum(['child', 'teen', 'adult', 'elder']).optional(),
@@ -508,6 +518,34 @@ export const catalogPortraitSetSchema = z.object({
 // the ingredient lock and leaves an already-attached render untouched.
 export const catalogGeneratedImageAttachSchema = z.object({
   mediaKey: z.string().trim().min(1).max(512),
+}).strict();
+
+// Place look-around (#16145). The prompt override is the director's own text, sent as typed (#11317).
+export const catalogLookAroundRenderSchema = z.object({
+  sourceImage: z.string().trim().min(1).max(512).optional(),
+  motion: z.enum(LOOK_AROUND_MOTION_IDS).optional(),
+  modelId: z.string().trim().min(1).max(200).optional(),
+  seconds: z.number().finite().positive().max(60).optional(),
+  resolution: z.string().trim().min(1).max(16).optional(),
+  prompt: z.string().max(20_000).refine((v) => v.trim().length > 0, { message: 'The prompt cannot be empty' }).optional(),
+  dryRun: z.boolean().optional(),
+}).strict();
+
+export const catalogLookAroundClipParamsSchema = z.object({
+  id: z.string().min(1).max(80),
+  clipId: z.string().regex(/^[A-Za-z0-9-]{1,80}$/),
+}).strict();
+
+export const catalogLookAroundFramesSchema = z.object({}).strict();
+
+export const catalogLookAroundAnglesSchema = z.object({
+  angles: z.array(z.object({
+    atSec: z.number().finite().min(0).max(3600),
+    bearingDeg: z.number().finite().min(0).max(360).optional(),
+    name: z.string().trim().max(80).optional(),
+  }).strict()).min(1).max(LOOK_AROUND_MAX_ANGLES),
+  cleanup: z.boolean().optional(),
+  dryRun: z.boolean().optional(),
 }).strict();
 
 // Reference-sheet render/preview body. The prompt overrides are the user's own

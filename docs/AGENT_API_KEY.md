@@ -53,7 +53,7 @@ curl -sS "$(jq -r .url ~/.portos/agent-key.json)/api/cos/tasks" \
 - The key is a session token, never the password. It carries the same operator authority as a signed-in browser or a PortOS-spawned agent, and the request audit identity names it as the `agent-key` session.
 - Holding the token is the only thing that grants it. Requests are never trusted for arriving on loopback: Tailscale serve and the dev proxy both deliver remote traffic to `127.0.0.1`.
 - Anything that can read a `0600` file in the host user's home already runs as that user and could mint a session from `data/auth-sessions.json`, so the file widens no boundary. It lives outside `data/` so backups and peer sync never carry the plaintext token (`auth-sessions.json` stores hashes only).
-- The on/off flag lives under `secrets.agentKey` in `settings.json`, out of reach of the generic settings GET/PUT. `PUT /api/auth/agent-key` and `POST /api/auth/agent-key/rotate` are on the host-control list (`server/lib/hostControlRoutes.js`). `GET /api/auth/agent-key` reports state and never the token.
+- The on/off flag lives under `secrets.agentKey` in `settings.json`, out of reach of the generic settings GET/PUT. `PUT /api/auth/agent-key` and `POST /api/auth/agent-key/rotate` need host control, like every `/api` write (`server/lib/hostControlRoutes.js`). `GET /api/auth/agent-key` reports state and never the token.
 
 ## FableLoom static export
 

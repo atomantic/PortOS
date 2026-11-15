@@ -1,3 +1,8 @@
+/**
+ * `assertFlux2InputsCompatible` rejects FLUX.2 selections whose init image or references would be
+ * discarded by the selected runner.
+ */
+
 import { ServerError } from './errorHandler.js';
 import { isFlux2 } from './runners.js';
 

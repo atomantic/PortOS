@@ -1,3 +1,8 @@
+// `downloadBlob(data, filename, type?)` — trigger a browser "Save as…" for a Blob / ArrayBuffer /
+// typed array / string, with object-URL + temporary `<a>` cleanup.
+//
+// Use instead of inlining `URL.createObjectURL` + `<a download>`.
+//
 // Trigger a browser "Save as…" for in-memory data without leaking the object
 // URL or the temporary <a>. Accepts a Blob, ArrayBuffer, typed array, or string
 // — anything the Blob constructor takes. Pass `type` to set the MIME type when

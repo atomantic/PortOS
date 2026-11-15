@@ -39,13 +39,21 @@ import {
   getSettings, getToolsList, patchSettingsSlice, listAgyImageModels, listImageModels, getImageGenStatus,
   getVideoGenModelContext, generateImage, getCredentialInventory, getProviders, registerTool, updateTool,
 } from '../../services/api';
+import toast from '../ui/Toast';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 import { ImageGenTab, MEDIA_TABS } from './ImageGenTab';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 
 // Every slice PATCH a save sent, keyed by slice path.
 const sentSlices = () => Object.fromEntries(patchSettingsSlice.mock.calls.map(([slicePath, partial]) => [slicePath, partial]));
-const awaitSave = () => waitFor(() => expect(patchSettingsSlice).toHaveBeenCalled());
+// A save PATCHes one slice at a time and then toasts its outcome, so wait for
+// that toast: resolving on the first PATCH races the remaining slices.
+const awaitSave = () => waitFor(() => {
+  expect(patchSettingsSlice).toHaveBeenCalled();
+  expect(toast.success.mock.calls.length + toast.error.mock.calls.length).toBeGreaterThan(0);
+});
+
+const awaitPatchStarted = () => waitFor(() => expect(patchSettingsSlice).toHaveBeenCalled());
 
 const renderTab = async (initialEntries = ['/media/image']) => {
   const view = render(
@@ -378,7 +386,7 @@ describe('ImageGenTab grouped tabs', () => {
     const save = screen.getByRole('button', { name: /^Save$/ });
     fireEvent.change(input, { target: { value: 'http://example.test:9001/' } });
     fireEvent.click(save);
-    await awaitSave();
+    await awaitPatchStarted();
     fireEvent.change(input, { target: { value: 'http://example.test:9002/' } });
     await act(async () => { finishPatch({}); });
     await waitFor(() => expect(save.disabled).toBe(false));

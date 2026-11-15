@@ -1,4 +1,9 @@
-/** Recoverable deletion for user-owned files; temporary cleanup still uses unlink. */
+/**
+ *  Recoverable deletion for user-owned files; temporary cleanup still uses unlink.
+ *
+ * `trashFiles(paths)` moves existing literal paths to the host OS Trash/Recycle Bin, guards test data,
+ * and propagates failures without permanent-delete fallback.
+ */
 import { moveToNativeTrash } from './nativeTrash.js';
 import { lstat } from 'node:fs/promises';
 import { ServerError } from './errorHandler.js';

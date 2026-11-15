@@ -1,6 +1,15 @@
 /**
  * Estimation-drill precision copy.
  *
+ * `estimationToleranceText(tolerancePct)` → the one line an estimation drill shows to say how precise
+ * to be, e.g. "Within 10% counts — 2 significant figures is close enough". Converts the grading band
+ * into significant figures (scale-free: rounding to `n` of them is worst-case `0.5 x 10^(1-n)` off, so
+ * the smallest `n` that fits the band IS the precision required), because a percentage of an answer
+ * you have not worked out yet is not actionable mid-drill. Reads the band through
+ * `resolveEstimationTolerancePct` (`server/lib/postScoring.js`), the same resolver both graders use,
+ * so the copy can never claim a band the ✓/✗ did not apply. Rendered by
+ * `components/meatspace/post/EstimationPrecision.jsx`. Pure, DOM-free.
+ *
  * Estimation drills grade within a percentage band of the exact answer, but a
  * bare "309 - 925" tells the drillee nothing about how precise to be — are they
  * estimating to the nearest 10, or the nearest 100? A percentage is also not

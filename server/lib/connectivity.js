@@ -1,6 +1,14 @@
 /**
  * Internet-reachability probe.
  *
+ * `isMachineOnline({timeoutMs?, hosts?})` — internet-reachability probe: bare TCP `connect` to public
+ * anycast resolvers on :443 (no DNS, no HTTP), resolves `true` on the first connect and `false` only
+ * after all fail; never rejects. Reuse when a caller needs a best-effort local reachability signal.
+ * Also `isPortReachable({host?, port, timeoutMs?})` — the same connect primitive aimed at ONE address,
+ * for "is anything listening there yet?"; use it rather than a bind probe whenever another process is
+ * expected to own the port, since a bind probe can win the race and kill that process with
+ * `EADDRINUSE`.
+ *
  * A liveness signal answering "does this machine currently have internet?" for
  * callers that need to distinguish a local outage from an unreachable service.
  *

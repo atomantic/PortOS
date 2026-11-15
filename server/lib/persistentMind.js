@@ -1,6 +1,15 @@
 /**
  * Pure persistent-CoS-mind state helpers.
  *
+ * Pure persistent-CoS-mind runtime state: default-off durable shape, normalization,
+ * FIFO-message/self-wake selection, interrupted-wake requeue, accepted-route fingerprints/receipts,
+ * image-work rollback guard, bounded exponential backoff, watchdog staleness, and next-wake
+ * projection. Staleness alone never kills a turn: `services/persistentMindSupervisor.js` tracks each
+ * turn's in-flight provider calls and, before interrupting a stale heartbeat, checks liveness (an open
+ * call, and for Ollama-backed providers `/api/ps` still showing the model loaded); a live thought
+ * waits with no fixed cap, while a turn with no open call (e.g. after a process restart) or a gone
+ * provider is interrupted as before.
+ *
  * The supervisor service owns I/O and timers. This module owns the durable
  * shape and clock-driven decisions so restart recovery can replay the same
  * rules without depending on module-level process state.

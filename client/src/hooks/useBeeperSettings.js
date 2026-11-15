@@ -1,3 +1,14 @@
+/**
+ * Load/edit/save lifecycle for the `settings.beeper` slice (enabled, interval, base URL, attachment
+ * budget), mirroring `useSyncSourceSettings`.
+ *
+ * The `settings.beeper` ingestion + connection slice (`enabled`, `intervalMinutes`, `baseUrl`,
+ * `attachmentBudgetGb`) as a load/edit/save lifecycle, mirroring `useSyncSourceSettings` but for
+ * Beeper's extra fields. Deliberately never reads or writes `token`/`tokenExpiresAt` — the server
+ * redacts the token from every `getSettings` response and rejects one on write (#30/#31). Returns `{
+ * loading, form, setForm, saving, dirty, save }`. Use when: The Comms → Beeper settings card (#30).
+ */
+
 import { useEffect, useState } from 'react';
 import { getSettings, updateSettings } from '../services/api';
 

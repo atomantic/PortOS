@@ -3,6 +3,12 @@
  * refusal reasons that describe a portable Mind bundle (#7621, #7622; epic
  * #7620).
  *
+ * Mind bundle format vocabulary, free of node builtins so the browser reads the same definitions
+ * (`client/src/lib/mindBundle.js`) — magic/versions/extension, scrypt parameters, export scopes
+ * (`PERSISTENT_MIND_BUNDLE_SCOPES`), import groups and their source scopes
+ * (`PERSISTENT_MIND_BUNDLE_GROUPS`, `MIND_BUNDLE_GROUP_SCOPES`, `MIND_BUNDLE_GROUP_CHOICES`),
+ * size/passphrase bounds, and the named refusal reasons (`MIND_BUNDLE_REFUSALS`, `mindBundleRefusal`).
+ *
  * Deliberately separate from `mindBundleCrypto.js`, which seals and opens one:
  * that module imports node's `crypto`, and the browser needs these same names
  * to render the export scope list, the import group table, and the passphrase

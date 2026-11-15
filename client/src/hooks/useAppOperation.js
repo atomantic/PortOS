@@ -1,3 +1,9 @@
+/**
+ * Socket-based app ops (update, standardize) with step tracking.
+ *
+ * Use when: App operations UI.
+ */
+
 import { useState, useCallback, useEffect, useRef } from 'react';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';

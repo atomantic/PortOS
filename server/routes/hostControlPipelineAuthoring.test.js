@@ -387,8 +387,19 @@ describe('Pipeline agent-backed generation authority (#10068, #10907)', () => {
     }
   });
 
-  it('keeps record CRUD, reads and cancellation open to remote callers', async () => {
-    const app = appFor();
+  it('refuses remote record CRUD and cancellation, and runs them for host control without agent work', async () => {
+    const remote = appFor();
+    for (const [operation, method] of [
+      [[`/api/pipeline/series/${id}`, { styleNotes: 'Example notes' }], 'patch'],
+      [[`${issue}`, { title: 'Example issue' }], 'patch'],
+      [[`${issue}/auto-run-text/cancel`, {}], 'post'],
+    ]) {
+      const refused = await call(remote, operation, {}, method);
+      expect([refused.status, refused.body.code], operation[0]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expectNoEffects();
+
+    const app = appFor('127.0.0.1');
     const patchSeries = await call(app, [`/api/pipeline/series/${id}`, { styleNotes: 'Example notes' }], {}, 'patch');
     expect(patchSeries.status).toBe(200);
     expect(effects.updateSeries).toHaveBeenCalledTimes(1);

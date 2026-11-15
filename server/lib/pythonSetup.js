@@ -1,3 +1,11 @@
+/**
+ * Python venv / runner setup helpers.
+ *
+ * `installLockedRuntime(python, profileId, onLog)` and `installPackages(python, names, onLog)` install
+ * only hash-pinned locks (`--require-hashes --no-deps`, private uv when `preferUv`) and refuse
+ * unsupported hosts or unlocked packages before any subprocess runs.
+ */
+
 import { execFile, spawn } from './childProcess.js';
 import { existsSync, readdirSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';

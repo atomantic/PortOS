@@ -1,3 +1,14 @@
+/**
+ * Hook resolving a canvas palette into a ref and re-resolving it on theme switch so canvases repaint.
+ *
+ * Resolves a canvas palette into a ref — `rollPalette` by default, or any resolver passed as the
+ * second argument (the Core Assembly avatar reads `--port-accent-2`), re-resolving on theme switch
+ * (`data-port-theme` MutationObserver) and repainting through a `drawRef`. Hands back a ref, not
+ * state, so a theme swap redraws the imperative canvas without a React re-render. Use when: Both
+ * piano-roll canvases need theme-aware accent/bg colors that canvas `fillStyle` can't read from CSS
+ * vars.
+ */
+
 import { useEffect, useRef } from 'react';
 import { rollPalette } from '../lib/canvasRoll.js';
 

@@ -1,6 +1,11 @@
 /**
  * The Node.js interpreter PortOS's own pm2 apps are pinned to.
  *
+ * `resolvePinnedNodeInterpreter` reads the absolute Node binary PortOS's pm2 apps are pinned to
+ * (`PORTOS_NODE_INTERPRETER`, exported value then `.env`; a missing or non-`node` path falls back to
+ * PATH), `isUsableNodeInterpreter`, and `withNodeBinOnPath` for scripts that must run on that runtime.
+ * CJS twin in `ecosystem.config.cjs`.
+ *
  * `ecosystem.config.cjs` used to launch every app with `interpreter: 'node'`,
  * which pm2 resolves against the DAEMON's PATH — so the Node that actually ran
  * PortOS was whichever `node` came first there (often Homebrew's), not the one

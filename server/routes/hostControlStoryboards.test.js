@@ -82,9 +82,9 @@ const post = (app, path, body = {}, headers = {}) => {
   return pending.send(body);
 };
 
-// A remote password-free caller can still create the board the runs act on.
+// Board creation is a write, so only an authorized (here local) caller can create it.
 const newBoard = async () => {
-  const created = await post(appFor(), '/api/storyboards', { name: 'Example Story' });
+  const created = await post(appFor('127.0.0.1'), '/api/storyboards', { name: 'Example Story' });
   expect(created.status).toBe(201);
   return created.body.id;
 };
@@ -105,44 +105,12 @@ beforeEach(() => {
 });
 
 describe('Storyboards agent runs require operator authority (#12952)', () => {
-  it('gates exactly the five runs; every other Storyboards mutation stores records and stays open', () => {
+  it('gates every Storyboards mutation, including the five agent runs', () => {
     const mutations = scanRouteGraph().routes
       .filter((route) => route.mountPath === '/api/storyboards' && route.method !== 'GET')
       .map(({ method, path }) => `${method} ${path}`);
-    expect(mutations.filter((route) => isHostControlRoute(...route.split(' '))).sort()).toEqual(GATED);
-    expect(mutations.filter((route) => !isHostControlRoute(...route.split(' '))).sort()).toEqual([
-      'DELETE /api/storyboards/:id',
-      'DELETE /api/storyboards/:id/beats/:beatId',
-      'DELETE /api/storyboards/:id/panels/:panelId',
-      'DELETE /api/storyboards/:id/panels/:panelId/takes/:takeId',
-      'DELETE /api/storyboards/recipes/:recipeId',
-      'PATCH /api/storyboards/:id',
-      'PATCH /api/storyboards/:id/beats/:beatId',
-      'PATCH /api/storyboards/:id/panels/:panelId',
-      'PATCH /api/storyboards/:id/panels/:panelId/make/:nodeId',
-      'POST /api/storyboards',
-      'POST /api/storyboards/:id/beats',
-      'POST /api/storyboards/:id/beats/:beatId/move',
-      'POST /api/storyboards/:id/beats/:beatId/panels',
-      'POST /api/storyboards/:id/beats/add',
-      'POST /api/storyboards/:id/panels/:panelId/move',
-      'POST /api/storyboards/:id/panels/:panelId/scene-art',
-      'POST /api/storyboards/:id/panels/:panelId/takes',
-      'POST /api/storyboards/:id/panels/:panelId/takes/:takeId/select',
-      'POST /api/storyboards/:id/video',
-      'POST /api/storyboards/fit-music-video/:projectId',
-      'POST /api/storyboards/from-fableloom/:loomId/:episodeId',
-      'POST /api/storyboards/from-music-video/:projectId',
-      'POST /api/storyboards/from-pipeline/:issueId',
-      'POST /api/storyboards/group-by-song/:projectId',
-      'POST /api/storyboards/music-video/:projectId/shots/:sceneId/panel-art',
-      'POST /api/storyboards/music-video/:projectId/shots/:sceneId/update-from-panel',
-      'POST /api/storyboards/pipeline/:issueId/update-from-board',
-      'POST /api/storyboards/recipes',
-      'POST /api/storyboards/sync-music-video/:projectId',
-      'PUT /api/storyboards/:id/recipe',
-      'PUT /api/storyboards/sync-music-video/:projectId/auto',
-    ]);
+    expect(mutations).toEqual(expect.arrayContaining(GATED));
+    expect(mutations.filter((route) => !isHostControlRoute(...route.split(' ')))).toEqual([]);
   });
 
   it('refuses a remote password-free caller, including spoofed-proxy variants and path spellings, before any provider call or render', async () => {

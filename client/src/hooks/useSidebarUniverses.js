@@ -1,3 +1,10 @@
+/**
+ * Universes for the Create > Universes grandchildren (built on `useFocusRefreshedList`, reloads on
+ * `universe:changed`).
+ *
+ * Use when: The sidebar universes section.
+ */
+
 import * as api from '../services/api';
 import { useFocusRefreshedList } from './useFocusRefreshedList.js';
 

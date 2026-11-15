@@ -66,9 +66,9 @@ export const beeperDdl = [
   // Pin/archive/mute/low-priority/unread state is Beeper's own state, mirrored
   // read-only; PortOS never invents a second source of truth for it. `type`
   // is intentionally unconstrained: db.ddlParity.test.js forbids a
-  // hardcoded enum constraint on any `type` column in this schema (the same
-  // rule that keeps catalog_ingredients.type app-layer-gated), so a new
-  // Beeper chat type never needs a two-file migration to accept.
+  // hardcoded enum constraint on it (the same rule that keeps
+  // catalog_ingredients.type app-layer-gated), so a new Beeper chat type
+  // never needs a constraint migration to accept.
   `CREATE TABLE IF NOT EXISTS beeper_conversations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id TEXT NOT NULL REFERENCES beeper_accounts (account_id) ON DELETE CASCADE,
@@ -337,10 +337,9 @@ export const beeperDdl = [
   // Every link an existing install made by hand before `kind='beeper-user'`
   // existed lives ONLY in the `beeper_participants.tribe_person_id` cache, so
   // the next purge + resweep would still lose it. This promotes each of those
-  // to a durable claim. It is not in `server/scripts/init-db.sql`: that file
-  // provisions a FRESH database, where there is no participant row to
-  // promote, and the parity test (`server/lib/db.ddlParity.test.js`)
-  // compares table/index/trigger shape, which this statement does not touch.
+  // to a durable claim. On a FRESH database (the generated
+  // `server/scripts/init-db.sql` runs it too) there is no participant row to
+  // promote, so it is a no-op there.
   //
   //   - The `NOT EXISTS` guard makes it ONE-SHOT. `ensureSchema()` does not
   //     memoize (it only collapses concurrent callers), and every beeperTribe

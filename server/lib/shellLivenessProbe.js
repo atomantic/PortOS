@@ -2,6 +2,12 @@
  * Build and run the process-liveness probe for a launched TUI command in a PTY
  * session.
  *
+ * `buildLivenessProbeCommand(shellPid, platform?)` + `parseLivenessProbeOutput(stdout, shellPid)` +
+ * `shellHasLiveChild(shellPid, opts?)` — platform-aware process-liveness probe for a launched TUI
+ * command in a persistent PTY shell. POSIX (`ps -Ao ppid=`) / Windows (`Get-CimInstance Win32_Process
+ * | Select-Object -ExpandProperty ParentProcessId` via PowerShell). Resolves true (assume alive) when
+ * the probe fails or cannot run.
+ *
  * The TUI runs as a CHILD of a persistent PTY shell (e.g. `claude` spawned inside
  * `zsh` or `cmd.exe`). When that command exits early during startup (bad config,
  * command not found, auth error), the PTY itself stays open — the shell returns to

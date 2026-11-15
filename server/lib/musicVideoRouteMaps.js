@@ -1,4 +1,14 @@
 /**
+ * Music Video route maps (`project.routeMaps`): an ordered path through the video's places with a
+ * direction of travel.
+ *
+ * a shot is on the stop of its picked set, else its first set reference
+ * (`musicVideoShotPlaceId(project, scene)`); `routeMapStopShots(project, map)` (each stop's shot
+ * numbers, derived, never stored), `draftRouteMapStops(project, { fromShot, toShot, newId })` (a new
+ * route read off the shots), `routeMapProblems`, `shotRangesText`, `routeMapShotText(project, scene)`
+ * (the shot's "Route" prompt addition, with each stop's side streets and landmarks placed in frame for
+ * its forward or back greybox camera). The map is drawn in the UI and never sent as an image. Pure.
+ *
  * Music Video route maps: an ordered path through several of the video's
  * places (a bike ride down five street stretches, a walk from the car park to
  * the rink), with the way the travellers face, so shots on different stretches

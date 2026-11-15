@@ -1,6 +1,12 @@
 /**
  * How the Agent Operations panel renders the bundled slashdo workflows (#3114).
  *
+ * The Agent Operations buttons. `SLASHDO_WORKFLOWS` is `server/lib/slashdoCatalog.js`'s list decorated
+ * with a per-command Tailwind tone, and `slashdoWorkflowsForApp(isSwiftApp)` filters it through the
+ * server's own `slashdoWorkflowAppliesTo` — so the panel cannot be a workflow short.
+ * `SLASHDO_NAMESPACE` + `slashdoLabel(command)` (the `/do:x` UI spelling) stay local: the server
+ * module that owns the namespace reaches for the provider registry.
+ *
  * WHICH workflows exist, what each does, and which app types each applies to are
  * defined once in `server/lib/slashdoCatalog.js` and read from there — the panel
  * cannot be a workflow short, and a description cannot say two different things

@@ -1,4 +1,10 @@
-/** Optional preview clock/playback messages. Legacy open and seek stay unchanged. */
+/**
+ *  Optional preview clock/playback messages. Legacy open and seek stay unchanged.
+ *
+ * Strict optional generated-preview clock, preparation, playback-anchor and pause message contracts,
+ * plus authored-producer reply contracts and private bridge constants; legacy open and seek payloads
+ * remain unchanged.
+ */
 import { z } from 'zod';
 
 export const AUTHORED_PREVIEW_PLAYBACK_TARGET = '__portosAuthoredPreviewPlayback';

@@ -1,6 +1,6 @@
 # Contributing Guide
 
-Git 2.40 or newer is required for merge validation and detached-checkout retirement.
+Git 2.43 or newer is required for merge validation, detached-checkout retirement and branch-presence checks (`git show-ref --exists`).
 The capability check requires both `git merge-tree --write-tree` and `--merge-base`
 ([Git 2.40 documentation](https://github.com/git/git/blob/v2.40.0/Documentation/git-merge-tree.txt)).
 Run `node scripts/checkGitVersion.js` before setup or contribution work; setup and
@@ -129,7 +129,7 @@ See [VERSIONING.md](./VERSIONING.md) for full details.
 1. Work on `main` branch (or feature branches merged to `main`)
 2. PRs to `main` trigger CI tests
 3. Follow the [frozen candidate procedure](./VERSIONING.md#creating-a-release): capture `main` at kickoff, validate an isolated candidate, then merge it into `release` to publish
-4. Before pushing, follow [Regular Development](./VERSIONING.md#regular-development): verify your branch/upstream and working-tree state, preserve unrelated work, and explicitly fetch the intended base for comparison (the tracking branch may differ); integrate it only for conflicts, enforced branch policy, or evidenced integration risk. Run `npm run pregate` on POSIX, or `node scripts/pregate.js` on Windows, after any rebase and before every push; use `npm run pregate -- --full` on POSIX or `node scripts/pregate.js --full` on Windows for CI's plan. See [AGENTS.md's Git Workflow](../AGENTS.md#git-workflow) for the full contract.
+4. Before pushing, follow [Regular Development](./VERSIONING.md#regular-development): verify your branch/upstream and working-tree state, preserve unrelated work, and explicitly fetch the intended base for comparison (the tracking branch may differ); integrate it only for conflicts, enforced branch policy, or evidenced integration risk. Run `npm run pregate` on POSIX, or `node scripts/pregate.js` on Windows, after any rebase and before every push; use `npm run pregate -- --full` on POSIX or `node scripts/pregate.js --full` on Windows for CI's plan. See [AGENTS.md's Git Workflow](../AGENTS.md#git-workflow) and the [portos-ship skill](../.claude/skills/portos-ship/SKILL.md) for the full contract.
 
 Pregate first checks installed package versions against all four workspace lockfiles without modifying dependency trees. Stale, missing, or unreadable evidence stops lint/tests with a reconciliation diagnostic. Pregate requires development dependencies (`npm ci --include=dev` in an owning workspace); a production-only installation cannot run its checks. Ordinary worktree links must be repaired only in their owning source checkout; a separate clone with its own locked installs is also suitable for validation. `--plan-only` prints the plan without checking installed dependencies.
 
@@ -360,6 +360,12 @@ Opt-in diagnostics add observation work; original test deadlines stay intact.
 Failure messages retain bounded phase evidence even with quiet reporting; without
 the opt-in they still name the active phase and per-phase elapsed time.
 A passing run without a reproduced slow phase does not resolve the timeout.
+
+### Test Strategy: Value Over Assertion Count
+
+- **Default to the highest practical public boundary** (route, service workflow, store adapter, socket exchange, rendered interaction): success plus materially different failure/compatibility paths, not every branch. Don't unit-test a helper a stable caller already exercises, add coverage-only tests, or table-drive permutations proving one outcome.
+- **Focused unit tests earn their place** where a higher-level test can't pin behavior precisely or cheaply: parsers/algorithms with a real input matrix; security, privacy, data-isolation and destructive-action guards; migrations and cross-version compatibility; serialization/schema boundaries; retry, timeout and process-lifecycle state machines; edge cases ambiguous through integration. Real timeout behavior gets one fake-time contract test, never repeated production sleeps.
+- **Name the regression a new test uniquely catches** before adding it. In review, remove tests that duplicate a stronger assertion, mirror implementation details, only verify mocks calling mocks, or cover impossible states. Count and coverage are diagnostics; CI time, determinism and regression-detection value are the goals.
 
 For server watch mode, run this alternative from the repository root:
 

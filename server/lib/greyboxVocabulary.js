@@ -2,6 +2,14 @@
  * Greybox constants both sides of the wire agree on, kept DEPENDENCY-FREE so
  * the client imports them directly (`greyboxScene.js` pulls in zod, which the
  * client CI job does not install).
+ *
+ * Dependency-free greybox constants both sides of the wire agree on (`GREYBOX_ASPECTS`,
+ * `GREYBOX_PRACTICAL_LIGHTS` (lamp, headlight, window: what a part gives off after dark),
+ * `GREYBOX_SHOT_ROLE_PREFIX`, `GREYBOX_SHOT_ID_MAX`/`GREYBOX_SHOT_ID_PATTERN`) and
+ * `greyboxFigurePromptLines(scene, shot)` for visible figure placement additions, `GREYBOX_SKY_COLOR`
+ * (light capture sky) and `greyboxInfrastructurePromptLines(scene, shot)` for the street layout (pole
+ * line side, drops, lamps, sidewalks, derelict houses) a plate prompt states, so the client imports
+ * them directly instead of mirroring them.
  */
 
 /** Maximum authored instruction length, shared with request validation. */

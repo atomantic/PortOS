@@ -1,3 +1,17 @@
+/**
+ * Drag-to-pan gesture hook: mouse pointer drags scroll a surface past a slop threshold, with click
+ * suppression after a drag ends.
+ *
+ * Shared drag-to-pan gesture: mouse-only pointer drag scrolls a surface by writing
+ * `scrollLeft`/`scrollTop` directly, past a per-caller `slop` threshold, with built-in click
+ * suppression so ending a drag over a control doesn't activate it. `canStart(event)` opts a gesture
+ * out (an interactive child, or another gesture that already claimed the pointerdown);
+ * `onPanEnd(moved)` lets a caller with more than one drag source (a card's own drag) fold this into
+ * its own combined click-suppression ref. Returns `{ surfaceRef, panProps, panned, isPanning }`. Use
+ * when: Any pannable overflow surface bigger than its pane (FableLoom's scene graph, a stretched
+ * chart) — don't re-roll the scrollLeft/scrollTop drag math.
+ */
+
 import { useCallback, useRef, useState } from 'react';
 import { isTapGesture } from '../lib/graphPicking';
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { captureImageFrameDependencies } from '../../lib/musicVideoDependencies.js';
-import { appendSceneTakes, rejectUnusedTakes, swapSceneFrames } from './takes.js';
+import { appendSceneTakes, appendTakesAcrossScenes, rejectUnusedTakes, selectSceneTake, swapSceneFrames } from './takes.js';
 import { captureClipReferenceDependency, captureMusicVideoEvidence, captureTakeDependencies } from '../../lib/musicVideoDependencies.js';
 
 const project = () => ({ id: 'mv-1', scenes: [{ sceneId: 's1' }] });
@@ -211,5 +211,41 @@ describe('swap start and end frames', () => {
     const added = next.takes.filter((t) => !['t1', 't2', 't3'].includes(t.takeId));
     expect(added.map((t) => [t.kind, t.assetId, t.prompt])).toEqual([['endImage', 'a.png', 'Door opens']]);
     expect(() => swapSceneFrames({ scenes: [{ ...scene, endImageId: null }] }, 's1')).toThrow(/both a start and an end frame/);
+  });
+});
+
+// #16128: one sequence take filed on two shots, each picked on its own.
+describe('sequence takes', () => {
+  const sequence = (index, offsetFrames) => ({ sceneIds: ['a', 'b'], index, offsetFrames, from: index ? 'cut' : 'start' });
+  const filed = () => appendTakesAcrossScenes({ id: 'mv-1', scenes: [
+    { sceneId: 'a', videoHistoryId: 'own-a', offsetFrames: 6 },
+    { sceneId: 'b' },
+  ] }, [
+    { sceneId: 'a', kind: 'video', assetId: 'seq', source: 'generated', autoSelect: false, sequence: sequence(0, 0) },
+    { sceneId: 'b', kind: 'video', assetId: 'seq', source: 'generated', autoSelect: false, sequence: sequence(1, 60) },
+  ]);
+
+  it('files the take on every shot without changing a selection, even an empty one', () => {
+    const { project: next, appended } = filed();
+    expect(next.scenes.map((s) => s.videoHistoryId ?? null)).toEqual(['own-a', null]);
+    expect(next.scenes[0].offsetFrames).toBe(6);
+    expect(appended.map(({ take }) => take.sequence)).toEqual([sequence(0, 0), sequence(1, 60)]);
+  });
+
+  it('picking it on one shot sets that shot\'s in-point only, and leaving it clears the in-point', () => {
+    const { project: next, appended } = filed();
+    const picked = selectSceneTake(next, 'b', appended[1].take.takeId);
+    expect(picked.scene).toMatchObject({ videoHistoryId: 'seq', offsetFrames: 60 });
+    expect(picked.project.scenes.find((s) => s.sceneId === 'a')).toMatchObject({ videoHistoryId: 'own-a', offsetFrames: 6 });
+    const nudged = { ...picked.project, scenes: picked.project.scenes.map((s) => (s.sceneId === 'b' ? { ...s, offsetFrames: 64 } : s)) };
+    // Re-picking the same take keeps the nudge.
+    expect(selectSceneTake(nudged, 'b', appended[1].take.takeId).scene.offsetFrames).toBe(64);
+    const onA = selectSceneTake(nudged, 'a', appended[0].take.takeId);
+    expect(onA.scene.videoHistoryId).toBe('seq');
+    expect(onA.scene).not.toHaveProperty('offsetFrames');
+    const ownTake = onA.scene.takes.find((t) => t.assetId === 'own-a');
+    const back = selectSceneTake({ ...onA.project, scenes: onA.project.scenes.map((s) => (s.sceneId === 'a' ? { ...s, offsetFrames: 12 } : s)) }, 'a', ownTake.takeId);
+    expect(back.scene).toMatchObject({ videoHistoryId: 'own-a' });
+    expect(back.scene).not.toHaveProperty('offsetFrames');
   });
 });

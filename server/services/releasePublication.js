@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { execGit } from '../lib/execGit.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { releasePublicationRequestSchema } from '../lib/releasePublication.js';
 import { execGh } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
@@ -20,9 +20,6 @@ export async function verifyAgentReleasePublication(agentId, body) {
   const agent = await getAgentRecord(agentId);
   if (!agent || agent.status !== 'running' || agent.metadata?.taskAnalysisType !== 'do-release') {
     refuse('Publication evidence requires an active release coordinator');
-  }
-  if (agent.metadata.resumedFromAgentId && agent.metadata.releaseCandidateRecovery?.status !== 'transferred') {
-    refuse('Interrupted candidate recovery must be verified before publication');
   }
   const owner = { id: agent.id, taskId: agent.taskId, startedAt: agent.startedAt, metadata: { ...agent.metadata } };
   const cwd = agent.metadata.sourceWorkspace || agent.metadata.workspacePath;
@@ -41,13 +38,6 @@ export async function verifyAgentReleasePublication(agentId, body) {
   const promotionMerge = requireSha(pr.merge_commit_sha);
   const candidate = await readReleaseCandidate(candidateHead, cwd).catch(error => refuse(error.message));
   if (candidate.version !== input.version) refuse('Candidate version differs from the requested publication');
-  const transfer = agent.metadata.releaseCandidateRecovery?.transfer;
-  if (transfer && (transfer.branch !== pr.head.ref || transfer.candidate.cutoff !== candidate.cutoff
-    || transfer.candidate.pin !== candidate.pin || transfer.candidate.releaseBase !== candidate.releaseBase
-    || transfer.candidate.version !== candidate.version
-    || (transfer.publication && transfer.publication.number !== input.promotionPrNumber))) {
-    refuse('Publication differs from the recovered candidate');
-  }
   const tag = `v${input.version}`;
   const [release, run, promotion, ref] = await Promise.all([
     api(`releases/tags/${tag}`), api(`actions/runs/${input.workflowRunId}`),
@@ -77,7 +67,6 @@ export async function verifyAgentReleasePublication(agentId, body) {
   if (tagTree !== tree) refuse('Release tag tree differs from the published candidate');
   const identity = createHash('sha256').update(JSON.stringify([origin.host, repository, tag, tagCommit, tree])).digest('hex');
   const receipt = {
-    ...(transfer && { recoveredPublisher: transfer.origin }),
     status: 'verified', synchronizationHandoffVersion: input.synchronizationMode === 'inline' ? 2 : 1,
     identity, repository, version: input.version, candidateHead,
     candidateBranch: pr.head.ref,
@@ -91,7 +80,12 @@ export async function verifyAgentReleasePublication(agentId, body) {
   // Identity/owner checks and the write share the ordinary agent state lock.
   // Replays retain the original verification time; a competing release cannot
   // replace an earlier milestone or turn it into a terminal delivery verdict.
-  const saved = await recordAgentReleasePublication(owner, receipt);
+  const { readReleaseSynchronizationOutbox } = await import('./releaseSynchronizationStore.js');
+  const existing = (await readReleaseSynchronizationOutbox()).publications?.[identity];
+  const samePublication = existing?.version === 2 && existing.owner.taskId === agent.taskId
+    && ['identity', 'repository', 'version', 'candidateHead', 'promotionMerge', 'workflowRunId', 'tagCommit', 'tagTree']
+      .every(key => existing.publication[key] === receipt[key]);
+  const saved = await recordAgentReleasePublication(owner, samePublication ? existing.publication : receipt);
   const { ensureReleaseSynchronization } = await import('./releaseSynchronization.js');
   // A failed handoff never rolls back or overwrites verified publication.
   const synchronization = await ensureReleaseSynchronization(await getAgentRecord(agentId));

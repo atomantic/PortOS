@@ -1,6 +1,11 @@
 /**
  * Telegram outbound rate limiter (pure — no I/O, no timers).
  *
+ * `createTokenBucket({ max = 30, refillMs = 60_000 })` → `{ consume() }` — the coarse
+ * full-refill-per-window bucket both Telegram transports use against Telegram's ~30 msg/min throttle.
+ * Each transport creates its OWN instance: they are never both active, and one shared bucket would let
+ * a transport inherit the other's drained budget. Pure (reads `Date.now()`, owns no timer).
+ *
  * Telegram throttles bots at roughly 30 messages/minute. Both transports
  * (`services/telegram.js`, `services/telegramBridge.js`) enforce that with the
  * same coarse token bucket: a full refill once the window has elapsed since the

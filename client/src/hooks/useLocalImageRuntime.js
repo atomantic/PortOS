@@ -1,3 +1,14 @@
+/**
+ * The local image runtime's verdict for one model — `{ runtime, loading, refresh }` — from `GET
+ * /api/image-gen/status?mode=local&modelId=…`, the same `diagnoseLocalRuntime` the renderer refuses
+ * against.
+ *
+ * `runtime` carries `readiness`, `reason` and a one-button `remedy`. Pass `null` while the host is
+ * still resolving which model it renders on. Use when: Any surface whose renders can be blocked by an
+ * unhealthy local runtime: pair it with `LocalRuntimeStatus` to show the verdict and its fix, and read
+ * `readiness` to stand the surface's own Render button down.
+ */
+
 import { useCallback, useEffect, useState } from 'react';
 import { getImageGenStatus } from '../services/api';
 

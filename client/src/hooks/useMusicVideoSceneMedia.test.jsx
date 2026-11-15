@@ -33,7 +33,10 @@ vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), info: vi.f
 const { default: toast } = await import('../components/ui/Toast');
 const toastError = toast.error;
 const listCatalogIngredientMedia = vi.fn();
-vi.mock('../services/apiCatalog.js', () => ({ listCatalogIngredientMedia: (...a) => listCatalogIngredientMedia(...a) }));
+// The hook reads the cast in one batched call; the per-id mock below stands in for each member's result (any rejection fails the batch).
+vi.mock('../services/apiCatalog.js', () => ({
+  listCatalogIngredientsMedia: async (ids, options) => Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await listCatalogIngredientMedia(id, options)]))),
+}));
 
 const useMusicVideoSceneMedia = (await import('./useMusicVideoSceneMedia.js')).default;
 
@@ -289,9 +292,15 @@ describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
     };
     const { result } = renderHook(() => useMusicVideoSceneMedia({ project: cast, videoSettings: { settings: {} }, applyScenePatch: vi.fn() }));
     await waitFor(() => expect(result.current.castMedia['cat-chr-x']).toHaveLength(1));
+    // A refocus right after a load is skipped; one after the throttle window reloads.
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(listCatalogIngredientMedia).toHaveBeenCalledTimes(1);
     listCatalogIngredientMedia.mockRejectedValueOnce(new Error('offline'));
+    const realNow = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(realNow + 60_000);
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
     await waitFor(() => expect(listCatalogIngredientMedia).toHaveBeenCalledTimes(2));
+    nowSpy.mockRestore();
     await act(async () => { await Promise.resolve(); });
     expect(result.current.castMedia['cat-chr-x']).toHaveLength(1);
     await act(async () => { await result.current.generateFrame(cast.scenes[0]); });
@@ -364,6 +373,23 @@ it('sends the clip card\'s expected reference files with the video request', asy
   generateVideo.mockResolvedValueOnce({ jobId: 'job-reference', status: 'queued' });
   await act(async () => { await result.current.generateSceneVideo(shot, { card: { prompt: shot.prompt, expectedClipReferenceFiles: ['rider.png'] } }); });
   expect(JSON.parse(generateVideo.mock.calls.at(-1)[0].musicVideo)).toMatchObject({ expectedClipReferenceFiles: ['rider.png'] });
+  cleanup();
+});
+
+// Uniquely catches a draft/final render sent at the pinned resolution, or without its tier (#16136).
+it('sends a draft or final clip at its tier resolution, and an untiered one at the pinned resolution', async () => {
+  const { generateVideo } = await import('../services/apiImageVideo.js');
+  const shot = { sceneId: 's1', order: 0, prompt: 'a rider', referenceImageId: 'start.png', takes: [], startSec: 0, endSec: 4 };
+  const project = { id: 'p7', scenes: [shot] };
+  const settings = { backend: 'fal', falModelId: 'bytedance/seedance-2.5/image-to-video', falResolution: '720p' };
+  const { result } = renderHook(() => useMusicVideoSceneMedia({ project, videoSettings: { settings }, applyScenePatch: vi.fn() }));
+  for (const [tier, resolution] of [['draft', '480p'], ['final', '1080p'], [null, '720p']]) {
+    generateVideo.mockResolvedValueOnce({ jobId: `job-${tier}`, status: 'queued' });
+    await act(async () => { await result.current.generateSceneVideo(shot, tier ? { tier } : {}); });
+    const body = generateVideo.mock.calls.at(-1)[0];
+    expect(body.falResolution).toBe(resolution);
+    expect(body.tier).toBe(tier ?? undefined);
+  }
   cleanup();
 });
 

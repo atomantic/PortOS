@@ -1,4 +1,14 @@
 /**
+ * Newest-render-wins ordering guard for out-of-order async completions.
+ *
+ * `createNewestWinsGuard()` returns `{ isStale(key, at), mark(key, at), clear() }` — tracks the newest
+ * applied `queuedAt` per slot `key` so an older render completing after a newer one is dropped
+ * (`isStale` true) instead of clobbering the newer frame. ISO timestamps compare as strings; absent
+ * `at` is never stale. Used by `createMediaJobImageHook`'s opt-in guard and the catalog hook's
+ * portrait slot.
+ */
+
+/**
  * createNewestWinsGuard — newest-render-wins ordering guard for out-of-order
  * async completions.
  *

@@ -6,7 +6,7 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { installScripts, XCODE_SCRIPT_NAMES } from '../../services/xcodeScripts.js';
 import { loadApp, pathExists } from './shared.js';

@@ -2604,3 +2604,451 @@ Bounded validation on native Apple Silicon, CPython **3.13.18**:
 No model weights, user records, provider calls, full native runtime installation,
 video inference, model-quality evaluation or Windows/Linux CUDA hardware run is
 included. Existing explicit ABI/interpreter/source constraints are preserved.
+
+## Newly cooled follow-on (2026-11-13, #15988)
+
+This refresh advances **SentencePiece 0.2.2 → 0.2.3** in the twelve direct
+MLX/CUDA source recipes that pinned 0.2.2 and their seventeen complete locks;
+**Reactor SDK 1.13.0 → 1.14.0** in its source/lock; and the inseparable
+**Pydantic 2.14.2 / Core 2.50.2 → 2.14.3 / 2.50.4** pair in MiniMax H3 MLX
+and Pixal Metal. Transitive-only SentencePiece/Pydantic entries in other
+profiles retain their existing resolutions. No native/model source, interpreter,
+Torch/CUDA/MLX pin, platform marker or unrelated artifact allowlist changes.
+
+Source/API review:
+
+- [SentencePiece 0.2.3](https://github.com/google/sentencepiece/releases/tag/v0.2.3)
+  adds an independent Lite/FlatBuffers runtime and training algorithms; these
+  profiles continue loading existing Protobuf models through the full processor.
+  Python now requires 3.10+, within the affected profiles' 3.11+ floors. Its
+  wrapper preserves encode options when pickled, accepts legacy model-only
+  pickle state, and repairs empty-batch decoding and normalizer flags. The
+  retained Transformers 5.22.1 SentencePiece conversion/backend code was
+  inspected; no switch to Lite or retraining of user tokenizers is introduced.
+- [Reactor 1.14.0 changelog](https://github.com/reactor-team/reactor-client-sdks/blob/python-v1.14.0/sdks/python/CHANGELOG.md)
+  moves reactor-webrtc 0.24.2 → 0.26.0 on the same libwebrtc revision, raises
+  the default data-channel message ceiling, and fixes reconnect/stepped-frame
+  handling. The inspected wheel preserves the streamed constructor/JWT,
+  callback/track, command, upload and disconnect APIs used by
+  `scripts/reactor-render.py`. Its ctypes ABI declarations are unchanged and
+  the native Apple Silicon library loads and passes its ABI check. There are
+  still seven wheels and no default runtime dependencies; the audio-device
+  extra remains absent. No provider connection or paid call was made.
+- [Pydantic 2.14.3](https://github.com/pydantic/pydantic/releases/tag/v2.14.3)
+  requires exactly Core 2.50.4. The release includes schema/serialization
+  optimizations, GC fixes and validation/copy fixes. Inspected Gradio 6.31.0
+  `Model3D` uses `FileData`; image/prediction data models and MLX-VLM 0.6.10's
+  retained request schemas use the same BaseModel/Field/validator interfaces.
+  No application API adaptation is needed by the exercised contracts. H3's
+  generation runner does not start the optional VLM HTTP server.
+
+All nineteen complete closures were resolved with a fresh **hash-verified uv
+0.13.7** and **2026-11-06T00:00:00Z** cutoff. Extract each existing
+`name==version` requirement with its marker into scratch constraints, substituting
+only the selected versions; use the target/header commands and arm64 macOS
+universal environment restrictions already documented above. Check the entire
+resolved package/version/marker set before transferring the newly generated
+changed-package blocks into the original lock. Preserve companion hash blocks
+and provenance comments, as in the thirty-second slice's bounded recipe.
+Never compose artifact hashes by hand. The header's bounded-regeneration line
+records this run; older commands/dates below it describe the prior baseline.
+
+For CUDA temporary projects, use an **explicit named CUDA index** for Torch
+(and Wan's Torchvision), plus any retained CUDA-local package such as
+`torchcodec==0.17.0+cu126`. Resolve other packages from PyPI. The older
+AudioLDM2/ACE-Step 1.5 multi-index recipes can select undated PyTorch mirrors of
+ordinary PyPI packages and then fail the exclusion cutoff (observed for Pillow).
+The scoped-index recipe avoids that failure without weakening the cutoff or
+changing installer indexes. The complete emitted lock still carries the
+existing CUDA extra-index URL and exact allowed hashes.
+
+Parsed before/after checks preserve every unrelated identity, marker and hash
+set. Across the affected union, **269 identities / 5,313 distinct artifact
+hashes** match official, non-yanked pre-cutoff PyPI or PyTorch-index artifacts.
+Fresh OSV/MAL querybatch requests cover **271 identities**, including base
+versions of CUDA-local packages; response counts, errors and pagination tokens
+are checked, with zero findings. This does not certify bundled native libraries
+or model assets. All nineteen full-profile hash-required installation dry plans
+pass for their declared targets; these plans select artifacts without installing
+or executing those full runtimes.
+
+Native offline probes run on Apple Silicon, **CPython 3.13.18**, against fresh
+seven-package baseline/candidate hash-installed subclosures, both passing
+`uv pip check`. `scripts/cooled_runtime_probe.py` performs:
+
+- Real SentencePiece BPE/unigram training on a tiny synthetic corpus under
+  0.2.2, then identical encoding/decoding (Unicode, whitespace, byte fallback,
+  empty text and BOS/EOS) under 0.2.3 using the same serialized models. Model
+  bytes and legacy pickles reload; candidate pickles retain encode options;
+  corrupt models are refused. No production tokenizer/model is downloaded.
+- Real Reactor native-library loading, client construction, message/raw-frame
+  callback dispatch, track selection, command/upload signatures, pre-connect
+  refusal and no-session disconnect. Callback inputs are synthetic; no WebRTC
+  transport, live stream or provider session is exercised.
+- Actual inspected VLM and Gradio model/helper definitions with real Pydantic:
+  schema limits/literals, file metadata context, JSON serialization/round-trip,
+  extra fields and invalid-input refusal. Definitions are extracted by AST to
+  avoid heavyweight package initializers; only FileData's documentation decorator
+  is omitted. This is not a full Gradio server or model inference test.
+
+Run the opt-in probes in those isolated environments, never an application's
+installed runtime. First run `sentencepiece --fixtures <scratch> --baseline`
+with 0.2.2; then use the same scratch directory with 0.2.3 and no `--baseline`.
+Every subcommand enforces its exact baseline/candidate versions; pass
+`--baseline` only in the baseline environment. The `reactor` subcommand needs
+only the locked SDK. `pydantic` takes `--vlm`,
+`--gradio`, and `--client` paths to the package directories from the inspected,
+hash-verified wheels. Python socket connections are refused by the probes;
+Reactor's native connect API is never invoked.
+
+Retained PyAV 18 on Python 3.11, SymPy's `mpmath<1.4`, Pixal Gradio's
+`safehttpx<0.2`/`tomlkit<0.15`, and ACE-Step's py3langid 0.3 caller constraint
+are unchanged. The Pydantic probes also pass after reinstalling Pixal's distinct retained
+Annotated-Types 0.7.0 artifact (H3 uses 0.8.0). Seven focused installer,
+profile, Reactor capture, H3 readiness and Pixal adapter files pass **222 tests**.
+No full GPU runtime installation, CUDA/Windows execution, weights, generation,
+production records or output-quality evaluation is claimed.
+
+## Click/tqdm slice for MiniMax H3 MLX (2026-11-15, #16047)
+
+First slice of #16047, limited to the MiniMax H3 Apple Silicon profile: **click
+8.5.0 → 8.5.1** and **tqdm 4.70.0 → 4.70.1**. The immutable H3 source revision,
+Transformers, Typer, Regex, Protobuf, MLX versions and every other pin are
+unchanged; the other 55 lock entries and their markers are identical.
+
+Click 8.5.1 (wheel published 2026-11-06 17:36 UTC, `Requires-Python >=3.10`, no
+runtime dependencies) and tqdm 4.70.1 (published 2026-09-11, `>=3.8`, only
+`colorama` on Windows) are patch releases that keep the CLI/progress APIs H3's
+Typer entry points and progress bars consume. The lock's new wheel hashes match
+PyPI's published SHA-256 for both wheels, and OSV returned no records (including
+`MAL-`) for either identity. Registry metadata and the pins test
+(`scripts/_minimax_h3_mlx_pins.test.js`, 18 tests) are the only evidence; no H3
+model inference or native install was run.
+
+The lock was regenerated with the documented command at cutoff
+`2026-11-07T00:00:00Z`, using private **uv 0.8.14** because uv 0.13.x could not
+connect to PyPI on the regenerating host (curl and uv 0.8.x could). Only the two
+version lines and their hashes changed relative to the previous lock.
+
+Remaining under #16047: the same Click/tqdm bump for the Pixal3D and TRELLIS.2
+Metal profiles (their lock regeneration timed out on PyPI connections), then
+Transformers 5.22.2, then Typer/Regex/Protobuf as separate slices.
+
+## Click/tqdm slice for Pixal3D and TRELLIS.2 Metal (2026-11-15, #16047)
+
+Second slice of #16047, limited to the two Apple Silicon image-to-3D Metal
+profiles: **click 8.5.0 → 8.5.1** in both and **tqdm 4.67.3 → 4.70.1** in both.
+Immutable source revisions, Transformers, Typer, Regex, the Pillow 13 override
+and every other pin are unchanged.
+
+Both profiles were recompiled with the documented command at cutoff
+`2026-11-07T00:00:00Z` under private **uv 0.8.14** (0.13.x could not reach PyPI
+on the regenerating host), constrained to the previous lock's other pins. An
+unconstrained recompile also moved `annotated-doc`, `filelock`, `packaging` and
+`scipy` hashes, so the constrained run supplied only the two entries and its
+version list was checked identical to the spliced lock: only the `click` and `tqdm` entries differ from the previous
+locks; the new wheel and sdist SHA-256 values match PyPI's JSON metadata. OSV
+returned no records for either identity (including `MAL-`). Registry
+metadata and the installer/pins contracts are the only evidence; no native
+install, Metal inference or model run was executed.
+
+Remaining under #16047: Transformers 5.22.2 across its profiles, then
+Typer 0.28.0 / Regex 2026.11.7 (Pixal/TRELLIS/H3) and Protobuf 7.36.2 (H3) as
+separate slices.
+
+
+## Transformers slice for Prompt Guard and JEV (2026-11-15, #16047)
+
+Third slice of #16047: **Transformers 5.22.1 → 5.22.2** in the shared
+Guard/JEV source recipe, complete lock and both canonical JavaScript pin lists.
+The classifier models/revisions, thresholds, prompt handling, interpreter,
+Torch 2.14.1, Hub 2.4.0, optional extras and all 55 companion entries are
+unchanged. This slice isolates the security classifiers from the independent
+creative MLX/CUDA profiles; it does not complete the issue.
+
+The [5.22.2 release](https://github.com/huggingface/transformers/releases/tag/v5.22.2)
+fixes distributed backend device binding and hardens the chat-template sandbox.
+Hash-verified baseline/candidate wheels differ in only four package files:
+version initialization, the Jinja dependency table, distributed utilities and
+chat-template utilities. The actual AutoTokenizer/sequence-classification,
+DeBERTa-v2 and Qwen3.5 implementations consumed by `run_prompt_guard.py`,
+`run_jev.py` and `jev_head_kit.py` are byte-identical. Python remains >=3.11;
+the raised optional Jinja floor (3.1.6) is already satisfied by this lock.
+Neither classifier uses Jinja chat templates or distributed training.
+
+The complete 56-entry universal closure was regenerated with hash-verified
+**uv 0.13.7** and **2026-11-07T00:00:00Z** cutoff. Extract every existing
+`name==version` requirement with its marker into scratch constraints,
+substitute only Transformers 5.22.2, and pass `--constraint <scratch-file>`
+to the header's compile command. Universal resolution needs
+`python_full_version < '3.15'` in each declared environment: Torch 2.14.1 has
+no Linux Python 3.15 wheel. The header now records that resolver bound;
+installation markers and supported-target refusal behavior are unchanged.
+Compare the complete emitted package/version/hash sets at Python 3.11–3.14
+for all four declared OS/architecture pairs before transferring only the
+new Transformers block. All 16 comparisons passed; the retained companion
+blocks and every original marker are byte-identical. No hashes were composed
+by hand.
+
+Direct PyPI connections timed out from both uv 0.13.7 and 0.8.14, while curl
+worked. Resolution therefore used a temporary loopback curl relay to official
+PyPI Simple JSON and `files.pythonhosted.org` artifacts, with download concurrency
+2 and HTTP multiplexing disabled. Only artifact URLs were rewritten for local
+transport; upload timestamps, yanked status, Requires-Python, metadata and hashes
+were retained. No relay, index override or network setting ships to installers.
+All **56 registry identities / 718 artifact hashes** were independently checked
+against fresh official version JSON: non-yanked and uploaded before the cutoff.
+Fresh OSV querybatch results cover all 56 identities, including MAL records;
+response cardinality, errors and pagination are checked, with zero findings.
+The only changed runtime registry input is Transformers; the resolver's uv
+wheel is separately SHA-256 verified. There are no changed source revisions.
+
+Eight hash-required, wheel-only installation dry plans pass for Python 3.11
+and 3.12 on Apple Silicon macOS 14, Linux x86_64/aarch64 (glibc 2.28) and
+Windows AMD64. They select artifacts; they do not execute those other platforms.
+An isolated Apple Silicon **CPython 3.11.17** environment hash-installed all
+34 applicable wheels, with `uv pip check` passing. It ran baseline 5.22.1 then
+candidate 5.22.2 on the same synthetic saved models/tokenizer fixtures:
+
+- The shipped Prompt Guard CLI loads a tiny real DeBERTa-v2 classifier and
+  tokenizes all 1,200 synthetic tokens into three overlapping windows. Scores
+  are finite, coverage is complete, and empty/null/whitespace input is refused.
+- The shipped JEV loader, scorer and pooling helper load a tiny real Qwen3.5
+  classifier with linear and full-attention layers on MPS. Hypothesis order,
+  normalized probabilities, 16-value pooling and three logits are preserved;
+  oversized scoring and pooling requests are refused before model execution.
+- Baseline/candidate Guard results are identical; the maximum absolute numeric
+  difference for JEV scores, pooling and logits is **0.0**. Model Hub offline
+  flags are set; the probe process refuses Python socket connections.
+
+Ten existing public installer/profile/runner/service regression files pass
+**119 tests**. These are synthetic API contracts, not production model weights,
+classifier accuracy/canary certification, full GPU-profile validation or native
+Windows/Linux execution. Production install canaries remain mandatory.
+
+Remaining under #16047: Transformers 5.22.2 in the other requested profiles,
+then the independent Typer 0.28.0 / Regex 2026.11.7 slices for Pixal/TRELLIS/H3
+and Protobuf 7.36.2 for H3. The documented LTX CUDA Transformers 5.14.1 and
+other retained exceptions remain unchanged.
+
+## Transformers slice for MiniMax H3 MLX (2026-11-15, #16047)
+
+This slice updates **Transformers 5.22.1 → 5.22.2** in H3's Apple Silicon
+source recipe and complete lock. All **56 companion entries**, their markers
+and hashes are identical. The immutable H3 source revision
+`fcd9e9b79a1d6018d91ac477c0968de1fa067e49`, Python 3.11, MLX/MLX-Metal,
+MLX-VLM, optional extras and the torch-free installation contract are unchanged.
+The installer consumes this lock directly; no separate runtime version literal
+needs changing.
+
+The [upstream patch release](https://github.com/huggingface/transformers/releases/tag/v5.22.2)
+changes distributed device binding and Jinja sandboxing. SHA-256-verified
+baseline/candidate wheels differ in only four package files: version
+initialization, the dependency table, distributed utilities and chat-template
+utilities. H3's pinned `MiniMaxH3TextEncoder.build_request` tokenizes the prompt
+directly with `AutoTokenizer`, without a chat template. PortOS's
+`load_pil_image_processor` binds `Qwen2VLImageProcessorPil` for keyframes;
+these tokenization and image-processing implementations are byte-identical.
+The Python floor remains 3.11 and the raised optional Jinja floor (3.1.6)
+is already satisfied. H3 does not use distributed Torch setup.
+
+The entire **57-package** lock was regenerated with SHA-256-verified
+**uv 0.13.7**, wheel-only resolution and cutoff **2026-11-07T00:00:00Z**.
+Only Transformers and its two hashes changed. Every one of the resulting
+**1,292 hashes** independently matches an official non-yanked pre-cutoff PyPI
+artifact. Fresh OSV querybatch, including MAL records, covers all 57 identities
+with zero findings, scanner errors or pagination tokens. The only changed runtime
+registry input is Transformers; the resolver's uv wheel was separately verified.
+No source revision changes or bundled-native-library security certification
+are included.
+
+Direct uv-to-PyPI requests timed out, as in the preceding classifier slice.
+Resolution and installation used a temporary loopback curl relay to official
+PyPI Simple JSON and `files.pythonhosted.org`, retaining upload dates, yanked
+status, Requires-Python, metadata and hashes. Only artifact transport URLs were
+rewritten. No relay, index override or extra setup ships to installers.
+
+Native verification used a fresh Apple Silicon **macOS 27.2.1 / CPython
+3.11.18** scratch environment. All 57 candidate wheels installed with
+`--require-hashes --only-binary :all:` and `uv pip check` passed. Only Transformers
+was then hash-swapped to the baseline and back to the candidate:
+
+- Both versions pass the shipped `minimax_h3_runtime_probe.py --verify-seams`
+  against the exact source revision, including the pipeline, Qwen3-VL import,
+  encoder digest and borrowed MLX-VLM seams.
+- The new opt-in `cooled_runtime_probe.py h3-transformers` exercises the actual
+  pinned request builder, local `AutoTokenizer` loading and PortOS PIL adapter
+  with six synthetic cases: ordinary, Unicode/whitespace, empty and long text,
+  one keyframe and two keyframes. Torch and TorchVision remain absent. Token
+  IDs, modality tags, pixel arrays and image grids exactly match the baseline;
+  non-string prompts are refused. Only weight construction is bypassed.
+- Five existing installer/runner/seam test files pass **257 tests**, with nine
+  existing interpreter/dependency-conditional skips. Native probes above use
+  the separately installed Python 3.11 environment.
+
+To repeat the offline comparison, run the following in isolated environments
+containing the complete lock, first with hash-installed Transformers 5.22.1
+and then 5.22.2. Use the same fixture directory, initially absent; omit
+`--baseline` on the second run. `<source>` is the inspected checkout at the
+revision above. The probe refuses Python socket connections.
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 <venv>/bin/python \
+  scripts/cooled_runtime_probe.py h3-transformers \
+  --source <source> --fixtures <scratch>/h3-fixtures --baseline
+```
+
+No production tokenizer/checkpoint, model weights, tensor inference, generation,
+output-quality evaluation or Windows/Linux execution is claimed. This slice
+does not complete #16047: Transformers in the other requested profiles and the
+separate Typer/Regex/Protobuf slices remain there. LTX CUDA's Transformers
+5.14.1 constraint and other documented exceptions are unchanged.
+
+## Transformers slice for Pixal3D and TRELLIS.2 Metal (2026-11-15, #16047)
+
+Both Metal source recipes and locks now use **Transformers 5.22.2** instead
+of 5.22.1. The other **98 Pixal3D / 55 TRELLIS.2** package blocks, markers and
+artifact hashes are byte-identical. Python 3.13, Torch 2.15.0, TorchVision
+0.29.2, Pillow 13, optional extras, native build steps and immutable source
+revisions are unchanged. These installers consume their locks directly; there
+is no separate JavaScript Transformers version constant for these lanes.
+
+The [upstream release](https://github.com/huggingface/transformers/releases/tag/v5.22.2)
+fixes distributed device binding and Jinja sandboxing. Freshly SHA-256-verified
+5.22.1/5.22.2 wheels differ in only version initialization, the dependency table,
+distributed utilities and chat-template utilities. DINOv3, auto-model loading
+and the image segmentation APIs consumed by these sources are byte-identical.
+Neither lane uses distributed training or chat templates; the optional Jinja
+3.1.6 floor is already satisfied. Python's floor remains 3.11.
+
+Both complete closures were regenerated with hash-verified **uv 0.13.7** and
+cutoff **2026-11-07T00:00:00Z**, using each header's platform/interpreter,
+wheel-only flags and Pixal Pillow override. Extract every existing `name==version`
+line into scratch constraints, replacing only Transformers with 5.22.2, and add
+`--constraint <scratch-file>` to the documented command. Resolution emits the
+same 99/56 identities and includes every retained hash, but also emits additional
+artifacts for unchanged packages (including alternative macOS NumPy wheels).
+Transfer only the generated Transformers block to preserve the previously
+selected native artifacts. No hashes are composed by hand.
+
+The resolver's **2,136 Pixal3D / 1,084 TRELLIS.2** hashes were checked against
+fresh official PyPI version JSON: all are non-yanked and pre-cutoff. The shipped
+locks retain **1,408 / 584** hashes respectively. Fresh OSV querybatch covers
+all **101 distinct registry identities** across the two closures, including
+MAL records: zero findings, scanner errors or pending pagination. Transformers
+is the only changed runtime registry input; the resolver wheel was separately
+hash-verified. There are no changed source inputs. Direct uv requests timed out;
+the temporary loopback curl relay described above again supplied official PyPI
+metadata and artifacts without changing timestamps, yanked status or hashes.
+No relay or index override ships to installers.
+
+Native checks used separate scratch environments on **Apple Silicon macOS
+27.2.1 / CPython 3.13.5**, hash-installing each entire shipped wheel lock, then
+hash-verified baseline/candidate Transformers wheels. Both versions pass
+`uv pip check` in TRELLIS; Pixal reports only its already documented CLI-only
+Gradio/Pillow 13 metadata exception, identically on both versions. The opt-in
+`metal-transformers` probe runs
+the actual pinned TRELLIS DINOv3 extractor after its existing MPS patch, and
+Pixal's projection extractor/grid, isolated by AST from heavyweight package
+initializers. Local saved tiny DINOv3 weights are shared between versions.
+RGB, grayscale/RGBA batches and tensor inputs exercise CPU and MPS: feature,
+global-token and projected-grid shapes, finite nonzero values, invalid-image
+refusal and missing-camera refusal pass. Baseline/candidate outputs agree at
+`rtol=atol=1e-6` in both environments. Python socket connections are refused.
+
+Repeat in an isolated hash-installed environment, first with 5.22.1 and
+`--baseline`, then with 5.22.2 and the same fixtures directory (omit `--baseline`):
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 <venv>/bin/python \
+  scripts/cooled_runtime_probe.py metal-transformers \
+  --source <inspected-pixal-source> --trellis-source <inspected-mps-patched-trellis-source> \
+  --fixtures <scratch>/metal-fixtures --baseline
+```
+
+Five existing installer, adapter and lock-profile regression files pass **171
+tests**. This is synthetic API compatibility evidence: no production weights,
+BiRefNet remote model code, NAF, full native-extension install, mesh generation,
+output-quality certification, CUDA or Windows/Linux execution is claimed.
+
+Remaining under #16047: Transformers in the other requested profiles, then
+the independent Typer/Regex slices for Pixal/TRELLIS/H3 and Protobuf for H3.
+LTX CUDA's Transformers 5.14.1 and all documented retained exceptions remain
+unchanged.
+
+## Regex slice for H3 MLX, Pixal3D and TRELLIS.2 Metal (2026-11-15, #16047)
+
+Fourth independent slice of #16047: **regex 2026.9.29 → 2026.11.7** in the
+MiniMax H3 MLX, Pixal3D and TRELLIS.2 Metal source recipes and locks. Every other
+package block, marker and hash in the three locks is unchanged; Transformers,
+Typer, Protobuf, interpreters, source revisions and optional extras are untouched.
+
+Regex 2026.11.7 (wheels uploaded 2026-11-06, `Requires-Python >=3.11`, no runtime
+dependencies) still satisfies the 3.11 (H3) and 3.13 (Pixal/TRELLIS) interpreters.
+Regex is a leaf consumed through Transformers/tokenizer pattern compilation; the
+release only drops the retired CPython 3.10 wheels. Its block is regenerated from
+the registry's complete wheel set: **113 non-yanked wheels**, every one verified
+pre-cutoff (**2026-11-07T00:00:00Z**) from fresh PyPI version JSON, replacing the
+previous 130 hashes (which included the 3.10 wheels). No hash is composed by hand,
+and no relay, index override or source distribution ships. Fresh OSV (including
+`MAL-` records) returned no records for the new identity.
+
+Evidence is limited to registry metadata, hash-verified installation of the new
+lock block into an isolated Python 3.13 environment, and a Unicode
+property-class pattern probe; the H3 pins test (18 tests) passes. No Transformers
+tokenization, model inference or native install is claimed.
+
+Remaining under #16047: Transformers 5.22.2 in the other requested profiles,
+Typer 0.28.0 for Pixal/TRELLIS/H3, and Protobuf 7.36.2 for H3 MLX, each as its
+own slice. LTX CUDA's Transformers 5.14.1 and documented retained exceptions are
+unchanged.
+
+## Final #16047 slices: Transformers, Typer and Protobuf (2026-11-15)
+
+Three independent commits finish #16047. Each changes exactly one package block
+per lock; every companion version, marker and artifact hash is retained.
+
+- **Transformers 5.22.1 → 5.22.2** in the ACE-Step, ACE-Step 1.5, AudioLDM2,
+  FLUX.2 (MLX and CUDA source recipes), FLUX.3, FastVideo, MusicGen, MiniMax
+  H3 CUDA, MiniMax Music3 and Wan 2.2 CUDA source recipes and all 22 of their
+  locks, plus the recipe-pinned Wan 2.2 MLX, LTX 2.3/2.5 MLX, mflux,
+  mflux-video and AuK MLX locks (`docs/MLX_VIDEO_LOCKS.md` helper pin updated).
+- **Typer 0.27.3 → 0.28.0** for MiniMax H3 MLX, Pixal3D and TRELLIS.2 Metal.
+- **Protobuf 7.35.1 → 7.36.2** for MiniMax H3 MLX.
+
+Compatibility evidence:
+
+- Fresh PyPI metadata shows identical `Requires-Dist` (outside extras) and
+  `Requires-Python` for each old/new pair, so no companion pin can change.
+  Every pinned package's declared constraint on Transformers (47 across the
+  source-recipe locks, 18 across the recipe-pinned MLX and CUDA 3D locks), Typer (3)
+  and Protobuf (10) accepts the new version; the only exception is
+  `datasets`' unused `benchmarks` extra.
+- The SHA-256-verified 5.22.1 and 5.22.2 wheels differ only in version
+  initialization, the dependency table, distributed device binding and
+  chat-template sandboxing. The new chat-template floor (Jinja2 3.1.6) is
+  already the pin in every changed lock. Typer 0.28.0's only runtime change is
+  a metavar/default option-name fix; Protobuf stays within its 7.x runtime.
+- Constrained to their own pins, `uv pip compile` with each header's
+  platform, interpreter and wheel-only flags (cutoff 2026-11-07T00:00:00Z)
+  reproduces the identical identity set for the eight universal and
+  platform-specific MLX source recipes, Pixal3D, TRELLIS.2 and H3 MLX. The CUDA
+  locks were not re-resolved: their PyTorch CUDA index was unreachable from
+  the regenerating host, so they rely on the metadata evidence above.
+- Each new block lists the new release's equivalent of every previously
+  retained artifact kind (2 for Transformers and Typer, 8 for Protobuf); every
+  hash is a non-yanked file uploaded before the cutoff. No hash is composed by
+  hand.
+- The full OSV PyPI export (26,924 records, including 12,053 `MAL-` records)
+  returned **zero findings across 305 distinct identities** in the 31 changed
+  locks. The OSV API was unreachable, so the export was evaluated locally.
+- Focused installer, adapter and lock-profile suites pass (19 files, 886 tests).
+
+No native installation, model inference or Windows/Linux execution was run
+for these slices.
+
+Retained: Pixal3D CUDA and TRELLIS.2 CUDA keep Transformers 5.22.1 because
+their immutable profile identities (`scripts/*-cuda-profile.json`, registry
+cutoff 2026-11-04) and setup assertion pin it. Moving them is a new profile
+revision with CUDA validation, not part of this refresh. LTX CUDA's
+Transformers 5.14.1 and the other documented exceptions are unchanged.

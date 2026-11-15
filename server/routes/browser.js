@@ -86,7 +86,7 @@ const updateConfigSchema = z.object({
 router.get('/', asyncHandler(async (req, res) => {
   const status = await getBrowserStatusSnapshot();
   // Page titles/URLs and saved filenames come from the signed-in profile; only
-  // a caller who may drive that profile (see HOST_CONTROL_ROUTES) sees them.
+  // a caller who may drive that profile (see HOST_CONTROL_GET_ROUTES) sees them.
   if (requestHasHostControl(req)) return res.json(status);
   res.json({
     ...status,

@@ -1,3 +1,19 @@
+/**
+ * A project's saved render pins — video backend
+ * (local/Grok/fal.ai)/model/generation-mode/audio-reactive LoRA + the image-side frame pin — with the
+ * Video Gen catalog they read from.
+ *
+ * Optimistic-local + silent PATCH, rollback + toast on failure; `saving` gates the dependent generate
+ * buttons. Returns `{ models, modelsLoading, catalogStatus ('loading'|'ready'|'error'), retryCatalog,
+ * defaultModel, falEnabled (null until read), runwayEnabled, saving, settings, effectiveModelId,
+ * activeModel, audioReactiveModels, audioReactiveLoras, detectedAudioReactiveLora, audioReactiveReady,
+ * audioReactiveSelected, videoBlockedReason, change, changeFramePin }`. `videoBlockedReason` is the
+ * single "why can't I generate" string (an unavailable audio-reactive setup, or a fal.ai pin with no
+ * configured API key; a pending or failed catalog read says so instead of claiming a missing key)
+ * shared by the disabled buttons, their tooltips, and the blocked-call toast. Use when: The Music
+ * Video renderer selects and anything building a scene-clip job payload from them.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import { updateMusicVideoProject } from '../services/apiMusicVideo.js';
@@ -119,6 +135,9 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
     runwayModelId: project?.videoSettings?.runwayModelId ?? null,
     runwayDuration: project?.videoSettings?.runwayDuration ?? null,
     runwayResolution: project?.videoSettings?.runwayResolution ?? null,
+    // #16136: ceilings for the shot card's Render draft / Render final; null = the model's lowest / highest tier.
+    draftResolution: project?.videoSettings?.draftResolution ?? null,
+    finalResolution: project?.videoSettings?.finalResolution ?? null,
     generationMode: project?.videoSettings?.generationMode || 'image',
     audioReactiveLora: project?.videoSettings?.audioReactiveLora || '',
     audioReactiveScale: project?.videoSettings?.audioReactiveScale ?? 1.2,

@@ -3,6 +3,12 @@
  * plus the two anchored layouts (radial rings by kind, timeline lanes by first
  * appearance) and the viewport fit they share.
  *
+ * 2D positioning for the Universe Builder graph canvas: `seedPositions` (deterministic phyllotaxis),
+ * `stepLayout`/`settleLayout` (force sim with per-kind collision radius), `applyAnchors` (radial rings
+ * by kind, timeline lanes by first appearance), `computeFit`, `toScreen`/`toWorld`, `hitTest`,
+ * `radiusFor`, `GRAPH_LAYOUTS`. Distinct from `graphSimulation.js`, which settles the Brain/CoS graphs
+ * in 3D with no anchors, collision or screen fit.
+ *
  * Separate from `client/src/lib/graphSimulation.js`, which settles the Brain /
  * CoS graphs in 3D for a three.js scene with no anchors, no per-kind collision
  * radius and no screen fit — the two solve different problems and share no

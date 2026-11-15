@@ -1,6 +1,22 @@
 /**
  * Which local runtime a provider talks to, and at which endpoint.
  *
+ * Which LOCAL daemon a provider talks to, and where — `LOCAL_RUNTIMES` (llama.cpp / Ollama / LM Studio
+ * / MTPLX / vLLM: label, binary, canonical base URL read from `opencodeConfig.js` rather than
+ * re-typed, manage/docs links, model-download hint), `localEndpointPort` + `isLocalInstanceHost`, and
+ * re-exports of `localBackendForProvider` / `localRuntimeKind` / `modelPinIsOffered` — all three now
+ * live in the browser-safe leaf `modelPinMembership.js` (a picker needs the pin rule and must not pull
+ * the endpoint graph below to get it), so existing importers here are untouched —
+ * `localRuntimeForProvider(provider)` → the row with the endpoint the provider ITSELF configures
+ * (`OPENCODE_CONFIG_CONTENT`'s `baseURL`, `ANTHROPIC_BASE_URL`, or `endpoint`), then the
+ * `OLLAMA_URL`/`OLLAMA_HOST`/`LM_STUDIO_URL` override the backend managers read, then the canonical
+ * default — and `null` when that resolved endpoint fails `isLocalInstanceEndpoint` (an API provider on
+ * another machine has no local daemon to check, whatever its name says) — plus
+ * `normalizeOpenAiBaseUrl`. Pure; the probing half is `services/providerReadiness.js`. Optional
+ * `setupStateDetail` overrides `providerReadiness`'s per-state prose for a runtime whose local setup
+ * is not a model cache (vLLM's is a compose project); `standbyWhenStopped` marks an installed runtime
+ * such as llama.cpp whose stopped state is intentional standby rather than incomplete setup.
+ *
  * A provider like `opencode-llama-tui` is only half a configuration: PortOS can
  * spawn the OpenCode CLI perfectly and the run still dies with "Cannot connect
  * to API: Unable to connect" because the daemon it points at — `llama-server`,

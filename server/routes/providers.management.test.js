@@ -5,6 +5,7 @@ import express, { Router } from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware, errorEvents } from '../lib/errorHandler.js';
 import { staticImportClosure, specifierMatchesPackage } from '../lib/staticImportGraph.js';
+import { runtimeUpdateEvents } from '../services/runtimeUpdateEvents.js';
 import { createPortOSProviderRoutes } from './providers.js';
 
 const SERVER_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -226,15 +227,24 @@ describe('provider configuration invalidation', () => {
   afterEach(() => errorEvents.off('error', handleExpectedError));
   it('notifies websocket clients after successful writes, but not reads or rejected writes', async () => {
     const setActiveProvider = vi.fn().mockResolvedValue(CLAUDE_OLLAMA);
-    const app = appWith({ setActiveProvider, getAllProviders: vi.fn().mockResolvedValue(providersFixture()) });
+    const app = appWith({ setActiveProvider, getAllProviders: vi.fn().mockResolvedValue(providersFixture()),
+      getProviderById: vi.fn().mockResolvedValue(CLAUDE_OLLAMA), updateProvider: vi.fn().mockResolvedValue({ ...CLAUDE_OLLAMA, enabled: false }) });
+    const updates = vi.spyOn(runtimeUpdateEvents, 'emit');
     const emit = vi.fn();
     app.set('io', { emit });
     expect((await request(app).get('/api/providers')).status).toBe(200);
     expect(emit).not.toHaveBeenCalledWith('providers:changed');
+    expect(updates).not.toHaveBeenCalled();
     expect((await request(app).put('/api/providers/active').send({ id: 'claude-ollama' })).status).toBe(200);
     expect(emit).toHaveBeenCalledWith('providers:changed');
+    expect(updates).not.toHaveBeenCalled();
+    expect((await request(app).put('/api/providers/claude-ollama').send({ enabled: false })).status).toBe(200);
+    expect(updates).toHaveBeenCalledWith('changed');
+    updates.mockClear();
     emit.mockClear();
     expect((await request(app).put('/api/providers/active').send({})).status).toBe(400);
     expect(emit).not.toHaveBeenCalledWith('providers:changed');
+    expect(updates).not.toHaveBeenCalled();
+    updates.mockRestore();
   });
 });

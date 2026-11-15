@@ -2,6 +2,13 @@
  * Media model registry — single source of truth for image/video model
  * definitions and the text encoder used by the LTX video pipeline.
  *
+ * Single source of truth for image/video model metadata. `setMediaModelEnabled(id, enabled)` persists
+ * availability; `withLiveMediaModelsRestore(transfer)` fences registry mutations and reloads the cache
+ * across a live snapshot restore (#9924); getters omit disabled entries unless `includeDisabled` is
+ * set. Entry fields are documented in the module docblock — note `repoFiles[]`, which narrows a
+ * model's own repo to an explicit file list for an aggregate repo that holds far more than the runner
+ * loads (MiniMax H3 CUDA).
+ *
  * On first load, seeds `data/media-models.json` with the project's default
  * catalog. Edit that JSON to add models, tune steps/guidance, switch the
  * text encoder, etc. Server restart picks up changes (the registry is

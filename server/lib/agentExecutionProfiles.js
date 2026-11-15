@@ -1,3 +1,16 @@
+/**
+ * Named agent execution postures shared by lifecycle dispatch, CLI/TUI spawners, and child-environment
+ * filtering.
+ *
+ * A stage declares a PROFILE (`PUBLIC_REVIEW_EXECUTION_PROFILE`,
+ * `PUBLIC_REVIEW_GATE_EXECUTION_PROFILE`, `PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE`);
+ * `publicReviewPostureForProfile` maps it to the enforceable POSTURE a provider must carry a
+ * maintained recipe for (`no-tool` or `sandboxed-actions`), which is how a pipeline stage stays
+ * vendor-agnostic. `isPublicReviewRestrictedProfile` covers both postures;
+ * `isPublicReviewNoToolProfile` / `isPublicReviewActionsProfile` separate them for the callers whose
+ * rule differs by posture (credential-bootstrap wrapping, child-env allowlist).
+ */
+
 import { PRIVATE_SECURITY_EXECUTION_PROFILE } from './privateSecurityPolicy.js';
 /**
  * Named execution postures shared by the agent spawners and their environment

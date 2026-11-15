@@ -1,6 +1,11 @@
 /**
  * Music Video lyric-sheet structure: section headers and stage directions.
  *
+ * Lyric-sheet structure: `parseLyricSheet` splits a sheet into sung cues plus `[Verse]`/`[Chorus]`
+ * section and stage-direction markers anchored to cue indices; `normalizeLyricMarkers`,
+ * `remapLyricMarkers` (keep markers on their cue through a cue-list edit), `offsetLyricMarkers`,
+ * `relabelAnalysisSections`, `deliveryNotesWithin`. Pure.
+ *
  * A lyric sheet carries more than sung text. `[Verse 1]`, `[Chorus]` and
  * `[Bridge — stripped groove]` name the song's structure, and directions like
  * `[Spoken, close]`, `[Whispered spoken]`, `[Shouts]` or `[Stop — silence]`

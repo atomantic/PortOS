@@ -1,4 +1,11 @@
 /**
+ * Re-export of `server/lib/personaTraitBlend.js`.
+ *
+ * Digital-twin persona trait-blending (M34 P7) — `describeTraitAdjustments` /
+ * `renderTraitBlendDirective` / `BIG_FIVE_LEAN` for the Personas UI preview.
+ */
+
+/**
  * Digital-twin persona trait blending, so the Personas UI previews the same directional wording the twin will use.
  *
  * Re-export of `server/lib/personaTraitBlend.js` — the one definition of this rule,

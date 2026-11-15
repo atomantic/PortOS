@@ -150,7 +150,40 @@ describe('runtime update review monitor', () => {
     expect(byId['pm2-startup'].summary).toContain('after boot');
     expect(byId['harness:codex']).toMatchObject({ drillTo: '/ai/harnesses/codex', revision: '1.0.0:1.1.0' });
     expect(byId['harness:codex'].summary).toContain('Installed 1.0.0; latest 1.1.0');
-    expect(monitor.items().every((item) => item.required && item.operations.length === 0)).toBe(true);
+    expect(monitor.items().every((item) => item.required === !item.id.startsWith('harness:') && item.operations.length === 0)).toBe(true);
+  });
+
+  it('reads effective harness usage and keeps unavailable enabled tools dismissible', async () => {
+    const listHarnesses = vi.fn().mockResolvedValue([
+      harness({ id: 'unused', vendor: 'unused', providers: [{ enabled: false }] }),
+      harness({ id: 'runtime-id', vendor: 'disabled-vendor', providers: [{ enabled: true }] }),
+      harness({ providers: [{ enabled: false }, { enabled: true }], vendor: 'codex', latestVersion: null }),
+    ]);
+    const listEnablement = vi.fn().mockResolvedValue([
+      { id: 'disabled-vendor', source: 'setting', enabled: false },
+      { id: 'codex', source: 'detected', enabled: false },
+    ]);
+    const entries = await __testing.readReviewHarnesses({ listHarnesses, listEnablement });
+    expect(entries.map(entry => entry.enabled)).toEqual([false, false, true]);
+    const cached = { id: 'harness:codex', title: 'Codex update', summary: 'An older update', revision: '1.0.0:1.1.0', required: true };
+    const { monitor } = fixture({ harnesses: entries, cached: [cached] });
+    await monitor.start();
+    await vi.waitFor(() => expect(monitor.items().find(item => item.id === 'harness:codex')).toMatchObject({ required: false, unverified: true }));
+    expect(monitor.items().filter(item => item.id.startsWith('harness:'))).toHaveLength(1);
+    monitor.stop();
+  });
+
+  it('clears disabled harness updates, including cached missing binaries, and restores them on enable', async () => {
+    const { monitor, deps } = fixture({ harnesses: [harness()] });
+    await monitor.refresh();
+    expect(monitor.items().find(item => item.id === 'harness:codex')).toMatchObject({ required: false });
+    deps.readHarnesses.mockResolvedValue([harness({ enabled: false, installed: false, probeState: 'missing' })]);
+    await monitor.refresh();
+    expect(monitor.items().some(item => item.id === 'harness:codex')).toBe(false);
+    expect(deps.save.mock.calls.at(-1)[0].some(item => item.id === 'harness:codex')).toBe(false);
+    deps.readHarnesses.mockResolvedValue([harness({ enabled: true })]);
+    await monitor.refresh();
+    expect(monitor.items().find(item => item.id === 'harness:codex')).toMatchObject({ required: false });
   });
 
   it('projects inline harness review details only for an observed update', async () => {

@@ -371,6 +371,20 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
                 )}
               </span>
             </label>
+            <label
+              className="flex items-center gap-2 cursor-pointer select-none"
+              title="Automated visual quality inspection: verifies hand/finger count, detects spurious limbs, and checks composition before admitting to gallery."
+            >
+              <input
+                type="checkbox"
+                checked={Boolean(fields.verifyImage)}
+                onChange={(event) => fields.setVerifyImage(event.target.checked)}
+                className="rounded"
+              />
+              <span className="text-port-accent">
+                Verify Quality & Anatomy
+              </span>
+            </label>
           </div>
         </div>
       </details>

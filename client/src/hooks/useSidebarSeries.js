@@ -1,3 +1,10 @@
+/**
+ * Pipeline series for the Create > Pipeline grandchildren (built on `useFocusRefreshedList`, reloads
+ * on `pipeline-series:changed`).
+ *
+ * Use when: The sidebar pipeline-series section.
+ */
+
 import * as api from '../services/api';
 import { useFocusRefreshedList } from './useFocusRefreshedList.js';
 

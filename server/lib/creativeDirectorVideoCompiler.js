@@ -1,8 +1,13 @@
 /**
  * Pure Video treatment compilation and pinned-backend shot compatibility.
- * Shared by project mutations and execution preflight; no storage, dispatch,
- * approval, or revision-history mutation belongs here. Inputs have already
- * passed the treatment/plan schemas; this checks their cross-field contracts.
+ *
+ * `compileVideoArtifact` and `validateVideoShot` — pure timed-shot/source-reference compilation and
+ * pinned-backend compatibility shared by Creative Director project mutations and Video execution
+ * preflight. Storage, history and approval remain with their existing owners.
+ *
+ * Shared by project mutations and execution preflight; no storage, dispatch, approval, or
+ * revision-history mutation belongs here. Inputs have already passed the treatment/plan schemas; this
+ * checks their cross-field contracts.
  */
 
 import { ServerError } from './errorHandler.js';

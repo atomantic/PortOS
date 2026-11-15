@@ -1,3 +1,13 @@
+/**
+ * One YouTube-audio-import job slot (#1945): start/cancel + SSE progress + terminal-frame handling via
+ * `POST /api/tracks/import/youtube`.
+ *
+ * Returns `{ active, percent, start(url, context), cancel }`; `onComplete(track, context)` fires with
+ * the finished Track. Call once per UI surface that can independently kick off an import — a shared
+ * slot would let one surface's kickoff orphan another's in-flight job. Use when: Any picker that lets
+ * a user paste a YouTube URL to create a Track (Music Video's create form and track-change row).
+ */
+
 import { importTrackFromYoutube, importTrackFromSuno, cancelTrackImport, trackImportEventsUrl } from '../services/apiTracks.js';
 import { isSunoSongUrl } from '../../../server/lib/sunoSong.js';
 import useSseJobSlot from './useSseJobSlot.js';

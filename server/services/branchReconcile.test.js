@@ -140,7 +140,6 @@ import {
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
 import { recordHeldCheckoutRetirement, recordWorkspaceCheckoutRetirement } from './branchReconcileOutcome.js';
-import { withClaimOwnershipLock, checkoutRetirementFenceReason } from './cosClaimOwnership.js';
 import { hasCompletedCheckoutEvidence } from './completedCheckoutEvidence.js';
 import { execGit } from '../lib/execGit.js';
 import { execGh } from './github.js';
@@ -502,6 +501,19 @@ describe('cleanupMerged', () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     const worktreePath = '/repo/.claude/worktrees/next-2190';
     const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath }]);
+    expect(res.cleaned).toEqual(['next/issue-2190']);
+  });
+
+  // Merged and superseded retirement share this recorder (#16100).
+  it('reports a retired branch as cleaned when its display-history write is rejected', async () => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    const fallback = gitFixtureResult('', 0);
+    execGit.mockImplementation(async (args, ...rest) => (args[0] === 'show-ref' ? { stdout: '', exitCode: 1 } : fallback(args, ...rest)));
+    wt.deleteCompletedLocalBranch.mockImplementationOnce(async (_repo, _branch, _head, { onRetired }) => { await onRetired(); return true; });
+    recordHeldCheckoutRetirement.mockRejectedValueOnce(new Error('synthetic history persistence failure'));
+    const worktreePath = '/repo/.claude/worktrees/next-2190';
+    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath }], { appId: 'app-1' });
+    expect(recordHeldCheckoutRetirement).toHaveBeenCalledWith('app-1', expect.objectContaining({ branch: 'next/issue-2190', path: worktreePath, head: RETIRE_HEAD, branchDeleted: true }));
     expect(res.cleaned).toEqual(['next/issue-2190']);
   });
 
@@ -2083,15 +2095,14 @@ describe('reconcile — detached-HEAD worktrees (#10825)', () => {
     expect(recordWorkspaceCheckoutRetirement).toHaveBeenCalledWith('/repo', expect.objectContaining({ path, checkoutOnly: true, branchDeleted: false }));
   });
 
-  it.each(['rejected', 'unreadback'])('keeps a removed detached tree unresolved when its receipt write is %s', async failure => {
+  it('reports a removed detached tree as cleaned when its display-history write is rejected', async () => {
     const path = '/repo/data/cos/worktrees/agent-1234abcd';
     wt.listWorktrees.mockResolvedValue([MAIN, detachedTree(path)]);
     stubGit();
-    if (failure === 'rejected') recordHeldCheckoutRetirement.mockRejectedValueOnce(new Error('synthetic receipt persistence failure'));
-    else recordHeldCheckoutRetirement.mockResolvedValueOnce({ retired: [] });
+    recordHeldCheckoutRetirement.mockRejectedValueOnce(new Error('synthetic history persistence failure'));
     const res = await reconcile('/repo', { appId: 'app-1' });
-    expect(res.cleaned).not.toContain(path);
-    expect(res.detachedWorktrees).toContainEqual(expect.objectContaining({ path, reason: 'retirement-receipt-unverified' }));
+    expect(res.cleaned).toContain(path);
+    expect(res.detachedWorktrees).not.toContainEqual(expect.objectContaining({ path }));
   });
 
   it.each([
@@ -2950,7 +2961,7 @@ describe('describeIdleReconcilePark', () => {
   it('preserves archive capacity and generation evidence in the remaining checkout status', () => {
     const archiveLimit = { scope: 'content', kind: 'total', limitBytes: 250 * 1024 * 1024, observedBytes: 264 * 1024 * 1024 };
     const row = { branch: 'feature/example', reason: 'retirement-archive-limit-exceeded', archiveLimit,
-      createdAt: '2026-10-24T00:00:00Z', checkoutIdentity: 'identity', checkoutIncarnation: { pointer: 'original' },
+      createdAt: '2026-10-24T00:00:00Z', checkoutIdentity: 'identity',
       preservationReceipt: { archiveDir: '/archive' }, preservationEvidence: { status: 'unresolved' }, checkoutMissing: true, branchMissing: true };
     const out = describeIdleReconcilePark([row]);
     expect(out.skipCauses).toEqual({ 'retirement-archive-limit-exceeded': 1 });

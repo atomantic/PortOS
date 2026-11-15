@@ -1,6 +1,14 @@
 // Pure SSE response plumbing, shared by every streaming route: open a stream
 // with write-safe helpers, and notice when the client hangs up.
 //
+// `startHfDownloadStream({req,res,repo|repos|fallbacks,alreadyDownloadedMessage,pythonPath?})`,
+// `openSseStream(res)`, `onClientDisconnect(req,res,cb)` — shared SSE driver for model downloads.
+// **Use `onClientDisconnect`, never `req.on('close')`**: on a POST whose body `express.json()` already
+// consumed, `req` is complete at handler entry and emits `close` immediately, which reads as an
+// instant disconnect and cancels work that never started. Required targets may name an immutable
+// `revision` and exact `only` files, fallback chains are first-success, and the cross-route in-flight
+// Map deduplicates pulls.
+//
 // The HF-repo download driver that used to live here moved to
 // `services/hfDownloadStream.js` — it spawns a child process and reads
 // settings, so it belongs above this layer (issue #4901). These two helpers do

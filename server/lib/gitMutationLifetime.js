@@ -1,3 +1,10 @@
+/**
+ * Git operation context shared by process execution and completion.
+ *
+ * Completion and cleanup leave the finished spawn operation without changing caller authorization or
+ * granting checkout admission; the old operation remains closed.
+ */
+
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 const lifetime = new AsyncLocalStorage();

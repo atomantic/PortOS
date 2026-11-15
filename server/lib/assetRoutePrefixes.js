@@ -1,4 +1,15 @@
 /**
+ * Import-free leaf listing server-owned URL prefixes: `ASSET_ROUTE_PREFIXES` (static `/data/**`
+ * mounts) and `SERVER_OWNED_PREFIXES` (never served by the SPA fallback).
+ *
+ * Import-free leaf holding the URL prefixes the server owns: `ASSET_ROUTE_PREFIXES` (every `/data/**`
+ * static mount) and `SERVER_OWNED_PREFIXES` (what must never reach the SPA fallback, each with the
+ * exact `spaPaths` that ARE client routes). `scripts/dev-proxy-drift.test.js` checks the dev proxy's
+ * `^/data/` wildcard against the mounts, pins the route-registration order in `server/index.js` (a
+ * router added below the terminators is shadowed), and fails if a client route — from `NAV_COMMANDS`
+ * or `App.jsx`'s nested `<Route>` tree — is ever added under a server-owned prefix without being
+ * declared.
+ *
  * The URL prefixes the SERVER owns, as data — deliberately a leaf module with
  * zero imports, so anything (a Vite config, a drift guard, a build script) can
  * read it without dragging express or a service into its graph.

@@ -1,3 +1,7 @@
+// Multi-column row draft (analogue of `useFieldDraft`).
+//
+// Use when: Multi-column row that commits as a unit.
+//
 // Multi-column row-draft buffer keyed by column name. Row-level analogue of
 // `useFieldDraft`. Sibling-draft "ride-along" race protection: when a fast
 // A-blur → B-blur sequence commits B before the parent has re-rendered with

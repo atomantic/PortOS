@@ -26,6 +26,7 @@ import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
 
 import { musicVideoCastInputsRecord } from '../../lib/musicVideoCastLook.js';
 import { captureImageFrameDependencies, captureTakeDependencies, musicVideoTakeChanges, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
+import { extendTakeRecord, sequenceTakeRecord, sequenceTakeSelectionPatch } from '../../lib/musicVideoSequenceTake.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
@@ -55,7 +56,9 @@ const clip = (v, max) => (isNonBlankStr(v) ? trimTo(v, max) : null);
 // A basename only — an imported file's name is provenance, never a path.
 const takeOriginalName = (name) => (isNonBlankStr(name) ? clip(name.split(/[\\/]/).pop(), 200) : null);
 
-function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, use = 'final', dependencies = null, frameDependencies = null, inputAssets = null, castInputs = null, costUsd = null, spendKind = null, costModelId = null, now }) {
+function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, use = 'final', dependencies = null, frameDependencies = null, inputAssets = null, castInputs = null, costUsd = null, spendKind = null, costModelId = null, sequence = null, extend = null, tier = null, now }) {
+  const sequenceRecord = kind === 'video' ? sequenceTakeRecord(sequence) : null;
+  const extendRecord = kind === 'video' ? extendTakeRecord(extend) : null;
   const recordedCastInputs = kind === 'image' || kind === 'endImage' ? musicVideoCastInputsRecord(castInputs) : null;
   return {
     takeId: `mvt-${randomUUID()}`,
@@ -82,10 +85,16 @@ function buildTake({ kind, assetId, source, provider = null, jobId = null, promp
       // The paid model the quote priced, so project spend can say where it went.
       ...(isNonBlankStr(costModelId) ? { costModelId: clip(costModelId, 200) } : {}),
     } : {}),
+    // #16136: a clip rendered as a draft or a final; absent on untiered takes.
+    ...(tier === 'draft' || tier === 'final' ? { tier } : {}),
     // #8977: the immutable record of what a performance take was generated
     // against (audio revision, song interval, edit in/out, cues, capability).
     // Present only on takes that carry one, so other takes keep their shape.
     ...(shotInstruction && typeof shotInstruction === 'object' ? { shotInstruction: structuredClone(shotInstruction) } : {}),
+    // #16128: one clip covering a run of shots, and where this shot's window starts in it.
+    ...(sequenceRecord ? { sequence: sequenceRecord } : {}),
+    // #16150: a hosted extension of another take, and the in-point of its new footage.
+    ...(extendRecord ? { parentTakeId: extendRecord.parentTakeId, extend: extendRecord } : {}),
   };
 }
 
@@ -292,6 +301,10 @@ export function selectSceneTake(project, sceneId, takeId, options = {}) {
   assertMusicVideoMedia(project, take.kind, 'take selection');
   const nextTakes = takes.map((t) => (t.takeId === takeId && t.status === 'rejected' ? { ...t, status: 'candidate' } : t));
   const next = { ...scene, takes: nextTakes, [TAKE_SLOT[take.kind]]: take.assetId };
+  // A sequence take plays from its own in-point on this shot (#16128); leaving one clears it.
+  const offset = sequenceTakeSelectionPatch({ ...scene, takes }, take);
+  if (offset.offsetFrames === null) delete next.offsetFrames;
+  else if (Number.isInteger(offset.offsetFrames)) next.offsetFrames = offset.offsetFrames;
   if (next.selectedTakeMarkedBad) {
     const selectedVideo = nextTakes.find((entry) => entry.kind === 'video' && entry.assetId === next.videoHistoryId);
     const source = selectedVideo?.sourceImageId || selectedVideo?.dependencies?.references?.find((ref) => ref.role === 'plate')?.assetId;

@@ -2,6 +2,13 @@
  * viteAllowedHosts — detect and remediate Vite's `server.allowedHosts` block in a
  * managed app's config.
  *
+ * Detect and remediate a managed app's Vite `server.allowedHosts`. `findViteConfig(repoPath)` locates
+ * the config; `parseAllowedHosts(src)` / `hostIsAllowed(parsed, host)` decide whether a Tailscale/IP
+ * host would be accepted (mirrors Vite's localhost+IP-always-allowed and leading-dot-suffix rules);
+ * `rewriteAllowedHosts(src)` deterministically injects `allowedHosts: true` (or bails `ok:false` on
+ * ambiguous shapes so the caller can fall back to an LLM fix); `checkViteHost(repoPath, host)` is the
+ * one-shot status used by `GET /api/apps/:id/vite-host-check`.
+ *
  * Why this exists: PortOS is served over a Tailscale MagicDNS name (e.g.
  * `host-gamma.example-tailnet.ts.net`). When a managed app's Dev UI is launched, the browser
  * hits the app's Vite dev server at that same hostname — and Vite ≥5 rejects it

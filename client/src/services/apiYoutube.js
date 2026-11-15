@@ -1,3 +1,7 @@
+/**
+ * YouTube watch-history scrape, playlist/video library sync, and setup check.
+ */
+
 import { request } from './apiCore.js';
 
 // YouTube watch-history ingestion (#2153) — CDP scrape of the signed-in history

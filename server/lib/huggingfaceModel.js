@@ -1,10 +1,15 @@
 /**
- * HuggingFace base-model classifier — pure helpers for the "add a base model
- * from HuggingFace" flow (issue #2124). The LoRA installer's analogue
- * (huggingfaceLora.js) picks a single .safetensors and tags a video-LoRA
- * family; this module instead inspects a full repo's siblings + card and
- * decides which PortOS image/video *runtime* (if any) can load it, then shapes
- * a `data/media-models.json` registry entry.
+ * HuggingFace base-model classifier — pure helpers for the "add a base model from HuggingFace" flow
+ * (issue #2124).
+ *
+ * HuggingFace base-model (image/video) classifier for the self-service "add a model" flow (#2124):
+ * inspect repo siblings + card → decide the loadable runtime/runner, STRICTLY refuse GGUF-only / wan /
+ * hunyuan / unclassifiable repos (so a bad add can't wedge the picker), build the `media-models.json`
+ * entry (`source:'user'`), + a `searchHuggingfaceModels` Hub-search helper. Pure.
+ *
+ * The LoRA installer's analogue (huggingfaceLora.js) picks a single .safetensors and tags a video-LoRA
+ * family; this module instead inspects a full repo's siblings + card and decides which PortOS
+ * image/video *runtime* (if any) can load it, then shapes a `data/media-models.json` registry entry.
  *
  * The overriding design goal is STRICT REFUSAL: a base model that no runtime
  * can load must never land in the registry, because a broken entry wedges the

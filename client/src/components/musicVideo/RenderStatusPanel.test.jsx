@@ -34,11 +34,6 @@ it('offers one tap that fixes the shots a render refusal names', async () => {
     context: { shortfalls: [{ sceneId: 'd', shortBySec: 0.58 }] } } }} onPatchShots={onPatchShots} />);
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Hold the last frame on it' })); });
   expect(onPatchShots).toHaveBeenLastCalledWith(['d'], { holdLastFrame: true }, 'Holding the last frame on 1 shot');
-  const onRenderClips = vi.fn(async () => {});
-  rerender(<RenderFailure project={project} renderJob={{ failure: { projectId: project.id, code: 'STALE_CLIP_DEPENDENCIES', message: 'Shot 8: the clip was made from frames that have since changed. …',
-    context: { sceneIds: ['e'] } } }} onPatchShots={onPatchShots} onRenderClips={onRenderClips} />);
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Render a new clip' })); });
-  expect(onRenderClips).toHaveBeenCalledWith(['e']);
   expect(onPatchShots).toHaveBeenCalledTimes(2);
   rerender(<RenderFailure project={project} renderJob={{ failure: { ...failure, code: 'MISSING_CLIPS' } }} onPatchShots={onPatchShots} />);
   expect(screen.queryByRole('button')).not.toBeInTheDocument();

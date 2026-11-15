@@ -1,4 +1,7 @@
 /**
+ * Dependency-free scientific-pitch math shared by the LLM-authored music formats on both runtimes:
+ * `pitchToMidi("C4")` → 60 (null when unparseable) and `midiToFreq(69)` → 440.
+ *
  * Scientific-pitch math shared by the LLM-authored music formats (chiptune
  * scores, drawn waveform sketches) on both runtimes. Pure and dependency-free,
  * so the client imports it directly (see client/src/lib/README.md).

@@ -7,7 +7,7 @@
 
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { brainGraphQuerySchema } from '../lib/brainValidation.js';
 import {
   getBrainGraphSearchIndex,

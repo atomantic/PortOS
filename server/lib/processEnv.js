@@ -1,5 +1,25 @@
 // Strip macOS `Malloc*` debug env vars before spawning a child process.
 //
+// `withoutServerSecretsEnv(env, { keep })` / `serverSecretEnvKeys(env)` — copy of an env minus the
+// vault key, `PG*`, PortOS tokens and provider credentials, for non-AI-CLI children (managed apps,
+// deploy scripts, third-party installs); `keep` exempts names a child needs by design.
+// `stripDebugMallocEnv(env)` / `safeChildProcessEnv(extra)` — drop macOS `Malloc*` debug env vars
+// before spawning a child. `safeChildProcessOptions(options)` adds that sanitized environment plus
+// `windowsHide: true`, preventing detached PM2 subprocesses from opening transient Windows console UI;
+// `buildSafeCliBaseEnv(env, provider)` allowlists runtime/delivery essentials and only the selected
+// CLI's ambient provider auth before an AI CLI inherits the server environment. Route Node→Python and
+// other background CLI spawns through the process helpers. Also `whichFirst(name)` — first-hit
+// `which`/`where` PATH probe (safe options, 5s timeout, direct PATH fallback on probe failure)
+// returning the absolute binary path or `null`; `whichFirstSync(name)` provides the same contract
+// without the await; `findCommandOnPath(name, { env, cwd })` resolves an executable from the exact
+// child environment without needing `which` itself on that PATH. `adoptPathDirs(dirs)` appends the
+// ones that exist and are not already there to THIS process's `process.env.PATH` (case-insensitively
+// on Windows), which fixes this process AND every child, since the env builders above derive from
+// `process.env` — the only fix that reaches a CLI launched by BARE NAME through node-pty. Shared by
+// `npmGlobalBin.js` and `services/llamaServerManager.js`'s winget-shim adoption.
+// `windowsPowerShell51Path(env)` is the fixed Windows PowerShell 5.1 location under `SystemRoot`,
+// shared by `interactiveShellResolver.js` and `nativeTrash.js`.
+//
 // When PortOS is launched from Pinokio (or any tool that exports an empty or
 // zero `MallocStackLogging` / `MallocScribble` / similar var), every Python
 // subprocess prints

@@ -1,11 +1,9 @@
 /**
- * The two local-LLM backends PortOS keeps a model catalog for. Shared by the
- * Runtimes view (one card per backend) and the Model Library view (the same
- * list as a picker), so adding a third backend is a one-line change here.
+ * `LOCAL_LLM_BACKENDS` (id/label/lucide icon for Ollama + LM Studio) and `localLlmBackendLabel(id)`.
  *
- * Exported under qualified names because `client/src/lib/index.js` is a flat
- * `export *` barrel and `BACKENDS` / `labelFor` are far too generic to claim
- * there — consumers alias them back on import.
+ * The two backends PortOS keeps a model catalog for, shared by the Runtimes view's backend cards and
+ * the Model Library's backend picker so a third backend is added in one place. The qualified names
+ * keep generic `BACKENDS` / `labelFor` identifiers out of call sites.
  */
 
 import { Box, Cpu } from 'lucide-react';

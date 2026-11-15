@@ -1,3 +1,7 @@
+/**
+ * GitHub repo metadata.
+ */
+
 import { request } from './apiCore.js';
 
 // GitHub Repos

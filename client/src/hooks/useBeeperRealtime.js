@@ -1,3 +1,12 @@
+/**
+ * Subscribes to the server's Beeper realtime relay — invalidation frames (`{ kind, chatID, ids, seq,
+ * ts }`, never message content) plus the `connected` / `reconnecting` / `down` transport state.
+ *
+ * Re-emits `beeper:subscribe` on every socket `connect`. Returns `{ realtime, connectionState,
+ * lastInvalidation, seedRealtime }`. Use when: Any Beeper surface that must refetch when the mirror
+ * changes (#33).
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
 import { useSocketSubscription } from './useSocketSubscription';

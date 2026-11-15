@@ -1,4 +1,31 @@
 /**
+ * Shared test helpers: `request()` HTTP harness, fetch `Response` mocks, `startLoopbackServer`, a
+ * server-source scanner for guard suites, and cross-platform path/python helpers.
+ *
+ * Test helpers: `request()` (supertest-style HTTP) + `mockJsonResponse`/`mockTextResponse` (fetch
+ * `Response` mocks with `.text()`, `.json()`, and a `headers.get` content-type),
+ * `startLoopbackServer(app)`/`closeLoopbackServer(server)`/`waitForAbort(signal)` for tests that need
+ * a real socket (raw disconnects, SSE streaming) that `request()`'s run-to-completion fetch harness
+ * can't model, plus the source-scan pair `collectServerSources()` / `readServerSource(rel)` (and
+ * `SERVER_DIR`) used by the whole-tree guard suites — `spawnCwd.test.js` (#3193) and
+ * `cliChildEnv.test.js` (#3194). Those guards overlap deliberately, so they share one definition of "a
+ * source file"; change the ignore rules here and both move together. Cross-platform trio:
+ * `posixPath(v)` normalizes a RECEIVED path before comparing it to a POSIX-spelled literal (no-op on
+ * POSIX — never normalize the expectation, which would hide a genuinely wrong path), and
+ * `resolveTestPython()` returns an interpreter that actually runs, probing by execution because
+ * Windows ships a `python` Store-alias stub that exists but fails (`{ modules }` also requires those
+ * imports); `null` when there is none, for `describe.skipIf`; `pinPlatform(value)` pins
+ * `process.platform` and returns a restore that reinstates the ORIGINAL descriptor (deleting the pin
+ * when there was none) — it carries the one hazard every hand-rolled pin had to rediscover: never pin
+ * above an import that loads a native addon, which picks its prebuilt binary off the platform at load
+ * time (#4085). Python-shelling suites also take their two nested budgets from here:
+ * `PY_TEST_TIMEOUT_MS` (vitest per-test, passed as `it()`'s third argument — a real interpreter's wall
+ * time tracks machine load, not the assertion, so a ~4s case crosses the tight global 10s
+ * `testTimeout` on a contended full-suite worker) and the strictly smaller `PY_SUBPROCESS_TIMEOUT_MS`
+ * (every `execFileSync` spawn's own `timeout`, so a hung interpreter trips the spawn guard first and
+ * names the command instead of producing a bare vitest timeout; a subprocess allowance ABOVE the
+ * vitest budget is dead intent — vitest always wins).
+ *
  * Shared test helpers: HTTP request harness, fetch-Response mocks, the
  * server-source scanner used by the whole-tree guard suites, and the three
  * cross-platform helpers (`posixPath`, `resolveTestPython`, `pinPlatform`) that

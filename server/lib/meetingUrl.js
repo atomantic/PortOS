@@ -2,6 +2,11 @@
  * Selection of the ONE join link worth caching out of a raw Google Calendar
  * event, plus the bound both the HTTP ingress and the selector enforce.
  *
+ * Selects the one cacheable join URL (`selectMeetingUrl`) out of a raw Google Calendar event — first
+ * http(s) `video` entry point, else `hangoutLink` — and owns the shared `MEETING_URL_MAX` bound.
+ * Three-state: `undefined` = the producer never described conferencing, `null` = described with none
+ * usable.
+ *
  * Pure and dependency-light on purpose: the push route (`routes/calendar.js`)
  * needs `MEETING_URL_MAX` at schema-construction time, and the sync service
  * (`services/calendarGoogleSync.js`) needs the selector — so a single copy has

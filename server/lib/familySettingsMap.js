@@ -1,3 +1,14 @@
+/**
+ * `normalizeFamilyMap` and `mergeFamilyMap` implement the shared merge rule for per-provider-family
+ * maps in settings (plan prices, tiers), distinguishing absent from empty.
+ *
+ * The merge rule every per-provider-family map in `data/settings.json` shares (plan prices, plan
+ * tiers) — `normalizeFamilyMap(raw, normalizeValue)` and `mergeFamilyMap(stored, patch,
+ * normalizeValue)`, which hold the absent-vs-present-but-empty contract in ONE place: an omitted
+ * family keeps its stored value, one sent empty is an intentional clear and is deleted. Each store
+ * supplies only its value normalizer. Pure.
+ */
+
 import { isPlainObject } from './objects.js';
 
 /**

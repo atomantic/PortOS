@@ -1,3 +1,11 @@
+// `imageThumbnailSrc(src)` maps a gallery PNG (`/data/images/x.png`) to its on-demand 512px WebP
+// (`/data/image-thumbnails/x.webp`), else null.
+//
+// `galleryTileSources(filenames)` orders each gallery filename's WebP derivative before its original
+// for walk-back tile chains; `<MediaImage thumbnail>` applies the same order to one src. Used by
+// catalog, Creative Library, mood board, universe/series and entry/deck card tiles so lists don't pull
+// multi-MB originals.
+//
 // The served 512px WebP derivative of a gallery PNG (`/data/images/x.png` →
 // `/data/image-thumbnails/x.webp`, generated on first request), or null when
 // `src` is not a gallery PNG. Callers keep the original as the fallback.

@@ -1,3 +1,13 @@
+// Draws the Kestrel Neon rotating icosahedron: `ICOSAHEDRON_VERTICES`, `ICOSAHEDRON_EDGES`,
+// `rotatePoint`, `projectIcosahedron` and `drawWireframeCore` on a 2D canvas.
+//
+// The Kestrel Neon "core assembly": icosahedron geometry (`ICOSAHEDRON_VERTICES` /
+// `ICOSAHEDRON_EDGES`, 12 vertices, 30 edges), `rotatePoint` / `projectIcosahedron` (Y-then-X rotation
+// + perspective), and `drawWireframeCore(ctx, frame)` — one 2D-canvas frame of the depth-shaded
+// wireframe with its orbit rings, vertex dots, and corner angle readout. Every color is an `[r, g, b]`
+// triple so the caller sources them from `AGENT_STATES` and resolved theme tokens; no DOM reads.
+// Consumed by `cos/CoreCoSAvatar.jsx`.
+//
 // Wireframe "core assembly" — the rotating icosahedron the Kestrel Neon theme
 // concept draws in its telemetry panel, rendered on a plain 2D canvas so it
 // needs no WebGL context (unlike the three.js CoS avatars).

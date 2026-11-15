@@ -1,6 +1,13 @@
 /**
  * Assembly-coverage gate for an already-validated Three.js scene spec.
  *
+ * `evaluateThreejsPartCoverage(spec, { family })` — structural assembly gate over an already-validated
+ * Three.js spec: flags promised features fused onto the same part set, geometry claimed by no detail,
+ * and details nothing was built for (folded minor relief stays a `note`). With a subject family it
+ * also warns on a required component the spec never mentions at all — the one check that can fault a
+ * spec for what it failed to *promise*. `buildThreejsCoverageFeedback(coverage)` turns the error
+ * findings (plus any family gap) into default refinement feedback.
+ *
  * `threejsSculptSpecSchema` proves that every `detailInventory[].implementationPartIds`
  * entry names a real part. It never checks the inverse direction, so a spec can
  * declare eight identity-priority details, point all eight at the same box, or

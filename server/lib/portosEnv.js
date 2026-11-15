@@ -1,6 +1,12 @@
 /**
  * Single server-side helper for reading/writing PortOS's own `.env`.
  *
+ * Single server-side helper for PortOS's own `.env` (`PORTOS_ENV_PATH` anchored to `installRoot` per
+ * #1947, `parseEnvContents`, `readPortosEnvValue`, `upsertPortosEnvLine` + `upsertEnvLine`, shared
+ * per-file `queuePortosEnvWrite` for settings and vault provisioning), with replacer-function guard
+ * for `$`-patterns and `process.env` wins precedence; `scripts/lib/envFile.js` stays as the
+ * zero-dependency boundary copy.
+ *
  * PortOS records machine-local runtime state (e.g. `LLM_BACKEND`,
  * `VLLM_QWEN_PROJECT_DIR`) in the install's `.env` so it survives restarts
  * without a dotenv loader. The file lives at the **install root**, not the

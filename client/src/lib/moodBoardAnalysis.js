@@ -1,6 +1,13 @@
 // Mood-board analysis helpers shared by the per-item prompt-from-media flow
 // and the board-level "analyze, then compose a poster" flow.
 //
+// `moodBoardAnalysisFromResult(item, result)` picks the type-matched prompt-from-media payload stored
+// on a pin; `boardAnalyzePlan(items)` splits pins into already-analyzed, still-readable, and skipped;
+// `boardPosterRenderCfg(imageCfg, mode)` builds the explicit landscape poster render (any chosen image
+// service) and `posterStyleKey(style)` detects a style change while that render is in flight;
+// `moodBoardItemSendLinks(item)` builds the text-to-image / image-to-image / video handoff URLs for a
+// pin card.
+//
 // Pure: no React, no fetches. The page persists whatever `moodBoardAnalysisFromResult`
 // returns; the style panel uses `boardAnalyzePlan` to decide whether the next
 // click runs vision or only composes from prompts already stored on the items.

@@ -1,3 +1,11 @@
+/**
+ * Deep-linkable `[activeTab, setActiveTab]` for a tabbed `<Drawer>`, backed by a caller-named URL
+ * search param (falls back to a default on stale/missing).
+ *
+ * Use when: A tabbed config drawer whose open section should be shareable/bookmarkable — use with
+ * `<Drawer tabs>`; don't re-roll the search-param plumbing.
+ */
+
 import { useCallback } from 'react';
 import { useSearchParams } from 'react-router';
 

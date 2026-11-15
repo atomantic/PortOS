@@ -1,4 +1,9 @@
-/** Pi uses --print --approve, --thinking, and a trailing argv prompt (not stdin). */
+/**
+ *  Pi uses --print --approve, --thinking, and a trailing argv prompt (not stdin).
+ *
+ * Per-CLI argv conventions (`buildCliArgs`) for stdin prompt delivery — dependency-light extraction
+ * from runner.js so out-of-process callers (autofixer) can import it.
+ */
 /**
  * Per-CLI argv conventions for stdin-based prompt delivery.
  *

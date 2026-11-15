@@ -1,3 +1,9 @@
+// `isLoopbackHost(host)` / `isLoopbackOrigin()` / `describeMicAvailability()` — Secure Context /
+// loopback-origin heuristics.
+//
+// Use these in any new mic, clipboard, or `getUserMedia`-gated surface; matches the full `127.0.0.0/8`
+// range, IPv6 `::1`, and the browser-bracketed `[::1]` form.
+//
 // Browser secure-context rule mirrored client-side: getUserMedia (and other
 // powerful APIs) are gated on the page origin being HTTPS, localhost, or a
 // loopback IP (127.0.0.0/8, ::1, [::1]) — anything else (Tailscale IP, LAN

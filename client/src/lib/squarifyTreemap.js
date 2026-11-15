@@ -1,3 +1,8 @@
+// `squarifyTreemap(items, width, height, getValue?)` — squarified treemap layout.
+//
+// Returns `{ item, x, y, w, h }` tiles whose areas are proportional to each item's value. Drives the
+// Data Manager disk-usage map.
+//
 // Squarified treemap layout (Bruls, Huizing & van Wijk). Packs weighted items
 // into a width×height rectangle so each tile's area is proportional to its
 // value while keeping tiles as close to square as possible — the layout disk

@@ -1,6 +1,15 @@
 /**
  * Which checkpoints Slotstream is offered, and which files of one are fetched.
  *
+ * `SLOTSTREAM_CATALOG` — the curated mixture-of-experts checkpoints worth streaming from SSD (the
+ * technique only pays off on MoE: a dense model of the same size would stream every layer for every
+ * token). `resolveSlotstreamRepo(idOrRepo)` maps a catalog id or an `owner/name` repo id to a repo
+ * (null for anything else), `slotstreamModelDirName(repo)` flattens it to the single-segment cache
+ * directory whose NAME is the id a start hands `--model`, and `selectSlotstreamRepoFiles(siblings)`
+ * picks the `.safetensors`/config/tokenizer files a checkpoint is made of while dropping mirrored
+ * `original/`, GGUF, ONNX, and PyTorch copies of the same weights (which can double a 100 GB+ pull)
+ * and any name that is not a plain relative path.
+ *
  * `slotstreamModels.js` answers "what is on disk and how much memory will a
  * start want". This module answers the question before it: which mixture-of-
  * experts checkpoints are worth streaming from SSD at all, and — once one is

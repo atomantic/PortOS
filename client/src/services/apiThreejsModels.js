@@ -1,3 +1,8 @@
+/**
+ * Procedural Three.js model workspaces: gallery-image generation, refinement, source export, deletion,
+ * and the subject-family checklist options.
+ */
+
 import { request } from './apiCore.js';
 
 export const listThreejsModels = (options) => request('/threejs-models', options);

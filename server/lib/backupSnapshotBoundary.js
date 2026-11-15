@@ -1,3 +1,13 @@
+/**
+ * `withBackupAssetPublication(work)` admits a complete durable file-plus-row mutation.
+ *
+ * `acquireBackupSnapshotCut()` drains admitted work and pauses new publication through backup's file
+ * copy, database dump, and manifest. Nested mutation calls reuse their lease;
+ * `runOutsideBackupAssetPublication(work)` lets a synchronous event fan-out give each listener its own
+ * lease; `holdsBackupAssetPublication()` tells a writer whether it runs inside an active lease;
+ * `backupSnapshotCutPending()` lets optional housekeeping defer instead of waiting out a cut.
+ */
+
 import { maintenance } from './maintenanceAdmission.js';
 import { backupSharedAdmission } from './backupSharedAdmission.js';
 /**

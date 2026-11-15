@@ -3,6 +3,8 @@
  * settings that map onto the render-API params the LTX/mlx_video pipeline
  * actually consumes.
  *
+ * Locked-at-creation aspect ratio + quality presets for the Creative Director.
+ *
  * The contract: a project picks an aspectRatio + quality + modelId once;
  * every scene render uses these. Tweaking is intentionally not allowed
  * mid-project — segment-to-segment continuity needs identical resolution

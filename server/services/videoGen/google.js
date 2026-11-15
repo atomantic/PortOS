@@ -12,19 +12,13 @@
  * settings at dispatch and never rides in persisted queue params.
  */
 
-import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
-import { randomUUID } from 'crypto';
-import { writeFile, unlink } from 'fs/promises';
-import { basename, join, relative, resolve, isAbsolute } from 'path';
+import { basename } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { GOOGLE_DEFAULT_VIDEO_MODEL, buildGoogleVideoRequest, getGoogleVideoModel } from '../../lib/googleVideoModels.js';
-import { probeVideoGeometry } from '../../lib/ffmpeg.js';
-import { attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
 import { videoGenEvents } from './events.js';
-import { discardUnpublishedVideo, finalizeGeneratedVideo, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
-import { maintenance } from '../../lib/maintenanceAdmission.js';
-import { mutateVideoHistory } from './history.js';
+import { emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
+import { createHostedVideoJobRunner } from './hostedJobRunner.js';
 import { getSettings } from '../settings.js';
 import { frameDataUriAtAspect } from './falFrameAspect.js';
 import {
@@ -39,37 +33,10 @@ const GOOGLE_RENDER_TIMEOUT_MS = (() => {
 })();
 const PLACEHOLDER_IMAGE = Object.freeze({ mimeType: 'image/png', data: '' });
 
-const jobs = new Map();
-const activeRequests = new Map();
-const activeJobs = new Map();
-
-export const getActiveJob = () => {
-  const entries = [...activeJobs.values()];
-  return entries.length ? entries[entries.length - 1] : null;
-};
-export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
-
-const preparations = createMediaJobPreparation();
-
-export const cancel = (jobId) => {
-  if (!jobId) {
-    throw new Error('videoGen/google.cancel requires a jobId — use cancelAll() to terminate every in-flight render');
-  }
-  const pending = preparations.cancel(jobId);
-  if (pending) return pending;
-  const entry = activeRequests.get(jobId);
-  if (!entry) return false;
-  entry.aborted = true;
-  entry.controller.abort();
-  return true;
-};
-
-export const cancelAll = () => {
-  const ids = [...preparations.ids(), ...activeRequests.keys()];
-  if (ids.length === 0) return false;
-  for (const id of ids) cancel(id);
-  return true;
-};
+// Veo operations cannot be canceled remotely: a cancel stops the wait, and a
+// failure marks the spend unsettled (abandonGoogleOperation).
+const runner = createHostedVideoJobRunner({ mode: 'google', provider: 'Google', abandonRemote: abandonGoogleOperation });
+export const { getActiveJob, attachSseClient, cancel, cancelAll } = runner;
 
 /**
  * Dry-run the request with placeholder media before anything is read or paid
@@ -101,12 +68,12 @@ export function googleVideoSentPrompt({
   return { planned, record };
 }
 
-export const generateVideo = (params) => preparations.run(params, generateVideoPrepared);
+export const generateVideo = (params) => runner.prepare(params, generateVideoPrepared);
 
 async function generateVideoPrepared({
   settings, modelId: requestedModelId,
   prompt = '', negativePrompt, duration, aspectRatio, width, height, resolution = null, generateAudio = false, seed = null,
-  sourceImagePath = null, lastImagePath = null, referenceImagePaths = [], jobId: providedJobId = null,
+  sourceImagePath = null, lastImagePath = null, referenceImagePaths = [], jobId,
   uploadedTempPath = null, uploadedTempPaths = [], frameAspect = null, promptAdditions = [],
 }) {
   await ensureDir(PATHS.videos);
@@ -130,9 +97,7 @@ async function generateVideoPrepared({
     ...spec, promptAdditions, hasImage: !!sourceImagePath, hasEndImage: !!lastImagePath, referenceCount: referenceImagePaths.length,
   });
 
-  const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.mp4`;
-  const outputPath = join(PATHS.videos, filename);
   const meta = {
     id: jobId,
     prompt: (prompt || '').trim(),
@@ -150,28 +115,14 @@ async function generateVideoPrepared({
     mode: sourceImagePath ? 'image' : 'text',
     ...(referenceImagePaths.length ? { clipReferenceFiles: referenceImagePaths.map((path) => basename(path)) } : {}),
   };
-  const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
-  jobs.set(jobId, job);
-
-  console.log(`🎬 Generating video [${jobId.slice(0, 8)}] Google (${modelId} ${planned.resolution} ${planned.seconds}s)`);
-  videoGenEvents.emit('started', { generationId: jobId, totalSteps: 1, ...meta });
-  activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0 });
-  emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Submitting to Google…');
-
-  runGoogleVideo(job, jobId, {
-    config, spec, sourceImagePath, lastImagePath, referenceImagePaths, outputPath, filename, meta,
-    uploadedTempPath, uploadedTempPaths, frameAspect,
-  }).catch((err) => {
-    console.error(`❌ Google video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
+  return runner.start({
+    meta, renderStartedAtMs, logDetail: `${modelId} ${planned.resolution} ${planned.seconds}s`,
+    run: (job) => runGoogleVideo(job, jobId, {
+      config, spec, sourceImagePath, lastImagePath, referenceImagePaths, meta,
+      uploadedTempPath, uploadedTempPaths, frameAspect,
+    }),
   });
-
-  return { jobId, filename, path: `/data/videos/${filename}`, generationId: jobId, mode: 'google', status: 'running' };
 }
-
-const isStagedUpload = (path) => {
-  const rel = relative(PATHS.uploads, resolve(path));
-  return !!rel && !rel.startsWith('..') && !isAbsolute(rel);
-};
 
 // A frame is cropped to the project's aspect (Music Video) before it is sent, like the fal lane.
 async function inlineFrame(path, aspect) {
@@ -182,31 +133,12 @@ async function inlineFrame(path, aspect) {
 }
 
 async function runGoogleVideo(job, jobId, {
-  config, spec, sourceImagePath, lastImagePath, referenceImagePaths, outputPath, filename, meta,
+  config, spec, sourceImagePath, lastImagePath, referenceImagePaths, meta,
   uploadedTempPath = null, uploadedTempPaths = [], frameAspect = null,
 }) {
-  const entry = createGoogleOperationEntry();
-  entry.aborted = preparations.take(jobId);
-  const publication = {};
-  let inputCleanup;
-  const settleInputs = () => (inputCleanup ??= (async () => {
-    const inputs = new Set([uploadedTempPath, ...(Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [])]);
-    for (const path of inputs) {
-      if (!path || !isStagedUpload(path)) continue;
-      await unlink(path).catch(error => {
-        if (error.code === 'ENOENT') return;
-        maintenance.markCurrentUnsettled();
-        maintenance.markResourceUnsettled('media', jobId);
-        console.error(`❌ Google staged-input cleanup failed [${jobId.slice(0, 8)}]: ${error.message}`);
-      });
-    }
-  })());
-  const finishFailure = async (reason) => {
-    await settleInputs();
-    if (entry.aborted) return finalizeCanceled(job, jobId);
-    return finalizeJobFailure(job, jobId, null, reason, { force: true });
-  };
-  activeRequests.set(jobId, entry);
+  const { entry, finishFailure, publish, fail } = runner.begin(job, createGoogleOperationEntry(), {
+    inputs: [uploadedTempPath, ...(Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [])],
+  });
   const deadline = Date.now() + GOOGLE_RENDER_TIMEOUT_MS;
   try {
     const signal = entry.controller.signal;
@@ -234,37 +166,8 @@ async function runGoogleVideo(job, jobId, {
     emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.FETCH, 'Saving video…');
     const video = Array.isArray(polled.response?.videos) ? polled.response.videos.find((v) => typeof v?.bytesBase64Encoded === 'string') : null;
     if (!video) return finishFailure(googleFilteredReason(polled.response, 'video'));
-    await writeFile(outputPath, Buffer.from(video.bytesBase64Encoded, 'base64'));
-    if (entry.aborted) {
-      await unlink(outputPath);
-      return finishFailure('Canceled');
-    }
-    const measured = (await probeVideoGeometry(outputPath)) || {};
-    await settleInputs();
-    if (entry.aborted) {
-      await unlink(outputPath);
-      return finishFailure('Canceled');
-    }
-    activeRequests.delete(jobId);
-    activeJobs.delete(jobId);
-    await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, ...measured }, actualSeed: request.seed ?? null, mutateHistory: mutateVideoHistory, publication });
-    closeJobAfterDelay(jobs, jobId);
+    await publish({ buffer: Buffer.from(video.bytesBase64Encoded, 'base64'), meta, actualSeed: request.seed ?? null });
   } catch (err) {
-    if (!publication.committed) await discardUnpublishedVideo({ jobId, outputPath }).catch(error => {
-      maintenance.markCurrentUnsettled();
-      maintenance.markResourceUnsettled('media', jobId);
-      console.error(`❌ Google video publication cleanup failed [${jobId.slice(0, 8)}]: ${error.message}`);
-    });
-    abandonGoogleOperation(entry);
-    return finishFailure(`Google video generation failed: ${err?.message || err}`);
+    return fail(err);
   }
 }
-
-const finalizeJobFailure = createJobFailureFinalizer({
-  jobs,
-  activeJobs,
-  activeSlots: activeRequests,
-  label: 'Google video generation',
-  events: videoGenEvents,
-});
-const finalizeCanceled = finalizeJobFailure.canceled;

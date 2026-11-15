@@ -1,4 +1,10 @@
 /**
+ * Dependency-free retired-task-name map (`TASK_TYPE_RENAMES`, `currentTaskTypeName`).
+ *
+ * Re-exported by `scheduledTaskTypes.js`.
+ */
+
+/**
  * Retired scheduled task names → their current names. Dependency-free so the
  * browser-safe task-type classifier (taskTypeBucket.js) can use it without
  * pulling in scheduledTaskTypes.js's validation imports.

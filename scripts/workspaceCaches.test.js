@@ -1,18 +1,18 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { checkWorkspaceCacheIsolation } from './lib/workspaceCacheFixture.js';
+import { readCiJobs } from './lib/ciWorkflowJobs.js';
 import { createTestPhaseDiagnostics } from '../server/test/testPhaseDiagnostics.js';
 
-const REPO = fileURLToPath(new URL('../', import.meta.url));
 
 describe('checkout-owned server Vite caches with shared dependencies', () => {
   it('keeps CI artifact-cache restores pointed at the owned test cache roots', () => {
-    const workflow = readFileSync(join(REPO, '.github/workflows/ci.yml'), 'utf8');
-    const caches = workflow.split('- name: Cache Vitest transform artifacts').slice(1)
-      .map(block => block.split('\n      - name:')[0]);
-    expect(caches).toHaveLength(6);
+    // Every job that runs Vitest restores transform artifacts, the server
+    // ones through the setup-server action.
+    const jobs = readCiJobs();
+    const runners = ['server', 'client', 'database', 'browser', 'windows-server', 'macos-native'];
+    for (const id of runners) expect(jobs[id], id).toContain('- name: Cache Vitest transform artifacts');
+    const caches = runners.map(id => jobs[id].split('- name: Cache Vitest transform artifacts')[1].split('\n      - name:')[0]);
     for (const cache of caches) {
       expect(cache).not.toContain('node_modules/.vite');
       if (cache.includes('key: vitest-server-')) {
@@ -23,7 +23,7 @@ describe('checkout-owned server Vite caches with shared dependencies', () => {
   });
 
   for (const [configName, cacheName] of [['vitest.config.js', 'vitest'], ['vitest.config.db.js', 'vitest-db']]) {
-    it(`server ${configName} keeps concurrent publications separate and reuses its owned cache`, async ({ signal, onTestFailed }) => {
+    it.concurrent(`server ${configName} keeps concurrent publications separate and reuses its owned cache`, async ({ signal, onTestFailed }) => {
       const children = new Map();
       onTestFailed(({ task }) => {
         const evidence = `Cache children: ${JSON.stringify([...children.values()])}`;

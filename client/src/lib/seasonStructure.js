@@ -1,4 +1,8 @@
 /**
+ * Re-export of `server/lib/seasonStructure.js`.
+ */
+
+/**
  * Season/episode structure vocabulary.
  *
  * Re-export of `server/lib/seasonStructure.js` — the one definition of this rule,

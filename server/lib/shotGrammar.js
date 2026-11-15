@@ -1,4 +1,13 @@
 /**
+ * Storyboard shot-grammar vocabularies (`SHOT_TYPES`, angles, moves, lenses, eyelines,
+ * `SCREEN_DIRECTIONS`) and normalizers like `normalizeShotType`.
+ *
+ * Pure shot-grammar vocabularies (`SHOT_TYPES`, `SHOT_ANGLES`, `SHOT_FACINGS`, `SHOT_COMPOSITIONS`,
+ * `SHOT_MOVES`, `SHOT_LENSES`, `SHOT_FOCUSES`, `SHOT_EYELINES`, `SCREEN_DIRECTIONS`) + normalizers
+ * (`normalizeShotType`, `normalizeScreenDirection`) for a storyboard shot's camera framing + on-screen
+ * direction. Shared by the scene extractor's sanitizer, the storyboards Zod schema, and the
+ * `visual.shot-continuity` editorial check (#1315).
+ *
  * Shot-grammar vocabulary + normalizers (#1315) — the canonical controlled
  * vocabularies for a storyboard shot's camera framing (`shotType`) and on-screen
  * direction (`screenDirection`), plus the normalizers that coerce raw LLM/UI

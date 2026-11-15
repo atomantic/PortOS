@@ -20,8 +20,20 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join, relative, resolve } from 'path';
 import { buildStaticImportGraph, findImportCycles } from '../lib/staticImportGraph.js';
+import { staticExportNames } from '../lib/staticExportSurface.js';
 
 const SERVICES_DIR = dirname(fileURLToPath(import.meta.url));
+
+// The walks below revisit the same few hundred modules from several guards; read each once.
+const sources = new Map();
+const sourceOf = (file) => {
+  let src = sources.get(file);
+  if (src === undefined) {
+    src = readFileSync(join(SERVICES_DIR, file), 'utf-8');
+    sources.set(file, src);
+  }
+  return src;
+};
 
 // The modules the #2837 audit named, plus the leaf modules extracted to break
 // the cycle. A cycle anywhere in `server/services` will be reported, but only a
@@ -71,7 +83,7 @@ const CLUSTER = [
 // well; that fails CLOSED, which is the correct bias for a structural guard (the
 // alternative is a green suite over a live back-edge).
 function importsDynamically(file, mod) {
-  const src = readFileSync(join(SERVICES_DIR, file), 'utf-8');
+  const src = sourceOf(file);
   return new RegExp(String.raw`\bimport\s*\(\s*[^)]*\b${mod.replace(/\./g, '\\.')}[^)]*\)`).test(src);
 }
 
@@ -88,7 +100,7 @@ function importsDynamically(file, mod) {
 // copies of a structural matcher is how a guard rots.
 const FACADE = 'agentOrchestrator.js';
 function reexportedPairs(source) {
-  const facade = readFileSync(join(SERVICES_DIR, FACADE), 'utf-8');
+  const facade = sourceOf(FACADE);
   const block = facade.match(new RegExp(
     String.raw`export\s*\{([^}]*)\}\s*from\s*['"]\./${source.replace(/\./g, '\\.')}['"]`));
   expect(block, `facade no longer re-exports from ${source} — did the layering change?`).toBeTruthy();
@@ -101,25 +113,11 @@ function reexportedPairs(source) {
 }
 const reexportedFrom = (source) => reexportedPairs(source).map(pair => pair.declared);
 
-// Loaders for the modules whose REAL export surface the guards below assert on.
-// Spelled out one literal specifier each rather than `import(`./${name}`)` —
-// the bundler cannot analyze a fully-variable specifier and warns, and the point
-// of reading the live key list is that it is ground truth, so it should not
-// depend on runtime path assembly. Every module here is side-effect-free to
-// import (their side effects live behind `init()`/`start()`/`initSpawner()`).
-const MODULE_LOADERS = {
-  'cos.js': () => import('./cos.js'),
-  'subAgentSpawner.js': () => import('./subAgentSpawner.js'),
-  'agentLifecycle.js': () => import('./agentLifecycle.js'),
-};
-const exportedNames = async (mod) => Object.keys(await MODULE_LOADERS[mod]());
-
-// Whichever assertion loads first pays for transforming `cos.js`'s whole service
-// graph — measured at 5–10s here depending on machine load, i.e. straddling the
-// 10s default, which turns a green guard into an intermittent red one that says
-// nothing about the invariant. Every `it()` below that calls `exportedNames`
-// carries this, not just the one that happens to run first today.
-const MODULE_LOAD_TIMEOUT_MS = 60_000;
+// The REAL export surface of the modules the guards below assert on, derived
+// statically (`lib/staticExportSurface.js`) instead of by importing them:
+// loading `cos.js` transformed its whole service graph, seconds spent on every
+// push. Every export form is static ES syntax, so the key set is the same.
+const exportedNames = (mod) => staticExportNames(join(SERVICES_DIR, mod));
 
 describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
   const graph = buildStaticImportGraph(SERVICES_DIR);
@@ -198,7 +196,7 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     expect(offenders, `agentOrchestrator.js must not be imported by ${offenders.join(', ')}`).toEqual([]);
   });
 
-  it('no longer needs the state-layer forwarders into the process layer (#3450)', async () => {
+  it('no longer needs the state-layer forwarders into the process layer (#3450)', () => {
     // Step 4 of the #3450 sequencing. `cosAgentLifecycle.js` — the agent STATE
     // layer — used to forward pause/kill/stats into the PROCESS layer with
     // `await import()`, purely so a caller holding a `cos.js` handle could reach
@@ -239,16 +237,16 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     // barrel, so the rule could only be stated for `cos.js`. With that barrel
     // retired the rule generalizes, which is the point of having retired it.
     for (const barrel of ['cos.js', 'subAgentSpawner.js']) {
-      const barrelExports = await exportedNames(barrel);
+      const barrelExports = exportedNames(barrel);
       expect(barrelExports, `${barrel} exports nothing — did the import fail?`).not.toEqual([]);
       for (const name of forbidden) {
         expect(barrelExports, `${barrel} must not re-export ${name} — it is a process-layer transition, ask the facade`)
           .not.toContain(name);
       }
     }
-  }, MODULE_LOAD_TIMEOUT_MS);
+  });
 
-  it('keeps the cluster orchestrators from re-growing a re-export barrel (#3450)', async () => {
+  it('keeps the cluster orchestrators from re-growing a re-export barrel (#3450)', () => {
     // `subAgentSpawner.js` re-exported ~40 symbols from nine siblings, and
     // `agentLifecycle.js` re-exported the leaves that had been extracted out of
     // it for that barrel to forward. So "where does finalizeAgent live" had
@@ -263,19 +261,19 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     // declared, and if that scan ever misses a legitimate local declaration the
     // test fails LOUD rather than going green over a live re-export.
     for (const mod of ['subAgentSpawner.js', 'agentLifecycle.js']) {
-      const src = readFileSync(join(SERVICES_DIR, mod), 'utf-8');
+      const src = sourceOf(mod);
       const declared = new Set(
         [...src.matchAll(/^export\s+(?:async\s+)?(?:function\s*\*?|const|let|var|class)\s+([A-Za-z0-9_$]+)/gm)]
           .map(m => m[1])
       );
-      const actual = await exportedNames(mod);
+      const actual = exportedNames(mod);
       expect(actual, `${mod} exports nothing — did the import fail?`).not.toEqual([]);
       const forwarded = actual.filter(name => !declared.has(name)).sort();
       expect(forwarded,
         `${mod} must declare what it exports — ${forwarded.join(', ')} is forwarded from another module; import it from the one that defines it`
       ).toEqual([]);
     }
-  }, MODULE_LOAD_TIMEOUT_MS);
+  });
 
   it('makes every transition caller name the facade or the defining module, never a barrel (#3450)', () => {
     // Step 3 of the #3450 sequencing, for the callers the "move the caller out"
@@ -319,10 +317,17 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     // any depth. None remain: `cosAgents.js` was retired in #3450 and `cos.js`'s
     // agent re-export block was the last one. Walking the re-export edges rather
     // than listing barrels means a NEW barrel is covered the day it is written.
-    const reexportEdges = (file) => [
-      ...readFileSync(join(SERVICES_DIR, file), 'utf-8')
-        .matchAll(/export\s*(?:\*|\{[^}]*\})\s*(?:as\s+\w+\s*)?from\s*['"]([^'"]+)['"]/g)
-    ].map(m => relative(SERVICES_DIR, resolve(dirname(join(SERVICES_DIR, file)), m[1])));
+    // Memoized: every module is a BFS start and an intermediate hop of many others.
+    const edgeCache = new Map();
+    const reexportEdges = (file) => {
+      if (!edgeCache.has(file)) {
+        edgeCache.set(file, [
+          ...sourceOf(file)
+            .matchAll(/export\s*(?:\*|\{[^}]*\})\s*(?:as\s+\w+\s*)?from\s*['"]([^'"]+)['"]/g)
+        ].map(m => relative(SERVICES_DIR, resolve(dirname(join(SERVICES_DIR, file)), m[1]))));
+      }
+      return edgeCache.get(file);
+    };
 
     const forwarders = new Set();
     for (const file of graph.keys()) {
@@ -348,7 +353,7 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     const offenders = [];
     for (const file of graph.keys()) {
       if (file === FACADE) continue;
-      const src = readFileSync(join(SERVICES_DIR, file), 'utf-8');
+      const src = sourceOf(file);
       const resolveSpec = (spec) => relative(SERVICES_DIR, resolve(dirname(join(SERVICES_DIR, file)), spec));
 
       // Named imports — `import { completeAgent as done } from './cos.js'`. The
@@ -372,7 +377,10 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
       // reads static syntax would go green the day someone writes it again.
       // In a destructure the LEFT of `a: b` is the exported name, same role `as`
       // plays in a static import.
-      for (const [, names, spec] of src.matchAll(/(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:await\s+)?import\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+      // Every deferred form below needs an `import(` call; skip the three
+      // scans over the (large) majority of modules that have none.
+      const hasDeferredImport = /\bimport\s*\(/.test(src);
+      for (const [, names, spec] of hasDeferredImport ? src.matchAll(/(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:await\s+)?import\s*\(\s*['"]([^'"]+)['"]\s*\)/g) : []) {
         const target = resolveSpec(spec);
         if (allowed.has(target)) continue;
         for (const entry of names.split(',')) {
@@ -384,8 +392,8 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
       // `(await import('./cos.js')).completeAgent` — the same reach, one step
       // shorter. `?.` and `['name']` are the same property read to the engine,
       // so a matcher that only knows the dot reads green over both.
-      for (const [, spec, dotted, bracketed] of src.matchAll(
-        /import\s*\(\s*['"]([^'"]+)['"]\s*\)[\s)]*(?:\?)?(?:\.\s*(\w+)|\.?\s*\[\s*['"`](\w+)['"`]\s*\])/g)) {
+      for (const [, spec, dotted, bracketed] of hasDeferredImport ? src.matchAll(
+        /import\s*\(\s*['"]([^'"]+)['"]\s*\)[\s)]*(?:\?)?(?:\.\s*(\w+)|\.?\s*\[\s*['"`](\w+)['"`]\s*\])/g) : []) {
         const name = dotted || bracketed;
         const target = resolveSpec(spec);
         if (allowed.has(target) || !declaredBy.has(name) || declaredBy.get(name).has(target)) continue;
@@ -404,7 +412,7 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
       // access and a dot-only matcher waves the other two straight through.
       const handles = [
         ...src.matchAll(/import\s*\*\s*as\s+(\w+)\s*from\s*['"]([^'"]+)['"]/g),
-        ...src.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*(?:await\s+)?import\s*\(\s*['"]([^'"]+)['"]\s*\)/g),
+        ...(hasDeferredImport ? src.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*(?:await\s+)?import\s*\(\s*['"]([^'"]+)['"]\s*\)/g) : []),
       ];
       for (const [, ns, spec] of handles) {
         const target = resolveSpec(spec);

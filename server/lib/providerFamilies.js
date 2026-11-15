@@ -1,3 +1,17 @@
+/**
+ * Subscription-quota provider family identity: `PROVIDER_FAMILIES` (claude/codex/agy/grok),
+ * `PROVIDER_FAMILY_IDS`, `familyLabel` and `familyForProvider(config)`.
+ *
+ * Subscription-quota FAMILY identity — `PROVIDER_FAMILIES` (`{ id, label, idPattern, matches }` for
+ * claude/codex/agy/grok), `PROVIDER_FAMILY_IDS`, `familyLabel`, `familyForProvider(config)`,
+ * `familyForProviderId(id)` (the weaker id-only classifier a Zod schema can use, null when the id
+ * names no family) → family id or null (local-runtime wrappers and API-only providers belong to none).
+ * The pure half of the registry `services/providerUsage.js` attaches quota `fetch`ers to, so cost
+ * attribution and route validation can ask "which plan is this provider on?" without importing the
+ * PTY-scrape graph. Distinct from `providerVendors.js`, which is argv-shaped and includes vendors with
+ * no subscription quota.
+ */
+
 import { isClaudeHarnessProvider } from './providerTypes.js';
 import { commandBasename } from './providerModels.js';
 

@@ -1,3 +1,9 @@
+/**
+ * Dismisses a system-health dashboard warning as resolved, with an Undo toast.
+ *
+ * Use when: The dashboard widget and the Live health overview page both dismiss/undo warnings.
+ */
+
 import { useState, useCallback } from 'react';
 import { dismissHealthWarning, undismissHealthWarning } from '../services/apiSystem.js';
 import toast from '../components/ui/Toast';

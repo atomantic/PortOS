@@ -1,8 +1,15 @@
-// The registry of PortOS credentials — the single list Settings > Credentials
-// renders. Pure data, no I/O, so a lib and a service can read it without a
-// service→lib inversion. Runtime resolution — settings store, repo `.env`,
-// inherited process.env, CLI/keychain, instance config — lives in
-// `server/services/credentialInventory.js`.
+// The registry of PortOS credentials — the single list Settings > Credentials renders.
+//
+// Pure catalog of PortOS credentials (`CREDENTIALS`, `CREDENTIAL_IDS`, `CREDENTIAL_TIERS`) — one entry
+// per key/token an install can use (`id`, `label`, `unlocks`, `tier`, `getUrl`, `envVars`,
+// `settingsPath`, `configurePath`, optional `feature`). Sits beside `instanceFeatureRegistry.js` so
+// the two lists stay greppable together. Runtime resolution (settings / repo `.env` / inherited
+// `process.env` / CLI / instance config) lives in `services/credentialInventory.js`. The Settings >
+// Credentials page never receives a value or masked prefix.
+//
+// Pure data, no I/O, so a lib and a service can read it without a service→lib inversion. Runtime
+// resolution — settings store, repo `.env`, inherited process.env, CLI/keychain, instance config —
+// lives in `server/services/credentialInventory.js`.
 //
 // Ordered most-value-first. Adding a credential:
 //   1. add a descriptor here;
@@ -27,12 +34,6 @@ export const CREDENTIALS = Object.freeze([
     envVars: Object.freeze(['HF_TOKEN', 'HUGGINGFACE_HUB_TOKEN', 'HUGGINGFACEHUB_API_TOKEN', 'HUGGINGFACE_TOKEN']),
     settingsPath: 'imageGen.hfToken',
     configurePath: '/media/image?settings=1',
-  }),
-  Object.freeze({
-    id: 'artificial-analysis', label: 'Artificial Analysis', privateStore: true,
-    unlocks: 'Model benchmark and pricing sync.', tier: 'free',
-    getUrl: 'https://artificialanalysis.ai/', envVars: Object.freeze(['ARTIFICIAL_ANALYSIS_API_KEY']),
-    settingsPath: 'secrets.artificialAnalysis.apiKey', configurePath: '/settings/credentials',
   }),
   Object.freeze({
     id: 'fal', label: 'fal.ai', privateStore: true,

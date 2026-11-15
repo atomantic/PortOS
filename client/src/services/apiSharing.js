@@ -1,3 +1,7 @@
+/**
+ * Share buckets + federation sync.
+ */
+
 import { request } from './apiCore.js';
 
 // ---- Buckets ----

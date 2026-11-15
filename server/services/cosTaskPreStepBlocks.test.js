@@ -428,7 +428,7 @@ describe('applyReleaseOptions — the do-release {releaseOptions} block', () => 
     expect(out.startsWith('## Release options for this run')).toBe(true);
     expect(out).toContain('**Resolve blockers: OFF**');
     expect(out.endsWith('my custom release prompt')).toBe(true);
-    expect(out).toContain("recover the existing candidate's recorded cutoff");
+    expect(out).toContain("check live publication activity");
     expect(out).toContain('Never pull, rebase, or merge the live development branch into the candidate');
     expect(out).toContain('override broader backlog-sweep instructions in a customized prompt');
   });

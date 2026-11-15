@@ -1,3 +1,15 @@
+/**
+ * Shared Universe Builder constants and pure helpers: trunk tabs, canon buckets, category labels,
+ * default render options and composite category helpers.
+ *
+ * Shared constants + pure category/trunk/composite helpers for the Universe Builder page and its
+ * extracted tab/editor components (#2374): `TRUNK_TABS`/`TRUNK_BY_ID`/`TRUNK_BY_KIND`, `TAB_*` +
+ * `BUCKET_CANON`, `CATEGORY_LABELS`, `DEFAULT_RENDER_OPTS`, `COMPOSITE_BOARD_KINDS`; and helpers
+ * `groupBucketsByKind`, `normalizeCategoryKey`, `humanizeCategory`, `ensureDraftCategories`,
+ * `getCategoryKeys`, `compositeKindLabel`. No React state — safe to import from the page or any tab
+ * component without a cycle.
+ */
+
 import { Users, MapPin, Package } from 'lucide-react';
 // Imports direct from apiUniverseBuilder (NOT the global `services/api`
 // barrel) — see universeBuilderExpand.js for why: tracing through the

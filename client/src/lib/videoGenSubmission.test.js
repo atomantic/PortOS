@@ -289,6 +289,16 @@ describe('buildVideoGenSubmission — prompt additions (#11317)', () => {
     expect(buildVideoGenSubmission(baseArgs({ ...args, mode: 'text' }))).not.toHaveProperty('referenceImageFiles');
   });
 
+  it('sends fal reference images only for a reference model, leaving one slot for a start frame', () => {
+    const files = Array.from({ length: 31 }, (_, i) => `r${i}.png`);
+    const args = { hostedLane: 'fal', mode: 'text', referenceImageFiles: ['one.png', ''] };
+    const ref = 'bytedance/seedance-2.5/reference-to-video';
+    expect(buildVideoGenSubmission(baseArgs({ ...args, falModelId: ref })).referenceImageFiles).toEqual(['one.png']);
+    expect(buildVideoGenSubmission(baseArgs({ ...args, falModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video' }))).not.toHaveProperty('referenceImageFiles');
+    expect(buildVideoGenSubmission(baseArgs({ hostedLane: 'fal', falModelId: ref, mode: 'text', referenceImageFiles: files })).referenceImageFiles).toHaveLength(30);
+    expect(buildVideoGenSubmission(baseArgs({ hostedLane: 'fal', falModelId: ref, mode: 'image', sourceImageFile: 's.png', referenceImageFiles: files })).referenceImageFiles).toHaveLength(29);
+  });
+
   it('sends Higgsfield reference images only in Text mode on a family with a reference route', () => {
     const args = { hostedLane: 'higgsfield', mode: 'text', referenceImageFiles: ['one.png', ''] };
     expect(buildVideoGenSubmission(baseArgs({ ...args, higgsfieldModelId: 'bytedance/seedance-2.5' })).referenceImageFiles).toEqual(['one.png']);

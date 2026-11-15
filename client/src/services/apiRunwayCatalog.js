@@ -1,3 +1,7 @@
+/**
+ * Shared Runway model catalog capabilities and cached model selection.
+ */
+
 import { request } from './apiCore.js';
 import { RUNWAY_CATALOG_SNAPSHOT } from '../../../server/lib/runwayCatalogSnapshot.js';
 

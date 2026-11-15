@@ -1,3 +1,18 @@
+/**
+ * Dependency-free per-backend image-gen capability literals: `EDIT_INCAPABLE_IMAGE_MODES`,
+ * `isEditCapableMode`, and the derived `I2I_CAPABLE_MODES`.
+ *
+ * Per-backend image-gen capability literals, a dependency-free leaf beside `generationModes.js`:
+ * `EDIT_INCAPABLE_IMAGE_MODES`/`isEditCapableMode` and the derived `I2I_CAPABLE_MODES`, the shipped
+ * defaults (`CODEX_IMAGEGEN_DEFAULT_MODEL`/`_EFFORT`, `AGY_IMAGEGEN_DEFAULT_MODEL`,
+ * `AGY_IMAGEGEN_IMAGE_MODEL`), the `AGY_`/`GROK_ASPECT_RATIOS` alphabets, and
+ * `IMAGE_GEN_PROVIDER_CAPABILITIES` (`supportsModelOverride`, `maxInputImages`,
+ * `promptRequiredWithInputImage`) with its
+ * `supportsCloudModelOverride`/`maxInputImages`/`cloudPromptRequired` readers. The
+ * `services/imageGen/*` modules re-export these, and `client/src/lib/imageGenModes.js` imports them
+ * instead of copying them (#6590).
+ */
+
 import { getRunwayImageModel } from './runwayImageModels.js';
 /**
  * Per-backend image-gen capability literals.

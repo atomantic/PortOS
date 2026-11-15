@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isFullWidthRoute } from './lib/layoutRoutes.js';
 import { NAV_COMMANDS } from '../../server/lib/navManifest.js';
 import { trackedSourceFiles } from './test/trackedFiles.js';
 import { maskComments, stringLiterals } from './test/classNameScan.js';
@@ -16,14 +15,38 @@ const root = dirname(fileURLToPath(import.meta.url));
 
 // App's lazy imports and Route declarations are the real page inventory. Resolve
 // aliases (XPage, RapidReaderPage) rather than guessing a filename from the tag.
+// A route's shell is the pathless FullWidthMain / PaddedMain layout route it sits
+// under — the declaration itself, so there is no parallel table to cross-check.
 function pageRoutes(app) {
   const modules = new Map([...app.matchAll(/const\s+(\w+)\s*=\s*lazyWithReload\(\(\)\s*=>\s*import\(['"]([^'"]+)['"]\)/g)]
     .map((match) => [match[1], match[2]]));
   for (const match of app.matchAll(/import\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g)) modules.set(match[1], match[2]);
-  const shell = app.slice(app.indexOf('<Route path="/" element={<Layout />}'));
-  return [...shell.matchAll(/<Route\s+path="([^"]+)"\s+element=\{<(\w+)\b/g)]
-    .filter((match) => modules.has(match[2]))
-    .map((match) => ({ path: `/${match[1]}`, component: match[2], module: modules.get(match[2]) }));
+  const lines = app.slice(app.indexOf('<Route path="/" element={<Layout />}')).split('\n');
+  const stack = [];
+  const routes = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (line === '</Route>') {
+      stack.pop();
+      if (!stack.length) break;
+      continue;
+    }
+    if (!line.startsWith('<Route')) continue;
+    const element = line.match(/element=\{<(\w+)\b/)?.[1];
+    if (!stack.length) {
+      stack.push({ path: '', shell: null, layout: true });
+      continue;
+    }
+    const parent = stack.at(-1);
+    const path = line.match(/\bpath="([^"]+)"/)?.[1];
+    const shell = element === 'FullWidthMain' ? 'full' : element === 'PaddedMain' ? 'padded' : parent.shell;
+    const full = path ? `${parent.path}/${path}` : parent.path;
+    // Nested outlets (Media Gen's /media/image) render inside their parent page,
+    // which owns the title bar, so only a shell's direct children are pages.
+    if (path && parent.layout && modules.has(element)) routes.push({ path: full, component: element, module: modules.get(element), shell });
+    if (!line.endsWith('/>')) stack.push({ path: full, shell, layout: !path });
+  }
+  return routes;
 }
 
 function ownsShell(raw) {
@@ -53,8 +76,8 @@ function matchRoute(routeList, pathname) {
     }
   }
   if (best) return best;
-  // Nested outlets (Media Gen's /media/image) are declared as child paths, so
-  // the flat route list only has the parent. The parent owns the title bar.
+  // Nested outlets (Media Gen's /media/image) are not in the page list; their
+  // parent owns the title bar.
   let prefix = null;
   for (const route of routeList) {
     if (route.path.includes(':')) continue;
@@ -85,15 +108,15 @@ export function createPagesMissingPageHeader(commands, routeList, readSource, al
   return failures;
 }
 
-function violations(routes, sourceFor, classify = isFullWidthRoute) {
+function violations(routes, sourceFor) {
   const failures = [];
   for (const route of routes) {
-    if (!classify(route.path) && ownsShell(sourceFor(route))) failures.push(`${route.path}: ${route.component} owns its PageHeader shell`);
+    if (route.shell !== 'full' && ownsShell(sourceFor(route))) failures.push(`${route.path}: ${route.component} owns its PageHeader shell`);
     // A param sibling mounting the same page must retain its index shell even
     // if the page's implementation delegates its header/body to a child.
     const index = routes.find((entry) => entry.component === route.component &&
       !entry.path.includes(':') && route.path.startsWith(`${entry.path}/:`));
-    if (index && classify(index.path) && !classify(route.path)) failures.push(`${route.path}: differs from ${index.path}`);
+    if (index && index.shell === 'full' && route.shell !== 'full') failures.push(`${route.path}: differs from ${index.path}`);
   }
   return failures;
 }
@@ -110,15 +133,19 @@ const sourceFor = ({ module }) => {
 describe('page shell conventions', () => {
   it('pairs routed PageHeader workspaces and their detail routes with the full-width shell', () => {
     expect(routes.length).toBeGreaterThan(100);
+    expect(routes.filter((route) => !route.shell)).toEqual([]);
     expect(violations(routes, sourceFor)).toEqual([]);
   });
 
   it('rejects a probe workspace in the padded shell and a missed param sibling', () => {
-    const probe = [{ path: '/probe', component: 'Probe' }, { path: '/probe/:id', component: 'Probe' }];
-    expect(violations(probe, () => '<div className="flex h-full"><PageHeader /></div>', () => false)).toHaveLength(2);
-    expect(violations(probe, () => '<Child />', (path) => path === '/probe')).toEqual(['/probe/:id: differs from /probe']);
-    expect(violations(probe, () => '<div className="flex-1 overflow-auto"><PageHeader /></div>', () => true)).toEqual([]);
-    expect(violations(probe, () => '<div><PageHeader /></div>', () => false)).toEqual([]);
+    const probe = (indexShell, detailShell) => [
+      { path: '/probe', component: 'Probe', shell: indexShell },
+      { path: '/probe/:id', component: 'Probe', shell: detailShell },
+    ];
+    expect(violations(probe('padded', 'padded'), () => '<div className="flex h-full"><PageHeader /></div>')).toHaveLength(2);
+    expect(violations(probe('full', 'padded'), () => '<Child />')).toEqual(['/probe/:id: differs from /probe']);
+    expect(violations(probe('full', 'full'), () => '<div className="flex-1 overflow-auto"><PageHeader /></div>')).toEqual([]);
+    expect(violations(probe('padded', 'padded'), () => '<div><PageHeader /></div>')).toEqual([]);
   });
 
   it('gives every Create page without a tab group a PageHeader', () => {

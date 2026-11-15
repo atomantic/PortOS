@@ -1,3 +1,9 @@
+/**
+ * `copyToClipboard`, `writeClipboardSilently`, `readClipboard` — safe across insecure-origin contexts.
+ *
+ * Use these instead of `navigator.clipboard.writeText` inline.
+ */
+
 import toast from '../components/ui/Toast';
 
 // `navigator.clipboard` is undefined on insecure-origin contexts (raw HTTP over

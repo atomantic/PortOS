@@ -1,6 +1,10 @@
 // Visible-watermark removal — erases the Gemini / Nano-Banana "✦" sparkle that
 // Google stamps into the BOTTOM-RIGHT corner of its image-gen output.
 //
+// `removeCornerWatermark` (erases the visible Gemini/Nano-Banana bottom-right ✦ via dependency-free
+// harmonic/Laplace inpaint) + pure helpers `resolveWatermarkRegion` / `inpaintRegion`. Distinct from
+// SynthID regen — this targets the *visible* corner logo.
+//
 // This is a DIFFERENT problem from SynthID (handled by `imageGen/regen.js`):
 //   - SynthID is an *invisible* per-pixel signal → defeated by a generative
 //     img2img round-trip / spatial resample.

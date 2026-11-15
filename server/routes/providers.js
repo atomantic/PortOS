@@ -1,3 +1,4 @@
+import { runtimeUpdateEvents } from '../services/runtimeUpdateEvents.js';
 import { EXECUTION_OPTION_DEFINITIONS } from '../lib/executionOptions.js';
 import { harnessForProvider } from '../lib/providerHarnesses.js';
 import { executionOptionSelectionSchema, providerExecutionOptionsQuerySchema } from '../lib/validation.js';
@@ -281,7 +282,13 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
   router.use((req, res, next) => {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
       res.once('finish', () => {
-        if (res.statusCode < 400) req.app.get('io')?.emit('providers:changed');
+        if (res.statusCode < 400) {
+          req.app.get('io')?.emit('providers:changed');
+          if (typeof req.body?.enabled === 'boolean' || req.method === 'DELETE'
+            || (req.method === 'POST' && ['/', '/presets', '/:id/derive', '/:id/modes/tui'].includes(req.route?.path))) {
+            runtimeUpdateEvents.emit('changed');
+          }
+        }
       });
     }
     next();

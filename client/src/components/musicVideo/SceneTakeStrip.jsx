@@ -1,10 +1,13 @@
 import { currentPlateEvidence, renderQualityAcknowledged } from '../../../../server/lib/musicVideoPlateEvidence.js';
+import { musicVideoRenderTierLabel } from '../../../../server/lib/musicVideoRenderTier.js';
 import { useRef, useState } from 'react';
 import { Ban, Check, Loader2, RotateCcw, Eye, X, MessageSquare, PencilLine } from 'lucide-react';
 import { sceneTakeList, takePreviewKey, takeThumbUrl, takeClipUrl, takeProvenance, TAKE_SLOT } from '../../lib/musicVideoTakes.js';
 import { plateVerdict } from './PlateComparison.jsx';
+import TakeExtend from './TakeExtend.jsx';
 import AssetReferenceActions from '../media/AssetReferenceActions.jsx';
 import { getVideoHistoryItem } from '../../services/apiImageVideo.js';
+import { sequenceTakeLabel, sequenceTakeSummary } from '../../../../server/lib/musicVideoSequenceTake.js';
 
 const VERDICT_TONE = { pass: 'bg-port-success/20 text-port-success', fail: 'bg-port-error/20 text-port-error', unverified: 'bg-port-warning/20 text-port-warning' };
 // The project's asset marks are keyed by media kind: an end frame is a still like any other.
@@ -105,6 +108,12 @@ export default function SceneTakeStrip({
                     <Check size={11} aria-hidden="true" /> In use
                   </span>
                 )}
+                {/* #16136: a clip rendered as a draft or a final says which. */}
+                {kind === 'video' && musicVideoRenderTierLabel(take.tier) && (
+                  <span className="port-media-overlay-strong absolute bottom-1 left-1 rounded px-1 text-[10px]" data-testid="take-tier">
+                    {musicVideoRenderTierLabel(take.tier)}
+                  </span>
+                )}
               </button>
               {/* Only what the director acts on: how a take was made stays in the hover title. */}
               {/* "In use" is already on the thumbnail; a rejected take reads from its dimmed thumbnail and Restore. */}
@@ -117,6 +126,14 @@ export default function SceneTakeStrip({
                     </button>
                   ) : <span className={`rounded px-1 ${VERDICT_TONE[verdict.tone]}`} title="A vision check found it matches the shot">{verdict.label}</span>}
                 </div>
+              )}
+              {sequenceTakeLabel(take) && (
+                <p className="break-words text-[10px] text-port-text-muted" title={sequenceTakeSummary(take, project?.scenes)} data-testid="sequence-take-label">
+                  {sequenceTakeLabel(take)}
+                </p>
+              )}
+              {take.parentTakeId && (
+                <p className="break-words text-[10px] text-port-text-muted" data-testid="extend-take-label">Extends an earlier take</p>
               )}
               {verdictOpen && (
                 <ul className="space-y-0.5 text-[10px] text-port-warning">
@@ -179,6 +196,9 @@ export default function SceneTakeStrip({
                     <MessageSquare size={11} />
                   </button>
                 </div>
+              )}
+              {kind === 'video' && take.takeId && !rejected && project?.id && (
+                <TakeExtend projectId={project.id} scene={scene} take={take} busy={busy} />
               )}
               {/* Secondary: copy the file's ID or URL, after the review actions. */}
               <AssetReferenceActions assetId={take.assetId} compact

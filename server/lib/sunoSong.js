@@ -1,8 +1,18 @@
 /**
- * Suno song links and song pages — the pure half of the track import from a
- * Suno URL. Accepts a song page (`suno.com/song/<uuid>`) or a share link
- * (`suno.com/s/<code>`, which redirects to one), and reads the song's title,
- * lyrics, style and audio/cover URLs out of the page HTML.
+ * Suno song links and song pages — the pure half of the track import from a Suno URL.
+ *
+ * Suno song links and pages for the track import: `SUNO_SONG_URL_RE` / `isSunoSongUrl` (a
+ * `suno.com/song/<uuid>` page or `suno.com/s/<code>` share link), `sunoSongIdFromUrl`,
+ * `normalizeSunoSongId` (a lower-cased UUID, or null), `sunoSongUrl(songId)`
+ * (`https://suno.com/song/<id>` — store the id, build the link), `isSunoHost`, `sunoCdnAudioUrl`,
+ * `sunoCdnVideoUrl` (the public fallback when Suno withholds the audio file), and
+ * `parseSunoSongPage(html, songId)` → `{ title, lyrics, style (excluded styles folded in as minus
+ * terms), excludedStylesKnown, audioUrl (CDN media only), imageUrl }` read from the page's Next.js
+ * flight payload (long-text rows resolved) with og: tags as fallback. Pure leaf the client also
+ * imports.
+ *
+ * Accepts a song page (`suno.com/song/<uuid>`) or a share link (`suno.com/s/<code>`, which redirects
+ * to one), and reads the song's title, lyrics, style and audio/cover URLs out of the page HTML.
  *
  * A pure leaf: the client imports `isSunoSongUrl` to route a pasted URL to the
  * right import endpoint, so this module imports no Node built-in.

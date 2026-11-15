@@ -1,8 +1,20 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+/**
+ * `useVideoGenForm(...)` returns the VideoGen form as named groups (lane, prompt, model, sampler, frames, …) plus the payload builder.
+ *
+ * Composes `useVideoGenFieldState` (mutable fields), `useVideoGenBackendCaps` (the
+ * Local/hosted lane and each provider's fields) and `useVideoGenUrlPrefill` (ImageGen
+ * handoff, Continue, Remix, `?lora=`), then adds the mode/backend transitions that clear
+ * stale inputs, the derived model/keyframe/IC gates (`extendModeBlocked`, `a2vModeBlocked`,
+ * `icLoraModeBlocked`, `keyframesError`), `applyRemix` / `applyResumedParams`, and
+ * `buildGeneratePayload()`. Use when: The /media/video form — the single client-side source
+ * of truth for the payload `server/routes/videoGen.js` validates. Reuse it for any second
+ * entry point that generates video; hand each panel only the group it renders.
+ */
+
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router';
 import toast from '../components/ui/Toast';
 import { extractLastFrame } from '../services/api';
-import { trackAudioUrl } from '../services/apiTracks.js';
 import { videoLoraFamily, isVideoLoraFamily, loraFamilyOf, VIDEO_LORA_FAMILIES, isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import {
   DEFAULT_I2V_REFERENCE_MODE, isDefaultI2vReferenceMode, normalizeI2vReferenceMode,
@@ -24,12 +36,13 @@ import {
   resolveDraftDecodeForModel, draftDecodeFromRecord,
 } from '../lib/videoGenParams.js';
 import { videoStreamingModeFromRecord } from '../lib/videoStreamingMode.js';
-import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel, runwayModelTakesText } from '../lib/runwayVideoModels.js';
-import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, getHiggsfieldVideoModel } from '../lib/higgsfieldVideoModels.js';
-import { GOOGLE_DEFAULT_VIDEO_MODEL, getGoogleVideoModel } from '../lib/googleVideoModels.js';
+import { falExtraReferenceLimit } from '../lib/falVideoModels.js';
+import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel } from '../lib/runwayVideoModels.js';
 import { RUNWAY_SPECIAL_VIDEO_MODELS, getRunwaySpecialVideoModel, RUNWAY_SPECIAL_VIDEO_MODES } from '../../../server/lib/runwaySpecialVideoModels.js';
+import { useVideoGenBackendCaps } from './useVideoGenBackendCaps.js';
 import { useVideoGenFieldState } from './useVideoGenFieldState.js';
 import { useVideoGenSubmitFlow } from './useVideoGenSubmitFlow.js';
+import { useVideoGenUrlPrefill, readVideoGenIncoming } from './useVideoGenUrlPrefill.js';
 import { useVideoGenValidation } from './useVideoGenValidation.js';
 
 // A Remix is an editing starting point. A fixed sampler profile (for example,
@@ -86,251 +99,67 @@ export function useVideoGenForm({
   remoteSubmissionFields = null, displaySleepEnabled = false,
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [unavailableReferenceImageNames, setUnavailableReferenceImageNames] = useState([]);
-  const [unavailableSourceImageName, setUnavailableSourceImageName] = useState('');
-  const incomingSourceImage = searchParams.get('sourceImageFile');
-  const incomingAudioFilename = searchParams.get('audioFilename');
-  const incomingPrompt = searchParams.get('prompt');
-  const incomingNegativePrompt = searchParams.get('negativePrompt');
-  const incomingWidth = searchParams.get('w');
-  const incomingHeight = searchParams.get('h');
-
+  const incoming = readVideoGenIncoming(searchParams);
+  const fields = useVideoGenFieldState(incoming);
   const {
-    audioDurationSec, setAudioDurationSec,
-    audioFile, setAudioFile, audioHandoffRef,
-    backend, setBackend,
-    chunks, setChunks,
-    chunkPrompts, setChunkPrompts,
-    contextFrames, setContextFrames,
-    disableAudio, setDisableAudio,
-    extendingFrame, setExtendingFrame,
-    extendFromVideoId, setExtendFromVideoId,
-    fps, setFps,
-    grokDuration, setGrokDuration,
-    falDuration, setFalDuration,
-    falModelId, setFalModelId,
-    falResolution, setFalResolution,
-    falGenerateAudio, setFalGenerateAudio,
-    runwayModelId, setRunwayModelId,
-    runwayDuration, setRunwayDuration,
-    runwayResolution, setRunwayResolution,
-    runwayInputs, setRunwayInputs,
-    higgsfieldModelId, setHiggsfieldModelId,
-    higgsfieldDuration, setHiggsfieldDuration,
-    higgsfieldResolution, setHiggsfieldResolution,
-    higgsfieldGenerateAudio, setHiggsfieldGenerateAudio,
-    googleModelId, setGoogleModelId,
-    googleDuration, setGoogleDuration,
-    googleResolution, setGoogleResolution,
-    googleGenerateAudio, setGoogleGenerateAudio,
-    reactorClipId, setReactorClipId,
-    reactorSeconds, setReactorSeconds,
-    reactorSeed, setReactorSeed,
-    reactorAspect, setReactorAspect,
-    guidanceScale, setGuidanceScale,
-    height, setHeight,
-    i2vReferenceMode, setI2vReferenceMode,
-    icReferenceFile, setIcReferenceFile,
-    icReferenceImageFiles, setIcReferenceImageFiles,
+    prompt, setPrompt, negativePrompt, setNegativePrompt,
+    stylePreset, setStylePreset, selectedUniverse, setSelectedUniverse,
+  } = fields.prompt;
+  const {
+    modelId, setModelId, remixSourceModel, setRemixSourceModel,
+    remixModelFallback, setRemixModelFallback, staleModelToastRef,
+    selectedLoras, setSelectedLoras, a2vLoraStageStrengths, setA2vLoraStageStrengths,
+    textEncoderId, setTextEncoderId, speedProfileId, setSpeedProfileId,
+    draftDecode, setDraftDecode, streamingMode, setStreamingMode,
+  } = fields.model;
+  const {
+    width, setWidth, height, setHeight, sizeManuallySetRef,
+    numFrames, setNumFrames, fps, setFps, chunks, setChunks,
+    chunkPrompts, setChunkPrompts, contextFrames, setContextFrames,
+    steps, setSteps, guidanceScale, setGuidanceScale,
+    imageStrength, setImageStrength, i2vReferenceMode, setI2vReferenceMode,
+    batchSize, setBatchSize, seed, setSeed, tiling, setTiling,
+    disableAudio, setDisableAudio, noMusic, setNoMusic,
+  } = fields.sampler;
+  const {
+    mode, setMode, sourceImageFile, setSourceImageFile, sourceImageUpload, setSourceImageUpload,
+    unavailableSourceImageName, setUnavailableSourceImageName,
+    lastImageFile, setLastImageFile, lastImageUpload, setLastImageUpload,
+    keyframesMode, setKeyframesMode, keyframes, setKeyframes,
+    extendFromVideoId, setExtendFromVideoId, extendingFrame, setExtendingFrame,
+  } = fields.frames;
+  const {
+    audioFile, setAudioFile, audioDurationSec, setAudioDurationSec,
+    icReferenceFile, setIcReferenceFile, icReferenceVideoId, setIcReferenceVideoId,
+    icReferenceImageFiles, setIcReferenceImageFiles, icReferenceNames, setIcReferenceNames,
+    icStrength, setIcStrength, icSkipStage2, setIcSkipStage2,
     referenceImageFiles, setReferenceImageFiles,
-    referenceVideoIds, setReferenceVideoIds,
-    referenceAudioFiles, setReferenceAudioFiles,
-    icReferenceNames, setIcReferenceNames,
-    icReferenceVideoId, setIcReferenceVideoId,
-    icSkipStage2, setIcSkipStage2,
-    icStrength, setIcStrength,
-    imageStrength, setImageStrength,
-    keyframes, setKeyframes,
-    keyframesMode, setKeyframesMode,
-    lastImageFile, setLastImageFile,
-    lastImageUpload, setLastImageUpload,
-    mode, setMode,
-    modelId, setModelId,
-    negativePrompt, setNegativePrompt,
-    noMusic, setNoMusic,
-    numFrames, setNumFrames,
-    prompt, setPrompt,
-    remixModelFallback, setRemixModelFallback,
-    remixSourceModel, setRemixSourceModel,
-    batchSize, setBatchSize,
-    seed, setSeed,
-    selectedLoras, setSelectedLoras,
-    a2vLoraStageStrengths, setA2vLoraStageStrengths,
-    selectedUniverse, setSelectedUniverse,
-    sizeManuallySetRef,
-    speedProfileId, setSpeedProfileId,
-    draftDecode, setDraftDecode,
-    streamingMode, setStreamingMode,
-    staleModelToastRef,
-    steps, setSteps,
-    stylePreset, setStylePreset,
-    sourceImageFile, setSourceImageFile,
-    sourceImageUpload, setSourceImageUpload,
-    textEncoderId, setTextEncoderId,
-    tiling, setTiling,
-    width, setWidth,
-  } = useVideoGenFieldState({
-    incomingAudioFilename,
-    incomingNegativePrompt,
-    incomingPrompt,
-    incomingSourceImage,
+    unavailableReferenceImageNames, setUnavailableReferenceImageNames,
+    referenceVideoIds, setReferenceVideoIds, referenceAudioFiles, setReferenceAudioFiles,
+  } = fields.conditioning;
+
+  const caps = useVideoGenBackendCaps({
+    enabled: { grok: grokEnabled, fal: falEnabled, reactor: reactorEnabled, runway: runwayEnabled, gemini: geminiEnabled, higgsfield: higgsfieldEnabled, google: googleEnabled },
+    mode,
+  });
+  const {
+    backend, setBackend, hostedLane, applyResumedLane,
+    isGrok, isFal, isReactor, isRunway, isGemini, isHiggsfield, isGoogle,
+  } = caps;
+  const { falModel } = caps.fal;
+  const { runwayModelId, setRunwayModelId, setRunwayInputs } = caps.runway;
+  const { higgsfieldModel } = caps.higgsfield;
+  const { googleModel } = caps.google;
+
+  const { dropSourceImageParam } = useVideoGenUrlPrefill({
+    searchParams, setSearchParams, incoming, fields, models, modelId, availableLoras,
   });
 
-  // Each fal model has its own resolution and audio capabilities.
-  useEffect(() => {
-    setFalResolution('');
-    setFalGenerateAudio(false);
-  }, [falModelId]);
-
-  // Each Runway model has its own lengths and sizes.
-  const runwayModelPickRef = useRef(runwayModelId);
-  useEffect(() => {
-    if (runwayModelPickRef.current === runwayModelId) return;
-    runwayModelPickRef.current = runwayModelId;
-    setRunwayDuration('');
-    setRunwayResolution('');
-  }, [runwayModelId]);
-
-  // Each Higgsfield family has its own lengths, tiers and audio switch.
-  const higgsfieldModelPickRef = useRef(higgsfieldModelId);
-  useEffect(() => {
-    if (higgsfieldModelPickRef.current === higgsfieldModelId) return;
-    higgsfieldModelPickRef.current = higgsfieldModelId;
-    setHiggsfieldDuration('');
-    setHiggsfieldResolution('');
-  }, [higgsfieldModelId]);
-
-  // Each Veo model has its own lengths and inputs.
-  const googleModelPickRef = useRef(googleModelId);
-  useEffect(() => {
-    if (googleModelPickRef.current === googleModelId) return;
-    googleModelPickRef.current = googleModelId;
-    setGoogleDuration('');
-    setGoogleResolution('');
-  }, [googleModelId]);
-
-  // Music renders live in the shared library rather than in the browser's
-  // local file picker. Turn a render's deep-link filename into the same File
-  // object the upload panel produces, so the existing multipart submit path,
-  // size checks, and server staging remain the single source of truth.
-  useEffect(() => {
-    if (!incomingAudioFilename || audioHandoffRef.current === incomingAudioFilename) return;
-    audioHandoffRef.current = incomingAudioFilename;
-    let cancelled = false;
-    setMode('a2v');
-    setAudioFile(null);
-    fetch(trackAudioUrl(incomingAudioFilename))
-      .then((response) => {
-        if (!response.ok) throw new Error('The selected music render could not be loaded.');
-        return response.blob();
-      })
-      .then((blob) => {
-        if (cancelled) return;
-        const type = blob.type || 'audio/wav';
-        setAudioFile(new File([blob], incomingAudioFilename, { type }));
-        setSearchParams((prev) => {
-          const next = new URLSearchParams(prev);
-          next.delete('audioFilename');
-          return next;
-        }, { replace: true });
-      })
-      .catch((error) => {
-        if (!cancelled) toast.error(error.message || 'Failed to load the music render');
-      });
-    return () => { cancelled = true; };
-  }, [incomingAudioFilename, setSearchParams]);
   // Seed the model dropdown from the server's default once the model context
   // lands, without clobbering a Remix/deep-link/user pick that already set it.
   useEffect(() => {
     if (modelContext?.defaultModel) setModelId((prev) => prev || modelContext.defaultModel);
   }, [modelContext?.defaultModel]);
-
-  // Re-sync when ImageGen pipes a new image via ?sourceImageFile=...
-  useEffect(() => {
-    if (incomingSourceImage) {
-      setSourceImageFile(incomingSourceImage);
-      setSourceImageUpload(null);
-      setUnavailableSourceImageName('');
-      setMode((m) => (m === 'text' ? 'image' : m));
-    }
-  }, [incomingSourceImage]);
-  // A prompt handed in through the URL (Continue, Send-to-Video, Remix) is the
-  // COMPOSED prompt of an existing render — composeStyledPrompt already prefixed
-  // it with whatever style layers produced it. Drop both pickers' selections
-  // with it, or the next submit prefixes a style onto a prompt that already
-  // carries one (the same double-styling applyRemix clears both pickers).
-  useEffect(() => {
-    if (incomingPrompt) {
-      setPrompt(incomingPrompt);
-      setStylePreset(null);
-      setSelectedUniverse(null);
-    }
-  }, [incomingPrompt]);
-  useEffect(() => {
-    if (incomingNegativePrompt) setNegativePrompt(incomingNegativePrompt);
-  }, [incomingNegativePrompt]);
-  // When "Continue" pipes a video's last frame here, also sync the resolution
-  // so the new render matches the source. Width/height get rounded to the
-  // selected model's declared resolution grid server-side, so off-grid sources
-  // still work.
-  useEffect(() => {
-    const w = Number(incomingWidth);
-    const h = Number(incomingHeight);
-    if (Number.isFinite(w) && w > 0) { setWidth(w); sizeManuallySetRef.current = true; }
-    if (Number.isFinite(h) && h > 0) { setHeight(h); sizeManuallySetRef.current = true; }
-  }, [incomingWidth, incomingHeight]);
-
-  // Remix payload from MediaPreview (?modelId=…&numFrames=…&seed=…). Populate
-  // form state once on mount, then strip the params so a hot-reload or back-
-  // nav doesn't re-clobber edits the user has made since. Mirrors the
-  // ImageGen remix-prefill effect.
-  //
-  // Gating: presence of any remix-only key (modelId / numFrames / fps / seed
-  // / steps / guidanceScale / tiling / disableAudio) marks the URL as a Remix
-  // bundle — the Continue and SendToVideo paths set sourceImageFile +/-
-  // prompt/w/h but never the remix-only keys, so they keep their URL state.
-  // When it IS a remix, we ALSO strip prompt/negativePrompt/w/h from the URL.
-  // Note: prompt/negativePrompt are captured by initial useState (lines above);
-  // w/h are NOT in initial state (defaults are 768×512) and are instead applied
-  // by the separate incomingWidth/incomingHeight effect on first render —
-  // which runs BEFORE this strip-pass since effects fire in declaration order.
-  // The result is the same one-shot consumption, just via two effects.
-  useEffect(() => {
-    const remixGateKeys = ['modelId', 'numFrames', 'fps', 'seed', 'steps', 'guidanceScale', 'tiling', 'disableAudio'];
-    const present = remixGateKeys.filter((k) => searchParams.get(k) != null);
-    if (present.length === 0) return;
-    const get = (k) => searchParams.get(k);
-    if (get('modelId')) {
-      setModelId(get('modelId'));
-      setRemixSourceModel({ id: get('modelId'), preserveConditioning: false });
-    }
-    const nf = Number(get('numFrames'));
-    if (Number.isFinite(nf) && nf > 0) setNumFrames(nf);
-    const f = Number(get('fps'));
-    if (Number.isFinite(f) && f > 0) setFps(f);
-    if (get('seed') != null) setSeed(get('seed'));
-    if (get('steps')) setSteps(get('steps'));
-    // guidanceScale=0 is a meaningful value (CFG off); test for presence,
-    // not truthiness, so "0" round-trips through Remix correctly.
-    if (get('guidanceScale') != null && get('guidanceScale') !== '') setGuidanceScale(get('guidanceScale'));
-    // tiling: URL params are user-controlled; only accept values defined in
-    // VIDEO_TILING_OPTIONS so a hand-edited URL or stale link can't push the
-    // <select> into an invalid state and 400 the next POST.
-    const urlTiling = get('tiling');
-    const normalizedUrlTiling = normalizeVideoTiling(urlTiling);
-    if (normalizedUrlTiling) setTiling(normalizedUrlTiling);
-    // disableAudio is a boolean; accept the common encodings a hand-edited URL
-    // might carry ('1' from our own Remix builder, 'true' from a manual share).
-    // Anything else (absent, '0', 'false', garbage) means "default off".
-    const audioParam = (get('disableAudio') || '').toLowerCase();
-    setDisableAudio(audioParam === '1' || audioParam === 'true');
-    const stripKeys = [...remixGateKeys, 'prompt', 'negativePrompt', 'w', 'h'];
-    setSearchParams((prev) => {
-      const n = new URLSearchParams(prev);
-      stripKeys.forEach((k) => n.delete(k));
-      return n;
-    }, { replace: true });
-  }, []);
 
   // Object URLs for the currently-selected upload Files so we can render
   // real previews before the files ever hit the server. Revoked on change /
@@ -683,36 +512,9 @@ export function useVideoGenForm({
   // from the shared contract the server gates on, so the picker can never offer
   // an option the POST would 400 on.
   const referenceModeSupported = runtimeSupportsI2vReferenceMode(currentModel?.runtime, 'inspire');
-  // Hoisted above the reference-mode derivation below, which needs it: the grok
-  // lane reads only prompt/dims/source-image/duration, so its image_to_video
-  // always anchors and the promise has to collapse to the default there.
-  // Each hosted lane stays gated on its own *Enabled flag, so a persisted
-  // backend that is no longer configured resolves to null (the local lane).
-  const hostedLane = ({ grok: grokEnabled, fal: falEnabled, reactor: reactorEnabled, runway: runwayEnabled, gemini: geminiEnabled, higgsfield: higgsfieldEnabled, google: googleEnabled })[backend]
-    ? backend : null;
-  const isGrok = hostedLane === 'grok';
-  // fal.ai's queue REST API is usability-gated on a configured API key
-  // (`falEnabled`, mirrored from the server's isVideoModeUsable check), not a
-  // toggle — same short-circuit shape as grok: only prompt/dims/source-image
-  // and a duration reach the provider.
-  const isFal = hostedLane === 'fal';
-  // reactor.inc fast-h3 is likewise usability-gated on a configured API key
-  // (`reactorEnabled`) — same short-circuit shape as fal, plus native
-  // clip-to-clip chaining via continue_from_clip_id.
-  const isReactor = hostedLane === 'reactor';
-  // Runway is usability-gated the same way; text mode is offered for the models that render from a prompt alone.
-  const isRunway = hostedLane === 'runway';
-  // Gemini renders in the PortOS Browser, so it has no key and no provider settings.
-  const isGemini = hostedLane === 'gemini';
-  const isHiggsfield = hostedLane === 'higgsfield';
-  const higgsfieldModel = getHiggsfieldVideoModel(higgsfieldModelId) || getHiggsfieldVideoModel(HIGGSFIELD_DEFAULT_VIDEO_MODEL);
-  const isGoogle = hostedLane === 'google';
-  const googleModel = getGoogleVideoModel(googleModelId) || getGoogleVideoModel(GOOGLE_DEFAULT_VIDEO_MODEL);
-  // A model that needs a start frame cannot stay picked in Text mode: fall back to the catalog default (which renders from text).
-  const runwayTextBlocked = isRunway && mode === 'text' && !runwayModelTakesText(getRunwayVideoModel(runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL));
-  useEffect(() => {
-    if (runwayTextBlocked) setRunwayModelId('');
-  }, [runwayTextBlocked, setRunwayModelId]);
+  // The grok lane (like every hosted lane, `hostedLane` from
+  // useVideoGenBackendCaps) reads only prompt/dims/source-image/duration, so its
+  // image_to_video always anchors and the promise collapses to the default there.
   const referenceModeApplies = mode === 'image' && !hostedLane;
   // The strength the render will actually use, for the slider readout — an
   // untouched slider under Inspire still resolves to the contract's low default
@@ -780,13 +582,6 @@ export function useVideoGenForm({
     applyModelSelection(nextId);
   };
 
-  const dropSourceImageParam = () => {
-    if (!incomingSourceImage) return;
-    const next = new URLSearchParams(searchParams);
-    next.delete('sourceImageFile');
-    setSearchParams(next, { replace: true });
-  };
-
   const clearSourceImage = () => {
     setSourceImageFile(null);
     setSourceImageUpload(null);
@@ -810,7 +605,7 @@ export function useVideoGenForm({
   // preview keeps rendering the old gallery image while the POST sends the
   // upload.
   const uploadSourceImage = (file) => {
-    if (file && (sourceImageFile || incomingSourceImage)) clearSourceImage();
+    if (file && (sourceImageFile || incoming.incomingSourceImage)) clearSourceImage();
     if (file) setUnavailableSourceImageName('');
     setSourceImageUpload(file);
   };
@@ -909,7 +704,7 @@ export function useVideoGenForm({
   // Extra reference rows for a reference-to-video model. The model's
   // `maxReferenceImages` counts the first-frame input, so rows cap one lower.
   // A Higgsfield reference render has no start frame, so every row is a reference.
-  const maxExtraReferenceImages = isHiggsfield ? higgsfieldModel.maxReferenceImages : isGoogle ? googleModel.maxReferenceImages : Math.max(0, (Number(isRunway
+  const maxExtraReferenceImages = isFal ? falExtraReferenceLimit(falModel, mode) : isHiggsfield ? higgsfieldModel.maxReferenceImages : isGoogle ? googleModel.maxReferenceImages : Math.max(0, (Number(isRunway
     ? getRunwayVideoModel(runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL)?.referenceImages?.max
     : currentModel?.maxReferenceImages) || 0) - 1);
   const addReferenceImage = () => setReferenceImageFiles((prev) => (
@@ -1342,63 +1137,11 @@ export function useVideoGenForm({
     setStreamingMode(videoStreamingModeFromRecord(p.streamingMode));
     setA2vLoraStageStrengths(p.a2vLoraStageStrengths ?? [1, 1]);
     if (typeof p.disableAudio === 'boolean') setDisableAudio(p.disableAudio);
-    if (p.mode === 'grok') {
-      // Grok job: 'grok' is the queue discriminator, not a semantic video
-      // mode — restore the backend switch and the real t2v/i2v mode.
-      setBackend('grok');
-      setMode(p.videoMode === 'image' ? 'image' : 'text');
-      if (p.duration) setGrokDuration(p.duration);
-    } else if (p.mode === 'fal') {
-      // fal.ai job: same discriminator shape as grok above.
-      setBackend('fal');
-      setMode(p.videoMode === 'image' ? 'image' : 'text');
-      if (p.duration) setFalDuration(p.duration);
-      if (p.modelId) setFalModelId(p.modelId);
-    } else if (p.mode === 'higgsfield') {
-      setBackend('higgsfield');
-      setMode(p.videoMode === 'image' ? 'image' : 'text');
-      const family = getHiggsfieldVideoModel(p.modelId);
-      if (family) {
-        higgsfieldModelPickRef.current = family.id;
-        setHiggsfieldModelId(family.id);
-      }
-      if (p.duration) setHiggsfieldDuration(String(p.duration));
-      if (p.resolution) setHiggsfieldResolution(p.resolution);
-      setHiggsfieldGenerateAudio(p.generateAudio === true);
-    } else if (p.mode === 'google') {
-      setBackend('google');
-      setMode(p.videoMode === 'image' ? 'image' : 'text');
-      const veo = getGoogleVideoModel(p.modelId);
-      if (veo) {
-        googleModelPickRef.current = veo.id;
-        setGoogleModelId(veo.id);
-      }
-      if (p.duration) setGoogleDuration(String(p.duration));
-      if (p.resolution) setGoogleResolution(p.resolution);
-      setGoogleGenerateAudio(p.generateAudio === true);
-    } else if (p.mode === 'gemini') {
-      setBackend('gemini');
-      setMode(p.videoMode === 'image' ? 'image' : 'text');
-    } else if (p.mode === 'runway') {
-      // Runway job: same discriminator shape as fal above.
-      setBackend('runway');
-      setMode(RUNWAY_SPECIAL_VIDEO_MODES.includes(p.videoMode) ? p.videoMode : p.videoMode === 'text' ? 'text' : 'image');
-      setRunwayInputs({ targetAspectRatio: p.targetAspectRatio, ratio: p.ratio, bodyControl: p.bodyControl, expressionIntensity: p.expressionIntensity, seed: p.seed });
-      if (p.modelId) {
-        runwayModelPickRef.current = p.modelId;
-        setRunwayModelId(p.modelId);
-      }
-      if (p.duration) setRunwayDuration(String(p.duration));
-      if (p.resolution) setRunwayResolution(p.resolution);
-    } else if (p.mode === 'reactor') {
-      // reactor.inc job: same discriminator shape as grok/fal above.
-      setBackend('reactor');
-      setMode(p.videoMode === 'image' ? 'image' : 'text');
-      if (p.continueFromClipId) setReactorClipId(p.continueFromClipId);
-      if (p.seconds) setReactorSeconds(p.seconds);
-      if (p.seed !== undefined && p.seed !== null) setReactorSeed(p.seed);
-      if (p.aspect) setReactorAspect(p.aspect);
-    } else if (p.mode) setMode(p.mode);
+    // A hosted job's `p.mode` is its queue discriminator; the lane restore
+    // hands back the real video mode.
+    const laneMode = applyResumedLane(p);
+    if (laneMode) setMode(laneMode);
+    else if (p.mode) setMode(p.mode);
     if (p.chunks && p.chunks > 1) setChunks(p.chunks);
     // 0 is a real restored value ("last frame only"), so this can't gate on
     // truthiness the way `chunks` does — that would silently upgrade a render
@@ -1475,6 +1218,12 @@ export function useVideoGenForm({
 
   // Snapshot the current validated state into a wire payload. The submit flow
   // stays pure so all three backend contracts can be tested independently.
+  const { grokDuration } = caps.grok;
+  const { falDuration, falModelId, falResolution, falGenerateAudio } = caps.fal;
+  const { runwayDuration, runwayResolution, runwayInputs } = caps.runway;
+  const { higgsfieldModelId, higgsfieldDuration, higgsfieldResolution, higgsfieldGenerateAudio } = caps.higgsfield;
+  const { googleModelId, googleDuration, googleResolution, googleGenerateAudio } = caps.google;
+  const { reactorClipId, reactorSeconds, reactorSeed, reactorAspect } = caps.reactor;
   const submissionState = {
     hostedLane, isGrok, grokDuration, isFal, falDuration, falModelId, falResolution, falGenerateAudio,
     isReactor, reactorClipId, reactorSeconds, reactorSeed, reactorAspect, remoteSubmissionFields,
@@ -1495,92 +1244,87 @@ export function useVideoGenForm({
   };
   const { buildGeneratePayload, envelopedPrompt } = useVideoGenSubmitFlow(submissionState);
 
+  // Each group is one concern a panel renders, so a panel takes the group it
+  // needs rather than the whole form. Field names stay unique across groups.
   return {
-    // Backend + mode
-    backend, hostedLane, isGrok, isFal, isReactor, isRunway, isGemini, isHiggsfield, isGoogle, handleBackendChange,
-    higgsfieldModel, higgsfieldModelId, setHiggsfieldModelId,
-    higgsfieldDuration, setHiggsfieldDuration,
-    higgsfieldResolution, setHiggsfieldResolution,
-    higgsfieldGenerateAudio, setHiggsfieldGenerateAudio,
-    googleModel, googleModelId, setGoogleModelId,
-    googleDuration, setGoogleDuration,
-    googleResolution, setGoogleResolution,
-    googleGenerateAudio, setGoogleGenerateAudio,
-    grokDuration, setGrokDuration,
-    falDuration, setFalDuration,
-    falModelId, setFalModelId,
-    falResolution, setFalResolution,
-    falGenerateAudio, setFalGenerateAudio,
-    runwayModelId, setRunwayModelId,
-    runwayDuration, setRunwayDuration,
-    runwayResolution, setRunwayResolution,
-    runwayInputs, setRunwayInputs,
-    reactorClipId, setReactorClipId,
-    reactorSeconds, setReactorSeconds,
-    reactorSeed, setReactorSeed,
-    reactorAspect, setReactorAspect,
-    mode, handleModeChange,
-    // Prompt + style
-    prompt, setPrompt,
-    // The exact prompt a render would be submitted with right now (style preset
-    // + no-music envelope). The LoRA picker's #4665 trigger hint reads THIS, not
-    // the raw textarea, so it can never disagree with the server-side weave.
-    envelopedPrompt,
-    negativePrompt, setNegativePrompt,
-    stylePreset, setStylePreset,
-    selectedUniverse, setSelectedUniverse,
-    remixModelFallback,
-    // Model
-    modelId, handleModelChange, currentModel, visibleModels, otherModeModels,
-    loraFamily, videoLoras, loraUnavailableHint,
-    selectedLoras, setSelectedLoras,
-    a2vLoraStageStrengths, setA2vLoraStageStrengths,
-    // Sampler / output
-    width, height, handleResolutionChange,
-    numFrames, setNumFrames,
-    fps, setFps,
-    chunks, setChunks,
-    chunkPrompts, setChunkPromptAt, chainingActive,
-    contextFrames, setContextFrames,
-    steps, setSteps,
-    guidanceScale, setGuidanceScale,
-    imageStrength, setImageStrength,
-    i2vReferenceMode, setI2vReferenceMode,
-    referenceModeSupported, effectiveImageStrength,
-    batchSize, setBatchSize,
-    seed, setSeed, handleRandomSeed,
-    tiling, setTiling,
-    textEncoderId, setTextEncoderId, textEncoderOptions,
-    speedProfileId, setSpeedProfileId,
-    draftDecode, setDraftDecode, draftDecodeOptions,
-    streamingMode, setStreamingMode,
-    disableAudio, setDisableAudio,
-    noMusic, setNoMusic,
-    // Frames
-    sourceImageFile, sourceImageUpload, sourceUploadUrl, unavailableSourceImageName,
-    pickSourceImage, uploadSourceImage, clearSourceImage,
-    lastImageFile, lastImageUpload, lastUploadUrl,
-    pickLastImage, uploadLastImage, clearLastImage, lastFrameIsAdvisory,
-    // Keyframes
-    keyframesMode, keyframes, keyframesSupported, keyframesActive, keyframesError, keyframesBlocked,
-    toggleKeyframesMode, addKeyframe, updateKeyframe, removeKeyframe,
-    // Extend
-    extendFromVideoId, extendingFrame, handleExtendPick, extendModeBlocked,
-    // Audio-to-video
-    audioDurationSec, setAudioDurationSec,
-    audioFile, setAudioFile, a2vDurationError, a2vModeBlocked,
-    // IC-LoRA remix
-    icSpec, icModeActive, icImageKind, icLoraModeBlocked,
-    icReferenceFile, icReferenceVideoId, icReferenceNames, icReferenceImageFiles,
-    pickIcReferenceFile, pickIcReferenceVideoId,
-    addIcReferenceImage, updateIcReferenceImage, removeIcReferenceImage,
-    referenceImageFiles, unavailableReferenceImageNames, addReferenceImage, updateReferenceImage, removeReferenceImage,
-    referenceVideoIds, maxReferenceVideos, addReferenceVideo, pickReferenceVideo, removeReferenceVideo,
-    referenceAudioFiles, maxReferenceAudios, addReferenceAudio, removeReferenceAudio,
-    icStrength, setIcStrength,
-    icSkipStage2, setIcSkipStage2,
+    lane: {
+      backend, hostedLane, isGrok, isFal, isReactor, isRunway, isGemini, isHiggsfield, isGoogle,
+      handleBackendChange, mode, handleModeChange,
+    },
+    grok: caps.grok,
+    fal: caps.fal,
+    runway: caps.runway,
+    higgsfield: caps.higgsfield,
+    google: caps.google,
+    reactor: caps.reactor,
+    prompt: {
+      prompt, setPrompt,
+      // The exact prompt a render would be submitted with right now (style preset
+      // + no-music envelope). The LoRA picker's #4665 trigger hint reads THIS, not
+      // the raw textarea, so it can never disagree with the server-side weave.
+      envelopedPrompt,
+      negativePrompt, setNegativePrompt,
+      stylePreset, setStylePreset,
+      selectedUniverse, setSelectedUniverse,
+    },
+    model: {
+      modelId, handleModelChange, currentModel, visibleModels, otherModeModels, remixModelFallback,
+      loraFamily, videoLoras, loraUnavailableHint,
+      selectedLoras, setSelectedLoras,
+      a2vLoraStageStrengths, setA2vLoraStageStrengths,
+      textEncoderId, setTextEncoderId, textEncoderOptions,
+      speedProfileId, setSpeedProfileId,
+      draftDecode, setDraftDecode, draftDecodeOptions,
+      streamingMode, setStreamingMode,
+    },
+    sampler: {
+      width, height, handleResolutionChange,
+      numFrames, setNumFrames,
+      fps, setFps,
+      chunks, setChunks,
+      chunkPrompts, setChunkPromptAt, chainingActive,
+      contextFrames, setContextFrames,
+      steps, setSteps,
+      guidanceScale, setGuidanceScale,
+      imageStrength, setImageStrength,
+      i2vReferenceMode, setI2vReferenceMode,
+      referenceModeSupported, effectiveImageStrength,
+      batchSize, setBatchSize,
+      seed, setSeed, handleRandomSeed,
+      tiling, setTiling,
+      disableAudio, setDisableAudio,
+      noMusic, setNoMusic,
+    },
+    frames: {
+      sourceImageFile, sourceImageUpload, sourceUploadUrl, unavailableSourceImageName,
+      pickSourceImage, uploadSourceImage, clearSourceImage,
+      lastImageFile, lastImageUpload, lastUploadUrl,
+      pickLastImage, uploadLastImage, clearLastImage, lastFrameIsAdvisory,
+    },
+    keyframes: {
+      keyframesMode, keyframes, keyframesSupported, keyframesActive, keyframesError, keyframesBlocked,
+      toggleKeyframesMode, addKeyframe, updateKeyframe, removeKeyframe,
+    },
+    extend: { extendFromVideoId, extendingFrame, handleExtendPick, extendModeBlocked },
+    audio: {
+      audioDurationSec, setAudioDurationSec,
+      audioFile, setAudioFile, a2vDurationError, a2vModeBlocked,
+    },
+    ic: {
+      icSpec, icModeActive, icImageKind, icLoraModeBlocked,
+      icReferenceFile, icReferenceVideoId, icReferenceNames, icReferenceImageFiles,
+      pickIcReferenceFile, pickIcReferenceVideoId,
+      addIcReferenceImage, updateIcReferenceImage, removeIcReferenceImage,
+      icStrength, setIcStrength,
+      icSkipStage2, setIcSkipStage2,
+    },
+    references: {
+      referenceImageFiles, unavailableReferenceImageNames, addReferenceImage, updateReferenceImage, removeReferenceImage,
+      referenceVideoIds, maxReferenceVideos, addReferenceVideo, pickReferenceVideo, removeReferenceVideo,
+      referenceAudioFiles, maxReferenceAudios, addReferenceAudio, removeReferenceAudio,
+    },
     // Prefill + submit
-    applyRemix, applyFinish, applyResumedParams, buildGeneratePayload,
+    actions: { applyRemix, applyFinish, applyResumedParams, buildGeneratePayload },
   };
 }
 

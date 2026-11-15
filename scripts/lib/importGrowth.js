@@ -45,7 +45,7 @@
  */
 
 import { spawnSync } from 'child_process';
-import { existsSync, readFileSync, statSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join, isAbsolute, posix, relative } from 'path';
 import { staticImportSpecifiersFromSource } from '../../server/lib/staticImportGraph.js';
 
@@ -75,6 +75,17 @@ export const MIN_SERVER_TESTS = 1_000;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
 const SOURCE_EXT = /\.(?:[cm]?js|jsx|tsx?)$/;
+
+// Head and base walk nearly identical sources, so parse each distinct text once.
+const specifierCache = new Map();
+function specifiersOf(text) {
+  let specs = specifierCache.get(text);
+  if (!specs) {
+    specs = staticImportSpecifiersFromSource(text);
+    specifierCache.set(text, specs);
+  }
+  return specs;
+}
 
 const PROXY_NOTE = 'Static closure sizes are a proxy for import cost, not a count of observed module instantiations.';
 
@@ -111,7 +122,7 @@ function closureOf(entry, resolved) {
  * head never run different analyzers. `readText` returns null when the path
  * is absent. A throw from `readText` is a failed read, not an empty closure.
  *
- * @returns {{ tests: Map<string, Set<string>>, deps: Map<string, string[]>, testCount: number, total: number }}
+ * @returns {{ tests: Map<string, Set<string>>, deps: Map<string, string[]>, texts: Map<string, string|null>, testCount: number, total: number }}
  */
 export function measureClosures(testFiles, readText) {
   const textCache = new Map();
@@ -132,7 +143,7 @@ export function measureClosures(testFiles, readText) {
     }
     const next = [];
     const seen = new Set();
-    for (const spec of staticImportSpecifiersFromSource(text)) {
+    for (const spec of specifiersOf(text)) {
       const target = resolveRepoSpecifier(rel, spec);
       if (!target || seen.has(target)) continue;
       if (read(target) == null) continue;
@@ -151,7 +162,7 @@ export function measureClosures(testFiles, readText) {
     tests.set(file, closure);
     total += closure.size;
   }
-  return { tests, deps, testCount: tests.size, total };
+  return { tests, deps, texts: textCache, testCount: tests.size, total };
 }
 
 export function closureSizeFromDeps(entry, deps) {
@@ -452,10 +463,13 @@ function diskRead(repoRoot) {
     const abs = join(repoRoot, ...rel.split('/'));
     const back = relative(repoRoot, abs);
     if (back.startsWith('..') || isAbsolute(back)) return null;
-    if (!existsSync(abs)) return null;
-    const stat = statSync(abs);
-    if (!stat.isFile()) return null;
-    return readFileSync(abs, 'utf8');
+    // One syscall instead of exists + stat + read; absent and non-file stay null.
+    try {
+      return readFileSync(abs, 'utf8');
+    } catch (error) {
+      if (error.code === 'ENOENT' || error.code === 'EISDIR' || error.code === 'ENOTDIR') return null;
+      throw error;
+    }
   };
 }
 
@@ -543,7 +557,11 @@ function readBlobs(repoRoot, sha, paths) {
   return blobs;
 }
 
-export function measureGitTree(repoRoot, sha) {
+/**
+ * `headTexts` is the head measurement's text map: a path git reports as
+ * unchanged is the same bytes in the worktree, so it need not be read again.
+ */
+export function measureGitTree(repoRoot, sha, headTexts = null) {
   const tree = listTree(repoRoot, sha);
   const testFiles = [...tree].filter(isServerTest).sort();
   // git diff exits 1 when the trees differ and 0 when they do not. Above 1 is a real failure.
@@ -560,6 +578,8 @@ export function measureGitTree(repoRoot, sha) {
     if (dirty.has(rel)) {
       throw importGrowthBaseError(`Base file ${rel} differs from the worktree but its blob was not loaded from ${String(sha).slice(0, 12)}.`);
     }
+    const shared = headTexts?.get(rel);
+    if (typeof shared === 'string') return shared;
     const abs = join(repoRoot, ...rel.split('/'));
     if (!existsSync(abs)) {
       throw importGrowthBaseError(`Base file ${rel} is unchanged from ${String(sha).slice(0, 12)} but missing from the worktree.`);
@@ -598,7 +618,7 @@ export function evaluateWorkingTreeImportGrowth({
     );
   }
   const baseStart = now();
-  const base = measureGitTree(repoRoot, baseRef.sha);
+  const base = measureGitTree(repoRoot, baseRef.sha, head.texts);
   const baseCollectMs = Math.round(now() - baseStart);
   if (base.testCount < MIN_SERVER_TESTS) {
     throw importGrowthBaseError(

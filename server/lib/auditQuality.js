@@ -1,3 +1,12 @@
+/**
+ * Audit quality helpers: category discovery strategies, slice-scored assessment prompt, v1/v2 report
+ * schema, sentinel parsing, and per-category rolling app quality aggregation.
+ *
+ * Category discovery strategies, slice-scored assessment prompt and v1/v2 report schema, sentinel
+ * parsing, and freshness-aware app quality aggregation: per-category rolling window of recent run
+ * scores over daily winners across peers.
+ */
+
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import { AUDIT_DEFINITIONS, normalizeAuditTaskType } from './auditCatalog.js';

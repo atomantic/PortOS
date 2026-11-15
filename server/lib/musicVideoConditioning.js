@@ -1,3 +1,13 @@
+/**
+ * Selects music-video frame and clip reference images, including approved character assets from the
+ * catalog, and defines renderer reference capacities.
+ *
+ * Shared music-video frame and clip reference selection and renderer capacities: a shot's pickers also
+ * offer every approved asset of each character linked from the catalog (portrait, sheets, guides,
+ * references rated good), which never join the automatic set; clip picks are independent of frame
+ * picks, and model limits determine how many extra images accompany a source frame.
+ */
+
 import { activeMusicVideoSubjects, isActiveMusicVideoReference } from './musicVideoCastSelection.js';
 import { isGoodReference, pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from './catalogMediaLibrary.js';
 import { isEditCapableMode, maxInputImages } from './imageGenCapabilities.js';
@@ -182,7 +192,8 @@ function catalogItemReferences(project) {
       id: catalogReferenceId(item.subjectId, filename),
       imageId: filename,
       role: ['place', 'location'].includes(item.kind) ? 'set' : item.kind === 'object' ? 'prop' : item.kind,
-      label: String(item.name || 'Catalog item').slice(0, 120),
+      label: (item.angles?.[filename]?.label ? `${item.name || 'Catalog item'} · ${item.angles[filename].label}` : String(item.name || 'Catalog item')).slice(0, 120),
+      ...(item.angles?.[filename] ? { angle: lookAroundRefAngle(item.angles[filename]) } : {}),
       note: String(item.description || '').slice(0, 1000),
       // Pick-only images never join Auto (automaticConditioningReferences keeps `condition` refs).
       condition: auto,
@@ -193,8 +204,12 @@ function catalogItemReferences(project) {
 }
 
 // The check-in's still-listed catalog images it no longer offers (catalogCheckin.js `retiredImages`), by reference id.
-const retiredCatalogImages = (project) => new Map((project.castAndSets.catalogCheckin?.items || []).flatMap((item) => (item.retiredImages || [])
-  .map((filename) => [catalogReferenceId(item.subjectId, filename), { name: item.name, filename }])));
+// A character's retired image carries the id of the image Auto now sends for it (`successor`): a canonical swap moves its shot picks.
+const retiredCatalogImages = (project) => new Map((project.castAndSets.catalogCheckin?.items || []).flatMap((item) => {
+  const current = item.kind === 'character' ? (item.images || []).find((filename) => SENDABLE_REFERENCE_FILE.test(filename)) : null;
+  const successor = current ? catalogReferenceId(item.subjectId, current) : null;
+  return (item.retiredImages || []).map((filename) => [catalogReferenceId(item.subjectId, filename), { name: item.name, filename, successor }]);
+}));
 
 /**
  * Resolves one saved shot pick against the check-in. A generated sheet's id never
@@ -219,6 +234,7 @@ function catalogPickResolver(project) {
       if (offered.some((choice) => choice.id === id)) return { id };
       retired ??= retiredCatalogImages(project);
       const owner = retired.get(id);
+      if (owner?.successor && offered.some((choice) => choice.id === owner.successor)) return { id: owner.successor, moved: true };
       return { id, unmapped: { id, label: owner ? `${owner.name || 'a catalog item'}'s image ${owner.filename}` : 'an image removed from the catalog or from this video' } };
     }
     const ref = saved.get(id);
@@ -307,6 +323,7 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
 }
 
 const SHEET_ROLE = /^sheet:([^@]+)(?:@(.+))?$/;
+const lookAroundRefAngle = ({ clipId, sourceMediaKey, bearingDeg }) => ({ clipId, sourceMediaKey, bearingDeg });
 const titleCase = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 
 // The catalog kinds a music video links, and the reference role each one plays in a shot.
@@ -343,7 +360,7 @@ export function musicVideoLinkedCastReferences(project, castMedia) {
       && CAST_IMAGE_KINDS.has(m.kind) && typeof m.mediaKey === 'string' && SENDABLE_REFERENCE_FILE.test(m.mediaKey)
       && !rejected.has(m.mediaKey) && !String(m.role || '').startsWith('archive:')
       && (m.library?.variant?.formId || sheet?.[2] || null) === formId
-      && (sheet || m.kind === 'portrait' || m.library?.guide === true || isGoodReference(m)));
+      && (sheet || m.kind === 'portrait' || m.library?.guide === true || isGoodReference(m) || Boolean(m.library?.angle)));
     const rank = ({ m, sheet }) => (m.kind === 'portrait' ? 0 : sheet ? 1 : 2);
     return [...assets].sort((a, b) => rank(a) - rank(b)).filter(({ m }) => !seen.has(m.mediaKey) && seen.add(m.mediaKey))
       .map(({ m, sheet }) => ({
@@ -353,6 +370,8 @@ export function musicVideoLinkedCastReferences(project, castMedia) {
         label: `${subject.name || kind.fallback} · ${linkedAssetDetail(m, sheet, kind)}`.slice(0, 120),
         // Only a cast member's images are recorded as cast guides on the take.
         ...(kind.role === 'character' ? { castGuide: true } : {}),
+        // A look-around angle plate (#16145): which clip's geometry it shares, for the shot reference check.
+        ...(m.library?.angle ? { angle: lookAroundRefAngle(m.library.angle) } : {}),
         linkedCast: true,
         subjectId: subject.id,
       }));
@@ -362,12 +381,42 @@ export function musicVideoLinkedCastReferences(project, castMedia) {
 /** A saved pick of a catalog asset, which only resolves once its cast member's media loads. */
 export const isCatalogMediaReferenceId = (id) => /^mvr-(guide|linked)-/.test(String(id));
 
-/** The cast members whose media this scene's saved references need before they can resolve or render. */
+/**
+ * A saved linked pick whose image is still on its character's record but no longer offered
+ * (a replaced canonical) renders as that character's current lead image; others pass through.
+ */
+function currentLinkedPickIds(project, ids, castMedia, linked) {
+  const offered = new Set(linked.map((ref) => ref.id));
+  const lead = (subjectId) => linked.find((ref) => ref.subjectId === subjectId && ref.role === 'character')?.id;
+  const owned = (id) => activeMusicVideoSubjects(project?.concept).find((subject) => (castMedia?.[subject.ingredientId] || [])
+    .some((m) => m && !m.deleted && musicVideoLinkedReferenceId(m.mediaKey) === id));
+  return [...new Set(ids.map((id) => {
+    if (!String(id).startsWith('mvr-linked-') || offered.has(id)) return id;
+    const subject = owned(id);
+    return (subject && lead(subject.id)) || id;
+  }))];
+}
+
+/**
+ * The cast members whose media this scene's saved references need before they can resolve or render:
+ * its look variant, plus (when it saved a catalog-linked pick) the linked subjects the shot names.
+ * A pick names its asset by hash only, so when the shot names no linked subject every linked member
+ * is needed to find the owner. This set only gates the shot's controls and renders: the board still
+ * loads every linked member in one batched read, so a pick owned by an unnamed subject resolves too.
+ */
 export function musicVideoSceneCastIds(project, scene) {
   const variant = sceneCastVariant(scene);
   const picksLinked = [scene?.frameReferenceIds, scene?.clipReferenceIds]
     .some((ids) => Array.isArray(ids) && ids.some((id) => String(id).startsWith('mvr-linked-')));
-  return [...new Set([...(variant ? [variant.ingredientId] : []), ...(picksLinked ? musicVideoLinkedCastIds(project) : [])])];
+  let linked = [];
+  if (picksLinked) {
+    const all = musicVideoLinkedCastIds(project);
+    const named = new Set(sceneCatalogSubjectIds(project, scene));
+    const narrowed = activeMusicVideoSubjects(project?.concept)
+      .filter((subject) => named.has(subject.id) && all.includes(subject.ingredientId)).map((subject) => subject.ingredientId);
+    linked = narrowed.length ? narrowed : all;
+  }
+  return [...new Set([...(variant ? [variant.ingredientId] : []), ...linked])];
 }
 
 /**
@@ -377,9 +426,10 @@ export function musicVideoSceneCastIds(project, scene) {
  */
 export function musicVideoMissingFrameLinkedPicks(project, scene, castMedia) {
   if (!Array.isArray(scene?.frameReferenceIds)) return [];
-  const choices = [...musicVideoLinkedCastReferences(project, castMedia), ...musicVideoCastGuideReferences(project, scene, castMedia)]
+  const linked = musicVideoLinkedCastReferences(project, castMedia);
+  const choices = [...linked, ...musicVideoCastGuideReferences(project, scene, castMedia)]
     .filter((ref) => !isLegacyCatalogReference(project, ref));
-  return scene.frameReferenceIds.filter((id) => isCatalogMediaReferenceId(id) && !choices.some((ref) => ref.id === id));
+  return currentLinkedPickIds(project, scene.frameReferenceIds, castMedia, linked).filter((id) => isCatalogMediaReferenceId(id) && !choices.some((ref) => ref.id === id));
 }
 
 /** What a picker offers: the linked cast first, minus any image the project's own references already offer. */
@@ -395,6 +445,18 @@ export function musicVideoOfferedReferences(choices) {
  * automatic set fills the remaining slots. `castMedia` is optional: without it
  * (or without a variant) the result is the automatic set alone.
  */
+/**
+ * A shot's saved frame picks as they render: a replaced canonical or generated sheet id moves to
+ * its current one. Callers editing the list must compare against these, not the raw saved ids,
+ * or a pick that moved is mistaken for an unresolved guide and saved back, undoing a removal.
+ */
+export function resolvedFramePickIds(project, scene, castMedia = null, linked = musicVideoLinkedCastReferences(project, castMedia)) {
+  const saved = Array.isArray(scene?.frameReferenceIds) ? scene.frameReferenceIds : [];
+  // A pick of a character's replaced canonical image renders as the current one (catalogPickResolver).
+  const resolve = project?.castAndSets?.source === 'catalog' ? catalogPickResolver(project) : null;
+  return currentLinkedPickIds(project, resolve ? saved.map((id) => resolve(id).id) : saved, castMedia, linked);
+}
+
 function baseConditioningReferences(project, scene, castMedia = null, limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES) {
   const research = musicVideoResearchReferences(scene).filter((ref) => !isLegacyCatalogReference(project, ref));
   // A roster cameo's photos (#14821) are the shot's identity references, ahead of any cast guide.
@@ -403,9 +465,12 @@ function baseConditioningReferences(project, scene, castMedia = null, limit = MU
   const panel = musicVideoPanelArtReferences(scene).filter((ref) => !isLegacyCatalogReference(project, ref));
   // The director's own pick for this shot (the shot card's References row) wins over the automatic set.
   if (Array.isArray(scene?.frameReferenceIds)) {
-    const choices = [...research, ...guides, ...panel, ...musicVideoReferenceChoices(project), ...musicVideoLinkedCastReferences(project, castMedia)]
+    const linked = musicVideoLinkedCastReferences(project, castMedia);
+    const choices = [...research, ...guides, ...panel, ...musicVideoReferenceChoices(project), ...linked]
       .filter((ref) => !isLegacyCatalogReference(project, ref));
-    return scene.frameReferenceIds.map((id) => choices.find((ref) => ref.id === id)).filter(Boolean)
+    // A pick of a character's replaced canonical image renders as the current one (catalogPickResolver).
+    const ids = resolvedFramePickIds(project, scene, castMedia, linked);
+    return ids.map((id) => choices.find((ref) => ref.id === id)).filter(Boolean)
       .slice(0, limit);
   }
   const automatic = automaticConditioningReferences(project, scene, limit);

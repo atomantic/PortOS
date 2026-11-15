@@ -7,7 +7,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as reverseOutline from '../../services/pipeline/reverseOutline.js';
 import { mapServiceError } from './shared.js';

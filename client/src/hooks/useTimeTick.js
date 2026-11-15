@@ -1,3 +1,12 @@
+/**
+ * Singleton-backed wall-clock tick (`Date.now()`).
+ *
+ * N subscribers at the same cadence share one `setInterval`; `{ enabled: false }` unsubscribes a
+ * counter whose subject has stopped. Use when: A widget renders something derived from `Date.now()`
+ * (relative timestamps, threshold-based health labels, countdowns) and is also fed by a deduped
+ * `useAutoRefetch` — without this the label goes stale until the data changes.
+ */
+
 import { useEffect, useState } from 'react';
 import { subscribeVisibility } from './useVisibilityEvent.js';
 

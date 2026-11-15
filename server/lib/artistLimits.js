@@ -1,6 +1,8 @@
 // Length/count caps for artists records. Pure constants so the server sanitizer
 // (services/artists/logic.js) and the client editors import ONE definition —
 // see storyArcLimits.js for the same pattern.
+//
+// Artist record length caps shared by the artists sanitizer and client editors.
 export const NAME_MAX = 120;
 export const GENRE_MAX = 120;
 export const BIO_MAX = 4000;

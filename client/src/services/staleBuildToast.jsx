@@ -1,3 +1,7 @@
+/**
+ * Sticky toast shown when server's build id differs from client's.
+ */
+
 import toast from '../components/ui/Toast';
 
 /**

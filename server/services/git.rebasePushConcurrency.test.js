@@ -3,7 +3,6 @@ import { tmpdir } from 'os';
 
 const execGitMock = vi.hoisted(() => vi.fn());
 vi.mock('../lib/execGit.js', () => ({ execGit: execGitMock, execGitSafe: execGitMock }));
-vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_dir, work) => work() }));
 
 import { checkout, rebaseAndPushDefaultBranch, resetToDefaultBranch, syncBranch } from './git.js';
 

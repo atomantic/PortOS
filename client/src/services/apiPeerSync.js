@@ -1,6 +1,9 @@
 /**
  * Federated peer-sync API wrappers.
  *
+ * Per-record federated sync subscriptions, integrity checks, and manual push/pull controls (including
+ * Universe, Pipeline, Media Collections, and FableLoom).
+ *
  * Sibling of `apiSharing.js` (which targets cloud-synced share buckets); this
  * module targets *other PortOS instances over Tailnet*. The route surface is
  * a thin wrapper over `server/routes/peerSync.js`:

@@ -1,3 +1,11 @@
+/**
+ * The manual-tempo fallback for a project whose auto-detected BPM is null: BPM/offset drafts (reset on
+ * project switch), tap-tempo estimation, and the persisted `setMusicVideoManualTempo` call.
+ *
+ * Returns `{ bpm, setBpm, offset, setOffset, saving, tap, submit }`. Use when: The Music Video "No
+ * tempo detected" row.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import { setMusicVideoManualTempo } from '../services/apiMusicVideo.js';

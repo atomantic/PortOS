@@ -1,6 +1,16 @@
 /**
  * Video-registry bucket naming and platform selection (issue #4142).
  *
+ * Names and resolves the video registry's two model buckets (#4142). The split is by RUNTIME FAMILY —
+ * `mlx` (Apple MLX runtimes) vs `cuda` (plain torch+CUDA, which runs on Windows *and* Linux) — not by
+ * operating system, which is why `activeVideoBucket()` keys on `process.platform === 'darwin'` instead
+ * of on "is this Windows". `readVideoBucket` / `readVideoDefault` / `matchesVideoBucket` resolve the
+ * canonical key first and fall back to the pre-#4142 `macos` / `windows` / `defaultMacos` /
+ * `defaultWindows` spellings, so any registry written by an older install still loads untouched;
+ * `canonicalizeVideoBuckets` performs the one-time rename (migration 270 and the load-time twin in
+ * `mediaModels.js`). Kept separate from `mediaModels.js` so `scripts/migrations/` can share the alias
+ * resolution without importing the registry loader, which seeds `data/` as a side effect.
+ *
  * The video registry has always held exactly two lists of models, and they were
  * originally keyed `macos` and `windows`. That naming was never the real axis:
  * what separates the two lists is the RUNTIME FAMILY each entry needs — Apple's

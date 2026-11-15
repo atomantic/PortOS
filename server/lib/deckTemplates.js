@@ -1,6 +1,12 @@
 /**
  * Decks — the pure, dependency-free half of the card-deck designer.
  *
+ * Decks (playing cards / tarot): kind alphabet, per-kind card roster (`deckCardRoster`), exact
+ * playing-card rank/suit identity cues (`deckCardIdentityPrompt`), shared layout and face-orientation
+ * prompts (`deckCardOrientationPrompt`), render prompt composition (`composeCardRenderPrompt`),
+ * per-card status and `deckCompletion`, plus `deckCardSize` / `deckCardAspectStyle` (persisted trim →
+ * thumbnail box). Pure — re-exported by `client/src/lib/decks.js`.
+ *
  * Owns the deck alphabet (`playing` | `tarot`), the card roster each kind
  * mints on creation, the layout clause and face-orientation prompt each kind
  * renders with, the render prompt composition (deck style → layout → face

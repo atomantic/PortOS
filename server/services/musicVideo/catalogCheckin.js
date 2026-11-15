@@ -124,14 +124,18 @@ export async function resolveCatalogCheckin(project, {
     // but Auto only conditions on `images` (the 4-image budget). Character picks keep form scoping.
     item.pickableImages = allowsImages && subject.kind !== 'character'
       ? [...new Set(listPickableImages(media).map(row => row.mediaKey).filter(key => exists(key) && !item.images.includes(key)))] : [];
+    // A place's look-around angle plates (#16145) carry their angle label and shared-geometry lineage to the shot picker.
+    const offered = new Set([...item.images, ...item.pickableImages]);
+    const angles = subject.kind === 'place' ? rows.filter(row => row.library?.angle && offered.has(row.mediaKey)) : [];
+    if (angles.length) item.angles = Object.fromEntries(angles.map(row => [row.mediaKey, { label: row.library.variant?.label || '', ...row.library.angle }]));
     // Still on the record (even a file missing on disk) but not offered: a stale pick names it and is not cleared.
     item.retiredImages = allowsImages ? [...new Set((media || []).filter(row => !row.deleted).map(row => row.mediaKey).filter(key => typeof key === 'string' && !item.images.includes(key) && !item.pickableImages.includes(key)))] : [];
     if (allowsImages && !item.images.length) problem('CATALOG_IMAGES_REQUIRED', `Add a usable image to ${item.name}${item.formId ? "'s selected catalog look" : ' in the catalog'}.`);
   }
   if (!items.length) problems.push({ subjectId: null, code: 'CATALOG_SUBJECTS_REQUIRED', message: 'Add cast, environments or objects from the catalog before approving.' });
-  // `retiredImages` and `pickableImages` stay out of the basis: they widen the choice list for explicit
-  // shot picks without changing the Auto set, so adding an image never stales an approval.
-  const basis = createHash('sha256').update(JSON.stringify({ items: items.map(({ retiredImages: _retired, pickableImages: _pickable, ...item }) => item), problems, concept: project?.concept?.prompt || '',
+  // `retiredImages`, `pickableImages` and `angles` stay out of the basis: they widen or label the choice list for
+  // explicit shot picks without changing the Auto set, so adding an image never stales an approval.
+  const basis = createHash('sha256').update(JSON.stringify({ items: items.map(({ retiredImages: _retired, pickableImages: _pickable, angles: _angles, ...item }) => item), problems, concept: project?.concept?.prompt || '',
     song: [project?.trackId || null, project?.uploadedAudioFilename || null] })).digest('hex');
   const report = shotReferenceReport(project, items, problems);
   if (includeShotChecks && isCatalogCheckin(project) && allowsImages) {

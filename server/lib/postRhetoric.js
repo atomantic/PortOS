@@ -1,3 +1,12 @@
+/**
+ * Shared rhetoric evaluator rubric, mode and drill ids, evaluator prompt/response validation, and a
+ * fictional gold-reference corpus for POST reports.
+ *
+ * Shared rhetoric evaluator rubric, mode/drill ids, structured evaluator prompt/response validation,
+ * and the 40-item fictional gold-reference corpus used by POST background reports and local-model
+ * performance checks.
+ */
+
 import { z } from 'zod';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { extractJson } from './jsonExtract.js';

@@ -1,6 +1,13 @@
 /**
  * Per-domain autonomy budgets (pure helpers).
  *
+ * Per-domain daily autonomy budgets (pure). `BUDGET_LIMIT_FIELDS`
+ * (`maxActionsPerDay`/`maxMinutesPerDay`), `getDomainBudget(config, id)`,
+ * `normalizeDomainBudgets(raw)`, `hasBudget(budget)`, and `evaluateBudget(budget, usage)` → `{
+ * withinBudget, exceeded }`. A `null`/non-positive cap means unlimited (default per domain, so no
+ * migration needed). Token/$ caps are intentionally absent — CLI subscription providers expose no
+ * per-run metering. Usage ledger + gate wiring live in `services/domainUsage.js`.
+ *
  * The third slice of the #711 autonomy-guardrails umbrella. Where
  * `domainAutonomy.js` answers "is this domain allowed to act automatically?",
  * this module answers "has this domain done *too much* automatic work today?".

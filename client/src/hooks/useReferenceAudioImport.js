@@ -1,3 +1,13 @@
+/**
+ * One round reference-audio-import job slot (#2120): start/cancel + SSE progress + terminal-frame
+ * handling via `POST /api/rounds/reference-audio/import`.
+ *
+ * Returns `{ active, percent, stage, start(url, context), cancel }`; `onComplete(filename, context)`
+ * fires with the uploads-dir filename to persist on the reference. Call once per surface that can
+ * independently kick off a download. Use when: The reference-audio attach controls
+ * (`ReferenceAudioAttach`) — the "Download from URL" convenience.
+ */
+
 import {
   importReferenceAudio,
   cancelReferenceAudioImport,

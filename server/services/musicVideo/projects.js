@@ -535,6 +535,9 @@ export async function mergeProjectPreviousScene(id, sceneId, options = {}) {
   return mergeIntoBoard(id, before, outcome);
 }
 
+// A shot looked up by id after an edit: a retime re-sorts the board, so its old index may name another shot.
+const sceneById = (project, sceneId) => (project.scenes || []).find((scene) => scene.sceneId === sceneId) || null;
+
 /**
  * Move the cut before a shot: the shot starts at `startSec` and the shot
  * before it ends there, so the two stay joined. Returns `{ project, scene, previous }`.
@@ -556,8 +559,10 @@ export async function moveProjectSceneStart(id, sceneId, { startSec }) {
     }
     let project = applySceneUpdate(current, sceneId, { startSec }).project;
     if (previous) project = applySceneUpdate(project, previous.sceneId, { endSec: startSec }).project;
-    assertBoardHoldsShotLengths(current, [project.scenes[index], previous ? project.scenes[index - 1] : null]);
-    return { project, scene: project.scenes[index], previous: previous ? project.scenes[index - 1] : null };
+    const moved = sceneById(project, sceneId);
+    const prior = previous ? sceneById(project, previous.sceneId) : null;
+    assertBoardHoldsShotLengths(current, [moved, prior]);
+    return { project, scene: moved, previous: prior };
   });
   return moveCutOnBoard(id, outcome, [outcome.previous, outcome.scene]);
 }
@@ -592,8 +597,10 @@ export async function moveProjectSceneEnd(id, sceneId, { endSec }) {
     if (!next) assertBoardHoldsLastEnd(current, endSec);
     let project = applySceneUpdate(current, sceneId, { endSec }).project;
     if (next) project = applySceneUpdate(project, next.sceneId, { startSec: endSec }).project;
-    assertBoardHoldsShotLengths(current, [project.scenes[index], next ? project.scenes[index + 1] : null]);
-    return { project, scene: project.scenes[index], next: next ? project.scenes[index + 1] : null };
+    const moved = sceneById(project, sceneId);
+    const nextShot = next ? sceneById(project, next.sceneId) : null;
+    assertBoardHoldsShotLengths(current, [moved, nextShot]);
+    return { project, scene: moved, next: nextShot };
   });
   return moveCutOnBoard(id, outcome, [outcome.scene, outcome.next]);
 }

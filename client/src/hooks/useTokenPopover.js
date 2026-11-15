@@ -1,3 +1,12 @@
+/**
+ * Hover/click/pin state machine for an anchored token popover (200ms open, 150ms grace close) plus the
+ * `hotRef` cross-link highlight.
+ *
+ * Returns `{ pop, hotRef, onTokenEnter/Leave/Click, onPopoverEnter/Leave, closePopover }`. Use when:
+ * Prose (or any) tokens that open a detail popover on hover and pin on click (WorkEditor ↔
+ * ProseTokenPopover).
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 // useTokenPopover — hover/click state machine for the prose-token popover.

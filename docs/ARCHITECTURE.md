@@ -402,7 +402,7 @@ Error severity levels:
 The authoritative statement is "Security Model" in the root `AGENTS.md`; in brief:
 
 1. **Network Security**: A private network behind Tailscale; PortOS is never exposed to the public internet
-2. **Optional authentication**: An instance password (off by default) gates `/api/*` and `/data/*`; spawned agents carry a loopback `PORTOS_API_TOKEN`; host-control routes (`server/lib/hostControlRoutes.js`) need operator authority
+2. **Optional authentication**: An instance password (off by default) gates `/api/*` and `/data/*`; spawned agents carry a loopback `PORTOS_API_TOKEN`; every `/api` write outside the public, peer and opt-in public-API surfaces, plus a short list of sensitive reads (`server/lib/hostControlRoutes.js`), needs operator authority
 3. **Command Allowlist**: Shell execution restricted to approved commands (`server/lib/commandSecurity.js`)
 4. **No Shell Interpolation**: Uses `spawn()` with argument arrays
 5. **Zod Validation**: All API inputs validated
@@ -449,7 +449,7 @@ PostgreSQL itself is not PM2-managed — it runs as the system service (`:5432`)
    - React state and lifecycle hooks → `client/src/hooks/` (prefix with `use`)
    - Pure formatting and mathematical helpers → `client/src/utils/`
    - API / network / WebSocket clients → `client/src/services/` (prefix with `api*`)
-2. **Catalog Parity Rule**: Every new module MUST be re-exported in that directory's `index.js` barrel (or `services/api.js`) AND documented in that directory's `README.md` table. This invariant is enforced by unit tests (e.g., `server/lib/index.test.js`, `client/src/lib/index.test.js`).
+2. **Module summary rule**: Every module opens with a comment whose first paragraph is a one-sentence summary of at most 200 characters; `node scripts/lib-catalog.js <term>` derives the catalog from these headers, and each directory's `moduleSummaries.test.js` enforces them. A new `apiX.js` is also re-exported from `client/src/services/api.js`.
 
 ### Adding a Data Store
 1. Determine the storage tier according to `docs/STORAGE.md`.
@@ -458,7 +458,7 @@ PostgreSQL itself is not PM2-managed — it runs as the system service (`:5432`)
 
 ### Adding CoS Task Types
 1. Add the task type to `SELF_IMPROVEMENT_TASK_TYPES` and `DEFAULT_TASK_INTERVALS` in `server/services/taskSchedule.js`.
-2. Add its prompt template to `DEFAULT_TASK_PROMPTS` in `server/services/taskPromptDefaults/prompts.js` (if you are changing an existing default: bump `PROMPT_VERSIONS`, then run `node scripts/regen-prompt-integrity-snapshot.js` to retire the outgoing default's hash into `integrity.snapshot.json`).
+2. Add its prompt template to `DEFAULT_TASK_PROMPTS` in `server/services/taskPromptDefaults/prompts.js` (after editing any default, run `node scripts/regen-prompt-integrity-snapshot.js`: it bumps the version and retires the outgoing default's hash in `integrity.snapshot.json`).
 3. If it is an audit that should be configurable to **file issues** or **do the work**, add it to `AUDIT_DEFINITIONS` in `server/lib/auditCatalog.js` (and map any matching legacy quota-burn preset via `quotaBurnId`, so an un-migrated plan converts onto it). Quota Burn picks the new type up for free — its plan references scheduled tasks rather than carrying prompts of its own ([QUOTA-BURN.md](./QUOTA-BURN.md)).
 4. If it ALWAYS files findings/plans into the app's work tracker (never implements), add a wording preset to `TRACKER_FILING_PRESETS` in `server/lib/workTracker.js` and reference `{trackerInstructions}` in its prompt template — membership is what makes `resolveTrackerFilingBlock` file on every dispatch.
 5. Give it a home in `WORKFLOW_STAGES` (`server/services/workflow.js`) so the Workflow tab doesn't render it under Ambient.

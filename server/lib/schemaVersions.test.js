@@ -1,3 +1,4 @@
+import { readFileSync } from 'fs';
 import { describe, it, expect } from 'vitest';
 import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import {
@@ -15,117 +16,86 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     expect(() => { PORTOS_SCHEMA_VERSIONS.universes = 999; }).toThrow();
   });
 
-  it('declares universes at the post-split layout version', () => {
-    // If this changes, the corresponding migration in scripts/migrations/
-    // must ship alongside it. The test exists to make a layout bump a
-    // deliberate two-file edit.
-    // v6 = canon characters gained relationshipLinks[] (#1287); v7 = canon
-    // objects gained attachments[] (#1288); v8 adds styleReferences[]; v9 adds
-    // moodBoardId (#4188); v10 adds character production packages (#5378);
-    // v11 adds the optional character psychology profile (#6414);
-    // v12 adds the universe factual flag (#7616).
-    // These are additive + version-gated so an older peer
-    // cannot strip-then-LWW them.
-    // v15 adds an optional place `greybox` layout; additive + version-gated.
-    // v18 adds an optional `height` on canon forms.
-    // v19 adds the film look weave/flicker speed a visual profile can carry.
-    // v20 adds an optional place `photoreal` look (#14946).
-    // v21 adds an optional real-world `size` on places and objects.
-    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(22);
+  it('holds only positive integers, since a non-integer silently reads as 0 and skips the gate', () => {
+    for (const [category, version] of Object.entries(PORTOS_SCHEMA_VERSIONS)) {
+      expect(Number.isInteger(version), category).toBe(true);
+      expect(version, category).toBeGreaterThan(0);
+    }
   });
 
-  it('declares pipeline collection layout versions', () => {
-    // pipelineIssues v4 preserves text-stage generation ownership.
-    expect(PORTOS_SCHEMA_VERSIONS.pipelineIssues).toBe(6);
-    // pipelineSeries bumped to 14 for authored arc.seriesDesign; v13 added characterArcs[].evolution
-    // (#6440) (v2 = readerMap, v3 = tickingClock, v4 = styleGuide,
-    // v5 = coverImage, v6 = characterArcs, v7 = factCritical + factReference,
-    // v8 = editorialCheckConfig, v9 = severityWeights + blockingSeverities,
-    // v10 = arc.foreshadowing, v11 = styleGuide.voiceExemplars +
-    // voiceAntiExemplars, v12 = exportSettings).
-    expect(PORTOS_SCHEMA_VERSIONS.pipelineSeries).toBe(14);
+  it('pins the render-backend alphabets that sync versions must move with', () => {
+    // Older receivers coerce an unknown imageMode/videoMode to auto/null, then
+    // LWW the lost pin back. Adding a backend means updating this snapshot AND
+    // bumping creativeCommissions + fableLoom in schemaVersions.js.
+    expect({
+      image: [...IMAGE_GEN_MODES],
+      video: [...VIDEO_GEN_MODES],
+    }).toEqual({
+      image: ['external', 'local', 'codex', 'grok', 'agy', 'fal', 'runway', 'higgsfield', 'google'],
+      video: ['local', 'grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield', 'google'],
+    });
   });
 
-  it('gates mediaCollections at v2 so a v1 peer refuses collections carrying removal records (#12433)', () => {
-    expect(PORTOS_SCHEMA_VERSIONS.mediaCollections).toBe(2);
+  it('caps each entry\'s comment block at 6 lines so the registry cannot regrow history', () => {
+    const lines = readFileSync(new URL('./schemaVersions.js', import.meta.url), 'utf8').split('\n');
+    const start = lines.findIndex((l) => l.startsWith('export const PORTOS_SCHEMA_VERSIONS'));
+    const end = lines.findIndex((l, i) => i > start && l === '});');
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const offenders = [];
+    let commentLines = 0;
+    for (const line of lines.slice(start + 1, end)) {
+      if (line.trimStart().startsWith('//')) { commentLines += 1; continue; }
+      const entry = line.match(/^ {2}(\w+):/);
+      if (entry && commentLines > 6) offenders.push(`${entry[1]} (${commentLines} lines)`);
+      commentLines = 0;
+    }
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe('per-category gates against the live registry', () => {
+  it('gates a mediaCollections v1 receiver so removal records are refused, not stripped (#12433)', () => {
+    const current = PORTOS_SCHEMA_VERSIONS.mediaCollections;
     // A v1 receiver would strip `removedItems` and union the removed item back.
-    const v1Receiver = { ...PORTOS_SCHEMA_VERSIONS, mediaCollections: 1 };
+    const v1Receiver = { ...PORTOS_SCHEMA_VERSIONS, mediaCollections: current - 1 };
     const diff = scopeVersionDiff(
       compareSchemaVersions(PORTOS_SCHEMA_VERSIONS, v1Receiver),
       RECORD_KIND_SCHEMA_CATEGORIES.mediaCollection,
     );
-    expect(diff.ahead).toEqual([{ category: 'mediaCollections', senderV: 2, receiverV: 1 }]);
+    expect(diff.ahead).toEqual([{ category: 'mediaCollections', senderV: current, receiverV: current - 1 }]);
   });
 
-  it('version-gates catalog object attachments and media generation provenance', () => {
-    // v11 adds the ref/relation/media tombstone-revival guard (#8347).
-    // v15 adds the per-image likeness opt-out on media library rows.
-    // v16 adds an optional `height` on bible forms.
-    // v17 adds an optional real-world `size` on places and objects.
-    expect(PORTOS_SCHEMA_VERSIONS.catalog).toBe(17);
-  });
-
-  it('version-gates the persisted FableLoom shot and reference shape', () => {
-    // v7 adds timed shots and draft character image anchors; v8 adds the
-    // optional per-character five-stage evolution lens on the series plan; v9
-    // adds the shared finite/renewable series-design brief.
-    // Older peers stay behind the full render contract until they advertise
-    // support for the additive fields.
-    expect(PORTOS_SCHEMA_VERSIONS.fableLoom).toBe(16);
-    const olderPeer = { ...PORTOS_SCHEMA_VERSIONS, fableLoom: 15 };
+  it('pauses only fableLoom when an older peer is one version behind', () => {
+    const current = PORTOS_SCHEMA_VERSIONS.fableLoom;
+    const olderPeer = { ...PORTOS_SCHEMA_VERSIONS, fableLoom: current - 1 };
     const diff = compareSchemaVersions(PORTOS_SCHEMA_VERSIONS, olderPeer);
     expect(scopeVersionDiff(diff, RECORD_KIND_SCHEMA_CATEGORIES.fableLoom)).toEqual({
       compatible: false,
-      ahead: [{ category: 'fableLoom', senderV: 16, receiverV: 15 }],
+      ahead: [{ category: 'fableLoom', senderV: current, receiverV: current - 1 }],
       behind: [],
     });
     expect(scopeVersionDiff(diff, RECORD_KIND_SCHEMA_CATEGORIES.artist).compatible).toBe(true);
   });
-
-  it('version-gates the additive Creative Commission taste brief shape', () => {
-    expect(PORTOS_SCHEMA_VERSIONS.creativeCommissions).toBe(9);
-  });
-
-  it('moves the render-backend alphabets and their sync versions together', () => {
-    // Older receivers coerce an unknown imageMode/videoMode to auto/null, then
-    // LWW the lost pin back. Adding a backend means: update this snapshot AND
-    // bump creativeCommissions + fableLoom (and their pins above).
-    expect({
-      image: [...IMAGE_GEN_MODES],
-      video: [...VIDEO_GEN_MODES],
-      creativeCommissions: PORTOS_SCHEMA_VERSIONS.creativeCommissions,
-      fableLoom: PORTOS_SCHEMA_VERSIONS.fableLoom,
-    }).toEqual({
-      image: ['external', 'local', 'codex', 'grok', 'agy', 'fal', 'runway', 'higgsfield', 'google'],
-      video: ['local', 'grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield', 'google'],
-      creativeCommissions: 9,
-      fableLoom: 16,
-    });
-  });
 });
 
 describe('buildPortosMeta', () => {
-  it('rejects the title card\'s slide, fade out and steady drawing, and earlier music-video fields, on older peers', async () => {
+  it('gates an older peer on music-video projects, since older builds re-normalize newer fields away', async () => {
     const meta = await buildPortosMeta();
-    expect(meta.schemaVersions.musicVideoProjects).toBe(63);
-    // Older builds re-normalize the newer fields away; the gate must stop that peer receiving them.
-    for (const receiverV of [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62]) {
-      expect(compareSchemaVersions(meta.schemaVersions, { ...meta.schemaVersions, musicVideoProjects: receiverV }).ahead)
-        .toContainEqual({ category: 'musicVideoProjects', senderV: 63, receiverV });
-    }
-    const olderPeer = { ...meta.schemaVersions, musicVideoProjects: 24 };
+    const current = meta.schemaVersions.musicVideoProjects;
+    const olderPeer = { ...meta.schemaVersions, musicVideoProjects: current - 1 };
     expect(scopeVersionDiff(compareSchemaVersions(meta.schemaVersions, olderPeer), RECORD_KIND_SCHEMA_CATEGORIES.musicVideoProject))
-      .toMatchObject({ compatible: false, ahead: [{ category: 'musicVideoProjects', senderV: 63, receiverV: 24 }] });
+      .toMatchObject({ compatible: false, ahead: [{ category: 'musicVideoProjects', senderV: current, receiverV: current - 1 }] });
   });
 
   it('advertises the Suno song id so an older peer does not strip it from a take', async () => {
     const meta = await buildPortosMeta();
-    expect(meta.schemaVersions.tracks).toBe(13);
-    const olderPeer = { ...meta.schemaVersions, tracks: 12 };
+    const current = meta.schemaVersions.tracks;
+    const olderPeer = { ...meta.schemaVersions, tracks: current - 1 };
     const diff = compareSchemaVersions(meta.schemaVersions, olderPeer);
     expect(scopeVersionDiff(diff, RECORD_KIND_SCHEMA_CATEGORIES.track)).toEqual({
       compatible: false,
-      ahead: [{ category: 'tracks', senderV: 13, receiverV: 12 }],
+      ahead: [{ category: 'tracks', senderV: current, receiverV: current - 1 }],
       behind: [],
     });
     // This upgrade pauses only tracks; unrelated artist/album sync still works.
@@ -136,14 +106,12 @@ describe('buildPortosMeta', () => {
   it('returns { portosVersion, schemaVersions } with the live registry', async () => {
     const meta = await buildPortosMeta();
     expect(meta.portosVersion).toMatch(/^\d+\.\d+\.\d+/);
-    expect(meta.schemaVersions.universes).toBe(22);
-    expect(meta.schemaVersions.pipelineIssues).toBe(6);
-    expect(meta.schemaVersions.pipelineSeries).toBe(14);
+    expect(meta.schemaVersions).toEqual(PORTOS_SCHEMA_VERSIONS);
   });
 
   it('overrides merge into schemaVersions', async () => {
     const meta = await buildPortosMeta({ schemaVersions: { future: 1 } });
-    expect(meta.schemaVersions.universes).toBe(22);
+    expect(meta.schemaVersions.universes).toBe(PORTOS_SCHEMA_VERSIONS.universes);
     expect(meta.schemaVersions.future).toBe(1);
   });
 });

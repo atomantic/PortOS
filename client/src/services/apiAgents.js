@@ -1,3 +1,14 @@
+/**
+ * API client for running-agent process management, CoS run-event diagnostics, task schedule, and
+ * maintenance runs (`getMaintenanceRuns`, `startMaintenanceRun`).
+ *
+ * Running-agent process management, CoS run-event diagnostics, the CoS task schedule (intervals,
+ * on-demand triggers, manual maintenance runs via
+ * `getMaintenanceRuns`/`startMaintenanceRun`/`stopMaintenanceRun`), and persistent-mind conversation,
+ * lifecycle, context, runtime-telemetry calls, and versioned tool recipe library CRUD, validation,
+ * archive, and restore calls.
+ */
+
 import { request } from './apiCore.js';
 
 // Running Agents (Process Management)
@@ -408,15 +419,12 @@ export const refreshBranchReconcileInventory = (appId, options = {}) => request(
 });
 
 // Retire one merged, clean held checkout in place named exactly as the last branch-reconcile inventory reported it.
-export const retireBranchReconcileCheckout = ({ appId, path, head, branch = null, locked, lockReason = null, review }, options = {}) => request('/cos/schedule/branch-reconcile/checkouts/retire', {
+export const retireBranchReconcileCheckout = ({ appId, path, head, branch = null, locked, lockReason = null }, options = {}) => request('/cos/schedule/branch-reconcile/checkouts/retire', {
   method: 'POST',
-  body: JSON.stringify({ appId, path, head, branch, locked, lockReason, review }),
+  body: JSON.stringify({ appId, path, head, branch, locked, lockReason }),
   ...options
 });
 
-export const reviewBranchReconcileCheckout = (body, options = {}) => request('/cos/schedule/branch-reconcile/checkouts/review', {
-  method: 'POST', body: JSON.stringify(body), ...options
-});
 
 // Autonomous Jobs
 export const getCosJobs = (options = {}) => request('/cos/jobs', options);

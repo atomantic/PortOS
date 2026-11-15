@@ -1,6 +1,23 @@
 /**
  * Goal-fidelity CALIBRATION contract — pure.
  *
+ * Goal-fidelity CALIBRATION contract — what happens when the follow-up investigation overturns a
+ * finding, i.e. the objective WAS delivered and the reviewer misjudged it.
+ * `GOAL_FIDELITY_CONTEXT_GAPS` is the closed vocabulary of what the reviewer could not see
+ * (`truncated-diff`, `truncated-objective`, `objective-omits-context`, `work-outside-diff`,
+ * `execution-step-misread`, `rubric-gap`, `other`), enforced ONLY by `normalizeGoalFidelityContextGap`
+ * (the report route takes a bounded string, so a near-miss gap name folds to `other` with its
+ * diagnosis intact instead of 400ing the report away). `GOAL_FIDELITY_REVIEW_SURFACES` addresses the
+ * reviewer's three context surfaces once — objective / diff / rubric — and
+ * `GOAL_FIDELITY_CONTEXT_GAP_FIXES` maps each gap onto one of them, so a rename cannot leave seven
+ * prose copies lying (`goalFidelityCalibration.pointers.test.js` walks the table against the real
+ * files). `goalFidelityCalibrationFingerprint(gap)` keys the dedup on the GAP alone, so many false
+ * positives from one blind spot fold into one fix instead of minting an agent each.
+ * `buildGoalFidelityCalibrationTask` composes the PortOS-side task body (including the
+ * do-not-disarm-the-detector contract) and `buildGoalFidelityFalsePositiveReportBlock` the `curl`
+ * instructions appended to a follow-up task, taking `apiBase` as an argument and the call shape from
+ * `agentApiToken.js`. I/O lives in `services/goalFidelityCalibration.js`.
+ *
  * `goalFidelity.js` owns the verdict, `goalFidelityFollowUp.js` owns what
  * happens when the verdict found a problem. This module owns the third case,
  * which until now had nowhere to go: the follow-up investigator looked at the
@@ -153,11 +170,11 @@ export const GOAL_FIDELITY_CONTEXT_GAP_FIXES = Object.freeze({
   }),
   'execution-step-misread': Object.freeze({
     surface: 'rubric',
-    note: 'The rubric already carves out claim-flow execution steps. Extend that carve-out to the shape that was misread — narrowly, naming it, not by weakening the rubric.',
+    note: 'The rubric already carves out claim-flow execution steps. Extend that carve-out in general terms to the kind of execution step that was misread, not by weakening the rubric.',
   }),
   'rubric-gap': Object.freeze({
     surface: 'rubric',
-    note: 'The rubric defines what counts as missing, unrequested, and verified. Fix the specific misreading and pin it with a regression case.',
+    note: 'The rubric defines what counts as missing, unrequested, and verified. Correct the general rule that produced the misreading and pin it with a regression case.',
   }),
   other: Object.freeze({
     surface: null,
@@ -266,8 +283,11 @@ const reported = (text, empty) => reportedField(text) || empty;
  * The scope contract is the load-bearing paragraph. The cheapest way to make a
  * false positive stop is to make the detector never say `rethink` again, and an
  * unattended agent optimizing for "this finding must not recur" will find that
- * path. So the task states the failure mode it must not produce and asks for
- * the regression test that proves it did not.
+ * path. The next cheapest is a matcher that recognizes this one diff, which is
+ * how the reviewer once accumulated single-incident recognizers (#16103). So
+ * the task confines the fix to the general prompt or its evidence, states the
+ * failure modes it must not produce, and asks for the regression test that
+ * proves it did not.
  */
 export function buildGoalFidelityCalibrationTask({ gap, detail, evidence, findingFingerprint, taskId, verdict } = {}) {
   const resolved = normalizeGoalFidelityContextGap(gap);
@@ -296,7 +316,9 @@ export function buildGoalFidelityCalibrationTask({ gap, detail, evidence, findin
       '## What to do',
       'Close the named gap so a run of this shape is judged correctly, then prove it. The fix belongs in whichever of the three surfaces above actually produced the misjudgement — do not fix a context gap by editing the rubric, or a rubric gap by widening a cap.',
       '',
-      '**Do not disarm the detector.** The cheap way to stop this false positive is to make the reviewer stop returning `rethink`, and that would silently give every future run a free pass — the exact failure the gate exists to catch (`server/lib/goalFidelity.js` opens with it). A change that broadens what counts as `ship`, weakens a hold, or removes a check is only acceptable when it names the shape it exempts, and it must exempt that shape and nothing wider.',
+      '**Edit only the general prompt or the evidence supplied to it.** Never add a matcher, classifier, extra prompt or extra review pass keyed to this case: no code that recognizes a specific diff, file path, function name or objective wording. A reviewer that special-cases past diffs does not generalize, and nobody can reason about such a matcher without the incident (#16103). State the correction as a rule any objective of this kind can use.',
+      '',
+      '**Do not disarm the detector.** The cheap way to stop this false positive is to make the reviewer stop returning `rethink`, and that would silently give every future run a free pass — the exact failure the gate exists to catch (`server/lib/goalFidelity.js` opens with it). A change that broadens what counts as `ship`, weakens a hold, or removes a check is only acceptable when it states the kind of shape it exempts in general terms, and it must exempt that kind and nothing wider.',
       '',
       '**Ship a regression test** that reconstructs this case and asserts the corrected judgement — a prompt/rubric change with no test pinning it is one rebase away from being reverted by the next person who reads it as noise.',
     ].join('\n'),

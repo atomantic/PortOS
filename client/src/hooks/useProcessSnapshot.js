@@ -1,3 +1,10 @@
+/**
+ * PM2 snapshots from entry reads and server pushes, with reconnect/reshow recovery and stale-read
+ * protection.
+ *
+ * Use when: Process lists and native-launch panels; pass an app id for custom PM2 homes.
+ */
+
 import { useEffect, useRef, useState, useCallback } from 'react';
 import * as api from '../services/api';
 import socket from '../services/socket';

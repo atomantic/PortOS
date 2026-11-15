@@ -1,3 +1,7 @@
+/**
+ * Genome upload + search schemas.
+ */
+
 import { z } from 'zod';
 
 export const genomeClinvarSyncSchema = z.object({

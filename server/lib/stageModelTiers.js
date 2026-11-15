@@ -1,7 +1,14 @@
 /**
- * The model-tier vocabulary a prompt stage's `model` / `judgeModel` field uses
- * (#8149). A stage names either an exact model id (a pin) or one of these tiers,
- * which resolves on whichever provider runs the stage.
+ * The model-tier vocabulary a prompt stage's `model` / `judgeModel` field uses (#8149).
+ *
+ * The prompt-stage `model`/`judgeModel` tier vocabulary (#8149): `STAGE_MODEL_TIERS` (`default` + the
+ * shared MODEL_TIERS), `STAGE_MODEL_TIER_OPTIONS` (the picker rows every stage model select renders),
+ * `LEGACY_STAGE_MODEL_TIERS` (`quick`→light, `coding`→medium, still readable from older
+ * peers/backups), `canonicalStageModelTier`, `isStageModelTier` (tier vs model-id pin). Pure — the
+ * client re-exports it.
+ *
+ * A stage names either an exact model id (a pin) or one of these tiers, which resolves on whichever
+ * provider runs the stage.
  *
  * The tiers are the shared MODEL_TIERS (the same names task metadata,
  * orchestration roles and dispatch labels use) plus `default` — "no tier, use

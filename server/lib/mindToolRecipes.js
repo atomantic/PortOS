@@ -1,4 +1,8 @@
-/** Closed, non-executable recipe definitions. No tools or providers run here. */
+/**
+ *  Closed, non-executable recipe definitions. No tools or providers run here.
+ *
+ * Closed recipe schemas, current semantic-contract validation, and safe JSON field binding resolution.
+ */
 import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
 

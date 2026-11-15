@@ -1,3 +1,10 @@
+/**
+ * `trackOptionLabels(tracks)` — ID-keyed library option labels with title, artist, duration, creation
+ * date, missing-audio status, and stable collision-resolving ID suffixes.
+ *
+ * Build before filtering selector eligibility.
+ */
+
 import { formatDateShort, formatDurationSec } from './formatters.js';
 
 /**

@@ -1,6 +1,12 @@
 /**
  * Render-target alphabet (#3231 Phase 2).
  *
+ * Render-target alphabet (#3231): `RENDER_TARGET`/`RENDER_TARGETS` name every creative surface that
+ * enqueues renders (universe-bible, sprite-reference, music-video, …) — the keys into
+ * `settings.renderDefaults` — plus the `RENDER_TARGET_BACKEND_AUTO` fall-through sentinel.
+ * Dependency-free leaf; resolved per surface by
+ * `services/imageGen/cloudProviderConfig.js#resolveRenderTargetConfig`.
+ *
  * A render target names one creative surface that enqueues image (or video)
  * renders — the key into `settings.renderDefaults`, where the user pins an
  * install-wide default backend + model per surface ("Universe Bible renders

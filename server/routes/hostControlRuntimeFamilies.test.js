@@ -172,7 +172,7 @@ vi.mock('../services/lmStudioManager.js', () => ({
   getLoadedModels: vi.fn(),
 }));
 
-import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import browserRoutes from './browser.js';
 import harnessRoutes from './harnesses.js';
 import localLlmRoutes from './localLlm.js';
@@ -191,7 +191,7 @@ const buildApp = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlBodyGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/browser', browserRoutes);
   app.use('/api/harnesses', harnessRoutes);
   app.use('/api/local-llm', localLlmRoutes);
@@ -273,14 +273,25 @@ describe('operator authority for browser, harness and local-runtime management (
     }
   });
 
-  it('preserves remote status/catalog reads, model downloads and configured-model inference', async () => {
+  it('preserves remote status/catalog reads and runs model downloads and configured-model inference for a local caller', async () => {
     const app = buildApp();
     for (const path of ['/api/browser/config', '/api/harnesses', '/api/local-llm/status', '/api/local-llm/catalog?backend=ollama']) {
       expect((await request(app).get(path)).status).toBe(200);
     }
-    expect((await call(app, ['post', '/api/local-llm/install', { backend: 'ollama', modelId: 'example-model' }])).status).toBe(200);
-    expect((await call(app, ['post', '/api/local-llm/test', { backend: 'ollama', modelId: 'example-model', prompt: 'Example' }])).status).toBe(200);
-    expect((await call(app, ['post', '/api/local-llm/capability-tests/run', { backend: 'ollama', modelId: 'example-model', testId: 'story-outline' }])).status).toBe(200);
+    const inference = [
+      ['post', '/api/local-llm/install', { backend: 'ollama', modelId: 'example-model' }],
+      ['post', '/api/local-llm/test', { backend: 'ollama', modelId: 'example-model', prompt: 'Example' }],
+      ['post', '/api/local-llm/capability-tests/run', { backend: 'ollama', modelId: 'example-model', testId: 'story-outline' }],
+    ];
+    for (const operation of inference) {
+      const refused = await call(app, operation);
+      expect([refused.status, refused.body.code], operation[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expect(runCapabilityTest).not.toHaveBeenCalled();
+    expect(installModel).not.toHaveBeenCalled();
+    expect(runLocalLlmTest).not.toHaveBeenCalled();
+    const local = buildApp('127.0.0.1');
+    for (const operation of inference) expect((await call(local, operation)).status, operation[1]).toBe(200);
     expect(runCapabilityTest).toHaveBeenCalledTimes(1);
     expect(installModel).toHaveBeenCalledTimes(1);
     expect(runLocalLlmTest).toHaveBeenCalledTimes(1);

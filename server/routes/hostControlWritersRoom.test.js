@@ -147,11 +147,18 @@ describe('Writers Room authoring authority', () => {
     expect(effects.augment).toHaveBeenLastCalledWith('wr-work-example', 'wr-char-example', operations[4][1]);
   });
 
-  it('leaves record edits, reads and cancellation accessible', async () => {
-    const app = appFor();
-    expect((await request(app).patch(work).send({ title: 'Example title' })).status).toBe(200);
-    expect((await request(app).get(`${work}/analysis`)).status).toBe(200);
-    expect((await call(app, [`${work}/polish/cancel`, {}])).status).toBe(200);
+  it('keeps remote reads open, refuses remote record edits and cancellation, and applies them locally', async () => {
+    const remote = appFor();
+    expect((await request(remote).get(`${work}/analysis`)).status).toBe(200);
+    for (const response of [
+      await request(remote).patch(work).send({ title: 'Example title' }),
+      await call(remote, [`${work}/polish/cancel`, {}]),
+    ]) expect([response.status, response.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect(effects.updateWork).not.toHaveBeenCalled();
+    expect(effects.cancel).not.toHaveBeenCalled();
+    const local = appFor('127.0.0.1');
+    expect((await request(local).patch(work).send({ title: 'Example title' })).status).toBe(200);
+    expect((await call(local, [`${work}/polish/cancel`, {}])).status).toBe(200);
     expect(effects.updateWork).toHaveBeenCalledOnce();
     expect(effects.listAnalyses).toHaveBeenCalledOnce();
     expect(effects.cancel).toHaveBeenCalledOnce();

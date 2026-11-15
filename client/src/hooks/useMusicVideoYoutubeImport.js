@@ -1,3 +1,15 @@
+/**
+ * Hook managing the Music Video page's two independent YouTube track import slots (create form and
+ * detail view) with URL drafts and captured target project.
+ *
+ * The Music Video page's two independent `useYoutubeTrackImport` slots (create form + detail-view
+ * track row) plus their URL drafts, the detail slot's captured target project, and the URL-nav
+ * backstop that bounces a deep link / Back / ⌘K jump away from an in-flight import back to its
+ * project. Returns `{ createUrl, setCreateUrl, editUrl, setEditUrl, createJob, editJob, startCreate,
+ * startEdit, switchBlockedMessage }`. Use when: The Music Video page. Reuse `switchBlockedMessage` for
+ * any additional guard (delete, list picker) so every surface says the same thing.
+ */
+
 import { useEffect, useState } from 'react';
 import toast from '../components/ui/Toast';
 import { updateMusicVideoProject } from '../services/apiMusicVideo.js';

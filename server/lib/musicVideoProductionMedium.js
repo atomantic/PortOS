@@ -2,6 +2,11 @@
  * Music Video production medium (#14244): an optional per-project handmade
  * surface the compositor owns, not the image/video model.
  *
+ * The optional project `productionMedium` (`stepped`, `beat-graphic`): `normalizeProductionMedium`,
+ * `productionMediumAddition(project)` (the shot-card prompt chip), `rendersIntercut(project)`,
+ * `usesLoudTierEverywhere`, and `steppedHoldPlan(sections, …)` (the frame spans a stepped render
+ * holds, performance shots exempt). Browser-safe.
+ *
  *   - `stepped`: no smooth motion, blur, gloss or generated lettering in the
  *     prompt, and the final render holds every other frame (24 fps out).
  *   - `beat-graphic`: lettering, labels and UI are compositor-only, and every

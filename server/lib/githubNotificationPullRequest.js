@@ -1,3 +1,10 @@
+/**
+ * `notificationPullRequestTarget`, `notificationPullRequestView` — same-host PR targets and the inbox
+ * action eligibility projection.
+ *
+ * Mutations always re-read the forge.
+ */
+
 import { repoApiPath } from './githubNotificationParse.js';
 
 /** A notification can name only a PR in its own repository and account host. */

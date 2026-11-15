@@ -22,7 +22,7 @@ export async function inspectOrQueueCompletedReview(input, deps = {}) {
   if (!purpose) return inspected;
   const target = inspected.reviewTarget;
   if (!target || !inspected.agentId || !inspected.originalTask || !inspected.roster) return { disposition: 'held', reason: 'review-obligation-unverified' };
-  const permitted = deps.permitted || (await import('./branchReconcileRetirement.js')).assertAutomaticRetirementAllowed;
+  const permitted = deps.permitted || (await import('./heldCheckoutRecovery.js')).assertAutomaticRetirementAllowed;
   try { await permitted(); } catch (error) { return { disposition: 'held', reason: error.message }; }
   const observation = observationFor(inspected, purpose, input.repairEvidence);
   const lifecycle = deps.lifecycle || await import('./cosAgentLifecycle.js');

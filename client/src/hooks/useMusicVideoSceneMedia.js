@@ -1,5 +1,25 @@
+/**
+ * Per-scene generation lanes (reference frame and clip) for Music Video over the scene render
+ * lifecycle, with prompt builders and visual-spec reference conditioning.
+ *
+ * Both per-scene generation lanes (reference frame + scene clip) over `useSceneRenderLifecycle`, the
+ * frame/shot prompt builders (concept-style + visual-spec direction suffix), visual-spec
+ * reference-image conditioning with explicit unsupported-backend feedback (#8965), the batch "generate
+ * the missing ones" actions, restores in-flight scene renders from the server queue on mount
+ * (`getMusicVideoSceneJobs`) so a reload doesn't invite duplicate submits, and folds the persisted
+ * `scene.lastFailure` (socket `music-video:scene-failure`) onto the scene (#10154). Loads the Casting
+ * media of each cast member a shot names in `characterVariant` (#12763) so frame conditioning leads
+ * with their guides. Returns `{ genScenes, genVideoScenes, conditioning, castMedia, buildFramePrompt,
+ * buildShotPrompt, generateFrame, generateSceneVideo, continueSceneVideo, generateMissingFrames,
+ * generateMissingVideos, planMissingFrames, planMissingVideos, frameBatch, videoBatch, sceneProgress,
+ * videoSceneProgress }` (the batches run counted via `useSceneBatch`; the board confirms count +
+ * estimate before calling `generateMissing*`). Use when: The Music Video scene board — don't re-wire
+ * the two lanes or re-derive the i2v/a2v/extend payloads.
+ */
+
 import { higgsfieldShotRequestFields } from '../../../server/lib/higgsfieldVideoModels.js';
 import { googleShotRequestFields } from '../../../server/lib/googleVideoModels.js';
+import { renderTierVideoSettings, sceneRenderTierPlan } from '../../../server/lib/musicVideoRenderTier.js';
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { isOutsideMusicVideoReference, musicVideoClipConditioningReferences, musicVideoConditioningReferences, musicVideoLinkedCastIds, musicVideoSceneCastIds } from '../../../server/lib/musicVideoConditioning.js';
 import { preMusicClipSound } from '../../../server/lib/musicVideoColdOpen.js';
@@ -9,7 +29,7 @@ import { useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import { addMusicVideoSceneTake, getMusicVideoSceneJobs, renderMusicVideoSceneClip, renderMusicVideoSceneFrame } from '../services/apiMusicVideo.js';
-import { listCatalogIngredientMedia } from '../services/apiCatalog.js';
+import { listCatalogIngredientsMedia } from '../services/apiCatalog.js';
 import { generateVideo } from '../services/apiImageVideo.js';
 import useMusicVideoGreyboxPlaces from './useMusicVideoGreyboxPlaces.js';
 import useSceneBatch from './useSceneBatch.js';
@@ -76,6 +96,8 @@ export const isOutsideReference = isOutsideMusicVideoReference;
  * fills an unselected slot — so a late render never replaces the frame or clip
  * the director chose.
  */
+const CAST_RELOAD_MIN_MS = 30_000;
+
 export default function useMusicVideoSceneMedia({ project, videoSettings, applyScenePatch, onReconciled } = {}) {
   const frameBatch = useSceneBatch();
   const videoBatch = useSceneBatch();
@@ -186,19 +208,27 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const [castMedia, setCastMedia] = useState({});
   const greyboxPlaces = useMusicVideoGreyboxPlaces(project);
   const [castRefresh, setCastRefresh] = useState(0);
-  useVisibilityEvent((state) => { if (state === 'visible') setCastRefresh((n) => n + 1); });
+  const castLoadedAt = useRef(0);
+  // Returning to the tab refetches only when the last load is stale; a failed-member retry forces one (reloadCastMedia).
+  useVisibilityEvent((state) => { if (state === 'visible' && Date.now() - castLoadedAt.current > CAST_RELOAD_MIN_MS) setCastRefresh((n) => n + 1); });
   useEffect(() => {
     if (!castIds) return undefined;
     let active = true;
-    Promise.all(castIds.split(',').map((id) => listCatalogIngredientMedia(id, { silent: true })
-      .then((media) => [id, Array.isArray(media) ? media : null], () => [id, null])))
-      // A failed reload keeps the media already loaded; only a never-loaded member is marked failed (null).
-      .then((entries) => { if (active) setCastMedia((prev) => Object.fromEntries(entries.map(([id, media]) => [id, media ?? prev[id] ?? null]))); });
+    const ids = castIds.split(',');
+    // One batched read for every cast member (#16076); a failed read marks only never-loaded members failed (null).
+    listCatalogIngredientsMedia(ids, { silent: true })
+      .catch(() => ({}))
+      .then((byId) => {
+        if (!active) return;
+        castLoadedAt.current = Date.now();
+        setCastMedia((prev) => Object.fromEntries(ids.map((id) => [id, (Array.isArray(byId?.[id]) ? byId[id] : null) ?? prev[id] ?? null])));
+      });
     return () => { active = false; };
   }, [castIds, castRefresh]);
   // Failed members return to "loading" while the retry is in flight, so a render waits instead of being told the read failed.
   const reloadCastMedia = () => {
     setCastMedia((prev) => Object.fromEntries(Object.entries(prev).map(([id, media]) => [id, media === null ? undefined : media])));
+    castLoadedAt.current = 0;
     setCastRefresh((n) => n + 1);
   };
   // A render before the shot's cast guides load, or after a failed read (null), would silently go out without them.
@@ -379,7 +409,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * Returns a promise that always resolves to `{ ok }` — see generateFrame's
    * doc comment. `revisionId` (optional) is the revision hook's kickoff tag (#9011).
    */
-  const generateSceneVideo = (scene, { revisionId, onJob, target = null, card = null } = {}) => {
+  const generateSceneVideo = (scene, { revisionId, onJob, target = null, card = null, tier = null } = {}) => {
     if (!scene.referenceImageId) { toast.error('Generate a reference frame first'); return Promise.resolve({ ok: false }); }
     const problem = shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
@@ -389,7 +419,9 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const prompt = card ? card.prompt : authoredShotPrompt(scene);
     if (!prompt) { toast.error('Add a shot prompt first'); return Promise.resolve({ ok: false }); }
     // `target` renders this one shot elsewhere (a scene card's Render on pick) without changing the saved setting.
-    const settings = target ? { ...videoSettings.settings, ...target } : videoSettings.settings;
+    // `tier` (#16136) renders a draft or a final: the tier's resolution on the shot's model, unless `target` names one.
+    const pinned = target ? { ...videoSettings.settings, ...target } : videoSettings.settings;
+    const settings = tier ? renderTierVideoSettings(pinned.backend, { scene, scenes: project?.scenes, videoSettings: videoSettings.settings, override: target, tier }) : pinned;
     const { detectedAudioReactiveLora } = videoSettings;
     const audioReactiveSelected = target ? settings.backend === 'local' && settings.generationMode === 'audioReactive' : videoSettings.audioReactiveSelected;
     const videoBlockedReason = target && videoSettings.blockedReasonFor ? videoSettings.blockedReasonFor(settings) : videoSettings.videoBlockedReason;
@@ -443,6 +475,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const renderKey = videoLane.startScene(scene.sceneId, { label: videoRenderLabel(settings) });
     return renderMusicVideoSceneClip(project.id, scene.sceneId, {
       prompt,
+      ...(tier ? { tier } : {}),
       ...(settings.backend ? { backend: settings.backend } : {}),
       ...(settings.backend === 'grok'
         // Request the 6/10s clip that COVERS this shot; the saved pin is only
@@ -581,7 +614,9 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         : 'Every scene already has a video');
       return;
     }
-    runBatch(videoBatch, pending, generateSceneVideo);
+    // #16136: a batch renders drafts on a model with resolution tiers; an untiered lane renders as before.
+    const draftTier = (scene) => (sceneRenderTierPlan(videoSettings.settings.backend, { scene, scenes: project?.scenes, videoSettings: videoSettings.settings }) ? { tier: 'draft' } : {});
+    runBatch(videoBatch, pending, (scene, options) => generateSceneVideo(scene, { ...options, ...draftTier(scene) }));
   };
 
   return {

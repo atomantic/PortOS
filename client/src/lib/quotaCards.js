@@ -1,3 +1,8 @@
+/**
+ * Groups shared provider quota observations without summing allowances and reconciles per-family
+ * refreshes with federated snapshots.
+ */
+
 import { limitWindowExpired, normalizeResetAt } from '../../../server/lib/quotaReset.js';
 
 // Quota snapshots do not identify accounts. Grouping by family therefore uses

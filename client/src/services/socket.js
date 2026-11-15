@@ -1,3 +1,7 @@
+/**
+ * Singleton Socket.IO client over relative path (Tailscale-friendly).
+ */
+
 import { io } from 'socket.io-client';
 import { isPublicGuestRoute } from '../lib/publicGuestRoutes';
 import { showStaleBuildToast } from './staleBuildToast';

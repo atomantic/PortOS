@@ -1,3 +1,7 @@
+/**
+ * Read-only runtime capabilities and per-dispatch execution-option preparation.
+ */
+
 import { createHash } from 'node:crypto';
 import { buildCodexAuthModeArgs, isCodexCommand } from './codex.js';
 import { isGrokCommand, grokSpeedArgsConflict, grokSpeedTarget } from './grok.js';

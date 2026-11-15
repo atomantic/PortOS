@@ -1,3 +1,7 @@
+/**
+ * Stacker News account, territory, review-action, and safe analysis APIs.
+ */
+
 import { request } from './apiCore.js';
 
 export const getStackerNewsAccounts = (options = {}) => request('/stacker-news/accounts', options);

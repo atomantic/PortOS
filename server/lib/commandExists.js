@@ -1,3 +1,17 @@
+/**
+ * `commandExists(cmd, args, opts)` probes whether a command runs successfully, with a spawn deadline
+ * that settles even if the child ignores signals.
+ *
+ * `commandExists(cmd, args = ['--version'], { timeoutMs = 5_000, env, cwd })` — does running `cmd
+ * args` succeed? A capability probe (spawn-based, with a deadline that settles even when the child
+ * ignores termination), not a PATH lookup like `processEnv.js`'s `whichFirst`; `env`/`cwd` let a
+ * caller check the exact child process configuration. Consolidates the two previously-private copies
+ * in `localLlm.js`/`ollamaManager.js`; callers probing a heavier CLI (e.g. `codeReview.js`'s
+ * reviewer-binary probe) pass a longer `timeoutMs`. Sibling `commandOutput(cmd, args, opts)` runs the
+ * same probe but returns the trimmed stdout (or `null` when it could not run / exited non-zero), so a
+ * caller can read a `--version` banner or a `models` listing without spawning the same child twice.
+ */
+
 import { spawn } from './childProcess.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

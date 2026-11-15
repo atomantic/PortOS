@@ -1,3 +1,13 @@
+/**
+ * Reads and classifies git origin remotes: `getOriginInfo`, `classifyOriginRemote`,
+ * `parseGitRemoteUrl`, and upstream-owner checks.
+ *
+ * `getOriginInfo`, `classifyOriginRemote`, `parseGitRemoteUrl`, `readRemoteUrl`, `isUpstreamOwner`,
+ * `isUpstreamFullName`, `UPSTREAM_OWNER`/`UPSTREAM_REPO` — safely reads and classifies checkout
+ * remotes against PortOS or a caller-supplied canonical upstream. Used by self-update and managed
+ * integrations to detect forks.
+ */
+
 import { execGit } from './execGit.js';
 import { PATHS } from './fileUtils.js';
 import { resolveSshHostAlias } from './sshHostAlias.js';

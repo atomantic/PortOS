@@ -1,3 +1,8 @@
+/**
+ * Strict operator request schemas for Tailcat device public-key approval and explicit enforcement
+ * mode.
+ */
+
 import { z } from 'zod';
 import { isValidNodePublicKey } from './tailcatAddress.js';
 

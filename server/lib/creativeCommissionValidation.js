@@ -1,3 +1,10 @@
+/**
+ * Creative Commission (Autonomous Creation Engine) create/update + brief/schedule/generation schemas.
+ *
+ * The brief field caps it enforces come from `creativeBriefLimits.js`; the generation-param spec comes
+ * from `creativeCommissionSpec.js`.
+ */
+
 import { z } from 'zod';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { recurrenceRuleSchema } from './recurrenceValidation.js';

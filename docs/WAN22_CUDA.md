@@ -22,7 +22,7 @@ including transitive packages, before treating an existing runtime as current.
 An older or incomplete environment therefore offers Upgrade/Repair.
 
 The stack is torch 2.14.1 / torchvision 0.29.1 with the `+cu126` build tag,
-diffusers 0.42.0 and transformers 5.22.1. Newer transformers pins replace the old
+diffusers 0.42.0 and transformers 5.22.2. Newer transformers pins replace the old
 4.x range to clear its OSV advisories. `PORTOS_TORCH_CUDA_INDEX` overrides remain
 available to other runtimes; Wan rejects a different index because its locks
 describe this exact CUDA stack. Changing CUDA requires regenerating and

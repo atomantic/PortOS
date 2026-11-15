@@ -6,6 +6,9 @@ import {
   buildFalVideoRequest,
   coerceFalVideoSeconds,
   estimateFalVideoCostUsd,
+  falCapabilityHint,
+  falExtendModel,
+  falExtendSourceProblem,
   falImageVideoQuotes,
   falVideoClipQuote,
   getFalVideoModel,
@@ -186,5 +189,46 @@ describe('buildFalVideoRequest — prompt length caps', () => {
     expect(build('fal-ai/minimax/hailuo-02/standard/image-to-video', { prompt: 'a', negativePrompt: 'blur' }).body.prompt).toBe('a\nAvoid: blur');
     const long = 'x '.repeat(1500).trim();
     expect(build('fal-ai/veo3.1/fast/image-to-video', { prompt: long }).body.prompt).toBe(long);
+  });
+});
+
+describe('falCapabilityHint', () => {
+  it('marks reference models and plain text/image models apart', () => {
+    expect(falCapabilityHint(getFalVideoModel('minimax/h3-max/reference-to-video'))).toBe('refs ≤9 · end frame · audio refs');
+    expect(falCapabilityHint(getFalVideoModel('fal-ai/minimax/hailuo-02/standard/image-to-video'))).toMatch(/^no refs/);
+    expect(falCapabilityHint(null)).toBe('');
+  });
+});
+
+describe('Veo 3.1 extend (#16150)', () => {
+  const EXTEND = 'fal-ai/veo3.1/fast/extend-video';
+  const good = { durationSec: 8, width: 1280, height: 720 };
+
+  // Uniquely catches an extend offer on a model that declares none, or the wire shape drifting from fal's schema.
+  it('offers extend only for a clip whose recorded model declares it, and sends a silent 7s 720p request', () => {
+    expect(falExtendModel('fal:fal-ai/veo3.1/fast/image-to-video')?.id).toBe(EXTEND);
+    expect(falExtendModel('fal-ai/kling-video/v3/pro/image-to-video')).toBeNull();
+    expect(falExtendModel('wan-2.2')).toBeNull();
+    const built = buildFalVideoRequest({ modelId: EXTEND, prompt: 'She turns to the door', videoUrl: 'https://cdn.example/clip.mp4', aspectRatio: '16:9' });
+    expect(built.body).toEqual({
+      prompt: 'She turns to the door', video_url: 'https://cdn.example/clip.mp4', duration: '7s', resolution: '720p', aspect_ratio: '16:9', generate_audio: false,
+    });
+    expect(built.estimatedCostUsd).toBe(1.05);
+  });
+
+  it('refuses a missing source clip, and a source clip on a model that takes none', () => {
+    expect(() => buildFalVideoRequest({ modelId: EXTEND, prompt: 'x' })).toThrow(/source clip/);
+    expect(() => buildFalVideoRequest({ modelId: 'fal-ai/veo3.1/fast/image-to-video', prompt: 'x', imageUrl: 'u', videoUrl: 'v' })).toThrow(/no source video/);
+  });
+
+  // Uniquely catches a paid request for a source fal would reject.
+  it('refuses an over-length, wrong-shape, small or unmeasured source before anything is paid for', () => {
+    const model = getFalVideoModel(EXTEND);
+    expect(falExtendSourceProblem(model, good)).toBeNull();
+    expect(falExtendSourceProblem(model, { ...good, width: 720, height: 1280 })).toBeNull();
+    expect(falExtendSourceProblem(model, { ...good, durationSec: 8.5 })).toMatch(/at most 8s/);
+    expect(falExtendSourceProblem(model, { ...good, width: 1000, height: 1000 })).toMatch(/16:9 or 9:16/);
+    expect(falExtendSourceProblem(model, { durationSec: 4, width: 854, height: 480 })).toMatch(/at least 720p/);
+    expect(falExtendSourceProblem(model, {})).toMatch(/could not be measured/);
   });
 });

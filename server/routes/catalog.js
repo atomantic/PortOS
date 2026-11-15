@@ -62,6 +62,11 @@ import {
   catalogVideoSubjectSaveSchema,
   catalogVideoDescriptionRestoreSchema,
   REF_KINDS,
+  catalogBatchMediaQuerySchema,
+  catalogLookAroundRenderSchema,
+  catalogLookAroundClipParamsSchema,
+  catalogLookAroundFramesSchema,
+  catalogLookAroundAnglesSchema,
 } from '../lib/catalogValidation.js';
 import { getActiveCatalogTypes, setUserCatalogTypes } from '../lib/catalogTypes.js';
 import { updateUserTypes } from '../services/catalogUserTypes/store.js';
@@ -335,6 +340,13 @@ router.patch('/ingredients/:id/lock', asyncHandler(async (req, res) => {
   await projectToCanon(updated.id, updated);
   catalogEvents.emit('primitive-changed', { ingredientId: updated.id });
   res.json(updated);
+}));
+
+// One request for the media of N ingredients ({ [id]: media[] }); registered before /:id so "media" is not read as an id.
+router.get('/ingredients/media', asyncHandler(async (req, res) => {
+  const { ids } = validateRequest(catalogBatchMediaQuerySchema, req.query);
+  const byId = await catalogDB.listMediaForIngredients(ids);
+  res.json(Object.fromEntries(ids.map((id) => [id, byId.get(id) ?? []])));
 }));
 
 router.get('/ingredients/:id', asyncHandler(async (req, res) => {
@@ -813,8 +825,8 @@ router.post('/previz-jobs/:id/finish', asyncHandler(async (req, res) => {
   res.json({ finished: finishPrevizJob(req.params.id, body) });
 }));
 
-// Place greybox. Draft is a provider call on the user's tap (host-control gated,
-// see hostControlRoutes.js) and answers with a preview; save stores or clears it;
+// Place greybox. Draft is a provider call on the user's tap (host-control gated
+// like every write, see hostControlRoutes.js) and answers with a preview; save stores or clears it;
 // capture attaches a rendered shot as a reference image.
 router.post('/ingredients/:id/greybox/draft', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogGreyboxDraftSchema, req.body);
@@ -920,6 +932,36 @@ router.get('/ingredients/:id/photoreal/blend', asyncHandler(async (req, res) => 
   const path = await photorealBlendPath(req.params.id);
   if (!path) throw new ServerError('No Blender scene has been built for this place yet.', { status: 404, code: 'NOT_FOUND' });
   res.download(path, 'blockout.blend');
+}));
+
+// Look around (#16145): one rotating-camera clip of a place's main plate becomes matching angle plates.
+// The render previews its prompt and price (`dryRun`); nothing attaches to the place until angles are kept.
+router.get('/ingredients/:id/look-around', asyncHandler(async (req, res) => {
+  const { getLookAround } = await import('../services/catalogLookAround.js');
+  res.json(await getLookAround(req.params.id));
+}));
+
+router.post('/ingredients/:id/look-around', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogLookAroundRenderSchema, req.body ?? {});
+  const { startLookAround } = await import('../services/catalogLookAround.js');
+  res.status(body.dryRun ? 200 : 202).json(await startLookAround(req.params.id, body));
+}));
+
+// A POST, not a GET: scoring decodes the clip with ffmpeg, and writes are host-control gated.
+router.post('/ingredients/:id/look-around/:clipId/frames', asyncHandler(async (req, res) => {
+  const { id, clipId } = validateRequest(catalogLookAroundClipParamsSchema, req.params);
+  validateRequest(catalogLookAroundFramesSchema, req.body ?? {});
+  const { scoreLookAroundClip } = await import('../services/catalogLookAround.js');
+  res.json(await scoreLookAroundClip(id, clipId));
+}));
+
+router.post('/ingredients/:id/look-around/:clipId/angles', asyncHandler(async (req, res) => {
+  const { id, clipId } = validateRequest(catalogLookAroundClipParamsSchema, req.params);
+  const body = validateRequest(catalogLookAroundAnglesSchema, req.body ?? {});
+  const { saveLookAroundAngles } = await import('../services/catalogLookAround.js');
+  const result = await saveLookAroundAngles(id, clipId, body);
+  res.status(result.dryRun ? 200 : 201).json(result);
+  if (!result.dryRun) catalogEvents.emit('primitive-changed', { ingredientId: id });
 }));
 
 // Record a voice memo onto an ingredient: transcribe via Whisper, persist the

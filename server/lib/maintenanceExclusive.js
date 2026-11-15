@@ -1,4 +1,9 @@
-/** Exclusive coordinator ownership and receiver-local one-use launch capabilities. */
+/**
+ *  Exclusive coordinator ownership and receiver-local one-use launch capabilities.
+ *
+ * Coordinator-owned exclusive claims, opaque idle observations, durable ownership, one-use
+ * fixed-adapter capabilities and verified settlement. Peer credentials alone never grant authority.
+ */
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { peerAdminIntentSchema } from './peerAdminValidation.js';

@@ -48,20 +48,20 @@ describe('creativeDirectorSceneImageHook', () => {
     mediaJobEvents.emit('completed', completedImageJob({
       params: { musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' } },
     }));
-    await new Promise((r) => setTimeout(r, 20));
+    await hook.__testing.settled();
     expect(updateScene).not.toHaveBeenCalled();
   });
 
   it('ignores a non-image job kind', async () => {
     mediaJobEvents.emit('completed', { kind: 'video', id: 'v1', params: { creativeDirector: tag() }, result: { filename: 'v1.mp4' } });
-    await new Promise((r) => setTimeout(r, 20));
+    await hook.__testing.settled();
     expect(updateScene).not.toHaveBeenCalled();
   });
 
   it('skips a tag missing projectId or sceneId', async () => {
     mediaJobEvents.emit('completed', completedImageJob({ params: { creativeDirector: { projectId: 'cd-1' } } }));
     mediaJobEvents.emit('completed', completedImageJob({ params: { creativeDirector: { sceneId: 'scene-1' } } }));
-    await new Promise((r) => setTimeout(r, 20));
+    await hook.__testing.settled();
     expect(updateScene).not.toHaveBeenCalled();
   });
 
@@ -71,7 +71,7 @@ describe('creativeDirectorSceneImageHook', () => {
     await waitFor(() => updateScene.mock.calls.length > 0);
     // No further assertions needed — a thrown rejection inside the hook would
     // surface as an unhandled rejection and fail the test run.
-    await new Promise((r) => setTimeout(r, 20));
+    await hook.__testing.settled();
   });
 
   it('does not let an older render (earlier queuedAt) overwrite a newer frame on the same scene', async () => {
@@ -82,7 +82,7 @@ describe('creativeDirectorSceneImageHook', () => {
     mediaJobEvents.emit('completed', completedImageJob({
       params: { creativeDirector: tag() }, filename: 'old.png', id: 'a', queuedAt: '2026-06-29T00:00:01.000Z',
     }));
-    await new Promise((r) => setTimeout(r, 30));
+    await hook.__testing.settled();
     expect(updateScene).toHaveBeenCalledTimes(1);
     expect(updateScene).toHaveBeenCalledWith('cd-1', 'scene-1', { sourceImageFile: 'new.png' });
   });

@@ -1,4 +1,3 @@
-vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: async (_repo, work) => work() }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';

@@ -16,6 +16,7 @@
  * request that is still queued; once it started the render runs to the end.
  */
 
+import { assertHeaderSafeKey } from '../lib/headerSafeKey.js';
 import { randomUUID } from 'crypto';
 import { readFile } from 'fs/promises';
 import { maintenance } from '../lib/maintenanceAdmission.js';
@@ -43,7 +44,7 @@ export function resolveHiggsfieldApiKey(settings) {
 }
 
 const headers = (apiKey, json = false) => ({
-  Authorization: `Key ${apiKey}`,
+  Authorization: `Key ${assertHeaderSafeKey(apiKey, 'Higgsfield')}`,
   ...(json ? { 'Content-Type': 'application/json' } : {}),
 });
 

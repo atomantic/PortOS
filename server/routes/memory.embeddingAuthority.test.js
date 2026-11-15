@@ -29,7 +29,7 @@ vi.mock('../services/chatgptImport.js', () => ({ readArchivedConversation: vi.fn
 vi.mock('../services/promptRunner.js', () => ({ runPromptThroughProvider: vi.fn() }));
 
 import memoryRoutes from './memory.js';
-import { authGate, hostControlRouteGate, hostControlBodyGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { isAuthEnabled } from '../services/auth.js';
 import { createMemory } from '../services/memoryBackend.js';
 import { reinitialize } from '../services/memoryEmbeddings.js';
@@ -45,12 +45,14 @@ const budget = Math.floor(2048 * 0.85 * 3);
 const longContent = 'Reference text. '.repeat(420);
 let app;
 let inputs;
+let address;
 
 beforeEach(() => {
   vi.resetAllMocks();
   isAuthEnabled.mockResolvedValue(false);
   reinitialize();
   inputs = [];
+  address = '127.0.0.1';
   getConfig.mockResolvedValue({ embeddingProviderId: 'embed', embeddingModel: 'example-embed' });
   loadMeta.mockResolvedValue({ defaultProvider: 'summary' });
   getProviderById.mockImplementation(async (id) => id === 'embed' ? embeddingProvider : summaryProvider);
@@ -71,13 +73,12 @@ beforeEach(() => {
   });
   app = express();
   app.use((req, res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: '192.0.2.10', configurable: true });
+    Object.defineProperty(req.socket, 'remoteAddress', { value: address, configurable: true });
     next();
   });
   app.use(authGate);
   app.use(hostControlRouteGate);
   app.use(express.json());
-  app.use(hostControlBodyGate);
   app.use('/api/memory', memoryRoutes);
   app.use(errorMiddleware);
 });
@@ -85,9 +86,19 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('memory creation embedding authority (#11038)', () => {
-  // Uniquely catches accepted data-only remote writes acquiring host tools in
-  // the automatic over-budget summarizer, before the memory is persisted.
-  it('summarizes an over-budget remote memory with tools and fallback disabled', async () => {
+  it('refuses a remote password-free memory create before summarizing, embedding or persisting', async () => {
+    address = '192.0.2.10';
+    const response = await request(app).post('/api/memory').send({ type: 'fact', content: longContent });
+
+    expect([response.status, response.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+    expect(createMemory).not.toHaveBeenCalled();
+    expect(inputs).toEqual([]);
+  });
+
+  // Uniquely catches memory content (data, not instructions) acquiring host
+  // tools in the automatic over-budget summarizer, before the memory is persisted.
+  it('summarizes an over-budget memory with tools and fallback disabled', async () => {
     const response = await request(app).post('/api/memory').send({ type: 'fact', content: longContent });
 
     expect(response.status).toBe(201);
@@ -129,7 +140,7 @@ describe('memory creation embedding authority (#11038)', () => {
     expect(inputs).toEqual([`Type: fact\nCategory: other\n${longContent}`.slice(0, budget)]);
   });
 
-  it('embeds an in-budget remote memory directly without provider inference', async () => {
+  it('embeds an in-budget memory directly without provider inference', async () => {
     const response = await request(app).post('/api/memory').send({ type: 'fact', content: 'A short fact.' });
 
     expect(response.status).toBe(201);

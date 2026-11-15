@@ -1,3 +1,16 @@
+/**
+ * Character rigging.
+ *
+ * `getRiggingReadiness()` (`GET /rigging/readiness`): whether this install's Blender runtime is
+ * provisioned, the resolved interpreter, the module version, the install command when it is not, and
+ * the auto-skin threshold defaults. `rigImageTo3dModel(id, body)` (`POST /rigging/models/:id`):
+ * auto-skin a rendered mesh behind the measured weight-coverage gate, resolving with the updated model
+ * record. `listRiggingClips()` (`GET /rigging/clips`): the locally-held animation clip library plus
+ * CoS-state coverage. `retargetImageTo3dModel(id, body)` (`POST /rigging/models/:id/retarget`): apply
+ * a clip to a published rig in `diagnostic` (measure only) or `write` mode, resolving with the updated
+ * model record.
+ */
+
 import { request } from './apiCore.js';
 
 // Character rigging: the read-only readiness answer for this install's Blender

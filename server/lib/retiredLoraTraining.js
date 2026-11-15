@@ -1,3 +1,7 @@
+/**
+ * Retirement refusal and short-lived admission for retained training data access/removal.
+ */
+
 import { ServerError } from './errorHandler.js';
 
 export const TRAINING_RETIRED_MESSAGE = 'LoRA training is retired. Existing datasets, checkpoints and adapters are preserved. Use reference images for new generation; manage retained files in Settings → Data Maintenance.';

@@ -58,6 +58,24 @@ describe('useMusicVideoSceneMedia clip batch (#10153)', () => {
     expect(result.current.videoBatch.state).toMatchObject({ done: 1, failed: 1 });
   });
 
+  // #16136: a batch on a model with resolution tiers renders drafts; an untiered lane sends no tier.
+  it('renders a tiered model as drafts at the draft resolution and leaves an untiered lane alone', async () => {
+    generateVideo.mockImplementation(() => Promise.resolve({ status: 'queued', jobId: 'job' }));
+    const tiered = { settings: { backend: 'fal', falResolution: '768P' }, audioReactiveSelected: false, videoBlockedReason: '' };
+    const { result } = renderHook(() => useMusicVideoSceneMedia({ project, videoSettings: tiered, applyScenePatch: vi.fn() }));
+    act(() => result.current.generateMissingVideos());
+    await flush();
+    expect(generateVideo).toHaveBeenCalledTimes(9);
+    for (const [body] of generateVideo.mock.calls) expect(body).toMatchObject({ tier: 'draft', falResolution: '512P' });
+
+    generateVideo.mockClear();
+    const local = renderMedia();
+    act(() => local.result.current.generateMissingVideos());
+    await flush();
+    expect(generateVideo.mock.calls.length).toBeGreaterThan(0);
+    for (const [body] of generateVideo.mock.calls) expect(body.tier).toBeUndefined();
+  });
+
   it('Cancel remaining cancels every unfinished job and clears the spinners through the canceled event', async () => {
     let n = 0;
     generateVideo.mockImplementation(() => Promise.resolve({ status: 'queued', jobId: `job-${n++}` }));

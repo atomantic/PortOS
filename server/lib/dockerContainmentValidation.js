@@ -1,4 +1,10 @@
 /**
+ * Zod schemas for Docker containment: the machine-local `dockerContainment` settings slice (limits,
+ * extra egress hosts, digest-pinned image overrides) and the `/api/docker-containment` run/pull
+ * bodies.
+ *
+ * Kept out of `validation.js` to keep that closure narrow.
+ *
  * Route schemas for Docker containment (#12844): the machine-local
  * `dockerContainment` settings slice and the run/pull request bodies. Kept out
  * of `validation.js` so the containment profile does not join that module's
@@ -10,8 +16,8 @@ import { DOCKER_CONTAINMENT_PHASES, isDigestPinnedImage, isEgressHostname } from
 /**
  * Limits, extra egress hosts and image overrides. Host-control: an override
  * picks the image untrusted code runs in and extra hosts widen install
- * egress, so `PUT /api/settings` gates the whole slice
- * (`HOST_CONTROL_SETTINGS_SLICES`).
+ * egress; like every settings write, it needs operator authority
+ * (`hostControlRouteGate`).
  */
 export const dockerContainmentSettingsSchema = z.object({
   limits: z.object({

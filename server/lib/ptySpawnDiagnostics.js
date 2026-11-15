@@ -1,6 +1,20 @@
 /**
  * Turn a raw node-pty spawn failure into a diagnosis a human can act on.
  *
+ * `diagnosePtySpawnFailure(err, {cwd, probeCwd, runtimeProbe})` + `probePtyRuntime(pty, cwd)` and the
+ * `PTY_UNAVAILABLE_PREFIX` / `PTY_WORKSPACE_MISSING_PREFIX` markers — turns node-pty’s one opaque
+ * `posix_spawn failed: No such file or directory` into a named fault. The executable is already
+ * cleared upstream (PATH resolve + `--version` probe), so a throw is either a `cwd` that vanished
+ * (cheap `existsSync`) or a PTY layer that cannot fork AT ALL — proven by re-forking a known-good
+ * command in a known-good directory; `diagnosed: false` means neither matched, and the caller
+ * re-throws rather than inventing a cause. **Retry policy is the caller’s and the two faults differ:**
+ * `agentTuiSpawning.js` matches only the PTY-layer prefix, mapping it to the actionable
+ * `runner-pty-unavailable` so the task blocks once with the repair, while a reaped workspace falls
+ * through to the retrying `spawn-rejected` because the next attempt provisions a fresh worktree. The
+ * motivating outage: an `npm ci` inside a CoS worktree emptied the primary checkout’s
+ * `server/node_modules` through a symlink, deleting the `spawn-helper` binary node-pty execs on every
+ * fork, while the already-loaded binding left the runner process itself looking healthy.
+ *
  * node-pty reports every POSIX launch failure as the same opaque string —
  * `posix_spawn failed: No such file or directory` — with no indication of WHICH
  * file was missing. Three very different faults collapse into it:

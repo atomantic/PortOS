@@ -667,7 +667,8 @@ function wordAnchorProblem(shot, cues, documentShots) {
  * Every shot's open work: the timing or storyboard fields it is missing
  * (`incompleteShots`), and lyric anchors that disagree with the lines sung over it
  * (`lyricAnchors`, with both sides so the checklist can show and fix them), each
- * also named in `problems`.
+ * also named in `problems`. A selected take marked bad is advice (`selectedTakeMarkedBad`),
+ * never a problem: the user may keep or pick any take.
  */
 function shotProblems(project, draft, scenes, { documentShots, cues, duration }) {
   const problems = [];
@@ -693,14 +694,6 @@ function shotProblems(project, draft, scenes, { documentShots, cues, duration })
     }
     const wordProblem = wordAnchorProblem(scene, cues, documentShots);
     if (wordProblem) problems.push(wordProblem);
-    const badSelectedTake = scene.selectedTakeMarkedBad || (project.assetMarks && (
-      (scene.referenceImageId && project.assetMarks[`image:${scene.referenceImageId}`] === 'bad') ||
-      (scene.endImageId && project.assetMarks[`image:${scene.endImageId}`] === 'bad') ||
-      (scene.videoHistoryId && project.assetMarks[`video:${scene.videoHistoryId}`] === 'bad')
-    ));
-    if (badSelectedTake) {
-      problems.push(`Selected take marked bad for ${scene.label || scene.sceneId || 'shot'}.`);
-    }
   }
   return { problems, incompleteShots, lyricAnchors };
 }
@@ -922,6 +915,60 @@ export function carryStoryboardApproval(before, after, reason) {
     basis: basis.storyboard, shotsBasis: basis.storyboardShots, inputs: productionApprovalInputs(after).storyboard,
     carriedOver: { reason, at: new Date().toISOString() } } };
   return { ...after, productionReview: { ...after.productionReview, approvals } };
+}
+
+// Labeled inputs and values name a shot by its board position ("scene 3 timing").
+const SCENE_POSITION_KEY = /^scene (\d+) (.+)$/;
+
+/**
+ * Re-stamp the review bindings across a change that only puts the same shots in
+ * time order (#16117). The bases hash `scenes` by position, so without this the
+ * repair of a board stored out of time order would stale approvals and the
+ * rendered proof though nothing in the cut changed. Only a binding that held on
+ * `before` moves to `after`; a stale one stays stale. Position keys of an
+ * approval's recorded inputs and values follow their shots, so a later
+ * staleness check still names what changed since the approval.
+ */
+export function carryReviewThroughSceneOrder(before, after) {
+  const review = after.productionReview;
+  if (!review) return after;
+  const was = productionReviewBasis(before);
+  const now = productionReviewBasis(after);
+  const wasInputs = productionApprovalInputs(before);
+  const nowInputs = productionApprovalInputs(after);
+  const newIndex = new Map((after.scenes || []).map((scene, i) => [scene.sceneId, i + 1]));
+  const position = new Map((before.scenes || []).map((scene, i) => [i + 1, newIndex.get(scene.sceneId) ?? i + 1]));
+  const moveKey = (key) => {
+    const match = SCENE_POSITION_KEY.exec(key);
+    return match ? `scene ${position.get(Number(match[1])) ?? match[1]} ${match[2]}` : key;
+  };
+  const moveKeys = (record) => Object.fromEntries(Object.entries(record).map(([key, value]) => [moveKey(key), value]));
+  // An order-sensitive input that held (the proof's take list) re-stamps; the rest move with their shots.
+  const carryInputs = (inputs, stage) => {
+    const moved = moveKeys(inputs);
+    for (const key of Object.keys(moved)) {
+      if (!SCENE_POSITION_KEY.test(key) && inputs[key] === wasInputs[stage][key]) moved[key] = nowInputs[stage][key];
+    }
+    return moved;
+  };
+  const carryApproval = (approval, stage) => ({ ...approval,
+    ...(approval.inputs && typeof approval.inputs === 'object' ? { inputs: carryInputs(approval.inputs, stage) } : {}),
+    ...(approval.values && typeof approval.values === 'object' ? { values: moveKeys(approval.values) } : {}) });
+  const approvals = review.approvals ? { ...review.approvals } : review.approvals;
+  const board = approvals?.storyboard;
+  if (board && (board.basis === was.storyboard || (!!was.storyboardShots && board.shotsBasis === was.storyboardShots))) {
+    approvals.storyboard = { ...carryApproval(board, 'storyboard'),
+      ...(board.basis === was.storyboard ? { basis: now.storyboard } : {}),
+      ...(board.shotsBasis && board.shotsBasis === was.storyboardShots ? { shotsBasis: now.storyboardShots } : {}) };
+  }
+  const excerpt = (after.excerpts || []).find((e) => e.id === review.proof?.excerptId);
+  const proofKey = (basis) => hash({ basis, excerptId: excerpt?.id, filename: excerpt?.filename });
+  if (approvals?.proof && excerpt && approvals.proof.basis === proofKey(was.proof)) {
+    approvals.proof = { ...carryApproval(approvals.proof, 'proof'), basis: proofKey(now.proof) };
+  }
+  const next = { ...review, ...(approvals ? { approvals } : {}) };
+  if (review.proof?.basis && review.proof.basis === was.proof) next.proof = { ...review.proof, basis: now.proof };
+  return { ...after, productionReview: next };
 }
 
 // A refreshed snapshot is re-inserted last so insertion order doubles as recency.

@@ -479,11 +479,26 @@ export function buildExternalRepositoryCompletionSection({ isTui = false, sentin
   );
 }
 
-export function buildCheckoutRecoveryCompletionSection({ sentinelPath } = {}) {
+function checkoutOwnershipLines(ownership) {
+  if (!ownership) return [];
+  const sessions = Array.isArray(ownership.sessions) ? ownership.sessions : [];
+  const commits = Array.isArray(ownership.portosCommits) ? ownership.portosCommits : [];
+  return [
+    '### Checkout ownership observed by PortOS',
+    sessions.length
+      ? `- Live interactive agent sessions with this checkout as their working directory: ${sessions.map(s => `pid ${s.pid} (status ${s.status})`).join('; ')}. Treat each as the operator's own session, not an unknown writer: do not change its work. If it blocks recovery, report blocked and name it as an interactive operator session with its status; PortOS holds recovery until it exits or the checkout settles.`
+      : '- No live interactive agent session has this checkout as its working directory.',
+    `- Commits whose reflog entry carries a \`portos-commit-\` action were made by PortOS itself, not by another writer${commits.length ? `: ${commits.join(', ')}` : ''}.`,
+    '',
+  ];
+}
+
+export function buildCheckoutRecoveryCompletionSection({ sentinelPath, ownership = null } = {}) {
   return [
     '## App Checkout Recovery Handoff',
     CHECKOUT_RECOVERY_GUIDANCE,
     '',
+    ...checkoutOwnershipLines(ownership),
     'After recovery reaches its verified final outcome or a precise blocker, write the completion sentinel and stop:',
     '',
     ...buildSentinelWriteSteps(1, sentinelPath, '   ## Recovery outcome\n   <verified checkout and preservation PR outcomes, or INCOMPLETE with the first unverified checkpoint>'),
@@ -621,10 +636,9 @@ function buildClaimOwnershipSection(agentId) {
     'This records selection only; it grants no checkout, merge or cleanup authority. Completion independently checks the recorded issue in the configured repository and the clean source checkout against the live default branch. Bound child claims always take precedence; no parked selection can hide unfinished siblings. A refusal or unreadable response is an unmet completion prerequisite, not permission to fabricate a claim. Pinned issues and runs that already bound a claim keep their existing binding workflow.',
     'Before this run (the parent, never a fan-out child) creates, adopts or checks out ANY claim worktree, bind that exact branch to this run — the pinned issue’s own `claim/…` branch, a tracking epic’s child, a slice split from an oversized issue, each issue a picker or swarm selects, or a claim worktree you are resuming. Replace BRANCH with the branch name and require a parsed JSON response with bound:true:',
     '```bash', command('bind'), '```',
-    'Immediately after creating that worktree, repeat the same bind command and require bound:true BEFORE editing or running work there. This records the server-observed physical checkout generation; a refusal means preserve it and report the blocker. An existing resumed checkout is captured by its initial bind.',
+    'Immediately after creating that worktree, repeat the same bind command and require bound:true BEFORE editing or running work there. This confirms the branch remains bound to this run; a refusal means preserve it and report the blocker. Binding reserves ownership without recording filesystem generations.',
     'A refusal, HTTP/auth/transport error or unreadable JSON means the branch is not yours: do not create or enter that worktree; report the reason. A binding lasts until that branch\'s delivery is complete, through publication, CI, merge or leave-open handoff and cleanup — never release a branch you are still finishing. Release a branch the moment its own PR/MR is confirmed MERGED and its checkout and local branch are removed, even while this run (a swarm parent, or any run holding several claims) keeps working on others: a later slice of the same issue reuses that branch name and stays refused while you hold it. Also release a branch you deliberately leave for another owner mid-run. Never release an open, unmerged, pending-merge or not-yet-retired branch:',
     '```bash', command('release'), '```',
-    'PortOS also frees a binding whose checkout this run recorded and has since retired (checkout, local branch and origin branch all gone) when another run binds that name; that backstop does not replace the release above.',
   ].join('\n');
 }
 
@@ -1083,7 +1097,7 @@ function buildManualPrCreateStep(step, { branchName, baseBranch, forgeCli = 'gh'
     '   if [ -z "$PUSH_REMOTE" ] || [ "$PUSH_REMOTE" = "." ]; then PUSH_REMOTE=origin; PUSH_REMOTE_SOURCE=default; fi',
     '   PUSH_REF=$(git config --get "branch.${BRANCH}.merge")',
     '   PUBLISH_ERROR="publish failed; refusing PR/MR"',
-    '   publish_reviewed_branch() { git push "$@" || { echo "$PUBLISH_ERROR" >&2; exit 1; }; }',
+    '   publish_reviewed_branch() { git push --no-follow-tags "$@" || { echo "$PUBLISH_ERROR" >&2; exit 1; }; }',
     '   if [ "$PUSH_REMOTE_SOURCE" = "branch.remote" ] && [ -n "$PUSH_REF" ]; then',
     '     if [ "$PUSH_REF" != "refs/heads/$BRANCH" ] && [ "$PUSH_REF" != "$BRANCH" ]; then echo "Configured upstream $PUSH_REMOTE/$PUSH_REF does not name $BRANCH; refusing to publish" >&2; exit 1; fi',
     '   fi',

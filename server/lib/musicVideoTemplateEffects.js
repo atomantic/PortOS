@@ -1,3 +1,7 @@
+/**
+ * Layered-template addition controls, sparse normalization and per-shot inheritance.
+ */
+
 /** Built-in layered-template additions, separate from chosen shot effects and film looks. */
 export const TEMPLATE_EFFECT_CONTROLS = Object.freeze([
   { id: 'beatReaction', label: 'Beat reaction', default: 1 },

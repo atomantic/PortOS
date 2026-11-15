@@ -1,4 +1,9 @@
-/** Shared SSE channel lifecycle for request-owned progress streams. */
+/**
+ *  Shared SSE channel lifecycle for request-owned progress streams.
+ *
+ * `createProgressChannels({ label, describeKey })` — shared GET/POST progress channel lifecycle with
+ * late subscriber replay, idle reservation reaping, and one active stream owner per key.
+ */
 import { attachSseClient, broadcastSse, SSE_CLEANUP_DELAY_MS } from './sseUtils.js';
 
 export const CHANNEL_IDLE_MS = 60_000;

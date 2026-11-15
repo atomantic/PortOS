@@ -1,3 +1,12 @@
+/**
+ * `begin()` → `isCurrent()`: a latest-request-wins guard.
+ *
+ * Each `begin()` supersedes earlier requests (and unmount supersedes all), so an older response
+ * resolving late can see `isCurrent() === false` and drop its setState. Use when: A load keyed on
+ * changing input (a debounced search, a `?subject=` route param) where responses can arrive out of
+ * order and overwrite the view the user has already moved to.
+ */
+
 import { useCallback, useEffect, useRef } from 'react';
 
 // Latest-request-wins guard for a load keyed on changing input (a search box, a

@@ -1,4 +1,11 @@
 /**
+ * Leaf (no imports) for the quota-burn dispatch-cap sentinel: `QUOTA_BURN_UNLIMITED_DISPATCHES` (-1)
+ * and `isUnlimitedDispatchCap`.
+ *
+ * Shared with the client quota-burn form; `quotaBurnConfig.js` re-exports both.
+ */
+
+/**
  * Quota-burn dispatch-cap sentinel — the `maxDispatchesPerWindow` value meaning
  * the window is not counted at all. -1 rather than 0/null: it stays a number for
  * the client's `<input type="number">` and the run log, and it can never be

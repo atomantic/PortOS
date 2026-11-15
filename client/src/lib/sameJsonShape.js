@@ -1,3 +1,6 @@
+// `sameJsonShape(prev, next)` — JSON.stringify-based equality for `useAutoRefetch`'s `compare` option
+// on small, deterministically-shaped poll payloads.
+//
 // Stringified-shape equality for `useAutoRefetch`'s `compare` option and other
 // "skip the re-render when nothing changed" callers. JSON.stringify is the
 // right tool when:

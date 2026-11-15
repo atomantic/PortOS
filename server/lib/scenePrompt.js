@@ -1,6 +1,8 @@
 /**
  * Shared scene-prompt composer + bible matchers. Pure ESM, no Node-only
  * deps — mirrored to `client/src/lib/scenePrompt.js` for the client bundle.
+ *
+ * Scene-prompt composer + bible matchers (chars/places/objects in text).
  */
 
 import { mapCanonDescriptorFragments, richCanonDescriptorFragments } from './canonPrompt.js';

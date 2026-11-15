@@ -1,5 +1,12 @@
 // First-run missions (issue #5640).
 //
+// Dashboard first-run missions (#5640). `FIRST_RUN_MISSIONS` is the four-slice catalog (Creative
+// studio → `/start-story`, Personal knowledge → `/brain/inbox`, Run my machines → `/apps`, Delegate
+// work → `/cos/tasks`) plus the matching Settings → Features ids each mission writes.
+// `shouldShowFirstRunCard` / `parseFirstRunQueryParam` / `featuresToEnable` are the show/hide and
+// write-set helpers — `/` only, session dismiss vs durable `hideFirstRunCard`, `?firstRun=` force
+// on/off. Pure / React-free; the card lives in `components/onboarding/`.
+//
 // Pure data + visibility helpers for the dashboard first-run card. One mission
 // per top-level PortOS slice that has a natural entry point. A mission writes
 // ONLY the matching Settings → Features toggles (via the existing features

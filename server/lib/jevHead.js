@@ -1,6 +1,15 @@
 /**
  * Static contract for a PROJECT-SPECIFIC trained head on the frozen jev encoder.
  *
+ * The artifact contract for a project-specific head trained on the FROZEN jev encoder: `jevHeadSchema`
+ * + `parseJevHead` (shape, chained layer widths, a bounded parameter count so weights stay inspectable
+ * JSON), `isHeadCompatible` (exact encoder-revision equality — a different checkpoint is a different
+ * vector space), and THE ADOPTION GATE, `headBeatsBaselines` / `headAdoptionBlocker`: a head must beat
+ * BOTH the stock zero-shot classifier and the majority class on the held-out gold set, strictly, or it
+ * cannot be adopted through any surface. A head emits the checkpoint's own three labels, so every
+ * abstention floor downstream is unchanged. Also `JEV_HEAD_SLUG` and the train/adopt route schemas.
+ * Pure; the store is `services/jevHeads.js`.
+ *
  * Phase 1 of scope adherence (#7643) scores a change against the repository's
  * own `PRD.md` / `GOALS.md` clauses with the checkpoint's stock zero-shot NLI
  * classifier. This module describes the optional alternative: a small head fit

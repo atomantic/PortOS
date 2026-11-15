@@ -1,4 +1,11 @@
 /**
+ * `parseHumanReset` turns a provider CLI's human reset string into ISO 8601 (call it from the adapter).
+ *
+ * `normalizeResetAt`/`hoursUntilReset` compute time remaining without treating unknown values as
+ * imminent resets; `parseObservedReset` pulls the reset a provider stated in its own refusal text, and
+ * `isObservedBlockActive` is the shared "is that refusal still holding?" predicate every
+ * observed-refusal ledger uses.
+ *
  * Normalize the reset times emitted by the provider quota adapters. A missing
  * or ambiguous reset is deliberately represented as null: a scheduled quota
  * burn must park rather than guess that a provider is about to reset.

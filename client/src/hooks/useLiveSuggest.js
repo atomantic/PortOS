@@ -1,3 +1,13 @@
+/**
+ * Hook providing a post-typing debounce for an imperative panel trigger: `{ registerTrigger,
+ * scheduleSuggest }` fires the registered function after a quiet period.
+ *
+ * Post-typing debounce for an imperative panel trigger: `{ registerTrigger, scheduleSuggest }` re-arms
+ * one `debounceMs` timer per keystroke and fires the registered fn only while `enabled` and still
+ * mounted. Use when: An editor that asks a sibling AI panel to suggest once the writer pauses
+ * (WorkEditor ↔ LiveContinuationPanel).
+ */
+
 import { useCallback, useEffect, useRef } from 'react';
 import useMounted from './useMounted';
 

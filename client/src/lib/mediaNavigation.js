@@ -1,3 +1,7 @@
+/**
+ * `getAdjacentMedia(items, item)` — prev/next computation for lightboxes.
+ */
+
 export function getAdjacentMedia(items, item) {
   const list = Array.isArray(items) ? items : [];
   const key = item?.key;

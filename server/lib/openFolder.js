@@ -1,6 +1,9 @@
 /**
  * Cross-platform "open folder in system file manager" helper.
  *
+ * `openFolderInSystemExplorer(localPath)` — cross-platform "open in Finder/Explorer/Nautilus" via
+ * detached spawn; child `error` handler prevents spawn failures from crashing the process.
+ *
  * Extracted from routes/brain.js POST /links/:id/open-folder.
  * The child process is detached and unref'd so the spawned file manager
  * outlives the Node process without blocking it. The child 'error' handler

@@ -1,6 +1,19 @@
 /**
  * The `.env` half of provisioning the vLLM Qwen3.8-27B compose project.
  *
+ * The `.env` half of provisioning that same project: `generateVllmApiKey()`, `isWsl2Engine()` (win32
+ * counts — Docker Desktop's engine IS a WSL2 VM), `vllmEnvDefaults({apiKey, wsl2})` → the load-bearing
+ * tool-parser/pin-memory/alloc-conf settings, `parseEnvContents(contents)` → a key→value Map (keyed on
+ * *mention*, so a commented-out key reads as absent and `KEY=` as an intentional empty), and the two
+ * writers over one shared newline guard: `mergeEnvFileContents(existing, defaults)` → `{contents,
+ * added, kept, effective}` is **additive only** — an operator's existing key or tuning is never
+ * overwritten, and `effective` reports what the container will actually read — while
+ * `upsertEnvLine(contents, key, value)` REPLACES one key's line, for a value PortOS owns and
+ * re-derives (`vllmQwenProject.js`'s recorded project directory); its replacement is a function, not a
+ * string, so a `$`-sequence in the value is written literally. Plus `WSL2_PREPARE_MIN_BYTES` /
+ * `WSL2_PREPARE_CONFIG_HINT` for the ceiling `prepare` needs (detected and warned about, never
+ * raised).
+ *
  * `vllmQwenProject.js` answers "is this project prepared?" by reading directory
  * entries. This module answers the next question — "what must its `.env` say
  * before `docker compose build` is worth running?" — and nothing else: it

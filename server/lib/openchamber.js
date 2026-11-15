@@ -1,6 +1,9 @@
 /**
  * Per-CLI conventions for OpenChamber's control CLI (binary: `openchamber`).
  *
+ * OpenChamber control-CLI identity, `session create` headless argv, `provider/model` gate, and
+ * `--dir`/`--prompt` spawn-time delivery.
+ *
  * OpenChamber (`@openchamber/web`, MIT) is an agentic development environment
  * built ON TOP of OpenCode: a long-running workspace server with desktop, web,
  * VS Code and mobile surfaces. That makes it a different SHAPE of harness from

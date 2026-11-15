@@ -1,6 +1,14 @@
 /**
  * Which runtime is this process? Dependency-free on purpose.
  *
+ * `isTestRunner()` — NODE_ENV=test **or** the VITEST env var, so a run that dropped NODE_ENV is still
+ * armed. `isVitestRunner()` narrows to a real Vitest worker; `isSmokeBoot()` (`SMOKE_BOOT_ENV`) marks
+ * the server boot smoke, whose boot skips schedulers, agent recovery, and external integrations
+ * (#8343). Dependency-free and deliberately apart from `db.js`, which used to own it: the lowest-level
+ * file primitives need the same answer and must not pull in `pg`, and the many suites spelling
+ * `vi.mock('../lib/db.js', () => ({ query }))` used to strip it out of the graph for every other
+ * consumer.
+ *
  * Kept apart from every module that has an opinion about storage, paths, or
  * the database, because the lowest-level file primitives (`fileCore.js`) and
  * the highest-level backend selectors both need this answer. `db.js` used to

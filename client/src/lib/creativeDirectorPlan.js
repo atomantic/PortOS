@@ -1,5 +1,9 @@
 // Pure helpers for the Creative Director studio Plan board (CDO Phase 4, #2186).
 //
+// Pure presentation helpers for the CD studio Plan board (CDO Phase 4) — annotate `plan.steps[]` with
+// tool cost-class/timing/approval flags, cost/status summaries, owning-surface deep links, status/cost
+// badge tone maps.
+//
 // The Plan tab renders a directive project's `plan.steps[]` as a step board with
 // live status, cost-class badges (hydrated from the creative-tool catalog), run
 // timing, and blocked-step triage. These helpers keep that presentation logic

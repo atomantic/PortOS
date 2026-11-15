@@ -1,3 +1,10 @@
+/**
+ * Resolves one active alternate per character name and excludes references owned by inactive cast.
+ *
+ * `musicVideoPrevizForActiveCast(project)` is the previz with every unused alternate's ids read as
+ * the chosen one (cached per previz and cast).
+ */
+
 /** One active interpretation per named character; older projects choose the first. */
 export function activeMusicVideoSubjects(concept) {
   const subjects = concept?.subjects || [];

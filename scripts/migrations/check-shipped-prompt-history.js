@@ -5,30 +5,26 @@ import { fileURLToPath } from 'url';
 import { inspectShippedPromptHistory } from './shippedPromptHistory.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const result = await inspectShippedPromptHistory({
-  repoRoot,
-  migrationsDir: join(repoRoot, 'scripts', 'migrations'),
-  stageDir: join(repoRoot, 'data.reference', 'prompts', 'stages'),
-});
+const result = await inspectShippedPromptHistory({ repoRoot });
 
 if (result.skipped) {
   const inCi = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
   if (inCi) {
-    console.error(`❌ Shipped stage-prompt history guard requires full git history in CI: ${result.skipped}`);
+    console.error(`❌ Shipped prompt history guard requires full git history in CI: ${result.skipped}`);
     process.exitCode = 1;
   } else {
-    console.log(`⏭️ Skipping shipped stage-prompt history guard: ${result.skipped}`);
+    console.log(`⏭️ Skipping shipped prompt history guard: ${result.skipped}`);
     process.exit(0);
   }
 } else if (result.stranded.length) {
   for (const { file, hash, commit } of result.stranded) {
     console.error(
-      `❌ ${file}: historical hash ${hash} from ${commit.slice(0, 12)} is not accepted by a prompt migration`,
+      `❌ ${file}: historical hash ${hash} from ${commit.slice(0, 12)} is not retired in data.reference/prompts/shipped-hashes.json — run node scripts/regen-shipped-prompt-hashes.js, or restore the dropped hash`,
     );
   }
   process.exitCode = 1;
 } else {
   console.log(
-    '✅ Every historical shipped stage-prompt body is accepted by a prompt migration',
+    '✅ Every historical shipped prompt body is current or retired in shipped-hashes.json',
   );
 }

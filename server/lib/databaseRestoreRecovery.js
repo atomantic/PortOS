@@ -1,10 +1,15 @@
 /**
- * Durable, machine-local journal for ONE in-flight snapshot database restore
- * (#9725). Its presence is the admission fence: while the file exists, only
- * the matching recovery operation may use the database, in this process and
- * across restart. The record carries what recovery needs and nothing else —
- * the operation id, the admitted dump digest, the ORIGINAL pre-replay sync
- * feed positions and the pending stage. No credentials, no copied records.
+ * Durable, machine-local journal for ONE in-flight snapshot database restore (#9725).
+ *
+ * `createDatabaseRestoreRecovery(dataDir?)` durable machine-local journal + admission fence for one
+ * in-flight snapshot database restore (#9725): operation id, dump digest, ORIGINAL pre-replay feed
+ * positions and stage (`replaying` → `repairing`), published before replay and released only after
+ * repair or a proven rollback; damaged state fails closed.
+ *
+ * Its presence is the admission fence: while the file exists, only the matching recovery operation may
+ * use the database, in this process and across restart. The record carries what recovery needs and
+ * nothing else — the operation id, the admitted dump digest, the ORIGINAL pre-replay sync feed
+ * positions and the pending stage. No credentials, no copied records.
  *
  * Stages:
  *   replaying — published BEFORE the destructive replay. Whether the replay

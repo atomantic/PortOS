@@ -1,5 +1,20 @@
 // Search / sort ordering for the Media Collections grid (#3283).
 //
+// Search / sort ordering for the Media Collections grid (#3283) and the `CollectionPickerShell`
+// dropdown (#3312): `applyCollectionView(collections, { query, sort })` filters via `mediaSearch.js`'s
+// AND-token matcher over name+description and orders synthetic "Unsorted" → non-empty-or-user-created
+// → auto-generated empties, then by `COLLECTION_SORTS` (`updated` / `name` / `count`,
+// `normalizeCollectionSort` coerces an unknown/URL value); keys are derived once per record, not per
+// comparison. "Hide empty" is deliberately NOT a parameter — the page owns that one predicate
+// (`collectionItemCount(c) > 0`) because it also needs the pre-filter count. `isAutoCollection(c)`
+// recognizes a machine-created collection from ANY of four independent markers (`AUTO_NAME_PREFIXES`,
+// `Auto-created…`/`Auto-generated…` description, `uc-`/`sc-` id, universe/series link) so a record
+// predating a given marker still classifies; `splitCollectionName(name)` lifts the shared `Creative
+// Director: ` / `Writers Room: ` / `Universe: ` / `Series: ` prefix into a badge label so the
+// distinguishing tail survives truncation, and name sorting uses that stripped title. **Adding a
+// server-side auto-creator means adding its prefix here** or its collections silently rank as
+// user-created. Pure — no React.
+//
 // The grid is dominated by collections nothing created on purpose: every
 // Creative Director project, Writers Room render batch, and universe/series
 // render bucket auto-files itself as a collection, so a user with a handful of

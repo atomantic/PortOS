@@ -31,6 +31,7 @@ import { staticImportClosure } from '../server/lib/staticImportGraph.js';
 import { destroyGitSandbox, makeGitSandbox } from '../server/lib/gitTestRepo.js';
 import { readTestProcesses } from './lib/testOwnedProcesses.js';
 import { OWNER_FILE, STALE_ROOT_AGE_MS, sweepStaleRunRoots } from './lib/vitestStaleRunRoots.js';
+import { readCiJobs } from './lib/ciWorkflowJobs.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 import { buildCiTestPlan, collectPlanInputs } from './ci-test-plan.js';
 
@@ -137,7 +138,7 @@ it('hands only real client fixture consumers to Vitest for a shared browser clea
     // Real comment-heavy consumers and fixture templates must resolve without
     // retaining hundreds of unrelated files in the actual runner handoff.
     for (const test of ['client/src/components/sprites/WalkWorkflow.test.jsx', 'client/src/components/sprites/TrackWorkflow.test.jsx',
-      'client/src/services/apiRounds.test.js', 'client/src/a11yConventions.test.js']) {
+      'client/src/services/apiRounds.test.js', 'client/src/a11y/controlNames.conventions.test.js']) {
       expect(inputs.clientTestDependencies[test], test).toEqual(expect.any(Array));
       expect(plan.client.files, test).not.toContain(test);
     }
@@ -327,7 +328,7 @@ async function createRunnerSandbox(files) {
 }
 
 it.each(['files', 'full'])('validates the guard proof before the actual %s Vitest selection with the persistent memo off', async (mode) => {
-  const guard = 'server/lib/index.test.js';
+  const guard = 'server/lib/moduleSummaries.test.js';
   const { scratch: fixture, repo: root } = await createRunnerSandbox([guard, 'scripts/example.test.js']);
   try {
     installFakeNpm(fixture, 'if (process.env.PORTOS_PREGATE_GUARDS) throw new Error("Guard proof leaked to test process");\n' + REPORTING_NPM);
@@ -343,8 +344,8 @@ it.each(['files', 'full'])('validates the guard proof before the actual %s Vites
     if (mode === 'files') expect(result.stdout).toContain('Reused 1 structural guards');
     else expect(result.stdout).not.toContain('Reused');
     const { selection } = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('{"args"')));
-    if (mode === 'files') expect(selection.include).not.toContain('lib/index.test.js');
-    else expect(selection.include).toContain('lib/index.test.js');
+    if (mode === 'files') expect(selection.include).not.toContain('lib/moduleSummaries.test.js');
+    else expect(selection.include).toContain('lib/moduleSummaries.test.js');
     expect(selection.include).toContain('../scripts/example.test.js');
   } finally {
     await destroyGitSandbox(fixture);
@@ -507,7 +508,7 @@ it('partitions complete browser profiles before per-shard memo reuse and preserv
 }, 150_000);
 
 it('keeps explicit browser selectors with their owner after structural guard reuse', async () => {
-  const guard = 'server/lib/index.test.js';
+  const guard = 'server/lib/moduleSummaries.test.js';
   const browser = 'server/services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js';
   const ordinary = 'scripts/example.test.js';
   const { scratch: fixture, repo: root } = await createRunnerSandbox([guard, browser, ordinary]);
@@ -559,7 +560,7 @@ it('keeps explicit browser selectors with their owner after structural guard reu
 });
 
 it('keeps explicit DB selectors with the DB runner after structural guard reuse and test memo subtraction (#13455)', async () => {
-  const guard = 'server/lib/index.test.js';
+  const guard = 'server/lib/moduleSummaries.test.js';
   const dbTest = 'server/services/githubNotifications.db.test.js';
   const ordinary = 'scripts/example.test.js';
   const { scratch: fixture, repo: root } = await createRunnerSandbox([guard, dbTest, ordinary]);
@@ -616,7 +617,9 @@ it('rejects empty browser coverage except explicitly deferred smoke-only inputs'
 });
 
 describe('ci.yml shard wiring', () => {
-  const runners = Object.entries(workflowJobs(WORKFLOW)).filter(([, body]) => /(?:run|watch)-ci-tests\.js/.test(body));
+  // Composite actions expanded: these contracts hold for the steps GitHub runs.
+  const CI_JOBS = readCiJobs();
+  const runners = Object.entries(CI_JOBS).filter(([, body]) => /(?:run|watch)-ci-tests\.js/.test(body));
 
   it('builds every test runner matrix from the planner and hands each slice to the runner', () => {
     expect(runners.map(([id]) => id).sort()).toEqual(['browser', 'client', 'database', 'server', 'windows-server']);
@@ -635,7 +638,7 @@ describe('ci.yml shard wiring', () => {
   });
 
   it('memoizes the serial database job through the db scope', () => {
-    const body = workflowJobs(WORKFLOW).database;
+    const body = CI_JOBS.database;
     const start = body.indexOf('- name: Run DB-backed tests (portos_test)');
     const step = body.slice(start, body.indexOf('- name:', start + 1));
     expect(step).toContain('run: node scripts/run-ci-tests.js db');
@@ -647,7 +650,7 @@ describe('ci.yml shard wiring', () => {
   });
 
   it('runs the planner-selected browser suites on their own job with prerequisites required (#10312)', () => {
-    const body = workflowJobs(WORKFLOW).browser;
+    const body = CI_JOBS.browser;
     expect(body).toContain("if: needs.impact.outputs.browser_files != '[]'");
     const start = body.indexOf('- name: Run cross-workspace browser suites');
     expect(start).toBeGreaterThan(0);
@@ -667,7 +670,7 @@ describe('ci.yml shard wiring', () => {
   });
 
   it('uploads every failed synthetic template comparison without including arbitrary diagnostics', () => {
-    const body = workflowJobs(WORKFLOW).browser;
+    const body = CI_JOBS.browser;
     const start = body.indexOf('- name: Retain synthetic template parity pixels and media state');
     expect(start).toBeGreaterThan(0);
     const step = body.slice(start, body.indexOf('- name:', start + 1));
@@ -681,7 +684,7 @@ describe('ci.yml shard wiring', () => {
   });
 
   it('deduplicates only Linux browser ownership and runs PR browser suites as smoke', () => {
-    const jobs = workflowJobs(WORKFLOW);
+    const jobs = CI_JOBS;
     expect(jobs.server).toContain('PORTOS_CI_BROWSER_OWNER: unit');
     expect(jobs['windows-server']).not.toContain('PORTOS_CI_BROWSER_OWNER');
     expect(jobs.browser).toContain("github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full'");
@@ -709,7 +712,7 @@ describe('ci.yml shard wiring', () => {
     // lint-only diff from starting a test job; the `lint` job's own comment
     // says why it cannot simply move to a different shard. Both halves are
     // pinned here: no runner job invokes the linter, and lint is not a matrix.
-    const jobs = workflowJobs(WORKFLOW);
+    const jobs = CI_JOBS;
     for (const [id, body] of runners) expect(body, id).not.toContain('run-ci-lint.js');
     expect(jobs.lint).toBeTruthy();
     expect(jobs.lint).toContain('run: node scripts/run-ci-lint.js');
@@ -729,8 +732,8 @@ describe('ci.yml shard wiring', () => {
 
 describe('toRunnerPath', () => {
   it('maps repo paths onto each workspace runner root', () => {
-    expect(toRunnerPath('client', 'client/src/lib/index.test.js')).toBe('./src/lib/index.test.js');
-    expect(toRunnerPath('server', 'server/lib/index.test.js')).toBe('./lib/index.test.js');
+    expect(toRunnerPath('client', 'client/src/lib/moduleSummaries.test.js')).toBe('./src/lib/moduleSummaries.test.js');
+    expect(toRunnerPath('server', 'server/lib/moduleSummaries.test.js')).toBe('./lib/moduleSummaries.test.js');
     expect(toRunnerPath('server', 'scripts/checkNodeVersion.test.js')).toBe('../scripts/checkNodeVersion.test.js');
     expect(toRunnerPath('client', 'server/lib/postScoring.js')).toBe('../server/lib/postScoring.js');
   });

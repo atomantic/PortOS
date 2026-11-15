@@ -1,3 +1,7 @@
+/**
+ * Shared finite motion/refine multiplier schema and legacy-default predicate for A2V user LoRAs.
+ */
+
 import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
 

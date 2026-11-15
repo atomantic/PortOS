@@ -1,6 +1,11 @@
 /**
  * JSON transport limits for legacy base64 uploads.
  *
+ * Single source of truth for upload size caps — `JSON_BODY_LIMIT`/`JSON_BODY_LIMIT_BYTES` (the
+ * express.json limit applied in `index.js`), `MAX_BASE64_UPLOAD_BYTES` derived from it (base64 ×4/3,
+ * so a bigger per-route cap is unreachable), `MAX_SCREENSHOT_BYTES`. Mirrored client-side as
+ * `JSON_UPLOAD_MAX_FILE_SIZE`.
+ *
  * Legacy callers send files base64-encoded inside a JSON body, where the
  * Express body-parser limit sets the transport ceiling. Multipart uploads
  * stream files separately and are not constrained by this JSON limit.

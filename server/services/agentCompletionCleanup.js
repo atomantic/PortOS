@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { outsideGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 import { withDeliveryActivity } from './agentDeliveryActivity.js';
 import { storeCompletionData, readCompletionData, completionReplayInput } from './agentCompletionData.js';
@@ -52,7 +51,6 @@ import { cleanupAgentWorktree, spawnMergeRecoveryTask, releaseRetryHold } from '
 import { PR_CREATION, resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
 import { resolvePrOpenedBy, PR_OPENED_BY } from '../lib/slashdoInvocation.js';
 import { isPublicReviewRestrictedProfile, publicReviewPostureForProfile } from '../lib/agentExecutionProfiles.js';
-import { acknowledgeCompletionSentinel, completionSentinelPresent } from './agentCompletionSentinel.js';
 
 const ROOT_DIR = PATHS.root;
 
@@ -439,8 +437,7 @@ async function performCompletionCleanupSteps(context, onStepError) {
       await persist({ stages: { [key]: stages[key] } });
       return value;
     } catch (err) {
-      const deferred = ['checkout-capture-pending', 'checkout-retirement-pending',
-        'completion-sentinel-generation-pending', 'completion-sentinel-generation-changed'].includes(err.message);
+      const deferred = ['checkout-capture-pending', 'checkout-retirement-pending'].includes(err.message);
       if (!deferred) firstError ||= err;
       stages[key] = { status: deferred ? 'held' : 'failed', retryable: deferred || retryable, reason: err.message };
       await persist({ stages: { [key]: stages[key] } }).catch(() => {});
@@ -489,7 +486,6 @@ async function performCompletionCleanupSteps(context, onStepError) {
   }
   const cleanupWarnings = preserveAuditEvidence ? [] : await runStep('worktree', 'Worktree cleanup', async () => {
     if (state?.metadata?.checkoutCapture?.status === 'pending') throw new Error('checkout-capture-pending');
-    if (await completionSentinelPresent(context.agentId, state?.metadata?.workspacePath)) throw new Error('completion-sentinel-generation-pending');
     return completeWorktreeCleanup(context);
   },
     // Workspace retirement revalidates identity, ownership, delivery and bytes on
@@ -713,18 +709,8 @@ export async function removeCompletionSentinel({ agentId, agent, agentState, tas
   if (typeof agentId !== 'string' || doneSentinelName(agentId) === DONE_SENTINEL_NAME) return;
   const workspace = agentState?.metadata?.workspacePath || agent?.workspacePath || null;
   if (!workspace) return;
-  const receipt = agentState?.metadata?.completionSentinel;
-  // No sentinel is harmless. An occupied marker without ingestion evidence is
-  // not acknowledged, even for a completed record predating this protocol.
-  if (!receipt && !await tryReadFile(resolveDoneSentinelPath(workspace, agentId))) return;
-  const payload = agentState?.metadata?.completionSentinelData;
-  if (payload) {
-    const contents = await readCompletionData(agentState, payload);
-    if (typeof contents !== 'string' || createHash('sha256').update(contents).digest('hex') !== receipt?.sha256) {
-      throw new Error('completion-ingestion-data-unverified');
-    }
-  }
-  await acknowledgeCompletionSentinel({ agentId, workspace, receipt });
+  // The sentinel was ingested by persistCompletionSummary before cleanup runs.
+  await rm(resolveDoneSentinelPath(workspace, agentId), { force: true });
 }
 
 async function completeWorktreeCleanup({ agentId, task, effectiveSuccess, prOwnership, outputBuffer, prClaimVerified, branchProvenEmpty }) {

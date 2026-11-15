@@ -1,3 +1,7 @@
+/**
+ * Shared editable redesign fields and per-field limits for catalog creative conversations.
+ */
+
 import { BIBLE_LIMITS as L } from './bibleLimits.js';
 
 // Shared by the conversation, editor and output validator: proposals never

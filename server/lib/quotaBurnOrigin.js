@@ -2,6 +2,20 @@
  * Quota-burn PROVENANCE carried on an on-demand scheduled-task request, and the
  * metadata an on-demand engine stamps from it.
  *
+ * Quota-burn PROVENANCE on an on-demand scheduled-task request and on the task it produces.
+ * `normalizeQuotaBurnProvenance` reads the request block (burn-step id always required, plus an
+ * attribution — the family whose window is spent, OR the manual `maintenanceRunId` alone when the run
+ * is pinned outside every subscription family — the limiting-window reset and the
+ * provider/model/effort overrides); `QUOTA_BURN_PROVENANCE_FIELDS` is the ONE block definition every
+ * persistence and projection hop derives from, spread by `quotaBurnTaskMetadata` (flat task-metadata
+ * keys), `quotaBurnAgentMetadata` (the agent projection) and read back by `quotaBurnProvenance` /
+ * `hasQuotaBurnProvenance`, which accept both the flat keys and a nested `quotaBurn` block;
+ * `burnPlanOwnsTask` / `burnPlanOwnsAgent` are the ONE rule for whether the family plan (not a manual
+ * maintenance run) owns a burn-provenanced task. `isManualOnDemandRequest` distinguishes explicit runs
+ * from automated cadence gates. `onDemandRequestMetadata` is the single spread both on-demand engines
+ * apply. Import-light on purpose — `taskScheduleConstants.js` declares the origin string and must not
+ * drag the quota-burn config graph.
+ *
  * A burn step no longer queues its own synthesized task: it asks the schedule to
  * run a task the user already owns (`quotaBurnInvoke.js` →
  * `taskSchedule.triggerOnDemandTask` with `origin: 'quota-burn'`). Acceptance is

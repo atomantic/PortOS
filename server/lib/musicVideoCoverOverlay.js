@@ -1,6 +1,13 @@
 /**
  * Music Video cover lettering, as a pure function of a song's cover design.
  *
+ * Music Video cover lettering (#10345): `COVER_DESIGN_OPTIONS` / `DEFAULT_COVER_DESIGN`,
+ * `normalizeCoverDesign(design, { fonts })` (accepts every stored design; a `font:<id>` typeface only
+ * when that uploaded font is listed), `coverOverlaySvg({ title, tag, design, widths, fonts })` and the
+ * `coverFontSpec` / `fontAttrs` / `titleLinesFor` / `tagTextFor` helpers the width probe reads. Pure;
+ * the server render (`coverArtCompose.js`) and the client's live Lettering preview run this one
+ * layout.
+ *
  * The design vocabulary (`COVER_DESIGN_OPTIONS`), the normalizer that accepts
  * any stored design, and `coverOverlaySvg`, which lays the song title and
  * artist tag out as one SVG. Pure and dependency-free so the server render

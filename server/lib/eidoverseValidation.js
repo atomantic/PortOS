@@ -1,3 +1,11 @@
+// Zod schemas for Eidoverse world projections: the `EIDOVERSE_PROJECTION_SOURCE_KEYS` allowlist and
+// V1/V2 projection recipes with path-escape guards.
+//
+// Eidoverse world-projection schemas — the `EIDOVERSE_PROJECTION_SOURCE_KEYS` allowlist, the V1/V2
+// projection recipe union (includes/assets/terrain/scale/districts/environment, with the `..`-escape
+// guard on every asset path), and the world augment/say/config-patch route bodies (incl. the 8KB
+// augment-argument cap). Split out of `validation.js` (#5698), which re-exports it.
+//
 // =============================================================================
 // EIDOVERSE WORLD PROJECTION
 // =============================================================================

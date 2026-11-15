@@ -1,5 +1,13 @@
 // Confirmed draft delivery through the authenticated Outlook / Teams browser tab.
 //
+// Confirmed Outlook/Teams draft delivery through the authenticated browser tab, as pure helpers:
+// `planDelivery` (deliverability + intended recipients/thread, run BEFORE a draft is claimed),
+// `buildComposePhaseScript` (probe/open/fill/submit/discard CDP scripts, args as JSON),
+// `classifySendOutcome` (confirmed only on a closed compose surface plus a fresh provider signal;
+// anything else after the single submit click is `unknown`), `recipientsMatch`,
+// `checkAccountIdentity`, and overridable `COMPOSE_SELECTOR_DEFAULTS`/`resolveComposeConfig`. Defaults
+// are unvalidated against a live mailbox.
+//
 // Everything here is pure: it plans a delivery, builds the scripts the CDP page
 // evaluates, and judges what the page reported. The I/O (finding the tab, running
 // each phase, serializing sends) lives in `services/messagePlaywrightSync.js`.

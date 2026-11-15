@@ -2,6 +2,13 @@
  * Scrub credential-SHAPED token values out of free text bound for an LLM
  * provider or a world-readable artifact.
  *
+ * `scrubSecretTokens(text)` — replace credential-SHAPED substrings (prefixed API keys, GitHub/Slack
+ * tokens, JWTs, AWS key ids, pasted Bearer headers, 48+-char hex) with `[REDACTED]` in free text bound
+ * for an LLM provider or a world-readable artifact; `scrubSecretTokensDeep(value)` walks arrays/plain
+ * objects and scrubs every string value. Value-side counterpart to the operator-action ledger's
+ * key-based `redactPayload` and `commandSecurity.js#redactOutput`'s JSON patterns; conservative so
+ * prose, 40-hex git SHAs, and short ids survive.
+ *
  * The operator-action ledger already drops credential-shaped KEYS at record
  * time (`services/userActions.js#redactPayload`), but free-text fields —
  * summaries, target names — can carry a pasted token by VALUE, where no key

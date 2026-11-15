@@ -61,7 +61,7 @@ const bridgeEffects = vi.hoisted(() => ({
 }));
 vi.mock('../services/telegramBridge.js', () => bridgeEffects);
 
-import { authGate, hostControlRouteGate, hostControlBodyGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import telegramRoutes from './telegram.js';
 
@@ -71,7 +71,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/telegram', telegramRoutes);
   const settingsRouter = express.Router();
   settingsRouter.put('/', (req, res) => {
@@ -215,7 +215,7 @@ describe('Telegram bot, bridge and settings operator authority (#11431)', () => 
     expect(telegramEffects.sendMessage).not.toHaveBeenCalled();
   });
 
-  it('gates the telegram slice on PUT /api/settings and PATCH /api/settings/slice', async () => {
+  it('gates every settings write for remote callers and applies telegram and other slices for a local caller', async () => {
     const remoteApp = appFor('192.0.2.10');
 
     const putRemote = await request(remoteApp).put('/api/settings').send({ telegram: { chatId: 'attacker-chat' } });
@@ -229,18 +229,26 @@ describe('Telegram bot, bridge and settings operator authority (#11431)', () => 
     expect(patchRemote.status).toBe(403);
     expect(patchRemote.body.code).toBe('HOST_CONTROL_FORBIDDEN');
 
-    // Safe / non-host-control slice stays open to remote callers
-    const safePut = await request(remoteApp).put('/api/settings').send({ location: { city: 'Test' } });
-    expect(safePut.status).toBe(200);
+    // Settings writes are gated whole, whichever slice they touch.
+    const otherSliceRemote = await request(remoteApp).put('/api/settings').send({ location: { city: 'Example City' } });
+    expect([otherSliceRemote.status, otherSliceRemote.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect(currentSettings.telegram.chatId).toBe('12345678');
+    expect(currentSettings.location).toBeUndefined();
 
     const localApp = appFor('127.0.0.1');
     const putLocal = await request(localApp).put('/api/settings').send({ telegram: { chatId: 'local-chat' } });
     expect(putLocal.status).toBe(200);
+    expect(currentSettings.telegram.chatId).toBe('local-chat');
+
+    const otherSliceLocal = await request(localApp).put('/api/settings').send({ location: { city: 'Example City' } });
+    expect(otherSliceLocal.status).toBe(200);
+    expect(currentSettings.location).toEqual({ city: 'Example City' });
 
     const patchLocal = await request(localApp).patch('/api/settings/slice').send({
       slicePath: 'telegram',
       partial: { chatId: 'local-chat-2' },
     });
     expect(patchLocal.status).toBe(200);
+    expect(currentSettings.telegram).toEqual({ chatId: 'local-chat-2' });
   });
 });

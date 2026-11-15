@@ -12,14 +12,19 @@ const owners = vi.hoisted(() => vi.fn(async () => []));
 vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-refresh-inventory-'),
 }));
+vi.mock('./repoCleanupObservation.js', async original => {
+  const actual = await original();
+  return { ...actual, readCheckoutPathPresence: vi.fn(actual.readCheckoutPathPresence), readLocalBranchPresence: vi.fn(actual.readLocalBranchPresence) };
+});
 vi.mock('./apps.js', () => ({ getAppById: getApp }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: owners }));
 vi.mock('./agentState.js', () => ({ getActiveAgentIds: () => new Set() }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
 vi.mock('./supersededLedger.js', async importOriginal => ({ ...await importOriginal(), readVerdictLedger: async () => [] }));
 
+import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
 import { PATHS } from '../lib/paths.js';
-import { getBranchReconcileOutcome, recordBranchReconcileOutcome } from './branchReconcileOutcome.js';
+import { getBranchReconcileOutcome, getBranchReconcileInventory, recordBranchReconcileOutcome } from './branchReconcileOutcome.js';
 import { refreshBranchReconcileInventory } from './branchReconcileRefresh.js';
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch reconciliation inventory refresh (real Git)', () => {
@@ -38,17 +43,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch reconciliation inventory refresh
     await cleanupTempDataRoots();
   });
 
-  it('replaces stale local and remote inventory while retaining missing-source evidence without changing Git or dispatching work', async () => {
+  it('replaces stale local and remote inventory without changing Git or dispatching work', async () => {
     const missing = { branch: 'fix/old', path: join(scratch, 'missing'), head: 'a'.repeat(40), locked: false, lockReason: null, reason: 'checkout-retained' };
     await recordBranchReconcileOutcome('example', { status: 'incomplete', remaining: [missing, { branch: 'peer-old', reason: 'remote-branch-held' }] });
     const refs = (await execGit(['show-ref'], repoPath)).stdout;
     await writeFile(join(repoPath, 'private-untracked.txt'), 'preserve this content');
     const result = await refreshBranchReconcileInventory('example');
-    expect(result.outcome).toMatchObject({ status: 'incomplete',
-      remaining: [{ ...missing, reason: 'retirement-provenance-unverified', checkoutMissing: true }],
-      retirementObligations: [{ ...missing, reason: 'retirement-provenance-unverified' }],
-      remoteInventory: { reaped: [], reported: [] }, observedAt: expect.any(String),
-    });
+    expect(result.outcome).toMatchObject({ remaining: [], remoteInventory: { reaped: [], reported: [] }, observedAt: expect.any(String) });
+    expect(result.outcome).not.toHaveProperty('retirementObligations');
     expect((await execGit(['show-ref'], repoPath)).stdout).toBe(refs);
     expect(await readFile(join(repoPath, 'private-untracked.txt'), 'utf8')).toBe('preserve this content');
     const schedule = JSON.parse(await readFile(join(PATHS.cos, 'task-schedule.json'), 'utf8'));
@@ -70,19 +72,29 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch reconciliation inventory refresh
     await expect(refreshBranchReconcileInventory('missing')).rejects.toMatchObject({ status: 404 });
   });
 
-  it('retains a merged missing-source obligation until its retirement is verified', async () => {
-    getApp.mockImplementation(async id => ['example', 'settled-app'].includes(id) ? { id, repoPath } : null);
-    await execGit(['branch', '-D', 'fix/current'], repoPath).catch(() => null);
+  it.each(['no prior ref row', 'checkout first', 'ref first'])('prunes vanished checkout rows without merging remote holds or duplicating local refs: %s', async order => {
     const head = (await execGit(['rev-parse', 'HEAD'], repoPath)).stdout.trim();
-
-    const integrated = { branch: 'claim/issue-settled', path: join(scratch, 'integrated'), head, locked: false, lockReason: null, reason: 'checkout-retained' };
-    await recordBranchReconcileOutcome('settled-app', { status: 'incomplete', remaining: [integrated] });
-
-    const result = await refreshBranchReconcileInventory('settled-app');
-    expect(result.outcome).toMatchObject({ status: 'incomplete',
-      retirementObligations: [{ ...integrated, reason: 'retirement-provenance-unverified' }],
-      remaining: [{ ...integrated, reason: 'retirement-provenance-unverified' }],
-    });
-    expect(result.outcome.retired || []).toEqual([]);
+    await execGit(['branch', '-f', 'fix/survivor', head], repoPath);
+    const survivor = { branch: 'fix/survivor', path: join(scratch, 'missing-survivor'), head, locked: true,
+      lockReason: 'former lock', checkoutIdentity: 'a'.repeat(64), reason: 'retirement-provenance-unverified' };
+    const remote = { branch: survivor.branch, reason: 'remote-branch-held' };
+    const branch = { branch: survivor.branch, head, locked: false, lockReason: null, reason: 'cleanup-disabled' };
+    const local = order === 'no prior ref row' ? [survivor] : order === 'checkout first' ? [survivor, branch] : [branch, survivor];
+    await recordBranchReconcileOutcome('example', { status: 'incomplete', remaining: [remote, ...local,
+      { branch: 'fix/vanished', path: join(scratch, 'missing-other'), head, reason: 'retirement-receipt-unverified' }] });
+    const current = await getBranchReconcileInventory('example');
+    expect(current.remaining).toEqual([remote, { ...branch, reason: order === 'no prior ref row' ? 'branch-cleanup-pending' : branch.reason }]);
+    expect((await getBranchReconcileOutcome('example')).remaining).toEqual(current.remaining);
+    expect(current.retired || []).toEqual([]);
   });
+  it('persists unreadable checkout and branch rows without treating them as missing', async () => {
+    const rows = [{ branch: 'fix/unknown-path', path: join(scratch, 'unreadable'), head: 'a'.repeat(40), reason: 'checkout-retained' },
+      { branch: 'fix/unknown-ref', head: 'b'.repeat(40), reason: 'branch-held' }];
+    await recordBranchReconcileOutcome('example', { status: 'incomplete', remaining: rows });
+    readCheckoutPathPresence.mockResolvedValueOnce(null);
+    readLocalBranchPresence.mockResolvedValueOnce(null);
+    expect((await getBranchReconcileInventory('example')).remaining).toEqual(rows);
+    expect((await getBranchReconcileOutcome('example')).remaining).toEqual(rows);
+  });
+
 });

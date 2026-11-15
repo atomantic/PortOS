@@ -1,3 +1,14 @@
+/**
+ * Browser-safe source-span resolution for the video timeline: `resolveClipSpan`, `resolveStillFades`
+ * and `resolveAudioSpan` clamp trims, fades and offsets to real file lengths.
+ *
+ * Browser-safe source-span resolution for the video timeline: `resolveClipSpan` (trim clamped to the
+ * history clip length, fades refit), `resolveStillFades`, `resolveAudioSpan` (bed offset/length/fades
+ * fit to the real file length; an unknown length keeps the authored slice), `historySourceDuration`,
+ * `MIN_MEDIA_SEC`. One implementation for the ffmpeg export (`resolveTimeline`) and the editor
+ * preview, so both play the same timeline.
+ */
+
 import { fitFades } from './videoTimelineFades.js';
 
 /**

@@ -3,6 +3,10 @@
  * lacks and leaves the save/reply press to the director.
  */
 import { describe, expect, it, vi } from 'vitest';
+import { typeXText } from './xTyping.js';
+
+vi.mock('./xTyping.js', () => ({ typeXText: vi.fn(async () => {}) }));
+
 import { CROSS_LINK_ADAPTERS } from './crossLinkEdits.js';
 
 const row = (target, url) => ({ target, url, missing: [{ target: 'stackerNews', url: 'https://stacker.news/items/7' }], text: 'Music video: https://youtu.be/abc\nStacker News: https://stacker.news/items/7' });
@@ -43,11 +47,11 @@ describe('cross-link edits', () => {
     expect(summary).toEqual({ added: ['Stacker News: https://stacker.news/items/7'], leftForYou: ['Save (top right)'] });
   });
 
-  it('opens a reply to the X post with the lines prefilled', async () => {
-    const page = fakePage({ text: 'Music video: https://youtu.be/abc\nStacker News: https://stacker.news/items/7' });
+  it('types a reply to the X post and leaves it for review', async () => {
+    const page = fakePage();
     const summary = await CROSS_LINK_ADAPTERS.x.prepare(page, row('x', 'https://x.com/example/status/42'));
-    expect(page.goto.mock.calls[0][0]).toBe(`https://x.com/intent/post?in_reply_to=42&text=${encodeURIComponent(row('x').text)}`);
-    expect(page.evaluate).not.toHaveBeenCalled(); // prefilled: nothing pasted
+    expect(page.goto.mock.calls[0][0]).toBe('https://x.com/intent/post?in_reply_to=42');
+    expect(typeXText).toHaveBeenCalledWith(page, '[data-testid=tweetTextarea_0]', row('x').text);
     expect(summary.leftForYou).toEqual(['Reply']);
   });
 

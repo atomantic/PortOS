@@ -1,3 +1,9 @@
+/**
+ * Targeted 3D model lifecycle reads, cancellation and bounded transient recovery.
+ *
+ * Use when: Image-to-3D and procedural model views.
+ */
+
 import { useSocketResource } from './useSocketResource';
 
 const IMAGE_EVENTS = ['image-to-3d:changed'];

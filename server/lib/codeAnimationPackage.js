@@ -1,4 +1,10 @@
-/** Data-only portable project boundary. Validation never reads or executes files. */
+/**
+ *  Data-only portable project boundary. Validation never reads or executes files.
+ *
+ * Versioned data-only Code Animation package schema, byte/path/reference integrity limits, SHA-256
+ * revision binding, `createCodeAnimationPackage` and `summarizeCodeAnimationPackage`; validation never
+ * executes or stages code.
+ */
 import { createHash } from 'crypto';
 import { z } from 'zod';
 import { canonicalStringify } from './objects.js';

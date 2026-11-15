@@ -6,7 +6,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { resolveTestPython } from '../server/lib/testHelper.js';
+import { PY_SUBPROCESS_TIMEOUT_MS, PY_TEST_TIMEOUT_MS, resolveTestPython } from '../server/lib/testHelper.js';
 import { createVideoDiagnosticTail } from '../server/lib/videoFailure.js';
 
 const script = join(dirname(fileURLToPath(import.meta.url)), 'generate_fastvideo.py');
@@ -316,4 +316,15 @@ with tempfile.TemporaryDirectory() as tmp:
     expect(invalidContract).toBe('True');
     expect(invalid).toBe('True');
   });
+});
+
+// generate_fastvideo_test.py locks the per-family argv shapes (#5860); nothing
+// else runs it, so this wrapper is its only CI entry point.
+describe.skipIf(!pyBin)('generate_fastvideo_test.py argv-shape unit suite', () => {
+  it('passes the unittest suite', () => {
+    expect(() => execFileSync(pyBin, [fileURLToPath(new URL('./generate_fastvideo_test.py', import.meta.url))], {
+      encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS, stdio: 'pipe',
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+    })).not.toThrow();
+  }, PY_TEST_TIMEOUT_MS);
 });

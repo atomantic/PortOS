@@ -1,3 +1,8 @@
+/**
+ * Strict, separate planning and execution schemas with fixed intents, signed receipts and explicit
+ * grant scopes.
+ */
+
 import { z } from 'zod';
 
 // Planning v1 is deliberately not an execution grant. A future executor must

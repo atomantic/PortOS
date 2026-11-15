@@ -1,3 +1,8 @@
+/**
+ * Route map limits, `ROUTE_MAP_HEADINGS` (the eight compass directions of travel) and the stop feature
+ * kinds and sides, a leaf so `musicVideoValidation.js` stays narrow.
+ */
+
 /** Route map limits and headings (lib/musicVideoRouteMaps.js), a leaf so validation stays narrow. */
 export const ROUTE_MAP_MAX = 12;
 export const ROUTE_MAP_STOPS_MAX = 24;

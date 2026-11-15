@@ -1,3 +1,6 @@
+// Pure seeded Applied Numeracy pack — everyday percentage, ratio, unit, rate, and estimation scenarios
+// plus server-authoritative numeric/fraction/unit scoring with explicit tolerance handling.
+//
 // Deterministic applied-numeracy drill generation and authoritative scoring.
 // Each question is reconstructed from the persisted seed/config on submit, so
 // client-supplied expected values, prompts, and correctness never affect scores.

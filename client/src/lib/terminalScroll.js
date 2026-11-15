@@ -1,5 +1,19 @@
 // Scrolling the Shell terminal — by touch at all, and inside a full-screen TUI.
 //
+// Scrolling the Shell terminal by touch, wheel, and page controls. xterm 6 binds **no touch handlers
+// at all**, and a TUI’s ALTERNATE screen buffer has no terminal scrollback, so `scrollLines()` clamps
+// to a no-op there. Normal shell scrollback uses `scrollLines()`; alternate-screen wheel gestures are
+// captured before xterm’s mouse listener and translated to standard PageUp/PageDown input, which
+// OpenCode supports for its message viewport, while apps that explicitly enable terminal mouse
+// tracking keep xterm’s native wheel path. `attachTerminalTouchScroll(terminal)` (→ detach fn)
+// reserves one-finger panning while preserving pinch zoom and adds bounded flick momentum to normal
+// shell scrollback; mouse-aware apps receive row-granular wheel events at the touch coordinates, and
+// only apps without wheel support fall back to page keys. `attachTerminalWheelScroll(terminal)`
+// handles native wheel input, and `scrollTerminalPage(terminal, direction)` powers the `SCROLL_KEYS`
+// buttons. `measureTerminalGeometry(terminal)` takes one layout read per gesture;
+// `planTouchScrollSteps(accumPx, rowHeightPx)` is the pure sub-row-remainder core. Wired in
+// `useShellSession`.
+//
 // Two separate gaps land on one primitive, which is why one module covers both:
 //
 //   • xterm.js 6 has NO touch input path. Its viewport is VS Code's

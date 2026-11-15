@@ -42,7 +42,7 @@ import { sweepTombstones, getSweepStatus, TOMBSTONE_GRACE_MS } from '../services
 import { authorizePeerPull } from '../services/sharing/peerPullAuthorization.js';
 import { MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 
 const router = Router();
 

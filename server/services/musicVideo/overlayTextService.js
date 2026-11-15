@@ -162,9 +162,13 @@ export async function startOverlayTextCheck(projectId) {
   return { ...changed(project), done: entry.done };
 }
 
-/** Start a check after a new document lands; a project that cannot be checked is skipped quietly. */
+/**
+ * Start after a document lands; uncheckable projects are skipped quietly.
+ * Callers may leave this in the background. Owners that replace its fixtures
+ * must await the returned promise, including startup, probe and browser cleanup.
+ */
 export function checkOverlayTextInBackground(projectId) {
-  startOverlayTextCheck(projectId).catch((err) => {
+  return startOverlayTextCheck(projectId).then((started) => started.done).catch((err) => {
     if (!['TEXT_CHECK_UNAVAILABLE', 'NO_TIMELINE', 'NOT_FOUND'].includes(err.code)) console.error(`❌ Overlay text check ${short(projectId)} did not start: ${err.message}`);
   });
 }

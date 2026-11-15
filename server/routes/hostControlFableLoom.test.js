@@ -93,7 +93,7 @@ vi.mock('../services/fableLoom/exports.js', () => ({
 import * as shotRuns from '../services/fableLoom/shotRuns.js';
 import * as exports from '../services/fableLoom/exports.js';
 import * as fableLoom from '../services/fableLoom/index.js';
-import { authGate, hostControlRouteGate, hostControlBodyGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import routes from './fableLoom.js';
 
@@ -130,7 +130,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use(base, routes);
   app.use(errorMiddleware);
   return app;
@@ -212,9 +212,10 @@ describe('FableLoom agent workflow authority (#10668)', () => {
     expect(fableLoom.resumeEpisodeProductionBatch).toHaveBeenLastCalledWith('example-run');
   });
 
-  it('preserves remote record edits, deterministic validation/planning, cancellation and reads', async () => {
-    const app = appFor();
-    for (const [method, path, body, effect, status = 200] of [
+  it('keeps record edits, deterministic validation/planning and cancellation local-only, with reads open remotely', async () => {
+    const remote = appFor();
+    const local = appFor('127.0.0.1');
+    const records = [
       ['post', base, { name: 'Example Loom' }, fableLoom.createLoom, 201],
       ['patch', loom, { premise: 'Example premise' }, fableLoom.updateLoom],
       ['post', `${loom}/episodes`, { title: 'Example episode' }, fableLoom.addEpisode, 201],
@@ -226,9 +227,15 @@ describe('FableLoom agent workflow authority (#10668)', () => {
       ['post', `${episode}/continuity/review`, {}, fableLoom.reviewEpisodeContinuity],
       ['post', `${episode}/production/batch/example-run/cancel`, {}, fableLoom.cancelEpisodeProductionBatch],
       ['get', `${episode}/production/batch`, undefined, fableLoom.getLatestEpisodeProductionBatch],
-    ]) {
+    ];
+    for (const [method, path, body] of records.filter(([method]) => method !== 'get')) {
+      const refused = await call(remote, [path, body], {}, method);
+      expect([refused.status, refused.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expectNoEffects();
+    for (const [method, path, body, effect, status = 200] of records) {
       const before = effect.mock.calls.length;
-      const response = await call(app, [path, body], {}, method);
+      const response = await call(method === 'get' ? remote : local, [path, body], {}, method);
       expect(response.status, `${path}: ${JSON.stringify(response.body)}`).toBe(status);
       expect(effect).toHaveBeenCalledTimes(before + 1);
     }

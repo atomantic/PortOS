@@ -1,12 +1,12 @@
 /**
  * X thread adapter (#9282). prepare() composes the whole thread in one
- * composer: each post's text goes in by paste (the Draft.js editor keeps its
- * line breaks that way), media attaches through the focused post's file input,
- * and the thread waits until every upload reports Ready. X builds a post's
+ * composer: text is entered at a paced cadence, media attaches through the
+ * focused post's file input, and the thread waits until every upload reports Ready. X builds a post's
  * link card from its LAST link; the payload already orders links for that.
  * submit() presses "Post all" and finds the new thread on the profile.
  */
-import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, pasteText, step } from './browser.js';
+import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, step } from './browser.js';
+import { typeXText } from './xTyping.js';
 
 const COMPOSE_URL = 'https://x.com/compose/post';
 const label = 'X';
@@ -36,10 +36,12 @@ export const xAdapter = {
     const scope = await composerScope(page);
     for (const [i, post] of payload.posts.entries()) {
       const editor = `${scope}[data-testid=tweetTextarea_${i}]`;
-      if (i > 0) await step(label, `add post ${i + 1}`, () => page.locator(`${scope}[data-testid=addButton]`).click({ timeout: T }));
+      // Every post in the thread renders its own addButton, so from the third post on the selector matches
+      // several; the newest post's button is the last in DOM order.
+      if (i > 0) await step(label, `add post ${i + 1}`, () => page.locator(`${scope}[data-testid=addButton]`).last().click({ timeout: T }));
       await step(label, `write post ${i + 1}`, async () => {
         await page.locator(editor).waitFor({ timeout: T });
-        await pasteText(page, editor, post.text);
+        await typeXText(page, editor, post.text);
       });
       if (post.media) {
         await step(label, `attach media to post ${i + 1}`, async () => {

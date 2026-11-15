@@ -7,7 +7,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import * as digitalTwinService from '../../services/digital-twin.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { documentFilenameSchema, importDataInputSchema } from '../../lib/digitalTwinValidation.js';
 import * as spotifyBrowserImport from '../../services/spotifyBrowserImport.js';
 

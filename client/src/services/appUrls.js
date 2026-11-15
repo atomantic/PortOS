@@ -1,3 +1,7 @@
+/**
+ * Compute candidate launch URLs for an app from page context.
+ */
+
 import { PORTOS_APP_ID } from './apiCore';
 
 /**

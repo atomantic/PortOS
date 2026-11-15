@@ -1,7 +1,12 @@
 /**
- * Rounds record sanitization — shape bounds + pure sanitize helpers for the
- * a cappella rounds workbench (services/rounds.js). Extracted so the service
- * keeps only seed data + CRUD while the validation vocabulary lives with the
+ * Rounds record sanitization — shape bounds + pure sanitize helpers for the a cappella rounds
+ * workbench (services/rounds.js).
+ *
+ * Rounds workbench shape bounds + pure record sanitizers (sections, layers, recordings, pitch
+ * analysis, references, progress) — `sanitizeRound(raw, builtinIds)` and the length/count limits
+ * shared with routes/rounds.js.
+ *
+ * Extracted so the service keeps only seed data + CRUD while the validation vocabulary lives with the
  * other *Validation lib modules.
  *
  * The bounds are shared with routes/rounds.js#roundInputSchema (via the

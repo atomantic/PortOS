@@ -16,7 +16,6 @@ import {
 import * as agentPersonalities from '../services/agentPersonalities.js';
 import { generateAgentPersonality } from '../services/agentPersonalityGenerator.js';
 import { logAction } from '../services/history.js';
-import { assertHostControl } from '../services/authGate.js';
 
 const router = Router();
 
@@ -91,7 +90,6 @@ router.post('/generate', asyncHandler(async (req, res) => {
 router.post('/:id/toggle', asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { enabled } = validateRequest(agentToggleSchema, req.body);
-  if (enabled) assertHostControl(req);
 
   const agent = await agentPersonalities.toggleAgent(id, enabled);
   if (!agent) {

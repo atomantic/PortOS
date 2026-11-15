@@ -1,3 +1,10 @@
+/**
+ * Composes the Image Gen form and gallery with backend probes, job/SSE progress, batch submission,
+ * cancellation, result/error state, federated targets, and regeneration.
+ *
+ * Use when: The Image Gen page runtime when its route should remain presentational.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { composeStyledPrompt, stylePromptAdditions } from '../lib/composeStyledPrompt';
@@ -299,6 +306,7 @@ export function useImageGenPageRuntime() {
       ...(effectiveCloudModel ? { cloudModel: effectiveCloudModel } : {}),
       cleanC2PA: fields.cleanC2PA,
       denoise: fields.denoise,
+      verifyImage: fields.verifyImage,
     } : {
       prompt: composed.prompt,
       negativePrompt: composed.negativePrompt || undefined,
@@ -314,6 +322,7 @@ export function useImageGenPageRuntime() {
       mode: IMAGE_GEN_MODE.LOCAL,
       cleanC2PA: fields.cleanC2PA,
       denoise: fields.denoise,
+      verifyImage: fields.verifyImage,
     };
     Object.assign(payload, musicVideoFilingFields(searchParams), promptAdditionsField(derived.activeStylePresets));
     const hasInitImage = derived.i2iCapable && images.initImage.source != null;
@@ -468,6 +477,7 @@ export function useImageGenPageRuntime() {
           mode: IMAGE_GEN_MODE.EXTERNAL,
           cleanC2PA: fields.cleanC2PA,
           denoise: fields.denoise,
+          verifyImage: fields.verifyImage,
         };
         if (fields.seed && Number(fields.seed) >= 0) payload.seed = Number(fields.seed);
         Object.assign(payload, musicVideoFilingFields(searchParams), promptAdditionsField(derived.activeStylePresets));

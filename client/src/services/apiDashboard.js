@@ -1,3 +1,7 @@
+/**
+ * Dashboard state.
+ */
+
 import { request } from './apiCore.js';
 
 export const getDashboardLayouts = () => request('/dashboard/layouts');

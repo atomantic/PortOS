@@ -2,6 +2,9 @@
  * Request schemas for the Music Video Blender film routes
  * (routes/musicVideoBlender.js). A leaf beside musicVideoValidation.js so the
  * ~450 suites reaching that module do not pay for these.
+ *
+ * Request schemas for the Music Video Blender film routes: settings, workspace scaffold, source file
+ * read/write, sync, shot renders, cut assembly, director notes and the render media query.
  */
 import { z } from 'zod';
 import {

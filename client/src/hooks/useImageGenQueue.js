@@ -1,3 +1,9 @@
+/**
+ * Work-scoped live queue of in-flight image renders.
+ *
+ * Use when: Pages that show per-work image-gen queue state.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
 import { cancelImageGen } from '../services/apiImageVideo';

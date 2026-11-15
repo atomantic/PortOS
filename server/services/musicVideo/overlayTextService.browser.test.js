@@ -10,6 +10,8 @@
  * plated data readout included.
  */
 import { afterAll, describe, expect, it, vi } from 'vitest';
+import { channel } from 'node:diagnostics_channel';
+import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
@@ -28,7 +30,7 @@ vi.mock('../browserService.js', () => ({ loadConfig: async () => ({ chromePath: 
 const { PATHS } = await import('../../lib/paths.js');
 const projects = await import('./projects.js');
 const { importDocumentDirectory, importDocumentTemplate } = await import('./compositionDocument.js');
-const { startOverlayTextCheck } = await import('./overlayTextService.js');
+const { startOverlayTextCheck, checkOverlayTextInBackground } = await import('./overlayTextService.js');
 const { productionReadiness } = await import('./productionReview.js');
 
 afterAll(async () => {
@@ -125,9 +127,29 @@ describe.skipIf(!chrome)('overlay text check (headless Chrome)', () => {
         { id: 'l3', text: 'years since launch 764,465', startSec: 6.5, endSec: 9, words: [] },
         { id: 'l4', text: 'welcome to the club', startSec: 9.2, endSec: 11.5, words: [] }] } }));
     await importDocumentTemplate(created.id, 'layered');
-    const started = await startOverlayTextCheck(created.id);
-    const check = await started.done;
-    expect(check, check.error ?? 'Overlay text check failed without a stored error').toMatchObject({ status: 'complete', findings: [] });
-    expect(check.textSamples).toBeGreaterThan(4);
+    // The import-triggered entry point must expose settlement through child
+    // close and profile removal, rather than only the running-record write.
+    const lifecycle = channel('portos.composition-browser.lifecycle');
+    const browsers = [];
+    const observe = ({ event, profile, child }) => {
+      if (event === 'allocated') browsers.push({ profile, closed: false, removed: false });
+      const owned = browsers.find(item => item.profile === profile);
+      if (owned && event === 'child') child.once('close', () => { owned.closed = true; });
+      if (owned && event === 'remove-resolved') owned.removed = true;
+    };
+    lifecycle.subscribe(observe);
+    try {
+      const check = await checkOverlayTextInBackground(created.id);
+      expect(check, check?.error ?? 'Overlay text check failed without a stored error').toMatchObject({ status: 'complete', findings: [] });
+      expect(check.textSamples).toBeGreaterThan(4);
+      expect(browsers).toHaveLength(1);
+      for (const owned of browsers) {
+        expect(owned.closed).toBe(true);
+        expect(owned.removed).toBe(true);
+        expect(existsSync(owned.profile)).toBe(false);
+      }
+    } finally {
+      lifecycle.unsubscribe(observe);
+    }
   }, 120000);
 });

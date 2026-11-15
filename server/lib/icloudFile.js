@@ -1,6 +1,47 @@
 /**
  * iCloud (ubiquity-container) file guards.
  *
+ * Guards against blocking reads of **evicted (dataless) cloud files**. macOS Optimize-Mac-Storage
+ * offloads a file in an iCloud ubiquity container (or a `~/Library/CloudStorage` File Provider mount);
+ * the path and `size` remain but no blocks are local, and the first **data access** BLOCKS in the
+ * kernel until materialization completes — indefinitely and uncancellably when iCloud is wedged. Four
+ * such reads exhaust libuv's 4-thread fs pool and every later `fs` call in the process queues forever,
+ * including the `express.static` read that serves the UI bundle (the whole UI hangs while memory-only
+ * routes still answer). Retry-on-error can't help: the read doesn't fail, it hangs.
+ * `readIfMaterialized(path, {encoding, label})` screens with a `stat()` (safe — never materializes)
+ * and rejects with `err.code === ICLOUD_NOT_MATERIALIZED` instead of issuing the read, kicking a
+ * background `brctl download` so the next cycle succeeds; concurrent callers for one path+encoding
+ * share a single read. `isUbiquityPath(path)` resolves the containing directory's real path (memoized)
+ * rather than substring-matching, so a **symlinked** route into iCloud — `~/Documents/...` under
+ * "Desktop & Documents Folders" sync — is still recognized. `isDatalessStats(stats)` is the raw
+ * predicate (`size > 0 && blocks === 0`) and is **not safe alone** (a sparse or `decmpfs`-compressed
+ * ordinary file matches it); pair it with the platform + cloud-root scoping via `isEvictedStats(path,
+ * stats)`, which is what a caller holding a `Stats` should use, or `isSuspectedDataless(path)` which
+ * does the `stat` itself. `requestMaterialization(path, {label, retryAfterExit, onFailure})` is the
+ * fire-and-forget `brctl download` every brctl caller shares — read paths kick it (default
+ * `retryAfterExit: true`) to heal an evicted file, per-path-deduped in a shared in-flight map capped
+ * at 4 concurrent children (an evicted vault walk would otherwise fork one per note) and each killed
+ * at `DOWNLOAD_DEADLINE_MS` so a wedged `brctl` can't hold every slot for the life of the process; the
+ * boot/settings pin in `mortalLoomStore` passes `retryAfterExit: false` so it is NOT tracked in that
+ * shared map (it owns a single-sticky-path dedupe at its call site) plus an `onFailure` hook to clear
+ * that sticky path on a failed/killed download. `claimBrctlMissingWarning()` returns `true` on the
+ * first call only, so the "brctl not found on PATH" warning fires at most once per process across
+ * every brctl caller (the fire-and-forget path here and the awaited `materializeAndWait`).
+ * `materializeAndWait(path, {label, timeoutMs})` is the **awaited, bounded** counterpart used by WRITE
+ * paths (`mortalLoomStore` before overwriting its store, `obsidian.updateNote` before overwriting a
+ * note): a write must not silently skip, so it materializes and waits rather than firing and
+ * forgetting, bounded by `MATERIALIZE_TIMEOUT_MS` (20s — much tighter than the background
+ * `DOWNLOAD_DEADLINE_MS` because a caller is blocked on it) and run in a child process, which is what
+ * makes the wait cancellable when the kernel write it replaces would not be. It resolves `true` only
+ * on brctl exit-0, which means the download was **accepted, not completed** — always re-screen before
+ * trusting the file. Measured (#3706, #3713), and recorded in the module docblock's syscall table:
+ * `stat`/`open`/`rename`/`unlink` never materialize, while `read`, `write` (including after `O_TRUNC`
+ * — truncating does NOT skip the download), `link`, and `clonefile` all do. `unlink` being free is a
+ * measurement, not the POSIX inference — `link` is pure metadata too and it *does* materialize — so
+ * delete paths need no screen. The docblock also carries the reproduction recipe: `brctl evict <path>`
+ * works (undocumented, like `brctl download`), which is what makes the evict/measure/heal loop
+ * scriptable. Consumed by `services/mortalLoomStore.js` and `services/obsidian.js`.
+ *
  * ## Why this exists
  *
  * macOS "Optimize Mac Storage" evicts iCloud files to the cloud. An evicted

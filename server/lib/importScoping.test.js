@@ -25,10 +25,10 @@
  */
 
 import { beforeAll, describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { dirname, join, posix, relative, sep } from 'path';
 import { fileURLToPath } from 'url';
-import { staticImportClosure } from './staticImportGraph.js';
+import { staticImportClosure as walkImportClosure, staticImportSpecifiers } from './staticImportGraph.js';
 import {
   evaluateWorkingTreeImportGrowth,
   formatImportGrowthReport,
@@ -38,6 +38,18 @@ import {
 import { importSpecifiersFromSource } from '../../scripts/lib/importReach.js';
 
 const SERVER_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
+
+// The tree is read-only here, so every closure below shares one read and one
+// existence probe per file instead of repeating them for each entry.
+const memoize = (fn) => {
+  const cache = new Map();
+  return (key) => {
+    if (!cache.has(key)) cache.set(key, fn(key));
+    return cache.get(key);
+  };
+};
+const closureIo = { specifiers: memoize(staticImportSpecifiers), exists: memoize(existsSync) };
+const staticImportClosure = (entry) => walkImportClosure(entry, closureIo);
 
 // Server-relative POSIX paths, so a failure names `lib/db.js` rather than the
 // absolute path of whoever's checkout is running the suite.
@@ -604,6 +616,17 @@ describe('server suite import growth (#7993)', () => {
       `${reachingCount} server test files still statically reach services/instances.js (was 181 before #6836's instanceIdentity.js leaf split). If this crept back up, check for a caller that only needs identity (getInstanceId/ensureInstanceId/getSelf/ensureSelf/updateSelf/UNKNOWN_INSTANCE_ID) re-widening its import back onto instances.js instead of instanceIdentity.js.`,
     ).toBeLessThan(60);
   }, 60_000);
+});
+
+// #16096: request validation is its own leaf. ~113 route/service files import
+// only validateRequest; if this grows past errorHandler.js, every one of them
+// pays for the new edge again.
+it('keeps the validateRequest leaf to itself and errorHandler.js', () => {
+  const closure = staticImportClosure(abs('lib/validateRequest.js')).files;
+  expect([...closure].map((file) => relative(SERVER_DIR, file)).sort()).toEqual([
+    'lib/errorHandler.js',
+    'lib/validateRequest.js',
+  ]);
 });
 
 // The shared compiler must remain usable without loading project mutations.

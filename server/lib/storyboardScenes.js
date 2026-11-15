@@ -1,6 +1,14 @@
 /**
  * Storyboard scene/shot durable ids + id-first target resolution (#3413).
  *
+ * Durable ids + id-first addressing for `stages.storyboards.scenes[]` (#3413).
+ * `ensureStoryboardIds(scenes)` stamps a deterministic `scene-NN` / `shot-NN` id on any entry lacking
+ * one — and re-stamps later copies of a DUPLICATE id (collision-escaped with a `-2` suffix, so peers
+ * and concurrent readers derive identical ids); `resolveStoryboardTarget(list, { id, index })` → `{
+ * index, record, matchedBy, stale }` resolves a captured id against a fresh array, falling back to the
+ * index only when no id was captured, and reporting `stale: true` (409, never an index retarget) when
+ * a captured id is gone.
+ *
  * Storyboard scenes used to be addressed purely by ARRAY INDEX end to end —
  * the route took `sceneIndex`, the media-job owner encoded `scene<idx>`, and
  * the stage write patched `scenes[index]`. A reorder or delete landing between

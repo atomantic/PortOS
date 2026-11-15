@@ -1,5 +1,9 @@
 // Shared client-side URL normalization + detection helpers.
 //
+// `isUrl` detection, `normalizeUrl` (optional git/`requireDot` modes), `isHttpUrl` / `isHttpsUrl`
+// (safe-href checks), and `tiktokVideoId` / `tiktokEmbedSrc` (host-anchored TikTok video-id extraction
+// + its Embed Player URL, so a reference embeds without loading TikTok's embed.js).
+//
 // Three brain-capture surfaces (LinksTab, QuickBrainCapture, FeedsTab) each
 // prepended `https://` to bare URLs with near-identical-but-subtly-different
 // logic. This module consolidates that logic while preserving each call site's

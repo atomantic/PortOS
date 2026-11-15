@@ -1,3 +1,17 @@
+/**
+ * Model-abuse boundary contract: prompt guard metadata and deterministic abuse signals such as hidden
+ * or invisible code point summaries.
+ *
+ * Pinned model-abuse boundary contract: Prompt Guard metadata, deterministic abuse signals
+ * (`hiddenCodePointSummary` for invisible/direction-control/C0-C1 code points,
+ * `invisibleClusterSummary` for a dense cluster of the exempt ones, `describeEncodedPayload` for
+ * compressed/opaque blobs — the last scoped to `CODE_CONTENT_SOURCES` so a private message carrying
+ * base64 is not model abuse — plus hidden HTML comments/collapsed markup that address a model),
+ * complete classifier-window coverage validation, chunk/timeout limits, fixed dependency versions
+ * (`MODEL_ABUSE_GUARD_PYTHON_PACKAGES`), and `MODEL_ABUSE_GUARD_STAGES` /
+ * `modelAbuseGuardStageReadiness` for the operator-facing install checklist. Pure.
+ */
+
 import { createHash } from 'node:crypto';
 import { escapeRegExp } from './textUtils.js';
 
@@ -73,7 +87,7 @@ export const MODEL_ABUSE_GUARD_PYTHON_IMPORTS = Object.freeze([
 // slices the complete token stream into the pinned DeBERTa window format. Updating these pins requires the explicit install canary.
 export const MODEL_ABUSE_GUARD_PYTHON_PACKAGES = Object.freeze([
   'torch==2.14.1',
-  'transformers==5.22.1',
+  'transformers==5.22.2',
   'safetensors==0.8.0',
   'huggingface_hub==2.4.0',
 ]);

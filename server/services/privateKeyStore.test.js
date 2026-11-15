@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, writeFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -52,19 +52,22 @@ it('moves legacy keys out of settings, preserves unrelated data, and resolves af
   expect((await settings.getSettings()).videoGen.fal.apiKey).toBe('example-fal');
 });
 
-it('persists a successful Artificial Analysis key and reuses it without a request key', async () => {
-  vi.doMock('./modelComparison.js', () => ({ importModelComparison: vi.fn(async () => ({ observations: [] })) }));
-  const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ intelligence_index_version: '4.3', data: [{ id: 'example', name: 'Example Model', slug: 'example-model', model_creator: { name: 'Example' }, evaluations: { artificial_analysis_intelligence_index: 40 } }], pagination: { has_more: false } }) }));
-  vi.stubGlobal('fetch', fetchMock);
-  vi.stubEnv('ARTIFICIAL_ANALYSIS_API_KEY', 'example-env');
-  const { syncArtificialAnalysisCatalog } = await import('./artificialAnalysis.js');
-  await syncArtificialAnalysisCatalog({ apiKey: 'example-saved' });
+it('boots and saves cleanly with a retired credential key left on disk, leaving it untouched', async () => {
+  await mkdir(join(directory, 'private'), { recursive: true });
+  await writeFile(join(directory, 'private/api-keys.json'), JSON.stringify({
+    schemaVersion: 1,
+    keys: { 'artificial-analysis': 'example-retired', civitai: 'example-civitai' },
+  }));
+  await writeFile(join(directory, 'settings.json'), JSON.stringify({
+    theme: 'dark', secrets: { retiredCatalog: { apiKey: 'example-legacy' } },
+  }));
   settings.__resetSettingsCache();
-  await syncArtificialAnalysisCatalog();
-  expect(fetchMock.mock.calls[1][1].headers['x-api-key']).toBe('example-saved');
-  fetchMock.mockResolvedValueOnce({ ok: false, status: 401, text: async () => 'Unauthorized' });
-  await expect(syncArtificialAnalysisCatalog({ apiKey: 'example-invalid' })).rejects.toThrow();
-  expect((await settings.getSettings()).secrets.artificialAnalysis.apiKey).toBe('example-saved');
+  const loaded = await settings.getSettings();
+  expect(loaded.civitai.apiKey).toBe('example-civitai');
+  expect(JSON.stringify(loaded)).not.toContain('example-retired');
+  await settings.updateSettings({ theme: 'light' });
+  const keys = JSON.parse(await readFile(join(directory, 'private/api-keys.json'), 'utf8')).keys;
+  expect(keys).toEqual({ 'artificial-analysis': 'example-retired', civitai: 'example-civitai' });
 });
 
 it('refuses a corrupt private store without overwriting keys or exposing parser input', async () => {

@@ -779,7 +779,7 @@ describe('GET /api/cos/tasks — bounded view routing (#9677)', () => {
           evidence: { prUrl: 'https://github.com/example/repo/pull/99', headSha: 'a'.repeat(40) },
         },
       },
-      synchronization: { status: 'blocked', blocker: 'publisher-candidate-checkout-unverified' },
+      synchronization: { status: 'blocked', blocker: 'synchronization-pr-pending' },
     });
     getTaskView.mockResolvedValue({
       items: [{ id: 'task-sync-1', metadata: {} }],
@@ -790,7 +790,7 @@ describe('GET /api/cos/tasks — bounded view routing (#9677)', () => {
     expect(res.status).toBe(200);
     expect(res.body.items[0].metadata.releasePublication).toMatchObject({ status: 'verified', identity });
     expect(res.body.items[0].metadata.releaseSynchronization).toMatchObject({
-      status: 'blocked', blocker: 'publisher-candidate-checkout-unverified',
+      status: 'blocked', blocker: 'synchronization-pr-pending',
       identity,
       prUrl: 'https://github.com/example/repo/pull/99',
     });

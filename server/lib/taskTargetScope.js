@@ -2,6 +2,12 @@
  * Target-scope vocabulary for scheduled task types: does a type act on ONE
  * managed app, on the whole install, or on either?
  *
+ * Target scope for a scheduled task type: `INSTALL_WIDE_TASK_TYPES`, `MANAGED_APP_TARGET_TASK_TYPES`,
+ * `PROGRAMMATIC_SCHEDULED_TASK_TYPES`, `isProgrammaticScheduledTaskType`, `requiresManagedAppTarget`,
+ * `requiresInstallWideTarget`. Declared here (not in `services/taskScheduleRegistry.js`, which
+ * re-exports it) so `quotaBurnValidation.js` can reject a burn reference with the wrong target scope
+ * without importing upward into services.
+ *
  * Lives in `lib/` (pure data + two predicates, no imports) because three tiers
  * need the same answer and only one of them is a service:
  *   - `services/taskScheduleRegistry.js` re-exports these, so the on-demand

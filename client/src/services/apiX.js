@@ -1,3 +1,7 @@
+/**
+ * X account diagnostics, public post metrics, review-gated drafts, and manual browser handoffs.
+ */
+
 import { request } from './apiCore.js';
 
 export const getXAccounts = (options = {}) => request('/x/accounts', options);

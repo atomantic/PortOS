@@ -1,3 +1,7 @@
+/**
+ * Author personas (name, writing style, bio, headshot description/style).
+ */
+
 import { request } from './apiCore.js';
 
 // ---- Author personas ----

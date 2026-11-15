@@ -170,15 +170,15 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
     });
   }
 
-  // 5. Learning failures (skipped task types)
+  // 5. Historical learning recommendations (not scheduler state)
   const skippedTypes = learningSummary?.skippedTypes || [];
   if (skippedTypes.length > 0) {
     insights.push({
       type: 'learning',
       priority: 'low',
       icon: 'Brain',
-      title: `${skippedTypes.length} task type${skippedTypes.length > 1 ? 's' : ''} auto-skipped`,
-      description: `Due to low success rates: ${skippedTypes.slice(0, 2).map(t => t.type).join(', ')}`,
+      title: `${skippedTypes.length} task type${skippedTypes.length > 1 ? 's' : ''} with low historical success`,
+      description: `Historical performance only; scheduling is unchanged: ${skippedTypes.slice(0, 2).map(t => t.type).join(', ')}`,
       action: { label: 'View Learning', route: '/cos/learning' },
       count: skippedTypes.length
     });

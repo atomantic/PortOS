@@ -1,3 +1,10 @@
+/**
+ * `useCalendarWindowEvents(startDate, endDate)` — sequential 200-event offset pages for a complete
+ * calendar window, account/event deduplication, retry and date/sync supersession.
+ *
+ * Use when: Day/Week/Month grids; pair with CalendarWindowStatus to disclose incomplete availability.
+ */
+
 import { useCallback, useEffect } from 'react';
 import { getCalendarEvents } from '../services/api';
 import socket from '../services/socket';

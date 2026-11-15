@@ -1,4 +1,8 @@
-/** Curated native Runway image schemas and list prices, verified 2026-10-22.
+/**
+ * Shared Runway image capabilities, exact canvases, reference/seed limits, hosted disclosure, request
+ * validation and reference identities.
+ *
+ *  Curated native Runway image schemas and list prices, verified 2026-10-22.
  * Sources: https://docs.dev.runwayml.com/api.md and guides/pricing.md;
  * https://github.com/runwayml/sdk-node/blob/main/src/resources/text-to-image.ts
  * Dependency-free: shared by the server and browser model pickers.

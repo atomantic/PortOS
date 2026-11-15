@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from '../../lib/childProcess.js';
+import { trackedFiles } from '../../../scripts/lib/trackedFiles.js';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -48,8 +48,7 @@ const ALLOWED = new Set([
 
 describe('render-target resolver guard (#3231)', () => {
   it('no surface calls resolveCloudProviderConfig outside the dispatcher allowlist', () => {
-    const tracked = execFileSync('git', ['ls-files', '*.js'], { cwd: SERVER_ROOT, encoding: 'utf8' })
-      .split('\n')
+    const tracked = trackedFiles(SERVER_ROOT, ['*.js'])
       .filter((f) => f && !f.endsWith('.test.js'));
     const offenders = tracked.filter((rel) => {
       if (ALLOWED.has(rel)) return false;

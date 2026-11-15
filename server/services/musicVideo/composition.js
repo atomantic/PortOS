@@ -162,6 +162,7 @@ export function normalizeComposition(input) {
     // Kept verbatim when well-formed so a peer on an older or newer catalog round-trips it (#10254).
     ...(filmStyleIdSchema.safeParse(input.styleGrammarId).success ? { styleGrammarId: input.styleGrammarId } : {}),
     textCues,
+    ...(input.noTypography === true ? { noTypography: true } : {}),
     style: {
       color: typeof style.color === 'string' && /^#[0-9a-f]{6}$/i.test(style.color) ? style.color.toLowerCase() : '#ffffff',
       font: pick(style.font, TYPOGRAPHY_FONTS, 'sans'),

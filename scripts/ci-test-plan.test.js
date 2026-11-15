@@ -7,10 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { staticImportClosure } from '../server/lib/staticImportGraph.js';
 import { TRUSTED_REBUILDS } from './trusted-rebuilds.js';
+import { readCiJobs } from './lib/ciWorkflowJobs.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 
 import {
-  ALWAYS_RUN_TESTS,
+  getAlwaysRunTests,
   BROWSER_SUITES,
   buildCiTestPlan,
   classifyDependencyChange,
@@ -59,8 +60,7 @@ let realTreeInputs;
 const realTree = () => (realTreeInputs ??= collectPlanInputs({ baseSha: 'HEAD', changedFiles: REAL_TREE_SOURCES, cwd: REPO_ROOT }));
 
 const TRACKED = [
-  'server/lib/index.js',
-  'server/lib/index.test.js',
+  'server/lib/moduleSummaries.test.js',
   'server/lib/bufferedSpawn.js',
   'server/routes/auth.test.js',
   'server/routes/sprites.test.js',
@@ -86,7 +86,14 @@ const TRACKED = [
   'server/lib/shellCd.test.js',
   'server/lib/shellCd.js',
   'server/services/agentTuiSpawning.test.js',
-  'client/src/a11yConventions.test.js',
+  'client/src/a11y/controlNames.conventions.test.js',
+  'client/src/a11y/dnd.conventions.test.js',
+  'client/src/a11y/fileInputsToasts.conventions.test.js',
+  'client/src/a11y/hitAreas.conventions.test.js',
+  'client/src/a11y/landmarks.conventions.test.js',
+  'client/src/a11y/overlays.conventions.test.js',
+  'client/src/a11y/routeHeadings.conventions.test.js',
+  'client/src/a11y/scanner.conventions.test.js',
   'client/src/App.jsx',
   'client/src/App.test.jsx',
   'client/src/hooks/mountedRefConventions.test.js',
@@ -95,7 +102,7 @@ const TRACKED = [
   'client/src/components/sprites/WalkWorkflow.test.jsx',
   'client/src/hooks/useAsyncAction.js',
   'client/src/lib/catalogLinks.js',
-  'client/src/lib/index.test.js',
+  'client/src/lib/moduleSummaries.test.js',
   'client/src/services/apiSprites.test.js',
   'scripts/migrations/210-example.js',
   'scripts/migrations/210-example.test.js',
@@ -106,7 +113,7 @@ it('selects checkout-cache contracts only in their installed-dependency runners'
   const serverContract = 'scripts/workspaceCaches.test.js';
   const clientContract = 'client/src/test/workspaceCaches.test.js';
   const shared = [
-    '.github/workflows/ci.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
+    '.github/workflows/ci.yml', '.github/actions/setup-server/action.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
     'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
     'scripts/lib/vitestWatch.js', 'scripts/lib/testProcessAttribution.js', 'scripts/lib/testOwnedProcesses.js', 'scripts/lib/darwinTestProcesses.py',
     'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/workspaceTests.js',
@@ -373,7 +380,7 @@ describe('real shared-source import chains', () => {
     expect(plan.server.mode).toBe('related');
     expect(plan.server.sources).toEqual([source]);
     // Explicit guards stay additive to the traversal.
-    expect(plan.server.files).toEqual(expect.arrayContaining(ALWAYS_RUN_TESTS.filter((path) => path.startsWith('server/'))));
+    expect(plan.server.files).toEqual(expect.arrayContaining(getAlwaysRunTests().filter((path) => path.startsWith('server/'))));
     // validation.test.js reaches the leaf only through pipelineValidation; it names
     // neither the leaf nor the editorial feature, so only traversal selects it.
     expect(plan.server.files).not.toContain('server/lib/validation.test.js');
@@ -815,19 +822,19 @@ describe('CI test impact planner', () => {
     expect(splitByRunner([
       'server/services/taskPromptDefaults.test.js',
       'scripts/agent-instructions-files.test.js',
-      'client/src/a11yConventions.test.js',
+      'client/src/a11y/overlays.conventions.test.js',
     ])).toEqual({
       server: ['server/services/taskPromptDefaults.test.js', 'scripts/agent-instructions-files.test.js'],
-      client: ['client/src/a11yConventions.test.js'],
+      client: ['client/src/a11y/overlays.conventions.test.js'],
     });
   });
 
   // Every guard on the list is unreachable by import-graph selection, so a
   // docs-only plan is the one scope where the complete list has to survive.
   it('carries every tracked always-run guard on a docs-only plan', () => {
-    const tracked = [...TRACKED, ...ALWAYS_RUN_TESTS];
+    const tracked = [...TRACKED, ...getAlwaysRunTests()];
     const plan = buildCiTestPlan(['docs/GITHUB_ACTIONS.md'], { trackedFiles: tracked });
-    const { server, client } = splitByRunner(ALWAYS_RUN_TESTS);
+    const { server, client } = splitByRunner(getAlwaysRunTests());
 
     expect(plan.server.mode).toBe('files');
     for (const guard of server) {
@@ -847,16 +854,16 @@ describe('CI test impact planner', () => {
 
   it('maps every always-run guard to a runner', () => {
     // splitByRunner drops a path whose runnerForTest is null. A root-level
-    // entry on ALWAYS_RUN_TESTS would then vanish from both jobs and the
+    // entry on getAlwaysRunTests() would then vanish from both jobs and the
     // docs-only plan would report green having run it nowhere.
-    for (const path of ALWAYS_RUN_TESTS) {
+    for (const path of getAlwaysRunTests()) {
       const { server, client } = splitByRunner([path]);
       expect(server.includes(path) || client.includes(path), path).toBe(true);
     }
   });
 
-  it('runs the migration prompt-drift baseline on every plan', () => {
-    expect(ALWAYS_RUN_TESTS).toContain('scripts/setup-data-drift.test.js');
+  it('runs the shipped prompt-hash guard on every plan', () => {
+    expect(getAlwaysRunTests()).toContain('scripts/migrations/shippedPromptHashes.guard.test.js');
   });
 
   it('omits an untracked always-run guard rather than handing Vitest a missing selector', () => {
@@ -942,29 +949,20 @@ describe('CI test impact planner', () => {
     expect(plan.reason).toMatch(/composition root changed/);
   });
 
-  it('uses only the structural contract for a server barrel edit', () => {
-    const plan = buildCiTestPlan(['server/lib/index.js'], { trackedFiles: TRACKED });
-
-    expect(plan.full).toBe(false);
-    expect(plan.server.mode).toBe('files');
-    expect(plan.server.sources).toEqual([]);
-    expect(plan.server.files).toContain('server/lib/index.test.js');
-    expect(plan.client.mode).toBe('skip');
-    expect(plan.db).toBe(false);
-    expect(plan.windows).toBe(false);
-  });
-
   // One row per structural trigger in structuralTestsFor. Each diff pairs the
   // trigger with an unrelated path, so a rule that only fires when every changed
   // file matches (`.some` → `.every`) drops its guard and fails here.
   const STRUCTURAL_GUARD_ROWS = [
     { changed: 'server/sockets/chat.js', runner: 'server', guards: ['server/sockets/asyncHandlerGuard.test.js'] },
-    { changed: 'server/lib/bufferedSpawn.js', runner: 'server', guards: ['server/lib/index.test.js'] },
+    { changed: 'server/lib/bufferedSpawn.js', runner: 'server', guards: ['server/lib/moduleSummaries.test.js'] },
     { changed: 'server/routes/sprites.js', runner: 'server', guards: ['server/lib/apiRouteGraph.test.js', 'server/lib/apiRouteParity.test.js', 'scripts/generate-prompt-stage-call-sites.test.js'] },
-    { changed: 'client/src/lib/catalogLinks.js', runner: 'client', guards: ['client/src/lib/index.test.js'] },
-    { changed: 'client/src/hooks/useAsyncAction.js', runner: 'client', guards: ['client/src/hooks/index.test.js'] },
-    { changed: 'client/src/utils/formatters.js', runner: 'client', guards: ['client/src/utils/index.test.js'] },
-    { changed: 'client/src/components/catalog/CatalogCard.jsx', runner: 'client', guards: ['client/src/a11yConventions.test.js'] },
+    { changed: 'server/scripts/init-db.sql', runner: 'server', guards: ['server/lib/db.ddlParity.test.js'] },
+    { changed: 'server/scripts/init-db.base.sql', runner: 'server', guards: ['server/lib/db.ddlParity.test.js'] },
+    { changed: 'client/src/lib/catalogLinks.js', runner: 'client', guards: ['client/src/lib/moduleSummaries.test.js'] },
+    { changed: 'client/src/hooks/useAsyncAction.js', runner: 'client', guards: ['client/src/hooks/moduleSummaries.test.js'] },
+    { changed: 'client/src/utils/formatters.js', runner: 'client', guards: ['client/src/utils/moduleSummaries.test.js'] },
+    { changed: 'client/src/services/apiSprites.js', runner: 'client', guards: ['client/src/services/moduleSummaries.test.js'] },
+    { changed: 'client/src/components/catalog/CatalogCard.jsx', runner: 'client', guards: ['client/src/a11y/controlNames.conventions.test.js', 'client/src/a11y/dnd.conventions.test.js', 'client/src/a11y/fileInputsToasts.conventions.test.js', 'client/src/a11y/hitAreas.conventions.test.js', 'client/src/a11y/landmarks.conventions.test.js', 'client/src/a11y/overlays.conventions.test.js', 'client/src/a11y/routeHeadings.conventions.test.js', 'client/src/a11y/scanner.conventions.test.js'] },
   ];
   it.each(STRUCTURAL_GUARD_ROWS)('schedules the structural guards for $changed in a mixed diff', ({ changed, runner, guards }) => {
     const trackedFiles = [...TRACKED, changed, ...STRUCTURAL_GUARD_ROWS.flatMap((row) => row.guards)];
@@ -974,6 +972,13 @@ describe('CI test impact planner', () => {
     for (const guard of guards) {
       expect(plan[runner].files, guard).toContain(guard);
     }
+  });
+
+  // update.* and the lockfiles already force a full CI plan, so the planner
+  // row above can't show it; pregate's downgraded plan relies on this rule.
+  it.each(['update.sh', 'update.ps1', 'scripts/ensure-deps.js', 'server/package-lock.json'])('selects the ensure-deps contract for %s', (changed) => {
+    expect(structuralTestsFor([changed, 'docs/README.md'], new Set(['scripts/ensure-deps.test.js']))).toContain('scripts/ensure-deps.test.js');
+    expect(structuralTestsFor(['docs/README.md'], new Set(['scripts/ensure-deps.test.js']))).not.toContain('scripts/ensure-deps.test.js');
   });
 
   it('selects lint when scripts, lib, or autofixer changes, and skips slashdo and dependency trees', () => {
@@ -1080,8 +1085,15 @@ describe('CI test impact planner', () => {
       'client/src/components/catalog/CatalogCard.jsx',
       'client/src/lib/catalogLinks.js',
     ]);
-    expect(plan.client.files).toContain('client/src/lib/index.test.js');
-    expect(plan.client.files).toContain('client/src/a11yConventions.test.js');
+    expect(plan.client.files).toContain('client/src/lib/moduleSummaries.test.js');
+    expect(plan.client.files).toContain('client/src/a11y/controlNames.conventions.test.js');
+    expect(plan.client.files).toContain('client/src/a11y/dnd.conventions.test.js');
+    expect(plan.client.files).toContain('client/src/a11y/fileInputsToasts.conventions.test.js');
+    expect(plan.client.files).toContain('client/src/a11y/hitAreas.conventions.test.js');
+    expect(plan.client.files).toContain('client/src/a11y/landmarks.conventions.test.js');
+    expect(plan.client.files).toContain('client/src/a11y/overlays.conventions.test.js');
+    expect(plan.client.files).toContain('client/src/a11y/routeHeadings.conventions.test.js');
+    expect(plan.client.files).toContain('client/src/a11y/scanner.conventions.test.js');
     expect(plan.client.files).toContain('client/src/hooks/mountedRefConventions.test.js');
     expect(plan.lint).toEqual({
       mode: 'files',
@@ -1100,7 +1112,14 @@ describe('CI test impact planner', () => {
     const plan = buildCiTestPlan(['client/src/hooks/useAsyncAction.js'], { trackedFiles: TRACKED });
 
     expect(plan.client.files).toContain('client/src/hooks/mountedRefConventions.test.js');
-    expect(plan.client.files).not.toContain('client/src/a11yConventions.test.js');
+    expect(plan.client.files).not.toContain('client/src/a11y/controlNames.conventions.test.js');
+    expect(plan.client.files).not.toContain('client/src/a11y/dnd.conventions.test.js');
+    expect(plan.client.files).not.toContain('client/src/a11y/fileInputsToasts.conventions.test.js');
+    expect(plan.client.files).not.toContain('client/src/a11y/hitAreas.conventions.test.js');
+    expect(plan.client.files).not.toContain('client/src/a11y/landmarks.conventions.test.js');
+    expect(plan.client.files).not.toContain('client/src/a11y/overlays.conventions.test.js');
+    expect(plan.client.files).not.toContain('client/src/a11y/routeHeadings.conventions.test.js');
+    expect(plan.client.files).not.toContain('client/src/a11y/scanner.conventions.test.js');
   });
 
   it('runs the DB suite when a database-backed adapter changes', () => {
@@ -1557,15 +1576,6 @@ describe('CI test impact planner', () => {
       const exact = buildCiTestPlan(tests, { trackedFiles });
       expect(exact.server.mode).toBe('files');
       expect(exact.shards.server).toEqual([1]);
-
-      // A barrel-only edit keeps exact-file selection; over the cap it fans out.
-      const barrel = 'server/lib/index.js';
-      const named = featureTests('server/consumers', MAX_TARGETED_TEST_FILES + 1);
-      const barrelPlan = buildCiTestPlan([barrel], { trackedFiles: [...TRACKED, ...named],
-        pathContractTests: { [barrel]: named } });
-      expect(barrelPlan.server.mode).toBe('files');
-      expect(barrelPlan.server.files).toEqual(expect.arrayContaining(named));
-      expect(barrelPlan.shards.server).toEqual(SERVER_FANOUT);
     });
 
     it("stays on one runner when Vitest's shard guard could see fewer files than shards", () => {
@@ -1667,6 +1677,11 @@ describe('CI test impact planner', () => {
       expect(plan.full, path).toBe(true);
       expect(plan.windowsMode, path).toBe('skip');
     }
+    // ci.yml's composite actions are part of its job definitions, windows-server's included.
+    for (const path of ['.github/actions/setup-server/action.yml', '.github/actions/test-memo/action.yml']) {
+      expect(windowsModeOf(path), path).toBe('files');
+      expect(buildCiTestPlan([path], { trackedFiles: TRACKED }).full, path).toBe(true);
+    }
     // Any matching trigger still wins: ci.yml next to a Linux-only script escalates.
     expect(windowsModeOf('.github/workflows/ci.yml')).toBe('files');
     expect(buildCiTestPlan(['scripts/ci-test-plan.js', '.github/workflows/ci.yml'], { trackedFiles: TRACKED }).windowsMode).toBe('files');
@@ -1763,9 +1778,9 @@ describe('CI test impact planner', () => {
     expect(plan.windowsFiles).toContain(contract);
   });
 
-  it('runs the native supervised release-recovery service contract on Windows', () => {
-    const source = 'server/services/releaseCandidateRecovery.js';
-    const contract = 'server/services/releaseCandidateRecovery.test.js';
+  it('runs the native release pre-flight contract on Windows', () => {
+    const source = 'server/services/releasePreflight.js';
+    const contract = 'server/services/releasePreflight.test.js';
     const plan = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, contract] });
     expect(plan.windows).toBe(true);
     expect(plan.windowsMode).toBe('files');
@@ -1939,7 +1954,6 @@ describe('Windows native support boundary', () => {
     'server/lib/windowsAgentProcess.js',
     'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
     'server/lib/gitRepositoryIdentity.js',
-    'server/lib/checkoutRetirementAdmission.js',
     'server/lib/pathSafety.js',
     'server/services/shell.windows.test.js',
     'server/services/agentTuiSpawning/sessionController.js',
@@ -1993,7 +2007,7 @@ describe('Windows native support boundary', () => {
       'server/services/shell.windows.test.js', 'server/services/tuiPromptRunner.test.js',
       'server/lib/execGit.test.js', 'server/lib/windowsGitProcess.test.js', 'server/lib/windowsGitProcess.protocol.test.js',
       'server/lib/windowsAgentProcess.test.js',
-      'server/lib/gitRepositoryIdentity.test.js', 'server/lib/checkoutRetirementAdmission.test.js',
+      'server/lib/gitRepositoryIdentity.test.js',
       'server/lib/nativeTrash.smoke.test.js',
     ]));
     const repo = fileURLToPath(new URL('../', import.meta.url));
@@ -2292,7 +2306,8 @@ describe('dependency manifest Windows escalation', () => {
   });
 
   it('pins the Windows-installed workspaces to the windows-server install steps in ci.yml', () => {
-    const job = workflowJobs(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '.github', 'workflows', 'ci.yml'), 'utf8'))['windows-server'];
+    // The install steps live in the setup-server composite action.
+    const job = readCiJobs()['windows-server'];
     const installed = [...job.matchAll(/npm (?:ci|install)\b[^\n]*/g)].map(([cmd]) => cmd.match(/--prefix\s+(\S+)/)?.[1] ?? '.');
     expect(installed.sort()).toEqual([...WINDOWS_INSTALLED_WORKSPACES].sort());
   });
@@ -2489,14 +2504,13 @@ describe('path-gated single-purpose jobs', () => {
   it('runs the macOS supervision suites only for the native supervision path and its harness', () => {
     for (const file of [
       'server/lib/windowsAgentProcess.js', 'server/lib/windowsAgentProcess.darwin.test.js', 'server/lib/darwinAgentSupervisor.py',
-      'server/services/releaseCandidateRecovery.js', 'server/services/releaseCandidateRecovery.test.js',
-      'server/services/releaseCandidateSettlement.js', 'server/vitest.config.js', 'server/package-lock.json', 'server/.npmrc',
-      'scripts/trusted-rebuilds.js', '.github/workflows/ci.yml',
+      'server/vitest.config.js', 'server/package-lock.json', 'server/.npmrc',
+      'scripts/trusted-rebuilds.js', '.github/workflows/ci.yml', '.github/actions/setup-server/action.yml',
     ]) expect(buildCiTestPlan([file]).macosNative, file).toBe(true);
     for (const file of [
       'server/lib/windowsAgentSupervisor.ps1', 'server/lib/linuxAgentSupervisor.py', 'server/lib/bufferedSpawn.js',
-      'server/services/releaseCandidateEvidence.js', 'client/src/App.jsx', 'docs/GITHUB_ACTIONS.md',
-      '.github/workflows/release.yml', 'package-lock.json', 'client/.npmrc',
+      'server/services/releasePreflight.js', 'server/services/releaseCandidateEvidence.js', 'client/src/App.jsx', 'docs/GITHUB_ACTIONS.md',
+      '.github/workflows/release.yml', 'package-lock.json', 'client/.npmrc', '.github/actions/setup-client/action.yml',
     ]) expect(buildCiTestPlan([file]).macosNative, file).toBe(false);
     expect(buildCiTestPlan(['docs/README.md'], { forceFull: true }).macosNative).toBe(true);
 

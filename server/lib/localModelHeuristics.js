@@ -1,6 +1,15 @@
 /**
  * Local-model capability heuristics.
  *
+ * Capability heuristics for untyped local (Ollama/LM Studio) models.
+ * `isEmbeddingModel`/`isGenerationModel` (so a generation/fallback run never picks an embedding model
+ * like `nomic-embed-text`); `isVisionModel(model)` (string id or model card — prefers explicit
+ * `type:'vlm'`/`capabilities:['vision']` metadata, falls back to id regex; used by the LoRA
+ * captioner); `recommendEditorialModel(models, { measured })` ranks installed models for editorial
+ * review/editing, dropping any a fresh measurement proved cannot run here. Pure —
+ * `client/src/utils/localModelHeuristics.js` re-exports
+ * `isEmbeddingModel`/`isVisionModel`/`isToolUseModel` from here.
+ *
  * Local backends (Ollama / LM Studio) don't tag their models with a capability
  * type, so PortOS infers one from the model id / family string. Kept pure and
  * dependency-free so every consumer shares one source of truth:
@@ -117,7 +126,8 @@ const VISION_RE = new RegExp([
 // command-based allow-list is how the captioner knows a CLI provider can read
 // images. Keyed on `command` so a renamed/duplicated provider still qualifies.
 // grok has no attach flag; it opens a staged image with its read_file tool (#15576).
-const VISION_CLI_COMMANDS = new Set(['codex', 'claude', 'grok']);
+// agy (Antigravity) multimodal models (Gemini 4 Argon, etc.) inspect staged images in their workspace.
+const VISION_CLI_COMMANDS = new Set(['codex', 'claude', 'grok', 'agy', 'antigravity']);
 
 /**
  * Whether a CLI-type provider can caption images (its model reads vision and

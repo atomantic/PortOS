@@ -1,4 +1,11 @@
 /**
+ * `BACKUP_ASSET_OWNERS` inventories every durable file-plus-row owner as `admitted`, `reference-only`,
+ * or `outstanding`.
+ *
+ * `backupAssetConsistency()` derives the consistency a backup snapshot may claim (`global` only when
+ * nothing is outstanding, otherwise `admitted-owners` with the outstanding ids). Its test keeps
+ * admitted entries and `withBackupAssetPublication` call sites in step.
+ *
  * Inventory of durable asset owners for backup snapshot consistency (#9923).
  * Scope: enumerated managed runtime writers using the shared install protocol.
  * External tools and preexisting corruption are outside this concurrency claim.
@@ -239,12 +246,13 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     // apart from the bytes, so each holds the lease from its first byte change
     // (or, for an upload, the record write) through the record. Committing a
     // voice-memo scrap to an ingredient names bytes the admitted scrap already
-    // named, and detaching catalog media removes no bytes.
+    // named, and detaching catalog media removes no bytes. A kept look-around
+    // angle is saved to the gallery first and its plate row commits under the lease.
     id: 'attachments-and-catalog-media',
     status: 'admitted',
     modules: [
       'services/persistentMindAttachments.js', 'routes/brainSongbook.js', 'services/catalogMedia.js',
-      'services/catalogIngestSources.js', 'services/roundReferenceAudioImport.js',
+      'services/catalogIngestSources.js', 'services/roundReferenceAudioImport.js', 'services/catalogLookAround.js',
     ],
   },
   {
@@ -360,8 +368,8 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'admitted',
     modules: [
       'services/imageGen/local.js', 'services/imageGen/agy.js', 'services/imageGen/codex.js',
-      'services/imageGen/grok.js', 'services/imageGen/fal.js', 'services/imageGen/runway.js', 'services/imageGen/higgsfield.js',
-      'services/imageGen/google.js', 'services/imageGen/external.js',
+      // The hosted runner publishes for fal.ai, Runway, Higgsfield and Google (#16098).
+      'services/imageGen/grok.js', 'services/imageGen/hostedJobRunner.js', 'services/imageGen/external.js',
       'services/imageGen/remote.js', 'services/imageGen/variants.js', 'services/mediaSketches.js',
       'services/imageGen/publication.js', 'services/imageGen/index.js',
       // A storyboard-guided Grok clip files the first frame it built into the

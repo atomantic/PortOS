@@ -1,4 +1,15 @@
 /**
+ * `capturePreviewFrame` freezes the displayed animatic (DOM, media, canvas layers) into an SVG and PNG
+ * with fit, transforms and film look applied.
+ *
+ * `capturePreviewFrame` freezes the displayed animatic DOM, decoded media and canvas layers into an
+ * inert SVG and PNG with actual fitting, transforms and film look, then lays any `over` layers (a
+ * steady title card, shown outside the look) on the finished picture; `lyricFrameCaptureBridge`
+ * captures the known sandboxed lyric/title canvas layers after an acknowledged seek. Fails on missing,
+ * tainted or unsupported layers.
+ */
+
+/**
  * Freeze the actual preview tree, including CSS fitting/transforms and SVG filters.
  * Media becomes decoded pixels before async rasterization, so a later seek cannot
  * replace the selected frame. The resulting SVG is used only as an inert image.

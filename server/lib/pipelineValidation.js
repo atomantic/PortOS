@@ -2,12 +2,16 @@
  * Creative-production pipeline Zod schemas (split out of validation.js,
  * issue #1831).
  *
+ * Creative-production pipeline schemas (Writers Room works/folders/live-mode/drafts, story-bible
+ * character/place/object, editorial checks, storyboard shots/scenes, prompt-stage config, issue-list
+ * query).
+ *
  * Covers the Writers Room (works, folders, live-mode, drafts, snapshots,
  * exercises, analyses), the story-bible character/place/object schemas (+ the
  * kind-neutral Pipeline re-exports), registry-driven editorial checks, storyboard
  * shot/scene shapes, the prompt-stage config, and the pipeline issue-list query.
  * validation.js re-exports everything here (flat) so existing deep imports keep
- * working; the barrel surfaces it as the `pipelineValidation` namespace.
+ * working.
  */
 import { z } from 'zod';
 import { partialWithoutDefaults } from './zodCompat.js';

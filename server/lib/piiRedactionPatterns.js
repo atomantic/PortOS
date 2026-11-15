@@ -1,4 +1,17 @@
 /**
+ * `PII_PATTERNS`: shared table of machine-identity and PII `{ code, pattern, replacement }` entries
+ * used for federation detection and free-text redaction.
+ *
+ * `PII_PATTERNS` — the machine-identity/PII `{ code, pattern, replacement }` table shared by
+ * `federationSafety.js` (detection, via `pattern.test()`) and
+ * `services/agentContextMcp.js#redactAgentContextText` /
+ * `services/agentErrorAnalysis.js#redactFailureSnippet` (replacement, via `redactPii(text)`). One list
+ * for home/Windows paths, IPv4/IPv6, MAC, `.ts.net`/`.local` hosts, email, phone, and labelled GPS
+ * coordinates, so a correction reaches every consumer instead of drifting across independent copies
+ * (#7474). `globalPattern(pattern)` derives a global-flagged copy for a `.replace()` caller without
+ * mutating the shared (deliberately non-global) regex object. Dependency-free leaf —
+ * credential-shaped/-named checks stay in `secretText.js`/`secretKeys.js`. Pure; reads no environment.
+ *
  * Shared machine-identity / PII pattern table for free text — the pieces
  * `server/services/agentContextMcp.js#redactAgentContextText`,
  * `server/services/agentErrorAnalysis.js#redactFailureSnippet`, and

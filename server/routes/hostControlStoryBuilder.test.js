@@ -34,7 +34,7 @@ vi.mock('../services/storyBuilderRunner.js', () => ({
   listActiveStepRuns: effects.listActiveStepRuns,
 }));
 
-import { authGate, hostControlRouteGate, hostControlBodyGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import storyRoutes from './storyBuilder.js';
 
@@ -54,7 +54,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use(base, storyRoutes);
   app.use(errorMiddleware);
   return app;
@@ -125,7 +125,7 @@ describe('Story Builder generation authority (#10670)', () => {
     expect(effects.attachClient).toHaveBeenCalledTimes(3);
   });
 
-  it('preserves remote CRUD, sync/reconcile, locks, current-step selection and progress reads', async () => {
+  it('keeps remote reads open, refuses remote record writes, and runs CRUD, sync/reconcile, locks and current-step selection for a local caller', async () => {
     for (const [method, path, body, effect, status] of [
       ['post', base, { title: 'Example story' }, effects.createStorySession, 201],
       ['get', session, undefined, effects.getStorySessionView, 200],
@@ -140,7 +140,12 @@ describe('Story Builder generation authority (#10670)', () => {
       ['get', `${session}/steps/idea/progress`, undefined, effects.attachClient, 200],
     ]) {
       const before = effect.mock.calls.length;
-      const response = await call(appFor(), path, body, {}, method);
+      if (method !== 'get') {
+        const remote = await call(appFor(), path, body, {}, method);
+        expect([remote.status, remote.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+        expect(effect).toHaveBeenCalledTimes(before);
+      }
+      const response = await call(appFor(method === 'get' ? '192.0.2.10' : '127.0.0.1'), path, body, {}, method);
       expect(response.status, `${path}: ${JSON.stringify(response.body)}`).toBe(status);
       expect(effect).toHaveBeenCalledTimes(before + 1);
     }

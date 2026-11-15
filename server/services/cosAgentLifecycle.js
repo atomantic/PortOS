@@ -1,4 +1,3 @@
-import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 /**
  * CoS Agent Lifecycle Module
  *
@@ -23,8 +22,8 @@ import { atomicWrite, ensureDir, readFileTail, safeJSONParse, tryReadFile } from
 import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
-import { loadAgentIndex, saveAgentIndex, getAgentDir, recordArchivedAgentOrder, moveAgentDir } from './cosAgentIndex.js';
-import { hasClaimCheckoutBindings, hasReleaseCandidateBinding, boundCheckoutBranches, completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
+import { loadAgentIndex, saveAgentIndex, getAgentDir, recordArchivedAgentOrder, moveAgentDir, invalidateArchivedRecord } from './cosAgentIndex.js';
+import { hasClaimCheckoutBindings, hasReleaseCandidateBinding } from './completedCheckoutEvidence.js';
 import { isAgentHandoff } from '../lib/agentOutcome.js';
 import { collectProtectedCleanupOwners } from '../lib/taskRetryHold.js';
 import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
@@ -45,8 +44,7 @@ const releaseDeliveryIdentity = agent => ({ taskId: agent?.taskId, startedAt: ag
   metadata: { sourceWorkspace: agent?.metadata?.sourceWorkspace, workspacePath: agent?.metadata?.workspacePath,
     taskAnalysisType: agent?.metadata?.taskAnalysisType, taskApp: agent?.metadata?.taskApp, isWorktree: agent?.metadata?.isWorktree,
     releasePublication: agent?.metadata?.releasePublication, releaseCandidate: agent?.metadata?.releaseCandidate,
-    releaseCandidateRecovery: agent?.metadata?.releaseCandidateRecovery, releaseCandidateLifecycle: agent?.metadata?.releaseCandidateLifecycle,
-    checkoutSeeds: agent?.metadata?.checkoutSeeds } });
+    releaseCandidateLifecycle: agent?.metadata?.releaseCandidateLifecycle } });
 
 async function assertManagedReleaseDelivery(agent, outcome) {
   const { verifyReleaseDelivery } = await import('./releaseDeliveryGate.js');
@@ -131,12 +129,12 @@ export async function readProtectedCleanupOwners({ state = null, index = null, t
 }
 
 export async function registerAgent(agentId, taskId, metadata = {}) {
-  const { releaseCandidateLifecycle: _lifecycle, ...untrustedMetadata } = metadata;
+  const { releaseCandidateLifecycle: _lifecycle, checkoutSeeds: _seeds, supersededCheckoutSeeds: _superseded, ...untrustedMetadata } = metadata;
   metadata = untrustedMetadata;
   metadata = { ...metadata, releasePublication: null };
   if (metadata.taskAnalysisType === 'do-release') {
     // A task's supplied metadata is not a server-observed checkout reservation.
-    const { releaseCandidateRecovery: _recovery, releaseCandidateSuccessor: _successor, releaseCandidate: _candidate,
+    const { releaseCandidate: _candidate,
       releaseSynchronizationCheckout: _syncCheckout, checkoutSeeds: _seeds, supersededCheckoutSeeds: _superseded, completedCheckouts: _completed, checkoutCapture: _capture, ...trusted } = metadata;
     metadata = trusted;
   }
@@ -153,10 +151,6 @@ export async function registerAgent(agentId, taskId, metadata = {}) {
     };
     if (metadata.taskAnalysisType === 'do-release' && metadata.isWorktree === false) {
       registered.metadata = { ...metadata, releaseCandidateLifecycle: initialCandidateLifecycle(registered) };
-    }
-    if (metadata.isWorktree === true && metadata.worktreeBranch && metadata.sourceWorkspace) {
-      const { captureCheckoutSeeds } = await import('./completedCheckoutEvidence.js');
-      registered.metadata = { ...metadata, checkoutSeeds: await captureCheckoutSeeds(registered) };
     }
     if (['win32', 'linux', 'darwin'].includes(process.platform) && ['do-release', 'release-sync'].includes(metadata.taskAnalysisType)) {
       const { reserveWindowsAgentProcess } = await import('../lib/windowsAgentProcess.js');
@@ -209,6 +203,10 @@ export async function updateAgent(agentId, updates) {
 
     // Only forge verification may write publication receipts. Generic updates
     // and stale completion metadata cannot forge or revoke an observed release.
+    if (updates.metadata) {
+      const { checkoutSeeds: _seeds, supersededCheckoutSeeds: _superseded, ...metadata } = updates.metadata;
+      updates = { ...updates, metadata };
+    }
     if (updates.metadata && Object.hasOwn(updates.metadata, 'releasePublication')) {
       const { releasePublication: _publication, ...metadata } = updates.metadata;
       updates = { ...updates, metadata };
@@ -220,7 +218,7 @@ export async function updateAgent(agentId, updates) {
     if (current.metadata?.taskAnalysisType === 'do-release' && updates.metadata) {
       // Only the ownership transaction and completion capture write these
       // fields; generic updates cannot manufacture or revoke their evidence.
-      const { releaseCandidateRecovery: _recovery, releaseCandidateSuccessor: _successor, releaseCandidate: _candidate,
+      const { releaseCandidate: _candidate,
         releaseSynchronizationCheckout: _syncCheckout, checkoutSeeds: _seeds, supersededCheckoutSeeds: _superseded, completedCheckouts: _completed, checkoutCapture: _capture, ...metadata } = updates.metadata;
       updates = { ...updates, metadata };
     }
@@ -262,6 +260,7 @@ export async function updateAgent(agentId, updates) {
       const { output: _output, ...metadata } = updatedAgent;
       const dateStr = updatedAgent.completedAt.slice(0, 10);
       await atomicWrite(join(getAgentDir(agentId, dateStr), 'metadata.json'), metadata);
+      invalidateArchivedRecord(agentId);
     }
 
     cosEvents.emit('agent:updated', updatedAgent);
@@ -277,8 +276,7 @@ export async function recordAgentReleasePublication(owner, receipt) {
     if (!agent || agent.status !== 'running' || agent.taskId !== owner.taskId
       || agent.startedAt !== owner.startedAt || agent.metadata?.taskAnalysisType !== 'do-release'
       || agent.metadata?.sourceWorkspace !== owner.metadata?.sourceWorkspace
-      || agent.metadata?.workspacePath !== owner.metadata?.workspacePath
-      || !isDeepStrictEqual(agent.metadata?.releaseCandidateRecovery, owner.metadata?.releaseCandidateRecovery)) {
+      || agent.metadata?.workspacePath !== owner.metadata?.workspacePath) {
       throw new ServerError('Release coordinator ownership changed during verification', { status: 409 });
     }
     const previous = agent.metadata.releasePublication;
@@ -348,12 +346,16 @@ async function archiveCompletedAgent(agentId, agent) {
 export function recordRepoStateVerification(agentId, verification) {
   return updateCompletionReceipt(agentId, (metadata, agent) => {
     const capture = metadata.checkoutCapture;
+    const verifiedBy = metadata.completionCleanup?.stages?.worktree?.verifiedBy;
+    const currentInventory = ['current-inventory', 'inherited-current-inventory'].includes(verifiedBy);
+    // Completed agent records from before the inventory transition remain valid.
+    const legacyRetirement = ['service-retirement-receipt', 'inherited-service-retirement-receipt'].includes(verifiedBy)
+      && /^[a-f0-9]{64}$/.test(capture?.receiptDigest || '')
+      && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(capture?.retiredHead || '');
     const retired = capture?.status === 'retired' && capture.unknown === true
-      && /^[a-f0-9]{64}$/.test(capture.receiptDigest || '') && /^[a-f0-9]{64}$/.test(capture.checkoutIdentity || '')
-      && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(capture.retiredHead || '')
+      && (currentInventory || (legacyRetirement && /^[a-f0-9]{64}$/.test(capture.checkoutIdentity || '')))
       && metadata.repoStateVerification?.physicalRetirementVerified === true
-      && metadata.completionCleanup?.status === 'completed'
-      && ['service-retirement-receipt', 'inherited-service-retirement-receipt'].includes(metadata.completionCleanup.stages?.worktree?.verifiedBy);
+      && metadata.completionCleanup?.status === 'completed';
     // An absent task cannot undo an already verified physical retirement. The
     // startup selector may still hold the snapshot from before receipt replay.
     const next = verification.status === 'pending' && retired ? { ...verification, status: 'completed', reasons: [] } : verification;
@@ -365,26 +367,6 @@ export function recordRepoStateVerification(agentId, verification) {
     }
     return { ...metadata, repoStateVerification: { ...metadata.repoStateVerification, ...next } };
   });
-}
-
-/** Historical cleanup has its own ledger; the runs' original verdicts and
- * transferred verification records remain evidence, never rewritten success. */
-export async function recordHistoricalCleanupReconciliation(agentId, expected, patch) {
-  let matched = false;
-  const saved = await updateCompletionReceipt(agentId, (metadata, agent) => {
-    const { historicalCleanupReconciliation: _prior, ...current } = metadata;
-    const { historicalCleanupReconciliation: _expected, ...original } = expected.metadata || {};
-    if (agent.startedAt !== expected.startedAt || agent.taskId !== expected.taskId
-      || !isDeepStrictEqual(agent.result, expected.result) || !isDeepStrictEqual(current, original)) return metadata;
-    matched = true;
-    const { branchOutcome, ...fields } = patch;
-    const prior = metadata.historicalCleanupReconciliation || {};
-    return { ...metadata, historicalCleanupReconciliation: { ...prior, ...fields,
-      ...(branchOutcome && { branches: { ...prior.branches,
-        [JSON.stringify([branchOutcome.branch, branchOutcome.path || null])]: { ...branchOutcome, observedAt: patch.checkedAt } } }),
-    } };
-  }, { preserveResult: true });
-  return saved && matched;
 }
 
 /** Reserve a cognitive recovery once per exact observation on its original run.
@@ -552,6 +534,7 @@ async function updateCompletionReceipt(agentId, update, { preserveResult = false
     if (date && (!state.agents[agentId] || await tryReadFile(join(getAgentDir(agentId, date), 'metadata.json')))) {
       const { output: _output, ...record } = updated;
       await atomicWrite(join(getAgentDir(agentId, date), 'metadata.json'), record);
+      invalidateArchivedRecord(agentId);
     }
     if (state.agents[agentId]) { state.agents[agentId] = updated; await saveState(state, { changedAgentIds: [agentId] }); }
     cosEvents.emit('agent:updated', updated);
@@ -593,63 +576,50 @@ export async function recordCompletionCleanup(agentId, startedAt, patch) {
   return saved && matched;
 }
 
-/** Settle only an earlier run's physical cleanup after its verified successor.
- * Keep the original unknown capture and failed execution verdict explicit. */
-export function recordSuccessorCheckoutRetirement(agentId, expected, proof) {
-  return recordCheckoutRetirement(agentId, expected, proof, 'delivered-successor');
-}
-
-/** A canonical service receipt proves physical retirement, not an unknown
- * original terminal head or a successful execution. Preserve both as history. */
-export function recordSeededCheckoutRetirement(agentId, expected, proof) {
-  return recordCheckoutRetirement(agentId, expected, proof, 'service-retirement-receipt');
-}
-
-/** An unseeded primary continuation never acquires its parent's retired checkout. */
-export function recordInheritedCheckoutRetirement(agentId, expected, proof) {
-  return recordCheckoutRetirement(agentId, expected, proof, 'inherited-service-retirement-receipt');
-}
-
-async function recordCheckoutRetirement(agentId, expected, proof, verifiedBy) {
+/** Verified absence settles physical cleanup without inventing a terminal
+ * head or changing the original execution result. A captured checkout settles
+ * only for a cleanup run whose task already completed or names another
+ * cleanup owner; neither state can be handed back to this run, while a merely
+ * unowned task may still be awaiting this run's own cleanup handoff. A cleanup
+ * run with an unknown capture follows the same rule. */
+export async function recordAbsentCheckoutRetirement(agentId, expected, proof) {
+  const verifiedBy = proof.inheritedFromAgentId ? 'inherited-current-inventory' : 'current-inventory';
   let matched = false;
-  const saved = await updateCompletionReceipt(agentId, (metadata, agent) => {
+  const saved = await updateCompletionReceipt(agentId, async (metadata, agent) => {
     if (agent.status !== 'completed' || agent.startedAt !== expected.startedAt || agent.taskId !== expected.taskId
       || !isDeepStrictEqual(metadata, expected.metadata) || metadata.completionCleanup?.status !== 'pending') return metadata;
-    const source = proof.sourceCapture;
-    if (source) {
-      if (verifiedBy !== 'delivered-successor' || metadata.checkoutCapture?.status !== 'captured'
-        || agent.result?.executionSuccess !== true || agent.result.validationPassed === false
-        || agent.result.cleanupPending !== true || agent.result.deliveryRecoveryOwned !== true
-        || agent.result.taskOutcome?.status !== 'incomplete' || agent.result.taskOutcome?.recovery?.mode !== 'cleanup'
-        || agent.result.executionInterruption || metadata.executionInterruption || metadata.blocker
-        || !proof.successorAgentId || proof.successorAgentId === agentId || proof.head !== source.head
-        || !/^[a-f0-9]{64}$/.test(proof.receiptDigest || '')
-        || retirementCheckoutIdentityFromPointer(source.incarnation?.pointer) !== proof.checkoutIdentity
-        || proof.prUrl !== metadata.reviewLoopMergeTarget?.url || source.branch !== metadata.worktreeBranch
-        || source.repoPath !== metadata.sourceWorkspace || source.path !== metadata.workspacePath
-        || !metadata.completedCheckouts?.some(row => completedCheckoutReceiptValid(agent, row) && isDeepStrictEqual(row, source))) return metadata;
-    } else if (metadata.checkoutCapture?.status !== 'pending' || metadata.checkoutCapture.unknown !== true) return metadata;
-    if (verifiedBy === 'inherited-service-retirement-receipt'
+    const handedOff = metadata.checkoutCapture?.status === 'captured';
+    if (handedOff ? agent.result?.cleanupPending !== true || metadata.isWorktree !== true
+        || proof.branch !== metadata.worktreeBranch || proof.path !== metadata.workspacePath
+      : metadata.checkoutCapture?.status !== 'pending' || metadata.checkoutCapture.unknown !== true) return metadata;
+    // A run that still owns its task's cleanup keeps its delivery obligation
+    // whether or not its capture completed.
+    if (handedOff || agent.result?.cleanupPending === true) {
+      const { getTaskById } = await import('./cosTaskStore.js');
+      const task = await getTaskById(agent.taskId).catch(() => null);
+      const owner = task?.metadata?.deliveryRecoveryAgentId;
+      if (task?.status !== 'completed' && !(typeof owner === 'string' && owner && owner !== agentId)) return metadata;
+    }
+    if (verifiedBy === 'inherited-current-inventory'
       && (!proof.inheritedFromAgentId || metadata.resumedFromAgentId !== proof.inheritedFromAgentId
-        || metadata.isWorktree !== false || metadata.checkoutSeeds?.length || metadata.completedCheckouts?.length
+        || metadata.isWorktree !== false || metadata.completedCheckouts?.length
         || metadata.worktreeBranch || metadata.prDeliveryTarget || metadata.reviewLoopMergeTarget)) return metadata;
     const stages = metadata.completionCleanup.stages;
     if (!stages || !stages.worktree || ['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report'].some(key => stages[key]?.status !== 'done')
       || Object.entries(stages).some(([key, stage]) => key !== 'worktree' && stage.status !== 'done')) return metadata;
     matched = true;
     const completionCleanup = { ...metadata.completionCleanup, status: 'completed', updatedAt: new Date().toISOString(),
-      stages: { ...stages, worktree: { status: 'done', retryable: false, verifiedBy, ...(proof.successorAgentId && { successorAgentId: proof.successorAgentId }) } } };
+      stages: { ...stages, worktree: { status: 'done', retryable: false, verifiedBy } } };
     delete completionCleanup.context; delete completionCleanup.replay;
     const updated = { ...metadata, completionCleanup,
-      checkoutCapture: source ? metadata.checkoutCapture : { ...metadata.checkoutCapture, status: 'retired', reason: verifiedBy === 'delivered-successor' ? 'retired-by-verified-successor'
-        : verifiedBy === 'inherited-service-retirement-receipt' ? 'inherited-scope-already-retired' : 'retired-by-service-receipt', ...proof },
       repoStateVerification: { ...metadata.repoStateVerification, status: 'completed', reasons: [],
-        checkedAt: new Date().toISOString(), ...(proof.successorAgentId
-          ? { deliveryVerifiedBySuccessor: proof.successorAgentId } : { physicalRetirementVerified: true }) } };
-    return source ? metadataWithCleanupOutcome(updated, { status: 'verified', reason: 'same-head-successor-retirement-verified',
-      branch: source.branch, path: source.path, prUrl: proof.prUrl, committedIntegrationVerified: true,
-      successorAgentId: proof.successorAgentId, preservation: { verifiedAt: new Date().toISOString(),
-        checkoutIdentity: proof.checkoutIdentity, receiptDigest: proof.receiptDigest } }) : updated;
+        checkedAt: new Date().toISOString(), physicalRetirementVerified: true } };
+    // The captured checkout stays recorded; its ledger row shows the cleanup
+    // settled without claiming integration, so the execution result is unchanged.
+    if (handedOff) return metadataWithCleanupOutcome(updated, { status: 'verified', reason: 'already-absent-after-handoff',
+      branch: proof.branch, path: proof.path });
+    return { ...updated, checkoutCapture: { ...metadata.checkoutCapture, status: 'retired',
+      reason: verifiedBy === 'inherited-current-inventory' ? 'inherited-scope-already-retired' : 'retired-from-current-inventory', ...proof } };
   });
   return saved && matched;
 }
@@ -660,14 +630,11 @@ export async function settleAbsentTaskCompletion(agentId, expected) {
   let matched = false;
   const saved = await updateCompletionReceipt(agentId, async (metadata, agent) => {
     const { getTaskById } = await import('./cosTaskStore.js');
-    const { getInstanceId, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
-    const instanceId = await getInstanceId();
-    const keys = ['instanceId', 'completionCleanup', 'completionTaskDispatch', 'completedCheckouts', 'checkoutSeeds', 'supersededCheckoutSeeds',
+    const keys = ['completionCleanup', 'completedCheckouts',
       'worktreeBranch', 'workspacePath', 'sourceWorkspace', 'isWorktree', 'claimBranches', 'claimReleasedBranches'];
     const successfulAudit = agent.result?.success === true && agent.result?.cleanupPending !== true;
     if (agent.startedAt !== expected.startedAt || agent.taskId !== expected.taskId
       || (agent.result?.cleanupPending !== true && !successfulAudit)
-      || !instanceId || instanceId === UNKNOWN_INSTANCE_ID || metadata.instanceId !== instanceId
       || keys.some(key => !isDeepStrictEqual(metadata[key], expected.metadata?.[key]))
       || await getTaskById(agent.taskId)) return metadata;
     const prior = metadata.completionCleanup;
@@ -686,50 +653,39 @@ export async function settleAbsentTaskCompletion(agentId, expected) {
   return saved && matched;
 }
 
-/**
- * Whether this agent's recorded delivery target owns the checkout at
- * `{ branch, path, repoPath }`. The pre-lock forge read passes
- * `includeReviewLoop: true`; the in-lock re-check passes false because there the
- * review-loop PR is already covered by `knownPr`.
- */
-async function deliveryTargetBindsCheckout(meta, { branch, path, repoPath }, { includeReviewLoop }) {
-  const resolves = async (target, expected) => await realpath(target || '').catch(() => null) === expected;
-  if (meta?.prOpenedBy === 'agent-inline' && meta.configOpenPR === true && meta.prDeliveryTarget?.branch === branch
-    && await resolves(meta.prDeliveryTarget?.workspacePath, path)) return true;
-  if (meta?.configClaimFlow === true && hasClaimCheckoutBindings(meta) && meta.claimBranches?.includes(branch)
-    && await resolves(meta.sourceWorkspace || meta.workspacePath, repoPath)) return true;
-  return includeReviewLoop && meta?.prCompletionPolicy === 'review-then-merge'
-    && meta.reviewLoopMergeTarget?.branch === branch && meta.worktreeBranch === branch
-    && await resolves(meta.workspacePath, path);
-}
-
-/** Resolve an explicit retirement's paths and head; null when any is unusable. */
-async function normalizeRetirement(retirement) {
-  const [repoPath, path] = await Promise.all([realpath(retirement.repoPath).catch(() => null), realpath(retirement.path).catch(() => null)]);
-  if (!repoPath || !path || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(retirement.head || '')) return null;
-  return { ...retirement, repoPath, path };
-}
-
-/** Fresh merge proof read outside the ownership lock for an unknown terminal capture. */
-async function resolveMergedCaptureRetirement(agentId) {
-  const { readMergedClaimEvidence } = await import('./completedCheckoutEvidence.js');
-  const original = await getAgentRecord(agentId);
-  const meta = original?.metadata;
-  const seed = meta?.checkoutSeeds?.length === 1 ? meta.checkoutSeeds[0] : null;
-  // Inline, claim and review-loop deliveries can merge before terminal capture fails.
-  // The locked replay still rechecks the original generation, head and every later owner.
-  if (!(original?.status === 'completed' && original.result?.executionSuccess === true
-    && original.result.validationPassed !== false && meta.checkoutCapture?.status === 'pending'
-    && meta.checkoutCapture.unknown === true && meta.checkoutCapture.targets?.length === 0
-    && seed?.agentId === agentId && seed.startedAt === original.startedAt
-    && await deliveryTargetBindsCheckout(meta, seed, { includeReviewLoop: true }))) return null;
-  const { execGit } = await import('../lib/execGit.js');
-  const head = await execGit(['rev-parse', '--verify', 'HEAD^{commit}'], seed.path, {
-    env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0', GIT_NO_REPLACE_OBJECTS: '1' }, timeout: 5000,
-  }).then(result => result.stdout.trim()).catch(() => null);
-  const proof = head && await readMergedClaimEvidence({ repoPath: seed.repoPath, branch: seed.branch, head }).catch(() => null);
-  return proof ? { repoPath: seed.repoPath, branch: seed.branch, path: seed.path, head,
-    prUrl: proof.prUrl, verifiedPrUrl: proof.prUrl, verifiedMergedHead: head, observedStartedAt: original.startedAt } : null;
+/** Recover an unknown capture from the run's still-bound delivery and fresh
+ * merge proof. Checkout generations and legacy seeds do not grant authority. */
+async function resolveMergedCompletionSnapshot(agentId) {
+  const agent = await getAgentRecord(agentId);
+  const meta = agent?.metadata;
+  if (agent?.status !== 'completed' || agent.result?.executionSuccess !== true
+    || agent.result.validationPassed === false || meta?.blocker || agent.result.taskOutcome?.recovery?.mode === 'approval'
+    || meta?.checkoutCapture?.status !== 'pending' || meta.checkoutCapture.unknown !== true) return null;
+  const metadata = structuredClone(meta);
+  const repoPath = meta.sourceWorkspace || meta.workspacePath;
+  const branches = hasClaimCheckoutBindings(meta) ? meta.claimBranches : [meta.worktreeBranch];
+  if (!repoPath || branches?.length !== 1 || !branches[0]) return null;
+  const branch = branches[0];
+  const { listWorktrees } = await import('./worktreeManager.js');
+  const trees = await listWorktrees(repoPath).catch(() => null);
+  const holders = trees?.filter(tree => tree.branch?.replace(/^refs\/heads\//, '') === branch);
+  if (holders?.length !== 1 || holders[0].locked) return null;
+  const path = holders[0].path;
+  const matchesPath = async value => await realpath(value || '').catch(() => null) === await realpath(path);
+  const claim = meta.configClaimFlow === true && hasClaimCheckoutBindings(meta);
+  const inline = meta.prOpenedBy === 'agent-inline' && meta.configOpenPR === true
+    && meta.prDeliveryTarget?.branch === branch && await matchesPath(meta.prDeliveryTarget.workspacePath);
+  const review = meta.prCompletionPolicy === 'review-then-merge' && meta.reviewLoopMergeTarget?.branch === branch
+    && await matchesPath(meta.workspacePath);
+  if (!claim && !inline && !review) return null;
+  const { readCompletedCheckoutIdentity, readMergedClaimEvidence } = await import('./completedCheckoutEvidence.js');
+  const current = await readCompletedCheckoutIdentity({ repoPath, branch, path, head: holders[0].head }).catch(() => null);
+  if (!current) return null;
+  const proof = await readMergedClaimEvidence(current).catch(() => null);
+  const knownPr = meta.branchCompletionPolicy?.prUrl || meta.reviewLoopMergeTarget?.url;
+  if (!proof || (knownPr && knownPr !== proof.prUrl)) return null;
+  return { metadata, snapshot: { version: 2, agentId, startedAt: agent.startedAt, capturedAt: new Date().toISOString(),
+    repoPath: current.repoPath, branch, path: current.path, head: current.head } };
 }
 
 /** True when another record on this branch and repository is not strictly earlier than this generation. */
@@ -747,82 +703,50 @@ async function hasCompetingGenerationOnBranch(history, agentId, startedAt, targe
 }
 
 /** A pre-terminal capture snapshot must lie inside the run and still match the physical checkout. */
-async function capturedSnapshotIsCurrent(agent, target) {
+async function capturedSnapshotIsCurrent(agent, target, { late = false } = {}) {
   const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
   if (!Number.isFinite(Date.parse(target.capturedAt)) || Date.parse(target.capturedAt) < Date.parse(agent.startedAt)
-    || Date.parse(target.capturedAt) > Date.parse(agent.completedAt)) return false;
+    || (!late && Date.parse(target.capturedAt) > Date.parse(agent.completedAt))) return false;
   const current = await readCompletedCheckoutIdentity(target).catch(() => null);
-  const expected = { repoPath: target.repoPath, branch: target.branch, path: target.path, head: target.head, incarnation: target.incarnation };
-  return Boolean(current) && JSON.stringify(current) === JSON.stringify(expected);
+  const expected = { repoPath: target.repoPath, branch: target.branch, path: target.path, head: target.head };
+  return Boolean(current) && isDeepStrictEqual({ repoPath: current.repoPath, branch: current.branch, path: current.path, head: current.head }, expected);
 }
 
 /** Every target must belong to this generation: same agent, no later owner, no competing generation, current snapshot. */
-async function targetsOwnedByThisGeneration({ agent, agentId, targets, seedBacked, owners, history }) {
+async function targetsOwnedByThisGeneration({ agent, agentId, targets, owners, history, late = false }) {
   const { claimCheckoutOwner } = await import('../lib/claimContinuation.js');
   for (const target of targets) {
     if (target.agentId !== agentId || target.startedAt !== agent.startedAt
       || claimCheckoutOwner({ branchName: target.branch, holderPath: target.path, sourceWorkspace: target.repoPath, agents: owners })) return false;
     if (await hasCompetingGenerationOnBranch(history, agentId, agent.startedAt, target)) return false;
-    if (!seedBacked && !await capturedSnapshotIsCurrent(agent, target)) return false;
+    if (!await capturedSnapshotIsCurrent(agent, target, { late })) return false;
   }
   return true;
 }
 
-/** A merge-verified retirement of a successful, unblocked run whose PR is the known one or was proven inline. */
-function isReviewedRetirement(retirement, agent, { knownPr, verifiedInline }) {
-  return retirement?.verifiedMergedHead === retirement?.head
-    && typeof retirement?.prUrl === 'string' && (retirement.prUrl === knownPr || verifiedInline)
-    && agent?.result?.executionSuccess === true && agent.result.validationPassed !== false
-    && agent.result?.taskOutcome?.recovery?.mode !== 'approval' && !agent.metadata?.blocker;
-}
-
-/** An orphaned run whose empty capture is retired against one of its own physical seeds. */
-function isSeededOrphanRetirement(retirement, agent, pending) {
-  return retirement && agent?.result?.orphaned === true && agent.result.validationPassed !== false
-    && pending?.status === 'captured' && agent.metadata.completedCheckouts?.length === 0
-    && agent.metadata.checkoutSeeds?.some(seed => seed.repoPath === retirement.repoPath
-      && seed.branch === retirement.branch && seed.path === retirement.path);
-}
-
-/** Replay requires preterminal snapshots. An explicit, freshly merged retirement
- * review may observe the current head inside the original physical seed instead.
- * Neither path discovers a replacement by name or rewrites execution history.
- */
+/** Retry only terminal targets already observed by this run, preserving live owner checks. */
 export async function retryCompletionCheckoutCapture(agentId, { retirement } = {}) {
   const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
-  const { captureSeededCompletionCheckouts } = await import('./completedCheckoutEvidence.js');
-  if (!retirement) retirement = await resolveMergedCaptureRetirement(agentId) ?? undefined;
+  const mergedSnapshot = await resolveMergedCompletionSnapshot(agentId);
   const recovered = await withClaimOwnershipLock(async () => {
-    if (retirement && !(retirement = await normalizeRetirement(retirement))) return false;
     const agent = await getAgentRecord(agentId);
     const pending = agent?.metadata?.checkoutCapture;
-    const knownPr = agent?.metadata?.branchCompletionPolicy?.prUrl || agent?.metadata?.reviewLoopMergeTarget?.url;
-    const verifiedInline = !knownPr
-      && retirement?.verifiedPrUrl === retirement?.prUrl && retirement?.observedStartedAt === agent?.startedAt
-      && await deliveryTargetBindsCheckout(agent?.metadata, { branch: retirement?.branch, path: retirement?.path,
-        repoPath: retirement?.repoPath }, { includeReviewLoop: false });
-    const reviewedRetirement = isReviewedRetirement(retirement, agent, { knownPr, verifiedInline });
-    if (retirement?.verifiedMergedHead && !reviewedRetirement) return false;
-    const seededOrphan = isSeededOrphanRetirement(retirement, agent, pending);
-    if (agent?.status !== 'completed' || (pending?.status !== 'pending' && !seededOrphan)) return false;
+    if (agent?.status !== 'completed' || pending?.status !== 'pending') return false;
     const owners = await readClaimOwnershipAgents().catch(() => null);
     const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
     const history = await readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);
     if (!Array.isArray(owners) || !Array.isArray(history)) return false;
-    const bound = boundCheckoutBranches(agent.metadata);
-    const seeds = (agent.metadata?.checkoutSeeds || []).filter(seed => Array.isArray(bound) && bound.includes(seed.branch));
-    const targets = seeds.length ? seeds : pending.unknown === false ? pending.targets : null;
+    const targets = pending.unknown === false ? pending.targets
+      : mergedSnapshot?.snapshot.startedAt === agent.startedAt && isDeepStrictEqual(mergedSnapshot.metadata, agent.metadata)
+        ? [mergedSnapshot.snapshot] : null;
     if (!targets?.length) return false;
-    if (!await targetsOwnedByThisGeneration({ agent, agentId, targets, seedBacked: seeds.length > 0, owners, history })) return false;
-    const captured = seeds.length ? await captureSeededCompletionCheckouts(agent,
-      reviewedRetirement ? { retirement } : {}).catch(() => null) : targets;
-    if (!captured?.length) return false;
+    if (!await targetsOwnedByThisGeneration({ agent, agentId, targets, owners, history, late: pending.unknown === true })) return false;
+    const captured = targets;
     if (retirement && !captured.some(row => row.repoPath === retirement.repoPath && row.branch === retirement.branch
       && row.path === retirement.path && row.head === retirement.head)) return false;
     let recorded = false;
     const saved = await updateCompletionReceipt(agentId, (metadata, current) => {
-      if (current.startedAt !== agent.startedAt || JSON.stringify(metadata.checkoutCapture) !== JSON.stringify(pending)
-        || JSON.stringify(metadata.checkoutSeeds) !== JSON.stringify(agent.metadata.checkoutSeeds)) return metadata;
+      if (current.startedAt !== agent.startedAt || JSON.stringify(metadata.checkoutCapture) !== JSON.stringify(pending)) return metadata;
       recorded = true;
       return { ...metadata, checkoutCapture: { status: 'captured', retriedAt: new Date().toISOString() }, completedCheckouts: captured };
     });
@@ -904,7 +828,7 @@ export async function completeAgent(agentId, result = {}) {
       completedCheckouts = [];
       // Identity capture describes the owned physical checkout, not a passing
       // execution verdict. Failed/orphaned runs may already have delivered code.
-      const { captureCompletedCheckouts, captureSeededCompletionCheckouts } = await import('./completedCheckoutEvidence.js');
+      const { captureCompletedCheckouts } = await import('./completedCheckoutEvidence.js');
       try { completedCheckouts = await captureCompletedCheckouts(agent, { success: true, strict: true }); }
       catch (error) {
         // Ingestion remains terminal. Retry only an originally captured exact
@@ -913,12 +837,6 @@ export async function completeAgent(agentId, result = {}) {
           targets: error.checkoutCapture?.targets || [], unknown: error.checkoutCapture?.unknown !== false,
           observedAt: new Date().toISOString() };
         result = { ...result, executionSuccess: result.executionSuccess ?? (result.success === true) };
-      }
-      if (!completedCheckouts.length && agent.metadata?.checkoutSeeds?.length) {
-        // Capture a terminal head before publishing completion, even when the
-        // ordinary inventory read failed. A later retry must match this head.
-        const targets = await captureSeededCompletionCheckouts(agent, { preterminal: true }).catch(() => null);
-        if (targets?.length) checkoutCapture = { ...(checkoutCapture || { status: 'captured' }), targets, unknown: false };
       }
     }
 

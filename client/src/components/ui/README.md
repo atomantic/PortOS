@@ -11,6 +11,7 @@ accessibility). Feature-specific components live under their own feature directo
 | `ActionActivityBar` | Thin indeterminate bar at the top of the app while a tap-started request (`services/actionFeedback.js`) runs past 300ms. Mounted once in `Layout`. |
 | `AutoSizeTextarea` | Controlled `<textarea>` that grows to fit its content — no internal scroll, no hand-resize. |
 | `Banner` | Toned alert block (icon + content + actions) for warnings, errors, and info callouts. |
+| `GroupedRouteTabsHeader` | Route tabs split into labeled `navGroup` pill rows on desktop and one `<optgroup>` `<select>` below `sm` (Settings header). |
 | `SettingsLoadError` | Inline "failed to load saved settings" banner with Retry; pair with a disabled Save so defaults are never written over stored values. |
 | `UnreadableSyncStateNotice` | Warning banner shown when a sync status reports `stateError: 'UNREADABLE_STORE'` (sync stopped because its saved position could not be read). Pass the status object. |
 | `BeatPulse` | Metronome dot row — one dot per beat of the bar, the current one lit. |

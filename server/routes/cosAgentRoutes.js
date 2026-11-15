@@ -49,22 +49,12 @@ router.post('/agents/:id/release-publication', asyncHandler(async (req, res) => 
 router.post('/agents/:id/release-candidate', asyncHandler(async (req, res) => {
   const { releaseCandidateRequestSchema } = await import('../lib/releasePublication.js');
   const input = validateRequest(releaseCandidateRequestSchema, req.body ?? {});
-  if (input.action === 'recover') {
-    const { recoverReleaseCandidate } = await import('../services/releaseCandidateRecovery.js');
-    return res.json(await recoverReleaseCandidate(req.params.id, input.predecessorAgentId));
-  }
-  if (input.action === 'retire') {
-    const { retireHeldReleaseCandidate } = await import('../services/releaseCandidateReconciliation.js');
-    // Server-derived, like the synchronization checkpoint reset: never a body field.
-    const operator = req.portosAuthContext?.method === 'session' ? 'operator-session' : 'local-operator';
-    return res.json(await retireHeldReleaseCandidate(req.params.id, input.reason, operator));
-  }
   if (input.action === 'sync-reserve' || input.action === 'sync-capture') {
     const { updateReleaseSynchronizationOwnership } = await import('../services/cosClaimOwnership.js');
     return res.json(await updateReleaseSynchronizationOwnership(req.params.id, input.action));
   }
   const { updateReleaseCandidateOwnership } = await import('../services/cosClaimOwnership.js');
-  res.json(await updateReleaseCandidateOwnership(req.params.id, input.action));
+  res.json(await updateReleaseCandidateOwnership(req.params.id, input.action, { version: input.version }));
 }));
 
 // A registered run hands its published, reviewed head to the server's

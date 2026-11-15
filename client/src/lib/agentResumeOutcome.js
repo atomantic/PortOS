@@ -1,4 +1,16 @@
 /**
+ * `agentResumeMessage(result, messages, fallback)` — the toast wording for a CoS agent resume/relaunch
+ * result.
+ *
+ * The server answers with a `mode` (what it did to the task) plus `spawned`/`spawnHold` (whether it
+ * also STARTED it — a resumed task is force-spawned when a slot is free, and `spawnHold` names the
+ * refusal when it isn't). `messages` is keyed by mode as `{ queued, running? }`; a mode with no
+ * `running` variant is one that deliberately queues nothing, so it can never be reported as started.
+ * Shared by the Resume dialog (`cos/tabs/AgentsTab.jsx`) and `cos/tabs/RelaunchAgentModal.jsx` so
+ * neither can say "queued" for a run that already started, or omit the reason it didn't.
+ */
+
+/**
  * Toast wording for a resume/relaunch result, shared by the two dialogs that
  * dispatch one — Resume (`cos/tabs/AgentsTab.jsx`) and Relaunch
  * (`cos/tabs/RelaunchAgentModal.jsx`).

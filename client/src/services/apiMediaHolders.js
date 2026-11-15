@@ -1,3 +1,8 @@
+/**
+ * `getMediaHolders` (which machines hold each media file) and `makeMediaPrimary` (keep one holder's
+ * copy, release the others).
+ */
+
 import { request } from './apiCore.js';
 
 // Which machines hold each media file: { self, items: { '<kind>:<filename>': { holders, primaryInstanceId } } }.

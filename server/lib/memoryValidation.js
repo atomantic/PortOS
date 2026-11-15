@@ -1,3 +1,7 @@
+/**
+ * Memory record + retrieval schemas.
+ */
+
 import { z } from 'zod';
 import { partialWithoutDefaults } from './zodCompat.js';
 import { MEMORY_LINK_TYPES } from './memoryLinkTypes.js';

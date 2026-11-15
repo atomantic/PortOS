@@ -198,13 +198,17 @@ describe('Stacker News review and publication authority', () => {
     expect(events.map((event) => event[2])).toEqual(['pending_review', 'approved', 'executing', 'completed']);
   });
 
-  it('keeps remote action reads and preparation available without granting approval', async () => {
+  it('keeps remote action reads available and lets a local caller prepare a draft without granting approval', async () => {
     const app = appFor();
     const read = await request(app).get(`/api/stacker-news/accounts/${account.id}/actions`);
     expect(read.status).toBe(200);
-    const draft = await post(app, '/api/stacker-news/actions', {
+    const draftBody = {
       accountId: account.id, itemId: item.id, kind: 'draft_comment', payload: { body: 'Example local draft' },
-    });
+    };
+    const refused = await post(app, '/api/stacker-news/actions', draftBody);
+    expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect(events).toEqual([]);
+    const draft = await post(appFor('127.0.0.1'), '/api/stacker-news/actions', draftBody);
     expect(draft.status, JSON.stringify(draft.body)).toBe(201);
     expect(draft.body.state).toBe('pending_review');
     expect(executeStackerNewsOperation).not.toHaveBeenCalled();

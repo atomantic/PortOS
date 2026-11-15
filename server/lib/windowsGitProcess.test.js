@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { spawn } from './childProcess.js';
 import { assertGitWorkSettled, execGit } from './execGit.js';
-import { reserveCheckoutRetirement, releaseCheckoutReservation, withCheckoutPublication } from './checkoutRetirementAdmission.js';
+import { withGitMutationLifetime } from './gitMutationLifetime.js';
 import { destroyGitSandbox } from './gitTestRepo.js';
 
 const quote = value => `'${value.replaceAll('\\', '/').replaceAll("'", "'\\''")}'`;
@@ -57,7 +57,7 @@ if (mode !== 'child') {
       const supervisedReady = join(root, 'supervised-ready');
       const supervisedRelease = join(root, 'supervised-release');
       const supervisedArgs = ['-c', `alias.hold=!${quote(process.execPath)} ${quote(script)} ${quote(supervisedReady)} ${quote(supervisedRelease)}`, 'hold'];
-      const outcome = withCheckoutPublication(root, () => execGit(supervisedArgs, root, { timeout: 1500 })).catch(error => error);
+      const outcome = withGitMutationLifetime(() => execGit(supervisedArgs, root, { timeout: 1500 })).catch(error => error);
       await waitForFile(supervisedReady);
       await expect(destroyGitSandbox(root)).rejects.toMatchObject({ code: 'GIT_SETTLEMENT_HELD' });
       const cleanup = globalThis.__portosGitSupervisorCleanup();
@@ -68,8 +68,6 @@ if (mode !== 'child') {
       expect(await drained).toBeNull();
       expect(neighbor.exitCode).toBe(null);
       expect(() => assertGitWorkSettled(root)).not.toThrow();
-      const reservation = await reserveCheckoutRetirement(root, 'confirmed-cancellation');
-      await releaseCheckoutReservation(reservation);
 
       // Overflow shares the same cancellation path but must retain its cause.
       const overflowReady = join(root, 'overflow-ready');

@@ -1,4 +1,9 @@
-/** Renderer-independent, absolute-time blocking for offline greybox references. */
+/**
+ *  Renderer-independent, absolute-time blocking for offline greybox references.
+ *
+ * Offline sequence validation, absolute-time anchor/camera sampling and global frame-grid planning for
+ * greybox reference exports.
+ */
 import { z } from 'zod';
 import { greyboxSceneSchema } from './greyboxScene.js';
 

@@ -1,5 +1,13 @@
 // Pure helpers for the Round editor's in-memory draft (`/rounds/:id`).
 //
+// Pure draft rules for the Round editor (`/rounds/:id`, #3389) shared by the page, its `useRound*`
+// hooks, and the edit form: the mirrored server caps `PARTNERS_MAX` / `SCORE_PARTS_MAX`; the
+// in-session temp-id contract (`TEMP_ID_RE`, `localId(prefix)`, `stripTempId(row)`) that keeps a
+// never-saved row's React key from being persisted and later colliding with a server uuid; the tempo
+// band `TEMPO_MIN`/`TEMPO_MAX` with `parseTempo(raw)` (on change — no clamping, so typing "68" isn't
+// mangled) and `clampTempo(n)` (on blur); and `buildRoundPatch(song)`, the PUT body with every temp id
+// — including a segment's dangling `layerId` — blanked.
+//
 // Extracted from RoundEditor.jsx (#3389) so the page, its per-concern hooks
 // (useRoundDraft / useRoundRows / useRoundPartners), and the edit-form component
 // all read the same caps, id rules, and tempo band instead of re-declaring them.

@@ -1,7 +1,12 @@
-// Shared resolution presets for video generation. Companion to
-// `imageGenResolutions.js` — both the image and video generators feed their
-// preset table into the shared `components/media/ResolutionField.jsx` control
-// (preset dropdown + "Custom…" W×H), so the size UX stays consistent across both.
+// Shared resolution presets for video generation.
+//
+// Shared resolution presets/default for video generation, model-specific preset/default resolvers (for
+// native canvases such as MiniMax H3), and `snapAspectToImage()` to pick the closest-aspect preset for
+// an I2V source.
+//
+// Companion to `imageGenResolutions.js` — both the image and video generators feed their preset table
+// into the shared `components/media/ResolutionField.jsx` control (preset dropdown + "Custom…" W×H), so
+// the size UX stays consistent across both.
 //
 // Video sizes follow LTX-2's preferred latent boundaries (multiples of 64 on
 // each edge); the aspect-ratio hints in the labels surface common shapes the

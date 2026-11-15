@@ -12,12 +12,6 @@
  * hooks), drive the clock with fake timers (`vi.advanceTimersByTimeAsync`), or
  * wait for a positive signal with `vi.waitFor` and only then assert the negative.
  *
- * ## Burn-down
- *
- * `BURN_DOWN` names the test files that still carry the pattern. It only
- * shrinks: a file that no longer matches must leave the list (the stale-entry
- * assertion fails otherwise), and a new site anywhere fails outright.
- *
  * ## What the scan sees
  *
  * A one-line real sleep (`await new Promise(<fn> => setTimeout(<fn>, <literal>))`)
@@ -37,19 +31,6 @@ import { fileURLToPath } from 'node:url';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 // This file spells the pattern out in its docs and recognizer fixtures.
 const SELF = 'server/negativeProofSleepConventions.test.js';
-
-const BURN_DOWN = [
-  'client/src/components/meatspace/post/PostSessionLauncher.test.jsx',
-  'server/services/agentCliSpawning.test.js',
-  'server/services/backupScheduler.test.js',
-  'server/services/creativeDirectorSceneImageHook.test.js',
-  'server/services/fableLoomSceneImageHook.test.js',
-  'server/services/fableLoomSceneVideoHook.test.js',
-  'server/services/mediaJobImageHook.test.js',
-  'server/services/musicVideo/autonomousService.test.js',
-  'server/services/runner.test.js',
-  'server/services/writersRoomSceneImageHook.test.js',
-];
 
 const REAL_SLEEP = /await\s+new\s+Promise\s*\(\s*\(?\s*\w*\s*\)?\s*=>\s*setTimeout\s*\(\s*\w+\s*,\s*\d+\s*\)\s*\)/;
 const NEGATIVE_CALL = /\.not\.toHaveBeenCalled\b|toHaveBeenCalledTimes\(\s*0\s*\)/;
@@ -106,25 +87,13 @@ describe('negative proofs do not rest on real sleeps (#12047)', () => {
     expect(scanNegativeProofSleeps(fakeTimers, 'probe.test.js')).toEqual([]);
   });
 
-  it('keeps the pattern out of every test file not on the burn-down list', () => {
+  it('keeps the pattern out of every test file', () => {
     const files = trackedTests();
     expect(files.length).toBeGreaterThan(100);
-    const burnDown = new Set(BURN_DOWN);
-    const offenders = files
-      .filter((f) => !burnDown.has(f))
-      .flatMap((f) => scanNegativeProofSleeps(readFileSync(join(ROOT, f), 'utf8'), f));
+    const offenders = files.flatMap((f) => scanNegativeProofSleeps(readFileSync(join(ROOT, f), 'utf8'), f));
     expect(
       offenders,
-      'await the handler\'s completion signal, drive fake timers, or vi.waitFor a positive signal before the negative assertion. Do NOT add to BURN_DOWN — it only shrinks.',
+      'await the handler\'s completion signal, drive fake timers, or vi.waitFor a positive signal before the negative assertion.',
     ).toEqual([]);
-  });
-
-  it('drops burn-down entries once their file is clean', () => {
-    const files = new Set(trackedTests());
-    const stale = BURN_DOWN.filter((f) => !files.has(f)
-      || scanNegativeProofSleeps(readFileSync(join(ROOT, f), 'utf8'), f).length === 0);
-    expect(stale, 'these files no longer carry the pattern — remove them from BURN_DOWN').toEqual([]);
-    expect([...BURN_DOWN].sort()).toEqual(BURN_DOWN);
-    expect(new Set(BURN_DOWN).size).toBe(BURN_DOWN.length);
   });
 });

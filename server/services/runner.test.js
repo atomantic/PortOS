@@ -874,9 +874,8 @@ describe('executeCliRun — credential-bootstrap wrapping', () => {
     spawn.mockReturnValue(child);
 
     const run = executeCliRun({ runId: 'run-bootstrap-timeout', provider: bootstrapProvider(10), prompt: 'p', workspacePath: TEST_WORKSPACE });
-    await new Promise(resolve => setTimeout(resolve, 60));
+    await vi.waitFor(() => expect(killSpy).toHaveBeenCalledWith(-424242, 'SIGTERM'));
 
-    expect(killSpy).toHaveBeenCalledWith(-424242, 'SIGTERM');
     // The wrapper's own pid is never signalled directly: the group signal
     // succeeded, so killProcessTree returns without the per-pid fallback.
     expect(child.kill).not.toHaveBeenCalled();
@@ -898,10 +897,10 @@ describe('executeCliRun — credential-bootstrap wrapping', () => {
       prompt: 'p',
       workspacePath: TEST_WORKSPACE,
     });
-    await new Promise(resolve => setTimeout(resolve, 60));
-
+    // Wait for the positive signal (the timeout fired) before asserting the
+    // group signal was never sent.
+    await vi.waitFor(() => expect(child.kill).toHaveBeenCalledWith('SIGTERM'));
     expect(killSpy).not.toHaveBeenCalledWith(-515151, expect.anything());
-    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
 
     child.emit('close', null);
     await run;

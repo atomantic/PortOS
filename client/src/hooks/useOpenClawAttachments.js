@@ -1,3 +1,9 @@
+/**
+ * File attachment handling (base64, size-capped).
+ *
+ * Use when: OpenClaw attachment UI.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { readFileAsBase64 } from '../utils/fileUpload';
 import { formatBytes } from '../utils/formatters';

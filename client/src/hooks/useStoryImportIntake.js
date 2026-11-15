@@ -1,3 +1,11 @@
+/**
+ * Story Builder "Import a finished work" intake: the form fields plus the analyze → commit →
+ * create-session workflow, in one `{ ...state, patch, analyze, retryIssues, importAndBuild }` bag.
+ *
+ * Use when: Call from the always-mounted Story Builder index and pass down as `intake` — holding this
+ * in the panel loses the manuscript and analysis on an intake tab flip (#3904).
+ */
+
 import { useCallback, useEffect, useState } from 'react';
 import toast from '../components/ui/Toast';
 import {

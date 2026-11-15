@@ -1,8 +1,14 @@
 /**
- * Storyboard ↔ shots sync — a music video's shots kept 1:1 with its linked
- * storyboard's panels. Shared by the Storyboard step (each panel's time and
- * sung lyric, and the sync preview, in the browser) and the write (on the
- * server), so the shots written are the ones previewed.
+ * Storyboard ↔ shots sync — a music video's shots kept 1:1 with its linked storyboard's panels.
+ *
+ * Storyboard ↔ shots sync: `storyboardPanelSpans` times each panel on the song at its own length
+ * (start, end, sung lyric, section; the last runs to the song end within
+ * `STORYBOARD_SYNC_END_SLACK_SEC`), and `storyboardShotSyncPlan` plans one linked shot per panel (link
+ * by panel, else by span or most of it; new, retimed, reworded, held by a lock, or removed). Shared by
+ * the Storyboard step preview and `services/storyboards/syncMusicVideo.js`. Browser-safe.
+ *
+ * Shared by the Storyboard step (each panel's time and sung lyric, and the sync preview, in the
+ * browser) and the write (on the server), so the shots written are the ones previewed.
  *
  * Timing: a panel's `seconds` is its exact length. The song's panels play end
  * to end from the song's start (pins and the proportional Fit to song do not

@@ -1,3 +1,7 @@
+/**
+ * Typed Story summary, proposal and selective-apply request schemas.
+ */
+
 import { z } from 'zod';
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';

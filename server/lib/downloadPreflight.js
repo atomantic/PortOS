@@ -2,6 +2,22 @@
  * Free-disk preflight, hash verification, and resumable streaming for large
  * weight downloads.
  *
+ * Free-disk preflight + resumable weight download. `assessDownloadPreflight({ destPath, expectedBytes
+ * })` → `{ freeBytes, requiredBytes, headroomBytes, verdict: ok|tight|insufficient }`;
+ * `assertDownloadFits` throws typed `DISK_INSUFFICIENT` (507) when the volume cannot hold the payload.
+ * `streamResumableDownload` Range-resumes a `.partial` on transport failure, discards it on user
+ * cancel, and verifies a published sha256 before rename. `sweepOrphanedPartials(dirs, { maxAgeMs })`
+ * unlinks leftover `.partial` (+ `.partial.etag`) files older than 7 days (default) and skips
+ * recent/in-flight dests; missing dirs are a no-op. `probeRemoteSize` / `siblingDownloadMeta` /
+ * `verifyDownloadHash` are the size+digest helpers the four weight-download entry points share.
+ * `createDownloadSlot({ codePrefix, idleStallEnvVar, exclusive, keepPartialOnCancel })` is the one
+ * transfer-slot registry a weight download claims before its first await — in-flight map, abort
+ * controller carrying a cancel/stall reason, typed
+ * `<PREFIX>_DOWNLOAD_IN_FLIGHT`/`_STALLED`/`_CANCELLED` errors, a per-chunk progress throttle, and an
+ * `isInFlight(path)` predicate covering the dest, its `.partial`, and shards under a claimed
+ * directory. Call it at module scope only. `isAnyDownloadInFlight` answers for every registered slot
+ * at once, which is how the orphaned-partial GC protects live transfers.
+ *
  * A multi-gigabyte GGUF/safetensors pull is a decision the user makes with
  * numbers in front of them: before transferring anything we report size,
  * destination, and free disk, and refuse outright when the volume cannot hold

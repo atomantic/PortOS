@@ -1,6 +1,12 @@
 /**
  * Streaming ZIP parser — unzipper.Parse replacement.
  *
+ * Streaming ZIP parser (`parseZip`, unzipper-style); `collectZipEntry(entry, maxBytes?)` buffers one
+ * `parseZip` entry into a Buffer (size-capped); `collectZipEntries(path, { match, onMatch, maxBytes?
+ * })` owns the multi-entry import lifecycle (teardown, autodrain, per-entry await) leaving callers
+ * only match/parse; `isZipUpload(file)` predicate for an uploaded ZIP; `extractZipEntryToBuffer(path,
+ * match)` cracks one member out to a Buffer.
+ *
  * Usage (mirrors unzipper):
  *   createReadStream(path).pipe(parseZip())
  *     .on('entry', entry => { entry.path; entry.pipe(ws); entry.autodrain(); })

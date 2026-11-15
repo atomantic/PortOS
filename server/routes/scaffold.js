@@ -29,7 +29,7 @@ const __dirname = dirname(__filename);
 const router = Router();
 
 // GET /api/scaffold/directories - Browse directories for directory picker.
-// Operator-only (HOST_CONTROL_ROUTES): it enumerates any readable host
+// Operator-only (HOST_CONTROL_GET_ROUTES): it enumerates any readable host
 // directory, so the workspace roots that scope POST / below do not apply.
 router.get('/directories', asyncHandler(async (req, res) => {
   const { path: dirPath, includeFiles } = validateRequest(scaffoldDirectoriesQuerySchema, req.query);

@@ -13,7 +13,7 @@
 
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { DOCKER_CONTAINMENT_FEATURE_ID, DOCKER_CONTAINMENT_SETTINGS_KEY } from '../lib/dockerContainment.js';
 import { dockerContainmentPullSchema, dockerContainmentRunSchema } from '../lib/dockerContainmentValidation.js';
 import { PATHS } from '../lib/paths.js';

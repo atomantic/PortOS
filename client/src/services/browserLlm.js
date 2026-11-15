@@ -1,3 +1,6 @@
+// Client for Chrome's on-device "Gemini Nano" (Prompt API): dual-shape detection, availability enum,
+// cached `promptNano()` with timeout.
+//
 // Client for Chrome's built-in, on-device LLM ("Gemini Nano") via the Prompt
 // API. Feature-detects BOTH the current global `LanguageModel` and the legacy
 // `self.ai.languageModel`, normalizes availability into one enum, and exposes a

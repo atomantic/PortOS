@@ -1,6 +1,9 @@
 /**
  * Database Connection Pool
  *
+ * PostgreSQL connection pool and `withDatabaseMaintenance(fn)` admission/drain gate for atomic restore
+ * and reconciliation.
+ *
  * PostgreSQL connection management for the memory system.
  * Uses pg (node-postgres) with a connection pool for efficient query execution.
  */

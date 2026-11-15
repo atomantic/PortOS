@@ -13,7 +13,7 @@
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { readFile, writeFile, rename, readdir, rm, stat, cp } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { AGENTS_DIR, withStateLock } from './cosState.js';
 import { atomicWrite, ensureDir, safeJSONParse, tryReadFile, tryReadFileStrict } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -26,6 +26,31 @@ import {
 } from './cosAgentCompletionIndex.js';
 
 const INDEX_FILE = join(AGENTS_DIR, 'index.json');
+
+// Parsed archive records for the branch-completion policy read, keyed by agent id
+// and bucket date. Archive writers call invalidateArchivedRecord after each
+// metadata.json write so the next read sees it; the epoch stops a read that
+// started before a write from caching the superseded content.
+const archivedRecordCache = new Map();
+let archivedRecordEpoch = 0;
+
+export const archivedRecordCacheEpoch = () => archivedRecordEpoch;
+export const getCachedArchivedRecord = (id, date) => {
+  const hit = archivedRecordCache.get(id);
+  return hit?.date === date ? hit : null;
+};
+export function cacheArchivedRecord(id, date, agent, epoch) {
+  if (epoch === archivedRecordEpoch) archivedRecordCache.set(id, { date, agent });
+}
+export function pruneArchivedRecordCache(liveIds) {
+  for (const id of archivedRecordCache.keys()) if (!liveIds.has(id)) archivedRecordCache.delete(id);
+}
+/** Drop one record, or every record when called without an id (file restore). */
+export function invalidateArchivedRecord(agentId) {
+  archivedRecordEpoch++;
+  if (agentId === undefined) archivedRecordCache.clear();
+  else archivedRecordCache.delete(agentId);
+}
 
 // Lightweight index mapping agentId → YYYY-MM-DD date bucket (~50KB vs 16MB full cache)
 // Lazy-loaded from data/cos/agents/index.json on first access
@@ -89,6 +114,7 @@ async function loadAgentIndexLeased() {
 export async function reloadAgentIndexAfterRestore() {
   agentIndex = null;
   agentIndexPromise = null;
+  invalidateArchivedRecord();
   const content = await readFile(INDEX_FILE, 'utf8').catch(error => {
     if (error.code === 'ENOENT') return null;
     throw error;
@@ -216,6 +242,14 @@ export function getAgentDir(agentId, dateString) {
  * intact. Callers guarantee `targetDir` did not exist before the call.
  */
 export async function moveAgentDir(flatDir, targetDir) {
+  try {
+    return await moveAgentDirUncached(flatDir, targetDir);
+  } finally {
+    invalidateArchivedRecord(basename(targetDir));
+  }
+}
+
+async function moveAgentDirUncached(flatDir, targetDir) {
   try {
     await rename(flatDir, targetDir);
     return;

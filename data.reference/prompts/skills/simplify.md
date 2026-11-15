@@ -13,7 +13,7 @@ You are finding code the repository would be better without — or removing it, 
 - Cross-version and cross-install compatibility shims are NOT dead code, even when this install never hits them.
 
 ### 2. Prefer reuse over a new helper
-- Grep the shared library catalogs (`server/lib/README.md`, `client/src/lib/README.md`, hooks, services) before introducing a local duplicate.
+- Search the shared-module catalog (`node scripts/lib-catalog.js <term>`, covering `server/lib`, `client/src/lib`, hooks, utils and services) before introducing a local duplicate.
 - For copy-paste drift, say which copy is correct and why.
 
 ### 3. Mode

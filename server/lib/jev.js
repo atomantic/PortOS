@@ -1,6 +1,14 @@
 /**
  * Static contract for PortOS's local entailment ("jev") scoring boundary.
  *
+ * Pinned local entailment ("jev") contract: the `JEV_MODEL` descriptor (repo, revision,
+ * `qwen3.5-4b-nli` subfolder, MIT/ungated), the four-file required allowlist, pinned Python packages,
+ * `JEV_STAGES` / `jevStageReadiness()` for the operator install checklist, the premise/hypothesis
+ * bounds, the `jevScoreRequestSchema` / `jevScoreResponseSchema` wire pair, `normalizeJevScores`
+ * (rejects a reply describing a different hypothesis list), and `decideFromScores` — the margin
+ * arithmetic that ABSTAINS rather than picking a near-tie. Pure. Lifecycle is `services/jev.js`; see
+ * [docs/JEV_SETUP.md](../../docs/JEV_SETUP.md).
+ *
  * This is the closed-set counterpart to `modelAbuseGuard.js`. Where Prompt
  * Guard answers "is this content attacking a model?", jev answers "which of
  * these fixed options does this text entail?" — a natural-language-inference
@@ -83,7 +91,7 @@ export const JEV_PYTHON_IMPORTS = Object.freeze([
 // transformers requirement must bump `modelAbuseGuard.js` in the same change.
 export const JEV_PYTHON_PACKAGES = Object.freeze([
   'torch==2.14.1',
-  'transformers==5.22.1',
+  'transformers==5.22.2',
   'safetensors==0.8.0',
   'huggingface_hub==2.4.0',
 ]);

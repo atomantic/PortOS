@@ -2,6 +2,14 @@
  * Vault Crypto — field-level AES-256-GCM for the Privacy Center PII Vault
  * (issue #2140, epic #2138). PortOS's first encrypted-at-rest layer.
  *
+ * Privacy Center PII Vault field-level encryption (issue #2140). AES-256-GCM
+ * `encryptValue`/`decryptValue` (`v1:<iv>:<tag>:<ct>` format, per-value 12-byte IV),
+ * `ensureVaultKey()` self-heal (generates `PRIVACY_VAULT_KEY` into the install root's `.env` on first
+ * write, replacing any invalid line; never logs the value), key resolution that falls back to reading
+ * `.env` so decrypt/status survive a server restart, `isVaultKeyConfigured()`, and the per-type
+ * `maskValue(type, plaintext)` display masking (last-4 / domain-visible / street-masked). Plaintext
+ * must never be logged by callers.
+ *
  * Ciphertext format (versioned for future key rotation):
  *   `v1:<iv_b64>:<tag_b64>:<ct_b64>`
  * — per-value random 12-byte IV, 16-byte GCM auth tag. Any tampering with the

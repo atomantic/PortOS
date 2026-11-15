@@ -2,17 +2,19 @@
 
 import { execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
-import { join, posix, relative } from 'path';
+import { dirname, join, posix, relative } from 'path';
+import { fileURLToPath } from 'url';
 import { staticImportClosure, toModuleKey } from '../server/lib/staticImportGraph.js';
 import { escapeRegExp } from '../server/lib/textUtils.js';
 import { moduleImports } from './lib/sourceTokens.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { CATALOG_DIRS } from './lib-catalog.js';
 import { SERVER_LINT_RE } from './lib/serverLintSurface.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
+import { detectTreeGuards } from './lib/guardScanners.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { formatReachSummary, measureRepoImportReach } from './lib/importReach.js';
-import { declaresPromptHashes, isNumberedMigrationFile } from './migrations/shippedPromptHistory.js';
 
 const TEST_FILE_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/i;
 const MODULE_SOURCE_RE = /\.[cm]?[jt]sx?$/i;
@@ -222,6 +224,9 @@ const FULL_TRIGGER_RULES = [
   // ci.yml defines the windows-server job itself. The other workflows (release,
   // acceptance, cancel recovery) never run on windows-latest.
   { re: /^\.github\/workflows\/ci\.yml$/, reason: 'workflow definition changed', windowsRelevant: true },
+  // ci.yml's composite actions (setup-server, diff-base, test-memo, …) are part
+  // of its job definitions, windows-server included.
+  { re: /^\.github\/actions\//, reason: 'workflow definition changed', windowsRelevant: true },
   { re: /^\.github\/workflows\//, reason: 'workflow definition changed', windowsRelevant: false },
   { re: DEPENDENCY_MANIFEST_RE, reason: 'dependency manifest changed', windowsRelevant: 'dependencies' },
   // Every workspace's .npmrc pins ignore-scripts and install behavior; npm reads
@@ -281,12 +286,12 @@ export const WINDOWS_RISK_RULES = [
   /^server\/lib\/aiToolkit\/internal\/windowsSafeSpawn\.js$/,
   /^server\/lib\/shell(?:Cd|Exit|LivenessProbe|ReadinessProbe)(?:\.test)?\.js$/,
   /^server\/lib\/agentGuard\//,
-  /^server\/lib\/(?:gitRepositoryIdentity|checkoutRetirementAdmission)(?:\.test)?\.js$/,
+  /^server\/lib\/gitRepositoryIdentity(?:\.test)?\.js$/,
   /^server\/cos-runner\//,
   /^server\/services\/shell\b/,
   /^server\/services\/agentTuiSpawning(?:\/|(?:\.test)?\.js$)/,
   /^server\/services\/tuiPromptRunner(?:\.test)?\.js$/,
-  /^server\/services\/releaseCandidate(?:Recovery|Settlement|Evidence)(?:\.test)?\.js$/,
+  /^server\/services\/(?:releaseCandidateEvidence|releasePreflight)(?:\.test)?\.js$/,
 ];
 
 // Each entry protects the supported native boundary. No import-graph expansion:
@@ -314,11 +319,10 @@ export const WINDOWS_CONTRACT_TESTS = [
   // Real native ownership/cancellation and safe filesystem semantics.
   'server/lib/execGit.test.js',
   'server/lib/windowsAgentProcess.test.js',
-  'server/services/releaseCandidateRecovery.test.js',
+  'server/services/releasePreflight.test.js',
   'server/lib/windowsGitProcess.test.js',
   'server/lib/windowsGitProcess.protocol.test.js',
   'server/lib/gitRepositoryIdentity.test.js',
-  'server/lib/checkoutRetirementAdmission.test.js',
   'server/lib/worktreeOwnership.test.js',
   'server/lib/staticImportGraph.test.js',
   'server/lib/nativeTrash.test.js',
@@ -345,156 +349,89 @@ export const WINDOWS_CONTRACT_TESTS = [
 //      They sat structurally unselectable — `agent-instructions-files.test.js`
 //      went red on `main` and stayed there while every PR reported green — and
 //      the always-run list is the only mechanism that can reach them at all.
-//      `repo-scan-guards.test.js` keeps this half of the list honest: it
-//      re-derives the scanner set from the tree and fails when a new one is
-//      added without being registered here or named as structurally selected.
+//      The planner derives this half from the tree (getTreeGuards, detected by
+//      scripts/lib/guardScanners.js), so a new scanner needs no registration;
+//      repo-scan-guards.test.js pins the detector and the derived set.
 //
-// Everything here is deliberately cheap — the whole set runs in ~3s and reads
-// only prompt data or `git` output, which is affordable on every PR including
-// documentation-only ones, where the alternative is reasoning per-scope about
-// what can reach it.
-export const ALWAYS_RUN_TESTS = [
+// Everything here is deliberately cheap: it reads only prompt data or `git`
+// output, which is affordable on every PR including documentation-only ones,
+// where the alternative is reasoning per-scope about what can reach it. The
+// whole set measured ~23s of a 27s focused pregate (#16086), so each guard has
+// a per-file budget (GUARD_BUDGET_MS in scripts/lib/guardBudget.js) that
+// pregate enforces; a behavioural test that no scan needs does not belong here.
+export const EXPLICIT_ALWAYS_RUN_TESTS = [
   // Doc-parity guards: each compares a .md next to it against source it reads
-  // rather than imports. The .md is documentation-only to the planner and the
-  // source has no import edge to the guard, so neither side of the comparison
-  // can select it — a docs-only PR that documented a removed endpoint would
-  // otherwise merge green.
+  // rather than imports, so a docs-only PR that documented a removed endpoint
+  // would otherwise merge green.
   'docs/api-doc.test.js',
-  'docs/auth-public-paths-doc.test.js',
   'docs/doc-endpoint-methods.test.js',
   'docs/docs-index.test.js',
   'docs/deps-doc.test.js',
   'docs/features/product-surfaces.test.js',
-  'scripts/agent-instructions-files.test.js',
   'scripts/doc-code-pointers.test.js',
-  // A newly added shared selector has no import edge to its documentation
-  // inventory. Check that contract before broad suites, including docs-only edits.
+  // A newly added shared selector has no import edge to its documentation inventory.
   'server/lib/executionOptions.consumers.test.js',
-  // Whole-tree scanner: a new browser suite can adopt the gate with no import
-  // edge back to the registry it must join (#10312).
-  'scripts/browser-suite-registry.test.js',
-  // The union-merged catalogs are `.md` to the planner — documentation-only —
-  // so a rebase that doubled a row would otherwise never be re-checked.
-  'scripts/catalog-merge-union.test.js',
-  // Walks the client→server/lib import graph; any server/lib file can add a
-  // Node-only import and break the client build with no edge back to here.
-  'scripts/client-server-import-purity.test.js',
-  'scripts/direct-invocation-drift.test.js',
-  'scripts/ensure-deps.test.js',
-  'scripts/migrations/promptBumpMigrations.guard.test.js',
+  // Base-relative: a rename or deletion of a shipped migration touches no file
+  // the planner would select for it (#16094).
+  'scripts/migrations/migrationFilenames.guard.test.js',
   'scripts/migrations/shippedPromptHistory.guard.test.js',
-  // Sweeps every migration export against independent prompt-hash baselines;
-  // migration files have no import edge back to this guard.
-  'scripts/setup-data-drift.test.js',
-  'scripts/node-version-drift.test.js',
-  // Whole-tree markdown scanner: a docs-only PR can reintroduce the stale band
-  // in prose with no import edge back to this test (#11851).
-  'scripts/port-band-docs.test.js',
-  'scripts/repo-scan-guards.test.js',
-  // Whole-tree scanner: any server file can add an import of client source.
-  'scripts/server-imports-no-client.test.js',
-  'scripts/tailnet-identity-leak.test.js',
-  'server/dependency-overrides.test.js',
-  // Whole-tree scanner: a caller can disappear from any file without touching its export.
-  'server/deadExports.test.js',
-  // Whole-tree scanner: any server file can add a `process.env` read, and
-  // `.env.example` itself is not a scope the selector routes to a runner.
-  'server/envExampleDrift.test.js',
-  // Whole-tree scanner (#12093): any rename or deletion can strand a backticked
-  // file name in an AGENTS.md, which is documentation-only to the planner.
-  'server/instructionFileReferences.test.js',
-  // Whole-tree scanners over the shared collectServerSources/collectClientSources
-  // walkers (#8723): the offending file is never imported by the guard, so
-  // impact selection only reaches them when the guard itself changes.
-  'server/lib/apiRouteGraph.test.js',
+  // Compares every reference prompt body and shipped-hashes.json against the merge base (#16090).
+  'scripts/migrations/shippedPromptHashes.guard.test.js',
+  // Route policy and write-back scans depend on independently changed files (#13224).
   'server/lib/apiRouteParity.test.js',
-  // Route inventories and write-back scans depend on independently changed files (#13224).
   'server/lib/hostControlRoutes.test.js',
   'server/jsonWritebackConventions.test.js',
-  // Whole-tree scanner (#9982): any server module can start taking backup
-  // admission with no import edge back to the owner inventory it must join.
-  'server/lib/backupAssetOwners.test.js',
-  'server/lib/childProcess.guards.test.js',
-  'server/lib/claimFlowTaskTypes.test.js',
-  'server/lib/cliChildEnv.test.js',
-  'server/lib/editorial/proseTics.test.js',
-  'server/lib/generatedManifests.test.js',
-  // Whole-tree scanner over git-tracked test files (#9000): a suite anywhere
-  // in server/scripts/lib/autofixer can add a leaked mkdtemp call with no
-  // import edge back to this guard.
-  'server/lib/mkdtempCleanup.guards.test.js',
-  // Base-relative server import-growth guard (#7993). A new eager edge in a
-  // widely reached module multiplies across suites this file does not import,
-  // so impact selection would not reach it unless the diff touched this file.
-  // Docs-only plans and rebases onto a moved base still need the comparison. It reads
-  // CI_BASE_SHA — the same variable main() requires for a pull request that
-  // is not forced full — and fails closed when that commit cannot be read.
-  // Pregate copies the sha into the test process so the local run uses this
-  // plan's base, not a second guess.
+  // Whole-tree route-mount scan (#12952, #16018).
+  'server/hostControlCoverage.test.js',
+  // Base-relative server import-growth guard (#7993): a new eager edge in a widely
+  // reached module multiplies across suites this file does not import. Reads CI_BASE_SHA
+  // and fails closed when that commit cannot be read; pregate forwards the plan's base.
   'server/lib/importScoping.test.js',
   // Scans every lib source for upward service imports without importing it.
   'server/lib/layering.test.js',
-  // Whole-tree scanner over collectServerSources: every cwd-passing spawn pins PWD (#8723).
-  'server/lib/spawnCwd.test.js',
-  // Whole-tree scanner: any server/client file can add a hardcoded "Models →"
-  // breadcrumb, with no import edge back to this file.
-  'server/lib/localProviderRuntime.test.js',
-  'server/lib/qwenAgentParsers.test.js',
-  // Schema reachability reads consumers as text across the tracked source tree.
-  'server/lib/validationSplit.test.js',
-  'server/lib/testDataIsolation.guards.test.js',
-  'server/lib/testHelper.test.js',
-  // Whole-tree scanner: any server/client file can re-inline a RegExp escape (#8723).
-  'server/lib/textUtils.test.js',
-  // Whole-tree scanner: any server file can log a failure through
-  // `console.log`, and the guard only ever sees it as a path string.
-  'server/logLevelConventions.test.js',
-  // Whole-tree scanner: a module moved between directories leaves a stale cited
-  // path in some comment, with no import edge to this guard (#12408).
-  'server/sourceFileReferences.test.js',
-  // Whole-tree scanner: a renamed export in any module leaves a dead key in some
-  // suite's vi.mock factory, with no import edge from that suite to this guard (#11891).
-  'server/mockContractConventions.test.js',
-  // Whole-tree scanner over git-tracked tests (#12047): any suite can add a
-  // real sleep before a not-called assertion with no import edge to this guard.
-  'server/negativeProofSleepConventions.test.js',
-  // Whole-tree scanner: any server file can spawn a child and await before
-  // attaching its error/exit listener (#11761), with no import edge to this file.
-  'server/childListenerOrderConventions.test.js',
-  // Whole-tree scanner: any server/autofixer file can re-implement raw
-  // `pm2 jlist` execution/parsing outside the two designated readers (#8164).
-  'server/pm2JlistOwnership.guard.test.js',
-  'server/services/imageGen/renderTargets.guard.test.js',
-  // Whole-tree scanners over collectServerSources (#8723).
-  'server/services/gitlab.glabFlags.test.js',
-  'server/services/orphanedPartialGc.test.js',
-  'server/services/providers.shape.test.js',
-  'server/services/taskPromptDefaults.test.js',
-  // Whole-tree scanners over server/services import edges (#14327): a PR that
-  // closes a static cycle never imports these guards, so they must run on every PR.
+  // Static import-cycle guards (#14327): a PR that closes a cycle never imports them.
   'server/services/agentImportCycles.test.js',
   'server/services/meatspacePostImportCycles.test.js',
   'server/services/serviceImportCycles.test.js',
   'server/services/twinImportCycles.test.js',
-  // Base-relative retired history guard: JSON edits have no import edge here.
-  // Pregate and CI forward the planner's exact CI_BASE_SHA.
+  // Prompt-upgrade contract and base-relative retired-history guard: JSON edits have no import edge here.
+  'server/services/taskPromptDefaults.test.js',
   'server/services/taskPromptDefaults/integritySnapshot.guard.test.js',
-  // Whole-tree scanner (#12048): server/index.js can mount a new router that no
-  // test imports, with no import edge from that router to this guard.
-  'server/routeTestCoverageConventions.test.js',
-  // Whole-tree scanner (#12952): server/index.js can mount a mutating route that
-  // no host-control classification names, with no import edge to this guard.
-  'server/hostControlCoverage.test.js',
-  'server/routeValidationConventions.test.js',
-  'server/floatingAsyncConventions.test.js',
-  'server/timerCallbackConventions.test.js',
-  // Whole-tree scanner (#12815): any server file can bind a bare JSON.stringify to
-  // a jsonb parameter, with no import edge to this guard.
-  'server/pgJsonConventions.test.js',
 ];
+
+/**
+ * Tree scanners the detector finds (scripts/lib/guardScanners.js) that another
+ * selector already reaches, so they must NOT ride every plan. Each entry names
+ * that selector.
+ */
+export const TREE_GUARDS_SELECTED_ELSEWHERE = new Map([
+  ['scripts/ensure-deps.test.js', 'structuralTestsFor: ENSURE_DEPS_INPUTS (behavioural, #16086)'],
+  // `.ps1` is an unclassified changed file and forces the complete suite.
+  ['scripts/ps1-bom.test.js', 'unclassified-file full-suite trigger: *.ps1'],
+]);
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+/**
+ * Tracked tree-scanning guards, derived rather than registered (#16085). Lazy
+ * and memoized: scanning spawns git, and pregate must not start a subprocess
+ * before it has validated its arguments.
+ */
+let treeGuards;
+export const getTreeGuards = () => (treeGuards ??= detectTreeGuards(REPO_ROOT));
+
+/** Client scanners are reached by structuralTestsFor on any client/src js(x) change. */
+const isClientGuard = (path) => path.startsWith('client/src/');
+
+let alwaysRun;
+export const getAlwaysRunTests = () => (alwaysRun ??= [...new Set([
+  ...EXPLICIT_ALWAYS_RUN_TESTS,
+  ...getTreeGuards().filter((path) => !isClientGuard(path) && !TREE_GUARDS_SELECTED_ELSEWHERE.has(path)),
+])].sort());
 
 const DB_RISK_RULES = [
   /^scripts\/rehearsal-scratch-db(?:[.\/]|$)/i,
+  /^scripts\/generate-init-db-sql(?:[.\/]|$)/i,
   /^scripts\/lib\/migrationFiles(?:[.\/]|$)/i,
   /^scripts\/lib\/dbImage(?:[.\/]|$)/i,
   /^server\/lib\/databaseMaintenanceSchema(?:[.\/]|$)/i,
@@ -639,12 +576,11 @@ export const needsSlashdoSubmodule = (plan) => Boolean(
 //   diffs (macos-native; see its note).
 // Every pattern names ci.yml so a workflow edit proves the job still runs.
 export const PROMPT_HISTORY_GUARD = 'scripts/migrations/check-shipped-prompt-history.js';
-// The guard reads git history of data.reference/prompts/stages and imports the
-// migrations that declare prompt hashes. The whole migrations directory is
-// listed (not just today's declaring modules) so a diff that removes a
-// declaration still runs the guard. taskPromptDefaults and the snapshot
-// regenerator are the other half of a prompt-default bump.
-export const PROMPT_HISTORY_PATH_RE = /^(?:scripts\/migrations\/|data\.reference\/prompts\/|server\/services\/taskPromptDefaults(?:\/|\.js$)|scripts\/regen-prompt-integrity-snapshot(?:\.test)?\.js$|\.github\/workflows\/ci\.yml$)/;
+// The guard reads git history of data.reference/prompts against
+// data.reference/prompts/shipped-hashes.json, which the hash regenerator writes.
+// taskPromptDefaults and the snapshot regenerator are the other half of a
+// prompt-default bump.
+export const PROMPT_HISTORY_PATH_RE = /^(?:scripts\/migrations\/|data\.reference\/prompts\/|server\/services\/taskPromptDefaults(?:\/|\.js$)|scripts\/regen-(?:prompt-integrity-snapshot|shipped-prompt-hashes)(?:\.test)?\.js$|\.github\/workflows\/ci\.yml$)/;
 // The files the `linux-containment` job passes to `npm test --prefix server`.
 export const LINUX_CONTAINMENT_TESTS = [
   'autofixer/sandbox.verify.test.js',
@@ -695,14 +631,14 @@ export const DOCKER_CONTAINMENT_LIVE_PATH_RE = /^(?:server\/package(?:-lock)?\.j
 // boundary (#14781): suites that skip on every other platform, so the Linux
 // and Windows jobs can never prove them. macOS runners are the scarcest hosted
 // capacity, so the gate is this explicit path list, not an import closure —
-// the recovery suite's closure reaches most of the server.
+// application import closures reach most of the server.
 export const MACOS_NATIVE_TESTS = [
   'server/lib/windowsAgentProcess.darwin.test.js',
-  'server/services/releaseCandidateRecovery.test.js',
 ];
 // The supervision path itself, the dependency manifests and Vitest harness the
-// job installs and loads, and ci.yml so a workflow edit proves the job runs.
-export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/services\/(?:releaseCandidateRecovery[^/]*\.js|releaseCandidateSettlement\.js)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml)$/;
+// job installs and loads, and ci.yml plus the setup-server action it installs
+// through, so a workflow edit proves the job runs.
+export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml|\.github\/actions\/setup-server\/action\.yml)$/;
 
 /**
  * Repository-relative static import closure of `entries` in `cwd`, or null
@@ -723,18 +659,8 @@ const staticClosureOf = (entries, cwd) => {
   }
 };
 
-/** Static closure of the prompt-history guard and every migration it imports. */
-export function collectPromptHistoryInputs(files, cwd) {
-  try {
-    const declaring = files.filter((path) => path.startsWith('scripts/migrations/')
-      && !path.slice('scripts/migrations/'.length).includes('/')
-      && isNumberedMigrationFile(basenameOf(path))
-      && declaresPromptHashes(readFileSync(join(cwd, path), 'utf8')));
-    return staticClosureOf([PROMPT_HISTORY_GUARD, ...declaring], cwd);
-  } catch {
-    return null;
-  }
-}
+/** Static closure of the prompt-history guard. */
+export const collectPromptHistoryInputs = (cwd) => staticClosureOf([PROMPT_HISTORY_GUARD], cwd);
 
 /** Static closure of the linux-containment tests and their Vitest harness. */
 export const collectLinuxContainmentInputs = (cwd) => staticClosureOf(LINUX_CONTAINMENT_ENTRIES, cwd);
@@ -828,7 +754,7 @@ const featureDirectory = (path) => {
 // import graph; select their shared contract explicitly instead of running its
 // subprocesses on every unrelated or documentation-only change.
 const WORKSPACE_CACHE_COMMON_INPUTS = new Set([
-  '.github/workflows/ci.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
+  '.github/workflows/ci.yml', '.github/actions/setup-server/action.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
   'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
   'scripts/lib/vitestWatch.js', 'scripts/lib/testProcessAttribution.js', 'scripts/lib/testOwnedProcesses.js', 'scripts/lib/darwinTestProcesses.py',
   'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/workspaceTests.js',
@@ -849,6 +775,11 @@ const WORKSPACE_CACHE_CLIENT_INPUTS = new Set([
   'lib/portosAuthCore.js', 'server/lib/eidoverseProxyRoutes.js',
 ]);
 
+const ENSURE_DEPS_INPUTS = new Set([
+  'scripts/ensure-deps.js', 'update.sh', 'update.ps1',
+  'package-lock.json', 'client/package-lock.json', 'server/package-lock.json',
+]);
+
 export const structuralTestsFor = (changedFiles, trackedSet) => {
   const selected = [];
   const add = (path) => {
@@ -864,8 +795,15 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
     // The runner's client enumeration is pinned against `vitest list` from the client workspace, where the client job runs it.
     add('client/src/test/workspaceTests.test.js');
   }
-  if (changedFiles.some((path) => /^server\/lib\//.test(path))) {
-    add('server/lib/index.test.js');
+  // Behavioural temp-directory test: it imports ensure-deps.js (so the graph
+  // selects it for that file) but only reads the update scripts and lockfiles.
+  if (changedFiles.some((path) => ENSURE_DEPS_INPUTS.has(path))) {
+    add('scripts/ensure-deps.test.js');
+  }
+  // The module-summary guards readdir-scan their directory instead of importing
+  // it, so no import edge selects them for a newly added module.
+  for (const dir of CATALOG_DIRS) {
+    if (changedFiles.some((path) => path.startsWith(`${dir}/`))) add(`${dir}/moduleSummaries.test.js`);
   }
   // These guards read the tree rather than importing it, so no import edge
   // selects them: the route-graph guard catches a route file nothing mounts,
@@ -877,23 +815,27 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
     add('server/lib/apiRouteParity.test.js');
     add('scripts/generate-prompt-stage-call-sites.test.js');
   }
+  // The fresh-install schema check reads init-db.sql and its base file rather
+  // than importing them, so a hand edit to either would otherwise select only
+  // the DB suite, which never compares the file with its generator (#16092).
+  if (changedFiles.some((path) => /^server\/scripts\/init-db(?:\.base)?\.sql$/.test(path))) {
+    add('server/lib/db.ddlParity.test.js');
+  }
   // The socket guard readdir-scans server/sockets/ rather than importing it, so
   // no import edge reaches it — a handler added there would otherwise only be
   // checked on a full suite.
   if (changedFiles.some((path) => /^server\/sockets\//.test(path))) {
     add('server/sockets/asyncHandlerGuard.test.js');
   }
-  if (changedFiles.some((path) => /^client\/src\/lib\//.test(path))) {
-    add('client/src/lib/index.test.js');
-  }
-  if (changedFiles.some((path) => /^client\/src\/hooks\//.test(path))) {
-    add('client/src/hooks/index.test.js');
-  }
-  if (changedFiles.some((path) => /^client\/src\/utils\//.test(path))) {
-    add('client/src/utils/index.test.js');
-  }
   if (changedFiles.some((path) => /^client\/src\/.*\.jsx$/.test(path))) {
-    add('client/src/a11yConventions.test.js');
+    add('client/src/a11y/controlNames.conventions.test.js');
+    add('client/src/a11y/dnd.conventions.test.js');
+    add('client/src/a11y/fileInputsToasts.conventions.test.js');
+    add('client/src/a11y/hitAreas.conventions.test.js');
+    add('client/src/a11y/landmarks.conventions.test.js');
+    add('client/src/a11y/overlays.conventions.test.js');
+    add('client/src/a11y/routeHeadings.conventions.test.js');
+    add('client/src/a11y/scanner.conventions.test.js');
   }
   // Both `.js` and `.jsx`: the StrictMode mounted-ref bug the first guard covers
   // reached its widest blast radius through a plain-`.js` hook (`useAsyncAction`),
@@ -904,30 +846,10 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
   // None of these files has a source sibling or imports an app module, so nothing
   // else selects them — without this entry they only ever run on a full suite.
   if (changedFiles.some((path) => /^client\/src\/.*\.jsx?$/.test(path))) {
-    add('client/src/apiWrapperOptionsConventions.test.js');
-    add('client/src/asyncEffectDisposalConventions.test.js');
     add('client/src/dashboardWidgetContainerConventions.test.js');
-    add('client/src/dragHandleTouchConventions.test.js');
-    add('client/src/globalShadowConventions.test.js');
-    add('client/src/headingTruncationConventions.test.js');
-    add('client/src/hooks/mountedRefConventions.test.js');
-    add('client/src/hoverRevealConventions.test.js');
-    add('client/src/listFetchConventions.test.js');
-    add('client/src/moduleContractConventions.test.js');
-    add('client/src/numberFormattingConventions.test.js');
-    add('client/src/pageShellConventions.test.js');
-    add('client/src/pollingConventions.test.js');
-    add('client/src/popoverClampConventions.test.js');
-    add('client/src/preWrapClasses.test.js');
-    add('client/src/providerSelectConventions.test.js');
-    add('client/src/responsiveGridConventions.test.js');
-    add('client/src/socketSubscriptionConventions.test.js');
-    add('client/src/storageConventions.test.js');
-    add('client/src/subNavConventions.test.js');
-    // Same trigger, different subject: this one scans the TEST files for an
-    // inline async bound the per-test budget would cut short, and a changed
-    // `*.test.jsx` matches the `.jsx?` pattern above.
-    add('client/src/test/timeouts.test.js');
+    // Tree-scanning client guards are derived (scripts/lib/guardScanners.js);
+    // timeouts.test.js scans the TEST files, which this pattern also matches.
+    for (const path of getTreeGuards()) if (path.startsWith('client/src/')) add(path);
   }
 
   return selected;
@@ -937,14 +859,14 @@ const uniqueSorted = (values) => [...new Set(values)].sort();
 
 // Guarded by trackedSet like every other selector: an untracked path handed to
 // Vitest as an exact selector makes the run exit non-zero.
-const alwaysRunTests = (trackedSet) => ALWAYS_RUN_TESTS.filter((path) => trackedSet.has(path));
+const alwaysRunTests = (trackedSet) => getAlwaysRunTests().filter((path) => trackedSet.has(path));
 
 /**
  * Split a set of always-run selectors across the two Vitest runners.
  *
  * The docs-only plan names its files directly instead of going through the
  * runner split the scoped branches use, so it has to do that split itself: an
- * entry added to ALWAYS_RUN_TESTS under client/src would otherwise be handed to
+ * entry added to the always-run set under client/src would otherwise be handed to
  * the server runner, which does not glob client/, and the guard would report
  * green having run nowhere.
  */
@@ -969,22 +891,6 @@ const hasWindowsRiskFile = (paths) => paths.some((path) => (
 ));
 
 const skippedRunner = () => ({ mode: 'skip', files: [], sources: [] });
-
-// Catalog barrels are validated by structural export guards. Feeding one to
-// Vitest's import graph selects nearly every consumer even though the barrel
-// contains no behavior; PR #5296 changed server/lib/index.js and consequently
-// selected 1,244 files / 27,491 tests. Behavioral source files in the same diff
-// still drive related-test selection normally.
-//
-// Also the set `.gitattributes` merges with `union` — scripts/catalog-merge-union.test.js
-// pins the two lists to each other.
-export const STRUCTURAL_BARRELS = [
-  'server/lib/index.js',
-  'client/src/lib/index.js',
-  'client/src/hooks/index.js',
-  'client/src/utils/index.js',
-];
-const isStructuralBarrel = (path) => STRUCTURAL_BARRELS.includes(path);
 
 /**
  * A route declaration is a safe, client-only subset of the App composition
@@ -1282,31 +1188,26 @@ function buildSuitePlan(changedFiles, {
   const hasServerSource = jsSources.some(isServerRunnerFile);
   const hasClientSource = jsSources.some(isClientSource);
 
-  const serverSources = jsSources
-    .filter(isServerRunnerFile)
-    .filter((path) => !isStructuralBarrel(path));
-  const clientSources = jsSources
-    .filter(isClientSource)
-    .filter((path) => clientDependencySet.has(path) || !isStructuralBarrel(path));
+  const serverSources = jsSources.filter(isServerRunnerFile);
+  const clientSources = jsSources.filter(isClientSource);
 
   // Feature-name matches, basename contracts, direct tests and guards are
   // additive explicit selectors; they never replace import-graph traversal. A
   // nested feature leaf can be consumed by a differently named test in another
   // area, so any behavioral source in a runner takes one 'related' invocation.
-  // Only a barrel-only edit (fully covered by the structural export guard) or a
-  // test-only diff keeps exact-file selection.
+  // Only a test-only diff keeps exact-file selection.
   const serverMode = serverSources.length > 0 ? 'related' : 'files';
   const clientMode = clientSources.length > 0 ? 'related' : 'files';
 
   const server = serverFiles.length > 0
     ? { mode: serverMode, files: serverFiles, sources: serverMode === 'related' ? serverSources : [] }
     : hasServerSource
-      ? { mode: serverSources.length > 0 ? 'related' : 'files', files: [], sources: serverSources }
+      ? { mode: 'related', files: [], sources: serverSources }
       : skippedRunner();
   const client = clientFiles.length > 0
     ? { mode: clientMode, files: clientFiles, sources: clientMode === 'related' ? clientSources : [] }
     : hasClientSource
-      ? { mode: clientSources.length > 0 ? 'related' : 'files', files: [], sources: clientSources }
+      ? { mode: 'related', files: [], sources: clientSources }
       : skippedRunner();
 
   const dbTests = new Set(resolveDbTestFiles(trackedFiles));
@@ -1727,7 +1628,7 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
     : {};
 
   const hasRelatedServerSource = collectedChangedFiles.some((path) => isServerRunnerFile(path)
-    && MODULE_SOURCE_RE.test(path) && !isTestFile(path) && !isStructuralBarrel(path));
+    && MODULE_SOURCE_RE.test(path) && !isTestFile(path));
   const dbDependencies = hasRelatedServerSource
     ? collectTestDependencies(resolveDbTestFiles(dependencyFiles), snapshot.testDependencies)
     : [];
@@ -1777,7 +1678,7 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
   }
 
   // A forced-full run always runs every gated job, so it skips the walks.
-  const promptHistoryInputs = forceFull ? null : collectPromptHistoryInputs(dependencyFiles, cwd);
+  const promptHistoryInputs = forceFull ? null : collectPromptHistoryInputs(cwd);
   const linuxContainmentInputs = forceFull ? null : collectLinuxContainmentInputs(cwd);
   const supercolliderLiveInputs = forceFull ? null : collectSuperColliderLiveInputs(cwd);
   const dockerContainmentLiveInputs = forceFull ? null : collectDockerContainmentLiveInputs(cwd);

@@ -1,4 +1,8 @@
 /**
+ * Promise-based async mutex.
+ */
+
+/**
  * Creates a simple async mutex (promise-based lock).
  * Returns a `withLock(fn)` function that serializes async operations.
  * Uses try/finally to guarantee the lock is always released, even on error.

@@ -1,3 +1,17 @@
+// Music-video beat-quantized timeline arranger (#1854).
+//
+// `buildBeatGridPoints(audioAnalysis)` merges beats/downbeats/section edges into one ranked snap-point
+// list; `snapTimeToGrid(timeSec, gridPoints, toleranceSec)` finds the nearest point within tolerance;
+// `computeSceneSpans(scenes, durationSec)` lays out scenes without a persisted `startSec`/`endSec`
+// contiguously as a display-only fallback; `computeDragSpan({kind, startSpan, deltaSec, gridPoints,
+// ...})` resolves a timeline drag gesture (`'move'` or `'right'` — no `'left'`, since the render can
+// only trim from a clip's own frame 0) into a new span; `shouldMarkBeatAligned({kind, snapped,
+// wasPersisted})` gates the `beatAligned` flag so a reposition-only drag can't silently promote an
+// unpersisted scene's placeholder fallback duration into a "saved exactly" render duration;
+// `autoArrangeScenes(scenes, audioAnalysis)` proposes a full `{ sceneId, startSec, endSec, beatAligned
+// }[]` arrangement by distributing scenes across song sections weighted by each section's `energy`
+// (#1915). Used by `components/musicVideo/BeatTimeline.jsx` and `components/musicVideo/stages/usePlanStageWiring.js`.
+//
 // Pure helpers for the music-video beat-quantized timeline arranger (#1854).
 // Consumed by client/src/components/musicVideo/BeatTimeline.jsx. Mirrors the
 // spirit of the server's shorten-only `beatSnapClips` (server/services/

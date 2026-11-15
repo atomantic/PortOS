@@ -1,5 +1,5 @@
 import { settleMergedReviewFollowUpBeforeSpawn } from './reviewFollowUpCompletion.js';
-import { isRetirementOnlyRecovery, settleRetirementRecoveryBeforeSpawn } from './retirementRecoveryCompletion.js';
+import { isCleanupOnlyRecovery, settleCleanupBeforeSpawn } from './cleanupOnlyCompletion.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { loadState } from './cosState.js';
 import { hasActiveTaskOwner } from './agentState.js';
@@ -74,6 +74,9 @@ export function createAgentSpawnContext(task) {
   };
 
   context.blockAndBail = async ({ reason, category, infrastructureCode, emit = 'agent:error', emitPayload = {}, persist = true }) => {
+    // An unpersisted hold leaves the task pending for the next dequeue, so this
+    // line is its only record; without it the lane cycles silently (#16177).
+    if (!persist) emitLog('info', `⏸️ Task ${context.task.id} stays pending: ${reason}`, { taskId: context.task.id });
     if (persist) {
       await updateTask(context.task.id, {
         status: 'blocked',
@@ -145,7 +148,7 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
     await context.cleanupOnError('task state unavailable');
     return null;
   }
-  if (isRetirementOnlyRecovery(task) && await settleRetirementRecoveryBeforeSpawn(task)) {
+  if (isCleanupOnlyRecovery(task) && await settleCleanupBeforeSpawn(task)) {
     await context.cleanupOnError('retirement dispatch settled or changed');
     return null;
   }
@@ -196,6 +199,7 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
   const freshTask = fresh.value;
   if (fresh.failed || !!checkedTask !== !!freshTask || (checkedTask && (checkedTask.status !== freshTask.status
     || !isDeepStrictEqual(checkedTask.metadata, freshTask.metadata)))) {
+    emitLog('warn', `Holding task ${task.id}: ${fresh.failed ? 'task state could not be read' : 'task changed after spawn budget verification'}`, { taskId: task.id });
     await context.cleanupOnError('task changed after spawn budget verification');
     return null;
   }
@@ -227,8 +231,13 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
     const claimUpdate = await updateTask(task.id, {
       metadata: buildClaim(instanceId),
     }, task.taskType || 'user', { expectedStatus: freshTask.status,
-      expectedTask: { description: freshTask.description, priority: freshTask.priority, metadata: freshTask.metadata } }).catch(() => null);
+      expectedTask: { description: freshTask.description, priority: freshTask.priority, metadata: freshTask.metadata } }).catch(err => {
+      emitLog('warn', `Holding task ${task.id}: claim write failed: ${err?.message || String(err)}`, { taskId: task.id });
+      return null;
+    });
     if (!claimUpdate || claimUpdate.error || claimUpdate.statusChanged) {
+      if (claimUpdate?.error) emitLog('warn', `Holding task ${task.id}: claim refused: ${claimUpdate.error}`, { taskId: task.id });
+      else if (claimUpdate?.statusChanged) emitLog('info', `Holding task ${task.id}: task or ownership changed during claim`, { taskId: task.id });
       await context.cleanupOnError('task or claim changed during dispatch');
       return null;
     }

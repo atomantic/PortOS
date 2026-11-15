@@ -1,4 +1,13 @@
 /**
+ * Re-export of `server/lib/editorial/letteringDensity.js` — `analyzeComicLettering` /
+ * `panelLetteringMetrics` / `overflowSeverity` / `sanitizeLetteringThresholds` /
+ * `DEFAULT_LETTERING_THRESHOLDS`.
+ *
+ * Powers the comic-script stage's INLINE per-page warnings (#1313) from the same code the
+ * authoritative `comic.lettering-density` check runs.
+ */
+
+/**
  * Comic lettering-density accounting, so the comic-script stage’s inline per-page warnings match the authoritative editorial check.
  *
  * Re-export of `server/lib/editorial/letteringDensity.js` — the one definition of this rule,

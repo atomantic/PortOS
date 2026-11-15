@@ -1,4 +1,9 @@
 /**
+ * `isPairedPeer(peer)` / `PAIR_SECRET_MIN_LENGTH` (32) — the one paired-peer predicate: a peer holds a
+ * pair secret long enough to authenticate with.
+ *
+ * Callers keep their own enabled / instance-match / `peerAuthAccepted` conditions.
+ *
  * Is a peer record a paired peer — i.e. does it hold a pair secret long
  * enough to authenticate with? This is the one place the length floor lives:
  * authGate, peer HTTP credentials, peer admin, catalog identity and the push

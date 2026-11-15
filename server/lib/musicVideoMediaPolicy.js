@@ -1,3 +1,8 @@
+/**
+ * Whole-workflow media modes, legacy intent, selection admission and independent document renderer
+ * choice.
+ */
+
 /** Media provenance policy is independent of the composition renderer. */
 export const MUSIC_VIDEO_MEDIA_MODES = ['code-only', 'code-images', 'code-images-video'];
 export const MUSIC_VIDEO_MEDIA_MODE_LABELS = {

@@ -54,6 +54,7 @@ import CatalogRelatedImages from '../components/catalog/CatalogRelatedImages';
 import CatalogSheetsPanel, { ReferenceSheetPanel } from '../components/catalog/CatalogSheetsPanel';
 import CatalogUnlockNotice from '../components/catalog/CatalogUnlockNotice';
 import CatalogPlatesPanel from '../components/catalog/CatalogPlatesPanel';
+import LookAroundPanel from '../components/catalog/LookAroundPanel';
 import GreyboxPanel from '../components/catalog/GreyboxPanel';
 import WorldPanel from '../components/catalog/WorldPanel';
 import PhotorealPanel from '../components/catalog/PhotorealPanel';
@@ -1124,6 +1125,8 @@ function IngredientEditor() {
             sheetMedia={media.filter(isSheetMedia).map(protectMedia)}
             missingMedia={missingMedia}
             onDetach={identityReadOnly ? undefined : handleDetachMedia}
+            onSetPortrait={identityReadOnly ? undefined : handleSetPortrait}
+            portraitKey={media.find((m) => m.kind === 'portrait')?.mediaKey || null}
             blockedReason={renderBlockedReason('sheet')}
             savedStamp={record.updatedAt || null}
             onSheetFile={handleSheetFile}
@@ -1174,6 +1177,10 @@ function IngredientEditor() {
             onSetRole={identityReadOnly ? undefined : handleSetMediaRole}
             onDetach={identityReadOnly ? undefined : handleDetachMedia}
           />
+        )}
+
+        {activeTab === 'plates' && mediaReady && record.type === 'place' && (
+          <LookAroundPanel key={record.id} ingredientId={record.id} media={media} readOnly={identityReadOnly} onSaved={refreshMedia} />
         )}
 
         {activeTab === 'greybox' && mediaReady && (

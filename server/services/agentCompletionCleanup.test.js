@@ -47,7 +47,6 @@ vi.mock('./creativeDirector/completionHook.js', () => ({ handleCreativeDirectorC
 vi.mock('./taskPromptService.js', () => ({ getStagePrompt: vi.fn().mockResolvedValue('do stage work in {appName}') }));
 
 import { handlePipelineProgression, runAgentCompletionCleanup, runSpawnerCompletionCleanup, removeCompletionSentinel } from './agentCompletionCleanup.js';
-import { readCompletionSentinel } from './agentCompletionSentinel.js';
 import { updateTask, addTask, reviveBlockedTask } from './cosTaskStore.js';
 import { getAgent } from './cosAgentLifecycle.js';
 import { checkStagePrecondition } from './cosTaskGenerator.js';
@@ -902,9 +901,6 @@ describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
   it("removes this run's completion sentinel and leaves a concurrent sibling's alone", async () => {
     await writeFile(join(workspace, '.agent-done-a1'), '## Summary\nDid the example work');
     await writeFile(join(workspace, '.agent-done-a2'), '## Summary\nStill working');
-    const state = await getAgent('a1');
-    state.metadata.completionSentinel = (await readCompletionSentinel('a1', workspace)).receipt;
-
     await complete({});
 
     await expect(readFile(join(workspace, '.agent-done-a1'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -969,8 +965,7 @@ describe('completion sentinel survives a finalize that recorded no outcome', () 
   afterEach(async () => { await rm(workspace, { recursive: true, force: true }); });
 
   const cleanupWithStatus = async (status) => {
-    const ingested = status === 'running' ? null : await readCompletionSentinel('a1', workspace);
-    getAgent.mockResolvedValue({ status, metadata: { workspacePath: workspace, completionSentinel: ingested?.receipt } });
+    getAgent.mockResolvedValue({ status, metadata: { workspacePath: workspace } });
     return runSpawnerCompletionCleanup({
       agentId: 'a1', task: { id: 't', metadata: {} }, success: false, outputBuffer: '',
       prOwnership: { taskOpenPR: false, agentOpensOwnPr: false },

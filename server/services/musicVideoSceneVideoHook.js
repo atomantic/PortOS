@@ -38,6 +38,7 @@ import { recordSceneLastFailure } from './musicVideo/sceneFailure.js';
 import { alignPerformanceInstruction } from './musicVideo/takeAudioAlignment.js';
 import { getHistoryItem } from './videoGen/history.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { extendTakeInPointFrames } from '../lib/musicVideoSequenceTake.js';
 import { storyboardFirstFrameFile } from '../lib/storyboardGuidance.js';
 import { safeUnder } from '../lib/ffmpeg.js';
 
@@ -53,6 +54,14 @@ async function alignedShotInstruction(instruction, videoHistoryId) {
   });
   if (aligned.alignment?.offsetSec) console.log(`🎤 music-video take ${videoHistoryId.slice(0, 8)} aligned to the song: speech starts ${aligned.alignment.offsetSec.toFixed(3)}s into the clip (r=${aligned.alignment.correlation})`);
   return aligned;
+}
+
+// #16150: a hosted extension lands as an unselected child take. Whether fal returned the extension alone or
+// the source joined with it is read off the delivered length, which sets the in-point of the new footage.
+async function extendRecord(extend, videoHistoryId) {
+  if (!extend?.parentTakeId) return null;
+  const entry = await getHistoryItem(videoHistoryId).catch(() => null);
+  return { parentTakeId: extend.parentTakeId, offsetFrames: extendTakeInPointFrames({ deliveredSec: entry?.durationSec, extensionSec: extend.extensionSec }) };
 }
 
 const hook = createMediaJobImageHook({
@@ -83,6 +92,7 @@ const hook = createMediaJobImageHook({
   // A deleted project/scene 404s here, so a late completion can't resurrect it.
   attach: async ({ projectId, sceneId, videoHistoryId, job }) => {
     const firstFrame = storyboardFirstFrameFile(job.result);
+    const extend = await extendRecord(job.params?.musicVideoExtend, videoHistoryId);
     return appendSceneTakes(projectId, sceneId, [
     // A clip rendered from a storyboard panel files the first frame it was animated
     // from as a still take too (a new take fills only an empty slot).
@@ -105,12 +115,16 @@ const hook = createMediaJobImageHook({
     dependencies: job.params?.musicVideoDependencies ?? null,
     // Cast guide catalog data is outside the project snapshot. Keep a take
     // that used an untracked guide as a candidate until a director selects it.
-    autoSelect: !job.params?.musicVideoDependencies?.references?.some((ref) => ref.role === 'clipReferences' && ref.untrackedCastGuides),
+    ...(extend ? { extend } : {}),
+    // An extension is a candidate until the director picks it.
+    autoSelect: !extend && !job.params?.musicVideoDependencies?.references?.some((ref) => ref.role === 'clipReferences' && ref.untrackedCastGuides),
     // #10157: the estimate this clip was priced at; a revision-tagged job is
     // an auto-review generation, the rest are manual takes.
     costUsd: job.params?.musicVideoCostUsd ?? null,
     costModelId: job.params?.musicVideoCostModelId ?? null,
     spendKind: job.params?.musicVideo?.revisionId ? 'autoReview' : 'manual',
+    // #16136: the shot card's Render draft / Render final.
+    tier: job.params?.musicVideo?.tier ?? null,
   }]);
   },
   onAttached: ({ projectId, sceneId, videoHistoryId }, { scene, appended }) => {

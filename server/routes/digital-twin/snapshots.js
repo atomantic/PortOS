@@ -6,7 +6,7 @@
 import { Router } from 'express';
 import * as timeCapsuleService from '../../services/timeCapsule.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import {
   createSnapshotInputSchema,
   compareSnapshotsInputSchema,

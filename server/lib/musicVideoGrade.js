@@ -1,4 +1,10 @@
-/** LUT-free, opt-in Music Video grades shared by footage and document encoders. */
+/**
+ *  LUT-free, opt-in Music Video grades shared by footage and document encoders.
+ *
+ * Opt-in Music Video grade presets, bounded normalization, and shared song-timed RGB lookup tables
+ * with deterministic grain for composed and document encodes; a captured document's wipe frames grade
+ * each picture with its own scene's preset.
+ */
 import { sumExpr } from './ffmpegExpr.js';
 import { musicVideoWipeHeldMask } from './musicVideoWipes.js';
 

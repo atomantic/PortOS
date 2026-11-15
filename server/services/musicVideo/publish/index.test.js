@@ -298,6 +298,17 @@ describe('publish drafts (#9282)', () => {
     expect(pages[0].closed).toBe(true);
   });
 
+  it('leaves an interrupted editor open and disconnects without treating it as a finished draft', async () => {
+    const id = await readyProject();
+    const { connect, pages, browsers } = fakeBrowser();
+    const err = Object.assign(new Error('Review the open tab'), { code: 'PUBLISH_EDIT_INTERRUPTED' });
+    const adapters = { stackerNews: adapter({ prepare: vi.fn(async () => { throw err; }) }) };
+    await expect(preparePublishDraft(id, 'stackerNews', {}, { connect, adapters, platforms })).rejects.toBe(err);
+    expect(pages[0].closed).toBe(false);
+    expect(browsers[0].close).toHaveBeenCalled();
+    expect(await listPublishDrafts(id, { connect })).toEqual([]);
+  });
+
   it('refuses a platform the director has not turned on, before opening a tab', async () => {
     const id = await readyProject();
     const { connect } = fakeBrowser();

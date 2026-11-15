@@ -9,6 +9,7 @@ import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from '../lib/vide
  */
 
 import { withMediaFileSizes } from '../lib/mediaFileInfo.js';
+import { checkHiggsfieldNewModels } from '../services/higgsfieldCatalogCheck.js';
 import { clearMetalBufferProfiles } from '../services/videoGen/metalBufferProfiles.js';
 import { historyListQuerySchema, isHistoryListQuery, listVideoHistoryQuery } from '../services/videoGen/historyList.js';
 import { Router } from 'express';
@@ -23,7 +24,7 @@ import { createVideoHistoryItemRead, historyRecordIdSchema } from './videoHistor
 import { optionalUpload, optionalUploadFields } from '../lib/multipart.js';
 import {
   validateRequest, hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema,
-  icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema,
+  icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema, videoExtendBodySchema,
 } from '../lib/validation.js';
 import { grokVideoDurationSchema } from '../lib/sharedSchemas.js';
 import {
@@ -64,6 +65,7 @@ import { assertNoPendingTopaz, enqueueTopazUpscale, reconcileTopazStatus, recove
 import { enqueueStitch } from '../services/videoGen/stitchJob.js';
 import { trimHistoryItem } from '../services/videoGen/trim.js';
 import { handheldHistoryItem } from '../services/videoGen/handheld.js';
+import { extendHistoryClip } from '../services/videoGen/extendHosted.js';
 import { HANDHELD_SEED_MAX } from '../lib/handheldCamera.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
 import { submitVideoGenJob } from '../services/videoGen/submitJob.js';
@@ -609,6 +611,8 @@ export const generateBodySchema = z.object({
       startFrameLayout: z.boolean().optional(),
       // Names the overnight batch this take was queued in (musicVideo/overnightRenders.js).
       batchId: z.string().uuid().optional(),
+      // The shot card's Render draft / Render final (#16136); the take records it.
+      tier: z.enum(['draft', 'final']).optional(),
     }).optional(),
   ),
   // File the clip into this music video's media collection even when no shot
@@ -768,6 +772,11 @@ async function resolveLocalPythonHealth(py) {
     return { connected: false, reason: `Python probe failed: ${err.message || err}`, missing: [], pythonVersion: null };
   }
 }
+
+// Higgsfield video families the curated picker lacks, read from their public catalog.
+router.get('/higgsfield-models/unsupported', asyncHandler(async (_req, res) => {
+  res.json(await checkHiggsfieldNewModels());
+}));
 
 router.get('/models', asyncHandler(async (_req, res) => {
   const { models } = await hardwareAwareVideoModels();
@@ -1605,6 +1614,14 @@ router.post('/history/:id/handheld', asyncHandler(async (req, res) => {
   if (!parsed.success) failValidation(parsed);
   const body = validateRequest(handheldBodySchema, req.body ?? {});
   res.json({ ok: true, video: await handheldHistoryItem(parsed.data, body) });
+}));
+
+// Continue a hosted clip on its model's extend endpoint (#16150); `dryRun` returns the exact body and price.
+router.post('/history/:id/extend', asyncHandler(async (req, res) => {
+  const parsed = historyIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const body = validateRequest(videoExtendBodySchema, req.body ?? {});
+  res.json(await extendHistoryClip(parsed.data, body));
 }));
 
 const stitchBodySchema = z.object({

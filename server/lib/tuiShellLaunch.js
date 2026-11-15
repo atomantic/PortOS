@@ -1,3 +1,18 @@
+/**
+ * `buildTuiShellLaunch(provider)` → `{ commandLine, env }` for launching a TUI provider by hand in a
+ * Shell session (the AI Providers card's "Launch in Shell" button).
+ *
+ * Resolves the command via `tuiHandshake.js#buildTuiInvocation` (so the vendor posture flags and
+ * `--model`/`--effort` injection match a real TUI spawn) and the env via
+ * `cliChildEnv.js#composeProviderEnv`. **The env is why this is server-side and the deep link carries
+ * only a provider ID**: a TUI provider's backend lives in `envVars` (`ANTHROPIC_BASE_URL` for an
+ * Ollama-backed or Bedrock `claude`, `OPENCODE_CONFIG_CONTENT` for an OpenCode wrapper), so a shell
+ * handed only the command line would run the right binary against the vendor cloud instead of the
+ * local daemon the user configured — and those values are secret, so they can't ride a URL. Returns
+ * null for a non-TUI provider. Must be given a RAW provider, never a client-sanitized one (redacted
+ * `'***'` env reads truthy).
+ */
+
 import { EXECUTION_OPTIONS_ERROR } from './executionOptions.js';
 /**
  * Resolve everything a TUI provider needs to be launched by hand in a Shell

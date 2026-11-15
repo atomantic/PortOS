@@ -1,3 +1,5 @@
+// MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS — browser-safe image generation caps shared with validation.
+//
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
 // pixels. Mirror the ceiling for every image-gen route. Local mflux can
 // render up to 3840 in principle but is impractically slow past ~2048 — the

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const forge = vi.hoisted(() => ({ probes: new Map(), evidence: new Map(), gitlab: new Map() }));
 vi.mock('./apps.js', () => ({ getAppById: async () => ({ id: 'app', repoPath: '/repo' }) }));
 vi.mock('./prProbe.js', () => ({ probePrForBranch: async (_repo, branch) => forge.probes.get(branch) }));
-vi.mock('./heldCheckoutReview.js', () => ({ readRetirementForgeEvidence: async (_repo, branch) => forge.evidence.get(branch) }));
+vi.mock('./mergedPrEvidence.js', () => ({ readMergedPrDelivery: async (_repo, branch) => forge.evidence.get(branch) }));
 vi.mock('../lib/workTracker.js', () => ({ resolveAppForgeTarget: async () => ({ target: {
   forge: 'gitlab', fullName: 'group/sub/project', webHost: 'gitlab.example.com',
 } }) }));

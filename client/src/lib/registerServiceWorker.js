@@ -1,11 +1,16 @@
 // Service-worker registration — the modern replacement for AppCache, giving
 // PortOS an offline-capable app shell and low-bandwidth asset caching.
 //
+// `registerServiceWorker()` / `unregisterServiceWorkers()` — wires up the offline app-shell +
+// low-bandwidth asset-caching service worker (`public/sw.js`). Registers only in a production secure
+// context (HTTPS or localhost); no-ops over plain-HTTP Tailnet and tears down any stale SW in dev.
+// Called once from `main.jsx`.
+//
 // The worker itself lives at `client/public/sw.js` (served from `/sw.js` at the
 // site root so its scope is `/`). This module only decides *whether* to
 // register it and wires the register/unregister lifecycle. It is intentionally
 // side-effect-free at import time — call `registerServiceWorker()` explicitly
-// (from `main.jsx`) so the barrel import in tests stays inert.
+// (from `main.jsx`) so importing it in tests stays inert.
 //
 // Secure-context note: `navigator.serviceWorker` only exists in a secure
 // context — HTTPS, or `http://localhost`. PortOS accessed over a plain-HTTP

@@ -144,7 +144,7 @@ import settingsRoutes from './settings.js';
 import { resolveReviewLoopOptions } from '../services/codeReview.js';
 import { buildReviewLoopFollowUpSection, reviewPolicyToLoopMetadata } from '../services/promptSections/reviewLifecycle.js';
 import { buildReviewWithArgs } from '../lib/reviewerConfig.js';
-import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import * as auth from '../services/auth.js';
 import * as instanceIdentity from '../services/instanceIdentity.js';
 import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
@@ -1384,19 +1384,41 @@ describe('Settings routes — orchestration profiles (#5992)', () => {
 
 it('accepts only registered private keys and never returns the submitted secret', async () => {
   const { getCredentialInventory } = await import('../services/credentialInventory.js');
-  getCredentialInventory.mockResolvedValue({ credentials: [{ id: 'artificial-analysis', configured: true, source: 'settings', editable: true }] });
+  getCredentialInventory.mockResolvedValue({ credentials: [{ id: 'civitai', configured: true, source: 'settings', editable: true }] });
   const app = buildApp();
-  const result = await request(app).put('/api/settings/credentials/artificial-analysis').send({ value: 'example-private-key' });
+  const result = await request(app).put('/api/settings/credentials/civitai').send({ value: 'example-private-key' });
   expect(result.status).toBe(200);
   expect(result.body).toMatchObject({ configured: true });
   expect(JSON.stringify(result.body)).not.toContain('example-private-key');
-  expect(store.secrets.artificialAnalysis.apiKey).toBe('example-private-key');
+  expect(store.civitai.apiKey).toBe('example-private-key');
   const publicSettings = await request(app).get('/api/settings');
   expect(JSON.stringify(publicSettings.body)).not.toContain('example-private-key');
   expect((await request(app).put('/api/settings/credentials/auth').send({ value: 'example' })).status).toBe(400);
   expect((await request(app).put('/api/settings/credentials/civitai').send({ value: {}, extra: true })).status).toBe(400);
-  await request(app).put('/api/settings/credentials/artificial-analysis').send({ value: '' });
-  expect(store.secrets.artificialAnalysis.apiKey).toBe('');
+  await request(app).put('/api/settings/credentials/civitai').send({ value: '' });
+  expect(store.civitai.apiKey).toBe('');
+});
+
+it.each([
+  ['higgsfield', 'Higgsfield'], ['fal', 'fal.ai'], ['runway', 'Runway'], ['reactor', 'reactor.inc'], ['google-cloud', 'Google'],
+])('refuses a %s key that cannot go in an HTTP header, naming the setting and never echoing it', async (id, label) => {
+  const app = buildApp();
+  const goodKey = 'key_id:key_secret-123';
+  for (const bad of ['abc\u{1F600}def', 'abc def', `${goodKey}\n`]) {
+    store = {};
+    const res = await request(app).put(`/api/settings/credentials/${id}`).send({ value: bad });
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(res.body)).toContain(`The ${label} API key contains characters that cannot be sent`);
+    expect(JSON.stringify(res.body)).not.toContain('abc');
+    expect(JSON.stringify(store)).not.toContain('abc');
+  }
+  expect((await request(app).put(`/api/settings/credentials/${id}`).send({ value: goodKey })).status).toBe(200);
+});
+
+it('still accepts a Google service account JSON credential, whitespace and all', async () => {
+  const app = buildApp();
+  const json = '{\n  "type": "service_account",\n  "private_key": "-----BEGIN\\nabc"\n}';
+  expect((await request(app).put('/api/settings/credentials/google-cloud').send({ value: json })).status).toBe(200);
 });
 
 describe('Settings routes — optional networking preference', () => {
@@ -1758,7 +1780,7 @@ const guardedSettingsApp = (authority) => {
       : { enabled: false, authenticated: false, method: null };
     next();
   });
-  app.use(hostControlBodyGate);
+  app.use(hostControlRouteGate);
   app.use('/api/settings', settingsRoutes);
   return app;
 };
@@ -1813,8 +1835,8 @@ describe('generic voice settings operator authority', () => {
     expect(store.voice).toEqual(voice);
   });
 
-  it('keeps unrelated generic settings writes open without changing voice policy', async () => {
-    const res = await request(guardedSettingsApp('remote')).put('/api/settings').send({ theme: 'dark' });
+  it('saves unrelated generic settings without changing voice policy', async () => {
+    const res = await request(guardedSettingsApp('local')).put('/api/settings').send({ theme: 'dark' });
     expect(res.status).toBe(200);
     expect(store.voice).toEqual(original);
   });
@@ -1866,8 +1888,8 @@ describe('autofixer settings operator authority', () => {
     expect(updateAiAssignment).toHaveBeenLastCalledWith('settings.autofixer', body);
   });
 
-  it('keeps unrelated remote settings saves open without changing deferred repair policy', async () => {
-    expect((await request(guardedSettingsApp('remote')).put('/api/settings').send({ theme: 'dark' })).status).toBe(200);
+  it('saves unrelated settings without changing deferred repair policy', async () => {
+    expect((await request(guardedSettingsApp('local')).put('/api/settings').send({ theme: 'dark' })).status).toBe(200);
     expect(store.autofixer).toEqual(original);
   });
 });

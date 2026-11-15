@@ -1,3 +1,11 @@
+/**
+ * Sprite render map reconciled on scoped queue events, entry, reconnect and tab show.
+ *
+ * Submitting sentinel, terminal-before-response recovery and 404-only release. Use when:
+ * Queue-backed sprite reference/walk renders; persisted assets reconcile separately on
+ * `sprites:changed`.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import { getMediaJob, listMediaJobs } from '../services/apiMediaJobs.js';

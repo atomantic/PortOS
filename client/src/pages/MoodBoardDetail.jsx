@@ -991,6 +991,16 @@ function MoodBoardEditor({ id }) {
                 const promptText = moodBoardItemPrompt(item);
                 const displayText = promptText || item.caption || '';
                 const sendLinks = moodBoardItemSendLinks(item);
+                const textField = (
+                  <MoodBoardItemTextField
+                    key={`${item.id}-${displayText}`}
+                    item={item}
+                    displayText={displayText}
+                    isAnalyzed={isAnalyzed}
+                    hasPrompt={hasPrompt}
+                    onUpdate={handleUpdateItemText}
+                  />
+                );
                 return (
                   <div key={item.id} className="min-w-0 bg-port-card border border-port-border rounded-md overflow-hidden flex flex-col">
                     <div className="relative w-full aspect-square bg-port-bg">
@@ -1152,16 +1162,20 @@ function MoodBoardEditor({ id }) {
                           }}
                         />
                       ) : null}
-                      <MoodBoardItemTextField
-                        key={`${item.id}-${displayText}`}
-                        item={item}
-                        displayText={displayText}
-                        isAnalyzed={isAnalyzed}
-                        hasPrompt={hasPrompt}
-                        onUpdate={handleUpdateItemText}
-                      />
+                      {hasPrompt ? (
+                        <details className="min-w-0">
+                          <summary className="cursor-pointer rounded border border-port-border px-2 py-1.5 text-xs text-gray-400 hover:text-gray-200 focus-visible:outline focus-visible:outline-port-accent">
+                            Prompt text
+                          </summary>
+                          <div className="mt-2">
+                            {textField}
+                          </div>
+                        </details>
+                      ) : (
+                        textField
+                      )}
                       {item.source ? (
-                        <span className="min-w-0 text-[10px] text-gray-500 truncate" title={item.source}>{item.source}</span>
+                        <span className="min-w-0 text-[10px] text-gray-500 truncate" title={item.source}>{item.source.replace(/^https?:\/\//i, '')}</span>
                       ) : null}
                       {item.type === 'text' && item.render?.status === 'failed' ? (
                         <span className="min-w-0 text-[10px] text-port-error break-words">

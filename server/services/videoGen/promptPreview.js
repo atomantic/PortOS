@@ -5,7 +5,7 @@
  * holds is named in place of its staged path, and the grok scratch folder names
  * the job folder it will get.
  */
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ServerError } from '../../lib/errorHandler.js';
 import { resolveGalleryImage } from '../../lib/fileUtils.js';
@@ -117,6 +117,11 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
       generateAudio: body.falGenerateAudio === true, promptAdditions,
       hasImage: hasSourceImage, hasEndImage: !!uploads.lastImage || !!body.lastImageFile, hasAudio: !!uploads.audioFile,
       guidanceReferences: body.guidanceImageFile ? (body.referenceImageFiles || []).length : null,
+      // Plain references are named @ImageN in the order given (hostedSubmission.js).
+      ...(!body.guidanceImageFile && !body.musicVideo && body.referenceImageFiles?.length ? {
+        referenceCount: body.referenceImageFiles.length,
+        clipReferenceLabels: body.referenceImageFiles.map((file) => ({ label: basename(file) })),
+      } : {}),
     }).record };
   }
   if (backend === VIDEO_GEN_MODE.RUNWAY) {

@@ -1,3 +1,16 @@
+/**
+ * Maintenance task ladder shared by both runners: `MAINTENANCE_TASK_ORDER`, interleaved
+ * `MAINTENANCE_SEQUENCE_TYPES` with claim-issue drains, and `maintenanceStepParams`.
+ *
+ * The maintenance ladder shared by both runners: `MAINTENANCE_TASK_ORDER` /
+ * `MAINTENANCE_ORDER_GUIDANCE`, the interleaved `MAINTENANCE_SEQUENCE_TYPES` (a perpetual
+ * `claim-issue` drain between every pair of audits), `maintenanceStepParams` (audits file issues,
+ * documentation does the work), and `buildMaintenanceSteps` (fix mode runs audits directly with one
+ * final drain; issue filing can omit claim jobs) which emits quota-burn-shaped run-once steps so
+ * `quotaBurnInvoke.js` can run a step from the Schedule tab's manual run or a Quota Burn family plan
+ * alike. Pure.
+ */
+
 import { EXTENDED_AUDIT_WORKFLOW } from './auditWorkflow.js';
 /**
  * The maintenance ladder: the ordered audits PortOS recommends running against a

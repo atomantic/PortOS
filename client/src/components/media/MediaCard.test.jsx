@@ -331,4 +331,23 @@ describe('shared media-card file size', () => {
     expect(plainCard.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
     expect(onDelete).not.toHaveBeenCalled();
   });
+
+  it('renders verified clean and defect badges when verification metadata is present', () => {
+    const verifiedItem = {
+      ...imageItem,
+      verification: { verdict: 'pass', summary: 'Clean render, all 5 digits verified' },
+    };
+    const defectItem = {
+      ...imageItem,
+      verification: { verdict: 'fail', summary: 'Extra finger detected on right hand' },
+    };
+
+    const { rerender } = render(<MediaCard item={verifiedItem} />);
+    expect(screen.getByText('✓ verified')).toBeInTheDocument();
+    expect(screen.getByTitle('Clean render, all 5 digits verified')).toBeInTheDocument();
+
+    rerender(<MediaCard item={defectItem} />);
+    expect(screen.getByText('⚠ defect')).toBeInTheDocument();
+    expect(screen.getByTitle('Extra finger detected on right hand')).toBeInTheDocument();
+  });
 });

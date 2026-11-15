@@ -10,7 +10,8 @@ import { readFile, stat, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { ensureDir } from '../../lib/fileCore.js';
-import { FFMPEG_FRAME_TIMEOUT_MS, FFMPEG_SCAN_TIMEOUT_MS, findFfmpeg, probeVideoDuration, runFfmpegProcess } from '../../lib/ffmpeg.js';
+import { FFMPEG_FRAME_TIMEOUT_MS, findFfmpeg, probeVideoDuration, runFfmpegProcess } from '../../lib/ffmpeg.js';
+import { detectVideoSceneCuts } from '../../lib/videoSceneCuts.js';
 import { PATHS } from '../../lib/paths.js';
 import { makePathResolver } from '../../lib/pathSafety.js';
 import { trimTo } from '../../lib/textUtils.js';
@@ -18,34 +19,7 @@ import { trimTo } from '../../lib/textUtils.js';
 const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'm4v'];
 const resolveGalleryVideo = makePathResolver(() => PATHS.videos, { extensions: VIDEO_EXTENSIONS });
 
-// ffmpeg scene score above which a frame change counts as a cut.
-const CUT_THRESHOLD = 0.3;
-const MAX_CUTS = 120;
-
 const thumbUrl = (name) => `/data/video-thumbnails/${encodeURIComponent(name)}`;
-
-/** Parse `pts_time:` stamps from ffmpeg's showinfo log into rounded seconds. */
-function parseCutTimes(stderr) {
-  const times = [];
-  for (const match of String(stderr || '').matchAll(/pts_time:([0-9.]+)/g)) {
-    const t = Math.round(Number(match[1]) * 100) / 100;
-    if (Number.isFinite(t) && t > 0 && (!times.length || t - times.at(-1) >= 0.2)) times.push(t);
-  }
-  return times.slice(0, MAX_CUTS);
-}
-
-async function detectCuts(ffmpeg, videoPath) {
-  const result = await runFfmpegProcess({
-    bin: ffmpeg,
-    // -nostats keeps progress lines out of the stderr tail the stamps are read from.
-    args: ['-hide_banner', '-nostats', '-loglevel', 'info', '-i', videoPath, '-an', '-vf', `scale=320:-2,select='gt(scene,${CUT_THRESHOLD})',showinfo`, '-f', 'null', '-'],
-    returnStderr: true,
-    stderrTailBytes: 400000,
-    timeoutMs: FFMPEG_SCAN_TIMEOUT_MS,
-  });
-  // null, not [], so a failed pass never reads as "no cuts".
-  return result.ok ? parseCutTimes(result.stderr) : null;
-}
 
 async function extractKeyframe(ffmpeg, videoPath, atSec, outputPath) {
   const result = await runFfmpegProcess({
@@ -79,7 +53,7 @@ export async function resolveReferenceVideo(ref) {
     const { times } = await encodeReferenceContactSheet(path, at(names.sheet), { everySec: Math.max(0.5, durationSec / 48) });
     await extractKeyframe(ffmpeg, path, durationSec * 0.3, at(names.early));
     await extractKeyframe(ffmpeg, path, durationSec * 0.7, at(names.late));
-    meta = { durationSec, cuts: await detectCuts(ffmpeg, path), sheetEverySec: times.length > 1 ? times[1] - times[0] : durationSec };
+    meta = { durationSec, cuts: await detectVideoSceneCuts(path, { bin: ffmpeg }), sheetEverySec: times.length > 1 ? times[1] - times[0] : durationSec };
     // An unmeasured rhythm is not cached, so the next request measures again.
     if (meta.cuts) await writeFile(at(names.meta), JSON.stringify(meta));
   }

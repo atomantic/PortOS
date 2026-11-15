@@ -21,7 +21,7 @@
 
 import { Router } from 'express';
 import { asyncHandler } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { scopeAdherenceRequestSchema } from '../../lib/scopeAdherence.js';
 import { loadApp } from './shared.js';
 

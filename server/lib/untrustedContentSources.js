@@ -1,6 +1,11 @@
 /**
  * The untrusted-content ingress vocabulary.
  *
+ * The ingress vocabulary alone — `UNTRUSTED_CONTENT_SOURCES` and `PRIVATE_UNTRUSTED_CONTENT_SOURCES`.
+ * Split out of `untrustedContent.js` (which reaches `zod` and `node:crypto`) so the browser can import
+ * it: the Abuse Guard panel offers exactly the sources the server screens, instead of restating them
+ * and drifting (#7680).
+ *
  * Its own leaf so the browser can import it: `untrustedContent.js` reaches
  * `zod` and, through `modelAbuseGuard.js`, `node:crypto`, and the settings
  * panel needs nothing but these two lists. A source the server screens but

@@ -93,12 +93,22 @@ describe('Moltworld host authority', () => {
     }
   });
 
-  it('leaves reads, disconnect and queue cancellation/annotations reachable remotely', async () => {
-    const app = appFor();
+  it('leaves reads reachable remotely and runs disconnect and queue cancellation/annotations for host control', async () => {
+    const remote = appFor();
     for (const path of ['status?accountId=example-account', 'balance?accountId=example-account', 'rate-limits?accountId=example-account', 'queue/example-agent', 'ws/status']) {
-      expect((await request(app).get(`${base}/${path}`)).status, path).toBe(200);
+      expect((await request(remote).get(`${base}/${path}`)).status, path).toBe(200);
     }
-    for (const path of ['ws/disconnect', 'queue/example-item/complete', 'queue/example-item/fail']) {
+    const writes = ['ws/disconnect', 'queue/example-item/complete', 'queue/example-item/fail'];
+    for (const path of writes) {
+      const refused = await call(remote, path, {});
+      expect([refused.status, refused.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    const refusedDelete = await request(remote).delete(`${base}/queue/example-item`);
+    expect([refusedDelete.status, refusedDelete.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    for (const name of ['disconnect', 'markCompleted', 'markFailed', 'removeAction']) expect(effects[name]).not.toHaveBeenCalled();
+
+    const app = appFor('127.0.0.1');
+    for (const path of writes) {
       expect((await call(app, path, {})).status, path).toBe(200);
     }
     expect((await request(app).delete(`${base}/queue/example-item`)).status).toBe(200);

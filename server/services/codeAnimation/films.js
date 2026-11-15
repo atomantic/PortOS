@@ -6,7 +6,7 @@ import { normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
 import { makePathResolver } from '../../lib/pathSafety.js';
 import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { createFilmSchema, patchFilmSchema, filmAudioSchema } from '../../lib/codeAnimationFilms.js';
 import { blenderRefusal } from '../film/workspace.js';
 import { emitCodeAnimationChanged, emitCodeAnimationFilm } from '../socket.js';

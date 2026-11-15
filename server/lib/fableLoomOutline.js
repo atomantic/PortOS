@@ -2,6 +2,9 @@
  * FableLoom episode beat outlines — the story-first contract between a
  * series plan and a fully written teleplay.
  *
+ * FableLoom story-first episode beat outlines: bounded log-lines, deterministic arc validation, and
+ * compact prompt rendering before teleplay expansion.
+ *
  * An outline is deliberately smaller than a scene graph: one short log-line
  * per camera-cut beat, the intended audience contract, and the paths between
  * beats. This module stays pure so the same deterministic checks can run

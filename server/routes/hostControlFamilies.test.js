@@ -4,7 +4,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 import { request } from '../lib/testHelper.js';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 
-// The real authGate and both host-control gates over the #8721 families,
+// The real authGate and host-control route gate over the #8721 families,
 // pinned to a password-free install so the developer's own settings cannot
 // change what these cases observe.
 vi.mock('../services/auth.js', async (importOriginal) => ({
@@ -13,7 +13,7 @@ vi.mock('../services/auth.js', async (importOriginal) => ({
   verifyRequestSession: vi.fn(async req => req.headers.authorization === 'Bearer example-session'),
 }));
 
-// The stored settings the executable-path gate compares a body against.
+// Stored settings; a resave that repeats them is still an operator write (#16018).
 const settingsStore = vi.hoisted(() => ({ current: {} }));
 vi.mock('../services/settings.js', async (importOriginal) => ({
   ...await importOriginal(),
@@ -67,7 +67,7 @@ const installer = vi.hoisted(() => ({
 }));
 vi.mock('../services/providerRuntimeInstaller.js', () => installer);
 
-import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import featureAgentsRoutes from './featureAgents.js';
 import loopsRoutes from './loops.js';
 import { createPortOSProviderRoutes } from './providers.js';
@@ -92,7 +92,6 @@ const buildGatedApp = (remoteAddress) => {
   app.use(authGate);
   app.use(hostControlRouteGate);
   app.use(express.json());
-  app.use(hostControlBodyGate);
   app.use('/api/feature-agents', featureAgentsRoutes);
   app.use('/api/loops', loopsRoutes);
   app.use('/api/providers', createPortOSProviderRoutes({ services: { providers: {} }, routes: { providers: Router() } }));
@@ -177,15 +176,22 @@ describe('host-control gate on agent, loop, provider and policy writes (#8721)',
     expect(mediaHostAction).not.toHaveBeenCalled();
   });
 
-  it('leaves a remote caller the writes that only stop work or change no execution policy', async () => {
-    const statuses = [];
-    for (const write of [
+  it('refuses a remote caller even the writes that only stop work or change no execution policy, and keeps them local', async () => {
+    const writes = [
       ['post', '/api/feature-agents/agent-1/stop'],
       ['post', '/api/loops/loop-1/stop'],
       ['put', '/api/settings', { location: { lat: null, lon: null } }],
       ['put', '/api/cos/config', { avatarStyle: 'svg' }],
       ['post', '/api/github/repos/sync'],
-    ]) statuses.push((await call(remote(), write)).status);
+    ];
+    for (const write of writes) expectRefused(await call(remote(), write));
+    expect(github.syncRepos).not.toHaveBeenCalled();
+    expect(featureAgents.stopFeatureAgent).not.toHaveBeenCalled();
+    expect(loops.stopLoop).not.toHaveBeenCalled();
+    expect(settingsWrite).not.toHaveBeenCalled();
+    expect(cosConfigWrite).not.toHaveBeenCalled();
+    const statuses = [];
+    for (const write of writes) statuses.push((await call(local(), write)).status);
     expect(statuses).toEqual([200, 200, 200, 200, 200]);
     expect(github.syncRepos).toHaveBeenCalledTimes(1);
     expect(featureAgents.stopFeatureAgent).toHaveBeenCalledTimes(1);
@@ -254,13 +260,16 @@ describe('host-control gate on settings keys that pick an executable (#8751)', (
     expect(settingsWrite).not.toHaveBeenCalled();
   });
 
-  it('lets a remote caller resave the stored values, or clear one, while changing an open key', async () => {
-    const statuses = [];
-    for (const body of [
+  it('refuses a remote caller that only resaves the stored values or clears one, and keeps it local', async () => {
+    const bodies = [
       { imageGen: { ...STORED.imageGen, grok: { ...STORED.imageGen.grok, aspectRatio: '16:9' } } },
       { layeredIntelligence: { trustShellSources: false } },
       { imageGen: { grok: { enabled: false, grokPath: '' } } },
-    ]) statuses.push((await call(remote(), ['put', '/api/settings', body])).status);
+    ];
+    for (const body of bodies) expectRefused(await call(remote(), ['put', '/api/settings', body]));
+    expect(settingsWrite).not.toHaveBeenCalled();
+    const statuses = [];
+    for (const body of bodies) statuses.push((await call(local(), ['put', '/api/settings', body])).status);
     expect(statuses).toEqual([200, 200, 200]);
     expect(settingsWrite).toHaveBeenCalledTimes(3);
   });
@@ -299,11 +308,13 @@ describe('tool registry prompt writes require operator authority (#9014)', () =>
     expect(tools.updateTool).not.toHaveBeenCalled();
   });
 
-  it('keeps all reads and deletion available to remote password-free callers', async () => {
+  it('keeps all reads available to remote password-free callers and deletion to local ones', async () => {
     for (const path of ['/api/tools', '/api/tools/enabled', '/api/tools/summary', '/api/tools/example-tool']) {
       expect((await request(remote()).get(path)).status).toBe(200);
     }
-    expect((await request(remote()).delete('/api/tools/example-tool')).status).toBe(204);
+    expectRefused(await request(remote()).delete('/api/tools/example-tool'));
+    expect(tools.deleteTool).not.toHaveBeenCalled();
+    expect((await request(local()).delete('/api/tools/example-tool')).status).toBe(204);
     expect(tools.deleteTool).toHaveBeenCalledWith('example-tool');
   });
 

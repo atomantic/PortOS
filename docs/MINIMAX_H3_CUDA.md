@@ -17,7 +17,7 @@ unpinned upgrade or VCS install precedes sync. The direct requirements file is
 only an input to regeneration.
 
 The stack uses torch 2.14.1+cu126, torchvision 0.29.1+cu126, torchao 0.18.0,
-diffusers 0.42.0 and transformers 5.22.1. Linux resolves torchao's
+diffusers 0.42.0 and transformers 5.22.2. Linux resolves torchao's
 `0.18.0+cu126` wheel; Windows uses its `0.18.0` wheel. NumPy 2.4.6 retains
 Python 3.11 support (the previous 2.5.2 pin requires Python 3.12+).
 A different `PORTOS_TORCH_CUDA_INDEX` is refused for this runtime: a new CUDA

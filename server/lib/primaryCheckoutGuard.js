@@ -1,6 +1,17 @@
 /**
  * Primary-checkout branch-jack detector (#3680).
  *
+ * `capturePrimaryCheckoutState(path)` / `detectPrimaryCheckoutDrift(baseline, {agentBranch})` +
+ * `PRIMARY_CHECKOUT_MUTATED_REASON`/`_CATEGORY` — the branch-jack detector (#3680): stamps the PRIMARY
+ * checkout's branch + HEAD onto a worktree agent's metadata at spawn (`agentLifecycle.js`) and
+ * re-reads it in the shared finalize path (`agentFinalization.js`), so a worktree-isolated agent that
+ * commits to the primary is recorded as a FAILURE naming the drifted branch, the commit count, and the
+ * `git reset --hard` recovery — instead of a silent "completed". Detect-and-report only: the reset
+ * discards commits, so it stays a human decision. Non-throwing (runs outside the request lifecycle);
+ * an unreadable checkout reports no drift rather than inventing one. `resolveRemoteDefaultRef(path)`
+ * resolves local origin/HEAD, origin/main, then origin/master to `{ref, sha}` or null without
+ * fetching; also used by run-window diffs.
+ *
  * A CoS agent spawned with a worktree must only ever write inside that
  * worktree. On 2026-08-09 one didn't: running `/do:pr` from its worktree it
  * applied its three commits onto the PRIMARY checkout's local `main`, where

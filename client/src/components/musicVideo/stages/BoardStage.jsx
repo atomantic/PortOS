@@ -15,6 +15,9 @@ import ScenePoster from '../ScenePoster.jsx';
 import { blenderShotThumbPath } from '../../../lib/musicVideoBlender.js';
 import { musicVideoBlenderMediaUrl } from '../../../services/apiMusicVideo.js';
 import SharedTakeOffers from '../SharedTakeOffers.jsx';
+import SequenceTakePanel from '../SequenceTakePanel.jsx';
+import FinalUpgradePanel from '../FinalUpgradePanel.jsx';
+import { sceneClipIsFinal, sceneFinalApproved } from '../../../../../server/lib/musicVideoFinalApproval.js';
 import { sceneActiveEndImageId } from '../../../../../server/lib/musicVideoEndFrame.js';
 import ShotEffectsCard, { SceneEffectBadges } from '../ShotEffectsCard.jsx';
 import { shotNumbers } from '../ShotStepper.jsx';
@@ -38,12 +41,15 @@ const isTypingTarget = (el) => !!el && (el.isContentEditable || ['INPUT', 'TEXTA
 function SceneMediaBadges({ scene, layered, scenes }) {
   const kind = sceneMediaKind(scene, { layered, scenes });
   const endFrame = sceneActiveEndImageId(scene);
-  if (!kind && !endFrame) return null;
+  // #16136: where the shot's clip stands on the draft-to-final path.
+  const tier = sceneClipIsFinal(scene) ? 'Final' : sceneFinalApproved(scene) ? 'Approved for final' : null;
+  if (!kind && !endFrame && !tier) return null;
   const Icon = MEDIA_ICONS[kind];
   return (
     <span id={`scene-media-${scene.sceneId}`} className="absolute right-1 top-1 flex gap-1">
       {kind && <span className="port-media-overlay-strong inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium leading-none"><Icon size={11} aria-hidden="true" />{SCENE_MEDIA_LABELS[kind]}</span>}
       {endFrame && <span className="port-media-overlay-strong inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium leading-none"><FlagTriangleRight size={11} aria-hidden="true" />End frame</span>}
+      {tier && <span className="port-media-overlay-strong inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium leading-none" data-testid="scene-tier-badge"><CheckCircle2 size={11} aria-hidden="true" />{tier}</span>}
     </span>
   );
 }
@@ -246,6 +252,11 @@ export default function BoardStage({ board }) {
         </div>
       )}
       {scenes.length > 0 && <SharedTakeOffers scenes={scenes} onSave={board.saveScene} />}
+      {scenes.length > 1 && <SequenceTakePanel key={project.id} project={project} shotName={shotName} disabled={locked} />}
+      {scenes.length > 0 && board.approveFinal && (
+        <FinalUpgradePanel key={project.id} project={project} shotName={shotName} disabled={locked} onApprove={board.approveFinal}
+          onOpenShot={(sceneId) => onToggleSceneExpand?.(sceneId, true)} />
+      )}
       {scenes.length > 0 && (
         <ShotEffectsCard counts={shotEffectCounts([...effectsById.values()])} selected={effectFilter} onSelect={setEffectFilter} />
       )}
@@ -258,7 +269,7 @@ export default function BoardStage({ board }) {
             ref={element => { if (element) thumbnailsRef.current.set(scene.sceneId, element); else thumbnailsRef.current.delete(scene.sceneId); }}
             onClick={() => { board.seekToScene?.(scene); onToggleSceneExpand?.(scene.sceneId, true); }}
             aria-label={`Open ${shotName(scene)}`}
-            aria-describedby={[(sceneMediaKind(scene, { layered }) || sceneActiveEndImageId(scene)) && `scene-media-${scene.sceneId}`,
+            aria-describedby={[(sceneMediaKind(scene, { layered, scenes }) || sceneActiveEndImageId(scene) || sceneClipIsFinal(scene) || sceneFinalApproved(scene)) && `scene-media-${scene.sceneId}`,
               scene.shotSheet?.checked && `scene-done-${scene.sceneId}`,
               Object.values(effectsById.get(scene.sceneId)).some((list) => list.length) && `scene-effects-${scene.sceneId}`].filter(Boolean).join(' ') || undefined}
             className={`min-w-0 rounded border p-2 text-left ${scene.shotSheet?.checked ? 'border-port-success bg-port-success/10' : 'border-port-border bg-port-card'} ${activeSceneId === scene.sceneId ? 'ring-2 ring-port-accent' : ''}`}>
@@ -339,6 +350,7 @@ export default function BoardStage({ board }) {
               defaultVideoModel={videoSettings.defaultModel}
               canContinueShot={board.canContinueShot}
               onSetDone={board.setSceneDone}
+              onApproveFinal={board.approveFinal}
               onMove={board.moveScene}
               onDelete={board.onDeleteScene}
               onSplit={board.onSplitScene}

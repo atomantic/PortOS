@@ -1,3 +1,13 @@
+/**
+ * React wrapper over `lib/midiPlayback.js` (#2490): one synth player per parsed MIDI view-model, torn
+ * down when the data changes/unmounts so oscillators never outlive the roll.
+ *
+ * Returns `{ playing, toggle, seek(sec), getPosition }` — `getPosition` is the stable ref the
+ * `<MidiPianoRoll>` rAF playhead reads; no AudioContext is touched until the first toggle. A resume
+ * failure resets `playing` instead of lying. Use when: `<MidiVisualization>` (Rounds ReferenceAnalysis
+ * + Music Video).
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createMidiPlayer } from '../lib/midiPlayback.js';
 

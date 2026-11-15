@@ -1,6 +1,12 @@
 /**
  * Shared HTML → readable plain text converter.
  *
+ * Shared HTML → plain-text converter. `htmlToText(html, { extraEntities?, paragraphBreak?,
+ * collapseSpaces? })` — strips script/style/head/noscript blocks, converts ` `/block closes to
+ * newlines, strips remaining tags, decodes entities via `decodeXmlEntities`, collapses 3+ newlines,
+ * trims. Options preserve caller-specific output (Gmail: `paragraphBreak: '\n\n'` + `collapseSpaces`;
+ * SongBook import: defaults — space runs preserved for tab alignment).
+ *
  * A single dependency-free strip-tags pipeline for the places PortOS turns
  * fetched/synced HTML into text (Gmail message bodies, SongBook URL imports).
  * Replaces the near-identical private copies that lived in

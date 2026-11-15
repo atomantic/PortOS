@@ -1,6 +1,12 @@
 /**
  * Git repository URL parsing — AUTHORITATIVE copy.
  *
+ * `parseRepoUrl(url)` → `{ host, provider, owner, repo }` / `isRepoUrl(url)` / `repoCloneUrl(parsed)`
+ * / `repoBrowseUrl(parsed)` / `parseGitHubUrl(url)` / `isGitHubRepoUrl(url)` — authoritative "is this
+ * a clonable repo URL?" rule, with per-host behavior (subgroup nesting, clone layout) in the
+ * `REPO_HOSTS` table. Re-exported by `client/src/lib/repoUrl.js` so the Brain capture boxes reveal the
+ * post-clone agent options for exactly the URLs the server will clone.
+ *
  * Answers "is this URL a repository we can clone, and which host/owner/repo is
  * it?" for the hosts PortOS clones from: github.com and gitlab.com. Lives in
  * `lib/` (not `services/repoCloner.js`, which re-exports it) because the Brain

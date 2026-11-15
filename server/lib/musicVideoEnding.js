@@ -1,4 +1,9 @@
 /**
+ * The ending after the song: the cutting room floor then the credits, each optional.
+ *
+ * `endingParts`, `endingSeconds`, `endingPartAt`, `drawEnding` and `endingPageSource` (the final
+ * render's page script). Browser-safe.
+ *
  * Music Video — the ending after the song: the cutting room floor
  * (lib/musicVideoStatsOutro.js) and the film credits
  * (lib/musicVideoCreditsOutro.js), each optional, played in that order with

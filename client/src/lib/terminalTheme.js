@@ -1,3 +1,13 @@
+// Pure xterm.js palette builder for the Shell terminal.
+//
+// `buildTerminalTheme({ bg, fg, accent, card, error, success, warning }, mode)` assembles the xterm
+// `theme` object — base ANSI colors from the active theme's CSS vars, the rest from mode-tuned
+// literals (`ANSI_NIGHT` bright/pastel for dark backgrounds, `ANSI_DAY` darkened/saturated so colored
+// CLI output stays legible on daytime themes). `parseCssColorToHex(raw, fallback)` normalizes both the
+// `15 15 15` triple form and the `rgb(7 7 7 / 0.86)` function form (used by `--port-terminal-*`
+// tokens) to `#rrggbb`, dropping alpha. No DOM reads — `Shell.jsx` resolves CSS vars and re-applies on
+// theme switch.
+//
 // Pure helpers for building the xterm.js terminal palette from the active PortOS
 // theme. Kept side-effect-free (no DOM reads) so it can be unit-tested; the Shell
 // page reads CSS custom properties off the document and hands resolved colors in.

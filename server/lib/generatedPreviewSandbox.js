@@ -1,6 +1,10 @@
 /**
  * Network-isolation contract for generated preview browsers (#11157).
  *
+ * OS network-isolation plan for generated preview browsers: macOS Seatbelt or Linux bubblewrap,
+ * otherwise refusal. The jail denies IP and the host DNS resolver; Chrome flags are defense in depth.
+ * Pure; the launcher is `services/htmlComposition/ownedBrowser.js`.
+ *
  * A fresh srcdoc realm gets its own constructors, so a page CSP and a
  * constructor freeze in the original document do not stop WebRTC, DNS, or a
  * nested navigation. The preview browser therefore runs under an OS mechanism

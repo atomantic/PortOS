@@ -1,6 +1,11 @@
 /**
  * Mood board → style-relevant text context (pure).
  *
+ * `collectBoardStyleContext(board)` bounds a board's notes, captions, analyzed prompts, and composite
+ * style for creative prompts. `moodBoardImageCandidates(board, resolveItem)` lists the poster first,
+ * then pinned local images. `moodBoardItemCaption(item)` returns an item's caption unless it was
+ * imported from X/Pinterest/another page (or a frame cut from one).
+ *
  * Shared by the style synthesis run (`moodBoardStyleSynthesis.js`) and Code
  * Animation's art direction, and kept dependency-light so a caller that only
  * needs the board's text fragments doesn't import the provider stack.

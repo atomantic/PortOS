@@ -1,3 +1,7 @@
+/**
+ * Database introspection.
+ */
+
 import { request } from './apiCore.js';
 
 // Database

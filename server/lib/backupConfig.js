@@ -1,6 +1,19 @@
 /**
  * Backup schedule defaults — the SINGLE declaring module (#6632).
  *
+ * `resolveBackupConfig(settings.backup)` + `DEFAULT_BACKUP_CRON` — the single declaring module for how
+ * a SPARSE backup settings slice resolves (#6632): an omitted `enabled` means enabled, a missing/blank
+ * `cronExpression` means midnight (`0 0 * * *`), and `scheduled` additionally requires a `destPath`.
+ * Also `resolveRetentionCount(settings.backup)` +
+ * `DEFAULT_RETENTION_COUNT`/`MIN_RETENTION_COUNT`/`MAX_RETENTION_COUNT` (#8334): per-source
+ * completed-snapshot retention, where an omitted or `null` `retentionCount` means unlimited — a NEW
+ * install ships the `30` default on disk via `data.reference/settings.json`, never invented here for
+ * an absent value. Read-time resolution only — nothing on disk changes. Shared by
+ * `services/backupScheduler.js` (registration + handler eligibility, and the retention count
+ * `services/backup.js#runBackup` prunes with) and `routes/settings.js` (the GET projects effective
+ * values), so the Settings screen can render what the scheduler will actually do instead of inventing
+ * its own defaults.
+ *
  * The backup settings slice is stored sparsely: a user who only ever typed a
  * destination has no `enabled` and no `cronExpression` on disk. Before this
  * module the scheduler and the Settings screen each invented their own answer

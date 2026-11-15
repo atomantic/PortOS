@@ -1,3 +1,10 @@
+/**
+ * Fetches per-kind integrity diff from every eligible online peer.
+ *
+ * Reduces to worst-case `statusById` + `byPeer` breakdown maps. Use when: Federated media sync
+ * integrity UI — badges, drawers, peer breakdown.
+ */
+
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { getInstances } from '../services/apiSystem.js';
 import { fetchSyncIntegrity } from '../services/apiPeerSync.js';

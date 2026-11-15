@@ -1,4 +1,15 @@
 /**
+ * Helpers for a director's explicit finished-outside declaration: `finishedOutside`,
+ * `finishedOutsideCovers`, `finishedOutsideBlocker`, and stage ids.
+ *
+ * `finishedOutside(project)`, `finishedOutsideCovers(project, stageId)`,
+ * `finishedOutsideBlocker(project)`, `FINISHED_OUTSIDE_STAGE_IDS` and
+ * `FINISHED_OUTSIDE_RERENDER_NOTE`: the director's explicit "finished outside PortOS" marker, which
+ * counts Song through Shots as done without recording any approval, only while the project holds a
+ * final render. Read by the client's stage derivation and `musicVideoSummary.js`.
+ */
+
+/**
  * A project finished outside PortOS: the song, look, storyboard and footage were
  * made elsewhere and only the final video (and its posts) came back in, so the
  * revision-bound approvals those steps gate on were never recorded here.

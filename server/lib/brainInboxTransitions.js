@@ -1,6 +1,12 @@
 /**
  * Brain inbox status machine (#15155).
  *
+ * `transitionInbox(entry, event, attemptId)` + `INBOX_EVENTS` — the Brain inbox status machine
+ * (#15155): which status a classify completion, failure, resolve, correct, retry or mark-done may move
+ * a row to, and when it is a stale completion (ignored), a 409 conflict, or a no-op. A completion
+ * applies only while `classificationAttempt` matches. `services/brain.js` applies it inside
+ * `brainStorage.updateWith` so the check runs against the freshly re-read record. Pure.
+ *
  * `transitionInbox(entry, event, attemptId)` decides what one event may do to an
  * inbox row's status. `services/brain.js` applies it only inside
  * `brainStorage.updateWith('inbox', id, …)`, against the record re-read in the

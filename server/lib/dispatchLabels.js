@@ -1,6 +1,45 @@
 /**
  * slashdo-compatible dispatch-hint labels for planner-driven issue filing.
  *
+ * slashdo dispatch-hint contract: the `model:` capability and `effort:` reasoning-budget label
+ * vocabulary (the tiers themselves live in this module and are deliberately not re-enumerated here — a
+ * catalog copy of them is what drifted a tier behind), prescribed forge colors, validation
+ * (`normalizeDispatchModel` / `normalizeDispatchEffort`), the read-side inverse
+ * (`dispatchHintFromLabels` — recovers `{model, effort}` from a raw label-name list, used by
+ * branch-reconcile's per-branch routing hint), the per-forge label separator (`labelSeparator` /
+ * `forgeLabelName` — GitLab spells every prefixed label with its native scoped `::`, GitHub keeps `:`,
+ * and the read side accepts both; applied once at the `forgeIssueLabels` / `dispatchLabelSpec`
+ * boundary so the axis builders stay canonical; Jira keeps the hyphen form), optional contributor
+ * labels (`good first issue` / `help wanted`, never implied by `model:light`, and released at claim
+ * time by `formatContributorLabelReleaseCommands` — one best-effort command per label, since a forge
+ * fails the whole edit when a named label is absent), the one shared volunteer-claim policy
+ * (`volunteerClaimLabels` / `formatVolunteerClaimCommands` — a human comment claiming an unassigned
+ * issue is resolved by BOTH issueWatcher.js's deterministic pass and the claim prompt's Phase 1
+ * handoff, so both stamp `in-progress` and retire the invitations rather than writing opposite state),
+ * the open-ended planner-attribution axis (`planner:<model>`, `normalizePlannerId` /
+ * `resolvePlannerId` / `formatPlannerLabelGuidance` — records WHICH model wrote the plan,
+ * prefix-matched by `dispatchLabelSpec` so it lazily creates like the fixed labels; a filing agent
+ * takes the value from its prompt, never from self-identification), the workflow-state markers
+ * (`EPIC_LABEL`/`EPIC_DECOMPOSED_LABEL` and `IN_PROGRESS_LABEL` — state, not hints: shared with
+ * perpetualWork.js#isActionableIssue, issueReconcile.js's zombie scan, issueWatcher.js's volunteer
+ * assignment, and the claim prompts), lazy-create command text, the optional `--label` slots a
+ * rendered `issue create` example offers (`OPTIONAL_ISSUE_LABEL_FLAG_SLOTS` /
+ * `formatOptionalIssueLabelFlags` — one list so a new axis reaches every prompt template's
+ * copy-pasteable command, not just its prose), and shared dispatch plus issue-quality guidance
+ * (`ISSUE_QUALITY_GUIDANCE`, `DISPATCH_HINT_GUIDANCE`, `MANDATORY_DISPATCH_HINT_GUIDANCE`,
+ * `JIRA_DISPATCH_HINT_GUIDANCE`, `MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE`,
+ * `REFERENCE_WATCH_LABEL_CONTRACT`, plus the consumer-side pair `DISPATCH_HINT_READING_GUIDANCE` /
+ * `DISPATCH_HINT_FANOUT_GUIDANCE` — what the labels mean to an agent that RECEIVES them (the preloaded
+ * `open-issues` task data input) and, for an orchestrator only, how to route each sub-agent by its own
+ * issue (the swarm block); the fan-out form is the reading form plus one line, never a second copy of
+ * the vocabulary). All forge filing callers require both dispatch axes and verify labels after
+ * creation; hardware-bound help wanted also requires explicit `hardwareRequirements` labels
+ * (`windows`, `macos`, `linux`, `cuda`, `apple-silicon`), while user-perspective-only requests declare
+ * `helpWantedReason: user-perspectives`; independent platform targets are split rather than combined;
+ * never invent `medium`; reject future-only/speculative work while keeping useful current refactors
+ * claimable. Consumed by work-tracker instructions, quota-burn audits, Layered Intelligence filing,
+ * and claim follow-up prompts.
+ *
  * Two independent axes — capability (`model:`) and reasoning budget (`effort:`) —
  * plus the prescribed forge colors, validation, and label-formatting helpers.
  * Omit an axis when the evidence does not justify it; never stamp `medium` on
@@ -728,13 +767,23 @@ export const HARDWARE_REQUIREMENT_GUIDANCE = [
 ].join('\n');
 const HELP_WANTED_GUIDANCE = `Apply \`help wanted\` (color 008672) ${HELP_WANTED_CRITERIA}`;
 
+/**
+ * What the `effort:` axis means, shared by the forge and Jira contracts (`p` is
+ * the label prefix, `levels` the axis spelled for that tracker). Effort sets how much a model THINKS per step, and
+ * current models think more at each level than the ones these labels were
+ * first written for (Opus 5.5 at `medium` matches Opus 5 at `high`), so a
+ * label inflated by breadth buys cost and latency, not care. Breadth is
+ * diligence: an enumerated checklist in the body, not a higher level.
+ */
+const effortAxisGuidance = (p, levels) => `\`${levels}\` — thinking per step, not amount of work: \`${p}medium\` is normal, \`${p}low\` for mechanical steps, \`${p}high\` when a step hinges on a hard argument, \`${p}xhigh\`/\`${p}max\` rarely. Breadth is not effort: list a wide sweep's call sites in the body.`;
+
 /** Canonical filing contract for every autonomous issue producer. */
 export const MANDATORY_DISPATCH_HINT_GUIDANCE = [
   'If you file issues, follow this contract even when older task text or examples describe dispatch labels as optional. This does not authorize issue creation on its own.',
   'Dispatch labels are REQUIRED on every issue you file: exactly one `model:` and exactly one `effort:`. They are two independent axes describing HOW to run the work, not how big it is — pick each from the code you just read. If evidence is insufficient, investigate before filing rather than guessing or omitting an axis.',
   '- `model:light|medium|heavy|ultra` — capability: light is mechanical (rename, config, a well-specified single-file edit); medium is routine multi-file work; heavy is genuinely hard reasoning (concurrency, schema/compatibility design, redesign); ultra is exceptional frontier reasoning, explicitly requested.',
-  '- `effort:low|medium|high|xhigh|max` — reasoning budget per step, independent of model. `model:light` + `effort:max` is a mechanical sweep across many call sites; `model:heavy` + `effort:low` is a two-line change that hinges on one idea.',
-  'Never derive one axis from the other, and do NOT stamp `medium` on both by reflex — where that genuinely is the answer, justify it in one line of the body. Do NOT put `[model:…]` / `[effort:…]` / `[category]` / `[SEVERITY]` in the title; those belong in labels.',
+  `- ${effortAxisGuidance('effort:', `effort:${DISPATCH_EFFORT_LEVELS.join('|')}`)}`,
+  'Never derive one axis from the other, and choose `model:` from the evidence rather than defaulting to `medium`. Do NOT put `[model:…]` / `[effort:…]` / `[category]` / `[SEVERITY]` in the title; those belong in labels.',
   'On GitLab, write every prefixed label with a DOUBLE colon (`model::heavy`, `effort::max`, `planner::opus-5`): GitLab renders `key::value` as a native scoped label, so only one value per key can sit on an issue at a time. GitHub has no equivalent and keeps the single colon (`model:heavy`). Use the separator the repo\'s own tracker uses, and match an existing `area` label\'s spelling rather than re-separating it — a mismatched separator is a different, unfilterable label.',
   // Whole commands, not a `name color` list: an agent copying `model:light D4C5F9`
   // out of a list minted that string as a label name (#9056).
@@ -758,8 +807,8 @@ export const DISPATCH_HINT_GUIDANCE = MANDATORY_DISPATCH_HINT_GUIDANCE;
 export const JIRA_DISPATCH_HINT_GUIDANCE = [
   'Dispatch hints are optional, independent Jira labels recommending HOW to run the work — not a size estimate:',
   '- `model-light|model-medium|model-heavy|model-ultra` — capability (mechanical, routine, complex, exceptional frontier reasoning).',
-  '- `effort-low|effort-medium|effort-high|effort-xhigh|effort-max` — reasoning budget per step, independent of model.',
-  'Choose each axis only when the work you just inspected justifies it. Omit an axis rather than guessing. Do NOT stamp `medium` on both by reflex, and do NOT put `[model-…]` / `[effort-…]` / `[category]` / `[SEVERITY]` in the summary — those belong in labels.',
+  `- ${effortAxisGuidance('effort-', DISPATCH_EFFORT_LEVELS.map((level) => `effort-${level}`).join('|'))}`,
+  'Choose each axis only when the work you just inspected justifies it. Omit an axis rather than guessing. Choose `model-*` from the evidence rather than defaulting to `model-medium`, and do NOT put `[model-…]` / `[effort-…]` / `[category]` / `[SEVERITY]` in the summary — those belong in labels.',
   'Also apply contributor labels when the work actually fits them — independently of the dispatch axes: `good-first-issue` (self-contained, a new contributor can ship it) and `help-wanted` under the criteria below. A `model-light` 40-file sweep is NOT a good-first-issue.',
   `Apply \`help-wanted\` ${HELP_WANTED_CRITERIA}`,
   HARDWARE_REQUIREMENT_GUIDANCE,

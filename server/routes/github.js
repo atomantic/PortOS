@@ -9,7 +9,6 @@ import * as githubNotifications from '../services/githubNotifications.js';
 import * as githubAudit from '../services/githubNotificationAudit.js';
 import * as githubDeployment from '../services/githubNotificationDeployment.js';
 import { retriageOpenThreads } from '../services/githubNotificationTriage.js';
-import { requestHasHostControl } from '../services/authGate.js';
 
 const router = express.Router();
 
@@ -147,12 +146,12 @@ router.get('/notifications', asyncHandler(async (req, res) => {
 
 /**
  * POST /api/github/notifications/sync — fetch unread notifications from GitHub.
- * Open as a refresh; Assist/Autopilot run only for a caller with host control
- * (lib/hostControlRoutes.js, #12952).
+ * Assist/Autopilot run only for a caller with host control (#12952), which
+ * hostControlRouteGate already requires for this write (#16018).
  */
 router.post('/notifications/sync', asyncHandler(async (req, res) => {
   const { accountId } = validateRequest(githubNotificationsSyncSchema, req.body ?? {});
-  const options = { automate: requestHasHostControl(req) };
+  const options = { automate: true };
   const results = accountId
     ? [{ ...(await githubNotifications.syncAccountNotifications(accountId, options)), ok: true }]
     : await githubNotifications.syncAllNotifications(options);

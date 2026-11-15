@@ -1,4 +1,4 @@
-import { hasRetirementReceipt, unresolvedRetirements } from '../lib/reconcileRetirementEvidence.js';
+import { observeCleanupTarget, verifyCleanupCompletion, recordCleanupCompletion } from './cleanupOnlyCompletion.js';
 import { getAppById } from './apps.js';
 import { getTaskById } from './cosTaskStore.js';
 import { getActiveAgentIds } from './agentState.js';
@@ -38,30 +38,18 @@ export async function settleBranchReconcileRun(agent) {
     claimOwners: { agents, readAgents: readClaimOwnershipAgents },
     forgeAccount: app.forgeAccount || null
   });
-  const { getBranchReconcileOutcome, recordBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
-  const outcome = await getBranchReconcileOutcome(app.id);
+  const { recordBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
+  const unverifiedRetirements = [];
   const { recordRepoCleanupRecovery, recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
   for (const target of task.metadata.reconcileRetirements || []) {
-    if (target.cognition?.ownerAgentId && target.cognition.observation) {
+    const verdict = await observeCleanupTarget(app.repoPath, target.release);
+    const verified = verdict.status === 'verified';
+    if (verified && target.cognition?.ownerAgentId && target.cognition.observation) {
       await recordRepoCleanupRecovery(target.cognition.ownerAgentId, target.release.branch, target.cognition.observation,
         { phase: 'completed', taskId: task.id });
     }
-    const verified = hasRetirementReceipt(outcome, { ...target.release, createdAt: target.createdAt });
-    await recordCleanupOutcome(agent.id, { ...target.release, status: verified ? 'verified' : 'blocked',
-      reason: verified ? 'retirement-receipt-verified' : 'retirement-receipt-unverified' });
-  }
-  const unverifiedRetirements = unresolvedRetirements(outcome,
-    (task.metadata.reconcileRetirements || []).map(({ release, createdAt }) => ({ ...release, createdAt, reason: 'retirement-review-pending' })));
-  if (task.metadata.reconcileRetirements?.length) {
-    const missing = task.metadata.reconcileRetirements.filter(({ release, createdAt }) => !hasRetirementReceipt(outcome, { ...release, createdAt }));
-    if (missing.length) {
-      await recordBranchReconcileOutcome(app.id, {
-        status: 'incomplete', reason: agent.result?.success === false ? 'retirement-review-failed' : 'retirement-receipt-unverified',
-        retirementObligations: missing.map(({ release, createdAt }) => ({ ...release, createdAt, reason: 'retirement-receipt-unverified' })),
-        nextAction: 'Inspect the scoped review task and retained checkout; retirement requires ok:true and branchDeleted:true with no archive directory.',
-      });
-      emitLog('warn', `Branch reconciliation retained ${missing.length} review obligation(s) without verified retirement receipts`, { appId: app.id, taskId: agent.taskId });
-    }
+    await recordCleanupOutcome(agent.id, { ...target.release, status: verified ? 'verified' : 'blocked', reason: verdict.reason });
+    if (!verified) unverifiedRetirements.push({ ...target.release, reason: verdict.reason });
   }
   const inFlightBranches = new Set((result.inFlight || []).map(branch => branch.branch));
   const holds = describeIdleReconcilePark([...(result.skipped || []), ...unverifiedRetirements], [], {
@@ -71,6 +59,13 @@ export async function settleBranchReconcileRun(agent) {
     // remaining checkout projections and includes retained claim reservations.
     worktreeInventory: result.worktreeInventory?.filter(tree => !inFlightBranches.has(tree.branch)) ?? null,
   });
+  if (unverifiedRetirements.length) {
+    await recordBranchReconcileOutcome(app.id, {
+      status: 'incomplete', reason: 'cleanup-local-target-unverified',
+      remaining: [...holds.remaining, ...(result.inFlight || []).map(row => ({ branch: row.branch, reason: 'actionable' }))],
+      nextAction: 'Inspect the remaining checkout or local branch and rerun branch reconciliation.',
+    });
+  }
   const uncertain = unverifiedRetirements.length > 0 || result.forgeUnavailable || result.prStateUnavailable
     || result.worktreeInventory == null || result.orphanRemotes?.remoteUnavailable;
   const remaining = inFlightBranches.size + holds.remaining.length;
@@ -81,17 +76,16 @@ export async function settleBranchReconcileRun(agent) {
   return result;
 }
 
-/** Recovery success is not preservation evidence. This path never scans or mutates Git. */
+/** Settle cleanup from current local state without claiming delivery or deleting anything. */
 export async function settleRetirementReviewRun(agent) {
   if (agent?.metadata?.recoveryOrigin?.subsystem !== 'repository-cleanup') return null;
   const task = await getTaskById(agent.taskId);
-  const { verifyRetirementRecoveryCompletion, recordRetirementRecoveryCompletion } = await import('./retirementRecoveryCompletion.js');
-  const verdict = await verifyRetirementRecoveryCompletion(task);
+  const verdict = await verifyCleanupCompletion(task);
   if (!verdict) {
     const { recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
-    await recordCleanupOutcome(agent.id, { status: 'blocked', reason: 'legacy-cleanup-receipt-unverified' });
+    await recordCleanupOutcome(agent.id, { status: 'blocked', reason: 'cleanup-target-unverified' });
     return { verified: false };
   }
-  await recordRetirementRecoveryCompletion(agent, verdict);
+  await recordCleanupCompletion(agent, verdict);
   return { verified: verdict.status === 'verified' };
 }

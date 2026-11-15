@@ -364,11 +364,11 @@ describe('backup schedule defaults (#6632)', () => {
     const first = schedule.mock.calls[0][0].cron;
 
     // What the settings GET now hands the screen, plus the unrelated edit.
-    settingsEvents.emit('settings:updated', {
+    // Call the sync the settings:updated handler runs and await it, rather
+    // than sleeping until the event-bus promise happens to settle.
+    await syncBackupSchedule({
       backup: { destPath: '/example-backups', enabled: true, cronExpression: '0 0 * * *', excludePaths: ['/scratch'] }
     });
-    // The re-sync runs on the event bus, so let its promise settle before asserting.
-    await new Promise(resolve => setTimeout(resolve, 0));
     expect(first).toBe('0 0 * * *');
     // Identical registration inputs → the signature guard makes this a no-op.
     // A cancel here is the bug: the screen's save disabling a live schedule.

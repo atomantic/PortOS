@@ -1,4 +1,11 @@
 /**
+ * Leaf (no imports) for the rounds tempo band (`TEMPO_MIN` / `TEMPO_MAX`) and the partner /
+ * harmony-part caps (`PARTNERS_MAX` / `SCORE_PARTS_MAX`).
+ *
+ * Shared with the client rounds editor and metronome; `roundsValidation.js` re-exports them.
+ */
+
+/**
  * Rounds tempo and part-count bounds shared by the server validator and the
  * client editor/metronome. A leaf module (no imports) so the browser bundle can
  * import it; `roundsValidation.js` re-exports these.

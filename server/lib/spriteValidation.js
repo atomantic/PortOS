@@ -1,3 +1,14 @@
+/**
+ * Zod schemas for the Sprite Manager: record create/import/update, reference generate/lock/fork,
+ * walk-cycle actions, and per-track generate/approve requests.
+ *
+ * Sprite Manager Zod schemas — record import/create/update, reference generate/lock/unlock + fork,
+ * walk-cycle generate/approve/reopen/trim, per-track generate/approve schemas built from the
+ * animation-track registry, publish binding + runtime contract, atlas publish/compile, and
+ * user-defined animation-track create/update. Split out of `validation.js` (#3873), which re-exports
+ * it.
+ */
+
 import { z } from 'zod';
 import {
   SPRITE_ID_PATTERN, SPRITE_RECORD_KINDS, ANCHOR_DIRECTIONS, SPRITE_DIRECTIONS,

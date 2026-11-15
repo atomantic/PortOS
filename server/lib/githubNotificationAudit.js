@@ -1,8 +1,12 @@
 /**
- * Suggestions for the GitHub notifications subscription audit (#12873). Pure:
- * the service aggregates the last 30 days of stored threads per repo × reason
- * and lists watched repos; this turns them into one-tap changes and links.
- * Nothing here is applied automatically.
+ * Suggestions for the GitHub notifications subscription audit (#12873).
+ *
+ * `AUDIT_WINDOW_DAYS`, `buildAuditSuggestions` — the GitHub notifications subscription audit's
+ * suggestions from 30 days of stored threads per repo × reason: unwatch, mute handled threads, and
+ * links for settings the API cannot change.
+ *
+ * Pure: the service aggregates the last 30 days of stored threads per repo × reason and lists watched
+ * repos; this turns them into one-tap changes and links. Nothing here is applied automatically.
  */
 
 export const AUDIT_WINDOW_DAYS = 30;

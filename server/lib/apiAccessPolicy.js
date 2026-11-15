@@ -1,4 +1,9 @@
-/** Shared authentication-boundary metadata for HTTP API discovery and auth. */
+/**
+ *  Shared authentication-boundary metadata for HTTP API discovery and auth.
+ *
+ * Shared always-public path, gated non-`/api` prefix, and peer-credential federation surface
+ * (`PEER_API_SURFACE`, `isPeerApiRequestAllowed`) policy consumed by `authGate` and API discovery.
+ */
 
 export const ALWAYS_PUBLIC_API_PATHS = Object.freeze([
   '/api/auth/status',

@@ -2,6 +2,12 @@
  * Describe a pixel canvas as the aspect ratio a human (or an image model) reads
  * it as — "2:3 portrait", "5:7 portrait", "16:9 landscape", "1:1 square".
  *
+ * Describe a pixel canvas as the ratio phrase a prompt can use — `aspectRatioTerms(w, h)` (bounded
+ * best rational approximation, so 1096x1536 reads as 5:7 rather than 137:192) and
+ * `aspectRatioPhrase(w, h)` → `"5:7 portrait"` / `"16:9 landscape"` / `"1:1 square"`. Use it wherever
+ * a prompt has to state a framing the canvas already fixes, so the sentence and the canvas cannot
+ * drift. Pure.
+ *
  * Exists so a prompt that tells a model what shape to draw can be DERIVED from
  * the canvas it will be rendered onto, rather than restated beside it. A
  * hand-written ratio phrase is a second copy of the canvas size, and the two

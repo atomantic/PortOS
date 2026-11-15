@@ -1,12 +1,23 @@
 /**
  * Music Video scene takes (#8965) — client-side view helpers.
  *
+ * Music-video scene takes view helpers (#8965): `sceneTakeList(scene, kind)` lists a scene's
+ * image/video takes with an un-materialized pre-takes selection appended as a read-only `legacy` take;
+ * `takePreviewKey`, `takeThumbUrl`, `takeClipUrl` (hover-preview clip), `sceneHasPendingDecision`
+ * (contact-sheet filter), `takeProvenance`; `mergeTakeColorMatch` merges measured color fields without
+ * replacing newer take decisions; `TAKE_SLOT` maps a take kind to its selection field;
+ * `selectTakePatch` / `reviewTakePatch` / `markTakeAssetMarks` mirror the server's take transforms for
+ * optimistic Use/Reject/Bad. Used by `components/musicVideo/SceneTakeStrip.jsx` and
+ * `components/musicVideo/ProjectWorkspace.jsx`.
+ *
  * A scene slot (`referenceImageId` / `videoHistoryId`) is the director's
  * selection among the scene's immutable `takes`. A pre-#8965 record has a
  * selection but no takes list yet (the server materializes it on the scene's
  * next take operation), so the board shows that selection as a read-only
  * `legacy` take rather than hiding it.
  */
+
+import { sequenceTakeSelectionPatch } from '../../../server/lib/musicVideoSequenceTake.js';
 
 // `endImage` (#11173): the optional style-break end frame a fal clip ends on.
 export const TAKE_SLOT = Object.freeze({ image: 'referenceImageId', video: 'videoHistoryId', endImage: 'endImageId' });
@@ -69,10 +80,14 @@ export function takeProvenance(take) {
 // (server/services/musicVideo/takes.js) will write, applied before the reply so
 // the buttons answer at once. The reply replaces them with the saved scene.
 
-/** Scene patch for Use: the take fills its slot, a rejected take comes back as a candidate. */
+/**
+ * Scene patch for Use: the take fills its slot, a rejected take comes back as a
+ * candidate, and a sequence take brings its in-point (the server's own rule).
+ */
 export function selectTakePatch(scene, take) {
   const takes = Array.isArray(scene?.takes) ? scene.takes : [];
   return {
+    ...sequenceTakeSelectionPatch(scene, take),
     [TAKE_SLOT[take.kind]]: take.assetId,
     takes: takes.map((t) => (t.takeId === take.takeId && t.status === 'rejected' ? { ...t, status: 'candidate' } : t)),
   };

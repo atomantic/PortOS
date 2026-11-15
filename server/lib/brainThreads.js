@@ -3,6 +3,15 @@
  * (#7664): status/priority vocabularies, the terminal-status test, the overdue
  * predicate and the list comparator.
  *
+ * Brain THREAD rules (#7664) — the pure half of the bullet journal (a *thread* is a tracked open loop,
+ * never a message thread): `THREAD_STATUSES` / `THREAD_PRIORITIES` / `THREAD_TERMINAL_STATUSES` /
+ * `THREAD_ACTIVE_STATUSES`, `isTerminalThreadStatus`, `isThreadOverdue(thread, now)` (never true once
+ * finished), `threadNextLine` (the row's "Waiting on X" / next-action line) and the list comparator
+ * `compareThreads` (pinned, soonest-due, most recently touched, id — NaN-safe for two undated
+ * threads). `brainValidation.js` builds its enums from the arrays, `routes/brainThreads.js` sorts with
+ * the comparator, and `client/src/lib/brainThreads.js` re-exports the whole module so the tab, the
+ * widget and the server agree.
+ *
  * A Brain *thread* is a tracked topic or commitment (an open loop), NOT a
  * message thread — `messageSync.js` / `messageGmailSync.js` / `beeperSync.js`
  * own that other sense of the word.

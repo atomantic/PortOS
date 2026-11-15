@@ -1,8 +1,14 @@
 /**
- * Cross-links between a music video's release posts. Pure, shared by the
- * publish payloads (a new draft lists the posts already made) and the
- * Publish stage's "Backfill cross-links" card (which posts already up are
- * missing links to the ones made after them).
+ * Cross-links between a music video's release posts.
+ *
+ * Cross-links between a release's posts: each post's public link, the `Label: url` lines a new draft
+ * adds, which links a posted record carries (`links`, or what its draft always linked), and
+ * `crossLinkBackfill(kit)` listing the links each editable post (YouTube, Suno, X, Stacker News) still
+ * lacks. Shared by the publish payloads and the Publish stage.
+ *
+ * Pure, shared by the publish payloads (a new draft lists the posts already made) and the Publish
+ * stage's "Backfill cross-links" card (which posts already up are missing links to the ones made after
+ * them).
  *
  * A post record may carry `links`: the targets whose links it already shows.
  * Posts recorded before that field existed are read with what their draft

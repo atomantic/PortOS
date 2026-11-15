@@ -1,6 +1,14 @@
 /**
  * The managed-app placeholders every CoS prompt template shares.
  *
+ * `applyAppPlaceholders(text, app)` — expand `{appName}` / `{repoPath}` / `{appId}` / `{appSlug}` in a
+ * CoS prompt template. The ONE owner of that chain: four renderers (`cosTaskGenerator.js`'s claim-work
+ * router and JIRA per-ticket builder, `cosTaskPreStepBlocks.js`'s scheduled builder,
+ * `referenceRepos.js`) each used to spell it themselves and drifted. Function-form replacers
+ * throughout, since a name/path/id is free text a `$` can appear in. Callers expand their own injected
+ * blocks (`{trackerInstructions}`, `{modeInstructions}`) FIRST — those blocks carry app placeholders
+ * of their own. Pure.
+ *
  * Four renderers build an agent prompt from a template plus an app record
  * (`services/cosTaskGenerator.js`'s claim-work router and JIRA per-ticket
  * builder, `services/cosTaskPreStepBlocks.js`'s scheduled builder, and

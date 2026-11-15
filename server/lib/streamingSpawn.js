@@ -1,6 +1,22 @@
 /**
  * Run one command to completion, streaming its stdout/stderr LINES to a hook.
  *
+ * `runStreamingCommand(cmd, args, onLine, {timeoutMs?, cwd?, env?, splitRe?})` — run one command to
+ * completion and forward its stdout/stderr LINES to a hook, resolving `{ success, error? }`. Never
+ * rejects (spawn error, non-zero exit, and timeout all resolve as `success: false`) because every
+ * caller is an install/setup flow running outside the Express request lifecycle, and the `onLine` hook
+ * is guarded for the same reason. A failure carries the last ~1KB of streamed output, so `brew upgrade
+ * ollama` exiting 1 with "Error: ollama not installed" surfaces that string instead of "exited with
+ * code 1". Shared by `services/localLlm.js`'s package-manager installs and
+ * `services/localRuntimeSetup.js`'s one-click daemon setup. `splitRe` is forwarded to the line readers
+ * — pass `/[\r\n]+/` for a downloader whose progress bar redraws one line with a bare `\r`, or the
+ * stream goes silent for the whole download. `isCancelled` is polled once a second and SIGKILLs the
+ * child when it turns true (resolving `{success:false, error:'cancelled'}`) — required for a command
+ * that can run for hours while the caller holds a lock until it settles; a throwing predicate is
+ * logged and read as "not cancelled" rather than crashing the process from a timer callback.
+ * `bufferedSpawn.js` is the sibling for run-and-collect; use this one when live output IS the
+ * progress.
+ *
  * The install/setup flows (`services/localLlm.js`'s package-manager installs,
  * `services/localRuntimeSetup.js`'s one-click daemon setup) all need the same
  * thing: spawn a package manager, forward every line it prints to an SSE frame,

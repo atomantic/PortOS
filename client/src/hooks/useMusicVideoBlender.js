@@ -1,3 +1,24 @@
+/**
+ * `useMusicVideoBlender(projectId, { enabled })` loads a project's Blender film state (settings,
+ * renders, cuts, jobs) and keeps it current via socket events.
+ *
+ * A project's Blender film (`useMusicVideoBlender(projectId, { enabled })`): the server's state
+ * (settings, tool, workspace, manifest, renders, cuts, jobs, notes) read once and kept current by the
+ * `music-video:blender` socket channel. A `job` message folds into the job list at once; a finished
+ * job, a `state` message, a reconnect or the tab coming back re-reads; one read runs at a time and a
+ * job frame newer than a read outlives its answer. Never polled. Also holds the unsaved form state
+ * (`settings` + `settingsChanges`/`settingsDirty`, the film's options as form fields in `optionFields`
+ * with `editOption`, `noteDrafts`, `fileDrafts`) so it survives a change of step, `runBlocker` (why a
+ * sync or render cannot start) and `renderBlocker` (renders also wait for a sync after the frame rate
+ * changed). Actions resolve to `{ ok, answer, error }` and toast their own failures: `saveSettings`
+ * (changed fields and film options only), `saveNote`, `saveFile`, `deleteFile`, `createWorkspace`,
+ * `sync({ replaceScenes })` (queues a background job; read it with `blenderSyncJob(state)`),
+ * `render(body, key)`, `cancelJob`, `cancelAll`, `assembleCut`, `openShot`, `clearFrames`, `refresh`;
+ * `pending` names what is in flight, and `usageRevision` bumps when the workspace's disk use may have
+ * changed. Use when: The Music Video page (one instance per open Blender film project, passed down as
+ * `board.blender`) and `BlenderFilmPanel`.
+ */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';

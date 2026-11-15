@@ -63,13 +63,22 @@ export const MIGRATION_OWNED_PATHS = new Set([
 ]);
 
 /**
+ * `data.reference/` files that describe the shipped tree rather than seed an
+ * install: `prompts/shipped-hashes.json` is read in place by the prompt
+ * reconciler, and a copy under `data/` would only go stale.
+ */
+export const REFERENCE_ONLY_PATHS = new Set([
+  'prompts/shipped-hashes.json',
+]);
+
+/**
  * A `cpSync` filter for seeding `data/` from `referenceDir`: true for every
- * source path except a migration-owned one.
+ * source path except a migration-owned or reference-only one.
  *
  * @param {string} referenceDir absolute path to the `data.reference/` being copied
  * @returns {(srcPath: string) => boolean}
  */
 export function isSeedableReferencePath(referenceDir) {
-  const owned = new Set([...MIGRATION_OWNED_PATHS].map((relPath) => join(referenceDir, ...relPath.split('/'))));
+  const owned = new Set([...MIGRATION_OWNED_PATHS, ...REFERENCE_ONLY_PATHS].map((relPath) => join(referenceDir, ...relPath.split('/'))));
   return (srcPath) => !owned.has(srcPath);
 }

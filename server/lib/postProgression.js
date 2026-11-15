@@ -1,6 +1,12 @@
 /**
  * Generic POST mastery-gated progression ladder (pure, side-effect-free).
  *
+ * Generic mastery-gated progression ladder (extracted from `postMultiplicationLadder.js`) —
+ * `createProgression({ levels, describeLevel, speedTargetForLevel? })` resolves a user's current rung
+ * from exact-level sample, accuracy, completion, and optional speed evidence with an anti-demotion
+ * floor. Also defines meaningful cognitive-drill ladders (including task switching, Go/No-Go, and
+ * Flanker) and their level→generator-config mapping.
+ *
  * Extracted from `postMultiplicationLadder.js` so ANY drill — not just
  * multiplication — can declare an ordered level list plus a mastery predicate
  * and get level resolution (with an anti-demotion floor) for free.

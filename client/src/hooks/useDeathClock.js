@@ -1,3 +1,9 @@
+/**
+ * 1-second countdown for death-clock display.
+ *
+ * Use when: Mortality / death-clock surfaces.
+ */
+
 import { useState, useEffect, useRef } from 'react';
 
 /**

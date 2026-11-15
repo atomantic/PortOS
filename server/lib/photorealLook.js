@@ -1,8 +1,14 @@
 /**
- * Photoreal look for a Place: how Blender dresses its greybox (materials, lights,
- * atmosphere). Stored on the place as `payload.photoreal`, beside `payload.greybox`.
- * Declarative only: presets are an allowlist the PortOS Blender script maps to
- * procedural node setups, so neither a provider nor the user ever sends code.
+ * Photoreal look for a Place: how Blender dresses its greybox (materials, lights, atmosphere).
+ *
+ * Environments › Photoreal look: `photorealLookSchema` (allowlisted material presets per zone/part,
+ * lights, haze/world/exposure stored as `payload.photoreal`), `resolvePhotorealLook`,
+ * `photorealLookReferenceErrors`, and the "Dress with AI" prompt blocks plus
+ * `parsePhotorealLookAnswer`.
+ *
+ * Stored on the place as `payload.photoreal`, beside `payload.greybox`. Declarative only: presets are
+ * an allowlist the PortOS Blender script maps to procedural node setups, so neither a provider nor the
+ * user ever sends code.
  *
  * Also the prompt contract and parser for "Dress with AI" (draft → preview →
  * apply), composed so Show full prompt names every word the model read (#11317).

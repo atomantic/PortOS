@@ -123,6 +123,18 @@ test('registers inline synchronization on the publishing task without dispatchin
   expect(await verifyAgentReleasePublication('publisher', { ...input, synchronizationMode: 'inline' })).toEqual(result);
 });
 
+test('re-verifies an inline publication on the same task without transferring candidate lineage', async () => {
+  const original = await verifyAgentReleasePublication('publisher', { ...input, synchronizationMode: 'inline' });
+  fixture.state.agents.publisher.status = 'completed';
+  fixture.state.agents.successor = { ...fixture.state.agents.publisher, id: 'successor', status: 'running',
+    startedAt: '2026-01-02T00:00:00Z', metadata: { ...fixture.state.agents.publisher.metadata, releasePublication: null } };
+  fixture.disk = structuredClone(fixture.state);
+  const resumed = await verifyAgentReleasePublication('successor', { ...input, synchronizationMode: 'inline' });
+  expect(resumed.identity).toBe(original.identity);
+  expect(resumed.verifiedAt).toBe(original.verifiedAt);
+  expect(resumed.synchronizationPolicy).toEqual(original.synchronizationPolicy);
+});
+
 test('does not publish a successful terminal agent record when inline delivery evidence is unavailable', async () => {
   await verifyAgentReleasePublication('publisher', { ...input, synchronizationMode: 'inline' });
   await expect(completeAgent('publisher', { success: true })).rejects.toMatchObject({ code: 'RELEASE_SYNC_DELIVERY_UNVERIFIED' });
@@ -193,7 +205,7 @@ for (const [name, fail] of [
   const outbox = JSON.parse(await readFile(join(PATHS.cos, 'release-synchronization.json'), 'utf8'));
   const entry = outbox.publications[original.identity];
   expect(entry.registeredAt).toEqual(expect.any(String));
-  expect(entry.checkouts).toEqual(fixture.state.agents.publisher.metadata.checkoutSeeds);
+  expect(entry.checkouts).toEqual([]);
   expect(Object.values(entry.obligations).every(value => value.status === 'pending')).toBe(true);
 });
 
@@ -310,7 +322,6 @@ test('does not accept publication prose or caller-supplied receipts through regi
 test('does not accept caller-supplied release checkout ownership through generic agent metadata', async () => {
   const forged = { releaseCandidate: { version: 1, branch: 'codex/release-agent-forged' }, checkoutSeeds: [{ forged: true }],
     completedCheckouts: [{ forged: true }], checkoutCapture: { status: 'captured' },
-    releaseCandidateRecovery: { status: 'transferred' }, releaseCandidateSuccessor: { forged: true },
     releaseCandidateLifecycle: { version: 1, stage: 'captured' } };
   await registerAgent('agent-forged', 'other-task', { taskAnalysisType: 'do-release', isWorktree: false, ...forged });
   const lifecycle = fixture.disk.agents['agent-forged'].metadata.releaseCandidateLifecycle;
@@ -325,22 +336,7 @@ test('does not accept caller-supplied release checkout ownership through generic
   expect(fixture.disk.agents['agent-forged'].metadata.releaseCandidateLifecycle).toEqual(lifecycle);
 });
 
-test('requires recovery before a resumed publisher can record publication, and rejects a concurrent recovery change', async () => {
+test('verifies a resumed publication from Git/GitHub without a transfer', async () => {
   fixture.state.agents.publisher.metadata.resumedFromAgentId = 'agent-predecessor';
-  await expect(verifyAgentReleasePublication('publisher', input)).rejects.toThrow('recovery must be verified');
-  delete fixture.state.agents.publisher.metadata.resumedFromAgentId;
-  fixture.readHook = () => { fixture.state.agents.publisher.metadata.releaseCandidateRecovery = { version: 1, status: 'held' }; };
-  await expect(verifyAgentReleasePublication('publisher', input)).rejects.toThrow('ownership changed');
-  expect(fixture.disk.agents.publisher.metadata.releasePublication).toBeUndefined();
-});
-
-test('binds recovered publication to the original cutoff, promotion and publisher identity', async () => {
-  const original = { agentId: 'agent-predecessor', taskId: 'release-task', startedAt: '2026-01-01T00:00:00Z' };
-  fixture.state.agents.publisher.metadata.releaseCandidateRecovery = { status: 'transferred', transfer: {
-    branch: 'release/example-candidate', origin: original, publication: { number: 12 },
-    candidate: { cutoff: 'f'.repeat(40), pin, releaseBase: root, version: '1.2.3' },
-  } };
-  await expect(verifyAgentReleasePublication('publisher', input)).rejects.toThrow('differs from the recovered');
-  fixture.state.agents.publisher.metadata.releaseCandidateRecovery.transfer.candidate.cutoff = cutoff;
-  expect(await verifyAgentReleasePublication('publisher', input)).toMatchObject({ recoveredPublisher: original, cutoff, pin, candidateHead: head });
+  expect(await verifyAgentReleasePublication('publisher', input)).toMatchObject({ status: 'verified', version: input.version });
 });

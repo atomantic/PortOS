@@ -1,7 +1,7 @@
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
-import { assertProductionApproval, clipLocks, nameShots, productionReviewBasis } from './productionReview.js';
+import { assertProductionApproval, nameShots, productionReviewBasis } from './productionReview.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 /**
  * Music Video — render pipeline (#1760, Phase 2).
@@ -348,7 +348,7 @@ async function footageClip(scene, entry, planned, editOverride = undefined) {
 // in scene order. Neither needs footage: a still needs its selected reference
 // frame (404 MISSING_STILLS when it is gone), and both need an authored span
 // (422 UNTIMED_SECTIONS), since there is no clip to take a length from.
-export async function resolveSceneClips(project, { layered = false, stillForMissingClip = false } = {}) {
+export async function resolveSceneClips(project, { layered = false, stillForMissingClip = false, sceneId = null } = {}) {
   // A draft shows a footage shot that has no clip yet as its still (layered renders only).
   const allScenes = Array.isArray(project.scenes) ? project.scenes : [];
   const playableId = (s) => scenePlayableClipId(s, allScenes);
@@ -360,7 +360,7 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
   const scenes = allScenes
     .slice()
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-    .filter((s) => s && (playableId(s) || sceneVisualLayer(s, { layered }) !== 'footage' || standIn(s)));
+    .filter((s) => s && (!sceneId || s.sceneId === sceneId) && (playableId(s) || sceneVisualLayer(s, { layered }) !== 'footage' || standIn(s)));
   if (scenes.length === 0) {
     throw new ServerError('No scene videos to render — generate at least one scene clip first', {
       status: 400, code: 'NO_SCENE_CLIPS',
@@ -766,7 +766,7 @@ function buildSegmentArgs(segment, { plan, prerolls, postrolls, addInput, sectio
 // overlap the window, clipped to it and re-based to the excerpt's own timeline
 // (0 = `startSec`) so a contact sheet built from the excerpt file can sample
 // cut boundaries directly. `totalDuration` becomes the excerpt's own length.
-export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, overlays = [], frameGrid: gridOption = false, excerpt = null, soundBed = null, grade = null, aspect = null, beats = [], segment = null, canvas = null } = {}) {
+export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, audioStartSec = 0, overlays = [], frameGrid: gridOption = false, excerpt = null, soundBed = null, grade = null, aspect = null, beats = [], segment = null, canvas = null } = {}) {
   if (!Array.isArray(clips) || clips.length === 0) throw new Error('buildMusicVideoFfmpegArgs: empty clips');
   const frameGrid = gridOption || clips.some((c) => c.layer);
   // Stills and cards have no dimensions of their own: the first footage clip
@@ -929,6 +929,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   for (const preroll of prerolls) preroll.input = addInput(preroll.clip);
   for (const postroll of postrolls) postroll.input = addInput(postroll.clip);
   const audioIdx = nextInput; // master audio follows the section inputs
+  if (audioStartSec > 0) inputs.push('-ss', String(audioStartSec));
   inputs.push('-i', audioPath);
   for (const overlay of overlays) inputs.push('-itsoffset', String(overlay.startSec), '-i', overlay.path);
 
@@ -1041,25 +1042,13 @@ export function excerptBoundaryTimes(sections, cues, startSec, endSec, { fps = 2
 // authored span. Both callers build on the exact same resolved clip list, so
 // an excerpt frame matches what a full render would produce at that song time.
 //
-// Legacy approval compatibility: a clip locked before shot locking was removed
-// (read-only `clipApprovals`) stays exempt, so older projects still render.
-// Any other stale clip blocks, naming its shots (numbered in song order) and the fix.
-export function assertCurrentClipDependencies(project) {
-  const locks = clipLocks(project);
-  const stale = (project.scenes || []).filter((scene) => scene.videoHistoryId && scene.visualLayer !== 'still' && !isSelfDrawnLayer(scene.visualLayer))
-    .filter((scene) => locks?.[scene.sceneId] !== 'locked')
-    .filter((scene) => musicVideoTakeChanges(project, scene, (scene.takes || []).find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)).length);
-  if (!stale.length) return;
-  const shots = nameShots(project, stale.map((scene) => scene.sceneId));
-  throw new ServerError(`${shots}: the clip was made from frames that have since changed. Render a new one`,
-    { status: 422, code: 'STALE_CLIP_DEPENDENCIES', context: { sceneIds: stale.map((scene) => scene.sceneId) } });
-}
+// A selected clip is never checked against the shot's current frames: the user may
+// override or pick any clip and it renders as chosen.
 
 // `decode: false` plans for a read-only caller without host control: the
 // performance-take review skips its ffmpeg decode of the song master.
 export async function planMusicVideoRender(project, { draft = false, decode = true } = {}) {
   assertMusicVideoMediaSelections(project);
-  assertCurrentClipDependencies(project);
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
 
@@ -1195,7 +1184,6 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   const audioPath = await resolveMasterAudioPath(project);
   assertSongAudioCurrent(project, basename(audioPath));
   if (renderer.performanceTakes) {
-    assertCurrentClipDependencies(project);
     await assertCurrentPerformanceTakes(project, audioPath);
   }
   const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;
@@ -1271,7 +1259,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
     const atSec = typeof project.composition?.posterSec === 'number'
       ? project.composition.posterSec + (encoded.leadSec || 0)
       : (encoded.boundaryTimes[0] || 0);
-    const completed = { status: 'complete', extra: { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) } };
+    const completed = { status: 'complete', extra: { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project, { clipFrames: false }) } };
     // The encoder wrote the MP4 in place; the poster, the history entry naming
     // it and the project row naming that entry publish under one lease (#9982).
     const thumb = await withBackupAssetPublication(async () => {
@@ -1387,7 +1375,7 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
         width: plan.width, height: plan.height, numFrames: Math.round(durationSec * plan.fps), fps: plan.fps,
         filename, thumbnail: poster, createdAt: new Date().toISOString(), musicVideoProjectId: projectId,
       });
-      settled = await writeSettled('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) });
+      settled = await writeSettled('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project, { clipFrames: false }) });
       return poster;
     });
     await retireOldFinals(projectId, jobId);
@@ -1697,7 +1685,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
                 createdAt: new Date().toISOString(),
                 musicVideoProjectId: projectId,
               });
-              settled = await writeSettled('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) });
+              settled = await writeSettled('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project, { clipFrames: false }) });
               return poster;
             });
             await retireOldFinals(projectId, jobId);

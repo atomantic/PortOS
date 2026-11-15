@@ -1,6 +1,9 @@
 /**
  * Sharp-free border and alpha primitives shared by image-processing lanes.
  *
+ * Sharp-free image primitives shared by sprites and image-to-3D: statistics median, subsampled
+ * border-band sampling, solid-border coverage detection, and alpha meaningfulness/variation checks.
+ *
  * Border sampling deliberately uses a narrow band and a subsampled perimeter:
  * one dirty edge row should not overturn an otherwise flat background, while a
  * large source should not allocate one sample for every border pixel.

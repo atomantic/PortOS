@@ -11,5 +11,5 @@
 mlx-audio==0.6.4
 mlx==0.32.4
 mlx-metal==0.32.4
-transformers==5.22.1
+transformers==5.22.2
 huggingface-hub[hf_xet]==2.4.0

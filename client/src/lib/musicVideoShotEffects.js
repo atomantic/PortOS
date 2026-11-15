@@ -1,4 +1,12 @@
 /**
+ * `shotEffects` and `shotEffectCounts` summarize a shot's start, mid and end effects and per-video
+ * effect usage for badging Shots board cards.
+ *
+ * Music-video shot effects at a glance: `shotEffects` (a shot's start / mid-shot / end effects, read
+ * through the render's own transition, image-effect and cut-effect helpers) and `shotEffectCounts`
+ * (every effect option's use per slot, zeros included). Used by the Shots board's card badges and its
+ * Effects card.
+ *
  * Music Video shot effects at a glance: what each shot plays at its start, in
  * its middle and at its end, and how often the video uses each effect, so the
  * Shots board can badge every card and count every option.

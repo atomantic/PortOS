@@ -55,7 +55,7 @@ const CONTRACT_MODULES = [
 
 /** `<test file>|<module specifier>|<key>` -> reason, for mock keys that are deliberate adapters. */
 const MOCK_ADAPTERS = new Map([
-  ['src/pages/MusicVideo.test.jsx|../services/apiMusicVideo.js|listMusicVideoProjects', 'in-test project store: the suite backs listMusicVideoProjectSummaries and getMusicVideoProject with it'],
+  ['src/test/musicVideoPageMocks.jsx|../services/apiMusicVideo.js|listMusicVideoProjects', 'in-test project store: the Music Video page suites back listMusicVideoProjectSummaries and getMusicVideoProject with it'],
 ]);
 
 const IMPORT_RE = /import\s+([^'"]+?)\s+from\s+['"]([^'"]+)['"]/g;
@@ -138,8 +138,9 @@ const scanMockDrift = (testFile, source) => scanMockDriftIn(testFile, source, { 
 
 const read = (file) => readFileSync(join(CLIENT_ROOT, file), 'utf8');
 
+// Shared page mock scaffolds (`src/test/*PageMocks.jsx`) register `vi.mock` for several suites, so they are scanned too.
 const trackedTestFiles = () => execSync('git ls-files src', { cwd: CLIENT_ROOT, encoding: 'utf8' })
-  .trim().split('\n').filter((f) => /\.test\.jsx?$/.test(f));
+  .trim().split('\n').filter((f) => /\.test\.jsx?$/.test(f) || /^src\/test\/\w+PageMocks\.jsx$/.test(f));
 
 describe('module contract conventions', () => {
   const files = trackedSourceFiles(CLIENT_ROOT);

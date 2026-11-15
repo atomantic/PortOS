@@ -2,6 +2,16 @@
  * FableLoom graph layout — pure helpers that place an episode's scene nodes on
  * the editor canvas and route its transition edges.
  *
+ * FableLoom canvas layout — `layoutLoomGraph(episode, { viewportWidth, orientation })` (BFS +
+ * barycenter-ordered positions, persisted `pos` overrides on left-to-right only, orthogonal
+ * port-fanned edges, canvas extents), `pickLoomOrientation` (stacks top-to-bottom under
+ * `LOOM_STACK_WIDTH` when orientation is not pinned), `loomGraphLayers`, `routeLoomEdges` (forward
+ * edges in packed gap lanes; backward/skip edges around the card band), `placeEdgeLabels` (de-collides
+ * intent labels), `loomEdgePath(from, to, { laneY, self, orientation })`,
+ * `LOOM_NODE_W`/`LOOM_NODE_H`/`LOOM_EDGE_LABEL_MAX`/`LOOM_ORIENTATION`/`LOOM_STACK_WIDTH`. A
+ * view-layer layering (shows unreachable nodes in trailing columns), deliberately NOT a mirror of the
+ * server's analysis-oriented `computeGraphLayers`. Pure/DOM-free.
+ *
  * Default positions come from BFS layering (depth from the opening scene, then
  * a barycenter pass so forward edges cross as little as possible). Unreachable
  * nodes trail in extra layers so the author can see them — this is a VIEW

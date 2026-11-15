@@ -15,7 +15,7 @@ afterAll(cleanupTempDataRoots);
 // reads, retime/alignment jobs, image jobs and Cast & Sets releases, plus the
 // automation brief and the sheet approval that steer unattended runs. Real
 // router behind the real gates; each service sink is a spy, so a refused
-// caller that reached one is visible, and an open body must still reach it.
+// caller that reached one is visible, and an authorized body must still reach it.
 const auth = vi.hoisted(() => ({ enabled: false }));
 const effects = vi.hoisted(() => {
   const resolves = (value) => vi.fn(async () => value);
@@ -161,7 +161,7 @@ vi.mock('../services/musicVideo/vocalStem.js', async (importOriginal) => ({
   attachVocalStem: effects.attachVocalStem,
 }));
 
-import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import musicVideoRoutes from './musicVideo.js';
 
@@ -179,7 +179,7 @@ const upload = (field, filename, type) => ({
 });
 
 const PROJECT = '/api/music-video/example-project';
-// [method, path, body, sink, authorized status, open body (body-gated rows only)]
+// [method, path, body, sink, authorized status, steering-free body (formerly body-gated rows only)]
 const operations = [
   ['post', '/api/music-video', { name: 'Example video', automation: { guidance: 'Example guidance', checkins: { castAndSets: 'auto' } } },
     effects.createProject, 201, { name: 'Example video' }],
@@ -222,7 +222,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/music-video', musicVideoRoutes);
   app.use(errorMiddleware);
   return app;
@@ -243,7 +243,7 @@ beforeEach(() => {
 });
 
 describe('Music Video pre-guard operator authority (#13055)', () => {
-  it('imports a composition document for any caller and starts the browser overlay check only with host control', async () => {
+  it('refuses a remote composition import and starts the browser overlay check for a local import', async () => {
     const imports = [
       [['post', `${PROJECT}/composition/document/zip`, upload('file', 'example.zip', 'application/zip')], effects.importDocumentZip, 201],
       [['post', `${PROJECT}/composition/document/accept`, { directory: 'music-video/example-project/composition/doc-example' }],
@@ -254,30 +254,28 @@ describe('Music Video pre-guard operator authority (#13055)', () => {
         expect((await call(appFor(address), operation)).status, `${address} ${operation[1]}`).toBe(status);
       }
     };
+    for (const [operation, effect] of imports) {
+      const refused = await call(appFor('192.0.2.10'), operation);
+      expect([refused.status, refused.body.code], operation[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      expect(effect, operation[1]).not.toHaveBeenCalled();
+    }
+
     await importAs('127.0.0.1');
+    for (const [, effect] of imports) expect(effect).toHaveBeenCalledTimes(1);
     // The check starts behind two lazy imports, which a cold CI worker loads slowly.
     await vi.waitFor(() => expect(effects.checkOverlayTextInBackground).toHaveBeenCalledTimes(2), { timeout: 10_000 });
     expect(effects.checkOverlayTextInBackground).toHaveBeenLastCalledWith('example-project');
-
-    // The check starts behind a dynamic import of a now-cached module, so a
-    // check the remote imports had started would land before the next local one.
-    await importAs('192.0.2.10');
-    for (const [, effect] of imports) expect(effect).toHaveBeenCalledTimes(2);
-    await importAs('127.0.0.1');
-    await vi.waitFor(() => expect(effects.checkOverlayTextInBackground.mock.calls.length).toBeGreaterThanOrEqual(4), { timeout: 10_000 });
-    expect(effects.checkOverlayTextInBackground).toHaveBeenCalledTimes(4);
   });
 
   it('refuses remote password-free callers, spoofed-proxy and case variants before any service runs', async () => {
     for (const operation of operations) {
-      const [method, path, body, , , open] = operation;
-      const variants = [
+      const [method, path, body] = operation;
+      for (const [address, headers, target] of [
         ['192.0.2.10', {}, path],
         ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }, path],
         ['192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }, path],
-      ];
-      if (!open) variants.push(['192.0.2.10', {}, path.toUpperCase() + '/']);
-      for (const [address, headers, target] of variants) {
+        ['192.0.2.10', {}, path.toUpperCase() + '/'],
+      ]) {
         const response = await call(appFor(address), [method, target, body], headers);
         expect([response.status, response.body.code], `${method} ${target}`).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
       }
@@ -321,9 +319,15 @@ describe('Music Video pre-guard operator authority (#13055)', () => {
     expect(effects.createProject).toHaveBeenLastCalledWith(expect.objectContaining({ automation: operations[0][2].automation }));
   });
 
-  it('leaves the open body of each body-gated route available to a remote caller', async () => {
-    for (const [method, path, , effect, status, open] of operations.filter((operation) => operation[5])) {
-      const response = await call(appFor(), [method, path, open]);
+  it('gates the steering-free body of each formerly body-gated route remotely and serves it locally', async () => {
+    const plain = operations.filter((operation) => operation[5]);
+    for (const [method, path, , , , body] of plain) {
+      const refused = await call(appFor(), [method, path, body]);
+      expect([refused.status, refused.body.code], `${method} ${path}`).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expectNoEffects();
+    for (const [method, path, , effect, status, body] of plain) {
+      const response = await call(appFor('127.0.0.1'), [method, path, body]);
       expect(response.status, `${method} ${path}: ${JSON.stringify(response.body)}`).toBe(status);
       expect(effect, `${method} ${path}`).toHaveBeenCalledTimes(1);
     }

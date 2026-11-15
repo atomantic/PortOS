@@ -1,8 +1,14 @@
-// Map a linked universe's canon (characters/places/objects) onto a music
-// video project's visual-spec references (#8978 "Pull from universe"). Pure
-// (aside from minting reference ids) and read-only: the caller owns
-// persisting the result via the ordinary visualSpec PATCH (see
-// VisualSpecPanel.jsx).
+// Map a linked universe's canon (characters/places/objects) onto a music video project's visual-spec
+// references (#8978 "Pull from universe").
+//
+// `pullUniverseCanonReferences(universe, existingReferences)` (#8978) maps a linked universe's
+// characters/places/objects to visual-spec references (character/set/prop roles), skipping images
+// already present and capping at `MUSIC_VIDEO_MAX_REFERENCES` (24, mirrors the server schema). Returns
+// `{ next, added, skipped }`; the caller persists `next` via the ordinary visualSpec PATCH. Used by
+// `components/musicVideo/VisualSpecPanel.jsx`. (The style snapshots are derived server-side, #9105.)
+//
+// Pure (aside from minting reference ids) and read-only: the caller owns persisting the result via the
+// ordinary visualSpec PATCH (see VisualSpecPanel.jsx).
 //
 // Mirrors the server's 24-reference cap
 // (server/lib/musicVideoValidation.js musicVideoVisualSpecSchema) so a pull

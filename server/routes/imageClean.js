@@ -12,8 +12,7 @@ import { Router, raw } from 'express';
 import { z } from 'zod';
 import sharp from 'sharp';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
-import { assertHostControl } from '../services/authGate.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { cleanImageBuffer, CLEAN_LEVELS, compositeIgnoreZone, IGNORE_ZONE_FEATHER_DEFAULT } from '../lib/imageClean.js';
 import { applyLightRegen, computePixelDelta, REGEN_STRENGTH_MIN, REGEN_STRENGTH_MAX } from '../services/imageGen/regen.js';
 import { enqueueGpuClean, readGpuCleanResult, getGpuCleanStatus, saveGpuCleanToGallery } from '../services/imageGen/cleanGpu.js';
@@ -118,10 +117,6 @@ router.post(
   raw({ type: RAW_TYPES, limit: RAW_LIMIT }),
   asyncHandler(async (req, res) => {
     const { metadata, denoise, diffusion, mask: hasMask, feather, strength, maxMp } = validateRequest(cleanQuerySchema, req.query);
-    // The GPU pass queues a local Python FLUX job (#13055); the sync passes are
-    // in-process sharp and stay open. The mode rides in the query, which the
-    // body gate cannot see, so the handler checks it.
-    if (diffusion === 'gpu') assertHostControl(req);
 
     const rawBody = Buffer.isBuffer(req.body) ? req.body : null;
     const { image: buffer, mask: maskBuffer } = splitMaskEnvelope(rawBody, hasMask);

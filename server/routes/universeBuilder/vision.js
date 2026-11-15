@@ -11,7 +11,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { BIBLE_LIMITS } from '../../lib/storyBible.js';
 import * as canonSvc from '../../services/universeCanon.js';
 import { describeEntityFromImages, correctEntityFromImage, VISION_KINDS, VISION_MAX_IMAGES } from '../../services/universeVisionDescribe.js';

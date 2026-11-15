@@ -1,6 +1,9 @@
 /**
  * Client-side FableLoom story-first readiness checks.
  *
+ * Ordered FableLoom readiness plus the twelve-stage producer workflow spanning foundation, challenges,
+ * outlines, editorial, continuity, media, and final hosting.
+ *
  * Media controls use this small mirror of the server's ordered beat-arc gate
  * so a human sees the same sequence everywhere: outline every episode,
  * validate the arc, author configured handoffs, then render storyboard stills.

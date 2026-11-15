@@ -1,4 +1,10 @@
 /**
+ * Re-export of `server/lib/scenePrompt.js`.
+ *
+ * Scene-prompt composer + bible matchers.
+ */
+
+/**
  * Scene-prompt composer and the bible matchers it uses.
  *
  * Re-export of `server/lib/scenePrompt.js` — the one definition of this rule,

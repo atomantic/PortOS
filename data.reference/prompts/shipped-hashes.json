@@ -1,0 +1,1018 @@
+{
+  "_partials/bible-deference.md": {
+    "current": "a4681348c27776e414acf6e0be566a99",
+    "retired": [
+      "218f0e85643609ed85a12b1ccc7b5a8d"
+    ]
+  },
+  "_partials/craft-anti-patterns.md": {
+    "current": "f34e75f19ac4e41aa0533a0abcb38a2a",
+    "retired": [
+      "bd0149bf1a5c721e65e053dad8e536d3"
+    ]
+  },
+  "_partials/scene-output-contract.md": {
+    "current": "e310b103bdfec2a9c33cde0b775d40a9",
+    "retired": []
+  },
+  "skills/bug-fix.md": {
+    "current": "526c9237688cbc7f85aafa97dc16693f",
+    "retired": []
+  },
+  "skills/data-safety.md": {
+    "current": "ae8431ebaef206e733d603f1946a5584",
+    "retired": []
+  },
+  "skills/documentation.md": {
+    "current": "bf3876613bfe4ec4c75b89fda3797b28",
+    "retired": []
+  },
+  "skills/feature-agent.md": {
+    "current": "11786658084fd434de0ff0f822d57763",
+    "retired": []
+  },
+  "skills/feature.md": {
+    "current": "14b0910bf84100adcad202c95d2eb9c9",
+    "retired": []
+  },
+  "skills/mobile-responsive.md": {
+    "current": "e06cdb987351cda2e7bd91c5a436e142",
+    "retired": []
+  },
+  "skills/module-hygiene.md": {
+    "current": "a1ebfdf905995d7fccf8d07a60e981af",
+    "retired": []
+  },
+  "skills/refactor.md": {
+    "current": "1ffccf1d4b7729f79b5e129b8465e13b",
+    "retired": []
+  },
+  "skills/security-audit.md": {
+    "current": "cd2380a3363c6db68566bc26cb68c603",
+    "retired": [
+      "4b6d257ff6c4b4bd36b5044338eb7634"
+    ]
+  },
+  "skills/simplify.md": {
+    "current": "0b064e2a5f847ca26be8e8c8f4dfd0c8",
+    "retired": [
+      "8415080bcc0284a5736a4768bf4f40b2"
+    ]
+  },
+  "skills/threejs-visual.md": {
+    "current": "e8d4442868860d15b8b108fc67174327",
+    "retired": []
+  },
+  "stages/adversarial-boundary-scorer.md": {
+    "current": "18daf97251173ad10f937da561bea28e",
+    "retired": []
+  },
+  "stages/app-detection.md": {
+    "current": "92106f78da3e9aaf576cba15ff7fc236",
+    "retired": []
+  },
+  "stages/brain-classifier.md": {
+    "current": "c7124974a5eebf5305be60ff73d8555a",
+    "retired": []
+  },
+  "stages/brain-daily-digest.md": {
+    "current": "b5ae96d123ebb8f4ee1bd808fec1e2b0",
+    "retired": []
+  },
+  "stages/brain-weekly-review.md": {
+    "current": "5e00357f617e89d61f49b6f1eba811d2",
+    "retired": []
+  },
+  "stages/catalog-extract.md": {
+    "current": "937ab88c94f4c0c34b3edc420d10decf",
+    "retired": []
+  },
+  "stages/catalog-ideas-scenes-concepts.md": {
+    "current": "e6cce39c76689ea9c5233f233cd0f153",
+    "retired": [
+      "243074821ebc58eec63e26d284101b29",
+      "98aa063cec8ad5c0e017dbc7bc949054"
+    ]
+  },
+  "stages/cd-evaluate.md": {
+    "current": "a86de29e186581d3508662569c8acbf6",
+    "retired": [
+      "c986613edbb595cece674403db0f069d",
+      "e9b413b85d410c41dc8d7fd9254d9fff"
+    ]
+  },
+  "stages/cd-plan.md": {
+    "current": "8dac4102dbbaee05f2f23f37c7e80782",
+    "retired": [
+      "02354df62fe776704669d3ff06f346e4",
+      "0768d6809645c2c1fe73cacae9740fe9",
+      "3ce871196a8fd04781b71b6780e89c86",
+      "41a61590896d1327df2c6915557361de",
+      "ef0d96f6ebde43af6c4579969d31cfb7"
+    ]
+  },
+  "stages/cd-treatment.md": {
+    "current": "16c5ce4a199d8efbf80016424315beb6",
+    "retired": [
+      "16d0ef6a7fd2533719a846019122ebee",
+      "1de973575a772db0544bbeda2ba5df77",
+      "2ffa482e7bfb6fe8b7224505fedbf712",
+      "4da071646deff0001473502a7c4b5252",
+      "95b7685690ecfee4f682b0293b790277",
+      "d940eadfb406ce584f0e244032f33382"
+    ]
+  },
+  "stages/cos-agent-briefing.md": {
+    "current": "a01c81d3a7f4ac0ca9e8d5137735c0e3",
+    "retired": [
+      "181b26838e526427173e4dccfc884d01",
+      "3e1ca7f7b14b799f89a193c568003624",
+      "699d053875472df455258724a0162bd5",
+      "9bcd3a0167dd4aed7cfff7f404494dfb",
+      "af73fd50d6f29d561772474c12346e53",
+      "d761133753da290a0c02eca1c87709e4",
+      "dccb392a43cbd3dac900fee12c31619a"
+    ]
+  },
+  "stages/cos-evaluate.md": {
+    "current": "ba04e0ade2c46941ca57a38a1fc3ffb3",
+    "retired": []
+  },
+  "stages/cos-report-summary.md": {
+    "current": "9f3adf0017b09b3728667b432299be77",
+    "retired": []
+  },
+  "stages/cos-self-improvement.md": {
+    "current": "bbbeb214f02bff107cb22db3cb47ed5a",
+    "retired": []
+  },
+  "stages/cos-task-enhance.md": {
+    "current": "6519494a7bf87822cb7b38215e28dd9d",
+    "retired": []
+  },
+  "stages/fableloom-branch-node.md": {
+    "current": "39a208c8cc593d0531af50760e3cf0da",
+    "retired": [
+      "6279b1c9912c300363a727245d22fe84",
+      "c14e2b9c435e43a8c3b134a62cd66d08",
+      "e5005826c4577623ba362a0292741c7c",
+      "f558e4804b056a5961af1ea74fdef2ba",
+      "ff5d40b3090c775fc9c1f48c2ea96bbd"
+    ]
+  },
+  "stages/fableloom-editorial-remediate.md": {
+    "current": "75f23d18fdf3b4ca3f329db8c61aec9d",
+    "retired": [
+      "c0cce5cfe63ec4e94047415bbe83881b",
+      "d73329e2341e7bea9935a96043ed045f"
+    ]
+  },
+  "stages/fableloom-editorial-self-improve.md": {
+    "current": "10dc0c6571b4d76a3bbdfeea2f2069c1",
+    "retired": []
+  },
+  "stages/fableloom-feedback-episode.md": {
+    "current": "1aaa6f17acad6a3215e48dcce14e8670",
+    "retired": [
+      "43d1525fcedce99b933ae5b003516a36",
+      "9ff21b47c4251585da9500c306d91a28",
+      "d09bb405478d24c294b0c658ef365cd1"
+    ]
+  },
+  "stages/fableloom-feedback-series-plan.md": {
+    "current": "ece17ecf3ee0d6018f3ca350794d8d52",
+    "retired": [
+      "2d1b40041223baa02a1517a102f103c2",
+      "6c4f6c846acc6186eaa8da297080b9d9",
+      "c56a3de3776cf7ef8ba16782f0691144"
+    ]
+  },
+  "stages/fableloom-generate-series-plan.md": {
+    "current": "ab912a52879d8ce78e9998dec19ddaa8",
+    "retired": [
+      "2591cf4ca6cc160765f029fcc497dc35",
+      "27336d8c64e6193aecd1ba697f52315e"
+    ]
+  },
+  "stages/fableloom-outline-episode.md": {
+    "current": "76f5211b851de7a0a23d9c11c5969b25",
+    "retired": [
+      "2ff6fb72777ff0c6fc70f3afd0ddfd53",
+      "3f5144103b2ab6203fa071ff5026251b",
+      "513b2b5b8fa98766852cdde7b87198c9",
+      "820b8c157c1977b34eb317e44236519e"
+    ]
+  },
+  "stages/fableloom-plan-shots.md": {
+    "current": "9b1cd4b406ee327d6dc3fcbd57b48483",
+    "retired": [
+      "4cf0fb96d4e9a17a8ae8285ec134f37f"
+    ]
+  },
+  "stages/fableloom-play-turn.md": {
+    "current": "e35ad91aae263e3adf28d1e047a46661",
+    "retired": [
+      "bb33dc9bc483668d88196ca972d5f364"
+    ]
+  },
+  "stages/fableloom-reformat-scenes.md": {
+    "current": "f1d28a42b97e539bd9d22878c0db3a6a",
+    "retired": []
+  },
+  "stages/fableloom-review-episode-outline.md": {
+    "current": "3e548d8de54dd23312a6f1024910fedc",
+    "retired": [
+      "0f549ed25dea8566ce2d3c515968783b",
+      "8154b4c289b10268df8fd3c625bcdac2",
+      "96d631104155ff11be08bcc5144cca1c"
+    ]
+  },
+  "stages/fableloom-review-playthroughs.md": {
+    "current": "c24c3799c8ef9050c16a3fa4b56920e2",
+    "retired": [
+      "27843c9a77dc9dcfb8a9b12102253541"
+    ]
+  },
+  "stages/fableloom-review-series-plan.md": {
+    "current": "d82ff6df1d41c3e53fb0cc7ea49f8dc5",
+    "retired": [
+      "1c1ab552f6f6a4d9d51f1d3bacd89122",
+      "588c82fafd733581490f24cb6fb4bfa7",
+      "d7d3b306c82cea4d7f13a78512a46948"
+    ]
+  },
+  "stages/fableloom-review-series-teleplay.md": {
+    "current": "10a3289dd0824539f7ccbcd4a579c865",
+    "retired": [
+      "fc87fe58f599be451d245ce4f26d9691"
+    ]
+  },
+  "stages/fableloom-review-shots.md": {
+    "current": "8cf5fe685cc5f75537caddea1d272a00",
+    "retired": [
+      "699ba1189f67338728b74834269759a9"
+    ]
+  },
+  "stages/fableloom-review.md": {
+    "current": "c26a641f6d0530caef7d1186c3b09937",
+    "retired": [
+      "2802f269f246e00ec5a8937637d42de6"
+    ]
+  },
+  "stages/fableloom-weave-episode.md": {
+    "current": "94f22c0807924dadf151341c30720c71",
+    "retired": [
+      "18a442e39b973e4074a0d595928a665d",
+      "1b27f5b0073a304c21079aa6e2c71447",
+      "1fea11b8c4269008561ac22a30494d46",
+      "4c9454d1537c4ebb3becbfa04fae3ed8",
+      "990cdecf9e46fa049ae4aae27e3b172d",
+      "abea2442af2be2039b70deee4919c00e",
+      "b4d363db94fd8a9928fa977745c76ff9",
+      "e0f8d864caa8746912b56cd567f1c09d"
+    ]
+  },
+  "stages/importer-arc-extract.md": {
+    "current": "a60450cabce43eb8340f63135a5fbc5d",
+    "retired": [
+      "d3cdbcc4c6a0bf1481f922e900b6d848"
+    ]
+  },
+  "stages/importer-canon-extract.md": {
+    "current": "724bb2ae8ff68e29e79999452ddefd63",
+    "retired": [
+      "cd5e4ed4096723e05642b881fb74b3ec"
+    ]
+  },
+  "stages/importer-classify.md": {
+    "current": "f4506b0864999f1a49e45fafd0822ff7",
+    "retired": []
+  },
+  "stages/importer-issue-proposal.md": {
+    "current": "9ba2ff965fba61efb85a3568bb530055",
+    "retired": [
+      "192f824a02885010d380aaacb4df67b5",
+      "a6838832f8289932836db84ee565b870",
+      "d837e6321b8f6820bddaf972e7dbe01c"
+    ]
+  },
+  "stages/manuscript-reformat.md": {
+    "current": "1a02cf3ac59b5c253359357608c1c4ad",
+    "retired": [
+      "4df6381d5c685c683a518326b7908e18"
+    ]
+  },
+  "stages/memory-evaluate.md": {
+    "current": "5db4f871339eef26f1a72c276254fa72",
+    "retired": []
+  },
+  "stages/model-personality-alignment-scorer.md": {
+    "current": "a5089a1000e26920d5da29f030ae029c",
+    "retired": []
+  },
+  "stages/model-personality-profile.md": {
+    "current": "4594543c999b22d948e05d3500931e8b",
+    "retired": []
+  },
+  "stages/multi-turn-consistency-scorer.md": {
+    "current": "e06eb8d5eaa68b7ba84624884692244a",
+    "retired": []
+  },
+  "stages/pipeline-arc-overview.md": {
+    "current": "901557b9f146a2d279ce2e81bda24d73",
+    "retired": [
+      "0a1f6ffa6908522e3690c5e9e53a6ee0",
+      "59e19fb81417e640194a5e3ac5773125",
+      "5ed760caaf3cf88916ec28b220e2f590",
+      "612f8b04950e2ff26dd350dd76a062fe",
+      "648e11352cd1565aee490de1f662bef0",
+      "6a3ecab43d1f46b7ef9aab6c69ea0326",
+      "74d6c26548660d85fc345b2099c63b6c",
+      "d34d72b8e49ba303d38607845dd87f1c"
+    ]
+  },
+  "stages/pipeline-arc-resolve.md": {
+    "current": "5fb659e459a296b7d378d7711f4b78cd",
+    "retired": [
+      "0611db539437083621e19bb88b005e8d",
+      "0787128babf3c4c50e2f2cdb60214030",
+      "122950b9f5ce84708ac1510ef13b1bce",
+      "17fbb066d7957dc2e345df1795bb0d9d",
+      "2349bce80e9df8caafa391a6106327b6",
+      "2651dc3947adc75c02c4f394135f2703",
+      "31eca76b68f40de1b93734fe9bc9f4bb",
+      "3f5ef41212890889811e4509a131c4e9",
+      "56926d795bd31f7e05e6bbbc646ecf9f",
+      "5b340885c6e8f8afc63424d6b5bc7eb7",
+      "638b988c84b3e5599f7a2ce09fa149ce",
+      "87bc5c01f1a8a97b681727a38b05edc6",
+      "8bb134554c122d1583c479ab3010e53d",
+      "8e348f3d1894382889f9f0ee7d5c6792",
+      "96f73a7e90526d65ef2bb100fb1cd4bf",
+      "a8677bbe1eb38f871fb152a5b0fec7c6",
+      "aa2e463ebe0857859d79aa0c6ccb0256",
+      "cc27b4da1d1a13c35e35d1c2d6183815",
+      "ebd85d3a0b5949f16877c25ca498cce9"
+    ]
+  },
+  "stages/pipeline-arc-verify.md": {
+    "current": "090920d816beef8dfc12ee6152511456",
+    "retired": [
+      "36aa70cdfc25d7549573a4d556e7702c",
+      "4b60a322e35b536405d0fbf543580562",
+      "52e31abc93e3105176236fcaa5d1575a",
+      "68f6956d7e09ebdb3870d8726b1b2a7a",
+      "83347e7d923580a3062033ab39b3c14b",
+      "90712f66ec68061ebed2147044e5baee",
+      "9f32e91bd33b97d30e1cbb2e697f4fc3",
+      "a397f158fd9c0dca1c8dbe62df253f70",
+      "d077c3d6197fbb9a684a1fbb41a9493c",
+      "f09e81655ec897c74a2fae68ad31b9c4",
+      "ff56d8387162017e08d5d0491060ddd6"
+    ]
+  },
+  "stages/pipeline-audio-cues.md": {
+    "current": "b9826eaf46f431898d94bf26433a7d24",
+    "retired": []
+  },
+  "stages/pipeline-beat-continuity-resolve.md": {
+    "current": "31919ee8845f6128ba35dc4804aeca19",
+    "retired": []
+  },
+  "stages/pipeline-beat-continuity.md": {
+    "current": "2a8b6261ccf7a31fa02ae9dced6a9723",
+    "retired": []
+  },
+  "stages/pipeline-canon-describe-from-prose.md": {
+    "current": "824446ce94526da3a1aaa10401436d2e",
+    "retired": []
+  },
+  "stages/pipeline-character-differentiate-cast.md": {
+    "current": "ddf878760821c202de64f904a711b5aa",
+    "retired": []
+  },
+  "stages/pipeline-character-foundation.md": {
+    "current": "c606061954b23a9957c68dd068b54dc4",
+    "retired": [
+      "04419e382f3b46ed92bfaaa1d4f39e13",
+      "b7d2bac347e11171606f4c6acfcd32e1",
+      "cda34127b40754ddbcc8544e3d82572b",
+      "d6c449c06de73a0868141c899b26e52c",
+      "f1c0b75a8161c0bc7f26752d148a5c1c"
+    ]
+  },
+  "stages/pipeline-character-refine.md": {
+    "current": "05f3417cab9913885714e267de8a0f8a",
+    "retired": []
+  },
+  "stages/pipeline-comic-cover-concepts.md": {
+    "current": "9176a550d6499a562886c42414dda567",
+    "retired": []
+  },
+  "stages/pipeline-comic-page-refine-render.md": {
+    "current": "390b9ff6735d98185e682385823c893b",
+    "retired": []
+  },
+  "stages/pipeline-comic-panel-image-prompt.md": {
+    "current": "4e1610b0d53eb1c9d0cf41e2b8215d5d",
+    "retired": []
+  },
+  "stages/pipeline-comic-script.md": {
+    "current": "49af30c05f008b20f6998a0f113f7d87",
+    "retired": [
+      "133d200d069c2e8173b7c129eea58f53",
+      "1d380ef4b6c372099ce5fbe09e74b0d9",
+      "1e0af305c27d0c80c4b482d2ebcb4a0d",
+      "40e5fdc1a1e68a7419b7dad936366c1a",
+      "7c05ecde539f04c9fa91e87543057204",
+      "88258dfb6065026875370920ead93ef0",
+      "9fe2451b573fc60eb6c971e1b8808ef3",
+      "a4303016c34b65e4b0e641fe71252de3",
+      "beab031951859ca13579cdb9c4dbe769",
+      "dea7d497d1cb38e7574f236f4ff8e644",
+      "e530fc76b89cedaef848ad7ec99c934c",
+      "e9ee70bf18888492edada6633cd9928a"
+    ]
+  },
+  "stages/pipeline-continuity-bible.md": {
+    "current": "2a50b1dcdfb0e97754b44d61443a7f1a",
+    "retired": []
+  },
+  "stages/pipeline-editorial-adversarial-cuts.md": {
+    "current": "452a1e70efa276014c2f5d9ddd36b8d0",
+    "retired": []
+  },
+  "stages/pipeline-editorial-analysis.md": {
+    "current": "daeb02bd54b0c099b21af659c6298cfe",
+    "retired": [
+      "14d9879697c66d51830cc798040d5369"
+    ]
+  },
+  "stages/pipeline-editorial-appearance-continuity.md": {
+    "current": "8ef03aa3ed15557febe85d7ee66b6cc6",
+    "retired": [
+      "25ccc731f1596a99d21600919896a8e3"
+    ]
+  },
+  "stages/pipeline-editorial-arc-regression.md": {
+    "current": "8e34b3a84cd7f948592a2a94b28caee4",
+    "retired": [
+      "85b15c9e913fe8a436d407f1562a2b10"
+    ]
+  },
+  "stages/pipeline-editorial-arc-transitions.md": {
+    "current": "46cb5444f41d05fb7bdbc219d62619b2",
+    "retired": [
+      "4c297e92df472965be8641f8b9ce9853",
+      "72e27707f0dc82eab84eed74e9707587"
+    ]
+  },
+  "stages/pipeline-editorial-character-consistency.md": {
+    "current": "bbefd9b033cc7830752acf87722659a0",
+    "retired": [
+      "69bbee3a1bb126b2675d8b00f5aef48c"
+    ]
+  },
+  "stages/pipeline-editorial-chekhov.md": {
+    "current": "1f8a1696b5e4f476051dc5b2e5737db9",
+    "retired": [
+      "21246b605f442f8c749fc2835bd293b5",
+      "bfacbf343ba2b9a3f6037bb45b94e1bb"
+    ]
+  },
+  "stages/pipeline-editorial-climax-agency.md": {
+    "current": "255ad29214f48e6dd1c17adbb5887478",
+    "retired": [
+      "1bca84f9a0b7cde84e20e43702a12ffa",
+      "55c25664b9904806146f92cc739d7208",
+      "f6611ff22e36d6738b3b4faa9c1310df"
+    ]
+  },
+  "stages/pipeline-editorial-comic-page-turn.md": {
+    "current": "00da454e9fea2170f9eec7de848ca962",
+    "retired": []
+  },
+  "stages/pipeline-editorial-comic-prose-sync.md": {
+    "current": "838bb10dc30eaed0247225e1b5635b53",
+    "retired": []
+  },
+  "stages/pipeline-editorial-dead-metaphor.md": {
+    "current": "9410b0dfc345b212dc93e47f5386d505",
+    "retired": []
+  },
+  "stages/pipeline-editorial-dialogue-pleasantries.md": {
+    "current": "33e0af1726a0d6d58f9e8ffa443dd702",
+    "retired": []
+  },
+  "stages/pipeline-editorial-endings-cliffhanger.md": {
+    "current": "deaebfa026d40a6e576479ecc4f1e98b",
+    "retired": [
+      "3ef5e6fbc160f9f33902ab22d9284281"
+    ]
+  },
+  "stages/pipeline-editorial-eyeline-match.md": {
+    "current": "7c66926cbf8f7174ca17043e1f2e2251",
+    "retired": [
+      "5d0b8d0d4605225d208786165e26abb4"
+    ]
+  },
+  "stages/pipeline-editorial-fact-accuracy.md": {
+    "current": "caa7b3c7ed28c981248a8f19a3409837",
+    "retired": []
+  },
+  "stages/pipeline-editorial-head-hopping.md": {
+    "current": "00e596e9dea15b3154a6a9f3509e90a5",
+    "retired": [
+      "460e6449c4f1daec815b9ff0a6573f97"
+    ]
+  },
+  "stages/pipeline-editorial-info-dumping.md": {
+    "current": "7d558254de26b73852787234a821a09b",
+    "retired": []
+  },
+  "stages/pipeline-editorial-interiority-balance.md": {
+    "current": "426a75658737a33643fb35ae134e8f6f",
+    "retired": []
+  },
+  "stages/pipeline-editorial-interiority-register.md": {
+    "current": "caf813ec7a9f9107e442ffc1c916e38d",
+    "retired": []
+  },
+  "stages/pipeline-editorial-interiority.md": {
+    "current": "95368d05696104d3109cfcdd6e109492",
+    "retired": []
+  },
+  "stages/pipeline-editorial-kill-your-darlings.md": {
+    "current": "25767ad1e7c0d7e54b64fac7308ab6b6",
+    "retired": []
+  },
+  "stages/pipeline-editorial-mirror-description.md": {
+    "current": "d8f2fa869a65dc8f7816b4197f254ba3",
+    "retired": []
+  },
+  "stages/pipeline-editorial-object-backstory.md": {
+    "current": "daa063781e70df6711bac66eb773b0e6",
+    "retired": []
+  },
+  "stages/pipeline-editorial-object-motivation.md": {
+    "current": "9c783890ccbfe1b18f5b77c52928c71b",
+    "retired": []
+  },
+  "stages/pipeline-editorial-object-weight-proportionality.md": {
+    "current": "761890e3dcdc2cd828ec2be2a5f9cb82",
+    "retired": [
+      "89f6f6c6856ebcf0183b7760d71a6898",
+      "c1b7b58e0255c86b6ba5cece4330ac48",
+      "f4f91a4ea55a9fd89eaebc70074a89ec"
+    ]
+  },
+  "stages/pipeline-editorial-on-the-nose.md": {
+    "current": "e5786fb019e5bf19c7aa6ed0c8b35cda",
+    "retired": [
+      "48182b49149e6b5829fbed71b3ffc242",
+      "8d9038a2b197728f6edeedb84699f364"
+    ]
+  },
+  "stages/pipeline-editorial-opening-start.md": {
+    "current": "b87fe01ced08aa5640b6847f69cf0d9a",
+    "retired": []
+  },
+  "stages/pipeline-editorial-pacing-escalation-curve.md": {
+    "current": "52e7f023d4894e736609e8d0311cc403",
+    "retired": []
+  },
+  "stages/pipeline-editorial-plot-structure.md": {
+    "current": "2a4fe67b7b5e128314c385bb458decf2",
+    "retired": [
+      "400d829dd291753a299fa08d6afbe561"
+    ]
+  },
+  "stages/pipeline-editorial-premature-reveal.md": {
+    "current": "90485c0031da6e5f5207abb0acbc5da3",
+    "retired": []
+  },
+  "stages/pipeline-editorial-reaction-proportionality.md": {
+    "current": "b15471388a184d6f805e6dfac76fb164",
+    "retired": [
+      "38ca1b6edaa55c8989e22e7ffdbd76c7",
+      "8787e6e40f8bb46067b8303b866c7ff8"
+    ]
+  },
+  "stages/pipeline-editorial-reported-speech.md": {
+    "current": "23d8c950f647950cea760ac79e196758",
+    "retired": []
+  },
+  "stages/pipeline-editorial-secondary-arc.md": {
+    "current": "a9bd4dd9a06bc571f0363e0031d9a5d7",
+    "retired": [
+      "6ad9eb7c4969d8baeb2c8c38d8f6695e",
+      "8a96ce93f6592fed3d30e221497739a4"
+    ]
+  },
+  "stages/pipeline-editorial-sensory-balance.md": {
+    "current": "41acdb117f63ff1e5123af429b48d4d5",
+    "retired": []
+  },
+  "stages/pipeline-editorial-style-conformance.md": {
+    "current": "79e388202a0d8d9929dd86387e24d1a5",
+    "retired": []
+  },
+  "stages/pipeline-editorial-summary-not-scene.md": {
+    "current": "472dfdc328df0147663e333ab9eaf7c7",
+    "retired": []
+  },
+  "stages/pipeline-editorial-telling-emotion.md": {
+    "current": "871f7e8bea2a2d95f28875ab45a318e2",
+    "retired": [
+      "2c5c33709732fe7ffa319d32b8755354"
+    ]
+  },
+  "stages/pipeline-editorial-theme-coherence.md": {
+    "current": "89e29d0f101c0e368376c379e8e40518",
+    "retired": []
+  },
+  "stages/pipeline-editorial-timeline-contradiction.md": {
+    "current": "2d797a9fa3b55f4c9f85c22cc0baa547",
+    "retired": [
+      "f39272a486d4cc031ebb7b3b8fc01ed3"
+    ]
+  },
+  "stages/pipeline-editorial-unmodeled-names.md": {
+    "current": "6b35274e08ea9b5727c42f6ef6653cd5",
+    "retired": [
+      "2e562a414726b5b412537ad4ecbdbff5",
+      "50029186d6009d50c3850f3f4b90a5d6",
+      "9b9732f729c96dd7154175b77755fdd2",
+      "d34323ee9bf05fffc3584ad9d91146bd"
+    ]
+  },
+  "stages/pipeline-editorial-voice-consistency.md": {
+    "current": "bdde721c72e90f653f7c64be13302d0e",
+    "retired": []
+  },
+  "stages/pipeline-editorial-voice-distinctiveness.md": {
+    "current": "542e598444b037c82ea61044e47d97b7",
+    "retired": []
+  },
+  "stages/pipeline-editorial-white-room.md": {
+    "current": "df7a7351bc05e2e8977db1dcfbda9fbf",
+    "retired": []
+  },
+  "stages/pipeline-editorial-world-cost-free-power.md": {
+    "current": "2b761163f63c2e4fbe8dc6d7f6e577f7",
+    "retired": [
+      "42db5691fa6e4b2db9a146a821ed1fe7"
+    ]
+  },
+  "stages/pipeline-editorial-world-unforeshadowed-solution.md": {
+    "current": "09d5997e8c9ea77a5cf1bf446ef211f1",
+    "retired": [
+      "9a23180e49fbac1699c846ced1625575"
+    ]
+  },
+  "stages/pipeline-extract-scenes.md": {
+    "current": "9f404b0c4721b23932a6d2dcfc1fba43",
+    "retired": [
+      "59fa5ee305ce53d91eb15224d8b546d3",
+      "c51fb208568d0d903eb43b437478b0ba"
+    ]
+  },
+  "stages/pipeline-foundation-repair.md": {
+    "current": "390747ad9372a66330dea8e96809d15a",
+    "retired": []
+  },
+  "stages/pipeline-idea-expansion.md": {
+    "current": "a032e4a724251ed3e3495d33c4dbab8e",
+    "retired": [
+      "1ee44cf95851ff8debf18729ebcd40b4",
+      "1f3c5d077a5ef9a4b610335d5e3edd9c",
+      "41facefbc0c0549d456bef9111f95ab9",
+      "49a208628290543ba2607a5ed48fdc8c",
+      "5608b6d41a2c347f9cd7bf775cb94afc",
+      "93e9552c6662811e597a97296f3776a4",
+      "aee25112b2c596f643b17c559b772c22",
+      "b5c47c94ffc74637983c95761ab0c66c",
+      "c50f016639d41cd8244f5ff13429f997",
+      "c5b2e719e232a281b3829a5348cb29c1",
+      "d6fa86a435f978336661dcabca67258f"
+    ]
+  },
+  "stages/pipeline-judge-compare.md": {
+    "current": "48a0182eb9861b428024a147063b887c",
+    "retired": []
+  },
+  "stages/pipeline-judge-foundation.md": {
+    "current": "d4abf4ddafbf84a2903e6d70d14adea1",
+    "retired": [
+      "02a8e9215ba534b333f3a29f11f3ac4f",
+      "4c0bd349ff4d329048c9f4ac068745d4",
+      "74c0244e641dcf7a73e9c83123ebdee9",
+      "75714f0e41c77ff5c8b9623cb4fb0a25",
+      "e44b6c50d741bbd21fc86f481684c410",
+      "edf7850d0c724c63761bc9fb667227d9"
+    ]
+  },
+  "stages/pipeline-judge-issue.md": {
+    "current": "18657e52d16bd3426877bb5c28979faa",
+    "retired": []
+  },
+  "stages/pipeline-manuscript-completeness.md": {
+    "current": "a08a7aaea9b57dcf12311505150672cd",
+    "retired": [
+      "1ee5ac936fbf1d365e0eaea99bcf1e77",
+      "4f2b95778aed85f5fc461d71eb461b79",
+      "cec8faeb75dfff74e41b8221145c2e92",
+      "e6858c74ab2cead752d388e3f428406c",
+      "fd26f928c33803c12878a1bfb8561ece"
+    ]
+  },
+  "stages/pipeline-manuscript-fix.md": {
+    "current": "e2baaf0f2f53c8aa1e934a428c0ca583",
+    "retired": [
+      "196625952f4a36f3cb962c729f60f0ee",
+      "87c6e47030df07b37ace44d2a15372cf",
+      "88199bf7b5b50155bd2e1624bd920ebd",
+      "c88a56304eb5e290ae0de9dadd20b310"
+    ]
+  },
+  "stages/pipeline-observer.md": {
+    "current": "29e0212d2252b1be3278f20e2959eb8e",
+    "retired": [
+      "f3dc51ac077050a887c2161ee7438181"
+    ]
+  },
+  "stages/pipeline-panel-editor.md": {
+    "current": "90998f26022177656aa086e925bca992",
+    "retired": []
+  },
+  "stages/pipeline-panel-first-reader.md": {
+    "current": "713f088264d71490b7ca9632f859c49f",
+    "retired": []
+  },
+  "stages/pipeline-panel-genre-reader.md": {
+    "current": "86291252759f839228af3a66119ba0dc",
+    "retired": []
+  },
+  "stages/pipeline-panel-writer.md": {
+    "current": "915d000b169a2d63acbf4bbe1d7824d4",
+    "retired": []
+  },
+  "stages/pipeline-pov-analysis.md": {
+    "current": "51cf2501a34940010b63b9a4bcfa0180",
+    "retired": []
+  },
+  "stages/pipeline-pov-rewrite.md": {
+    "current": "eedcc03aaaf7e22e7726491f08d52974",
+    "retired": [
+      "cd073c8dbca2bf25eea07b6103e27d81"
+    ]
+  },
+  "stages/pipeline-prose.md": {
+    "current": "4cb3ef48309f3673570cf80e4d544b54",
+    "retired": [
+      "25e3d58c2741bd98acd5d08ba70d8a5e",
+      "30ac30ec2b9d3e2a9eb869c181732cc6",
+      "430d38ed2da59e0d4212e65edc499a74",
+      "50bb1101a39a3ae7ace1668176643416",
+      "84523d531eeafa60959c65c553b2563f",
+      "bef1bc2767b78f585f2bd89f3d615130",
+      "bfea5aeeb471aae9749baee765b473a7",
+      "d1f8e3f1d214725b5aa67f309a81cd7d",
+      "d344d987cf19ddeaa4db021d009ec875"
+    ]
+  },
+  "stages/pipeline-reverse-outline.md": {
+    "current": "4f6f4546d2cec86ad6802312e011056d",
+    "retired": []
+  },
+  "stages/pipeline-script-verify.md": {
+    "current": "722c62462d05462603cf67ca0ed1dee8",
+    "retired": [
+      "cec35763c134fcac8bd4e9669ab5505a",
+      "ed6c8101644cfe56a100eb6bfe3587f3"
+    ]
+  },
+  "stages/pipeline-season-episodes.md": {
+    "current": "b3fc07d785599b5a4859af8bed3c1d4e",
+    "retired": [
+      "50c68a29c3ebc275db3095d06bd87100",
+      "6e349ad26bed8a0ccb042571f03f03eb",
+      "7c24df53c097c2525a52bfb766239647",
+      "a88e8e78a949b7aaf500d03314e2ea0b",
+      "c4928e2a5f833358116b29d2d669888d"
+    ]
+  },
+  "stages/pipeline-self-improve.md": {
+    "current": "95b378832ff78e5976a6a63fcf328090",
+    "retired": [
+      "ed0b0df42e0690d515b8dd88911931e4"
+    ]
+  },
+  "stages/pipeline-series-concept-judge.md": {
+    "current": "77537e918115507eb3ef968e9b22b1c6",
+    "retired": []
+  },
+  "stages/pipeline-series-generate.md": {
+    "current": "136a21435aba2b2b212883750040b986",
+    "retired": [
+      "21352c21ed6d4edb7a4b7c32704eff55",
+      "bc72731124a2bd6304362f4402c6305d"
+    ]
+  },
+  "stages/pipeline-series-title-logo.md": {
+    "current": "cbda7245205c59058175177a2906ed6e",
+    "retired": []
+  },
+  "stages/pipeline-series-voice-discover.md": {
+    "current": "43420ecdd57c7cacca348c5064b8a76a",
+    "retired": []
+  },
+  "stages/pipeline-storyboard-image-prompt.md": {
+    "current": "cf3ad9700de15bdabc4c0a2e29ccaf6f",
+    "retired": []
+  },
+  "stages/pipeline-teleplay.md": {
+    "current": "2ea9974ac3803658b2314db1f5818b77",
+    "retired": [
+      "1280ef6b1ad68fa44070ca7478ec2a5f",
+      "2568e14beaa574d43f8018a5def51d04",
+      "376f779f4687b598f1c92ca4e770fd5a",
+      "3f6fecc25573ed054b47db392250034a",
+      "afa4215330bf856429d70d7e2f856605"
+    ]
+  },
+  "stages/pipeline-volume-cover-concepts.md": {
+    "current": "52ba289395565e49217a8480eaee6680",
+    "retired": []
+  },
+  "stages/pipeline-volume-verify.md": {
+    "current": "6f9b4ba4d9dd9a51a1032c7f0ca90405",
+    "retired": [
+      "03f3c874cb80e1c98abcf03168fa7a92",
+      "3e8a8f00d5faaee9d8e08a49d801b812",
+      "49458d36700cb94e34806d536ffe2940",
+      "56ad31371452a6fdf68597512f8c0d35",
+      "9c0839d7fe1760c0891464afd4a3b8fd",
+      "c6ea28e972ad6e229bafb2d602b4dda3"
+    ]
+  },
+  "stages/soul-contradiction-detector.md": {
+    "current": "f798bcecbdbcc5c64defae97d13c4838",
+    "retired": []
+  },
+  "stages/soul-enrichment-process.md": {
+    "current": "b8bcc09e1a3f076b7e5028f72969a5c5",
+    "retired": []
+  },
+  "stages/soul-enrichment.md": {
+    "current": "5c5948f0cdfe6d5d791c47078c30b5a0",
+    "retired": []
+  },
+  "stages/soul-test-generator.md": {
+    "current": "4cc7dca5f24ab104f0488de62fb902e7",
+    "retired": []
+  },
+  "stages/soul-test-scorer.md": {
+    "current": "e5b13403079a2b3486e3f747c3075b56",
+    "retired": []
+  },
+  "stages/soul-writing-analyzer.md": {
+    "current": "0d96efa74be78767ba00f0fb479d48c2",
+    "retired": []
+  },
+  "stages/story-builder-arc-refine.md": {
+    "current": "0ac486845e498728f40dc135ec3c1893",
+    "retired": []
+  },
+  "stages/story-builder-idea-expand.md": {
+    "current": "c12d76fefaaded2838023065bfc94bb0",
+    "retired": [
+      "778c86e2caa120856c36e4d5a4da3355",
+      "a23939626a226f7420cebfb45d47950c"
+    ]
+  },
+  "stages/story-builder-reader-map-refine.md": {
+    "current": "d8f02936a237a9e4e964d7250a118e17",
+    "retired": [
+      "befd154bb319c221f16ca357a23f1aa7"
+    ]
+  },
+  "stages/story-builder-reader-map.md": {
+    "current": "21929c9f7a7bd54c17c9dfdf00213987",
+    "retired": [
+      "af375710531a34b8fe265b425be42b3d"
+    ]
+  },
+  "stages/twin-confidence-analyzer.md": {
+    "current": "e4002cbc6493e302cee11ace2f52c846",
+    "retired": []
+  },
+  "stages/twin-image-identity-analyze.md": {
+    "current": "1983e488396d297c5a6b3be23c028501",
+    "retired": []
+  },
+  "stages/twin-import-analyzer.md": {
+    "current": "2f9e6d658623d831c7115f061e01e007",
+    "retired": []
+  },
+  "stages/twin-interview-analyze.md": {
+    "current": "456f95b6da92e6ffa4778d211d9d3e02",
+    "retired": []
+  },
+  "stages/twin-spoken-written-compare.md": {
+    "current": "1e91c6014c147747d6470a1eca75a378",
+    "retired": []
+  },
+  "stages/twin-trait-extractor.md": {
+    "current": "610543b3259427267a88f9c18b61b889",
+    "retired": []
+  },
+  "stages/universe-canon-entry-expand.md": {
+    "current": "37272a3ab3fe0952dab185d0ebea313e",
+    "retired": []
+  },
+  "stages/universe-cast-integrity-review.md": {
+    "current": "eaa9707993099672afdf7f3aeb09fb42",
+    "retired": []
+  },
+  "stages/universe-character-augment.md": {
+    "current": "8098e0ef8c1f38afe54918cac392b04c",
+    "retired": []
+  },
+  "stages/universe-character-expand.md": {
+    "current": "961b73ba6e50df5d49f0cc76505e50bd",
+    "retired": [
+      "177b6e4e8bdf445308cf8ac423cd5ad8",
+      "67b6e73ed47f318451a730088b4cff14",
+      "924fe8836f3014873d1789e98e997db2",
+      "ef109eb8e12ddb664c11c790271b5139"
+    ]
+  },
+  "stages/values-alignment-scorer.md": {
+    "current": "aa79760d60968481575f506cb8259053",
+    "retired": []
+  },
+  "stages/writers-room-cd-bridge.md": {
+    "current": "96c00e68d908bc4aea449cc7b041abec",
+    "retired": [
+      "0d744b22b9f9bf5f42978a762a7cf8f8"
+    ]
+  },
+  "stages/writers-room-characters.md": {
+    "current": "73ec5bbfdad5c62ec5d5c30f0940febf",
+    "retired": [
+      "2b00f3b324feb070fc233aed39bb1c6b",
+      "4b19f6538ff3a602007ef8e32c8e5047",
+      "cdd99c7a3ef92bf798f30fa2fb4465f1"
+    ]
+  },
+  "stages/writers-room-continue.md": {
+    "current": "458dc5ff4732befc1fb90890bdc885c2",
+    "retired": [
+      "67663696c97ebaeb23de25f7410cfdd4",
+      "93bfe80543ceca39842201a78b8393fa"
+    ]
+  },
+  "stages/writers-room-cuts.md": {
+    "current": "e46ad0f8808928b67f20a550e2c9bdbc",
+    "retired": []
+  },
+  "stages/writers-room-evaluate.md": {
+    "current": "995cfd92061b55730b0e081998e96f84",
+    "retired": [
+      "286e9498966187ed74126680da4a6a54",
+      "d3374472820df264731f435141e05270",
+      "d3b2b40bcabc9ca690fa67b69d64d628"
+    ]
+  },
+  "stages/writers-room-format.md": {
+    "current": "a197018b6775dd4890e62f66c5eb6182",
+    "retired": []
+  },
+  "stages/writers-room-objects.md": {
+    "current": "10efde7fbb46b28223db03f38e7043e4",
+    "retired": [
+      "1115d2d7d2e52e1e10c38325b88a4d94"
+    ]
+  },
+  "stages/writers-room-places.md": {
+    "current": "5d323f7aea4c2658e7e29afae2bdb7a4",
+    "retired": [
+      "24a33628cc94d80fa5ca60831d973daf",
+      "7f1f80eb63d67a21161994cde115045e",
+      "a7f68e51dd6b4421d20f5bd9d855d9b4"
+    ]
+  },
+  "stages/writers-room-revise.md": {
+    "current": "e7a3d79960548bbdbe7b0cb045bbb25e",
+    "retired": []
+  },
+  "stages/writers-room-script.md": {
+    "current": "847a8c640566146ce9e7f661287b269e",
+    "retired": [
+      "a1eca4a9cc3aa036681e5c29d1a6b550",
+      "aa0a876c1e4737d83f8f38f1953629e6",
+      "d53c7979fbc0c4ce85130b7b97b756d0"
+    ]
+  }
+}

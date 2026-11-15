@@ -740,8 +740,8 @@ describe('the shot asset manager', () => {
     const readiness = productionReadiness(stored);
     expect(readiness.selectedTakeMarkedBad).toBe(true);
     expect(readiness.storyboard.selectedTakeMarkedBad).toBe(true);
-    expect(readiness.storyboard.problems.some((p) => p.includes('Selected take marked bad'))).toBe(true);
-    expect(readiness.readyForProduction).toBe(false);
+    // Advice only: a bad mark on a kept take never blocks approving the storyboard.
+    expect(readiness.storyboard.problems.some((p) => p.includes('marked bad'))).toBe(false);
 
     const { summarizeMusicVideoProject } = await import('../lib/musicVideoSummary.js');
     expect(summarizeMusicVideoProject(stored).selectedTakeMarkedBad).toBe(true);

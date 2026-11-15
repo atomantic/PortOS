@@ -16,7 +16,7 @@
  * reproduces the shipped 153 / 206 tier bumps byte-for-byte without those
  * frozen migrations being rewritten to consume it.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync, mkdirSync, existsSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -53,6 +53,47 @@ describe('applyPromptReplaceMigration opt-ins', () => {
 
   afterEach(() => {
     rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  // #16090: a frozen migration's declared `current` goes stale on the next
+  // template edit. It must still treat the live body as current and the body it
+  // declared (or any retired table hash) as an upgradable shipped body.
+  describe('live reference body is current', () => {
+    const BODY_LATER = '# LATER\n';
+
+    it('upgrades a copy on the declared (now superseded) hash to the live body', async () => {
+      writeFileSync(join(sampleDir, FILENAME), BODY_LATER);
+      writeFileSync(join(stagesDir, FILENAME), BODY_NEW);
+      const result = await applyPromptReplaceMigration({ rootDir, ...baseOpts });
+      expect(result).toMatchObject({ updated: 1, alreadyCurrent: 0, skipped: 0 });
+      expect(readFileSync(join(stagesDir, FILENAME), 'utf-8')).toBe(BODY_LATER);
+    });
+
+    it('counts a copy already on the live body as current', async () => {
+      writeFileSync(join(sampleDir, FILENAME), BODY_LATER);
+      writeFileSync(join(stagesDir, FILENAME), BODY_LATER);
+      expect(await applyPromptReplaceMigration({ rootDir, ...baseOpts })).toMatchObject({ updated: 0, alreadyCurrent: 1, skipped: 0 });
+    });
+
+    it('upgrades a body the migration never named when the hash table retired it', async () => {
+      const BODY_OTHER = '# SHIPPED LATER, THEN SUPERSEDED\n';
+      writeFileSync(join(sampleDir, FILENAME), BODY_LATER);
+      writeFileSync(join(stagesDir, FILENAME), BODY_OTHER);
+      writeFileSync(join(rootDir, 'data.reference', 'prompts', 'shipped-hashes.json'), JSON.stringify({
+        [`stages/${FILENAME}`]: { current: md5(BODY_LATER), retired: [md5(BODY_OTHER)] },
+      }));
+      expect(await applyPromptReplaceMigration({ rootDir, ...baseOpts })).toMatchObject({ updated: 1, skipped: 0 });
+      expect(readFileSync(join(stagesDir, FILENAME), 'utf-8')).toBe(BODY_LATER);
+    });
+
+    it('still leaves a customized copy alone', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      writeFileSync(join(sampleDir, FILENAME), BODY_LATER);
+      writeFileSync(join(stagesDir, FILENAME), BODY_CUSTOM);
+      expect(await applyPromptReplaceMigration({ rootDir, ...baseOpts })).toMatchObject({ updated: 0, skipped: 1 });
+      expect(readFileSync(join(stagesDir, FILENAME), 'utf-8')).toBe(BODY_CUSTOM);
+      warn.mockRestore();
+    });
   });
 
   describe('createIfMissing', () => {

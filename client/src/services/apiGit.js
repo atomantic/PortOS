@@ -1,3 +1,7 @@
+/**
+ * Git operations.
+ */
+
 import { request } from './apiCore.js';
 
 // Git

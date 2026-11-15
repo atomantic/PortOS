@@ -3,6 +3,13 @@
  * render queue can wait for that instant instead of burning every queued job
  * against the same wall.
  *
+ * `parseQuotaDeferral(text, { now })` — read a provider quota exhaustion that states its own reset out
+ * of a failed render's error text, returning `{ resumeAt, resetsInMs }` or `null`. Requires BOTH an
+ * exhaustion marker and a parseable Go-style duration (`2h26m1s`), because the text embeds the agent's
+ * own prose about the page being rendered. Plus `formatDeferral` and `MAX_QUOTA_DEFERRAL_MS`. Consumed
+ * by `services/mediaJobQueue` to hold queued renders for a cooling backend instead of burning them
+ * against the same wall.
+ *
  * The signal this reads is narration, not a structured field. Antigravity
  * relays `generate_image`'s failure through whatever prose the driving agent
  * chose that turn, so the same outage was recorded three different ways in one

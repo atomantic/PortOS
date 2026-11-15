@@ -1,4 +1,10 @@
-/** Upload staging, validation, persistence, and local-file serving helpers. */
+/**
+ *  Upload staging, validation, persistence, and local-file serving helpers.
+ *
+ * Upload staging/import, base64/image persistence, and safe local-file serving.
+ * `assertFileNotMediaManifest(path)` refuses a media upload whose bytes are a playlist or manifest
+ * before ffmpeg can probe it (the base64 and multipart import helpers apply the same check).
+ */
 import { open, readFile, stat, unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { join, resolve as resolvePath } from 'path';

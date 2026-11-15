@@ -1,3 +1,10 @@
+/**
+ * A music video's Previz work in flight (greybox drafts for its sets, AI proposals) from the server
+ * job list, live over `catalog:previz-jobs`.
+ *
+ * Use when: Previz step and the step list's Previz note.
+ */
+
 import { useEffect, useState } from 'react';
 import { getCatalogPrevizJobs } from '../services/apiCatalog.js';
 import socket from '../services/socket.js';

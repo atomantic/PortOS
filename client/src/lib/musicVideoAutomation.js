@@ -1,5 +1,11 @@
 // Music Video automation brief — client half. Re-exports the server's tool
 // catalog (a dependency-free leaf) and owns the form draft ↔ wire mapping.
+//
+// Music Video automation brief, client half: re-exports the server tool catalog
+// (`MUSIC_VIDEO_AUTOMATION_TOOLS` / `_TOOL_IDS`), `DEFAULT_AUTOMATION_TOOLS` (the unmetered tools),
+// and the form mapping `automationDraftFrom(automation)` / `automationFromDraft(draft)` (empty budget
+// = no cap; the direction-LLM pin rides as `llm`, absent = Auto), plus `llmRouteLabel(route)` for the
+// stage-route summary. Used by the create drawer and `AutopilotPanel`.
 
 import {
   MUSIC_VIDEO_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOL_IDS, MUSIC_VIDEO_LLM_STAGES, MUSIC_VIDEO_LLM_STAGE_LABELS, musicVideoLlmRouteLabel,

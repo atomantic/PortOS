@@ -37,7 +37,7 @@ const writes = [
   ['post', '/api/tools'], ['put', '/api/tools/example'],
 ];
 // Sentinel store handlers prove the real gates refuse before any write.
-// The actual settings router is needed for its changed-value body gate.
+// The actual settings router shows what an authorized update persists.
 const persisted = [];
 const appFor = (address) => {
   const app = express();
@@ -90,16 +90,17 @@ describe('prompt store operator authority (#9040)', () => {
     }
     expect(persisted).toHaveLength(writes.length * 2);
   });
-  it('does not overwrite a concurrent operator change when a remote form resends unchanged protected values', async () => {
-    twin.updateSettings.mockImplementationOnce(async data => {
-      // Operator update lands after the route compared the form snapshot.
-      twin.current.includePrivacyContext = true;
-      return Object.assign(twin.current, data);
-    });
-    const response = await call('192.0.2.10', ['put', '/api/digital-twin/settings'],
-      { ...twin.current, maxContextTokens: 5000 });
+  it('refuses a remote form that resends unchanged protected values, and applies the same form locally', async () => {
+    const original = { ...twin.current };
+    const form = { ...original, maxContextTokens: 5000 };
+    refused(await call('192.0.2.10', ['put', '/api/digital-twin/settings'], form));
+    refused(await call('192.0.2.10', ['put', '/api/digital-twin/settings'], { maxContextTokens: 5000 }));
+    expect(twin.updateSettings).not.toHaveBeenCalled();
+    expect(twin.current).toEqual(original);
+    const response = await call('127.0.0.1', ['put', '/api/digital-twin/settings'], form);
     expect(response.status).toBe(200);
-    expect(twin.current).toMatchObject({ includePrivacyContext: true, maxContextTokens: 5000 });
+    expect(twin.updateSettings).toHaveBeenCalledTimes(1);
+    expect(twin.current).toEqual(form);
   });
   it('gates changed twin instruction settings, including the alternate active-persona path', async () => {
     const original = { ...twin.current };
@@ -109,14 +110,13 @@ describe('prompt store operator authority (#9040)', () => {
     ]) refused(await call('192.0.2.10', ['put', '/api/digital-twin/settings'], data));
     expect(twin.current).toEqual(original);
     expect(twin.updateSettings).not.toHaveBeenCalled();
-    for (const data of [{ maxContextTokens: 5000 }, { ...original, maxContextTokens: 6000 }]) {
-      expect((await call('192.0.2.10', ['put', '/api/digital-twin/settings'], data)).status).toBe(200);
-    }
     for (const enabled of [false, true]) {
       auth.enabled = enabled;
       expect((await call(enabled ? '192.0.2.10' : '127.0.0.1', ['put', '/api/digital-twin/settings'],
         { autoInjectToCoS: enabled, includePrivacyContext: !enabled },
         enabled ? { Authorization: 'Bearer example-operator' } : {})).status).toBe(200);
     }
+    expect(twin.current).toMatchObject({ autoInjectToCoS: true, includePrivacyContext: false });
+    expect(twin.updateSettings).toHaveBeenCalledTimes(2);
   });
 });

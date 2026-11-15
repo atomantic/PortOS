@@ -1,6 +1,9 @@
 /**
  * FableLoom branching-playthrough test harness.
  *
+ * FableLoom branching-playthrough harness: bounded exhaustive path enumeration, ending/loop/coverage
+ * diagnostics, aggregate loom reports, and compact traces for narrative-quality review.
+ *
  * This is intentionally deterministic and side-effect free: it walks every
  * bounded path through an episode graph, records the exact choices taken, and
  * reports coverage/non-termination before an optional AI story editor judges

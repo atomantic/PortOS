@@ -1,6 +1,11 @@
 /**
  * Containment contract for the autofixer's verify command (#12487).
  *
+ * Containment contract for the autofixer verify command (#12487): Linux bubblewrap argv and seccomp
+ * policy that contain a forking test runner, deny network and host sockets, restrict writes to the
+ * worktree/scratch and hide credential stores; unsupported platforms refuse verification. Includes the
+ * from-scratch verify environment. Pure; the runner is `autofixer/sandbox.js#runVerifyCommand`.
+ *
  * The verify command (`npm test`, …) runs over a worktree a crash-log-driven
  * agent just edited, so a test file or `pretest` script it wrote executes
  * here. A test runner forks, so the single-process Code Animation profile

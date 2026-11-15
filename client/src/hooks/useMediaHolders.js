@@ -1,3 +1,14 @@
+/**
+ * `useMediaHolders()` returns `{ self, items }` of machines holding media files, refreshed on socket
+ * events; `useMediaHoldersFor(item)` picks one card's entry.
+ *
+ * `useMediaHolders()` → `{ self, items }`, the machines holding each media file another machine also
+ * holds (`GET /media/holders`), shared by every mounted consumer and refreshed on
+ * `media:holders:changed`; `useMediaHoldersFor(item)` picks one card's entry; `refreshMediaHolders()`
+ * after a Make primary. Use when: A media card or lightbox that shows where an item lives or offers
+ * Make primary.
+ */
+
 import { useEffect, useSyncExternalStore } from 'react';
 import socket from '../services/socket';
 import { getMediaHolders } from '../services/api';

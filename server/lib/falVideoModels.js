@@ -1,4 +1,22 @@
 /**
+ * Curated fal.ai video model catalog: `FAL_VIDEO_MODELS`, per-model request shapes and durations, and
+ * `falCapabilityHint` labels for refs, end frame and audio.
+ *
+ * Curated fal.ai VIDEO model catalog (`falCapabilityHint` labels refs / end frame / audio per model) —
+ * `FAL_VIDEO_MODELS` (Hailuo-02 standard t2v/i2v default, MiniMax H3 Max/Max Turbo i2v, H3
+ * reference-to-video, H3 lip-sync, OmniHuman v1.5 audio-to-video (`FAL_AUDIO_VIDEO_MODELS`: kind
+ * `a2v`, plus the H3 Max and Seedance reference models that hear a song slice as an audio reference
+ * (`falHearsAudioReference()`, default `FAL_MUSIC_VIDEO_DEFAULT_MODEL`); the supplied audio drives the
+ * whole picture's motion; LTX audio-to-video runs locally, never on fal), Seedance 2.5
+ * t2v/i2v/reference, Kling v3 Pro i2v, Veo 3.1 Fast i2v) with per-model duration rules
+ * (enum/range/audio), resolutions, aspect ratios, optional inputs and list prices verified on
+ * `FAL_VIDEO_PRICING_VERIFIED_AT`; `getFalVideoModel()`, `coerceFalVideoSeconds()` (round UP to a
+ * covering length), `resolveFalVideoResolution()`, `buildFalVideoRequest()` (the exact queue body per
+ * model; null for an uncurated id, which keeps the legacy body) (a prompt over the model's
+ * `promptMaxChars` is refused, never cut), `estimateFalVideoCostUsd()` (null = unknown),
+ * `describeFalVideoRate()`, `falExtraReferenceLimit()` (reference rows a form may add).
+ * Dependency-free; the client re-exports it.
+ *
  * Curated fal.ai VIDEO model catalog (#8977 follow-up) — what PortOS knows
  * about each fal video endpoint it offers: the request-body shape (parameter
  * names and wire types differ per family), the duration / resolution / aspect
@@ -34,7 +52,7 @@ export const FAL_VIDEO_PRICING_VERIFIED_AT = '2026-10-13';
  * drives the whole picture's motion (`a2v` — a drummer hitting on the beat, a
  * dancer, a crowd), steered by a prompt.
  */
-export const FAL_VIDEO_KINDS = Object.freeze(['t2v', 'i2v', 'ref2v', 'lipsync', 'a2v']);
+export const FAL_VIDEO_KINDS = Object.freeze(['t2v', 'i2v', 'ref2v', 'lipsync', 'a2v', 'extend']);
 
 export const FAL_DEFAULT_TEXT_VIDEO_MODEL = 'fal-ai/minimax/hailuo-02/standard/text-to-video';
 export const FAL_DEFAULT_IMAGE_VIDEO_MODEL = 'fal-ai/minimax/hailuo-02/standard/image-to-video';
@@ -89,6 +107,17 @@ const h3 = (id, label, rates, extra = {}) => ({
   pricing: { perSecond: rates },
   ...extra,
 });
+
+/**
+ * Veo 3.1 extend (#16150): continues a clip PortOS already rendered, which holds a likeness better than a
+ * fresh shot. Its queue schema (read 2026-11-15) takes `video_url` (720p or 1080p, 16:9 or 9:16, input up
+ * to 8s) and renders a fixed 7s at 720p. List price $0.10/s silent, $0.15/s with audio; priced at $0.15/s
+ * either way, as the i2v row above is billed. Whether fal returns the extension alone or the original joined
+ * with it is not published, so the Music Video hook compares the delivered length with `EXTEND_SEC` and sets
+ * the child take's in-point from that (musicVideoSceneVideoHook.js).
+ */
+export const FAL_EXTEND_SEC = 7;
+const EXTEND_SOURCE_ASPECTS = Object.freeze(['16:9', '9:16']);
 
 /** The curated catalog, one frozen row per fal endpoint. */
 export const FAL_VIDEO_MODELS = Object.freeze([
@@ -222,6 +251,7 @@ export const FAL_VIDEO_MODELS = Object.freeze([
     negativePrompt: 'native',
     audio: { param: 'generate_audio', providerDefault: true },
     seed: 'seed',
+    extend: { modelId: 'fal-ai/veo3.1/fast/extend-video' },
     // The same invoice billed a silent (generate_audio: false) 4 s clip at the
     // audio-on $0.15/s, so silence saves nothing here: priced at what is billed.
     pricing: {
@@ -229,12 +259,60 @@ export const FAL_VIDEO_MODELS = Object.freeze([
       perSecondWithAudio: { '720p': 0.15, '1080p': 0.15, '4k': 0.35 },
     },
   },
+  {
+    id: 'fal-ai/veo3.1/fast/extend-video', kind: 'extend', label: 'Veo 3.1 Fast (extend a clip)', family: 'veo-3.1',
+    prompt: 'required',
+    promptMaxChars: 20000,
+    // Downloads its source clip: it is hosted on fal's CDN first.
+    hostedInputs: true,
+    videoInput: { param: 'video_url', maxSec: 8, aspects: EXTEND_SOURCE_ASPECTS, minShortSide: 720 },
+    duration: { kind: 'enum', values: [FAL_EXTEND_SEC], wire: 'seconds-suffix', defaultSec: FAL_EXTEND_SEC },
+    resolution: { param: 'resolution', options: ['720p'], default: '720p' },
+    aspectRatio: { param: 'aspect_ratio', options: EXTEND_SOURCE_ASPECTS, auto: 'auto' },
+    negativePrompt: 'native',
+    audio: { param: 'generate_audio', providerDefault: true },
+    seed: 'seed',
+    pricing: { perSecond: { '720p': 0.15 }, perSecondWithAudio: { '720p': 0.15 } },
+  },
 ].map((model) => Object.freeze(model)));
 
 const BY_ID = new Map(FAL_VIDEO_MODELS.map((m) => [m.id, m]));
 
 /** The catalog row for `modelId`, or null for a model PortOS has not curated. */
 export const getFalVideoModel = (modelId) => (typeof modelId === 'string' ? BY_ID.get(modelId.trim()) || null : null);
+
+/** The extend endpoint a clip rendered by `historyModelId` (a history row's `fal:<id>`, or a bare id) can continue on, or null. */
+export const falExtendModel = (historyModelId) => {
+  const id = typeof historyModelId === 'string' ? historyModelId.replace(/^fal:/, '') : '';
+  const target = getFalVideoModel(id)?.extend?.modelId;
+  return target ? getFalVideoModel(target) : null;
+};
+
+/**
+ * Refusal reason when a source clip cannot be extended on `model` (too long, wrong shape or too small), else
+ * null. Checked before anything is paid for; an unreadable measurement is refused, never assumed fine.
+ */
+export function falExtendSourceProblem(model, { durationSec, width, height } = {}) {
+  const rule = model?.videoInput;
+  if (!rule) return `${model?.label || 'This model'} takes no source video`;
+  if (!(durationSec > 0) || !(width > 0) || !(height > 0)) return 'The source clip could not be measured';
+  if (durationSec > rule.maxSec + 1e-6) return `The source clip is ${durationSec.toFixed(1)}s; ${model.label} extends a clip of at most ${rule.maxSec}s`;
+  const aspect = width / height;
+  if (!rule.aspects.some((a) => Math.abs(ratioOf(a) - aspect) < 0.02)) return `The source clip is ${width}x${height}; ${model.label} needs ${rule.aspects.join(' or ')}`;
+  if (Math.min(width, height) < rule.minShortSide) return `The source clip is ${width}x${height}; ${model.label} needs at least ${rule.minShortSide}p`;
+  return null;
+}
+
+/** How many extra reference images a form may add on `model`; a model with no start-frame field of its own spends one slot on a start frame in Image mode (buildFalVideoRequest). */
+export const falExtraReferenceLimit = (model, mode) => (model?.referenceImages
+  ? Math.max(0, model.referenceImages.max - (mode === 'image' && !model.image ? 1 : 0)) : 0);
+
+/** Picker hint for the inputs a model takes beyond text, e.g. "refs ≤9 · end frame · audio refs". */
+export const falCapabilityHint = (model) => (model ? [
+  model.referenceImages ? `refs ≤${model.referenceImages.max}` : 'no refs',
+  model.endImage ? 'end frame' : null,
+  model.referenceAudio ? 'audio refs' : null,
+].filter(Boolean).join(' · ') : '');
 
 /**
  * Music Video cutaway models that accept a frame, including reference models.
@@ -442,7 +520,7 @@ export const falPromptExpansionAddition = (mode) => (mode ? {
  */
 export function buildFalVideoRequest({
   modelId, prompt = '', negativePrompt = '', seconds, audioSec, aspectRatio, width, height, resolution,
-  imageUrl = null, endImageUrl = null, referenceImageUrls = [], audioUrl = null, referenceAudioUrls = [],
+  imageUrl = null, videoUrl = null, endImageUrl = null, referenceImageUrls = [], audioUrl = null, referenceAudioUrls = [],
   generateAudio = false, enableTranscription = false, seed, promptExpansion,
 } = {}) {
   const model = getFalVideoModel(modelId);
@@ -471,6 +549,12 @@ export function buildFalVideoRequest({
     else if (model.image.required) throw refuse(`${model.label} renders from a start frame — supply a source image`);
   } else if (imageUrl && !model.referenceImages) {
     throw refuse(`${model.label} is text-to-video — it cannot use a source image`);
+  }
+  if (model.videoInput) {
+    if (!videoUrl) throw refuse(`${model.label} needs the source clip to extend`);
+    body[model.videoInput.param] = videoUrl;
+  } else if (videoUrl) {
+    throw refuse(`${model.label} takes no source video`);
   }
   if (model.referenceImages) {
     // Without a start-frame field, a PortOS start frame becomes the first reference ("Image 1" / @Image1).

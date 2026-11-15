@@ -1,3 +1,10 @@
+/**
+ * Holds a screen wake lock (`navigator.wakeLock`) while `active` is true.
+ *
+ * Releases on unmount/inactive, re-acquires on visibilitychange; no-op where unsupported. Use when:
+ * Hands-free surfaces that must keep the screen on (SongBook autoscroll).
+ */
+
 import { useEffect, useRef } from 'react';
 
 /**

@@ -1,6 +1,32 @@
 /**
  * One reading of "is this peer usable as a media provider right now?" (#4348).
  *
+ * One reading of a peer’s federated media-provider readiness (#4348), shared by the Instances peer
+ * card and the System Health capacity panel so the two cannot disagree.
+ * `resolvePeerMediaReadiness(peer, { now })` maps the stored probe onto a display state/label/tone
+ * plus its remedy text, queue snapshot, capabilities, and per-kind allowlists; it re-derives `stale`
+ * when the snapshot’s `freshUntil` has passed, so a snapshot probed as `ready` cannot keep reading
+ * `ready` after the server would refuse to submit against it. Also exports `FEDERATED_MEDIA_KINDS`
+ * (audio/image/video + their config fields and icons), the state/help tables, and
+ * `peerMediaProviderConfig`. `summarizePeerMediaQueue(queue)` renders the peer’s queue block into
+ * finished display segments — slot occupancy, how many jobs drain in parallel, and which kinds are
+ * busy — so every surface shows the same words, dropping any segment an older provider did not send
+ * rather than showing it as a zero. `federatedMediaModelsForPeer(peer, kind)` intersects the local
+ * per-kind allowlist with the peer’s advertised capabilities and returns the capability entries (with
+ * their `ready` / `unavailableReason`), so no surface can offer a model the server would refuse or
+ * hide why a listed one cannot run. `federatedMediaSupports(status, feature, capability)` mirrors the
+ * server helper of the same name and is the ONE place the "absent reads as false" rule lives on this
+ * side (#4826): it answers whether the peer’s BUILD speaks a wire feature (`lyrics`, `inputAssets`)
+ * from the status-root `features` list, retaining only the legacy `inputAssets` capability block for
+ * peers on the previous build because that signal is genuinely per-model, and
+ * `peerMediaProviderSnapshot(peer)` returns the status payload to ask it against.
+ * `peerModelAcceptsInput(capability, role, status)` / `peerModelRequiresInput(capability)` read the
+ * capability’s `inputAssets` block — which conditioning slots (`initImage` / `referenceImages` /
+ * `sourceImage` / `lastImage`) a peer model takes, and whether it can render without one — gated first
+ * on the build speaking conditioning at all, with **absent reading as NO**, so a provider predating
+ * that field is never offered a render it would reject. Display only — the server re-probes and
+ * fail-closes before any job leaves.
+ *
  * Two surfaces answer that question — the Instances peer card (which also
  * edits the per-kind allowlist) and the System Health capacity panel — and they
  * must not disagree: a card reading `ready` beside a panel reading `stale` is

@@ -1,5 +1,19 @@
 /**
  * Array utilities — pure, side-effect-free helpers shared across services.
+ *
+ * `asArray(value)` — returns an array unchanged, or a fresh empty array for non-array inputs.
+ * `shuffle(arr, random?)` — Fisher-Yates shuffle (new array, never mutates). The canonical uniform
+ * shuffle — never `arr.sort(() => Math.random() - 0.5)`, which is biased. Shared by
+ * `meatspacePostCognitive.js` (Schulte table / mental rotation) and `meatspacePostMemory.js` (memory
+ * drill generators). `dedupeByKey(items, keyOf, pick?)` — one survivor per key, first-seen order.
+ * **Required before any multi-row `INSERT … ON CONFLICT (key) DO UPDATE`**: Postgres refuses the whole
+ * statement ("ON CONFLICT DO UPDATE command cannot affect row a second time") when its VALUES list
+ * names one conflict key twice, and the rows a batcher joins usually come from something that promises
+ * no uniqueness (a disk scan, a peer payload). `DO NOTHING` upserts are exempt. `pick(held,
+ * candidate)` defaults to last-seen-wins (what a sequential one-row upsert loop leaves); pass a
+ * comparator when the table's conflict rule isn't "latest write" — `memorySync.applyRemoteChanges`
+ * keeps the newest `updatedAt` so a peer's payload ordering can't flip a last-writer-wins outcome.
+ * Used by `services/mediaAssetIndex/db.js` and `services/memorySync.js`.
  */
 
 /** Return array inputs unchanged, or a fresh empty array for anything else. */

@@ -1,4 +1,9 @@
-/** AsyncAPI 3 document for PortOS's source-derived Socket.IO event catalog. */
+/**
+ *  AsyncAPI 3 document for PortOS's source-derived Socket.IO event catalog.
+ *
+ * Builds the AsyncAPI 3 Socket.IO document from the generated event catalog with direction-aware
+ * operations and explicit modeled/generated payload status.
+ */
 
 import { buildSocketEventCatalog } from './socketEventCatalog.js';
 

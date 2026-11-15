@@ -2,7 +2,7 @@ import express from 'express';
 import { z } from 'zod';
 import mediaService from '../services/mediaService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 
 const router = express.Router();
 const MAX_JPEG_FRAME_BYTES = 8 * 1024 * 1024;

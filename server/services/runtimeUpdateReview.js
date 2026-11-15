@@ -185,6 +185,7 @@ function reconcileHarnesses(rows, harnesses, removedHarnesses, removalsBeforeRea
     if (!harness?.id) continue;
     const id = `harness:${harness.id}`;
     priorIds.delete(id);
+    if (harness.enabled === false) { rows.delete(id); continue; }
     const link = `/ai/harnesses/${encodeURIComponent(harness.id)}`;
     if (harness.installed && removalsBeforeRead.has(harness.id)) removedHarnesses.delete(harness.id);
     // A PATH lookup cannot distinguish removal from an inaccessible binary or
@@ -222,6 +223,7 @@ function reconcileHarnesses(rows, harnesses, removedHarnesses, removalsBeforeRea
     } else if (compared === -1) {
       rows.set(id, {
         ...row(id, `${harness.label} update available`, `Installed ${harness.version}; latest ${harness.latestVersion}. Review the harness updater before updating.`, link, `${harness.version}:${harness.latestVersion}`),
+        required: false,
         harnessUpdate: { id: harness.id, label: harness.label, installedVersion: harness.version,
           candidateVersion: harness.latestVersion, package: harness.package, updatable: harness.updatable === true },
       });
@@ -250,6 +252,7 @@ function createRuntimeUpdateReviewMonitor({ readRuntime, readHarnesses, readBrow
     .filter((entry) => entry.id !== 'pm2-upstream' && (!entry.unverified || entry.unverifiedPrevious))
     .map((entry) => ({
       ...entry,
+      ...(entry.id.startsWith('harness:') && entry.id !== 'harness:check' ? { required: false } : {}),
       ...(entry.unverified ? { summary: `Status unverified; last known result: ${entry.summary}` } : {}),
     }));
   const snapshot = () => ({
@@ -338,9 +341,21 @@ function createRuntimeUpdateReviewMonitor({ readRuntime, readHarnesses, readBrow
   return { items, snapshot, browserSnapshot, refresh, start, stop };
 }
 
+async function readReviewHarnesses({ listHarnesses, listEnablement } = {}) {
+  const harnesses = await (listHarnesses || (await import('./harnesses.js')).listHarnesses)({ fresh: true });
+  const enablement = await (listEnablement || (await import('./harnessEnablement.js')).listHarnessEnablement)();
+  return harnesses.map(harness => ({
+    ...harness,
+    // Only an explicit disable clears prior evidence; a failed PATH probe
+    // must still retain an enabled harness's last known update.
+    enabled: harness.providers.some(provider => provider.enabled)
+      && !enablement.some(entry => entry.id === harness.vendor && entry.source === 'setting' && !entry.enabled),
+  }));
+}
+
 const monitor = createRuntimeUpdateReviewMonitor({
   readRuntime: async () => (await import('./nodeRuntime.js')).getNodeRuntimeStatus(),
-  readHarnesses: async () => (await import('./harnesses.js')).listHarnesses({ fresh: true }),
+  readHarnesses: () => readReviewHarnesses(),
   readBrowser: async () => {
     const status = await (await import('./browserUpdateStatus.js')).readBrowserUpdateStatus({ includeProof: true });
     return (await import('./browserUpdateRestart.js')).annotateBrowserRestartStatus(status);
@@ -353,4 +368,4 @@ const monitor = createRuntimeUpdateReviewMonitor({
 export const getRuntimeUpdateReviewSnapshot = () => monitor.snapshot();
 export const getBrowserUpdateSnapshot = () => monitor.browserSnapshot();
 export const startRuntimeUpdateReview = () => monitor.start();
-export const __testing = { createRuntimeUpdateReviewMonitor };
+export const __testing = { createRuntimeUpdateReviewMonitor, readReviewHarnesses };

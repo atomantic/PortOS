@@ -1,4 +1,15 @@
 /**
+ * `deriveAttentionItems(project, live)` returns Music Video header banner rows for server-held states
+ * a client workflow can strand, like open revisions or interrupted stages.
+ *
+ * Music Video "Needs attention" model (#9940): `deriveAttentionItems(project, live)` returns the
+ * banner rows for server-held states a client-orchestrated workflow can strand — an open/rendering
+ * revision, an interrupted Cast & Sets stage, a running auto-review waiting on its revised sections, a
+ * final render nobody is watching — derived from the persisted record so they survive a reload
+ * (healthy work this tab can see progressing is not flagged); `openRevisionOf(project)`;
+ * `ATTENTION_ANCHOR_ID` + `revealAttention()` scroll a refusal toast to the banner. Used by
+ * `components/musicVideo/NeedsAttentionBanner.jsx` and `components/musicVideo/ProjectWorkspace.jsx`.
+ *
  * "Needs attention" for the Music Video header (#9940): the server-held states
  * a client-orchestrated workflow can strand — an open revision, an interrupted
  * Cast & Sets stage, a running auto-review that never handed out its revised sections, a

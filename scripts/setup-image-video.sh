@@ -40,6 +40,7 @@ TORCH_CUDA_INDEX="${PORTOS_TORCH_CUDA_INDEX:-https://download.pytorch.org/whl/cu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PORTOS_DATA="${PORTOS_DATA:-${REPO_ROOT}/data}"
+PORTOS_UV_DIR="${HOME}/.portos/tools/uv-0.13.7"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -325,7 +326,7 @@ venv_exists() { [[ -x "$1/bin/python3" || -x "$1/Scripts/python.exe" ]]; }
 # execute or upgrade a user-wide PATH copy. This stays lazy for installs that
 # only need pip (and for the Python-free mere.run lane).
 portos_uv() {
-  local tool_dir="${HOME}/.portos/tools/uv-0.13.7" bin banner candidate bootstrap_python=""
+  local tool_dir="$PORTOS_UV_DIR" bin banner candidate bootstrap_python=""
   if is_windows; then bin="$tool_dir/Scripts/uv.exe"; else bin="$tool_dir/bin/uv"; fi
   banner="$("$bin" --version 2>/dev/null || true)"
   if [[ ! "$banner" =~ ^uv\ 0\.13\.7($|[[:space:]]) ]]; then
@@ -464,7 +465,7 @@ require_mlx_video_profile() {
 }
 
 sync_locked_mlx_video() (
-  local label="$1" dir="$2" python="$3" pin="$4" lock="$5" base_python checkout_status
+  local label="$1" dir="$2" python="$3" pin="$4" lock="$5" base_python checkout_status sync_status
   shift 5
   cd "$dir"
   checkout_status="$(git status --porcelain=v1 --untracked-files=all)"
@@ -484,7 +485,11 @@ sync_locked_mlx_video() (
     portos_uv --no-config venv --clear --python 3.11 "$UV_PROJECT_ENVIRONMENT"
   fi
   echo "📦 Syncing ${label} wheels from ${lock##*/}..."
-  portos_uv --no-config --no-cache pip sync --require-hashes --only-binary :all: --python "$python" "$lock"
+  portos_uv --no-config --no-cache pip sync --require-hashes --only-binary :all: --python "$python" "$lock" || {
+    sync_status=$?
+    echo "❌ ${label} dependency sync failed (exit ${sync_status}). See the package error above. For connection errors such as 'No route to host', check internet/VPN routing and application firewall rules (for example, Little Snitch) for ${PORTOS_UV_DIR}/bin/uv. This executable needs HTTPS access to pypi.org and files.pythonhosted.org even if a browser or another uv works. After restoring access, retry Install/Repair; deleting the venv will not fix a network block." >&2
+    return "$sync_status"
+  }
   if [[ "$1" == --wan22-source ]]; then
     # Bash 3.2 drops function locals before the subshell's EXIT trap on error.
     build_dir="$(mktemp -d "${TMPDIR:-/tmp}/portos-wan22.XXXXXX")"

@@ -1,3 +1,11 @@
+/**
+ * `readGitCommonDirectory(repoPath)` — fresh canonical Git common-directory identity for
+ * repository-scoped ownership.
+ *
+ * Aliases and linked worktrees share identity, independent clones do not, and unreadable evidence
+ * returns null.
+ */
+
 import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { execGit } from './execGit.js';

@@ -1,6 +1,12 @@
 /**
  * Resolve SSH `Host` aliases from `~/.ssh/config` to the real `HostName`.
  *
+ * `resolveSshHostAlias`, `parseSshHostAliases` — resolves a personal SSH `Host` alias
+ * (`git@github-acme:…`, backed by `HostName github.com` in `~/.ssh/config`) to the host a remote
+ * actually connects to. Every remote-URL host parser (`gitForge.parseGitRemote`,
+ * `gitRemote.parseGitRemoteUrl`, `workTracker.hostFromOriginUrl`) canonicalizes through it, so
+ * multi-account checkouts classify as GitHub instead of an unreachable unknown host.
+ *
  * ## Why PortOS needs this
  *
  * The standard way to drive several GitHub accounts from one machine is a

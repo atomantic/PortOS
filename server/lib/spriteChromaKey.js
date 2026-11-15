@@ -1,6 +1,10 @@
 /**
  * Sprites — dynamic chroma-key selection (issue #2896, phase 2).
  *
+ * Chroma-key selection color math (`CHROMA_KEYS`, `CHROMA_KEY_HEXES`, `DEFAULT_CHROMA_KEY`,
+ * hue-distance picking). Pure color math, no image I/O — that lives in
+ * `services/sprites/normalize.js`.
+ *
  * The source pipeline hardcoded magenta because its one character wore green;
  * per the #2895 decision the key is now picked per character from a FIXED set
  * of three standard keys, by hue distance from the character's own palette

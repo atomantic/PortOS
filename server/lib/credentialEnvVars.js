@@ -1,6 +1,11 @@
-// Shared (server + client) classifier for env-var names that conventionally hold
-// credentials. The explicit provider `secretEnvVars` list stays the primary
-// masking source; this catches hand-entered vars whose Secret box was left off.
+// Shared (server + client) classifier for env-var names that conventionally hold credentials.
+//
+// `isCredentialEnvVarName(name)` / `isNonCredentialEnvVarName(name)` / `isMaskedEnvVar(name,
+// secretEnvVars)`: name-convention classifier for credential env vars (API_KEY, TOKEN, SECRET…),
+// shared by provider response masking and the client readiness check. Pure.
+//
+// The explicit provider `secretEnvVars` list stays the primary masking source; this catches
+// hand-entered vars whose Secret box was left off.
 
 const CREDENTIAL_ENV_VAR_RE = /(?:^|_)(?:API_KEY|APIKEY|AUTH|ACCESS_KEY|ACCESS_TOKEN|BEARER|CLIENT_SECRET|CREDENTIALS?|KEY|PASSWORD|PRIVATE_KEY|SECRET|TOKEN)(?:_|$)/i;
 

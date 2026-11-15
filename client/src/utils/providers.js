@@ -1,6 +1,9 @@
 /**
  * Compatibility facade for the AI-provider helpers.
  *
+ * Compatibility facade re-exporting every helper from the nine modules below, so existing
+ * `../utils/providers` imports keep working. New code imports the declaring module.
+ *
  * The helpers used to live here as one 2,200-line module. They now live in
  * nine responsibility-scoped siblings, each named for the question it answers
  * (and, where one exists, for the server module it mirrors):

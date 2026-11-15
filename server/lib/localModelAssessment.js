@@ -1,6 +1,18 @@
 /**
  * Local-model assessment scoring — pure, dependency-free.
  *
+ * Scoring for MEASURED local-model assessments (recorded by `services/localModelAssessments.js`):
+ * `classifyFitVerdict` (`fits`/`does-not-fit`/`incompatible`/`unknown`), `summarizePerformance`
+ * (mean/peak chars-per-second AND tokens-per-second, prefill rate, TTFT, max working context,
+ * cross-context degradation), `scoreAssessment` + `scoreForIntent` + `rankByIntent` for the
+ * balanced/smartest/fastest/lightweight pickers, `explainAssessment`,
+ * `compareEnvironments`/`describeStaleness` (is a stored reading still valid for THIS machine?),
+ * `buildThroughputReport` (every measurement as one tokens/s table, fastest first, per-context
+ * readings intact), `selectSweepTargets`/`summarizeSweepScopes`/`SWEEP_SCOPES` (which measurements a
+ * "measure everything" run covers, and how many), and `measuredFitVerdict`/`reconcileFit` (fold a
+ * measurement into the catalog's size-estimate fit badge, keeping the disagreement). Pure. `null`
+ * strictly means NOT MEASURED — never 0, never "failed".
+ *
  * PortOS already guesses whether a local model fits from catalog metadata alone
  * (weight bytes × a fixed overhead multiplier, in `huggingFaceCatalog.js`). That
  * guess never touches the machine: it can't tell a model that loads and streams

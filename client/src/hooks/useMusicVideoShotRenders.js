@@ -1,3 +1,14 @@
+/**
+ * Hook caching the composed final render's per-shot segments, re-read on input changes and shot-render
+ * completion, with live per-shot progress.
+ *
+ * The composed final render's per-shot segment cache: `GET /:id/shot-renders` re-read as render inputs
+ * change (debounced) and when a shot render settles, plus live `music-video:shot-render` progress per
+ * shot. Returns `{ status, live, markLive(sceneId, entry), clearLive(sceneId, since) → boolean,
+ * refresh, retry }`; `status` is null outside the composed render style. Use when: The shot card's
+ * Final render section and the Render final control.
+ */
+
 import { useEffect, useMemo, useRef, useState } from 'react';
 import socket from '../services/socket';
 import { getMusicVideoShotRenders } from '../services/apiMusicVideo.js';

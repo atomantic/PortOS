@@ -331,8 +331,8 @@ describe('POST /api/ask (host control)', () => {
       .send({ question: 'hi', providerId: 'antigravity-cli', hasHostControl: true });
     expect(res.status).toBe(403);
     expect(res.body).toMatchObject({ code: 'HOST_CONTROL_FORBIDDEN' });
-    // The body's hasHostControl is ignored: a bare test app carries no auth context.
-    expect(svc.resolveAskProvider).toHaveBeenCalledWith('antigravity-cli', { hasHostControl: false });
+    // hostControlRouteGate (#16018) admits only operators to this write, so the handler always asks as one.
+    expect(svc.resolveAskProvider).toHaveBeenCalledWith('antigravity-cli', { hasHostControl: true });
     expect(convs.createConversation).not.toHaveBeenCalled();
     expect(convs.appendTurn).not.toHaveBeenCalled();
     expect(svc.runAsk).not.toHaveBeenCalled();

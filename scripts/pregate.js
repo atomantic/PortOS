@@ -17,12 +17,13 @@ import { execFileSync } from 'child_process';
 import { dirname, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib/aiToolkit/internal/windowsSafeSpawn.js';
-import { ALWAYS_RUN_TESTS, FULL_SUITE_SHARDS, structuralTestsFor } from './ci-test-plan.js';
+import { getAlwaysRunTests, FULL_SUITE_SHARDS, structuralTestsFor } from './ci-test-plan.js';
 import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
 import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { ACTIONLINT_VERSION, probeActionlint, selectWorkflowFiles } from './lib/actionlint.js';
+import { GUARD_BUDGET_MS, hostTooBusyForBudget, overBudgetGuards, readGuardDurations } from './lib/guardBudget.js';
 import { buildPregateReport, guardInputSnapshot, PREGATE_REPORT_PATH, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
 import { assertGitMergeTree } from '../lib/gitMergeTree.js';
 import { dependencyConsistencyProblems } from './lib/workspaceDependencies.js';
@@ -46,7 +47,7 @@ export const UNCOVERED_SUITES = Object.freeze({
   linuxContainment: 'a Linux host with bubblewrap: PORTOS_REQUIRE_LINUX_CONTAINMENT=1 npm test --prefix server -- --run <LINUX_CONTAINMENT_TESTS>',
   supercolliderLive: 'a native amd64/arm64 Linux Docker engine: npm run setup:supercollider -- --yes, then PORTOS_SUPERCOLLIDER_LIVE=1 npx vitest run services/superColliderRender.live.test.js from server/',
   dockerContainmentLive: 'a local Docker engine with Linux containers and npm registry access: PORTOS_DOCKER_CONTAINMENT_LIVE=1 npx vitest run services/dockerContainment.live.test.js from server/',
-  macosNative: 'a Mac: npm test --prefix server -- --run lib/windowsAgentProcess.darwin.test.js services/releaseCandidateRecovery.test.js',
+  macosNative: 'a Mac: npm test --prefix server -- --run lib/windowsAgentProcess.darwin.test.js',
 });
 
 /** Remedy when a prerequisite probe ran but failed (timeout, teardown): nothing indicates a missing install. */
@@ -329,7 +330,7 @@ export function downgradeFullPlan(plan, trackedFiles, changedFiles = []) {
     full: false,
     server: {
       mode: 'files',
-      files: [...new Set([...ALWAYS_RUN_TESTS.filter((path) => tracked.has(path)), ...serverStructuralGuards])],
+      files: [...new Set([...getAlwaysRunTests().filter((path) => tracked.has(path)), ...serverStructuralGuards])],
       sources: [],
     },
     client: {
@@ -785,6 +786,25 @@ function stageOutcomeVerdict(result, outcome) {
   return null;
 }
 
+/**
+ * Fail a passed guard stage whose files overran their budget, naming each one.
+ * Marks `result` failed like stageOutcomeVerdict so the receipt agrees.
+ */
+function guardBudgetVerdict(result) {
+  const over = overBudgetGuards(result.fileDurations);
+  if (over.length === 0) return null;
+  const lines = over.map(({ file, durationMs, budgetMs }) => `${file} took ${formatDuration(durationMs)} (budget ${formatDuration(budgetMs)})`);
+  if (hostTooBusyForBudget()) {
+    console.log(`⏭️ ${result.name} budget not enforced, host load exceeds its core count: ${lines.join('; ')}.`);
+    return null;
+  }
+  result.status = 'failed';
+  return {
+    failure: `❌ ${result.name} over the ${formatDuration(GUARD_BUDGET_MS)} per-guard budget: ${lines.join('; ')}. Speed the guard up (share one tracked-file listing and one read per source file) rather than raising the budget.`,
+    exitCode: 1,
+  };
+}
+
 /** Print each dependency-consistency problem with the re-link or reconcile hint that fits its checkout. */
 function reportDependencyProblems(problems) {
   let primaryCheckout = null;
@@ -1020,10 +1040,17 @@ async function main() {
       result.env = { ...result.env, PORTOS_PREGATE_GUARDS: JSON.stringify(passed) };
     }
     console.log(`▶️ ${result.name}`);
+    const durationsDir = result.guard ? mkdtempSync(join(tmpdir(), 'portos-pregate-durations-')) : null;
+    const durationsPath = durationsDir && join(durationsDir, 'durations.json');
+    if (durationsPath) result.env = { ...result.env, PORTOS_PREGATE_DURATIONS_PATH: durationsPath };
     const started = Date.now();
     const outcome = await runStage(result, owner);
     result.durationMs = Date.now() - started;
-    const verdict = stageOutcomeVerdict(result, outcome);
+    if (durationsDir) {
+      result.fileDurations = readGuardDurations(durationsPath);
+      rmSync(durationsDir, { recursive: true, force: true });
+    }
+    const verdict = stageOutcomeVerdict(result, outcome) ?? guardBudgetVerdict(result);
     if (verdict) {
       ({ failure, exitCode } = verdict);
     } else {

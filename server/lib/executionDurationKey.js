@@ -1,4 +1,9 @@
-/** Shared persisted execution-duration key contract for the server and browser. */
+/**
+ *  Shared persisted execution-duration key contract for the server and browser.
+ *
+ * Shared pure execution-duration key composers/parser, separator and absent-effort sentinel, and
+ * minimum execution sample threshold; preserves persisted keys for server writers and browser lookups.
+ */
 
 // Effort sentinel for a provider with no effort control. The repo's absent-vs-empty
 // rule: a run at no effort level must be its own bucket, never a key ending in a

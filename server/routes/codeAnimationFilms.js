@@ -1,7 +1,7 @@
 /** Standalone films in Code Animation Production. */
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { createFilmSchema, patchFilmSchema, filmAudioSchema, promoteFilmSchema } from '../lib/codeAnimationFilms.js';
 import { createFilmRoutes } from './filmRoutes.js';
 import { attachFilmAudio, codeAnimationFilmOwner, createFilmProject, patchFilmProject, getFilmState } from '../services/codeAnimation/films.js';

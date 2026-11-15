@@ -1,6 +1,17 @@
 /**
  * Which PROVIDER RECORDS front each model-taking reviewer's binary (#7339).
  *
+ * Which PROVIDER RECORDS front each model-taking reviewer's binary — `REVIEWER_PROVIDER_MATCHERS`
+ * (slug → record predicates, in preference order), `providersForReviewer(reviewer, providers)` (every
+ * match, de-duped, preference-ordered so `[0]` is the record whose default a picker shows) and
+ * `reviewerProviderIds`. A reviewer slug names a BINARY and PortOS ships more than one record per
+ * binary (`claude` spans `claude-code` + `claude-code-tui`, `grok` spans `grok-cli` + its TUI), so
+ * both the picker's option list and the retired-pin audit union every match: sourcing from one record
+ * makes the answer hostage to that record's staleness, and judging a pin against one produces a false
+ * retirement for a model the other still lists. Deliberately excludes Bedrock/Vertex and the
+ * `opencode-<backend>` presets (ids that resolve only under another record's environment). Imported
+ * directly by `client/src/hooks/useReviewerModelOptions.js` — one table, no mirror to drift (#7339).
+ *
  * A reviewer slug names a BINARY, not a provider record — `claude` is whatever
  * `claude` on PATH resolves to, and PortOS ships more than one record per
  * binary (`claude-code` for the headless CLI, `claude-code-tui` for the PTY;

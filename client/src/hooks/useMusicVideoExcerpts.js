@@ -1,3 +1,16 @@
+/**
+ * Draft excerpt render over a time window plus timecoded review notes for music videos, built on
+ * `useSseJobSlot`.
+ *
+ * Draft excerpt render + timecoded review notes (#8986): a `useSseJobSlot` render job over a chosen
+ * `[startSec, endSec)` window (any terminal frame reloads the project, since the persisted excerpt
+ * shape lives server-side) plus add/edit/delete review-note calls that apply the fresh whole project
+ * from each response. Returns `{ rendering, progress, deletingId, noteBusyId, startExcerpt(startSec,
+ * endSec), cancelExcerpt(excerptId), attachRender(jobId, projectId), deleteExcerpt(excerptId),
+ * addNote(excerptId, {atSec, note, verdict?}), editNote(excerptId, noteId, patch),
+ * deleteNote(excerptId, noteId) }`. Use when: The Music Video excerpt panel.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import {

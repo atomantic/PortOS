@@ -1,3 +1,9 @@
+/**
+ * Pinned Laya-MLX experiment model, request validation and probability normalization.
+ *
+ * Entropy confidence stays distinct from entailment.
+ */
+
 import { z } from 'zod';
 
 // Runtime and weights are independently pinned. Never download during scoring.

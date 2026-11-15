@@ -1,4 +1,9 @@
-/** Pure Tailcat capability validation and diagnostic redaction. */
+/**
+ *  Pure Tailcat capability validation and diagnostic redaction.
+ *
+ * Pure Tailcat capability validation and redaction: `isValidTcAddress`, `isValidNodePublicKey`,
+ * `redactTcAddress`, `redactTailcatDiagnostics`.
+ */
 
 const DIAGNOSTIC_MAX_CHARS = 320;
 

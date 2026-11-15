@@ -1,3 +1,7 @@
+/**
+ * App scaffolding templates.
+ */
+
 import { request } from './apiCore.js';
 
 // Templates & Scaffold

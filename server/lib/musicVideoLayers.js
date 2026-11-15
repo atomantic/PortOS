@@ -1,6 +1,23 @@
 /**
  * Music Video — per-scene visual layers (#8985, part of #8966).
  *
+ * Music Video per-scene visual layers (#8985): `MUSIC_VIDEO_VISUAL_LAYERS`
+ * (`footage`/`still`/`card`/`code`), `MUSIC_VIDEO_STILL_MOVES` (`hold`/`push`/`pan`),
+ * `STILL_PUSH_ZOOM` / `STILL_PAN_TRAVEL` (shared render/animatic motion amounts),
+ * `MUSIC_VIDEO_FRAME_FITS` (`fill`/`still`/`vhs`/`black`: how an off-shape clip fills the frame),
+ * `sceneVisualLayer(scene, { layered })` (only a composed render honors a still/card),
+ * `sceneHasAuthoredSpan`, `sceneUsesAuthoredTiming` (a pacing cut, word cut, beat alignment or planner
+ * section provenance owns its saved span), `wordTimedScenes(project, scenes)` (once the board is cut
+ * on sung words, every timed shot renders its exact saved span, #14820), and `sceneRenderReady(scene,
+ * { layered })`. `clipSpeedRate(scene)` / `clipOffsetSec(scene)` / `clipReversed(scene)` read a
+ * footage shot's hand-set `speedFps`, `offsetFrames` and `reverse` on the 24 fps grid
+ * (`CLIP_TIMING_FPS`, `CLIP_SPEED_FPS_RANGE`, `CLIP_OFFSET_FRAMES_RANGE`). Pure leaf shared by
+ * `services/musicVideo/render.js` and the client board (`client/src/lib/musicVideoLayers.js`).
+ * `clipPlaybackWindow(scene, edit, duration)` / `clipLoops` / `clipCanLoop` share source timing and
+ * loop eligibility; `clipNeedsMoreFootage` and `COVERAGE_TOLERANCE_SEC` keep held-clip coverage
+ * identical in the card and render preflight; `sharedTakeExtraSec(scene, scenes)` adds the footage
+ * later shots that reuse the same take need (#15541).
+ *
  * In a composed render a scene can show its generated footage (the default,
  * and every scene saved before the field existed), its selected still frame
  * with a deterministic camera move, a code-rendered title card (a solid
@@ -134,10 +151,12 @@ export function sceneRenderReady(scene, { layered = false, scenes = null } = {})
 // the clip that many frames a second faster (or slower) on the 24 fps grid, and
 // `offsetFrames` slides it against the song (positive starts that many frames
 // into the clip, negative holds its first frame that long). Both are applied
-// at playback and render, never by writing another copy of the clip.
+// at playback and render, never by writing another copy of the clip. A shot
+// playing its window of a sequence take (#16128) starts up to a take's length in,
+// so the forward offset reaches the longest clip a shot keeps (60s).
 export const CLIP_TIMING_FPS = 24;
 export const CLIP_SPEED_FPS_RANGE = Object.freeze({ min: -18, max: 48 });
-export const CLIP_OFFSET_FRAMES_RANGE = Object.freeze({ min: -240, max: 240 });
+export const CLIP_OFFSET_FRAMES_RANGE = Object.freeze({ min: -240, max: 60 * 24 });
 const whole = (value, { min, max }) => (Number.isInteger(value) ? Math.min(max, Math.max(min, value)) : 0);
 /** How fast a shot's clip plays: 1 is as rendered, 26/24 is two frames a second faster. */
 export const clipSpeedRate = (scene) => (CLIP_TIMING_FPS + whole(scene?.speedFps, CLIP_SPEED_FPS_RANGE)) / CLIP_TIMING_FPS;

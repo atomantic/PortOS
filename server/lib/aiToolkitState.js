@@ -1,6 +1,10 @@
 /**
  * Shared module-level singleton holding the AI Toolkit instance.
  *
+ * Module-level singleton for the toolkit instance shared by the `providers`/`runner`/`promptService`
+ * shims — `setAIToolkitInstance` / `requireToolkit` (throws `AI_TOOLKIT_NOT_INITIALIZED`) /
+ * `getAIToolkitInstance` (no-throw for cleanup paths).
+ *
  * `server/index.js` wires the toolkit once at boot and the three service shims
  * (`providers.js`, `runner.js`, `promptService.js`) all read it through here
  * — replacing three identical `let aiToolkitInstance = null` + `requireToolkit()`

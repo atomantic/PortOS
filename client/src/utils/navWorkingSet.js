@@ -1,7 +1,19 @@
+// Recent/pinned nav persistence (`recordVisit`, `togglePin`, `isPinned`) plus
+// `resolveRecentNavEntries` for mapping stored deep links back to their longest matching nav-manifest
+// entry.
+//
+// Also `migrateLegacyNavPath(path, commands)` — maps a stored path onto the CURRENT path of the page
+// that used to answer to it, driven by each command's own `previousPaths` (declared in
+// `server/lib/navManifest.js` beside the page that moved, shipped whole in the palette manifest). A
+// pin is a stored route path, so without it a moved page's pin stops matching the manifest and the
+// sidebar row silently vanishes on update.
+//
 // Pure working-set helpers for the sidebar Pinned + Recent sections.
 // No DOM / localStorage access here — callers (useNavWorkingSet) own I/O so
 // this logic is testable in node. Lists are plain string[] of route paths,
 // most-recent-first for Recent and insertion-order for Pinned.
+
+import { matchesPreviousPath, previousPathRedirects, previousPathStaticDepth, previousPathTarget } from '../lib/previousPaths.js';
 
 export const RECENT_KEY = 'portos-nav-recent';
 export const PINNED_KEY = 'portos-nav-pinned';
@@ -28,15 +40,6 @@ export const togglePin = (path, list) => {
 
 export const isPinned = (path, list) => asList(list).includes(path);
 
-// The static head of a previous path: everything before its first `:param`
-// segment. `/media/training/:datasetId` → `/media/training`, so a stored deep
-// link into one record matches the subtree its page moved out of.
-const staticBase = (previous) => {
-  const segments = previous.split('/');
-  const param = segments.findIndex((s) => s.startsWith(':'));
-  return (param === -1 ? segments : segments.slice(0, param)).join('/').replace(/\/$/, '');
-};
-
 // Map a stored path onto the current path of the page that used to answer to it,
 // preserving whatever followed (`/media/sprites/s-1` → `/sprites/s-1`).
 //
@@ -47,26 +50,22 @@ const staticBase = (previous) => {
 //
 // This is what keeps a pinned sidebar row alive across an app update: a pin is a
 // stored route path, and before this a moved page's old path simply stopped
-// matching the manifest, so the row silently rendered nothing.
+// matching the manifest, so the row silently rendered nothing. Matching is by
+// route pattern, the same rule App.jsx's generated redirects use, so a paramless
+// previous path (`/ai`) never rewrites a live sibling (`/ai/harnesses`).
 export const migrateLegacyNavPath = (path, commands) => {
   if (!isPath(path)) return path;
   let best = null;
-  for (const command of asList(commands)) {
-    if (!isPath(command?.path)) continue;
-    for (const previous of asList(command.previousPaths)) {
-      const base = staticBase(previous);
-      if (!base || !(path === base || path.startsWith(`${base}/`))) continue;
-      // Longest base wins, so `/media/universe-builder` beats `/universe-builder`.
-      if (!best || base.length > best.base.length) {
-        best = {
-          base,
-          to: command.path,
-          preserveSuffix: command.preservePreviousPathSuffix !== false,
-        };
-      }
-    }
+  for (const redirect of previousPathRedirects(asList(commands).filter((command) => isPath(command?.path)))) {
+    if (!matchesPreviousPath(redirect.from, path)) continue;
+    // Longest static head wins, so `/media/universe-builder/:id` beats `/universe-builder/:id`.
+    const depth = previousPathStaticDepth(redirect.from);
+    if (!best || depth > best.depth) best = { depth, redirect };
   }
-  return best ? `${best.to}${best.preserveSuffix ? path.slice(best.base.length) : ''}` : path;
+  if (!best) return path;
+  const [pathname, hash = ''] = path.split('#');
+  const [bare, query = ''] = pathname.split('?');
+  return previousPathTarget(best.redirect, { pathname: bare, search: query ? `?${query}` : '', hash: hash ? `#${hash}` : '' });
 };
 
 // Resolve stored recent paths against the server-backed nav manifest. Exact

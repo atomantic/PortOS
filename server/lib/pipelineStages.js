@@ -1,3 +1,8 @@
+/**
+ * Canonical pipeline data-stage groups, visible tab order, UI/voice labels, spoken aliases, and
+ * derived voice-intent regex.
+ */
+
 import { escapeRegExp } from './textUtils.js';
 
 // Persisted pipeline stages, grouped by artifact shape and execution behavior.

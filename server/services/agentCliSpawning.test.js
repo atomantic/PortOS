@@ -1355,7 +1355,8 @@ describe('stream error containment', () => {
 
     const args = { ...minimalArgs, provider: { ...minimalArgs.provider, envVars: { GITHUB_TOKEN: 'ghp_provider_bot' } } };
     const spawnPromise = spawnDirectly(args);
-    await new Promise((r) => setTimeout(r, 10));
+    // spawn is the positive signal that the env resolution the probe belongs to has finished.
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
 
     // gh prefers GH_TOKEN over GITHUB_TOKEN — injecting the owner GH_TOKEN would
     // shadow the provider's explicit bot credential, so the probe is skipped.

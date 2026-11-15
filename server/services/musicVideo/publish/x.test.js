@@ -1,10 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+vi.mock('./xTyping.js', () => ({ typeXText: vi.fn(async (page, selector) => { page.calls.typed.push(selector); }) }));
 import { xAdapter } from './x.js';
 
 // A page whose modal composer (when `dialog`) sits over the home timeline's inline one; both carry
 // tweetTextarea_0. `dialogDelay` makes the modal's editor appear only after a while (X still hydrating).
 const fakePage = ({ dialog, dialogDelay = 0 }) => {
-  const calls = { pasted: [], clicked: [], waited: [] };
+  const calls = { typed: [], clicked: [], waited: [] };
   const born = Date.now();
   const page = {
     calls,
@@ -13,7 +15,6 @@ const fakePage = ({ dialog, dialogDelay = 0 }) => {
     waitForTimeout: async () => {},
     waitForURL: async () => { throw new Error('stop here'); },
     evaluate: async (fn, arg) => {
-      if (Array.isArray(arg) && arg.length === 2 && typeof arg[0] === 'string') { calls.pasted.push(arg[0]); return true; }
       if (Array.isArray(arg) && typeof arg[0] === 'number') return Array.from({ length: arg[0] }, () => 5);
       return 'example';
     },
@@ -29,7 +30,13 @@ const fakePage = ({ dialog, dialogDelay = 0 }) => {
       };
       return {
         waitFor: async (o) => { calls.waited.push(sel); return waitFor(o); },
-        click: async () => { calls.clicked.push(sel); },
+        // Playwright strict mode: a bare click on a selector matching several elements throws. From post 3 on,
+        // every post carries its own addButton, so only .last() (the newest post) may be clicked.
+        click: async () => {
+          if (sel.includes("addButton") && calls.clicked.filter((c) => c.includes("addButton")).length >= 1) throw new Error("strict mode violation: resolved to 2 elements");
+          calls.clicked.push(sel);
+        },
+        last: () => ({ click: async () => { calls.clicked.push(sel); } }),
         first: () => ({ waitFor, setInputFiles: async () => {} }),
       };
     },
@@ -41,21 +48,27 @@ describe('X composer scope', () => {
   it('scopes every composer selector to the modal when /compose/post opens over the timeline', async () => {
     const page = fakePage({ dialog: true });
     await xAdapter.prepare(page, { posts: [{ text: 'one' }, { text: 'two' }] });
-    expect(page.calls.pasted).toEqual(['[role=dialog] [data-testid=tweetTextarea_0]', '[role=dialog] [data-testid=tweetTextarea_1]']);
+    expect(page.calls.typed).toEqual(['[role=dialog] [data-testid=tweetTextarea_0]', '[role=dialog] [data-testid=tweetTextarea_1]']);
     expect(page.calls.clicked).toContain('[role=dialog] [data-testid=addButton]');
     expect(page.calls.waited).toContain('[role=dialog] ');
+  });
+
+  it('adds a third post through the newest add-post button when earlier posts each render one', async () => {
+    const page = fakePage({ dialog: true });
+    await xAdapter.prepare(page, { posts: [{ text: 'one' }, { text: 'two' }, { text: 'three' }] });
+    expect(page.calls.typed).toHaveLength(3);
   });
 
   it('waits for a modal that hydrates late instead of falling back to unscoped selectors', async () => {
     const page = fakePage({ dialog: true, dialogDelay: 50 });
     await xAdapter.prepare(page, { posts: [{ text: 'one' }] });
-    expect(page.calls.pasted).toEqual(['[role=dialog] [data-testid=tweetTextarea_0]']);
+    expect(page.calls.typed).toEqual(['[role=dialog] [data-testid=tweetTextarea_0]']);
   });
 
   it('leaves selectors unscoped for a full-page composer', async () => {
     const page = fakePage({ dialog: false });
     await xAdapter.prepare(page, { posts: [{ text: 'one' }] });
-    expect(page.calls.pasted).toEqual(['[data-testid=tweetTextarea_0]']);
+    expect(page.calls.typed).toEqual(['[data-testid=tweetTextarea_0]']);
   });
 
   it('presses the modal\'s Post button on submit, not the timeline\'s', async () => {

@@ -47,7 +47,7 @@ import routes from './codeAnimationFilms.js';
 import musicVideoBlenderRoutes from './musicVideoBlender.js';
 import { getTrack } from '../services/tracks/index.js';
 import { mutateFilmProject } from '../services/codeAnimation/projectStore.js';
-import { authGate, hostControlRouteGate, hostControlBodyGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { listBlenderJobs, __resetBlenderJobsForTests } from '../services/film/jobs.js';
 import { runPromptThroughProvider } from '../services/promptRunner.js';
 import { analyzeAudioFile } from '../services/musicVideo/audioAnalysis.js';
@@ -56,7 +56,7 @@ import { BLENDER_NEEDS_TRUSTED_LOCAL } from '../services/film/state.js';
 const appFor = (address = '127.0.0.1') => {
   const app = express();
   app.use((req, _res, next) => { Object.defineProperty(req.socket, 'remoteAddress', { value: address }); next(); });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/code-animation/films', routes);
   app.use('/api/music-video', musicVideoBlenderRoutes); app.use(errorMiddleware);
   return app;

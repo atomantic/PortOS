@@ -18,13 +18,12 @@ const boards = await import('../services/storyboards/index.js');
 const { __setStoryDepsForTests } = await import('../services/musicVideo/story.js');
 // Exercise the actual route handlers and validators without requiring a local
 // listening socket; the file-backed project and storyboard stores remain real.
-function request(router, operator = false) {
+function request(router) {
   const call = (method, url, body) => new Promise((resolveResult, reject) => {
     const match = url.match(/^\/api\/music-video\/([^/]+)\/story\/(context|summary|propose|apply|beats|art-guides)$/);
     const layer = router.stack.find((entry) => entry.route?.path === `/:id/story/${match?.[2]}` && entry.route.methods[method.toLowerCase()]);
     if (!match || !layer) return reject(new Error(`No ${method} route for ${url}`));
-    const req = { params: { id: match[1] }, body, method, url, headers: {}, socket: { remoteAddress: '192.0.2.1' },
-      ...(operator ? { portosAuthContext: { enabled: true, authenticated: true, method: 'session' } } : {}), app: { get: () => null } };
+    const req = { params: { id: match[1] }, body, method, url, headers: {}, socket: { remoteAddress: '192.0.2.1' }, app: { get: () => null } };
     const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(data) { resolveResult({ status: this.statusCode, body: data }); return this; } };
     layer.route.stack[0].handle(req, res, reject);
   });
@@ -97,15 +96,11 @@ describe('Music Video story review and apply', () => {
     expect(await projects.getProject(id)).toEqual(before);
   });
 
-  it('requires server-derived host authority for tool-capable providers', async () => {
+  it('runs tool-capable providers for the operator the route gate admitted, ignoring the body', async () => {
     const { id } = await fixture();
     const input = { providerId: 'test-route', messages: [{ role: 'user', content: 'Develop this story' }] };
     resolve.mockResolvedValue({ provider: { id: 'test-route', enabled: true, type: 'tui', command: 'codex' }, selectedModel: 'chosen-model' });
-    const denied = await request(app).post(`${path(id)}/propose`).send(input);
-    expect(denied.status).toBe(403);
-    expect(denied.body.code).toBe('HOST_CONTROL_FORBIDDEN');
-    expect(run).not.toHaveBeenCalled();
-    const authorized = await request(app, true).post(`${path(id)}/propose`).send(input);
+    const authorized = await request(app).post(`${path(id)}/propose`).send(input);
     expect(authorized.status).toBe(200);
     expect(run).toHaveBeenCalledTimes(1);
     expect((await request(app).post(`${path(id)}/propose`).send({ ...input, hasHostControl: true })).status).toBe(400);
@@ -178,7 +173,7 @@ describe('Music Video art guides from the story', () => {
     expect(preview.body.promptAdditions.map((a) => a.id)).toEqual(['creative-latitude', 'art-guide-instructions', 'story', 'project']);
     expect(preview.body.sentPrompt).toContain('Story in your own words:\nAri at 7 and at 30, the old rink at night.');
     run.mockResolvedValueOnce({ text: JSON.stringify({ cast: 'Ari, 30: tired eyes. Ari, 7: pigtails.', environments: 'The rink, empty, at night.', visualLanguage: 'Warm tungsten, 16mm grain.' }) });
-    const drafted = await request(app, true).post(`${path(id)}/art-guides`).send(input);
+    const drafted = await request(app).post(`${path(id)}/art-guides`).send(input);
     expect(drafted.status).toBe(200);
     expect(drafted.body.proposal).toEqual({ cast: 'Ari, 30: tired eyes. Ari, 7: pigtails.', environments: 'The rink, empty, at night.', visualLanguage: 'Warm tungsten, 16mm grain.' });
     expect(run.mock.calls[0][0].prompt).toBe(preview.body.sentPrompt);

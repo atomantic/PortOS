@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import { describe, it, expect } from 'vitest';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-import { PINNED_DB_IMAGE } from './lib/dbImage.js';
+import { PINNED_DB_IMAGE, PINNED_DB_MAJOR } from './lib/dbImage.js';
 
 const PINNED = /^pgvector\/pgvector:pg\d+@sha256:[0-9a-f]{64}$/;
 
@@ -28,6 +28,13 @@ describe('database image is pinned to a manifest digest', () => {
   it('compose and CI pin the same digest', () => {
     const digests = Object.values(sources).flatMap((t) => [...t.matchAll(/pgvector\/pgvector:pg\d+@(sha256:[0-9a-f]{64})/g)].map((m) => m[1]));
     expect(new Set(digests).size).toBe(1);
+  });
+
+  // Regression caught: a dependency refresh that moves the tag to a new major
+  // leaves every existing Docker volume unable to start.
+  it(`every pin stays on the PostgreSQL ${PINNED_DB_MAJOR} line its volumes were created with`, () => {
+    const majors = Object.values(sources).flatMap((t) => [...t.matchAll(/pgvector\/pgvector:pg(\d+)@/g)].map((m) => Number(m[1])));
+    expect(new Set([...majors, Number(PINNED_DB_IMAGE.match(/:pg(\d+)@/)[1])])).toEqual(new Set([PINNED_DB_MAJOR]));
   });
 
   it('the live restore test dumps with the image the CI DB service runs', () => {

@@ -4,7 +4,6 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { RELEASE_SYNC_OBLIGATIONS } from '../lib/releaseSynchronization.js';
-import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 // Fail-fast cancellation does not stop an async body. Join its remaining writes
 // before either this fixture or the admission setup removes its directories.
 function joinTestWork(run) {
@@ -146,18 +145,10 @@ it('retains publisher and continuation history until the outbox verifies synchro
     status: 'verified', verifiedAt: '2001-01-01T03:00:00Z', evidence: { receipt: name },
   }]));
   entry.synchronization = { status: 'blocked', attempts: 1, checkedAt: '2001-01-01T03:00:00Z',
-    verifiedAt: null, retryAt: null, blocker: 'publisher-candidate-checkout-unverified' };
+    verifiedAt: null, retryAt: null, blocker: 'synchronization-pr-pending' };
   await saveReleaseSynchronization(entry);
   expect(await api.clearCompletedAgents()).toEqual({ cleared: 0, retained: 3 });
   await assertIndexedTrees();
-  const target = { agentId: publisher, repoPath: seed.repoPath, branch: seed.branch, path: seed.path, head: candidateHead,
-    checkoutIdentity: retirementCheckoutIdentityFromPointer(pointer), createdAt: seed.seededAt };
-  entry.obligations.retirement.evidence = {
-    checkouts: [target],
-    receipts: [{ ...target, branchDeleted: true, archiveDir: null, retiredAt: '2001-01-01T02:30:00Z' }],
-    publisherReview: { branch: seed.branch, path: seed.path, head: candidateHead, checkoutIdentity: target.checkoutIdentity,
-      prUrl: 'https://github.com/example/repo/pull/12', receipt: null, models: [] },
-  };
   entry.synchronization = { status: 'verified', attempts: 1, checkedAt: '2001-01-01T03:00:00Z',
     verifiedAt: '2001-01-01T03:00:00Z', retryAt: null, blocker: null };
   await saveReleaseSynchronization(entry);

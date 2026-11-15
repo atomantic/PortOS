@@ -339,6 +339,15 @@ describe('following the tab order', () => {
       .toMatchObject({ done: false, label: 'Timed typography added' });
   });
 
+  // Uniquely catches a dismissed typography expectation still asking for text cues in the checklist and header.
+  it('stops asking for typography once the director says the video has none', () => {
+    const composition = { mode: 'composed', textCues: [], noTypography: true };
+    const project = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene()], composition, lyricCues: [], lyricOverlayEnabled: false };
+    const readiness = readinessFor(project, { art: true, storyboard: true, approvedComposition: JSON.stringify(composition) });
+    expect(stageChecklist('produce', project, readiness).find((i) => i.id === 'composition')).toMatchObject({ done: true });
+    expect(deriveNextAction(project, { readiness })).not.toMatchObject({ id: 'goto-compose' });
+  });
+
   it('keeps the header on the footage until it is in, unless a run is parked on its pilot proof', () => {
     const project = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene({ videoHistoryId: null })] };
     const readiness = readinessFor(project, { art: true, storyboard: true });

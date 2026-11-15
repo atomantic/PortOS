@@ -1,3 +1,9 @@
+/**
+ * Shared MediaPreview / MediaLightbox action handlers (images + videos — dispatch by `item.kind`).
+ *
+ * Use when: New surface that exposes the same 4 preview actions.
+ */
+
 import { useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import toast from '../components/ui/Toast';

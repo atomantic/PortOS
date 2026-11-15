@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
-import { isCatalogMediaReferenceId, musicVideoCastGuideReferences, musicVideoCatalogPickPlans, musicVideoConditioningReferences, musicVideoLinkedCastReferences, musicVideoMissingFrameLinkedPicks, musicVideoOfferedReferences, musicVideoPanelArtReferences, musicVideoReferenceChoices, musicVideoResearchReferences, musicVideoSceneCastIds, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../../server/lib/musicVideoConditioning.js';
+import { isCatalogMediaReferenceId, musicVideoCastGuideReferences, musicVideoCatalogPickPlans, musicVideoConditioningReferences, musicVideoLinkedCastReferences, musicVideoMissingFrameLinkedPicks, musicVideoOfferedReferences, musicVideoPanelArtReferences, musicVideoReferenceChoices, musicVideoResearchReferences, resolvedFramePickIds, musicVideoSceneCastIds, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../../server/lib/musicVideoConditioning.js';
 import { musicVideoGreyboxReferences } from '../../../../server/lib/musicVideoGreybox.js';
 import { MUSIC_VIDEO_OTHER_REFERENCES_NOTE } from '../../../../server/lib/musicVideoShotPrompt.js';
 import { musicVideoCameoReferences } from '../../../../server/lib/musicVideoCameos.js';
@@ -44,7 +44,8 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
   const others = musicVideoOfferedReferences(choices).filter((ref) => !chosenIds.includes(ref.id));
   const auto = !Array.isArray(scene.frameReferenceIds);
   // Unresolved saved guides still occupy slots and must survive an edit.
-  const unresolvedGuides = (scene.frameReferenceIds || []).filter((refId) => isCatalogMediaReferenceId(refId) && !ids.includes(refId));
+  // Compared as resolved: a saved id that moved to a listed reference is that chip, not an unresolved guide.
+  const unresolvedGuides = resolvedFramePickIds(project, scene, castMedia).filter((refId) => isCatalogMediaReferenceId(refId) && !ids.includes(refId));
   const full = ids.length + unresolvedGuides.length >= MUSIC_VIDEO_MAX_REFERENCE_CHOICES;
   const notOffered = auto ? [] : musicVideoCatalogPickPlans(project, [scene])[0]?.unmappedFrame || [];
   const previewProps = (ref) => ({

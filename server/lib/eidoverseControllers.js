@@ -2,6 +2,22 @@
  * Executable Eidoverse world controllers — the install schema, the sandboxed
  * step boundary, and the tick scheduling math (#7456, part of epic #7453).
  *
+ * Executable Eidoverse world controllers — the install schema and the sandboxed step boundary (#7456).
+ * `eidoverseControllerInstallSchema` / `eidoverseControllerRecordSchema` describe an install (a
+ * registry `controllerId`, a bounded `config`, a `tickIntervalMs`, and a `deliverEffects` flag that is
+ * FALSE by default, so installing arms bookkeeping and never a world verb).
+ * `eidoverseRiddleActionSchema` validates the fixed offer/guess/reveal action with an inspected
+ * `expectedRevision`. `runControllerStep` is the sandbox: it hands the controller JSON copies of its
+ * state and config, REFUSES a step that returns a Promise (an await is the shape every
+ * network/disk/AI-provider call takes, so the tick path is provider-free structurally rather than by
+ * convention), caps the state it may return, and validates its effects against a closed vocabulary —
+ * `note` (never leaves the ledger), `say`, and `augment`, which reuses `eidoverseValidation.js`'s own
+ * world-verb operation schema. `controllerTickDue` / `nextControllerTickAt` are the scheduling math,
+ * measured from now so a machine that slept wakes to ONE tick and not a replayed backlog.
+ * `summarizeControllerInstall` is the prompt-shaped projection that keeps a 16KB state blob out of a
+ * mind turn; it surfaces `derivedFrom`, the edge an install adopted from a peer's foundation carries
+ * (#7626). Pure: callers pass `now`.
+ *
  * SwarmWorld's strongest result is that technologies are *executable*: they
  * keep running when the agent that authored them is gone. PortOS minds wake
  * intermittently, so a world that only changes during a mind turn is a world

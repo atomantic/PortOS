@@ -1,3 +1,7 @@
+/**
+ * CLI command dispatch.
+ */
+
 import { request } from './apiCore.js';
 
 // Commands

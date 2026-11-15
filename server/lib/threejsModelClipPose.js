@@ -1,4 +1,12 @@
 /**
+ * `evaluateThreejsModelClipPose(clip, timeSeconds)` evaluates a declarative Three.js model clip pose,
+ * shared by the preview and physical audit.
+ *
+ * `evaluateThreejsModelClipPose(clip, timeSeconds)` — the declarative clip pose evaluator (owner per
+ * part+channel, step `visible`, the four easing curves) shared by the preview
+ * (`client/src/lib/threejsAnimation.js` re-uses it) and the physical audit, so the gate measures the
+ * pose the user sees; its test pins it against the emitted `THREEJS_PLAYER_SOURCE`.
+ *
  * Pure pose evaluator for the declarative clip contract in `threejsModel.js`,
  * shared by the Three.js Models preview (`client/src/lib/threejsAnimation.js`
  * re-uses it) and the gates that measure a clip mid-motion

@@ -46,7 +46,7 @@ vi.mock('../services/mediaRemoteDelete.js', () => ({
 
 const installProcess = vi.hoisted(() => {
   const spawn = vi.fn();
-  const makeChild = () => {
+  const makeChild = ({ code = 0, stdout = '', stderr = '' } = {}) => {
     const listeners = {};
     const child = {
       pid: 4242,
@@ -56,7 +56,15 @@ const installProcess = vi.hoisted(() => {
       kill: vi.fn(() => true),
       on: vi.fn((event, handler) => {
         listeners[event] = handler;
-        if (event === 'close') setImmediate(() => handler(0));
+        if (event === 'close') setImmediate(() => {
+          for (const [stream, text] of [[child.stdout, stdout], [child.stderr, stderr]]) {
+            // Split writes also exercise summaries received across chunks.
+            const onData = stream.on.mock.calls.find(([name]) => name === 'data')?.[1];
+            onData?.(text.slice(0, 19));
+            onData?.(text.slice(19));
+          }
+          void handler(code);
+        });
         return child;
       }),
     };
@@ -638,6 +646,31 @@ describe('videoGen routes', () => {
   });
 
   describe('/setup/runtime-install', () => {
+    it('retains the dependency stage and actionable installer failure in the final SSE error', async () => {
+      const diagnostic = 'LTX-2.5 MLX dependency sync failed (exit 2). Check application firewall access for the private uv, then retry Install/Repair.';
+      installProcess.spawn.mockImplementationOnce(() => installProcess.makeChild({
+        code: 2,
+        stdout: '📦 Syncing LTX-2.5 MLX wheels from requirements-ltx25-mlx.lock.txt...\n',
+        stderr: `fixture: download failed\n❌ ${diagnostic}`,
+      }));
+      const r = await request(app).post('/api/video-gen/setup/runtime-install?runtime=ltx25');
+      const events = r.text.split('\n').filter((line) => line.startsWith('data: '))
+        .map((line) => JSON.parse(line.slice(6)));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'stage', stage: 'dependencies' }));
+      expect(events.at(-1)).toMatchObject({ type: 'error', message: diagnostic });
+      expect(events.some((event) => event.type === 'complete')).toBe(false);
+    });
+
+    it('keeps other package errors in the log without inventing a network diagnosis', async () => {
+      installProcess.spawn.mockImplementationOnce(() => installProcess.makeChild({
+        code: 1, stderr: 'fixture: wheel hash mismatch\n',
+      }));
+      const r = await request(app).post('/api/video-gen/setup/runtime-install?runtime=wan22');
+      expect(r.text).toContain('wheel hash mismatch');
+      expect(r.text).toContain('Installer exited with code 1.');
+      expect(r.text).not.toContain('firewall');
+    });
+
     it('keeps GET read-only and returns the current runtime status', async () => {
       const r = await request(app).get('/api/video-gen/setup/runtime-install?runtime=wan22');
       expect(r.status).toBe(200);

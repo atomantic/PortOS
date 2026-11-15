@@ -1,3 +1,9 @@
+/**
+ * `[ref, width]` via ResizeObserver.
+ *
+ * Use when: Layout responds to a specific container's width.
+ */
+
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 // Track a container element's width via ResizeObserver. Returns [ref, width]

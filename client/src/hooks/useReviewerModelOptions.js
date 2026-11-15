@@ -1,3 +1,16 @@
+/**
+ * Provides selectable model ids and provider defaults per model-taking reviewer for the ReviewerPicker
+ * Model column, from local LLM status and provider lists.
+ *
+ * Selectable model ids and concrete provider defaults per model-taking reviewer for `ReviewerPicker`'s
+ * Model column — local-LLM ids from `/api/local-llm/status`, codex/claude/antigravity tiers from
+ * `/api/providers` (claude's list also spans installed Ollama ids for an Ollama-backed CLI; agy's list
+ * collapses to base ids since the row has its own Effort cell). Returns `{ optionsByReviewer,
+ * defaultModels, freeText, unavailable, loaded, reviewers }`. Use when: Every surface that renders
+ * `ReviewerPicker` (Code Review Defaults, TaskAddForm, ScheduleTab, SlashDoRunDrawer) — the picker
+ * never fetches; pass this as its `modelOptions`.
+ */
+
 import { useEffect, useMemo, useState } from 'react';
 import * as api from '../services/api';
 import { filterSelectableModels, selectableModelsForProvider } from '../utils/providers';

@@ -1,7 +1,13 @@
 /**
- * Supported Blender releases for the Code Animation renderer. Versions are compared as
- * `major.minor` series: a patch update (5.2.3 → 5.2.4) keeps existing projects valid,
- * while the execution check still records the exact patch it rendered with.
+ * Supported Blender releases for the Code Animation renderer.
+ *
+ * Supported Blender releases for Code Animation: `LATEST_BLENDER_VERSION`, `MIN_BLENDER_SERIES`,
+ * `blenderSeries(v)` (patch-insensitive match), `isSupportedBlenderVersion(v)`, and
+ * `BLENDER_COMPAT_PY` (engine-id and `Action.fcurves` shims shared by the driver and probe across
+ * Blender 4.2–5.x).
+ *
+ * Versions are compared as `major.minor` series: a patch update (5.2.3 → 5.2.4) keeps existing
+ * projects valid, while the execution check still records the exact patch it rendered with.
  */
 
 /** Newest stable release PortOS has been checked against; new projects default to it. */

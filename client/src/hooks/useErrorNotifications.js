@@ -1,3 +1,9 @@
+/**
+ * Subscribes to server error events and shows toasts.
+ *
+ * Use when: Wire once high in the tree to surface server errors.
+ */
+
 import { useEffect, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';

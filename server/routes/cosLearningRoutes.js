@@ -35,15 +35,17 @@ router.post('/learning/backfill', asyncHandler(async (req, res) => {
   res.json({ success: true, backfilledCount: count });
 }));
 
-// GET /api/cos/learning/skipped - Get task types being skipped due to poor performance
+// GET /api/cos/learning/skipped - Get historical low-success recommendations (legacy endpoint name)
 router.get('/learning/skipped', asyncHandler(async (req, res) => {
   const skipped = await taskLearning.getSkippedTaskTypes();
   res.json({
-    skippedCount: skipped.length,
+    advisoryOnly: true,
+    lowSuccessCount: skipped.length,
+    skippedCount: skipped.length, // Legacy field; not scheduler state.
     skippedTypes: skipped,
     message: skipped.length > 0
-      ? 'These task types have <30% success rate after 5+ attempts and are being skipped'
-      : 'No task types are currently being skipped'
+      ? 'These task types have low historical success rates; this recommendation does not pause scheduling'
+      : 'No task types currently have low-success recommendations'
   });
 }));
 

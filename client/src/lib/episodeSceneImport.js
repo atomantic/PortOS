@@ -1,8 +1,15 @@
-// Best-effort mapping from a FableLoom scene node's authored text into the
-// `{ lines: [{ type, speaker, text }] }` shape /api/continuous-video expects
-// (#6228). There is no existing FableLoom→continuous-video scene export, and
-// prose/teleplay text is free-form — this is a lossy starting draft the
-// Episode Composer always leaves user-editable, not a round-trip parser.
+// Best-effort mapping from a FableLoom scene node's authored text into the `{ lines: [{ type, speaker,
+// text }] }` shape /api/continuous-video expects (#6228).
+//
+// Best-effort mapping of a FableLoom episode's scene nodes into the Episode Composer's draft `scenes`
+// shape (#6228): `parseNodeTextToLines(text, { format })` splits prose into a single action line, or
+// (for `teleplay`) picks out ALL-CAPS character cues + following dialogue lines and drops sluglines;
+// `loomEpisodeToDraftScenes(episode, { format })` maps every node to one draft scene. Lossy on purpose
+// — the composer always leaves the import user-editable.
+//
+// There is no existing FableLoom→continuous-video scene export, and prose/teleplay text is free-form —
+// this is a lossy starting draft the Episode Composer always leaves user-editable, not a round-trip
+// parser.
 
 const CUE_RE = /^[A-Z][A-Z0-9 .,'()-]{1,59}$/; // total length capped at 60 (matches looksLikeCue's guard)
 

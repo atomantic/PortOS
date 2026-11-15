@@ -438,3 +438,30 @@ describe('anchoring shots to the sung lyrics', () => {
     expect(project.scenes.map((scene) => scene.lyricText)).toEqual(['sung over both', 'sung over both']);
   });
 });
+
+describe('board time order (#16117)', () => {
+  // Uniquely catches a cut move on a board saved out of time order taking the stored neighbour
+  // instead of the shot that plays before it.
+  it('reads a board saved out of order in time order and moves a cut against the real previous shot', async () => {
+    const p = await projects.createProject({ name: 'Out of order' });
+    const { scenes: [a, b, c] } = await projects.addProjectScenes(p.id, [
+      { startSec: 0, endSec: 2, prompt: 'First' },
+      { startSec: 2, endSec: 4, prompt: 'Second' },
+      { startSec: 4, endSec: 6, prompt: 'Third' },
+    ]);
+    const file = await import('./projectsFile.js');
+    const all = await file.loadAll();
+    const saved = all.find((record) => record.id === p.id);
+    saved.scenes = [saved.scenes[2], saved.scenes[0], saved.scenes[1]].map((scene, order) => ({ ...scene, order }));
+    await file.saveAll(all);
+    const ids = (project) => project.scenes.map((scene) => scene.sceneId);
+    const read = await projects.getProject(p.id);
+    expect(ids(read)).toEqual([a.sceneId, b.sceneId, c.sceneId]);
+    expect(read.scenes.map((scene) => scene.order)).toEqual([0, 1, 2]);
+    expect(read.updatedAt).toBe(saved.updatedAt);
+    const moved = await projects.moveProjectSceneStart(p.id, c.sceneId, { startSec: 3 });
+    expect(moved.previous.sceneId).toBe(b.sceneId);
+    expect((await file.getProject(p.id)).scenes.map((scene) => [scene.sceneId, scene.startSec, scene.endSec, scene.order]))
+      .toEqual([[a.sceneId, 0, 2, 0], [b.sceneId, 2, 3, 1], [c.sceneId, 3, 6, 2]]);
+  });
+});

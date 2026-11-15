@@ -3,10 +3,10 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { releaseCandidateDiagnostics } from './ciTestPolicy.js';
-import { watch, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, rmSync } from 'node:fs';
+import { watch, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { stripVTControlCharacters } from 'node:util';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { killProcessTree, prepareCliSpawn } from '../server/lib/bufferedSpawn.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
@@ -506,6 +506,9 @@ async function main() {
   const guardProof = JSON.parse(process.env.PORTOS_PREGATE_GUARDS || 'null');
   // A proof is for this runner only, never a nested invocation from its tests.
   delete process.env.PORTOS_PREGATE_GUARDS;
+  // Same one-shot rule: pregate's guard stage asks for per-file wall times.
+  const durationsPath = process.env.PORTOS_PREGATE_DURATIONS_PATH;
+  delete process.env.PORTOS_PREGATE_DURATIONS_PATH;
   const mode = process.env.CI_TEST_MODE || 'full';
   const inputFiles = JSON.parse(process.env.CI_TEST_FILES || '[]');
   // Explicit planner selectors must respect the same browser and DB ownership as
@@ -590,15 +593,22 @@ async function main() {
   process.env.PORTOS_CI_TEST_SELECTION = selection.path;
   const extraArgs = memoDir && !readOnlyMemo ? ['--experimental.recordDependencies'] : [];
   const passed = [];
+  const durations = {};
   try {
     process.exitCode = await spawnNpm(workspace, script, extraArgs, label, {
       name: scope,
-      onResult: (result) => passed.push(...passedTestFiles(result.fileResults ?? [], {
-        repoRoot, namePattern: process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined, status: result.status, runReport: result.runReport,
-      })),
+      onResult: (result) => {
+        for (const { file, durationMs } of result.fileResults ?? []) {
+          if (durationMs !== null) durations[relative(repoRoot, file).split(sep).join('/')] = durationMs;
+        }
+        passed.push(...passedTestFiles(result.fileResults ?? [], {
+          repoRoot, namePattern: process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined, status: result.status, runReport: result.runReport,
+        }));
+      },
     });
   } finally {
     rmSync(selection.dir, { recursive: true, force: true });
+    if (durationsPath) writeFileSync(durationsPath, JSON.stringify(durations));
   }
   if (!memoDir || passed.length === 0) return;
   // PR jobs restore trusted memos, but ci.yml never saves their new entries.

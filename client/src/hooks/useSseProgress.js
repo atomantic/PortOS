@@ -1,3 +1,11 @@
+/**
+ * Generic JSON-frame SSE subscriber: EventSource for GET, one abortable fetch stream for `method:
+ * 'POST'` without retry.
+ *
+ * `frames` is a bounded history (`maxFrames`, default 200; `0` for latest-only consumers). Use when:
+ * New SSE progress stream — start here, build on top.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import { throwApiError } from '../services/apiCore';
 

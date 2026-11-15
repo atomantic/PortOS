@@ -1,3 +1,10 @@
+/**
+ * Server-authoritative art/storyboard/proof approvals and SSE proof rendering, with stale-readiness
+ * suppression.
+ *
+ * Use when: Music Video production review.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import { checkMusicVideoOverlayText, reverifyMusicVideoAlignment, importMusicVideoDocumentShots, getMusicVideoProductionReview, saveMusicVideoProductionDraft, prepareMusicVideoProductionReview,
   approveMusicVideoProductionReview, renderMusicVideoProductionProof, musicVideoExcerptRenderEventsUrl,

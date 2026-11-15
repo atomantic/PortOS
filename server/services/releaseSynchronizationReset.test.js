@@ -7,14 +7,12 @@ import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../lib/m
 import { RELEASE_SYNC_OBLIGATIONS } from '../lib/releaseSynchronization.js';
 
 vi.mock('../lib/fileUtils.js', async original => makePathsProxy(await original(), { dataRoot: lazyTempDataRoot('release-sync-reset-') }));
-const ownership = vi.hoisted(() => ({ agents: [], active: [], runner: [], task: null, updates: [], updateResult: null, inventory: [], current: true }));
-vi.mock('../lib/retirementCheckoutObservation.js', async original => ({ ...(await original()), isCurrentRetirementCheckout: async () => ownership.current }));
+const ownership = vi.hoisted(() => ({ agents: [], active: [], runner: [], task: null, updates: [], updateResult: null }));
 vi.mock('./cosClaimOwnershipState.js', () => ({
   withClaimOwnershipLock: work => work(), readClaimOwnershipAgents: async () => ownership.agents,
 }));
 vi.mock('./agentState.js', () => ({ getActiveAgentIds: () => ownership.active }));
 vi.mock('./cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: async () => ownership.runner }));
-vi.mock('./branchReconcileOutcome.js', () => ({ getBranchReconcileOutcome: async () => ({ remaining: ownership.inventory }) }));
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: async () => [] }));
 vi.mock('./cosTaskStore.js', () => ({ getTaskById: async id => ownership.task?.id === id ? ownership.task : null,
   updateTask: async (id, patch) => { ownership.updates.push({ id, patch }); if (ownership.updateResult) return ownership.updateResult;
@@ -22,10 +20,10 @@ vi.mock('./cosTaskStore.js', () => ({ getTaskById: async id => ownership.task?.i
   addTask: async () => { throw new Error('Unexpected retired continuation registration'); } }));
 
 import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';
-import { resetReleaseSynchronization, retireReleaseSynchronizationForDeletion, releaseTaskDispatchDisposition, retainReleaseSynchronizationReview, recoverReleaseSynchronizationHandoffs } from './releaseSynchronization.js';
+import { resetReleaseSynchronization, retireReleaseSynchronizationForDeletion, releaseTaskDispatchDisposition, recoverReleaseSynchronizationHandoffs } from './releaseSynchronization.js';
 
 afterAll(cleanupTempDataRoots);
-beforeEach(() => { ownership.agents = []; ownership.active = []; ownership.runner = []; ownership.task = null; ownership.updates = []; ownership.updateResult = null; ownership.inventory = []; ownership.current = true; });
+beforeEach(() => { ownership.agents = []; ownership.active = []; ownership.runner = []; ownership.task = null; ownership.updates = []; ownership.updateResult = null; });
 const fixture = identity => ({ version: 1, identity,
   owner: { agentId: 'publisher', taskId: 'original', startedAt: '2026-01-01T00:00:00Z', workspace: tmpdir() },
   publication: { identity, status: 'verified', tag: 'v1.2.3' },
@@ -33,35 +31,24 @@ const fixture = identity => ({ version: 1, identity,
   obligations: Object.fromEntries(RELEASE_SYNC_OBLIGATIONS.map(key => [key, { status: 'pending' }])), checkouts: [],
   registeredAt: '2026-01-01T00:00:00Z', attempts: 0, lastAttemptAt: null, blocker: null, retryAt: null,
   synchronization: { status: 'blocked', attempts: 1, checkedAt: '2026-01-01T00:00:00Z',
-    verifiedAt: null, retryAt: null, blocker: 'publisher-candidate-checkout-unverified' } });
+    verifiedAt: null, retryAt: null, blocker: 'synchronization-pr-pending' } });
 
 it('retires only the selected stale checkpoint without claiming historical success', async () => {
   const identity = 'a'.repeat(64), entry = fixture(identity), reason = 'Start a fresh release from main';
   await saveReleaseSynchronization(entry);
   const task = { metadata: { app: 'example', analysisType: 'do-release' } };
-  const checkout = { path: '/example/old', branch: 'old', head: 'b'.repeat(40), checkoutIdentity: 'c'.repeat(64) };
   ownership.task = { ...entry.task, status: 'pending' };
   expect(await releaseTaskDispatchDisposition(task)).toBe('wait-for-synchronization');
-  await expect(resetReleaseSynchronization(identity, reason, 'local-operator', [checkout])).rejects.toThrow('current inventory');
-  ownership.inventory = [checkout];
-  ownership.current = false;
-  await expect(resetReleaseSynchronization(identity, reason, 'local-operator', [checkout])).rejects.toThrow('changed since the inventory');
-  ownership.current = true;
-  const receipt = await resetReleaseSynchronization(identity, reason, 'local-operator', [checkout]);
-  expect(receipt).toMatchObject({ identity, reason, previousStatus: 'blocked', previousBlocker: 'publisher-candidate-checkout-unverified' });
+  const receipt = await resetReleaseSynchronization(identity, reason, 'local-operator');
+  expect(receipt).toMatchObject({ identity, reason, previousStatus: 'blocked', previousBlocker: 'synchronization-pr-pending', checkouts: [] });
   expect(ownership.task.status).toBe('blocked');
-  expect(await resetReleaseSynchronization(identity, reason, 'local-operator', [checkout])).toEqual(receipt);
+  expect(await resetReleaseSynchronization(identity, reason, 'local-operator')).toEqual(receipt);
   await expect(resetReleaseSynchronization(identity, 'Different decision', 'local-operator')).rejects.toThrow('different operator reset');
   const saved = (await readReleaseSynchronizationOutbox()).publications[identity];
   expect(saved.synchronization).toEqual(entry.synchronization);
   expect(saved.obligations).toEqual(entry.obligations);
   expect(await releaseTaskDispatchDisposition(task)).toBeNull();
   expect(await releaseTaskDispatchDisposition(saved.task)).toBe('retired-continuation');
-  const release = { repoPath: tmpdir(), ...checkout };
-  expect(await retainReleaseSynchronizationReview(release)).toBe(true);
-  for (const changed of [{ checkoutIdentity: 'd'.repeat(64) }, { branch: 'another' }, { head: 'e'.repeat(40) }]) {
-    expect(await retainReleaseSynchronizationReview({ ...release, ...changed })).toBe(true);
-  }
   await expect(saveReleaseSynchronization({ ...saved, operatorReset: undefined })).rejects.toThrow('immutable ownership');
   const other = fixture('d'.repeat(64));
   await saveReleaseSynchronization(other);

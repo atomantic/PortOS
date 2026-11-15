@@ -1,6 +1,27 @@
 /**
  * Investigation tasks — identity, fingerprinting, and the auto-retry decision.
  *
+ * Investigation-task identity, approval, auto-retry, and PR-backed delivery policy — shared by the
+ * producers (`services/investigationTaskProducer.js`), the reaper (`cosTaskStore.js`, which used to
+ * hand-copy the predicate to dodge an import cycle) and the retry (`services/investigationRetry.js`).
+ * `isInvestigationTask(task)` (durable `isInvestigation` marker, falling back to the
+ * `INVESTIGATION_HEADLINE_PREFIX` headline for pre-#2615 / peer-synced tasks);
+ * `INVESTIGATION_TASK_DELIVERY` keeps unattended investigations in an isolated worktree and routes
+ * them through a PR merged on green, while `CLIENT_INVESTIGATION_DELIVERY` +
+ * `clientInvestigationFingerprint({description, app})` give a UI-queued investigation (#6043) the same
+ * isolation with a review-then-merge PR and a server-derived `ui-investigation` dedup key the client
+ * cannot hand-craft; `buildInvestigationFingerprint(task, analysis)` /
+ * `investigationFingerprint({category, kind, scope})` → the `category:kind:scope` dedup key;
+ * `resolveInvestigationApproval({fingerprint, tasks, recentCreations})` → unattended by default
+ * (#3714), held only on a `repeat-fingerprint` or `failure-storm` loop, with `approvalReason` +
+ * `loopProse` for the queue UI; `couldReleaseBlockedTasks(investigation)` is the pure pre-read gate
+ * for `resolveInvestigationRetryTargets({investigation, tasksById})`, which returns the
+ * failure-blocked tasks a just-completed investigation releases plus every skip and its
+ * `RETRY_SKIP_REASONS` reason (an `auto-expired` completion, a non-`blocked` task, a
+ * `NON_AUTO_RETRY_BLOCK_CATEGORIES` block, or a task past `MAX_AUTO_RETRIES_PER_TASK`);
+ * `autoRetryMetadata(task, investigationId, now)` stamps the budget that survives the revive's own
+ * `failureCount` reset. Pure.
+ *
  * Pure helpers shared by the three parties that all have to agree on what an
  * investigation task IS and which failure it tracks: the producer
  * (`agentErrorAnalysis.js`), the reaper (`cosTaskStore.js`, which used to

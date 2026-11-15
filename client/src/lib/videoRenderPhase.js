@@ -1,6 +1,17 @@
 /**
  * Video render phase → named progress step (#5872).
  *
+ * Video render phase → named progress step (#5872). `resolveVideoRenderSteps({ generating, phase,
+ * progressPct, remote })` → `{ activeId, steps: [{ id, label, state: 'done'|'active'|'pending' }] }`,
+ * collapsing the runners' fine-grained `STAGE:` vocabulary (`load-transformer`, `encode-prompt`,
+ * `sampling`, `mux`, …) onto six steps a person can read — the queue's own `queued` is one of them, so
+ * a caller needs no separate flag. Family prefixes (`download-*`, `load-*`, `wan-*`, …) absorb markers
+ * a future runner adds; `videoRenderStepFor(phase, { remote })` returns `null` for a genuinely unknown
+ * one, never step 0. `remote: true` swaps in the four-step provider ladder
+ * (`REMOTE_VIDEO_RENDER_STEPS`: queued → submit → render → fetch) for a render an external API owns,
+ * where the local weight/load/encode steps describe work this machine never does. Consumed by
+ * `components/videoGen/RenderStatusCard.jsx`.
+ *
  * A local video render spends most of its wall clock somewhere other than the
  * sampler: resolving a cache, streaming tens of gigabytes of weights onto the
  * GPU, encoding the prompt, decoding latents, muxing audio. The runners already

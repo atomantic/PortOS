@@ -2,6 +2,10 @@
  * Duration-driven video model contracts shared by the registry loader and
  * migrations. Keep this module pure: importing mediaModels.js from a migration
  * seeds the live registry as a side effect.
+ *
+ * Pure pinned duration/frame contracts shared by model-registry upgrades and migrations. LTX-2.5 A2V
+ * follows the full uploaded audio, rounds up to its 8n+1 temporal grid, and tops out at 1017 frames
+ * under the API's single-pass boundary.
  */
 
 export const LTX25_AUDIO_PROFILE = Object.freeze({

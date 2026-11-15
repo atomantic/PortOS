@@ -1,3 +1,12 @@
+// Chord detection for the MIDI visualization UI (#2477).
+//
+// `detectChordWindows(notes, { minWindowSec })` sweeps the normalized note list for maximal spans
+// where ≥2 distinct pitch classes sound simultaneously → `[{ startSec, endSec, label, midis }]`
+// (adjacent same-label windows merged); `nameChord(pcs, bassPc)` maps a pitch-class set to a compact
+// symbol (maj/min/dim/aug triads, maj7/7/m7/m7b5/dim7, sus2/sus4/add9, slash-chord inversions) and
+// falls back to sorted pitch-class names (`C E G#`) rather than guessing wrong;
+// `chordNoteNames(midis)` for tooltips. Pure — no canvas/React.
+//
 // Chord detection for the MIDI visualization UI. Pure helpers: given the
 // normalized note list from midiNotes.js, find time windows where ≥2 distinct
 // pitch classes sound simultaneously and label each window with a compact

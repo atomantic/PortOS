@@ -8,6 +8,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 
 | Doc | Covers |
 |-----|--------|
+| [SCRIPTS.md](./SCRIPTS.md) | Every `npm run` maintenance command and the operator scripts in `scripts/`, with when to run each |
 | [CODEX_USAGE_PREVIEW.md](./CODEX_USAGE_PREVIEW.md) | Read-only bounded Codex raw/compressed/archive usage preview, deduplication and coverage limits |
 | [EXECUTION_OPTIONS.md](./EXECUTION_OPTIONS.md) | Capability-driven speed options, persistence, dispatch attribution and selector inventory |
 | [FLUX3_IMAGE.md](./FLUX3_IMAGE.md) | FLUX.3 Klein MLX profiles, isolated runtime, reference edits and license/access behavior |
@@ -81,7 +82,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [UX_DESIGN_AUDIT.md](./UX_DESIGN_AUDIT.md) | Representative UX audit and Jev/Performance pilot content maps |
 | [PAGE_LAYOUT_AUDIT.md](./PAGE_LAYOUT_AUDIT.md) | Routed header/navigation layout inventory, fixes, intentional exceptions, and browser regression coverage |
 | [GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md) | CI and release workflows |
-| [RUNTIME_ADVISORY_TRIAGE.md](./RUNTIME_ADVISORY_TRIAGE.md) | November 2026 runtime advisory paths, evidence and upstream blockers |
+| [RUNTIME_ADVISORY_TRIAGE.md](./RUNTIME_ADVISORY_TRIAGE.md) | November 2026 runtime advisory paths, evidence and upstream blockers (Nov 11 and Nov 14 reviews) |
 | [VERSIONING.md](./VERSIONING.md) | SemVer + release process (`/do:release`) |
 | [SELF_UPDATE.md](./SELF_UPDATE.md) | Fork-aware self-update flow — release polling, `FORK_SYNC_REQUIRED`, fork sync, running a customized fork, and the unattended idle-gated automatic update |
 | [MANAGED_APP_UPDATES.md](./MANAGED_APP_UPDATES.md) | Safe managed-app update default and the opt-in app lifecycle contract |

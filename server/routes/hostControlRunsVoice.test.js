@@ -188,13 +188,17 @@ describe('Runs and palette host authority (#8834)', () => {
     expect(effect).toHaveBeenCalledTimes(2);
   });
 
-  it('does not grant host tools authority from missing or JSON-shaped contexts, while read tools stay usable', async () => {
+  it('does not grant host tools authority from missing or JSON-shaped contexts, while local read tools stay usable', async () => {
     for (const [name, args] of hostTools) {
       for (const ctx of [undefined, { hasHostControl: true }, { hasHostControl: () => false }]) {
         await expect(dispatchTool(name, { ...args, hasHostControl: true }, ctx)).rejects.toMatchObject({ code: 'HOST_CONTROL_FORBIDDEN' });
       }
     }
-    expect((await request(appFor('192.0.2.10')).post('/api/palette/action/pm2_status').send({})).status).toBe(200);
+    // The palette action endpoint is a POST, so the default-deny write policy
+    // (#16018) refuses even a read tool to a remote password-free caller.
+    const remote = await request(appFor('192.0.2.10')).post('/api/palette/action/pm2_status').send({});
+    expect([remote.status, remote.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect((await request(appFor('127.0.0.1')).post('/api/palette/action/pm2_status').send({})).status).toBe(200);
     expectNoHostEffects();
   });
 });

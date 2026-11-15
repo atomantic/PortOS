@@ -1,3 +1,10 @@
+/**
+ * Pure task-branch contract: `resolveTaskTargetBranch(metadata)` reads a retry's legacy
+ * `existingBranch` or a review-loop follow-up's canonical `reviewLoopPRBranch`.
+ *
+ * `shouldStripTaskTargetBranch(metadata)` identifies only retry-owned pointers for terminal cleanup.
+ */
+
 import { forkLocalBranch, resolveTaskForkHead } from './forkHead.js';
 import { isTruthyMeta } from './metadataFlags.js';
 /**

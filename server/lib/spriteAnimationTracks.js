@@ -1,6 +1,9 @@
 /**
  * Sprites — the animation-track registry (issue #3015).
  *
+ * The animation-track registry (`ANIMATION_TRACKS`, `WALK_TRACK`, `TRACK_BOUND_TRIPLES`,
+ * `AUTHORED_TRACK_FIELDS`) — a zero-import table of per-track frame/fps bounds.
+ *
  * Frame-count and fps bounds used to be GLOBAL and walk-shaped: one 6–16 /
  * 4–24 range applied to every animation, because the walk cycle was the only
  * animation that existed. #2985 made the persisted target *track-keyed*

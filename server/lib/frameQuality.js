@@ -2,6 +2,25 @@
  * Frame-quality scoring — picks the video continuation anchor by measuring
  * candidate frames instead of trusting wherever an end-seek happens to land.
  *
+ * Scores decoded video frames so a chained render can CHOOSE its continuation anchor instead of taking
+ * whatever an end-seek lands on. `scoreFrame({width,height,data},{recency})` combines three terms over
+ * a raw single-channel buffer: log-compressed `gradientVariance` (focus), distance of `meanLuma` from
+ * mid-grey (exposure penalty, which rejects a fade-to-black or a blown highlight), and a small linear
+ * recency bonus that keeps the anchor near the cut when candidates are comparably clean. Usability and
+ * ranking are deliberately separate: `usable` gates on raw gradient variance against
+ * `MIN_SIGNAL_VARIANCE` alone, so only a mathematically degenerate frame is rejected and a
+ * legitimately dark low-key tail still qualifies — the same contract `imageFrameStats.js` keeps.
+ * Gating on the composite score instead would reject every night scene on the exposure term.
+ * `TAIL_WINDOW_SECONDS` is capped at the reach of the single `-sseof -1.0` seek this replaces: focus
+ * is systematically highest at the OLDEST candidate, so a wider window would widen the backward jump
+ * at each chain seam rather than tightening it. `pickBestFrame(paths)` decodes each candidate through
+ * `sharp` and returns the winner (or `null` when nothing decodes or every candidate is degenerate, so
+ * the caller degrades rather than failing a render); its `index` is the position in the array AS
+ * PASSED, because the caller turns that into the anchor's time offset. `MAX_CANDIDATES` is derived
+ * from the window, never set independently — the ffmpeg-side `-frames:v` cap truncates from the NEWEST
+ * end, exactly the frames recency prefers. `TAIL_WINDOW_SECONDS` / `CANDIDATE_FPS` / `MAX_CANDIDATES`
+ * define the window the caller decodes from. Consumer: `services/videoGen/local.js#extractLastFrame`.
+ *
  * A chained render conditions chunk N+1 on ONE frame taken from the tail of
  * chunk N. Local video output is motion-heavy by construction (the prompt
  * guidance explicitly asks for a camera move and a visible action), so that

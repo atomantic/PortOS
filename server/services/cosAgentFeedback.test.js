@@ -21,6 +21,7 @@ vi.mock('./cosState.js', () => ({
 
 vi.mock('./cosAgentIndex.js', () => ({
   loadAgentIndex: vi.fn(async () => mockAgentIndex.entries),
+  invalidateArchivedRecord: vi.fn(),
   getAgentDir: (agentId, dateBucket) => join(mockCosState.agentsDir, dateBucket || '', agentId)
 }));
 

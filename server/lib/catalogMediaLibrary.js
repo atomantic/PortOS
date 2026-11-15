@@ -1,6 +1,10 @@
 /**
  * Cast reference library (Casting > References).
  *
+ * Normalize reference variants, reviews, exact feedback and refinement lineage; filter by
+ * age/era/look/tag/rating and select up to 4 compatible render guides, excluding bad images (a legacy
+ * or older-peer `rejected` reads as bad).
+ *
  * Each catalog media row carries an optional `library` JSONB describing how the
  * asset is used as a reference for the cast member: which variant it depicts
  * (age, era, wardrobe/look, free label), searchable tags, and whether it is a
@@ -10,6 +14,8 @@
  * Pure helpers only (no DB) so the picker is shared by routes, music video
  * conditioning and tests.
  */
+
+import { normalizeLookAroundAngle } from './catalogLookAround.js';
 
 export const MAX_CAST_GUIDES = 4;
 export const CAST_ERAS = Object.freeze(['child', 'teen', 'adult', 'elder']);
@@ -83,6 +89,9 @@ export function normalizeLibrary(value) {
   // The other character on a comparison sheet, so a regenerate keeps the pair.
   const comparedWith = cleanStr(value.comparedWith, 64);
   if (comparedWith) out.comparedWith = comparedWith;
+  // A place's look-around angle plate: the clip, moment and main plate it came from (#16145).
+  const angle = normalizeLookAroundAngle(value.angle);
+  if (angle) out.angle = angle;
   return out;
 }
 

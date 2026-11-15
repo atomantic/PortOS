@@ -82,7 +82,7 @@ vi.mock('../services/voice/facetimeBridge.js', () => ({
   checkSetup: vi.fn(), probe: vi.fn(), call: vi.fn(), hangup: vi.fn(),
 }));
 
-import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import voiceRoutes from './voice.js';
 
 const storedVoice = {
@@ -116,7 +116,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/voice', voiceRoutes);
   app.use(errorMiddleware);
   return app;
@@ -182,8 +182,8 @@ describe('voice config instruction and runtime authority (#10990, #13055)', () =
     expect(voiceConfig.updateVoiceConfig).not.toHaveBeenCalled();
   });
 
-  it('lets the same remote caller resend the stored instructions and runtime keys while changing the TTS rate, without reconciling', async () => {
-    const response = await putConfig(appFor(), {
+  it('refuses a remote caller even when it only resends the stored config with a new TTS rate, and saves and reconciles it locally', async () => {
+    const benign = {
       enabled: true,
       stt: { modelPath: 'example-models/example.bin', coreml: false, engine: 'whisper' },
       tts: { rate: 1.25, engine: 'piper', piper: { voicePath: 'example-voices/example.onnx' } },
@@ -202,13 +202,19 @@ describe('voice config instruction and runtime authority (#10990, #13055)', () =
           announceOnComplete: true, model: '', provider: '', enabled: false,
         },
       },
-    });
-    expect(response.status, JSON.stringify(response.body)).toBe(200);
-    expect(voiceConfig.updateVoiceConfig).toHaveBeenCalledTimes(1);
-    expect(voiceConfig.getVoiceConfig).toHaveBeenCalledTimes(1);
-    // PM2 and the setup script are host work: the record saves, the runtime is left as it was.
-    expect(response.body.reconciliation).toEqual({ skipped: 'host-control' });
+    };
+    const remote = await putConfig(appFor(), benign);
+    expect([remote.status, remote.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect(voiceConfig.getVoiceConfig).not.toHaveBeenCalled();
+    expect(voiceConfig.updateVoiceConfig).not.toHaveBeenCalled();
     expect(bootstrap.reconcile).not.toHaveBeenCalled();
+
+    const local = await putConfig(appFor('127.0.0.1'), benign);
+    expect(local.status, JSON.stringify(local.body)).toBe(200);
+    expect(voiceConfig.updateVoiceConfig).toHaveBeenCalledOnce();
+    expect(voiceConfig.updateVoiceConfig.mock.calls[0][0].tts.rate).toBe(1.25);
+    expect(local.body.reconciliation).toEqual({});
+    expect(bootstrap.reconcile).toHaveBeenCalledOnce();
   });
 
   it('lets a local password-free caller, an operator session and a delegated agent session change every field and reconcile', async () => {

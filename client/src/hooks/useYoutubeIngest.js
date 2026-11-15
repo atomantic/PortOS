@@ -1,3 +1,14 @@
+/**
+ * One YouTube brain-ingest job slot: start/cancel + SSE progress + terminal-frame handling via `POST
+ * /api/brain/youtube/ingest`.
+ *
+ * Returns `{ active, percent, stage, start(body), cancel }` — `start` takes the whole payload (`{ url,
+ * captureTranscript, downloadVideo, ingestAudio, note, agentPrompt, tags }`), not a bare URL.
+ * `onComplete(ingest)` fires with the stored ingest record; non-fatal `warnings[]` on the terminal
+ * frame are toasted automatically. Use when: Quick Capture's YouTube path, and any other surface that
+ * ingests a video into the brain.
+ */
+
 import toast from '../components/ui/Toast';
 import { startYoutubeIngest, cancelYoutubeIngest, youtubeIngestEventsUrl } from '../services/apiBrain.js';
 import useSseJobSlot from './useSseJobSlot.js';

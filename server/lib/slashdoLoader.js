@@ -1,4 +1,14 @@
-/** Shared slashdo rendering and immutable prompt bundles for CoS agents. */
+/**
+ *  Shared slashdo rendering and immutable prompt bundles for CoS agents.
+ *
+ * Shared slashdo renderer adapter: `loadSlashdoBundle(cmd, {stripFrontmatter, skipIncludes, defer})`
+ * returns an entrypoint and supporting files using the bundled transformer; `loadSlashdoFile` returns
+ * a self-contained command; `loadSlashdoLib` expands explicit reads for legacy recipes without
+ * traversing see-also links. `writeResolvedSlashdoBody(cmd, body, {files})` stages immutable
+ * content-addressed bundles under `PATHS.slashdoResolved`, with relative library paths and the
+ * entrypoint written last. Missing required references fail dispatch rather than silently removing
+ * workflow gates.
+ */
 import { createHash } from 'crypto';
 import { join } from 'path';
 import { pathToFileURL } from 'url';

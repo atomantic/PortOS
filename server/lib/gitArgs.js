@@ -1,6 +1,11 @@
 // Pure command-argument builders and validators for git operations. No
 // child-process access — these sanitize/shape the inputs that
 // server/services/git.js passes to execGit.
+//
+// `PROTECTED_BRANCHES`, `validateFilePaths(files)`, `isGitStageableFilePath(file)` — pure command-arg
+// builders/validators for `git.js` (reject injection/traversal in staged paths).
+// `isGitStageableFilePath` is `validateFilePaths`' non-throwing twin, for callers that must refuse an
+// unstageable path BEFORE writing the file rather than 500 on the commit.
 
 import { ServerError } from './errorHandler.js';
 

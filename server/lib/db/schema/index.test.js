@@ -10,12 +10,11 @@
  * (and every peer install upgrading) is missing the table and the feature
  * fails at first query with a Postgres `relation does not exist`.
  *
- * The directory-level barrel/README guard in server/lib/index.test.js does not
- * reach here — its `readdirSync` is non-recursive — hence this local copy of
- * the same contract, modeled on server/lib/editorial/checkInfraBarrel.test.js.
+ * This directory keeps its own barrel and README, so it owns this local copy
+ * of the contract, modeled on server/lib/editorial/checkInfraBarrel.test.js.
  *
  * Out of scope: DDL statement text and ordering (schema.test.js and
- * db.ddlParity.test.js own those).
+ * the generated init-db.sql checks in db.ddlParity.test.js own those).
  */
 
 import { describe, it, expect } from 'vitest';

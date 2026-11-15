@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { ALWAYS_RUN_TESTS } from '../ci-test-plan.js';
+import { getAlwaysRunTests } from '../ci-test-plan.js';
 import {
   DIRECTORY_INPUT_LIMIT,
   TEST_MEMO_NEVER,
@@ -103,9 +103,9 @@ describe('floor key', () => {
       expect(info.floor.memoizable, label).toBe(false);
       expect(info.floor.key, label).toBeNull();
     }
-    const alwaysRun = ALWAYS_RUN_TESTS.find((path) => path.startsWith('server/'));
+    const alwaysRun = getAlwaysRunTests().find((path) => path.startsWith('server/'));
     expect(keyOf({ ...TREE, [alwaysRun]: "import { it } from 'vitest';\nit('x', () => {});\n" }, alwaysRun).floor).toMatchObject({ memoizable: false, reason: 'always-run guard' });
-    const never = Object.keys(TEST_MEMO_NEVER).find((path) => path.startsWith('server/') && !ALWAYS_RUN_TESTS.includes(path));
+    const never = Object.keys(TEST_MEMO_NEVER).find((path) => path.startsWith('server/') && !getAlwaysRunTests().includes(path));
     expect(keyOf({ ...TREE, [never]: "import { it } from 'vitest';\nit('x', () => {});\n" }, never).floor).toMatchObject({ memoizable: false, reason: TEST_MEMO_NEVER[never] });
   });
 

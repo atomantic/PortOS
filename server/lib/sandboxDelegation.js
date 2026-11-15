@@ -1,3 +1,7 @@
+/**
+ * Bounded tool-free worker context, route configuration, and fidelity evaluation schemas.
+ */
+
 import { z } from 'zod';
 
 // A context packet is data supplied by the orchestrator, never a path to read.

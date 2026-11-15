@@ -3,7 +3,7 @@ import { isForgeMaintenanceTask, hasCurrentForgeMaintenanceEvidence, LEGACY_FORG
 import { getSkipReason } from './cosTaskClaim.js';
 import { isDeepStrictEqual } from 'node:util';
 import { RELEASE_SYNC_FROZEN_METADATA_KEYS } from '../lib/releaseSynchronization.js';
-import { RELEASE_ATTEMPTS_KEY, appendReleaseAttempt, mergeReleaseAttempts } from '../lib/releaseAttemptMembership.js';
+import { RELEASE_ATTEMPTS_KEY, mergeReleaseAttempts } from '../lib/releaseAttemptMembership.js';
 import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
 import { matchesSpawnBudgetProof, newSpawnBudgetEpisode, validSpawnBudgetEpisode, spawnBudgetCount, SPAWN_HISTORY_METADATA_KEYS } from './spawnBudgetProof.js';
 /**
@@ -900,37 +900,18 @@ function acceptsDispatchProof({ owners, agent, current, taskId, updatedMetadata,
 
 const hasSpawnHistory = metadata => SPAWN_HISTORY_METADATA_KEYS.some(key => metadata?.[key] != null
   && !(key === 'totalSpawnCount' && spawnBudgetCount(metadata[key]) === 0));
-// Spawn preparation claims the task for this instance just before dispatching
-// it. That claim is this dispatch's own, not evidence of an earlier one; a
-// previous dispatch also leaves counters that still count as history.
-const withoutOwnClaim = (metadata, instanceId) => (metadata?.claimedBy === instanceId
-  ? { ...metadata, claimedBy: null, claimedAt: null } : metadata);
-
-// Release attempt membership is store-owned like the spawn-budget proof, but no
-// reset clears it: only a verified release dispatch appends to it.
-async function applyReleaseAttemptMembership({ current, taskId, updatedMetadata, spawnBudgetOperation }) {
-  const prior = current.metadata?.[RELEASE_ATTEMPTS_KEY];
-  delete updatedMetadata[RELEASE_ATTEMPTS_KEY];
-  if (prior !== undefined) updatedMetadata[RELEASE_ATTEMPTS_KEY] = prior;
-  if (spawnBudgetOperation?.kind !== 'dispatch'
-    || currentTaskTypeName(current.metadata?.analysisType || current.metadata?.selfImprovementType) !== 'do-release') return null;
-  const agent = trustedAgent(await readAgentsStateForSafetyCheck(), spawnBudgetOperation.agentId);
-  // An unverifiable release dispatch must not run without being recorded.
-  if (!agent || agent.id !== spawnBudgetOperation.agentId || agent.taskId !== taskId || agent.status !== 'running'
-    || !agent.startedAt || agent.startedAt !== spawnBudgetOperation.startedAt) {
-    return { error: 'Cannot record release attempt membership for this dispatch' };
-  }
-  const membership = appendReleaseAttempt(prior,
-    { agentId: agent.id, startedAt: agent.startedAt, instanceId: agent.metadata?.instanceId }, { pristine: !hasSpawnHistory(withoutOwnClaim(current.metadata, agent.metadata?.instanceId)) });
-  if (!membership) return { error: 'Cannot record release attempt membership for this dispatch' };
-  updatedMetadata[RELEASE_ATTEMPTS_KEY] = membership;
-  return null;
-}
-
 // Store-owned spawn-budget provenance. Mutates `updatedMetadata`; returns a
 // refusal for the caller to return, or null to continue the write.
 async function applySpawnBudgetOperation({ current, taskId, taskType, updatedMetadata, spawnBudgetOperation }) {
   // Provenance is owned by the store, not by callers carrying task snapshots.
+  // Compatibility only: retain historical membership for independently upgraded peers.
+  delete updatedMetadata[RELEASE_ATTEMPTS_KEY];
+  if (current.metadata?.[RELEASE_ATTEMPTS_KEY] !== undefined) updatedMetadata[RELEASE_ATTEMPTS_KEY] = current.metadata[RELEASE_ATTEMPTS_KEY];
+  // Older peers may still use complete membership to authorize recovery. A
+  // dispatch omitted by this version makes that historical record incomplete.
+  if (spawnBudgetOperation?.kind === 'dispatch' && updatedMetadata[RELEASE_ATTEMPTS_KEY]?.complete === true) {
+    updatedMetadata[RELEASE_ATTEMPTS_KEY] = { ...updatedMetadata[RELEASE_ATTEMPTS_KEY], complete: false };
+  }
   delete updatedMetadata.spawnBudgetProof;
   const priorProof = current.metadata?.spawnBudgetProof;
   if (validSpawnBudgetEpisode(priorProof)) updatedMetadata.spawnBudgetProof = priorProof;
@@ -956,8 +937,6 @@ async function applySpawnBudgetOperation({ current, taskId, taskType, updatedMet
     else updatedMetadata.spawnBudgetProof = newSpawnBudgetEpisode(nextCount);
     delete updatedMetadata.spawnBudgetReconciledHold;
   }
-  const attemptRefusal = await applyReleaseAttemptMembership({ current, taskId, updatedMetadata, spawnBudgetOperation });
-  if (attemptRefusal) return attemptRefusal;
   if (kind === 'dispatch' && validSpawnBudgetEpisode(priorProof)) {
     const owners = await readAgentsStateForSafetyCheck();
     const agent = trustedAgent(owners, spawnBudgetOperation.agentId);

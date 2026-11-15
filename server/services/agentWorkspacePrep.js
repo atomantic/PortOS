@@ -1,5 +1,6 @@
 import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
+import { withGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 /**
  * Agent Workspace Preparation
  *
@@ -567,8 +568,7 @@ export async function prepareAgentWorkspace({ agentId, task, onPrepared = result
     if (probe.exitCode === 128 && /^fatal: not a git repository \(or any (?:of the parent directories|parent up to mount point)/im.test(probe.stderr || '')) return prepareAndRegister();
     throw new Error('Cannot establish workspace repository identity before dispatch');
   }
-  const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
-  return withCheckoutPublication(workspacePath, prepareAndRegister);
+  return withGitMutationLifetime(prepareAndRegister);
 }
 
 /**

@@ -23,11 +23,9 @@
  * cost is recorded as unknown.
  */
 
-import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
 import { storyboardGuidanceMeta } from './storyboardGuidance.js';
-import { randomUUID } from 'crypto';
-import { readFile, writeFile, unlink } from 'fs/promises';
-import { basename, join, relative, resolve, isAbsolute } from 'path';
+import { readFile } from 'fs/promises';
+import { basename } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
@@ -41,12 +39,10 @@ import {
   falHearsAudioReference,
   getFalVideoModel,
 } from '../../lib/falVideoModels.js';
-import { probeVideoDuration, probeVideoGeometry } from '../../lib/ffmpeg.js';
-import { attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
+import { probeVideoDuration } from '../../lib/ffmpeg.js';
 import { videoGenEvents } from './events.js';
-import { discardUnpublishedVideo, finalizeGeneratedVideo, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
-import { maintenance } from '../../lib/maintenanceAdmission.js';
-import { mutateVideoHistory } from './history.js';
+import { emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
+import { createHostedVideoJobRunner } from './hostedJobRunner.js';
 import { getSettings } from '../settings.js';
 import { autoDeleteHostedCopy } from '../hostedRenderRemoteDelete.js';
 import { nearestAspectRatio } from '../imageGen/modes.js';
@@ -89,43 +85,8 @@ const FAL_RENDER_TIMEOUT_MS = (() => {
   return Number.isFinite(n) && n > 0 ? n : 20 * 60 * 1000;
 })();
 
-// Per-job state — keyed by jobId (cloud lane allows parallel renders). Same
-// client shape as videoGen/grok.js so attachSseClient/broadcastSse work.
-const jobs = new Map();
-// Tracks the fal.ai request so cancel() can both stop our poll loop and ask
-// fal.ai to cancel the queued/running render.
-const activeRequests = new Map();
-const activeJobs = new Map();
-
-export const getActiveJob = () => {
-  const entries = [...activeJobs.values()];
-  return entries.length ? entries[entries.length - 1] : null;
-};
-
-export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
-
-const preparations = createMediaJobPreparation();
-
-export const cancel = (jobId) => {
-  if (!jobId) {
-    throw new Error("videoGen/fal.cancel requires a jobId — use cancelAll() to terminate every in-flight render");
-  }
-  const pending = preparations.cancel(jobId);
-  if (pending) return pending;
-  const entry = activeRequests.get(jobId);
-  if (!entry) return false;
-  entry.aborted = true;
-  entry.controller.abort();
-  void cancelFalRequest(entry);
-  return true;
-};
-
-export const cancelAll = () => {
-  const ids = [...preparations.ids(), ...activeRequests.keys()];
-  if (ids.length === 0) return false;
-  for (const id of ids) cancel(id);
-  return true;
-};
+const runner = createHostedVideoJobRunner({ mode: 'fal', provider: 'fal.ai', logName: 'fal', cancelRemote: cancelFalRequest });
+export const { getActiveJob, attachSseClient, cancel, cancelAll } = runner;
 
 // Legacy source-audio body for a lip-sync model id outside the catalog; the
 // curated MiniMax H3 lip-sync route (#8977) builds through the catalog, which
@@ -159,7 +120,7 @@ function buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, image
  * history records. Returns the plan with the record of the text fal receives
  * (#11317); the Video Gen form's preview calls it with the same inputs.
  */
-export function falVideoSentPrompt({ hasImage = false, hasEndImage = false, hasAudio = false, guidanceReferences = null, referenceCount = 0, clipReferenceLabels = null, promptAdditions = [], ...spec }) {
+export function falVideoSentPrompt({ hasImage = false, hasVideo = false, hasEndImage = false, hasAudio = false, guidanceReferences = null, referenceCount = 0, clipReferenceLabels = null, promptAdditions = [], ...spec }) {
   const modelId = spec.modelId || (hasImage ? FAL_DEFAULT_IMAGE_MODEL : FAL_DEFAULT_TEXT_MODEL);
   const { negativePrompt } = spec;
   // A storyboard-guided render (`guidanceReferences`: how many reference images
@@ -180,6 +141,7 @@ export function falVideoSentPrompt({ hasImage = false, hasEndImage = false, hasA
       ...(guidance ? { referenceImageUrls: guidance.placeholders }
         : referenceCount > 0 ? { referenceImageUrls: Array.from({ length: referenceCount }, (_, i) => `pending:reference-${i + 1}`) } : {}),
       imageUrl: hasImage ? 'pending:image' : null,
+      videoUrl: hasVideo ? 'pending:video' : null,
       endImageUrl: hasEndImage ? 'pending:end-image' : null,
       audioUrl: hasAudio && !audioAsReference ? 'pending:audio' : null,
       referenceAudioUrls: audioAsReference ? ['pending:audio'] : [],
@@ -215,16 +177,17 @@ function falStoryboardGuidance(model, referenceCount) {
   };
 }
 
-export const generateVideo = (params) => preparations.run(params, generateVideoPrepared);
+export const generateVideo = (params) => runner.prepare(params, generateVideoPrepared);
 
 async function generateVideoPrepared({
   apiKey: providedApiKey, settings, modelId: requestedModelId,
   prompt = '', negativePrompt, duration, aspectRatio, width, height,
-  sourceImagePath = null, lastImagePath = null, jobId: providedJobId = null,
+  sourceImagePath = null, lastImagePath = null, jobId,
   audioFilePath = null, lipSync = null, shotInstruction = null,
   uploadedTempPath = null, uploadedTempPaths = [],
   resolution = null, generateAudio = false, frameAspect = null, promptAdditions = [], musicVideo = null,
   guidanceImagePath = null, referenceImagePaths = [], clipReferenceLabels = null,
+  sourceVideoPath = null, extendedFrom = null, extendSourceSec = null, lookAround = null,
 }) {
   await ensureDir(PATHS.videos);
   const renderStartedAtMs = Date.now();
@@ -254,9 +217,7 @@ async function generateVideoPrepared({
     throw new ServerError('No fal.ai API key configured — set it in Settings > Video Gen or the FAL_KEY env var', { status: 400, code: 'FAL_NOT_CONFIGURED' });
   }
 
-  const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.mp4`;
-  const outputPath = join(PATHS.videos, filename);
   // An explicit aspectRatio always wins (e.g. FableLoom's visualConditioning
   // render parameters); otherwise derive the nearest fal-supported ratio from
   // the request's width/height, same as grok's deriveAspectRatio. Legacy body
@@ -280,7 +241,7 @@ async function generateVideoPrepared({
   const guidanceImages = guidanceImagePath ? [guidanceImagePath, ...referenceImagePaths] : referenceImagePaths;
   const { planned, record: sentRecord, prompt: guidedPrompt } = falVideoSentPrompt({
     ...requestSpec, promptAdditions,
-    hasImage: !!sourceImagePath, hasEndImage: !!lastImagePath, hasAudio: !!audioFilePath,
+    hasImage: !!sourceImagePath, hasVideo: !!sourceVideoPath, hasEndImage: !!lastImagePath, hasAudio: !!audioFilePath,
     guidanceReferences: guidanceImagePath ? referenceImagePaths.length : null,
     referenceCount: guidanceImagePath ? 0 : referenceImagePaths.length,
     clipReferenceLabels: guidanceImagePath ? null : clipReferenceLabels,
@@ -313,41 +274,26 @@ async function generateVideoPrepared({
     filename,
     createdAt: new Date().toISOString(),
     mode: sourceImagePath ? 'image' : 'text',
+    // #16150: the clip this render continues.
+    ...(extendedFrom ? { extendedFrom, ...(extendSourceSec ? { extendSourceSec } : {}) } : {}),
+    // #16145: a place's look-around clip names its place, motion and main plate (catalogLookAround.js).
+    ...(lookAround?.ingredientId ? { lookAround } : {}),
     ...storyboardGuidanceMeta(guidanceImagePath, referenceImagePaths),
     ...(clipReferenceLabels != null && !guidanceImagePath ? { clipReferenceFiles: referenceImagePaths.map((path) => basename(path)) } : {}),
     // A lip-sync take syncs a mouth; an audio-to-video take moves the whole frame to the audio.
     ...(audioFilePath ? (catalogModel?.kind === 'a2v' || audioAsReference ? { audioDriven: true } : { lipSync: true }) : {}),
     ...(shotInstruction?.audioWindow ? { audioWindow: shotInstruction.audioWindow } : {}),
   };
-  const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
-  jobs.set(jobId, job);
-
   const costNote = meta.estimatedCostUsd != null ? ` ~$${meta.estimatedCostUsd.toFixed(2)}` : ' cost unknown';
-  console.log(`🎬 Generating video [${jobId.slice(0, 8)}] fal (${modelId}${meta.resolution ? ` ${meta.resolution}` : ''}${costNote})`);
-  videoGenEvents.emit('started', { generationId: jobId, totalSteps: 1, ...meta });
-  activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0 });
-  emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Submitting to fal.ai…');
-
-  runFalVideo(job, jobId, {
-    apiKey, modelId, prompt, negativePrompt, duration, aspectRatio: effectiveAspectRatio, sourceImagePath, lastImagePath, outputPath, filename, meta,
-    audioFilePath, uploadedTempPath, uploadedTempPaths, enableTranscription: lipSync?.enableTranscription === true,
-    requestSpec: planned ? requestSpec : null, frameAspect, guidanceImages,
-  })
-    .catch((err) => {
-      console.error(`❌ fal video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
-    });
-
-  return {
-    jobId, filename, path: `/data/videos/${filename}`, generationId: jobId,
-    mode: 'fal',
-    status: 'running',
-  };
+  return runner.start({
+    meta, renderStartedAtMs, logDetail: `${modelId}${meta.resolution ? ` ${meta.resolution}` : ''}${costNote}`,
+    run: (job) => runFalVideo(job, jobId, {
+      apiKey, modelId, prompt, negativePrompt, duration, aspectRatio: effectiveAspectRatio, sourceImagePath, lastImagePath, meta,
+      audioFilePath, uploadedTempPath, uploadedTempPaths, enableTranscription: lipSync?.enableTranscription === true,
+      requestSpec: planned ? requestSpec : null, frameAspect, guidanceImages, sourceVideoPath,
+    }),
+  });
 }
-
-const isStagedUpload = (path) => {
-  const rel = relative(PATHS.uploads, resolve(path));
-  return !!rel && !rel.startsWith('..') && !isAbsolute(rel);
-};
 
 // The staged voice clip keeps its upload's extension (a performance slice is always WAV).
 function audioMimeType(path) {
@@ -359,34 +305,13 @@ function audioMimeType(path) {
 }
 
 async function runFalVideo(job, jobId, {
-  apiKey, modelId, prompt, negativePrompt, duration, aspectRatio, sourceImagePath, lastImagePath, outputPath, filename, meta,
+  apiKey, modelId, prompt, negativePrompt, duration, aspectRatio, sourceImagePath, lastImagePath, meta,
   audioFilePath = null, uploadedTempPath = null, uploadedTempPaths = [], enableTranscription = false, requestSpec = null,
-  frameAspect = null, guidanceImages = [],
+  frameAspect = null, guidanceImages = [], sourceVideoPath = null,
 }) {
-  const entry = createFalRequestEntry(apiKey);
-  entry.aborted = preparations.take(jobId);
-  const publication = {};
-  // Every terminal path shares the same cleanup attempt. A publication error
-  // can enter the catch after the success path has already settled its inputs.
-  let inputCleanup;
-  const settleInputs = () => (inputCleanup ??= (async () => {
-    const inputs = new Set([uploadedTempPath, audioFilePath, ...(Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [])]);
-    for (const path of inputs) {
-      if (!path || !isStagedUpload(path)) continue;
-      await unlink(path).catch(error => {
-        if (error.code === 'ENOENT') return;
-        maintenance.markCurrentUnsettled();
-        maintenance.markResourceUnsettled('media', jobId);
-        console.error(`❌ fal staged-input cleanup failed [${jobId.slice(0, 8)}]: ${error.message}`);
-      });
-    }
-  })());
-  const finishFailure = async (reason) => {
-    await settleInputs();
-    if (entry.aborted) return finalizeCanceled(job, jobId);
-    return finalizeJobFailure(job, jobId, null, reason, { force: true });
-  };
-  activeRequests.set(jobId, entry);
+  const { entry, finishFailure, publish, fail } = runner.begin(job, createFalRequestEntry(apiKey), {
+    inputs: [uploadedTempPath, audioFilePath, ...(Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [])],
+  });
   const deadline = Date.now() + FAL_RENDER_TIMEOUT_MS;
   try {
     // A Music Video clip's frames are cropped to its project's aspect, since
@@ -407,14 +332,16 @@ async function runFalVideo(job, jobId, {
     // Most routes read inputs inline; a model that downloads them gets fal-hosted URLs.
     const hosted = getFalVideoModel(modelId)?.hostedInputs === true;
     const host = (dataUri, name) => (hosted && dataUri ? hostFalDataUri({ apiKey, dataUri, fileName: `${jobId}-${name}` }) : dataUri);
-    const [imageUrl, endImageUrl, audioUrl, ...referenceImageUrls] = await Promise.all([
-      host(imageDataUri, 'start'), host(endImageDataUri, 'end'), host(audioDataUri, 'audio'),
+    // An extend render continues the source clip, hosted like any other input.
+    const videoDataUri = sourceVideoPath ? `data:video/mp4;base64,${(await readFile(sourceVideoPath)).toString('base64')}` : null;
+    const [imageUrl, endImageUrl, audioUrl, videoUrl, ...referenceImageUrls] = await Promise.all([
+      host(imageDataUri, 'start'), host(endImageDataUri, 'end'), host(audioDataUri, 'audio'), host(videoDataUri, 'source'),
       // A storyboard panel and its references go in uncropped: none is a frame of the clip.
       ...guidanceImages.map(async (path, i) => host((await frameDataUriAtAspect(path, null)).dataUri, `reference-${i + 1}`)),
     ]);
     const audioInputs = falHearsAudioReference(getFalVideoModel(modelId)) ? { referenceAudioUrls: audioUrl ? [audioUrl] : [] } : { audioUrl };
     const body = requestSpec
-      ? buildFalVideoRequest({ ...requestSpec, imageUrl, endImageUrl, ...audioInputs, ...(referenceImageUrls.length ? { referenceImageUrls } : {}) }).body
+      ? buildFalVideoRequest({ ...requestSpec, imageUrl, videoUrl, endImageUrl, ...audioInputs, ...(referenceImageUrls.length ? { referenceImageUrls } : {}) }).body
       : audioFilePath
         ? buildLipSyncRequestBody({ imageDataUri: imageUrl, audioDataUri: audioUrl, enableTranscription })
         : buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, imageDataUri: imageUrl });
@@ -453,54 +380,24 @@ async function runFalVideo(job, jobId, {
       }));
     });
     if (entry.aborted) return finishFailure('Canceled');
-    await writeFile(outputPath, buffer);
-    if (entry.aborted) {
-      await unlink(outputPath);
-      return finishFailure('Canceled');
-    }
-
-    // Record what the provider actually delivered: fal reports no frame count,
-    // and the Music Video renderer trims every clip by numFrames/fps — the
-    // measured length is also what a performance take's edit points index.
-    const measured = (await probeVideoGeometry(outputPath)) || {};
-    const expectedSec = meta.audioWindow?.durationSec;
-    if (expectedSec && measured.durationSec && measured.durationSec + 0.1 < expectedSec) {
-      console.warn(`⚠️ fal source-audio take [${jobId.slice(0, 8)}] delivered ${measured.durationSec.toFixed(2)}s for a ${expectedSec.toFixed(2)}s audio window`);
-    }
-    activeRequests.delete(jobId);
-    await settleInputs();
-    activeJobs.delete(jobId);
-    await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, ...measured }, actualSeed: null, mutateHistory: mutateVideoHistory, publication });
-    closeJobAfterDelay(jobs, jobId);
-    void autoDeleteHostedCopy('fal', 'video', jobId, { apiKey });
-  } catch (err) {
-    // Best-effort: an unanticipated throw (e.g. from fetchFalResult or the
-    // download) may still leave the remote render queued or running — cancel
-    // it before finalizing. `cancelFalRequest` already no-ops once
-    // entry.remoteTerminal is set (fal reported COMPLETED/ERROR) or the
-    // request was never submitted (no cancelUrl yet), so this never sends a
-    // stray cancel for a job that already finished on fal.ai's side (#8340).
-    //
-    // A dispatch failure can follow the durable commit. Never remove those
-    // bytes; a failure before publication cleans only this fresh output.
-    if (!publication.committed) await discardUnpublishedVideo({ jobId, outputPath }).catch(error => {
-      maintenance.markCurrentUnsettled();
-      maintenance.markResourceUnsettled('media', jobId);
-      console.error(`❌ fal video publication cleanup failed [${jobId.slice(0, 8)}]: ${error.message}`);
+    // fal reports no frame count, so the measured length is also what a
+    // performance take's edit points index.
+    const published = await publish({
+      buffer, meta,
+      onMeasured: (measured) => {
+        const expectedSec = meta.audioWindow?.durationSec;
+        if (expectedSec && measured.durationSec && measured.durationSec + 0.1 < expectedSec) {
+          console.warn(`⚠️ fal source-audio take [${jobId.slice(0, 8)}] delivered ${measured.durationSec.toFixed(2)}s for a ${expectedSec.toFixed(2)}s audio window`);
+        }
+      },
     });
-    await cancelFalRequest(entry);
-    return finishFailure(`fal.ai video generation failed: ${err?.message || err}`);
+    if (published) void autoDeleteHostedCopy('fal', 'video', jobId, { apiKey });
+  } catch (err) {
+    // cancelFalRequest no-ops once fal reported COMPLETED/ERROR or before
+    // anything was submitted, so this never sends a stray cancel (#8340).
+    return fail(err);
   }
 }
-
-const finalizeJobFailure = createJobFailureFinalizer({
-  jobs,
-  activeJobs,
-  activeSlots: activeRequests,
-  label: 'fal video generation',
-  events: videoGenEvents,
-});
-const finalizeCanceled = finalizeJobFailure.canceled;
 
 // Test-only handles.
 export const _internals = {

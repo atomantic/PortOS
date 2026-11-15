@@ -82,11 +82,11 @@ describe('renderOnGeminiWeb', () => {
     expect(fake.log.closed).toBe(true);
   });
 
-  it('picks the Flash mode before turning on Create video', async () => {
+  it('leaves the mode picker alone and uses the composer default', async () => {
     const fake = fakeGemini({ answers: [CLIP] });
     await render(fake);
-    expect(fake.log.clicks.indexOf('mode')).toBeGreaterThan(-1);
-    expect(fake.log.clicks.indexOf('mode')).toBeLessThan(fake.log.clicks.indexOf('Create video'));
+    expect(fake.log.clicks).not.toContain('mode');
+    expect(fake.log.clicks.filter((name) => /mode picker/.test(name))).toEqual([]);
   });
 
   it('fails at once when Gemini answers with a still instead of a clip, without sending again', async () => {

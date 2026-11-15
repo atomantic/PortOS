@@ -1,3 +1,12 @@
+/**
+ * Zod schemas for federated peer-sync wire payloads: push, subscribe, sync-now, pull-metadata and
+ * library manifest, plus tombstone request header constants.
+ *
+ * Federated peer-sync wire/request schemas (push payload, subscribe, sync-now, pull-metadata, the
+ * library manifest with its optional image `tombstones` and the `PEER_LIBRARY_TOMBSTONES_HEADER` that
+ * requests them plus the `PEER_LIBRARY_TOMBSTONES_SINCE_HEADER` cursor).
+ */
+
 import { z } from 'zod';
 import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalogValidation.js';
 import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from './taskParser.js';

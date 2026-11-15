@@ -2,6 +2,12 @@
  * "Does this payload KEY name hold a credential?" — the key-side half of the
  * secret-redaction pair whose value side is `secretText.js#scrubSecretTokens`.
  *
+ * `isSecretKey(key)` — does a payload KEY name hold a credential (`api_key`/`apiKey`/`API-KEY` all
+ * normalize to `apikey`; a trailing `Key`/`Keys` counts; short names like `auth`/`env` match only
+ * whole). The key-side half of the pair whose value side is `secretText.js#scrubSecretTokens`. Split
+ * out of `services/userActions.js` so `lib/federationSafety.js` can reach it; deliberate
+ * over-redaction (losing `tokenCount` beats shipping `refreshToken`).
+ *
  * Split out of `services/userActions.js` (where the operator-action ledger
  * wrote it) when the Eidoverse promote gate needed the same question at the
  * federation boundary: a `body` of `{ apiKey: 'hunter2' }` carries a live

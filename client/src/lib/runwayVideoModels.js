@@ -1,4 +1,11 @@
 /**
+ * Re-export of `server/lib/runwayVideoModels.js` — the curated Runway video model catalog, per-model
+ * request rules and `estimateRunwayVideoCostUsd()`.
+ *
+ * Used by the Music Video Runway pickers and the Video Gen page's Runway backend.
+ */
+
+/**
  * Curated Runway video model catalog.
  *
  * Re-export of `server/lib/runwayVideoModels.js` — the one definition of each

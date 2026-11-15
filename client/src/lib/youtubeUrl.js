@@ -1,4 +1,14 @@
 /**
+ * `isYoutubeVideoUrl(text)` / `youtubeVideoId(url)` re-exported from `server/lib/youtubeUrl.js`, so
+ * Quick Capture can only offer the ingest path for a URL the server accepts.
+ *
+ * Also the client-only `INGEST_OPTIONS` — the single table of the three ingest artifacts (`key` /
+ * `settingKey` / `fallback` / `label` / `hint`) — plus `defaultIngestOptions()` and
+ * `ingestOptionsFromSettings(settings)`. Everything that enumerates the switches derives from that
+ * table; add an artifact there, not at each call site.
+ */
+
+/**
  * The YouTube ingest options Quick Capture offers, over the canonical
  * single-video URL rule in `server/lib/youtubeUrl.js`.
  *

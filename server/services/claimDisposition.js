@@ -5,6 +5,7 @@ import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { expandHome, safeJSONParse } from '../lib/fileUtils.js';
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
 import { getAppDataForTask } from './agentAppWorkspace.js';
+import { listWorktrees } from './worktreeManager.js';
 
 const unverified = reason => ({ status: 'unverified', reason });
 const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
@@ -32,7 +33,7 @@ async function selectedIssues(task, agent, context) {
   const number = positiveIssue(task.metadata?.claimTarget);
   if (number) return [number];
   if (task.metadata?.claimTarget || !agent.metadata?.claimSelection
-    || agent.metadata?.claimReleasedBranches?.length || agent.metadata?.checkoutSeeds?.length) return null;
+    || agent.metadata?.claimReleasedBranches?.length) return null;
   const [{ claimSelectionIssues }, { getInstanceId }] = await Promise.all([
     import('./cosClaimSelection.js'), import('./instanceIdentity.js'),
   ]);
@@ -226,16 +227,20 @@ async function inspectClaimDisposition(task, agent) {
     if (result.status !== 'verified') return result;
     issues.push(result);
   }
-  // Parking an issue settles this attempt, not unfinished code. Require the
-  // checkout to be clean and fully present in the live default-branch head.
+  // Parking settles this attempt, not unfinished code. Bound claims must be
+  // clean and contained in the live default head. Unbound runs own no checkout:
+  // never inspect the shared primary checkout's unrelated work.
   for (const issue of issues.filter(issue => issue.disposition === 'operator-blocked')) {
     if (!/^[a-f0-9]{40,64}$/i.test(issue.defaultCommit || '')) return unverified('default-branch-unavailable');
-    // Swarm coordinators run outside their selected children's checkouts.
-    // Only server-captured seeds bind each child to the path we must inspect.
-    const workspace = agent.metadata?.claimBranches?.length
-      ? agent.metadata.checkoutSeeds?.find(seed => seed.agentId === agent.id && seed.branch === `claim/issue-${issue.issue}`
-        && typeof seed.repoPath === 'string' && resolve(seed.repoPath) === resolve(source))?.path
-      : agent.metadata?.workspacePath;
+    const trees = await listWorktrees(source).catch(() => null);
+    if (!Array.isArray(trees)) return unverified('checkout-unavailable');
+    const holders = trees.filter(tree => tree.branch?.replace(/^refs\/heads\//, '') === `claim/issue-${issue.issue}`);
+    if (!agent.metadata?.claimBranches?.length) {
+      if (holders.length) return unverified('checkout-has-undelivered-work');
+      continue;
+    }
+    if (holders.length !== 1) return unverified('checkout-unavailable');
+    const workspace = holders[0].path;
     if (typeof workspace !== 'string' || !workspace) return unverified('checkout-unavailable');
     const status = await execGit(['status', '--porcelain', '--untracked-files=all'], workspace);
     if (status.stdout.trim()) return unverified('checkout-has-undelivered-work');

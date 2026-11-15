@@ -1,3 +1,10 @@
+/**
+ * Music Video projects + scene board + audio analysis.
+ *
+ * Includes render cleanup inventory/apply with optional unused film-look purging, and shot color-match
+ * measure, take correction and group reference.
+ */
+
 import { request } from './apiCore.js';
 
 export const getMusicVideoMakingOfCatalog = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/making-of/catalog`, options);
@@ -189,6 +196,18 @@ export const renderMusicVideoSceneClip = (id, sceneId, body, options = {}) => re
 // #14241: queue one planned sequence run (its scenes in timeline order) as a single timed fal request.
 export const renderMusicVideoSequence = (id, sceneIds, options = {}) => request(`/music-video/${encodeURIComponent(id)}/sequence-coverage/render`, {
   method: 'POST', body: JSON.stringify({ sceneIds }), ...options,
+});
+// #16128: one hosted take across consecutive shots. `dryRun: true` returns the prompt, references and price only.
+export const musicVideoSequenceTake = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/sequence-takes`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+// #16136: tick or clear shots for the final-resolution upgrade; returns `{ scenes, counts }`.
+export const approveMusicVideoFinal = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes/approve-final`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+// #16136: upgrade approved draft shots (`method: upscale | rerender`); `dryRun: true` returns the plan and price only.
+export const upgradeMusicVideoShots = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/upgrade`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
 });
 export const updateMusicVideoScene = (id, sceneId, patch, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}`, {

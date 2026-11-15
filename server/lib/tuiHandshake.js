@@ -1,6 +1,12 @@
 /**
  * Shared TUI invocation + paste-handshake constants.
  *
+ * Shared TUI invocation + paste-handshake constants. Also owns `SUBMIT_KEY` — the single Enter byte
+ * every PTY writer sends, whether it's submitting a pasted TUI prompt or a command PortOS injected
+ * into a shell session. It is CR, never LF: a POSIX pty's ICRNL hides the difference, but cmd.exe
+ * under Windows ConPTY accepts only CR and leaves an LF-terminated line typed-but-unexecuted at the
+ * prompt.
+ *
  * Two execution paths need these: `server/services/tuiPromptRunner.js` (one-shot
  * prompts from the central handler) and `server/services/agentTuiSpawning.js`
  * (long-running CoS agents). Both shell into the same set of TUI binaries
@@ -116,10 +122,8 @@ export const PASTE_TO_ENTER_FALLBACK_MS = 3500;
 // re-paste cadence that IS the recovery. The spawner reads the boot tracker
 // live for that reason — the banner can latch after the paste went out.
 //
-// The one-shot runner (tuiPromptRunner.js) keeps the flat fallback: it never
-// re-pastes, so it has nothing for patience to protect, and it tracks no
-// verifiable prompt prefix, so a short codex prompt renders no chip there and
-// would simply wait the full window for nothing.
+// Both TUI runners get this rule through the shared paste driver
+// (tuiPasteSubmitDriver.js, `settleRule: 'codex'`).
 export const PASTE_COMMIT_PATIENCE_MS = 45000;
 
 // Codex's composer placeholder — the ONLY positive evidence its input box is

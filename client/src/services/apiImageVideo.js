@@ -1,3 +1,11 @@
+/**
+ * `checkHiggsfieldNewModels` (Higgsfield families the picker lacks), Image-gen local backend extras.
+ *
+ * Bounded image/mixed gallery pages, global facets and collection summaries, exact-reference
+ * `getGalleryImages`, one image's original-vs-cleaned variant set via `listImageVariants`, plus
+ * models, LoRAs, cancel and delete.
+ */
+
 import { uploadBody, request, API_BASE, throwApiError } from './apiCore.js';
 import { filterHardwareCompatibleModels } from '../utils/systemCapabilities.js';
 
@@ -209,6 +217,8 @@ export const getVideoGenStatus = (options = {}) => request('/video-gen/status', 
     ...status,
     models: filterHardwareCompatibleModels(status?.models),
   }));
+/** Higgsfield video families the picker doesn't offer yet, read from their public catalog. */
+export const checkHiggsfieldNewModels = (options = {}) => request('/video-gen/higgsfield-models/unsupported', options);
 export const listVideoModels = ({ includeUnavailable = false, ...options } = {}) =>
   request('/video-gen/models', options)
     .then((models) => filterHardwareCompatibleModels(models, { includeUnavailable }));
@@ -318,6 +328,10 @@ export const setVideoHidden = (id, hidden, options = {}) => request(`/video-gen/
 });
 export const updateVideoPrompt = (id, prompt, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/prompt`, {
   method: 'PATCH', body: JSON.stringify({ prompt }), ...options,
+});
+// Continue a hosted clip on its model's extend endpoint (#16150). `dryRun: true` returns the exact body and price.
+export const extendVideoHistoryItem = (id, body, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/extend`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
 });
 export const extractLastFrame = (id, options = {}) => request(`/video-gen/last-frame/${encodeURIComponent(id)}`, { method: 'POST', ...options });
 // `method` selects the upscale pass (#6509/#6510): 'lanczos' (the historical

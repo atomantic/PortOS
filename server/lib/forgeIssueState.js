@@ -1,4 +1,12 @@
 /**
+ * `normalizeIssueState(state)` — collapse a forge issue/PR/MR state string to `open`/`closed`.
+ *
+ * GitHub reports `OPEN`/`CLOSED`; GitLab reports `opened`/`closed`/`locked`; anything unrecognized is
+ * treated as open so an unfamiliar state can never read as "already resolved". Shared by
+ * `layeredIntelligence/forgeFiler.js` and `services/blockedIssueReconcile.js`.
+ */
+
+/**
  * Normalize a forge issue/PR/MR state string to `open` / `closed`. GitLab
  * reports `opened` (and `closed`/`locked`); GitHub reports `open`/`closed`.
  * Anything unrecognized is treated as open, so an unfamiliar state string

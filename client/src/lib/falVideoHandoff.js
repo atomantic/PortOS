@@ -1,3 +1,12 @@
+/**
+ * `buildFalH3MaxPrompt(prompt, negativePrompt)` composes the provider-neutral shot prompt fal's free
+ * MiniMax H3 Max tool is driven with.
+ *
+ * `FAL_H3_MAX_FREE_URL` and `FAL_H3_MAX_FREE_ALLOWANCE_NOTE` carry the tool URL and current vendor
+ * allowance copy. The free web allowance is deliberately a handoff, not the separately metered fal
+ * API.
+ */
+
 export const FAL_H3_MAX_FREE_URL = 'https://fal.ai/tools/minimax-h3-max';
 export const FAL_H3_MAX_FREE_ALLOWANCE_NOTE =
   'fal.ai currently advertises up to 5 free videos per day with an account; this vendor-controlled allowance may change.';

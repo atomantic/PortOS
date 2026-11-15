@@ -2,11 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 vi.mock('../services/maintenanceControl.js', () => ({ resumeMaintenance: async input => maintenance.resume(input) }));
 import router from './maintenance.js';
+import { hostControlRouteGate } from '../services/authGate.js';
 const session = { enabled: true, authenticated: true, method: 'session' };
+// hostControlRouteGate (#16018) is what refuses these writes to a non-operator caller.
 const call = (method, path, body, auth = session, address = '192.0.2.10') => new Promise(resolve => {
-  const req = { app: { get: () => null }, method, url: path, body, headers: {}, socket: { remoteAddress: address }, portosAuthContext: auth };
+  const req = { app: { get: () => null }, method, url: path, path: `/api${path}`, body, headers: {}, socket: { remoteAddress: address }, portosAuthContext: auth };
   const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(value) { resolve({ status: this.statusCode, body: value }); } };
-  router.handle(req, res, err => resolve({ status: err?.status || 404, error: err }));
+  const fail = err => resolve({ status: err?.status || 404, error: err });
+  hostControlRouteGate(req, res, err => (err ? fail(err) : router.handle(req, res, fail)));
 });
 afterEach(() => {
   const hold = maintenance.status().hold;

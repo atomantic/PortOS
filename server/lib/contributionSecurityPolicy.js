@@ -1,3 +1,7 @@
+/**
+ * Trusted host-control security policy and strict tool-free GitHub contribution assessment contract.
+ */
+
 import { z } from 'zod';
 
 // Trusted policy, shipped with PortOS. Contributor prose cannot replace it.

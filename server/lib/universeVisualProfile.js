@@ -1,3 +1,8 @@
+/**
+ * Shared profile normalization, original photography default, photoreal detection, labeled additions,
+ * explicit overrides and separate color/texture strength.
+ */
+
 import { FILM_LOOK_CONTROLS, filmLookPreset, normalizeFilmLook } from './filmLook.js';
 
 export const VISUAL_PROFILE_TEXT_MAX = 2000;

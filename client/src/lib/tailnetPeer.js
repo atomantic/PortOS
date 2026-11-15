@@ -1,6 +1,15 @@
 /**
  * Is a peer reachable ONLY over the tailnet? — the browser's copy of the gate.
  *
+ * `isTailnetPeer(peer)` — is this registered peer reachable ONLY over the tailnet? A faithful port of
+ * `server/lib/tailnetPeer.js` (MagicDNS `.ts.net`, the 100.64.0.0/10 CGNAT range with every octet
+ * range-checked, and the `fd7a:115c:a1e0::/48` ULA; an explicit non-tailnet `host` overrides a
+ * tailnet-looking `address`). FAIL-CLOSED — anything not positively recognized is not tailnet. Used to
+ * keep the unattended-render-routing picker from OFFERING a peer the server would refuse under ADR
+ * [federated visual prompts](../../../docs/decisions/2026-08-20-federated-visual-prompts.md) rule 5;
+ * the server stays authoritative and refuses such a route both on save and on every enqueue. Keep the
+ * table in `tailnetPeer.test.js` identical to the server suite’s.
+ *
  * A faithful port of `server/lib/tailnetPeer.js`, which stays authoritative:
  * the server refuses a standing route to a non-tailnet peer both when the route
  * is SAVED (`server/services/federatedMedia/routingPolicy.js`) and again on

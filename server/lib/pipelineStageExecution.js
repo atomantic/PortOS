@@ -1,8 +1,14 @@
 /**
- * The one place a pipeline stage's execution settings land on a task's
- * metadata. Task creation (stage 0), the agent-completion hand-off (stage 1+)
- * and the pr-reviewer security preflight (its synthetic stage 0 -> stage 1)
- * all apply a stage the same way; a policy added here reaches all three.
+ * The one place a pipeline stage's execution settings land on a task's metadata.
+ *
+ * `applyStageExecution(metadata, stage, { taskDefaults, clearInheritedExecutionOptions })` — the one
+ * place a pipeline stage's model/provider/effort pins, `executionOptions` and behavior flags
+ * (read-only default, task-default fallback, draft-delivery guard) land on task metadata. Shared by
+ * task creation, the agent-completion stage hand-off and the pr-reviewer security preflight (#14388).
+ *
+ * Task creation (stage 0), the agent-completion hand-off (stage 1+) and the pr-reviewer security
+ * preflight (its synthetic stage 0 -> stage 1) all apply a stage the same way; a policy added here
+ * reaches all three.
  */
 import { PIPELINE_STAGE_BEHAVIOR_FLAGS } from './cosValidation.js';
 import { PR_COMPLETIONS } from './prDisposition.js';

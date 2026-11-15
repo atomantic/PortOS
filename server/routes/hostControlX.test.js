@@ -268,7 +268,7 @@ describe('X (Twitter) review, browser handoff and sync authority', () => {
     expect(executeXBrowserRead).toHaveBeenCalledTimes(3);
   });
 
-  it('keeps remote reads and draft creation available without granting execution or approval', async () => {
+  it('keeps remote reads open, refuses remote draft creation, and creates a pending-review draft locally without execution or approval', async () => {
     const app = appFor();
 
     const capabilities = await request(app).get('/api/x/capabilities');
@@ -280,7 +280,11 @@ describe('X (Twitter) review, browser handoff and sync authority', () => {
     const drafts = await request(app).get(`/api/x/accounts/${account.id}/drafts`);
     expect(drafts.status).toBe(200);
 
-    const createdDraft = await post(app, '/api/x/drafts', { accountId: account.id, body: 'New proposed post' });
+    const remoteDraft = await post(app, '/api/x/drafts', { accountId: account.id, body: 'New proposed post' });
+    expect([remoteDraft.status, remoteDraft.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect(storage.query.mock.calls.some(([sql]) => sql.includes('INSERT INTO x_drafts'))).toBe(false);
+
+    const createdDraft = await post(appFor('127.0.0.1'), '/api/x/drafts', { accountId: account.id, body: 'New proposed post' });
     expect(createdDraft.status, JSON.stringify(createdDraft.body)).toBe(201);
     expect(createdDraft.body.state).toBe('pending_review');
 

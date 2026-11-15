@@ -3,7 +3,7 @@ import * as genomeService from '../services/genome.js';
 import * as clinvarService from '../services/clinvar.js';
 import * as epigeneticService from '../services/epigenetic.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
   genomeUploadSchema,
   genomeClinvarSyncSchema,

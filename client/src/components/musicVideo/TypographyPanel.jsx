@@ -49,6 +49,14 @@ export default function TypographyPanel({ project, onEditLocal, onSave }) {
         <span className="block sm:inline sm:ml-1">— timed text laid over the footage, kept inside the title-safe area.</span>
       </summary>
 
+      {composed && (
+        <label htmlFor="mv-typo-none" className="mt-2 flex items-center gap-2 min-h-[44px] pointer-fine:sm:min-h-0 text-port-text-muted">
+          <input id="mv-typo-none" type="checkbox" checked={composition.noTypography === true}
+            onChange={(e) => replace({ noTypography: e.target.checked })} />
+          This video has no typography — stop asking for text cues (the opening title card still applies)
+        </label>
+      )}
+
       <div className="mt-2 flex flex-wrap items-end gap-2">
         <div>
           <label htmlFor="mv-typo-cutting" className="block text-port-text-muted mb-0.5" title="Intercut re-cuts each shot on the song's energy and sung words, reusing cutaway footage — no extra generation.">Cutting</label>

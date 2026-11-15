@@ -1,4 +1,11 @@
 /**
+ * `PORTOS_APP_ID` — stable id of the baseline PortOS app.
+ *
+ * Re-exported from `server/lib/appIdentity.js`; dependency-free so a module reachable from a server
+ * test can import it.
+ */
+
+/**
  * The product name/tagline every surface prints.
  *
  * Re-export of `server/lib/appIdentity.js` — the one definition of this rule,

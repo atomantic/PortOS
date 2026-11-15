@@ -1,3 +1,9 @@
+/**
+ * Toasts when a user-triggered on-demand task run found no work (parked).
+ *
+ * Use when: Wire once high in the tree so an explicit "Run" that parks isn't a silent no-op.
+ */
+
 import { createElement, useEffect } from 'react';
 import MaintenanceRunStatus, { maintenanceRunProgress } from '../components/cos/tabs/schedule/MaintenanceRunStatus';
 import toast from '../components/ui/Toast';

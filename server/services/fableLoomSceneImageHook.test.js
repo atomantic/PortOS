@@ -52,8 +52,7 @@ describe('fableLoomSceneImageHook', () => {
   it('ignores jobs without the fableLoom tag and tags missing their ids', async () => {
     mediaJobEvents.emit('completed', completedImageJob({ params: {} }));
     mediaJobEvents.emit('completed', completedImageJob({ params: { fableLoom: { loomId: 'loom-1' } } }));
-    // Give the async handlers a beat to (not) fire.
-    await new Promise((r) => setTimeout(r, 25));
+    await hook.__testing.settled();
     expect(attachNodeImage).not.toHaveBeenCalled();
   });
 });

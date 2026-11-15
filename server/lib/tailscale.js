@@ -1,3 +1,8 @@
+/**
+ * Locate the Tailscale CLI binary, flag the sandboxed macOS App-bundle build, and return a normalized
+ * backend/MagicDNS/peer snapshot (`getTailscaleStatus` / `isTailscaleUp`).
+ */
+
 import { existsSync } from 'fs';
 import { join, delimiter } from 'path';
 import { execFile } from './childProcess.js';

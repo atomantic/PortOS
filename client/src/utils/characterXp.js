@@ -1,3 +1,6 @@
+// Character age and birthday-progress helpers: `computeAgeView`, `diffXp`, `birthDateCta`, and legacy
+// `levelFromXP`.
+//
 // Pure, deterministic helpers for OpenWorld's character HUD badge (roadmap 2.11): given the
 // character sheet from GET /api/character, compute the badge view-model and detect XP gains
 // by diffing two successive snapshots. No React imports so the math is unit-testable.

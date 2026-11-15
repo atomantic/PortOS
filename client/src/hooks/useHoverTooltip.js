@@ -1,3 +1,15 @@
+/**
+ * `{ hoveredNode, tooltipPos, handleHover, handlePointerMove }` for a canvas hover tooltip.
+ *
+ * `handlePointerMove` drops any move that cannot paint a tooltip (nothing hovered, or a touch pointer,
+ * where the tooltip is `pointer-coarse:hidden`), so idle cursor motion stops re-rendering the page.
+ * The gate reads a ref, not the hovered state — r3f raycasts on the Canvas' inner div while React
+ * delegates the container's move handler, so the enter event's own move still sees the pre-flush
+ * `null`. Use when: Any 3D graph/canvas view with a cursor-following hover tooltip (BrainGraph) — pass
+ * `{ x: e.clientX, y: e.clientY }` to `handleHover` from the mesh's `onPointerOver` so the first frame
+ * is placed.
+ */
+
 import { useCallback, useRef, useState } from 'react';
 
 /**

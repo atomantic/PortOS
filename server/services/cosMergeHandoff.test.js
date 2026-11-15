@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -233,7 +234,7 @@ describe('pending-merge handoff', () => {
   it('names a cleanup recovery owner for a retained merged checkout and confirms cleanup after it finishes', async () => {
     await handedOff();
     f.tasks['task-agent-1'].status = 'completed';
-    cleanupMock.mockResolvedValue({ ok: false, reason: 'retirement-submodule-not-uninitialized' });
+    cleanupMock.mockResolvedValue({ ok: false, reason: 'checkout-branch-changed' });
     greenChecks();
     await processPendingMergePrs(f.apps.get('app1'));
     f.pr.state = 'MERGED';
@@ -251,12 +252,12 @@ describe('pending-merge handoff', () => {
     expect(pending()).toEqual([]);
   });
 
-  it.each(['retirement-submodule-not-uninitialized', 'active-owner'])(
+  it.each(['checkout-branch-changed', 'active-owner'])(
     'holds an unresolved completed recovery after one final retirement attempt: %s', async reason => {
       await handedOff();
       f.tasks['task-agent-1'].status = 'completed';
       f.pr.state = 'MERGED';
-      cleanupMock.mockResolvedValue({ ok: false, reason: 'retirement-submodule-not-uninitialized' });
+      cleanupMock.mockResolvedValue({ ok: false, reason: 'checkout-branch-changed' });
       await processPendingMergePrs(f.apps.get('app1'));
       pending()[0].cleanup.retryAt = 0;
       await processPendingMergePrs(f.apps.get('app1'));
@@ -441,6 +442,21 @@ describe('pending-merge handoff', () => {
     expect(notifyMock).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['receipt-pr-head-changed', 'receipt-checkout-locked', 'checkout-head-changed', 'checkout-lock-changed'])(
+    'holds a refused merged cleanup for recovery without force-removing the checkout: %s', async reason => {
+      cleanupMock.mockResolvedValue({ ok: false, reason });
+      await handedOff();
+      greenChecks();
+      await processPendingMergePrs(f.apps.get('app1'));
+      f.pr.state = 'MERGED';
+      pending()[0].cleanup = undefined;
+      await processPendingMergePrs(f.apps.get('app1'));
+      expect(pending()).toHaveLength(1);
+      expect(pending()[0].cleanup).toMatchObject({ status: 'held', reason });
+      expect(existsSync(workspace)).toBe(true);
+    },
+  );
+
   it('keeps merged cleanup owned and bounded after an archival refusal', async () => {
     cleanupMock.mockResolvedValue({ ok: false, reason: 'retirement-forge-unreadable' });
     await handedOff();
@@ -461,7 +477,7 @@ describe('pending-merge handoff', () => {
     expect(pending()).toEqual([]);
   });
 
-  it.each(['pr-completion-human-handoff', 'retirement-submodule-not-uninitialized'])('holds merged cleanup requiring explicit recovery: %s', async reason => {
+  it.each(['pr-completion-human-handoff', 'checkout-branch-changed'])('holds merged cleanup requiring explicit recovery: %s', async reason => {
     cleanupMock.mockResolvedValue({ ok: false, reason });
     await handedOff();
     greenChecks();

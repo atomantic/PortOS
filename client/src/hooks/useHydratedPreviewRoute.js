@@ -1,3 +1,14 @@
+/**
+ * `usePreviewRoute` plus a lazy single-item lookup of the OPEN preview's gallery record (image sidecar
+ * or video-history entry), merged over the host's item.
+ *
+ * A compact list item (`item.compact`) never falls back to its prompt preview; a failed lookup marks
+ * it `detailError`. Use when: Media History's compact grid, and any page that owns its own media refs
+ * and composes a styled prompt on the way out (pipeline canon refs, music-video scenes, deck cards) —
+ * otherwise the lightbox shows a label the renderer never saw. Use eager `useGallerySidecars` when the
+ * page needs records for more than the lightbox.
+ */
+
 import { useEffect, useMemo, useRef, useState } from 'react';
 import usePreviewRoute from './usePreviewRoute';
 import socket from '../services/socket';

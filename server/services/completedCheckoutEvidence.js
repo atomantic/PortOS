@@ -1,25 +1,19 @@
-import { isDeepStrictEqual } from 'node:util';
-/** Server-observed checkout identity captured before a claim run completes.
- * A branch name/path/head can all be reused; private Git filesystem identity
- * distinguishes the completed checkout from a later manual checkout.
- */
-import { lstat, realpath } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+/** Server-observed checkout snapshots captured before a claim run completes.
+ * Older installs persisted seed and filesystem-incarnation fields beside these
+ * snapshots; they are ignored on read and never written. */
+import { realpath } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { execGit } from '../lib/execGit.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
-import { checkoutSeedSchema } from '../lib/checkoutSeed.js';
-
-export { checkoutSeedSchema } from '../lib/checkoutSeed.js';
 
 const shortBranch = branch => branch?.replace(/^refs\/heads\//, '');
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 export const hasClaimCheckoutBindings = meta => meta?.isWorktree !== true
   && (isTruthyMeta(meta?.claimPicksOwnBranch) || Array.isArray(meta?.claimBranches));
-export const releaseCandidateBranch = meta => meta?.releaseCandidateRecovery?.status === 'transferred'
-  ? meta.releaseCandidateRecovery.transfer.branch : meta?.releaseCandidate?.branch;
+export const releaseCandidateBranch = meta => meta?.releaseCandidate?.branch;
 export const hasReleaseCandidateBinding = meta => meta?.isWorktree !== true && meta?.taskAnalysisType === 'do-release'
   && ((meta.releaseCandidate?.version === 1 && typeof meta.releaseCandidate.branch === 'string')
-    || (meta.releaseCandidateRecovery?.status === 'transferred' && typeof releaseCandidateBranch(meta) === 'string'));
+    || (meta.releaseSynchronizationCheckout?.version === 1 && meta.releasePublication?.status === 'verified'));
 export const boundCheckoutBranches = meta => hasClaimCheckoutBindings(meta) ? meta.claimBranches
   : hasReleaseCandidateBinding(meta) ? [releaseCandidateBranch(meta), meta.releaseSynchronizationCheckout?.branch].filter(Boolean) : [meta?.worktreeBranch];
 
@@ -35,15 +29,6 @@ async function resolveRepoCommon(repository) {
   return cached;
 }
 
-async function filesystemIdentity(path, type) {
-  const stat = await lstat(path, { bigint: true });
-  if (!(type === 'file' ? stat.isFile() : stat.isDirectory()) || typeof stat.dev !== 'bigint'
-    || typeof stat.ino !== 'bigint' || stat.ino <= 0n || typeof stat.birthtimeNs !== 'bigint' || stat.birthtimeNs <= 0n) {
-    throw new Error('checkout-incarnation-unavailable');
-  }
-  return { dev: String(stat.dev), ino: String(stat.ino), birthtimeNs: String(stat.birthtimeNs) };
-}
-
 export async function readCompletedCheckoutIdentity({ repoPath, branch, path, head, worktrees = null, repoCommon = null, allowLocked = false }) {
   const { listWorktrees } = await import('./worktreeManager.js');
   const repository = await realpath(repoPath);
@@ -52,9 +37,6 @@ export async function readCompletedCheckoutIdentity({ repoPath, branch, path, he
   const trees = worktrees || await listWorktrees(repository);
   const holders = trees.filter(tree => shortBranch(tree.branch) === branch);
   if (holders.length !== 1 || (!allowLocked && holders[0].locked === true) || await realpath(holders[0].path) !== checkout || holders[0].head !== head) return null;
-  const pointer = await filesystemIdentity(join(checkout, '.git'), 'file');
-  const gitdir = await realpath((await execGit(['rev-parse', '--absolute-git-dir'], checkout)).stdout.trim());
-  const administration = await filesystemIdentity(gitdir, 'directory');
   const [currentHead, currentBranch, common, resolvedRepoCommon] = await Promise.all([
     execGit(['rev-parse', '--verify', 'HEAD^{commit}'], checkout),
     execGit(['symbolic-ref', '--quiet', '--short', 'HEAD'], checkout),
@@ -64,9 +46,7 @@ export async function readCompletedCheckoutIdentity({ repoPath, branch, path, he
   if (!resolvedRepoCommon) return null;
   if (currentHead.stdout.trim() !== head || currentBranch.stdout.trim() !== branch
     || await realpath(resolve(checkout, common.stdout.trim())) !== await realpath(resolve(repository, resolvedRepoCommon))) return null;
-  if (!same(pointer, await filesystemIdentity(join(checkout, '.git'), 'file'))
-    || !same(administration, await filesystemIdentity(gitdir, 'directory'))) return null;
-  return { repoPath: repository, branch, path: checkout, head, incarnation: { pointer, gitdir: { path: gitdir, ...administration } } };
+  return { repoPath: repository, branch, path: checkout, head };
 }
 
 /** The repository a run's checkouts belong to. A claim run that picks its own
@@ -79,176 +59,13 @@ function runRepository(meta) {
     && typeof meta.workspacePath === 'string' && meta.workspacePath ? meta.workspacePath : null;
 }
 
-/** Invoked only at server-controlled registration/binding while the owner is
- * active. Bind before creation reserves the branch; binding again afterward
- * records its physical generation before work starts. A changed seed refuses.
- */
-export async function captureCheckoutSeeds(agent, { allowUncreated = true } = {}) {
-  const prior = agent.metadata?.checkoutSeeds || [];
-  const rows = await captureCompletedCheckouts(agent, { success: true, strict: true, allowUncreated });
-  const seeds = [...prior];
-  for (const row of rows) {
-    const seed = checkoutSeedSchema.parse({ version: 1, agentId: agent.id, startedAt: agent.startedAt,
-      seededAt: new Date().toISOString(), repoPath: row.repoPath, branch: row.branch, path: row.path,
-      repository: await filesystemIdentity(row.repoPath, 'directory'), checkout: await filesystemIdentity(row.path, 'directory'),
-      incarnation: row.incarnation });
-    const existing = prior.find(value => value.branch === seed.branch);
-    if (existing) {
-      if (!same({ ...existing, seededAt: seed.seededAt }, seed)) throw new Error('checkout-seed-generation-changed');
-    } else seeds.push(seed);
-  }
-  return seeds;
-}
-
-/** A branch this run released may be re-cut under the same name once its
- * seeded checkout is gone (#15463). Called with the pre-bind record, so the
- * release is still visible. The retired generation moves to
- * supersededCheckoutSeeds — completion evidence, never discarded — and the
- * next capture records the new checkout. A prior checkout still present (or
- * unreadable) keeps its seed, so a replacement generation still refuses.
- * Returns the metadata patch, or null when nothing is superseded.
- */
-export async function supersedeReleasedCheckoutSeed(agent, branch) {
-  const meta = agent?.metadata || {};
-  const released = meta.claimReleasedBranches ?? agent?.claimReleasedBranches ?? [];
-  const seeds = Array.isArray(meta.checkoutSeeds) ? meta.checkoutSeeds : [];
-  const retired = seeds.filter(seed => seed?.branch === branch);
-  if (!retired.length || !Array.isArray(released) || !released.includes(branch)) return null;
-  const { readCheckoutPathPresence } = await import('./repoCleanupObservation.js');
-  for (const seed of retired) {
-    if (await readCheckoutPathPresence(seed.path) !== false) return null;
-  }
-  const supersededAt = new Date().toISOString();
-  return { checkoutSeeds: seeds.filter(seed => seed?.branch !== branch),
-    supersededCheckoutSeeds: [...(Array.isArray(meta.supersededCheckoutSeeds) ? meta.supersededCheckoutSeeds : []),
-      ...retired.map(seed => ({ ...seed, supersededAt }))] };
-}
-
-/** Whether a superseded generation's physical checkout is still retired: true
- * when its path is absent or now holds a different directory (the re-cut
- * checkout), false when the original directory is back, null when unreadable.
- */
-export async function readSupersededGenerationRetired(seed) {
-  if (!checkoutSeedSchema.safeParse(seed).success) return null;
-  return filesystemIdentity(seed.path, 'directory')
-    .then(current => !same(current, seed.checkout))
-    .catch(error => error.code === 'ENOENT' || error.message === 'checkout-incarnation-unavailable' ? true : null);
-}
-
-/** A late capture has an actual late timestamp and a separately bound early
- * physical generation; legacy v1 evidence retains its original time contract.
- */
+/** Validate the run and capture time; legacy seed/incarnation fields are ignored.
+ * Older v2 captures were recorded after completion; retain that time contract. */
 export function completedCheckoutReceiptValid(agent, receipt) {
   if (!receipt || receipt.agentId !== agent.id || receipt.startedAt !== agent.startedAt
     || !Number.isFinite(Date.parse(receipt.capturedAt)) || Date.parse(receipt.capturedAt) < Date.parse(agent.startedAt)) return false;
   if (receipt.version === 1) return Date.parse(receipt.capturedAt) <= Date.parse(agent.completedAt);
-  if (receipt.version !== 2 || Date.parse(receipt.capturedAt) > Date.now()) return false;
-  return agent.metadata?.checkoutSeeds?.some(seed => checkoutSeedSchema.safeParse(seed).success
-    && seed.agentId === agent.id && seed.startedAt === agent.startedAt && seed.seededAt === receipt.seededAt
-    && Date.parse(seed.seededAt) >= Date.parse(agent.startedAt) && Date.parse(seed.seededAt) <= Date.parse(agent.completedAt) && seed.repoPath === receipt.repoPath
-    && seed.branch === receipt.branch && seed.path === receipt.path && same(seed.incarnation, receipt.incarnation)) === true;
-}
-
-/** One completed review task can retain its original physical generation even
- * when a retry lost its terminal capture or explicit resume link. This proves
- * only retirement by its later completed owner, never that the older run passed.
- */
-export function sameTaskRetirementBinding(agent, successor, input) {
-  const a = agent?.metadata, b = successor?.metadata;
-  const eligible = item => item?.status === 'completed' && item.result?.executionSuccess === true
-    && item.result.validationPassed !== false && !item.result.executionInterruption
-    && !item.metadata?.executionInterruption && !item.metadata?.blocker
-    && item.result.taskOutcome?.recovery?.mode !== 'approval'
-    && item.metadata?.isWorktree === true && item.metadata.prCompletionPolicy === 'review-then-merge'
-    && !isTruthyMeta(item.metadata.reviewLoopLeaveOpen)
-    && item.metadata.reviewLoopMergeTarget?.url === input.prUrl
-    && item.metadata.reviewLoopMergeTarget.branch === input.branch
-    && resolve(item.metadata.sourceWorkspace || '') === resolve(input.repoPath)
-    && (!item.metadata.branchCompletionPolicy || (item.metadata.branchCompletionPolicy.prUrl === input.prUrl
-      && item.metadata.branchCompletionPolicy.branch === input.branch && item.metadata.branchCompletionPolicy.completion === 'review-then-merge'));
-  if (!eligible(agent) || !eligible(successor) || agent.id === successor.id || !agent.taskId || agent.taskId !== successor.taskId
-    || !a.instanceId || a.instanceId === 'unknown' || a.instanceId !== b.instanceId
-    || !(Date.parse(agent.completedAt) >= Date.parse(agent.startedAt))
-    || !(Date.parse(agent.completedAt) <= Date.parse(successor.startedAt))) return null;
-  const capture = owner => (Array.isArray(owner.metadata.completedCheckouts) ? owner.metadata.completedCheckouts : []).filter(row =>
-    completedCheckoutReceiptValid(owner, row) && checkoutSeedSchema.shape.incarnation.safeParse(row.incarnation).success
-    && resolve(row.repoPath || '') === resolve(input.repoPath) && row.branch === input.branch
-    && resolve(row.path || '') === resolve(owner.metadata.workspacePath || '')
-    && isDeepStrictEqual(row.incarnation, input.checkoutIncarnation));
-  const current = capture(successor);
-  if (current.length !== 1 || current[0].head !== input.tip || resolve(current[0].path) !== resolve(input.checkoutPath)) return null;
-  const source = capture(agent);
-  if (source.length === 1) return { sourceCapture: source[0], successorCapture: current[0] };
-  if (!Array.isArray(a.completedCheckouts) || a.completedCheckouts.length !== 0
-    || a.checkoutCapture?.status !== 'pending' || a.checkoutCapture.unknown !== true
-    || !Array.isArray(a.checkoutCapture.targets) || a.checkoutCapture.targets.length !== 0 || current[0].version !== 2) return null;
-  const seed = owner => (Array.isArray(owner.metadata.checkoutSeeds) ? owner.metadata.checkoutSeeds : []).filter(row =>
-    checkoutSeedSchema.safeParse(row).success && row.agentId === owner.id && row.startedAt === owner.startedAt
-    && Date.parse(row.seededAt) >= Date.parse(owner.startedAt) && Date.parse(row.seededAt) <= Date.parse(owner.completedAt)
-    && resolve(row.repoPath) === resolve(input.repoPath) && row.branch === input.branch
-    && resolve(row.path) === resolve(owner.metadata.workspacePath) && isDeepStrictEqual(row.incarnation, input.checkoutIncarnation));
-  const older = seed(agent), newer = seed(successor);
-  if (older.length !== 1 || newer.length !== 1 || newer[0].seededAt !== current[0].seededAt
-    || !isDeepStrictEqual(older[0].checkout, newer[0].checkout) || !isDeepStrictEqual(older[0].repository, newer[0].repository)) return null;
-  const dispatch = owner => {
-    const d = owner.metadata.completionTaskDispatch;
-    if (d?.taskId !== owner.taskId || !Array.isArray(d.expected) || d.expected.length !== 4
-      || d.expected.some(row => !Array.isArray(row) || row.length !== 2)) return null;
-    const m = new Map(d.expected), count = m.get('totalSpawnCount');
-    if (m.size !== 4 || m.get('claimedBy') !== owner.metadata.instanceId
-      || m.get('claimedAt') !== m.get('lastSpawnedAt')
-      || !(Date.parse(m.get('claimedAt')) >= Date.parse(owner.startedAt))
-      || !(Date.parse(m.get('claimedAt')) <= Date.parse(owner.completedAt))
-      || !((typeof count === 'number' || (typeof count === 'string' && /^\d+$/.test(count))) && Number.isSafeInteger(Number(count)) && Number(count) > 0)) return null;
-    return { type: d.taskType, count: Number(count), claimedAt: Date.parse(m.get('claimedAt')) };
-  };
-  const first = dispatch(agent), last = dispatch(successor);
-  if (!first || !last || first.type !== last.type || first.count > last.count || first.claimedAt >= last.claimedAt) return null;
-  return { sourceSeed: older[0], successorCapture: current[0] };
-}
-
-/** Read the final head only inside the pre-existing physical binding. No fetch
- * or branch-name discovery is allowed after terminal ingestion.
- */
-export async function captureSeededCompletionCheckouts(agent, { preterminal = false, retirement = null } = {}) {
-  if (preterminal && !['running', 'paused'].includes(agent.status)) return null;
-  const terminalAt = preterminal ? Date.now() : Date.parse(agent.completedAt);
-  const bound = boundCheckoutBranches(agent.metadata);
-  const seeds = agent.metadata?.checkoutSeeds?.filter(seed => Array.isArray(bound) && bound.includes(seed.branch));
-  if (!Array.isArray(seeds) || !seeds.length) return null;
-  // A successful terminal capture stores its observations in completedCheckouts;
-  // targets belongs to the pending-capture path. Both are server-owned receipts.
-  // Never replace an explicit pending target list with a different observation.
-  const terminalRows = agent.metadata?.checkoutCapture?.targets
-    ?? (agent.metadata?.checkoutCapture?.status === 'captured' ? agent.metadata?.completedCheckouts : null);
-  const receipts = [];
-  for (const seed of seeds) {
-    if (!checkoutSeedSchema.safeParse(seed).success || seed.agentId !== agent.id || seed.startedAt !== agent.startedAt
-      || Date.parse(seed.seededAt) < Date.parse(agent.startedAt) || Date.parse(seed.seededAt) > terminalAt
-      || !same(seed.repository, await filesystemIdentity(seed.repoPath, 'directory'))
-      || !same(seed.checkout, await filesystemIdentity(seed.path, 'directory'))) return null;
-    const head = (await execGit(['rev-parse', '--verify', 'HEAD^{commit}'], seed.path, {
-      env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0', GIT_NO_REPLACE_OBJECTS: '1' }, timeout: 5000,
-    })).stdout.trim();
-    // Normal replay requires the head observed during execution. Explicit
-    // retirement review can instead bind a currently merged head to the exact
-    // original seed; this is a current observation, never a backdated capture.
-    const terminal = terminalRows?.find(row => completedCheckoutReceiptValid(agent, row) && row.agentId === agent.id
-      && row.startedAt === agent.startedAt && row.repoPath === seed.repoPath && row.branch === seed.branch
-      && row.path === seed.path && same(row.incarnation, seed.incarnation)
-      && Number.isFinite(Date.parse(row.capturedAt)) && Date.parse(row.capturedAt) >= Date.parse(agent.startedAt)
-      && Date.parse(row.capturedAt) <= terminalAt);
-    const reviewedCurrentHead = !terminal && retirement?.verifiedMergedHead === head
-      && retirement.head === head && retirement.repoPath === seed.repoPath
-      && retirement.branch === seed.branch && retirement.path === seed.path;
-    if (!preterminal && ((!terminal && !reviewedCurrentHead) || (terminal && terminal.head !== head))) return null;
-    const target = { repoPath: seed.repoPath, branch: seed.branch, path: seed.path, head };
-    const current = await readCompletedCheckoutIdentity({ ...target, allowLocked: hasReleaseCandidateBinding(agent.metadata) });
-    if (!current || !same(current.incarnation, seed.incarnation)) return null;
-    receipts.push({ version: 2, agentId: agent.id, startedAt: agent.startedAt, seededAt: seed.seededAt,
-      capturedAt: new Date().toISOString(), ...current });
-  }
-  return receipts;
+  return receipt.version === 2 && Date.parse(receipt.capturedAt) <= Date.now();
 }
 
 /** Called under the agent-state lock while the run still owns its current
@@ -292,22 +109,17 @@ export async function captureCompletedCheckouts(agent, { success, strict = false
       if (!recordedPath || await realpath(holders[0].path).catch(() => null) !== recordedPath) { incomplete = true; unknown = true; continue; }
     }
     const target = { repoPath, branch, path: holders[0].path, head: holders[0].head, worktrees: trees, allowLocked: releaseCandidate };
-    const first = await readCompletedCheckoutIdentity(target).catch(() => null);
-    if (!first) { incomplete = true; unknown = true; continue; }
-    // The original preterminal generation is retained even if the independent
-    // final read fails. Replay may compare this exact target, never infer one.
-    const snapshot = { version: 1, agentId: agent.id, startedAt: agent.startedAt, capturedAt: new Date().toISOString(), ...first };
+    const observed = await readCompletedCheckoutIdentity(target).catch(() => null);
+    if (!observed) { incomplete = true; unknown = true; continue; }
+    const snapshot = { version: 1, agentId: agent.id, startedAt: agent.startedAt, capturedAt: new Date().toISOString(), ...observed };
     targets.push(snapshot);
-    if (!same(first, await readCompletedCheckoutIdentity(target).catch(() => null))) { incomplete = true; continue; }
     receipts.push(snapshot);
   }
-  if (strict && incomplete) throw Object.assign(new Error('checkout-incarnation-unverified'), { checkoutCapture: { targets, unknown } });
+  if (strict && incomplete) throw Object.assign(new Error('checkout-capture-incomplete'), { checkoutCapture: { targets, unknown } });
   return receipts;
 }
 
-/** Revalidate immediately before retirement as well as before archival. Older
- * completed records, failures and reused checkout incarnations grant nothing.
- */
+/** Revalidate the recorded checkout scope and newest owner before retirement. */
 export async function hasCompletedCheckoutEvidence(records, target) {
   if (!Array.isArray(records)) return false;
   const current = await readCompletedCheckoutIdentity(target).catch(() => null);
@@ -322,13 +134,14 @@ export async function hasCompletedCheckoutEvidence(records, target) {
     return await realpath(repoPath).catch(() => null) === current.repoPath ? agent : null;
   }))).filter(Boolean);
   return scoped.some(agent => agent?.status === 'completed' && agent.result?.success === true
-    // A later run can reuse an existing checkout without changing its inode or
-    // head. Its failure/missing receipt supersedes the older success. Unknown
+    // A later run can reuse an existing checkout at the same path and head.
+    // Its failure/missing receipt supersedes the older success. Unknown
     // ordering is also a hold; only an unambiguous newest owner can grant this.
     && scoped.every(other => other === agent || Date.parse(other.startedAt) < Date.parse(agent.startedAt))
     && hasClaimCheckoutBindings(agent.metadata) && Array.isArray(agent.metadata?.completedCheckouts)
     && agent.metadata.completedCheckouts.some(receipt => completedCheckoutReceiptValid(agent, receipt)
-      && same(current, { repoPath: receipt.repoPath, branch: receipt.branch, path: receipt.path, head: receipt.head, incarnation: receipt.incarnation })));
+      && same({ repoPath: current.repoPath, branch: current.branch, path: current.path, head: current.head },
+        { repoPath: receipt.repoPath, branch: receipt.branch, path: receipt.path, head: receipt.head })));
 }
 
 /** A manual /claim session records no receipt (#12849). Its proof is the forge:
@@ -336,9 +149,9 @@ export async function hasCompletedCheckoutEvidence(records, target) {
  * Returns that PR and its merge time, or null — any read failure grants nothing.
  */
 export async function readMergedClaimEvidence({ repoPath, branch, head, forgeAccount = null }) {
-  const { findMergedPullRequest, readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
+  const { findMergedPullRequest, readMergedPrDelivery } = await import('./mergedPrEvidence.js');
   const pr = await findMergedPullRequest(repoPath, branch, head, { forgeAccount }).catch(() => null);
   if (!pr || !Number.isFinite(Date.parse(pr.mergedAt))) return null;
-  const forge = await readRetirementForgeEvidence(repoPath, branch, pr.url, { forgeAccount }).catch(() => null);
+  const forge = await readMergedPrDelivery(repoPath, branch, pr.url, { forgeAccount, exactDeliveredHead: head }).catch(() => null);
   return forge?.prHead === head ? { prUrl: pr.url, mergedAt: pr.mergedAt } : null;
 }

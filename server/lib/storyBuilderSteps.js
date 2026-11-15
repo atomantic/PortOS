@@ -1,6 +1,9 @@
 /**
  * Unified Story Builder — shared step definitions.
  *
+ * Unified Story Builder ordered step definitions + helpers (`STEPS`, `STEP_IDS`, `STEP_STATUSES`,
+ * `isValidStepId`, `stepIndex`).
+ *
  * Single source of truth for the linear wizard's ordered steps, consumed by
  * both the server (state machine + gating in `services/storyBuilder.js`) and
  * the client (stepper UI, echoed via the API). The Story Builder is a thin

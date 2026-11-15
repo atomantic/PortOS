@@ -1,3 +1,14 @@
+/**
+ * Hook for the fully autonomous music-video run: applies pushed project updates, toasts
+ * director-needed outcomes, and returns `{ busy, resume, ... }`.
+ *
+ * Fully-autonomous run (prompt → lyrics → Suno song → video): applies the project pushed on
+ * `music-video:autonomous` and toasts the outcomes that need the director (checkpoint waiting, needs
+ * you, finished, failed). Returns `{ busy, resume(edits?, { inline }?), stop(), cancel() }` (an
+ * `inline` resume rejects instead of toasting, for errors shown next to the control). Use when: The
+ * Music Video autonomous run panel.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';

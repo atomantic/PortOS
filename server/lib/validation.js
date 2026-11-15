@@ -1,3 +1,13 @@
+/**
+ * Catch-all Zod schemas for app, process, provider, social, GitHub and backup routes, plus the
+ * `validateRequest` middleware and shared helpers.
+ *
+ * Catch-all Zod schemas (app/process/provider, social accounts, GitHub, backup/sharing,
+ * document/legacy-export) + the `validateRequest` middleware + shared helpers (`optionalBooleanMap`,
+ * `isSafeRecordId`, `parseIndexParam`, `parsePagination`). Re-exports the per-domain validation files
+ * below so existing deep imports keep working.
+ */
+
 import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from './videoLoraStageValidation.js';
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 import { federatedSourceAudioSchema } from './federatedMediaWire.js';
@@ -6,6 +16,7 @@ export { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
 import { CREDENTIALS } from './credentialRegistry.js';
 import { DEFAULT_BACKUP_CRON, MIN_RETENTION_COUNT, MAX_RETENTION_COUNT } from './backupConfig.js';
 import { z } from 'zod';
+import { isHeaderSafeKey, headerSafeKeyMessage } from './headerSafeKey.js';
 import { NOTIFICATION_TYPES } from './notificationTypes.js';
 import { POLLUTING_KEYS } from './objects.js';
 import { pipelineEditorialChecksSettingsSchema } from './pipelineValidation.js';
@@ -13,7 +24,6 @@ import { loraTrainingConfigSchema } from './mediaValidation.js';
 import { ServerError } from './errorHandler.js';
 import { isSafeGitRef } from './gitArgs.js';
 import { PM2_PROCESS_NAME_MAX, PM2_PROCESS_NAME_RE } from '../../lib/pm2ProcessName.js';
-import { releaseSynchronizationResetCheckoutSchema } from './releaseSynchronization.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap, presetProviderIdSchema, providerRefSchema } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
 import { LAYERED_INTELLIGENCE_SOURCE_KEYS } from './layeredIntelligenceSourceKeys.js';
@@ -1940,23 +1950,8 @@ export const agentToolsRelevantPostsQuerySchema = z.object({
   maxResults: z.coerce.number().int().min(1).max(100).default(10),
 });
 
-/**
- * Validate data against a Zod schema, throwing on failure.
- * Returns parsed data on success, throws ServerError on failure.
- */
-export function validateRequest(schema, data) {
-  const result = schema.safeParse(data);
-  if (result.success) return result.data;
-  const errors = result.error.issues.map(e => ({
-    path: e.path.join('.'),
-    message: e.message
-  }));
-  throw new ServerError('Validation failed', {
-    status: 400,
-    code: 'VALIDATION_ERROR',
-    context: { details: errors }
-  });
-}
+// validateRequest lives in its own leaf (#16096); re-exported for existing deep imports.
+export { validateRequest } from './validateRequest.js';
 
 // Media cancellation bodies (#9932). An OMITTED jobId keeps the legacy
 // "newest/running job" selection; a SUPPLIED jobId must be a usable id — a
@@ -2321,6 +2316,17 @@ const googlePlacementFields = {
   location: z.union([z.literal(''), z.string().trim().regex(GOOGLE_LOCATION_PATTERN, 'Not a Google Cloud region')]).optional(),
 };
 
+// Hosted provider key: '' clears. Validated untrimmed, so a pasted trailing
+// newline is refused with the setting named rather than silently altered.
+// `allowJson` lets Google's service-account JSON (spaces/newlines are legal) through.
+const hostedApiKeySchema = (label, max, { allowJson = false } = {}) => z.preprocess(
+  (v) => (v === '' ? undefined : v),
+  z.string().max(max).refine(
+    (v) => isHeaderSafeKey(v) || (allowJson && v.trim().startsWith('{')),
+    { message: headerSafeKeyMessage(label) },
+  ).optional(),
+);
+
 export const videoGenSettingsSchema = z.object({
   mode: videoModePinSchema,
   defaultModelId: z.preprocess(emptyToNull, z.string().trim().max(64).nullable().optional()),
@@ -2339,29 +2345,29 @@ export const videoGenSettingsSchema = z.object({
   // fal.ai queue REST provider (#6213) — settings-stored key wins over the
   // FAL_KEY env var (same precedence as loras.js's Civitai key).
   fal: z.object({
-    apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(200).optional()),
+    apiKey: hostedApiKeySchema('fal.ai', 200),
     parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   }).optional(),
   // reactor.inc fast-h3 provider (#6214) — same settings-wins-over-env
   // precedence as `fal` above.
   reactor: z.object({
-    apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(200).optional()),
+    apiKey: hostedApiKeySchema('reactor.inc', 200),
     parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   }).optional(),
   // Runway developer API — same settings-wins-over-env (RUNWAYML_API_SECRET) precedence.
   runway: z.object({
-    apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(200).optional()),
+    apiKey: hostedApiKeySchema('Runway', 200),
     parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   }).optional(),
   // Higgsfield developer API — KEY_ID:KEY_SECRET; settings win over HIGGSFIELD_API_KEY.
   higgsfield: z.object({
-    apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(400).optional()),
+    apiKey: hostedApiKeySchema('Higgsfield', 400),
     parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   }).optional(),
   // Google Cloud Agent Platform: the credential is an API key or a service account
   // JSON key (settings win over GOOGLE_CLOUD_API_KEY). Project and region are plain settings.
   google: z.object({
-    apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(GOOGLE_CREDENTIAL_MAX_LENGTH).optional()),
+    apiKey: hostedApiKeySchema('Google', GOOGLE_CREDENTIAL_MAX_LENGTH, { allowJson: true }),
     ...googlePlacementFields,
     parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   }).optional(),
@@ -2813,6 +2819,26 @@ export const privateCredentialParamsSchema = z.object({ id: z.enum(CREDENTIALS.f
 // Large enough for a Google Cloud service account JSON key (the Google credential).
 export const privateCredentialInputSchema = z.object({ value: z.string().trim().max(GOOGLE_CREDENTIAL_MAX_LENGTH) }).strict();
 
+// Private-store ids whose value is sent verbatim in an HTTP header (label for the message).
+const HEADER_CREDENTIAL_LABELS = Object.freeze({ fal: 'fal.ai', reactor: 'reactor.inc', runway: 'Runway', higgsfield: 'Higgsfield', 'google-cloud': 'Google' });
+
+/**
+ * PUT body for one private credential. Header-bound hosted keys are validated
+ * untrimmed ('' clears), so an emoji, inner space or pasted trailing newline is
+ * refused and the message names the setting; other credentials keep `trim()`.
+ */
+export const privateCredentialInputSchemaFor = (id) => {
+  const label = HEADER_CREDENTIAL_LABELS[id];
+  if (!label) return privateCredentialInputSchema;
+  const allowJson = id === 'google-cloud';
+  return z.object({
+    value: z.string().max(GOOGLE_CREDENTIAL_MAX_LENGTH).refine(
+      (v) => v === '' || isHeaderSafeKey(v) || (allowJson && v.trim().startsWith('{')),
+      { message: headerSafeKeyMessage(label) },
+    ).transform((v) => v.trim()),
+  }).strict();
+};
+
 export const modelComparisonBenchmarkRunSchema = z.object({
   providerId: z.string().min(1).max(200),
   model: z.string().min(1).max(200),
@@ -3131,7 +3157,6 @@ export const cosScheduleTriggerBodySchema = z.object({
 });
 export const releaseSynchronizationResetBodySchema = z.object({ identity: z.string().regex(/^[a-f0-9]{64}$/),
   reason: z.string().trim().min(1).max(1000),
-  checkouts: z.array(releaseSynchronizationResetCheckoutSchema).max(10).default([]),
 }).strict();
 export const releaseDeliveryVerificationBodySchema = z.object({ identity: z.string().regex(/^[a-f0-9]{64}$/),
   prNumber: z.number().int().positive().safe() }).strict();
@@ -3141,19 +3166,12 @@ export const heldCheckoutRetireBodySchema = z.object({
   checkoutIdentity: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   observedAt: z.string().datetime({ offset: true }).optional(),
   appId: nonEmptyString,
-  path: nonEmptyString,
+  path: nonEmptyString.optional(),
   head: z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/),
   branch: z.string().min(1).nullable(),
   locked: z.boolean(),
   lockReason: z.string().nullable(),
-  review: z.object({
-    prUrl: z.string().url(),
-    digest: z.string().regex(/^[a-f0-9]{64}$/),
-    acceptSuperseded: z.boolean(),
-    kind: z.enum(['source-supersession', 'preserved-supersession']).optional(),
-  }).optional(),
 });
-export const heldCheckoutReviewBodySchema = heldCheckoutRetireBodySchema.omit({ review: true }).extend({ prUrl: z.string().url(), kind: z.enum(['source-supersession', 'preserved-supersession']).optional() });
 
 // Per-app task-type overrides (routes/apps/taskTypes.js)
 export const appTaskTypeToggleBodySchema = z.object({ enabled: z.boolean() });
@@ -3284,4 +3302,15 @@ export const mediaMakePrimarySchema = z.object({
   kind: z.enum(['video', 'image']),
   filename: mediaFilenameSchema,
   instanceId: z.string().min(1).max(128),
+}).strict();
+
+// #16150: extend a hosted clip. The prompt is sent as written; a Music Video caller names the take it extends.
+export const videoExtendBodySchema = z.object({
+  prompt: z.string().min(1).max(20000),
+  dryRun: z.boolean().optional(),
+  musicVideo: z.object({
+    projectId: z.string().min(1).max(200),
+    sceneId: z.string().min(1).max(200),
+    takeId: z.string().min(1).max(128),
+  }).strict().optional(),
 }).strict();

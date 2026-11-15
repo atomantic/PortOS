@@ -1,7 +1,22 @@
-// Pure Tribe domain helpers shared by the Tribe page and its circle-map
-// visualization. Rings are Dunbar-inspired concentric circles (support is the
-// innermost / closest, village the outermost / weak ties). The ring `cadenceDays`
-// defaults are DEFAULT_RING_CADENCE from the shared `tribeCadence.js`.
+// Pure Tribe domain helpers shared by the Tribe page and its circle-map visualization.
+//
+// Pure Tribe domain helpers shared by the Tribe page and its `TribeCircleMap` visualization: `RINGS`
+// (support→core→tribe→village Dunbar rings + the uncapped `external` "outside the tribe"
+// classification — caps, cadence defaults, Tailwind tones + `hex`), `TRIBE_RINGS` (the four inner
+// rings the care queue/capacity/overdue counts operate over, excluding `external`), `ENERGY` (energy
+// tiers + `hex`), `STATUS_HEX` (cadence-status → SVG stroke color), `contactStatus(contact)`
+// (presentation wrapper over the shared `cadenceStatus` — attaches label/tone to the
+// missing/overdue/soon/steady/`external` state) / `daysBetween(date)` (alias of the shared
+// `daysSinceDate`), `ringFor` / `energyFor` lookups, `tagsToArray` / `tagsToInput`,
+// `initialsFor(name)` (node glyph), and the care-state filters shared by the summary tiles / roster /
+// care queue (`STATUS_FILTERS`, `STATUS_FILTER_IDS`, `STATUS_FILTER_LABELS`,
+// `matchesStatusFilter(contact, filter)` — unknown ids degrade to `all`). Ring `cadenceDays` come from
+// `DEFAULT_RING_CADENCE` (via `tribeCadence.js`); the cadence STATE MACHINE lives in
+// `tribeCadence.js`.
+//
+// Rings are Dunbar-inspired concentric circles (support is the innermost / closest, village the
+// outermost / weak ties). The ring `cadenceDays` defaults are DEFAULT_RING_CADENCE from the shared
+// `tribeCadence.js`.
 //
 // The cadence STATE MACHINE (external/missing/overdue/soon/steady) lives in the
 // shared, authoritative `tribeCadence.js` (mirrored from server/lib/tribeCadence.js)

@@ -1,3 +1,16 @@
+/**
+ * Hook for the Music Video publishing kit: SSE build job, copy drafts and edits, YouTube thumbnail and
+ * cover art, applying returned projects.
+ *
+ * Music Video publishing kit (#9281): a `useSseJobSlot` build job (encodes, thumbnails, captions,
+ * chapters) whose terminal frame reloads the project, plus the one-call copy draft, per-field copy
+ * edits, the YouTube thumbnail and cover art, each applying the returned project. Returns `{ building,
+ * progress, build(), cancelBuild(), drafting, saving, draftCopy(body), saveCopy(patch),
+ * composingThumbnail, composeThumbnail(body), clearThumbnail(), addThumbnailTest(),
+ * removeThumbnailTest(filename), paintingThumbnail, paintThumbnail(body), … }` plus the cover-art
+ * actions. Use when: The Music Video Publish stage.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';

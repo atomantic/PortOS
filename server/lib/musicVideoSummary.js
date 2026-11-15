@@ -1,6 +1,10 @@
 /**
  * Music Video project summary projection (#10169).
  *
+ * `summarizeMusicVideoProject(project, readiness)` bounded index/picker projection (stage, run status,
+ * spend, preview/poster, card badges) and `compareMusicVideoProjectsNewestFirst` for `GET
+ * /api/music-video?summary=1` (#10169).
+ *
  * `GET /api/music-video?summary=1` returns one bounded record per project — just
  * what the project index card and the header picker render — so the index never
  * ships every project's scenes, excerpts, revisions, runs and reviews. The stage
@@ -58,7 +62,7 @@ function projectSpend(project, run) {
 
 function composeDone(project, mode) {
   const composition = project.composition || {};
-  if (mode === 'composed') return (composition.textCues || []).length > 0 || composedDrawsLyrics(project);
+  if (mode === 'composed') return composition.noTypography === true || (composition.textCues || []).length > 0 || composedDrawsLyrics(project);
   if (mode === 'document') return Boolean(composition.document);
   if (mode === 'eidoverse') return Boolean(composition.eidoverseScene?.inlineScript);
   // A Blender film's shots are done when each has a complete, current final render. The renders

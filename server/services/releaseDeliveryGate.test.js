@@ -4,7 +4,7 @@ const fixture = vi.hoisted(() => ({ rows: [], prs: [], unavailable: false, reque
 vi.mock('node:fs/promises', async original => ({ ...await original(), realpath: async path => path }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async () => fixture.origin }));
 vi.mock('./completedCheckoutEvidence.js', async original => ({ ...await original(),
-  captureSeededCompletionCheckouts: async () => fixture.rows }));
+  captureCompletedCheckouts: async () => fixture.rows }));
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({}) }));
 vi.mock('./github.js', () => ({ execGh: async args => {
   fixture.requests.push(args.at(-1));
@@ -21,7 +21,7 @@ beforeEach(() => {
   const seed = { agentId: 'agent-release', startedAt: '2026-01-01T00:00:00Z', branch: 'codex/release-example' };
   agent = { id: seed.agentId, taskId: 'task-release', startedAt: seed.startedAt, status: 'running',
     metadata: { taskAnalysisType: 'do-release', isWorktree: false, workspacePath: '/repo',
-      releaseCandidate: { version: 1, branch: seed.branch }, checkoutSeeds: [seed] } };
+      releaseCandidate: { version: 1, branch: seed.branch } } };
   fixture.rows = [{ branch: seed.branch, repoPath: '/repo' }];
   fixture.prs = [];
   fixture.requests = [];

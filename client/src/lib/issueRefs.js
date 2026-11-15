@@ -2,6 +2,14 @@
  * Bare forge issue references in rendered markdown — the `#7640` a CoS agent
  * writes in its own completion summary — turned into clickable links.
  *
+ * Bare forge issue references (`#7640`) in rendered markdown. `splitIssueRefs(text, issueUrlBase)`
+ * splits literal text into strings and `{ ref, url }` segments; `agentIssueLinkifier(agent)` is the
+ * `linkifyText` resolver for one CoS run, reading the tracker base the server stamped at spawn
+ * (`agent.metadata.repoIssueUrl`, built by `server/lib/workTracker.js#repoIssueUrlBase`). Holds NO
+ * forge knowledge — it appends a number to a base the server already shaped — and declines a qualified
+ * `owner/repo#7640`, which that base cannot retarget. Render-time only: nothing is rewritten on disk,
+ * so a run from before the stamp renders plain text.
+ *
  * The agent is not asked to build the link: it has no reliable way to know the
  * forge host, and a hand-built URL would be one more thing to get wrong. The
  * run record already carries `agent.metadata.repoIssueUrl`, the tracker base

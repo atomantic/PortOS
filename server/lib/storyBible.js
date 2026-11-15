@@ -2,6 +2,12 @@
  * Canonical story-bible shapes (Character / Place / Object) shared by the
  * Writers Room (per-work bibles) and the Pipeline (per-series bibles).
  *
+ * Canonical Character / Place / Object shapes; re-exports `BIBLE_LIMITS` from `bibleLimits.js`. Also
+ * the reveal-gated canon / spoiler-scoping helpers (#2178): `filterCanonForIssue` /
+ * `filterCanonListForIssue` / `isCanonEntryGatedForIssue` (hide or surface-substitute a gated entry in
+ * a drafting prompt), `canonHasRevealGated` + `revealGatedCanonRows` (for the
+ * `continuity.premature-reveal` check gate/summary).
+ *
  * Owns the shape + sanitization + merge-extracted-entries algorithm. The
  * `createBibleStore(...)` factory the writers-room domain files build on for
  * their CRUD + file I/O lives in ../services/bibleStore.js, which imports

@@ -1,4 +1,14 @@
 /**
+ * Storyboard shot-grammar display labels.
+ *
+ * `SHOT_TYPES` / `SCREEN_DIRECTIONS` are re-exported from `server/lib/shotGrammar.js`, so a hand-set
+ * value in the editor always passes `storyboardShotSchema`; `SHOT_TYPE_LABELS` /
+ * `SCREEN_DIRECTION_LABELS` are the client-only selects (#1468); `SHOT_TYPE_HINTS` / `SHOT_ANGLES` /
+ * `SHOT_FACINGS` / `SHOT_EYELINES` / `SHOT_COMPOSITIONS` / `SHOT_LENSES` / `SHOT_FOCUSES` /
+ * `SHOT_MOVES` with their `_LABELS` / `_HINTS` caption the storyboard panel's shot diagrams.
+ */
+
+/**
  * Storyboard shot-grammar display labels, over the controlled vocabularies in
  * `server/lib/shotGrammar.js` (#1315).
  *

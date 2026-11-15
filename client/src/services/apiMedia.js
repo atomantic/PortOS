@@ -1,3 +1,13 @@
+/**
+ * `importGalleryFile` dispatches image/video imports through the Prompt gallery upload endpoints.
+ *
+ * `assignImportedMedia` adds existing imports through idempotent bulk membership. Screenshots +
+ * media assets. Also owns the multi-file upload orchestration — `processScreenshotUploads` /
+ * `processAttachmentUploads` — moved from `utils/fileUpload.js` since they perform network I/O, not
+ * pure transforms. `utils/fileUpload.js` keeps only the pure helpers/constants and no longer
+ * re-exports these.
+ */
+
 import { uploadGalleryImage } from './apiSystem.js';
 import { uploadGalleryVideo } from './apiImageVideo.js';
 import { uploadBody, request, API_BASE, throwApiError } from './apiCore.js';

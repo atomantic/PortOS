@@ -15,7 +15,7 @@ interpreter. Every distribution, including torch and its transitive CUDA
 libraries, has an exact version and SHA-256 hashes. Repair removes packages
 outside the lock. No pip/bootstrap upgrades or Git builds run on this path.
 
-The stack uses torch 2.14.1+cu126, diffusers 0.42.1, transformers 5.22.1,
+The stack uses torch 2.14.1+cu126, diffusers 0.42.1, transformers 5.22.2,
 accelerate 1.15.0, huggingface-hub 2.4.0 and numpy 2.4.6 (the Python 3.11
 compatible line). The released Diffusers wheel contains MiniMax Music 3's
 modular pipeline, replacing the former Git commit install. A different

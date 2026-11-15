@@ -1,6 +1,10 @@
 /**
  * Opt-in action capabilities for the persistent Chief-of-Staff mind.
  *
+ * Default-off persistent-mind action grants plus bounded typed CoS-task, private-Eidoverse, and
+ * self-cleanup contracts (app/provider/model/effort, PR completion policy, the optional exact
+ * provider/model task allowlist, and mind-owned context scopes).
+ *
  * Provider/profile configuration controls inference. This separate slice
  * controls which typed side effects a completed mind turn may request, so an
  * existing conversation-only install never gains new authority on upgrade.

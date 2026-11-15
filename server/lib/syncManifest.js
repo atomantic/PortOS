@@ -1,6 +1,15 @@
 /**
  * Snapshot-sync MANIFEST wire contract.
  *
+ * Wire contract for the snapshot-sync MANIFEST leg — the fix for a category that is always dirty AND a
+ * map of per-instance slots (`usage`), where one instance advancing dragged every other instance's
+ * digest across the wire. `isManifestEnvelope(value)` validates a `{ data: { instances }, checksum }`
+ * response (a legacy peer that 404s the endpoint fails it, and the puller falls back to the whole
+ * snapshot); `diffManifestSlots(remoteInstances, localInstances)` returns the sorted slot ids whose
+ * REMOTE LWW stamp is strictly newer than ours — exactly the slots worth fetching. Comparison goes
+ * through `lwwTimestamp.js`, so a tie breaks to what we already hold. Consumed by
+ * `syncOrchestrator.syncDataCategoryFromPeer`; served by `dataSync.getManifest`.
+ *
  * Most snapshot categories are effectively static, so the checksum
  * short-circuit in `syncOrchestrator` is enough: nothing moved → nothing
  * transfers. `usage` broke that assumption — it is always dirty (every recorded

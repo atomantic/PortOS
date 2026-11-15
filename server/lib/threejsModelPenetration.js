@@ -1,6 +1,16 @@
 /**
  * Cross-part penetration gate for an already-validated Three.js scene spec.
  *
+ * `evaluateThreejsPenetration(spec)` — cross-part penetration gate over an already-validated Three.js
+ * spec, the one check that compares two parts to each other. Rebuilds each part's world placement (the
+ * same `THREE.Euler` 'XYZ' composition the preview applies), derives an analytic solid per geometry
+ * type, and samples one part's interior against another's to flag a part entirely buried inside an
+ * unrelated one (`error`) or unrelated parts occupying substantially the same space (`warning`). Parts
+ * in the same subtree and declared `attachmentPartIds` are exempt — embedding is what those
+ * relationships are *for* — and a shallow or transparent-container overlap is reported as an undecided
+ * `note`, never as a defect. `buildThreejsPenetrationFeedback(penetration)` turns the errors and
+ * warnings (never the undecided notes) into default refinement feedback.
+ *
  * Every other gate reads one part at a time. `threejsSculptSpecSchema` proves
  * each geometry is well formed (a hole inside its outline, a tube that does not
  * retrace itself), the coverage gate proves the assembly backs the inventory,

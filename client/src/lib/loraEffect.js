@@ -1,6 +1,16 @@
 /**
  * How the LoRA manager card renders an adapter-effect measurement (#4872).
  *
+ * `LORA_EFFECT_STATUSES` is re-exported from `server/lib/loraEffect.js`; `LORA_EFFECT_BADGES` +
+ * `loraEffectBadge(status)` (only `zero` is styled as an error, because only `zero` refuses a render
+ * server-side) and `loraEffectDetail(report)` are client-only — the detail line returns `null` when
+ * the badge already says everything, where the server's `formatLoraEffect` always returns a sentence
+ * for its log.
+ */
+
+/**
+ * How the LoRA manager card renders an adapter-effect measurement (#4872).
+ *
  * The status vocabulary is re-exported from `server/lib/loraEffect.js` — the
  * server measures and records the report, so a new verdict there reaches the
  * badge table below without a second edit. The badge tones and

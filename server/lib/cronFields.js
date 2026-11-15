@@ -1,6 +1,14 @@
 /**
  * Cron FIELD semantics (pure, dependency-free).
  *
+ * Cron FIELD semantics (pure, browser-safe): `matchesCronField(value, expr, fieldMin)` — the matcher
+ * `services/eventScheduler.js` walks minute by minute with — plus `expandCronField(expr, min, max)`
+ * and `cronWeekdayHours(expr)` → `{days, hours}`, the weekday/hour OCCUPANCY view a scheduler planner
+ * needs. Sibling of `cronValidation.js` (syntax/range only); one matcher so a planner reading an hour
+ * as free and the walker firing in it cannot disagree. `cronWeekdayHours` over-approximates on purpose
+ * — a `dayOfMonth`/`month` restriction lands on an unpredictable weekday, so it reports the whole
+ * week.
+ *
  * Sibling of `cronValidation.js`, which answers syntax and range only. This
  * module answers the two questions a reader of an already-valid expression
  * has: does THIS value match that field, and which values does that field

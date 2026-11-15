@@ -1,5 +1,12 @@
 // PNG text metadata helpers for Stable Diffusion-compatible renders.
 //
+// `extractGenerationMetadataEntries` shares the bounded projection between PNG text chunks and video
+// container tags. `extractPngGenerationMetadataFile` seeks past pixel data for bounded disk-file
+// metadata extraction. Bounded PNG `tEXt`/`zTXt`/`iTXt` extraction for Stable Diffusion-compatible
+// provenance plus normalization of prompt, negative prompt, sampler, steps, CFG, seed, size, model,
+// and model hash fields; `GENERATION_METADATA_LIMITS` shares the projection bounds with catalog sync
+// validation. Pure.
+//
 // The image upload path re-encodes images to PNG with sharp, which deliberately
 // drops ancillary chunks. Read the bounded text chunks before that conversion so
 // prompt provenance survives as structured application metadata instead of being

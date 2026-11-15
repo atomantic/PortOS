@@ -11,7 +11,7 @@ machine-local runtime journal**. It must fence both the API and standalone CoS r
 before either can use PostgreSQL or start work. Its bounded live-operation set and
 operator hold are not app records and never federate. Data snapshots copy the
 `workflow-maintenance/` subtree as evidence, but no restore ever installs it (see
-[Explicitly abandoned duplicate agents](#explicitly-abandoned-duplicate-agents)).
+`scripts/reconcile-maintenance-reservations.mjs` for reservation recovery).
 The schema is versioned; an absent file starts Normal, while corrupt/future state or
 an interrupted transaction fails closed. Replacement uses exclusive directory locking,
 file/directory fsync and atomic rename. No seed or DB migration is required.
@@ -273,35 +273,20 @@ step; never edit the request's hashes to bypass them. The hold and every other
 operation remain; run/task outcomes and transcript warnings stay unchanged.
 `acknowledged-uncertainty` with `outputCompleteness: "unknown"` records an operator
 disposition, **not** successful saving. These machine-local receipts share the
-backup/restore exclusions described below for abandoned-agent receipts; they
+backup/restore exclusions described below; they
 have no seed, migration, federation or automatic expiry.
 
-### Explicitly abandoned duplicate agents
+### Machine-local maintenance receipts
 
-A local operator may reconcile a user-killed duplicate that saved no output with
-`node scripts/reconcile-abandoned-agent.mjs <agent-id> <run-id> --confirm-abandoned <reason>`.
-Begin a normal maintenance hold first and run from the install checkout;
-worktree code deliberately ignores the `PORTOS_DATA_ROOT` pin. This is an
-explicit abandonment decision, never automatic expiry or a successful-run verdict.
-The command refuses present agent/runner ownership, live recorded PIDs, retained
-agent output (including archives), worktrees/branches, nonempty run output,
-untrusted evidence, other reservations for that agent, and failed settlement.
-The exact hold and reservation are checked under the journal transaction lock.
-
-Before releasing the matching reservation, the owning service durably publishes
-`data/workflow-maintenance/abandoned-<run-id>.json`, retaining the original operation,
-operator reason, and evidence fingerprints. Other operations and the hold remain.
-Run/task outcomes are unchanged. Repeating the same request reuses its receipt;
-it cannot settle a replacement reservation. Receipt-first interrupted publication
-can be retried after normal journal recovery; the command never steals a transaction
-lock. These machine-local recovery receipts are never federated and never restored:
-a data snapshot copies them, but every file restore (full or scoped, preview and
-execution) preserves this machine's `workflow-maintenance/` subtree byte-for-byte
-and refuses an explicit selection with `BACKUP_RESTORE_MACHINE_LOCAL`, because
-installing another snapshot's journal or receipts would replace local authority.
-To use a receipt as an investigation artifact elsewhere, copy it out of the
-snapshot or the live data directory separately. This deliberately narrow command
-does not recover nonempty output or general failed saves; those still require the owning workflow's recovery.
+Manual reservation reconciliation uses `node scripts/reconcile-maintenance-reservations.mjs`
+(`inspect` / `reconcile`). Its receipts and the journal are machine-local and never
+federated or restored: a data snapshot copies the `workflow-maintenance/` subtree, but
+every file restore (full or scoped, preview and execution) preserves this machine's copy
+byte-for-byte and refuses an explicit selection with `BACKUP_RESTORE_MACHINE_LOCAL`,
+because installing another snapshot's journal or receipts would replace local authority.
+Historical `abandoned-<run-id>.json` receipts from the retired single-agent command
+remain under the same exclusion. To use a receipt as an investigation artifact elsewhere,
+copy it out of the snapshot or the live data directory separately.
 
 
 ## The Four Storage Classes
@@ -321,7 +306,7 @@ does not recover nonempty output or general failed saves; those still require th
 
 ## `db-primary` — app-native relational records
 
-- Release synchronization outbox — `cos_release_synchronizations`, keyed by the forge-verified publication identity, retains the original publication receipt, coordinator generation, immutable continuation task/policy, physical checkout seeds, pending delivery obligations and registration retry evidence. PostgreSQL is authoritative and covered by the database backup. The `data/cos/release-synchronization.json` adapter is development/test only. This is machine-local execution/ownership state, never federated; the continuation is pinned to the producing instance through existing task controls. No data seed or input migration is needed for this new empty domain; additive schema initialization creates the table on upgrade. Neither completed-history eviction nor task execution success releases its identity or verifies synchronization. Adapter: `server/services/releaseSynchronizationStore.js`.
+- Release synchronization outbox — `cos_release_synchronizations`, keyed by the forge-verified publication identity, retains the original publication receipt, coordinator generation, immutable continuation task/policy, its delivery obligations (back-merge PR merged; release ancestry and version on the default branch) and registration retry evidence. Entries written before #16017 also carry immutable checkout seeds and older obligation names, which stay readable and are no longer consulted. PostgreSQL is authoritative and covered by the database backup. The `data/cos/release-synchronization.json` adapter is development/test only. This is machine-local execution/ownership state, never federated; the continuation is pinned to the producing instance through existing task controls. No data seed or input migration is needed for this new empty domain; additive schema initialization creates the table on upgrade. Neither completed-history eviction nor task execution success releases its identity or verifies synchronization. Adapter: `server/services/releaseSynchronizationStore.js`.
 
 - Deep audit evidence — `deep_audit_ledgers` stores each app/category coverage ledger, source/prompt pins, server-assigned attempts, candidates, receipts and invalidated history. Machine-local and covered by the PostgreSQL dump; it does not federate (no sync cursor or tombstones). JSONB holds structured evidence, not binary assets, and row locking serializes updates. No full-text index is needed for keyed checkpoint reads. Additive schema initialization creates the table for existing and fresh installs without transforming old records or seeding data. Agent-written checkpoint JSON under `data/cos/deep-audit-checkpoints/` is a retained recovery input outside source checkouts, captured by normal CoS filesystem backup; imported database receipts remain authoritative. See [Deep audits](./DEEP-AUDITS.md).
 
@@ -495,7 +480,7 @@ removing the fence or launching another operation.
 
 `data/database-restore-recovery.json` (`server/lib/databaseRestoreRecovery.js`) is `file-primary`, machine-local recovery state for ONE in-flight snapshot database restore (#9725). It must be readable before PostgreSQL, so it cannot live in the database it fences. The file's presence is the admission fence: `server/lib/db.js` refuses every ordinary operation while it exists, and boot resumes recovery before loading anything else. The versioned record holds the operation UUID, stage (`replaying` | `repairing`), timestamp, snapshot id, the admitted dump's SHA-256 and the pre-replay sync-feed sequence positions — no credentials, connection details or application records. It is published (atomic no-replace link) before the destructive replay and removed only after repair completes or the replay is proven rolled back. Absent means idle; a malformed or unreadable file fails closed. It is never federated, has no reference seed and needs no migration (absent on every existing install). It and its `.database-restore-recovery-*.pending` scratch are non-overridable backup excludes: a restored copy would fence the database for an operation that no longer exists.
 
-The companion `restore_receipts` table (`db-primary`, machine-local, never federated) holds one row per committed restore operation (`operation_id`, `dump_sha256`, `applied_at`), written inside the replay transaction so a crash or lost response at `COMMIT` is resolved from the database. It is additive base schema (`restoreReceiptsDdl` in `server/lib/db/schema/core.js`, mirrored in `init-db.sql`), and the replay also creates it for dumps that predate it. `pg_dump` excludes its rows (`--exclude-table-data`), and the restore's reset drops it with the other application tables, so receipts describe only this machine's restores. Operator contract: [committed-restore recovery](BACKUP.md#database--restorepostgres).
+The companion `restore_receipts` table (`db-primary`, machine-local, never federated) holds one row per committed restore operation (`operation_id`, `dump_sha256`, `applied_at`), written inside the replay transaction so a crash or lost response at `COMMIT` is resolved from the database. It is additive base schema (`restoreReceiptsDdl` in `server/lib/db/schema/core.js`, carried into the generated `init-db.sql`), and the replay also creates it for dumps that predate it. `pg_dump` excludes its rows (`--exclude-table-data`), and the restore's reset drops it with the other application tables, so receipts describe only this machine's restores. Operator contract: [committed-restore recovery](BACKUP.md#database--restorepostgres).
 
 ### Calendar daily-review recovery
 
@@ -719,6 +704,13 @@ The escape hatch is **guarded from bitrot by the test suite** (tests boot with `
 
 **Compose receives the resolved values.** PortOS and PM2 read `.env` literally (matching surrounding quotes removed; no inline comments, no `$` expansion), but `docker-compose.yml` interpolates its `PGUSER`/`PGDATABASE`/`PGPASSWORD`/`PGPORT_DOCKER` with Docker's own `.env` grammar, which treats ` #` as a comment and expands `$`. So `npm run setup:db` and `scripts/db.sh` put the already-resolved values in the environment of every `docker compose` subprocess (process environment outranks Compose's `.env`), and the container is provisioned with exactly what PortOS connects with. They travel in the child environment only — never argv or logs. If you run `docker compose` yourself, Compose applies its own grammar to `.env`: wrap a password containing ` #` or `$` in single quotes (`PGPASSWORD='pa$$word'` — in Compose, single quotes are literal), or export the variables first.
 
+### PostgreSQL version updates
+
+**Settings › Software** lists the running server's version with the latest patch release and end-of-life date of its major line, read from [postgresql.org's release index](https://www.postgresql.org/versions.json). The row shows an update when a newer patch release exists, needs attention within a year of end of life, and shows a security state once the line is past end of life.
+
+- **Patch (minor) releases need no data migration.** A minor release keeps the on-disk format. Native Homebrew: `brew upgrade postgresql@NN pgvector && brew services restart postgresql@NN`. Upgrade pgvector with the server, because C extensions must be rebuilt alongside it. Docker: a dependency-update PR refreshes the pinned digest (step 6 above); after updating PortOS, `npm run setup:db` recreates the container on the existing volume. Upgrade the client tools (`psql`, `pg_dump`, `pg_restore`) of any other installed `postgresql@NN` kegs too. Read the release's "Updating" notes for any REINDEX it asks for.
+- **A new major cannot open an older data directory.** `PINNED_DB_MAJOR` in `scripts/lib/dbImage.js` fixes the Docker image's major, and `scripts/dbImageDigestPin.test.js` fails if a digest refresh moves the tag. Changing the major must ship a dump/restore path for existing volumes in the same change. Native installs move by taking a backup that includes the database dump ([Backup & Restore](./BACKUP.md)), installing the new major, then restoring that dump into it.
+
 ### Moving between Docker and native
 
 Use **Settings → Database** for coordinated backend migration, including
@@ -888,7 +880,7 @@ mounted under the HTTP asset routes. Filesystem backups include it: protect back
 access as carefully as the install. This is permission-protected storage, not
 application-level encryption.
 
-Settings > Credentials manages Artificial Analysis, Hugging Face, CivitAI, fal.ai,
+Settings > Credentials manages Hugging Face, CivitAI, fal.ai,
 and reactor.inc keys through a write-only endpoint. Existing integration settings
 screens use the same store. Server-side settings readers retain their legacy shape;
 public settings and inventory responses never contain these values. Stored keys
@@ -899,8 +891,7 @@ Migration 357 copies existing settings keys before removing their old fields and
 preserves keys already in the private store on retry. There is no seed file. The
 runtime also reads legacy settings until their next save, so independently updated
 installs do not need to re-enter keys. Environment credentials remain supported and
-are not copied automatically. Artificial Analysis saves a supplied key after a
-successful API fetch and subsequent syncs can omit it. Downgrades to versions before
+are not copied automatically. Downgrades to versions before
 this store require re-entering keys through the older settings UI or environment.
 Other credentials (provider connections, account-specific logins, and auth) retain
 their existing dedicated stores and management flows.
@@ -1337,20 +1328,22 @@ untracked work; git-ignored local files never hold a merged checkout. Migrations
 as `data/cos/worktrees/` intact. See
 [branch reconciliation](./features/branch-reconciliation.md#retiring-a-held-checkout).
 
-`<canonical-common-git-dir>/portos-checkout-admission/` is a separate file-primary
-cross-process safety fence shared by linked checkouts and server/runner processes.
-It contains nonce-owned publication directories and at most one retirement cut.
-Unknown, interrupted and uncertain records block rather than age out. The native
-archive excludes this control subtree; it never excludes repository payload
-because it is ignored or untracked. Admission metadata is not part of the
-portable repository or peer synchronization.
+Branch reconciliation uses current Git/path state as local inventory authority.
+Missing checkout rows are pruned; a surviving local ref becomes a branch-only row
+and undergoes fresh ownership, completion-policy, integration and expected-head
+checks before deletion. Unreadable paths/refs stay unresolved, and remote-only
+holds remain visible until a fresh forge scan replaces them. Inventory reads do
+not reconcile historical receipts or claim preservation of vanished ephemeral state.
 
-Initialized-checkout finalization receipts keep a compact, uncapped
-`branchReconcileOutcome.retirementReceiptIdentities` map alongside the bounded
-recent-retirements display list. Its keys hash the exact archive path and release
-identity; values preserve the original receipt timestamp. This operational
-recovery evidence prevents an interrupted journal replay from becoming fresh
-retirement evidence after the display row has aged out. It has no TTL purge.
+`branchReconcileOutcome.retired` keeps at most 20 recent retirements for display;
+it never authorizes cleanup or gates completion. The schedule store normalizes old
+records under its existing serialized read/write queue, removing receipt maps,
+obligations, initialization observations and legacy reconciliation history while
+retaining their inventory observations for fresh inspection. Migration 443 and its
+minimal frozen helper remain runnable for older installs; runtime code does not
+import that helper. Agent cleanup observes current path/ref absence independently
+of this display history. Its delivery, review, process-settlement and owner checks
+remain separate requirements.
 
 FableLoom shot-planning run checkpoints live in machine-local `data/fableloom-shot-runs/` JSON journals (atomic writes, one latest run per story/episode). They preserve drafts, review verdicts and feedback across restarts; they do not federate. Reading an interrupted run marks it failed without starting a provider call. Explicit resume uses the saved provider/guidance and rejects changed source revisions. Story records remain PostgreSQL-primary.
 

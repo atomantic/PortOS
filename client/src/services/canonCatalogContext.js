@@ -1,3 +1,9 @@
+/**
+ * Lazy universe and batched catalog identity context.
+ *
+ * Preserves embedded IDs, excludes retained shared aliases and refuses ambiguous canon targets.
+ */
+
 import { getUniverse } from './apiUniverseBuilder';
 import { getCatalogIngredientCards } from './apiCatalog';
 

@@ -1,3 +1,11 @@
+/**
+ * Owns Image Gen gallery filters, normalized recent/hidden cards, annotations, URL preview state, and
+ * local gallery mutations.
+ *
+ * Use when: Image Gen gallery and lightbox surfaces that share recent-image, annotation, and preview
+ * behavior.
+ */
+
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { normalizeImage } from '../components/media/normalize';
 import usePreviewRoute from './usePreviewRoute';

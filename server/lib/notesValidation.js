@@ -1,3 +1,7 @@
+/**
+ * Notes route schemas + safe-relative-path guard.
+ */
+
 import { z } from 'zod';
 import { isAbsolute } from 'path';
 

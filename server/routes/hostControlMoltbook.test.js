@@ -241,11 +241,20 @@ describe('Moltbook publication authority', () => {
     expect((await personalities.getAgentById(ids.agentId)).personality.promptPrefix).toBe('Changed instructions');
   });
 
-  it('keeps remote reads, private drafts, disabling and deletion available without publication', async () => {
-    const app = appFor();
-    expect((await request(app).get('/api/agents/tools/feed?accountId=example-account')).status).toBe(200);
-    expect((await request(app).get('/api/agents/schedules')).status).toBe(200);
-    expect((await call(app, ['post', '/tools/drafts', { agentId: ids.agentId, type: 'post', content: 'Private draft' }])).status).toBe(201);
+  it('keeps remote reads, and runs private drafts, disabling and deletion for host control without publication', async () => {
+    const remote = appFor();
+    expect((await request(remote).get('/api/agents/tools/feed?accountId=example-account')).status).toBe(200);
+    expect((await request(remote).get('/api/agents/schedules')).status).toBe(200);
+    const draft = ['post', '/tools/drafts', { agentId: ids.agentId, type: 'post', content: 'Private draft' }];
+    const before = await savedState();
+    for (const operation of [draft, ['post', '/schedules/example-schedule/toggle', { enabled: false }], ['delete', '/personalities/example-agent', {}]]) {
+      const refused = await call(remote, operation);
+      expect([refused.status, refused.body.code], operation[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expect(await savedState()).toEqual(before);
+
+    const app = appFor('127.0.0.1');
+    expect((await call(app, draft)).status).toBe(201);
     for (const path of ['/schedules/example-schedule', '/personalities/example-agent']) {
       expect((await call(app, ['post', path + '/toggle', { enabled: false }])).status).toBe(200);
     }

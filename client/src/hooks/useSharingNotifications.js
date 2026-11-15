@@ -1,3 +1,9 @@
+/**
+ * Subscriber for share-bucket notifications.
+ *
+ * Use when: Wire once to surface federation/sync events.
+ */
+
 import { useEffect } from 'react';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';

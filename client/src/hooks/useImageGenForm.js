@@ -1,3 +1,11 @@
+/**
+ * Owns Image Gen form fields, model/LoRA catalog loading, legacy and remix URL restoration,
+ * image-input object URLs, mode-dependent capabilities, and image-pick/remix actions.
+ *
+ * Use when: Image Gen form compositions that need the complete prompt, model, conditioning-image,
+ * cleaner, and handoff lifecycle.
+ */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import useListResource from './useListResource';
 import { getNavPageForPath } from '../../../server/lib/navManifest.js';
@@ -137,6 +145,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
   const [batchCount, setBatchCount] = useState(1);
   const [cleanC2PA, setCleanC2PA] = useState(true);
   const [denoise, setDenoise] = useState(false);
+  const [verifyImage, setVerifyImage] = useState(false);
   const [savedCleanC2PAByMode, setSavedCleanC2PAByMode] = useState({});
   const [savedDenoiseByMode, setSavedDenoiseByMode] = useState({});
   const wantI2iModeRef = useRef(false);
@@ -778,6 +787,8 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
       setCleanC2PA,
       denoise,
       setDenoise,
+      verifyImage,
+      setVerifyImage,
     },
     catalogs: {
       models,

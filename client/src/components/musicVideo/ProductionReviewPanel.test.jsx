@@ -119,11 +119,11 @@ describe('Production proof playback evidence', () => {
     expect(screen.queryByText(/By approving, I confirm/)).toBeNull();
     expect(approve.getAttribute('aria-describedby')).toBeNull();
     fireEvent.click(approve);
-    expect(review.approve).toHaveBeenCalledWith('proof', { watchedWithAudio: true, excerptId: 'proof-a', filename: 'proof-a.mp4' });
+    expect(review.approve).toHaveBeenCalledWith('proof', { method: 'playback', watchedWithAudio: true, excerptId: 'proof-a', filename: 'proof-a.mp4' });
     // A note, when given, goes with the approval.
     fireEvent.change(screen.getByLabelText('Notes (optional)'), { target: { value: NOTE } });
     fireEvent.click(approve);
-    expect(review.approve).toHaveBeenLastCalledWith('proof', { watchedWithAudio: true, excerptId: 'proof-a', filename: 'proof-a.mp4', timecodedNotes: NOTE });
+    expect(review.approve).toHaveBeenLastCalledWith('proof', { method: 'playback', watchedWithAudio: true, excerptId: 'proof-a', filename: 'proof-a.mp4', timecodedNotes: NOTE });
   });
 
 
@@ -182,57 +182,31 @@ describe('Production proof playback evidence', () => {
     expect(screen.queryByLabelText('Animated proof with master audio')).toBeNull();
   });
 
-  it('submits substantive machine evidence for the exact proof without claiming playback', () => {
+  it('offers no machine-review form to the human and stays bound to the exact proof', () => {
     const review = reviewFixture();
     const view = render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
     recordPlayback();
-    fireEvent.change(screen.getByLabelText('Review method'), { target: { value: 'machine' } });
-    expect(screen.queryByRole('checkbox')).toBeNull();
-    const approve = screen.getByRole('button', { name: proofAction });
-    const evidence = {
-      visualReview: 'Continuous frame sequence shows the figure turning and opening the prop on the beat.',
-      audioReview: 'Decoded master audio matches the proof interval; transient timing aligns with the turn.',
-      limitations: 'Machine inspection only; no human listening or playback is claimed.',
-    };
-    fireEvent.change(screen.getByLabelText('Visual and motion observations'), { target: { value: evidence.visualReview } });
-    fireEvent.change(screen.getByLabelText('Audio and alignment observations'), { target: { value: 'short' } });
-    fireEvent.change(screen.getByLabelText('Review limitations'), { target: { value: evidence.limitations } });
-    expect(approve.disabled).toBe(true);
-    fireEvent.change(screen.getByLabelText('Audio and alignment observations'), { target: { value: evidence.audioReview } });
-    expect(approve.disabled).toBe(false);
-    fireEvent.click(approve);
+    expect(screen.queryByLabelText('Review method')).toBeNull();
+    expect(screen.queryByLabelText('Visual and motion observations')).toBeNull();
+    expect(screen.queryByLabelText('Review limitations')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: approvalAction }));
     expect(review.approve).toHaveBeenCalledWith('proof', {
-      method: 'machine', watchedWithAudio: false, machineEvidence: evidence,
-      excerptId: 'proof-a', filename: 'proof-a.mp4', timecodedNotes: NOTE,
+      method: 'playback', watchedWithAudio: true, excerptId: 'proof-a', filename: 'proof-a.mp4', timecodedNotes: NOTE,
     });
-    fireEvent.change(screen.getByLabelText('Review method'), { target: { value: 'playback' } });
-    expect(screen.getByRole('button', { name: approvalAction }).disabled).toBe(false);
-    fireEvent.change(screen.getByLabelText('Review method'), { target: { value: 'machine' } });
     view.rerender(<ProductionReviewPanel project={{ ...project, excerpts: [{ ...project.excerpts[0], filename: 'replacement.mp4' }] }} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
-    expect(screen.getByLabelText('Review method').value).toBe('playback');
-    fireEvent.loadedData(screen.getByLabelText('Animated proof with master audio'));
-    fireEvent.change(screen.getByLabelText('Review method'), { target: { value: 'machine' } });
-    expect(screen.getByLabelText('Visual and motion observations').value).toBe('');
-    expect(screen.getByLabelText('Audio and alignment observations').value).toBe('');
-    expect(screen.getByLabelText('Review limitations').value).toBe('');
-    expect(approve.disabled).toBe(true);
+    expect(screen.getByRole('button', { name: approvalAction }).disabled).toBe(true);
   });
 
-  it('reports server errors and blocks machine approval for missing media', () => {
+  it('reports server errors and blocks approval for missing media', () => {
     const review = reviewFixture();
     render(<ProductionReviewPanel project={project} review={{ ...review, error: 'The proof revision changed; review the current proof.' }} onOpenArtifact={vi.fn()} stage="proof" />);
     expect(screen.getByRole('alert').textContent).toContain('proof revision changed');
-    expect(screen.getByLabelText('Review method').disabled).toBe(true);
     fireEvent.loadedData(screen.getByLabelText('Animated proof with master audio'));
-    fireEvent.change(screen.getByLabelText('Review method'), { target: { value: 'machine' } });
-    for (const label of ['Visual and motion observations', 'Audio and alignment observations', 'Review limitations']) {
-      fireEvent.change(screen.getByLabelText(label), { target: { value: 'Specific evidence from the exact proof and the current master audio.' } });
-    }
     const approve = screen.getByRole('button', { name: proofAction });
     expect(approve.disabled).toBe(false);
     fireEvent.error(screen.getByLabelText('Animated proof with master audio'));
     expect(approve.disabled).toBe(true);
-    expect(screen.getByLabelText('Visual and motion observations').disabled).toBe(true);
+    expect(screen.getByLabelText('Notes (optional)').disabled).toBe(true);
     expect(review.approve).not.toHaveBeenCalled();
   });
 
@@ -335,6 +309,18 @@ describe('Production proof playback evidence', () => {
     expect(screen.getByLabelText('Notes (optional)').value).toBe('');
     view.rerender(<ProductionReviewPanel project={{ ...approved, excerpts: [{ id: 'proof-a', filename: 'replacement.mp4', status: 'complete' }] }} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
     expect(screen.queryByLabelText('Recorded proof review')).toBeNull();
+  });
+
+  it('renders a stored machine review read-only with its three evidence fields', () => {
+    const review = reviewFixture();
+    review.readiness.proof.approved = true;
+    const machine = { excerptId: 'proof-a', filename: 'proof-a.mp4', method: 'machine', watchedWithAudio: false,
+      machineEvidence: { visualReview: 'Frames show the turn.', audioReview: 'Audio aligns.', limitations: 'No human playback.' } };
+    const approved = { ...project, productionReview: { ...project.productionReview, approvals: { proof: { proofReview: machine } } } };
+    render(<ProductionReviewPanel project={approved} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
+    const region = screen.getByLabelText('Recorded proof review');
+    for (const text of ['Machine review', 'Frames show the turn.', 'Audio aligns.', 'No human playback.']) expect(region.textContent).toContain(text);
+    expect(region.querySelector('textarea, input, select')).toBeNull();
   });
 
   it.each([

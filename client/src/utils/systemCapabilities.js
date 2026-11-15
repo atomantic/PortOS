@@ -1,4 +1,7 @@
 /**
+ * Server-annotated hardware compatibility helpers: preserve model/provider choices when compatibility
+ * is unknown, and hide only entries whose `hardwareCompatibility.state` is definitively `unavailable`.
+ *
  * Browser-side helpers for the server's hardware compatibility annotations.
  * The browser does not re-probe the host: the server owns detection, and an
  * absent annotation stays compatible for older servers and custom records.

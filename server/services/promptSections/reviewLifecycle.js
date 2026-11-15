@@ -1299,5 +1299,5 @@ function buildDefaultBranchHeadInstructions(branch, headIsDefaultBranch) {
 export function buildForkBranchInstructions(branch, forkHead) {
   const fork = normalizeForkHead(forkHead);
   if (!fork || !branch) return '';
-  return `Fork checkout: local branch \`${forkLocalBranch(branch, fork)}\` tracks the contributor's \`${branch}\`. For every push use \`git push ${shellQuote(forkRemoteName(fork.ownerLogin))} ${shellQuote(`HEAD:refs/heads/${branch}`)}\` (add --force-with-lease only when the workflow authorizes a rebase). This destination applies to all push steps below. Keep this local branch checked out; never push it to origin or delete the contributor's remote branch.\n\n`;
+  return `Fork checkout: local branch \`${forkLocalBranch(branch, fork)}\` tracks the contributor's \`${branch}\`. For every push use \`git push --no-follow-tags ${shellQuote(forkRemoteName(fork.ownerLogin))} ${shellQuote(`HEAD:refs/heads/${branch}`)}\` (add --force-with-lease only when the workflow authorizes a rebase). This destination applies to all push steps below. Keep this local branch checked out; never push it to origin or delete the contributor's remote branch.\n\n`;
 }

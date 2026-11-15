@@ -1,3 +1,8 @@
+/**
+ * Mood boards (inspiration canvas + items), `listMoodBoardNames()` for pickers,
+ * `composeMoodBoardPrompt()` which stores the board's composite style prompt.
+ */
+
 import { request } from './apiCore.js';
 
 // Mood boards (issue #911) — inspiration/reference canvases that feed the

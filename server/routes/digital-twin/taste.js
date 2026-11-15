@@ -11,7 +11,7 @@
 import { Router } from 'express';
 import * as tasteService from '../../services/taste-questionnaire.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import {
   tasteAnswerInputSchema,
   tasteSummaryInputSchema,
