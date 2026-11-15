@@ -15,6 +15,8 @@ import { VideoCastLinksDisclosure } from './VideoCastLinks.jsx';
 import { MUSIC_VIDEO_MAX_SUBJECTS } from '../../lib/musicVideoUniverseRefs.js';
 
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
+// Past this many choices a plain select stops being scannable, so a name filter appears.
+const PICKER_FILTER_THRESHOLD = 12;
 const kinds = [['character', 'Cast'], ['place', 'Places'], ['object', 'Objects']];
 const fields = { character: 'characters', place: 'places', object: 'objects' };
 // Unchecked subjects are saved to these catalog pages on Cast & Sets approval
@@ -48,6 +50,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [selectedCanon, setSelectedCanon] = useState([]);
+  const [pickFilter, setPickFilter] = useState({});
   const [descriptionBases, setDescriptionBases] = useState({});
   const [catalogKind, setCatalogKind] = useState(null);
   const universeId = draft?.universeId ?? project.concept?.universeId ?? '';
@@ -165,13 +168,19 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
         </div>
       </div>
       {loading && <p className="text-xs">Loading canon…</p>}
-      {universeReady && universe && <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">{kinds.map(([kind, label]) => <div key={kind}>
-        <label htmlFor={idFor(`pick-${kind}`)} className="text-xs">Select {label.toLowerCase()}</label>
-        <select id={idFor(`pick-${kind}`)} value="" className={inputClass} disabled={subjects.length >= MUSIC_VIDEO_MAX_SUBJECTS} onChange={(e) => {
-          const entry = (universe[fields[kind]] || []).find((item) => item.id === e.target.value);
-          if (entry) add(kind, entry.name, entry.physicalDescription || entry.description, entry);
-        }}><option value="">Add from universe…</option>{(universe[fields[kind]] || []).filter((entry) => !subjects.some((s) => s.kind === kind && (s.canonId === entry.id || (entry.ingredientId && s.ingredientId === entry.ingredientId)))).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>
-      </div>)}</div>}
+      {universeReady && universe && <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">{kinds.map(([kind, label]) => {
+        const available = (universe[fields[kind]] || []).filter((entry) => !subjects.some((s) => s.kind === kind && (s.canonId === entry.id || (entry.ingredientId && s.ingredientId === entry.ingredientId))));
+        const query = (pickFilter[kind] || '').trim().toLowerCase();
+        const shown = query ? available.filter((entry) => (entry.name || '').toLowerCase().includes(query)) : available;
+        return <div key={kind}>
+          <label htmlFor={idFor(`pick-${kind}`)} className="text-xs">Select {label.toLowerCase()}</label>
+          {available.length > PICKER_FILTER_THRESHOLD && <input type="search" aria-label={`Filter ${label.toLowerCase()} by name`} placeholder={`Filter ${available.length} by name…`} value={pickFilter[kind] || ''} onChange={(e) => setPickFilter((f) => ({ ...f, [kind]: e.target.value }))} className={`${inputClass} mb-1`} />}
+          <select id={idFor(`pick-${kind}`)} value="" className={inputClass} disabled={subjects.length >= MUSIC_VIDEO_MAX_SUBJECTS} onChange={(e) => {
+            const entry = (universe[fields[kind]] || []).find((item) => item.id === e.target.value);
+            if (entry) add(kind, entry.name, entry.physicalDescription || entry.description, entry);
+          }}><option value="">{query ? `${shown.length} of ${available.length} match…` : 'Add from universe…'}</option>{shown.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>
+        </div>;
+      })}</div>}
       <div className="flex flex-wrap items-center gap-x-3" role="group" aria-label="Add from catalog">
         <span className="text-xs text-port-text-muted">From the catalog:</span>
         {kinds.map(([kind, label]) => <button key={kind} type="button" disabled={subjects.length >= MUSIC_VIDEO_MAX_SUBJECTS} onClick={() => setCatalogKind(kind)} className="text-sm text-port-accent min-h-[44px] rounded border border-port-border px-3 py-2 hover:bg-port-accent/10 disabled:opacity-50">Add {label.toLowerCase()}</button>)}

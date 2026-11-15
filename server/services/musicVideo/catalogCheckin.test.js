@@ -197,3 +197,31 @@ describe('look-around angle plates in shots (#16145)', () => {
     expect(resolved.shotReferenceProblems[0].fix).toBeUndefined();
   });
 });
+
+describe('videos above the old 24-subject cap (#16205)', () => {
+  const COUNT = 60;
+  const places = Array.from({ length: COUNT }, (_, i) => ({ id: `subject-p${i}`, ingredientId: `env-${i}`, kind: 'place', name: `Place ${i}` }));
+  const db = (imageFor = i => `plate-${i}.png`) => ({
+    getIngredient: vi.fn(async id => ({ id, type: 'place', name: id, payload: {} })),
+    listMediaForIngredient: vi.fn(async id => [{ kind: 'reference', role: 'plate', mediaKey: imageFor(Number(id.slice(4))), createdAt: '2026-01-01T00:00:00.000Z' }]),
+  });
+  const project = (scenes = []) => ({ concept: { subjects: places }, castAndSets: { source: 'catalog', status: 'review' }, scenes });
+  const run = (p, catalog) => resolveCatalogCheckin(p, { catalog, exists: () => true });
+
+  // Uniquely catches a cap silently truncating the check-in or leaving the last subject out of the basis hash.
+  it('checks in every subject and stales the basis when only the last one changes', async () => {
+    const first = await run(project(), db());
+    expect(first.items).toHaveLength(COUNT);
+    expect(first.problems).toEqual([]);
+    const changed = await run(project(), db(i => (i === COUNT - 1 ? 'new-plate.png' : `plate-${i}.png`)));
+    expect(changed.basis).not.toBe(first.basis);
+  });
+
+  // Uniquely catches the shot reference picker dropping choices past the old cap.
+  it('offers a shot pick for every subject, including those past the old cap', async () => {
+    const resolved = await run(project([{ sceneId: 'a', takes: [] }]), db());
+    const choices = musicVideoReferenceChoices({ ...project([]), castAndSets: { source: 'catalog', catalogCheckin: resolved } });
+    expect(choices.find(ref => ref.imageId === 'plate-59.png')).toMatchObject({ role: 'set', label: 'env-59' });
+    expect(resolved.shotReferenceProblems).toEqual([]);
+  });
+});
