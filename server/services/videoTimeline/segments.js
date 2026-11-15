@@ -32,6 +32,7 @@ import { existsSync } from 'fs';
 import { join, resolve as resolvePath, sep } from 'path';
 import { PATHS, isTopLevelEntryName } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { clamp } from '../../lib/vectorMath.js';
 import { fitFades } from '../../lib/videoTimelineFades.js';
 
 export { fitFades } from '../../lib/videoTimelineFades.js';
@@ -98,8 +99,6 @@ const num = (value, fallback = 0) => {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 };
-
-const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
 // Fades are stored per segment/overlay/track and always land inside their
 // own duration — a fade longer than the thing it fades produces an ffmpeg

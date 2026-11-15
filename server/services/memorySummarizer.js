@@ -38,7 +38,7 @@ const SUMMARY_SYSTEM_PROMPT =
   + 'Prefer keywords and concrete nouns over prose. No preamble, no headings, no markdown — '
   + 'just the summary text. Aim for under 250 words.';
 
-const clamp = (s, n) => (s.length > n ? s.slice(0, n) : s);
+const truncateText = (s, n) => (s.length > n ? s.slice(0, n) : s);
 
 /**
  * Resolve the provider+model to summarize with. Prefers the Brain default
@@ -91,7 +91,7 @@ export async function summarizeForEmbedding(memory, fallbackText) {
   const sourceText = await resolveSourceText(memory, fallbackText);
   if (!sourceText?.trim()) return null;
 
-  const prompt = `${SUMMARY_SYSTEM_PROMPT}\n\n--- CONTENT ---\n${clamp(sourceText, MAX_SUMMARY_INPUT_CHARS)}`;
+  const prompt = `${SUMMARY_SYSTEM_PROMPT}\n\n--- CONTENT ---\n${truncateText(sourceText, MAX_SUMMARY_INPUT_CHARS)}`;
 
   const result = await runPromptThroughProvider({
     provider: summarizer.provider,

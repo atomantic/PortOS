@@ -17,6 +17,7 @@
  * value); `{ characters: [] }` is an intentional clear.
  */
 
+import { isPlainObject as isObject } from '../../lib/objects.js';
 import { trimTo } from '../../lib/textUtils.js';
 
 export const CAST_SETS_DEFINITION_RENDERERS = Object.freeze(['svg', 'canvas2d', 'three']);
@@ -44,7 +45,6 @@ const PATH = /^[MmLlHhVvCcSsQqTtAaZz0-9\s.,+-]+$/;
 
 // Local escape (the sheet imports this module, so it cannot be imported back).
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const slug = (v) => String(v ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 const oneOf = (v, list, fallback) => (list.includes(v) ? v : fallback);
 const round = (n) => Math.round(n * 100) / 100;
