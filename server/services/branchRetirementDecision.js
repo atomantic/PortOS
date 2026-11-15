@@ -698,3 +698,63 @@ export function decideExternalWorktreeRemoval({ tree, path, holder, repoPath, di
     tree: { ...tree, path }, holder, sourceWorkspace: repoPath, disposable, roots: [{ path: worktreesDir, requireAgentId: true }], facts,
   });
 }
+
+/**
+ * Whether a holder's tree holds nothing its branch ref does not, so detaching
+ * HEAD in place loses nothing: the porcelain status is readable and clean
+ * (untracked files too unless `allowUntracked`; a tracked or staged change
+ * always holds) and HEAD is already an ancestor of the branch's remote ref.
+ * Shared by the idle `/do:next` release and the ownerless foreign-holder release.
+ *
+ * @param {object} input
+ * @param {boolean} [input.allowUntracked=false] - a detach leaves untracked files where they are
+ * @param {object} input.facts - `porcelain` (string, `--untracked-files=all`), `remoteRef` (null when absent), `pushed` (HEAD is an ancestor of it); null is a failed read
+ * @returns {{ need: string } | { hold: { reason: string } } | { admit: true }}
+ */
+export function decideCleanPushedDetach({ allowUntracked = false, facts }) {
+  if (facts.porcelain === undefined) return { need: 'porcelain' };
+  if (facts.porcelain === null) return holdOn('status-failed');
+  const dirt = allowUntracked ? facts.porcelain.split('\n').some(l => l && !l.startsWith('?? ')) : facts.porcelain !== '';
+  if (dirt) return holdOn('uncommitted');
+  if (facts.remoteRef === undefined) return { need: 'remoteRef' };
+  if (!facts.remoteRef) return holdOn('no-remote-ref');
+  if (facts.pushed === undefined) return { need: 'pushed' };
+  if (!facts.pushed) return holdOn('unpushed');
+  return { admit: true };
+}
+
+/**
+ * Whether an idle slashdo `/do:next` sibling checkout may be detached in place
+ * to free its `next/…` branch. Gates, in order: the branch is `next/…`; the
+ * holder is a linked worktree (never the primary, index 0) that exists, is
+ * unlocked and not prunable; it sits outside the managed root; no active
+ * workspace is the holder or inside it; nothing in its git directory changed for
+ * `idleMs` (an unreadable git directory holds); then `decideCleanPushedDetach`.
+ * The idle clock is read before any status so a refused attempt cannot reset it.
+ *
+ * @param {object} input
+ * @param {string} input.branchName
+ * @param {number} input.holderIndex - position in the worktree list; <= 0 is the primary or absent
+ * @param {{ path: string, locked?: boolean, prunable?: boolean, exists: boolean }} input.holder
+ * @param {string} input.worktreesDir
+ * @param {string[]} [input.activeWorkspacePaths]
+ * @param {(a: string, b: string) => boolean} [input.samePath]
+ * @param {number} input.idleMs
+ * @param {number} input.nowMs
+ * @param {boolean} [input.allowUntracked]
+ * @param {object} input.facts - `lastTouchMs` (newest git-dir mtime; null when the git directory is unreadable) plus `decideCleanPushedDetach`'s
+ */
+export function decideIdleNextHolderRelease({
+  branchName, holderIndex, holder, worktreesDir, activeWorkspacePaths = [], samePath = (a, b) => a === b, idleMs, nowMs, allowUntracked = false, facts,
+}) {
+  if (!branchName?.startsWith('next/')) return holdOn('not-a-next-branch');
+  if (holderIndex <= 0) return holdOn('primary-checkout');
+  if (holder.locked) return holdOn('worktree-locked');
+  if (holder.prunable || !holder.exists) return holdOn('worktree-missing');
+  if (isPathInsideDir(worktreesDir, holder.path)) return holdOn('managed-worktree');
+  if (activeWorkspacePaths.some(p => p && (samePath(p, holder.path) || isPathInsideDir(holder.path, p)))) return holdOn('worktree-active-agent');
+  if (facts.lastTouchMs === undefined) return { need: 'lastTouchMs' };
+  if (facts.lastTouchMs === null) return holdOn('git-dir-unreadable');
+  if (nowMs - facts.lastTouchMs < idleMs) return holdOn('recently-touched');
+  return decideCleanPushedDetach({ allowUntracked, facts });
+}
