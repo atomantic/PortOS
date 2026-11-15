@@ -23,7 +23,7 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
 import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { ACTIONLINT_VERSION, probeActionlint, selectWorkflowFiles } from './lib/actionlint.js';
-import { GUARD_BUDGET_MS, overBudgetGuards, readGuardDurations } from './lib/guardBudget.js';
+import { GUARD_BUDGET_MS, hostTooBusyForBudget, overBudgetGuards, readGuardDurations } from './lib/guardBudget.js';
 import { buildPregateReport, guardInputSnapshot, PREGATE_REPORT_PATH, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
 import { assertGitMergeTree } from '../lib/gitMergeTree.js';
 import { dependencyConsistencyProblems } from './lib/workspaceDependencies.js';
@@ -793,8 +793,12 @@ function stageOutcomeVerdict(result, outcome) {
 function guardBudgetVerdict(result) {
   const over = overBudgetGuards(result.fileDurations);
   if (over.length === 0) return null;
-  result.status = 'failed';
   const lines = over.map(({ file, durationMs, budgetMs }) => `${file} took ${formatDuration(durationMs)} (budget ${formatDuration(budgetMs)})`);
+  if (hostTooBusyForBudget()) {
+    console.log(`⏭️ ${result.name} budget not enforced, host load exceeds its core count: ${lines.join('; ')}.`);
+    return null;
+  }
+  result.status = 'failed';
   return {
     failure: `❌ ${result.name} over the ${formatDuration(GUARD_BUDGET_MS)} per-guard budget: ${lines.join('; ')}. Speed the guard up (share one tracked-file listing and one read per source file) rather than raising the budget.`,
     exitCode: 1,

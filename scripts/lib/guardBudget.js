@@ -8,6 +8,7 @@
  * Builtins only: `scripts/pregate.js` loads this from its own fixture checkouts.
  */
 import { readFileSync } from 'node:fs';
+import { availableParallelism, loadavg } from 'node:os';
 
 export const GUARD_BUDGET_MS = 3000;
 
@@ -42,4 +43,14 @@ export function readGuardDurations(path) {
   } catch {
     return {};
   }
+}
+
+/**
+ * Vitest wall time stretches with host contention (parallel agents, other
+ * builds), so a slow reading on a saturated machine says nothing about the
+ * guard. Enforce only while the 1-minute load average fits the core count;
+ * Windows reports 0 and is always enforced.
+ */
+export function hostTooBusyForBudget({ load = loadavg()[0], cores = availableParallelism() } = {}) {
+  return load > cores;
 }
