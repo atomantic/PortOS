@@ -262,7 +262,7 @@ export const waitFor = async (predicate, { timeoutMs = 2000, intervalMs = 5 } = 
 
 // Services are imported lazily: this module loads before the suite's vi.mock
 // registrations resolve, and the services must see the mocked fileUtils.
-export async function seedComplete({ script = VALID_SCRIPT } = {}) {
+export const seedComplete = async ({ script = VALID_SCRIPT } = {}) => {
   const seriesSvc = await import('../series.js');
   const seasonsSvc = await import('../seasons.js');
   const issuesSvc = await import('../issues.js');
@@ -274,10 +274,10 @@ export async function seedComplete({ script = VALID_SCRIPT } = {}) {
   await issuesSvc.updateStage(issue.id, 'idea', ready('beats'));
   await issuesSvc.updateStage(issue.id, 'comicScript', ready(script));
   return { seriesId: series.id, seasonId, issueId: issue.id };
-}
+};
 
 /** The `beforeEach` body shared by every suite; takes the mocked bindings the suite imported. */
-export function resetFixtures({ autopilot, getDomainBudgetStatus, getSettings }) {
+export const resetFixtures = ({ autopilot, getDomainBudgetStatus, getSettings }) => {
   fileStore.clear();
   state.uuidCounter = 0;
   state.cosMode = 'execute';
@@ -318,4 +318,4 @@ export function resetFixtures({ autopilot, getDomainBudgetStatus, getSettings })
   applyFoundationFix.mockReset();
   snapshotFoundationState.mockReset();
   restoreFoundationState.mockReset();
-}
+};
