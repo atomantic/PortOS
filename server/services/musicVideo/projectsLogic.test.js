@@ -21,6 +21,8 @@ import {
 } from './projectsLogic.js';
 
 import { productionReviewBasis } from './productionReview.js';
+import { treatmentBasis } from './treatment.js';
+import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 import { musicVideoPrevizSchema, musicVideoProjectCreateSchema, musicVideoProjectUpdateSchema, musicVideoSceneCreateSchema } from '../../lib/musicVideoValidation.js';
 
 const baseProject = () => buildProjectRecord({ name: 'Test MV' }, { id: 'mv-1', now: '2026-01-01T00:00:00.000Z' });
@@ -1400,5 +1402,84 @@ describe('layered template controls', () => {
     expect(productionReviewBasis(reset).proof).not.toBe(proof);
     expect(musicVideoProjectUpdateSchema.safeParse({ templateEffects: { grain: 1.1 } }).success).toBe(false);
     expect(musicVideoSceneCreateSchema.safeParse({ templateEffects: { typo: 0 } }).success).toBe(false);
+  });
+});
+
+// #16117: readers walk `project.scenes` by index, so the stored order is the time order.
+describe('board time order', () => {
+  const timeline = (project) => project.scenes.map((scene) => [scene.label, scene.startSec, scene.order]);
+  const inTimeOrder = (project) => project.scenes.every((scene, i) => scene.order === i
+    && (i === 0 || (project.scenes[i - 1].startSec ?? Infinity) <= (scene.startSec ?? Infinity)));
+  const board = () => addScenes(baseProject(), [
+    { label: 'A', startSec: 0, endSec: 2 },
+    { label: 'B', startSec: 2, endSec: 4 },
+    { label: 'C', startSec: 4, endSec: 6 },
+  ]);
+
+  // Uniquely catches a retime that leaves the shot at its old index after a reorder moved shots between slots.
+  it('keeps the board in time order through a retime after a reorder and a reorder after a retime', () => {
+    const { project, scenes: [a, b, c] } = board();
+    const reordered = reorderScenes(project, [c.sceneId, a.sceneId, b.sceneId]);
+    expect(inTimeOrder(reordered)).toBe(true);
+    const retimed = applySceneUpdate(reordered, c.sceneId, { startSec: 7, endSec: 8 }).project;
+    expect(retimed.scenes.map((scene) => scene.sceneId)).toEqual([a.sceneId, b.sceneId, c.sceneId]);
+    expect(inTimeOrder(retimed)).toBe(true);
+    const again = reorderScenes(retimed, [b.sceneId, a.sceneId, c.sceneId]);
+    expect(inTimeOrder(again)).toBe(true);
+    expect(again.scenes.map((scene) => scene.startSec)).toEqual([2, 4, 7]);
+  });
+
+  // Uniquely catches a new mid-song shot appended at the end of the board.
+  it('adds a shot with a mid-timeline start at its time', () => {
+    const { project } = addScenes(baseProject(), [{ label: 'A', startSec: 0, endSec: 2 }, { label: 'C', startSec: 4, endSec: 6 }]);
+    const { project: next, scene } = addScene(project, { label: 'B', startSec: 2, endSec: 4 });
+    expect(timeline(next)).toEqual([['A', 0, 0], ['B', 2, 1], ['C', 4, 2]]);
+    expect(scene.order).toBe(1);
+  });
+
+  // Uniquely catches the one-time repair changing a shot's content or staling a review that held.
+  it('repairs a board stored out of order without changing its shots, its updatedAt or its approvals', () => {
+    const { project: built } = board();
+    const shuffled = { ...built, scenes: [built.scenes[2], built.scenes[0], built.scenes[1]].map((scene, order) => ({
+      ...scene, order, referenceImageId: `img-${scene.label}`, videoHistoryId: `clip-${scene.label}` })) };
+    const excerpt = { id: 'ex-1', filename: 'proof.mp4', status: 'complete' };
+    const unreviewed = { ...shuffled, excerpts: [excerpt], treatment: { basis: treatmentBasis(shuffled) }, productionReview: { proof: { excerptId: excerpt.id } } };
+    const basis = productionReviewBasis(unreviewed);
+    const project = { ...unreviewed,
+      productionReview: {
+        proof: { excerptId: excerpt.id, basis: basis.proof },
+        approvals: {
+          storyboard: { stage: 'storyboard', basis: basis.storyboard, shotsBasis: basis.storyboardShots,
+            values: { 'scene 1 prompt': { sceneId: shuffled.scenes[0].sceneId } } },
+          proof: { stage: 'proof', basis: canonicalSnapshotChecksum({ basis: basis.proof, excerptId: excerpt.id, filename: excerpt.filename }) },
+          art: { stage: 'art', basis: 'unchanged' },
+        },
+      } };
+    const repaired = afterLoad(project);
+    expect(timeline(repaired)).toEqual([['A', 0, 0], ['B', 2, 1], ['C', 4, 2]]);
+    const byId = new Map(project.scenes.map((scene) => [scene.sceneId, scene]));
+    for (const scene of repaired.scenes) {
+      const { order: _was, ...before } = byId.get(scene.sceneId);
+      const { order: _now, ...after } = scene;
+      expect(after).toEqual(before);
+    }
+    expect(repaired.updatedAt).toBe(project.updatedAt);
+    const now = productionReviewBasis(repaired);
+    const approvals = repaired.productionReview.approvals;
+    expect(approvals.storyboard).toMatchObject({ basis: now.storyboard, shotsBasis: now.storyboardShots,
+      values: { 'scene 3 prompt': { sceneId: project.scenes[0].sceneId } } });
+    expect(repaired.productionReview.proof.basis).toBe(now.proof);
+    expect(approvals.proof.basis).toBe(canonicalSnapshotChecksum({ basis: now.proof, excerptId: excerpt.id, filename: excerpt.filename }));
+    expect(approvals.art).toEqual(project.productionReview.approvals.art);
+    expect(repaired.treatment.basis).toEqual(treatmentBasis(repaired));
+    expect(afterLoad(repaired)).toBe(repaired);
+  });
+
+  // Uniquely catches the repair blessing an approval that was already stale.
+  it('leaves a stale approval stale', () => {
+    const { project: built } = board();
+    const project = { ...built, scenes: [...built.scenes].reverse(),
+      productionReview: { approvals: { storyboard: { stage: 'storyboard', basis: 'old', shotsBasis: 'old' } } } };
+    expect(afterLoad(project).productionReview.approvals.storyboard).toEqual({ stage: 'storyboard', basis: 'old', shotsBasis: 'old' });
   });
 });

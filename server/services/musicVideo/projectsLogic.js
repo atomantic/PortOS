@@ -51,8 +51,8 @@ import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
 import { normalizeCreditsOutro } from '../../lib/musicVideoCreditsOutro.js';
 import { MUSIC_VIDEO_EDGED_WIPES, sceneWipe, varyWipes } from '../../lib/musicVideoWipes.js';
-import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
-import { anchorShotsToSungLyrics, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
+import { carryTreatmentThroughSceneOrder, remapTreatmentForClone, scenesFingerprint } from './treatment.js';
+import { anchorShotsToSungLyrics, carryReviewThroughSceneOrder, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
 import { cuesSungWithin, lyricAnchorOnset, lyricWordCuts, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 import { normalizeShotSheet } from '../../lib/musicVideoShotSheet.js';
@@ -681,11 +681,16 @@ function sceneListInTimeOrder(scenes) {
 
 /**
  * Load-time repair for a project whose scenes drifted out of time order
- * (#16117). Reorders only; labels, times and selections are untouched.
+ * (#16117). Reorders only; labels, times and selections are untouched, and
+ * every review binding that held before still holds: the bases hash `scenes`
+ * by position, and the repair moves no shot in the cut, so it must not stale
+ * an approval, the rendered proof or the treatment. Pure and idempotent, with
+ * `updatedAt` left alone, so the stores run it on every load.
  */
 export function afterLoad(project) {
   const scenes = sceneListInTimeOrder(project?.scenes);
-  return scenes === project?.scenes ? project : { ...project, scenes };
+  if (scenes === project?.scenes) return project;
+  return carryReviewThroughSceneOrder(project, carryTreatmentThroughSceneOrder(project, { ...project, scenes }));
 }
 
 /** Where a new scene goes: before the first timed scene that starts after it; untimed scenes go last. */
