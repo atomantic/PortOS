@@ -205,6 +205,6 @@ it.each([{}, { verbose: true }, { reviewLoopMergeOnly: true }])('keeps fork push
   const section = buildReviewLoopFollowUpSection({ ...metadata, ...options, reviewLoopPRBranch: 'main',
     forkHead: { remoteUrl: 'https://github.com/contributor/example.git', ownerLogin: 'contributor' } }, options);
   expect(section).toContain('local branch `fork/contributor/main`');
-  expect(section).toContain('git push fork-contributor HEAD:refs/heads/main');
+  expect(section).toContain('git push --no-follow-tags fork-contributor HEAD:refs/heads/main');
   expect(section).toContain('never push it to origin or delete the contributor');
 });
