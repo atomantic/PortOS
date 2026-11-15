@@ -49,8 +49,8 @@ import { cosEvents, emitLog } from './cosEvents.js';
 import { addTask, updateTask, getAllTasks, getCosTasks, getTaskById, reconcileLegacyForgeMaintenanceTasks } from './cosTaskStore.js';
 import { PRIORITY_VALUES } from '../lib/taskParser.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
-import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
-import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
+import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown, updateAppActivity } from './appActivity.js';
+import { getActiveApps, getAppTaskTypeOverrides, getAppById } from './apps.js';
 // The single Priority-0 on-demand loop body, shared with the dequeueNextTask
 // engine in cos.js so the two can no longer drift (#6618).
 import { drainOnDemandRequests } from './onDemandDrain.js';
@@ -66,7 +66,7 @@ import { getSkipReason } from './cosTaskClaim.js';
 import { ensureInstanceId } from './instanceIdentity.js';
 import { resolveAppPrCompletion } from '../lib/prDisposition.js';
 import { applyStageExecution } from '../lib/pipelineStageExecution.js';
-import { resolveTrackerFilingBlock } from '../lib/workTracker.js';
+import { resolveTrackerFilingBlock, resolveAppWorkTracker, trackerToClaimTaskType } from '../lib/workTracker.js';
 import {
   isAuditTaskType,
   isFileIssuesMode,
@@ -103,6 +103,9 @@ import {
 import { detectIdleLeftoverBranches, formatUserActionDetectorBlock } from './userActionDetectors.js';
 
 import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { finishPreflightCard, finishPreflightDispatch, cardIdForRequest, reportPreflightStep, recordPreflightOutcome, preflightReporter } from './preflightTaskCard.js';
+import { checkGhHealth } from './github.js';
+import { detectActionableWork } from './perpetualWork.js';
 // Back-compat shim — these five were public here before the pre-step layer moved
 // to its own module, so a deep import of this file keeps resolving them.
 export {
@@ -983,7 +986,6 @@ export async function evaluateTasks(options) {
     if (!entry) return;
     deferredPreflights.delete(taskId);
     try {
-      const { finishPreflightCard, finishPreflightDispatch } = await import('./preflightTaskCard.js');
       if (emitted) await finishPreflightDispatch(entry.cardId, entry.resultTaskId);
       else await finishPreflightCard(entry.cardId, {
         outcome: 'failed', reason: 'dispatch-interrupted',
@@ -1902,7 +1904,6 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
 
   try {
     if (appRequests.length > 0) {
-      const { cardIdForRequest, reportPreflightStep } = await import('./preflightTaskCard.js');
       endPreflight = beginPreflightActivity(cardIdForRequest(appRequests[0]));
       const request = await taskSchedule.clearOnDemandRequest(appRequests[0].id);
       if (!request) {
@@ -1977,7 +1978,6 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
     return { task, pendingPerpetualDispatch, preflightCardId: stolenCardId };
   } catch (error) {
     if (stolenRequest && stolenCardId) {
-      const { finishPreflightCard } = await import('./preflightTaskCard.js');
       await finishPreflightCard(stolenCardId, { outcome: 'failed', reason: 'preparation-failed',
         note: 'Preparation failed before the handoff completed. Check the activity log and run again.' });
     }
@@ -2143,7 +2143,6 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
   let reason = null;
   if (skip?.gate === 'reviewer-identity') reason = skip.reason;
   if (outcome === 'idle' && appId && request.taskType === 'layered-intelligence') {
-    const { getAppById } = await import('./apps.js');
     const app = await getAppById(appId).catch(() => null);
     reason = app?.layeredIntelligence?.lastRunReason || null;
   }
@@ -2180,7 +2179,6 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
     // avoid.
     forge = { cli: verdict.cli, remedy: verdict.remedy };
   } else if (verdict?.cli === 'gh') {
-    const { checkGhHealth } = await import('./github.js');
     const health = await checkGhHealth().catch(() => null);
     if (health && !health.ok && health.remedy) forge = { cli: 'gh', remedy: health.remedy };
   }
@@ -2193,7 +2191,6 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
   // `preflightFailure` + `note` this stamps.
   const securityFailure = request.taskType === 'pr-reviewer' && appId
     && reason?.startsWith('security-') && reason !== 'security-scan-report-pending';
-  const { finishPreflightCard, recordPreflightOutcome } = await import('./preflightTaskCard.js');
   if (securityFailure) {
     // Minted when absent: an automated cadence run reaches the same failure with
     // no card to close, and it needs the record just as much.
@@ -2367,7 +2364,6 @@ export async function resolveTaskInputHook(app, taskType, taskSchedule, { ignore
 async function resolveClaimWorkRouting(app, taskType, metadata, taskSchedule) {
   if (taskType !== 'claim-work') return taskType;
   metadata.claimFlow = true;
-  const { resolveAppWorkTracker, trackerToClaimTaskType } = await import('../lib/workTracker.js');
   const wt = await resolveAppWorkTracker(app);
   const promptTaskType = trackerToClaimTaskType(wt.resolved) || 'plan-task';
   emitLog('info', `claim-work for ${app.name}: tracker=${wt.resolved} (${wt.source}) → ${promptTaskType}`, { appId: app.id, analysisType: taskType });
@@ -2407,7 +2403,6 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
   if (interval.perpetual !== true || isReconcileDrainTaskType(taskType)) {
     return { skip: false };
   }
-  const { detectActionableWork } = await import('./perpetualWork.js');
   const detection = await detectActionableWork(promptTaskType, app, {
     issueAuthorFilter: metadata.issueAuthorFilter || 'self',
     issueExcludeLabels: metadata.issueExcludeLabels || [],
@@ -2677,7 +2672,6 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // deterministic pre-agent work reports its progress into it.
   preflightCardId = null
 } = {}) {
-  const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
   const { getTaskPrompt, getStagePrompt } = await import('./taskPromptService.js');
 
@@ -2755,7 +2749,6 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
 
   if (taskType === 'pr-reviewer') ensurePrReviewerPipeline(metadata);
   initializePipelineMetadata(metadata);
-  const { preflightReporter } = await import('./preflightTaskCard.js');
   const securityPreflight = await runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest, taskSchedule, {
     progress: preflightReporter(preflightCardId),
   });
@@ -2918,7 +2911,6 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   } catch (err) {
     if (err.code !== 'REVIEWER_IDENTITY_NOT_FOUND') throw err;
     emitLog('info', err.message, { appId: app.id, analysisType: taskType });
-    const { recordPreflightOutcome } = await import('./preflightTaskCard.js');
     await recordPreflightOutcome({
       requestId: preflightCardId?.replace(/^preflight-/, '') || `reviewer-identity-${app.id}-${taskType}-${Date.now().toString(36)}`,
       taskType, appId: app.id, appName: app.name,
