@@ -39,7 +39,6 @@ const RATCHET_SLACK_BYTES = 2 * 1024;
 // a doc forces its entry down or out.
 const SIZE_RATCHET_CEILINGS = {
   'STORAGE.md': 233548,
-  'API.md': 111397,
   'BACKUP.md': 103721,
   'GITHUB_ACTIONS.md': 98951,
   'features/eidoverse.md': 95026,
