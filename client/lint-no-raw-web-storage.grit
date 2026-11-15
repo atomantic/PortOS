@@ -1,0 +1,37 @@
+language js
+
+// Replaces the source-grepping `storageConventions.test.js` guard (#5689).
+//
+// `localStorage` / `sessionStorage` throw (not return null) in Safari private
+// browsing, with cookies disabled, in sandboxed iframes and at quota, and a
+// `typeof` or `?.` check does not guard that. Every access goes through the
+// `safe*` helpers in `lib/safeStorage.js`.
+//
+// Matches a member access (dot, optional-chain or computed) whose object is the
+// bare `localStorage`/`sessionStorage` identifier, or that identifier reached
+// through `window` / `globalThis` / `self`. A bare identifier, `typeof
+// localStorage` and prose in comments are not accesses and do not match.
+// Not seen (same as the old grep): aliasing (`const s = localStorage`) and a
+// computed base (`globalThis['localStorage']`).
+//
+// Exemptions (`src/lib/safeStorage.js`, `src/utils/timeWindow.js`, `src/test/**`,
+// tests) are negated globs on the override in biome.jsonc that loads this plugin.
+or {
+  JsStaticMemberExpression(object = $obj),
+  JsComputedMemberExpression(object = $obj),
+  JsStaticMemberAssignment(object = $obj),
+  JsComputedMemberAssignment(object = $obj)
+} as $node where {
+  or {
+    $obj <: or { `localStorage`, `sessionStorage` },
+    $obj <: or {
+      JsStaticMemberExpression(object = or { `window`, `globalThis`, `self` }, member = or { `localStorage`, `sessionStorage` }),
+      JsComputedMemberExpression(object = or { `window`, `globalThis`, `self` }, member = or { `"localStorage"`, `"sessionStorage"`, `'localStorage'`, `'sessionStorage'` })
+    }
+  },
+  register_diagnostic(
+    span = $node,
+    message = "Raw localStorage/sessionStorage access throws in private mode, sandboxed iframes and at quota. Use the safeRead*/safeWrite*/safeRemove* helpers from lib/safeStorage.js.",
+    severity = "error"
+  )
+}
