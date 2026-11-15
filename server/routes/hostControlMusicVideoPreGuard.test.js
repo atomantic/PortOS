@@ -1,9 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import express from 'express';
 import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
-import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
+import { expectAuthorizedWorkflows, expectRemoteRefusal, hostControlApp, REMOTE_ADDRESS } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
@@ -14,8 +11,9 @@ afterAll(cleanupTempDataRoots);
 // (#13055): ffmpeg/ffprobe decodes, the headless-browser text check, Suno browser
 // reads, retime/alignment jobs, image jobs and Cast & Sets releases, plus the
 // automation brief and the sheet approval that steer unattended runs. Real
-// router behind the real gates; each service sink is a spy, so a refused
-// caller that reached one is visible, and an authorized body must still reach it.
+// router; each service sink is a spy. These are plain writes under the
+// default-deny gate (#16018), whose principal matrix lives in
+// services/authGate.test.js, so this suite keeps the authorized workflows.
 const auth = vi.hoisted(() => ({ enabled: false }));
 const effects = vi.hoisted(() => {
   const resolves = (value) => vi.fn(async () => value);
@@ -59,7 +57,6 @@ const effects = vi.hoisted(() => {
 vi.mock('../services/auth.js', async (importOriginal) => ({
   ...await importOriginal(),
   isAuthEnabled: vi.fn(async () => auth.enabled),
-  verifyPassword: vi.fn(async () => true),
 }));
 vi.mock('../services/settings.js', () => ({
   settingsEvents: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
@@ -68,9 +65,7 @@ vi.mock('../services/settings.js', () => ({
 }));
 vi.mock('../services/instanceIdentity.js', () => ({
   ensureInstanceId: vi.fn(async () => 'example-self'),
-  loadData: vi.fn(async () => ({ peers: [{
-    id: 'example-peer', instanceId: 'example-instance', enabled: true, syncSecret: 'a'.repeat(32),
-  }] })),
+  loadData: vi.fn(async () => ({ peers: [] })),
 }));
 vi.mock('../services/musicVideo/projects.js', async (importOriginal) => ({
   ...await importOriginal(),
@@ -161,8 +156,6 @@ vi.mock('../services/musicVideo/vocalStem.js', async (importOriginal) => ({
   attachVocalStem: effects.attachVocalStem,
 }));
 
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
-import { createSession } from '../services/auth.js';
 import musicVideoRoutes from './musicVideo.js';
 
 const BOUNDARY = 'example-boundary';
@@ -179,13 +172,12 @@ const upload = (field, filename, type) => ({
 });
 
 const PROJECT = '/api/music-video/example-project';
-// [method, path, body, sink, authorized status, steering-free body (formerly body-gated rows only)]
+// [method, path, body, sink, authorized status]
 const operations = [
   ['post', '/api/music-video', { name: 'Example video', automation: { guidance: 'Example guidance', checkins: { castAndSets: 'auto' } } },
-    effects.createProject, 201, { name: 'Example video' }],
-  ['patch', PROJECT, { automation: { checkins: { castAndSets: 'auto' } } }, effects.updateProject, 200, { name: 'Example video' }],
-  ['post', `${PROJECT}/dev-artifacts/mvda-example/review`, { status: 'approved' }, effects.reviewArtifact, 200,
-    { status: 'changes-requested', note: 'Example note' }],
+    effects.createProject, 201],
+  ['patch', PROJECT, { automation: { checkins: { castAndSets: 'auto' } } }, effects.updateProject, 200],
+  ['post', `${PROJECT}/dev-artifacts/mvda-example/review`, { status: 'approved' }, effects.reviewArtifact, 200],
   ['post', `${PROJECT}/analyze`, {}, effects.analyzeProjectSong, 200],
   ['post', `${PROJECT}/analyze/manual`, { bpm: 120, offsetSec: 0 }, effects.analyzeAudioFileManual, 200],
   ['post', `${PROJECT}/audio-timing/apply`, {
@@ -216,120 +208,49 @@ const operations = [
   ['post', `${PROJECT}/vocal-stem`, upload('stem', 'example.mp3', 'audio/mpeg'), effects.attachVocalStem, 200],
 ];
 
-const appFor = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/music-video', musicVideoRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
-const call = (app, [method, path, body], headers = {}) => {
-  const pending = request(app)[method](path);
-  if (body?.raw) pending.set('Content-Type', `multipart/form-data; boundary=${BOUNDARY}`);
-  for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return pending.send(body?.raw ?? body);
-};
-const expectNoEffects = () => {
-  for (const effect of Object.values(effects)) expect(effect).not.toHaveBeenCalled();
-};
+const mounts = [['/api/music-video', musicVideoRoutes]];
+const multipart = (app, path, { raw }) => request(app).post(path)
+  .set('Content-Type', `multipart/form-data; boundary=${BOUNDARY}`).send(raw);
 
 beforeEach(() => {
   vi.clearAllMocks();
   auth.enabled = false;
 });
 
-describe('Music Video pre-guard operator authority (#13055)', () => {
-  it('refuses a remote composition import and starts the browser overlay check for a local import', async () => {
-    const imports = [
-      [['post', `${PROJECT}/composition/document/zip`, upload('file', 'example.zip', 'application/zip')], effects.importDocumentZip, 201],
-      [['post', `${PROJECT}/composition/document/accept`, { directory: 'music-video/example-project/composition/doc-example' }],
-        effects.acceptMixedMediaDocument, 200],
-    ];
-    const importAs = async (address) => {
-      for (const [operation, , status] of imports) {
-        expect((await call(appFor(address), operation)).status, `${address} ${operation[1]}`).toBe(status);
-      }
-    };
-    for (const [operation, effect] of imports) {
-      const refused = await call(appFor('192.0.2.10'), operation);
-      expect([refused.status, refused.body.code], operation[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      expect(effect, operation[1]).not.toHaveBeenCalled();
-    }
-
-    await importAs('127.0.0.1');
-    for (const [, effect] of imports) expect(effect).toHaveBeenCalledTimes(1);
-    // The check starts behind two lazy imports, which a cold CI worker loads slowly.
-    await vi.waitFor(() => expect(effects.checkOverlayTextInBackground).toHaveBeenCalledTimes(2), { timeout: 10_000 });
-    expect(effects.checkOverlayTextInBackground).toHaveBeenLastCalledWith('example-project');
-  });
-
-  it('refuses remote password-free callers, spoofed-proxy and case variants before any service runs', async () => {
-    for (const operation of operations) {
-      const [method, path, body] = operation;
-      for (const [address, headers, target] of [
-        ['192.0.2.10', {}, path],
-        ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }, path],
-        ['192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }, path],
-        ['192.0.2.10', {}, path.toUpperCase() + '/'],
-      ]) {
-        const response = await call(appFor(address), [method, target, body], headers);
-        expect([response.status, response.body.code], `${method} ${target}`).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
-    }
-    expectNoEffects();
-  });
-
-  it('requires authentication with a password and denies legacy Basic and scoped-peer credentials', async () => {
-    auth.enabled = true;
-    for (const operation of operations) {
-      for (const [headers, status, code] of [
-        [{}, 401, 'AUTH_REQUIRED'],
-        [{ Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403, 'HOST_CONTROL_FORBIDDEN'],
-        [{
-          [PEER_AUTH_HEADER]: derivePeerAuthToken('a'.repeat(32), 'example-instance'),
-          [PEER_INSTANCE_HEADER]: 'example-instance',
-        }, 403, 'PEER_SCOPE_FORBIDDEN'],
-      ]) {
-        const response = await call(appFor(), operation, headers);
-        expect([response.status, response.body.code], `${operation[0]} ${operation[1]}`).toEqual([status, code]);
-      }
-    }
-    expectNoEffects();
-  });
-
-  it('keeps working for local callers, operator sessions and delegated agent sessions', async () => {
-    const operator = await createSession();
-    const agent = await createSession({ label: 'agent' });
-    for (const [enabled, address, headers] of [
-      [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Authorization: `Bearer ${operator.token}` }],
-      [true, '192.0.2.10', { Authorization: `Bearer ${agent.token}` }],
-    ]) {
-      auth.enabled = enabled;
-      for (const operation of operations) {
-        const response = await call(appFor(address), operation, headers);
-        expect(response.status, `${operation[0]} ${operation[1]}: ${JSON.stringify(response.body)}`).toBe(operation[4]);
-      }
-    }
-    for (const [method, path, , effect] of operations) expect(effect, `${method} ${path}`).toHaveBeenCalledTimes(3);
+describe('Music Video pre-guard writes behind the default-deny gate (#13055, #16114)', () => {
+  it('still runs every guarded route for a local operator and a delegated agent session', async () => {
+    const plain = operations.filter(([, , body]) => !body?.raw);
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: plain.map(([method, path, body, effect, status]) => [method, path, body, effect, status]) });
     expect(effects.createProject).toHaveBeenLastCalledWith(expect.objectContaining({ automation: operations[0][2].automation }));
   });
 
-  it('gates the steering-free body of each formerly body-gated route remotely and serves it locally', async () => {
-    const plain = operations.filter((operation) => operation[5]);
-    for (const [method, path, , , , body] of plain) {
-      const refused = await call(appFor(), [method, path, body]);
-      expect([refused.status, refused.body.code], `${method} ${path}`).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+  it('refuses the dependency-impact read, which decodes the song master with ffmpeg (#13097), from a remote caller', async () => {
+    await expectRemoteRefusal(mounts, ['get', `${PROJECT}/dependency-impact`, undefined, effects.getDependencyImpact]);
+  });
+
+  it('refuses a remote composition import or vocal-stem upload and starts the overlay check for a local import', async () => {
+    const zip = upload('file', 'example.zip', 'application/zip');
+    const remote = await hostControlApp(REMOTE_ADDRESS, mounts);
+    for (const [path, body, effect] of [
+      [`${PROJECT}/composition/document/zip`, zip, effects.importDocumentZip],
+      [`${PROJECT}/vocal-stem`, upload('stem', 'example.mp3', 'audio/mpeg'), effects.attachVocalStem],
+    ]) {
+      const refused = await multipart(remote, path, body);
+      expect([refused.status, refused.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      expect(effect, path).not.toHaveBeenCalled();
     }
-    expectNoEffects();
-    for (const [method, path, , effect, status, body] of plain) {
-      const response = await call(appFor('127.0.0.1'), [method, path, body]);
-      expect(response.status, `${method} ${path}: ${JSON.stringify(response.body)}`).toBe(status);
-      expect(effect, `${method} ${path}`).toHaveBeenCalledTimes(1);
-    }
+    const local = await hostControlApp('127.0.0.1', mounts);
+    expect((await multipart(local, `${PROJECT}/composition/document/zip`, zip)).status).toBe(201);
+    expect((await multipart(local, `${PROJECT}/vocal-stem`, upload('stem', 'example.mp3', 'audio/mpeg'))).status).toBe(200);
+    expect(effects.importDocumentZip).toHaveBeenCalledTimes(1);
+    expect(effects.attachVocalStem).toHaveBeenCalledTimes(1);
+    // The check starts behind two lazy imports, which a cold CI worker loads slowly.
+    await vi.waitFor(() => expect(effects.checkOverlayTextInBackground).toHaveBeenCalledWith('example-project'), { timeout: 10_000 });
+  });
+
+  it('refuses a remote composition accept before it starts the browser overlay check', async () => {
+    const accept = ['post', `${PROJECT}/composition/document/accept`, { directory: 'music-video/example-project/composition/doc-example' }];
+    await expectRemoteRefusal(mounts, [...accept, effects.acceptMixedMediaDocument]);
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: [[...accept, effects.acceptMixedMediaDocument, 200]] });
   });
 });
