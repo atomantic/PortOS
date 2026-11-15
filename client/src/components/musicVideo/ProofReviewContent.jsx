@@ -13,7 +13,7 @@ export function ProofRenderControls({ proof, fieldId, review, ready, blocked }) 
 
 export default function ProofReviewContent({ proof, fieldId, jump, saved, review, project, ready, blocked }) {
   const { excerpt, proofIdentity, needsRender: proofNeedsRender, proofMedia, setProofMedia, matchingRecordedReview,
-    playbackBlocked, playback, setPlayback, machineReview } = proof;
+    playbackBlocked, playback, setPlayback } = proof;
   const renderControls = <ProofRenderControls proof={proof} fieldId={fieldId} review={review} ready={ready} blocked={blocked} />;
   return <>
     {(!ready?.art.approved || !ready?.storyboard.approved) && <div className="space-y-1 text-sm" aria-label="Proof approval prerequisites">
@@ -50,24 +50,6 @@ export default function ProofReviewContent({ proof, fieldId, jump, saved, review
       </section>}
       {/* The review notes belong to a proof; with none to watch they would only be disabled clutter. */}
       {!proofNeedsRender && <>
-      <label htmlFor={fieldId('review-method')} className="block text-sm">Review method
-        <select id={fieldId('review-method')} disabled={playbackBlocked} value={playback.method}
-          onChange={e => setPlayback({ method: e.target.value })} className={fieldClass}>
-          <option value="playback">Playback with audio</option>
-          <option value="machine">Machine review with visual and audio evidence</option>
-        </select>
-      </label>
-      {machineReview && <fieldset className="space-y-3">
-        <legend className="text-sm font-medium">Machine review evidence</legend>
-        {[
-          ['visualReview', 'Visual and motion observations', 8000],
-          ['audioReview', 'Audio and alignment observations', 8000],
-          ['limitations', 'Review limitations', 4000],
-        ].map(([key, label, maxLength]) => <label key={key} htmlFor={fieldId(key)} className="block text-sm">{label}
-          <textarea id={fieldId(key)} rows={3} maxLength={maxLength} disabled={playbackBlocked} value={playback[key]}
-            onChange={e => setPlayback({ [key]: e.target.value })} className={fieldClass} />
-        </label>)}
-      </fieldset>}
       <label htmlFor={fieldId('playback-notes')} className="block text-sm">Notes (optional)
         <textarea id={fieldId('playback-notes')} rows={2} maxLength={4000} disabled={playbackBlocked} value={playback.timecodedNotes} onChange={e => setPlayback({ timecodedNotes: e.target.value })} className={fieldClass}
           placeholder="0:04 — turn lands on the downbeat" />
