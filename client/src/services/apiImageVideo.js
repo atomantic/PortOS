@@ -380,6 +380,12 @@ export const handheldVideo = (id, { shake, steps, seed } = {}, options = {}) => 
   body: JSON.stringify({ shake, steps, seed }),
   ...options,
 });
+// Queue a blurred-fill vertical copy (`ratio`: '9:16' | '4:5' | '1:1') of a clip; resolves `{ job }`.
+export const makeVideoVertical = (id, ratio, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/vertical`, {
+  method: 'POST',
+  body: JSON.stringify({ ratio }),
+  ...options,
+});
 export const stitchVideos = (videoIds, options = {}) => request('/video-gen/stitch', {
   method: 'POST',
   body: JSON.stringify({ videoIds }),

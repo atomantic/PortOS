@@ -65,6 +65,8 @@ import { assertNoPendingTopaz, enqueueTopazUpscale, reconcileTopazStatus, recove
 import { enqueueStitch } from '../services/videoGen/stitchJob.js';
 import { trimHistoryItem } from '../services/videoGen/trim.js';
 import { handheldHistoryItem } from '../services/videoGen/handheld.js';
+import { enqueueVertical } from '../services/videoGen/verticalJob.js';
+import { VERTICAL_RATIO_IDS } from '../lib/verticalReframe.js';
 import { extendHistoryClip } from '../services/videoGen/extendHosted.js';
 import { HANDHELD_SEED_MAX } from '../lib/handheldCamera.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
@@ -1614,6 +1616,16 @@ router.post('/history/:id/handheld', asyncHandler(async (req, res) => {
   if (!parsed.success) failValidation(parsed);
   const body = validateRequest(handheldBodySchema, req.body ?? {});
   res.json({ ok: true, video: await handheldHistoryItem(parsed.data, body) });
+}));
+
+// "Make it vertical" (lib/verticalReframe.js): the clip centred over a blurred copy of itself on
+// a 9:16, 4:5 or 1:1 canvas. Queued as a media job; a repeat request returns the live job.
+const verticalBodySchema = z.object({ ratio: z.enum(VERTICAL_RATIO_IDS) }).strict();
+router.post('/history/:id/vertical', asyncHandler(async (req, res) => {
+  const parsed = historyIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const body = validateRequest(verticalBodySchema, req.body ?? {});
+  res.json({ ok: true, job: await enqueueVertical(parsed.data, body.ratio) });
 }));
 
 // Continue a hosted clip on its model's extend endpoint (#16150); `dryRun` returns the exact body and price.
