@@ -17,6 +17,7 @@ export {
   describeFalVideoRate,
   estimateFalVideoCostUsd,
   falCapabilityHint,
+  falExtraReferenceLimit,
   falHearsAudioReference,
   falImageVideoQuotes,
   falPromptExpansionAddition,

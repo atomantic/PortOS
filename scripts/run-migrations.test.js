@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createHash } from 'crypto';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, readdirSync, existsSync, utimesSync } from 'fs';
 import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
@@ -259,6 +260,26 @@ export default {
     await expect(listPendingMigrations({ rootDir, migrationsDir })).resolves.toEqual(['003-later.js']);
     await expect(runMigrations({ rootDir, migrationsDir, through: '009-missing.js' }))
       .rejects.toThrow('Cannot run migrations through "009-missing.js"');
+  });
+
+  // #16090: a template edit ships no numbered migration, so the runner itself
+  // must upgrade untouched old shipped prompts — on every full pass, even one
+  // with nothing pending, and only after the chain.
+  it('reconciles shipped prompts after a full pass, not after a bounded replay', async () => {
+    const md5 = (body) => createHash('md5').update(body).digest('hex');
+    mkdirSync(join(rootDir, 'data.reference', 'prompts', 'stages'), { recursive: true });
+    mkdirSync(join(dataDir, 'prompts', 'stages'), { recursive: true });
+    writeFileSync(join(rootDir, 'data.reference', 'prompts', 'stages', 'a.md'), '# new\n');
+    writeFileSync(join(rootDir, 'data.reference', 'prompts', 'shipped-hashes.json'),
+      JSON.stringify({ 'stages/a.md': { current: md5('# new\n'), retired: [md5('# old\n')] } }));
+    const installed = join(dataDir, 'prompts', 'stages', 'a.md');
+    writeFileSync(installed, '# old\n');
+
+    await runMigrations({ rootDir, migrationsDir, through: '001-fixture.js' });
+    expect(readFileSync(installed, 'utf-8')).toBe('# old\n');
+
+    await expect(runMigrations({ rootDir, migrationsDir })).resolves.toBe(0);
+    expect(readFileSync(installed, 'utf-8')).toBe('# new\n');
   });
 });
 

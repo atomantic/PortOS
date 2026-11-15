@@ -917,6 +917,60 @@ export function carryStoryboardApproval(before, after, reason) {
   return { ...after, productionReview: { ...after.productionReview, approvals } };
 }
 
+// Labeled inputs and values name a shot by its board position ("scene 3 timing").
+const SCENE_POSITION_KEY = /^scene (\d+) (.+)$/;
+
+/**
+ * Re-stamp the review bindings across a change that only puts the same shots in
+ * time order (#16117). The bases hash `scenes` by position, so without this the
+ * repair of a board stored out of time order would stale approvals and the
+ * rendered proof though nothing in the cut changed. Only a binding that held on
+ * `before` moves to `after`; a stale one stays stale. Position keys of an
+ * approval's recorded inputs and values follow their shots, so a later
+ * staleness check still names what changed since the approval.
+ */
+export function carryReviewThroughSceneOrder(before, after) {
+  const review = after.productionReview;
+  if (!review) return after;
+  const was = productionReviewBasis(before);
+  const now = productionReviewBasis(after);
+  const wasInputs = productionApprovalInputs(before);
+  const nowInputs = productionApprovalInputs(after);
+  const newIndex = new Map((after.scenes || []).map((scene, i) => [scene.sceneId, i + 1]));
+  const position = new Map((before.scenes || []).map((scene, i) => [i + 1, newIndex.get(scene.sceneId) ?? i + 1]));
+  const moveKey = (key) => {
+    const match = SCENE_POSITION_KEY.exec(key);
+    return match ? `scene ${position.get(Number(match[1])) ?? match[1]} ${match[2]}` : key;
+  };
+  const moveKeys = (record) => Object.fromEntries(Object.entries(record).map(([key, value]) => [moveKey(key), value]));
+  // An order-sensitive input that held (the proof's take list) re-stamps; the rest move with their shots.
+  const carryInputs = (inputs, stage) => {
+    const moved = moveKeys(inputs);
+    for (const key of Object.keys(moved)) {
+      if (!SCENE_POSITION_KEY.test(key) && inputs[key] === wasInputs[stage][key]) moved[key] = nowInputs[stage][key];
+    }
+    return moved;
+  };
+  const carryApproval = (approval, stage) => ({ ...approval,
+    ...(approval.inputs && typeof approval.inputs === 'object' ? { inputs: carryInputs(approval.inputs, stage) } : {}),
+    ...(approval.values && typeof approval.values === 'object' ? { values: moveKeys(approval.values) } : {}) });
+  const approvals = review.approvals ? { ...review.approvals } : review.approvals;
+  const board = approvals?.storyboard;
+  if (board && (board.basis === was.storyboard || (!!was.storyboardShots && board.shotsBasis === was.storyboardShots))) {
+    approvals.storyboard = { ...carryApproval(board, 'storyboard'),
+      ...(board.basis === was.storyboard ? { basis: now.storyboard } : {}),
+      ...(board.shotsBasis && board.shotsBasis === was.storyboardShots ? { shotsBasis: now.storyboardShots } : {}) };
+  }
+  const excerpt = (after.excerpts || []).find((e) => e.id === review.proof?.excerptId);
+  const proofKey = (basis) => hash({ basis, excerptId: excerpt?.id, filename: excerpt?.filename });
+  if (approvals?.proof && excerpt && approvals.proof.basis === proofKey(was.proof)) {
+    approvals.proof = { ...carryApproval(approvals.proof, 'proof'), basis: proofKey(now.proof) };
+  }
+  const next = { ...review, ...(approvals ? { approvals } : {}) };
+  if (review.proof?.basis && review.proof.basis === was.proof) next.proof = { ...review.proof, basis: now.proof };
+  return { ...after, productionReview: next };
+}
+
 // A refreshed snapshot is re-inserted last so insertion order doubles as recency.
 const omitKey = (obj, key) => Object.fromEntries(Object.entries(obj || {}).filter(([k]) => k !== key));
 const MAX_APPROVAL_HISTORY = 50;

@@ -116,28 +116,28 @@ describe('writersRoomSceneImageHook', () => {
   it('ignores jobs without a writersRoom tag', async () => {
     mediaJobEvents.emit('completed', completedImageJob({ params: { catalogAttach: { ingredientId: 'x' } } }));
     mediaJobEvents.emit('completed', completedImageJob({ params: {} }));
-    await new Promise((r) => setTimeout(r, 30));
+    await hook.__testing.settled();
     expect(persistSceneImage).not.toHaveBeenCalled();
     expect(emitted).toHaveLength(0);
   });
 
   it('ignores an incomplete writersRoom tag (missing sceneId)', async () => {
     mediaJobEvents.emit('completed', completedImageJob({ params: { writersRoom: { workId: 'w1', analysisId: 'script' } } }));
-    await new Promise((r) => setTimeout(r, 30));
+    await hook.__testing.settled();
     expect(persistSceneImage).not.toHaveBeenCalled();
   });
 
   it('ignores non-image jobs and jobs with no result filename', async () => {
     mediaJobEvents.emit('completed', { kind: 'video', id: 'v', params: { writersRoom: tag() }, result: { filename: 'v.mp4' } });
     mediaJobEvents.emit('completed', { kind: 'image', id: 'i', params: { writersRoom: tag() }, result: {} });
-    await new Promise((r) => setTimeout(r, 30));
+    await hook.__testing.settled();
     expect(persistSceneImage).not.toHaveBeenCalled();
   });
 
   it('swallows a persist error without rejecting and emits nothing (best-effort)', async () => {
     persistSceneImage.mockRejectedValueOnce(new Error('disk full'));
     mediaJobEvents.emit('completed', completedImageJob({ params: { writersRoom: tag() } }));
-    await new Promise((r) => setTimeout(r, 30));
+    await hook.__testing.settled();
     expect(emitted).toHaveLength(0);
   });
 
@@ -152,7 +152,7 @@ describe('writersRoomSceneImageHook', () => {
       kind: 'image', id: 'a', params: { writersRoom: tag() }, result: { filename: 'old.png' },
       queuedAt: '2026-06-29T00:00:01.000Z',
     });
-    await new Promise((r) => setTimeout(r, 30));
+    await hook.__testing.settled();
     // The newer frame persisted; the older one was dropped (never re-persisted).
     expect(persistSceneImage).toHaveBeenCalledTimes(1);
     expect(persistSceneImage.mock.calls[0][2].filename).toBe('new.png');

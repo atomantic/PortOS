@@ -56,7 +56,6 @@
 
 import { readFile, writeFile, unlink, readdir, rename, mkdir, stat } from 'fs/promises';
 import { join } from 'path';
-import { pathToFileURL } from 'url';
 import { createHash } from 'crypto';
 import { atomicWrite, readJSONFileStrict } from '../../server/lib/fileUtils.js';
 import { VIDEO_BUCKET_MLX, resolveVideoBucketKey } from '../../server/lib/mediaModelBuckets.js';
@@ -400,8 +399,13 @@ export const md5 = (str) => {
  * `subdirs` mirrors a migration's `DRIFT_SUBDIRS` export: a per-filename
  * override of the `prompts/<subdir>/` directory both sides resolve under.
  * Stage prompts (the default, `'stages'`) need no entry; prompt fragments in
- * `prompts/_partials/` do. Passing the migration's own `DRIFT_SUBDIRS` object
- * keeps the replace pass and the setup-data.js drift sweep reading one table.
+ * `prompts/_partials/` do.
+ *
+ * "Current" is the live reference body, not the migration's declared
+ * `current` hash (#16090): a later template edit would otherwise make this
+ * frozen migration call today's shipped body customized. The declared hash and
+ * every retired hash in `data.reference/prompts/shipped-hashes.json` count as
+ * untouched shipped bodies, so no shipped migration ever needs re-pointing.
  */
 export async function applyPromptReplaceMigration({
   rootDir,
@@ -417,6 +421,9 @@ export async function applyPromptReplaceMigration({
   const dataPathFor = (filename) => join(rootDir, 'data', 'prompts', subdirFor(filename), filename);
   const samplePathFor = (filename) => join(rootDir, 'data.reference', 'prompts', subdirFor(filename), filename);
   const filenames = Object.keys(accepted);
+  // Lazy: shippedPromptHashes.js imports this module.
+  const { readShippedHashes } = await import('./shippedPromptHashes.js');
+  const shippedHashes = await readShippedHashes(rootDir);
 
   // Two phases so parallelism never changes the migration's failure semantics:
   //
@@ -451,21 +458,26 @@ export async function applyPromptReplaceMigration({
     }
 
     const existingMd5 = md5(existing);
-    const acceptedOld = accepted[filename];
-    const matchesAcceptedOld = acceptedOld.includes(existingMd5);
-    const matchesCurrent = existingMd5 === current[filename];
+    const sampleContent = await readFile(samplePath, 'utf-8').catch((err) => {
+      if (err.code !== 'ENOENT') throw err;
+      return null;
+    });
+    const shipped = new Set([
+      ...accepted[filename],
+      current[filename],
+      ...(shippedHashes[`${subdirFor(filename)}/${filename}`]?.retired || []),
+    ]);
+    const matchesCurrent = sampleContent === null
+      ? existingMd5 === current[filename]
+      : existingMd5 === md5(sampleContent);
+    const matchesAcceptedOld = !matchesCurrent && shipped.has(existingMd5);
 
     if (retireOnSampleMissing) {
-      // Peek at the sample before any other branch: a missing sample means
-      // the prompt was renamed or retired upstream, so the on-disk file is
-      // obsolete regardless of which shipped version it matches. Unmodified
-      // copies (either accepted-old or current hash) are unlinked; customized
-      // copies warn and skip.
-      const sampleExists = await readFile(samplePath, 'utf-8').then(() => true, (err) => {
-        if (err.code === 'ENOENT') return false;
-        throw err;
-      });
-      if (!sampleExists) {
+      // A missing sample means the prompt was renamed or retired upstream, so
+      // the on-disk file is obsolete regardless of which shipped version it
+      // matches. Unmodified copies (either accepted-old or current hash) are
+      // unlinked; customized copies warn and skip.
+      if (sampleContent === null) {
         if (matchesAcceptedOld || matchesCurrent) {
           return { unlink: dataPath, counter: 'retired', log: `🗑️  ${label} ${filename} was renamed/retired upstream — removed unmodified copy from data/` };
         }
@@ -488,10 +500,10 @@ export async function applyPromptReplaceMigration({
       };
     }
 
-    // Sample read stays in the plan phase: a missing sample for an accepted-old
-    // file is the migration-author error the old loop surfaced by throwing, so
-    // it must still abort before any write lands.
-    const sampleContent = await readFile(samplePath, 'utf-8');
+    // A missing sample for an accepted-old file is the migration-author error
+    // the old loop surfaced by throwing; it still aborts in the plan phase,
+    // before any write lands.
+    if (sampleContent === null) await readFile(samplePath, 'utf-8');
     return { write: { path: dataPath, content: sampleContent }, counter: 'updated', log: `✅ updated ${label}: ${filename}` };
   }));
 
@@ -1278,83 +1290,4 @@ export function makeAdditiveProviderInsertMigration({ targets, label }) {
   }
 
   return { up };
-}
-
-/**
- * Build the per-subdir prompt-drift tables that `scripts/setup-data.js` uses
- * for its "pending migration" warning by sweeping every numbered migration's
- * exported drift constants — instead of hand-mirroring them in setup-data.js
- * (the spot most likely to drift out of sync with the migrations).
- *
- * Each prompt-touching migration exports:
- *   - `ACCEPTED_OLD_MD5` — `{ 'file.md': hash | [hash, …] }` (the shipped
- *     hashes a still-unmodified installed copy may carry before this migration)
- *   - `NEW_SHIPPED_MD5`  — `{ 'file.md': hash }` (the hash this migration ships)
- *   - `DRIFT_SUBDIRS`    — (optional) `{ 'file.md': '_partials' }` for prompt
- *     fragments under `data/prompts/_partials/` rather than the default
- *     `data/prompts/stages/`.
- *
- * Merge rules across a file's migration lineage. Migrations sort numerically by
- * filename, so the highest-numbered one that ships a file defines its current
- * shape:
- *   - current/new hash  = the LAST `NEW_SHIPPED_MD5` entry for the file.
- *   - accepted-old set  = union of every `ACCEPTED_OLD_MD5` entry PLUS every
- *     intermediate `NEW_SHIPPED_MD5` (each earlier shipped hash is itself
- *     auto-updatable to the latest), minus the current hash.
- *
- * Only migration files whose source text mentions the export names are
- * imported — this skips the heavier split/seed migrations (which pull in
- * server-side modules) and keeps the sweep a cheap, side-effect-free read.
- * `_`-prefixed files (this module) are excluded by the numeric-prefix filter.
- * Specialist prompt lineages that manage their own drift inline without
- * exporting these constants (e.g. the importer-stage migrations 015/016/020)
- * are intentionally not swept — they were never in setup-data.js's tables.
- *
- * Returns `{ [subdir]: { oldMap, newMap, files } }` keyed by `'stages'` /
- * `'_partials'`, matching the shape `collectDrift` in setup-data.js consumes.
- */
-export async function buildPromptDriftTables(migrationsDir) {
-  // Sort by the leading migration number, not lexicographically — so the
-  // `current` (latest) hash selection holds even if a future migration name
-  // isn't zero-padded (e.g. `7-foo.js` must order before `60-foo.js`).
-  const candidates = (await readdir(migrationsDir))
-    .filter((f) => /^\d.*\.js$/.test(f) && !f.endsWith('.test.js'))
-    .sort((a, b) => (parseInt(a, 10) - parseInt(b, 10)) || a.localeCompare(b));
-
-  // key = `${subdir}/${filename}` so stages + _partials never collide.
-  const merged = new Map();
-  for (const file of candidates) {
-    const filePath = join(migrationsDir, file);
-    const source = await readFile(filePath, 'utf-8');
-    if (!source.includes('ACCEPTED_OLD_MD5') && !source.includes('NEW_SHIPPED_MD5')) continue;
-    const mod = await import(pathToFileURL(filePath).href);
-    const oldMap = mod.ACCEPTED_OLD_MD5 || {};
-    const newMap = mod.NEW_SHIPPED_MD5 || {};
-    const subdirs = mod.DRIFT_SUBDIRS || {};
-    const names = new Set([...Object.keys(oldMap), ...Object.keys(newMap)]);
-    for (const name of names) {
-      const subdir = subdirs[name] || 'stages';
-      const key = `${subdir}/${name}`;
-      const entry = merged.get(key) || { subdir, name, old: new Set(), newSeq: [] };
-      const ov = oldMap[name];
-      if (ov != null) (Array.isArray(ov) ? ov : [ov]).forEach((h) => entry.old.add(h));
-      if (newMap[name]) entry.newSeq.push(newMap[name]);
-      merged.set(key, entry);
-    }
-  }
-
-  const tables = {};
-  for (const { subdir, name, old, newSeq } of merged.values()) {
-    // A file with only accepted-old hashes and no shipped current has nothing
-    // to update *to* — skip it rather than emit a half table.
-    if (newSeq.length === 0) continue;
-    const current = newSeq[newSeq.length - 1];
-    const olds = new Set([...old, ...newSeq.slice(0, -1)]);
-    olds.delete(current);
-    const table = (tables[subdir] ||= { oldMap: {}, newMap: {}, files: [] });
-    table.oldMap[name] = [...olds];
-    table.newMap[name] = current;
-    table.files.push(name);
-  }
-  return tables;
 }

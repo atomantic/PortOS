@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { describe, expect, it } from 'vitest';
 
 import { resolveBaseSha } from './ci-base-sha.js';
+import { readCiJobs } from './lib/ciWorkflowJobs.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 
 const WORKFLOW = readFileSync(
@@ -45,7 +46,8 @@ describe('resolveBaseSha', () => {
 });
 
 describe('ci.yml checkout depth', () => {
-  const jobs = workflowJobs(WORKFLOW);
+  // The diff-base step lives in a composite action; read the expanded jobs.
+  const jobs = readCiJobs();
 
   it('fetches full history only for the shipped prompt guard', () => {
     expect(Object.keys(jobs).length).toBeGreaterThan(0);
@@ -101,7 +103,7 @@ describe('ci.yml required checks', () => {
 });
 
 describe('ci.yml server node_modules cache', () => {
-  const jobs = workflowJobs(WORKFLOW);
+  const jobs = readCiJobs();
 
   /** Every job that installs the server workspace — each one this cache serves. */
   const installers = Object.entries(jobs)
@@ -117,6 +119,8 @@ describe('ci.yml server node_modules cache', () => {
   it('caches the installed tree on every job that installs it', () => {
     expect(installers.map(([id]) => id).sort())
       .toEqual(['browser', 'database', 'macos-native', 'server', 'windows-server']);
+    // One definition: each job installs through the setup-server action.
+    for (const [id, body] of installers) expect(body, id).toContain('uses: ./.github/actions/setup-server');
 
     for (const [, body] of installers) expect(cacheEntry(body)).toMatch(/id: server-modules\b/);
   });
@@ -130,7 +134,7 @@ describe('ci.yml server node_modules cache', () => {
     // flag) reintroduces the hole.
     for (const [id, body] of installers) {
       const install = body.match(
-        /- name: Install server dependencies\n {8}if: (?<cond>.*)\n {8}run: npm ci --prefix server/,
+        /- name: Install server dependencies\n {8}if: (?<cond>.*)\n {8}shell: bash\n {8}run: npm ci --prefix server/,
       );
       const rebuild = body.match(
         /- name: Rebuild trusted native dependencies\n {8}if: (?<cond>.*)\n/,
@@ -162,7 +166,7 @@ describe('ci.yml server node_modules cache', () => {
   it('checks a restored tree without letting a bad entry wedge the repo', () => {
     for (const [id, body] of installers) {
       const check = body.match(
-        /- name: Check the restored node_modules was rebuilt\n {8}id: server-modules-usable\n {8}if: (?<cond>.*)\n {8}continue-on-error: true\n {8}run: node scripts\/trusted-rebuild-stamp\.js check server/,
+        /- name: Check the restored node_modules was rebuilt\n {8}id: server-modules-usable\n {8}if: (?<cond>.*)\n {8}continue-on-error: true\n {8}shell: bash\n {8}run: node scripts\/trusted-rebuild-stamp\.js check server/,
       );
       // Without continue-on-error the same broken entry fails every run
       // forever: nothing a pull request touches feeds the key, so the next run

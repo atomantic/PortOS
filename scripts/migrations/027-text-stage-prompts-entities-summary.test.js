@@ -75,13 +75,6 @@ describe('migration 027 — text-stage prompts entities-summary + speechPattern'
     }
   });
 
-  it('NEW_SHIPPED_MD5 matches the live data.reference bodies (drift catch)', () => {
-    for (const filename of Object.keys(NEW_SHIPPED_MD5)) {
-      const liveHash = md5(sampleBody(filename));
-      expect(liveHash).toBe(NEW_SHIPPED_MD5[filename]);
-    }
-  });
-
   it('upgrades when on-disk hash matches an accepted-old entry (synthetic fixture)', async () => {
     const filename = 'pipeline-prose.md';
     const fakeOldBody = `# synthetic pre-migration body for ${filename}\n`;

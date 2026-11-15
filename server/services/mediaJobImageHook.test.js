@@ -55,7 +55,7 @@ describe('createMediaJobImageHook', () => {
     mediaJobEvents.emit('completed', job({ params: {} }));
     mediaJobEvents.emit('completed', job({ params: { test: { recordId: 'r1' } } })); // missing sceneId
     mediaJobEvents.emit('completed', { kind: 'image', params: { test: tag() }, result: {} }); // no filename
-    await new Promise((r) => setTimeout(r, 30));
+    await h.hook.__testing.settled();
     expect(h.attach).not.toHaveBeenCalled();
     expect(h.onAttached).not.toHaveBeenCalled();
   });
@@ -64,7 +64,7 @@ describe('createMediaJobImageHook', () => {
     mediaJobEvents.emit('completed', job({ params: { test: tag() }, filename: 'new.png', id: 'b', queuedAt: '2026-06-29T00:00:02.000Z' }));
     await waitFor(() => h.attach.mock.calls.length > 0);
     mediaJobEvents.emit('completed', job({ params: { test: tag() }, filename: 'old.png', id: 'a', queuedAt: '2026-06-29T00:00:01.000Z' }));
-    await new Promise((r) => setTimeout(r, 30));
+    await h.hook.__testing.settled();
     expect(h.attach).toHaveBeenCalledTimes(1);
     expect(h.attach.mock.calls[0][0].filename).toBe('new.png');
   });
@@ -114,7 +114,7 @@ describe('createMediaJobImageHook', () => {
     h.attach.mockRejectedValue(new Error('boom'));
     mediaJobEvents.emit('completed', job({ params: { test: tag() } }));
     await waitFor(() => h.attach.mock.calls.length > 0);
-    await new Promise((r) => setTimeout(r, 20));
+    await h.hook.__testing.settled();
     expect(h.onAttached).not.toHaveBeenCalled();
   });
 
@@ -122,7 +122,7 @@ describe('createMediaJobImageHook', () => {
     h.hook.init(); // second init
     mediaJobEvents.emit('completed', job({ params: { test: tag() } }));
     await waitFor(() => h.attach.mock.calls.length > 0);
-    await new Promise((r) => setTimeout(r, 20));
+    await h.hook.__testing.settled();
     expect(h.attach).toHaveBeenCalledTimes(1);
   });
 

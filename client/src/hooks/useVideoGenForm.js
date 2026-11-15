@@ -24,6 +24,7 @@ import {
   resolveDraftDecodeForModel, draftDecodeFromRecord,
 } from '../lib/videoGenParams.js';
 import { videoStreamingModeFromRecord } from '../lib/videoStreamingMode.js';
+import { falExtraReferenceLimit, getFalVideoModel } from '../lib/falVideoModels.js';
 import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel, runwayModelTakesText } from '../lib/runwayVideoModels.js';
 import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, getHiggsfieldVideoModel } from '../lib/higgsfieldVideoModels.js';
 import { GOOGLE_DEFAULT_VIDEO_MODEL, getGoogleVideoModel } from '../lib/googleVideoModels.js';
@@ -909,7 +910,7 @@ export function useVideoGenForm({
   // Extra reference rows for a reference-to-video model. The model's
   // `maxReferenceImages` counts the first-frame input, so rows cap one lower.
   // A Higgsfield reference render has no start frame, so every row is a reference.
-  const maxExtraReferenceImages = isHiggsfield ? higgsfieldModel.maxReferenceImages : isGoogle ? googleModel.maxReferenceImages : Math.max(0, (Number(isRunway
+  const maxExtraReferenceImages = isFal ? falExtraReferenceLimit(getFalVideoModel(falModelId), mode) : isHiggsfield ? higgsfieldModel.maxReferenceImages : isGoogle ? googleModel.maxReferenceImages : Math.max(0, (Number(isRunway
     ? getRunwayVideoModel(runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL)?.referenceImages?.max
     : currentModel?.maxReferenceImages) || 0) - 1);
   const addReferenceImage = () => setReferenceImageFiles((prev) => (

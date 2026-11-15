@@ -1,0 +1,43 @@
+name: Restore the test memo
+description: >-
+  Restore the trusted test memo (docs/GITHUB_ACTIONS.md "Test memo") for one
+  job partition. The job saves it afterwards with actions/cache/save, passing
+  the same runner-temp `portos-test-memo` path and this action's `key`
+  output, and only from a trusted green run.
+
+inputs:
+  suite:
+    description: The job family (server, client, db, browser, windows-server); the fallback restore prefix.
+    required: true
+  partition:
+    description: >-
+      The job family plus its shard (e.g. `server-1of2`), or the family alone
+      for an unsharded job. The preferred restore prefix and the saved key.
+    required: true
+
+outputs:
+  key:
+    description: This run's save key.
+    value: ${{ steps.restore.outputs.cache-primary-key }}
+
+runs:
+  using: composite
+  steps:
+    # The runner skips a selected test file whose every input — loaded
+    # modules, fixtures, package versions, Node/platform, gating env — is
+    # byte-identical to one a trusted green run verified. Pull requests only
+    # read. The scheduled, dispatched and called full runs save, so the cache
+    # holds nothing a PR branch wrote. Prefer the same partition's lineage,
+    # then any shard of this job family: scoped 1of1 plans have no full-run
+    # seed of their own. OS and architecture are in every key, so a platform
+    # reads only its own verdicts. Per-test content keys still decide reuse;
+    # unmatched files run normally.
+    - name: Restore from the trusted memo cache
+      id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/portos-test-memo
+        key: test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.partition }}-${{ github.run_id }}
+        restore-keys: |
+          test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.partition }}-
+          test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-

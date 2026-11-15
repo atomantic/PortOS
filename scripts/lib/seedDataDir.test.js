@@ -38,6 +38,17 @@ describe('seedDataDir migration safety', () => {
     expect(readFileSync(join(dataDir, 'cos/config.json'))).toEqual(original);
   });
 
+  // The table is read in place from data.reference/; a copy in data/ would go stale (#16090).
+  it.each(['fresh', 'existing'])('never copies the shipped prompt-hash table into a %s install', (install) => {
+    if (install === 'existing') mkdirSync(dataDir);
+    mkdirSync(join(referenceDir, 'prompts', 'stages'), { recursive: true });
+    writeFileSync(join(referenceDir, 'prompts', 'shipped-hashes.json'), '{}');
+    writeFileSync(join(referenceDir, 'prompts', 'stages', 'a.md'), '# a');
+    seedDataDir({ referenceDir, dataDir });
+    expect(existsSync(join(dataDir, 'prompts', 'shipped-hashes.json'))).toBe(false);
+    expect(existsSync(join(dataDir, 'prompts', 'stages', 'a.md'))).toBe(true);
+  });
+
   it('copies a missing ordinary file without replacing customized content on upgrade', () => {
     mkdirSync(join(dataDir, 'cos'), { recursive: true });
     writeFileSync(join(referenceDir, 'cos/custom.json'), 'shipped customization');

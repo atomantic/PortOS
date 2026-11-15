@@ -90,13 +90,19 @@ export const unknownVideoModelMessage = (modelId) => (HOSTED_VIDEO_BACKENDS.incl
   ? `Unknown modelId: ${modelId}. ${modelId} is a renderer: send backend: "${modelId}" instead of modelId`
   : `Unknown modelId: ${modelId}`);
 
-/** Hosted lanes cannot consume the generic reference inputs used by local models, except Runway's, Higgsfield's and Google's own image picks (hostedSubmission.js). */
+/** Hosted lanes cannot consume the generic reference inputs used by local models, except the image picks of Runway, Higgsfield, Google and a fal model whose catalog entry takes reference images (hostedSubmission.js). */
 export function hostedReferenceInputsError({ backend, body, uploads = {} }) {
-  if (backend === VIDEO_GEN_MODE.LOCAL
-    || !((body.referenceImageFiles?.length && !body.guidanceImageFile && backend !== VIDEO_GEN_MODE.RUNWAY && backend !== VIDEO_GEN_MODE.HIGGSFIELD && backend !== VIDEO_GEN_MODE.GOOGLE) || body.referenceVideoIds?.length
-      || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]))) return null;
-  return new ServerError('Reference images, clips and voice clips are only used by local reference-to-video models and, for images, Runway, Higgsfield and Veo models that take them.',
-    { status: 400, code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY' });
+  if (backend === VIDEO_GEN_MODE.LOCAL) return null;
+  const falModel = backend === VIDEO_GEN_MODE.FAL ? getFalVideoModel(body.falModelId) : null;
+  const takesImages = backend === VIDEO_GEN_MODE.RUNWAY || backend === VIDEO_GEN_MODE.HIGGSFIELD || backend === VIDEO_GEN_MODE.GOOGLE
+    || !!falModel?.referenceImages;
+  const refusedImages = !!body.referenceImageFiles?.length && !body.guidanceImageFile && !takesImages;
+  const otherReferences = !!body.referenceVideoIds?.length || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]);
+  if (!refusedImages && !otherReferences) return null;
+  return new ServerError(refusedImages && !otherReferences && falModel
+    ? `${falModel.label} takes no reference images. Pick a fal.ai reference model such as Seedance 2.5 (reference), or drop the reference images.`
+    : 'Reference images, clips and voice clips are only used by local reference-to-video models and, for images, Runway, Higgsfield, Veo and fal.ai models that take them.',
+  { status: 400, code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY' });
 }
 
 /**

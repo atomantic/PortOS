@@ -20,7 +20,6 @@ import { PORTOS_APP_ID } from './appIdentity.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const SETTINGS_PAGE = path.join(REPO_ROOT, 'client/src/pages/Settings.jsx');
 
 // Maps URL prefix → how to extract the page's own tab set from its source. Each
 // page validates the :tab/:section param against this list, so the nav manifest
@@ -185,6 +184,16 @@ describe('nav contract — generated section child navigation', () => {
       ['Operate', ['Quota Burn', 'Status', 'Subscriptions', 'Usage']],
       ['Policies', ['Abuse Guard', 'Code Reviewers', 'Decision Classifiers']],
     ]);
+  });
+
+  it('groups every Settings tab into the four design sections', () => {
+    expect(getSectionNavGroups('Settings').map(({ label, tabs }) => [label, tabs.map((tab) => tab.label)])).toEqual([
+      ['Access', ['API Access', 'Credentials', 'Security', 'Sharing']],
+      ['Agents', ['AI Assignments', 'Autofixer', 'Orchestration Profiles', 'Prompts']],
+      ['Integrations', ['MortalLoom', 'OpenClaw', 'Telegram', 'Voice']],
+      ['System', ['Backup', 'Data Maintenance', 'Database', 'Features', 'General', 'Software']],
+    ]);
+    expect(getSectionNavTabs('Settings').every((tab) => tab.navGroup)).toBe(true);
   });
 
   it('resolves a promoted drill-down as itself instead of its LLM parent', () => {
@@ -639,7 +648,6 @@ const REDIRECT_ELEMENT = /element=\{<\s*(Navigate|RedirectWithSearch|PrefixRedir
 // whatever followed — correct for a static route, silently lossy for a param'd
 // one, which is how a bookmark into a specific record turns into a landing on
 // the index.
-const SUFFIX_PRESERVING_ELEMENTS = new Set(['PrefixRedirect', 'UniverseRouteRedirect']);
 
 // Flatten a stack of (possibly multi-segment, possibly "/") route path pieces
 // into a single absolute path: ['/', 'media', 'image'] → '/media/image'.
@@ -668,10 +676,14 @@ function scanRoutes(appSrc) {
   const topLevel = [];
   const redirects = []; // { from, to } for every forwarding leaf route
   const malformed = [];
+  const all = []; // every hand-written leaf path, param routes included
+  let generatesPreviousPaths = false;
   for (const rawLine of appSrc.split('\n')) {
     const line = rawLine.trim();
     if (line === '</Route>') { stack.pop(); continue; }
     if (!/^<Route\b/.test(line)) continue; // skips <Routes>, comments, JSX text
+    // The one generated route: a redirect per NAV_COMMANDS[].previousPaths entry.
+    if (/element=\{<PreviousPathRedirect\b/.test(line)) { generatesPreviousPaths = true; continue; }
 
     // A single-line <Route> always closes its tag with `>` (container) or `/>`
     // (leaf). Anything else is a multi-line opener the scanner can't handle.
@@ -694,6 +706,7 @@ function scanRoutes(appSrc) {
       ? joinRoutePath(stack)
       : joinRoutePath([...stack, routePath]);
     if (stack.length === 0) topLevel.push(absolute);
+    all.push(absolute);
 
     // Redirects are recorded rather than dropped: a moved page's old path has to
     // keep landing somewhere, and that is only assertable if the scanner reports
@@ -713,18 +726,7 @@ function scanRoutes(appSrc) {
     if (absolute.split('/').some((s) => s.startsWith(':'))) continue; // param route
     required.push(absolute);
   }
-  return { required: [...new Set(required)], topLevel: [...new Set(topLevel)], redirects, malformed, stackDepth: stack.length };
-}
-
-// Settings owns a small declarative redirect map for retired tabs, while App.jsx
-// owns redirects that need their own route element. Keep both forms in the
-// previous-path contract so a migration can use the existing Settings page
-// without turning a route-only client edit into an application-root change.
-function scanSettingsRedirects(settingsSrc) {
-  const block = settingsSrc.match(/const REDIRECTS\s*=\s*\{([\s\S]*?)^\};/m);
-  if (!block) throw new Error('No REDIRECTS object found in Settings.jsx');
-  return [...block[1].matchAll(/^\s*['"]?([\w-]+)['"]?\s*:\s*['"]([^'"]+)['"]\s*,?$/gm)]
-    .map((match) => ({ from: `/settings/${match[1]}`, to: match[2] }));
+  return { required: [...new Set(required)], topLevel: [...new Set(topLevel)], all: [...new Set(all)], redirects, malformed, generatesPreviousPaths, stackDepth: stack.length };
 }
 
 describe('nav coverage — every navigable App.jsx route has a manifest entry', () => {
@@ -732,9 +734,7 @@ describe('nav coverage — every navigable App.jsx route has a manifest entry', 
   // deep-link variant of a real route; compare on the bare path.
   const navPaths = new Set(NAV_COMMANDS.map((c) => c.path.split(/[?#]/)[0]));
   const scan = scanRoutes(fs.readFileSync(APP_JSX, 'utf8'));
-  const settingsRedirects = scanSettingsRedirects(fs.readFileSync(SETTINGS_PAGE, 'utf8'));
   const routePaths = new Set(scan.required);
-  const byFrom = new Map([...scan.redirects, ...settingsRedirects].map((r) => [r.from, r]));
 
   it('the line scanner saw every <Route> (single-line assumption holds)', () => {
     // A non-empty malformed list or unbalanced stack means a multi-line route
@@ -776,37 +776,18 @@ describe('nav coverage — every navigable App.jsx route has a manifest entry', 
   // forgets the redirect 404s all of them, and nothing else in this file would
   // notice — the coverage guard above only looks at where routes point NOW.
   //
-  // Driven by each command's own `previousPaths`, NOT a list maintained here: the
-  // declaration then lives beside the path that moved, and the next move is one
-  // edit in navManifest.js instead of two files that can disagree.
-  // Compare the full destination, including any query that opens a feature-local
-  // drawer or selects a subview.
-  it('keeps a redirect from every declared previous path to its current one', () => {
-    const broken = NAV_COMMANDS
-      .flatMap((c) => (c.previousPaths || []).map((from) => ({ from, to: c.path, id: c.id })))
-      .filter(({ from, to }) => byFrom.get(from)?.to !== to)
-      .map(({ from, to, id }) => `${id}: ${from} → ${byFrom.get(from)?.to ?? 'NO REDIRECT'} (want ${to})`);
-    expect(broken).toEqual([]);
+  // Declaring a previous path IS its redirect: App.jsx maps NAV_COMMANDS'
+  // `previousPaths` into redirect routes, and App.routes.test.jsx renders each one
+  // to prove where it lands (record id, query and hash carried). What a render
+  // can't show is a hand-written <Route> for the same path competing with it.
+  it('generates the previous-path redirects instead of hand-writing them', () => {
+    expect(scan.generatesPreviousPaths).toBe(true);
+    const declared = new Set(NAV_COMMANDS.flatMap((c) => c.previousPaths || []));
+    expect(scan.all.filter((p) => declared.has(p))).toEqual([]);
   });
 
-  // Landing on the right PAGE is only half of it. A previous path with a `:param`
-  // segment was a deep link into one record, so its redirect has to carry that
-  // segment across — swapping the PrefixRedirect for a bare <Navigate to="/models/training">
-  // still points at the right page and would pass the check above, while every
-  // bookmarked record quietly lands on the index instead. Retired features may
-  // explicitly opt out because their destination no longer selects old records.
-  it('preserves the record id when a parameterized previous path redirects', () => {
-    const lossy = NAV_COMMANDS
-      .flatMap((c) => (c.previousPaths || []).map((from) => ({ from, id: c.id, preserveSuffix: c.preservePreviousPathSuffix !== false })))
-      .filter(({ from, preserveSuffix }) => preserveSuffix && from.split('/').some((seg) => seg.startsWith(':')))
-      .map(({ from, id }) => ({ from, id, hit: byFrom.get(from) }))
-      .filter(({ hit }) => !hit || !SUFFIX_PRESERVING_ELEMENTS.has(hit.element))
-      .map(({ from, id, hit }) => `${id}: ${from} forwards via ${hit?.element ?? 'NO REDIRECT'}, which drops the trailing segment`);
-    expect(lossy).toEqual([]);
-  });
-
-  // The guard above is only as good as what it is pointed at, and it reads a
-  // field that is easy to simply not add. Pin the moves already made so deleting
+  // The redirects are only as good as the declarations, and the field is easy
+  // to simply not add. Pin the moves already made so deleting
   // a `previousPaths` entry fails here rather than silently shrinking coverage.
   it('still declares the previous paths of the pages already moved', () => {
     const declared = new Set(NAV_COMMANDS.flatMap((c) => c.previousPaths || []));

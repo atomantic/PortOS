@@ -190,6 +190,10 @@ export const renderMusicVideoSceneClip = (id, sceneId, body, options = {}) => re
 export const renderMusicVideoSequence = (id, sceneIds, options = {}) => request(`/music-video/${encodeURIComponent(id)}/sequence-coverage/render`, {
   method: 'POST', body: JSON.stringify({ sceneIds }), ...options,
 });
+// #16128: one hosted take across consecutive shots. `dryRun: true` returns the prompt, references and price only.
+export const musicVideoSequenceTake = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/sequence-takes`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
 export const updateMusicVideoScene = (id, sceneId, patch, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}`, {
     method: 'PATCH', body: JSON.stringify(patch), ...options,

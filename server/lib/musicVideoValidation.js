@@ -1186,6 +1186,16 @@ export const musicVideoSequenceRenderSchema = z.object({
   sceneIds: z.array(z.string().min(1).max(200)).min(2).max(30),
 });
 
+// #16128: one hosted take across 2-6 consecutive board shots. `prompt` replaces
+// the composed prompt and is sent as written; `dryRun` returns the plan and price only.
+export const musicVideoSequenceTakeSchema = z.object({
+  sceneIds: z.array(z.string().min(1).max(200)).min(2).max(6),
+  modelId: z.string().trim().min(1).max(200).optional(),
+  resolution: z.string().trim().min(1).max(20).optional(),
+  prompt: z.string().max(20000).optional(),
+  dryRun: z.boolean().optional(),
+}).strict();
+
 // `baseRevision` matches compile and patch. `revision` stays accepted so an older
 // client still applies. Sending both with different numbers is a conflict.
 export const musicVideoTreatmentApplySchema = z.object({

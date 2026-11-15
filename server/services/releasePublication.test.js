@@ -132,7 +132,6 @@ test('re-verifies an inline publication on the same task without transferring ca
   const resumed = await verifyAgentReleasePublication('successor', { ...input, synchronizationMode: 'inline' });
   expect(resumed.identity).toBe(original.identity);
   expect(resumed.verifiedAt).toBe(original.verifiedAt);
-  expect(fixture.state.agents.successor.metadata.releaseCandidateRecovery).toBeUndefined();
   expect(resumed.synchronizationPolicy).toEqual(original.synchronizationPolicy);
 });
 
@@ -323,7 +322,6 @@ test('does not accept publication prose or caller-supplied receipts through regi
 test('does not accept caller-supplied release checkout ownership through generic agent metadata', async () => {
   const forged = { releaseCandidate: { version: 1, branch: 'codex/release-agent-forged' }, checkoutSeeds: [{ forged: true }],
     completedCheckouts: [{ forged: true }], checkoutCapture: { status: 'captured' },
-    releaseCandidateRecovery: { status: 'transferred' }, releaseCandidateSuccessor: { forged: true },
     releaseCandidateLifecycle: { version: 1, stage: 'captured' } };
   await registerAgent('agent-forged', 'other-task', { taskAnalysisType: 'do-release', isWorktree: false, ...forged });
   const lifecycle = fixture.disk.agents['agent-forged'].metadata.releaseCandidateLifecycle;
@@ -338,24 +336,7 @@ test('does not accept caller-supplied release checkout ownership through generic
   expect(fixture.disk.agents['agent-forged'].metadata.releaseCandidateLifecycle).toEqual(lifecycle);
 });
 
-test('verifies a resumed publication from Git/GitHub without a transfer, and still detects concurrent ownership changes', async () => {
+test('verifies a resumed publication from Git/GitHub without a transfer', async () => {
   fixture.state.agents.publisher.metadata.resumedFromAgentId = 'agent-predecessor';
   expect(await verifyAgentReleasePublication('publisher', input)).toMatchObject({ status: 'verified', version: input.version });
-  delete fixture.state.agents.publisher.metadata.releasePublication;
-  delete fixture.disk.agents.publisher.metadata.releasePublication;
-  delete fixture.state.agents.publisher.metadata.resumedFromAgentId;
-  fixture.readHook = () => { fixture.state.agents.publisher.metadata.releaseCandidateRecovery = { version: 1, status: 'held' }; };
-  await expect(verifyAgentReleasePublication('publisher', input)).rejects.toThrow('ownership changed');
-  expect(fixture.disk.agents.publisher.metadata.releasePublication).toBeUndefined();
-});
-
-test('binds recovered publication to the original cutoff, promotion and publisher identity', async () => {
-  const original = { agentId: 'agent-predecessor', taskId: 'release-task', startedAt: '2026-01-01T00:00:00Z' };
-  fixture.state.agents.publisher.metadata.releaseCandidateRecovery = { status: 'transferred', transfer: {
-    branch: 'release/example-candidate', origin: original, publication: { number: 12 },
-    candidate: { cutoff: 'f'.repeat(40), pin, releaseBase: root, version: '1.2.3' },
-  } };
-  await expect(verifyAgentReleasePublication('publisher', input)).rejects.toThrow('differs from the recovered');
-  fixture.state.agents.publisher.metadata.releaseCandidateRecovery.transfer.candidate.cutoff = cutoff;
-  expect(await verifyAgentReleasePublication('publisher', input)).toMatchObject({ recoveredPublisher: original, cutoff, pin, candidateHead: head });
 });

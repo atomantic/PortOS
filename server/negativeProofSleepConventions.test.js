@@ -42,13 +42,8 @@ const BURN_DOWN = [
   'client/src/components/meatspace/post/PostSessionLauncher.test.jsx',
   'server/services/agentCliSpawning.test.js',
   'server/services/backupScheduler.test.js',
-  'server/services/creativeDirectorSceneImageHook.test.js',
-  'server/services/fableLoomSceneImageHook.test.js',
-  'server/services/fableLoomSceneVideoHook.test.js',
-  'server/services/mediaJobImageHook.test.js',
   'server/services/musicVideo/autonomousService.test.js',
   'server/services/runner.test.js',
-  'server/services/writersRoomSceneImageHook.test.js',
 ];
 
 const REAL_SLEEP = /await\s+new\s+Promise\s*\(\s*\(?\s*\w*\s*\)?\s*=>\s*setTimeout\s*\(\s*\w+\s*,\s*\d+\s*\)\s*\)/;

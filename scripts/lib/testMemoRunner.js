@@ -160,7 +160,7 @@ export function writeSelectionFile({ scope, include, exclude }) {
 }
 
 /**
- * Per-file outcomes from Vitest's JSON report: `{ file, status, passed, failed, skipped }`.
+ * Per-file outcomes from Vitest's JSON report: `{ file, status, durationMs, passed, failed, skipped }`.
  * Any read or schema problem yields an empty list — nothing gets memoized.
  */
 export function fileResultsFromReport(reportPath) {
@@ -170,7 +170,7 @@ export function fileResultsFromReport(reportPath) {
     return report.testResults.map((suite) => {
       const assertions = Array.isArray(suite.assertionResults) ? suite.assertionResults : [];
       const count = (status) => assertions.filter((assertion) => assertion?.status === status).length;
-      return { file: String(suite.name ?? ''), status: suite.status, passed: count('passed'), failed: count('failed'), skipped: assertions.length - count('passed') - count('failed') };
+      return { file: String(suite.name ?? ''), status: suite.status, durationMs: Number.isFinite(suite.endTime - suite.startTime) ? suite.endTime - suite.startTime : null, passed: count('passed'), failed: count('failed'), skipped: assertions.length - count('passed') - count('failed') };
     }).filter((result) => result.file);
   } catch {
     return [];

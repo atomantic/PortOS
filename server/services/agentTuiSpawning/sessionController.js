@@ -43,10 +43,10 @@ import { isCodexCommand } from '../../lib/codex.js';
 import { isClaudeCommand, isOpencodeCommand } from '../../lib/providerModels.js';
 import { isFalsyMeta } from '../../lib/metadataFlags.js';
 import { createCodexModelRejectionGate } from './codexModelRejection.js';
+import { createPasteSubmitDriver } from '../../lib/tuiPasteSubmitDriver.js';
 import {
   READY_POLL_INTERVAL_MS,
   READY_IDLE_THRESHOLD_MS,
-  PASTE_MARKER_POLL_MS,
   countPasteMarkers,
   createSelfClearingSignalGate,
   createOomNudgeGate,
@@ -64,38 +64,21 @@ import {
   TRUNCATION_NUDGE_TEXT,
   createStallNudgeGate,
   createPromptSubmissionGate,
-  UNSUBMITTED_PROMPT_ENTER_MAX_ATTEMPTS,
   createAgyResumeGate,
   AGY_RESUME_MAX_ATTEMPTS,
   STALL_NUDGE_MAX_ATTEMPTS,
   STALL_NUDGE_TEXT,
   STALL_NUDGE_MAX_TOTAL,
   createMcpBootTracker,
-  MCP_BOOT_PASTE_DEADLINE_MS,
-  MCP_BOOT_PASTE_RETRY_DELAY_MS,
-  PASTE_RETRY_MIN_WINDOW_MS,
-  PASTE_RETRY_WINDOW_DELAY_MS,
   createInputReadyTracker,
   shapeHasLoginShell,
   createStartupDialogAnswers,
   answerStartupDialogs,
   AGY_INPUT_READY_PATTERN,
   OPENCODE_INPUT_READY_PATTERN,
-  PASTE_TO_ENTER_MIN_DELAY_MS,
-  PASTE_TO_ENTER_FALLBACK_MS,
-  PASTE_COMMIT_PATIENCE_MS,
   CODEX_COMPOSER_READY_PATTERN,
-  POST_PASTE_BUFFER_CAP,
-  scheduleSubmitEnters,
   PASTE_DEADLINE_MS,
   TUI_INPUT_READY_DEADLINE_MS,
-  PASTE_VERIFY_POLL_MS,
-  PASTE_VERIFY_WINDOW_MS,
-  PASTE_RETRY_MAX_ATTEMPTS,
-  PASTE_RETRY_BASE_DELAY_MS,
-  extractVerifiablePromptPrefix,
-  isPasteConfirmed,
-  isPasteCommitted,
   CLAUDE_LOW_PRIORITY_RESUBMIT_DELAY_MS,
   SUBMIT_KEY,
   detectMissingTuiBinary,
@@ -106,22 +89,15 @@ import {
 const PROVIDER_SIGNAL_POLL_MS = 5000;
 const SENTINEL_RECOVERY_RETRY_MS = 250;
 
-// Paste + submit-Enter retry machinery for the controller's prompt delivery.
-// Separated so retries don't re-run the liveness guard or re-set the outer
-// promptSentAt (see `sendPrompt` below) — the cluster the spawner's own
-// comments already described as one cohesive concern. Owns the paste-attempt
-// counter, the post-paste accumulator, the paste-marker/verify timers, and the
-// submit-Enter backstop timer.
+// Prompt delivery for the controller: the startup liveness guard, then the
+// shared paste-and-submit driver (lib/tuiPasteSubmitDriver.js), which owns the
+// paste / commit-wait / verify / retry / settle / submit-Enter timers for this
+// path and the one-shot prompt runner alike (#16105).
 //
 // `isFinalized`/`markPromptSent`/`markPromptSubmitted` are accessors into the
-// controller's own `sessionPhase`/`promptSentAt`/`promptSubmittedAt` — those are
-// read by handleData and the provider-signal timer well outside this cluster, so
-// they stay owned by the controller and are threaded through rather than
-// duplicated here. `finishStartupFailure`/`appendLine` are likewise the
-// controller's own closures, passed in rather than re-implemented, and
-// `noteInput` reports each submit and re-delivery to the controller's
-// prompt-submission gate.
-function createPasteRetryController({
+// controller's own `sessionPhase`/`promptSentAt`/`promptSubmittedAt`, which
+// handleData and the provider-signal timer read well outside this cluster.
+function createPromptDelivery({
   agentId,
   sessionLabel,
   write,
@@ -136,111 +112,40 @@ function createPasteRetryController({
   isFinalized,
   markPromptSent,
   markPromptSubmitted,
-  noteInput,
+  promptGate,
+  getLastOutputAt,
   finishStartupFailure,
 }) {
-  // Markers already present in the prompt text itself (a transcript-analysis task
-  // can echo `[Pasted text #N]` back). The paste-commit fast path must wait for
-  // the TUI's OWN marker — i.e. the count to EXCEED this — so an echoed marker
-  // doesn't fire the submit-Enters mid-reflow (issue #1229 review). STRIP the
-  // prompt first: a pasted RAW transcript may carry the cursor-positioned marker
-  // form (`[Pasted\x1b[11Gtext…`), which counts as 0 unstripped but echoes back as
-  // the stripped `[Pastedtext#…]` (count 1) — so we must count the prompt the same
-  // way the post-paste buffer is counted, or the gate undercounts and fires early.
-  const promptMarkerCount = countPasteMarkers(stripAnsi(prompt));
-  // Extract a verifiable prefix from the prompt for paste verification (issue #2192).
-  // Computed once up front so retry attempts use the same verification target.
-  const verifiablePrefix = extractVerifiablePromptPrefix(prompt);
-  const pasteConfirmed = (buffer) =>
-    isPasteConfirmed(buffer, { verifiablePrefix, promptMarkerCount });
-  // Same evidence, minus isPasteConfirmed's "nothing to verify against" pass —
-  // the commit-wait below must keep WAITING while a prompt too short to carry a
-  // verifiable prefix has not visibly landed, not treat it as already committed.
-  //
-  // Memoized on buffer identity because the marker poll re-asks every
-  // PASTE_MARKER_POLL_MS for up to PASTE_COMMIT_PATIENCE_MS — ~300 ticks — while
-  // a booting codex is silent, and the predicate is three full-buffer regex
-  // scans plus two whitespace-stripped copies of it. `pasteState.buffer` is only
-  // ever rebound when output actually arrives, so an idle tick is a pointer
-  // compare.
-  let lastCommitBuffer = null;
-  let lastCommitVerdict = false;
-  const pasteCommitted = (buffer) => {
-    if (buffer !== lastCommitBuffer) {
-      lastCommitBuffer = buffer;
-      lastCommitVerdict = isPasteCommitted(buffer, { verifiablePrefix, promptMarkerCount });
-    }
-    return lastCommitVerdict;
-  };
-
-  // Paste-confirmation state: which protocol window an attempt is in, plus the
-  // bounded post-paste output accumulated across it.
-  //   idle            no attempt in flight; incoming output is ignored
-  //   awaiting-marker attempt fired; waiting for the TUI's commit evidence
-  //   awaiting-verify commit wait elapsed with no evidence; short window for a
-  //                   late marker / prompt echo before declaring it swallowed
-  //   backoff         verification failed; waiting out the retry delay
-  // The buffer deliberately survives every phase change except `idle`, so
-  // delayed TUI output can still confirm a paste that looked failed. The
-  // transition helpers below are the ONLY writers of this object.
-  const pasteState = { phase: 'idle', buffer: '', lastOutputAt: 0 };
-  let pasteSettleTimer = null;
-  let pasteSettleStartedAt = null;
-  const armAttempt = () => { pasteState.phase = 'awaiting-marker'; pasteState.buffer = ''; };
-  const beginVerify = () => { pasteState.phase = 'awaiting-verify'; };
-  // Retains the buffer: a marker painted after the verify window closes must
-  // still confirm this paste instead of letting the retry duplicate it.
-  const enterBackoff = () => { pasteState.phase = 'backoff'; };
-  const clearPaste = () => { pasteState.phase = 'idle'; pasteState.buffer = ''; };
-  let pasteEnterTimer = null;
-  let pasteVerifyTimer = null;
-  let pasteRetryTimer = null;
-  let submitEnterTimer = null;
-  let pasteAttempt = 0;
-  // Wall-clock of the FIRST paste attempt — the anchor for the MCP-boot-aware
-  // retry deadline (retries are time-bounded, not attempt-count-bounded, while
-  // codex is still booting its MCP servers).
-  let firstPasteStartedAt = null;
-  // Guards re-entry the way the outer promptSentAt used to before this state
-  // moved here — sendPrompt is this controller's only setter for it now.
+  const driver = createPasteSubmitDriver({
+    prompt,
+    command: tuiConfig.command,
+    write,
+    paste: (text, { label }) => paste(text, { label: `[cosAgents] ${label}` }),
+    isFinalized,
+    onFail: finishStartupFailure,
+    onSubmitted: markPromptSubmitted,
+    promptGate,
+    getLastOutputAt,
+    settleRule: isCodexSession ? 'codex' : 'default',
+    mcpBoot,
+    logError: (message) => emitLog('error', `TUI agent ${agentId}: ${message}`, { agentId }),
+    onEvent: (event) => {
+      if (event.type === 'pasted') {
+        const attemptSuffix = event.attempt > 1 ? ` [attempt ${event.attempt}]` : '';
+        appendLine(LIFECYCLE_LINES.promptPasted({ session: sessionLabel, reason: event.reason, attemptSuffix }));
+      } else if (event.type === 'paste-retrying') {
+        const bootNote = event.mcpBootActive ? ` (waiting for ${tuiConfig.command} MCP servers to finish booting)` : '';
+        appendLine(LIFECYCLE_LINES.pasteRetrying({ delayMs: event.delayMs, bootNote }));
+      } else if (event.type === 'paste-not-rendered') {
+        appendLine(event.mcpBootActive
+          ? LIFECYCLE_LINES.pasteNeverLandedMcpBoot({ seconds: event.seconds })
+          : LIFECYCLE_LINES.pasteNeverRendered({ attempts: event.attempts }));
+      } else if (event.type === 'unsubmitted-enter') {
+        appendLine(LIFECYCLE_LINES.unsubmittedPromptEntered({ attempt: event.attempt, max: event.max }));
+      }
+    },
+  });
   let sent = false;
-
-  /**
-   * Re-deliver text into the live session: the whole prompt while a
-   * self-clearing provider signal's grace window is open (agy's
-   * account-eligibility banner), or the short `continue` nudge that recovers a
-   * turn a local-GPU OOM killed (see createOomNudgeGate).
-   *
-   * The banner is the REJECTION of the submission, not a spinner over an
-   * in-flight one: agy discards the prompt, empties its composer and returns to
-   * its idle footer, so nothing will generate until something re-asks — which is
-   * also what the banner instructs ("try again shortly"). Re-pasting the WHOLE
-   * prompt is correct precisely because the composer is empty.
-   *
-   * Lives here rather than in the controller because this cluster owns
-   * `submitEnterTimer`; leaving the handle in one scope and the re-delivery in
-   * another is how you leak an Enter interval past finish(). Nothing here
-   * re-runs paste VERIFICATION: the prompt already rendered once (its rejection
-   * is why we're here), and routing back through `attemptPaste` would spend the
-   * startup paste-retry budget and let a verification hiccup mid-handshake
-   * finalize the run as `paste-not-rendered`.
-   *
-   * @returns {boolean} whether the paste actually went out (false once the
-   *   session is gone — the caller must not claim a re-submission that didn't
-   *   happen).
-   */
-  const resubmit = ({ text = prompt, label = 'provider-handshake resubmit' } = {}) => {
-    if (isFinalized()) return false;
-    // Overwriting a live handle would leak the previous attempt's Enter interval
-    // past cancel(); paste returns a fresh one, or false once the session is
-    // gone — which is also the "don't bother" answer, since the grace window's
-    // deadline still owns the fail-over.
-    if (submitEnterTimer) clearInterval(submitEnterTimer);
-    const handle = paste(text, { label: `[cosAgents] ${label}` });
-    submitEnterTimer = handle || null;
-    if (handle) noteInput();
-    return !!handle;
-  };
 
   const sendPrompt = async (reason) => {
     if (isFinalized() || sent) return;
@@ -266,238 +171,16 @@ function createPasteRetryController({
       );
       return;
     }
-    // Start the paste attempt — may be retried if verification fails (issue #2192).
-    attemptPaste(reason);
+    driver.start(reason);
   };
 
-  // The commit buffer goes to noteInput because it holds the paste chip: a TUI
-  // that ignores the submit Enter may never repaint it (createPromptSubmissionGate).
-  const submitConfirmedPaste = () => {
-    if (isFinalized()) return;
-    // A late/partial chip proves receipt, not that the input burst has ended.
-    // Measure the existing settle interval from the latest paste output rather
-    // than the initial write (Codex's Windows burst reader suppresses Enter).
-    const remaining = PASTE_TO_ENTER_MIN_DELAY_MS - (Date.now() - pasteState.lastOutputAt);
-    if (isCodexSession && remaining > 0) {
-      pasteSettleStartedAt ??= Date.now();
-      // Reuse Codex's cold-start patience as a fixed cap, never a moving
-      // deadline. Continuous redraws must fail explicitly, not hold forever or
-      // force Enter into an input stream whose state is still unknown.
-      if (Date.now() - pasteSettleStartedAt >= PASTE_COMMIT_PATIENCE_MS) {
-        clearPaste();
-        finishStartupFailure('prompt-not-submitted', 'Codex paste output never settled; no submission Enter was sent.')
-          .catch(err => emitLog('error', `TUI agent ${agentId} unsettled paste cleanup failed: ${err?.message || err}`, { agentId }));
-        return;
-      }
-      if (pasteSettleTimer) clearTimeout(pasteSettleTimer);
-      pasteSettleTimer = setTimeout(() => {
-        pasteSettleTimer = null;
-        try {
-          submitConfirmedPaste();
-        } catch (err) {
-          finishStartupFailure('prompt-submit-failed', `Could not submit the pasted prompt: ${err.message}`)
-            .catch(failure => emitLog('error', `TUI agent ${agentId} submit failure cleanup failed: ${failure?.message || failure}`, { agentId }));
-        }
-      }, remaining);
-      return;
-    }
-    const evidence = pasteState.buffer;
-    clearPaste();
-    if (pasteRetryTimer) {
-      clearTimeout(pasteRetryTimer);
-      pasteRetryTimer = null;
-    }
-    markPromptSubmitted();
-    noteInput(evidence);
-    submitEnterTimer = scheduleSubmitEnters(
-      () => write(SUBMIT_KEY, { promptSubmission: true }),
-      () => isFinalized()
-    );
+  return {
+    sendPrompt,
+    resubmit: driver.resubmit,
+    ingestChunk: driver.ingest,
+    pressUnsubmittedEnter: driver.pressUnsubmittedEnter,
+    cancel: driver.cancel,
   };
-
-  // Actually perform a paste attempt. Separated from sendPrompt so retries don't
-  // re-run the liveness guard or re-set promptSentAt. Increments pasteAttempt on
-  // each call; clears any pending timers from the previous attempt first.
-  const attemptPaste = (reason) => {
-    pasteAttempt += 1;
-    const attemptNum = pasteAttempt;
-    if (firstPasteStartedAt === null) firstPasteStartedAt = Date.now();
-    if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
-    if (pasteVerifyTimer) { clearInterval(pasteVerifyTimer); pasteVerifyTimer = null; }
-    if (pasteRetryTimer) { clearTimeout(pasteRetryTimer); pasteRetryTimer = null; }
-    // Start capturing post-paste output. Armed BEFORE writing the paste so
-    // every chunk that arrives in response gets appended.
-    armAttempt();
-    pasteState.lastOutputAt = Date.now();
-    write(`\x1b[200~${prompt}\x1b[201~`);
-    const attemptSuffix = attemptNum > 1 ? ` [attempt ${attemptNum}]` : '';
-    appendLine(LIFECYCLE_LINES.promptPasted({ session: sessionLabel, reason, attemptSuffix }));
-
-    // Confirms the TUI actually received the paste before we submit. The
-    // paste-commit marker is authoritative — Claude Code and OpenCode can
-    // collapse a multi-line paste into a chip and HIDE the body text, so a
-    // literal text check false-negatives on multi-line prompts (real incident
-    // 2026-07-05: agent-656efa6e et al. failed `paste-not-rendered` despite
-    // Claude's marker being present). Literal-text verification is only the
-    // fallback for the markerless path — see isPasteConfirmed.
-    // Markerless AND the prompt text never rendered → the paste was swallowed by
-    // a still-initializing TUI (issue #2192). Retry, then fail.
-    //
-    // Budget is boot-aware: once codex's MCP-boot banner has been seen (mcpBoot
-    // active), the boot can legitimately run for tens of seconds — up to ~2min
-    // for a node_repl/npx server — during which EVERY paste is swallowed. Switch
-    // from the fixed 3-attempt/exponential-backoff budget to a TIME budget
-    // (MCP_BOOT_PASTE_DEADLINE_MS from the first paste) with a fixed cadence, so
-    // retries outlast the boot and the paste finally lands once the input box is
-    // live (incident 2026-07-10, agent-c5a26b40). No MCP boot → unchanged.
-    const retryOrFailPaste = () => {
-      if (isFinalized()) return;
-      const bootActive = mcpBoot.active;
-      const withinBudget = bootActive
-        ? (Date.now() - firstPasteStartedAt) < MCP_BOOT_PASTE_DEADLINE_MS
-        : attemptNum < PASTE_RETRY_MAX_ATTEMPTS
-          || (Date.now() - firstPasteStartedAt) < PASTE_RETRY_MIN_WINDOW_MS;
-      if (withinBudget) {
-        const retryDelayMs = bootActive
-          ? MCP_BOOT_PASTE_RETRY_DELAY_MS
-          : attemptNum < PASTE_RETRY_MAX_ATTEMPTS
-            ? PASTE_RETRY_BASE_DELAY_MS * Math.pow(2, attemptNum - 1)
-            : PASTE_RETRY_WINDOW_DELAY_MS;
-        const bootNote = bootActive
-          ? ` (waiting for ${tuiConfig.command} MCP servers to finish booting)`
-          : '';
-        appendLine(LIFECYCLE_LINES.pasteRetrying({ delayMs: retryDelayMs, bootNote }));
-        // The failed attempt's buffer stays live during the backoff (see
-        // enterBackoff). A busy TUI can paint its authoritative paste marker
-        // only after the verification window closes; dropping output in this
-        // gap made Codex stack duplicate prompt chips, then falsely report that
-        // none had rendered.
-        pasteRetryTimer = setTimeout(() => {
-          pasteRetryTimer = null;
-          if (isFinalized()) return;
-          if (pasteConfirmed(pasteState.buffer)) {
-            submitConfirmedPaste();
-            return;
-          }
-          attemptPaste(reason);
-        }, retryDelayMs);
-        return;
-      }
-      // Budget exhausted — fail the agent, naming the MCP-boot cause when that's
-      // what kept the paste from landing so the operator knows to check their
-      // codex config rather than chasing a phantom paste-timing bug.
-      const bootSecs = Math.round(MCP_BOOT_PASTE_DEADLINE_MS / 1000);
-      const summary = bootActive
-        ? `${tuiConfig.command} did not finish booting its MCP servers within ${bootSecs}s, so the prompt was never delivered. A slow or hung MCP server in your ~/.codex config (e.g. playwright via npx, or a node_repl) blocks codex from accepting input — disable or fix it, or remove it for headless runs.`
-        : `${tuiConfig.command} was still initializing and the paste was silently swallowed. The prompt never appeared in the TUI buffer after ${attemptNum} attempts.`;
-      appendLine(bootActive
-        ? LIFECYCLE_LINES.pasteNeverLandedMcpBoot({ seconds: bootSecs })
-        : LIFECYCLE_LINES.pasteNeverRendered({ attempts: attemptNum }));
-      finishStartupFailure('paste-not-rendered', summary)
-        .catch(err => emitLog('error', `TUI agent ${agentId} finishStartupFailure(paste-not-rendered) failed: ${err?.message || err}`, { agentId }));
-    };
-
-    const pasteSentAt = Date.now();
-    // How long THIS attempt waits for the TUI to commit the paste before
-    // handing over to the verify/retry budget. Read live rather than captured:
-    // codex's MCP-boot banner can latch after the paste went out, and a
-    // swallowing codex must not spend the patient window — see
-    // PASTE_COMMIT_PATIENCE_MS.
-    const commitWaitMs = () => (isCodexSession && attemptNum <= 1 && !mcpBoot.active
-      ? PASTE_COMMIT_PATIENCE_MS
-      : PASTE_TO_ENTER_FALLBACK_MS);
-    pasteEnterTimer = setInterval(() => {
-      if (isFinalized()) {
-        clearInterval(pasteEnterTimer);
-        pasteEnterTimer = null;
-        clearPaste();
-        return;
-      }
-      const elapsed = Date.now() - pasteSentAt;
-      // Submit when EITHER the TUI's paste commit shows up (preferred) or the
-      // commit-wait window elapses (covers small prompts that don't render the
-      // marker). Waiting on the full commit evidence rather than the marker
-      // alone is what lets codex's patient first attempt (PASTE_COMMIT_PATIENCE_MS)
-      // exit in ~200ms when the composer was live all along.
-      if ((pasteCommitted(pasteState.buffer) && elapsed >= PASTE_TO_ENTER_MIN_DELAY_MS)
-        || elapsed >= commitWaitMs()) {
-        clearInterval(pasteEnterTimer);
-        pasteEnterTimer = null;
-        // Confirm the paste (issue #2192).
-        const commitBuffer = pasteState.buffer;
-        // Marker present (or text already visible, or nothing to verify) → the
-        // paste landed; submit now. Trusting the marker here is what fixes the
-        // multi-line-collapse false negative — Claude hides the pasted body text.
-        // pasteConfirmed is a superset of the pasteCommitted exit above, so only
-        // the commitWaitMs timeout can fall through to the verification window.
-        if (pasteConfirmed(commitBuffer)) {
-          submitConfirmedPaste();
-          return;
-        }
-        // Markerless AND text not visible yet: give the prompt a short window to
-        // render (a late marker also counts as confirmed) before declaring it
-        // swallowed. Keep accumulating through the verification window.
-        const verifyStartedAt = Date.now();
-        beginVerify();
-        pasteVerifyTimer = setInterval(() => {
-          if (isFinalized()) {
-            clearInterval(pasteVerifyTimer);
-            pasteVerifyTimer = null;
-            clearPaste();
-            return;
-          }
-          const verifyElapsed = Date.now() - verifyStartedAt;
-          const confirmed = pasteConfirmed(pasteState.buffer);
-          // Submit once confirmed, or give up and retry/fail when the window expires.
-          if (confirmed || verifyElapsed >= PASTE_VERIFY_WINDOW_MS) {
-            clearInterval(pasteVerifyTimer);
-            pasteVerifyTimer = null;
-            if (confirmed) {
-              submitConfirmedPaste();
-            } else {
-              enterBackoff();
-              retryOrFailPaste();
-            }
-          }
-        }, PASTE_VERIFY_POLL_MS);
-      }
-    }, PASTE_MARKER_POLL_MS);
-  };
-
-  // handleData's own hook: accumulates PTY output while a paste attempt is
-  // awaiting its marker, verification, or retry backoff (see pasteState
-  // above). A no-op while idle.
-  const ingestChunk = (stripped) => {
-    if (pasteState.phase === 'idle' || !stripped) return;
-    // Tail-bounded: see POST_PASTE_BUFFER_CAP for why a few screens is all the
-    // commit predicates can use.
-    pasteState.lastOutputAt = Date.now();
-    pasteState.buffer = (pasteState.buffer + stripped).slice(-POST_PASTE_BUFFER_CAP);
-    // The retry backoff used to be a blind spot: output was discarded after
-    // verification failed and before the next attempt began. A late marker or
-    // prompt echo still proves the existing paste landed, so submit it now and
-    // cancel the duplicate retry.
-    if (pasteState.phase === 'backoff' && pasteRetryTimer && pasteConfirmed(pasteState.buffer)) {
-      clearTimeout(pasteRetryTimer);
-      pasteRetryTimer = null;
-      submitConfirmedPaste();
-    }
-  };
-
-  // Stop everything this controller armed. Safe to call unconditionally (a run
-  // that ends before any paste was attempted just clears nulls) — see
-  // stopRunMachinery's own comment for why every teardown site must go through
-  // one chokepoint.
-  const cancel = () => {
-    if (pasteSettleTimer) { clearTimeout(pasteSettleTimer); pasteSettleTimer = null; }
-    if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
-    if (pasteVerifyTimer) { clearInterval(pasteVerifyTimer); pasteVerifyTimer = null; }
-    if (pasteRetryTimer) { clearTimeout(pasteRetryTimer); pasteRetryTimer = null; }
-    if (submitEnterTimer) { clearInterval(submitEnterTimer); submitEnterTimer = null; }
-    clearPaste();
-  };
-
-  return { sendPrompt, resubmit, ingestChunk, cancel };
 }
 
 /**
@@ -774,11 +457,10 @@ export function createTuiSessionController({
   // only as a recovery path, never duplicated into raw.txt.
   let receivedTuiOutput = false;
 
-  // The paste-attempt / submit-Enter machinery (pasteState, pasteEnterTimer,
-  // pasteVerifyTimer, submitEnterTimer) lives in createPasteRetryController
-  // rather than this closure — see its own comment for why that cluster is
-  // separated out. Created by attachSession() once sessionId/pid are known, and
-  // torn down from stopRunMachinery via `pasteController?.cancel()`.
+  // Prompt delivery (createPromptDelivery → the shared paste-submit driver) owns
+  // every paste / verify / retry / submit-Enter timer. Created by
+  // attachSession() once sessionId/pid are known, and torn down from
+  // stopRunMachinery via `pasteController?.cancel()`.
   let pasteController = null;
   // The two intervals and the sentinel watcher this run arms, owned HERE rather
   // than parked on the active-run record: `stopRunMachinery` is the only place
@@ -950,9 +632,8 @@ export function createTuiSessionController({
     doneSentinelWatcher?.();
     doneSentinelWatcher = null;
     // Cancels the paste-attempt timers and releases the post-paste accumulator
-    // even when the run ends mid-paste-window — see
-    // createPasteRetryController's own cancel() for why each is safe to clear
-    // unconditionally (a run that ends from elsewhere — shell-exit,
+    // even when the run ends mid-paste-window. Safe to call unconditionally
+    // (a run that ends from elsewhere — shell-exit,
     // command-not-found, user termination, a host restart — never gets a
     // chance to let its own cleanup path run).
     pasteController?.cancel();
@@ -1730,15 +1411,9 @@ export function createTuiSessionController({
     const sessionStartedAt = Date.now();
     const sessionLabel = sessionId.slice(0, 8);
 
-    // Owns the paste-attempt counter, the post-paste accumulator, and the paste
-    // timers — see createPasteRetryController's own comment for why that cluster
-    // lives outside this closure. `isFinalized`/`markPromptSent`/
-    // `markPromptSubmitted` are accessors into THIS closure's `sessionPhase`/
-    // `promptSentAt`/`promptSubmittedAt`, which handleData and the
-    // provider-signal timer below still read directly. `isFinalized` is the
-    // controller's own name for "the run is over", which is what BOTH terminal
-    // phases mean.
-    pasteController = createPasteRetryController({
+    // `isFinalized` is the controller's own name for "the run is over", which
+    // is what BOTH terminal phases mean.
+    pasteController = createPromptDelivery({
       agentId,
       sessionLabel,
       write: (keys, options) => options
@@ -1759,7 +1434,8 @@ export function createTuiSessionController({
         promptSubmittedAt = Date.now();
         submissionOutputBytes = rawOutputBytes;
       },
-      noteInput: (evidence) => promptGate.noteInput(Date.now(), evidence),
+      promptGate,
+      getLastOutputAt: () => lastOutputAt,
       finishStartupFailure,
     });
 
@@ -2000,13 +1676,7 @@ export function createTuiSessionController({
       }
       // A prompt still sitting unsubmitted gets the Enter it missed, long before
       // the stall nudge below would paste a second message on top of it.
-      const enter = sessionPhase === 'running' && promptSubmittedAt ? promptGate.takeEnter(now, lastOutputAt) : 0;
-      if (enter) {
-        if (session.write(sessionId, SUBMIT_KEY, { promptSubmission: true }) !== false) {
-          appendLine(LIFECYCLE_LINES.unsubmittedPromptEntered({ attempt: enter, max: UNSUBMITTED_PROMPT_ENTER_MAX_ATTEMPTS }));
-        }
-        return;
-      }
+      if (sessionPhase === 'running' && promptSubmittedAt && pasteController?.pressUnsubmittedEnter(now)) return;
       // Last, and only once no gate above has a say: every one of them describes a
       // session stalled for a KNOWN reason, and their own silence tests would be
       // pre-empted by a nudge sent on plain quiet.

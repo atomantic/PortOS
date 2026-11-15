@@ -236,6 +236,10 @@ const BY_ID = new Map(FAL_VIDEO_MODELS.map((m) => [m.id, m]));
 /** The catalog row for `modelId`, or null for a model PortOS has not curated. */
 export const getFalVideoModel = (modelId) => (typeof modelId === 'string' ? BY_ID.get(modelId.trim()) || null : null);
 
+/** How many extra reference images a form may add on `model`; a model with no start-frame field of its own spends one slot on a start frame in Image mode (buildFalVideoRequest). */
+export const falExtraReferenceLimit = (model, mode) => (model?.referenceImages
+  ? Math.max(0, model.referenceImages.max - (mode === 'image' && !model.image ? 1 : 0)) : 0);
+
 /** Picker hint for the inputs a model takes beyond text, e.g. "refs ≤9 · end frame · audio refs". */
 export const falCapabilityHint = (model) => (model ? [
   model.referenceImages ? `refs ≤${model.referenceImages.max}` : 'no refs',

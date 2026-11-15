@@ -44,7 +44,7 @@ const releaseDeliveryIdentity = agent => ({ taskId: agent?.taskId, startedAt: ag
   metadata: { sourceWorkspace: agent?.metadata?.sourceWorkspace, workspacePath: agent?.metadata?.workspacePath,
     taskAnalysisType: agent?.metadata?.taskAnalysisType, taskApp: agent?.metadata?.taskApp, isWorktree: agent?.metadata?.isWorktree,
     releasePublication: agent?.metadata?.releasePublication, releaseCandidate: agent?.metadata?.releaseCandidate,
-    releaseCandidateRecovery: agent?.metadata?.releaseCandidateRecovery, releaseCandidateLifecycle: agent?.metadata?.releaseCandidateLifecycle } });
+    releaseCandidateLifecycle: agent?.metadata?.releaseCandidateLifecycle } });
 
 async function assertManagedReleaseDelivery(agent, outcome) {
   const { verifyReleaseDelivery } = await import('./releaseDeliveryGate.js');
@@ -134,7 +134,7 @@ export async function registerAgent(agentId, taskId, metadata = {}) {
   metadata = { ...metadata, releasePublication: null };
   if (metadata.taskAnalysisType === 'do-release') {
     // A task's supplied metadata is not a server-observed checkout reservation.
-    const { releaseCandidateRecovery: _recovery, releaseCandidateSuccessor: _successor, releaseCandidate: _candidate,
+    const { releaseCandidate: _candidate,
       releaseSynchronizationCheckout: _syncCheckout, checkoutSeeds: _seeds, supersededCheckoutSeeds: _superseded, completedCheckouts: _completed, checkoutCapture: _capture, ...trusted } = metadata;
     metadata = trusted;
   }
@@ -218,7 +218,7 @@ export async function updateAgent(agentId, updates) {
     if (current.metadata?.taskAnalysisType === 'do-release' && updates.metadata) {
       // Only the ownership transaction and completion capture write these
       // fields; generic updates cannot manufacture or revoke their evidence.
-      const { releaseCandidateRecovery: _recovery, releaseCandidateSuccessor: _successor, releaseCandidate: _candidate,
+      const { releaseCandidate: _candidate,
         releaseSynchronizationCheckout: _syncCheckout, checkoutSeeds: _seeds, supersededCheckoutSeeds: _superseded, completedCheckouts: _completed, checkoutCapture: _capture, ...metadata } = updates.metadata;
       updates = { ...updates, metadata };
     }
@@ -275,8 +275,7 @@ export async function recordAgentReleasePublication(owner, receipt) {
     if (!agent || agent.status !== 'running' || agent.taskId !== owner.taskId
       || agent.startedAt !== owner.startedAt || agent.metadata?.taskAnalysisType !== 'do-release'
       || agent.metadata?.sourceWorkspace !== owner.metadata?.sourceWorkspace
-      || agent.metadata?.workspacePath !== owner.metadata?.workspacePath
-      || !isDeepStrictEqual(agent.metadata?.releaseCandidateRecovery, owner.metadata?.releaseCandidateRecovery)) {
+      || agent.metadata?.workspacePath !== owner.metadata?.workspacePath) {
       throw new ServerError('Release coordinator ownership changed during verification', { status: 409 });
     }
     const previous = agent.metadata.releasePublication;

@@ -19,6 +19,7 @@ import {
 } from './videoGenParams.js';
 import { isDefaultVideoStreamingMode } from './videoStreamingMode.js';
 import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, getHiggsfieldVideoModel } from './higgsfieldVideoModels.js';
+import { falExtraReferenceLimit, getFalVideoModel } from './falVideoModels.js';
 import { GOOGLE_DEFAULT_VIDEO_MODEL, getGoogleVideoModel } from './googleVideoModels.js';
 
 // The form owns state transitions and validation. This module owns the three
@@ -103,8 +104,10 @@ function grokVideoSubmission({
 
 function falVideoSubmission({
   composed, falDuration, falModelId, falResolution, falGenerateAudio,
-  width, height, mode, sourceImageFile, sourceImageUpload,
+  referenceImageFiles = [], width, height, mode, sourceImageFile, sourceImageUpload,
 }) {
+  // A model without reference images never gets the rows a previous pick left behind (its panel is hidden).
+  const referenceFiles = referenceImageFiles.filter(Boolean).slice(0, falExtraReferenceLimit(getFalVideoModel(falModelId), mode));
   return {
     backend: 'fal',
     prompt: composed.prompt,
@@ -114,6 +117,7 @@ function falVideoSubmission({
     falModelId: falModelId || undefined,
     ...(falResolution ? { falResolution } : {}),
     ...(falGenerateAudio ? { falGenerateAudio: true } : {}),
+    ...(referenceFiles.length ? { referenceImageFiles: referenceFiles } : {}),
     ...clampedSize(width, height),
     ...hostedImageFields(mode, sourceImageFile, sourceImageUpload),
   };
