@@ -4,15 +4,15 @@
 // See AGENTS.md "Command Palette & Voice Nav" for the contract.
 //
 // `previousPaths` lists every path this page has ANSWERED TO BEFORE — including
-// its parameterized drill-downs, written with the OLD route's param name (the
-// guard matches the `<Route path>` literally, and a deep link into a detail view
-// is exactly the kind of bookmark that breaks silently). Bookmarks,
-// stale palette history, and links held by other installs all still say the old
-// path, so a move that drops the redirect 404s them — and nothing else notices,
-// because every other guard here only looks at where a route points now. Declare
-// the old path when you move a page and `navManifest.test.js` proves App.jsx
-// still redirects it; the data lives next to the thing that moved, so the next
-// move needs no edit to the test.
+// its parameterized drill-downs as React Router patterns (a deep link into a
+// detail view is exactly the kind of bookmark that breaks silently; a trailing
+// `/*` covers a whole retired subtree). Bookmarks, stale palette history, and
+// links held by other installs all still say the old path, so a move that drops the redirect 404s them — and nothing else notices,
+// because every other guard here only looks at where a route points now. Declaring
+// the old path IS the redirect: App.jsx generates one redirect route per entry
+// (carrying the trailing segments, query and hash unless
+// `preservePreviousPathSuffix: false`), and the sidebar migrates stored pins with
+// the same pattern match (client/src/lib/previousPaths.js).
 
 import { PORTOS_APP_ID } from './appIdentity.js';
 
@@ -33,7 +33,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.review-hub', path: '/review', label: 'Review Hub', section: 'Main', aliases: ['review', 'review-hub'] },
   { id: 'nav.eidoverse.guest', path: '/eidoverse/guest', label: 'Eidoverse Guest', section: 'Main', feature: 'eidoverse', aliases: ['eidoverse-guest'], keywords: ['travel', 'teleport', 'visitor'] },
   { id: 'nav.eidoverse.solo', path: '/eidoverse/solo', label: 'Eidoverse World Only', section: 'Main', feature: 'eidoverse', aliases: ['eidoverse-solo', 'world-only', 'eidoverse-alone'], keywords: ['fullscreen', 'solo', 'without controls', 'chromeless'] },
-  { id: 'nav.eidoverse', path: '/eidoverse', label: 'Eidoverse', section: 'Main', feature: 'eidoverse', previousPaths: ['/openworld', '/city'], preservePreviousPathSuffix: false, aliases: ['eidoverse', 'eidoverse-worlds', 'worlds', 'openworld', 'open-world', 'city'], keywords: ['3d', 'world', 'agents', 'spatial', 'managed app', 'private environment'] },
+  { id: 'nav.eidoverse', path: '/eidoverse', label: 'Eidoverse', section: 'Main', feature: 'eidoverse', previousPaths: ['/openworld', '/openworld/*', '/city', '/city/*'], preservePreviousPathSuffix: false, aliases: ['eidoverse', 'eidoverse-worlds', 'worlds', 'openworld', 'open-world', 'city'], keywords: ['3d', 'world', 'agents', 'spatial', 'managed app', 'private environment'] },
   { id: 'nav.apps', path: '/apps', label: 'Apps', section: 'Main', aliases: ['apps'] },
   // Submodules are per-app (a tab on the app detail page), so this entry is
   // explicitly PortOS's own — the only repo whose app id is a fixed constant.
@@ -62,11 +62,11 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.create.code-animation', path: '/code-animation', label: 'Code Animation', section: 'Create', aliases: ['code-animation', 'codeanimation', 'code-video', 'procedural-animation', 'animation-prompt'], keywords: ['animation', 'canvas', 'webgl', 'procedural', 'no assets', 'llm prompt', 'motion graphics', 'universe style', 'mood board', 'audio reactive', 'record video', 'html animation'] },
   { id: 'nav.create.code-animation.gallery', path: '/code-animation/gallery', label: 'Code Animation Gallery', section: 'Create', aliases: ['code-animation-gallery', 'animation-gallery', 'past-animations'], keywords: ['gallery', 'thumbnails', 'posters', 'past animations', 'history', 'reopen animation', 'saved animations'] },
   { id: 'nav.create.code-animation.production', path: '/code-animation/production', label: 'Code Animation Production', section: 'Create', aliases: ['code-animation-production', 'animation-production', 'production-animation', 'blender-film-projects'], keywords: ['film projects', 'accepted output', 'compare runs', 'evidence', 'source packages', 'immutable revisions', 'animation history'] },
-  { id: 'nav.create.creative-director', path: '/creative-director', label: 'Creative Director', section: 'Create', previousPaths: ['/media/creative-director', '/media/creative-director/:id', '/media/creative-director/:id/:tab'], aliases: ['creative-director', 'creative', 'director', 'producer', 'orchestrator', 'long-form', 'episode', 'video-production', 'create-video', 'video-workspace'], keywords: ['story', 'episode', 'narrative', 'agent', 'auto-video', 'long-form', 'directive', 'production plan', 'plan board', 'orchestrator', 'studio', 'producer'] },
+  { id: 'nav.create.creative-director', path: '/creative-director', label: 'Creative Director', section: 'Create', previousPaths: ['/media/creative-director', '/media/creative-director/:id', '/media/creative-director/:id/:tab', '/media/creative-director/:id/:tab/:sceneId'], aliases: ['creative-director', 'creative', 'director', 'producer', 'orchestrator', 'long-form', 'episode', 'video-production', 'create-video', 'video-workspace'], keywords: ['story', 'episode', 'narrative', 'agent', 'auto-video', 'long-form', 'directive', 'production plan', 'plan board', 'orchestrator', 'studio', 'producer'] },
   { id: 'nav.create.creative-commission', path: '/creative-commission', label: 'Creative Commissions', section: 'Create', aliases: ['creative-commission', 'commissions', 'commission', 'creation-engine', 'autonomous-creation', 'standing-brief', 'recurring-brief'], keywords: ['schedule', 'recurring', 'nightly', 'brief', 'autonomous', 'creation engine', 'cron', 'feedback', 'taste', 'standing commission', 'auto-generate'] },
   { id: 'nav.create.fableloom', path: '/fableloom', label: 'FableLoom', section: 'Create', aliases: ['fableloom', 'fable-loom', 'loom', 'branching-narrative', 'interactive-story', 'branching-story'], keywords: ['branching', 'interactive', 'narrative', 'intent', 'endings', 'reader', 'scene', 'node', 'graph', 'nonlinear', 'play', 'story graph'] },
   { id: 'nav.create.game', path: '/game', label: 'Game', section: 'Create', aliases: ['game', 'games', 'game-studio'], keywords: ['managed app', 'sprite', 'atlas', 'music', 'asset bundle', 'manifest', 'feedback'] },
-  { id: 'nav.create.music-video', path: '/music-video', label: 'Music Video', section: 'Create', previousPaths: ['/media/music-video', '/media/music-video/:projectId'], aliases: ['music-video', 'musicvideo', 'music video', 'mv', 'sync-to-beat'], keywords: ['music', 'beat', 'sync', 'audio-reactive', 'director', 'scene board', 'tempo', 'choreography', 'autonomous', 'suno', 'one prompt', 'lyrics'] },
+  { id: 'nav.create.music-video', path: '/music-video', label: 'Music Video', section: 'Create', previousPaths: ['/media/music-video', '/media/music-video/:projectId', '/media/music-video/*'], aliases: ['music-video', 'musicvideo', 'music video', 'mv', 'sync-to-beat'], keywords: ['music', 'beat', 'sync', 'audio-reactive', 'director', 'scene board', 'tempo', 'choreography', 'autonomous', 'suno', 'one prompt', 'lyrics'] },
   { id: 'nav.create.music-video.new', path: '/music-video?new=project', label: 'New Music Video', section: 'Create', aliases: ['new-music-video', 'create-music-video', 'new music video', 'create music video'], keywords: ['music video', 'new', 'create', 'project', 'draft'] },
   { id: 'nav.create.music-video.setup', path: '/music-video/setup', label: 'Music Video Song', section: 'Create', aliases: ['music-video-setup', 'mv-setup', 'music video setup', 'music-video-song', 'mv-song'], keywords: ['music video', 'song', 'setup', 'track', 'audio', 'lyrics'] },
   { id: 'nav.create.music-video.cast-sets', path: '/music-video/cast-sets', label: 'Music Video Look', section: 'Create', aliases: ['cast-and-sets', 'cast-sets', 'cast and sets', 'music-video-cast-sets', 'music-video-look', 'mv-look'], keywords: ['music video', 'look', 'cast', 'sets', 'characters', 'visual spec', 'art direction'] },

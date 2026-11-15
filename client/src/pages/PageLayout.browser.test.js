@@ -100,7 +100,6 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
               import CodeAnimation from '/src/pages/CodeAnimation.jsx';
               import UsagePage from '/src/pages/UsagePage.jsx';
               import SystemHealthPage from '/src/pages/SystemHealthPage.jsx';
-              import { isFullWidthRoute } from '/src/lib/layoutRoutes.js';
               import '/src/index.css';
               const path = new URLSearchParams(location.search).get('route') || '/cos/agents';
               const rail = innerWidth >= 768 ? 256 : 0;
@@ -108,7 +107,8 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
               createRoot(document.getElementById('root')).render(
                 h(MemoryRouter, { initialEntries: [path] },
                   h('main', { id: 'fixture-main', style: {height: '100dvh', marginLeft: rail, width: 'calc(100% - ' + rail + 'px)'},
-                    className: isFullWidthRoute(path) ? 'relative overflow-hidden' : 'overflow-auto p-4 md:p-6' },
+                    // Every fixture route renders in FullWidthMain (App.jsx).
+                    className: 'relative overflow-hidden' },
                     h(Routes, null,
                       h(Route, { path: '/cos/:tab', element: h(ChiefOfStaff) }),
                       h(Route, { path: '/code-animation/gallery', element: h(CodeAnimation) }),

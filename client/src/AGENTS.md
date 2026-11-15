@@ -44,7 +44,8 @@ These apply to React/Vite client code; the root `AGENTS.md` rules always apply. 
 
 - **Tabbed pages use URL params** (`/devtools/history`), not tab state.
 - **Every selectable record is deep-linkable**: an opened project, item, scene, editor or master-detail selection is a route param (`/music-video/:projectId`), never `useState`/`selectedId`. Selection `navigate()`s to the id route, delete/clear `navigate()`s back to the index, and stale ids render a not-found fallback. Register both the index and `:id` routes in `App.jsx`, and the base path in `NAV_COMMANDS`.
-- **Pick the right Layout scroll mode for a new page.** Normal pages use `PageLayout` (`PageHeader` as `header`, optional `TabPills`/`RouteTabsHeader` as `navigation`, internally scrolling body) and register as full-width in `layoutRoutes.js` so `Layout.jsx` adds no second gutter or scroller. Editors override `bodyClassName` only when their panes own scrolling (CoS); document/form routes (`/apps/create`) may keep Layout's scroller. Match path boundaries so one rule doesn't capture another route (exceptions: `docs/PAGE_LAYOUT_AUDIT.md`).
+- **Pick the right Layout scroll mode** by where the `<Route>` sits in `App.jsx`, never by pathname: `PageLayout` pages (`PageHeader` over an internally scrolling body) go under `<FullWidthMain />`, document/form routes (`/apps/create`) under `<PaddedMain />` (`components/PageShell.jsx`). Exceptions: `docs/PAGE_LAYOUT_AUDIT.md`.
+- **Moving a page needs no hand-written redirect**: add the old path to its `NAV_COMMANDS` `previousPaths`.
 
 For the full new-page checklist (nav entry shape, palette actions, voice aliases), invoke the `portos-add-page` skill.
 
