@@ -2708,3 +2708,28 @@ Annotated-Types 0.7.0 artifact (H3 uses 0.8.0). Seven focused installer,
 profile, Reactor capture, H3 readiness and Pixal adapter files pass **222 tests**.
 No full GPU runtime installation, CUDA/Windows execution, weights, generation,
 production records or output-quality evaluation is claimed.
+
+## Click/tqdm slice for MiniMax H3 MLX (2026-11-15, #16047)
+
+First slice of #16047, limited to the MiniMax H3 Apple Silicon profile: **click
+8.5.0 → 8.5.1** and **tqdm 4.70.0 → 4.70.1**. The immutable H3 source revision,
+Transformers, Typer, Regex, Protobuf, MLX versions and every other pin are
+unchanged; the other 55 lock entries and their markers are identical.
+
+Click 8.5.1 (wheel published 2026-11-06 17:36 UTC, `Requires-Python >=3.10`, no
+runtime dependencies) and tqdm 4.70.1 (published 2026-09-11, `>=3.8`, only
+`colorama` on Windows) are patch releases that keep the CLI/progress APIs H3's
+Typer entry points and progress bars consume. The lock's new wheel hashes match
+PyPI's published SHA-256 for both wheels, and OSV returned no records (including
+`MAL-`) for either identity. Registry metadata and the pins test
+(`scripts/_minimax_h3_mlx_pins.test.js`, 18 tests) are the only evidence; no H3
+model inference or native install was run.
+
+The lock was regenerated with the documented command at cutoff
+`2026-11-07T00:00:00Z`, using private **uv 0.8.14** because uv 0.13.x could not
+connect to PyPI on the regenerating host (curl and uv 0.8.x could). Only the two
+version lines and their hashes changed relative to the previous lock.
+
+Remaining under #16047: the same Click/tqdm bump for the Pixal3D and TRELLIS.2
+Metal profiles (their lock regeneration timed out on PyPI connections), then
+Transformers 5.22.2, then Typer/Regex/Protobuf as separate slices.

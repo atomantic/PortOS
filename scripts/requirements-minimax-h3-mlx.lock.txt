@@ -1,4 +1,4 @@
-# Bounded #15988 regeneration: uv 0.13.7; cutoff 2026-11-06T00:00:00Z; complete closure constrained to retained pins.
+# Bounded #16047 regeneration: uv 0.8.14 (0.13.x could not reach PyPI on the regenerating host); cutoff 2026-11-07T00:00:00Z; click 8.5.1 and tqdm 4.70.1 only — all other pins unchanged.
 # Historical baseline documentation follows; older dates below predate this bounded regeneration.
 # AUTO-GENERATED hash-pinned lock — do not edit by hand. Input: requirements-minimax-h3-mlx.txt
 # Regenerate with hash-verified uv 0.13.7 on Apple Silicon, from the repo root.
@@ -313,9 +313,9 @@ charset-normalizer==3.5.2 \
     # via
     #   -r scripts/requirements-minimax-h3-mlx.txt
     #   requests
-click==8.5.0 \
-    --hash=sha256:255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360 \
-    --hash=sha256:ba0d2089de75ea0310e2dde03160e6ca10009947fb95a182f9b54021bb272e34
+click==8.5.1 \
+    --hash=sha256:8bb5376d2006950386f8c6427613334a2acadc5f559cb80e638d00b4df957e37 \
+    --hash=sha256:9bbfada76703fd1d784b83eea012e3e8c6a001a876543ef104fa56aaaeb072b4
     # via
     #   -r scripts/requirements-minimax-h3-mlx.txt
     #   huggingface-hub
@@ -1500,9 +1500,9 @@ tokenizers==0.23.3 \
     # via
     #   -r scripts/requirements-minimax-h3-mlx.txt
     #   transformers
-tqdm==4.70.0 \
-    --hash=sha256:55b0b0dbd97462d06ebee91e4dac24ed4d4702be82b24f07e6c1d27e08cea220 \
-    --hash=sha256:7f585706bfddbdebf89daac705b2dfcc16890130727d3197ca62c732b4310953
+tqdm==4.70.1 \
+    --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73 \
+    --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4
     # via
     #   -r scripts/requirements-minimax-h3-mlx.txt
     #   huggingface-hub
