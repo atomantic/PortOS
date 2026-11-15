@@ -86,6 +86,7 @@ export async function musicVideoClipReferences({ projectId, sceneId } = {}, limi
       { status: 409, code: 'MUSIC_VIDEO_CLIP_REFERENCE_MISSING' });
     if (path === excludePath || resolved.some((item) => item.path === path)) continue;
     resolved.push({ path, label: ref.label || '', ...(ref.role && ref.role !== 'character' ? { role: ref.role } : {}),
+      ...(ref.comparison ? { comparison: ref.comparison } : {}),
       ...(includePromptLabels ? { promptLabel: ref.label || ref.role || 'visual reference' } : {}) });
   }
   return resolved;

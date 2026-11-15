@@ -109,6 +109,13 @@ describe('composeSequenceTakePrompt', () => {
     expect(promptAdditions.some((a) => a.text.includes('action 1'))).toBe(false);
   });
 
+  it('describes a shared comparison sheet as several people, not one face', () => {
+    const pair = [...references.slice(0, 3), { kind: 'reference', label: 'Alice and Bob · comparison sheet', role: 'character', comparison: { names: ['Alice', 'Bob'], sides: true } }];
+    const { prompt } = composeSequenceTakePrompt({ project: project(members), members, modelId: H3, references: pair });
+    expect(prompt).toContain("Image 4 is Alice and Bob · comparison sheet: keep each person's exact face");
+    expect(prompt).not.toContain('keep this exact face');
+  });
+
   it('uses the model\'s own reference spelling', () => {
     const { prompt } = composeSequenceTakePrompt({ project: project(members), members, modelId: SEEDANCE, references });
     expect(prompt).toContain('Shot 2 (2.5-4s): @Image2.');
