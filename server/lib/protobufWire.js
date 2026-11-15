@@ -1,5 +1,10 @@
 // Minimal, dependency-free protobuf wire codec for a small declarative schema.
 //
+// Dependency-free protobuf wire codec over a small declarative schema (`encodeMessage` /
+// `decodeMessage`): varint (64-bit two's complement), bool, string, bytes, nested/recursive message,
+// double; repeated + packed; unknown fields skipped; truncated input throws `code:
+// PROTOBUF_WIRE_ERROR`.
+//
 // A schema maps a JS field name to its wire declaration:
 //
 //   { id: { no: 1, type: 'varint' }, name: { no: 2, type: 'string' },

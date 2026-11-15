@@ -1,6 +1,14 @@
 /**
  * Snapshot checksum helpers for cross-instance sync.
  *
+ * The two snapshot-checksum flavours a sync category can want. `snapshotChecksum(data)` hashes
+ * `JSON.stringify` — insertion-order SENSITIVE, correct only where the getter already canonicalizes
+ * its own ordering (`dataSync.js`, `digital-twin-sync.js`). `canonicalSnapshotChecksum(data)` hashes
+ * `canonicalStringify`, so two converged machines hash identically regardless of the order they
+ * learned the data (`peerUsage.js`, whose payload is a map keyed by wire-supplied instance ids).
+ * Picking the wrong one is not a crash — it is two synced peers whose checksums never match, which the
+ * sync UI reads as "behind" forever.
+ *
  * A sync category's checksum is what lets the orchestrator skip the full
  * payload transfer when nothing moved, so every snapshot getter needs one.
  * These are the shared implementations — three getters had grown their own

@@ -1,3 +1,14 @@
+/**
+ * Shared read of Settings > Features with a module-level cache, so the sidebar, ⌘K, and the Features
+ * tab collapse to one fetch.
+ *
+ * Returns `isFeatureEnabled(id)`; `publishInstanceFeatures` announces a toggle on the existing
+ * `INSTANCE_FEATURES_CHANGED` window event (the channel the reminder toast and the dashboard widgets
+ * already use). Fails open on a fetch error so navigation is never blanked. Use when: Gating a sidebar
+ * row, page, palette entry, or widget on an optional instance feature (`post`, `datadog`, `jira`,
+ * `gsd`). Pair with `lib/navFeatures.js` for manifest entries.
+ */
+
 import { useCallback, useSyncExternalStore } from 'react';
 import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
 import * as api from '../services/api';

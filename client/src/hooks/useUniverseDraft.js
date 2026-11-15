@@ -1,3 +1,14 @@
+/**
+ * Hook for the Universe Builder editable-record lifecycle: load, hydrate, create/save/delete, dirty
+ * baseline, pending canon merges and lock persistence.
+ *
+ * Universe Builder editable-record lifecycle: initial catalog/provider/image settings load,
+ * selected-universe hydration, create/save/delete, saved-draft dirty baseline, pending-canon addition
+ * merge ledger, keyed category mutations, and lock persistence. Use when: Universe Builder composition
+ * shell; expansion/refinement and rendering consume this hook's draft contract instead of owning
+ * persistence themselves.
+ */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import useMounted from './useMounted';
 import toast from '../components/ui/Toast';

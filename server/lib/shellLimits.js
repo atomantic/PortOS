@@ -1,3 +1,5 @@
+// `MAX_TOTAL_SESSIONS` shell-session cap shared by the shell service and the Shell UI.
+//
 // Soft ceiling on concurrent user-spawned interactive shells. Each session is a
 // single idle PTY (a few MB, one OS process), and the deployment is single-user
 // on a private network — so this is a sanity bound against runaway tab-spamming,

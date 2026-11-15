@@ -1,3 +1,10 @@
+/**
+ * Reader-panel snapshot (four personas + mined disagreements) + convene lifecycle (load, re-attach,
+ * per-persona SSE, run/cancel, reload).
+ *
+ * Use when: The Reader Map page's Reader Panel tab (#2170).
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   getReaderPanel, getReaderPanelStatus,

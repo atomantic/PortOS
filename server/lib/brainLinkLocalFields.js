@@ -1,4 +1,14 @@
 /**
+ * Handles machine-local Brain link fields: `BRAIN_LINK_MACHINE_LOCAL_FIELDS`,
+ * `stripLinkMachineLocalFields`, and `mergeIncomingLinkRecord` for sync.
+ *
+ * `BRAIN_LINK_MACHINE_LOCAL_FIELDS` / `stripLinkMachineLocalFields(record)` /
+ * `mergeIncomingLinkRecord(incoming, existing)` — the Brain link fields (`localPath`, clone state,
+ * `repoIntake`, scan/study state) that stay on the machine that wrote them: stripped from synced
+ * links, kept from the local copy when a peer record lands.
+ */
+
+/**
  * Brain link fields that describe THIS machine's clone and the actions queued
  * against it. They steer local execution (clone retry replays `repoIntake`,
  * scan/pull/study/open-folder act on `localPath`), so a peer must never set them

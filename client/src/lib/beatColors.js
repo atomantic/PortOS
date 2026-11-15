@@ -1,3 +1,8 @@
+// `BEAT_KIND_COLORS` + `getBeatKindColor(kind)` — per-kind display colors for reader-map emotional
+// beats (kinds defined server-side in `storyArc.js`).
+//
+// Keeps every beat visualization consistent.
+//
 // Canonical per-kind colors for reader-map emotional beats. The beat kinds
 // themselves are defined server-side (READER_MAP_BEAT_KINDS in
 // server/lib/storyArc.js); this maps each to a display color so every

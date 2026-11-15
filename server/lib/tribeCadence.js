@@ -1,3 +1,13 @@
+// Pure Tribe care-cadence rules: `cadenceStatus(entity)` returns state and days remaining or overdue,
+// plus `daysSinceDate` and defaults, mirrored to the client.
+//
+// Authoritative, pure Tribe care-cadence rules (single source of truth, mirrored to
+// `client/src/lib/tribeCadence.js`): `cadenceStatus(entity)` → `{ state:
+// external/missing/overdue/soon/steady, daysRemaining, daysOverdue }`, `daysSinceDate(dateStr)`,
+// `DEFAULT_CADENCE_DAYS` (45), `SOON_WINDOW_DAYS` (7). Consumed by `personCadenceStatus` /
+// `getCareSummary` in `services/tribe.js` (proactive alert + Care widget) and by the client Tribe
+// page/map.
+//
 // Authoritative, pure cadence rules for the Tribe care system — the single
 // source of truth for "who needs care." Consumed on the server by
 // `personCadenceStatus` / `getCareSummary` (server/services/tribe.js → the

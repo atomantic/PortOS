@@ -1,6 +1,17 @@
 /**
  * Fork-head coordinates — where a cross-repository pull request's branch lives.
  *
+ * `normalizeForkHead(value)` / `forkRemoteName(ownerLogin)` / `resolveTaskForkHead(metadata)` — the
+ * validated `{remoteUrl, ownerLogin}` address of a cross-repository PR's head branch, which has no
+ * `origin/<branch>` to attach to. Fail-closed: anything that isn't a usable pair (or that starts with
+ * `-`, which git would read as an option) is `null`, so every caller falls back to origin-only
+ * behavior instead of guessing. `forkRemoteName` is the deterministic `fork-<owner>` remote name that
+ * makes a re-attach reuse the remote it already added. Shared by `appPullRequests.js` (produces),
+ * `agentWorktreeCleanup.js`/`prRemediationFollowUp.js` (persist in task metadata),
+ * `agentWorkspacePrep.js` (threads), and `worktreeManager.js` (consumes — it has no forge client of
+ * its own). `resolveTaskForkHead` is the single reader of the generic `forkHead` task-metadata key,
+ * the fork-side counterpart to `taskTargetBranch.js`.
+ *
  * A PR opened from a fork has no `origin/<headRefName>`: the branch is in the
  * contributor's repository, and the forge only exposes its tip on origin as the
  * read-only `refs/pull/<n>/head`, which nothing can push back to. Every PortOS

@@ -1,3 +1,11 @@
+/**
+ * The Round editor's three URL-param views (`?mode=edit`, `?stack=1`, `?analyze=<refId>`) as one hook
+ * — every setter `replace`s so flipping surfaces doesn't pile up history.
+ *
+ * Returns `{ editing, setMode, stackOpen, setStack, analyzeId, setAnalyze }`. Use when: `/rounds/:id`.
+ * Add a new Round view here rather than a fourth ad-hoc `useSearchParams` reader.
+ */
+
 import { useCallback } from 'react';
 import { useSearchParams } from 'react-router';
 

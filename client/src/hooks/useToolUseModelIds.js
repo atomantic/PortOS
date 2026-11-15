@@ -1,3 +1,17 @@
+/**
+ * Returns `{ idsByProvider, loaded }`: function-calling capable model ids for Ollama and LM Studio
+ * from the local-LLM tool-use endpoint.
+ *
+ * `{ idsByProvider, loaded }` — TOOL-USE (function-calling) capable model ids the server reports
+ * (Ollama `/api/show` `tools` capability + LM Studio catalog capabilities) via
+ * `/api/local-llm/tool-use-models`, keyed by the provider id that serves them (`{ ollama: Set,
+ * lmstudio: Set }`), `null` until fetched; `loaded` flips once the fetch settles. One module-shared
+ * fetch across every mounted caller, retried on a later mount if it failed. Use when: Any AGENT model
+ * picker — pass `idsByProvider` to `localToolUseHint` / `withToolUseOptionLabel` so a tool-capable
+ * family the client id regex predates (`phi4-mini`) isn't mislabelled "⚠ no known tool use", and gate
+ * the annotation on `loaded` so the warning isn't asserted mid-fetch.
+ */
+
 import { useEffect, useState } from 'react';
 import { getToolUseModels } from '../services/apiLocalLlm';
 

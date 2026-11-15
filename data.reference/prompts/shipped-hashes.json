@@ -54,8 +54,10 @@
     ]
   },
   "skills/simplify.md": {
-    "current": "8415080bcc0284a5736a4768bf4f40b2",
-    "retired": []
+    "current": "0b064e2a5f847ca26be8e8c8f4dfd0c8",
+    "retired": [
+      "8415080bcc0284a5736a4768bf4f40b2"
+    ]
   },
   "skills/threejs-visual.md": {
     "current": "e8d4442868860d15b8b108fc67174327",

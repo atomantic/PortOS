@@ -1,4 +1,16 @@
 /**
+ * Sequence takes (#16128): one reference-to-video take for 2-6 consecutive board shots, filed whole on
+ * each shot with its own in-point.
+ *
+ * `sequenceTakeRun` (run checks), `SEQUENCE_TAKE_MODELS` / `sequenceTakeModelProblem` /
+ * `defaultSequenceTakeModelId` (fal `ref2v` models only), `unionSequenceTakeReferences` (frames first,
+ * then each shot's references once, capped), `composeSequenceTakePrompt` (numbered shots, hard cuts,
+ * shared reference map and look once, each a labeled addition; returns the back-to-back shot
+ * `windows`), `proposeSequenceTakeOffsets` (match planned shot changes to detected cuts, centre each
+ * window, 24 fps grid), `sequenceTakeRecord` (the take's stored `sequence` block),
+ * `sequenceTakeSelectionPatch` (picking the take sets `offsetFrames`; leaving one clears it),
+ * `sequenceTakeLabel` / `sequenceTakeSummary` (take-strip text). Pure; client-importable.
+ *
  * Music Video sequence takes (#16128): the director picks a run of consecutive
  * shots and renders them as ONE take on a reference-to-video model, written as
  * numbered shots with hard cuts. Identity and look hold better inside one take

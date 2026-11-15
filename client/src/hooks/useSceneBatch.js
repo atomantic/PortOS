@@ -1,3 +1,12 @@
+/**
+ * Counter for one Music Video "generate every missing frame / clip" batch (#10153): `{ state, begin,
+ * register, kickoffFailed, completedWithoutJob, settled, cancel, dismiss }`.
+ *
+ * Fed by a lane's `onSettled`; `cancel()` cancels the batch's queued and running jobs through the
+ * media-job cancel API (spinners clear via the lane's canceled event). Use when: A batch of per-scene
+ * renders that needs "N of M done · K failed" and "Cancel remaining".
+ */
+
 import { useCallback, useRef, useState } from 'react';
 import { cancelMediaJob } from '../services/apiMediaJobs';
 

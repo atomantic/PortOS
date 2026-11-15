@@ -1,3 +1,10 @@
+/**
+ * The stretch tapped on the Music Video shot sheet's map, kept in the URL (`mapBar`, `mapValue`).
+ *
+ * Returns `[mapFilter, setMapFilter]`. Use when: The shot sheet and scene board, so they narrow
+ * together.
+ */
+
 import { useSearchParams } from 'react-router';
 import { SHOT_SHEET_MAP_BARS } from '../../../server/lib/musicVideoShotSheet.js';
 

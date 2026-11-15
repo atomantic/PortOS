@@ -1,6 +1,10 @@
 /**
  * Local provider context-budget / fitness failures for Persistent Mind wakes.
  *
+ * Local context-budget / known-window-below-request-budget classifier for Persistent Mind wakes
+ * (`isContextBudgetFitnessError`, `publicContextBudgetReason`), plus actionable pause copy that keeps
+ * token counts and a numCtx recovery hint without exposing prompts or secrets.
+ *
  * When the pinned local window (numCtx / known context) is below the wake's
  * request token budget, retrying the same wake only climbs failureCount and
  * surfaces a vague "Provider unavailable or wake failed" in the public mind

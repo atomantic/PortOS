@@ -1,6 +1,16 @@
 /**
  * Loudness fingerprints of a stretch of a song (#9266).
  *
+ * Loudness fingerprint of a stretch of a song (#9266): `computeRmsEnvelope(path)` decodes a file once
+ * to a 100 Hz integer-dBFS RMS envelope on the song's own frame grid, `windowFingerprint(envelope, {
+ * startSec, endSec })` stores a window of it (base64 Int8Array, ≤3 KB for 30 s), and
+ * `compareWindowFingerprint(fp, envelope)` says whether a newer master still carries that window
+ * (Pearson ≥ 0.98 and mean |ΔdB| ≤ 1.5 above a −60 dB codec-noise floor). Lets a lip-sync take survive
+ * a re-master that changed audio outside its window. `envelopeOffsetSec(reference, candidate)`
+ * cross-correlates two envelopes and returns `{ offsetSec, correlation }` (where the reference's sound
+ * starts inside the candidate, refined below a frame) or null on a weak match — used to line a padded
+ * provider clip up with its source window (#11210).
+ *
  * A lip-sync take is valid for the audio it was cut from, not for the whole
  * file: a re-mastered song that only changes bars outside a take's window must
  * not invalidate the take. The fingerprint is a 100 Hz RMS envelope in integer

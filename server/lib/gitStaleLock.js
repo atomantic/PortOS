@@ -1,6 +1,19 @@
 /**
  * Recognize and clear the `*.lock` files a KILLED git process leaves behind.
  *
+ * `gitLockPathFromError`, `isStaleGitLock`, `clearStaleGitLock`, `clearStaleGitLocksIn`,
+ * `STALE_GIT_LOCK_MIN_AGE_MS` — recognizes the `*.lock` a KILLED git process left behind and removes
+ * it so the caller can retry. A lock under `.git/modules/<submodule>/` is shared by every worktree of
+ * the repo, so one dead process wedges submodule checkout install-wide with a bogus "another git
+ * process is running". Removal requires a `.lock` path under a `.git` directory (so a malformed
+ * message cannot aim the unlink at `yarn.lock`) that is older than 30 minutes — 3x the longest git
+ * command PortOS runs (`worktreeManager.WORKTREE_ADD_TIMEOUT_MS`, pinned by a test), which is what
+ * keeps it from deleting a LIVE competitor's lock. The threshold is deliberately not a parameter.
+ * `clearStaleGitLock(message)` is the reactive form, wired into
+ * `services/gitSubmodules.js#updateSubmodule` and `worktreeManager.addWorktreeWithRetry`;
+ * `clearStaleGitLocksIn(gitDir)` sweeps ahead of `update.sh`/`update.ps1`, the most likely producer.
+ * `scripts/doctor.js` reports one as the blocker.
+ *
  * Git guards each index/ref write with a lock file it removes on exit. A git
  * process that never gets to exit — PM2 tree-killing the server mid-update, an
  * `execGit` timeout firing, a reaped CoS agent — leaves the lock on disk, and

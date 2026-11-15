@@ -1,9 +1,15 @@
 /**
  * Off-main-thread synthesis for the drawn-waveform preview (#8470).
- * `createSketchSynthesizer()` → `{ synthesize(sketch, columns), dispose() }`:
- * `synthesize` resolves `{ channels, peaks }` from a module Web Worker
- * (`waveSketchSynthWorker.js`), with the channel buffers transferred rather
- * than copied.
+ *
+ * Off-main-thread synthesis for the drawn-waveform preview (#8470) — `createSketchSynthesizer({
+ * createWorker? })` → `{ synthesize(sketch, columns), dispose() }`, resolving `{ channels, peaks }`
+ * from a module Web Worker with the channel buffers transferred. Latest request wins: a new render
+ * terminates the in-flight worker and resolves the superseded promise to `null`; no Worker (or a
+ * worker load failure) falls back to a deferred main-thread render. `WaveformPanel` drives it.
+ *
+ * `createSketchSynthesizer()` → `{ synthesize(sketch, columns), dispose() }`: `synthesize` resolves `{
+ * channels, peaks }` from a module Web Worker (`waveSketchSynthWorker.js`), with the channel buffers
+ * transferred rather than copied.
  *
  * Latest request wins: starting a new render while one is in flight
  * terminates that worker (a render can't be interrupted any other way) and

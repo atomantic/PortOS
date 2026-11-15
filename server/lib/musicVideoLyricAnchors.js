@@ -1,4 +1,17 @@
 /**
+ * Music video lyric anchoring: `cuesSungWithin` and `sungLyricTextWithin` return the lyric cues and
+ * shot text (capped at 2,000 chars) sung within a time span.
+ *
+ * Music Video lyric anchors: `cuesSungWithin(cues, startSec, endSec)` and `sungLyricTextWithin(cues,
+ * startSec, endSec)` (shot text, capped at 2,000 characters), the lines a shot's span anchors, each
+ * counted from its first sung word to its last when it has word timing, else its line window. Shared
+ * by the storyboard anchor check and the retime anchor sync. Word anchors (#14820):
+ * `lyricWordCuts(cues, cueIds, mode)` (one cut per phrase or word, at its first word's onset, with
+ * where its last word ends) and `lyricAnchorOnset(cues, anchor)` (where a shot's anchored words are
+ * sung now).
+ */
+
+/**
  * Which timed lyric lines a shot's span anchors. A line counts from its first
  * sung word to its last when it has word timing (#9074), not from its line
  * window: lyric alignment opens each line where the line before it ended, so

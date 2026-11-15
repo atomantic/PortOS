@@ -1,4 +1,11 @@
 /**
+ * Hosted-provider API keys go in an HTTP header: `isHeaderSafeKey(v)` (printable ASCII only — no
+ * whitespace, control or non-Latin-1 characters) backs the Settings save schema in `validation.js`.
+ *
+ * `assertHeaderSafeKey(key, label)` is the render-time guard that throws a plain 400
+ * (`API_KEY_NOT_HEADER_SAFE`) naming the setting instead of fetch's opaque ByteString error, never
+ * echoing the key. Pure.
+ *
  * Hosted-provider API keys travel in an HTTP header (`Authorization`,
  * `x-goog-api-key`, `Reactor-API-Key`). `fetch` throws an opaque ByteString
  * error for a value with a character above U+00FF, and a space or control

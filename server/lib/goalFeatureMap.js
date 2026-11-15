@@ -1,5 +1,9 @@
 // Goal → PortOS feature-area map (issue #2666).
 //
+// Deterministic goal `category` → PortOS feature-area map (deep-links sourced from `NAV_COMMANDS`).
+// `getGoalFeatureAreas(goal)` honors the per-goal `featureAreas` override, else the category default.
+// Mirrored byte-for-byte to `client/src/lib/`.
+//
 // Deterministic, LLM-free registry that turns a goal's `category` (or its
 // optional per-goal `featureAreas` override) into the concrete PortOS feature
 // that actually moves it forward, each carrying a label, an icon name, and a

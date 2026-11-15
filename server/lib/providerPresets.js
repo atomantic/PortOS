@@ -1,3 +1,27 @@
+/**
+ * PRESETS (#7565, epic #7561) — a stored `data/providers.json` record read as a (harness, method,
+ * service) tuple plus the user's own defaults and overrides.
+ *
+ * A record carrying `harnessId` + `method` + `serviceId` is a DERIVED preset (`isDerivedPreset` in
+ * `providerGraphRecords.js`, `presetKind`): `materializeDerivedPreset({record, harness, instance,
+ * catalog, bootstrap})` re-derives every connection-owned value (program, endpoint, credential,
+ * backend markers, inline bootstrap, `models` = plan-filtered catalog ∩ `catalogNarrowing`) through
+ * `materializeRoute` while keeping every per-preset field (name, argv with a binding's suffix
+ * preserved, timeouts, pins, effort, fallback, generation params, consent flags, unknown fields) and
+ * the record's own OpenCode inline config when it already reaches the service;
+ * `refusedDerivedEdits(updates, derived, ownedEnvNames)` names the connection-owned keys a direct edit
+ * would move (`DERIVED_PRESET_OWNED_KEYS`, plus env vars by name); `derivedPresetDrift` /
+ * `derivedPresetPatch` compare a record with its derivation; `presetDerivable(record)` is the editor's
+ * "offer the button" test; `matchBootstrapApp` / `bootstrapInputFor` map an inline
+ * `credentialBootstrap` to a configured app and back; `planPresetBackfill({graph, providers,
+ * bootstraps, env})` is the boot-time stamp of every routed legacy record whose re-derivation is a
+ * FIXPOINT — additive keys only, every refusal reported with a reason. Pure; the store-backed half is
+ * `services/providerPresets.js`. `impliedCatalogNarrowing` is the narrowing that keeps a record on its
+ * current list once derived, and `rederivePreset` re-derives one derived preset from an instance
+ * (derived record + patch), shared by the backfill, `rematerializeDerivedPresets` and the service
+ * fold.
+ */
+
 import { isDeepStrictEqual } from 'node:util';
 import { isDerivedPreset } from './providerGraphRecords.js';
 import { providerConnectionProfile, withoutConnectionOwnedFields } from './providerConnections.js';

@@ -1,5 +1,10 @@
 // useSingToVerify — capture a sung phrase and align it note-for-note against an
 // existing score, without changing the score until the user accepts pitches.
+//
+// Captures a singer from a selected score bar after a one-bar count-in, aligns the pitch track to
+// written-note windows, and exposes `{ phase, beat, rows, error, start, stop, reset, toggleAccept,
+// acceptAll }` for explicit note-by-note correction. Tears down mic/analyser/tracker/metronome on stop
+// and unmount. Use when: The Song editor's Sing-to-verify panel.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createStreamAnalyser, openAnalysisMic } from '../lib/audioRecorder.js';

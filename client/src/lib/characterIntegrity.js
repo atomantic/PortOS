@@ -1,9 +1,18 @@
 /**
- * Client-side half of the shared cast-integrity contract (#6415): the badge
- * copy, tones and hints the report renders the server's vocabulary with. The
- * vocabulary itself — finding kinds, review statuses, depths, dimensions and
- * `castIntegrityPassed` — is re-exported from the server's pure leaf, not
- * copied; `characterIntegrity.test.js` checks every value has a row here.
+ * Client-side half of the shared cast-integrity contract (#6415): the badge copy, tones and hints the
+ * report renders the server's vocabulary with.
+ *
+ * Display half of the cast-integrity contract (#6415) — re-exports the finding kinds, review statuses,
+ * depths, dimensions and `castIntegrityPassed` from `server/lib/characterIntegrityVocabulary.js`, plus
+ * the client-only `FINDING_KIND_META` / `REVIEW_STATUS_META` / `DEPTH_META` badge copy and
+ * `DIMENSION_LABELS` (read off the server's dimension table), `findingIsRepairable` (which gates the
+ * Augment button off `contradictory` findings), `incompleteCoverage` and `humanizeIntegrityField` (a
+ * dotted field path rendered for a reader). `characterIntegrity.test.js` checks the tables cover every
+ * value the server can emit.
+ *
+ * The vocabulary itself — finding kinds, review statuses, depths, dimensions and `castIntegrityPassed`
+ * — is re-exported from the server's pure leaf, not copied; `characterIntegrity.test.js` checks every
+ * value has a row here.
  */
 
 import {

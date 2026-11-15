@@ -1,3 +1,12 @@
+/**
+ * Pure overlay of each provider app's own daily usage history onto the ledger's `dailyActivity` —
+ * `overlayNativeUsage(dailyActivity, { stores, providers })`.
+ *
+ * For a family's CLI/TUI providers, reported tokens = native store + the ledger's estimated share
+ * (runs the app never saves); from the store's `coverageStart` it replaces, before it only where it
+ * counts more, after its last refresh the ledger stands. Fed by `services/nativeUsageHistory.js`.
+ */
+
 import { familyForProvider, familyLabel } from './providerFamilies.js';
 
 /**

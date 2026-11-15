@@ -1,11 +1,17 @@
 /**
- * Which local video models can render which Music Video shot. A cutaway
- * animates its still, so it needs an image-to-video model; a performance shot
- * (lip-sync or music-driven) renders from its still and the song's slice, so
- * it needs an audio-to-video model PortOS hands that slice to: the LTX-2
- * family, or MiniMax H3 Ref2VA, which takes image + audio only. Shared by the
- * shot card's model picker, the project's renderer picker and the server's
- * submission checks, so the picker never offers a model the render refuses.
+ * Which local video models can render which Music Video shot.
+ *
+ * Which local video models render which Music Video shot: `localModelRendersCutaway` (image-to-video),
+ * `localModelRendersPerformance` (LTX-2 family a2v or MiniMax H3 Ref2VA, from the still + song slice),
+ * `localMusicVideoModels(models, performance)` and `localModelTakesSongAudio` (LTX-2 family a2v: a
+ * cutaway can take its song slice). Shared by the shot card and project model pickers and
+ * `submitJob.js` / `prepareParams.js`.
+ *
+ * A cutaway animates its still, so it needs an image-to-video model; a performance shot (lip-sync or
+ * music-driven) renders from its still and the song's slice, so it needs an audio-to-video model
+ * PortOS hands that slice to: the LTX-2 family, or MiniMax H3 Ref2VA, which takes image + audio only.
+ * Shared by the shot card's model picker, the project's renderer picker and the server's submission
+ * checks, so the picker never offers a model the render refuses.
  */
 import { MINIMAX_H3_REF2VA_RUNTIME, isLtx2FamilyRuntime } from './runners.js';
 import { resolveVideoSupportedModes } from './videoModeProfiles.js';

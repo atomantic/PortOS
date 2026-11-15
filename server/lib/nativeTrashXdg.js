@@ -1,10 +1,20 @@
 /**
- * Linux recycling adapter: freedesktop.org Trash specification 1.0 on `node:fs`
- * only (ADR docs/decisions/2026-10-18-native-trash-without-dependency.md).
- * One file per call; the caller (`nativeTrash.js` → `trashFiles.js`) owns
- * batching and post-operation verification. Entries keep their original
- * names, so `gio trash`, `trash-cli` and desktop file managers list and
- * restore them like their own.
+ * Linux recycling adapter: freedesktop.org Trash specification 1.0 on `node:fs` only (ADR
+ * docs/decisions/2026-10-18-native-trash-without-dependency.md).
+ *
+ * `trashXdg(path)` moves one file into the freedesktop Trash 1.0 directory serving its volume on
+ * `node:fs` alone (original names, RFC 2396 `Path=`, `O_EXCL` info reservation, NAME_MAX-bounded
+ * names, mount identity from `/proc/self/mountinfo` with a `st_dev` fallback so a bind mount gets its
+ * own volume trash instead of an `EXDEV`, physical-parent mount discovery, an owned trash directory is
+ * tightened to 0700 and `TRASH_DIR_UNSAFE` refuses a symlinked or foreign-owned one or a volume root
+ * whose entries other users could rename, a sticky shared `.Trash` counts only when root or the caller
+ * owns it and falls back to `.Trash-<uid>` when it cannot hold the per-user directory, refuses instead
+ * of copying across devices); `_topDirTrash(topDir, uid)`, `_parseMountInfo(text)` and
+ * `_mountOf(realDir, mounts)` are test hooks.
+ *
+ * One file per call; the caller (`nativeTrash.js` → `trashFiles.js`) owns batching and post-operation
+ * verification. Entries keep their original names, so `gio trash`, `trash-cli` and desktop file
+ * managers list and restore them like their own.
  *
  * Fails closed: there is no cross-device copy and no fallback directory. A
  * volume without a usable per-volume trash surfaces `EXDEV`/`EACCES` with the

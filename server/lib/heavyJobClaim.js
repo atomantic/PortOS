@@ -1,6 +1,10 @@
 /**
  * Machine-wide claim for a local accelerator job.
  *
+ * Cross-process, machine-wide accelerator claim: `claimHeavyLocalJob({ kind, id, timeoutMs? })` either
+ * acquires an ephemeral `data/` lock or reports its active holder; dead-PID claims are reclaimed, and
+ * a spawned child can take over the recorded PID across a server restart.
+ *
  * The claim is deliberately a file below the install's data root rather than an
  * in-process flag: PortOS worktrees and restarted server processes share the
  * same machine, and must therefore see the same owner. A dead process is

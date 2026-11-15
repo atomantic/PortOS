@@ -1,6 +1,10 @@
 /**
  * Pure argument shapes and output parsing for `gh` / `glab` issue filing.
  *
+ * Pure `gh`/`glab` issue-filing argument shapes and output parsing — `forgeLabelCreateArgs`,
+ * `forgeIssueCreateArgs`, `parseCreatedForgeIssue` — so the two CLIs' body-flag, label-attachment, and
+ * label-create disagreements have one definition.
+ *
  * Two CLIs disagree about the same three things, and every filer that has
  * rediscovered that disagreement has re-encoded it: the body flag
  * (`--body` vs `--description`), how labels attach (repeated `--label` flags vs

@@ -1,3 +1,10 @@
+/**
+ * 1-second ticker over a `{ id: epochMs }` cooldown map.
+ *
+ * Fires `onAllExpired` once when every deadline passes. Use when: Rate-limit countdown labels that
+ * need to refetch when the last cooldown clears (agents tabs pattern).
+ */
+
 import { useRef, useState, useEffect } from 'react';
 
 // Shared 1-second cooldown ticker for the agents tabs. Three near-identical

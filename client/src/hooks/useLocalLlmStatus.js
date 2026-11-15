@@ -1,3 +1,16 @@
+/**
+ * Hook `useLocalLlmStatus` exposing installed local-LLM status, install and action runners, and
+ * progress state shared by both local-LLM views.
+ *
+ * `{ status, loading, selected, setSelected, loadStatus, runAction, installBackend, actionInProgress,
+ * busy, progressMsg, setProgressMsg, confirmAction, setConfirmAction }` — the installed-model status
+ * both local-LLM views read, the single `localLlm:progress` subscription, and the one
+ * busy/toast/refresh path every action routes through. Takes stable `onRefresh` (extra loads on a
+ * status refresh) and `onReload` (extra reload after an action or `complete` frame) callbacks. Use
+ * when: `LocalLlmRuntimesView` / `LocalLlmLibraryView` — they never mount together, so the mounted one
+ * is the only subscriber.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getLocalLlmStatus, installLocalLlmBackend } from '../services/api';
 import socket from '../services/socket';

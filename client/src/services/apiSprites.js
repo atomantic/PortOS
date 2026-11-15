@@ -1,3 +1,13 @@
+/**
+ * API client for the Sprite Manager: records, asset library, production-set import, reference
+ * generate/lock, walk-cycle and per-track generation/approval, animation types.
+ *
+ * Sprite Manager records, asset library, production-set import (#2895), reference workflow:
+ * create/generate/lock (#2896), directional walk and per-track generation/approval, animation-type
+ * definition CRUD (#3153), trim/postprocess, and per-run source-frame listing for the Loop Trimmer's
+ * re-derive (#2980), and animation render-provider readiness (#4876).
+ */
+
 import { request } from './apiCore.js';
 
 // Sprite Manager: record list/detail + production-asset import (#2895), and

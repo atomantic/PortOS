@@ -1,4 +1,8 @@
 /**
+ * `isMac` detection and `modKey` (⌘/Ctrl) for keyboard-shortcut display.
+ */
+
+/**
  * Platform detection — the single source of truth for "is this a Mac?" in the client.
  *
  * Browsers are mid-migration from the deprecated `navigator.platform` to

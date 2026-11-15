@@ -1,4 +1,9 @@
 /**
+ * `streakGlyph(streak)` — the single POST streak emoji (✨ / ⚡ / 🔥 by day count) shared by the POST
+ * launcher, Morse trainer, daily widget, and dashboard streak widget.
+ */
+
+/**
  * The single POST streak glyph used across the launcher, Morse trainer, daily
  * widget, and dashboard streak widget — one implementation instead of the four
  * copy-pasted ternaries that used to drift (issue #2091).

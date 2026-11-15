@@ -1,4 +1,11 @@
 /**
+ * Classifies federated peer probe failures (`local_refused`, `tunnel_dial`, `probe_http`, timeout,
+ * auth, DNS) so the UI and logs can explain why a peer is unreachable.
+ *
+ * Classify federated peer probe failures (`local_refused` / `tunnel_dial` / `probe_http` / timeout /
+ * auth / DNS) so Instances UI and logs can tell a dead local forward from a tunnel dial miss from a
+ * PortOS health-details failure; messages stay redacted (no full `tc…` capabilities).
+ *
  * Classify why a federated peer probe failed so operators (and logs) can tell
  * "local forward not listening" apart from "tunnel cannot dial" apart from
  * "tunnel carried bytes but /api/system/health/details failed".

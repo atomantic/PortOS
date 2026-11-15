@@ -1,3 +1,13 @@
+// `createMidiPlayer` plays a parsed MIDI view-model as velocity-scaled oscillator tones on the shared
+// AudioContext with a live `position()` for UI sync.
+//
+// Synth preview of a transcribed `.mid` (#2490) — `createMidiPlayer(data, { onEnded })` plays the
+// `parseMidiFile` view-model as velocity-scaled oscillator tones through a per-play master bus on the
+// shared `AudioContext`, with the same lookahead-scheduler idiom + tone envelope (`scheduleTone`) as
+// `scorePlayback.js`. Transport: `play`/`pause`/`stop`/`seek(sec)` (seek re-anchors a running
+// transport and sounds the tails of notes sustaining across the seek point) and `position()` for the
+// `<MidiPianoRoll>` moving playhead. Pure (no React) — `useMidiPlayer` wraps it.
+//
 // Synth preview of a transcribed MIDI file (#2490) — turns the parseMidiFile
 // view-model (midiNotes.js) into audible oscillator tones with a live
 // `position()` the <MidiPianoRoll> reads for its moving playhead. Companion to

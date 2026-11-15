@@ -1,3 +1,12 @@
+/**
+ * `videoGenEnqueuePolicy(ctx)` — the single enqueue decision for Video Gen's Generate button, "Add to
+ * queue" button and Options caption.
+ *
+ * One ordered row table scoped `always`/`remote`/`local`; an off-machine render (Grok, fal.ai,
+ * reactor.inc) skips every local row. Returns `{ canEnqueue, generateTitle, queueTitle, optionsHint
+ * }`.
+ */
+
 import { isAudioToVideoRuntime } from './runnerFamilies';
 
 // One enqueue policy for Video Gen's Generate button, "Add to queue" button and

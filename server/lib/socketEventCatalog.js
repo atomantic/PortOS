@@ -1,4 +1,9 @@
-/** Searchable projection of the source-derived Socket.IO event inventory. */
+/**
+ *  Searchable projection of the source-derived Socket.IO event inventory.
+ *
+ * Searchable projection of the cached Socket.IO inventory: direction, domain, and runtime-schema
+ * coverage.
+ */
 
 import { socketEventContract } from './socketEventContracts.js';
 import { getSocketEventInventory } from './socketEventInventory.js';

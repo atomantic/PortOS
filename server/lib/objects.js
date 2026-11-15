@@ -1,6 +1,15 @@
 /**
  * Object utilities.
  *
+ * Object utilities — `deepMerge` (recursive merge w/ array replacement), `isPlainObject` (non-null,
+ * non-array `object` guard for JSON / LLM payloads), `POLLUTING_KEYS` (shared
+ * `__proto__`/`constructor`/`prototype` denylist for sanitizers), `bucketFor(map, key, init)`
+ * (get-or-create a bucket for an externally supplied key; `null` for `POLLUTING_KEYS`, `hasOwn`
+ * lookup), `canonicalStringify` (recursive sorted-key JSON serialization for cross-machine content
+ * hashing), `isEmptyScalar` (true for null/undefined/whitespace-string/empty-array — merge gap-fill
+ * gate), `boundedByJsonChars` (longest prefix of a list whose JSON encoding fits a character budget —
+ * the shared prompt-catalog truncation loop).
+ *
  * `isPlainObject(v)` — `true` when `v` is a non-null, non-array `object`. The
  * project standard for "is this a `{...}`-shaped value?" — used to gate JSON
  * sanitizers, deep-merge recursion, and LLM-response shape guards. Note that

@@ -166,15 +166,17 @@ describe('startAutonomousVideo', () => {
   it('names the imported Suno song on its track only after a backup cut is released (#9982)', async () => {
     const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
     const release = await acquireBackupSnapshotCut();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       await service.startAutonomousVideo({ prompt: 'a courier crosses a rainy city' });
       await vi.waitFor(() => expect(calls).toContain('probe'));
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await vi.advanceTimersByTimeAsync(100);
       expect(doubles.attachAudio).not.toHaveBeenCalled();
       release();
       await vi.waitFor(() => expect(doubles.attachAudio).toHaveBeenCalledOnce());
     } finally {
       release();
+      vi.useRealTimers();
     }
   });
 
@@ -799,15 +801,20 @@ describe('cancel while the final render is preparing (#11768)', () => {
   });
 
   it.each([['final render', viaFinalRender], ['produce stage', viaProduceStage]])('leaves a canceled run canceled when the %s preparation rejects', async (_, begin) => {
-    const render = deferred();
-    const done = begin(render);
-    await vi.waitFor(() => expect(doubles.renderVideo).toHaveBeenCalledOnce());
-    await service.cancelAutonomousVideo('mv-auto');
-    render.reject(Object.assign(new Error('no audio'), { code: 'NO_AUDIO' }));
-    await done;
-    await new Promise((r) => setTimeout(r, 20));
-    expect(runOf()).toMatchObject({ status: 'canceled', errorCode: null });
-    expect(doubles.cancelRender).not.toHaveBeenCalled();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const render = deferred();
+      const done = begin(render);
+      await vi.waitFor(() => expect(doubles.renderVideo).toHaveBeenCalledOnce());
+      await service.cancelAutonomousVideo('mv-auto');
+      render.reject(Object.assign(new Error('no audio'), { code: 'NO_AUDIO' }));
+      await done;
+      await vi.advanceTimersByTimeAsync(20);
+      expect(runOf()).toMatchObject({ status: 'canceled', errorCode: null });
+      expect(doubles.cancelRender).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('still cancels a render job stored before the cancel', async () => {

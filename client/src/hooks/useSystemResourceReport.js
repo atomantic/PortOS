@@ -1,6 +1,13 @@
 /**
  * The system-resource disk scan plus its cleanup lifecycle, as one hook.
  *
+ * The system-resource disk scan plus its cleanup lifecycle: generation-guarded `runReport` (a late
+ * scan can never resurrect rows a newer one removed), one-delete-at-a-time removal keyed on the
+ * candidate's server-issued action, and report invalidation after a successful delete. Returns `{
+ * report, setReport, loading, runReport, cleanup }` — `cleanup` is the prop bag
+ * `StoragePanel`/`ModelsPanel`/`CleanupControl` expect. Use when: Dev Tools → System Resources →
+ * Storage, and Models → Status. Don't re-wire the scan/cleanup pair by hand.
+ *
  * `runSystemResourceReport` is an expensive multi-store scan whose result feeds
  * two unrelated surfaces — the Storage panel under Dev Tools and the downloaded-
  * model inventory under Models → Status. Both need the same three things around

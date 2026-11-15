@@ -1,6 +1,10 @@
 /**
  * Pure text helpers for LLM responses.
  *
+ * Pure LLM-output text helpers — `stripCodeFences` (unfence a model reply) and `parseLLMJSON` (unfence
+ * then JSON.parse with a descriptive throw). Below the provider layer, so lib can clean model output
+ * without importing provider orchestration.
+ *
  * These sit below the provider layer so a lib module can clean up model output
  * without importing the provider orchestration that produced it (issue #4901).
  * They were exported from `aiProvider.js` while it lived in lib; that module

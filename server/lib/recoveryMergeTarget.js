@@ -1,3 +1,11 @@
+/**
+ * `repositoryCleanupMergeTarget(task)` → the `{ url, branch }` parent PR a repository-cleanup recovery
+ * was filed to land, or null (#12251).
+ *
+ * A claimed target only: merge admission also requires the completed parent's server-written backlink
+ * to that exact task, branch and PR.
+ */
+
 import { isPlainObject } from './objects.js';
 import { isTruthyMeta } from './metadataFlags.js';
 import { parsePullRequestUrl } from './gitForge.js';

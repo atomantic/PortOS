@@ -1,3 +1,9 @@
+/**
+ * Per-account busy/auth state and deduplicated HTTP/socket sync outcomes.
+ *
+ * Use when: Calendar and Messages sync controls.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';

@@ -2,6 +2,9 @@
  * Zod schemas for the `/api/decks` routes. A separate leaf from
  * `deckTemplates.js` so the client can re-export the pure roster/composition
  * helpers without pulling zod into the bundle.
+ *
+ * Zod schemas + limits for the `/api/decks` routes (create/update deck, card patch, sample analysis,
+ * prompt generation, render).
  */
 
 import { z } from 'zod';

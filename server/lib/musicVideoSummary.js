@@ -1,6 +1,10 @@
 /**
  * Music Video project summary projection (#10169).
  *
+ * `summarizeMusicVideoProject(project, readiness)` bounded index/picker projection (stage, run status,
+ * spend, preview/poster, card badges) and `compareMusicVideoProjectsNewestFirst` for `GET
+ * /api/music-video?summary=1` (#10169).
+ *
  * `GET /api/music-video?summary=1` returns one bounded record per project — just
  * what the project index card and the header picker render — so the index never
  * ships every project's scenes, excerpts, revisions, runs and reviews. The stage

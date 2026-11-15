@@ -1,3 +1,11 @@
+/**
+ * In-tree xterm sizing helper.
+ *
+ * `fitTerminal(terminal)` measures the parent and terminal CSS box, accounts for padding and the
+ * overview-ruler scrollbar, clamps the calculated geometry to at least 2 columns × 1 row, and resizes
+ * only when the dimensions change.
+ */
+
 const MINIMUM_COLS = 2;
 const MINIMUM_ROWS = 1;
 const DEFAULT_SCROLLBAR_WIDTH = 14;

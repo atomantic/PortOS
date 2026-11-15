@@ -1,5 +1,9 @@
 // The one gate every BROWSE surface applies to the nav manifest.
 //
+// `filterNavByFeatures(navEntries, isFeatureEnabled)` — drops nav-manifest entries whose optional
+// instance feature (`post`, `datadog`, `jira`, `gsd`) is off. The single gate for BROWSE surfaces
+// (sidebar, ⌘K); routes stay reachable by URL, bookmark, and voice. Pair with `useInstanceFeatures`.
+//
 // `GET /api/palette/manifest` ships each entry's optional `feature` tag rather
 // than pre-filtering, so the response stays HTTP-cacheable and shared across the
 // three consumers that fetch it. The gate is applied here instead, on the client

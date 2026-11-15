@@ -1,6 +1,11 @@
 /**
  * Cover-art lettering preview (#10345).
  *
+ * Cover-art lettering preview (#10345): re-export of `server/lib/musicVideoCoverOverlay.js` (the
+ * design vocabulary, `normalizeCoverDesign`, `coverOverlaySvg`) plus `canvasCoverWidths(design, texts,
+ * fonts)`, which measures text with a canvas so the live preview wraps and sizes the title the way the
+ * server's measured render does.
+ *
  * Re-export of `server/lib/musicVideoCoverOverlay.js` — the one layout the
  * server renders the cover with, imported rather than copied so the live
  * Lettering preview cannot drift from the saved JPEG — plus a canvas width

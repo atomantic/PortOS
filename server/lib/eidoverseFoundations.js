@@ -1,4 +1,32 @@
 /**
+ * Local-vs-baseline ownership for Eidoverse world foundations and the promote-candidate packaging gate
+ * (#7455).
+ *
+ * `EIDOVERSE_FOUNDATION_LAYERS` (`runtime` / `baseline` / `vernacular`, defaulting to `vernacular` so
+ * nothing is shared by omission) and `layerPromoteRefusal`; the record / input / candidate-envelope
+ * Zod schemas, where a foundation is `{ body, style }` BY CONSTRUCTION — packaging carries `body` and
+ * drops `style`, so an inheriting peer never receives its author's cosmetics, and `styleLeakFindings`
+ * REFUSES an unambiguously cosmetic key smuggled into `body` (spatial/asset keys stay allowed — they
+ * are a district template's substance). `assayEvidenceFromVerdict` folds an agent-free resilience
+ * verdict (#7460) into the evidence the gate reads, including the binding that it ran against the
+ * contribution this foundation names. `packageFoundationCandidate` and `verifyFoundationCandidate` are
+ * the one gate seen from the sending and receiving sides, over a content-addressed `fingerprint`
+ * hashed from the payload AS SENT; federation safety comes from `federationSafety.js`.
+ * `summarizeFoundation` is the prompt-shaped projection of a ledger record (layer, identity, assay
+ * outcome, whether a candidate exists) that keeps the local style layer and the packaged envelope out
+ * of a mind turn, and `detailFoundation` is its read-ONE counterpart, adding the `body` and
+ * `disclosure` the list deliberately omits (#7626). `eidoverseFoundationTargetSchema` +
+ * `foundationLedgerKey` are how a caller NAMES one record — `{ id, originInstanceId }`, where the
+ * origin addresses a local copy of a peer's foundation without making the internal
+ * `peer:<origin>:<id>` storage key user-typeable. `planFoundationAdoption` decides, per kind, what
+ * ADOPTING an inherited foundation means: a `controller` yields a disarmed install of the shipped
+ * controller its body names plus a `derived-from` edge, while `schema` / `affordance` /
+ * `district-template` are refused by name rather than silently succeeding. Pure: callers pass `now`.
+ * `derivedContributionId({ kind, id, body })` and `controllerDefinitionIdFromBody(body)` derive the
+ * assay binding label from the record itself, so neither an author nor a sending peer can name it
+ * (#7625); they live here rather than beside the sandbox that replays the body because the sandbox
+ * reaches this module through the creative toolkit.
+ *
  * Local-vs-baseline ownership for Eidoverse world foundations, plus the
  * packaging/validation step that turns one instance's vernacular artifact into
  * a promote candidate for the shared PortOS baseline (#7455, epic #7453).
@@ -44,7 +72,7 @@
  *      place in the tree that runs untrusted controller code. The ledger runs
  *      the assay fresh on every package attempt, so evidence is never older
  *      than the body it vouches for.
-  *   2. **Federation safety.** A promote payload is the one durable Eidoverse
+ *   2. **Federation safety.** A promote payload is the one durable Eidoverse
  *      artifact authorized to cross the federation layer, alongside live guest
  *      conversation, so it fails closed: `lib/federationSafety.js` refuses the
  *      package outright when the candidate carries machine identity, PII,

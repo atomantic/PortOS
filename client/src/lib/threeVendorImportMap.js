@@ -1,3 +1,11 @@
+// Inlines the vendored three.js modules into a Code Animation page for the sandboxed preview (#10464).
+//
+// `importsThree(html)` detects a bare `three` / `three/addons/*` import (mirrors the server's
+// `threeVendor.js`); `buildThreeImportMap(files)` turns the `GET /api/code-animation/vendor/three`
+// bundle into an import map of `data:` URLs (the opaque-origin iframe cannot fetch `./vendor/*.js`),
+// rewriting the vendored files' relative imports to `three-vendor/<path>` ids;
+// `inlineThreeVendor(html, files)` replaces any import map in the page with it.
+//
 // Inlines the vendored three.js modules (GET /api/code-animation/vendor/three)
 // into a Code Animation page so the sandboxed preview can import them. The
 // preview iframe has an opaque origin and a CSP with no network, so it cannot

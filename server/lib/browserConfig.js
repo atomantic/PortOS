@@ -1,3 +1,12 @@
+/**
+ * Resolves `browserExecutablePath` for managed and owned render browsers, normalizes browser config,
+ * derives macOS app bundle paths, and validates Chrome-compatible binaries.
+ *
+ * Shared `browserExecutablePath` resolution for managed and owned render browsers, plus custom path
+ * helpers for deriving macOS app bundles, detecting configured browser choices, normalizing browser
+ * config, and validating Chrome-compatible binary paths.
+ */
+
 import { isNonBlankStr } from './textUtils.js';
 
 /** Same executable for managed browsing and isolated headless rendering. */

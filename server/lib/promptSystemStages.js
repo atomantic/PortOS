@@ -2,6 +2,13 @@
  * The prompt stages PortOS features call by name — the single source of truth
  * for "which stage keys are system stages" (#3314).
  *
+ * Prompt-stage protection, split in two (#3335). CURATED (badging): `SYSTEM_STAGE_USAGE` (`key ->
+ * usedBy[]` feature-name copy), `SYSTEM_STAGE_KEYS`, `isSystemStage(key)`, `systemStageUsedBy(key)` —
+ * what `GET /api/prompts` ships and the Prompt Manager badges/filters; adding a row is a per-stage
+ * product decision. DERIVED (deletion): `STAGE_CALL_SITES` / `stageReferencedBy(key)` from the
+ * generated manifest, unioned with the curated set into `isProtectedStage(key)` /
+ * `PROTECTED_STAGE_KEYS` — what the `DELETE /api/prompts/:stage` force-guard and `canDelete` consult.
+ *
  * These stages are resolved by literal key (`getStage('cos-evaluate')`,
  * `runStage('brain-classifier')`, …) rather than authored by the user in the
  * Prompt Manager. Deleting one silently breaks the feature that names it, so

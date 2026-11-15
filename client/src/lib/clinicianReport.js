@@ -1,6 +1,12 @@
 /**
  * clinicianReport.js — pure builders for the MeatSpace clinician-export view.
  *
+ * Pure builders for the MeatSpace clinician-export view (`/meatspace/export`). `buildClinicianReport({
+ * tests, config })` → structured report model (blood panels grouped by category with reference ranges
+ * + out-of-range flags, plus a lifestyle summary); `reportToMarkdown(report)` → copy-paste markdown.
+ * Reuses the Blood tab's `REFERENCE_RANGES` / `getBloodValueStatus` so printed flags match the UI.
+ * Also exports `buildBloodTestModel`, `buildLifestyleModel`, `getCategoryForKey`, `formatRange`.
+ *
  * Turns raw blood-test history + lifestyle config into a structured,
  * doctor-friendly report model and a copy-paste markdown rendering. No React,
  * no I/O — fully unit-testable. Reuses the blood reference ranges and status

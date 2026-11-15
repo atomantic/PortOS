@@ -1,4 +1,18 @@
 /**
+ * `createConcurrencyGate(limit)` → `run(fn)` — cap on simultaneous async work for ONE module-scoped
+ * budget, released FIFO.
+ *
+ * Sibling to `mapWithConcurrency.js`, which caps in-flight work *within one array map*; a gate is
+ * shared state, so several call sites fanning out at the same remote respect one budget instead of
+ * each respecting its own while the host sees the sum. `createMutex` (`asyncMutex.js`) is this with
+ * `limit` fixed at 1 — prefer it for mutual exclusion. Note the budget is per-MODULE, not per-host:
+ * two modules calling one host each get their own gate. Used by `huggingFaceMetadata.js` (4) and
+ * `ollamaRegistryCatalog.js` (16), whose cold catalog-enrichment bursts otherwise arrive at a free
+ * public API as a thundering herd — which the Hub answers with an HTTP/2 GOAWAY that surfaces as a
+ * bare `fetch failed`.
+ */
+
+/**
  * Process-wide bounded-concurrency gate for un-batched async work.
  *
  * `createConcurrencyGate(limit)` → `run(fn)`, which resolves/rejects with

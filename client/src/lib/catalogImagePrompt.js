@@ -1,5 +1,8 @@
 // Visual fields and tags seed both the editor and the one-click card action.
 // Keep full descriptions: model limits must refuse, never silently truncate.
+//
+// `buildGenerationPromptSeed` composes complete visual descriptions and tags for catalog image
+// generation.
 export const GENERATION_VISUAL_KEYS = [
   'physicalDescription', 'visualNotes', 'visualIdentity',
   'silhouetteNotes', 'postureNotes', 'specialTraits',

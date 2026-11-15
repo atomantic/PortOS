@@ -1,3 +1,8 @@
+/**
+ * Pure, DOM-free Powers mental-math lessons — maps supported base/exponent pairs to named techniques
+ * and deterministic worked steps for drill misses and historical review.
+ */
+
 import { formatCount } from '../utils/formatters';
 
 const value = (base, exponent) => formatCount(Math.pow(base, exponent));

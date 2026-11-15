@@ -1,7 +1,13 @@
 /**
- * Shared limits and joint constraints for the POST cognitive drills whose
- * manual settings are RELATED pairs (digit-span span, reaction-time delay
- * window, Go/No-Go deadline vs stimulus). Browser-safe leaf: no imports.
+ * Shared limits and joint constraints for the POST cognitive drills whose manual settings are RELATED
+ * pairs (digit-span span, reaction-time delay window, Go/No-Go deadline vs stimulus).
+ *
+ * Browser-safe limits and joint constraints (`COGNITIVE_PAIR_CONSTRAINTS`, `validateCognitivePair`,
+ * `dependentMin`) for the POST cognitive drills with related manual pairs — digit-span start/max
+ * length, reaction-time delay window, Go/No-Go stimulus/deadline — shared by the config UI, route
+ * validation, and generators.
+ *
+ * Browser-safe leaf: no imports.
  *
  * The generators (meatspacePostCognitive.js) normalize a pair that violates
  * its relation; this module lets the browser and the config route reject the

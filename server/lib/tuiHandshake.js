@@ -1,6 +1,12 @@
 /**
  * Shared TUI invocation + paste-handshake constants.
  *
+ * Shared TUI invocation + paste-handshake constants. Also owns `SUBMIT_KEY` — the single Enter byte
+ * every PTY writer sends, whether it's submitting a pasted TUI prompt or a command PortOS injected
+ * into a shell session. It is CR, never LF: a POSIX pty's ICRNL hides the difference, but cmd.exe
+ * under Windows ConPTY accepts only CR and leaves an LF-terminated line typed-but-unexecuted at the
+ * prompt.
+ *
  * Two execution paths need these: `server/services/tuiPromptRunner.js` (one-shot
  * prompts from the central handler) and `server/services/agentTuiSpawning.js`
  * (long-running CoS agents). Both shell into the same set of TUI binaries

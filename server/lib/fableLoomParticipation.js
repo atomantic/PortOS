@@ -2,6 +2,9 @@
  * FableLoom audience-participation semantics shared by persistence, prompts,
  * graph validation, and the client editor.
  *
+ * FableLoom audience roles (helper vs protagonist), per-scene connection availability, prompt
+ * contracts, and backward-compatible defaults.
+ *
  * Existing stories predate the distinction and behaved as protagonist-led
  * choose-your-own adventures, so missing loom values retain that behavior.
  * New looms created through the product UI default to the primary helper

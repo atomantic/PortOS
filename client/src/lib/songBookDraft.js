@@ -1,3 +1,10 @@
+// SongBook editor save/dirty boundary: `buildSongBookPatch(draft, savedDraft)` preserves
+// unchanged-link omission.
+//
+// `songBookDraftsEqual(a, b)` compares the same serialized values. Exports `SCROLL_DURATION_MIN/MAX`
+// for the form. Page owns defaults and lifecycle; add save normalization here so the navigation guard
+// follows.
+//
 // SongBook editor serialization. Save and the unsaved-changes guard share this
 // boundary so a field has exactly one definition of its persisted value.
 // Pure: the page owns record-to-form defaults, requests, and navigation.

@@ -1,6 +1,9 @@
 /**
  * Sprites — the user-defined animation-track store (issue #3152).
  *
+ * The EFFECTIVE track table — compiled built-ins plus the user-defined store read from one small JSON
+ * config, so sprite schemas stay module-load constants rather than lazily-built.
+ *
  * #3136 made a track's whole workflow registry DATA — bounds, directionality,
  * on-disk kinds, source reference, prompt — so `animationTrackWorkflow.js` +
  * `POST /:id/tracks/:trackId/{generate,approve}` drive any row without new code.

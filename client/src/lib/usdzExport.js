@@ -1,6 +1,14 @@
 /**
  * USDZ (AR Quick Look) export helpers for the 3D viewer (#5756).
  *
+ * AR Quick Look (USDZ) export for the 3D viewer (#5756): `exportSceneToUsdz(scene, { maxTextureSize
+ * })` lazy-loads three's `USDZExporter` and serializes the already-decoded scene to bytes,
+ * `countSceneTriangles(object3d)` measures an object graph against `AR_TRIANGLE_BUDGET`, and
+ * `supportsArQuickLook()` feature-detects the `<a rel="ar">` handoff (Safari on iOS/iPadOS only —
+ * never sniff the user agent) so a desktop is offered a download instead of a button that does
+ * nothing. `AR_MAX_TEXTURE_SIZE` bounds the file: USDZ stores every texel raw, with no Draco/meshopt
+ * equivalent.
+ *
  * The conversion runs in the BROWSER: by the time the user can ask for it, the
  * viewer has already parsed the GLB and decoded every texture, so three's
  * `USDZExporter` only has to re-serialize what is in memory. PortOS ships no USD

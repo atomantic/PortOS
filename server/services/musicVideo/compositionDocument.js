@@ -500,6 +500,8 @@ export const UPGRADABLE_IMAGE_EFFECT_MODULES = new Set([
 // exposes an extra export. Keep its bytes for documents that may use it.
 export const COMPATIBLE_IMAGE_EFFECT_MODULES = new Set([
   'b5905e6d5be37d5d8b1ed0a1c741e3f9813b65c70eec182a3a3cf86efd4ec92d',
+  // #16084 moved the module's catalog row into its header comment; code unchanged.
+  'fdd1e93223f14339dab56e95a79844b5926f799b1070ab8df38419332e447993',
 ]);
 const engineDigest = bytes => createHash('sha256').update(bytes.toString('utf8').replace(/\r\n?/g, '\n')).digest('hex');
 

@@ -1,3 +1,8 @@
+/**
+ * Prepares fresh profile probes and measures render plus explicit playback-start time for one-use
+ * qualification receipts.
+ */
+
 import { benchmarkProfileInteractive, completeVoiceProfileInteractiveBenchmark } from './apiVoice';
 
 /** Prepare a fresh probe; its returned play action needs a second user gesture. */

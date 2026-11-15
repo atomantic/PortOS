@@ -1,4 +1,10 @@
-/** Picking a song out of Suno's picker rows (#10375). */
+/**
+ *  Picking a song out of Suno's picker rows (#10375).
+ *
+ * `pickSongRow(rows, { songId, durationSec, title })`: which Suno Hook picker row is the project song:
+ * by id when a row carries it, else the one row with the song's length, else the only row; -1 when
+ * rows cannot be told apart.
+ */
 
 const fmtClock = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 

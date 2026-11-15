@@ -1,3 +1,13 @@
+/**
+ * Records what a model actually received beyond user text: `promptAddition`, `sentPromptRecord`,
+ * `carriedPromptAdditions` and the `promptAdditionsSchema` request field.
+ *
+ * What a model actually received beside what the user wrote (#11317): `promptAddition`,
+ * `sentPromptRecord`, `carriedPromptAdditions`, `agentInstructionsAddition`, and the
+ * `promptAdditionsSchema` request field. Records `sentPrompt` / `sentNegativePrompt` /
+ * `promptAdditions` on every render.
+ */
+
 import { z } from 'zod';
 
 /**

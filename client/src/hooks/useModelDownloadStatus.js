@@ -1,3 +1,14 @@
+/**
+ * Image/video model cache-status + SSE pre-download.
+ *
+ * `useDownloadableAssets(descriptors, options)` shares readiness and independent integrity dismissals
+ * across asset roles. `start(id)` commands a pull; `startWhenIdle(id)` requests one — it waits for the
+ * cache verdict, skips an already-resident repo, and queues behind whatever owns the single download
+ * lane (`queuedModelId` while it waits, falsy id to retract). Use when: Surfacing "Available" vs
+ * "Download" badge inline in the gen form; `startWhenIdle` for a picker where choosing an option IS
+ * the request for its weights.
+ */
+
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useSseProgress } from './useSseProgress.js';
 import { isIcLoraMode } from '../lib/videoGenParams.js';

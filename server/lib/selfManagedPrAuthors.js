@@ -1,8 +1,13 @@
 /**
- * pr-watcher's self-managed author list: PRs by these logins are left to their
- * author (who runs their own merge) until the PR has had no activity for the
- * configured number of minutes. Leaf module so the watcher and the task-metadata
- * sanitizer share one vocabulary without the watcher importing validation.
+ * pr-watcher's self-managed author list: PRs by these logins are left to their author (who runs their
+ * own merge) until the PR has had no activity for the configured number of minutes.
+ *
+ * pr-watcher's self-managed author list: `normalizeSelfManagedPrAuthors`,
+ * `isValidSelfManagedPrStaleMinutes`, and `isSelfManagedPrActive(pr, { authors, staleMinutes },
+ * nowMs)` (true while a listed author's PR has activity inside the stale window, default 60 minutes).
+ *
+ * Leaf module so the watcher and the task-metadata sanitizer share one vocabulary without the watcher
+ * importing validation.
  */
 
 export const SELF_MANAGED_PR_STALE_MINUTES_DEFAULT = 60;

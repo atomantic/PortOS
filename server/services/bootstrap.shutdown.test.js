@@ -21,7 +21,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 // The shared brace-walker + comment stripper. Hand-rolling either is what
-// server/lib/README.md explicitly warns against — the naive "first `{` after the
+// the server/lib/mirrorParity.js header explicitly warns against — the naive "first `{` after the
 // anchor" version silently slices the wrong region the moment a signature grows
 // a destructured or defaulted parameter.
 import { extractDeclaration, stripCommentsAndNormalize } from '../lib/mirrorParity.js';

@@ -1,3 +1,7 @@
+/**
+ * strict scoped managed-visitor credentials, admissions, observations and bounded action schemas.
+ */
+
 import { z } from 'zod';
 const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
 export const visitorScopeSchema = z.object({ individualId: id, individualSessionId: id, worldId: id, epoch: id }).strict();

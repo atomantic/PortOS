@@ -1,4 +1,18 @@
 /**
+ * `THREEJS_PLAYER_SOURCE`: fixed clip-player source embedded in exported Three.js modules, providing
+ * `createSculptAnimationPlayer(root, { onCue })`.
+ *
+ * `THREEJS_PLAYER_SOURCE` — the fixed clip-player source `buildThreejsFactorySource` emits into every
+ * exported Three.js module, giving a standalone consumer `createSculptAnimationPlayer(root, { onCue
+ * })` (plus `evaluateSculptClipPose` / `collectSculptCues`) over the node map and validated
+ * `animation` block the factory already carries. A STRING constant, not generated text: nothing
+ * provider-authored is interpolated into it, so the export stays data-plus-PortOS-code. It takes
+ * `update(deltaSeconds)` from the host render loop rather than owning one, scrubs silently and fires
+ * cues only on playback (mirroring the preview), and clones a shared material before driving
+ * `opacity`. Semantics mirror `client/src/lib/threejsAnimation.js` — change one and change the other.
+ */
+
+/**
  * The clip player PortOS emits into an exported Three.js factory.
  *
  * The exported module already carries the validated `animation` block and the

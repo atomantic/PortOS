@@ -1,3 +1,10 @@
+/**
+ * Creative Director project/treatment/scene, inert Video draft preferences, and Create-Suite importer
+ * schemas.
+ *
+ * The directive `goal` cap it enforces comes from `creativeBriefLimits.js`.
+ */
+
 import { z } from 'zod';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES, PLAN_STEP_STATUSES, VIDEO_REVIEW_CHECKPOINTS } from './creativeDirectorPresets.js';

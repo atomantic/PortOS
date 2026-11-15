@@ -1,6 +1,38 @@
 /**
  * Slashdo invocation resolver (#3089).
  *
+ * Resolves how a bundled slashdo workflow is invoked on a given host CLI.
+ * `resolveSlashdoInvocation({command, args, providerId, providerCommand, leanMode})` → `{command,
+ * args, style, invocation, skillName}` for the three shapes slashdo's installer produces
+ * (`slash-namespaced` `/do:x` for Claude Code, `slash-flat` `/do-x` for OpenCode, `skill` — an Agent
+ * Skill selected by name — for codex/grok/antigravity and any unidentified provider). Plus
+ * `buildSlashdoSection(resolved, body, {bodyPath, reviewWith})` (pure renderer; the caller loads the
+ * body via `loadSlashdoFile`. With a staged `bodyPath` it emits a filesystem pointer for deferred
+ * bundles or bodies over `SLASHDO_INLINE_BUDGET_CHARS` (24,000)),
+ * `unreachableReviewerIncludes({reviewers, usernames})` → the reviewer-variant lib includes a run can
+ * never reach (the `skipIncludes` set for `loadSlashdoFile`; defaults to pruning NOTHING for an
+ * unresolved/unrecognized reviewer set, since an over-pruned prompt is worse than a fat one),
+ * `SLASHDO_REVIEWER_INCLUDES`/`SLASHDO_REVIEWER_INCLUDE_NAMES`, `slashdoSkillName`,
+ * `isValidSlashdoCommand` (the one definition of the safe bare-command shape, also gating the Zod
+ * schemas), `agentOwnsPrWorkflow({providerType, leanMode})` — a strictly WEAKER question than typing a
+ * slash command: any local `cli`/`tui` harness that is not a lean `--bare` session drives its own
+ * commit → push → PR → review → merge (#3733), with `PR_OPENED_BY` (`agent-slashdo` / `agent-inline` /
+ * `portos`) naming WHO opens a run’s PR per the prompt it was given (stamped as `metadata.prOpenedBy`
+ * by `promptOpensOwnPr`, services/promptSections/completion.js) and
+ * `resolvePrOpenedBy({persistedPrOpenedBy, persistedOwnsPrWorkflow, …})` reading it back for a
+ * completed agent — mapping both the legacy #3733 `ownsPrWorkflow` boolean and a pre-#3733 record with
+ * no stamp at all; `oversizedBodyPointer(bodyPath, body)` (the shared "it is on disk, go read it"
+ * line); `resolvePrOwnership({task, isTruthyMeta, persistedPrOpenedBy, persistedOwnsPrWorkflow,
+ * providerId, providerCommand, leanMode})` → `{taskOpenPR, prOpenedBy, agentOpensOwnPr,
+ * prClaimExpected}` — the persisted-first, task-shape-aware ownership verdict plus provider descriptor
+ * that both in-process spawners (TUI `finish()`, direct-CLI `close`) hand to
+ * `runSpawnerCompletionCleanup`, so the ownership question and the cleanup acting on it cannot
+ * disagree; and `canTypeSlashCommands()` — the single predicate behind `agentPromptBuilder.js`'s
+ * completion-workflow gates (can this session TYPE `/do:pr` / `/simplify`?), which reads
+ * `resolveSlashdoStyle`'s `assumeClaudeWhenUnknown` posture because the spawners resolve a blank
+ * command to `claude`. Provider is only known at spawn time, so a task persists the BARE command name
+ * — never a rendered `/do:x` string.
+ *
  * A CoS task can name a bundled slashdo workflow (`plan-task`, `next`, `review`,
  * …) instead of hand-written prose. How an agent actually *invokes* that workflow
  * is NOT a prefix swap — slashdo installs itself differently per host CLI

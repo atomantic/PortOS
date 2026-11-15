@@ -1,6 +1,12 @@
 /**
  * Creative Commission generation spec — a pure, dependency-free leaf (#6816).
  *
+ * `GENERATION_KEY_DEFS` / `ABILITY_GENERATION_SPEC` / `resolvedDefault` and the quality / aspect-ratio
+ * / image-mode / video-mode enums — the generation-param spec `creativeCommissionValidation.js` builds
+ * its Zod schema from and the ability adapters sanitize against. A pure leaf (like
+ * `creativeBriefLimits.js`) so `client/src/components/creative-commission/commissionForm.js` derives
+ * its fields/bounds/defaults from it directly instead of hand-copying them (#6816).
+ *
  * The per-generation-key descriptors (type/bounds/values/default) and their
  * per-ability grouping used to live inside `creativeCommissionValidation.js`,
  * which pulls `zod` — so the browser form could only mirror them by hand.

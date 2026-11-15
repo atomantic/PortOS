@@ -1,3 +1,7 @@
+/**
+ * CLI image-input provenance markers and read-time normalization for legacy sidecars.
+ */
+
 import { IMAGE_GEN_MODE } from './generationModes.js';
 
 // CLI drivers choose their own subsequent image-tool calls. These markers

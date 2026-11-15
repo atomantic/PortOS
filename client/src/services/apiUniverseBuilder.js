@@ -1,3 +1,7 @@
+/**
+ * Universe Builder (generate + edit + commit; names and index summaries).
+ */
+
 import { request } from './apiCore.js';
 
 export const WORLD_CATEGORIES = ['landscapes', 'environments', 'structures', 'vehicles'];

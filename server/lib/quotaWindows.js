@@ -2,6 +2,12 @@
  * Classify a provider quota window by its PERIOD — how long the allowance it
  * meters lasts before it refills.
  *
+ * Classifies a quota window by PERIOD (`windowPeriodHours`); `classifyWindows` splits one card's
+ * windows into the weekly allowance that expires unused and the 5-hour one that refuses first, in one
+ * pass. `windowLabelOf` names a window. `staleThresholdMs` / `isLimitStale` judge a reading's age
+ * against 10% of ITS OWN window period (floored at 5min) — the period-relative "is this reading too
+ * old to trust" verdict every quota card stamps. Pure.
+ *
  * Every subscription CLI reports at least two windows on the same card: a short
  * rolling one (claude/codex `session` ≈ 5h, antigravity `5-hour`) and a long one
  * (`week`, `month`). They answer different questions, and quota-burn needs both:

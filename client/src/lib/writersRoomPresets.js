@@ -1,4 +1,11 @@
 /**
+ * Re-export of `server/lib/writersRoomPresets.js` — `WORK_KINDS`, `WORK_STATUSES`,
+ * `EXERCISE_STATUSES`, `ANALYSIS_KINDS`.
+ *
+ * `writers-room/labels.test.js` requires a label per value.
+ */
+
+/**
  * Writers Room presets — re-export of server/lib/writersRoomPresets.js.
  *
  * The client and server share the work kind and status enums so they cannot drift.

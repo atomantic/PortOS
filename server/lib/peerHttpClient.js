@@ -1,4 +1,10 @@
 // Federation HTTP/Socket.IO client — TLS validation off (Tailnet is the trust boundary).
+//
+// Federation HTTP/Socket.IO client (TLS validation off — Tailnet is the trust boundary); attaches the
+// peer credential (`derivePeerAuthToken` pair token, legacy Basic until the receiver confirms it);
+// `readPeerBody(response, method, { idleTimeoutMs?, maxBytes? })` bounds native response body stalls
+// (`PEER_BODY_IDLE_TIMEOUT`) and streamed size (default `PEER_BODY_DEFAULT_MAX_BYTES` = 256 MiB,
+// rejects with `RESPONSE_TOO_LARGE` like the HTTPS shim).
 import http from 'node:http';
 import https from 'node:https';
 import { createHmac } from 'node:crypto';

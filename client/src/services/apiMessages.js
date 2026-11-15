@@ -1,3 +1,7 @@
+/**
+ * Messages / notifications + iMessage manager (#2413).
+ */
+
 import { request } from './apiCore.js';
 
 // Messages

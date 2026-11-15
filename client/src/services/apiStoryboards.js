@@ -1,3 +1,16 @@
+/**
+ * Client API wrapper for Storyboards: board, beat and panel CRUD, panel art takes, panel maker runs,
+ * beats from a plot summary and saved recipes.
+ *
+ * Storyboards (Create › Storyboards): board/beat/panel CRUD and moves, panel art takes (add, select,
+ * remove), the panel maker (board recipe, per-panel node values, node runs, Make empty panels), beats
+ * from a plot summary (preview, then add), the saved recipe library, Make storyboard from a music
+ * video and Fit to song (write a video's shots from its linked board), a fitted shot's Update from its
+ * edited panel and Use as panel art, Start a Video draft from a board, Make storyboard from a
+ * FableLoom path, Open in storyboard editor for a pipeline issue with its waiting board changes and
+ * Update, and Use as scene/shot art; every board write returns the whole board.
+ */
+
 import { request } from './apiCore.js';
 
 // Storyboards — the shared Create › Storyboards planning board (beats → panels,

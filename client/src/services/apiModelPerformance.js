@@ -1,3 +1,7 @@
+/**
+ * Explicit model discovery and PortOS task benchmarks shown on Models → Performance.
+ */
+
 import { request } from './apiCore.js';
 
 export const getModelPerformanceBenchmarks = (options) => request('/models/performance/task-benchmark', options);

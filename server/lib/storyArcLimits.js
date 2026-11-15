@@ -1,3 +1,8 @@
+/**
+ * Pure canonical length/count caps and series-design field/mode contract shared by sanitizers, schemas
+ * and browser editors.
+ */
+
 /** Canonical length and count caps for story arcs, seasons, and episodes. */
 export const ARC_LIMITS = Object.freeze({
   LOGLINE_MAX: 500,

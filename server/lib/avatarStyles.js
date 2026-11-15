@@ -1,10 +1,15 @@
 /**
- * Single source of truth for the CoS avatar-style vocabulary. Every consumer
- * that used to hand-maintain its own list derives from `AVATAR_STYLES`
- * instead (#6253): the picker labels (`components/cos/constants.js`), the
- * lazy-load map and WebGL-stage set (`pages/ChiefOfStaff.jsx`), and the
- * server's `avatarStyle` zod enum (`server/routes/cosStatusRoutes.js`,
- * which imports it directly).
+ * Single source of truth for the CoS avatar-style vocabulary.
+ *
+ * The CoS avatar-style vocabulary (#6253) — `AVATAR_STYLES` (`{id, label, webgl}`), `AVATAR_STYLE_IDS`
+ * (the `avatarStyle` zod enum in `cosStatusRoutes.js`), `AVATAR_STYLE_LABELS`, and
+ * `WEBGL_AVATAR_STYLE_IDS` (the three.js-stage set). `client/src/lib/avatarStyles.js` re-exports it
+ * for the picker and the lazy-load map.
+ *
+ * Every consumer that used to hand-maintain its own list derives from `AVATAR_STYLES` instead (#6253):
+ * the picker labels (`components/cos/constants.js`), the lazy-load map and WebGL-stage set
+ * (`pages/ChiefOfStaff.jsx`), and the server's `avatarStyle` zod enum
+ * (`server/routes/cosStatusRoutes.js`, which imports it directly).
  *
  * `webgl: true` marks a style that needs the three.js canvas stage —
  * `CANVAS_AVATAR_STYLES` derives from this flag. The 2D `core` canvas style

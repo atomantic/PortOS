@@ -1,3 +1,10 @@
+/**
+ * `installConsoleFilters()` — drops a small allow-list of known-noise console strings (THREE.js
+ * `Clock` deprecation, expected WebGL `Context Lost.`) from `console.{warn,log,debug}`.
+ *
+ * Idempotent; auto-installed on import. Imported for its side effect from `main.jsx`.
+ */
+
 const FILTER_INSTALLED = Symbol.for('portos.consoleFiltersInstalled');
 
 const SUPPRESSED_MESSAGES = new Set([

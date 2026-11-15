@@ -1,4 +1,8 @@
-/** Filename validation, containment checks, and approved asset resolution. */
+/**
+ *  Filename validation, containment checks, and approved asset resolution.
+ *
+ * Filename/traversal validation, path containment, and approved image-asset resolvers.
+ */
 import { existsSync, statSync } from 'fs';
 import { basename, join, resolve as resolvePath, sep as PATH_SEP } from 'path';
 import { platform } from 'os';

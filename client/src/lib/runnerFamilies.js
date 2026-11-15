@@ -1,3 +1,11 @@
+/**
+ * Mirror of `server/lib/runners.js`, including the shared LTX + MiniMax H3 Ref2VA audio-to-video
+ * runtime predicate.
+ *
+ * `loraCompatKeysMatch` keeps image Test handoffs and the adapter picker on the same size/family
+ * compatibility rule.
+ */
+
 export {
   RUNNER_FAMILIES,
   VIDEO_LORA_FAMILIES,

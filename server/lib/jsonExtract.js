@@ -1,6 +1,12 @@
 /**
  * Shared JSON extraction utilities for LLM responses.
  *
+ * Pull JSON blocks out of LLM responses. `extractNonPlaceholderJson(raw, { field })` skips echoed
+ * schema placeholders and distinguishes placeholder-only from parse failures. `findBalancedBlocks`
+ * walks top-level blocks and stops at the first unbalanced one; `findAllBalancedBlocks` is the
+ * stack-based variant that scans past stray braces and returns nested blocks in closing order (reverse
+ * it for outermost-newest-first).
+ *
  * LLM output is messy — CLI providers (notably Codex) prepend banner text
  * and echo the user prompt back to stdout before the model response. The
  * prompt itself often contains a JSON-shaped schema example whose braces

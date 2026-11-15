@@ -1,4 +1,11 @@
 /**
+ * `VIDEO_TILING_MODES` — the one list of video tiling modes.
+ *
+ * The video-gen routes build their `z.enum` from it and the client renders its options from it (labels
+ * in `client/src/lib/videoTilingOptions.js`). Leaf, no imports.
+ */
+
+/**
  * Video tiling modes — the one list the video-gen routes validate against and
  * the client renders its options from (client/src/lib/videoTilingOptions.js).
  *

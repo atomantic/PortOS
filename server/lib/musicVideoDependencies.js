@@ -1,4 +1,8 @@
-/** Versioned Music Video provenance. Only pointers/checksums live on project rows. */
+/**
+ *  Versioned Music Video provenance. Only pointers/checksums live on project rows.
+ *
+ * Versioned take/evidence provenance, dependency comparisons and bounded selective-repair previews.
+ */
 import { canonicalSnapshotChecksum } from './snapshotChecksum.js';
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
 import { musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, musicVideoSceneCastIds } from './musicVideoConditioning.js';

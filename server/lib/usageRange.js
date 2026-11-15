@@ -1,4 +1,7 @@
 /**
+ * `resolveUsageRange({ period, from, to })` — pure period→inclusive-YYYY-MM-DD range resolution for
+ * the usage cost report (explicit dates win; `all` unbounded; default 7d).
+ *
  * Date-range resolution for the /devtools/usage cost report — pure, shared by
  * the usage route and any future consumer (dashboard widget, voice tool,
  * scheduled report) that needs "period → inclusive YYYY-MM-DD range".

@@ -1,3 +1,7 @@
+/**
+ * Pipeline (issues + stages + canon; series names and index summaries).
+ */
+
 import { request } from './apiCore.js';
 import { buildFormData } from './apiImageVideo.js';
 import {

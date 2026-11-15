@@ -1,6 +1,10 @@
 /**
  * MeatSpace POST drill-type vocabulary.
  *
+ * MeatSpace POST drill vocabularies (`LLM_DRILL_TYPES`, `CACHEABLE_TYPES`, `COGNITIVE_DRILL_TYPES`,
+ * `POST_SUPPORTED_MEMORY_TYPES`), kept below validation so a route schema never pulls in the POST
+ * services (and, through them, the LLM drill generator).
+ *
  * These lists sit below both validation and the POST services so a route
  * schema can enumerate a drill type without importing service-layer
  * orchestration (issue #4901). That mattered more than the layering nit:

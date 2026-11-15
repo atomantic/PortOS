@@ -1,3 +1,11 @@
+/**
+ * Owns Image Gen form fields, model/LoRA catalog loading, legacy and remix URL restoration,
+ * image-input object URLs, mode-dependent capabilities, and image-pick/remix actions.
+ *
+ * Use when: Image Gen form compositions that need the complete prompt, model, conditioning-image,
+ * cleaner, and handoff lifecycle.
+ */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import useListResource from './useListResource';
 import { getNavPageForPath } from '../../../server/lib/navManifest.js';

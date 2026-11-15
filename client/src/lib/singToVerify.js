@@ -1,5 +1,10 @@
 // Pure sing-to-verify alignment. It maps a captured vocal pitch track onto the
 // written score's existing note windows, producing a strict 1:1 pitch diff.
+//
+// Pure strict-1:1 score verification: `alignSingToVerify(score, track, { bpm, startBar, captureEndMs
+// })` aligns clear sung-pitch frames to `buildColorMatchTimeline` windows, preserves detected octave
+// and key-aware spelling, and returns written→sung rows with raw cents, grade, source note, and
+// explicit acceptance state. Reached silent windows are `missed`; notes after Stop remain `pending`.
 
 import {
   buildColorMatchTimeline,

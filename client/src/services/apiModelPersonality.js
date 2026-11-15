@@ -1,3 +1,7 @@
+/**
+ * LLM personality self-profile tests: run, history, delete, scorer settings.
+ */
+
 import { request } from './apiCore.js';
 
 // Model Personality — LLM personality self-profile testing with optional

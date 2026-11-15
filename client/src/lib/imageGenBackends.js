@@ -1,9 +1,15 @@
 /**
- * Image-gen backend metadata for the UI. The pure constants + helpers live in
- * `imageGenModes.js` (a dependency-free leaf the server-side parity suite can
- * import — see its header) and are re-exported here so client consumers keep
- * one import site; this file adds only what needs client packages: the
- * per-mode lucide icons and the settings-driven backend derivation.
+ * Image-gen backend metadata for the UI.
+ *
+ * Icon metadata, `deriveAvailableBackends`, `isLocalImageConfigured(local)` (Python or a native MOSS
+ * pin), and `imageGenReadiness(status)` — a compatibility-safe `ready` / `unavailable` / `unknown`
+ * read of image-gen status responses; re-exports everything from `imageGenModes.js` so consumers keep
+ * one import site.
+ *
+ * The pure constants + helpers live in `imageGenModes.js` (a dependency-free leaf the server-side
+ * parity suite can import — see its header) and are re-exported here so client consumers keep one
+ * import site; this file adds only what needs client packages: the per-mode lucide icons and the
+ * settings-driven backend derivation.
  */
 
 import { Cpu, Terminal, Cloud, Sparkles, Zap } from 'lucide-react';

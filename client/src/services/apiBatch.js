@@ -1,3 +1,8 @@
+/**
+ * `fetchByIds(path, ids, options)` — batch-fetch records through a list route's `?ids=a,b,c` filter
+ * (dedupe, empty-list short-circuit, `{ items }` envelope unwrap).
+ */
+
 import { request } from './apiCore.js';
 
 /**

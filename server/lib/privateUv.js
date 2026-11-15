@@ -1,10 +1,16 @@
-// A PortOS-owned uv for Python installers. Ambient `uv` on PATH is whatever the
-// user happened to install: it may predate the compromised-CA removal and the
-// wheel entry-point/RECORD/ZIP/TAR extraction fixes (uv 0.13.4), and upgrading
-// a user-wide executable is not ours to do. So PortOS tools run a private copy,
-// bootstrapped once into ~/.portos/tools/uv-<version> exactly like the
-// bundled bootstraps in scripts/setup-image-video.sh (same directory, so the
-// two share one install), from the hash-pinned scripts/requirements-uv-bootstrap.lock.txt.
+// A PortOS-owned uv for Python installers.
+//
+// PortOS-private, version-checked patched uv: `ensurePrivateUv({ basePython, onLog })` bootstraps
+// `~/.portos/tools/uv-<version>` (shared with `scripts/setup-image-video.sh`) and returns `{ ok, uv }`
+// or `{ ok: false, reason }`; never PATH uv. `PRIVATE_UV_VERSION`, `MIN_PATCHED_UV` (0.13.4, the CA /
+// wheel-extraction fix floor), `isPatchedUvVersion(banner)`.
+//
+// Ambient `uv` on PATH is whatever the user happened to install: it may predate the compromised-CA
+// removal and the wheel entry-point/RECORD/ZIP/TAR extraction fixes (uv 0.13.4), and upgrading a
+// user-wide executable is not ours to do. So PortOS tools run a private copy, bootstrapped once into
+// ~/.portos/tools/uv-<version> exactly like the bundled bootstraps in scripts/setup-image-video.sh
+// (same directory, so the two share one install), from the hash-pinned
+// scripts/requirements-uv-bootstrap.lock.txt.
 import { execFile } from './childProcess.js';
 import { existsSync } from 'node:fs';
 import { homedir, platform } from 'node:os';

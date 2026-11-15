@@ -2,6 +2,12 @@
  * Public API registry — the single source of truth for which PortOS services
  * are usable as externally-callable HTTP APIs.
  *
+ * Single source of truth for which PortOS services are externally-callable HTTP APIs (`voice`,
+ * `sdapi`). `API_REGISTRY` declares each API's `publicPrefixes` (read/compute-safe surface only) +
+ * defaults; `isRegistryPublic(settings, path)` tells `authGate` when an `exposed && !requireAuth` API
+ * re-opens its prefix; `resolveApiAccess(settings)` merges persisted `apiAccess` flags for the
+ * Settings UI + OpenAPI docs.
+ *
  * One declaration here drives THREE consumers, so they can never drift:
  *   1. `authGate` (server/services/authGate.js) — when the PortOS password is on, an
  *      entry that is `exposed && !requireAuth` re-opens ONLY its `publicPrefixes`

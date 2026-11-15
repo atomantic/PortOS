@@ -1,6 +1,12 @@
 /**
  * Agent final verdict (#9645)
  *
+ * `resolveAgentFinalVerdict` — the completion outcome `finalizeAgent` persists, as one pure function
+ * of its evidence: the drift > PR > goal-fidelity > output-hook > reported precedence ladder, returned
+ * as a frozen `{ source, success, errorAnalysis, error, completionReason }`. A permanent hook
+ * rejection escalates an already-failed run only through the caller's pure `failureIsTerminal`
+ * predicate, so the side-effecting retry resolution runs once.
+ *
  * The completion outcome `finalizeAgent` (services/agentFinalization.js)
  * persists, as one pure function of the evidence it gathered: the agent's
  * reported result, primary-checkout drift, the PR claim check, the goal-fidelity

@@ -1,3 +1,13 @@
+/**
+ * Music Video cover Lettering controls (#10345): the install's uploaded typefaces and saved per-artist
+ * styles, loaded once.
+ *
+ * Loads whenever `enabled` (the section is open). Returns `{ fonts, styles, uploading,
+ * uploadFont(file), removeFont(id), saveStyle({ name, design }), removeStyle(name) }`
+ * (`fonts`/`styles` null until loaded); each mutation applies the server's answer at once. Use when:
+ * `CoverArtPanel` (Publish stage).
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import {

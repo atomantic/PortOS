@@ -1,4 +1,6 @@
 /**
+ * Marvel/DC-format comic script parser.
+ *
  * Pure parser for the Marvel/DC-format comic script the pipeline-comic-script
  * stage produces (see data.reference/prompts/stages/pipeline-comic-script.md —
  * data/ is gitignored; data.reference/ is the authoritative template, copied

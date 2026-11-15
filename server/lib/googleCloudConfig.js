@@ -1,8 +1,12 @@
 /**
- * Google Cloud Agent Platform configuration vocabulary, a dependency-free leaf shared
- * by the settings schema (lib/validation.js) and the transport
- * (services/googleCloudApi.js). The location lands in an endpoint hostname, so it is
- * pattern-checked before it is ever used.
+ * Google Cloud Agent Platform configuration vocabulary, a dependency-free leaf shared by the settings
+ * schema (lib/validation.js) and the transport (services/googleCloudApi.js).
+ *
+ * Google Cloud Agent Platform settings vocabulary (dependency-free): `GOOGLE_DEFAULT_LOCATION`, the
+ * region / project-id patterns and their `isValidGoogleLocation` / `isValidGoogleProjectId` checks,
+ * shared by the settings schema and `services/googleCloudApi.js`.
+ *
+ * The location lands in an endpoint hostname, so it is pattern-checked before it is ever used.
  */
 
 export const GOOGLE_DEFAULT_LOCATION = 'us-central1';

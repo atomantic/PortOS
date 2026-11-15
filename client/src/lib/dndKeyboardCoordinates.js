@@ -1,6 +1,14 @@
 /**
  * Keyboard coordinate getters for `@dnd-kit/core`'s `KeyboardSensor`.
  *
+ * `createFreeDroppableKeyboardCoordinates({ isSkipped? })` + `keyboardAwareCollisionDetection` — build
+ * a `KeyboardSensor` `coordinateGetter` for a `DndContext` whose drop targets are free `useDroppable`
+ * zones (no `SortableContext`): arrow keys JUMP to the adjacent zone in visual order instead of
+ * nudging 25px. Use it in `LibraryPane` / `GoalsListView`-shaped surfaces; a sortable list uses
+ * `@dnd-kit/sortable`'s `sortableKeyboardCoordinates` instead. Pair the getter with
+ * `keyboardAwareCollisionDetection` (keeps `rectIntersection` for pointer drags, `closestCenter` for
+ * keyboard ones) so adding keyboard support does not change where a mouse drop lands.
+ *
  * `@dnd-kit/sortable` ships `sortableKeyboardCoordinates` for a
  * `SortableContext`, and a board with its own geometry writes a bespoke getter
  * (`KanbanBoard.jsx`'s `kanbanKeyboardCoordinates`). What has no shipped answer

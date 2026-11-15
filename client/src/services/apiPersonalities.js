@@ -1,3 +1,7 @@
+/**
+ * Agent personality profiles.
+ */
+
 import { request } from './apiCore.js';
 
 // Agent Personalities

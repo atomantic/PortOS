@@ -1,8 +1,13 @@
 /**
- * Google Cloud Agent Platform video model catalog — the curated Veo models the
- * `google` video backend (services/videoGen/google.js) may call, and the one
- * request builder. Dependency-free: the Video Gen picker re-exports it, so the
- * browser offers exactly the lengths, sizes and inputs the server sends.
+ * Google Cloud Agent Platform video model catalog — the curated Veo models the `google` video backend
+ * (services/videoGen/google.js) may call, and the one request builder.
+ *
+ * Curated Google Veo models (dependency-free, shared with the client): `GOOGLE_VIDEO_MODELS`,
+ * `getGoogleVideoModel` and `buildGoogleVideoRequest` (one predictLongRunning instance from the
+ * prompt, start/end frame or asset reference images).
+ *
+ * Dependency-free: the Video Gen picker re-exports it, so the browser offers exactly the lengths,
+ * sizes and inputs the server sends.
  *
  * Every model takes `publishers/google/models/{id}:predictLongRunning` with one
  * instance (prompt, optional start frame `image`, end frame `lastFrame`, or

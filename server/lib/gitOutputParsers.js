@@ -1,5 +1,15 @@
-// Pure parsers for git / CLI command output. No child-process or filesystem
-// access — these turn the text git prints into structured data. The
+// Pure parsers for git / CLI command output.
+//
+// `parseStatus`, `parseDiffStat`, `parseBranchVerboseLine`,
+// `parseSubmoduleStatusLine`/`SUBMODULE_STATUS_RE`, `extractAgentSummary` — pure parsers turning git
+// command output into structured data for `git.js`. `extractAgentSummary` anchors on
+// `agentOutputMarkers`' completion marker so a TUI agent's PR body carries its sentinel summary, not
+// the lifecycle telemetry above it. `isBenignConcurrentFetchRefRace(stderr)` reads a non-zero `git
+// fetch` as a SUCCESS when its only failure is a lost compare-and-swap whose refs already hold the
+// fetched commits — the routine outcome when the Git tab, `getRemoteBranches`, and CoS agent worktrees
+// fetch one `.git` at once.
+//
+// No child-process or filesystem access — these turn the text git prints into structured data. The
 // orchestration that actually runs git lives in server/services/git.js.
 
 import { safeJSONParse } from './jsonIo.js';

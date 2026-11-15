@@ -1,4 +1,10 @@
 /**
+ * Re-export of `server/lib/assetProvenance.js`.
+ *
+ * Stamp-time model/LoRA license provenance + rollup for collection/export Attribution.
+ */
+
+/**
  * Provenance vocabulary + readers for a generated asset.
  *
  * Re-export of `server/lib/assetProvenance.js` — the one definition of this rule,

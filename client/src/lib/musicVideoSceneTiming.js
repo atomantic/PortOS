@@ -1,3 +1,8 @@
+/**
+ * `buildSceneTimingPresentation`: pure provider timing, cost, coverage and split/merge projection for
+ * the Music Video scene card, reusing canonical shot-timing policy.
+ */
+
 import { formatUsd } from '../utils/formatters.js';
 import { planProjectSequenceCoverage } from '../../../server/lib/musicVideoSequenceCoverage.js';
 import { resolveSourceTake } from '../../../server/lib/musicVideoSourceTake.js';

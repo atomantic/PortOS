@@ -1,3 +1,12 @@
+// `mergeExpandIntoDraft(draft, result)` merges an LLM expand response into a Universe Builder draft,
+// honoring locks and deduping canon, shared with the server merge.
+//
+// `mergeExpandIntoDraft(draft, result)` — pure merge of a Universe Builder draft with the LLM
+// expand-API response (lock honoring, category/sheet merge with `kind` precedence, canon dedupe by
+// name/slugline/alias). Also exports `mergeVariations`, `mergeCanonByName`, and
+// `extractPreservedFromDraft` for callers that need the building blocks (per-category Generate,
+// save-time refetch+merge).
+//
 // Re-export of the pure Universe-Builder expand merge in
 // `server/lib/universeExpandMerge.js` — the one definition of the lock /
 // preserve / dedupe rules, shared with the Story Builder's server path so the

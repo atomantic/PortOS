@@ -1,9 +1,18 @@
 /**
- * Music Video image effects: a still shot that plays a code-drawn effect over
- * its still instead of a generated clip, so no model is called for it. The
- * shot is a still section (`visualLayer: 'still'`) that also names an
- * `imageEffect`; only a layered (composed) render honours it, as it does the
- * still itself.
+ * Music Video image effects: a still shot that plays a code-drawn effect over its still instead of a
+ * generated clip, so no model is called for it.
+ *
+ * Music Video image effects: a code-drawn effect a still shot plays instead of a generated clip
+ * (`imageEffect`: `flash-develop`, a camera flash then the picture develops like an instant photo over
+ * `imageEffectSec`; or a fade, flash or glitch from the start frame to the end frame).
+ * `sceneImageEffect(scene, { layered })`, `imageEffectState` (the effect at a time into the shot,
+ * painted by the storyboard animatic) and `musicVideoImageEffectFilter` (the same curves as ffmpeg
+ * filters for the final render). Browser-safe and import-free: document videos ship it as is. Also
+ * exports the still-photo sequence limits, frame-grid compiler `scenePhotoSequence` and absolute-time
+ * selector `photoSequenceIndex`.
+ *
+ * The shot is a still section (`visualLayer: 'still'`) that also names an `imageEffect`; only a
+ * layered (composed) render honours it, as it does the still itself.
  *
  * "Camera flash develop" (`flash-develop`): the shot opens on a white camera
  * flash, then the picture develops like an instant photo over

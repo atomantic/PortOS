@@ -1,6 +1,13 @@
 /**
  * Move a file into place WITHOUT ever replacing what is already there.
  *
+ * `moveWithoutReplace(from, to)` — publish a staged file into its final name WITHOUT ever clobbering
+ * an existing one. `fs.rename` silently replaces its destination, which is the wrong default for a
+ * derived artifact; this uses `link(2)` + `unlink(2)`, so an existing destination fails atomically
+ * with `MOVE_DEST_EXISTS` and both files survive. Refuses rather than degrading when the filesystem
+ * cannot express it (`MOVE_CROSS_DEVICE`, `MOVE_NO_REPLACE_UNSUPPORTED`) — a `stat`-then-`rename`
+ * fallback would be a race. Used by the rigging publication contract (`services/rigging/autoSkin.js`).
+ *
  * `fs.rename` is the wrong primitive for publishing a derived artifact: POSIX
  * `rename(2)` silently clobbers an existing destination, so a second run that
  * collides on a name destroys the first run's output with no error to report. What a

@@ -1,6 +1,12 @@
 /**
  * Video render speed profiles (issue #4875).
  *
+ * Declared video sampler profiles, default sentinel, mode resolution, sampler precedence and registry
+ * validation/backfill. Quality preserves stock arguments. Legacy LTX profiles retain their disclosed
+ * degradation behavior; the complete pinned H3 LightX2V contract may replace its stock sampler lock
+ * and refuses incompatible requests before admission. The helper reports its applied profile
+ * separately for history and ETA.
+ *
  * A *speed profile* is a named sampler configuration a user can
  * pick instead of hand-tuning steps and CFG: it swaps the whole schedule at
  * once (stage-1 / stage-2 step counts, guidance, and runtime acceleration

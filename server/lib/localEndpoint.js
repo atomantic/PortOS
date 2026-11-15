@@ -1,6 +1,11 @@
 /**
  * Dependency-light local-endpoint predicates.
  *
+ * Dependency-light local-instance URL predicates (`isLocalInstanceHost`, `isLocalInstanceEndpoint`,
+ * scheme-optional `isLoopbackEndpoint` — the one "is this a local daemon" answer, `localEndpointPort`)
+ * shared by provider safety policy and local-runtime classification without importing backend
+ * configuration or daemon managers.
+ *
  * Keep host/URL classification below provider and runtime catalogs. It must be
  * safe to use from static provider policy reads without importing backend
  * configuration, ports, or daemon managers.

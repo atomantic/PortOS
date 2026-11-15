@@ -1,4 +1,12 @@
 /**
+ * `createBoundedStateMap({ maxSize, ttlMs })` — a `Map` that self-evicts so a per-key state cache
+ * can't grow one entry per key forever.
+ *
+ * Lazy TTL + LRU eviction on `get`/`set` (no timers); `get` doubles as the LRU touch. Used by the
+ * moltbook/moltworld rate-limiters to bound their per-agent state.
+ */
+
+/**
  * boundedStateMap — a `Map` that self-evicts so a per-key state cache can't
  * grow one entry per key forever.
  *

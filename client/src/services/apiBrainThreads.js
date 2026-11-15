@@ -1,3 +1,15 @@
+/**
+ * API client for Brain threads (tracked-topic open loops): filtered `listThreads`, full records with
+ * resolved refs, and thread mutations.
+ *
+ * Brain threads — the bullet journal's open loops (`/brain/threads`, Brain `threads` entity; a
+ * *thread* is a tracked topic, never a message thread): filtered list (`listThreads({ status,
+ * priority, tag, pinned, refKind, q })`), full record with `resolvedRefs` (`getThread`), create /
+ * defaults-free PUT / tombstone delete, per-ref attach/detach (`addThreadRef`, `removeThreadRef`),
+ * attach (`attachToThread`), and explicit assigned GitHub ingestion (`syncGithubThreads({ appId,
+ * pinned })`).
+ */
+
 import { request, queryString } from './apiCore.js';
 
 // Brain Threads API surface — the bullet journal's open loops at

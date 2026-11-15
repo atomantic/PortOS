@@ -1,3 +1,13 @@
+/**
+ * Pure Music Video batch helpers: `videoBatchPreview` cost estimate, `scenesWaitingForFrame`,
+ * `videosButtonLabel`, `batchSummary`, `batchActive` and `batchSceneName`.
+ *
+ * Pure helpers for the Music Video missing-frame / missing-clip batches (#10153): `videoBatchPreview`
+ * (count + fal estimate summed from `falSceneTake`, unpriced count), `scenesWaitingForFrame`,
+ * `videosButtonLabel`, `batchSummary`, `batchActive`, `batchSceneName`. Used by
+ * `components/musicVideo/ProjectActionGroups.jsx`.
+ */
+
 import { GEMINI_OMNI_WEB_MODEL } from '../../../server/lib/geminiWebVideo.js';
 import { meteredModelLabel, meteredSceneTake } from './musicVideoShotTiming.js';
 import { formatUsd } from '../utils/formatters.js';

@@ -1,6 +1,15 @@
 /**
  * File-backed settings document with shipped defaults.
  *
+ * `createSettingsStore(filePath | () => filePath, defaults, { normalize? })` → `{ get, update, path }`
+ * — the one owner of a flat per-feature settings document with shipped defaults
+ * (`journal-settings.json`, `activity-digest-settings.json`, `goal-scorecard-settings.json`, …).
+ * `get()` reads strict (#4115: a corrupt file rejects rather than reading as the defaults, because
+ * `update` writes it back), merges the file over `defaults`, then runs `normalize`; `update(patch)` is
+ * a serialized `get → apply → atomicWrite` that skips `undefined` values and writes `null` as an
+ * explicit clear. Filter client-settable keys BEFORE calling `update`. Reach for `createCachedStore`
+ * for an in-place-edited document and `createCollectionStore` for per-record collections.
+ *
  * One owner for the `read → merge defaults → PATCH → write back` shape every
  * per-feature settings file shares (`journal-settings.json`,
  * `youtube-ingest-settings.json`, `activity-digest-settings.json`,

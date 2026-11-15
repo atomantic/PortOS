@@ -53,7 +53,7 @@
     "pr-watcher": "5246968aa90bb2bbf7957dcd9ae13a51",
     "privacy": "71fd4422a7d1c67e405eb6cfb3acc426",
     "reference-watch": "bc92833dd816f0f66759de8c0db1e758",
-    "refresh-local-llm-catalog": "9741ca6a8419fcdea2743e3b64781a8b",
+    "refresh-local-llm-catalog": "a02928079b46bf9323274db7b135834b",
     "reliability": "f2468e63d460d435448e2a013fb9438d",
     "repo-sync": "0a648d35d43b023b758226b9c709c8ea",
     "security": "a66f5ec9d0ed0b42b6e59087783eb9fb",
@@ -119,7 +119,7 @@
     "pr-watcher": 2,
     "privacy": 2,
     "reference-watch": 5,
-    "refresh-local-llm-catalog": 4,
+    "refresh-local-llm-catalog": 5,
     "reliability": 2,
     "repo-sync": 1,
     "security": 6,
@@ -552,7 +552,8 @@
     "refresh-local-llm-catalog": [
       "525bd0077672bf2f8beec9c0124740c8",
       "a9dce67bb9f0837ba904f3412b03637f",
-      "ca7324a0f2251a66b46ea534940c9da8"
+      "ca7324a0f2251a66b46ea534940c9da8",
+      "9741ca6a8419fcdea2743e3b64781a8b"
     ],
     "reliability": [
       "2a99be77b8f34653f4b926db0a773ea5"

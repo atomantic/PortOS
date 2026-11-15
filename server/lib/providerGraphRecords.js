@@ -1,3 +1,20 @@
+/**
+ * The DURABLE half of the provider connection graph (#6367) — the pure record layer over
+ * `ai_connections` / `ai_harness_bindings` / `ai_route_bindings`.
+ *
+ * `graphFromPreview` / `importGraphFromProviders` mint UUID-keyed rows from a #6366 preview while
+ * every executable `providerId` stays untouched; `toManagementGraphDto` (`managementGraphSchema`)
+ * sanitizes them for `GET /api/providers/management` (credential PRESENCE only, no projection
+ * snapshots); `connectionOwnedSnapshot` / `applyProjections` materialize connection-owned values back
+ * into providers.json so a downgraded install still runs; `routeBelongsOnConnection` answers whether a
+ * stored connection still CONTAINS the backend one route describes (the create-time and reconcile-time
+ * test, looser than `sameConnectionIdentity`); and `planGraphReconciliation` / `reconciliationIsNoop`
+ * are the reconciliation contract shared by boot, legacy provider writes and downgrade-edit-reupgrade
+ * — acknowledging a landed projection, retrying an interrupted one, REFUSING a third externally
+ * changed value, dropping deleted records without resurrecting them, and detaching or splitting a
+ * binding whose backend moved. Pure: no DB handle, no file I/O, no provider call.
+ */
+
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
@@ -19,9 +36,8 @@ import { SERVICE_CREDENTIAL_VIAS, SERVICE_PLANS } from './serviceDefinitions.js'
 import { isNonBlankStr } from './textUtils.js';
 
 // `PROVIDER_GRAPH_SCHEMA_VERSION` is deliberately NOT re-exported: it is one
-// wire version shared with the preview, and two flat `export *` modules in this
-// directory publishing one identifier is exactly what the barrel's collision
-// detector refuses. Import it from `providerGraphPreview.js`.
+// wire version shared with the preview, so it has one declaring module.
+// Import it from `providerGraphPreview.js`.
 
 /**
  * The DURABLE half of the provider connection graph (#6367, design record

@@ -1,3 +1,12 @@
+/**
+ * `writeOriginScope` middleware and `currentWriteOrigin()` carry the client socket label of a write so
+ * record-changed broadcasts can name the originating tab.
+ *
+ * `writeOriginScope` middleware + `currentWriteOrigin()`: the client socket label (`X-PortOS-Origin`)
+ * a write carries through its async work, so a record-changed broadcast can name it and the asking tab
+ * can skip refetching its own change. A label, never an authority.
+ */
+
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 // The client socket that asked for a write (`X-PortOS-Origin`), carried through the request's

@@ -1,3 +1,11 @@
+/**
+ * One shared bounded system-activity snapshot.
+ *
+ * Socket invalidation coalesces to a single read; reconnect and reshow reconcile missed frames. A
+ * failed read stays unknown, never idle. Use when: Update banner and the live-activity widget. GPU
+ * samples stay on a visible-only poll — they have no event.
+ */
+
 import { useCallback, useSyncExternalStore } from 'react';
 import * as api from '../services/api';
 import socket from '../services/socket';

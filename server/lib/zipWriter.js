@@ -1,6 +1,9 @@
 /**
  * Minimal ZIP writer — the counterpart to the parser in `zipStream.js`.
  *
+ * Minimal ZIP writer — `createZip(entries)` builds a stored (uncompressed) archive Buffer that
+ * round-trips through `parseZip`; `crc32(buf)` is the dependency-free checksum it uses.
+ *
  * Writes **stored (method 0)** entries by default, with an opt-in **deflate
  * (method 8)** path (`createZip(entries, { compress: true })`). Local file
  * headers, a central directory, and the EOCD record. The only compression

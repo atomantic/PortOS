@@ -1,6 +1,10 @@
 /**
  * Is any process running with its working directory inside a directory?
  *
+ * `hasProcessCwdInside(dir)` — true when any process (via `lsof -d cwd`) has its working directory
+ * inside `dir`. Fails CLOSED: no `lsof`, an unsupported platform or an empty/unreadable listing reads
+ * as occupied. Backs the ownerless-foreign-worktree release in `worktreeManager.js`.
+ *
  * Used to tell an abandoned foreign worktree (its terminal session exited) from
  * one a person or tool is still sitting in. The answer is tri-state collapsed
  * to a boolean that fails CLOSED: anything the probe cannot establish (no

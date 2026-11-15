@@ -1,8 +1,18 @@
 /**
- * Drop-in `child_process` replacement that defaults every spawn to
- * `windowsHide: true` (`CREATE_NO_WINDOW`), so a console-less PM2 fork never
- * makes Windows allocate a visible console for a child. An explicit
- * `windowsHide: false` is always respected — the default only fills the gap.
+ * Drop-in `child_process` replacement that defaults every spawn to `windowsHide: true`
+ * (`CREATE_NO_WINDOW`), so a console-less PM2 fork never makes Windows allocate a visible console for
+ * a child.
+ *
+ * Drop-in `child_process` replacement that defaults every spawn to `windowsHide: true` — `spawn` /
+ * `spawnSync` / `fork` / `exec` / `execSync` / `execFile` / `execFileSync`, plus a `ChildProcess`
+ * re-export. **Server runtime code must import from here, never from `child_process` directly**
+ * (enforced by `childProcess.guards.test.js`): a console-less PM2 fork spawning a console child
+ * without `CREATE_NO_WINDOW` makes Windows hand the new console to Windows Terminal, which flashes a
+ * focus-stealing window. `exec`/`execFile` carry `util.promisify.custom` so `promisify(execFile)`
+ * still resolves to `{ stdout, stderr }`. An explicit `windowsHide: false` is respected. Background:
+ * `docs/WINDOWS_CONSOLE.md`.
+ *
+ * An explicit `windowsHide: false` is always respected — the default only fills the gap.
  *
  * Server runtime code must import from here rather than `child_process`;
  * `childProcess.guards.test.js` enforces that. Why a wrapper instead of another

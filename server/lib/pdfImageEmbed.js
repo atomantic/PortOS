@@ -1,4 +1,6 @@
 /**
+ * PDF image embed helpers for comic / volume PDFs.
+ *
  * PDF image-embed helpers shared between the issue-level comic PDF and the
  * volume-level trade-paperback PDF. Both assemblies read PNG/JPEG files
  * from PATHS.images, embed them into a @cantoo/pdf-lib document, and fit each

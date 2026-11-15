@@ -1,6 +1,11 @@
 // Dependency-free reference ceilings. Schema-only callers (request validation)
 // read these without instantiating the image-capability and reference-selection
 // modules that own the behavior around them.
+//
+// Dependency-free reference ceilings: `IMAGE_REFERENCE_REQUEST_LIMIT` and
+// `MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT`. `musicVideoValidation.js` reads them here so schema-only
+// callers skip the image-capability and reference-selection modules; `imageGenCapabilities.js` and
+// `musicVideoConditioning.js` re-export them unchanged (#14867).
 
 // Wire ceiling for explicit reference slots; individual backends can be lower.
 export const IMAGE_REFERENCE_REQUEST_LIMIT = 16;

@@ -2,6 +2,17 @@
  * Image-gen mode resolution ladder — the pure "which backend actually
  * renders" resolver shared by every server surface AND the client (#6815).
  *
+ * `resolveRenderPins` and `resolveRenderTargetPins` share backend-scoped model candidate inheritance
+ * across browser and server. Image-gen mode resolution ladder (#6815), a dependency-free leaf beside
+ * `generationModes.js`/`renderTargets.js` so the client imports it directly instead of hand-copying
+ * it: `isModeUsable(settings, mode)` (queueable + enabled gate, no per-provider spec lookup),
+ * `pickUsableMode(settings, candidates)` (first usable candidate, falling through disabled pins to the
+ * cloud-then-local tail), `renderTargetDefaults(settings, target)` (the normalized
+ * `settings.renderDefaults[target]` pin), and `imageModeCandidates(settings, target, record)` (the
+ * shared `[recordPin, targetPin, installDefault]` candidate order, declared once so a UI's own "what
+ * will Auto resolve to" display can't drift from the resolver).
+ * `services/imageGen/cloudProviderConfig.js` re-exports the first three for its existing callers.
+ *
  * Dependency-free leaf (imports only the sibling `generationModes.js` and
  * `renderTargets.js`) so the browser bundle can import it directly, the same
  * way `client/src/lib/imageGenModes.js` already imports those two siblings —

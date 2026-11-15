@@ -1,9 +1,14 @@
 /**
- * Web Worker entry for the drawn-waveform preview (#8470). Renders a
- * normalized sketch with the same deterministic synth the server saves the
- * take with (`synthesizeSketchChannels`, server/lib/waveSketch.js) so a
- * max-work painting — seconds of synthesis — never blocks the main thread.
- * The math is untouched; only the thread changes, so the PCM is
+ * Web Worker entry for the drawn-waveform preview (#8470).
+ *
+ * The Web Worker entry behind `waveSketchSynth.js` — `renderSketchPreview(sketch, columns)` → `{
+ * channels, peaks }` runs the server's `synthesizeSketchChannels` unchanged (sample-identical to the
+ * saved take) plus the mono-mix peaks. Its `onmessage` handler installs only inside a worker scope, so
+ * importing it elsewhere is side-effect free.
+ *
+ * Renders a normalized sketch with the same deterministic synth the server saves the take with
+ * (`synthesizeSketchChannels`, server/lib/waveSketch.js) so a max-work painting — seconds of synthesis
+ * — never blocks the main thread. The math is untouched; only the thread changes, so the PCM is
  * sample-identical to a main-thread render.
  *
  * `renderSketchPreview` is also the main-thread fallback used by

@@ -1,3 +1,16 @@
+/**
+ * Exposes update-available and install-out-of-sync advisories as state (`update`, `outOfSync`, ignore
+ * and dismiss actions) rather than toasts.
+ *
+ * Update-available + install-out-of-sync advisories as *state* (`{ update, outOfSync, ignoreUpdate,
+ * dismissUpdate, clearOutOfSync, dismissOutOfSync }`), never toasts — a non-transient advisory must
+ * not occlude the screen's primary action (#3786). Out-of-sync dismissals persist per on-disk commit
+ * in `safeStorage`, so a later `git pull` re-raises; `clearOutOfSync` is the session-only clear used
+ * when the user acts on it. Use when: Never call it directly — `components/UpdateBanners` owns the
+ * single instance and Layout renders that once at the app root. A second caller means a second status
+ * fetch and socket subscription.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 import useMounted from './useMounted';

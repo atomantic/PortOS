@@ -1,3 +1,7 @@
+/**
+ * Mortality tracking.
+ */
+
 import { request } from './apiCore.js';
 
 export const getMortalLoomStatus = () => request('/mortalloom/status');

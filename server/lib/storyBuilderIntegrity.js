@@ -1,6 +1,9 @@
 /**
  * Unified Story Builder — integrity / staleness hashing.
  *
+ * Pure staleness hashing for the Story Builder (`hashUpstream`, `computeStaleSteps`,
+ * `computeSyncDrift`).
+ *
  * Pure, side-effect-free. When a Story Builder step is locked we snapshot a
  * hash of its *upstream inputs* (the whitelisted universe/series fields the
  * step's content was derived from). If those inputs later change — because the

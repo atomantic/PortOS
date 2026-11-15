@@ -1,3 +1,8 @@
+/**
+ * `stripChatgptCitations(text)` removes opaque ChatGPT citation tokens while preserving ordinary
+ * Markdown and asset links.
+ */
+
 /** Remove ChatGPT's opaque citation markup without changing ordinary Markdown. */
 export function stripChatgptCitations(text) {
   if (typeof text !== 'string') return text;

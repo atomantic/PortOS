@@ -1,4 +1,12 @@
 /**
+ * The shipped `supportedModes` fact per video runtime (#3737), so "which modes does this model
+ * support?" has one answer on the registry entry instead of 25+ runtime comparisons.
+ *
+ * `VIDEO_RUNTIME_MODES` maps each runtime to the semantic modes its helper can actually render,
+ * including `minimax_h3_ref2va` as a2v-only; `VIDEO_BASE_MODES` remains the non-audio fallback for an
+ * unknown runtime. `resolveVideoSupportedModes(entry)` and `applyVideoSupportedModes(list)` provide
+ * the read-time decoration used by `mediaModels.js#getVideoModels`.
+ *
  * Video mode capability — the shipped `supportedModes` fact per video runtime
  * (issue #3737), so "which modes does this model support?" is answered by the
  * registry entry rather than re-derived from `runtime` comparisons at 25+ sites.

@@ -5175,7 +5175,7 @@ Default branch: {defaultBranch}
    \`command\`). Do not change the function signatures or other exports.
 
 6. Run the affected tests and make sure they pass:
-   \`cd {repoPath}/server && npx vitest run lib/localLlmCatalog lib/localModelHeuristics lib/index.test.js\`.
+   \`cd {repoPath}/server && npx vitest run lib/localLlmCatalog lib/localModelHeuristics lib/moduleSummaries.test.js\`.
    Update catalog/picker tests when you intentionally add recommendation
    metadata; do not change existing cross-backend install-id mapping semantics.
 

@@ -1,8 +1,42 @@
 // Pure video-generation parameter helpers extracted from VideoGen.jsx (#2834).
-// Side-effect-free — the model-memory calc, the FFLF/ltx2 frame-budget
-// back-solve, the per-edge resolution bounds, and the mode-compatibility
-// predicate. Kept in lib/ (not hooks/) because none touch React state; the
-// page and any future consumer import them directly.
+//
+// Pure VideoGen param helpers:
+// `FRAME_OPTIONS`/`FPS_OPTIONS`/`VIDEO_EDGE_BOUNDS`/`MAX_CHUNKS`/`CHUNK_OPTIONS`/`DEFAULT_CONTEXT_FRAMES`/`CONTEXT_FRAME_OPTIONS`
+// constants, model-aware frame/fps/resolution-grid normalization, separate mute vs prompt-audio
+// capability checks, `supportsContextWindow(model)` (does this runtime have an extend pipeline to feed
+// a continuation window to — display mirror of `server/lib/videoContinuity.js`, pinned by
+// `server/lib/videoContinuity.parity.test.js`), `videoModelMemoryGb()` (model memory footprint),
+// `selectVideoMemoryProfile(model, systemMemoryGb)` + `VIDEO_MEMORY_RESERVE_GB` (#5420 — which
+// declared weight-placement profile this machine can actually hold, out of the `memoryProfiles` the
+// server decorates onto the entry; the floors ride on the model so only the reserve is mirrored, and
+// an unmeasured `systemMemoryGb` returns a `null` usable figure rather than reading as a box that is
+// too small), `computeFflfSafeFrames()` (FFLF/ltx2 pixel-budget back-solve, mirrors
+// `server/services/videoGen/local.js`), and `isModelAllowedForMode()` (a2v uses the shared
+// audio-runtime capability; IC remix remains LTX-only). Speed profiles (#4875) mirror the conditioner
+// shape: `DEFAULT_SPEED_PROFILE_ID` (must equal `SPEED_PROFILE_DEFAULT_ID` in
+// `server/lib/videoSpeedProfiles.js` — absence and `'quality'` are the same request),
+// `isDefaultSpeedProfileId()` mirrors the server's absence-is-the-default rule,
+// `speedProfilesForModel()` reads the server-decorated `speedProfiles` off the entry,
+// `speedProfilesForMode(model, mode)` applies the SAME mode gate the server's
+// `speedProfileDeclineReason` does (so a profile the server would decline is never offered, nor
+// allowed to lock the dials), `normalizeSpeedProfileForModel()` snaps a selection onto what a
+// just-switched model declares (mode-independent, so switching to fflf hides the picker without
+// rewriting the choice), `speedProfileIdFromRecord()` reads one back out of a history entry / resumed
+// job, `selectedSpeedProfile(id, model, mode)` resolves the profile actually driving the render — what
+// the picker shows and what disables Steps+CFG — and `videoChainChunkModes({ model, mode, chaining,
+// contextFrames, hasSourceImage })` derives the modes a CHAINED request’s chunks will run in (chunk 0
+// the request’s, chunks 1+ `extend` on a window-continuity chain or `image` on a frame hop), mirroring
+// `generateChainedVideo`’s dispatch and `resolveContinuityStrategy`;
+// `resolveContextFramesForDisplay()` is the absent/invalid→`DEFAULT_CONTEXT_FRAMES` half of
+// `resolveContextFrames` that gate depends on. All pinned by
+// `server/lib/videoSpeedProfiles.parity.test.js`. Also mirrors the IC-LoRA remix registry
+// (`IC_LORA_MODES`/`IC_LORA_MODE_VALUES`/`isIcLoraMode()`/`icLoraSpecForMode()`/`icResolutionIssue()`)
+// from `server/lib/icLoraWeights.js` so the form validates a reference render pre-submit — pinned by
+// `server/lib/icLoraWeights.parity.test.js`.
+//
+// Side-effect-free — the model-memory calc, the FFLF/ltx2 frame-budget back-solve, the per-edge
+// resolution bounds, and the mode-compatibility predicate. Kept in lib/ (not hooks/) because none
+// touch React state; the page and any future consumer import them directly.
 
 import { isAudioToVideoRuntime, isLtx2FamilyRuntime } from './runnerFamilies';
 import { isDeliveryVideoModel } from './videoFinish.js';

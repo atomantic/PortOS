@@ -1,6 +1,10 @@
 /**
  * FableLoom node playback semantics shared by persistence, prompts, and UI.
  *
+ * FableLoom runtime version, node playback modes, audio occupancy and `evaluateFableLoomLiveInput`:
+ * shared live-input admission for connected decision holds, offscreen presence and safe audio, with
+ * legacy playback defaults.
+ *
  * Supports entry clips, deterministic hold loops, transition exit clips,
  * live interaction windows, audio-occupancy manifests, and production
  * readiness inspection. Legacy nodes default to decision mode and single

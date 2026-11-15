@@ -1,4 +1,8 @@
 /**
+ * `fetch` wrapper with AbortController timeout.
+ */
+
+/**
  * Fetch wrapper with AbortController timeout, and an opt-in retry for
  * connection-level failures.
  *

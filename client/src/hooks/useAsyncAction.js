@@ -1,3 +1,9 @@
+/**
+ * `running` state + toast-on-error.
+ *
+ * Use when: Buttons that await an async action.
+ */
+
 import { useState } from 'react';
 import toast from '../components/ui/Toast';
 

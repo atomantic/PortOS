@@ -1,3 +1,13 @@
+/**
+ * rAF autoscroll for a scrollable container: advances `scrollTop` by `pxPerSec`, auto-stops at the
+ * bottom, pauses on user wheel/touchmove, live speed changes via ref.
+ *
+ * `fitToDuration(sec)` solves the speed for a target run time from the measured scroll travel (returns
+ * the applied px/s, or `null` when there is nothing to scroll). Returns `{ playing, toggle, stop,
+ * pxPerSec, setPxPerSec, fitToDuration }`. Use when: SongBook play view; any teleprompter-style
+ * surface.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import useMounted from './useMounted';
 

@@ -1,6 +1,12 @@
 /**
  * Advisory run order for scheduled tasks.
  *
+ * Storage rules for a task's advisory `suggestedAfter` list — which OTHER scheduled tasks to run
+ * first. `normalizeSuggestedAfter` drops blanks, duplicates and self-references and caps at
+ * `SUGGESTED_AFTER_MAX`; the shipped order it defaults to is `auditCatalog.AUDIT_SUGGESTED_AFTER`,
+ * layered at read time in `getScheduleStatus`. Advisory only — the ENFORCED dependency field is
+ * `runAfter`. Pure — no I/O.
+ *
  * Every task carries an editable `suggestedAfter` array naming the task types a
  * user should generally run BEFORE it. It answers "which of these do I run
  * first?" by pointing at other scheduled tasks by name, which prose guidance

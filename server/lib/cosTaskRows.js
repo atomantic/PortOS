@@ -3,6 +3,11 @@
  * and the task store share, so a Postgres backend and an in-memory backend cannot
  * drift apart.
  *
+ * Row model for the `cos_tasks` queues: the stored form of a task (the old Markdown round-trip's
+ * normalization), the recent-completed working-set rule, fractional queue `position` assignment, and
+ * `planListSave` (turn "the whole list changed" into "only these rows changed"). Shared by the
+ * Postgres and in-memory repository backends so they cannot drift
+ *
  * A task is stored in its normalized form: exactly what the old Markdown
  * round-trip produced (scalar metadata read back as strings, nullish metadata
  * dropped, one-line descriptions). Consumers were written against that shape and

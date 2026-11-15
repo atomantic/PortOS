@@ -1,3 +1,18 @@
+/**
+ * HAND-AUTHORED canonical→executable model aliases for one provider route (#6369) — the correction
+ * surface for a `modelMap` a refresh could only fill with what it could VERIFY.
+ *
+ * Observed aliases (`ai_route_bindings.model_map`) and user overrides (`model_alias_overrides`) are
+ * stored apart and merged on READ by `effectiveModelAliases` (`{ ...observed, ...overrides }`), which
+ * is what lets a hand-authored alias outlast the next refresh; `applyModelAliasPatch` is the
+ * three-valued edit (absent preserves, a string sets, `null` is the only thing that removes);
+ * `staleModelAliases` reports — never repairs — an override naming a spelling the record no longer
+ * lists, and makes no claim at all about a route listing no models; `connectionCatalogModels` is the
+ * union an alias write re-derives the shared catalog from, so a correction actually reaches the model
+ * menus; `modelAliasRevision` is the stale-edit fingerprint, reusing `routeSettingsRevision` because
+ * `ai_route_bindings` has no revision column. Pure: no I/O.
+ */
+
 import { routeSettingsRevision } from './providerRouteSettings.js';
 import { isNonBlankStr } from './textUtils.js';
 

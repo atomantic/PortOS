@@ -1,4 +1,7 @@
 // Shared peer sync-category policy. This module performs no I/O.
+//
+// Pure peer sync-category defaults and `resolveEffectiveCategories`, shared by instance management and
+// usage coverage. `instances.js` re-exports the existing public policy names.
 
 // Default sync categories. Everything that replicates the user's own CONTENT is
 // off until explicitly enabled per-peer; the exception is `usage`, which is

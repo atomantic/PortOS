@@ -1,3 +1,8 @@
+/**
+ * Music albums (title, artist FK + name, description, genre, release year, cover art, ordered track
+ * ids).
+ */
+
 import { request } from './apiCore.js';
 
 // ---- Music albums ----

@@ -1,3 +1,7 @@
+/**
+ * Rapid Reader's optional author-hosted Accelerando loader and machine-local shelf API.
+ */
+
 import { request } from './apiCore.js';
 
 export const ACCELERANDO_SOURCE_PAGE_URL = 'http://www.antipope.org/charlie/blog-static/fiction/accelerando/accelerando-intro.html';

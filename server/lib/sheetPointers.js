@@ -1,4 +1,10 @@
-/** Browser-safe persisted reference-sheet layout shared by canon consumers. */
+/**
+ *  Browser-safe persisted reference-sheet layout shared by canon consumers.
+ *
+ * Browser-safe persisted character-sheet layout: `LEGACY_SHEET_VARIANT_ID`, `readSheetPointer`,
+ * `listSheetPointers`, identity-preserving `applySheetPointerToCharacter`, and default-variant browser
+ * adapter `applySheetPointer`.
+ */
 import { isPlainObject } from './objects.js';
 
 // Standard sheets retain their legacy field; other variants use map slots.

@@ -1,3 +1,21 @@
+/**
+ * Mode-override half of a provider route: the per-execution-mode fields (`args`, `timeout`, `effort`,
+ * default/light/medium/heavy models) and their handling.
+ *
+ * The MODE-OVERRIDE half of a provider route (#6369) — the route-owned fields a human tunes per
+ * execution mode (`args`, `timeout`, `effort` and the
+ * `defaultModel`/`lightModel`/`mediumModel`/`heavyModel`/`ultraModel` pins), mirroring what the
+ * toolkit's `sharedModeUpdates` already declares mode-specific. `ROUTE_SETTING_FIELDS` /
+ * `ROUTE_SETTING_KEYS` / `routeSettingKeys(mode)` name the set (`args` reaches cli/tui only);
+ * `routeSettingsFor(provider)` reads it off a record with absent and cleared collapsing to `null`;
+ * `routeSettingsSchema` is the wire shape `GET /api/providers/management` publishes;
+ * `unsupportedRouteSettings` rejects a key the route's mode does not accept; and
+ * `routeSettingsRevision` is the stale-edit fingerprint — a hash of the values as they are in
+ * providers.json rather than a graph row revision, so an edit made through `/ai/edit/:providerId` is
+ * caught too. Connection-owned values and execution consent (`enabled`) are deliberately absent. Pure:
+ * no I/O.
+ */
+
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { ROUTE_MODES, providerRouteMode } from './providerHarnesses.js';

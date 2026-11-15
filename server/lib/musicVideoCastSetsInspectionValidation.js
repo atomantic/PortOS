@@ -1,3 +1,7 @@
+/**
+ * Exact-input Cast & Sets inspection acknowledgement request schema.
+ */
+
 import { z } from 'zod';
 export const musicVideoCastSetsInspectSchema = z.object({
   keys: z.array(z.string().min(1).max(80)).min(1).max(100).optional(),

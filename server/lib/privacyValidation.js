@@ -1,3 +1,15 @@
+/**
+ * Privacy Center schemas — PII Vault (issue #2140): vault record create/update (partial PUT), list
+ * query, UUID params.
+ *
+ * The vault type/status vocabularies + the sensitive-type
+ * (`ssn`/`passport`/`drivers_license`/`financial_account`) `useForScans` hard-false rule and per-type
+ * scan defaults. Trusted Organizations registry (issue #2141): org create/update (partial PUT), list
+ * query, UUID params, and the replace-set holdings schema. Data-broker database + case ledger (issue
+ * #2144): broker list/case-list query filters, the scan-start + refresh action bodies, and the
+ * `PRIVACY_BROKER_CASE_STATES` vocabulary.
+ */
+
 import { z } from 'zod';
 import { isSafeHref } from './isSafeHref.js';
 
@@ -14,8 +26,7 @@ const SAFE_URL_MESSAGE = 'must be an http(s) URL';
 // Zod schemas for the encrypted PII Vault. Records are db-primary Postgres
 // (`privacy_vault_records` / `privacy_consents`), machine-local (federation is
 // a deferred child issue). validation.js re-exports everything here so deep
-// imports keep working; the lib barrel also namespace-exports this module as
-// `privacyValidation`.
+// imports keep working.
 
 // =============================================================================
 // HOUSEHOLD SUBJECTS (issue #3658)

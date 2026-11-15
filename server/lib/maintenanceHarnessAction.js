@@ -1,4 +1,8 @@
-/** Harness lifecycle ownership in the same journal that admits PortOS work. */
+/**
+ *  Harness lifecycle ownership in the same journal that admits PortOS work.
+ *
+ * Journal ownership, process settlement and deferred-work recovery for harness actions.
+ */
 import { processAbsent } from './maintenanceDeferredUpdate.js';
 
 const KIND = 'harness-action';

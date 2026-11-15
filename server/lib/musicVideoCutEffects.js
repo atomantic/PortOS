@@ -1,8 +1,14 @@
 /**
- * Music Video cut effects: configurable effects that play across a cut between
- * two shots, set on the outgoing shot (`scene.cutEffect`) and switched on or
- * off without losing their settings. Like the cut transitions
- * (musicVideoTransitions.js) they never add time or move a cut.
+ * Music Video cut effects: configurable effects that play across a cut between two shots, set on the
+ * outgoing shot (`scene.cutEffect`) and switched on or off without losing their settings.
+ *
+ * Music Video cut effects a shot sets on its cut out (`scene.cutEffect`, kept while switched off): the
+ * beat toggle (flips between the two shots' clips on the beats before the cut), a dissolve and a fade
+ * through black. `sceneCutEffect`, `beatToggleSwitches`, `cutEffectCuts` (the render's frames),
+ * `sceneCutEffects` (the animatic's song times), and `plannedCutEffect` / `plannedTransitions` (a
+ * storyboard row's Dissolve or Fade as the default effect). Browser-safe.
+ *
+ * Like the cut transitions (musicVideoTransitions.js) they never add time or move a cut.
  *
  * `beat-toggle`: over the last moments of the outgoing shot both clips play and
  * the picture flips between them on the song's beats, incoming first

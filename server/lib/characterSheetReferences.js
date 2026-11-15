@@ -1,3 +1,8 @@
+/**
+ * Select canonical character-sheet images and the portrait edit base, resolve viewable assets, and
+ * report missing files, model support, edit fallbacks and provider limits for preview/render parity.
+ */
+
 import { basename, join, relative } from 'node:path';
 import { PATHS } from './paths.js';
 import { isSafeFilename, resolveImageInputPath } from './pathSafety.js';

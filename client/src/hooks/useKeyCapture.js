@@ -1,3 +1,20 @@
+/**
+ * `useKeyCapture({ enabled?, enabledInDialog?, onKeyDown, onKeyUp })` — capture-phase window listener
+ * whose handler *claims* an event by returning `true`.
+ *
+ * A claimed event is `preventDefault`ed AND `stopImmediatePropagation`ed so no app-global bubble
+ * handler sees it. Which events are offered is decided by the shared `shouldIgnoreGlobalKey` predicate
+ * (`lib/a11yKeyboard.js`): never events from an editable field, never Space on a focused button (so
+ * native activation still works), and not while an `aria-modal` dialog is open (`{ enabledInDialog:
+ * true }` for a surface that lives INSIDE one — same name and default as `useKeyboardShortcuts`).
+ * Auto-repeat and ⌘/Ctrl/Alt chords deliberately DO still arrive, because a claiming surface tracks
+ * press/release itself. Each listener subscribes only when its handler is supplied. Use when: A
+ * surface that must own a key an app-global handler already binds — chiefly Space, which the voice
+ * widget uses for push-to-talk: the POST cognitive drills (n-back, go/no-go, reaction-time), the Morse
+ * keyer, RapidReader, the OpenWorld playback transport, and the exploration-mode jump key. Not for
+ * ordinary shortcuts (that is `useKeyboardShortcuts`).
+ */
+
 import { useEffect, useRef } from 'react';
 import { shouldIgnoreGlobalKey } from '../lib/a11yKeyboard.js';
 

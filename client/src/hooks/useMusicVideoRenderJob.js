@@ -1,3 +1,15 @@
+/**
+ * The final-render job (#1760 Phase 2): kickoff (409 → attach to the existing job), SSE progress,
+ * terminal-frame handling and non-terminal stream-close recovery.
+ *
+ * Thin `useSseJobSlot` adapter with 0–1 progress conversion; returns `{ active, pending, context, job,
+ * progress, start(projectId), cancel, reattach(projectId), reattaching }`; a project the server marks
+ * `rendering` re-attaches on load through a READ of the live job (`GET /:id/render`), never a POST
+ * (#9940); `onSettled(reason, projectId)` fires on every terminal frame; `onRendered(projectId,
+ * result)` / `onFailed(projectId)` key on the projectId captured at kickoff. Use when: The Music Video
+ * "Render final" control.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import {
   getMusicVideoActiveRender,

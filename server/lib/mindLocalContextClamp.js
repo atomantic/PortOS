@@ -1,6 +1,9 @@
 /**
  * Safety clamps for mind-driven local LLM context (`numCtx`) adjustments.
  *
+ * RAM/GPU safety ceilings for mind-driven local `numCtx` adjustments (CPU-only tiers, free-RAM +
+ * PortOS headroom). Pure.
+ *
  * Pure helpers — no I/O. Callers pass host facts (RAM, free memory, GPU/VRAM)
  * so a Persistent Mind cannot OOM PortOS on CPU-only / low-RAM hosts by
  * requesting an unbounded window.

@@ -1,5 +1,11 @@
 // Shared CoS duration/ETA estimator for the agent and task cards.
 //
+// Shared CoS ETA estimator for the agent and task cards: `estimateCosDuration({ durations, task,
+// agentMetadata })` walks the `/api/cos/learning/durations` payload from the narrowest bucket outward
+// — this run's provider+model+effort, then provider+model, then task type, then all tasks — and
+// `describeEstimateBasis(estimate)` renders the cards' shared "Based on N completed …" tooltip clause
+// naming which rung answered. MIRRORS the key composition in `server/services/taskLearning/store.js`.
+//
 // The cascade answers from the NARROWEST bucket with enough evidence, mirroring the
 // server's `getTaskDurationEstimate` (#8001):
 //   1. execution      — this task type on THIS provider + model + effort

@@ -1,4 +1,12 @@
 /**
+ * `PORTS` + `DEFAULT_PEER_PORT`, re-exported from the pure leaf `server/lib/ports.js` (which
+ * `ports.test.js` pins against `ecosystem.config.cjs`, the source of truth — see docs/PORTS.md).
+ *
+ * Use these instead of re-hardcoding a port literal in a form default, a copy-paste help string, or a
+ * cross-machine URL.
+ */
+
+/**
  * Re-export of the `PORTS` map and `DEFAULT_PEER_PORT` from the pure server leaf
  * `server/lib/ports.js`.
  *

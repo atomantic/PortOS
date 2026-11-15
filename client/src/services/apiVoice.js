@@ -1,3 +1,7 @@
+/**
+ * Voice synthesis / processing.
+ */
+
 import api, { singleFlightRead } from './apiCore';
 
 // `options` lets callers pass `{ silent: true }` so apiCore's default toast

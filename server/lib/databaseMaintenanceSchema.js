@@ -1,3 +1,9 @@
+/**
+ * Shared read-only maintenance-target memory/catalog presence query.
+ *
+ * Not complete runtime/schema compatibility.
+ */
+
 /** The existing fenced startup diagnostic, shared without importing a DB pool. */
 export const DATABASE_MAINTENANCE_SCHEMA_CONTRACT = 'maintenance-target-v1';
 export const DATABASE_MAINTENANCE_SCHEMA_SQL = `

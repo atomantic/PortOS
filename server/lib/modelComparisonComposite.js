@@ -1,4 +1,10 @@
-/** PortOS comparison v1: one stable index, calibrated evidence, explicit estimates. */
+/**
+ *  PortOS comparison v1: one stable index, calibrated evidence, explicit estimates.
+ *
+ * `buildModelComparisonComposite(observations, inventory, anchor)` derives a versioned sourced index
+ * with calibrated and effort estimates, matching task-workload costs, route-specific price references,
+ * zero API charges for local-inference inventory and explicit research gaps.
+ */
 import { catalogSlugForProviderModel } from './comparisonModelScope.js';
 
 export const COMPARISON_ANCHOR = 'Artificial Analysis Intelligence Index v4.3.2';

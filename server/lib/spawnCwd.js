@@ -1,6 +1,23 @@
 /**
  * Spawn working-directory resolution for provider runs and agents.
  *
+ * `resolveSpawnCwd(workspacePath, fallbackRoot, label)` — resolves and **logs** the working directory
+ * a run/agent spawns into (expanding `~`), and throws when a workspace was requested but is missing /
+ * not a directory. Behind `services/runner.js#resolveRunCwd`, which turns that throw into a normal
+ * failed-run record for the two spawning runners. Stops a bad app `repoPath` from silently spawning in
+ * the PortOS checkout (#3180). `usesCreativeDirectorScratchCwd(task)` /
+ * `creativeDirectorScratchCwd(agentId)` / `removeCreativeDirectorScratchCwd(agentId)` /
+ * `resolveAgentCliCwd({ workspacePath, fallbackRoot, task, agentId })` — Creative Director no-worktree
+ * tasks get a per-agent scratch cwd under `os.tmpdir()/portos-cd-cwd/<id>` (outside the PortOS git
+ * tree) instead of the PortOS root, so native CLI AGENTS.md / CLAUDE.md discovery cannot walk up into
+ * the repo (#4650). `removeCreativeDirectorScratchCwd` is the matching finalize cleanup.
+ * `withSpawnCwdEnv(env, cwd)` — returns a copy of `env` with `PWD` pinned to `cwd` (dropping stale
+ * case-variant keys), because `spawn({ cwd })` doesn't rewrite the inherited `PWD` and OpenCode
+ * resolves its project root as `process.env.PWD ?? process.cwd()` (#3193). Apply it at every spawn
+ * that names its own cwd — the shared wrappers (`bufferedSpawn`, `spawnDetached`) already do, so their
+ * callers inherit it. `spawnCwd.test.js` discovers cwd-passing spawns across `server/` and fails on
+ * any that neither pins nor is listed exempt.
+ *
  * Every AI provider run and CoS agent gets a `workspacePath` (the selected
  * app's repoPath) and spawns its CLI/TUI with that as the child's cwd. When the
  * value is missing the spawn falls back to the PortOS repo root — which is a

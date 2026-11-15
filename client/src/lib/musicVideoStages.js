@@ -1,8 +1,34 @@
 /**
- * Music Video page stages: the tab set, which stage a project is in, the one
- * "next action" the sticky header offers for it, and the project's generation
- * spend. Pure functions over the project record so the header, the progress
- * strip and the tests all read the same answer.
+ * Music Video page stages: the tab set, which stage a project is in, the one "next action" the sticky
+ * header offers for it, and the project's generation spend.
+ *
+ * Music Video page stage model: `MUSIC_VIDEO_STAGES` (eight steps: Story `story` (optional, never the
+ * current step) → Song `setup` → Storyboard `board` → Look `cast-sets` → Previz `previz` (optional) →
+ * Shots `produce` → Final render `review` → Publish; a retired `compose` link resolves to Shots),
+ * `resolveStageParam(value)` for the `:stage` route param, `deriveStages(project)` (per-stage
+ * `done`/`active`/`blocked`/`todo` + `current`, the first incomplete step; a live production run pins
+ * Shots), `deriveNextAction(project, ctx)` (the one primary action the sticky header offers — approve
+ * Cast & Sets, verify lyric timing, stop/resume production, render final, …), `describeProjectStatus`
+ * (the header line and the step that needs the director), `autopilotStatus` (the header Autopilot
+ * button), `projectSpend(project)` (paid generation used vs. cap), `projectShotSummary(project)`
+ * (document shots or scene counts), `stageChecklist(stageId, project, readiness)` (what one step still
+ * needs, with the open approval's reason and a scroll anchor; an `optional` item, such as Shots's
+ * animated proof, is listed but not counted), `summarizeStoryboardProblems(problems)` (folds the
+ * server's one-sentence-per-shot storyboard problems into one count line per kind),
+ * `stepNotes(project, readiness, publish)` (one fact per step for the step list), `listPreviewSources`
+ * (final, live composition, drafts, then the storyboard animatic; a Blender film's live composition is
+ * "Film (live)", playable once the film has synced shots), `projectServicesSummary(project)` (the
+ * saved image/video render services), `compareMusicVideoProjectsNewestFirst(a, b)` (sort projects
+ * newest created / updated first for project cards and pickers), and `currentProductionRun`;
+ * `productionReviewStopGuidance` separates current approval blockers from historical run stops. Used
+ * by `components/musicVideo/MusicVideoLayout.jsx` and `pages/MusicVideo.jsx`.
+ * `projectFalSpend(project)` (estimated fal.ai and Runway spend by model across paid takes and
+ * production steps). A Blender film's Shots step reads `project.blenderShots` (`{ total, finalReady,
+ * ready }`, attached by the server to every project read and recomputed by the page from the film
+ * state) through the shared `blenderShotsReady`.
+ *
+ * Pure functions over the project record so the header, the progress strip and the tests all read the
+ * same answer.
  */
 import { composedDrawsLyrics, isLayeredComposition, isSelfDrawnLayer, sceneRenderReady, sceneVisualLayer } from './musicVideoLayers.js';
 import {

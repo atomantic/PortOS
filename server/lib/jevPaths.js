@@ -1,6 +1,12 @@
 /**
  * Where a project-specific jev head, its corpora and its cached embeddings live.
  *
+ * Where `data/jev/` lives: `jevDataDir` / `jevHeadsDir` / `jevCorporaDir` / `jevEmbeddingsDir` /
+ * `jevDecisionEmbeddingsDir`. One definition, because the head store writes them, `services/jev.js`
+ * passes the heads directory to the sidecar, and `services/backup.js` excludes two of the three by
+ * path. Kept out of the head store so the sidecar lifecycle does not import the head schema merely to
+ * spell a directory. Everything under it is machine-local.
+ *
  * One definition of each directory, in a leaf, because three separate modules
  * need to agree about them and they disagree silently:
  *

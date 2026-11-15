@@ -1,3 +1,8 @@
+/**
+ * Social-bot agent schemas (personality, Moltbook/Moltworld accounts, automation schedules, agent
+ * tools + Moltworld payloads) and CoS Feature Agent definitions.
+ */
+
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 /**
  * Agent & social-automation Zod schemas (split out of validation.js, issue #1831).

@@ -1,3 +1,10 @@
+// `resolveSeriesLlmOverride(series, overrides)` returns the provider and model a Pipeline LLM action
+// should use, falling back to the series' configured LLM.
+//
+// Pure `resolveSeriesLlmOverride(series, { overrideProvider, overrideModel })` → `{ provider, model,
+// providerMatchesSeries }` — shared fallback so Pipeline LLM actions honor the series' configured
+// provider/model, only inheriting the series model when the effective provider still matches.
+//
 // Shared resolution for "which provider/model should a Pipeline LLM action
 // use?" — falls back to the series' configured LLM when the client doesn't
 // pass an explicit override, so every Pipeline action (extract-canon,

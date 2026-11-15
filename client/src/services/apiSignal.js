@@ -1,3 +1,7 @@
+/**
+ * Signal Desktop ingestion status / setup-check / sync.
+ */
+
 import { request } from './apiCore.js';
 
 // Signal Desktop ingestion (#2154, #11149) — read-only SQLCipher snapshot of the

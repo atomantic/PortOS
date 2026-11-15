@@ -1,6 +1,13 @@
 /**
  * Per-domain autonomy guardrails (pure helpers).
  *
+ * Per-domain autonomy guardrails (pure). `AUTONOMY_DOMAINS`/`DOMAIN_IDS`/`DOMAIN_MODES`
+ * (`off`/`dry-run`/`execute`), `getDomainMode(config, id)`, and `normalizeDomainAutonomy(raw)` to
+ * coerce a hand-edited/partial map. Default per domain is `execute` (reproduces pre-#711 behavior, so
+ * no migration needed). Also `CREATIVE_DOMAIN`/`getCreativeAutonomyMode(config)` (#2183) — the
+ * Creative Director orchestrator domain, kept out of `DOMAIN_IDS` and defaulting to mirror the `cos`
+ * mode.
+ *
  * Splits PortOS's single global autonomy posture into independent per-domain
  * knobs. Each domain is one of three modes:
  *

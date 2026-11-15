@@ -1,4 +1,7 @@
 /**
+ * Compiles a scene script + bible into beat-level continuous-video clip specs (duration/frame-grid
+ * snapping, byte-stable descriptor injection, chain-length fresh-cut rule).
+ *
  * Pure compiler that turns a scene script into beat-level video clip specs
  * for continuous chained video generation (issue #6217's Script-to-Beats
  * Compiler slice). Each beat becomes one clip request: a duration snapped to

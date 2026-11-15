@@ -1,3 +1,12 @@
+// Single source of truth for nav (`⌘K` palette + voice).
+//
+// Add an entry when you add a page. Also `getNavPageForPath(pathname)` → `{ label, section, breadcrumb
+// }` for the most specific command that owns a route (`null` for one nothing declares) — how
+// user-facing copy NAMES a page it links to, instead of typing "Models → LLMs" beside the link and
+// stranding it on the next move (#7414). `expandPageToken(text, runtime)` expands a `{page}` token in
+// `text` using `getNavPageForPath(runtime?.manageUrl)`, falling back to generic prose rather than
+// shipping a literal `{page}` (#7419).
+//
 // Single source of truth for PortOS navigation. Consumed by the sidebar,
 // server/services/voice/tools.js#ui_navigate, and the Cmd+K palette.
 // Entry: { id, path, label, section, tabId?, tabGroup?, navGroup?, parentPath?, tabLabel?, aliases?, keywords?, previousPaths?, preservePreviousPathSuffix? }.

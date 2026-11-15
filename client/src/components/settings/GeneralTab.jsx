@@ -6,6 +6,7 @@ import FormField from '../ui/FormField';
 import UnsavedChangesConfirm from '../ui/UnsavedChangesConfirm';
 import BrailleSpinner from '../BrailleSpinner';
 import ThemePickerPanel from '../ThemePickerPanel';
+import useSettingsForm from '../../hooks/useSettingsForm';
 import useUnsavedChangesGuard from '../../hooks/useUnsavedChangesGuard';
 import { getSettings, updateSettings } from '../../services/api';
 
@@ -20,23 +21,26 @@ const parseCoord = (v) => {
   return Number.isFinite(n) ? n : NaN; // NaN signals "non-empty but not a number"
 };
 
+const GENERAL_INITIAL = { timezone: '', lat: '', lon: '' };
+
 export function GeneralTab() {
   const [loading, setLoading] = useState(true);
-  const [timezone, setTimezone] = useState('');
-  const [savedTimezone, setSavedTimezone] = useState(null);
+  // Timezone and location save independently; `markFieldsSaved` moves one
+  // section's fields at a time. Before the load resolves nothing is editable,
+  // and a failed load leaves the empty fields as the baseline.
+  const { values, saved, isDirty: dirty, set, load, markFieldsSaved } = useSettingsForm(GENERAL_INITIAL);
+  const { timezone, lat, lon } = values;
+  const setTimezone = (value) => set('timezone', value);
+  const setLat = (value) => set('lat', value);
+  const setLon = (value) => set('lon', value);
   const [saving, setSaving] = useState(false);
   const [timezoneError, setTimezoneError] = useState('');
-  const [lat, setLat] = useState('');
-  const [lon, setLon] = useState('');
-  const [savedLocation, setSavedLocation] = useState(null);
   const [savingLocation, setSavingLocation] = useState(false);
   const [locationError, setLocationError] = useState('');
   const detectedTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const allTimezones = useMemo(() => Intl.supportedValuesOf?.('timeZone') ?? [], []);
-  const timezoneDirty = savedTimezone !== null && timezone !== savedTimezone;
-  const locationDirty = savedLocation !== null
-    && (lat !== savedLocation.lat || lon !== savedLocation.lon);
-  const dirty = timezoneDirty || locationDirty;
+  const timezoneDirty = timezone !== saved.timezone;
+  const locationDirty = lat !== saved.lat || lon !== saved.lon;
   const hasDiscardableChanges = (timezoneDirty && !saving)
     || (locationDirty && !savingLocation);
   const routeGuard = useUnsavedChangesGuard(dirty);
@@ -49,19 +53,10 @@ export function GeneralTab() {
         const nextTimezone = settings?.timezone || '';
         const nextLat = settings?.location?.lat != null ? String(settings.location.lat) : '';
         const nextLon = settings?.location?.lon != null ? String(settings.location.lon) : '';
-        setTimezone(nextTimezone);
-        setSavedTimezone(nextTimezone);
-        setLat(nextLat);
-        setLon(nextLon);
-        setSavedLocation({ lat: nextLat, lon: nextLon });
+        load({ timezone: nextTimezone, lat: nextLat, lon: nextLon });
       })
       .catch(() => {
         if (!current) return;
-        // The empty fields remain usable after a failed load, so treat the
-        // displayed fallback as the baseline instead of leaving edits outside
-        // dirty tracking.
-        setSavedTimezone('');
-        setSavedLocation({ lat: '', lon: '' });
         toast.error('Failed to load settings');
       })
       .finally(() => {
@@ -107,9 +102,7 @@ export function GeneralTab() {
       await updateSettings({ location: { lat: parsedLat, lon: parsedLon } }, { silent: true });
       const nextLat = parsedLat === null ? '' : String(parsedLat);
       const nextLon = parsedLon === null ? '' : String(parsedLon);
-      setSavedLocation({ lat: nextLat, lon: nextLon });
-      setLat(current => current === submittedLat ? nextLat : current);
-      setLon(current => current === submittedLon ? nextLon : current);
+      markFieldsSaved({ lat: nextLat, lon: nextLon }, { lat: submittedLat, lon: submittedLon });
       toast.success(parsedLat === null ? 'Location cleared' : `Location set to ${parsedLat}, ${parsedLon}`);
     } catch (err) {
       const message = err.message || 'Failed to save location';
@@ -151,8 +144,7 @@ export function GeneralTab() {
     setSaving(true);
     try {
       await updateSettings({ timezone: tzToSave }, { silent: true });
-      setSavedTimezone(tzToSave);
-      setTimezone(current => current === submittedTimezone ? tzToSave : current);
+      markFieldsSaved({ timezone: tzToSave }, { timezone: submittedTimezone });
       toast.success(`Timezone set to ${tzToSave}`);
     } catch (err) {
       const message = err.message || 'Failed to save timezone';
@@ -167,10 +159,10 @@ export function GeneralTab() {
     // A stale /settings/:tab URL can fall back to General on both sides of the
     // navigation, preserving this component instance. Reset the sections that
     // are not actively being persisted before releasing the parked route.
-    if (!saving) setTimezone(savedTimezone ?? '');
+    if (!saving) setTimezone(saved.timezone);
     if (!savingLocation) {
-      setLat(savedLocation?.lat ?? '');
-      setLon(savedLocation?.lon ?? '');
+      setLat(saved.lat);
+      setLon(saved.lon);
     }
     routeGuard.proceed();
   };

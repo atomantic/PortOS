@@ -1,6 +1,9 @@
 /**
  * imageVerification.js — Unified standards, schemas, dimension definitions, and prompt
  * builders for the PortOS Image Verifier.
+ *
+ * Image verifier defect taxonomy, built-in profiles, profile schema, inspection and confirmation
+ * prompts, and response parsers.
  */
 
 import { z } from 'zod';

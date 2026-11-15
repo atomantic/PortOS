@@ -1,3 +1,10 @@
+/**
+ * Revision-bound animated-proof playback state, render range, approval blockers and evidence payload.
+ *
+ * Returns playback/media setters, `range`/`setRange`, and approval state/actions. Use when:
+ * `ProductionReviewPanel` and its proof content.
+ */
+
 import { useEffect, useState } from 'react';
 
 const EMPTY_PLAYBACK = { timecodedNotes: '' };

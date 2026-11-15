@@ -1,4 +1,8 @@
 // Dependency-free policy shared by the server, browser, and route test doubles.
+//
+// `resolveCleanersFromConfig(modeCfg, mode)` and `resolveImageCleaners(body, settings, mode)` —
+// dependency-free saved defaults and request overrides; C2PA defaults on for codex/external, denoise
+// stays opt-in.
 
 /**
  * Read cleaner flags off a per-mode settings record. Pure: no I/O, no

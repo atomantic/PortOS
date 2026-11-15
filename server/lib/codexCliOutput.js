@@ -1,3 +1,7 @@
+/**
+ * Network/system error patterns for `agentErrorAnalysis.js`.
+ */
+
 const STARTUP_FIELD_RE = /^(workdir|model|provider|approval|sandbox|reasoning effort|reasoning summaries|session id):/i;
 const RUNTIME_SIGNAL_RE = /^(ERROR:|exec\s+)/i;
 const ERROR_SIGNAL_RE = /\b(invalid_request_error|not logged in|api key|unauthorized|forbidden|rate.?limit|quota exceeded|model .*not supported|billing|subscription)\b/i;

@@ -1,4 +1,26 @@
 /**
+ * Provider kind predicates: `PROVIDER_TYPES`, `isCliProvider`, `isTuiProvider`, `isApiProvider`,
+ * `isProcessProvider` and `isClaudeHarnessProvider`.
+ *
+ * What KIND of provider a record is: `PROVIDER_TYPES` (re-exported from
+ * `server/lib/aiToolkit/constants.js`) with `isCliProvider` / `isTuiProvider` / `isApiProvider` /
+ * `isProcessProvider` and `isClaudeHarnessProvider` (re-exported from `server/lib/providerTypes.js`,
+ * with legacy alias `isClaudeCommandProvider`), `isLaunchableTuiProvider` (a TUI provider carrying the
+ * server-resolved `tuiCommandLine`, i.e. one a human can start at a shell prompt — shared by the
+ * Providers card's "Launch in Shell" button and the Shell page's launch menu so the two can't
+ * disagree), `enabledApiProviderFilter`, `enabledProcessProviderFilter` (the coding/CLI-TUI-only
+ * counterpart, for a manual Claim/Replan/Resolve/Review "Run with" picker), `providerTypeClass`; the
+ * vendor-harness predicates keyed on the shipped ids plus `commandBasename` so a path-configured or
+ * renamed binary still qualifies (`isCodexProvider`, `isCodexSubscriptionProvider` — subscription
+ * readiness is keyed on the `codex` command, never an editable id — `isAntigravityProvider`,
+ * `isCursorProvider`, `isKimiProvider`, `isGrokProvider`, `isGrokBuildCli`, `isClaudeCommandProvider`,
+ * `isOpencodeLocalProvider`); and the structural backend markers a wrapper carries
+ * (`localRuntimeNamespace`, `isOllamaBackedProvider`). Everything with a server twin is re-exported
+ * from the pure leaves `server/lib/providerTypes.js`, `server/lib/providerModels.js`,
+ * `server/lib/aiToolkit/constants.js` and `server/lib/aiToolkit/internal/ollamaBacked.js`, never
+ * copied — `isGrokBuildCli` moved there in #7339 so the shared reviewer→provider matcher table keys on
+ * the same predicate the browser does.
+ *
  * What KIND of provider a record is: the `cli`/`tui`/`api` type enum and its
  * predicates, the vendor-harness predicates keyed on the shipped ids plus the
  * launch command's basename (so a path-configured or renamed `codex`/`agy`/

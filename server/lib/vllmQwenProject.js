@@ -2,6 +2,20 @@
  * Where the vLLM Qwen3.8-27B compose project lives, and whether its weights are
  * already on disk.
  *
+ * `resolveVllmProjectDir()` / `inspectVllmQwenProject()` → `{dir, hasProject, composeFile, hasWeights,
+ * weightsRoot}` for the syv-ai/qwen38-27b-rtx3090 compose project, plus
+ * `vllmStartBlockedReason(project)` → the prose refusal (or `null`), and
+ * `vllmProjectSetupState(project)` → `ready`/`empty`/`unknown` for the readiness checklist.
+ * `hasWeights` is tri-state: `true` found / `false` caches read and empty / `null` no cache readable
+ * (a docker-volume cache is invisible from a native-Win32 PortOS), and `services/localRuntimeSetup.js`
+ * refuses to `docker compose up` on anything but `true` so the start button can never kick off the ~20
+ * GB prepare. Also owns WHERE the project lives, as this stack's keyed view of
+ * `recordedProjectDir.js`: `readRecordedVllmProjectDir(envPath?)` / `recordVllmProjectDir(dir,
+ * envPath?)` / `vllmProjectDirIsSettled()`, resolving `VLLM_QWEN_PROJECT_DIR` (this run's decision) →
+ * the record → `~/qwen-serving`; `envPath` is a parameter so a test's sandbox answers instead of the
+ * developer's install. Directory reads plus that one config line — never docker, never a registry.
+ * Other override: `VLLM_QWEN_WEIGHTS_DIR`.
+ *
  * PortOS does not vendor this stack. It is an upstream compose project
  * (`syv-ai/qwen38-27b-rtx3090`) an operator clones and prepares once, on a box
  * with an RTX 3090 and a working NVIDIA container runtime — a ~9.5 GB image plus
@@ -51,8 +65,7 @@ import {
   resolveRecordedProjectDir,
 } from './recordedProjectDir.js';
 // PORTOS_ENV_PATH is declared by portosEnv.js; recordedProjectDir.js imports it
-// for its own defaults but does not re-export it — and it cannot, because both
-// modules are `export *`'d from lib/index.js and a re-export would collide there.
+// for its own defaults but does not re-export it.
 import { PORTOS_ENV_PATH } from './portosEnv.js';
 
 /** Operator override for where the compose project was cloned. */

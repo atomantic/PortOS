@@ -1,3 +1,8 @@
+/**
+ * Brain (second-brain) search + ingest + edit, plus the federation parity audit
+ * (`getBrainParityReports`, `runBrainParityCheck`).
+ */
+
 import { request } from './apiCore.js';
 
 // Brain - Second Brain Feature

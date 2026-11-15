@@ -1,3 +1,12 @@
+// Minimal Standard MIDI File parser + normalizer for the MIDI visualization UI (#2477) — in-tree, zero
+// deps.
+//
+// `parseMidiFile(arrayBuffer)` parses SMF format 0/1 (running status, note-on vel-0-as-off, tempo map
+// incl. mid-file changes, SMPTE division, track names) into the piano-roll view-model `{ durationSec,
+// minMidi, maxMidi, notes:[{id,midi,startSec,durationSec,velocity,track,name}], tracks, tempos }`.
+// Throws on non-MIDI bytes. Consumed by `useMidiNotes` → `<MidiPianoRoll>`. NOT the lead-sheet parser
+// (`scoreNotation.js`).
+//
 // Minimal Standard MIDI File (SMF) parser + normalizer for the MIDI
 // visualization UI (<MidiVisualization> / <MidiPianoRoll>). Parses format 0/1
 // files down to the events the piano-roll needs — note-on/off, tempo map,

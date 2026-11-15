@@ -1,3 +1,27 @@
+/**
+ * Leaf module of cross-domain Zod fragments shared by `validation.js` and per-domain validation files
+ * without circular imports.
+ *
+ * Cross-domain Zod fragments that `validation.js` and the per-domain `*Validation.js` files both need,
+ * kept in a leaf module so the domain files never import back through `validation.js` (its hoisted
+ * `export * from` lines would TDZ). `grokVideoDurationSchema` (grok clip-length union),
+ * `cloudModelIdString(message)` (cloud-CLI model-id charset/bounds), `recordRenderPinFields` (the
+ * `imageMode`/`imageModelId` per-record render pin pair), and `isSafeSubdirFilter(v)` (relative path
+ * with no wildcard, `..` segment, or leading `/`), and `csvIdsParam({ max, maxIdLength, truncate })`
+ * (the `?ids=a,b,c` batch-by-id query param: trims, drops empties, reads all-blank as absent, and
+ * either 400s or silently slices an over-cap batch). Also the backup-exclude anchoring rule (#7241):
+ * `anchorUserExclude` / `anchorUserExcludes` prepend the rsync root anchor (`/`) to any user pattern
+ * that is not already anchored and is not deliberately `*`/`**`-led, and `isSafeExcludePattern`
+ * (defined as `anchorUserExclude(x) !== null`, so the two can never disagree) rejects a `..` segment,
+ * a NUL, or a pattern longer than `EXCLUDE_PATTERN_MAX_LENGTH` once anchored — one rule shared by
+ * `backupConfigSchema` and `services/backup.js#computeEffectiveExcludes`, since an unanchored `cache/`
+ * is an rsync filter that matches at EVERY depth. Mirrored to `client/src/lib/backupExcludes.js`. Also
+ * `resolveAutoUpdateConfig(settings.autoUpdate)` + the channel/interval constants — same sparse-slice
+ * rule for the automatic self-update: omitted `enabled` means OFF, omitted `channel` means `release`,
+ * `minIntervalHours` clamps into `[1, 720]`, `resolveBlockersWithAgent` defaults on — shared by
+ * `autoUpdateSettingsSchema`, `services/autoUpdateScheduler.js`, and the settings GET projection.
+ */
+
 import { z } from 'zod';
 import { SERIES_DESIGN_MODES, SERIES_DESIGN_TEXT_MAX, SERIES_DESIGN_FIELDS } from './storyArcLimits.js';
 

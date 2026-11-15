@@ -1,6 +1,18 @@
 /**
  * Deterministic pre-LLM gate for a pull-request diff.
  *
+ * Pre-LLM gate over a unified diff — `scanDiffForHiddenContent(diff)` reports
+ * invisible/direction-control Unicode (added lines and filenames), dense clusters of the invisible
+ * characters the rules otherwise exempt, compressed or opaque encoded payloads, a new symlink that
+ * leaves the repository or a new git submodule, a non-media binary patch, and inline script in
+ * SVG/HTML/XML, keyed `path:line`; `formatHiddenContentFindings` renders them for a CI log. Detectors
+ * for the Unicode/encoded rules are shared with `modelAbuseGuard.js` (same rules, applied to external
+ * PR content). Lockfiles skip the encoded rule but never the Unicode ones, a leading BOM is allowed,
+ * and `portos-allow-hidden-content` on the line itself opts out of the added-line rules. Driven by
+ * `scripts/scan-diff-hidden-content.js`, which CI runs on every pull request before any reviewer reads
+ * the diff (`core.quotepath=false` so a stealth filename is not octal-escaped past the detector).
+ * Pure.
+ *
  * The model-abuse boundary (`modelAbuseGuard.js`) screens EXTERNAL pull
  * requests before their text reaches a reviewer model. This module is the
  * same class of check applied to the other half of the review process: our own

@@ -1,6 +1,9 @@
 /**
  * FableLoom episodic continuity review.
  *
+ * FableLoom episodic continuity review: multi-vector deterministic checks for visual entity bindings,
+ * convergence clarity, voice profile consistency/drift, pronunciation anchors, and playback safety.
+ *
  * Deterministic, multi-vector continuity checks across an episode graph:
  * - Visual entity bindings (characters, wardrobes, places, objects)
  * - Graph convergence & temporal continuity source unambiguousness

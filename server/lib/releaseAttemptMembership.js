@@ -1,5 +1,10 @@
-/** Historical membership compatibility for independently upgraded peers. New
- * release dispatches use Git/GitHub pre-flight and do not append this record. */
+/**
+ *  Historical membership compatibility for independently upgraded peers. New
+ * release dispatches use Git/GitHub pre-flight and do not append this record.
+ *
+ * Historical release-attempt membership compatibility for independently upgraded peers; new dispatches
+ * no longer record or require it.
+ */
 import { isDeepStrictEqual } from 'node:util';
 
 export const RELEASE_ATTEMPTS_KEY = 'releaseAttempts';

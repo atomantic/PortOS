@@ -1,6 +1,10 @@
 /**
  * Contracts for the persistent mind's forge-issue capability.
  *
+ * Persistent-mind forge-issue contracts: bounded list/file schemas, the required-both dispatch axes,
+ * the closed category-label vocabulary with its lazily-created colors, the `persistent-mind`
+ * attribution label, and the title key the duplicate guard compares on.
+ *
  * Filing an issue is the queueing lane that works on an install with no coding
  * agent attached: the mind cannot dispatch a CoS task there, but it can still
  * read the open backlog and write down work for whoever (or whatever) picks the

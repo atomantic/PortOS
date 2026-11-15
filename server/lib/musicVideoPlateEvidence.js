@@ -1,3 +1,7 @@
+/**
+ * Asset-bound authored-shot plate requirements, current evidence and selected-image admission.
+ */
+
 import { activeMusicVideoSubjects } from './musicVideoCastSelection.js';
 import { shotCameraRuleText, shotOmitsOwnedCameraDetail } from './musicVideoShotSheet.js';
 import { RENDER_DEFECTS } from './imageRenderQuality.js';

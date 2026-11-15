@@ -1,3 +1,9 @@
+/**
+ * Live progress for a single `mediaJobQueue` job.
+ *
+ * Use when: Subscribing to a known media-job id.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
 import { getMediaJob } from '../services/apiMediaJobs';

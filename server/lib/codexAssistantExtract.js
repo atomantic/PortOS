@@ -1,3 +1,5 @@
+// Strip Codex CLI banner + echoed metadata from session transcript.
+//
 // Codex CLI echoes its full session transcript (banner + metadata + echoed
 // prompt + `\ncodex\n<reply>` + token footer). JSON stages survive because the
 // parser skips non-JSON chunks; text stages don't, so this helper carves out

@@ -1,8 +1,16 @@
-// The user-facing explanation of a BLOCKED walk re-open (#3043/#3044), in one
-// place because the set-wide Unlock, per-direction Reopen, and Loop Trimmer
-// describe the same server-stamped block. Two hand-written copies drifted within
-// the same change ("one new grok render each" vs "…per direction"), which is
-// exactly how a user meets two different accounts of one irreversible-ish action
+// The user-facing explanation of a BLOCKED walk re-open (#3043/#3044), in one place because the
+// set-wide Unlock, per-direction Reopen, and Loop Trimmer describe the same server-stamped block.
+//
+// The user-facing copy for a BLOCKED walk re-open (#3043/#3044), shared by the Walk Cycles header,
+// per-direction cards, and Loop Trimmer so one server-stamped block can never be described two
+// different ways. `walkUnlockCopy(unlock, { mode?, direction? })` → `{ text, action, prompt,
+// acknowledgeNoClips, toast }` for a blocked scope (null when it is not blocked): a
+// blocked-but-`acknowledgeable` scope gets the regeneration offer plus the `acknowledgeNoClips`
+// consent flag its POST carries, a non-acknowledgeable one gets the dead-end explanation and no
+// action. `WALK_UNLOCK_TOAST` is the ordinary unlock success message. Pure — no React, no I/O.
+//
+// Two hand-written copies drifted within the same change ("one new grok render each" vs "…per
+// direction"), which is exactly how a user meets two different accounts of one irreversible-ish action
 // depending on which panel they happened to open.
 //
 // Pure: takes the stamped block, returns strings. No React, no I/O.

@@ -1,3 +1,8 @@
+/**
+ * Platform/OS detection helpers — listening-port probes plus `isAppleSilicon()` (arm64 darwin; gates
+ * MLX model features, detect at the route boundary).
+ */
+
 import { exec, execSync } from './childProcess.js';
 import { promisify } from 'util';
 import { isBrowserUnsafePort } from './browserUnsafePorts.js';

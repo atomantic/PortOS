@@ -1,6 +1,20 @@
 /**
  * Live progress derivation for a Persistent Mind turn (#7409).
  *
+ * Live progress derivation for a Persistent Mind turn (#7409). `describeMindTurnProgress({ state,
+ * runtime, events })` folds the public state and the `/mind/runtime` snapshot into one `{ phase:
+ * 'thinking'|'stalled'|'blocked'|'idle', busy, stage, retryAt, reason, detail }` reading, so the Mind
+ * page can tell healthy-but-slow local inference from a wedged turn from a quota autopause instead of
+ * showing one indefinite three-dot indicator for all three. Freshness comes from the runtime snapshot
+ * ONLY when its `turnId` matches the claimed turn (a stale snapshot would date a fresh turn as
+ * stalled), and an unreported measurement renders nothing rather than zero. `retryAt` reads
+ * `runtime.usageLimitRetryAt` before `state.nextEligibleWakeAt`, because a usage-limit autopause
+ * clears the backoff gate and its schedule lives only in the readiness probe.
+ * `mindTurnHeadline(progress, formatRetry)` is the one phrasing of a stalled/blocked turn, shared by
+ * the header pill and the chat indicator; `mindTurnStage` reads the newest trajectory event for the
+ * turn by `sequence`; `mindTurnRuntimeSnapshot` is the one turn-match rule. Status enums and durations
+ * only — no provider reasoning crosses the hidden chain-of-thought boundary.
+ *
  * The Mind page used to render one indefinite three-dot indicator for every
  * non-idle state, so "healthy but slow local inference", "the turn wedged and
  * the watchdog has not noticed yet", and "the provider hit a quota and the mind

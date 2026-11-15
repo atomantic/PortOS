@@ -1,6 +1,9 @@
 /**
  * First-class Persistent Mind operating modes / playbooks.
  *
+ * Continuous-play / explore→interact→reflect→invent Persistent Mind operating modes and prompt
+ * framing. Pure.
+ *
  * Distinct from the free-form identity+instructions prompt: a playbook is a
  * product-supported loop (e.g. continuous play → explore → interact → reflect
  * → invent) that every mind can opt into. Saving a playbook never starts

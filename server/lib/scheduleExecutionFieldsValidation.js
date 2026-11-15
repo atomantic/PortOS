@@ -1,3 +1,8 @@
+/**
+ * `scheduleExecutionFieldsSchema` validates optional prompt and provider/model selections before
+ * schedule writes, preserving null/empty clears.
+ */
+
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 import { z } from 'zod';
 import { providerRefFieldSchema } from './zodCompat.js';

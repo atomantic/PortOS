@@ -1,6 +1,14 @@
 /**
  * Which HTTP requests need operator authority (#8716, #16018).
  *
+ * Which HTTP requests need operator authority (#16018): `isHostControlRoute` gates every `/api/*`
+ * write (non-GET/HEAD/OPTIONS) by default, except the public auth paths, the peer federation surface
+ * and pair-secret bootstrap, the managed-visitor broker and the opt-in public API prefixes, plus the
+ * sensitive `HOST_CONTROL_GET_ROUTES` reads (`hostControlGetRouteFor`).
+ * `authGate.js#hostControlRouteGate` applies `requireHostControl` to each;
+ * `server/hostControlCoverage.test.js` pins the mounted writes that bypass it. The socket twin is
+ * `HOST_CONTROL_SOCKET_EVENTS` in `services/socket.js`.
+ *
  * `hostControlRouteGate` in services/authGate.js applies `requireHostControl`
  * to every request `isHostControlRoute` names: an operator session when a
  * password is set (a signed-in human or a PortOS-spawned agent's

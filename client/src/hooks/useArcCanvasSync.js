@@ -1,3 +1,15 @@
+/**
+ * Hook wiring the embedded ArcCanvas to a host page: dirty-check, server series merge, pending flush
+ * and `isDirty` for unsaved-changes guards.
+ *
+ * Host-side wiring for the embedded `<ArcCanvas>`: `lastSavedRef` dirty-check +
+ * `updateSeriesFromServer` (merges, keeping pending bible edits) / `handleIssuesUpdate` /
+ * `flushPending` / `isDirty` (for `useUnsavedChangesGuard`). Parameterized by `flushFields` (which
+ * bible fields to flush) + `silent`/`onFlushError`. Use when: Embedding `<ArcCanvas>` in a host that
+ * owns `series`/`issues` state (PipelineSeries, Story Builder arc step). Don't re-implement the setter
+ * contract.
+ */
+
 import { useCallback, useEffect, useRef } from 'react';
 import { updatePipelineSeries } from '../services/api';
 

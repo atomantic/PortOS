@@ -1,3 +1,7 @@
+/**
+ * Socket event payload schemas.
+ */
+
 import { z } from 'zod';
 import { DEPLOY_FLAGS } from './appDeployFlags.js';
 

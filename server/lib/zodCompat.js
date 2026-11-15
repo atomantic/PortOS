@@ -1,3 +1,14 @@
+/**
+ * Zod 4 compatibility helpers.
+ *
+ * `partialWithoutDefaults(objectSchema)` — like `.partial()` but strips inner field defaults first, so
+ * a PATCH/update schema doesn't inject (and clobber) the stored values of fields the caller didn't
+ * send. Use for any update schema derived from a defaulted base. Also home to the provider-reference
+ * zod forms (#7564) — `providerRefSchema` / `providerRefFieldSchema` (a preset id OR a composite
+ * `harness.method@service[+bootstrap]`, per `providerRef.js`) and `presetProviderIdSchema`
+ * (preset-only) — because `cosValidation.js` needs them and must not import validation.js.
+ */
+
 import { z } from 'zod';
 import { MAX_PROVIDER_REF_LENGTH, PRESET_ID_RE, PRESET_ONLY_MESSAGE, PROVIDER_REF_MESSAGE, parseProviderRef } from './providerRef.js';
 

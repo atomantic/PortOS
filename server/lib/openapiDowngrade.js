@@ -1,6 +1,12 @@
 /**
  * OpenAPI 3.0.3 compatibility for JSON Schema produced against draft 2020-12.
  *
+ * `OPENAPI_VERSION` plus `toOpenApi30Schema` / `toOpenApi30Operation`, which rewrite Zod's
+ * draft-2020-12 output (null unions, numeric exclusive bounds, `const`, tuples, `propertyNames`) into
+ * the OpenAPI 3.0.3 dialect. Apply ONLY at the OpenAPI document boundary — the AsyncAPI payloads, CoS
+ * provider tool definitions, and tool resource read the same schemas as plain JSON Schema, where these
+ * rewrites silently widen bounds and drop null branches.
+ *
  * PortOS publishes 3.0.3 rather than 3.1 because the documents are consumed by
  * agent tooling (tool-schema converters, validators, generators) whose 3.1
  * support is still thin, while 3.0.3 is universally understood. The gap is

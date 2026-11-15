@@ -1,6 +1,11 @@
-// One table for what each message-account type can deliver and over which
-// transport. Account capability, draft `sendVia`, the sender's mismatch guard and
-// the privacy email lanes all read this, so "Outlook can send" is declared once.
+// One table for what each message-account type can deliver and over which transport.
+//
+// `MESSAGE_ACCOUNT_TRANSPORT`, `MESSAGE_ACCOUNT_TYPES` — the one table of what each message-account
+// type delivers (`sendVia`, email-capable): `sendViaForAccountType`, `accountTypeCanSend`, and
+// `pickEmailSenderAccount` (privacy email lanes prefer an API transport, never pick a Teams chat).
+//
+// Account capability, draft `sendVia`, the sender's mismatch guard and the privacy email lanes all
+// read this, so "Outlook can send" is declared once.
 //
 // `email` marks accounts that can deliver to an arbitrary email address. A Teams
 // chat reaches a person, not a mailbox, so it is sendable but never an email lane.

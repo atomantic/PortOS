@@ -1,3 +1,9 @@
+/**
+ * Reconcile quota cards on scrape completion, reconnect and tab show.
+ *
+ * The caller owns the entry read. Use when: Usage, Subscriptions and Quota Burn quota cards.
+ */
+
 import { useSocketResource } from './useSocketResource.js';
 
 const EVENTS = ['provider-quota:updated'];

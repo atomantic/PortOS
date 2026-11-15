@@ -1,3 +1,20 @@
+/**
+ * Pure metadata helpers for the failed-task retry hold and delivery-cleanup ownership state shared by
+ * failure handling, spawn guard and orphan sweep.
+ *
+ * The failed-task RETRY HOLD and delivery-cleanup ownership state (#3373, #13430) — pure metadata
+ * helpers shared by the failure verdict, the post-cleanup release, the spawn guard, the orphan sweep,
+ * and completed-agent deletion guards. `retryHoldMetadata(agentId, now)` arms it (task stays
+ * `in_progress`, so no dequeue tier can claim the retry before its resume pointer is resolved);
+ * `clearedRetryHoldMetadata()` releases it in the same write that flips the task to `pending`;
+ * `isRetryHeld(metadata)` / `isRetryHoldOwner(metadata, agentId)` gate the spawn and the owner-scoped
+ * release; `isStaleRetryHold(metadata, now, graceMs)` + `RETRY_HOLD_GRACE_MS` let the orphan sweep
+ * finish a transition whose process died; `isDeliveryCleanupHeld(metadata)` /
+ * `collectProtectedCleanupOwners(tasks)` identify active delivery-cleanup and retry-cleanup owners
+ * across `in_progress` tasks so single deletion and bulk completed-agent clearing retain live recovery
+ * evidence.
+ */
+
 import { isTruthyMeta } from './metadataFlags.js';
 /**
  * Retry hold — the intermediate task state between a failed run's verdict and the

@@ -3,6 +3,10 @@
  * a looping 8-bit background-music score, plus the pure math that turns it
  * into absolute-time note events.
  *
+ * Chiptune score contract (#2911): `chiptuneScoreSchema` (Zod) + `sanitizeChiptuneScore`,
+ * `buildScoreEvents` — the pattern/order → absolute-time flatten mirrored by
+ * `client/src/lib/chiptunePlayback.js`.
+ *
  * One score = NES-style channels (two pulse waves, a triangle bass, a noise
  * drum lane), a bank of named patterns, and an `order` list that sequences
  * patterns into one seamless loop. Loop length is whole-pattern by

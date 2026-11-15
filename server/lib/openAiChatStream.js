@@ -2,6 +2,20 @@
  * One streaming `POST {base}/chat/completions` against an OpenAI-compatible
  * endpoint.
  *
+ * `iterateOpenAiChat(...)` → normalized async content/reasoning chunks and `streamOpenAiChat(...)` →
+ * the streamed text — one streaming `POST {base}/chat/completions` against any OpenAI-compatible
+ * endpoint; both own timeout/abort composition, retries, parsing, backpressure, and reader cleanup.
+ * `streamOllamaChat(...)` is the assessment-only native `/api/chat` transport that preserves Ollama's
+ * exact eval counts and nanosecond timings. Also exports `buildMessages`, `parseStreamFrame`,
+ * `parseOllamaStreamFrame`, `normalizeUsage` (snake/camel/Ollama token-count keys →
+ * `{completionTokens, promptTokens}`, `null` = not reported), and `resolvePartialOutput`. Registering
+ * `onStats` on the OpenAI path asks for token counts; a daemon that rejects `stream_options` is
+ * retried once without it and remembered per endpoint. Sibling of `openAiModelsProbe.js`. Shared by
+ * Ask (`services/askService.js`), `services/localLlmPlayground.js` (provider-backed runs with a
+ * `/runs` record), and its `runEndpointLlmTest` (a bare loopback daemon PortOS holds no provider
+ * record for, which is how `services/localModelAssessments.js` measures llama.cpp / MTPLX / vLLM). An
+ * abort mid-stream throws with `.partialOutput` carrying what already streamed.
+ *
  * Sibling of `openAiModelsProbe.js`: that module answers "is anything serving
  * here, and what does it serve?", this one answers "generate against it and tell
  * me what streamed". Both exist because PortOS talks to five local daemons

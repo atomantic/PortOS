@@ -1,6 +1,25 @@
 /**
  * Pure device/format helpers for the FaceTime call-host page.
  *
+ * Pure device/format helpers for the call-host page (`pages/VoiceCallHost.jsx`, #5308 + #5311) —
+ * shared by its Call mode (FaceTime Audio) and its Capture system audio mode (meeting transcription).
+ * `missingCallHostApis(scope)` lists every required browser API this browser lacks
+ * (MediaStreamTrackProcessor/Generator, AudioWorklet, `enumerateDevices`, `setSinkId`, Web Locks) so
+ * the page names all the gaps at once instead of one per reload; `findAudioDevice(devices, label,
+ * kind)` matches a device label EXACTLY after trim+case-fold (a substring match would resolve
+ * "BlackHole 1" to the 16ch device, indistinguishable from a dead call);
+ * `describeDeviceProblem(devices, {inputLabel, outputLabel})` returns the one blocking message or
+ * `null`, and deliberately blames MICROPHONE PERMISSION rather than a missing driver when every label
+ * comes back blank — an ungranted tab enumerates unlabeled devices, and "reinstall BlackHole" would
+ * send the user to fix the wrong thing; `outputLabel` is OPTIONAL — capture mode only listens, so
+ * omitting it skips the output-device check entirely rather than reporting a device named "undefined"
+ * as missing. Format side: `downmixToMono(channels)` (BlackHole 16ch carries the call on all channels;
+ * truncates to the shortest rather than reading past one), `resampleTo16k(samples, fromRate)` (linear,
+ * 48k→16k for whisper), `floatToInt16` (CLAMPED — wrapping would flip a hot sample's sign into an
+ * audible click), `rmsLevel` for the input meter, and `buildTestTone` (faded in/out so it cannot click
+ * through the call). Plus `CALL_HOST_LOCK` (the Web Lock name that stops a second tab double-answering
+ * — shared by both modes, since they read the same physical device) and `CALL_FRAME_SAMPLES`.
+ *
  * The page itself is unavoidably impure — real devices, a real AudioWorklet, a
  * real Web Lock — so everything that can be decided from plain data lives here
  * instead: which device to open, whether the browser can do the job at all,

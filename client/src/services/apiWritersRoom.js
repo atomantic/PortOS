@@ -1,3 +1,8 @@
+/**
+ * Writers Room (folders + works + drafts, live continuation + render-preview reservation, scene-image
+ * attach).
+ */
+
 import { request } from './apiCore.js';
 
 const enc = encodeURIComponent;

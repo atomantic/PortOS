@@ -1,4 +1,12 @@
 /**
+ * Re-export of `server/lib/avatarStyles.js` — the CoS avatar-style vocabulary (#6253):
+ * `AVATAR_STYLES`, `AVATAR_STYLE_IDS`, `AVATAR_STYLE_LABELS`, `WEBGL_AVATAR_STYLE_IDS`.
+ *
+ * The picker labels, the lazy-load map / WebGL-stage set, and the server's `avatarStyle` zod enum all
+ * read the one list.
+ */
+
+/**
  * Re-export of the authoritative CoS avatar-style vocabulary in
  * `server/lib/avatarStyles.js`.
  *

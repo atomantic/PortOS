@@ -1,3 +1,5 @@
+// Shared Runway model catalog capabilities and cached model selection.
+//
 // Public Runway OpenAPI capability snapshot, verified 2026-10-22.
 // Source: https://docs.dev.runwayml.com/openapi.json (API version 2024-11-06).
 // Only fields consumed by PortOS; optional advanced controls retain provider defaults.

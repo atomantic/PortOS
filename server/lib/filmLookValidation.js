@@ -1,3 +1,10 @@
+/**
+ * `filmLookSchema` / `filmLookBakeSchema`: the Zod shape of a film look, derived from
+ * `FILM_LOOK_CONTROLS`.
+ *
+ * `filmLookSavedPresetsSchema` for the install's saved looks.
+ */
+
 import { z } from 'zod';
 import { FILM_LOOK_CONTROLS, FILM_LOOK_PRESET_IDS } from './filmLook.js';
 

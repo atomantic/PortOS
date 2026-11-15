@@ -1,6 +1,28 @@
 /**
  * Physical-conformance audit gate for an already-validated Three.js scene spec.
  *
+ * `evaluateThreejsPhysicalAudit(spec)` — pure bounds and pose audit gate over an already-validated
+ * Three.js spec: inspects static resting poses and animated clip poses to detect floating parts
+ * (`floating-part`), swallowed geometry (`buried-geometry`), z-fighting coplanar surfaces
+ * (`coplanar-surface`), unprovenanced appearing geometry (`unprovenanced-transition`), non-uniform
+ * parent scale cascading into descendants (`nonuniform-parent-scale`), attachments declared with
+ * nothing to hang from (`unanchored-attachment`, warning), and attachments measured further from their
+ * declared anchor than `maxOffset` allows (`attachment-far-from-anchor`, error — the spec asserted the
+ * relationship itself), across the resting pose and the sampled clip poses so a clip that carries an
+ * attachment away from its anchor is caught too — interior times (each sequence midpoint, plus a
+ * subdivision per 90° of large rotations) as well as boundaries, under a 48-pose budget dealt
+ * round-robin across clips; `poseCoverage` records which clip times were measured and which the budget
+ * omitted, and an omission is a `clip-poses-unsampled` note rather than a clean pass. Named left/right
+ * pairs are additionally audited for handedness in the resting pose — measured in the frame of the
+ * pair’s nearest common ancestor, since the lateral plane a pair mirrors across is the one their
+ * shared parent defines and not world `x = 0` — which no bounds check can see — a limb mirrored by a
+ * 180° yaw about the vertical axis rather than a lateral reflection (`bilateral-chirality`), by a
+ * negated scale component (`bilateral-mirror-scale`), or not mirrored at all so both halves sit on one
+ * side of the lateral plane (`bilateral-pair-same-side`), all warnings. An attachment whose anchor
+ * geometry could not be measured is listed in `unmeasuredAttachments` rather than counted as passing.
+ * `buildThreejsPhysicalAuditFeedback(physicalAudit)` turns actionable findings into default refinement
+ * feedback.
+ *
  * Checks static assemblies and animated clips across key poses for:
  * 1. `floating-part`: Parts touching no parent, sibling, joint, attachment, or ground surface.
  * 2. `buried-geometry`: Parts swallowed completely or heavily inside another part without hierarchy/attachment exemption.
@@ -29,7 +51,6 @@
  * a straight run of control points has a perfectly reasonable bounding box,
  * penetrates nothing, and touches its parent, so every check above passes it.
  * Only the shape of the swept path itself says it never curves.
-
  */
 
 import {

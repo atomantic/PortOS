@@ -1,3 +1,8 @@
+/**
+ * Deterministic bounded source partitions, derived coverage groups and explicit contract-upgrade
+ * compatibility.
+ */
+
 import { canonicalSnapshotChecksum } from './snapshotChecksum.js';
 
 export const DEEP_AUDIT_PARTITION_FILES = 24;

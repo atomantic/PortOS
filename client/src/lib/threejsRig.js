@@ -2,6 +2,17 @@
  * Client mirror of `server/lib/threejsModelRig.js`'s readiness rule, plus the
  * joint lookup the preview needs to label a picked part.
  *
+ * `summarizeThreejsArticulation(spec)` → `{ articulationReady, jointCount, socketCount,
+ * attachmentCount, anchoredAttachmentCount, unanchoredAttachmentCount, jointsByPartId }` — client
+ * mirror of the readiness rule in `server/lib/threejsModelRig.js`, used by the Three.js Models
+ * preview, which is handed a bare spec rather than the record's stored report (and gets none at all
+ * for a model generated before rig readiness shipped). A spec with no `articulation` key reads as a
+ * static assembly; a graph is ready only when it carries more than a lone root, every child joint
+ * names a pivot socket, and every declared attachment names what it hangs from (the anchored
+ * `attachments` list and the older anchor-less `attachmentPartIds` are merged into one count).
+ * `jointsByPartId` is null-prototype so a provider-authored part id cannot resolve to an inherited
+ * function.
+ *
  * The server writes an authoritative report onto the record at generation time.
  * The preview is handed a bare `spec` (and a record generated before the report
  * shipped has none at all), so it derives the same verdict from the spec rather

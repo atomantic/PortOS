@@ -1,3 +1,13 @@
+/**
+ * Hook managing the Universe Builder per-entry render-job queue: pending job ids by entry, enqueue and
+ * clear helpers.
+ *
+ * Per-entry render-job queue for the Universe Builder — `pendingByEntryId` (entryId → jobId[]),
+ * `pendingHeadByEntryId` (first jobId per entry for single-subscription thumbs), `enqueueEntryJobs`
+ * (append variation/canon jobs), `clearPendingForEntry` (shift a jobId out, or drop the entry). Use
+ * when: Universe Builder render orchestration. Don't re-roll the per-entry pending-jobs reducer.
+ */
+
 import { useCallback, useMemo, useState } from 'react';
 
 // Per-entry render-job queue controller for the Universe Builder page.

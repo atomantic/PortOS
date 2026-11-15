@@ -1,3 +1,7 @@
+/**
+ * Shared health status styles and threshold-aware percentage/bar tones for system health views.
+ */
+
 import { AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
 
 export const DEFAULT_HEALTH_THRESHOLDS = {

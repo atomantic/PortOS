@@ -1,5 +1,8 @@
 // Stable wire codes shared by scheduling, workflow projections, and the Schedule UI.
 // Keep values unchanged: federated peers and clients may run different versions.
+//
+// Stable scheduled-task readiness reason codes, membership set, shared by the server and Schedule UI
+// (pure browser-safe leaf).
 export const TASK_READINESS_REASON = Object.freeze({
   REQUIRES_INSTALL_WIDE_TARGET: 'requires-install-wide-target',
   DISABLED: 'disabled',

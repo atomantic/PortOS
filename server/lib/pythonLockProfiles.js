@@ -1,3 +1,11 @@
+// Catalog of hash-pinned runtime locks (`LOCK_PROFILES`: `mflux`, `mflux-video`, `guard-runtime`) with
+// the host platforms each covers.
+//
+// `lockProfileUnsupportedReason(profile, host)` gives the precise refusal for an unsupported host;
+// `planLockedRepair(specs, { appleSilicon })` dispatches a generic package repair to the smallest lock
+// owning every package or lists the unresolved ones. Installers consume a profile, never a loose
+// package list.
+//
 // Catalog of hash-pinned Python runtime locks that Node installers may apply.
 // An installer picks a profile, never a loose package list: the lock is the
 // complete closure, installed with `--require-hashes --no-deps`, so nothing is

@@ -1,6 +1,13 @@
 /**
  * Task Parser for the Markdown task format
  *
+ * Parse and generate the Markdown task format (a task's stored form, and the input of db-migration
+ * 018), and own the vocabularies it can represent: `TASK_STATUS_VALUES` / `TASK_PRIORITY_VALUES`
+ * (derived from `STATUS_MAP` / `PRIORITY_VALUES`, read by `cosValidation.js` and
+ * `peerSyncValidation.js` so the HTTP and wire enums cannot drift from the store), plus
+ * `UNKNOWN_STATUS_BLOCKED_CATEGORY` — the marker `generateTasksMarkdown` stamps when it REPAIRS an
+ * unrepresentable task instead of dropping its row (#7239).
+ *
  * The CoS task queues are rows in `cos_tasks` now. This format survives as two
  * things: a task's STORED FORM (`lib/cosTaskRows.js` normalizes every task by
  * round-tripping it through one row, which is why scalar metadata reads back as

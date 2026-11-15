@@ -1,3 +1,11 @@
+/**
+ * Read a `Response` body as JSON, tolerating a non-JSON/HTML error page (no `Unexpected token <`
+ * crash).
+ *
+ * Object callers need no opts; pass `{ fallback, emptyValue }` for arrays or to surface the raw error
+ * text.
+ */
+
 import { safeJSONParse } from './fileUtils.js';
 
 // Private sentinel marking a failed parse — distinct from any value `safeJSONParse`

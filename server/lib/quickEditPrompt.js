@@ -1,6 +1,12 @@
 // The instruction a quick image edit wraps around the director's change (`withQuickEditInstruction` in
-// services/imageGen/prepareParams.js). The second form is used whenever more references follow the edited image.
-// A still made this way carries an edit instruction, never a description of its frame.
+// services/imageGen/prepareParams.js).
+//
+// The two quick-edit instruction prefixes (`QUICK_EDIT_PREFIX`, `QUICK_EDIT_PREFIX_WITH_REFERENCES`)
+// that `prepareParams.js` wraps around a refine, and `isQuickEditPrompt(prompt)`, so a refined still's
+// edit instruction is never adopted as a shot's frame description. Pure, no imports.
+//
+// The second form is used whenever more references follow the edited image. A still made this way
+// carries an edit instruction, never a description of its frame.
 export const QUICK_EDIT_PREFIX = 'Edit the reference image: ';
 export const QUICK_EDIT_PREFIX_WITH_REFERENCES = 'Edit the first reference image: ';
 

@@ -1,3 +1,8 @@
+/**
+ * Unified Story Builder conductor (sessions, step lock/unlock, generate/refine, cross-machine sync
+ * toggle + reconcile).
+ */
+
 import { request } from './apiCore.js';
 
 // Unified Story Builder — conductor API. Mirrors apiImporter.js. The server is

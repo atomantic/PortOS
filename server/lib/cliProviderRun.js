@@ -1,6 +1,11 @@
 /**
  * One-shot invocation of a user-configured CLI AI provider.
  *
+ * One-shot CLI provider invocation (`pickCliProvider` + `runCliProviderPrompt`) — lightweight path for
+ * the autofixer + calendar MCP sync to honor the configured provider/model. Optional `safetyProfile`
+ * runs only maintained no-tool vendor recipes and composes the same restricted environment, refusing
+ * extra argv and unsupported providers.
+ *
  * This is the single, dependency-light path for "run a prompt through whatever
  * CLI provider the user configured for this feature, get text back." It exists
  * so callers outside the main run machinery — the standalone `portos-autofixer`

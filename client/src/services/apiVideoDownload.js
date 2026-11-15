@@ -1,3 +1,12 @@
+/**
+ * API client for the Dev Tools yt-dlp video downloader: start and cancel downloads with SSE progress,
+ * list and delete clips, `getYtDlpStatus` and `updateYtDlp`.
+ *
+ * Dev Tools video downloader (#1946): start/cancel a YouTube/x.com full-video download via yt-dlp (SSE
+ * progress), list + delete downloaded clips, plus `getYtDlpStatus`/`updateYtDlp` for the in-place
+ * yt-dlp update the page offers when a download fails on a stale binary.
+ */
+
 import { request } from './apiCore.js';
 
 // Video downloader (#1946) — Dev Tools utility that downloads a full video from

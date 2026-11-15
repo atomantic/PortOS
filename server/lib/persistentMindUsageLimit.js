@@ -1,6 +1,11 @@
 /**
  * Hard provider usage-limit detection for Persistent Mind wakes.
  *
+ * Hard provider usage-limit / quota classifier for Persistent Mind wakes
+ * (`classifyPersistentMindProviderError`, `isHardProviderUsageLimitError`), the dedicated autopause
+ * reason string, and probe-backoff helpers so a usage-limit pause can auto-recover when the pinned
+ * provider is usable again without treating user pauses the same way.
+ *
  * Persistent Mind pins one provider/model with no automatic fallback pool
  * (see persistentMindAdapter / persistentMindProfile). When that provider
  * returns a hard quota / usage-limit / billing exhaustion, retrying only

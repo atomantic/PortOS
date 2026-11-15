@@ -2,6 +2,14 @@
  * Shared file upload utilities
  * Used by DevTools Runner and CoS TasksTab for screenshot and attachment uploads
  *
+ * Pure screenshot/attachment upload helpers: base64 read (`readFileAsBase64`) and image validation
+ * (`validateImageFile`). Also the shared upload constants — `JSON_UPLOAD_MAX_FILE_SIZE` (max file size
+ * / wire limit, mirrors `server/lib/uploadLimits.js`), `ATTACHMENT_MAX_FILE_SIZE`,
+ * `ALLOWED_ATTACHMENT_EXTENSIONS`, and the `accept` strings `ATTACHMENT_ACCEPT` / `IMAGE_ACCEPT` /
+ * `UPLOAD_IMAGE_ACCEPT`. The actual upload orchestration (`processScreenshotUploads` /
+ * `processAttachmentUploads` and their single-file variants) does network I/O and lives in
+ * `services/apiMedia.js` — import those from there, not from here.
+ *
  * This module holds only pure helpers (base64 read, validation, constants) —
  * no I/O. The upload orchestration that actually POSTs to the server
  * (`processScreenshotUploads` / `processAttachmentUploads`) lives in

@@ -1,6 +1,25 @@
 /**
  * Non-blocking conflict journal.
  *
+ * Non-blocking edit-conflict journal for cross-install LWW merges.
+ * `maybeJournalBeforeOverwrite({kind,id,local,remote,source})` (call right before a merge overwrite)
+ * archives the losing local version when a true 3-way divergence is detected (`detectConflict` via
+ * per-record `syncBaseHash` + `contentHashForRecord`), then advances the base hash;
+ * `flushBaseHashes()` persists the batched base-hash side store; `withBaseHashFlushBatch(fn)` defers
+ * every interior flush so an await-separated multi-record loop — the peer:online convergence push and
+ * every base-hash-evicting `pruneTombstoned*` loop — collapses N `sync_base_hashes.json` rewrites into
+ * one terminal write (depth-counted, so concurrent batches merge too; flushes in `finally`).
+ * `deleteSyncBaseHash(kind,id)` evicts a record's base hash when its tombstone is hard-pruned, so
+ * those paths don't let the side store grow without bound; `pruneOrphanedBaseHashes(resolves)` is the
+ * backstop sweep (`resolves(kind,id) => bool`; unknown kinds kept) that drops keys whose record no
+ * longer resolves, wired into the tombstone GC sweep. `conflictJournalStore()` is the
+ * `pending`/`resolved` entry store (discard resolves an entry; DELETE hard-removes it — there is no
+ * `dismissed` status). The base-hash file is read STRICT (`readJSONFileStrict`): a
+ * present-but-unreadable `sync_base_hashes.json` latches `_persistBlocked` — `flushBaseHashes()`
+ * no-ops so the file is preserved, `maybeJournalBeforeOverwrite` journals every overwrite fail-closed,
+ * `detectConflict` reports `baseUnavailable`, and `isBaseHashPersistBlocked()` exposes the latch to
+ * the conflict-journal status payload (#7260). Local-only — never crosses the wire.
+ *
  * All cross-install merges are last-write-wins by `updatedAt`. When LWW would
  * OVERWRITE a local record but BOTH sides edited it independently since the
  * last time they were in sync (a true 3-way divergence), the losing local

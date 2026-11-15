@@ -1,6 +1,13 @@
 /**
  * pg_dump binary resolution.
  *
+ * `withPgToolEnv(config, run)` stages Node trust roots with guaranteed cleanup; isolates libpq
+ * connection/TLS settings from inherited PG variables; `pg_dump` binary resolution shared by the
+ * backup snapshot path and the native↔Docker export path: `resolvePgDumpBinary(serverMajor)`
+ * (PORTOS_PGDUMP override → version-aware auto-select → bare `pg_dump`), plus the lower-level
+ * `pickPgDump` / `discoverPgDumpCandidates` / `resolvePgDump`. Picks the closest installed `pg_dump`
+ * whose major is ≥ the running server's.
+ *
  * `pg_dump` REFUSES to dump a server newer than itself ("server version
  * mismatch"), but a newer `pg_dump` dumps an older server fine. On machines
  * with multiple Postgres installs (the common Homebrew case: an old

@@ -1,5 +1,12 @@
 // Directional pending-sync counts for a delta-synced category (brain / memory).
 //
+// Directional pending-sync counts for the Instances federation cards. `directionalCounts({ localMax,
+// peerMax, ourCursor, peerCursorForUs })` → `{ toPull, toPush }` (each a non-negative Number, or
+// `null` when unknown) from monotonic change-log seqs; `diffSeq(ahead, behind)` is the BigInt-safe
+// clamp-at-zero subtraction (handles numeric strings past `MAX_SAFE_INTEGER`); `describeDirectional({
+// toPull, toPush })` renders the plain-language `{ state, text }` ("in sync" / "N to pull · M to push"
+// / "checking…"). No React — `SyncStatusBadge` drives it.
+//
 // PortOS federation sync is PULL-based — each instance pulls changes from its
 // peers — so "push pending" is really "items of ours the peer hasn't pulled yet."
 // Two directions, both derived from monotonic change-log sequences:

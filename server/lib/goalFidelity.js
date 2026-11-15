@@ -1,6 +1,33 @@
 /**
  * Goal-fidelity review contract (#5994) — pure.
  *
+ * Goal-fidelity review contract (#5994) — the value half of "does this diff deliver what was asked?",
+ * the question the quality-review chain structurally cannot answer because it never sees the request.
+ * `GOAL_FIDELITY_VERDICTS` (`ship` / `fix-first` / `rethink`, only `rethink` gating a run via
+ * `goalFidelityHoldsRun`), `taskObjective(task)` (the trusted operator-authored objective — the TASK's
+ * description + prompt block, never the agent's transcript, since a reviewer handed the transcript
+ * inherits the assumptions that produced the drift), `resolveGoalFidelityConfig(codeReview, chain)`
+ * (enabled/backend/model/effort, restricted to the local-LLM reviewers PortOS can call server-side and
+ * falling back to the quality chain's own local reviewer + its `<backend>Model`/`Effort` scalars),
+ * `normalizeGoalFidelityVerdict(parsed)` (`null` = nothing judged the run, never collapsed into a
+ * `ship` pass or a `rethink` hold) and `formatGoalFidelitySummary(review)`.
+ * `mergeOutcomeObjective(task)` / `mergeOutcomeReview({ number, prState })` /
+ * `GOAL_FIDELITY_SOURCE_FORGE` are the second answer shape: a review-loop follow-up is asked to LAND a
+ * change request, which no diff evidences, so its verdict is established from forge state (`MERGED` ⇒
+ * `ship`, everything else ⇒ nothing). `isDependencyAuditSummaryDiff` recognizes only edits to the two
+ * existing `docs/DEPS.md` audit-summary fields; finalization declines diff-only review for that
+ * dependency-audit shape only after independently reading empty alert and PR inventories (no invented
+ * `ship` verdict). `MAX_OBJECTIVE_CHARS` / `MAX_FIDELITY_DIFF_CHARS` bound what crosses into a
+ * fixed-window local model. Pure. `retainedProductionUses(objective, diff)` supplies exact-token
+ * surviving production witnesses for the bounded contradiction check. `SUMMARY_DISCLOSURE_REPAIR_CUE`
+ * frames only the bare premature-summary report, with its description and cap preserved.
+ * `productionAfterChangeHunks` (hunk-local JSX predicate traces) preserves separate file/hunk
+ * provenance while excluding deleted lines and tests for focused production review.
+ * `backfillAccountingFindings` adds only source-proven counter/warning contradictions for explicitly
+ * requested backfill outcomes; it never establishes delivery. `productionAuditEvidence(diff)` supplies
+ * hunk-local complete-statement syntax facts and handled-rejection scenarios with unavailable
+ * enclosing context marked.
+ *
  * PortOS's reviewers answer "is this diff good code?". None of them can answer
  * "is this the code that was asked for?", because none of them ever see the
  * request: `CODE_REVIEW_SYSTEM_PROMPT` hands the model a unified diff and

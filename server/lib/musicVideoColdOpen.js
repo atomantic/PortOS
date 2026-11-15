@@ -1,4 +1,7 @@
 /**
+ * Shots before the song (the cold open): pre-music settings, sound effects, scene splits (including
+ * the timed song shots a cut can land on) and the opening's timeline.
+ *
  * Music Video — the cold open: shots marked "Before the song" (`scene.preMusic`)
  * play first, in storyboard order, before the song's first note. The song's
  * own clock (lyric timing, beats, the Plan timing check, song shots'

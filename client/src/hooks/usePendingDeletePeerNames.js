@@ -1,3 +1,11 @@
+/**
+ * `usePendingDeletePeerNames(rows)` → `{ peerNames, rememberPeerName }` — registry id → peer display
+ * name for rows carrying `pendingDelete.peerId`.
+ *
+ * One silent registry read per unresolved id. Use when: Any media list that can start a remote
+ * delete and renders `MediaCard`'s pending marker.
+ */
+
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getInstances } from '../services/api';
 

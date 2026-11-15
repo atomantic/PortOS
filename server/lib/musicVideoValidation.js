@@ -1,3 +1,7 @@
+/**
+ * Music Video project/scene/reorder + cached audio-analysis schemas.
+ */
+
 import { CAST_SETS_IMAGE_EDIT_MAX } from './musicVideoCastSetsImageEdit.js';
 import { MUSIC_VIDEO_RENDER_TIERS } from './musicVideoRenderTier.js';
 import {
@@ -26,7 +30,7 @@ import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsVal
  * create/update, the per-scene create/update/reorder operations of the director
  * scene board, and the cached audio-analysis shape (produced by
  * services/musicVideo/audioAnalysis.js, Phase 0). Re-exported flat from
- * validation.js and as a namespace from server/lib/index.js.
+ * validation.js.
  */
 
 import { z } from 'zod';

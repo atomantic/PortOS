@@ -1,6 +1,15 @@
 /**
  * The one definition of "the external pull-request content PortOS screened".
  *
+ * The one definition of the external pull-request content PortOS screens.
+ * `screenedPullRequestContent(pr, diff, commits?)` builds the contributor-authored surface — title,
+ * description, commit log, unified diff — and `screenedPullRequestFingerprint(pr, diff, commits?)`
+ * hashes it to a stable identity for one head commit, returning null when the commit log is missing
+ * rather than matching by omission. Both take the PR row, because the pr-reviewer preflight STAMPS
+ * that fingerprint and the coordinator RECOMPUTES it from a fresh forge read before it reviews,
+ * rebases, or merges: when the two hand-written field projections drifted apart, every approved review
+ * was dropped. Never rebuild either shape at a call site. Pure.
+ *
  * Two independent places have to agree on this byte-for-byte: the pr-reviewer
  * security preflight STAMPS a fingerprint over the content it screened, and the
  * deterministic coordinator RECOMPUTES it from a fresh forge read immediately

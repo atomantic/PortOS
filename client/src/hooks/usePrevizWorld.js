@@ -1,3 +1,10 @@
+/**
+ * A music video previz's world environment, its map and its sets' loaded places, from
+ * `previz.worldId`.
+ *
+ * Use when: Previz step and previz player timeline shots.
+ */
+
 import { useMemo } from 'react';
 import useCatalogPlaces from './useCatalogPlaces.js';
 import { placeWorld } from '../../../server/lib/worldMap.js';

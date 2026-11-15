@@ -1,3 +1,7 @@
+/**
+ * MeatSpace health, genome, POST, memory-practice, and atomic POST training-run APIs.
+ */
+
 import { request } from './apiCore.js';
 
 // MeatSpace - Genome

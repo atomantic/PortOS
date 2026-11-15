@@ -1,3 +1,10 @@
+/**
+ * `useGoalCreate` and `useGoalOrganize`: shared goal suggestion preview, explicit apply, and guarded
+ * create flows for both Goals views.
+ *
+ * Use when: Goals List and Tree views.
+ */
+
 import { useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';

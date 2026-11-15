@@ -978,9 +978,10 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // while autonomous-job shipped-default snapshots handle future custom-job updates.
   it('refresh-local-llm-catalog follows the no-per-branch-changelog contract', () => {
     const current = DEFAULT_TASK_PROMPTS['refresh-local-llm-catalog'];
-    expect(PROMPT_VERSIONS['refresh-local-llm-catalog']).toBe(4);
+    expect(PROMPT_VERSIONS['refresh-local-llm-catalog']).toBe(5);
     expect(current).toContain('Do NOT create or edit a changelog file or fragment');
     expect(current).not.toContain('npm run changelog:add');
+    expect(current).toContain('lib/moduleSummaries.test.js');
     expect(current).not.toContain('.changelog/NEXT.md');
   });
 

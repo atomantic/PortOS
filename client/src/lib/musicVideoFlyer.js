@@ -1,3 +1,14 @@
+/**
+ * Printable 8.5x11 black-and-white release flyer: `resolveFlyer(project, opts)` merges saved settings
+ * with defaults and `buildFlyerHtml` renders it with a QR code.
+ *
+ * Printable 8.5×11 black-and-white release flyer: `resolveFlyer(project, { youtubeUrl })` (saved
+ * `publishKit.flyer` over defaults; the QR follows the YouTube link unless overridden),
+ * `buildFlyerHtml(flyer, { origin, autoPrint })`, `flyerImagePath` (cover, thumbnails or a picked
+ * gallery image), `FLYER_IMAGE_CHOICES`, `FLYER_STYLES` (80s or Clean look), `FLYER_LAYOUTS` (full
+ * page or 2 per page), `FLYER_TEXT_LIMITS`. Used by `components/musicVideo/FlyerPanel.jsx`.
+ */
+
 import { generateQrCodeSvg } from './qrCode.js';
 
 /**

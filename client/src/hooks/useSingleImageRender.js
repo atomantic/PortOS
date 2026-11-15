@@ -1,3 +1,13 @@
+/**
+ * Queue-one-image-render hook: builds options, POSTs generation, tracks the jobId and runs a
+ * once-per-key completion guard before `onComplete`.
+ *
+ * Queue-one-render / wait-for-completion jobId lifecycle: builds opts from `imageCfg`, calls
+ * `buildPrompt`, POSTs `generateImage`, tracks the `jobId` head, and runs a once-per-`(key, filename)`
+ * completion guard before `onComplete`. Use when: Single-image render slots driven by
+ * `EntryThumbSlot`/`MediaJobThumb` (style probe, characters step). Completion SSE stays in the thumb.
+ */
+
 import { useState, useRef, useCallback } from 'react';
 import { generateImage } from '../services/api';
 import { pipelineImageCfgToRenderOpts } from '../lib/pipelineImageDefaults';

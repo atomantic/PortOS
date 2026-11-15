@@ -1,3 +1,15 @@
+/**
+ * Hook running one series-scoped background run (Reverse Outline, Continuity Bible) from adoption to
+ * settlement, with stream-closed recovery.
+ *
+ * One series-scoped background run (Reverse Outline, Continuity Bible) from acknowledgement to
+ * settlement: `adopt(runId?)`, terminal-frame settle, and the stream-closed-without-terminal-frame
+ * recovery (status read → settle / `recovery: 'disconnected'` → `reattach()` / `'unknown'` →
+ * `retryStatus()`), plus `cancel()` that reconciles a `canceled:false` answer. Every async read is
+ * guarded by a run token; never POSTs a generation or polls. Use when: A series-keyed runner view
+ * whose server run can be evicted before the client attaches. Pair with `RunRecoveryBanner`.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePipelineProgress } from './usePipelineProgress.js';
 

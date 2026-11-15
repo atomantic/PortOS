@@ -1,3 +1,8 @@
+/**
+ * Notification vocabulary, forwarding labels, and the allowlisted `NOTIFICATION_ACTION_POLICY` used to
+ * admit source-owned obligations into the Review Queue.
+ */
+
 /** Notification vocabulary and labels shared by producers and forwarding settings. */
 export const NOTIFICATION_CATALOG = {
   MEMORY_APPROVAL: { key: 'memory_approval', label: 'Memory Approvals' },

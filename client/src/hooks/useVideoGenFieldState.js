@@ -1,3 +1,10 @@
+/**
+ * Mutable VideoGen field values, setters, and lifecycle refs initialized from URL handoff values.
+ *
+ * Use when: Internal state slice composed by `useVideoGenForm`; keep model reconciliation and
+ * submission behavior in their focused units.
+ */
+
 import { useRef, useState } from 'react';
 import { GROK_VIDEO_DEFAULT_DURATION } from '../lib/grokVideoClip.js';
 import { REACTOR_DEFAULT_CLIP_LENGTH } from '../lib/reactorVideoClip.js';

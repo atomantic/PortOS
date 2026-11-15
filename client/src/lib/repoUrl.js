@@ -1,4 +1,9 @@
 /**
+ * `parseRepoUrl(url)` / `isRepoUrl(url)` / `repoBrowseUrl(parsed)` / `parseGitHubUrl(url)` /
+ * `isGitHubRepoUrl(url)` — re-exported from `server/lib/repoUrl.js`, the authoritative repo-URL rule.
+ */
+
+/**
  * Repository URL parsing/normalization.
  *
  * Re-export of `server/lib/repoUrl.js` — the one definition of this rule,

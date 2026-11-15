@@ -1,4 +1,23 @@
 /**
+ * `providerPrerequisites(provider, opts)` reports whether a provider can run on this host, returning
+ * `{ met, missing }` for CLI binaries and required API keys.
+ *
+ * Can a provider run on this host AT ALL — `providerPrerequisites(provider, { runtime, gatewayKeySet
+ * })` → `{ met, missing: [{ code, label }] }` (CLI binary on PATH, API key stored for a public
+ * endpoint, the sibling key a gateway-backed wrapper inherits from the API record of its own gateway
+ * id unless it carries its own), plus `providerRuntimeKey` (`null` for an API provider, for a command
+ * carrying an explicit path, and for a provider with its own `PATH` in `envVars` — the runtime table
+ * only answers "does the BARE binary resolve on PortOS's PATH?", which is not those providers'
+ * question), `isPrivateNetworkEndpoint` (mirror of the client copy: loopback/RFC1918/tailnet CGNAT +
+ * ULA/`.ts.net`/single-label hosts need no key) and `describeMissingPrerequisites`. `runtime: null` =
+ * NOT PROBED and never counts as missing. Feeds BOTH `GET /api/providers` and the fallback chain in
+ * `aiToolkit/providerStatus.js` (via `services/providerPrerequisites.js`), so a `NEEDS SETUP` card and
+ * the router read one computation (#4611). `ROUTING_BLOCKING_CODES`/`blocksRouting(missing)` narrow
+ * what ROUTING may act on to the missing binary. Stored, inherited, and environment-backed credential
+ * findings stay presentation-only here because the server cannot assume the eventual process
+ * environment; the client card classifies sanitized env metadata through tri-state lookups (#4612).
+ * Pure.
+ *
  * Provider PREREQUISITES — the things that must already be true on this host
  * before a provider can run at all: the CLI binary it shells out to is on
  * PortOS's PATH, and the credential it authenticates with is stored.

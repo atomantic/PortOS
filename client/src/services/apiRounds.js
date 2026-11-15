@@ -1,3 +1,7 @@
+/**
+ * Rounds workbench CRUD (a cappella round writing + arranging voice layers + learning tracking).
+ */
+
 import { request } from './apiCore.js';
 
 // Rounds workbench API surface (a cappella round writing + learning). Every

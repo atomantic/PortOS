@@ -1,3 +1,6 @@
+// Shared 8 MiB media cap and transport ceiling accounting for polling base64 encoding plus 64 KiB
+// framing headroom.
+//
 // Keep the transport above the handler caps even on Engine.IO polling, which
 // base64-encodes binary attachments. Reserve 64 KiB for packet framing and
 // metadata, including a small over-cap payload reaching its handler refusal.

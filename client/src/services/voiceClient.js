@@ -1,3 +1,5 @@
+// Browser-side voice capture + playback (two modes).
+//
 // Browser-side voice capture + playback. Supports two modes:
 //   - Push-to-talk: MediaRecorder, manual start/stop.
 //   - Continuous:   AudioWorklet + energy VAD auto-submits on silence,

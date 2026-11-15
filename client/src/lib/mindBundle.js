@@ -1,6 +1,11 @@
 // Mind bundle format vocabulary, re-exported from the single server-side
 // definition (client/src/lib/README.md "One pure module, one definition").
 //
+// Persistent Mind portable-bundle format vocabulary, re-exported from the
+// `server/lib/mindBundleFormat.js` leaf (never copied): file extension, passphrase floor, size cap,
+// export scopes, and the import group ids / source scopes / choice values the import panel renders.
+// The sealing code stays server-side — that module imports node `crypto`.
+//
 // The client cannot import `server/lib/mindBundleCrypto.js` — that module pulls
 // node's `crypto` — so the format names live in a sibling leaf with no node
 // imports and both sides read THAT. A mirrored copy here would drift the first

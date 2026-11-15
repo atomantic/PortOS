@@ -2,6 +2,14 @@
  * Cross-machine identity for MeatSpace health rows (blood / epigenetic / eye
  * records) that federate through the `row-union` snapshot merge (#12432).
  *
+ * Cross-machine identity for MeatSpace health rows (#12432): `rowIdentityKeys` lists the keys a row
+ * answers to (its id and `aliasIds`, plus a `legacy-<sha256>` content key when it has no `createdAt`),
+ * `mergeRowCopies` collapses every group of rows sharing a key (transitively) to one row by per-row
+ * `updatedAt` LWW under its smallest minted id for the `row-union` snapshot merge, `rowAnswersTo` /
+ * `retainContentKey` keep edits and deletes addressed by retired keys working, `normalizeLegacyRows`
+ * stamps and dedupes legacy eye exams (also migration 429), and `ROW_TOMBSTONES_KEY` names the
+ * per-file deletion markers. Pure.
+ *
  * Before #12432 an id-less eye exam was stamped with `randomUUID()` on each
  * machine's first read, so two machines gave the same exam two ids and every
  * sync appended the peer's copy. Rows created since carry `createdAt`, and

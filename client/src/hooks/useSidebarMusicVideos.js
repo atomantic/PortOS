@@ -1,3 +1,10 @@
+/**
+ * Music video projects for the Create > Music Video grandchildren (built on `useFocusRefreshedList`,
+ * reloads on `music-video:project:changed`).
+ *
+ * Use when: The sidebar music-video projects section.
+ */
+
 import * as api from '../services/api';
 import { useFocusRefreshedList } from './useFocusRefreshedList.js';
 

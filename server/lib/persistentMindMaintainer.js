@@ -1,4 +1,9 @@
-/** Machine-local intent, separate from capability grants and provider choices. */
+/**
+ *  Machine-local intent, separate from capability grants and provider choices.
+ *
+ * Machine-local maintainer intent, inference allowance schema, normalization and additive wake
+ * charter; never grants authority.
+ */
 import { z } from 'zod';
 
 export const maintainerInferenceSchema = z.object({

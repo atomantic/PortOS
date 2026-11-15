@@ -1,6 +1,22 @@
 /**
  * Prompt-stage search + grouping for the Prompt Manager's Stages pane (#3284).
  *
+ * Search + grouping for the Prompt Manager's Stages pane (#3284). `buildStageGroups(stages, { query,
+ * systemOnly, systemStageKeys })` → `{ groups, matchCount, totalCount }`, filtering the `{ key: config
+ * }` stage map on title + description + key (AND-token, reusing `mediaSearch.js`'s
+ * `tokenizeQuery`/`matchHaystack`) and bucketing survivors into ordered `[{ key, label, stages: [[key,
+ * config], …] }]` groups (`Other` pinned last). `stageGroupLabel(name)` derives the family from the
+ * `Family — Specific` dash convention (em dash, en dash, or a spaced ASCII hyphen — a user typing
+ * their own stage name reaches for the last), falling back to the `STAGE_WORD_PREFIXES` word list
+ * (`CoS Agent Briefing`) and then `Other`; `stageGroupKey(label)` case-folds it into the group's
+ * identity, so `Pipeline — X` and `pipeline — y` are one group rather than twin headers that render
+ * alike under `uppercase`; `stageGroupLabelFor(key, config)` / `stageGroupKeyFor(key, config)` are the
+ * name-or-key forms both the bucketing and the page's auto-expand call, so a deep-linked stage opens
+ * the group it actually renders in. `stageHaystack(key, config)` is the searchable string. The
+ * system-stage list is NOT mirrored here — `GET /api/prompts` ships it as `systemStages` (the
+ * `SYSTEM_STAGE_KEYS` list in `server/lib/promptSystemStages.js`) and the page threads it in as
+ * `systemStageKeys` (#3314). Pure — no React, no I/O.
+ *
  * The stage list is 120+ entries deep and the taxonomy is already encoded in the
  * display names — `Pipeline — Prose Draft`, `Writers Room — Live Continuation`,
  * `CoS Agent Briefing`. These helpers turn that convention into navigable

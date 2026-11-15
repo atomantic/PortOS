@@ -1,3 +1,31 @@
+/**
+ * Music video shot sheet builders: `shotSheetRows(project)` lists each shot's lyric, plan and camera
+ * in song order, and `shotSheetMapRows` resolves map-tap selections.
+ *
+ * Music Video shot sheet: `shotSheetMapRows(rows, filter)` (the rows a stretch tapped on the map
+ * stands for), `shotSheetRows(project)` (every shot's sung lyric, plan and camera in song order, and
+ * `frameOutdated` when the selected frame was rendered from an earlier wording of its frame prompt),
+ * `shotSheetProblems(row, previous)` (empty columns, an unheld in-world camera, a removed camera, an
+ * action copied from the shot before, by rule alone), `shotSheetOptions(project, field)` (each
+ * column's pick list), `shotSheetBulkEdits(rows, field, value)` (set a column across shots),
+ * `shotSheetDoneProgress(project)` (shots marked Done, null before any shot has a sheet),
+ * `shotSheetMarkDoneEdits(rows)` (Mark all done), `shotSheetMediaEdits(rows)` (bring shots in line
+ * with their camera's photo or video output), `mergeShotSheetBackfill` (an AI proposal fills only
+ * empty columns), `shotSheetStretches(rows, readValue)` and `SHOT_SHEET_MAP_BARS` (the location,
+ * camera and time of day bars: consecutive shots with one value as stretches over the song),
+ * `normalizeShotSheet`, `shotSheetCast`, and the camera limits. `shotSheetDrivesPrompt(scene)` and
+ * `shotSheetPromptLines(project, scene)` (a shot with `shotSheet.promptFromSheet` adds its columns as
+ * labeled details to its still and clip prompts, its frame and motion prompts becoming general
+ * prompts; other shots' sheets aren't sent to a model). `shotCameraRuleText(project, scene)` is the
+ * shot's camera block (name, kind and rule; an owned in-world camera says it is taking the picture and
+ * is not in the frame), composed into the frame, end frame and clip even when the sheet does not drive
+ * the prompt. `shotOmitsOwnedCameraDetail(project, scene, subjectName, detail)` drops that camera from
+ * the owner's and holder's always-visible details on that shot. `shotSheetFocalSubject(scene)` (null
+ * with no sheet, '' when a sheet names nobody), `shotSheetFramingConflicts`, `sheetDirectionOverlay`,
+ * `applyShotSheetMedium` (the camera's medium wins over an automatic visual-layer pin; a real director
+ * pin wins; `fromSheet` is not stored), `lyricOverlayOff` and `VISUAL_LAYER_PIN_RATIONALE`. Pure.
+ */
+
 import { activeMusicVideoSubjects } from './musicVideoCastSelection.js';
 /**
  * The shot sheet: every shot's plan on one screen, read and edited without

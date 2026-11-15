@@ -1,3 +1,7 @@
+/**
+ * Admitted runtime recording updates with rollback of the prior file pair on failure.
+ */
+
 import { readFile } from 'fs/promises';
 import { atomicWrite, unlinkGuarded } from './fileUtils.js';
 import { withBackupAssetPublication } from './backupSnapshotBoundary.js';

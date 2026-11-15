@@ -1,3 +1,9 @@
+/**
+ * Moltworld WebSocket feed.
+ *
+ * Use when: Moltworld surfaces only.
+ */
+
 import { useState, useEffect, useCallback, useRef } from 'react';
 import socket from '../services/socket';
 import * as api from '../services/api';

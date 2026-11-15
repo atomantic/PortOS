@@ -2,6 +2,10 @@
  * Machine-local continuation receipts for a Persistent Mind's outbound
  * Eidoverse guest visits (#9791).
  *
+ * Bounded machine-local continuation receipts for a mind's outbound Eidoverse visits:
+ * `buildVisitReceiptEventData`, `selectOpenVisitReceipts`, `renderVisitContinuationPrompt` — never the
+ * remote ticket or result content.
+ *
  * `eidoverse.visit` returns an opaque local `visitId` that `visit-chat` and
  * `leave` require, but the ledger only kept "eidoverse.visit completed", so a
  * visit that used the turn's last tool call could not be continued on the next

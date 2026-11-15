@@ -1,3 +1,11 @@
+/**
+ * `validateRequest(schema, data)` — the request-validation helper (Zod `safeParse`, throws
+ * `ServerError` 400 `VALIDATION_ERROR`).
+ *
+ * Its own leaf (imports only `errorHandler.js`) so the ~113 route/service files that need only this
+ * function don't load the whole `validation.js` schema graph (#16096). `validation.js` re-exports it.
+ */
+
 import { ServerError } from './errorHandler.js';
 
 /**

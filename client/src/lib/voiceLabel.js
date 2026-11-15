@@ -1,3 +1,7 @@
+// `formatVoiceLabel(v, engine?)` — display label for a TTS voice record.
+//
+// Engine-specific formatters plug into a lookup table; new engines extend that map.
+//
 // Display-formatter for TTS voice entries. Engine-specific shapes plug in
 // via the ENGINE_FORMATTERS table — adding a new engine here is the single
 // surface every voice-picker UI (settings VoiceTab + character VoicePicker

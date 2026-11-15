@@ -1,8 +1,12 @@
 /**
- * Spectrogram picture of PCM audio — an RGB pixel buffer on a log-frequency
- * axis, for handing a model an image of what its painted canvas (#8464)
- * actually sounds like. Pure: returns raw pixels; the caller encodes them
- * (musicWaveform.js uses sharp).
+ * Spectrogram picture of PCM audio — an RGB pixel buffer on a log-frequency axis, for handing a model
+ * an image of what its painted canvas (#8464) actually sounds like.
+ *
+ * `spectrogramPixels(pcm, { sampleRate, width, height, minHz, maxHz })` → raw RGB pixels of a
+ * log-frequency STFT spectrogram (80 dB range) — the picture a model gets of its own painted canvas in
+ * the review pass (#8464). Pure; the caller encodes the PNG.
+ *
+ * Pure: returns raw pixels; the caller encodes them (musicWaveform.js uses sharp).
  *
  *   spectrogramPixels(pcm, { sampleRate, width, height, minHz, maxHz })
  *     → { width, height, pixels: Uint8Array(width × height × 3) }

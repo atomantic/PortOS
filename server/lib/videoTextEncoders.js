@@ -1,6 +1,49 @@
 /**
  * Swappable text-encoder (prompt conditioner) registry for local video runtimes.
  *
+ * Swappable prompt conditioners for local video runtimes. MiniMax H3 reads the *unnormalized* hidden
+ * state after Qwen3-VL language layer 49 (layers 50-63, the final norm and `lm_head` are never
+ * evaluated), so any checkpoint carrying the same embedding + layers 0-49 + vision tower is a drop-in
+ * conditioner — swapping it changes how the model reads a prompt without touching the diffusion
+ * weights. `TEXT_ENCODERS_BY_RUNTIME` declares the shipped options per runtime (pinned repo/revision
+ * plus an explicit `files` LIST — one repackaged safetensors, or just the shards of an upstream
+ * checkpoint that carry parameters the loader actually builds; in code rather than the media-models
+ * registry so a stale `data/media-models.json` can't name a file the runner can't map);
+ * `videoTextEncoderOptions(model)` returns the TRUE list stock-first (it deliberately does NOT
+ * collapse a one-entry runtime to `[]` — that is a presentation rule, and folding it in here would
+ * change what the server believes a model supports and empty the "offers …" list in the error;
+ * `TextEncoderPicker` owns the hide-when-there-is-no-real-choice check), `isStockTextEncoder(id)`
+ * makes absence and the `stock` sentinel the same request, `resolveVideoTextEncoder(model, id)`
+ * returns `null` for the stock choice or throws `VIDEO_TEXT_ENCODER_UNSUPPORTED` (with the
+ * non-throwing `supportsVideoTextEncoder` + `videoTextEncoderUnsupportedError` split out so the
+ * request path can reject before staging uploads), and `downloadableVideoTextEncoders()` (deduped by
+ * id — the table is keyed by RUNTIME, so one conditioner can be offered by two) /
+ * `downloadableVideoTextEncoder(id)` feed the `/api/video-gen/text-encoders/:id/(download|repair)`
+ * lane. Two loader-mechanics fields exist because a ComfyUI-packaged conditioner is namespaced
+ * differently from the HF checkpoint the MLX port matches: `keyPrefixMap` (`model.` →
+ * `model.language_model.`, `visual.` → `model.visual.`) is applied to every checkpoint key by
+ * `scripts/generate_minimax_h3.py` BEFORE the pinned loader sees it — no fork of the pinned runtime —
+ * and `finalNormKey` names where the runner synthesizes a ones-filled `norm.weight` for a checkpoint
+ * published without one (correct upstream, since H3 reads the state *before* the norm, but the pinned
+ * loader refuses to load with any parameter missing). Both are absent for an UPSTREAM Qwen3-VL-32B
+ * checkpoint, which already uses the loader namespace and ships its own norm. A candidate must BE
+ * Qwen3-VL-32B (the shim reuses upstream's config/tokenizer/processor) — a different Qwen generation
+ * is not a substitute however close its conditioning width looks; see
+ * docs/features/video-text-encoders.md. `publicTextEncoderOption(entry)` is the client projection and
+ * deliberately drops both, so the UI can't reimplement the remap. The `ltx25` table (#4320) uses a
+ * third mechanic, `configOverrides`, because an LTX-2.5 pack's OWN Gemma 4 tower wins over `--gemma`
+ * inside the pinned fork: the substitution is a standalone shim directory whose generated
+ * `config.json` is the substitute's own with these keys merged over it (only ever the `model_type`
+ * label a unified checkpoint gets wrong — never `text_config`/`quantization`), and a candidate must BE
+ * Gemma 4 12B at 48 layers / hidden 3840 / vocab 262144 / `k_eq_v`. `verified` gates a substitute out
+ * of BOTH lanes (picker AND download) until it has been A/B-rendered against its runtime's stock
+ * conditioner — required on every non-built-in entry and fail-closed on absence, so a new entry is
+ * unreachable until someone states a verdict; both ltx25 substitutes are `verified: false` today.
+ * `declaredVideoTextEncoders()` is the UNFILTERED table for shape/invariant checks only — never the
+ * render or download path, and `videoTextEncoderRuntimes()` enumerates the table's runtime keys so
+ * parity/shape tests cover every runtime rather than the one that happened to exist when they were
+ * written.
+ *
  * MiniMax H3 does not use its Qwen3-VL-32B conditioner as a language model: the
  * DiT reads the **unnormalized** hidden state after language layer 49 and feeds
  * it straight into `condition_proj`. Layers 50-63, the final norm and `lm_head`

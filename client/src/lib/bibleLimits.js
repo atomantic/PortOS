@@ -1,4 +1,7 @@
 /**
+ * `BIBLE_LIMITS` re-exported from the pure leaf `server/lib/bibleLimits.js`, plus the client-only
+ * `capImageRefs` / `appendImageRefById` for the optimistic imageRefs-append paths.
+ *
  * Re-export of `BIBLE_LIMITS` from the pure server leaf `server/lib/bibleLimits.js`
  * (the caps every canon sanitizer measures against), plus the client-only
  * `capImageRefs` / `appendImageRefById` helpers the optimistic imageRefs-append

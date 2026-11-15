@@ -1,4 +1,11 @@
 /**
+ * Egress proxy for the sandboxed install phase: `decideEgressConnect`, `isNonPublicAddress`, and
+ * `DOCKER_EGRESS_PROXY_SOURCE`, an allowlisting HTTPS CONNECT proxy.
+ *
+ * The install phase's egress proxy (#12844): `decideEgressConnect` (allowlisted host + port, no IP
+ * literals), `isNonPublicAddress`, and `DOCKER_EGRESS_PROXY_SOURCE`, the builtins-only HTTPS CONNECT
+ * proxy program the proxy container runs with `node -e`.
+ *
  * The install phase's egress proxy (#12844): a Node builtins-only HTTPS
  * CONNECT proxy that runs inside its own hardened container, the only member
  * of a run's internal Docker network besides the install container. It allows

@@ -1,5 +1,19 @@
 // IC-LoRA weight registry for the local LTX-2 video runtime (issue #3100).
 //
+// IC-LoRA weight registry for the local LTX-2 remix modes (`IC_LORA_MODES`, `IC_LORA_MODE_VALUES`,
+// `listIcLoraWeights()`, `isIcLoraMode(mode)`, `icLoraSpecForMode(mode)`, `icLoraRepos()`,
+// `icLoraWeightCandidates(spec)`, `findCachedIcLoraWeight(spec)`, `resolveIcLoraWeight(mode)` →
+// `{path,cached,spec}`). Single source of truth mapping each remix mode (`ic-control`, `ic-colorize`,
+// `ic-ingredients`) → its HF repo/filename, reference-count rule, per-weight
+// `referenceDownscaleFactor` (read from the weight's safetensors metadata, never assumed), and input
+// surface (`referenceKind: 'video' | 'image'`). A `requiresPreDownload` spec (Ingredients) suppresses
+// `resolveIcLoraWeight`'s bare-repo-id fallback — the pipeline would `snapshot_download` it, and its
+// candidates are a gated first-party repo plus a ~708 GB aggregate mirror, so the weight must be
+// pre-fetched single-file instead. Also owns the two rules derived from that data:
+// `assertIcReferenceCount(spec,count,fail)` / `describeIcReferenceRange(spec)` and
+// `icResolutionIssue(spec,w,h)` (the output-resolution divisibility its reference encoder imposes).
+// Mirrored to `client/src/lib/videoGenParams.js`; `icLoraWeights.parity.test.js` diffs the two.
+//
 // The `ltx2` runtime already ships `ltx_pipelines_mlx.ic_lora.ICLoraPipeline`
 // — a two-stage pipeline that conditions generation on a *reference video*
 // channel with an IC ("In-Context") LoRA fused into Stage 1. Which capability

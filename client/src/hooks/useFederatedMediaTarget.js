@@ -2,6 +2,17 @@
  * "Render here, or on a peer?" — one hook behind every interactive render form
  * that can route a job to a federated media provider (#4348).
  *
+ * 'Render here, or on a peer?' for one media kind (#4348): loads the opted-in provider peers,
+ * intersects the local per-kind allowlist with the peer’s advertised capabilities, and resolves one
+ * readiness verdict via `resolvePeerMediaReadiness`. Returns the selection state plus
+ * `submissionFields` (`mediaProviderPeerId`/`mediaProviderEngine`/`modelId`), a `blockedReason`
+ * carrying the remedy, and `verify()` which re-runs the same gates against the clock at submit time.
+ * `supports(feature)` and `acceptsInput(role)` are bound over the selected peer’s status snapshot so
+ * no form holds it directly — the underlying helpers take that status optionally and fall back to the
+ * pre-#4826 per-capability reading when it is omitted, which would fail open. Never polls — a capacity
+ * window expires on the clock, so only the submit-time check is trustworthy. Use when: Any render form
+ * offering a federated target: `RemoteMediaTargetPicker` in Image Gen, Video Gen, Music Studio.
+ *
  * Three surfaces now ask this question (Music Studio, Image Gen, Video Gen).
  * Each one would otherwise have to fetch the peer list, intersect the local
  * allowlist with the peer's advertised capabilities, and decide for itself what

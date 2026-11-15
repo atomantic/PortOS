@@ -1,10 +1,15 @@
 /**
- * FableLoom Board view — one path through an episode's scene graph laid out as
- * storyboard panels. The path starts at the episode's start scene and follows
- * the first choice at each fork unless the reader picked another (`via`, the
- * chosen transition ids, kept in the URL). A fork's other choices travel with
- * its panel as alternates. Consecutive scenes of the same dramatic scene form
- * one beat, as panels do on a storyboard. Read-only; browser-safe.
+ * FableLoom Board view — one path through an episode's scene graph laid out as storyboard panels.
+ *
+ * FableLoom Board view: `fableLoomBoardPath` walks one path from an episode's start scene (first
+ * choice at each fork unless a picked transition in `via`) into storyboard beats of panels with each
+ * fork's choices, stopping at an ending, a loop or a dead end; `fableLoomBoardPick` swaps a fork's
+ * pick. Browser-safe.
+ *
+ * The path starts at the episode's start scene and follows the first choice at each fork unless the
+ * reader picked another (`via`, the chosen transition ids, kept in the URL). A fork's other choices
+ * travel with its panel as alternates. Consecutive scenes of the same dramatic scene form one beat, as
+ * panels do on a storyboard. Read-only; browser-safe.
  */
 
 const sceneSeconds = (node) => (Number.isFinite(node?.shot?.durationSeconds) ? node.shot.durationSeconds : null);

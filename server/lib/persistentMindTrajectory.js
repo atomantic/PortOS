@@ -1,3 +1,14 @@
+/**
+ * Pure persistent-mind trajectory helpers: vocabulary, sequence cursor parsing, replay projection,
+ * rollup validation and bounded allowlisted per-provider-call execution receipts.
+ *
+ * Pure persistent-mind trajectory vocabulary, sequence cursor parsing, replay projection,
+ * provenance-tagged rollup validation, bounded strictly-allowlisted per-provider-call execution
+ * receipts (route, run id, elapsed time, outcome, usage that stays `unknown` rather than zero) with
+ * their safe public projection, and hard-budget context assembly with explicit
+ * empty/missing/failed/stale summary states.
+ */
+
 import { selectPersistentMindContextEvents, renderPersistentMindContextEvent } from './persistentMindContextEvents.js';
 import { fenceBlock, UNTRUSTED_REFERENCE_NOTICE } from './promptFencing.js';
 /**

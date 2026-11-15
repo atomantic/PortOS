@@ -1,6 +1,16 @@
 /**
  * Runtime scratch PortOS itself writes into an agent worktree.
  *
+ * Runtime scratch PortOS itself writes into an agent worktree and never commits —
+ * `PUBLIC_REVIEW_INPUT_FILENAME` / `PUBLIC_REVIEW_PATCH_DIRNAME` (the public-review bundle
+ * materialized by `services/modelAbuseGuard.js`), the `AGENT_SCRATCH_PATHS` list, prefix-aware
+ * `matchesScratchRoot(path, roots)` and `isAgentScratchPath(path)`. `classifyWorktreeDirt`
+ * (`services/worktreeManager.js`) subtracts the review roots for every caller and uses the same
+ * matcher for its per-call `ignoredPaths`. Ignored-payload retirement also recognizes the exact
+ * `.cache/pregate/report.json` runtime receipt through `isAgentScratchPath`, without exempting its
+ * directory, siblings or descendants. Only static names live here; a run-scoped name like
+ * `.agent-done-<agentId>` (`agentSentinel.js`) is passed per call instead.
+ *
  * These files are pipeline state, never work product: the public-review harness
  * materializes a screened input bundle into the worktree it hands a reviewer
  * model, and nothing ever commits it. `git status` cannot tell that apart from a

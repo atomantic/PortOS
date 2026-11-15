@@ -1,3 +1,14 @@
+/**
+ * API client for creative catalog ingredients (CRUD, facets, by-id cards, lock toggle) and scrap
+ * ingest.
+ *
+ * Creative catalog ingredients (list/create/update/delete + `listCatalogIngredientsByIds` / facets,
+ * bounded `getCatalogIngredientCards` and flag-only `setCatalogIngredientLock`) scrap ingest
+ * (create/extract/commit + url/file/voice/brain), reference sheets (`listCatalogSheetVariants` /
+ * `previewCatalogSheet` / `renderCatalogSheet`), and local consolidation
+ * preview/apply/history/recovery.
+ */
+
 import { request } from './apiCore.js';
 import { fetchByIds, normalizeIds } from './apiBatch.js';
 

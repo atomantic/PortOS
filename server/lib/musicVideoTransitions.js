@@ -1,8 +1,17 @@
 /**
- * Music Video cut transitions: short VHS glitches that ride on top of a cut
- * between two shots. A glitch never adds time or moves a cut: it repaints a
- * few frames around the cut (the outgoing shot's last frames and the incoming
- * shot's first) and every clip keeps its timing.
+ * Music Video cut transitions: short VHS glitches that ride on top of a cut between two shots.
+ *
+ * Music Video cut transitions: VHS glitch styles a shot sets on the cut into (`transitionIn`) or out
+ * of (`transitionOut`) it, `transitionGlitchFrames` (the glitched frames of a cut timeline, never
+ * moving a cut), `transitionFrameAt`, `sceneTransitionSections`,
+ * `imageEffectGlitchFrames`/`mergeGlitchFrames` (end-frame glitch effects in the same shape),
+ * `shotGlitchFrames`/`sceneShotGlitchFrames` (glitches a shot sets at moments inside it,
+ * `scene.glitches`), `blockBox`, `edgeGlows` (an effect's edge glows as fading ramps) and
+ * `musicVideoTransitionFilter` (per-frame ffmpeg filters for the final render). Styles span VHS, film
+ * and camera looks. Browser-safe; the storyboard animatic paints the same frames.
+ *
+ * A glitch never adds time or moves a cut: it repaints a few frames around the cut (the outgoing
+ * shot's last frames and the incoming shot's first) and every clip keeps its timing.
  *
  * A shot sets `transitionOut` (the cut to the next shot) and/or
  * `transitionIn` (the cut from the previous one); both name the same cut, so

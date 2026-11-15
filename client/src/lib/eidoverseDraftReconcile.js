@@ -1,8 +1,12 @@
-// Reconciling the Eidoverse world-config drafts (recipe, asset overrides,
-// label aliases) with a server response that lands while the user may have
-// kept typing. Every function here is pure; the revision protocol that decides
-// WHETHER a response may touch the draft at all lives in
-// `hooks/useConfigDraftRevision.js`.
+// Reconciling the Eidoverse world-config drafts (recipe, asset overrides, label aliases) with a server
+// response that lands while the user may have kept typing.
+//
+// Pure three-way merge of the Eidoverse world-config drafts (recipe, asset overrides, label aliases)
+// with a server response, plus the single `shouldReplaceDraft` rule for when a response may overwrite
+// the draft.
+//
+// Every function here is pure; the revision protocol that decides WHETHER a response may touch the
+// draft at all lives in `hooks/useConfigDraftRevision.js`.
 //
 // The three-way merge always speaks in four roles:
 //   current      what the user has in the draft right now

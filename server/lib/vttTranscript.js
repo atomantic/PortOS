@@ -1,6 +1,10 @@
 /**
  * WebVTT / SRT subtitle → readable plain-text transcript.
  *
+ * WebVTT/SRT → readable prose. `vttToPlainText(vtt)` (paragraph-joined transcript), `vttToLines(vtt)`
+ * (cleaned caption lines), `cleanCaptionLine(line)`. Collapses YouTube auto-captions' rolling
+ * repetition and strips inline `<c>`/timestamp markup. Used by the brain YouTube ingest.
+ *
  * yt-dlp hands us caption files, not prose. YouTube's AUTO-generated captions in
  * particular are a rolling two-line display: every cue repeats the tail of the
  * previous cue and appends a few new words, so a naive "strip the timings and

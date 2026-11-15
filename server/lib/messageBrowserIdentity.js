@@ -1,3 +1,12 @@
+/**
+ * Outlook message-browser helpers: row extraction, canonical ingestion identity, legacy matching,
+ * `createBrowserMessageMatcher`, detail mapping and identity-safe action scripts.
+ *
+ * Shared Outlook row extraction, canonical row/member ingestion identity, conservative legacy
+ * matching, per-sync exact identity indexing (`createBrowserMessageMatcher`), detail mapping, and
+ * identity-safe browser action scripts; exact unique targets and confirmed row removal.
+ */
+
 import { createHash } from 'node:crypto';
 
 /** DOM reader shared by Outlook ingestion and destructive browser actions.

@@ -1,3 +1,7 @@
+/**
+ * Identity section + chronotype + scheduling schemas.
+ */
+
 import { z } from 'zod';
 import { FEATURE_AREA_IDS } from './goalFeatureMap.js';
 

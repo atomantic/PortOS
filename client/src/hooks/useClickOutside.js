@@ -1,3 +1,10 @@
+/**
+ * Fire `onOutside` on mousedown outside a ref — or outside *every* ref in an array.
+ *
+ * Use when: Popovers, menus, drawers. Pass `[triggerRef, panelRef]` for a portaled panel, which is
+ * outside the trigger's subtree.
+ */
+
 import { useEffect, useRef } from 'react';
 
 // Calls onOutside when a mousedown lands outside the ref'd element(s).

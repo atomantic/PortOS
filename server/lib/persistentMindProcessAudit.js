@@ -1,4 +1,9 @@
-/** Bounded private process evidence and closed-vocabulary public findings. */
+/**
+ *  Bounded private process evidence and closed-vocabulary public findings.
+ *
+ * Bounded process-audit schemas, deterministic observations, measured recovery ratios, and
+ * closed-vocabulary synthetic finding renderer.
+ */
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
 

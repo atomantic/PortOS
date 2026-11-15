@@ -2,6 +2,16 @@
  * `blockedCategory` vocabulary — which blocks are the system's to clear, and
  * which are a person's.
  *
+ * The `blockedCategory` vocabulary — which blocks are the system's to clear and which are a person's,
+ * read by the pause logic, the failure reaper, and the investigation auto-retry so they can't drift
+ * into three literal sets. `PAUSED_BLOCKED_CATEGORIES` (paused until something outside the task
+ * changes — keeps the resume pointer), `USER_DECISION_BLOCKED_CATEGORIES` (user intent / open decision
+ * — the reaper's exemption), `NON_AUTO_RETRY_BLOCK_CATEGORIES` (their union — a completed
+ * investigation must never revive these), `TIMED_COOLDOWN_BLOCKED_CATEGORIES` (a timer clears these —
+ * the cooldown sweeper revives them, so block reporters stay quiet),
+ * `PROVIDER_CONFIG_BLOCKED_CATEGORY` (the shared literal the agent-spawn stamp site uses, so the stamp
+ * cannot drift from the two sets it belongs to). Pure.
+ *
  * A blocked task carries a `blockedCategory` naming WHY it stopped, and three
  * separate automations have to answer "may I move this?" from that one value:
  * the pause logic (does this block keep a resume pointer?), the failure reaper

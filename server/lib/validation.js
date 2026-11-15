@@ -1,3 +1,13 @@
+/**
+ * Catch-all Zod schemas for app, process, provider, social, GitHub and backup routes, plus the
+ * `validateRequest` middleware and shared helpers.
+ *
+ * Catch-all Zod schemas (app/process/provider, social accounts, GitHub, backup/sharing,
+ * document/legacy-export) + the `validateRequest` middleware + shared helpers (`optionalBooleanMap`,
+ * `isSafeRecordId`, `parseIndexParam`, `parsePagination`). Re-exports the per-domain validation files
+ * below so existing deep imports keep working.
+ */
+
 import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from './videoLoraStageValidation.js';
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 import { federatedSourceAudioSchema } from './federatedMediaWire.js';

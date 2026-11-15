@@ -1,3 +1,8 @@
+/**
+ * Versioned festival packet schema, portable text validation, field labels and selected plain-text
+ * exports.
+ */
+
 import { z } from 'zod';
 
 export const FESTIVAL_FIELDS = [

@@ -1,6 +1,14 @@
 /**
  * Autonomous-job cadence vocabulary (pure).
  *
+ * Autonomous-job cadence vocabulary (pure). `INTERVAL_OPTIONS` (picker rows, `ms: null` for a cadence
+ * with no recurrence), `ON_DEMAND_INTERVAL`, `JOB_INTERVAL_VALUES` (every legal stored cadence, incl.
+ * `custom`), `resolveIntervalMs(interval, customMs)` → ms or `null` (the no-interval sentinel — never
+ * falls through to `DAY`), and `isOnDemandJob(job)` for the three due/next-fire implementations. Lives
+ * here so `cosValidation.js` can validate the cadence without a lib → services import;
+ * `services/autonomousJobs/constants.js` re-exports it. Separate vocabulary from the
+ * scheduled-CoS-task `INTERVAL_TYPES`.
+ *
  * The interval-mode vocabulary for CoS autonomous jobs — the picker rows, the
  * cadence → milliseconds resolver, and the "this job has no clock" predicate.
  * Lives in lib rather than `services/autonomousJobs/constants.js` so the Zod

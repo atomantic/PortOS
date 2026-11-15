@@ -1,3 +1,8 @@
+/**
+ * Shared Zod shape and vocabulary for anchored calendar recurrences that cannot be represented
+ * faithfully by five-field cron.
+ */
+
 import { z } from 'zod';
 
 // Calendar recurrence is deliberately separate from five-field cron. Cron is

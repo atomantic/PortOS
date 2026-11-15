@@ -1,3 +1,9 @@
+// `MUSCRIPTOR_MODELS` (audio → MIDI size tiers `small`/`medium`/`large`) + `DEFAULT_MUSCRIPTOR_MODEL`.
+//
+// Single source consumed by the transcribe `<select>`s in `MusicVideo.jsx` and
+// `ReferenceAnalysis.jsx`. Mirrors the server's `MUSCRIPTOR_MODELS` in
+// `server/services/audioMidiTranscription.js`.
+//
 // Single source of truth for the MuScriptor audio → MIDI model-size tiers.
 // Consumed by the two transcription trigger points:
 //   - pages/MusicVideo.jsx — the source-track `MIDI` button's size <select>.

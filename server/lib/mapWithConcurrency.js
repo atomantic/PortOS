@@ -1,4 +1,8 @@
 /**
+ * Generic bounded-concurrency async mapper that preserves input order while capping in-flight work.
+ */
+
+/**
  * Map items with a bounded number of in-flight async operations while
  * preserving input order in the returned array.
  */

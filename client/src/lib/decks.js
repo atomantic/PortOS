@@ -1,3 +1,10 @@
+// Re-export of server deck templates: alphabet, card status and completion rules, render-prompt
+// composition, `deckCardSize` and `deckCardAspectStyle`.
+//
+// Deck alphabet, card roster/status/completion rules, face-orientation defaults/prompts, render-prompt
+// composition, and `deckCardSize` / `deckCardAspectStyle` (thumbnail box from the deck's trim) —
+// re-exported from `server/lib/deckTemplates.js` (one definition, no client copy).
+//
 // Decks — the deck alphabet, card status/completion rules and render-prompt
 // composition, re-exported from the server's pure leaf so the client never
 // carries a second copy of the roster or the completion math.

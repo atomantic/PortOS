@@ -1,4 +1,10 @@
 /**
+ * `compareSemver(a, b)` — semver ordering (-1/0/1) with pre-release precedence and build-metadata
+ * stripping.
+ *
+ * Shared by the self-update checker (`updateChecker.js`) and the local-LLM Ollama update detector
+ * (`localLlm.js`). Inputs must be `v`-stripped.
+ *
  * Version-string comparison shared across PortOS — the self-update checker
  * (upstream PortOS releases) and the local-LLM backend update detector (Ollama
  * GitHub releases) both need the same semver ordering, so it lives here rather

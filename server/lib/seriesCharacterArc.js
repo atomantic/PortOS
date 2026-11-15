@@ -1,6 +1,15 @@
 /**
  * Per-character story arcs for a series (#1293).
  *
+ * Per-character story-arc shapes (`series.characterArcs[]`): want/need, start → end state, transition
+ * beats. `CHARACTER_ARC_LIMITS` / `TRANSITION_KINDS` + `TRANSITION_KIND_LABELS` /
+ * `CHARACTER_ARC_STATUSES` (a pure leaf — the arc editor in `PipelineSeries.jsx` imports the caps,
+ * kinds and labels, so no Node built-in here; ids come from `uuid.js`). Sanitizers +
+ * `renderCharacterArcsForPrompt` for the `arc.transitions` editorial check, `characterArcEvidenceRefs`
+ * (the transition-id set a lens anchor resolves against), and `renderCharacterEvolutionsForPrompt` —
+ * the cast-level render of `characterEvolution.js`'s five-stage lens the character-arc checks and the
+ * arc planner share.
+ *
  * Sibling to `storyArc.js` — that module owns the *series-level* temporal spine
  * (the multi-season arc + the protagonist's single emotional fortune curve);
  * this one owns the *per-character* arcs: each cast member's want/need, their

@@ -1,3 +1,14 @@
+/**
+ * Story Builder step run state: `StoryStepRunProvider` holds one generate/refine run slot per step
+ * (SSE, phase, handlers) and `useStoryStepRun(stepId)` reads it.
+ *
+ * Story Builder step generate/refine runs hoisted above the step rail: `<StoryStepRunProvider
+ * sessionId>` owns one run slot per step id (SSE subscription, phase, `onComplete`/`onError` handlers,
+ * arbitrary `meta`), `useStoryStepRun(stepId)` reads/drives it. Use when: Any Story Builder surface
+ * that starts a step run — the panel unmounts on rail navigation, so run state must not live in it
+ * (#3905).
+ */
+
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { storyStepProgressSseUrl } from '../services/api';
 import { usePipelineProgress } from './usePipelineProgress';

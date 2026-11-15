@@ -1,6 +1,24 @@
 /**
  * Goal-fidelity FOLLOW-UP contract — pure.
  *
+ * Goal-fidelity FOLLOW-UP contract — what happens once the review HAS a finding, as opposed to what
+ * the finding is. `resolveGoalFidelityFollowUp(codeReview)` (`null` when neither action is configured;
+ * reads the RAW block, since a verdict already exists by the time this is asked),
+ * `normalizeGoalFidelityFollowUpTrigger` (shared with the settings projection so the form and the
+ * runtime cannot disagree), and `goalFidelityFollowUpApplies(review, trigger)` over
+ * `GOAL_FIDELITY_FOLLOW_UP_TRIGGERS` (`rethink` = only the verdict that holds a run, the default;
+ * `any-finding` also fires on the advisory `fix-first`). `goalFidelityFingerprint(task)` is the one
+ * dedup identity three parties share — the issue body marker (`goalFidelityIssueMarker` /
+ * `issueMatchesGoalFidelityMarker`), the tracker listing that reads it back, and the queued task
+ * fingerprint — keyed on taskType + app + objective slug so a perpetual task regenerating with a fresh
+ * id cannot re-file forever. `isGoalFidelityInvestigation(task)` / `overturnedInvestigatedFinding({
+ * task, agents })` let the gate decline to judge an investigation whose finding was already disproved
+ * against the investigated objective. Public issue markers hash that identity while matching legacy
+ * markers. `buildGoalFidelityIssue` requires a complete objective with verified tracker provenance and
+ * immutable diff references before publication; `buildGoalFidelityFollowUpTask` carries the finding
+ * issue snapshot and its resolution lifecycle. I/O and public-text scrubbing live in
+ * `services/goalFidelityFollowUp.js`.
+ *
  * `goalFidelity.js` owns the second review's verdict ("did this run ship what
  * was asked?"). This module owns what happens NEXT when that review found a
  * problem: file the finding on the project's own tracker so it outlives the run

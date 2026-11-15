@@ -1,6 +1,14 @@
 /**
  * scrubHomePath — replace the running user's home-directory prefix with `~`.
  *
+ * `scrubHomePath(value)` — replace the running user's home-directory prefix with `~` anywhere in a
+ * string, so `/Users/<name>/…` never embeds the OS username in anything a user pastes into a bug
+ * report. Non-strings pass through; a root-user container reporting `/` as home is left alone
+ * (substituting on it would rewrite every separator in every path). Zero-dependency by design:
+ * `agentRunEvents.js` re-exports it for the CoS ledger, and `scripts/doctor.js` imports it statically
+ * because it must load from a bare checkout with no `node_modules`
+ * (`scripts/pre-install-entrypoints.test.js` enforces that).
+ *
  * Lives in its own zero-dependency module, rather than beside the other
  * redaction helpers in `agentRunEvents.js`, because two callers need it from
  * opposite ends of the dependency graph:

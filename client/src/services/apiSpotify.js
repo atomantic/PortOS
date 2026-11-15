@@ -1,3 +1,7 @@
+/**
+ * Spotify OAuth + listening-history and playlist-library sync.
+ */
+
 import { request } from './apiCore.js';
 
 // Spotify listening-history ingestion (#2152) — OAuth + recently-played polling

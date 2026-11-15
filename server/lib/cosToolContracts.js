@@ -1,4 +1,9 @@
-/** Provider-neutral wire contracts for the semantic CoS tool interface. */
+/**
+ *  Provider-neutral wire contracts for the semantic CoS tool interface.
+ *
+ * Provider-neutral `portos_tool` catalog/call schema version, request-id and per-turn bounds, catalog
+ * query formats, and Persistent Mind tool-call shape.
+ */
 
 import { z } from 'zod';
 

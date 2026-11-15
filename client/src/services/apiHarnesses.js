@@ -1,6 +1,10 @@
 /**
  * Harnesses — the coding-agent CLIs/TUIs PortOS drives (Models → Harnesses).
  *
+ * Coding-agent harness (CLI/TUI) inventory for Models → Harnesses: installed vs latest version, the
+ * providers riding on each, and the model-catalog refresh. Install/update/remove is an SSE stream
+ * driven by `RuntimeInstallModal`, not a call here.
+ *
  * Read-side only. The install / update / remove stream is SSE and goes through
  * the shared `RuntimeInstallModal`, which owns its own fetch-stream reader —
  * pointing it at `/api/harnesses/action` with `runtime` and `action` in the

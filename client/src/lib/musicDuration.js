@@ -1,4 +1,11 @@
 /**
+ * Lyric-aware MiniMax Music 3 duration analysis: section/word detection, ending-cushioned
+ * auto-duration recommendations, and cap warnings.
+ *
+ * Mirrors `server/lib/musicDuration.js`.
+ */
+
+/**
  * Lyric-length → song-duration estimation.
  *
  * Re-export of `server/lib/musicDuration.js` — the one definition of this rule,

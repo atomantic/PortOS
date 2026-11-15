@@ -1,6 +1,10 @@
 /**
  * Director edits to a music video's song map (`audioAnalysis.sections`).
  * Pure: the route and the storage backends share these transforms.
+ *
+ * Director edits to a music video's song map: `applyEditedSections` (validate a gapless
+ * `{label,startSec,endSec}[]` tiling the song, carry energy by overlap, mark `labelSource: 'manual'`),
+ * `sectionsFromLyricSpans` (boundaries from the aligned lyric sheet), `remapScenesToSections`. Pure.
  */
 import { ServerError } from './errorHandler.js';
 import { lyricSectionSpans } from './lyricSectionSpans.js';

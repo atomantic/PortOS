@@ -1,6 +1,10 @@
 /**
  * Minimized semantic tool resource for PortOS's HTTP surface.
  *
+ * Builds the minimized semantic tool resource served at `/api/api-docs/tools.min.json` — only
+ * `x-portos-tool`-annotated operations, flattened to provider-neutral tool records with an HTTP
+ * binding and a shared error vocabulary.
+ *
  * The internal OpenAPI document describes every one of the ~2000 mounted
  * operations, which is the wrong shape (and far too large) to hand an agent
  * that just wants to know what it can call. This builds the small counterpart:

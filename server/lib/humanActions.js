@@ -1,6 +1,11 @@
 /**
  * Human action plans — the pure half.
  *
+ * Scheduled human action steps — the pure half: `humanActionPlanSchema` (a plan of dated steps with
+ * explicit `instructions`, ready-to-paste `content` and `links`), `humanActionThreadFields` (a step as
+ * the Brain thread it is stored as, tagged `human-action` + `plan:<key>`), `buildHumanActionNotes`,
+ * and `humanActionReminderDecision` (fire / arm / nothing for one thread, keyed on `remindedFor`).
+ *
  * A *human action* is a step only the person can take (press Post, reply to
  * people, upload a file), scheduled for a time and carried as a Brain thread so
  * it shows up in Review Hub › Actions and the Open Threads widget like any other

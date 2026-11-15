@@ -1,6 +1,9 @@
 /**
  * Reverse Outline grid layout (#1286) — pure view helper.
  *
+ * `buildPlotlineGrid` (reverse-outline scenes + plotlines → plotline-by-sequence grid rows/cells) +
+ * `sceneComponentCount`. Used by the Reverse Outline page.
+ *
  * Turns the flat `scenes[]` + `plotlines[]` from the reverse-outline artifact
  * into a plotline-by-sequence grid: rows = plotlines, columns = scenes in
  * reading order. Each cell tells the renderer whether the scene is on this

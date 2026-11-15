@@ -1,5 +1,7 @@
 // Barrel file — re-exports all API sub-modules.
 // Consumers using `import * as api from '../services/api'` continue to work unchanged.
+//
+// Barrel — re-exports every `apiX.js`.
 
 export * from './apiCore.js';
 export * from './apiHealth.js';

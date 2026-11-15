@@ -1,3 +1,16 @@
+/**
+ * Hook managing provider/model/effort pins for one CoS scheduled task with optimistic writes and
+ * cascading clears when the provider or model changes.
+ *
+ * Provider/model/effort pins for one CoS scheduled task: optimistic write per change (`'' → null`
+ * clears; picking a provider clears model+effort, picking a model clears the effort only when that
+ * model has no tiers at all), rollback when `onUpdate` resolves falsy, a `saving` flag to gate "Run
+ * Now", plus the derived `availableModels` (Antigravity base models, stale pin kept selectable),
+ * `effectiveProviderId` and `defaultProviderLabel` a `ProviderModelSelector` needs. Use when: Any
+ * surface that retargets a scheduled task's model (schedule card quick controls, config drawer Global
+ * defaults) — don't re-roll the select/PUT/rollback trio.
+ */
+
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { effortAwareModelOptions, effortSurvivingModel, mergeModelLists, resolveEffectiveProvider } from '../utils/providers';
 

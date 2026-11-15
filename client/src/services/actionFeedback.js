@@ -1,8 +1,12 @@
-// Instant feedback for taps that wait on the server. A request started from a
-// button's click (or a form's submit) marks that button `data-pending` until
-// the request settles, so every action button shows it is working the moment
-// it is tapped, with no per-component state. `request()` reports each call
-// here; nothing else needs to opt in.
+// Instant feedback for taps that wait on the server.
+//
+// Marks the button whose click/submit started a `request()` as `data-pending` until it settles (never
+// `aria-busy`, which stays component-owned) (styled in `index.css`), and counts those requests for
+// `ActionActivityBar`. Installed once from `main.jsx`; no per-component opt-in.
+//
+// A request started from a button's click (or a form's submit) marks that button `data-pending` until
+// the request settles, so every action button shows it is working the moment it is tapped, with no
+// per-component state. `request()` reports each call here; nothing else needs to opt in.
 
 // Element whose click/submit is being dispatched right now. Cleared on the
 // next macrotask, which runs after the handler's synchronous body and its

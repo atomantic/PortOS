@@ -1,3 +1,14 @@
+/**
+ * One OS-isolated generated-preview session.
+ *
+ * Emits `generated-preview:open` for `request` and returns inert JPEG frames, seek/command functions,
+ * and a recording blob. Reconnect opens a fresh session with the current controls and playhead;
+ * idle/capacity closure returns `status: 'idle'` until the viewer calls `resume()`. Film-look and
+ * title-card `controls` ride the open and later commands. A revision change reopens; a control change
+ * does not. Unsupported hosts surface `status: 'unavailable'` and never fall back to an iframe. Use
+ * when: Music-video composition, code-video, and code-animation previews.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { uuidv4 } from '../lib/uuid.js';
 import socket from '../services/socket';

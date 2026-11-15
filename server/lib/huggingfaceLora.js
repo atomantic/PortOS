@@ -3,6 +3,11 @@
  * metadata, picking the .safetensors to download, and building the PortOS
  * sidecar for an image or video LoRA.
  *
+ * HuggingFace LoRA import helpers: parse HF ref → `{repo,revision,file}`, fetch `/api/models`
+ * metadata, select an exact or family-matching `.safetensors`, detect the image or video LoRA family
+ * (`flux2` / `ltx-video` / …), build the sidecar + `resolve` download URL. The HF analogue of
+ * `civitai.js`. Pure.
+ *
  * Image LoRAs (Flux.2 Klein, Z-Image, …) and video LoRAs (fal/LTX, MiniMax H3)
  * both live on HuggingFace. Civitai's installer can't reach them. This module
  * is the HF analogue of server/lib/civitai.js: it parses the ref, hits the

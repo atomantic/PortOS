@@ -1,5 +1,10 @@
 // Pure render-budget state machine for adaptive quality (issue #2592).
 //
+// Pure adaptive render-quality state machine: capability-aware startup tier (`recommendStartTier`),
+// p75 frame-time windows, hysteresis, cooldown, warm-up/gap rejection (`createRenderBudget`,
+// `recordFrame`, `restartWarmup`, `resetRenderBudget`, `getEffectiveTier`, `QUALITY_TIERS`,
+// `DEFAULT_RENDER_BUDGET_CONFIG`).
+//
 // It observes per-frame delta times and decides when the *effective* detail tier
 // should step down (frame pressure) or up (headroom), with hysteresis + a cooldown
 // so it settles instead of oscillating between adjacent tiers. It is intentionally

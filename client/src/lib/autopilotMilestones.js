@@ -2,6 +2,20 @@
  * Autopilot milestone map — fold a run's projected plan plus its live
  * progress snapshot into the ordered rows the Autonomous-mode card renders.
  *
+ * Series-Autopilot milestone map. `buildAutopilotMilestones(plan, progress, {terminal})` folds the
+ * run's projected plan (the `start` frame) and its live progress snapshot (`progress` frames / the
+ * status route) into ordered rows with a `MILESTONE_STATUS` each — a furthest-index cursor, so a gate
+ * the run revisits can't un-finish the milestones after it; `summarizeAutopilotMilestones(rows)` rolls
+ * them into the header meter (a settled-but-unstepped milestone counts as complete);
+ * `describeAutopilotVerification(kind, verification)` renders what a gate actually validated — shared
+ * with the panel's `frameLabel`, since the milestone row and the activity log render the same
+ * telemetry; `isStoppedTerminal(terminal)` is the one definition of "the run stopped mid-plan";
+ * `autopilotMarkerTerminal(status)` translates a persisted `autopilot.status` into the terminal frame
+ * type the fold reads, so a map rebuilt from the marker after a reload (#4140) flags the step a paused
+ * run stopped on. Also owns `AUTOPILOT_STEP_LABELS` / `autopilotStepLabel(kind)`, the one set of human
+ * labels for conductor step kinds (shared by the map and the panel's live status line). Used by
+ * `components/pipeline/AutopilotMilestones.jsx` + `AutopilotPanel.jsx`.
+ *
  * The two inputs both come from the server and are never re-derived here:
  *   - `plan` rides the run's `start` frame (server: seriesAutopilot/dryRun.js) —
  *     every step the run expects to take, in resolver order, with its count.

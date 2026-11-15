@@ -1,3 +1,7 @@
+/**
+ * macOS Contacts sync + identity resolve + Tribe enrich (#2415).
+ */
+
 import { request } from './apiCore.js';
 
 // macOS Contacts ingestion + Tribe bridge (#2415).

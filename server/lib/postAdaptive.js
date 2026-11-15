@@ -1,6 +1,10 @@
 /**
  * POST adaptive difficulty policy (pure, side-effect-free).
  *
+ * Pure POST adaptive-difficulty policy — nudges a math drill's primary knob
+ * (`steps`/`maxDigits`/`maxExponent`/`tolerancePct`) up/down within clamped bounds from recent scored
+ * performance. Opt-in via the config Adaptive toggle.
+ *
  * Given a math drill's base config and the user's recent performance signal
  * ({ score, samples }), nudge a single primary difficulty knob up or down within
  * clamped bounds. Opt-in: the caller only applies this when the user has enabled

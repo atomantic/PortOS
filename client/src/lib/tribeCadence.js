@@ -1,4 +1,9 @@
 /**
+ * Re-export of `server/lib/tribeCadence.js` — the single authoritative Tribe care-cadence rules shared
+ * by the page, the Care dashboard widget, and the server.
+ */
+
+/**
  * Tribe check-in cadence vocabulary.
  *
  * Re-export of `server/lib/tribeCadence.js` — the one definition of this rule,

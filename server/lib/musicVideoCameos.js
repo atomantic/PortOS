@@ -1,4 +1,11 @@
 /**
+ * Music Video cameo roster (#14821): researched cameos beyond the Look cast cap, shots link one
+ * (`cameoId`/`cameoVariantId`).
+ *
+ * `fillCameoShots`/`fillSceneFromCameo` write the cameo's still into linked shots with no own take (a
+ * `source: 'cameo'` take), `musicVideoCameoCoverage`, `documentCameos`, `musicVideoCameoReferences`
+ * (conditioning chips), `musicVideoCameoImageIds` (peer sync). Pure.
+ *
  * Music Video cameos (#14821): light, per-video references for things a video
  * shows in many shots (each dog in a roll call) that do not need a Casting
  * record: a name, label, notes, a few photos and one chosen still. A shot links one cameo (`scene.cameoId`, optionally a variant
