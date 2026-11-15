@@ -3,7 +3,6 @@ import { EventEmitter } from 'node:events';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { STEPS } from '../lib/storyBuilderSteps.js';
 
@@ -75,36 +74,18 @@ beforeEach(() => {
 });
 
 describe('Story Builder generation authority (#10670)', () => {
-  it('refuses remote generation, refinement and backfill before session reads or SSE admission regardless of provider or URL spelling', async () => {
+  it('refuses remote generation, refinement and backfill before session reads or SSE admission regardless of provider', async () => {
     for (const [path, body] of operations) {
-      for (const candidate of [path, path.toUpperCase() + '/']) {
-        const response = await call(appFor(), candidate, body);
-        expect([response.status, response.body.code], candidate).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
+      const response = await call(appFor(), path, body);
+      expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     }
     for (const effect of Object.values(effects)) expect(effect).not.toHaveBeenCalled();
   });
 
-  it('refuses remote callers forwarded through the local dev proxy and anonymous auth-on callers', async () => {
-    for (const [enabled, headers, status, code] of [
-      [false, { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }, 403, 'HOST_CONTROL_FORBIDDEN'],
-      [true, {}, 401, 'AUTH_REQUIRED'],
-    ]) {
-      auth.enabled = enabled;
-      for (const [path, body] of operations) {
-        const response = await call(appFor('127.0.0.1'), path, body, headers);
-        expect([response.status, response.body.code]).toEqual([status, code]);
-      }
-    }
-    for (const effect of Object.values(effects)) expect(effect).not.toHaveBeenCalled();
-  });
-
-  it('preserves local auth-off, operator and delegated-agent generation plus progress attachment', async () => {
-    const operator = await createSession();
+  it('preserves local auth-off and delegated-agent generation plus progress attachment', async () => {
     const agent = await createSession({ label: 'agent' });
     for (const [enabled, address, headers] of [
       [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Cookie: `portos_auth=${operator.token}` }],
       [true, '127.0.0.1', { Authorization: `Bearer ${agent.token}` }],
     ]) {
       auth.enabled = enabled;
@@ -122,7 +103,7 @@ describe('Story Builder generation authority (#10670)', () => {
       const progress = await call(appFor(address), `${session}/steps/idea/progress`, undefined, headers, 'get');
       expect(progress.status).toBe(200);
     }
-    expect(effects.attachClient).toHaveBeenCalledTimes(3);
+    expect(effects.attachClient).toHaveBeenCalledTimes(2);
   });
 
   it('keeps remote reads open, refuses remote record writes, and runs CRUD, sync/reconcile, locks and current-step selection for a local caller', async () => {

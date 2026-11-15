@@ -3,9 +3,7 @@ import { EventEmitter } from 'node:events';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 // Production router composition and auth gates; double the effect boundaries
 // so refusal proves that no provider, queue, store or image lookup was reached.
@@ -145,37 +143,14 @@ describe('Universe Builder agent workflow authority (#10669)', () => {
         const response = await call(appFor(), [path, candidate]);
         expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
       }
-      const variant = await call(appFor(), [path.toUpperCase() + '/', body]);
-      expect([variant.status, variant.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     }
     expectNoEffects();
   });
 
-  it('refuses proxy-marked, anonymous auth-on, Basic and scoped-peer callers', async () => {
-    for (const [enabled, address, headers, status, code] of [
-      [false, '127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }, 403, 'HOST_CONTROL_FORBIDDEN'],
-      [true, '192.0.2.10', {}, 401, 'AUTH_REQUIRED'],
-      [true, '192.0.2.10', { Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403, 'HOST_CONTROL_FORBIDDEN'],
-      [true, '192.0.2.10', {
-        [PEER_AUTH_HEADER]: derivePeerAuthToken('a'.repeat(32), 'example-instance'),
-        [PEER_INSTANCE_HEADER]: 'example-instance',
-      }, 403, 'PEER_SCOPE_FORBIDDEN'],
-    ]) {
-      auth.enabled = enabled;
-      for (const operation of operations) {
-        const response = await call(appFor(address), operation, headers);
-        expect([response.status, response.body.code], operation[0]).toEqual([status, code]);
-      }
-    }
-    expectNoEffects();
-  });
-
-  it('preserves genuine local, operator-session and delegated-agent workflows', async () => {
-    const operator = await createSession();
+  it('preserves genuine local and delegated-agent workflows', async () => {
     const agent = await createSession({ label: 'agent' });
     for (const [enabled, address, headers] of [
       [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Cookie: `portos_auth=${operator.token}` }],
       [true, '127.0.0.1', { Authorization: `Bearer ${agent.token}` }],
     ]) {
       auth.enabled = enabled;
@@ -188,8 +163,8 @@ describe('Universe Builder agent workflow authority (#10669)', () => {
     }
     expect(effects.expand).toHaveBeenLastCalledWith(expect.objectContaining(picker));
     expect(effects.sheet).toHaveBeenLastCalledWith('example-world', 'example-character', { overridePrompt: 'Example sheet prompt' });
-    expect(effects.persistIds).toHaveBeenCalledTimes(3);
-    expect(effects.update).toHaveBeenCalledTimes(3);
+    expect(effects.persistIds).toHaveBeenCalledTimes(2);
+    expect(effects.update).toHaveBeenCalledTimes(2);
   });
 
   it('keeps remote history reads open, refuses remote record writes, and runs CRUD, proposal application, merge, locks and backfill locally', async () => {

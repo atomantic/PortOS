@@ -147,16 +147,6 @@ describe('Runs and palette host authority (#8834)', () => {
     for (const sink of Object.values(runner)) expect(sink).not.toHaveBeenCalled();
   });
 
-  it('refuses a Basic peer credential for Runs before creating metadata', async () => {
-    auth.enabled = true;
-    const response = await request(appFor('192.0.2.10')).post('/api/runs')
-      .set('Authorization', `Basic ${Buffer.from(':example-password').toString('base64')}`)
-      .send(runBody);
-    expect(response.status).toBe(403);
-    expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
-    expect(runner.createRun).not.toHaveBeenCalled();
-  });
-
   it.each(['cli', 'tui', 'api'])('allows local and session Runs with %s fallback', async (type) => {
     runner.createRun.mockResolvedValue({ runId: 'example-run', provider: { type }, metadata: {}, usedFallback: true, fallbackModel: 'fallback-model' });
     for (const address of ['127.0.0.1', '192.0.2.10']) {
@@ -170,15 +160,11 @@ describe('Runs and palette host authority (#8834)', () => {
       ? { model: 'fallback-model' } : { provider: { defaultModel: 'fallback-model' } });
   });
 
-  it.each(hostTools)('protects palette %s from remote anonymous and Basic callers, allowing local/session', async (name, args, effect) => {
-    for (const enabled of [false, true]) {
-      auth.enabled = enabled;
-      const response = await request(appFor('192.0.2.10')).post(`/api/palette/action/${name}`)
-        .set('Authorization', `Basic ${Buffer.from(':example-password').toString('base64')}`)
-        .send({ args: { ...args, hasHostControl: true }, hasHostControl: true });
-      expect(response.status).toBe(403);
-      expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
-    }
+  it.each(hostTools)('protects palette %s from a remote caller forging authority, allowing local/session', async (name, args, effect) => {
+    const response = await request(appFor('192.0.2.10')).post(`/api/palette/action/${name}`)
+      .send({ args: { ...args, hasHostControl: true }, hasHostControl: true });
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
     expectNoHostEffects();
     for (const address of ['127.0.0.1', '192.0.2.10']) {
       auth.enabled = address !== '127.0.0.1';

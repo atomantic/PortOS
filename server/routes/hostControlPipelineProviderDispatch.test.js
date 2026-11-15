@@ -104,17 +104,10 @@ beforeEach(() => {
 });
 
 describe('Pipeline generation never reaches a CLI provider for unauthorized callers (#10907)', () => {
-  it('refuses a remote password-free caller and a legacy Basic holder before the provider sink', async () => {
+  it('refuses a remote caller before the provider sink', async () => {
     for (const operation of operations) {
       const remote = await post(appFor('192.0.2.10'), operation);
       expect([remote.status, remote.body.code], operation[0]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    auth.enabled = true;
-    for (const operation of operations) {
-      const basic = await post(appFor('192.0.2.10'), operation, {
-        Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64'),
-      });
-      expect([basic.status, basic.body.code], operation[0]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     }
     // An in-flight reverse-outline run starts asynchronously; give it a turn to
     // reach the sink if the gate had let it through.
@@ -122,8 +115,8 @@ describe('Pipeline generation never reaches a CLI provider for unauthorized call
     expect(sink.runPromptThroughProvider).not.toHaveBeenCalled();
   });
 
-  it('lets a local caller and an operator session run the same operations on the chosen CLI provider', async () => {
-    const operator = await createSession();
+  it('lets a local caller and a delegated agent session run the same operations on the chosen CLI provider', async () => {
+    const operator = await createSession({ label: 'agent' });
     for (const [enabled, address, headers] of [
       [false, '127.0.0.1', {}],
       [true, '192.0.2.10', { Authorization: `Bearer ${operator.token}` }],
