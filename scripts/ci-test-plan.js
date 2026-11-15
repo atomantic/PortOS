@@ -12,7 +12,6 @@ import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { formatReachSummary, measureRepoImportReach } from './lib/importReach.js';
-import { declaresPromptHashes, isNumberedMigrationFile } from './migrations/shippedPromptHistory.js';
 
 const TEST_FILE_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/i;
 const MODULE_SOURCE_RE = /\.[cm]?[jt]sx?$/i;
@@ -388,9 +387,10 @@ export const ALWAYS_RUN_TESTS = [
   'scripts/migrations/migrationFilenames.guard.test.js',
   'scripts/migrations/promptBumpMigrations.guard.test.js',
   'scripts/migrations/shippedPromptHistory.guard.test.js',
-  // Sweeps every migration export against independent prompt-hash baselines;
-  // migration files have no import edge back to this guard.
-  'scripts/setup-data-drift.test.js',
+  // Reads every reference prompt body and shipped-hashes.json from disk and
+  // compares the table against the merge base; a prompt edit has no import
+  // edge back to it (#16090).
+  'scripts/migrations/shippedPromptHashes.guard.test.js',
   'scripts/node-version-drift.test.js',
   // Whole-tree markdown scanner: a docs-only PR can reintroduce the stale band
   // in prose with no import edge back to this test (#11851).
@@ -648,12 +648,11 @@ export const needsSlashdoSubmodule = (plan) => Boolean(
 //   diffs (macos-native; see its note).
 // Every pattern names ci.yml so a workflow edit proves the job still runs.
 export const PROMPT_HISTORY_GUARD = 'scripts/migrations/check-shipped-prompt-history.js';
-// The guard reads git history of data.reference/prompts/stages and imports the
-// migrations that declare prompt hashes. The whole migrations directory is
-// listed (not just today's declaring modules) so a diff that removes a
-// declaration still runs the guard. taskPromptDefaults and the snapshot
-// regenerator are the other half of a prompt-default bump.
-export const PROMPT_HISTORY_PATH_RE = /^(?:scripts\/migrations\/|data\.reference\/prompts\/|server\/services\/taskPromptDefaults(?:\/|\.js$)|scripts\/regen-prompt-integrity-snapshot(?:\.test)?\.js$|\.github\/workflows\/ci\.yml$)/;
+// The guard reads git history of data.reference/prompts against
+// data.reference/prompts/shipped-hashes.json, which the hash regenerator writes.
+// taskPromptDefaults and the snapshot regenerator are the other half of a
+// prompt-default bump.
+export const PROMPT_HISTORY_PATH_RE = /^(?:scripts\/migrations\/|data\.reference\/prompts\/|server\/services\/taskPromptDefaults(?:\/|\.js$)|scripts\/regen-(?:prompt-integrity-snapshot|shipped-prompt-hashes)(?:\.test)?\.js$|\.github\/workflows\/ci\.yml$)/;
 // The files the `linux-containment` job passes to `npm test --prefix server`.
 export const LINUX_CONTAINMENT_TESTS = [
   'autofixer/sandbox.verify.test.js',
@@ -732,18 +731,8 @@ const staticClosureOf = (entries, cwd) => {
   }
 };
 
-/** Static closure of the prompt-history guard and every migration it imports. */
-export function collectPromptHistoryInputs(files, cwd) {
-  try {
-    const declaring = files.filter((path) => path.startsWith('scripts/migrations/')
-      && !path.slice('scripts/migrations/'.length).includes('/')
-      && isNumberedMigrationFile(basenameOf(path))
-      && declaresPromptHashes(readFileSync(join(cwd, path), 'utf8')));
-    return staticClosureOf([PROMPT_HISTORY_GUARD, ...declaring], cwd);
-  } catch {
-    return null;
-  }
-}
+/** Static closure of the prompt-history guard. */
+export const collectPromptHistoryInputs = (cwd) => staticClosureOf([PROMPT_HISTORY_GUARD], cwd);
 
 /** Static closure of the linux-containment tests and their Vitest harness. */
 export const collectLinuxContainmentInputs = (cwd) => staticClosureOf(LINUX_CONTAINMENT_ENTRIES, cwd);
@@ -1792,7 +1781,7 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
   }
 
   // A forced-full run always runs every gated job, so it skips the walks.
-  const promptHistoryInputs = forceFull ? null : collectPromptHistoryInputs(dependencyFiles, cwd);
+  const promptHistoryInputs = forceFull ? null : collectPromptHistoryInputs(cwd);
   const linuxContainmentInputs = forceFull ? null : collectLinuxContainmentInputs(cwd);
   const supercolliderLiveInputs = forceFull ? null : collectSuperColliderLiveInputs(cwd);
   const dockerContainmentLiveInputs = forceFull ? null : collectDockerContainmentLiveInputs(cwd);

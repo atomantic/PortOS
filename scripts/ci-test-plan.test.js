@@ -856,8 +856,8 @@ describe('CI test impact planner', () => {
     }
   });
 
-  it('runs the migration prompt-drift baseline on every plan', () => {
-    expect(ALWAYS_RUN_TESTS).toContain('scripts/setup-data-drift.test.js');
+  it('runs the shipped prompt-hash guard on every plan', () => {
+    expect(ALWAYS_RUN_TESTS).toContain('scripts/migrations/shippedPromptHashes.guard.test.js');
   });
 
   it('omits an untracked always-run guard rather than handing Vitest a missing selector', () => {
