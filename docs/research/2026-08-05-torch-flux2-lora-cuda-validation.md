@@ -5,8 +5,7 @@ memory bugs found and fixed
 **Date:** 2026-08-05
 **Hardware:** Windows 11, NVIDIA RTX 3090 (24 GB), 32 GB system RAM, driver 596.36
 **Closes:** #2786 (split out of #1227)
-**Companion:** [2026-07-18-lora-training-e2e-validation.md](./2026-07-18-lora-training-e2e-validation.md)
-(mflux runtime + the Apple-Silicon MPS finding)
+**Companion:** the mflux runtime + Apple-Silicon MPS validation run (removed with the retired LoRA training feature; see git history)
 
 The 2026-07-18 validation established that the mflux (MLX) runtime works
 end-to-end on Apple Silicon and that the torch/diffusers fallback **cannot**

@@ -1,6 +1,6 @@
 # PortOS workspace design guide
 
-Status: reviewed design specification v1, 2026-09-20, for incremental implementation. The review preserves icon-prefixed desktop navigation and the CoS-style compact mobile icon row as explicit product requirements. This is not a claim that existing pages implement the specification. The [audit](UX_DESIGN_AUDIT.md) records the evidence and pilot scope. Existing accessibility, routing, privacy, and behavior contracts in `client/src/AGENTS.md` remain binding.
+Status: reviewed design specification v1, 2026-09-20, for incremental implementation. The review preserves icon-prefixed desktop navigation and the CoS-style compact mobile icon row as explicit product requirements. This is not a claim that existing pages implement the specification. The [audit](research/UX_DESIGN_AUDIT.md) records the evidence and pilot scope. Existing accessibility, routing, privacy, and behavior contracts in `client/src/AGENTS.md` remain binding.
 
 ## 1. The product experience
 
@@ -243,7 +243,7 @@ Runtimes and CoS can proceed independently once their shared prerequisite is com
 
 ## Sources and rationale
 
-The page families, spacing, navigation grouping, and pilot choices are PortOS design proposals based on the [repository/live audit](UX_DESIGN_AUDIT.md), not externally mandated rules.
+The page families, spacing, navigation grouping, and pilot choices are PortOS design proposals based on the [repository/live audit](research/UX_DESIGN_AUDIT.md), not externally mandated rules.
 
 - [NN/g: Progressive disclosure](https://www.nngroup.com/articles/progressive-disclosure/) supports moving secondary detail behind explicit requests while keeping primary work clear. Disclosure does not justify hiding sibling destinations.
 - [W3C: Reflow](https://www.w3.org/WAI/WCAG22/Understanding/reflow.html) explains narrow-width/zoom reflow and the exception for two-dimensional tables within their own scroll region.
