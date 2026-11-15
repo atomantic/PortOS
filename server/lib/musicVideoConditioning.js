@@ -192,7 +192,8 @@ function catalogItemReferences(project) {
       id: catalogReferenceId(item.subjectId, filename),
       imageId: filename,
       role: ['place', 'location'].includes(item.kind) ? 'set' : item.kind === 'object' ? 'prop' : item.kind,
-      label: String(item.name || 'Catalog item').slice(0, 120),
+      label: (item.angles?.[filename]?.label ? `${item.name || 'Catalog item'} · ${item.angles[filename].label}` : String(item.name || 'Catalog item')).slice(0, 120),
+      ...(item.angles?.[filename] ? { angle: lookAroundRefAngle(item.angles[filename]) } : {}),
       note: String(item.description || '').slice(0, 1000),
       // Pick-only images never join Auto (automaticConditioningReferences keeps `condition` refs).
       condition: auto,
@@ -322,6 +323,7 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
 }
 
 const SHEET_ROLE = /^sheet:([^@]+)(?:@(.+))?$/;
+const lookAroundRefAngle = ({ clipId, sourceMediaKey, bearingDeg }) => ({ clipId, sourceMediaKey, bearingDeg });
 const titleCase = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 
 // The catalog kinds a music video links, and the reference role each one plays in a shot.
@@ -358,7 +360,7 @@ export function musicVideoLinkedCastReferences(project, castMedia) {
       && CAST_IMAGE_KINDS.has(m.kind) && typeof m.mediaKey === 'string' && SENDABLE_REFERENCE_FILE.test(m.mediaKey)
       && !rejected.has(m.mediaKey) && !String(m.role || '').startsWith('archive:')
       && (m.library?.variant?.formId || sheet?.[2] || null) === formId
-      && (sheet || m.kind === 'portrait' || m.library?.guide === true || isGoodReference(m)));
+      && (sheet || m.kind === 'portrait' || m.library?.guide === true || isGoodReference(m) || Boolean(m.library?.angle)));
     const rank = ({ m, sheet }) => (m.kind === 'portrait' ? 0 : sheet ? 1 : 2);
     return [...assets].sort((a, b) => rank(a) - rank(b)).filter(({ m }) => !seen.has(m.mediaKey) && seen.add(m.mediaKey))
       .map(({ m, sheet }) => ({
@@ -368,6 +370,8 @@ export function musicVideoLinkedCastReferences(project, castMedia) {
         label: `${subject.name || kind.fallback} · ${linkedAssetDetail(m, sheet, kind)}`.slice(0, 120),
         // Only a cast member's images are recorded as cast guides on the take.
         ...(kind.role === 'character' ? { castGuide: true } : {}),
+        // A look-around angle plate (#16145): which clip's geometry it shares, for the shot reference check.
+        ...(m.library?.angle ? { angle: lookAroundRefAngle(m.library.angle) } : {}),
         linkedCast: true,
         subjectId: subject.id,
       }));
