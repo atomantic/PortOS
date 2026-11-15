@@ -79,27 +79,41 @@ export function dropStaleCatalogPicks(current, next) {
   return changed ? { ...next, scenes } : next;
 }
 
+/**
+ * One request's catalog reads, shared by every check-in it resolves (`reads` below): a read
+ * route that resolves the light check-in and then the full one reads each linked record once.
+ * Never share one across a write that may change catalog records.
+ */
+export const createCatalogReads = () => new Map();
+
 export async function resolveCatalogCheckin(project, {
-  catalog, exists = existsOnDisk, client, includeShotChecks = true, includeRepairPatches = false,
+  catalog, exists = existsOnDisk, client, includeShotChecks = true, includeRepairPatches = false, reads = null,
 } = {}) {
   const allowsImages = musicVideoAllowsMedia(project, 'image');
   const subjects = (project?.concept?.subjects || []).filter(subject => TYPES.has(subject?.kind));
   const items = [];
   const problems = [];
-  const records = new Map();
   const shotMedia = Object.create(null);
   const db = catalog || (subjects.some(subject => subject.ingredientId) ? await import('../catalogDB.js') : null);
+  // Keyed by the catalog that answered, so a test double never serves another catalog's rows.
+  const records = reads ? (reads.get(db) || reads.set(db, new Map()).get(db)) : new Map();
+  const mediaKey = allowsImages ? 'media' : 'none';
+  // Every linked record is requested up front so the reads overlap (#16210): one round trip
+  // per subject in turn made a 24-subject check-in wait on 24 database replies in a row.
+  for (const ingredientId of new Set(subjects.map(subject => subject.ingredientId).filter(Boolean))) {
+    const key = `${mediaKey}:${ingredientId}`;
+    if (!records.has(key)) {
+      records.set(key, Promise.all([db.getIngredient(ingredientId, { client }), allowsImages ? db.listMediaForIngredient(ingredientId, { client }) : Promise.resolve([])])
+        .catch(() => null));
+    }
+  }
   for (const subject of subjects) {
     const item = { subjectId: subject.id, ingredientId: subject.ingredientId || null, formId: subject.castForm?.id || null, formLabel: null,
       kind: subject.kind, name: subject.name || '', description: '', images: [], pickableImages: [], retiredImages: [] };
     items.push(item);
     const problem = (code, message) => problems.push({ subjectId: subject.id, code, message });
     if (!subject.ingredientId) { problem('CATALOG_LINK_REQUIRED', `Link ${item.name || 'this subject'} to a catalog record.`); continue; }
-    if (!records.has(subject.ingredientId)) {
-      records.set(subject.ingredientId, Promise.all([db.getIngredient(subject.ingredientId, { client }), allowsImages ? db.listMediaForIngredient(subject.ingredientId, { client }) : Promise.resolve([])])
-        .catch(() => null));
-    }
-    const loaded = await records.get(subject.ingredientId);
+    const loaded = await records.get(`${mediaKey}:${subject.ingredientId}`);
     if (!loaded) { problem('CATALOG_UNAVAILABLE', `The catalog for ${item.name} could not be read. Try again when it is available.`); continue; }
     const [record, media] = loaded;
     if (!record || record.deleted || record.type !== subject.kind) { problem('CATALOG_RECORD_MISSING', `Restore or relink the catalog record for ${item.name}.`); continue; }
@@ -147,7 +161,7 @@ export async function resolveCatalogCheckin(project, {
     && !problems.length && project.castAndSets.catalogApprovedBasis === basis, ...report };
 }
 
-/** Read-time only. Never persist the resolved media or presentation fields. */
+/** Read-time only. Never persist the resolved media or presentation fields. `options.reads`: see `createCatalogReads`. */
 export async function withCatalogCheckin(project, options) {
   if (!isCatalogCheckin(project)) return project;
   return { ...project, castAndSets: { ...project.castAndSets, catalogCheckin: await resolveCatalogCheckin(project, { includeShotChecks: false, ...options }) } };

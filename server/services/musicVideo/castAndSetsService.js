@@ -1,4 +1,4 @@
-import { isCatalogCheckin, resolveCatalogCheckin, withCatalogCheckin, assertCatalogCheckinReady, assertLegacyCheckin, remapCatalogShotReferences } from './catalogCheckin.js';
+import { createCatalogReads, isCatalogCheckin, resolveCatalogCheckin, withCatalogCheckin, assertCatalogCheckinReady, assertLegacyCheckin, remapCatalogShotReferences } from './catalogCheckin.js';
 import { previewCastSetsImageEdit, requestCastSetsImageEdit, settleCastSetsImageEdit, acceptCastSetsImageEdit, discardCastSetsImageEdit } from './castAndSetsImageEdit.js';
 import { musicVideoAllowsMedia, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 import { castAndSetsApprovalInputs, castAndSetsApprovalValues, castAndSetsStoryInputs, directorArtGuides, productionFeedbackContext, seedArtDraft, selectArtGuideIfNone } from './productionReview.js';
@@ -1406,8 +1406,10 @@ export async function getCastAndSetsCastingChanges(projectId) {
 
 /** The stage as the director sees it. */
 export async function getCastAndSets(projectId) {
-  const project = await requireProject(projectId);
-  return { stage: presentStage(project), catalogCheckin: await resolveCatalogCheckin(project, { catalog: deps.catalog }) };
+  // The project read resolves the light check-in; the full one here reuses its catalog reads.
+  const reads = createCatalogReads();
+  const project = await requireProject(projectId, { catalogReads: reads });
+  return { stage: presentStage(project), catalogCheckin: await resolveCatalogCheckin(project, { catalog: deps.catalog, reads }) };
 }
 
 /** Recompute the offered repair under the project's serialized write. */

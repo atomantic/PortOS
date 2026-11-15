@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { resolveCatalogCheckin, withCatalogCheckin, assertCatalogCheckinReady, assertLegacyCheckin, dropStaleCatalogPicks } from './catalogCheckin.js';
+import { createCatalogReads, resolveCatalogCheckin, withCatalogCheckin, assertCatalogCheckinReady, assertLegacyCheckin, dropStaleCatalogPicks } from './catalogCheckin.js';
 import { musicVideoCatalogReferenceId as refId } from '../../lib/musicVideoConditioning.js';
 import { musicVideoReferenceChoices, musicVideoCatalogPickPlans } from '../../lib/musicVideoConditioning.js';
 
@@ -223,5 +223,56 @@ describe('videos above the old 24-subject cap (#16205)', () => {
     const choices = musicVideoReferenceChoices({ ...project([]), castAndSets: { source: 'catalog', catalogCheckin: resolved } });
     expect(choices.find(ref => ref.imageId === 'plate-59.png')).toMatchObject({ role: 'set', label: 'env-59' });
     expect(resolved.shotReferenceProblems).toEqual([]);
+  });
+});
+
+describe('catalog reads per check-in (#16210)', () => {
+  const linked = Array.from({ length: 6 }, (_, i) => ({ id: `subject-${i}`, ingredientId: `character-${i}`, kind: 'character', name: `Actor ${i}` }));
+  const gatedCatalog = () => {
+    let inFlight = 0;
+    let peak = 0;
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const track = async (value) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await gate;
+      inFlight -= 1;
+      return value;
+    };
+    const db = {
+      getIngredient: vi.fn((id) => track({ id, type: 'character', name: id, payload: {} })),
+      listMediaForIngredient: vi.fn((id) => track([{ kind: 'portrait', mediaKey: `${id}.png` }])),
+    };
+    return { db, release, peak: () => peak };
+  };
+
+  // Uniquely catches the check-in going back to one catalog round trip per subject in turn,
+  // which made a many-subject video wait on every reply in a row on each read and write.
+  it('asks for every linked record before waiting on any reply', async () => {
+    const { db, release, peak } = gatedCatalog();
+    const pending = resolveCatalogCheckin(fixture({ concept: { subjects: linked } }), { catalog: db, exists: () => true });
+    await vi.waitFor(() => expect(peak()).toBe(linked.length * 2));
+    release();
+    const result = await pending;
+    expect(result.items.map(item => item.images)).toEqual(linked.map(subject => [`${subject.ingredientId}.png`]));
+    expect(result.problems).toEqual([]);
+  });
+
+  // Uniquely catches a read route that resolves the light and the full check-in paying for the catalog twice.
+  it('shares one request\'s reads between check-ins and answers the same as a fresh read', async () => {
+    const project = fixture({ concept: { subjects: [...linked, { ...linked[0], id: 'same-record-again' }] } });
+    const db = catalog();
+    const reads = createCatalogReads();
+    const light = await withCatalogCheckin(project, { catalog: db, exists: () => true, reads });
+    const full = await resolveCatalogCheckin(project, { catalog: db, exists: () => true, reads });
+    expect(db.getIngredient).toHaveBeenCalledTimes(linked.length);
+    expect(db.listMediaForIngredient).toHaveBeenCalledTimes(linked.length);
+    expect(full).toEqual(await resolveCatalogCheckin(project, { catalog: catalog(), exists: () => true }));
+    expect(light.castAndSets.catalogCheckin.basis).toBe(full.basis);
+    // Another catalog never answers from these reads.
+    const other = catalog();
+    await resolveCatalogCheckin(project, { catalog: other, exists: () => true, reads });
+    expect(other.getIngredient).toHaveBeenCalledTimes(linked.length);
   });
 });

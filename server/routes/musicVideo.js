@@ -91,13 +91,15 @@ const projectUpdateSchema = musicVideoProjectUpdateSchema.extend(recordRenderPin
 // second request is in flight. GET /:id/production-review still serves the full review payload.
 // A restart archives a thumbnail paint without clearing `pending`. Heal on read,
 // and only when one is present, so a project list does not load the image stack.
-async function presentProjectForRead(project) {
+// `catalogCheckinResolved`: the project came from getProject in this request, which already
+// resolved its catalog check-in; resolving it again only repeats every linked catalog read (#16210).
+async function presentProjectForRead(project, { catalogCheckinResolved = false } = {}) {
   let current = project;
   if (project?.publishKit?.youtubeThumbnail?.pending) {
     const { reconcileInterruptedYoutubeThumbnail } = await import('../services/musicVideo/youtubeThumbnail.js');
     current = await reconcileInterruptedYoutubeThumbnail(project);
   }
-  if (current?.castAndSets?.source === 'catalog') {
+  if (current?.castAndSets?.source === 'catalog' && !(catalogCheckinResolved && current.castAndSets.catalogCheckin)) {
     const { withCatalogCheckin } = await import('../services/musicVideo/catalogCheckin.js');
     current = await withCatalogCheckin(current);
   }
@@ -167,7 +169,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const p = await requireProject(req.params.id);
   // Transient (never persisted): lets a reloaded page reattach to a running publishing-kit build.
   const activePublishKitBuild = getActivePublishKitBuild(p.id);
-  const presented = await presentProjectForRead(p);
+  const presented = await presentProjectForRead(p, { catalogCheckinResolved: true });
   const activeDcpBuild = activeDcp(p.id);
   res.json({ ...presented, ...(activePublishKitBuild ? { activePublishKitBuild } : {}), ...(activeDcpBuild ? { activeDcpBuild } : {}) });
 }));
