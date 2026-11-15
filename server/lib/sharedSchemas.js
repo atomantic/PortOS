@@ -129,7 +129,7 @@ export const isSafeSnapshotSource = (v) =>
 // cannot be fixed.
 //
 // `DEFAULT_EXCLUDES` has always been anchored by hand (and a test in
-// `backup.test.js` fails if one entry is not); this is the same rule applied to
+// `backup.snapshots.test.js` fails if one entry is not); this is the same rule applied to
 // the one list a user actually edits. Lives here, beside `isSafeSubdirFilter`
 // and for the same reason: `backupConfigSchema` in `validation.js` and the
 // `computeEffectiveExcludes` guard in `services/backup.js` must share ONE rule,
