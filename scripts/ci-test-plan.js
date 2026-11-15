@@ -908,7 +908,14 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
     add('client/src/utils/index.test.js');
   }
   if (changedFiles.some((path) => /^client\/src\/.*\.jsx$/.test(path))) {
-    add('client/src/a11yConventions.test.js');
+    add('client/src/a11y/controlNames.conventions.test.js');
+    add('client/src/a11y/dnd.conventions.test.js');
+    add('client/src/a11y/fileInputsToasts.conventions.test.js');
+    add('client/src/a11y/hitAreas.conventions.test.js');
+    add('client/src/a11y/landmarks.conventions.test.js');
+    add('client/src/a11y/overlays.conventions.test.js');
+    add('client/src/a11y/routeHeadings.conventions.test.js');
+    add('client/src/a11y/scanner.conventions.test.js');
   }
   // Both `.js` and `.jsx`: the StrictMode mounted-ref bug the first guard covers
   // reached its widest blast radius through a plain-`.js` hook (`useAsyncAction`),
