@@ -189,7 +189,7 @@ describe('createPasteSubmitDriver', () => {
 
   it('fails write-failed when the paste write throws', () => {
     const { driver, onFail } = makeDriver({ write: vi.fn(() => { throw new Error('PTY closed'); }) });
-    driver.start('ready');
+    expect(driver.start('ready'), 'a failed paste must not report delivery in flight').toBe(false);
     expect(onFail).toHaveBeenCalledWith('write-failed', 'Failed to write prompt: PTY closed');
     expect(vi.getTimerCount()).toBe(0);
   });

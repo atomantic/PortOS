@@ -255,7 +255,7 @@ export function createPasteSubmitDriver({
     } catch (err) {
       clearPaste();
       fail('write-failed', `Failed to write prompt: ${err.message}`);
-      return;
+      return false;
     }
     onEvent({ type: 'pasted', reason, attempt: attemptNum });
 
@@ -341,15 +341,19 @@ export function createPasteSubmitDriver({
         }, PASTE_VERIFY_POLL_MS);
       }
     }, PASTE_MARKER_POLL_MS);
+    return true;
   };
 
   return {
-    /** Deliver the prompt once. Returns false when already started or finalized. */
+    /**
+     * Deliver the prompt once. Returns whether a paste is now in flight: false
+     * when already started, finalized, or the paste write failed (the run's
+     * onFail has already been told), so the caller arms nothing further.
+     */
     start(reason) {
       if (started || isFinalized()) return false;
       started = true;
-      attemptPaste(reason);
-      return true;
+      return attemptPaste(reason) && !isFinalized();
     },
 
     /** Feed ANSI-stripped PTY output. A no-op unless a paste attempt is open. */
