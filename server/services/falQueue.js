@@ -14,6 +14,7 @@
  * `awaitFalCompletion` are how it reports progress in its own terms.
  */
 
+import { assertHeaderSafeKey } from '../lib/headerSafeKey.js';
 import { readFile } from 'fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { maintenance } from '../lib/maintenanceAdmission.js';
@@ -92,7 +93,7 @@ export async function hostFalDataUri({ apiKey, dataUri, fileName, signal, maxRet
       const initiated = await fetchWithTimeout(FAL_STORAGE_INITIATE_URL, {
         method: 'POST',
         headers: {
-          Authorization: `Key ${apiKey}`,
+          Authorization: `Key ${assertHeaderSafeKey(apiKey, 'fal.ai')}`,
           'Content-Type': 'application/json',
           'X-Fal-Object-Lifecycle': JSON.stringify({ expiration_duration_seconds: FAL_HOSTED_INPUT_TTL_SEC }),
         },
@@ -184,7 +185,7 @@ async function sendFalCancel(entry) {
   try {
     const res = await fetchWithTimeout(entry.cancelUrl, {
       method: 'PUT',
-      headers: { Authorization: `Key ${entry.apiKey}` },
+      headers: { Authorization: `Key ${assertHeaderSafeKey(entry.apiKey, 'fal.ai')}` },
     }, FAL_POLL_TIMEOUT_MS);
     if (!res.ok) console.error(`❌ fal.ai cancellation request failed: HTTP ${res.status}`);
     await res.body?.cancel?.();
@@ -202,7 +203,7 @@ export const FAL_PLATFORM_BASE = 'https://api.fal.ai';
  */
 export async function deleteFalRequestPayloads({ apiKey, requestId }) {
   const res = await fetchWithTimeout(`${FAL_PLATFORM_BASE}/v1/models/requests/${encodeURIComponent(requestId)}/payloads`, {
-    method: 'DELETE', headers: { Authorization: `Key ${apiKey}` },
+    method: 'DELETE', headers: { Authorization: `Key ${assertHeaderSafeKey(apiKey, 'fal.ai')}` },
   }, FAL_POLL_TIMEOUT_MS);
   const payload = res.ok ? await res.json().catch(() => null) : (await res.body?.cancel?.(), null);
   if (res.status === 404) return { alreadyGone: true };
@@ -222,7 +223,7 @@ export async function deleteFalRequestPayloads({ apiKey, requestId }) {
 export async function submitFalRequest({ apiKey, modelId, body }) {
   const res = await fetchWithTimeout(`${FAL_QUEUE_BASE}/${modelId}`, {
     method: 'POST',
-    headers: { Authorization: `Key ${apiKey}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Key ${assertHeaderSafeKey(apiKey, 'fal.ai')}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   }, FAL_SUBMIT_TIMEOUT_MS).catch(err => {
     // A lost POST response is not proof that the paid request was rejected.
@@ -246,7 +247,7 @@ export async function submitFalRequest({ apiKey, modelId, body }) {
 
 async function pollFalStatus({ statusUrl, apiKey }) {
   const res = await fetchWithTimeout(statusUrl, {
-    headers: { Authorization: `Key ${apiKey}` },
+    headers: { Authorization: `Key ${assertHeaderSafeKey(apiKey, 'fal.ai')}` },
   }, FAL_POLL_TIMEOUT_MS);
   if (!res.ok) throw new ServerError(`fal.ai status check failed: HTTP ${res.status}`, { status: 502, code: 'FAL_STATUS_FAILED' });
   return res.json();
@@ -351,7 +352,7 @@ export async function readCompletedFalResult(url, { apiKey, signal, deadline, bi
     let response;
     try {
       response = await fetchWithTimeout(url, {
-        ...(apiKey ? { headers: { Authorization: `Key ${apiKey}` } } : {}),
+        ...(apiKey ? { headers: { Authorization: `Key ${assertHeaderSafeKey(apiKey, 'fal.ai')}` } } : {}),
         signal,
       }, Math.min(remaining, binary ? binaryTimeoutMs : FAL_POLL_TIMEOUT_MS));
       if (!response.ok) {
