@@ -51,13 +51,9 @@ describe('shipped stage-prompt history guard', () => {
   });
 
   it.skipIf(!historyAvailable)(
-    'checks all shipped stage-prompt history on a full-history checkout',
+    'checks all shipped prompt history on a full-history checkout',
     async () => {
-      const result = await inspectShippedPromptHistory({
-        repoRoot,
-        migrationsDir: join(repoRoot, 'scripts', 'migrations'),
-        stageDir: join(repoRoot, 'data.reference', 'prompts', 'stages'),
-      });
+      const result = await inspectShippedPromptHistory({ repoRoot });
       expect(result.stranded).toEqual([]);
     },
   );

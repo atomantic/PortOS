@@ -330,6 +330,15 @@ async function runPendingMigrations({ rootDir, migrationsDir, appliedFile, throu
   } else {
     console.log(`✅ ${ran} migration(s) applied`);
   }
+
+  // Shipped prompt templates are recognized by retired hash, not by a
+  // numbered migration per edit (#16090), so this runs on every complete pass,
+  // after the chain. A `through` replay stops mid-chain; the next full run
+  // reconciles.
+  if (through === null) {
+    const { reconcileShippedPrompts } = await import('./migrations/shippedPromptHashes.js');
+    await reconcileShippedPrompts({ rootDir });
+  }
   return ran;
 }
 

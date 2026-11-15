@@ -592,13 +592,14 @@ The selected work is split across parallel jobs:
   its `directInvocation.js` import, its drift test or `ci.yml` changed, since nothing else can change its answer; non-PR runs
   always run it.
 - **Shipped prompt history** — the one job with a full-history clone; it checks
-  that every stage-prompt body ever shipped is accepted by a prompt migration.
+  that every prompt body ever shipped is current or retired in
+  `data.reference/prompts/shipped-hashes.json`.
   On a pull request it runs only when the impact planner's `prompt_history`
   output is true: the diff touches `scripts/migrations/`,
-  `data.reference/prompts/`, `server/services/taskPromptDefaults`, the
-  integrity-snapshot regenerator, `ci.yml`, or any module the guard or a
-  hash-declaring migration statically imports (`PROMPT_HISTORY_PATH_RE` and
-  `collectPromptHistoryInputs()` in `scripts/ci-test-plan.js`). Non-PR runs
+  `data.reference/prompts/`, `server/services/taskPromptDefaults`, either
+  prompt-hash regenerator, `ci.yml`, or any module the guard statically
+  imports (`PROMPT_HISTORY_PATH_RE` and `collectPromptHistoryInputs()` in
+  `scripts/ci-test-plan.js`). Non-PR runs
   and pull requests into `release` always run it, and `npm run pregate` runs
   it locally when selected.
 - **Linux worker containment** — runs `LINUX_CONTAINMENT_TESTS` against real

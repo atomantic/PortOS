@@ -105,7 +105,7 @@ Read the nested instructions before editing these trees (each an `AGENTS.md` wit
 
 - `client/src/AGENTS.md`: UI, routing/deep-linking, API error/save gating, `Drawer`, collection loading
 - `client/src/components/dashboard/AGENTS.md`: widget registration, grid/arrange, ⌘K layout wiring
-- `server/AGENTS.md`: schema parity, write serialization, async boundaries, test peer fan-out, import scoping, generated manifests (incl. `scripts/generate-*.js`), prompt migrations
+- `server/AGENTS.md`: schema parity, write serialization, async boundaries, test peer fan-out, import scoping, generated manifests (incl. `scripts/generate-*.js`), prompt templates
 - `server/lib/aiToolkit/AGENTS.md`: the override-consistency contract for the vendored provider/runner/prompt toolkit (no imports out to other PortOS modules)
 
 **API-provider agents get these files too, within a budget**: `getAgentInstructionsContext()` in `server/services/promptSections/instructions.js` splices `~/.claude/CLAUDE.md`, the root file, then nested `AGENTS.md` files (depth 5 / 10 files; dot-dirs, `node_modules/`, `data/`, build output and nested repos skipped). The root file is the only guaranteed-first slot: rules guarding data loss, destructive actions, privacy or spend belong here. `scripts/agent-instructions-files.test.js` caps root at 28 KB and each nested file at 12 KB; move task-specific procedure into a skill (`.claude/skills/`) or doc rather than raising them.
