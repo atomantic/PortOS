@@ -1,6 +1,7 @@
 import { getHiggsfieldVideoModel, HIGGSFIELD_DEFAULT_VIDEO_MODEL } from '../../../../server/lib/higgsfieldVideoModels.js';
 import { getGoogleVideoModel, GOOGLE_DEFAULT_VIDEO_MODEL } from '../../../../server/lib/googleVideoModels.js';
 import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideoGreybox.js';
+import { sceneRenderTierChoices } from '../../../../server/lib/musicVideoRenderTier.js';
 import PlateComparison from './PlateComparison.jsx';
 import ShotActionInspector from './ShotActionInspector.jsx';
 import SceneCameraControls from './SceneCameraControls.jsx';
@@ -28,7 +29,7 @@ import { useCallback, useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, X, Video, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import SceneTakePicker from './SceneTakePicker.jsx';
-import { formatTimecode } from '../../utils/formatters.js';
+import { formatTimecode, formatUsd } from '../../utils/formatters.js';
 import useSceneClipPlayback from '../../hooks/useSceneClipPlayback.js';
 import SceneClipPreview from './SceneClipPreview.jsx';
 import SceneClipCoverageNotice from './SceneClipCoverageNotice.jsx';
@@ -383,7 +384,7 @@ export default function SceneCard({
             : useLtxReferences && !selectedClipReferences.length ? 'Choose at least one clip reference'
               : useLtxReferences && !cardRequest.authored?.trim() ? 'Add a shot prompt first' : null;
   const videoRefusal = sourceNotice || greyboxRefusal || referenceRefusal || otherRefusal;
-  const sendRender = () => {
+  const sendRender = (tier = null) => {
     const { endFrame, wholeLine } = cardRequest;
     const card = {
       prompt: useLtxReferences
@@ -397,12 +398,12 @@ export default function SceneCard({
         : canUseLtxReferences && ltxReferencesProjectDefault ? { ltxReferences: false } : {}),
       ...(startFrameLayout ? { startFrameLayout: true } : {}),
     };
-    onGenerateVideo?.(scene, { ...(renderOverrides ? { target: renderOverrides } : {}), card });
+    onGenerateVideo?.(scene, { ...(renderOverrides ? { target: renderOverrides } : {}), card, ...(tier ? { tier } : {}) });
   };
   const renderBlocked = !!videoRefusal || sendingClip;
-  const generateVideo = () => {
+  const generateVideo = (tier = null) => {
     if (renderBlocked) return;
-    sendRender();
+    sendRender(tier);
   };
   // A shot fitted from a storyboard panel with no still yet leads with Clip from storyboard:
   // its still renders first, then the server animates it on this card's lane.
@@ -413,6 +414,13 @@ export default function SceneCard({
     onGenerateFrame?.(scene, withFrameTarget({ thenClip: { ...(renderLane ? { backend: renderLane } : {}), ...(model ? { model } : {}), ...songAudioField } }));
   };
   const renderCost = performance ? performanceCost : timing.falCost;
+  // #16136: a hosted model with resolution tiers offers Render draft and Render final, each priced;
+  // a shared or sequence take is priced by its run, so its tiers show no price.
+  const tierChoices = layer === 'footage' && !storyboardDefault ? sceneRenderTierChoices(renderLane, {
+    scene, scenes: project?.scenes, videoSettings: falVideoSettings || {}, override: renderOverrides, songDurationSec,
+    lineCues: isPerformanceScene(scene) && renderInputs.wholeLine === true ? project?.lyricCues || [] : null,
+  }) : null;
+  const tierPriced = !timing.sharedNotice && timing.coverageSpan == null;
   // A composed still shows its picture (the still, or the still playing its image effect) in place of a clip.
   const stillPicture = layered && layer === 'still';
   // A footage shot's start and end frames show as a pair, the end frame optional; an effect
@@ -836,7 +844,7 @@ export default function SceneCard({
             <SceneRenderTarget id={fieldId('render-on')} value={renderPick} onChange={setRenderPick} performance={performance}
               options={renderOptions} onOptionsChange={setRenderOptions} scene={scene} scenes={project?.scenes} models={videoModels} defaultModel={defaultVideoModel}
               saved={falVideoSettings || {}} minFrames={useLtxReferences ? 121 : null} />
-            {renderCost && <span className="text-[11px] text-port-text-muted">{renderCost}</span>}
+            {renderCost && !tierChoices && <span className="text-[11px] text-port-text-muted">{renderCost}</span>}
           </div>
           {layer === 'footage' && canUseLtxReferences && (
             <label className="flex items-center gap-2 text-xs text-port-text-muted">
@@ -897,7 +905,16 @@ export default function SceneCard({
                   else onGenerateFrame(scene);
                 } : null} />
             )}
-            {!storyboardDefault && <button onClick={generateVideo}
+            {!storyboardDefault && tierChoices && tierChoices.map(({ tier, resolution, costUsd }) => (
+              <button key={tier} type="button" onClick={() => generateVideo(tier)} disabled={renderBlocked}
+                className={tier === 'final' ? PRIMARY_BUTTON : SECONDARY_BUTTON} data-testid={`render-${tier}`}
+                title={videoRefusal || `Render this shot's clip as a ${tier} at ${resolution}`}>
+                {sendingClip ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
+                {sendingClip ? 'Sending…' : `Render ${tier}`}
+                <span className="opacity-80">{`${resolution}${tierPriced && costUsd != null ? ` · ${formatUsd(costUsd)}` : ''}`}</span>
+              </button>
+            ))}
+            {!storyboardDefault && !tierChoices && <button onClick={() => generateVideo()}
               disabled={renderBlocked}
               className={PRIMARY_BUTTON}
               title={videoRefusal || (performance ? `${capability.style === 'music' ? "Animate this scene's frame to the song" : "Lip-sync this scene's frame to the song"} via ${capability.label} — ${performanceCost}`

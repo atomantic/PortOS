@@ -56,7 +56,7 @@ const clip = (v, max) => (isNonBlankStr(v) ? trimTo(v, max) : null);
 // A basename only — an imported file's name is provenance, never a path.
 const takeOriginalName = (name) => (isNonBlankStr(name) ? clip(name.split(/[\\/]/).pop(), 200) : null);
 
-function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, use = 'final', dependencies = null, frameDependencies = null, inputAssets = null, castInputs = null, costUsd = null, spendKind = null, costModelId = null, sequence = null, now }) {
+function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, use = 'final', dependencies = null, frameDependencies = null, inputAssets = null, castInputs = null, costUsd = null, spendKind = null, costModelId = null, sequence = null, tier = null, now }) {
   const sequenceRecord = kind === 'video' ? sequenceTakeRecord(sequence) : null;
   const recordedCastInputs = kind === 'image' || kind === 'endImage' ? musicVideoCastInputsRecord(castInputs) : null;
   return {
@@ -84,6 +84,8 @@ function buildTake({ kind, assetId, source, provider = null, jobId = null, promp
       // The paid model the quote priced, so project spend can say where it went.
       ...(isNonBlankStr(costModelId) ? { costModelId: clip(costModelId, 200) } : {}),
     } : {}),
+    // #16136: a clip rendered as a draft or a final; absent on untiered takes.
+    ...(tier === 'draft' || tier === 'final' ? { tier } : {}),
     // #8977: the immutable record of what a performance take was generated
     // against (audio revision, song interval, edit in/out, cues, capability).
     // Present only on takes that carry one, so other takes keep their shape.

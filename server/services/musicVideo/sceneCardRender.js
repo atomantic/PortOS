@@ -16,6 +16,7 @@ import {
 } from '../../lib/musicVideoShotTiming.js';
 import { loraFamilyOf, VIDEO_LORA_FAMILIES } from '../../lib/runners.js';
 import { buildSceneFrameGenerateBody } from './sceneFrameReferences.js';
+import { renderTierVideoSettings, sceneRenderTierPlan } from '../../lib/musicVideoRenderTier.js';
 
 const LTX_REFERENCES_MODE = 'ltxReferences';
 const LTX_IC_MODE = 'ic-ingredients-25';
@@ -69,6 +70,7 @@ function clipTag(project, scene, input, extra = {}) {
     ...(typeof card.songAudio === 'boolean' && !isPerformanceScene(scene) ? { songAudio: card.songAudio } : {}),
     ...(card.wholeLine && isPerformanceScene(scene) ? { wholeLine: true } : {}),
     ...(card.startFrameLayout ? { startFrameLayout: true } : {}),
+    ...(input.tier ? { tier: input.tier } : {}),
     ...extra,
   };
 }
@@ -87,7 +89,10 @@ async function buildShortClipBody(project, scene, input) {
   const card = input.card || input;
   const prompt = card.prompt || authoredShotPrompt(scene);
   if (!prompt) throw new ServerError('Add a shot prompt first', { status: 422, code: 'MUSIC_VIDEO_CLIP_UNPROMPTED' });
-  const settings = { ...(project.videoSettings || {}), ...(input.target || {}) };
+  const backend = input.target?.backend ?? project.videoSettings?.backend;
+  const settings = renderTierVideoSettings(backend, {
+    scene, scenes: project.scenes, videoSettings: project.videoSettings, override: input.target, tier: input.tier,
+  });
   const { getVideoModels } = await import('../../lib/mediaModels.js');
   const models = getVideoModels();
   const model = models.find((entry) => entry.id === (settings.modelId || input.target?.modelId));
@@ -176,13 +181,31 @@ async function ensureSceneClipReferences(body, project, scene) {
   };
 }
 
+/**
+ * A prepared body at `tier`: the tier's resolution fills the field the
+ * backend reads unless the body names one. The board resolves the tier itself
+ * so its price matches; this covers an API caller that sends only the tier.
+ */
+function preparedTierFields(project, scene, { tier, ...body }) {
+  if (!tier || !body.backend) return body;
+  const plan = sceneRenderTierPlan(body.backend, {
+    scene, scenes: project.scenes,
+    videoSettings: {
+      ...(project.videoSettings || {}),
+      ...Object.fromEntries(['falModelId', 'runwayModelId', 'higgsfieldModelId', 'googleModelId'].filter((key) => body[key]).map((key) => [key, body[key]])),
+    },
+  });
+  return plan && body[plan.requestField] == null ? { ...body, [plan.requestField]: plan[tier] } : body;
+}
+
 async function buildSceneClipSubmission(project, scene, input = {}) {
   const body = preparedClipBody(input) ? {
-    ...input,
+    ...preparedTierFields(project, scene, input),
     musicVideo: {
       ...(typeof input.musicVideo === 'string' ? JSON.parse(input.musicVideo) : (input.musicVideo || {})),
       projectId: project.id,
       sceneId: scene.sceneId,
+      ...(input.tier ? { tier: input.tier } : {}),
     },
   } : await buildShortClipBody(project, scene, input);
   return ensureSceneClipReferences(body, project, scene);

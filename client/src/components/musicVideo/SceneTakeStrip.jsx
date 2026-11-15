@@ -1,4 +1,5 @@
 import { currentPlateEvidence, renderQualityAcknowledged } from '../../../../server/lib/musicVideoPlateEvidence.js';
+import { musicVideoRenderTierLabel } from '../../../../server/lib/musicVideoRenderTier.js';
 import { useRef, useState } from 'react';
 import { Ban, Check, Loader2, RotateCcw, Eye, X, MessageSquare, PencilLine } from 'lucide-react';
 import { sceneTakeList, takePreviewKey, takeThumbUrl, takeClipUrl, takeProvenance, TAKE_SLOT } from '../../lib/musicVideoTakes.js';
@@ -104,6 +105,12 @@ export default function SceneTakeStrip({
                 {isSelected && (
                   <span className="absolute left-1 top-1 inline-flex items-center gap-0.5 rounded bg-port-accent px-1.5 py-0.5 text-[10px] font-semibold text-white shadow">
                     <Check size={11} aria-hidden="true" /> In use
+                  </span>
+                )}
+                {/* #16136: a clip rendered as a draft or a final says which. */}
+                {kind === 'video' && musicVideoRenderTierLabel(take.tier) && (
+                  <span className="port-media-overlay-strong absolute bottom-1 left-1 rounded px-1 text-[10px]" data-testid="take-tier">
+                    {musicVideoRenderTierLabel(take.tier)}
                   </span>
                 )}
               </button>

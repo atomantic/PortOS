@@ -376,6 +376,23 @@ it('sends the clip card\'s expected reference files with the video request', asy
   cleanup();
 });
 
+// Uniquely catches a draft/final render sent at the pinned resolution, or without its tier (#16136).
+it('sends a draft or final clip at its tier resolution, and an untiered one at the pinned resolution', async () => {
+  const { generateVideo } = await import('../services/apiImageVideo.js');
+  const shot = { sceneId: 's1', order: 0, prompt: 'a rider', referenceImageId: 'start.png', takes: [], startSec: 0, endSec: 4 };
+  const project = { id: 'p7', scenes: [shot] };
+  const settings = { backend: 'fal', falModelId: 'bytedance/seedance-2.5/image-to-video', falResolution: '720p' };
+  const { result } = renderHook(() => useMusicVideoSceneMedia({ project, videoSettings: { settings }, applyScenePatch: vi.fn() }));
+  for (const [tier, resolution] of [['draft', '480p'], ['final', '1080p'], [null, '720p']]) {
+    generateVideo.mockResolvedValueOnce({ jobId: `job-${tier}`, status: 'queued' });
+    await act(async () => { await result.current.generateSceneVideo(shot, tier ? { tier } : {}); });
+    const body = generateVideo.mock.calls.at(-1)[0];
+    expect(body.falResolution).toBe(resolution);
+    expect(body.tier).toBe(tier ?? undefined);
+  }
+  cleanup();
+});
+
 it('sends LTX reference sheets separately from the opening frame on a shot', async () => {
   const { generateVideo } = await import('../services/apiImageVideo.js');
   const shot = { sceneId: 's1', shotMode: 'cutaway', prompt: 'A rider turns', referenceImageId: 'start.png',

@@ -75,7 +75,7 @@ describe('music-video scene completion hooks → takes', () => {
       writeFileSync(join(TEST_DATA_ROOT, 'images', `${name}.png`), 'synthetic image');
     }
     mkdirSync(join(TEST_DATA_ROOT, 'videos'), { recursive: true });
-    const clips = ['clip-1', 'clip-2', 'clip-old', 'late-clip', 'clip-ok', 'clip-guided'];
+    const clips = ['clip-1', 'clip-2', 'clip-old', 'late-clip', 'clip-ok', 'clip-guided', 'clip-draft', 'clip-final', 'clip-plain'];
     for (const id of clips) writeFileSync(join(TEST_DATA_ROOT, 'videos', `${id}.mp4`), 'synthetic clip');
     writeFileSync(join(TEST_DATA_ROOT, 'video-history.json'), JSON.stringify(clips.map(id => ({ id, filename: `${id}.mp4` }))));
     imageHook.__testing.reset();
@@ -251,6 +251,22 @@ describe('music-video scene completion hooks → takes', () => {
       ['video', 'clip-2', 'frame-a.png'],
     ]);
     expect(emitted[1]).toMatchObject({ event: 'scene-video', videoHistoryId: 'clip-1' });
+  });
+
+  it('records the tier a draft or final clip was rendered at (#16136), and none on an untiered clip', async () => {
+    await projects.updateScene(project.id, scene.sceneId, { referenceImageId: 'frame-a.png' });
+    const tiered = (id, tier) => {
+      const job = videoJob(project.id, scene.sceneId, id);
+      job.params.musicVideo = { ...job.params.musicVideo, ...(tier ? { tier } : {}) };
+      return job;
+    };
+    mediaJobEvents.emit('completed', tiered('clip-draft', 'draft'));
+    mediaJobEvents.emit('completed', tiered('clip-final', 'final'));
+    mediaJobEvents.emit('completed', tiered('clip-plain', null));
+    await waitFor(async () => (await sceneOf(project.id, scene.sceneId))?.takes?.filter((t) => t.kind === 'video').length === 3);
+    const takes = (await sceneOf(project.id, scene.sceneId)).takes.filter((t) => t.kind === 'video');
+    expect(Object.fromEntries(takes.map((t) => [t.assetId, t.tier]))).toEqual({ 'clip-draft': 'draft', 'clip-final': 'final', 'clip-plain': undefined });
+    expect(takes.find((t) => t.assetId === 'clip-plain')).not.toHaveProperty('tier');
   });
 
   it('keeps a clip using an untracked cast guide unselected after completion', async () => {

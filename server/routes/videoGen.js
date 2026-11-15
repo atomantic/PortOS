@@ -610,6 +610,8 @@ export const generateBodySchema = z.object({
       startFrameLayout: z.boolean().optional(),
       // Names the overnight batch this take was queued in (musicVideo/overnightRenders.js).
       batchId: z.string().uuid().optional(),
+      // The shot card's Render draft / Render final (#16136); the take records it.
+      tier: z.enum(['draft', 'final']).optional(),
     }).optional(),
   ),
   // File the clip into this music video's media collection even when no shot
