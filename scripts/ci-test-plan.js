@@ -380,6 +380,9 @@ export const ALWAYS_RUN_TESTS = [
   'scripts/client-server-import-purity.test.js',
   'scripts/direct-invocation-drift.test.js',
   'scripts/ensure-deps.test.js',
+  // Base-relative: a rename or deletion of a shipped migration touches no file
+  // the planner would select for it, so the guard must run on every change (#16094).
+  'scripts/migrations/migrationFilenames.guard.test.js',
   'scripts/migrations/promptBumpMigrations.guard.test.js',
   'scripts/migrations/shippedPromptHistory.guard.test.js',
   // Sweeps every migration export against independent prompt-hash baselines;
