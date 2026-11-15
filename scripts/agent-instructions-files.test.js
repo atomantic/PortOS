@@ -51,7 +51,6 @@ const IMPORT_BODY = '@AGENTS.md\n';
 // they perform against what an older version actually wrote.
 const EXCLUDED_PREFIXES = [
   'docs/plans/',
-  'docs/superpowers/',
   'data/',
   'lib/slashdo/',
   'scripts/migrations/',
