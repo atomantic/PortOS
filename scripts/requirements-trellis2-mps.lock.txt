@@ -1,3 +1,4 @@
+# Bounded #16047 regeneration: uv 0.8.14 (0.13.x could not reach PyPI on the regenerating host); cutoff 2026-11-07T00:00:00Z; click 8.5.1 and tqdm 4.70.1 only — every other pin unchanged.
 # TRELLIS.2 Metal wheel closure: CPython 3.13, Apple Silicon, macOS 26+.
 # Generated with hash-verified uv 0.13.7; cutoff 2026-11-05T00:00:00Z (seven days).
 # Regenerate from the repository root, advancing the cutoff for a future update:
@@ -14,9 +15,9 @@ annotated-doc==0.0.4 \
 anyio==4.16.0 \
     --hash=sha256:59bb03251907983d1603d27c3087ddb1e93299ea2163adcdba37899a4fb12ffb \
     --hash=sha256:c66ae634e0b8228396b801741beb3294326d4b6102f7bba4041c0dfb58c29026
-click==8.5.0 \
-    --hash=sha256:255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360 \
-    --hash=sha256:ba0d2089de75ea0310e2dde03160e6ca10009947fb95a182f9b54021bb272e34
+click==8.5.1 \
+    --hash=sha256:8bb5376d2006950386f8c6427613334a2acadc5f559cb80e638d00b4df957e37 \
+    --hash=sha256:9bbfada76703fd1d784b83eea012e3e8c6a001a876543ef104fa56aaaeb072b4
 easydict==1.13 \
     --hash=sha256:6b787daf4dcaf6377b4ad9403a5cee5a86adbc0ca9a5bcf5410e9902002aeac2
 fast-simplification==0.2.0 \
@@ -622,8 +623,9 @@ torch==2.15.0 \
     --hash=sha256:fbefd73b521d3c75c5a1d7c77056b2c6339b81468d14d4e33c55f525418a5855
 torchvision==0.29.2 \
     --hash=sha256:d412494ff011f24c884a3cffd33eba1cb45a0299d4e26c1e175113f9d3b3ebc7
-tqdm==4.67.3 \
-    --hash=sha256:ee1e4c0e59148062281c49d80b25b67771a127c85fc9676d3be5f243206826bf
+tqdm==4.70.1 \
+    --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73 \
+    --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4
 transformers==5.22.1 \
     --hash=sha256:bed9fd76d6f43b4a1a9fc5d0c565ace7c77edbd029784f8cbcdf772cb5e924d8 \
     --hash=sha256:c940b4bf98de4f568723895f330ba1460a398bd83061b93b70238c3fe32e4389
