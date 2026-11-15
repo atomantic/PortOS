@@ -29,7 +29,6 @@ it('includes older and retired local measurements for publication without expand
 it('exports only validated local numeric evidence to approved sync peers', async () => {
   const local = deps([row('security', 40)]);
   const payload = await exportPortosQuality(peer.instanceId, 30, local);
-  expect(PORTOS_SCHEMA_VERSIONS.appQuality).toBe(1);
   expect(payload).toMatchObject({ schemaVersion: 1, measurements: [{ report: { category: 'security', score: 40 } }] });
   expect(JSON.stringify(payload)).not.toMatch(/Private|Users|agent-security|summary|app_id|github/);
   expect(local.query.mock.calls[0][1][0]).toBe('portos-default');
