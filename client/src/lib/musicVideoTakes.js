@@ -8,7 +8,7 @@
  * replacing newer take decisions; `TAKE_SLOT` maps a take kind to its selection field;
  * `selectTakePatch` / `reviewTakePatch` / `markTakeAssetMarks` mirror the server's take transforms for
  * optimistic Use/Reject/Bad. Used by `components/musicVideo/SceneTakeStrip.jsx` and
- * `pages/MusicVideo.jsx`.
+ * `components/musicVideo/ProjectWorkspace.jsx`.
  *
  * A scene slot (`referenceImageId` / `videoHistoryId`) is the director's
  * selection among the scene's immutable `takes`. A pre-#8965 record has a

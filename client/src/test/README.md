@@ -22,6 +22,7 @@ a new one.
 | `imageGenPageMocks.jsx` | Shared `vi.mock` scaffold + fixtures + `renderImageGenPage()` for the ImageGen page suites. |
 | `mockEventSource.js` | Minimal `EventSource` stand-in for jsdom, with manual `emit`/`emitRaw`/`fail` control. |
 | `mockFrameWindows.js` | `mockFrameWindows` — per-iframe postMessage identities for protocol tests while remote frame loading stays disabled; callers restore spies at teardown. |
+| `musicVideoPageMocks.jsx` | Shared `vi.mock` scaffold + fixtures + `openProject()`/`openStage()` + `installMusicVideoPageHooks()` for the Music Video page suites (the page's shell suite and each stage container's suite). |
 | `pageLoadBarrier.js` | `awaitPageLoaded` — waits for a page's loading skeleton (by its accessible label) to be removed. |
 | `pageNavTabAssertions.js` | Pins a tabbed page's rendered tab id/label list against drift from the nav manifest it was built from. |
 | `settledInput.js` | `typeSettled`/`clearSettled`/`retypeSettled` — waits for a controlled input's value to actually reflect the typed text before it's read. |

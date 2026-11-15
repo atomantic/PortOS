@@ -6,7 +6,7 @@
  * Interrupted / Done, from the same next-action and attention logic as the header),
  * `groupMusicVideoProjects(projects, query)` (collapse forks under their root, newest version first,
  * name filter, groups ordered by last touch), and `compareMusicVideoProjectsRecentlyTouched`. Used by
- * `pages/MusicVideo.jsx` and `components/musicVideo/MusicVideoProjectCard.jsx`.
+ * `components/musicVideo/ProjectIndex.jsx` and `components/musicVideo/MusicVideoProjectCard.jsx`.
  *
  * Pure; the pill reuses the same stage / next-action / attention derivations as the project header so
  * a card and the header never disagree about whether a project needs the director.

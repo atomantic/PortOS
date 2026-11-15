@@ -10,7 +10,7 @@
 // unpersisted scene's placeholder fallback duration into a "saved exactly" render duration;
 // `autoArrangeScenes(scenes, audioAnalysis)` proposes a full `{ sceneId, startSec, endSec, beatAligned
 // }[]` arrangement by distributing scenes across song sections weighted by each section's `energy`
-// (#1915). Used by `components/musicVideo/BeatTimeline.jsx` and `pages/MusicVideo.jsx`.
+// (#1915). Used by `components/musicVideo/BeatTimeline.jsx` and `components/musicVideo/stages/usePlanStageWiring.js`.
 //
 // Pure helpers for the music-video beat-quantized timeline arranger (#1854).
 // Consumed by client/src/components/musicVideo/BeatTimeline.jsx. Mirrors the
