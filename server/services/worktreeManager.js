@@ -2245,7 +2245,6 @@ export async function reapMergedWorktrees(sourceWorkspace, {
 
   const claudeTreesRoot = join(sourceWorkspace, '.claude', 'worktrees');
   const roots = { worktreesDir: WORKTREES_DIR, claudeTreesRoot };
-  const readDirty = path => readWorktreeStatus(path).then(status => status === null ? null : !classifyWorktreeDirt(status).clean);
 
   // An unreadable inventory is not an empty successful sweep: callers must
   // retain work rather than falling through to receipt-free orphan cleanup.
@@ -2256,16 +2255,19 @@ export async function reapMergedWorktrees(sourceWorkspace, {
   for (const wt of worktrees) {
     // Never touch the primary worktree (the main repo checkout).
     if (pathsEqual(wt.path, sourceWorkspace)) continue;
-    // Read only after the decision has proven the entry names a branch.
+    // Branch-keyed reads run only after the decision has proven the entry names a branch.
     const scannedBranch = wt.branch?.replace(/^refs\/heads\//, '');
+    const contentReaders = {
+      dirty: () => readWorktreeStatus(wt.path).then(status => status === null ? null : !classifyWorktreeDirt(status).clean),
+      mergeEvidence: () => hasBranchMergeEvidence(sourceWorkspace, scannedBranch, target).catch(() => false),
+    };
     const activeAgentIds = readActiveIds();
     const scan = await decideWith(facts => decideMergedWorktreeReap({
       tree: wt, defaultBranch, currentBranch, includeClaudeTrees, activeAgentIds, ...roots, facts,
     }), {
-      dirty: () => readDirty(wt.path),
+      ...contentReaders,
       // A merged PR at this exact head makes uncommitted and untracked files disposable.
       disposableHead: async () => (await import('./prProbe.js')).isMergedPrHead(sourceWorkspace, scannedBranch, wt.head),
-      mergeEvidence: () => hasBranchMergeEvidence(sourceWorkspace, scannedBranch, target).catch(() => false),
     });
     if (scan.hold) {
       // Named so a caller can say WHICH branch a hold kept, not just which path.
@@ -2284,8 +2286,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
       agents: () => readOwners(),
       policyHold: () => readBranchCompletionHold({ repoPath: sourceWorkspace, branch: branchName, tip: wt.head, retirement: true }),
       activeAgentIds: () => readActiveIds(),
-      dirty: () => readDirty(wt.path),
-      mergeEvidence: () => hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => false),
+      ...contentReaders,
     })).hold?.reason ?? null;
     await withClaimOwnershipLock(async () => {
       const initialHold = await verifyRemoval(wt);
