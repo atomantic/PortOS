@@ -9,7 +9,10 @@ const releaseContext = () => (releasePromise ??= readFile(new URL('../../package
   .then(async (text) => {
     const version = JSON.parse(text).version;
     if (typeof version !== 'string' || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version)) return { status: 'unknown' };
-    const notes = await readFile(new URL(`../../.changelog/v${version}.md`, import.meta.url), 'utf8').catch(() => null);
+    // RELEASE.md is overwritten per release; notes for another version are not this install's.
+    const file = await readFile(new URL('../../.changelog/RELEASE.md', import.meta.url), 'utf8').catch(() => null);
+    const heading = file?.split(/\r?\n/).find((line) => /^# /.test(line));
+    const notes = heading === `# Release v${version}` || heading?.startsWith(`# Release v${version} - `) ? file : null;
     const bullets = notes?.split(/\r?\n/).filter((line) => /^- /.test(line)) || [];
     return {
       status: notes === null ? 'unavailable' : 'available',

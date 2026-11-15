@@ -228,7 +228,8 @@ no username is synthesized and no credential allowlist is expanded.
 ### Changelog
 
 Nothing to write here — there is no per-branch changelog file or fragment.
-`/do:release` synthesizes the release notes from the commit log when it runs,
+`/do:release` synthesizes the release notes (the single `.changelog/RELEASE.md`)
+from the commit log when it runs,
 so write commit subjects/bodies for a human release-note reader (see Commit
 Messages below). See [`.changelog/README.md`](../.changelog/README.md) for
 details.

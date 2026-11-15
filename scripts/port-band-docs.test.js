@@ -20,7 +20,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const STALE_BAND = '5553[-–]5561';
 // Historical records and the plan archive legitimately quote the old range.
-const EXCLUDED_PATHSPECS = [':!.changelog', ':!docs/plans', ':!docs/research'];
+const EXCLUDED_PATHSPECS = [':!docs/plans', ':!docs/research'];
 const ALLOWED = [{ file: 'docs/PORTS.md', line: '| 5553-5561 | PortOS core services' }];
 
 /** `git grep` exits 1 on zero matches; that is an empty result, not a failure. */
