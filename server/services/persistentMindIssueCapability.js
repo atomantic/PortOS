@@ -74,9 +74,9 @@ File with issues.file. Write the body so someone can pick it up cold: what is wr
 
 A filed issue is world-readable. Write the title and body in your own prose and never paste in a secret, an absolute filesystem path, a hostname, network address, personal name, contact detail, or the contents of a private record — refer to a file by its repo-relative path instead. Home-directory prefixes and credential-shaped strings are stripped before filing, but that scrub cannot recognize a private record, so keeping one out is on you.
 
-Both dispatch axes are required and independent — never derive one from the other, and do not stamp medium on both by reflex:
+Both dispatch axes are required and independent — never derive one from the other, and choose model from the evidence rather than defaulting to medium:
 - model: ${DISPATCH_MODEL_TIERS.join(', ')} — the CAPABILITY the work needs, from mechanical (a rename, a config change, a well-specified single-file edit) through routine multi-file work and genuinely hard reasoning (concurrency, schema/compatibility design, redesign) to exceptional frontier reasoning.
-- effort: ${DISPATCH_EFFORT_LEVELS.join(', ')} — the REASONING BUDGET per step, independent of the model. A mechanical sweep across many call sites is the lowest model tier at the highest effort; a two-line change hinging on one idea is a high model tier at low effort.
+- effort: ${DISPATCH_EFFORT_LEVELS.join(', ')} — how hard each step is to reason through, independent of the model and of how much work there is. medium is the normal level; low for mechanical steps; high or above only when a step hinges on a hard argument. A mechanical sweep across many call sites is the lowest model tier at low effort.
 
 Optional category labels: ${Object.keys(PERSISTENT_MIND_ISSUE_CATEGORY_LABELS).join(', ')}. Every issue you file is additionally marked '${PERSISTENT_MIND_ISSUE_LABEL}' and attributed to the model that planned it.
 

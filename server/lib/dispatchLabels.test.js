@@ -325,7 +325,9 @@ describe('shared guidance', () => {
     expect(DISPATCH_HINT_GUIDANCE).toContain('specific hardware');
     expect(DISPATCH_HINT_GUIDANCE).toContain('multiple real users');
     expect(DISPATCH_HINT_GUIDANCE).toContain('read back again');
-    expect(DISPATCH_HINT_GUIDANCE).toMatch(/[Dd]o NOT stamp `medium` on both/);
+    expect(DISPATCH_HINT_GUIDANCE).toContain('`effort:medium` is normal');
+    expect(DISPATCH_HINT_GUIDANCE).toContain('Breadth is not effort');
+    expect(JIRA_DISPATCH_HINT_GUIDANCE).toContain('`effort-medium` is normal');
     expect(DISPATCH_HINT_GUIDANCE).toContain('repeated `--label`');
     expect(DISPATCH_HINT_GUIDANCE).toContain('Never relabel a deduplicated existing issue');
     expect(DISPATCH_HINT_GUIDANCE).toContain('good first issue');
