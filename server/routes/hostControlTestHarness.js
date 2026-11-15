@@ -57,8 +57,9 @@ export const expectRemoteRefusal = async (mounts, [method, path, body, effect]) 
  * calls `effect` once for a local password-free caller, then again for a
  * delegated agent session with a password set. `localPath(path)` names paths
  * whose router admits loopback sockets only, so the agent arrives locally there.
+ * `rearm()` runs before each principal's pass to reset stateful doubles.
  */
-export const expectAuthorizedWorkflows = async ({ auth, mounts, workflows, headers = {}, localPath = () => false }) => {
+export const expectAuthorizedWorkflows = async ({ auth, mounts, workflows, headers = {}, localPath = () => false, rearm = () => {} }) => {
   const { createSession } = await import('../services/auth.js');
   const agent = await createSession({ label: 'agent' });
   for (const [enabled, address, credentials] of [
@@ -66,6 +67,7 @@ export const expectAuthorizedWorkflows = async ({ auth, mounts, workflows, heade
     [true, REMOTE_ADDRESS, { Authorization: `Bearer ${agent.token}` }],
   ]) {
     auth.enabled = enabled;
+    rearm();
     for (const [method, path, body, effect, status] of workflows) {
       const before = effect.mock.calls.length;
       const app = await hostControlApp(localPath(path) ? '127.0.0.1' : address, mounts);
