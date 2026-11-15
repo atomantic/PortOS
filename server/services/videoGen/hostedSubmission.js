@@ -4,10 +4,11 @@ import { isDefaultA2vLoraStages } from '../../lib/videoLoraStageValidation.js';
  * is read from this submission's live settings; fal/Reactor credentials never
  * enter prepared output or persisted params (their workers resolve them).
  */
+import { basename } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { resolveGalleryImage } from '../../lib/fileUtils.js';
 import { probeVideoDuration } from '../../lib/ffmpeg.js';
-import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, getFalVideoModel } from '../../lib/falVideoModels.js';
+import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, buildFalVideoRequest, getFalVideoModel } from '../../lib/falVideoModels.js';
 import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, RUNWAY_FORM_REFERENCE_LABEL, getRunwayVideoModel, runwayModelTakesText } from '../../lib/runwayVideoModels.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import { VIDEO_GEN_MODE, isVideoModeUsable } from './modes.js';
@@ -236,13 +237,44 @@ async function stageFalSourceAudio({ body, uploads, sourceImagePath, stageUpload
   return audioPath;
 }
 
+// Gallery reference images for a fal reference-to-video model, in the order the model names them
+// (@Image1..N). A storyboard-guided render owns its references (storyboardGuidance.js) and a Music
+// Video clip resolves its own at queue time, so neither passes through here. The dry run refuses a
+// count over the model's cap (its start frame included) before anything is staged or paid for.
+async function resolveFalReferenceImages({ body, sourceImagePath, cleanupStaged }) {
+  const picks = body.guidanceImageFile || body.musicVideo ? [] : body.referenceImageFiles || [];
+  if (!picks.length) return [];
+  const refuse = async (message) => {
+    await cleanupStaged();
+    throw new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
+  };
+  try {
+    buildFalVideoRequest({
+      modelId: body.falModelId, prompt: body.prompt, negativePrompt: body.negativePrompt,
+      imageUrl: sourceImagePath ? 'pending:image' : null,
+      referenceImageUrls: picks.map((_, i) => `pending:reference-${i + 1}`),
+    });
+  } catch (err) {
+    await refuse(err.message);
+  }
+  const paths = [];
+  for (const file of picks) {
+    const path = resolveGalleryImage(file);
+    if (!path) await refuse(`The reference image ${file} could not be found in the gallery.`);
+    paths.push(path);
+  }
+  return paths;
+}
+
 // Stage fal's extra inputs (end frame, then source audio — the order matters
 // for rollback). Returns the provider fields plus every queue-owned path.
 async function stageFalInputs(ctx) {
+  const referenceImagePaths = await resolveFalReferenceImages(ctx);
   const endFrame = await stageFalEndFrame(ctx);
   const audioFilePath = ctx.falSourceAudio ? await stageFalSourceAudio(ctx) : null;
   const uploadedTempPaths = [...(endFrame?.owned ? [endFrame.path] : []), ...(audioFilePath ? [audioFilePath] : [])];
   return {
+    ...(referenceImagePaths.length ? { referenceImagePaths } : {}),
     ...(endFrame ? { lastImagePath: endFrame.path } : {}),
     ...(audioFilePath ? { audioFilePath } : {}),
     ...(uploadedTempPaths.length ? { uploadedTempPaths } : {}),
@@ -284,6 +316,10 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
     buildParams: (body, prepared) => ({
       modelId: body.falModelId,
       ...(prepared.lastImagePath ? { lastImagePath: prepared.lastImagePath } : {}),
+      ...(prepared.referenceImagePaths?.length && !prepared.guidanceImagePath ? {
+        referenceImagePaths: prepared.referenceImagePaths,
+        clipReferenceLabels: prepared.referenceImagePaths.map((path) => ({ label: basename(path) })),
+      } : {}),
       ...(prepared.uploadedTempPaths?.length ? { uploadedTempPaths: prepared.uploadedTempPaths } : {}),
       aspectRatio: body.visualConditioning?.render?.parameters?.aspectRatio,
       width: body.width,
