@@ -26,7 +26,6 @@ export const beforeEach = (body, ...options) => vitestBeforeEach(owned.wrap('set
 export let scratch;
 export let repo;
 export let external;
-export let cosDir;
 let pristineRepo;
 export const noOwners = async () => [];
 
@@ -37,7 +36,7 @@ export function describeHeldCheckoutRecovery(body) {
   describe.skipIf(SKIP_HEAVY_INTEGRATION)('held checkout retirement (real git)', () => {
     beforeEach(async () => {
       scratch = null;
-      Object.assign(retirementFaults, { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null });
+      Object.assign(retirementFaults, { onRemove: null });
       Object.assign(injected, { policies: [], schedule: { tasks: {}, executions: {} }, app: { id: 'app-1', repoPath: null }, onUnlockedStatus: null, statusReads: 0, onOtherFiles: null });
       scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-held-checkout-')));
       const safeRepo = join(scratch, 'repo');
@@ -51,7 +50,6 @@ export function describeHeldCheckoutRecovery(body) {
       await cp(pristineRepo, safeRepo, { recursive: true });
       repo = (await execGit(['rev-parse', '--show-toplevel'], safeRepo)).stdout.trim() || safeRepo;
       external = join(scratch, 'elsewhere');
-      cosDir = join(scratch, 'cos');
       await mkdir(external);
       injected.app.repoPath = repo;
     });
@@ -132,26 +130,3 @@ export const makeClean = async (path) => {
   await execGit(['checkout', '--', '.'], path);
   await execGit(['clean', '-fdx'], path);
 };
-
-export async function supersededCheckout({ clean = false } = {}) {
-  const { release } = await heldCheckout('superseded', { branch: 'feature/superseded' });
-  await rm(join(release.path, 'ignored.txt'));
-  await execGit(['worktree', 'unlock', release.path], repo);
-  if (clean) {
-    await execGit(['reset', '--hard'], release.path);
-    await execGit(['clean', '-fdx'], release.path);
-  } else {
-    await execGit(['add', 'initial.txt'], release.path);
-    await writeFile(join(release.path, 'initial.txt'), 'unstaged original work\n');
-  }
-  const gitdir = (await execGit(['rev-parse', '--absolute-git-dir'], release.path)).stdout.trim();
-  await writeFile(join(gitdir, 'private-note'), 'private administration');
-  const dirtyPaths = (await execGit(['status', '--porcelain'], release.path)).stdout.trimEnd().split('\n').filter(Boolean).map(line => line.slice(3));
-  const entry = { branch: release.branch, tip: release.head, worktreePath: release.path, worktreeLocked: false,
-    worktreeAgeMs: 365 * 86400000, dirtyPaths,
-    verdict: { branch: release.branch, tip: release.head, verdict: 'SUPERSEDED', dirtyPaths } };
-  return { entry, release: { ...release, locked: false, lockReason: null } };
-}
-export const reapSuperseded = async (entry, readAgents = noOwners) => (await import('./branchReconcile.js')).reapSupersededBranches(repo, 'main', [entry], {
-  appId: 'app-1', cosDir, claimOwners: { agents: [], readAgents },
-});
