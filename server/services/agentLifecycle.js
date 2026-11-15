@@ -57,7 +57,7 @@ import { isUpdateInProgress } from './updateChecker.js';
 import { createAgentSpawnContext, prepareAgentSpawn } from './agentSpawnPreparation.js';
 import { dispatchAgentRun } from './agentSpawnDispatch.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
-import { runAgentCompletionCleanup } from './agentCompletionCleanup.js';
+import { runAgentCompletionCleanup, replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
 import { finalizeAgent, releaseAgentLane, retireDeadAgent, stampLiExecutionVerdict } from './agentFinalization.js';
 import { extractFinalSummary } from './agentSummaryExtraction.js';
 import { handleOrphanedTask } from './agentManagement.js';
@@ -453,7 +453,6 @@ async function completeUntrackedAgentFromCosState(agentId, exitCode, success, du
     return;
   }
   if (cosAgent.status === 'completed') {
-    const { replayAgentCompletionCleanup } = await import('./agentCompletionCleanup.js');
     await replayAgentCompletionCleanup(cosAgent);
     console.log(`✅ Agent ${agentId} already completed (handled by orphan cleanup)`);
     return;
@@ -585,7 +584,6 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
     // to be in `runnerAgents` at all.
     if (persistedAgent && persistedAgent.status !== 'running') {
       if (persistedAgent.status === 'completed') {
-        const { replayAgentCompletionCleanup } = await import('./agentCompletionCleanup.js');
         await replayAgentCompletionCleanup(persistedAgent);
       }
       console.log(`✅ Agent ${agentId} already ${persistedAgent.status} — ignoring duplicate completion (exit ${exitCode})`);

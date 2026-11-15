@@ -1,114 +1,71 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
-
-vi.mock('../services/authors/index.js', () => ({
-  NAME_MAX: 120,
-  WRITING_STYLE_MAX: 4000,
-  BIO_MAX: 4000,
-  PHYSICAL_DESCRIPTION_MAX: 2000,
-  HEADSHOT_STYLE_MAX: 2000,
-  HEADSHOT_IMAGE_URL_MAX: 1000,
-  AUTHOR_ID_RE: /^auth-/,
-  listAuthors: vi.fn(async () => [{ id: 'auth-1', name: 'Jane' }]),
-  getAuthor: vi.fn(),
-  createAuthor: vi.fn(async (input) => ({ id: 'auth-new', ...input })),
-  updateAuthor: vi.fn(async (id, patch) => ({ id, ...patch })),
-  deleteAuthor: vi.fn(async (id) => ({ id })),
-}));
-
-import * as authors from '../services/authors/index.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import authorsRoutes from './authors.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-function makeApp() {
-  const app = express();
-  app.use(express.json());
-  app.use('/api/authors', authorsRoutes);
-  app.use(errorMiddleware);
-  return app;
-}
+// Real authors service (file backend under the test runner) over a temp data root.
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-authors-routes-') }));
+afterAll(cleanupTempDataRoots);
+
+const { default: authorsRoutes } = await import('./authors.js');
+
+const app = express();
+app.use(express.json());
+app.use('/api/authors', authorsRoutes);
+app.use(errorMiddleware);
+
+const api = (method, path = '', body) => request(app)[method](`/api/authors${path}`).send(body);
 
 describe('authors routes', () => {
-  let app;
-  beforeEach(() => {
-    app = makeApp();
-    vi.clearAllMocks();
-  });
+  it('creates an author that reads back by id and in the list, then patches and soft-deletes it', async () => {
+    const created = await api('post', '', { name: 'Jane Example', bio: 'blurb' });
+    expect(created.status).toBe(201);
+    const { id } = created.body;
 
-  it('GET / returns the author list', async () => {
-    const r = await request(app).get('/api/authors');
-    expect(r.status).toBe(200);
-    expect(r.body).toEqual([{ id: 'auth-1', name: 'Jane' }]);
+    const fetched = await api('get', `/${id}`);
+    expect(fetched.status).toBe(200);
+    expect(fetched.body).toMatchObject({ id, name: 'Jane Example', bio: 'blurb' });
+    expect((await api('get')).body.map((a) => a.id)).toContain(id);
+
+    const patched = await api('patch', `/${id}`, { name: 'Janet Example' });
+    expect(patched.status).toBe(200);
+    expect((await api('get', `/${id}`)).body).toMatchObject({ name: 'Janet Example', bio: 'blurb' });
+
+    expect((await api('delete', `/${id}`)).status).toBe(200);
+    expect((await api('get', `/${id}`)).status).toBe(404);
+    expect((await api('get')).body.map((a) => a.id)).not.toContain(id);
   });
 
   // Regression guard: every client caller (Authors page, AuthorPicker) calls
   // listAuthors() with no query params. If this ever returns an envelope instead
   // of a bare array, those lists silently render empty.
-  it('GET / without pagination params returns the unbounded bare array', async () => {
-    authors.listAuthors.mockResolvedValueOnce(
-      Array.from({ length: 120 }, (_, i) => ({ id: `auth-${i}`, name: `A${i}` }))
-    );
-    const r = await request(app).get('/api/authors');
-    expect(r.status).toBe(200);
-    expect(Array.isArray(r.body)).toBe(true);
-    expect(r.body).toHaveLength(120);
+  it('lists a bare unbounded array by default and a bounded envelope when pagination is requested', async () => {
+    for (let i = 0; i < 4; i++) await api('post', '', { name: `Paged ${i}` });
+
+    const bare = await api('get');
+    expect(Array.isArray(bare.body)).toBe(true);
+    const total = bare.body.length;
+    expect(total).toBeGreaterThanOrEqual(4);
+
+    const page = await api('get', '?limit=2&offset=1');
+    expect(page.status).toBe(200);
+    expect(page.body).toMatchObject({ total, limit: 2, offset: 1 });
+    expect(page.body.items.map((a) => a.id)).toEqual(bare.body.slice(1, 3).map((a) => a.id));
   });
 
-  it('GET / returns a bounded envelope when pagination is requested', async () => {
-    authors.listAuthors.mockResolvedValueOnce(
-      Array.from({ length: 5 }, (_, i) => ({ id: `auth-${i}`, name: `A${i}` }))
-    );
-    const r = await request(app).get('/api/authors?limit=2&offset=1');
-    expect(r.status).toBe(200);
-    expect(r.body.items).toHaveLength(2);
-    expect(r.body.items[0].id).toBe('auth-1');
-    expect(r.body.total).toBe(5);
-    expect(r.body.limit).toBe(2);
-    expect(r.body.offset).toBe(1);
+  it('rejects a missing name and an empty patch without persisting anything', async () => {
+    const before = (await api('get')).body.length;
+    expect((await api('post', '', { bio: 'no name' })).status).toBe(400);
+    expect((await api('get')).body).toHaveLength(before);
+
+    const { body } = await api('post', '', { name: 'Stable' });
+    expect((await api('patch', `/${body.id}`, {})).status).toBe(400);
+    expect((await api('get', `/${body.id}`)).body.name).toBe('Stable');
   });
 
-  it('POST / creates an author', async () => {
-    const r = await request(app).post('/api/authors').send({ name: 'Jane', bio: 'blurb' });
-    expect(r.status).toBe(201);
-    expect(authors.createAuthor).toHaveBeenCalledWith(expect.objectContaining({ name: 'Jane', bio: 'blurb' }));
-    expect(r.body.id).toBe('auth-new');
-  });
-
-  it('POST / rejects a missing name', async () => {
-    const r = await request(app).post('/api/authors').send({ bio: 'no name' });
-    expect(r.status).toBe(400);
-    expect(authors.createAuthor).not.toHaveBeenCalled();
-  });
-
-  it('GET /:id returns 404 when absent', async () => {
-    authors.getAuthor.mockResolvedValueOnce(null);
-    const r = await request(app).get('/api/authors/auth-missing');
-    expect(r.status).toBe(404);
-  });
-
-  it('GET /:id returns the author when found', async () => {
-    authors.getAuthor.mockResolvedValueOnce({ id: 'auth-1', name: 'Jane' });
-    const r = await request(app).get('/api/authors/auth-1');
-    expect(r.status).toBe(200);
-    expect(r.body.name).toBe('Jane');
-  });
-
-  it('PATCH /:id rejects an empty patch', async () => {
-    const r = await request(app).patch('/api/authors/auth-1').send({});
-    expect(r.status).toBe(400);
-    expect(authors.updateAuthor).not.toHaveBeenCalled();
-  });
-
-  it('PATCH /:id updates an author', async () => {
-    const r = await request(app).patch('/api/authors/auth-1').send({ name: 'Janet' });
-    expect(r.status).toBe(200);
-    expect(authors.updateAuthor).toHaveBeenCalledWith('auth-1', { name: 'Janet' });
-  });
-
-  it('DELETE /:id soft-deletes an author', async () => {
-    const r = await request(app).delete('/api/authors/auth-1');
-    expect(r.status).toBe(200);
-    expect(r.body).toEqual({ id: 'auth-1' });
+  it('returns 404 for an unknown author', async () => {
+    expect((await api('get', '/auth-missing')).status).toBe(404);
   });
 });

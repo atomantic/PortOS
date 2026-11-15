@@ -36,7 +36,7 @@ import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { getCosTasks } from './cosTaskStore.js';
 import { queueEligibleImprovementTasks } from './cosTaskGenerator.js';
-import { generateTaskFromJob, recordJobGateSkip, isScriptJob, executeScriptJob, isShellJob, executeShellJob } from './autonomousJobs.js';
+import { generateTaskFromJob, recordJobGateSkip, isScriptJob, executeScriptJob, isShellJob, executeShellJob, getJob, getEnabledJobs, getAllJobs } from './autonomousJobs.js';
 import { checkJobGate, hasGate } from './jobGates.js';
 import { clockCronExpression, nextIntervalJobFireTime } from './autonomousJobs/scheduler.js';
 import {
@@ -96,7 +96,6 @@ function computeNextJobFireTime(job, timezone) {
  * After execution, re-registers for the next fire time.
  */
 export async function registerSingleJobSchedule(jobId) {
-  const { getJob } = await import('./autonomousJobs.js');
   const job = await getJob(jobId);
   if (!job || !job.enabled) {
     cancelEvent(`job:${jobId}`);
@@ -230,7 +229,6 @@ export async function executeScheduledJob(jobId) {
     return;
   }
 
-  const { getJob } = await import('./autonomousJobs.js');
   const job = await getJob(jobId);
   if (!job || !job.enabled) return;
 
@@ -462,7 +460,6 @@ export async function executeScheduledJob(jobId) {
  * Register all enabled autonomous jobs as individual one-shot scheduled events.
  */
 export async function registerJobSchedules() {
-  const { getEnabledJobs } = await import('./autonomousJobs.js');
   const jobs = await getEnabledJobs();
 
   for (const job of jobs) {
@@ -478,7 +475,6 @@ export async function registerJobSchedules() {
  * Cancel all autonomous job scheduled events.
  */
 export async function unregisterJobSchedules() {
-  const { getAllJobs } = await import('./autonomousJobs.js');
   const jobs = await getAllJobs();
 
   for (const job of jobs) {

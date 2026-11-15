@@ -1,6 +1,6 @@
 /**
- * Rule: Every route module mounted by `server/index.js` must be imported (or `vi.mock`ed) by at least one tracked test; `UNTESTED_ALLOWLIST` is shrink-only.
- * Fix: Add an HTTP-boundary contract test (`request(app)` from `lib/testHelper.js`) and remove the module from `UNTESTED_ALLOWLIST`.
+ * Rule: Every route module mounted by `server/index.js` must be imported (or `vi.mock`ed) by at least one tracked test; a router with no validation or derivation may sit in `UNTESTED_ALLOWLIST` when its entry names the service suite that covers it.
+ * Fix: Add an HTTP-boundary contract test (`request(app)` from `lib/testHelper.js`) that asserts what the route owns, or, for a pure pass-through, allowlist it naming the covering service suite.
  * What this guard cannot see:
  *   - Sub-routers reached only through a barrel module are covered by the barrel's test.
  */
@@ -59,7 +59,7 @@ describe('mounted route modules are reached by a test (#12048)', () => {
     const offenders = untested.filter((m) => !UNTESTED_ALLOWLIST.has(m));
     expect(
       offenders,
-      'add a route contract test (request(app) at the mounted path: success plus the materially different failure). Do NOT add to UNTESTED_ALLOWLIST — it only shrinks.',
+      'add a route contract test (request(app) at the mounted path: refusals, derived arguments, error mapping), or for a router with no validation and no derivation add it to UNTESTED_ALLOWLIST with a reason naming the service suite that covers it.',
     ).toEqual([]);
   });
 

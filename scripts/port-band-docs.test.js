@@ -19,8 +19,6 @@ import { fileURLToPath } from 'url';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const STALE_BAND = '5553[-–]5561';
-// Historical records and the plan archive legitimately quote the old range.
-const EXCLUDED_PATHSPECS = [':!docs/plans', ':!docs/research'];
 const ALLOWED = [{ file: 'docs/PORTS.md', line: '| 5553-5561 | PortOS core services' }];
 
 /** `git grep` exits 1 on zero matches; that is an empty result, not a failure. */
@@ -39,7 +37,7 @@ function gitGrep(pattern, pathspecs) {
 
 describe('PortOS port band in tracked markdown (#11851)', () => {
   it('no tracked markdown states the stale 5553-5561 band outside the PORTS.md core-services row', () => {
-    const hits = gitGrep(STALE_BAND, ['*.md', ...EXCLUDED_PATHSPECS])
+    const hits = gitGrep(STALE_BAND, ['*.md'])
       .split('\n')
       .filter(Boolean)
       .map((line) => {

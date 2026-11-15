@@ -6,7 +6,7 @@
  * A file is referenced when another tracked file contains its name as a whole
  * token, or, for a Python module, its stem (`import ltx25_reference`). Exempt:
  * `*.test.js`, which the server Vitest run collects through `../scripts/**` globs.
- * Changelogs and point-in-time records (plans, decisions, research) do not count:
+ * Changelogs and decision records (ADRs) do not count:
  * a historical mention is not a pointer for the next reader.
  * No allowlist: document the script or delete it.
  */
@@ -19,7 +19,7 @@ import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const TOP_LEVEL_SCRIPT = /^scripts\/[^/]+$/;
 const VITEST_COLLECTED = /\.test\.js$/;
-const HISTORICAL = /^(?:docs\/(?:plans|decisions|research)\/)/;
+const HISTORICAL = /^docs\/decisions\//;
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // A whole `[\w.-]+` token equal to a key once its trailing dots are dropped.

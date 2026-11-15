@@ -11,6 +11,7 @@ vi.mock('../components/feature-agents/FeatureAgentCard', () => ({
 
 import FeatureAgents from './FeatureAgents';
 import { getFeatureAgents } from '../services/api';
+import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 
 const renderPage = () => render(<MemoryRouter><FeatureAgents /></MemoryRouter>);
@@ -57,5 +58,17 @@ describe('FeatureAgents list loading', () => {
     expect(screen.getByText('Example Agent')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the list when a feature-agent status event arrives', async () => {
+    getFeatureAgents.mockResolvedValueOnce([{ id: 'a1', name: 'Example Agent', status: 'active' }]);
+    renderPage();
+    expect(await screen.findByText('Example Agent')).toBeInTheDocument();
+
+    getFeatureAgents.mockResolvedValueOnce([{ id: 'a1', name: 'Renamed Agent', status: 'paused' }]);
+    const [, onStatus] = socket.on.mock.calls.find(([event]) => event === 'cos:feature-agent:status');
+    await act(async () => { onStatus({ id: 'a1' }); });
+
+    expect(await screen.findByText('Renamed Agent')).toBeInTheDocument();
   });
 });

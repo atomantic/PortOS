@@ -227,7 +227,7 @@ describe('Game routes', () => {
     games.compileGameAssets.mockResolvedValueOnce({ version: 2, created: true });
     const response = await request(makeApp()).post('/api/games/game-1/compile');
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ version: 2, created: true });
+    expect(games.compileGameAssets.mock.calls[0][0]).toBe('game-1');
   });
 
   it('returns bundle integrity preflight details', async () => {

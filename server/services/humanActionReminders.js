@@ -20,6 +20,7 @@ import { brainEvents } from './brainStorage.js';
 import * as eventScheduler from './eventScheduler.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { humanActionReminderDecision } from '../lib/humanActions.js';
+import { getInstanceId } from './instanceIdentity.js';
 
 const EVENT_PREFIX = 'human-action-due:';
 
@@ -134,7 +135,6 @@ const onRecordChanged = ({ type } = {}) => { if (type === 'threads') queueReconc
 export async function initHumanActionReminders() {
   if (started) return;
   started = true;
-  const { getInstanceId } = await import('./instanceIdentity.js');
   instanceId = await getInstanceId().catch(() => null);
   brainEvents.on('threads:upserted', onThreadEvent);
   brainEvents.on('threads:deleted', onThreadEvent);

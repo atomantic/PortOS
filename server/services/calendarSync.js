@@ -7,7 +7,7 @@ import { overlapsSyncWindow } from '../lib/calendarSyncWindow.js';
 import { calendarTouchpointDedupeKey } from '../lib/tribeMatch.js';
 import { resolveCalendarInstant, resolveEventInstant } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
-import { getAccount, updateSyncStatus } from './calendarAccounts.js';
+import { getAccount, updateSyncStatus, listAccounts } from './calendarAccounts.js';
 
 export const CACHE_DIR = join(PATHS.calendar, 'cache');
 const syncLocks = new Map();
@@ -127,7 +127,6 @@ export async function getEvents(options = {}) {
   // Aggregate across all account caches
   await ensureDir(CACHE_DIR);
   const files = await readdir(CACHE_DIR).catch(() => []);
-  const { listAccounts } = await import('./calendarAccounts.js');
   const accounts = await listAccounts();
   const accountMap = new Map(accounts.map(a => [a.id, a]));
 

@@ -39,15 +39,13 @@ const RATCHET_SLACK_BYTES = 2 * 1024;
 // a doc forces its entry down or out.
 const SIZE_RATCHET_CEILINGS = {
   'STORAGE.md': 233548,
-  'BACKUP.md': 103721,
+  'BACKUP.md': 48200,
+  'BACKUP_PUBLICATION_ADMISSION.md': 41800,
   'GITHUB_ACTIONS.md': 98951,
-  'features/eidoverse.md': 95026,
   'HTML_COMPOSITIONS.md': 67233,
-  'features/beeper.md': 59578,
-  'TROUBLESHOOTING.md': 51356,
+  'TROUBLESHOOTING.md': 46000,
   'FEDERATED_MEDIA_PROVIDERS.md': 45625,
   'QUOTA-BURN.md': 44909,
-  'features/product-surfaces.md': 44547,
 };
 
 describe('docs/README.md index coverage', () => {

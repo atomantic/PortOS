@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
@@ -76,5 +76,20 @@ describe('ProviderStatusCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry loading status' }));
     await waitFor(() => expect(screen.queryByText('Unable to load status')).not.toBeInTheDocument());
     expect(screen.getByText('Example Provider')).toBeInTheDocument();
+  });
+
+  it('re-reads provider status when a status-change event arrives', async () => {
+    api.getProviderStatuses.mockResolvedValueOnce({ providers: { example: { available: true } } });
+    render(<ProviderStatusCard />);
+    expect(await screen.findByText('All Available')).toBeInTheDocument();
+
+    api.getProviderStatuses.mockResolvedValueOnce({
+      providers: { example: { available: false, reason: 'rate-limit', message: 'Rate limit exceeded' } },
+    });
+    const [, onChanged] = socket.on.mock.calls.find(([event]) => event === 'provider:status:changed');
+    await act(async () => onChanged({ providerId: 'example' }));
+
+    expect(await screen.findByText('Example Provider')).toBeInTheDocument();
+    expect(screen.queryByText('All Available')).not.toBeInTheDocument();
   });
 });
