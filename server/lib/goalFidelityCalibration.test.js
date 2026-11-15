@@ -113,6 +113,14 @@ describe('buildGoalFidelityCalibrationTask', () => {
     expect(body).toMatch(/regression test/i);
   });
 
+  it('confines the fix to the general prompt or its evidence, never a case-specific matcher', () => {
+    // The other cheap fix: recognize this one diff so it never misjudges again.
+    const body = build();
+    expect(body).toContain('Edit only the general prompt or the evidence supplied to it.');
+    expect(body).toMatch(/never add a matcher, classifier, extra prompt or extra review pass/i);
+    expect(body).toMatch(/specific diff, file path, function name or objective wording/);
+  });
+
   it('names the reviewer\'s whole context surface, which the agent cannot discover from the diff', () => {
     // Rendered from the surface table, so this is also what keeps the body's
     // addresses and the gap's own pointer from disagreeing.

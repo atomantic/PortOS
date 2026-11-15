@@ -58,7 +58,6 @@ import {
   formatGoalFidelitySummary,
   goalFidelityHoldsRun,
   goalFidelityLogMarker,
-  isDependencyAuditSummaryDiff,
   mergeOutcomeObjective,
   isForgeRemediationTestFixDiff,
   mergeOutcomeReview,
@@ -853,37 +852,6 @@ async function verifyMergeOutcome(workspacePath, mergeObjective) {
 }
 
 /**
- * Independent evidence for the narrow audit-note-only decline below. Re-read
- * both complete inventories with the repository's pinned credentials; neither
- * transcript claims nor an inaccessible/malformed response can mean empty.
- * Other forges and nonempty inventories retain the normal review path.
- */
-async function hasEmptyDependencyInventories(workspacePath) {
-  const { getOriginInfo } = await import('../lib/gitRemote.js');
-  const origin = await getOriginInfo(workspacePath);
-  if (!origin.host || !origin.owner || !origin.repo) return false;
-  const { githubApiHost } = await import('../lib/workTracker.js');
-  const host = githubApiHost(origin.host.toLowerCase());
-  const { resolveForgeForRepo } = await import('./git.js');
-  const forge = await resolveForgeForRepo(workspacePath);
-  if (forge.cli !== 'gh' || githubApiHost(forge.host?.toLowerCase()) !== host || forge.owner !== origin.owner) return false;
-  const { execGh } = await import('./github.js');
-  const inventories = await Promise.all([
-    'dependabot/alerts',
-    'pulls',
-  ].map(async resource => {
-    const raw = await execGh([
-      'api', '--hostname', host, '--paginate', '--slurp',
-      `repos/${origin.owner}/${origin.repo}/${resource}?state=open&per_page=100`,
-    ], 30_000, { cwd: workspacePath, env: forge.env });
-    const pages = safeJSONParse(raw, null);
-    return Array.isArray(pages) && pages.length > 0
-      && pages.every(page => Array.isArray(page) && page.length === 0);
-  }));
-  return inventories.every(empty => empty);
-}
-
-/**
  * Goal-fidelity completion gate (#5994).
  *
  * Every other check on this path proves the run PRODUCED something: the commit
@@ -978,17 +946,6 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
   // commit criterion, which is the check that actually owns that question.
   if (reason || !diff) return noFidelityVerdict();
 
-  // #7899: an audit summary with no outstanding forge work cannot establish
-  // whether the inventory/scanners ran. Decline that exact shape, never stamp
-  // it `ship` or let a diff-only model invent missing bot resolutions. Ordinary
-  // changes (including dependency bumps), claim objectives, and incomplete or
-  // unavailable inventories keep the existing detector and hold behavior.
-  if (!claimFlow && resolveTaskHookType(task) === 'dependency-updates'
-      && isDependencyAuditSummaryDiff({ diff, truncated })
-      && await hasEmptyDependencyInventories(workspacePath).catch(() => false)) {
-    return fidelityNotJudged('Dependency audit summary is not judgeable from a diff: independent forge queries found no open alerts or PRs, but the diff cannot verify the audit execution or scanner coverage.');
-  }
-
   if (!claimFlow && isForgeRemediationTestFixDiff({ analysisType: resolveTaskHookType(task), diff })) {
     return fidelityNotJudged('PR remediation is not judgeable from a diff: its objective is forge state (CI, merges), and the run window holds only a test-file CI repair.');
   }
@@ -1005,18 +962,6 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
       .catch(() => null)
     : null;
 
-  // The comparison chart can expose observations that were already in the
-  // shipped catalog before this run, so their absence from the diff is not
-  // evidence that the metrics are absent. This never reads live instance data.
-  const referenceEvidence = /\bcomparison\b/i.test(objective)
-    ? await import('./goalFidelityComparisonEvidence.js')
-      .then(({ comparisonReferenceEvidence }) => comparisonReferenceEvidence({
-        workspacePath, base, head, objective, diff,
-        maxChars: MAX_FIDELITY_DIFF_CHARS - diff.trim().length - (priorDelivery?.diff.trim().length || 0),
-      }))
-      .catch(() => null)
-    : null;
-
   const result = await runLocalGoalFidelityReview({
     backend: config.backend,
     model: config.model,
@@ -1027,7 +972,6 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
     objectiveScreenshots: task.metadata?.screenshots,
     diff,
     ...(priorDelivery ? { priorDeliveryDiff: priorDelivery.diff } : {}),
-    ...(referenceEvidence ? { referenceEvidence } : {}),
   }).catch(err => ({ ok: false, error: err.message }));
   if (!result?.ok) return noFidelityVerdict(result?.error || 'goal-fidelity review returned no verdict');
   return {
