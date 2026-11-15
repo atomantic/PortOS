@@ -103,7 +103,7 @@ describe('instruction file references', () => {
   });
 
   it('pins the retired allowlist: still absent, still cited, never growing', () => {
-    expect(RETIRED_NAMES.length).toBeLessThanOrEqual(1);
+    expect(RETIRED_NAMES).toEqual([]);
     const cited = new Set(files.flatMap((f) => extractFileTokens(readFileSync(join(REPO_ROOT, f), 'utf8')).map((t) => basename(t.path))));
     for (const name of RETIRED_NAMES) {
       expect(tracked.has(name), `${name} is tracked again — drop it from RETIRED_NAMES`).toBe(false);
