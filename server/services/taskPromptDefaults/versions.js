@@ -159,3 +159,8 @@ PROMPT_VERSIONS['claim-issue-gitlab'] = 52; // v52: same new-issue grace and lin
 PROMPT_VERSIONS['claim-issue'] = 61; // v61: shared effort-label calibration.
 PROMPT_VERSIONS['claim-issue-gitlab'] = 53; // v53: shared effort-label calibration.
 PROMPT_VERSIONS['issue-reconcile'] = 11; // v11: shared effort-label calibration.
+
+// Busy epic stand-downs persist their blockers instead of retrying an unchanged queue (#16068).
+PROMPT_VERSIONS['claim-issue'] = 62;
+PROMPT_VERSIONS['claim-issue-gitlab'] = 54;
+PROMPT_VERSIONS['claim-issue-jira'] = 29;

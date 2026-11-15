@@ -19,7 +19,7 @@ import { verifyClaimDisposition, verifyCleanupClaimDisposition } from './claimDi
 
 const target = { forge: 'github', fullName: 'example/project', webHost: 'github.example.test', apiHost: 'github.example.test', repoSpec: 'github.example.test/example/project' };
 const task = { id: 'task-example', taskType: 'internal', metadata: { app: 'example', claimFlow: true, claimTarget: '42' } };
-const agent = { id: 'agent-example', taskId: task.id, metadata: { sourceWorkspace: '/example/project', workspacePath: '/example/claim' } };
+const agent = { id: 'agent-example', taskId: task.id, metadata: { sourceWorkspace: '/example/project', workspacePath: '/example/claim', claimBranches: ['claim/issue-42'] } };
 const reportedOutcome = { status: 'no-action-needed', reason: 'Untrusted reason says this was delivered.' };
 const merged = () => ({ __typename: 'PullRequest', number: 7, merged: true, mergedAt: '2026-10-01T10:00:00Z',
   baseRefName: 'main', baseRepository: { nameWithOwner: 'example/project' }, mergeCommit: { oid: 'a'.repeat(40) },
@@ -58,6 +58,38 @@ describe('selected claim tracker completion', () => {
       [['merge-base', '--is-ancestor', 'HEAD', 'c'.repeat(40)], '/example/claim', { ignoreExitCode: true }],
     ]);
     expect(repository.issue.state).toBe('OPEN');
+  });
+
+  it.each([['absent', undefined], ['empty', []]])('settles an unbound park without inspecting unrelated dirty primary work (%s bindings)', async (_name, claimBranches) => {
+    parkIssue();
+    listWorktrees.mockResolvedValue([
+      { branch: 'refs/heads/main', path: '/example/project' },
+      { branch: 'refs/heads/claim/issue-43', path: '/example/other-claim' },
+    ]);
+    execGit.mockResolvedValue({ exitCode: 0, stdout: ' M unrelated.js' });
+    const unbound = { ...agent, metadata: { ...agent.metadata, workspacePath: '/example/project', claimBranches } };
+    expect(await verify({ agent: unbound })).toMatchObject({
+      status: 'verified', issues: [{ issue: 42, disposition: 'operator-blocked' }],
+    });
+    expect(listWorktrees).toHaveBeenCalledWith('/example/project');
+    expect(execGit).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unbound park when the selected issue still holds a claim worktree', async () => {
+    parkIssue();
+    const unbound = { ...agent, metadata: { ...agent.metadata, claimBranches: [] } };
+    expect(await verify({ agent: unbound })).toMatchObject({
+      status: 'unverified', reason: 'checkout-has-undelivered-work',
+    });
+    expect(execGit).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unbound park when worktree inventory is unavailable', async () => {
+    parkIssue();
+    listWorktrees.mockRejectedValueOnce(new Error('inventory unavailable'));
+    const unbound = { ...agent, metadata: { ...agent.metadata, claimBranches: [] } };
+    expect(await verify({ agent: unbound })).toMatchObject({ status: 'unverified', reason: 'checkout-unavailable' });
+    expect(execGit).not.toHaveBeenCalled();
   });
 
   // The claim prompt's Phase 3 parks with needs-input and calls it converging.
@@ -238,8 +270,8 @@ describe('selected claim tracker completion', () => {
   });
 
   it.each([
-    ['missing target', { task: { ...task, metadata: { ...task.metadata, claimTarget: undefined } } }],
-    ['a URL supplied as target', { task: { ...task, metadata: { ...task.metadata, claimTarget: 'https://github.example.test/other/project/issues/42' } } }],
+    ['missing target', { agent: { ...agent, metadata: { ...agent.metadata, claimBranches: [] } }, task: { ...task, metadata: { ...task.metadata, claimTarget: undefined } } }],
+    ['a URL supplied as target', { agent: { ...agent, metadata: { ...agent.metadata, claimBranches: [] } }, task: { ...task, metadata: { ...task.metadata, claimTarget: 'https://github.example.test/other/project/issues/42' } } }],
     ['different task', { agent: { ...agent, taskId: 'other-task' } }],
     ['different source checkout', { agent: { ...agent, metadata: { sourceWorkspace: '/other/project' } } }],
   ])('refuses %s before querying the forge', async (_name, options) => {

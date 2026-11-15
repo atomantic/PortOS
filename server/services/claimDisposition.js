@@ -227,19 +227,20 @@ async function inspectClaimDisposition(task, agent) {
     if (result.status !== 'verified') return result;
     issues.push(result);
   }
-  // Parking an issue settles this attempt, not unfinished code. Require the
-  // checkout to be clean and fully present in the live default-branch head.
+  // Parking settles this attempt, not unfinished code. Bound claims must be
+  // clean and contained in the live default head. Unbound runs own no checkout:
+  // never inspect the shared primary checkout's unrelated work.
   for (const issue of issues.filter(issue => issue.disposition === 'operator-blocked')) {
     if (!/^[a-f0-9]{40,64}$/i.test(issue.defaultCommit || '')) return unverified('default-branch-unavailable');
-    // Inspect each currently bound child through Git's inventory, never the
-    // coordinator checkout or obsolete persisted seeds.
-    let workspace = agent.metadata?.workspacePath;
-    if (agent.metadata?.claimBranches?.length) {
-      const trees = await listWorktrees(source).catch(() => null);
-      const holders = trees?.filter(tree => tree.branch?.replace(/^refs\/heads\//, '') === `claim/issue-${issue.issue}`);
-      if (holders?.length !== 1) return unverified('checkout-unavailable');
-      workspace = holders[0].path;
+    const trees = await listWorktrees(source).catch(() => null);
+    if (!Array.isArray(trees)) return unverified('checkout-unavailable');
+    const holders = trees.filter(tree => tree.branch?.replace(/^refs\/heads\//, '') === `claim/issue-${issue.issue}`);
+    if (!agent.metadata?.claimBranches?.length) {
+      if (holders.length) return unverified('checkout-has-undelivered-work');
+      continue;
     }
+    if (holders.length !== 1) return unverified('checkout-unavailable');
+    const workspace = holders[0].path;
     if (typeof workspace !== 'string' || !workspace) return unverified('checkout-unavailable');
     const status = await execGit(['status', '--porcelain', '--untracked-files=all'], workspace);
     if (status.stdout.trim()) return unverified('checkout-has-undelivered-work');
