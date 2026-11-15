@@ -167,7 +167,7 @@ documented release refs use that same policy; main, other refs and raw SHAs keep
 the normal growth assertion. Other structural guards and full release suites run
 unchanged.
 
-An always-run list (`ALWAYS_RUN_TESTS` in the planner) is added to every plan,
+An always-run set (`getAlwaysRunTests()` in the planner) is added to every plan,
 so no impact scope can drop it. A documentation-only PR therefore still runs the
 server job with those files selected. The one exception is a PR that changes
 only generated data no code or test reads (`GENERATED_DATA_RULES`: the repo-root
@@ -189,10 +189,12 @@ and `CI Gate` passes once the impact job's diff scan does. Two kinds of test qua
   to the planner and the source has no import edge to the guard, so a docs-only
   PR is exactly the one that could document a removed endpoint and merge green.
 
-`scripts/repo-scan-guards.test.js` keeps the second half honest: it re-derives
-the scanner set from the tree and fails when a new scanner is added without
-being registered, either in `ALWAYS_RUN_TESTS` or in its own
-`STRUCTURALLY_SELECTED` map naming the selector that already reaches it.
+Tree-scanning guards need no registration: the planner derives them from the
+tracked tests with the detectors in `scripts/lib/guardScanners.js` and adds them
+to every plan (client scanners ride any `client/src` js/jsx change).
+`EXPLICIT_ALWAYS_RUN_TESTS` lists only guards the detector cannot see, and
+`TREE_GUARDS_SELECTED_ELSEWHERE` the few scanners another selector already
+reaches. `scripts/repo-scan-guards.test.js` pins the derivation.
 
 ### The bundled `lib/slashdo` submodule
 
@@ -981,7 +983,7 @@ base, and a setup-phase problem the static walk finds still fails both keys
 closed. The floor key always walks the setup closure (less bare mock
 registrations).
 
-**Never memoized (fails closed).** A file in the planner's `ALWAYS_RUN_TESTS`
+**Never memoized (fails closed).** A file in the planner's always-run set
 or in `TEST_MEMO_NEVER` (the tree-wide convention and catalog scanners); a
 file whose closure contains the `// test-memo: never` marker; a test file or
 `scripts/` module that spawns `git` (repository state is not in the key —

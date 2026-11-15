@@ -9,7 +9,7 @@ import { existingPaths } from './lib/trackedFiles.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
-// Scans the working tree, so it is registered in ALWAYS_RUN_TESTS (#10312).
+// Scans the working tree, so it is derived into the always-run set (#10312).
 describe('cross-workspace browser suite registry', () => {
   it('lists exactly the suites that guard canRun with the browser suite gate', () => {
     // Real browser contracts also use legacy .test.js names. Discover every

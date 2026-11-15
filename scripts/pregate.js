@@ -17,7 +17,7 @@ import { execFileSync } from 'child_process';
 import { dirname, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib/aiToolkit/internal/windowsSafeSpawn.js';
-import { ALWAYS_RUN_TESTS, FULL_SUITE_SHARDS, structuralTestsFor } from './ci-test-plan.js';
+import { getAlwaysRunTests, FULL_SUITE_SHARDS, structuralTestsFor } from './ci-test-plan.js';
 import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
@@ -330,7 +330,7 @@ export function downgradeFullPlan(plan, trackedFiles, changedFiles = []) {
     full: false,
     server: {
       mode: 'files',
-      files: [...new Set([...ALWAYS_RUN_TESTS.filter((path) => tracked.has(path)), ...serverStructuralGuards])],
+      files: [...new Set([...getAlwaysRunTests().filter((path) => tracked.has(path)), ...serverStructuralGuards])],
       sources: [],
     },
     client: {

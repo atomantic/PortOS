@@ -51,7 +51,7 @@ import { createHash } from 'node:crypto';
 import { builtinModules } from 'node:module';
 import { posix } from 'node:path';
 import { tokenize, staticEdges } from './sourceTokens.js';
-import { ALWAYS_RUN_TESTS, FIXTURE_OWNERS } from '../ci-test-plan.js';
+import { getAlwaysRunTests, FIXTURE_OWNERS } from '../ci-test-plan.js';
 
 export { tokenize } from './sourceTokens.js';
 
@@ -1106,7 +1106,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
 
   const verdict = (testRel, gathered, extra, baseClosure, { requireEdges }) => {
     const reasons = [];
-    if (ALWAYS_RUN_TESTS.includes(testRel)) reasons.push('always-run guard');
+    if (getAlwaysRunTests().includes(testRel)) reasons.push('always-run guard');
     if (TEST_MEMO_NEVER[testRel]) reasons.push(TEST_MEMO_NEVER[testRel]);
     if (gathered.never) reasons.push('test-memo: never marker');
     if (gathered.git) reasons.push('spawns git');
