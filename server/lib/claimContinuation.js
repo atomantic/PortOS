@@ -337,7 +337,6 @@ function scanClaimHolders({ agents, holderPath, branchName, sourceWorkspace, ign
     if (reservations != null && (!Array.isArray(reservations) || reservations.some(target => !target || typeof target.branch !== 'string'))) { possible.push(agent.id); continue; }
     if (reservations?.some(target => target?.branch === branchName) || ownsClaimBranch(agent, branchName)
       || (agent.metadata?.taskAnalysisType === 'do-release' && (agent.metadata?.releaseCandidate?.branch === branchName
-        || agent.metadata?.releaseCandidateRecovery?.transfer?.branch === branchName
         || agent.metadata?.releaseSynchronizationCheckout?.branch === branchName))) return { occupancy: 'active', holderIds: [agent.id].filter(Boolean) };
     if (claimHolder && mayPickClaimBranch(agent, branchName)) possible.push(agent.id);
   }

@@ -41,7 +41,7 @@ beforeEach(() => {
 });
 const run = extra => releasePreflight({ repoPath: repo, agentId: 'agent-current', version: '1.2.3', ...extra });
 const agent = (status, path = repo, type = 'do-release') => ({ id: 'agent-old', status,
-  metadata: { taskAnalysisType: type, workspacePath: path, releaseCandidateRecovery: { status: 'held' } } });
+  metadata: { taskAnalysisType: type, workspacePath: path } });
 
 describe('release startup pre-flight', () => {
   it('starts fresh after an interrupted candidate without requiring historical recovery metadata', async () => {

@@ -6,12 +6,12 @@ import { _createBlockedSystemInvestigationRecovery } from './blockedSystemInvest
 import { resolveUndeliveredTaskUpdate, MAX_TASK_RETRIES } from './agentErrorAnalysis.js';
 import { buildInvestigationFingerprint, couldReleaseBlockedTasks } from '../lib/investigationTasks.js';
 
-const identity = vi.hoisted(() => ({ agent: null, others: [], trusted: true, archived: false }));
+const identity = vi.hoisted(() => ({ agent: null, others: [], trusted: true }));
 vi.mock('./cosAgentLifecycle.js', () => ({ getAgentRecord: vi.fn(async () => identity.agent) }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./cosState.js', async importOriginal => ({ ...(await importOriginal()),
   readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: identity.trusted,
-    agents: Object.fromEntries([identity.archived ? null : identity.agent, ...identity.others].filter(agent => agent?.id).map(agent => [agent.id, agent])) })) }));
+    agents: Object.fromEntries([identity.agent, ...identity.others].filter(agent => agent?.id).map(agent => [agent.id, agent])) })) }));
 vi.mock('./agentState.js', async importOriginal => ({ ...(await importOriginal()), activeAgents: new Map(), runnerAgents: new Map() }));
 
 let root, path, time, created, calls, hold, failAfterCreate, race, failLink, analyses;
@@ -41,13 +41,6 @@ const releaseApproval = () => {
   task.metadata = { ...task.metadata, analysisType: 'do-release', blockedCategory: 'task-approval',
     deliveryDecisionAgentId: 'agent-original', taskOutcome: { status: 'blocked', recovery: { mode: 'approval' } } };
   return task;
-};
-const releaseOwner = (task, reason = 'candidate-successor-lineage-unverified') => {
-  const agent = ownerForTask(task);
-  agent.metadata = { ...agent.metadata, taskAnalysisType: 'do-release', releaseCandidateRecovery: {
-    version: 1, status: 'held', predecessorAgentId: 'agent-predecessor', reason,
-  } };
-  return agent;
 };
 const create = async (task, analysis) => {
   calls++;
@@ -86,7 +79,7 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'blocked-investigation-'));
   path = join(root, 'queues.json');
   time = Date.parse('2026-01-01T00:00:00.000Z');
-  identity.agent = null; identity.others = []; identity.trusted = true; identity.archived = false;
+  identity.agent = null; identity.others = []; identity.trusted = true;
   created = calls = 0; analyses = []; hold = null; failAfterCreate = race = failLink = false;
   await write({ user: { tasks: [] }, cos: { tasks: [blocked()] } });
 });
@@ -165,59 +158,16 @@ describe('blocked system recovery persisted workflow', () => {
       expect(created).toBe(0);
     });
 
-  it.each(['candidate-successor-lineage-unverified', 'candidate-process-proof-unavailable'])(
-    'diagnoses a service-recorded %s hold once while preserving the release approval', async reason => {
-      const task = releaseApproval();
-      identity.agent = releaseOwner(task, reason);
-      await write({ user: { tasks: [] }, cos: { tasks: [task] } });
-      const recovery = factory(true);
-      await Promise.all([recovery.sweep(), recovery.recover(task.id)]);
-      await factory(true).sweep(); // a service restart must reuse the same investigator
-      const queues = await read();
-      const original = queues.cos.tasks.find(row => row.id === task.id);
-      const investigator = queues.cos.tasks.find(row => row.id === 'investigator-1');
-      expect(created).toBe(1);
-      expect(original.status).toBe('blocked');
-      expect(original.metadata).toEqual({ ...task.metadata,
-        blockedInvestigation: expect.objectContaining({ phase: 'queued', attempts: 1, taskId: investigator.id }) });
-      expect(analyses[0]).toMatchObject({ category: `blocked-system-${reason}`, preserveOriginalBudget: true });
-      expect(analyses[0].escalation).toContain('The release approval remains in force');
-      expect(couldReleaseBlockedTasks({ ...investigator, status: 'completed' })).toBe(false);
-    });
-
-  it.each(['missing', 'wrong reason', 'wrong version', 'wrong predecessor', 'wrong agent type'])(
-    'does not investigate a release approval with %s service evidence', async problem => {
-      const task = releaseApproval();
-      identity.agent = releaseOwner(task);
-      const metadata = identity.agent.metadata;
-      if (problem === 'missing') delete metadata.releaseCandidateRecovery;
-      else if (problem === 'wrong reason') metadata.releaseCandidateRecovery.reason = 'candidate-publication-conflict';
-      else if (problem === 'wrong version') metadata.releaseCandidateRecovery.version = 2;
-      else if (problem === 'wrong predecessor') metadata.releaseCandidateRecovery.predecessorAgentId = identity.agent.id;
-      else metadata.taskAnalysisType = 'claim-issue';
-      const queues = { user: { tasks: [] }, cos: { tasks: [task] } };
-      await write(queues);
-      expect(await factory(true).recover(task.id)).toEqual({ handled: false, reason: 'release-candidate-hold-unverified' });
-      expect(created).toBe(0);
-      expect(await read()).toEqual(queues);
-    });
-
-  it('diagnoses an archived release owner only with a trusted inactive local inventory', async () => {
+  it('leaves a release approval to its owner, whatever the coordinator record carries', async () => {
     const task = releaseApproval();
-    identity.agent = releaseOwner(task);
-    identity.archived = true;
-    await write({ user: { tasks: [] }, cos: { tasks: [task] } });
-    identity.trusted = false;
-    expect(await factory(true).recover(task.id)).toMatchObject({ handled: false, reason: 'local-owner-unverified' });
-    identity.trusted = true;
-    identity.others = [{ id: 'agent-other', taskId: task.id, status: 'running' }];
-    expect(await factory(true).recover(task.id)).toMatchObject({ handled: false, reason: 'local-owner-unverified' });
-    identity.others = [];
-    identity.agent.completedAt = 'bad-time';
-    expect(await factory(true).recover(task.id)).toMatchObject({ handled: false, reason: 'local-owner-unverified' });
-    identity.agent.completedAt = '2026-01-01T00:01:00Z';
-    expect(await factory(true).recover(task.id)).toMatchObject({ handled: true, taskId: 'investigator-1' });
-    expect(created).toBe(1);
+    identity.agent = ownerForTask(task);
+    identity.agent.metadata.taskAnalysisType = 'do-release';
+    const queues = { user: { tasks: [] }, cos: { tasks: [task] } };
+    await write(queues);
+    expect(await factory(true).recover(task.id)).toEqual({ handled: false });
+    await factory(true).sweep();
+    expect(created).toBe(0);
+    expect(await read()).toEqual(queues);
   });
 
   it('does not starve later failures behind already-owned investigations', async () => {

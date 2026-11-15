@@ -47,9 +47,8 @@ function assertOrdinaryRunnerRecords(records) {
     const types = [metadata.taskAnalysisType, metadata.analysisType, metadata.selfImprovementType].map(currentTaskTypeName);
     return types.some(type => ['do-release', 'release-sync'].includes(type))
       || (typeof record?.taskId === 'string' && (record.taskId.startsWith('task-release-sync-') || record.taskId.includes('-do-release-')))
-      || record?.releasePublication || record?.releaseCandidate || record?.releaseCandidateRecovery
+      || record?.releasePublication || record?.releaseCandidate
       || metadata.releasePublication || metadata.releaseCandidate || metadata.releaseCandidateLifecycle
-      || metadata.releaseCandidateSuccessor || metadata.releaseCandidateRecovery
       || metadata.releaseSynchronization || metadata.releaseSynchronizationCheckout || metadata.releaseAttempts;
   })) refuse('Release-agent ownership must use its release recovery path.');
 }
