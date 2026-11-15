@@ -319,6 +319,7 @@ function MediaCollectionDetailContent() {
     setBulkBusy(true);
     let passCount = 0;
     let failCount = 0;
+    let errorCount = 0;
     for (const it of imagesToVerify) {
       try {
         const res = await verifyImageNow({
@@ -329,11 +330,13 @@ function MediaCollectionDetailContent() {
         if (res?.verdict === 'pass') passCount++;
         else if (res?.verdict === 'fail') failCount++;
       } catch (err) {
+        errorCount++;
         console.error(`Error verifying ${it.filename}:`, err);
       }
     }
     setBulkBusy(false);
-    toast.success(`Verified ${imagesToVerify.length} images: ${passCount} passed, ${failCount} defect(s) flagged.`);
+    if (errorCount > 0) toast.warning(`Batch verification: ${passCount} passed, ${failCount} defect(s) flagged, ${errorCount} could not be verified.`);
+    else toast.success(`Verified ${imagesToVerify.length} images: ${passCount} passed, ${failCount} defect(s) flagged.`);
     page.refresh();
   };
 

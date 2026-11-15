@@ -36,7 +36,7 @@ describe('ImageVerificationDetails', () => {
         filename: 'test-image.png',
         profileId: 'strict_anatomy',
         prompt: 'a beautiful bird',
-      });
+      }, { silent: true });
       expect(onVerificationChange).toHaveBeenCalled();
     });
   });
@@ -48,6 +48,7 @@ describe('ImageVerificationDetails', () => {
       verification: {
         verdict: 'fail',
         summary: 'Extra fingers detected on left hand',
+        reviewer: { providerId: 'local-reviewer', model: 'qwen3.8:27b' },
         defects: [
           { dimension: 'hands_and_fingers', claim: '6 fingers visible', region: 'Left hand' },
         ],
@@ -69,6 +70,7 @@ describe('ImageVerificationDetails', () => {
     );
 
     expect(screen.getByText('Defect Flagged')).toBeTruthy();
+    expect(screen.getByText('Qwen 27B/27G')).toBeTruthy();
     expect(screen.getByText(/Extra fingers detected on left hand/i)).toBeTruthy();
     expect(screen.getByText(/6 fingers visible/i)).toBeTruthy();
     expect(screen.getByText(/6 digits · ⚠/i)).toBeTruthy();
@@ -82,7 +84,7 @@ describe('ImageVerificationDetails', () => {
         filename: 'defective.png',
         verdict: 'pass',
         notes: 'Operator verified clean / false positive override',
-      });
+      }, { silent: true });
       expect(onVerificationChange).toHaveBeenCalled();
     });
   });
@@ -104,7 +106,7 @@ describe('ImageVerificationDetails', () => {
       />
     );
 
-    const modelSelect = screen.getByTitle('Select vision reviewer model');
+    const modelSelect = screen.getByRole('combobox', { name: 'Vision reviewer model' });
     expect(modelSelect).toBeTruthy();
     fireEvent.change(modelSelect, { target: { value: 'gemini-4-argon' } });
 
@@ -117,7 +119,7 @@ describe('ImageVerificationDetails', () => {
         profileId: 'strict_anatomy',
         prompt: 'a cybernetic hand',
         reviewerModel: 'gemini-4-argon',
-      });
+      }, { silent: true });
     });
   });
 });

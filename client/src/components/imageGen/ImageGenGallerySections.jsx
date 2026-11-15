@@ -46,6 +46,7 @@ export default function ImageGenGallerySections({ gallery, cards }) {
 
     let passCount = 0;
     let failCount = 0;
+    let errorCount = 0;
 
     for (let i = 0; i < selectedVerify.length; i++) {
       const filename = selectedVerify[i];
@@ -61,12 +62,14 @@ export default function ImageGenGallerySections({ gallery, cards }) {
         if (res?.verdict === 'pass') passCount++;
         else if (res?.verdict === 'fail') failCount++;
       } catch (err) {
+        errorCount++;
         console.error(`Verification error on ${filename}:`, err);
       }
     }
 
     setBatchVerifying(false);
-    toast.success(`Verified ${selectedVerify.length} images: ${passCount} passed, ${failCount} defect(s) flagged.`);
+    if (errorCount > 0) toast.warning(`Batch verification: ${passCount} passed, ${failCount} defect(s) flagged, ${errorCount} could not be verified.`);
+    else toast.success(`Verified ${selectedVerify.length} images: ${passCount} passed, ${failCount} defect(s) flagged.`);
     setSelectedVerify([]);
     setVerifyMode(false);
     refreshGallery();

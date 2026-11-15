@@ -2329,11 +2329,15 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
                 if (verification.verdict === 'fail' && rerollsDone < maxRerolls) {
                   console.log(`⚠️ media-job [${job.id.slice(0, 8)}] verification failed: ${verification.summary}. Auto-rerolling (attempt ${rerollsDone + 1} of ${maxRerolls})...`);
                   await enqueueJob({
-                    ...job.params,
-                    seed: (Number.isFinite(job.params?.seed) ? job.params.seed : Date.now()) + 1,
-                    verificationRerollCount: rerollsDone + 1,
-                    parentJobId: job.id,
-                  }, { kind: 'image', owner: job.owner }).catch((e) => console.error(`❌ Auto-reroll enqueue failed: ${e.message}`));
+                    kind: 'image',
+                    owner: job.owner,
+                    params: {
+                      ...job.params,
+                      seed: (Number.isFinite(job.params?.seed) ? job.params.seed : Date.now()) + 1,
+                      verificationRerollCount: rerollsDone + 1,
+                      parentJobId: job.id,
+                    },
+                  }).catch((e) => console.error(`❌ Auto-reroll enqueue failed: ${e.message}`));
                 }
               }
             }

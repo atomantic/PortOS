@@ -100,7 +100,7 @@ export async function deleteCustomProfile(id) {
 /**
  * Resolves the vision reviewer to use for inspection.
  */
-export async function resolveVisionReviewer(reviewerInput = null) {
+async function resolveVisionReviewer(reviewerInput = null) {
   const { resolvePlateReviewer } = await import('./musicVideo/plateReview.js');
   const { getAllProviders } = await import('./providers.js');
 

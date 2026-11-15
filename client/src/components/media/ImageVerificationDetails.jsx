@@ -30,6 +30,7 @@ export default function ImageVerificationDetails({ item, onVerificationChange })
   const [overriding, setOverriding] = useState(false);
 
   const verification = item?.verification;
+  const reviewerModel = verification?.reviewer?.model || verification?.reviewerModel;
   const isVideo = item?.kind === 'video';
 
   if (isVideo || !item?.filename) return null;
@@ -42,7 +43,7 @@ export default function ImageVerificationDetails({ item, onVerificationChange })
         profileId: selectedProfile,
         prompt: item.prompt || '',
         reviewerModel: selectedModel !== 'auto' ? selectedModel : undefined,
-      });
+      }, { silent: true });
       if (result) {
         onVerificationChange?.(result);
         if (result.verdict === 'pass') {
@@ -67,7 +68,7 @@ export default function ImageVerificationDetails({ item, onVerificationChange })
         filename: item.filename,
         verdict: 'pass',
         notes: 'Operator verified clean / false positive override',
-      });
+      }, { silent: true });
       if (updated) {
         onVerificationChange?.(updated);
         toast.success('Marked image as verified clean (operator override).');
@@ -118,15 +119,15 @@ export default function ImageVerificationDetails({ item, onVerificationChange })
             {verification.summary || (verification.verdict === 'pass' ? 'All anatomical and quality checks passed.' : 'Defects detected.')}
           </p>
 
-          {verification.reviewerModel && (
+          {reviewerModel && (
             <div className="text-[10px] text-gray-400 font-mono flex items-center gap-1">
               <span>Audited by:</span>
               <span className="text-port-accent">
-                {/argon/i.test(verification.reviewerModel)
+                {/argon/i.test(reviewerModel)
                   ? 'Gemini 4 Argon'
-                  : /qwen.*(?:27[bg]|3\.8)/i.test(verification.reviewerModel)
+                  : /qwen.*(?:27[bg]|3\.8)/i.test(reviewerModel)
                     ? 'Qwen 27B/27G'
-                    : verification.reviewerModel}
+                    : reviewerModel}
               </span>
             </div>
           )}
@@ -183,6 +184,7 @@ export default function ImageVerificationDetails({ item, onVerificationChange })
               disabled={verifying}
               className="text-[11px] bg-port-card border border-port-border rounded px-2 py-1 text-gray-300 focus:outline-none focus:border-port-accent"
               title="Select verification profile"
+              aria-label="Verification profile"
             >
               {PROFILE_OPTIONS.map((p) => (
                 <option key={p.id} value={p.id}>{p.label}</option>
@@ -194,6 +196,7 @@ export default function ImageVerificationDetails({ item, onVerificationChange })
               disabled={verifying}
               className="text-[11px] bg-port-card border border-port-border rounded px-2 py-1 text-gray-300 focus:outline-none focus:border-port-accent"
               title="Select vision reviewer model"
+              aria-label="Vision reviewer model"
             >
               {REVIEWER_MODEL_OPTIONS.map((m) => (
                 <option key={m.id} value={m.id}>{m.label}</option>
@@ -234,6 +237,7 @@ export default function ImageVerificationDetails({ item, onVerificationChange })
               disabled={verifying}
               className="text-[11px] bg-port-card border border-port-border rounded px-2 py-1 text-gray-300 focus:outline-none focus:border-port-accent"
               title="Select verification profile"
+              aria-label="Verification profile"
             >
               {PROFILE_OPTIONS.map((p) => (
                 <option key={p.id} value={p.id}>{p.label}</option>
@@ -245,6 +249,7 @@ export default function ImageVerificationDetails({ item, onVerificationChange })
               disabled={verifying}
               className="text-[11px] bg-port-card border border-port-border rounded px-2 py-1 text-gray-300 focus:outline-none focus:border-port-accent"
               title="Select vision reviewer model"
+              aria-label="Vision reviewer model"
             >
               {REVIEWER_MODEL_OPTIONS.map((m) => (
                 <option key={m.id} value={m.id}>{m.label}</option>

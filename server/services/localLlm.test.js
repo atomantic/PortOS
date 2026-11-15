@@ -1252,12 +1252,13 @@ describe('localLlm', () => {
       expect(mocks.ollama.getModelCapabilities).toHaveBeenCalledWith('gemma3:1b');
     });
 
-    it('appends vision-capable CLI providers (codex / claude), one entry per model', async () => {
+    it('appends vision-capable CLI providers, one entry per model', async () => {
       mocks.providers.getAllProviders.mockResolvedValueOnce({
         providers: [
           { id: 'codex', type: 'cli', command: 'codex', enabled: true, models: ['gpt-5'], defaultModel: 'gpt-5' },
           { id: 'claude-code', type: 'cli', command: 'claude', enabled: true, name: 'Claude Code', models: ['claude-opus-4-8', 'claude-sonnet-4-6'] },
-          { id: 'antigravity-cli', type: 'cli', command: 'agy', enabled: true, models: ['x'] }, // not vision-capable → excluded
+          { id: 'antigravity-cli', type: 'cli', command: 'agy', enabled: true, models: ['gemini-4-argon'] },
+          { id: 'text-only-cli', type: 'cli', command: 'pi', enabled: true, models: ['x'] }, // not vision-capable → excluded
           { id: 'lmstudio', type: 'api', enabled: true, models: [] }, // api handled elsewhere → excluded here
           { id: 'codex-off', type: 'cli', command: 'codex', enabled: false, models: ['gpt-5'] }, // disabled → excluded
         ],
@@ -1269,6 +1270,7 @@ describe('localLlm', () => {
         { providerId: 'codex', backend: 'cli', id: 'gpt-5', name: 'codex / gpt-5', vision: true },
         { providerId: 'claude-code', backend: 'cli', id: 'claude-opus-4-8', name: 'Claude Code / claude-opus-4-8', vision: true },
         { providerId: 'claude-code', backend: 'cli', id: 'claude-sonnet-4-6', name: 'Claude Code / claude-sonnet-4-6', vision: true },
+        { providerId: 'antigravity-cli', backend: 'cli', id: 'gemini-4-argon', name: 'antigravity-cli / gemini-4-argon', vision: true },
       ]);
     });
   });

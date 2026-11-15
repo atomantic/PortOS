@@ -79,6 +79,8 @@ const stubs = {
   generateVideoFal: vi.fn(async () => ({ jobId: 'whatever' })),
   generateChainedVideo: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImage: vi.fn(async () => ({ jobId: 'whatever' })),
+  getVerifierSettings: vi.fn(),
+  verifyImage: vi.fn(),
   finishVisualProfile: vi.fn(),
   generateImageGrok: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImageCodex: vi.fn(async () => ({ jobId: 'whatever' })),
@@ -169,6 +171,10 @@ vi.mock('../videoGen/fal.js', () => ({
 }));
 
 vi.mock('../imageGen/finishVisualProfile.js', () => ({ finishVisualProfileImage: (...args) => stubs.finishVisualProfile(...args) }));
+vi.mock('../imageVerifier.js', () => ({
+  getVerifierSettings: (...args) => stubs.getVerifierSettings(...args),
+  verifyImage: (...args) => stubs.verifyImage(...args),
+}));
 vi.mock('../imageGen/local.js', () => ({
   generateImage: (...args) => stubs.generateImage(...args),
   cancel: (...args) => stubs.cancelImage(...args),
@@ -282,6 +288,7 @@ beforeEach(async () => {
   const { createMaintenanceAdmission } = await vi.importActual('../../lib/maintenanceAdmission.js');
   currentAdmission = createMaintenanceAdmission(tempDataDir);
   Object.values(stubs).forEach((fn) => fn.mockReset());
+  stubs.getVerifierSettings.mockResolvedValue({ enabledForGeneration: false });
   const { getDefaultVideoModelId } = await import('../../lib/mediaModels.js');
   getDefaultVideoModelId.mockImplementation(() => 'example-mlx');
   // Default codex stub: hang (matches video/local defaults so tests that
@@ -1359,6 +1366,35 @@ describe('mediaJobQueue', () => {
     videoGenEvents.emit('failed', { generationId: blocker.jobId, error: 'cleanup' });
     if (resolveBlocker) resolveBlocker();
     await flush();
+  });
+
+  it('only verifies opted-in image jobs and rerolls within budget with the original owner and inputs', async () => {
+    stubs.generateImage.mockResolvedValue({});
+    const verification = { verdict: 'fail', summary: 'Extra fingers' };
+    stubs.verifyImage.mockResolvedValue(verification);
+    const unverified = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'No verification' } });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    imageGenEvents.emit('completed', { generationId: unverified.jobId, filename: 'unverified.png' });
+    await waitFor(() => mediaJobQueue.getJob(unverified.jobId).status === 'completed');
+    expect(stubs.verifyImage).not.toHaveBeenCalled();
+
+    const owner = { type: 'test', id: 'verifier' };
+    const params = { prompt: 'A hand', seed: 41, verifyImage: true, maxRerolls: 1, verificationProfileId: 'strict_anatomy' };
+    const first = await mediaJobQueue.enqueueJob({ kind: 'image', owner, params });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 2);
+    imageGenEvents.emit('completed', { generationId: first.jobId, filename: 'first.png' });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 3);
+    const reroll = mediaJobQueue.listJobs().find(job => job.params.parentJobId === first.jobId);
+    expect(reroll).toMatchObject({
+      kind: 'image', owner,
+      params: { ...params, seed: 42, verificationRerollCount: 1, parentJobId: first.jobId },
+    });
+    expect(mediaJobQueue.getJob(first.jobId)).toMatchObject({ status: 'completed', result: { verification } });
+    imageGenEvents.emit('completed', { generationId: reroll.id, filename: 'reroll.png' });
+    await waitFor(() => mediaJobQueue.getJob(reroll.id).status === 'completed');
+    expect(stubs.verifyImage).toHaveBeenCalledTimes(2);
+    expect(stubs.verifyImage).toHaveBeenLastCalledWith({ filename: 'reroll.png', prompt: params.prompt, profileId: params.verificationProfileId });
+    expect(mediaJobQueue.listJobs()).toHaveLength(3);
   });
 
   it('keeps an image running through its finish and retains the ungraded reference', async () => {

@@ -95,8 +95,8 @@ import {
   deleteCustomProfile,
   verifyImage,
   overrideVerification,
-  resolveVisionReviewer,
 } from './imageVerifier.js';
+import { runPromptThroughProvider } from './promptRunner.js';
 
 describe('imageVerifier service settings and profiles', () => {
   it('reads verifier settings with defaults', async () => {
@@ -175,16 +175,22 @@ describe('verifyImage execution', () => {
   });
 });
 
-describe('resolveVisionReviewer model routing', () => {
+describe('verifyImage model routing', () => {
+  beforeEach(() => { runPromptThroughProvider.mockClear(); });
+
   it('routes gemini-4-argon to antigravity-cli provider', async () => {
-    const reviewer = await resolveVisionReviewer({ model: 'gemini-4-argon' });
-    expect(reviewer.provider.id).toBe('antigravity-cli');
-    expect(reviewer.model).toBe('gemini-4-argon-medium');
+    await verifyImage({ filename: 'sample.png', reviewer: { model: 'gemini-4-argon' } });
+    expect(runPromptThroughProvider).toHaveBeenCalledWith(expect.objectContaining({
+      provider: expect.objectContaining({ id: 'antigravity-cli' }),
+      model: 'gemini-4-argon-medium',
+    }));
   });
 
   it('routes qwen-27b to matching Ollama provider', async () => {
-    const reviewer = await resolveVisionReviewer({ model: 'qwen-27b' });
-    expect(reviewer.provider.id).toBe('ollama-local');
-    expect(reviewer.model).toBe('qwen3.8:27b');
+    await verifyImage({ filename: 'sample.png', reviewer: { model: 'qwen-27b' } });
+    expect(runPromptThroughProvider).toHaveBeenCalledWith(expect.objectContaining({
+      provider: expect.objectContaining({ id: 'ollama-local' }),
+      model: 'qwen3.8:27b',
+    }));
   });
 });
