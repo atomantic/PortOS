@@ -51,17 +51,17 @@ export const isLtx25Python = (bin) => String(bin)
 // while passing in isolation. Poll the real completion condition instead (the
 // stitched history entry is written last, after the concat spawn), and fall
 // through on timeout so a genuine regression still fails on its own assertion.
-export const stitchedHistoryEntry = (atomicWriteMock) => atomicWriteMock.mock.calls
+const stitchedHistoryEntry = (atomicWriteMock) => atomicWriteMock.mock.calls
   .flatMap(([, payload]) => (Array.isArray(payload) ? payload : []))
   .find((entry) => entry?.chainedFrom) || null;
 
-export async function waitForStitch() {
+export const waitForStitch = async () => {
   const { atomicWrite } = await import('../../lib/fileUtils.js');
   const deadline = Date.now() + 5000;
   while (!stitchedHistoryEntry(vi.mocked(atomicWrite)) && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 10));
   }
-}
+};
 
 export const fsPromisesMock = ({
   unlink: vi.fn(async () => {}),

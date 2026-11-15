@@ -8,10 +8,13 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 
+// Stateless helper, safe to import statically (it reads the current mock registry).
+import { waitForStitch } from './local.testFixtures.js';
+
 // vi.mock factories are hoisted above imports; the shared fixtures module is
 // loaded the same way so its state objects outlive vi.resetModules().
 const fx = await vi.hoisted(() => import('./local.testFixtures.js'));
-const { MOCK_PATHS, waitForStitch, fsState, anchorPick, makeProc } = fx;
+const { MOCK_PATHS, fsState, anchorPick, makeProc } = fx;
 
 vi.mock('os', async (importOriginal) => fx.osFactory(importOriginal));
 vi.mock('../../lib/heavyJobClaim.js', () => fx.heavyJobClaimFactory());
