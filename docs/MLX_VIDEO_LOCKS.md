@@ -186,7 +186,7 @@ longer requires the separate Click distribution; LTX deliberately retains its
 existing explicit companion in this bounded update. All unchanged blocks must
 remain byte-identical. Audit every resulting artifact and OSV/MAL response,
 then repeat full hashed native installs and the actual helper-consumer checks
-documented in [the runtime refresh record](PYTHON_RUNTIME_REFRESH.md).
+documented in [the selective regeneration procedure](PYTHON_RUNTIME_REFRESH.md#selective-regeneration).
 
 ### Coordinated LTX Hub transport refresh (2026-11-12)
 

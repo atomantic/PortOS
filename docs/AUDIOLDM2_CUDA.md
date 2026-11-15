@@ -39,7 +39,7 @@ unrelated hash blocks; advance the cutoff to at least seven days ago.
 
 Do not resolve ordinary PyPI packages from the CUDA mirror: some entries have
 no upload date and fail cooldown validation. The
-[bounded #15988 procedure](./PYTHON_RUNTIME_REFRESH.md#newly-cooled-follow-on-2026-11-13-15988)
+[selective regeneration procedure](./PYTHON_RUNTIME_REFRESH.md#selective-regeneration)
 describes complete-closure constraints and selective generated-block transfer.
 Installation retains its existing indexes and exact hash restrictions.
 

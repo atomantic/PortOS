@@ -98,9 +98,8 @@ establish native compatibility.
 
 The 2026-11-12 network/cache refresh uses cutoff **2026-11-05T00:00:00Z**,
 recorded in the profile and regenerated lock. The 56-package closure retains
-all source revisions and native/renderer versions. See the eighteenth slice in
-[the runtime refresh record](./PYTHON_RUNTIME_REFRESH.md) for complete audit
-results, old/new native network-caller checks and unperformed renderer checks.
+all source revisions and native/renderer versions. Retained constraints are in
+[held-back pins](./PYTHON_RUNTIME_REFRESH.md#held-back-pins).
 
 ## Native validation
 
@@ -132,39 +131,6 @@ The exported GLB passed finite, nonempty indexed-triangle and embedded-PBR-textu
 checks: **295,589 vertices, 497,752 faces, two embedded texture images**. Its
 SHA-256 was `4e58d25d992aecfc9630e131d5c7e006cbfde2cf97e6ff6c9d868ff675b5a4ef`.
 
-The subsequent timm/PLY/Ninja maintenance refresh retains the same native
-profile and source revisions. See [3D Metal timm/PLY/build maintenance](PYTHON_RUNTIME_REFRESH.md#twenty-first-slice-3d-metal-timmplybuild-maintenance-2026-11-12)
-for exact upgrades, complete-lock audits, real CPU/native synthetic boundary
-tests and the limits of that validation.
-
-The CLI/text helper refresh retains Hub 1.16.4 and its Typer <0.26 constraint.
-See [3D Metal CLI/text helpers](PYTHON_RUNTIME_REFRESH.md#twenty-fourth-slice-3d-metal-cli-and-text-helpers-2026-11-12)
-for the four compatible upgrades, complete-lock audits and synthetic caller
-validation, which does not certify model inference or rendering.
-
-The packaging-tool refresh preserves native source revisions and other build
-pins, validating real isolated/offline hash installs and synthetic native
-source/editable builds.
-See [3D Metal packaging and installer tooling](PYTHON_RUNTIME_REFRESH.md#thirtieth-slice-3d-metal-packaging-and-installer-maintenance-2026-11-12)
-for exact scope, full-lock audits and the limits of installer-only coverage.
-
-The standalone pybind11 3.1.0 refresh leaves Torch's already-vendored 3.1.0
-headers and native source revisions unchanged. See
-[TRELLIS retained pybind11 tooling](PYTHON_RUNTIME_REFRESH.md#thirty-fourth-slice-trellis-metal-retained-pybind11-maintenance-2026-11-12)
-for header ownership, native CPU build probes and their limits.
-
-The retained Kornia 0.9.0/Kornia-RS 0.2.0 refresh preserves OpenCV and native
-source pins. See [Kornia/native image helper evidence](PYTHON_RUNTIME_REFRESH.md#thirty-fifth-slice-3d-metal-retained-kornia-and-image-helper-migration-2026-11-12)
-for synthetic CPU coverage and its application/runtime limits.
-
-The mesh-library refresh keeps native source/model pins fixed while updating
-Fast-Simplification, Trimesh and NetworkX. See [mesh/export compatibility evidence](PYTHON_RUNTIME_REFRESH.md#fortieth-slice-3d-metal-mesh-simplification-and-export-migration-2026-11-12)
-for actual synthetic caller tests and the excluded native baking/inference scope.
-
-The OpenCV 5 refresh preserves native source/model and NumPy/Torch pins.
-See [OpenCV image-operation evidence](PYTHON_RUNTIME_REFRESH.md#forty-first-slice-3d-metal-opencv-image-operation-migration-2026-11-12)
-for actual wheel ownership, synthetic caller tests and observed resize behavior.
-
-The retained ModernGL/Glcontext refresh does not change the Metal renderer.
-See [native OpenGL helper evidence](PYTHON_RUNTIME_REFRESH.md#forty-second-slice-3d-metal-retained-opengl-helper-migration-2026-11-12)
-for real offscreen tests and unchanged optional utils3d limitations.
+Later dependency refreshes keep the native profile and source revisions. Retained
+constraints are listed in [held-back pins](PYTHON_RUNTIME_REFRESH.md#held-back-pins);
+the merged PRs carry the per-refresh audit evidence.
