@@ -10,7 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   decideBranchRetirement, decideDetachedRetirement, decideHeldCheckoutRetirement, decideInventoriedBranchRetirement, decideMergedCheckoutOwner,
-  decideCleanPushedDetach, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideIdleNextHolderRelease, decideMergedDelivery, decideMergedWorktreeReap, decideMergedWorktreeRemoval, decidePendingMergeReceipt, decideWith, gatheredHoldReason,
+  decideCleanPushedDetach, decideForceRemoval, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideIdleNextHolderRelease, decideMergedDelivery, decideMergedWorktreeReap, decideMergedWorktreeRemoval, decidePendingMergeReceipt, decideWith, gatheredHoldReason,
   recoveryWorktreeReason, supersededPolicyHold,
   SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS,
 } from './branchRetirementDecision.js';
@@ -729,6 +729,40 @@ describe('decideIdleNextHolderRelease', () => {
   it('shares the clean-and-pushed gate with the ownerless release', () => {
     expect(decideCleanPushedDetach({ facts: {} })).toEqual({ need: 'porcelain' });
     expect(decideCleanPushedDetach({ facts: { porcelain: '', remoteRef: 'r', pushed: true } })).toEqual({ admit: true });
+  });
+});
+
+describe('decideForceRemoval', () => {
+  const reg = (extra = {}) => ({ holder: { locked: false, branch: 'refs/heads/b', head: 'h1', ...extra } });
+  const force = ({ guarded = true, facts = {} } = {}) => drive(decideForceRemoval, { guarded }, {
+    listing: reg(), identity: 'inc-1', guardReason: false, fresh: reg(), identityAfter: 'inc-1', ...facts,
+  });
+
+  it.each([
+    // [removed real-git case, overrides, verdict]
+    ['a clean registered worktree', {}, 'retire'],
+    ['an unguarded clean worktree', { guarded: false }, 'retire'],
+    ['an already-removed directory with no registration', { facts: { listing: { holder: null }, fresh: { holder: null } } }, 'retire'],
+    ['an unreadable registry', { facts: { listing: null } }, 'worktree-ownership-unreadable'],
+    ['a locked worktree', { facts: { listing: reg({ locked: true }) } }, 'worktree-locked'],
+    ['a lock acquired during the guard', { facts: { fresh: reg({ locked: true }) } }, 'worktree-locked'],
+    ['a guard that declines', { facts: { guardReason: 'unmerged' } }, 'unmerged'],
+    ['a registry that becomes unreadable after the guard', { facts: { fresh: null } }, 'worktree-ownership-unreadable'],
+    ['a head moved during the guard', { facts: { fresh: reg({ head: 'h2' }) } }, 'worktree-holder-changed'],
+    ['a branch switched during the guard', { facts: { fresh: reg({ branch: 'refs/heads/c' }) } }, 'worktree-holder-changed'],
+    ['a registration that vanished during the guard', { facts: { fresh: { holder: null } } }, 'worktree-holder-changed'],
+    ['a checkout recreated at the same path and head', { facts: { identityAfter: 'inc-2' } }, 'worktree-holder-changed'],
+    ['a recreated checkout without a guard (nothing captured)', { guarded: false, facts: { identityAfter: 'inc-2' } }, 'retire'],
+  ])('%s', (_name, overrides, expected) => {
+    expect(verdict(force(overrides))).toBe(expected);
+  });
+
+  it('asks nothing further once a lock, an unreadable registry or a declining guard holds', () => {
+    expect(force({ facts: { listing: reg({ locked: true }) } }).asked).toEqual(['listing']);
+    expect(force({ facts: { listing: null } }).asked).toEqual(['listing']);
+    expect(force({ facts: { guardReason: 'x' } }).asked).toEqual(['listing', 'identity', 'guardReason']);
+    expect(force().asked).toEqual(['listing', 'identity', 'guardReason', 'fresh', 'identityAfter']);
+    expect(force({ guarded: false }).asked).toEqual(['listing', 'fresh']);
   });
 });
 

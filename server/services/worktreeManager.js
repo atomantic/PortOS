@@ -25,7 +25,7 @@ import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { forkRemoteName, normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';
 import { isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
 import { ensureInstanceId } from './instanceIdentity.js';
-import { decideCleanPushedDetach, decideIdleNextHolderRelease, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideMergedWorktreeRemoval, decideMergedWorktreeReap, decideWith } from './branchRetirementDecision.js';
+import { decideForceRemoval, decideCleanPushedDetach, decideIdleNextHolderRelease, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideMergedWorktreeRemoval, decideMergedWorktreeReap, decideWith } from './branchRetirementDecision.js';
 import { provisionWorkspaceNodeModules, removeProvisionedNodeModules } from '../lib/worktreeNodeModules.js';
 import { withGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 
@@ -466,24 +466,22 @@ async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log =
   const logAll = label && log === 'all';
   let lastFailure = null;
   let heldReason = null;
+  const findHolder = entries => entries.find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath)) || null;
+  const listHolder = () => listWorktrees(repo).then(entries => ({ holder: findHolder(entries), entries }), () => null);
   const check = async () => {
-    const entries = await listWorktrees(repo).catch(() => null);
-    if (!entries) return 'worktree-ownership-unreadable';
-    const holder = entries.find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath)) || null;
-    if (holder?.locked) return 'worktree-locked';
     const { readRetirementCheckoutIdentity } = await import('../lib/retirementCheckoutObservation.js');
-    const identity = verifyRemoval && holder ? await readRetirementCheckoutIdentity(worktreePath) : null;
-    const reason = verifyRemoval ? await verifyRemoval(holder, entries).catch(() => 'worktree-ownership-unreadable') : null;
-    if (reason) return reason;
-    // The callback can await I/O while a checkout is recreated at the same
-    // path and head. Compare both Git's fresh registration and its pointer.
-    const fresh = await listWorktrees(repo).catch(() => null);
-    if (!fresh) return 'worktree-ownership-unreadable';
-    const current = fresh.find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath)) || null;
-    if (current?.locked) return 'worktree-locked';
-    if (current?.branch !== holder?.branch || current?.head !== holder?.head) return 'worktree-holder-changed';
-    if (verifyRemoval && holder && await readRetirementCheckoutIdentity(worktreePath) !== identity) return 'worktree-holder-changed';
-    return null;
+    let entries = null;
+    const decision = await decideWith(facts => decideForceRemoval({ guarded: Boolean(verifyRemoval), facts }), {
+      listing: async () => { const listed = await listHolder(); entries = listed?.entries; return listed; },
+      identity: () => readRetirementCheckoutIdentity(worktreePath),
+      // The callback can await I/O while a checkout is recreated at the same
+      // path and head, so the decision re-reads Git's registration and the
+      // checkout pointer after it.
+      guardReason: async facts => (await verifyRemoval(facts.listing.holder, entries).catch(() => 'worktree-ownership-unreadable')) || false,
+      fresh: listHolder,
+      identityAfter: () => readRetirementCheckoutIdentity(worktreePath),
+    });
+    return decision.hold?.reason ?? null;
   };
   heldReason = await check();
   if (!heldReason) await beforeMutation?.();
