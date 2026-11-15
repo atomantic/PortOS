@@ -524,10 +524,8 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     ], { filmLook: filmLookPreset('vhs') }), 3.5);
     await enableFilmLook();
     // A loaded runner rasterizing the VHS look can deliver frames over a
-    // second apart. The preview is already settled, so only a deadline that
-    // expires between the settle wait's frames can fail this save.
-    await page.waitForFunction(() => [...document.querySelectorAll('video[data-preview-video]')]
-      .every(video => Number(getComputedStyle(video.parentElement).opacity) === 0 || (!video.seeking && video.dataset.pausedFrame === String(video.currentTime))));
+    // second apart. capture() waits for the settled preview before clicking,
+    // so only a deadline expiring between the settle wait's frames fails it.
     await page.evaluate(() => {
       const frame = window.requestAnimationFrame;
       window.requestAnimationFrame = callback => frame(() => setTimeout(() => callback(performance.now()), 1100));
