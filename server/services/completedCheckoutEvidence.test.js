@@ -53,7 +53,7 @@ describe('completed claim checkout evidence', () => {
     await execGit(['worktree', 'lock', '--reason', 'owned operator checkout', path], repoPath);
     expect(await readCompletedCheckoutIdentity(target())).toBeNull();
     const identity = await readCompletedCheckoutIdentity({ ...target(), allowLocked: true });
-    expect(identity).toMatchObject({ branch, head, incarnation: { pointer: { ino: expect.any(String) } } });
+    expect(identity).toEqual({ repoPath: expect.any(String), branch, path: expect.any(String), head });
     expect(await captureCompletedCheckouts(agent, { success: true })).toEqual([]);
     expect((await execGit(['worktree', 'list', '--porcelain'], repoPath)).stdout).toContain('locked owned operator checkout');
   });

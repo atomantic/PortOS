@@ -1,11 +1,10 @@
 /** Server-observed checkout snapshots captured before a claim run completes.
- * Legacy filesystem identity helpers remain until the schema retirement slice. */
-import { lstat, realpath } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+ * Older installs persisted seed and filesystem-incarnation fields beside these
+ * snapshots; they are ignored on read and never written. */
+import { realpath } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { execGit } from '../lib/execGit.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
-
-export { checkoutSeedSchema } from '../lib/checkoutSeed.js';
 
 const shortBranch = branch => branch?.replace(/^refs\/heads\//, '');
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -32,15 +31,6 @@ async function resolveRepoCommon(repository) {
   return cached;
 }
 
-async function filesystemIdentity(path, type) {
-  const stat = await lstat(path, { bigint: true });
-  if (!(type === 'file' ? stat.isFile() : stat.isDirectory()) || typeof stat.dev !== 'bigint'
-    || typeof stat.ino !== 'bigint' || stat.ino <= 0n || typeof stat.birthtimeNs !== 'bigint' || stat.birthtimeNs <= 0n) {
-    throw new Error('checkout-incarnation-unavailable');
-  }
-  return { dev: String(stat.dev), ino: String(stat.ino), birthtimeNs: String(stat.birthtimeNs) };
-}
-
 export async function readCompletedCheckoutIdentity({ repoPath, branch, path, head, worktrees = null, repoCommon = null, allowLocked = false }) {
   const { listWorktrees } = await import('./worktreeManager.js');
   const repository = await realpath(repoPath);
@@ -49,9 +39,6 @@ export async function readCompletedCheckoutIdentity({ repoPath, branch, path, he
   const trees = worktrees || await listWorktrees(repository);
   const holders = trees.filter(tree => shortBranch(tree.branch) === branch);
   if (holders.length !== 1 || (!allowLocked && holders[0].locked === true) || await realpath(holders[0].path) !== checkout || holders[0].head !== head) return null;
-  const pointer = await filesystemIdentity(join(checkout, '.git'), 'file');
-  const gitdir = await realpath((await execGit(['rev-parse', '--absolute-git-dir'], checkout)).stdout.trim());
-  const administration = await filesystemIdentity(gitdir, 'directory');
   const [currentHead, currentBranch, common, resolvedRepoCommon] = await Promise.all([
     execGit(['rev-parse', '--verify', 'HEAD^{commit}'], checkout),
     execGit(['symbolic-ref', '--quiet', '--short', 'HEAD'], checkout),
@@ -61,9 +48,7 @@ export async function readCompletedCheckoutIdentity({ repoPath, branch, path, he
   if (!resolvedRepoCommon) return null;
   if (currentHead.stdout.trim() !== head || currentBranch.stdout.trim() !== branch
     || await realpath(resolve(checkout, common.stdout.trim())) !== await realpath(resolve(repository, resolvedRepoCommon))) return null;
-  if (!same(pointer, await filesystemIdentity(join(checkout, '.git'), 'file'))
-    || !same(administration, await filesystemIdentity(gitdir, 'directory'))) return null;
-  return { repoPath: repository, branch, path: checkout, head, incarnation: { pointer, gitdir: { path: gitdir, ...administration } } };
+  return { repoPath: repository, branch, path: checkout, head };
 }
 
 /** The repository a run's checkouts belong to. A claim run that picks its own
@@ -76,7 +61,7 @@ function runRepository(meta) {
     && typeof meta.workspacePath === 'string' && meta.workspacePath ? meta.workspacePath : null;
 }
 
-/** Validate the run and capture time, ignoring legacy seed/incarnation fields.
+/** Validate the run and capture time; legacy seed/incarnation fields are ignored.
  * Older v2 captures were recorded after completion; retain that time contract. */
 export function completedCheckoutReceiptValid(agent, receipt) {
   if (!receipt || receipt.agentId !== agent.id || receipt.startedAt !== agent.startedAt
@@ -126,14 +111,13 @@ export async function captureCompletedCheckouts(agent, { success, strict = false
       if (!recordedPath || await realpath(holders[0].path).catch(() => null) !== recordedPath) { incomplete = true; unknown = true; continue; }
     }
     const target = { repoPath, branch, path: holders[0].path, head: holders[0].head, worktrees: trees, allowLocked: releaseCandidate };
-    const first = await readCompletedCheckoutIdentity(target).catch(() => null);
-    if (!first) { incomplete = true; unknown = true; continue; }
-    // Record one server-observed snapshot; legacy filesystem identities are ignored.
-    const snapshot = { version: 1, agentId: agent.id, startedAt: agent.startedAt, capturedAt: new Date().toISOString(), repoPath: first.repoPath, branch: first.branch, path: first.path, head: first.head };
+    const observed = await readCompletedCheckoutIdentity(target).catch(() => null);
+    if (!observed) { incomplete = true; unknown = true; continue; }
+    const snapshot = { version: 1, agentId: agent.id, startedAt: agent.startedAt, capturedAt: new Date().toISOString(), ...observed };
     targets.push(snapshot);
     receipts.push(snapshot);
   }
-  if (strict && incomplete) throw Object.assign(new Error('checkout-incarnation-unverified'), { checkoutCapture: { targets, unknown } });
+  if (strict && incomplete) throw Object.assign(new Error('checkout-capture-incomplete'), { checkoutCapture: { targets, unknown } });
   return receipts;
 }
 
@@ -152,8 +136,8 @@ export async function hasCompletedCheckoutEvidence(records, target) {
     return await realpath(repoPath).catch(() => null) === current.repoPath ? agent : null;
   }))).filter(Boolean);
   return scoped.some(agent => agent?.status === 'completed' && agent.result?.success === true
-    // A later run can reuse an existing checkout without changing its inode or
-    // head. Its failure/missing receipt supersedes the older success. Unknown
+    // A later run can reuse an existing checkout at the same path and head.
+    // Its failure/missing receipt supersedes the older success. Unknown
     // ordering is also a hold; only an unambiguous newest owner can grant this.
     && scoped.every(other => other === agent || Date.parse(other.startedAt) < Date.parse(agent.startedAt))
     && hasClaimCheckoutBindings(agent.metadata) && Array.isArray(agent.metadata?.completedCheckouts)

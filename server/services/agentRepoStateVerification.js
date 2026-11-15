@@ -605,7 +605,7 @@ async function verifyReleasedSynchronization(agent) {
 }
 
 /** Physical cleanup uses the registered checkout scope, including legacy records
- * whose seed or incarnation fields are no longer relevant. */
+ * that predate the current snapshot fields. */
 function recordedCheckoutScope(agent) {
   const meta = agent?.metadata;
   if (![meta?.sourceWorkspace, meta?.workspacePath, meta?.worktreeBranch].every(value => typeof value === 'string' && value)
@@ -1335,7 +1335,7 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
   const expectation = resolveRepoStateExpectation({ ...structural, prExpected: prExpected || !!originalPrUrl, enabled, followUpPending: owned });
   if (!expectation.verify) return skipped(expectation.skipReason);
 
-  const hold = await resolveCheckoutIncarnation({ agentId, metadata, sourceWorkspace, branchName, worktreePath });
+  const hold = await resolveCheckoutHold({ agentId, metadata, sourceWorkspace, branchName, worktreePath });
   if (hold) return blockWith(hold.reason, { record: hold.record });
   const observed = await probeRepoState({
     sourceWorkspace,
@@ -1384,7 +1384,7 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
  *
  * @returns {Promise<{reason: string, record?: object}|null>} the hold, or null when this run still owns the checkout
  */
-async function resolveCheckoutIncarnation({ agentId, metadata, sourceWorkspace, branchName, worktreePath }) {
+async function resolveCheckoutHold({ agentId, metadata, sourceWorkspace, branchName, worktreePath }) {
   const inventory = await listWorktrees(sourceWorkspace).catch(() => null);
   if (!inventory) return { reason: 'checkout-inventory-unavailable' };
   const holders = inventory.filter(tree => tree.branch?.replace(/^refs\/heads\//, '') === branchName);
@@ -1394,7 +1394,7 @@ async function resolveCheckoutIncarnation({ agentId, metadata, sourceWorkspace, 
   const pathHolder = inventory.find(samePath);
   if (holders.some(tree => !samePath(tree))
     || (pathHolder && pathHolder.branch?.replace(/^refs\/heads\//, '') !== branchName)) {
-    return { reason: 'checkout-incarnation-changed' };
+    return { reason: 'checkout-changed' };
   }
   const completed = metadata.completedCheckouts?.find(row => row.branch === branchName && resolve(row.path) === resolve(worktreePath));
   if (completed && pathHolder) {
@@ -1402,7 +1402,7 @@ async function resolveCheckoutIncarnation({ agentId, metadata, sourceWorkspace, 
     const identity = await readCompletedCheckoutIdentity({ repoPath: sourceWorkspace, branch: branchName,
       path: worktreePath, head: pathHolder.head }).catch(() => null);
     if (!identity || identity.head !== completed.head) {
-      return { reason: 'checkout-incarnation-changed' };
+      return { reason: 'checkout-changed' };
     }
   }
   const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
@@ -1471,7 +1471,7 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
     const { withClaimOwnershipLock } = await import('./cosClaimOwnership.js');
     const verified = await withClaimOwnershipLock(async () => {
       await recheckCleanup?.();
-      if (await resolveCheckoutIncarnation({ agentId, metadata, sourceWorkspace, branchName, worktreePath })
+      if (await resolveCheckoutHold({ agentId, metadata, sourceWorkspace, branchName, worktreePath })
         || (worktreePath && await readCheckoutPathPresence(worktreePath) !== false)
         || await readLocalBranchPresence(sourceWorkspace, branchName) !== false) return false;
       return await (integrated
@@ -1525,10 +1525,10 @@ async function retireIntegratedCheckout({ agentId, appId, observed, issues, reco
       if (!manualCleanupOnly) await assertAutomaticRetirementAllowed();
       await recheckCleanup?.();
       if (recheckCleanup) {
-        const hold = await resolveCheckoutIncarnation({ agentId, metadata, sourceWorkspace, branchName, worktreePath });
+        const hold = await resolveCheckoutHold({ agentId, metadata, sourceWorkspace, branchName, worktreePath });
         if (hold) throw new Error(hold.reason);
       }
-    } }).catch(error => ({ reason: (['daemon-stopped', 'automatic-retirement-disabled', 'checkout-incarnation-changed', 'claim-owner-active', 'claim-owner-ambiguous', 'cleanup-owner-changed', 'cleanup-provenance-unverified', 'swarm-continuation-pending', 'completion-stages-pending', 'checkout-capture-unverified'].includes(error.message)) ? error.message : 'retirement-outcome-uncertain' }));
+    } }).catch(error => ({ reason: (['daemon-stopped', 'automatic-retirement-disabled', 'checkout-changed', 'claim-owner-active', 'claim-owner-ambiguous', 'cleanup-owner-changed', 'cleanup-provenance-unverified', 'swarm-continuation-pending', 'completion-stages-pending', 'checkout-capture-unverified'].includes(error.message)) ? error.message : 'retirement-outcome-uncertain' }));
   if (!result.ok || result.branchDeleted !== true) {
     return blockWith(result.reason || result.branchRetainedReason || 'retirement-receipt-unverified', { issues, observed });
   }

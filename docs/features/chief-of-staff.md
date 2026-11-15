@@ -180,8 +180,8 @@ exact-head lease to one captured, matching fetch/push endpoint. Recovery refs re
 merge without a checkout. Cleanup reports locked, dirty, active, unmanaged,
 unverified manual claim, changed-head and archive-failure holds explicitly.
 An absent live registry entry alone cannot waive a manual claim hold; a
-successful completion receipt bound to the current checkout path, head and
-filesystem incarnation is required, or for a manual session the forge's merged
+successful completion receipt bound to the current checkout path and head is
+required, or for a manual session the forge's merged
 PR at the exact head. A merged manual claim with no PR at its exact head (a
 reused branch, or a checkout left behind while the branch shipped from
 elsewhere) retires once a GitHub read finds no open PR for the branch and the

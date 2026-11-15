@@ -265,8 +265,7 @@ it.each(['all-merged', 'all-retired', 'one-open', 'manual-merged'])('wakes a cle
       completionTaskDispatch: { taskId: originalTask.id, taskType: 'internal', expected: [
         ['claimedBy', 'fixture-local'], ['claimedAt', start], ['lastSpawnedAt', start], ['totalSpawnCount', 1],
       ] }, completedCheckouts: branches.map((branch, index) => ({ version: 1, agentId: 'agent-swarm', startedAt: start,
-        capturedAt: start, repoPath: '/repo', path: `/tree/${index}`, branch, head: heads[index],
-        incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } })) } };
+        capturedAt: start, repoPath: '/repo', path: `/tree/${index}`, branch, head: heads[index] })) } };
   getAgentRecord.mockResolvedValue(agent);
   getTaskById.mockResolvedValue(originalTask);
   listWorktrees.mockResolvedValue(branches.map((branch, index) => ({ branch: `refs/heads/${branch}`, path: `/tree/${index}`, head: heads[index] })));
@@ -394,7 +393,7 @@ describe('verifyAgentRepoState — clean runs', () => {
       blockedCategory: 'task-recovery-exhausted', deliveryDecisionAgentId: 'agent-1',
       deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1', failureCount: '3', totalSpawnCount: '3', lastSpawnedAt: CREATED_AT } };
     const completed = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE,
-      head: HEAD, startedAt: CREATED_AT, capturedAt: CREATED_AT, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+      head: HEAD, startedAt: CREATED_AT, capturedAt: CREATED_AT };
     const state = { ...agentState({ completedCheckouts: [completed], completionCleanup: { version: 1, status: 'pending' },
       reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7', branch: BRANCH },
       completionTaskDispatch: { taskId: 'task-1', taskType: 'user', expected: [['lastSpawnedAt', CREATED_AT], ['totalSpawnCount', 3]] } }),
@@ -515,8 +514,7 @@ describe('verifyAgentRepoState — clean runs', () => {
   it.each(['parked', 'unverified', 'wrong-issue', 'open-pr'])('retains only an independently verified parked swarm checkout: %s', async scenario => {
     const branch = 'claim/issue-42';
     const capture = { version: 1, agentId: 'agent-swarm', startedAt: CREATED_AT, capturedAt: CREATED_AT,
-      repoPath: '/repo', branch, path: '/tree/42', head: HEAD,
-      incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+      repoPath: '/repo', branch, path: '/tree/42', head: HEAD };
     const delivered = { ...capture, branch: 'claim/issue-43', path: '/tree/43' };
     const outcome = { status: 'incomplete', recovery: { mode: 'cleanup' } };
     const state = { id: 'agent-swarm', taskId: 'task-1', status: 'completed', startedAt: CREATED_AT,
@@ -553,7 +551,7 @@ describe('verifyAgentRepoState — clean runs', () => {
 
   it.each(['follow-up', 'capture'])('immediately finalizes receipt-retired delivery after %s, including duplicate observations', async event => {
     const completed = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
-      startedAt: CREATED_AT, capturedAt: CREATED_AT, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+      startedAt: CREATED_AT, capturedAt: CREATED_AT };
     const state = { ...agentState({ instanceId: 'fixture-local', completedCheckouts: [completed],
       reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' }, repoStateVerification: { status: 'pending' },
       completionCleanup: { version: 1 } }), id: 'agent-1', taskId: 'task-1', status: 'completed',
@@ -804,7 +802,7 @@ describe('verifyAgentRepoState — clean runs', () => {
 
   it.each([{ delivered: true }, { delivered: false }, { delivered: true, restart: true }])('reconciles an eventual merge after a terminal pre-merge report with exact proof (%j)', async ({ delivered, restart }) => {
     const capture = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
-      startedAt: CREATED_AT, capturedAt: CREATED_AT, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+      startedAt: CREATED_AT, capturedAt: CREATED_AT };
     const originalResult = { success: false, executionSuccess: true, deliveryRecoveryOwned: true,
       taskOutcome: { status: 'incomplete', reason: 'Main moved during three guard rounds.' } };
     const state = { ...agentState({ instanceId: 'fixture-local', completedCheckouts: [capture],
@@ -958,7 +956,7 @@ describe('verifyAgentRepoState — clean runs', () => {
 
   it('settles captured merged delivery even when the original task did not request opening a PR', async () => {
     const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
-      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD };
     const state = { ...agentState({ completedCheckouts: [captured], repoStateVerification: { status: 'pending' } }),
       id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT, result: { success: false, cleanupPending: true } };
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/7', detail: 'MERGED' });
@@ -983,8 +981,7 @@ describe('verifyAgentRepoState — clean runs', () => {
 
   it.each(['advanced', 'rebased'])('settles absent merged delivery after a follow-up %s the captured head without a retirement receipt', async scenario => {
     const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
-      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: '4'.repeat(40),
-      incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: '4'.repeat(40) };
     const state = { ...agentState({ completedCheckouts: [captured], repoStateVerification: { status: 'pending' },
       reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' } }),
     id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT,
@@ -1002,8 +999,7 @@ describe('verifyAgentRepoState — clean runs', () => {
 
   it.each(['bound', 'wrong-source', 'wrong-branch', 'wrong-app'])('uses the server delivery follow-up target to settle a rebased parent: %s', async scenario => {
     const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
-      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: '4'.repeat(40),
-      incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: '4'.repeat(40) };
     const state = { ...agentState({ completedCheckouts: [captured], repoStateVerification: { status: 'pending' } }),
       id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT, result: { success: false, cleanupPending: true } };
     const source = { ...task({ deliveryFollowUpTaskId: 'follow-up', deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' }),
@@ -1028,7 +1024,7 @@ describe('verifyAgentRepoState — clean runs', () => {
 
   it.each(['contained', 'not-contained', 'lookup-unavailable', 'remote-branch'])('settles an unpublished no-change checkout only when its captured head is in the default branch: %s', async scenario => {
     const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
-      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD };
     const state = { ...agentState({ completedCheckouts: [captured], repoStateVerification: { status: 'pending' } }),
       id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT, result: { success: false, cleanupPending: true } };
     findPullRequestForBranch.mockResolvedValue(scenario === 'lookup-unavailable' ? { status: 'unavailable' } : { status: 'none', url: null, detail: null });
@@ -1053,8 +1049,7 @@ describe('verifyAgentRepoState — clean runs', () => {
 
   it.each(['contained', 'not-contained', 'other-refusal', 'remote-branch', 'wrong-capture', 'uncaptured'])('settles a merged contributor-fork PR from captured-head ancestry only when proven: %s', async scenario => {
     const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
-      repoPath: scenario === 'wrong-capture' ? '/other-instance' : '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
-      incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+      repoPath: scenario === 'wrong-capture' ? '/other-instance' : '/repo', branch: BRANCH, path: WORKTREE, head: HEAD };
     const state = { ...agentState({ completedCheckouts: scenario === 'uncaptured' ? [] : [captured], repoStateVerification: { status: 'pending' },
       reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' } }),
     id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT, result: { success: false, cleanupPending: true } };
@@ -1078,7 +1073,7 @@ describe('verifyAgentRepoState — clean runs', () => {
 
   it.each(['wrong-head', 'foreign-repository', 'uncaptured', 'ambiguous', 'open', 'unavailable'])('retains an unrequested-PR handoff when captured delivery is %s', async failure => {
     const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
-      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD };
     if (failure === 'wrong-head') captured.head = 'f'.repeat(40);
     if (failure === 'foreign-repository') captured.repoPath = '/other-instance';
     const completedCheckouts = failure === 'uncaptured' ? [] : failure === 'ambiguous' ? [captured, { ...captured }] : [captured];
@@ -1095,8 +1090,7 @@ describe('verifyAgentRepoState — clean runs', () => {
 
   it.each([true, false])('settles absent merged delivery before local objects are fetched (captured: %s)', async captured => {
     const completedCheckouts = captured ? [{ version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
-      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
-      incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } }] : [];
+      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD }] : [];
     const state = { ...agentState({ completedCheckouts, repoStateVerification: { status: 'pending' },
       reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' } }),
       id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT,
@@ -1145,9 +1139,9 @@ describe('verifyAgentRepoState — clean runs', () => {
   it('keeps a reused branch with a different checkout out of recovery across owner completion', async () => {
     listWorktrees.mockResolvedValue([{ ...RELEASE, path: '/repo/new-owner' }]);
     readClaimOwnershipAgents.mockResolvedValue([{ id: 'new-owner', status: 'running' }]);
-    for (let i = 0; i < 70; i++) expect(await run()).toMatchObject({ skipReason: 'checkout-incarnation-changed', recoveryTaskId: null });
+    for (let i = 0; i < 70; i++) expect(await run()).toMatchObject({ skipReason: 'checkout-changed', recoveryTaskId: null });
     readClaimOwnershipAgents.mockResolvedValue([{ id: 'new-owner', status: 'completed', result: { success: true } }]);
-    expect(await run()).toMatchObject({ skipReason: 'checkout-incarnation-changed', recoveryTaskId: null });
+    expect(await run()).toMatchObject({ skipReason: 'checkout-changed', recoveryTaskId: null });
     expect(addTask).not.toHaveBeenCalled();
     expect(readMergedDelivery).not.toHaveBeenCalled();
   });
@@ -1155,7 +1149,7 @@ describe('verifyAgentRepoState — clean runs', () => {
   it('ignores a legacy incarnation mismatch while retaining the recorded head check', async () => {
     listWorktrees.mockResolvedValue([RELEASE]);
     readCompletedCheckoutIdentity.mockResolvedValue({ head: 'f'.repeat(40), incarnation: { pointer: { ino: 'new' } } });
-    expect(await run({ agentState: agentState({ completedCheckouts: [{ ...RELEASE, incarnation: { pointer: { ino: 'old' } } }] }) })).toMatchObject({ skipReason: 'checkout-incarnation-changed' });
+    expect(await run({ agentState: agentState({ completedCheckouts: [{ ...RELEASE, incarnation: { pointer: { ino: 'old' } } }] }) })).toMatchObject({ skipReason: 'checkout-changed' });
     expect(addTask).not.toHaveBeenCalled();
   });
 
@@ -1378,7 +1372,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
 
   describe('completion stages held on repository verification (#14128)', () => {
     const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
-      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD };
     const heldOwner = stagePatch => {
       const pending = { ...task(), status: 'in_progress', metadata: { ...task().metadata,
         deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' } };
@@ -1543,8 +1537,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
   it('does not replay completion or refill from events emitted by a partial manual cleanup', async () => {
     const branches = ['claim/issue-1', 'claim/issue-2'];
     const captures = branches.map((branch, index) => ({ version: 1, agentId: 'agent-swarm', startedAt: CREATED_AT,
-      capturedAt: CREATED_AT, repoPath: '/repo', path: `/tree/${index}`, branch, head: HEAD,
-      incarnation: { pointer: { dev: '1', ino: String(index + 2), birthtimeNs: '3' } } }));
+      capturedAt: CREATED_AT, repoPath: '/repo', path: `/tree/${index}`, branch, head: HEAD }));
     const pending = { ...task({ claimFlow: true, analysisType: 'claim-issue' }), id: 'task-swarm', status: 'in_progress',
       metadata: { ...task({ claimFlow: true, analysisType: 'claim-issue' }).metadata,
         deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-swarm' } };
@@ -2155,7 +2148,7 @@ describe('verifyAgentRepoState — every hold records the reason it returns', ()
   it.each([
     ['ownership-unreadable', REPO_STATE_SKIPS.GATE_UNREADABLE, {}, () => getAllTasks.mockRejectedValue(new Error('tasks file unreadable'))],
     ['checkout-inventory-unavailable', 'checkout-inventory-unavailable', {}, () => listWorktrees.mockRejectedValue(new Error('not a git repository'))],
-    ['checkout-incarnation-changed', 'checkout-incarnation-changed', {}, () => listWorktrees.mockResolvedValue([{ ...RELEASE, path: '/repo/new-owner' }])],
+    ['checkout-changed', 'checkout-changed', {}, () => listWorktrees.mockResolvedValue([{ ...RELEASE, path: '/repo/new-owner' }])],
     ['claim-ownership-unreadable', 'claim-ownership-unreadable', { owners: [] }, () => readClaimOwnershipAgents.mockRejectedValue(new Error('agents unreadable'))],
     ['probe-incomplete', REPO_STATE_SKIPS.PROBE_INCOMPLETE, {}, () => readLocalBranchPresence.mockRejectedValue(new Error('git crashed'))],
     ['probe-incomplete', REPO_STATE_SKIPS.PROBE_INCOMPLETE, {}, () => readCheckoutPathPresence.mockResolvedValue(null)],
@@ -2260,8 +2253,7 @@ describe('claim-swarm completion', () => {
       await mkdir(repo);
       await symlink(repo, alias, 'dir');
       const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
-        repoPath: await realpath(repo), branch, path: WORKTREE, head: HEAD,
-        incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+        repoPath: await realpath(repo), branch, path: WORKTREE, head: HEAD };
       const state = { ...agentState({ isWorktree: false, sourceWorkspace: alias, workspacePath: alias,
         claimBranches: [branch], completedCheckouts: [captured], cleanupOutcomes: {
           [JSON.stringify([branch, WORKTREE])]: { branch, path: WORKTREE, status: 'verified', reason: 'already-absent-merged' },
@@ -2274,15 +2266,14 @@ describe('claim-swarm completion', () => {
   it.each(['absent', 'reused checkout', 'new picker', 'active owner'])('keeps verified results only for the same absent capture: %s', async scenario => {
     const branch = 'claim/issue-11';
     const capture = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
-      repoPath: '/repo', branch, path: WORKTREE, head: HEAD,
-      incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+      repoPath: '/repo', branch, path: WORKTREE, head: HEAD };
     const state = { ...agentState({ isWorktree: false, worktreeBranch: null, workspacePath: '/repo',
       claimBranches: [branch], completedCheckouts: [capture], cleanupOutcomes: {
         [JSON.stringify([branch, WORKTREE])]: { branch, path: WORKTREE, status: 'verified', reason: 'already-absent-merged' },
       } }), id: 'agent-1', status: 'completed', completedAt: CREATED_AT };
     if (scenario === 'reused checkout') {
       listWorktrees.mockResolvedValue([{ ...RELEASE, branch: `refs/heads/${branch}` }]);
-      readCompletedCheckoutIdentity.mockResolvedValue({ ...capture, incarnation: { pointer: { dev: '1', ino: '99', birthtimeNs: '3' } } });
+      readCompletedCheckoutIdentity.mockResolvedValue({ ...capture, head: 'e'.repeat(40) });
     }
     if (scenario === 'new picker' || scenario === 'active owner') readClaimOwnershipAgents.mockResolvedValue([{ id: 'other', status: 'running',
       metadata: { sourceWorkspace: '/repo', claimBranches: [branch] } }]);
@@ -2297,8 +2288,7 @@ describe('claim-swarm completion', () => {
     const selected = 'claim/issue-10';
     const delivered = 'claim/issue-11';
     const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
-      repoPath: scenario === 'foreign-capture' ? '/foreign' : '/repo', branch: delivered, path: WORKTREE, head: HEAD,
-      incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+      repoPath: scenario === 'foreign-capture' ? '/foreign' : '/repo', branch: delivered, path: WORKTREE, head: HEAD };
     const state = { ...agentState({ isWorktree: false, worktreeBranch: null, workspacePath: '/repo',
       claimBranches: scenario === 'still-bound' ? [selected, delivered] : [delivered],
       claimReleasedBranches: [selected], checkoutCapture: { status: 'captured' }, completedCheckouts: [captured],
@@ -2390,8 +2380,7 @@ describe('claim-swarm completion', () => {
   it.each(['bound-elsewhere', 'bound-here', 'completed', 'pending-only-completed', 'racing-bind'])('rechecks the recorded hold when its picker changes ownership: %s', async scenario => {
     const branch = 'claim/issue-11';
     const capture = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
-      repoPath: '/repo', branch, path: WORKTREE, head: HEAD,
-      incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+      repoPath: '/repo', branch, path: WORKTREE, head: HEAD };
     const state = { ...agentState({ isWorktree: false, worktreeBranch: null, workspacePath: '/repo',
       claimBranches: [branch], completedCheckouts: [capture], checkoutCapture: { status: 'captured' },
       repoStateVerification: { status: 'pending' }, completionCleanup: { status: 'completed' } }),
@@ -2731,8 +2720,7 @@ describe('completion after its originating task was removed', () => {
     const original = { ...task(), taskType: 'user', metadata: { ...task().metadata,
       claimedBy: 'dispatcher', claimedAt: CREATED_AT, lastSpawnedAt: CREATED_AT, totalSpawnCount: 1 } };
     const captured = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE,
-      head: HEAD, startedAt: CREATED_AT, capturedAt: CREATED_AT,
-      incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+      head: HEAD, startedAt: CREATED_AT, capturedAt: CREATED_AT };
     const state = { ...agentState({ instanceId: 'fixture-local', completedCheckouts: [captured],
       reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' },
       repoStateVerification: { status: 'pending' },
