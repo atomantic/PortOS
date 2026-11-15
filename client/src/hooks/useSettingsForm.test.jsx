@@ -41,4 +41,24 @@ describe('useSettingsForm', () => {
     expect(result.current.saved.mode).toBe('local');
     expect(result.current.isDirty).toBe(false);
   });
+
+  it('honors a per-field comparator and saves one section without touching another', () => {
+    const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
+    const initial = { tags: ['a', 'b'], name: 'x', url: 'u' };
+    const comparators = { tags: sameSet };
+    const { result } = renderHook(() => useSettingsForm(initial, { comparators }));
+
+    act(() => { result.current.set('tags', ['b', 'a']); });
+    expect(result.current.isDirty).toBe(false);
+    act(() => { result.current.set('tags', ['a']); });
+    expect(result.current.isDirty).toBe(true);
+    act(() => { result.current.set('tags', ['a', 'b']); });
+
+    act(() => { result.current.set('name', 'y'); });
+    act(() => { result.current.set('url', 'v'); });
+    act(() => { result.current.markFieldsSaved({ name: 'y' }, { name: 'y' }); });
+    expect(result.current.saved).toEqual({ tags: ['a', 'b'], name: 'y', url: 'u' });
+    expect(result.current.values.url).toBe('v');
+    expect(result.current.isDirty).toBe(true);
+  });
 });

@@ -18,6 +18,7 @@ import toast from '../../ui/Toast';
 import YoutubeIngestSettings from '../YoutubeIngestSettings';
 import ListLoadError from '../../ui/ListLoadError';
 import useListResource from '../../../hooks/useListResource';
+import useSettingsForm from '../../../hooks/useSettingsForm';
 
 const DAYS_OF_WEEK = [
   'monday',
@@ -31,6 +32,8 @@ const DAYS_OF_WEEK = [
 
 // Module-level so useListResource sees a stable fetcher; the pickers own the error UI.
 const fetchProviders = async () => (await api.getProviders({ silent: true }))?.providers || [];
+
+const EMBEDDING_INITIAL = { embeddingProvider: '', embeddingModel: '' };
 
 export default function ConfigTab({ onRefresh }) {
   const [loading, setLoading] = useState(true);
@@ -50,10 +53,10 @@ export default function ConfigTab({ onRefresh }) {
   // Embedding config lives in CoS config (embeddingProviderId/embeddingModel),
   // separate from the brain settings above — it drives semantic search /
   // pgvector, not classification.
-  const [embeddingProvider, setEmbeddingProvider] = useState('');
-  const [embeddingModel, setEmbeddingModel] = useState('');
-  const [savedEmbeddingProvider, setSavedEmbeddingProvider] = useState('');
-  const [savedEmbeddingModel, setSavedEmbeddingModel] = useState('');
+  const { values: embeddingForm, isDirty: embeddingDirty, set: setEmbeddingField, load: loadEmbeddingForm, markSaved: markEmbeddingSaved } = useSettingsForm(EMBEDDING_INITIAL);
+  const { embeddingProvider, embeddingModel } = embeddingForm;
+  const setEmbeddingProvider = (value) => setEmbeddingField('embeddingProvider', value);
+  const setEmbeddingModel = (value) => setEmbeddingField('embeddingModel', value);
   const [embeddingStatus, setEmbeddingStatus] = useState(null);
   const [savingEmbedding, setSavingEmbedding] = useState(false);
   const [reprocessing, setReprocessing] = useState(false);
@@ -84,10 +87,7 @@ export default function ConfigTab({ onRefresh }) {
     }
 
     if (cosConfig) {
-      setEmbeddingProvider(cosConfig.embeddingProviderId || '');
-      setEmbeddingModel(cosConfig.embeddingModel || '');
-      setSavedEmbeddingProvider(cosConfig.embeddingProviderId || '');
-      setSavedEmbeddingModel(cosConfig.embeddingModel || '');
+      loadEmbeddingForm({ embeddingProvider: cosConfig.embeddingProviderId || '', embeddingModel: cosConfig.embeddingModel || '' });
     }
     if (embStatus) setEmbeddingStatus(embStatus);
 
@@ -130,9 +130,6 @@ export default function ConfigTab({ onRefresh }) {
     setEmbeddingModel(embed || provider?.defaultModel || models[0] || '');
   };
 
-  const embeddingDirty = () =>
-    embeddingProvider !== savedEmbeddingProvider || embeddingModel !== savedEmbeddingModel;
-
   const handleSaveEmbedding = async () => {
     setSavingEmbedding(true);
     const result = await api
@@ -140,8 +137,7 @@ export default function ConfigTab({ onRefresh }) {
       .catch(err => { toast.error(err.message || 'Failed to save embedding config'); return null; });
     setSavingEmbedding(false);
     if (result) {
-      setSavedEmbeddingProvider(embeddingProvider);
-      setSavedEmbeddingModel(embeddingModel);
+      markEmbeddingSaved(embeddingForm, embeddingForm);
       toast.success('Embedding config saved');
       // The server reinitializes embeddings on this PUT — re-probe availability.
       await refreshEmbeddingStatus();
@@ -347,7 +343,7 @@ export default function ConfigTab({ onRefresh }) {
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <button
               onClick={handleSaveEmbedding}
-              disabled={cosConfigFailed || !embeddingDirty() || savingEmbedding}
+              disabled={cosConfigFailed || !embeddingDirty || savingEmbedding}
               className="flex items-center gap-2 px-3 py-2 bg-port-accent text-white rounded-lg text-sm hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {savingEmbedding ? <BrailleSpinner /> : <Save size={14} />}
@@ -355,8 +351,8 @@ export default function ConfigTab({ onRefresh }) {
             </button>
             <button
               onClick={handleReprocess}
-              disabled={reprocessing || cosConfigFailed || embeddingDirty()}
-              title={embeddingDirty() ? 'Save the embedding config first' : 'Re-embed every brain record'}
+              disabled={reprocessing || cosConfigFailed || embeddingDirty}
+              title={embeddingDirty ? 'Save the embedding config first' : 'Re-embed every brain record'}
               className="flex items-center gap-2 px-3 py-2 bg-port-bg border border-port-border text-white rounded-lg text-sm hover:bg-port-card disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {reprocessing ? <BrailleSpinner /> : <RefreshCw size={14} />}
