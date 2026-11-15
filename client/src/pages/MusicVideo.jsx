@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import { Plus, Film, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -29,6 +30,7 @@ import ProjectIndex from '../components/musicVideo/ProjectIndex.jsx';
 import useMusicVideoJobSlots from '../components/musicVideo/useMusicVideoJobSlots.js';
 import useProjectSummarySync from '../components/musicVideo/useProjectSummarySync.js';
 import { resolveStageParam, compareMusicVideoProjectsNewestFirst } from '../lib/musicVideoStages.js';
+import { applyMusicVideoEdit } from '../lib/musicVideoEditResult.js';
 
 // Automation first: a new project defaults to autopilot with the free tools.
 const emptyCreateForm = () => ({
@@ -85,6 +87,16 @@ export default function MusicVideo() {
   // it mid-flight (a job finishing) can refetch instead of being folded into a
   // response that may predate it.
   const fetchingIdRef = useRef(null);
+  // The newest saved revision of the open project this tab has applied (a read or an edit reply).
+  // An edit reply is a diff against the record before it, and a read can be older than a reply that
+  // landed first, so neither is applied over a newer one (#16247).
+  const savedRevision = useRef({ id: null, updatedAt: null });
+  const isOlderThanApplied = (projectId, updatedAt) => savedRevision.current.id === projectId
+    && !!updatedAt && !!savedRevision.current.updatedAt && updatedAt < savedRevision.current.updatedAt;
+  const noteApplied = (projectId, updatedAt) => {
+    if (!updatedAt || isOlderThanApplied(projectId, updatedAt)) return;
+    savedRevision.current = { id: projectId, updatedAt };
+  };
   // The music library the pickers read. A failed read is shown as such, with
   // Retry, never as an empty library; an import appends to it locally.
   const trackLibrary = useListResource(loadTracks);
@@ -129,7 +141,10 @@ export default function MusicVideo() {
       .then((project) => {
         if (cancelled) return;
         setSelectedFault(project ? null : { id: selectedId, notFound: true });
-        if (project) setSelectedProject(project);
+        if (project) {
+          savedRevision.current = { id: project.id, updatedAt: project.updatedAt ?? null };
+          setSelectedProject(project);
+        }
       })
       .catch((err) => {
         if (!cancelled) setSelectedFault({ id: selectedId, notFound: err?.status === 404, message: err?.message || 'Failed to load music video project' });
@@ -290,26 +305,68 @@ export default function MusicVideo() {
       });
       return { ...fresh, scenes };
     });
+    noteApplied(fresh.id, fresh.updatedAt);
     summaries.setItems((prev) => prev.map((p) => (p.id === fresh.id ? fresh : p)));
     return conflict;
   };
+  // The one full reload of the open project after first load: a change made elsewhere, a reconnect,
+  // a refused edit, or an edit reply that cannot be applied. It reads once this tab's queued take
+  // decisions land, and reads again when an edit reply newer than the read landed meanwhile (that
+  // reply's diff assumed every change before it, which the stale read does not carry past it).
+  const reloadOpenProject = (projectId, { onMerged = null } = {}) => {
+    const read = () => getMusicVideoProject(projectId, { silent: true });
+    const attempt = (left) => (takesRef.current ? takesRef.current.afterTakeWrites(read) : read()).then((fresh) => {
+      if (!fresh || fresh.id !== projectId) return;
+      if (isOlderThanApplied(projectId, fresh.updatedAt)) return left > 0 ? attempt(left - 1) : undefined;
+      const conflict = mergeFetchedProject(fresh);
+      onMerged?.(conflict);
+    });
+    return attempt(2).catch(() => {});
+  };
+  // A board edit's reply (lib/musicVideoEditResult.js) patched into the open project; fields typed and
+  // not yet saved keep their text. One that cannot be applied safely reloads instead.
+  const applyEdit = (projectId, edit) => {
+    if (!edit || isOlderThanApplied(projectId, edit.updatedAt)) { void reloadOpenProject(projectId); return; }
+    noteApplied(projectId, edit.updatedAt);
+    let refused = false;
+    // Applied at once, so a reply the open record refuses (one older than a change that landed since,
+    // say a rename) is known here and reloads.
+    flushSync(() => setSelectedProject((prev) => {
+      if (prev?.id !== projectId) return prev;
+      const next = applyMusicVideoEdit(prev, edit, { keep: unsavedSceneFields.current });
+      if (!next) refused = true;
+      return next || prev;
+    }));
+    if (refused) { void reloadOpenProject(projectId); return; }
+    if (edit.updatedAt) summaries.setItems((prev) => prev.map((p) => (p.id === projectId ? { ...p, updatedAt: edit.updatedAt } : p)));
+  };
   // An edit made elsewhere (an agent, another tab) reaches the open project here; fields typed
-  // locally and not yet saved keep their text, with a notice that the shot changed.
+  // locally and not yet saved keep their text, with a notice that the shot changed. A reconnect
+  // reloads too: events sent while the socket was down are not replayed.
   useEffect(() => {
     if (!selectedId) return undefined;
     let active = true;
+    let dropped = false;
+    const reload = () => reloadOpenProject(selectedId, { onMerged: (conflict) => {
+      if (active && conflict) toast.info('A shot changed elsewhere. Your unsaved text is kept; saving it replaces the other edit.');
+    } });
     const onChanged = (data) => {
       if (data?.id !== selectedId) return;
-      // This tab's own take decision: its reply already updated the shot.
+      // This tab's own edit: its reply already updated the board.
       if (data.origin && data.origin === socket.id) return;
-      const read = () => getMusicVideoProject(selectedId, { silent: true });
-      (takesRef.current ? takesRef.current.afterTakeWrites(read) : read()).then((fresh) => {
-        if (!active || !fresh) return;
-        if (mergeFetchedProject(fresh)) toast.info('A shot changed elsewhere. Your unsaved text is kept; saving it replaces the other edit.');
-      }).catch(() => {});
+      void reload();
     };
+    const onDisconnect = () => { dropped = true; };
+    const onConnect = () => { if (!dropped) return; dropped = false; void reload(); };
     socket.on('music-video:project:changed', onChanged);
-    return () => { active = false; socket.off('music-video:project:changed', onChanged); };
+    socket.on('disconnect', onDisconnect);
+    socket.on('connect', onConnect);
+    return () => {
+      active = false;
+      socket.off('music-video:project:changed', onChanged);
+      socket.off('disconnect', onDisconnect);
+      socket.off('connect', onConnect);
+    };
   }, [selectedId]);
 
   // The index and the header picker share `summaries`. The open-project listener
@@ -558,6 +615,8 @@ export default function MusicVideo() {
             unsavedSceneFields={unsavedSceneFields}
             takesRef={takesRef}
             mergeFetchedProject={mergeFetchedProject}
+            applyEdit={applyEdit}
+            reloadOpenProject={reloadOpenProject}
             tracks={tracks}
             trackLibrary={trackLibrary}
             trackName={trackName}

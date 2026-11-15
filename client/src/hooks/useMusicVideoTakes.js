@@ -28,7 +28,7 @@ import {
   importMusicVideoHandoff,
 } from '../services/apiMusicVideo.js';
 import { uploadGalleryImage } from '../services/apiSystem.js';
-import socket from '../services/socket.js';
+import { ownWrite } from '../services/socketWriteOrigin.js';
 import { selectTakePatch, reviewTakePatch, markTakeAssetMarks } from '../lib/musicVideoTakes.js';
 import { handheldVideo, trimVideo, uploadGalleryVideo } from '../services/apiImageVideo.js';
 import { downloadBlob } from '../lib/downloadBlob.js';
@@ -64,12 +64,14 @@ const handoffBundleFilename = (name) => `${handoffSlug(name)}-handoff.zip`;
  * is folded in only when no later decision on that shot is still queued (that
  * one's reply is fresher), and a refused one reloads the project. Each request
  * names this tab's socket, so the broadcast of its own change is not refetched.
+ * `writeMark()` / `settledSince(mark)` let a board edit tell whether a take decision started or is
+ * still running while it was in flight: then its reply may predate that decision, and it reloads.
  *
  * Handoff import uploads each picked file through the ordinary gallery upload
  * routes (image → data/images, video → video history), then asks the server to
  * associate them with scenes by the file tags the exported manifest assigned.
  */
-export default function useMusicVideoTakes({ project, applyScenePatch, patchProject = null, reloadProject = null }) {
+export default function useMusicVideoTakes({ project, applyScenePatch, patchProject = null, reloadProject = null, applyEdit = null }) {
   const [busy, setBusy] = useState(false);
   const chainRef = useRef(Promise.resolve());
   const [reconcileError, setReconcileError] = useState(null);
@@ -84,7 +86,10 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
     else queuedRef.current.delete(sceneId);
   };
   // This tab's own writes: the server names it on the change broadcast, so the page skips that refetch.
-  const own = () => ({ silent: true, ...(socket.id ? { headers: { 'X-PortOS-Origin': socket.id } } : {}) });
+  const own = () => ownWrite();
+  // Every take decision started, and those not yet answered (see writeMark / settledSince).
+  const startedRef = useRef(0);
+  const runningRef = useRef(0);
 
   const applyScene = (projectId, scene) => !queuedRef.current.has(scene.sceneId) && applyScenePatch?.(projectId, scene.sceneId, {
     referenceImageId: scene.referenceImageId ?? null,
@@ -99,10 +104,13 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
   const runTakeOp = (work, failMessage, { sceneId = null, optimistic = null } = {}) => {
     const projectId = project.id;
     queue(sceneId, 1);
+    startedRef.current += 1;
+    runningRef.current += 1;
     optimistic?.(projectId);
     const run = chainRef.current.then(() => work(projectId));
-    chainRef.current = run.then((scene) => { queue(sceneId, -1); if (scene) applyScene(projectId, scene); return true; })
+    chainRef.current = run.then((scene) => { runningRef.current -= 1; queue(sceneId, -1); if (scene) applyScene(projectId, scene); return true; })
       .catch((err) => {
+        runningRef.current -= 1;
         queue(sceneId, -1);
         toast.error(err?.message || failMessage);
         // Back to the saved record, read once the decisions queued behind this one land.
@@ -153,8 +161,10 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
 
   // An unused still or clip from the project's pool becomes this shot's selection (with its partner, when picked).
   // The still's frame prompt comes with it, so the start or end prompt shows what made the picture.
+  // Its reply carries the edit result: the placed shot, any shot whose takes went stale, and readiness.
   const placePoolItem = (scene, pick) => runTakeOp(
-    (projectId) => placeMusicVideoPoolItem(projectId, scene.sceneId, pick, { silent: true }).then(({ scene: placed }) => {
+    (projectId) => placeMusicVideoPoolItem(projectId, scene.sceneId, pick, applyEdit ? own() : { silent: true }).then(({ scene: placed, edit }) => {
+      if (applyEdit && edit) { applyEdit(projectId, edit); return null; }
       const field = pick.kind === 'endImage' ? 'endFramePrompt' : 'framePrompt';
       const stillPlaced = pick.kind !== 'video' || Boolean(pick.withAssetId);
       if (stillPlaced && placed[field] !== scene[field]) applyScenePatch?.(projectId, placed.sceneId, { [field]: placed[field] ?? null });
@@ -323,5 +333,8 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
     if (failures.length) toast.error(failures.slice(0, 3).join(' · '));
   };
 
-  return { busy, reconcileError: reconcileError?.projectId === project.id ? reconcileError : null, reconciling, retryReconcile: () => reconcileProject(project.id), afterTakeWrites, selectTake, placePoolItem, trimClipTake, handheldClipTake, reviewTake, checkTake, checking, rejectUnusedTakes, swapFrames, markTake, applyPoolMarks, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
+  const writeMark = () => startedRef.current;
+  const settledSince = (mark) => startedRef.current === mark && runningRef.current === 0;
+
+  return { busy, writeMark, settledSince, reconcileError: reconcileError?.projectId === project.id ? reconcileError : null, reconciling, retryReconcile: () => reconcileProject(project.id), afterTakeWrites, selectTake, placePoolItem, trimClipTake, handheldClipTake, reviewTake, checkTake, checking, rejectUnusedTakes, swapFrames, markTake, applyPoolMarks, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
 }
