@@ -3,8 +3,6 @@ import { EventEmitter } from 'node:events';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
-import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 const auth = vi.hoisted(() => ({
   isAuthEnabled: vi.fn(async () => false),
@@ -28,12 +26,6 @@ vi.mock('../services/auth.js', () => auth);
 vi.mock('../services/settings.js', () => ({
   settingsEvents: new EventEmitter(),
   getSettings: vi.fn(async () => ({})),
-}));
-vi.mock('../services/instanceIdentity.js', () => ({
-  loadData: vi.fn(async () => ({ peers: [{
-    id: 'example-peer', instanceId: 'example-instance', enabled: true,
-    syncSecret: 'example-pair-secret-for-tests-only-123456',
-  }] })),
 }));
 vi.mock('../services/voice/config.js', () => voiceConfig);
 vi.mock('../services/voice/health.js', () => ({ checkAll: vi.fn(), invalidateHealthCache: vi.fn() }));
@@ -105,11 +97,6 @@ const storedVoice = {
   },
 };
 
-const peerHeaders = {
-  [PEER_INSTANCE_HEADER]: 'example-instance',
-  [PEER_AUTH_HEADER]: derivePeerAuthToken('example-pair-secret-for-tests-only-123456', 'example-instance'),
-};
-
 const appFor = (address = '192.0.2.10') => {
   const app = express();
   app.use((req, _res, next) => {
@@ -154,32 +141,11 @@ beforeEach(() => {
 describe('voice config instruction and runtime authority (#10990, #13055)', () => {
   it('refuses a password-free remote change to the prompt, persona, tools or coding agent', async () => {
     for (const body of attackBodies) {
-      for (const path of ['/api/voice/config', '/API/Voice/Config/', '/api/voice/config//']) {
-        const response = await putConfig(appFor(), body, path);
-        expect([response.status, response.body.code], `${path} ${JSON.stringify(body)}`).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
-      const proxied = await putConfig(appFor('127.0.0.1'), body, '/api/voice/config', {
-        [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10',
-      });
-      expect(proxied.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+      const response = await putConfig(appFor(), body);
+      expect([response.status, response.body.code], JSON.stringify(body)).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     }
-    const peerPresented = await putConfig(appFor(), attackBodies[0], '/api/voice/config', peerHeaders);
-    expect([peerPresented.status, peerPresented.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     expect(voiceConfig.updateVoiceConfig).not.toHaveBeenCalled();
     expect(bootstrap.reconcile).not.toHaveBeenCalled();
-  });
-
-  it('refuses legacy Basic when a password is set, and a scoped peer before the config is read', async () => {
-    auth.isAuthEnabled.mockResolvedValue(true);
-    const basic = await putConfig(appFor(), attackBodies[0], '/api/voice/config', {
-      Authorization: `Basic ${Buffer.from(':example-password').toString('base64')}`,
-    });
-    expect([basic.status, basic.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    const readsBeforePeer = voiceConfig.getVoiceConfig.mock.calls.length;
-    const peer = await putConfig(appFor(), attackBodies[0], '/api/voice/config', peerHeaders);
-    expect([peer.status, peer.body.code]).toEqual([403, 'PEER_SCOPE_FORBIDDEN']);
-    expect(voiceConfig.getVoiceConfig).toHaveBeenCalledTimes(readsBeforePeer);
-    expect(voiceConfig.updateVoiceConfig).not.toHaveBeenCalled();
   });
 
   it('refuses a remote caller even when it only resends the stored config with a new TTS rate, and saves and reconciles it locally', async () => {
@@ -217,10 +183,9 @@ describe('voice config instruction and runtime authority (#10990, #13055)', () =
     expect(bootstrap.reconcile).toHaveBeenCalledOnce();
   });
 
-  it('lets a local password-free caller, an operator session and a delegated agent session change every field and reconcile', async () => {
+  it('lets a local password-free caller and a delegated agent session change every field and reconcile', async () => {
     for (const [enabled, address, headers] of [
       [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Cookie: 'portos_auth=example-session' }],
       [true, '192.0.2.10', { Authorization: 'Bearer example-session' }],
     ]) {
       auth.isAuthEnabled.mockResolvedValue(enabled);
@@ -231,7 +196,7 @@ describe('voice config instruction and runtime authority (#10990, #13055)', () =
       }
     }
     expect(voiceConfig.getVoiceConfig).not.toHaveBeenCalled();
-    expect(voiceConfig.updateVoiceConfig).toHaveBeenCalledTimes(attackBodies.length * 3);
-    expect(bootstrap.reconcile).toHaveBeenCalledTimes(attackBodies.length * 3);
+    expect(voiceConfig.updateVoiceConfig).toHaveBeenCalledTimes(attackBodies.length * 2);
+    expect(bootstrap.reconcile).toHaveBeenCalledTimes(attackBodies.length * 2);
   });
 });

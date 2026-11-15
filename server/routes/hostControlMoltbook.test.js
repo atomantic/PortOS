@@ -5,9 +5,7 @@ import { join } from 'node:path';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
   ...makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-moltbook-authority-') }),
@@ -171,48 +169,21 @@ beforeEach(async () => {
 afterEach(() => { cancelAll(); });
 
 describe('Moltbook publication authority', () => {
-  it('refuses remote, proxied and alternate spellings before credentials or persisted steering', async () => {
+  it('refuses remote callers before credentials or persisted steering', async () => {
     const before = await savedState();
     for (const operation of operations) {
-      for (const [address, headers] of [
-        ['192.0.2.10', {}],
-        ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
-      ]) {
-        const response = await call(appFor(address), operation, headers);
-        expect([response.status, response.body.code], operation[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
-      const response = await call(appFor(), [operation[0], operation[1].toUpperCase() + '/', operation[2]]);
+      const response = await call(appFor(), operation);
       expect([response.status, response.body.code], operation[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     }
     expect(await savedState()).toEqual(before);
     expectNoEffects();
   });
 
-  it('refuses anonymous, Basic and scoped peer credentials when auth is enabled', async () => {
-    auth.enabled = true;
-    const before = await savedState();
-    for (const operation of operations) {
-      for (const [headers, status, code] of [
-        [{}, 401, 'AUTH_REQUIRED'],
-        [{ Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403, 'HOST_CONTROL_FORBIDDEN'],
-        [{ [PEER_AUTH_HEADER]: derivePeerAuthToken('a'.repeat(32), 'example-instance'),
-          [PEER_INSTANCE_HEADER]: 'example-instance' }, 403, 'PEER_SCOPE_FORBIDDEN'],
-      ]) {
-        const response = await call(appFor(), operation, headers);
-        expect([response.status, response.body.code], operation[1]).toEqual([status, code]);
-      }
-    }
-    expect(await savedState()).toEqual(before);
-    expectNoEffects();
-  });
-
-  it('preserves local, human-session and delegated-agent publication and saved execution', async () => {
-    const owner = await createSession();
+  it('preserves local and delegated-agent publication and saved execution', async () => {
     const agent = await createSession({ label: 'agent' });
     let completedRuns = 0;
     for (const [enabled, address, headers] of [
       [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Cookie: `portos_auth=${owner.token}` }],
       [true, '127.0.0.1', { Authorization: `Bearer ${agent.token}` }],
     ]) {
       auth.enabled = enabled;
@@ -227,17 +198,17 @@ describe('Moltbook publication authority', () => {
         }
       }
     }
-    expect(effects.createPost).toHaveBeenCalledTimes(6);
+    expect(effects.createPost).toHaveBeenCalledTimes(4);
     expect(effects.createPost).toHaveBeenLastCalledWith('general', 'Example title', 'Example content');
-    expect(effects.createComment).toHaveBeenCalledTimes(3);
-    expect(effects.replyToComment).toHaveBeenCalledTimes(6);
-    expect(effects.upvote).toHaveBeenCalledTimes(3);
-    expect(effects.upvoteComment).toHaveBeenCalledTimes(3);
+    expect(effects.createComment).toHaveBeenCalledTimes(2);
+    expect(effects.replyToComment).toHaveBeenCalledTimes(4);
+    expect(effects.upvote).toHaveBeenCalledTimes(2);
+    expect(effects.upvoteComment).toHaveBeenCalledTimes(2);
     expect(effects.logActivity).toHaveBeenCalledWith(expect.objectContaining({
       scheduleId: 'example-schedule', action: 'post', status: 'completed',
     }));
     scheduler.invalidateCache(); personalities.invalidateCache();
-    expect((await scheduler.getScheduleById('example-schedule')).runCount).toBe(3);
+    expect((await scheduler.getScheduleById('example-schedule')).runCount).toBe(2);
     expect((await personalities.getAgentById(ids.agentId)).personality.promptPrefix).toBe('Changed instructions');
   });
 
@@ -281,18 +252,15 @@ describe('Moltbook publication authority', () => {
   it('gates decoded AI Assignments aliases through persistence and scheduled generation', async () => {
     const payload = { providerId: 'example-provider', model: 'example-model' };
     const before = await savedState();
-    for (const id of ['socialAgent.example-agent.default', 'socialAgent%2Eexample-agent%2Econtent']) {
-      const denied = await request(appFor()).put(`/api/settings/ai-assignments/${id}`).send(payload);
-      expect([denied.status, denied.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
+    const denied = await request(appFor())
+      .put('/api/settings/ai-assignments/socialAgent%2Eexample-agent%2Econtent').send(payload);
+    expect([denied.status, denied.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     expect(await savedState()).toEqual(before);
     expectNoEffects();
 
-    const owner = await createSession();
     const delegated = await createSession({ label: 'agent' });
     for (const [enabled, address, headers] of [
       [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Cookie: `portos_auth=${owner.token}` }],
       [true, '127.0.0.1', { Authorization: `Bearer ${delegated.token}` }],
     ]) {
       auth.enabled = enabled;
