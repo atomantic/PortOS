@@ -30,15 +30,18 @@ export async function enqueueVertical(historyId, ratioId) {
   const live = listJobs({ kind: VERTICAL_JOB_KIND })
     .find((j) => (j.status === 'queued' || j.status === 'running') && j.params?.verticalKey === key);
   if (live) return { jobId: live.id, position: live.position, status: live.status, deduplicated: true };
-  const item = await resolveHistoryItem(historyId);
-  const { width, height } = await probeVideoStreamInfo(resolveSourcePath(item));
-  if (isAlreadyTallEnough(width, height, ratioId)) {
-    throw new ServerError(`This clip is already as tall as ${ratioId}`, { status: 400, code: 'ALREADY_VERTICAL' });
-  }
-  const admission = enqueueJob({
-    kind: VERTICAL_JOB_KIND,
-    params: { historyId, ratio: ratioId, verticalKey: key, prompt: `Make ${ratioId} vertical copy` },
-  });
+  // Registered before any await so a concurrent identical request joins this admission.
+  const admission = (async () => {
+    const item = await resolveHistoryItem(historyId);
+    const { width, height } = await probeVideoStreamInfo(resolveSourcePath(item));
+    if (isAlreadyTallEnough(width, height, ratioId)) {
+      throw new ServerError(`This clip is already as tall as ${ratioId}`, { status: 400, code: 'ALREADY_VERTICAL' });
+    }
+    return enqueueJob({
+      kind: VERTICAL_JOB_KIND,
+      params: { historyId, ratio: ratioId, verticalKey: key, prompt: `Make ${ratioId} vertical copy` },
+    });
+  })();
   pendingAdmissions.set(key, admission);
   return admission.finally(() => pendingAdmissions.delete(key));
 }

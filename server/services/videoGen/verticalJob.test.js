@@ -35,6 +35,12 @@ describe('enqueueVertical', () => {
     expect(state.enqueued[0].params).toMatchObject({ historyId: 'v1', ratio: '9:16' });
   });
 
+  it('coalesces concurrent identical requests into one job', async () => {
+    const [a, b] = await Promise.all([enqueueVertical('v1', '9:16'), enqueueVertical('v1', '9:16')]);
+    expect(state.enqueued).toHaveLength(1);
+    expect(b).toMatchObject({ jobId: a.jobId, deduplicated: true });
+  });
+
   it('refuses an already-vertical clip with a 400', async () => {
     state.size = { width: 720, height: 1280 };
     await expect(enqueueVertical('v1', '9:16')).rejects.toMatchObject({ status: 400, code: 'ALREADY_VERTICAL' });

@@ -348,7 +348,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     modules: [
       'services/videoGen/remote.js',
       'services/videoGen/stitchVideos.js', 'services/videoGen/upscaleVideo.js', 'services/videoGen/upscaleJob.js', 'services/videoGen/topazJob.js',
-      'services/videoGen/trim.js', 'services/videoGen/handheld.js',
+      'services/videoGen/trim.js', 'services/videoGen/handheld.js', 'services/videoGen/verticalReframe.js',
       'services/videoTimeline/local.js', 'services/htmlComposition/index.js',
     ],
   },
