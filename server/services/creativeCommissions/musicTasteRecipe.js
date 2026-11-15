@@ -8,7 +8,7 @@
  */
 
 import { createHash } from 'crypto';
-import { canonicalStringify } from '../../lib/objects.js';
+import { canonicalStringify, isPlainObject as isObject } from '../../lib/objects.js';
 import {
   COMMISSION_MUSIC_TASTE_ANCHOR_MAX,
   COMMISSION_MUSIC_TASTE_PERCENT_MAX,
@@ -27,7 +27,6 @@ export const MUSIC_TASTE_FEEDBACK_TAGS = Object.freeze([
   'change-anchors',
 ]);
 
-const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
 const clampInt = (value, min, max, fallback) => Number.isInteger(value)
   ? Math.min(max, Math.max(min, value)) : fallback;
 

@@ -1,39 +1,12 @@
 // @vitest-environment node
 
 /**
- * Repo-wide guard: data-fetch polling in a view goes through `useAutoRefetch`.
- *
- * `hooks/useAutoRefetch.js` short-circuits its tick while
- * `document.visibilityState === 'hidden'` and re-fires once on the way back to
- * visible. A hand-rolled `useEffect` + `setInterval` does neither, so it keeps
- * hitting the server from a tab nobody is looking at — and PortOS is routinely
- * left open in a background tab on a second machine over the tailnet. Eleven
- * such polls had accumulated (#5697), several of which fanned out to `pm2
- * jlist` or Ollama on every tick.
- *
- * The rule is deliberately blunt: **no `setInterval` at all** under
- * `src/components/` or `src/pages/`, except for an allowlisted file carrying a
- * one-line reason. A rule that tried to tell "a poll that fetches" from "a
- * timer that ticks a clock" by looking at the callback body would have to
- * recognize every API-call spelling in the tree, and would miss the next one.
- * Banning the primitive outright and making the exceptions explicit is both
- * simpler and stricter: a genuine local timer costs one allowlist line, and
- * writing that line is the moment someone asks whether the hook fits.
- *
- * `src/hooks/` and `src/lib/` are out of scope — that is where a shared timer
- * primitive (`useTimeTick`, `useCooldownTick`, the metronome transports, and
- * `useAutoRefetch` itself) is supposed to live.
- *
- * ## What this guard CANNOT see
- *
- * It is a source grep, not an AST pass:
- *   - A poll built on `setTimeout` that re-arms itself is invisible.
- *   - A poll moved into a helper module outside the two scanned directories is
- *     invisible (that is also the sanctioned escape hatch, so this is by design).
- *   - `setInterval` written only inside a comment or a string counts.
- *   - It cannot tell an allowlisted file's *sanctioned* interval from a second,
- *     unsanctioned one added to the same file later. Allowlist entries are
- *     therefore meant to stay rare and small.
+ * Rule: No `setInterval` under `src/components/` or `src/pages/` unless allowlisted; use `useAutoRefetch` (`hooks/useAutoRefetch.js`) for data-fetch polling.
+ * Fix: Replace `useEffect` + `setInterval` with `useAutoRefetch`, or move genuine timer primitives to `src/hooks/` / `src/lib/`.
+ * What this guard cannot see:
+ *   - Self-rearming `setTimeout` polls or polls moved into helper modules outside the two scanned directories.
+ *   - `setInterval` inside a comment or string still counts.
+ *   - Cannot distinguish an allowlisted file's sanctioned interval from a second unsanctioned one added later.
  */
 
 import { describe, it, expect } from 'vitest';

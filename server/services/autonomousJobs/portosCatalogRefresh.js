@@ -7,6 +7,7 @@
  */
 
 import { PORTOS_APP_ID } from '../../lib/appIdentity.js'
+import { isPlainObject as isObject } from '../../lib/objects.js'
 import { DEFAULT_TASK_PROMPTS, promptMatchesShippedDefault } from '../taskPromptDefaults.js'
 import { isValidCron } from '../eventScheduler.js'
 import { DAY, WEEK } from './constants.js'
@@ -49,7 +50,6 @@ export const PORTOS_CATALOG_REFRESH_JOB = Object.freeze({
   updatedAt: null
 })
 
-const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value)
 
 /** Map the task scheduler's cadence vocabulary to autonomous-job fields. */
 export function catalogRefreshJobScheduleFields(task = {}, appOverride = {}) {

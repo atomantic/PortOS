@@ -1,54 +1,9 @@
 /**
- * Repo-wide guard: a route handler must validate the `req.body` or `req.query` it reads.
- *
- * Root `AGENTS.md` says every route input is validated through
- * `lib/validation.js`, but a hand-rolled `if (!path) throw …` is easy to write
- * and nothing noticed (#9950): ~50 POST/PUT/PATCH handlers read `req.body` with
- * no schema, so a wrong-typed field (`path: {}`, `enabled: "yes"`) reached the
- * service layer instead of bouncing as a 400.
- *
- * ## The rule
- *
- * Every `router.post|put|patch(…)` call under `server/routes/` (and the
- * vendored toolkit's `lib/aiToolkit/routes/`, plus the CoS runner's own
- * `app.post|put|patch(…)` in `cos-runner/index.js`) whose handler text mentions
- * `req.body` must also contain one of
- *
- *   - `validateRequest(schema, …)` (the default — throws the 400),
- *   - `validate(schema, …)` (the non-throwing sibling providers/social routes use),
- *   - `parseBody(schema, …)` (the toolkit prompts router's local wrapper over `validate`), or
- *   - `<name>Schema….safeParse(…)` / `<name>Schema….parse(…)` (the CoS runner's shape:
- *     it is a separate process, so it answers its own `{ error }` 400).
- *
- * ## Allowlist
- *
- * `ALLOWED_UNVALIDATED` holds the handlers that are exempt, each with a
- * one-line reason. It may only SHRINK: the test fails when an entry names a
- * handler that no longer exists or now validates, so a fixed handler is pruned
- * here in the same change. A genuinely new violation is a bug to fix with a
- * schema in `lib/validation.js`, not an entry to add.
- *
- * ## What this guard CANNOT see
- *
- * It is a lexer-assisted source scan (`lib/sourceScan.js`), not an AST pass.
- * It checks that the validation call's DATA argument carries `req.body` (or a
- * name assigned from it, incl. a `...rest` copy), so validating `req.params` while
- * reading `req.body` raw is flagged. It cannot see a body validated field-by-field
- * through a helper. It does not follow a handler delegated to a named function declared elsewhere;
- * and it only sees `router.<verb>(…)` call sites (not `router.route(…).post`).
- * The toolkit cannot import `lib/validation.js` (self-contained), so its schemas
- * live in `lib/aiToolkit/validation.js`; the runner's are `cos-runner/requestSchemas.js`.
- *
- * ## Query strings (#10024)
- *
- * The same rule applies to `req.query` on `get|post|put|patch|delete` handlers in
- * the same trees: the validation call's data argument must be the query object
- * (or a name assigned from it, including a `...rest` copy), not one field.
- * `parsePagination(req.query)` only clamps limit/offset, so it does not count.
- * `UNVALIDATED_QUERY_BASELINE` is the burn-down of handlers that already read
- * `req.query` without that call. It may only SHRINK — delete a line when the
- * handler validates or disappears. A new reader gets a schema, not a new line.
- * The lexer limits above apply to this scan too.
+ * Rule: Every route handler reading `req.body` or `req.query` must validate it with `validateRequest`, `validate`, `parseBody`, or `…Schema.safeParse/parse` (see root `AGENTS.md`).
+ * Fix: Add a Zod schema in `lib/validation.js` (or `lib/aiToolkit/validation.js` / `cos-runner/requestSchemas.js`) and pass `req.body` / `req.query` to `validateRequest(schema, …)`; prune resolved entries from `ALLOWED_UNVALIDATED` / `UNVALIDATED_QUERY_BASELINE`.
+ * What this guard cannot see:
+ *   - Lexer-assisted scan (`lib/sourceScan.js`): cannot see field-by-field validation in a helper, handlers delegated to a named function, or `router.route(…).post(…)`.
+ *   - `parsePagination(req.query)` only clamps limit/offset and does not count as validation.
  */
 
 import { describe, it, expect } from 'vitest';

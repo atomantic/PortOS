@@ -394,7 +394,7 @@ being released. See [GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md).
 
 ## API Documentation
 
-See [API.md](./API.md) for the complete REST API and WebSocket event reference.
+See [API.md](./API.md) for API conventions and the route-domain index; the complete endpoint list is the API Explorer (`/api-reference/catalog`).
 
 ## Reporting Bugs / Proposing Features
 

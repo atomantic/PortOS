@@ -1,75 +1,14 @@
 // @vitest-environment node
 
 /**
- * Repo-wide guard: `hooks/useMounted.js` is the only mounted-guard ref.
- *
- * Two rules, one bug class.
- *
- * ## 1. A mounted-guard ref must re-arm itself on mount
- *
- * The broken shape is a ref seeded `useRef(true)` whose ONLY assignment is
- * `false` in an effect cleanup:
- *
- *   const mountedRef = useRef(true);
- *   useEffect(() => () => { mountedRef.current = false; }, []);   // ← no setup body
- *
- * It reads as correct, and it is — in production. But the app runs under
- * `React.StrictMode` (`client/src/main.jsx`), and React's dev build mounts every
- * component as setup → cleanup → setup on the SAME instance. Refs survive that
- * cycle, so the cleanup flips the flag to `false` and nothing ever flips it back:
- * every `if (mountedRef.current) setX(...)` in the component is dead for the rest
- * of the dev session. That shipped as two user-visible freezes — MusicGenPanel
- * stuck on "Loading generators…" forever, and every `useAsyncAction` button stuck
- * in its disabled/spinner state after one click (#3264).
- *
- * The rule is deliberately shape-based rather than name-based — a ref called
- * `editorMountedRef` carries the identical bug, and one of the sites this guard
- * was written for was named exactly that.
- *
- * ## 2. Nothing may hand-roll the guard at all, even correctly
- *
- * `#3264` fixed fourteen sites that hand-rolled the guard *wrong*; thirteen more
- * hand-rolled it *right* and were therefore invisible to rule 1. Those thirteen
- * were the supply line: copying one of them and dropping the setup line
- * reproduces #3264 exactly, and several carried multi-line comments re-deriving
- * the StrictMode hazard from first principles — evidence the hazard was being
- * rediscovered per site instead of read off the hook name. So rule 2 rejects the
- * correct hand-roll too (#3266), leaving `useMounted()` as the only spelling.
- *
- * Rule 2 keys on the *behavior* — one effect that raises a `useRef(true)` and then
- * lowers it — not on the hook's characters. A rule that matched the body verbatim
- * would be defeated by any re-spelling (`||=`, a concise cleanup arrow, a non-empty
- * dep array, a `clearTimeout` next to the flag), and the last of those is exactly
- * the form `Ask.jsx` and `ReactionTimeRunner` were in before #3266. The fix there
- * is the general one: the real cleanup moves to its own effect, and only the ref
- * bookkeeping becomes `useMounted()`.
- *
- * ## What this guard CANNOT see
- *
- * It is a source grep, not a scope-aware AST pass, so these semantically identical
- * shapes slip through. They are listed so the next person extending it knows where
- * the floor is rather than trusting a green run too far:
- *
- *   - `let`/`var` declarations (the pattern hardcodes `const`).
- *   - A non-literal seed: `const INIT = true; const r = useRef(INIT)`.
- *   - Two components in ONE file where A is correct and B is broken — rule 1's scan
- *     is file-scoped, so A's `= true` satisfies B. (Rule 2 is per-effect, so A's
- *     effect can't vouch for B's.)
- *   - A ref created in one file and lowered in another (a hook returning its ref to
- *     a caller that writes `ref.current = false`).
- *   - Aliasing (`const g = mountedRef; g.current = false`), computed access
- *     (`ref['current']`), or assignment funneled through a setter function.
- *   - Anything lexical. There is no comment/string/regex-literal stripping, so an
- *     assignment written only inside a comment counts, and — the other direction —
- *     an unbalanced `(` or `)` inside a string, comment, or regex literal skews
- *     rule 2's paren walk and can truncate the effect it was reading. Both are
- *     pinned by fixtures below so the boundary is executable rather than a claim.
- *   - Rule 2 requires the raise and the lower in the SAME `useEffect` call. Split
- *     across two effects, or funneled through a helper the effect calls, it reads
- *     as ordinary ref use and only rule 1 applies.
- *
- * Tightening any of these means moving to an AST pass; the shapes above are all
- * unusual enough in this codebase that the grep earns its keep as-is.
+ * Rule: Use `hooks/useMounted.js` instead of hand-rolling a `useRef(true)` mounted-guard ref (StrictMode double-mounts leave un-rearmed refs stuck `false`).
+ * Fix: Replace the `useRef(true)` + `useEffect` cleanup with `useMounted()`, moving any other cleanup into its own `useEffect`.
+ * What this guard cannot see:
+ *   - `let`/`var` declarations, non-literal seeds (`useRef(INIT)`), or refs lowered in another file.
+ *   - Two components in one file where A re-arms and B does not (rule 1 is file-scoped).
+ *   - Aliasing (`const g = mountedRef`), computed access (`ref['current']`), or assignments in helpers.
+ *   - Comments/strings/regexes are not stripped: comments count as assignments, and unbalanced parens skew rule 2's walk.
+ *   - Raise and lower split across two `useEffect` calls bypasses rule 2.
  */
 
 import { describe, it, expect } from 'vitest';

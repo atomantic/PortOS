@@ -1,24 +1,8 @@
 /**
- * Repo-wide guard: a negative proof may not rest on a real sleep.
- *
- *   await new Promise((r) => setTimeout(r, 30));
- *   expect(writeMock).not.toHaveBeenCalled();
- *
- * That passes whenever the handler is merely slower than the sleep — on a
- * loaded CI worker the asserted-absent call lands after the assertion, so the
- * test is green against the exact regression it exists to catch, while every
- * run pays the sleep (#12047). The deterministic shapes are: await the
- * handler's own completion signal (`hook.__testing.settled()` on the media-job
- * hooks), drive the clock with fake timers (`vi.advanceTimersByTimeAsync`), or
- * wait for a positive signal with `vi.waitFor` and only then assert the negative.
- *
- * ## What the scan sees
- *
- * A one-line real sleep (`await new Promise(<fn> => setTimeout(<fn>, <literal>))`)
- * followed, before the enclosing test ends and within the next few lines, by
- * `.not.toHaveBeenCalled` / `toHaveBeenCalledTimes(0)`. A sleep bound to a
- * helper (`await sleep(30)`) or a negative assertion further away is not seen;
- * the guard errs toward silence rather than guessing at intent.
+ * Rule: Negative assertions (`.not.toHaveBeenCalled` / `toHaveBeenCalledTimes(0)`) may not rest on a one-line real `setTimeout` sleep.
+ * Fix: Await the handler's completion signal, use `vi.advanceTimersByTimeAsync`, or wait for a positive signal with `vi.waitFor` first.
+ * What this guard cannot see:
+ *   - Sleeps bound to a helper (`await sleep(30)`) or negative assertions further away than a few lines.
  */
 import { existingPaths } from '../scripts/lib/trackedFiles.js';
 

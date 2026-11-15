@@ -1,42 +1,8 @@
 /**
- * Repo-wide viewport clamp on fixed-width popovers.
- *
- * `Layout`'s root shell is `w-full max-w-full overflow-x-hidden`, so an
- * absolutely-positioned panel wider than the viewport is CLIPPED, not made
- * scrollable — the overflowing edge is simply unreachable. A filter panel
- * declared `w-96` (384px) and anchored `right-3` is therefore wider than a 360px
- * phone screen, and its whole left column of controls sits permanently off the
- * left edge with nothing to scroll to (issue #5686).
- *
- * The rule: a class string that positions an element `absolute` AND fixes its
- * width at 256px or more — `w-64` and up on the numeric scale, or the same size
- * written as an arbitrary `w-[19rem]` / `w-[384px]` — must also carry a clamp
- * that is *relative to the available width* and applies at the BASE viewport.
- * The tree's canonical form is `max-w-[calc(100vw-1rem)]`
- * (`components/pipeline/arcCanvas/VerifyScopeTooltip.jsx`), which keeps a fixed
- * 8px gutter at every width rather than a proportional one that collapses on
- * small screens; `max-w-[90vw]`, `max-w-full`, and `max-w-screen` also qualify.
- *
- * Both halves of that matter, and a looser "any `max-w-*` token" test would miss
- * a real bug on each: `max-w-96` / `max-w-none` / `max-w-lg` are *absolute*
- * ceilings that let the panel overflow a phone exactly as before, and a
- * variant-prefixed `sm:max-w-[calc(100vw-1rem)]` leaves the narrow viewport —
- * the only one that clips — entirely unclamped.
- *
- * Every token is read UNPREFIXED for the same reason: the base variant is the
- * phone. A responsive sidebar that reads `absolute w-[80vw] max-w-xs md:static
- * md:w-64` is correct as written — its fixed width belongs to the desktop
- * variant, where it is no longer absolute (`brain/tabs/DailyLogTab.jsx`).
- *
- * Deliberately NOT flagged:
- *  - `min-w-*` / `max-w-*` tokens, which are not a fixed width (`sm:min-w-80` on
- *    a `left-3 right-3` media overlay is correct as written).
- *  - `fixed` positioning, which escapes the shell's overflow box.
- *  - Widths below 256px, which fit inside the narrowest viewport the app
- *    targets even with an anchor offset and a gutter.
- *
- * Scoped to git-tracked non-test sources; comments are masked first so a doc
- * block quoting an example class string is documentation, not markup.
+ * Rule: An `absolute` element with a base fixed width >= 256px (`w-64`+ or equivalent `w-[…]`) must also carry an unprefixed viewport-relative clamp (`max-w-[calc(100vw-1rem)]`, `max-w-[90vw]`, `max-w-full`, or `max-w-screen`).
+ * Fix: Add `max-w-[calc(100vw-1rem)]` (or `max-w-full`) at the base viewport alongside the fixed width.
+ * What this guard cannot see:
+ *   - Scoped to git-tracked non-test sources (comments masked); `min-w-*`/`max-w-*`, `fixed`, and widths < 256px are not flagged.
  */
 
 import { describe, it, expect } from 'vitest';
