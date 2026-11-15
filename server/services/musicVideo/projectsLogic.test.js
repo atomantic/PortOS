@@ -769,6 +769,14 @@ describe('scene board operations', () => {
       expect(loaded.scenes[2].referenceImageId).toBe('x.png');
       expect(afterLoad(loaded)).toBe(loaded);
     });
+
+    it('keeps an untimed lead-in shot in place while timed shots are sorted around it', () => {
+      const { p } = timedBoard();
+      const lead = { ...p.scenes[0], sceneId: 'lead', label: 'lead', startSec: null, endSec: null };
+      const stored = { ...p, scenes: [lead, p.scenes[2], p.scenes[0], p.scenes[1]].map((s, i) => ({ ...s, order: i })) };
+      const loaded = afterLoad(stored);
+      expect(loaded.scenes.map((s) => s.startSec)).toEqual([null, 0, 4, 8]);
+    });
   });
 
   it('rejects a reorder that is not an exact permutation', () => {

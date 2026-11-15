@@ -663,16 +663,20 @@ function buildScene(input, { order }) {
 }
 
 /**
- * Stored scene order is time order: stable by startSec, untimed shots last in
- * their existing order, `order` equal to the index. Returns the SAME array when
- * it already holds that, so callers can detect a no-op by identity.
+ * Stored scene order is time order: the timed shots are stable-sorted by
+ * startSec into the slots timed shots already occupy, untimed shots (a lead-in
+ * or a not-yet-placed shot) keep their position, and `order` equals the index.
+ * Returns the SAME array when it already holds that, so callers can detect a
+ * no-op by identity.
  */
 function sceneListInTimeOrder(scenes) {
   const list = Array.isArray(scenes) ? scenes : [];
-  const key = (s) => (Number.isFinite(s?.startSec) ? s.startSec : Infinity);
-  const sorted = list.map((scene, i) => ({ scene, i })).sort((a, b) => key(a.scene) - key(b.scene) || a.i - b.i);
-  const inOrder = sorted.every(({ scene, i }, at) => i === at && scene.order === at);
-  return inOrder ? list : sorted.map(({ scene }, at) => (scene.order === at ? scene : { ...scene, order: at }));
+  const timed = list.filter((s) => Number.isFinite(s?.startSec));
+  const sortedTimed = timed.map((scene, i) => ({ scene, i })).sort((a, b) => a.scene.startSec - b.scene.startSec || a.i - b.i);
+  let next = 0;
+  const placed = list.map((scene) => (Number.isFinite(scene?.startSec) ? sortedTimed[next++].scene : scene));
+  const inOrder = placed.every((scene, at) => scene === list[at] && scene.order === at);
+  return inOrder ? list : placed.map((scene, at) => (scene.order === at ? scene : { ...scene, order: at }));
 }
 
 /**
