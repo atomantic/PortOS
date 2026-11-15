@@ -1,3 +1,4 @@
+# Bounded #16047 regeneration: cutoff 2026-11-07T00:00:00Z; Transformers 5.22.2 only; retained companion versions and artifact hashes.
 # Bounded #15988 regeneration: uv 0.13.7; cutoff 2026-11-06T00:00:00Z; complete closure constrained to retained pins.
 # Historical baseline documentation follows; older dates below predate this bounded regeneration.
 # FLUX.2 CUDA: CPython 3.11, x86_64 linux, CUDA 12.6.
@@ -1065,9 +1066,9 @@ torchvision==0.29.2 \
 tqdm==4.70.1 \
     --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73 \
     --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4
-transformers==5.22.1 \
-    --hash=sha256:bed9fd76d6f43b4a1a9fc5d0c565ace7c77edbd029784f8cbcdf772cb5e924d8 \
-    --hash=sha256:c940b4bf98de4f568723895f330ba1460a398bd83061b93b70238c3fe32e4389
+transformers==5.22.2 \
+    --hash=sha256:55f57e5cbd7c0b500b7a706daa0ecd76567b56ca139e6e02ef0bba0437e3a763 \
+    --hash=sha256:829c2820aff91730b8ec45a4b8ff4be07f586a140b68a9073998b36fa35297dc
 triton==3.8.0 \
     --hash=sha256:07a88b13e4f7e8b1769094238ab75109a5db2a8160a24ddc49c24d2efa44cb58 \
     --hash=sha256:197b0576cbcf354f27a2abdae638c72c03d93f2574844052887b0c98fd8f8e1c \
