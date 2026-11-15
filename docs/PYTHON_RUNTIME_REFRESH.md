@@ -2733,3 +2733,25 @@ version lines and their hashes changed relative to the previous lock.
 Remaining under #16047: the same Click/tqdm bump for the Pixal3D and TRELLIS.2
 Metal profiles (their lock regeneration timed out on PyPI connections), then
 Transformers 5.22.2, then Typer/Regex/Protobuf as separate slices.
+
+## Click/tqdm slice for Pixal3D and TRELLIS.2 Metal (2026-11-15, #16047)
+
+Second slice of #16047, limited to the two Apple Silicon image-to-3D Metal
+profiles: **click 8.5.0 → 8.5.1** in both and **tqdm 4.67.3 → 4.70.1** in both.
+Immutable source revisions, Transformers, Typer, Regex, the Pillow 13 override
+and every other pin are unchanged.
+
+Both profiles were recompiled with the documented command at cutoff
+`2026-11-07T00:00:00Z` under private **uv 0.8.14** (0.13.x could not reach PyPI
+on the regenerating host), constrained to the previous lock's other pins. An
+unconstrained recompile also moved `annotated-doc`, `filelock`, `packaging` and
+`scipy` hashes, so the constrained run supplied only the two entries and its
+version list was checked identical to the spliced lock: only the `click` and `tqdm` entries differ from the previous
+locks; the new wheel and sdist SHA-256 values match PyPI's JSON metadata. OSV
+returned no records for either identity (including `MAL-`). Registry
+metadata and the installer/pins contracts are the only evidence; no native
+install, Metal inference or model run was executed.
+
+Remaining under #16047: Transformers 5.22.2 across its profiles, then
+Typer 0.28.0 / Regex 2026.11.7 (Pixal/TRELLIS/H3) and Protobuf 7.36.2 (H3) as
+separate slices.

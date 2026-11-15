@@ -12,7 +12,7 @@ audioop-lts==0.2.2
 brotli==1.2.1
 certifi==2026.10.23
 charset-normalizer==3.5.2
-click==8.5.0
+click==8.5.1
 contourpy==1.4.0
 cycler==0.12.1
 diffusers==0.42.1
@@ -87,7 +87,7 @@ tokenizers==0.23.3
 tomlkit==0.14.0
 torch==2.15.0
 torchvision==0.29.2
-tqdm==4.67.3
+tqdm==4.70.1
 transformers==5.22.1
 trimesh==5.2.0
 typer==0.27.3
