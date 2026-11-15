@@ -29,12 +29,6 @@ export const CREDENTIALS = Object.freeze([
     configurePath: '/media/image?settings=1',
   }),
   Object.freeze({
-    id: 'artificial-analysis', label: 'Artificial Analysis', privateStore: true,
-    unlocks: 'Model benchmark and pricing sync.', tier: 'free',
-    getUrl: 'https://artificialanalysis.ai/', envVars: Object.freeze(['ARTIFICIAL_ANALYSIS_API_KEY']),
-    settingsPath: 'secrets.artificialAnalysis.apiKey', configurePath: '/settings/credentials',
-  }),
-  Object.freeze({
     id: 'fal', label: 'fal.ai', privateStore: true,
     unlocks: 'Video and image generation through fal.ai.', tier: 'metered',
     getUrl: 'https://fal.ai/dashboard/keys', envVars: Object.freeze(['FAL_KEY']),
