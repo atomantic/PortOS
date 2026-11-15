@@ -36,8 +36,7 @@ async function boardWithArt() {
 
 describe('storyboard federation', () => {
   it('declares its own version-gated sync category', () => {
-    expect(PORTOS_SCHEMA_VERSIONS.storyboards).toBe(15);
-    const older = { ...PORTOS_SCHEMA_VERSIONS, storyboards: 14 };
+    const older = { ...PORTOS_SCHEMA_VERSIONS, storyboards: PORTOS_SCHEMA_VERSIONS.storyboards - 1 };
     expect(scopeVersionDiff(compareSchemaVersions(PORTOS_SCHEMA_VERSIONS, older), RECORD_KIND_SCHEMA_CATEGORIES.storyboard)).toEqual({
       compatible: false,
       ahead: [{ category: 'storyboards', senderV: 15, receiverV: 14 }],

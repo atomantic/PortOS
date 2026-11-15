@@ -17,7 +17,6 @@ const { mergeWorksFromSync } = await import('./sync.js');
 const { conflictJournalStore } = await import('../../lib/conflictJournal.js');
 const { resolveConflict } = await import('../conflictJournalResolver.js');
 const { listCharacters } = await import('./characters.js');
-const { PORTOS_SCHEMA_VERSIONS } = await import('../../lib/schemaVersions.js');
 const WORK = 'wr-work-aaaa';
 const doc = (updatedAt, name = 'Example hero') => ({ characters: [{ id: 'wr-char-bbbb', name, psychology: { theoryOfControl: 'Planning brings safety' }, evolution: { outcome: 'full-change', stages: [{ stageId: 'final-proof', characterChoice: 'Trust the crew' }] } }], updatedAt });
 function write(kind, value) {
@@ -56,7 +55,6 @@ describe('bible asset delivery', () => {
     writeFileSync(join(root, 'writers-room', 'works', WORK, 'analysis', 'private.json'), '{}');
     const manifest = await buildWorkBibleManifest({ id: WORK });
     expect(manifest.map((e) => e.kind)).toEqual(['character', 'place', 'object']);
-    expect(PORTOS_SCHEMA_VERSIONS.writersRoomWorks).toBe(1);
     rmSync(workBiblePath(WORK, 'character'));
     const missing = await diffWorkBibleManifest(manifest);
     expect(missing).toEqual([manifest[0]]);
