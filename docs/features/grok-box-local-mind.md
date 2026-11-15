@@ -52,5 +52,5 @@ Apply never downloads weights. Install / start / pull stay on `/api/local-llm/in
 ## Related
 
 - [Claude Ollama](./claude-ollama.md) — local model behind the Claude Code harness (optional coding path once Ollama is up)
-- [Persistent Mind / CoS enhancement](./cos-enhancement.md)
+- [Persistent Mind / CoS enhancement](./chief-of-staff.md#hybrid-memory-search-execution-lanes-and-local-models)
 - [Product surfaces](./product-surfaces.md)

@@ -41,13 +41,10 @@ const SIZE_RATCHET_CEILINGS = {
   'STORAGE.md': 233548,
   'BACKUP.md': 103721,
   'GITHUB_ACTIONS.md': 98951,
-  'features/eidoverse.md': 95026,
   'HTML_COMPOSITIONS.md': 67233,
-  'features/beeper.md': 59578,
   'TROUBLESHOOTING.md': 51356,
   'FEDERATED_MEDIA_PROVIDERS.md': 45625,
   'QUOTA-BURN.md': 44909,
-  'features/product-surfaces.md': 44547,
 };
 
 describe('docs/README.md index coverage', () => {

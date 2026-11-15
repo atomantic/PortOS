@@ -64,3 +64,109 @@ Accepted adjustments persist via `updateProvider({ numCtx })` and call `ollamaMa
 - CoS → Mind → Context: **Operating playbook** mode selector
 - Config: `PUT /api/cos/config` with `persistentMindCapabilities.adjustLocalContext` and/or `persistentMindPlaybook`
 - CoS → Mind → Environment details (`GET /api/cos/mind/visibility`, also the wake prompt's environment snapshot): workspace diagnostics cover only the apps in the mind's managed-app access list (`persistentMindCapabilities.allowedAppIds`), or every active app when no allowlist is stored. The snapshot fits a fixed character budget in app order, so listing every app hid a granted app further down the registry and let an ungranted app's checkout mark the whole snapshot `blocked`.
+
+## Persistent Mind task filing
+
+The Persistent Mind has one explicit, default-off typed action, `cos.create-task`.
+When the grant is enabled, each wake receives a bounded server-built catalog of
+runnable apps and enabled CLI/TUI coding providers. The catalog includes each
+provider's selectable models and effort levels, and marks apps whose effective
+work tracker supports the issue-only **Plan & File Issue** workflow.
+
+The mind may select the provider, model, effort, priority, delivery mode, and PR
+completion policy per request. Implementation mode requires one of
+`review-then-merge`, `merge-on-green`, or `leave-open`; plan-only mode is only
+valid for GitHub/GitLab apps and is normalized to the existing unattended
+`plan-task --yes` no-code/no-PR contract. The queue path revalidates every choice
+after inference, so stale prompts, disabled providers, invented model ids, and
+unsupported trackers fail closed.
+
+Task model selection can be restricted in Persistent Mind Tools with an exact
+provider/model allowlist. An empty list preserves the unrestricted catalog; a
+non-empty list is applied to both the model choices sent to the mind and the
+server-side queue admission check, which supports subscription-specific or
+local-only task lanes. A removed or malformed allowlist fails closed.
+
+`GET /api/cos/mind/tools` returns the authority inventory and the managed-app
+roster. It does not list coding providers, models, or effort levels — the mind
+still receives that redacted catalog in its wake-time task prompt, and Mind
+Tools restricts models only through the task-model allowlist. Broader PortOS
+APIs remain governed by their own authenticated route contracts and are not
+silently made callable by enabling task filing.
+
+## Persistent Mind phone calls
+
+`voice.call-user` is the mind's only outward-reaching authority, and like every
+other grant it is **off by default** — an install upgrading with the mind
+already running gains nothing until the user turns it on in **Mind → Tools**.
+It lets the mind place a FaceTime Audio call to the single handle configured in
+**Settings → Voice → FaceTime Audio**. The request the model returns
+(`callRequest: { reason, openingLine }`) carries no recipient, so a confused or
+compromised turn cannot dial anyone else.
+
+The gate lives in `server/services/persistentMindCallCapability.js` and runs
+*after* inference. A call is placed only when all of these hold:
+
+| Check | Suppression reason |
+|---|---|
+| The grant is on (re-read from stored config) | `not-granted` |
+| The optional **FaceTime** feature is enabled | `feature-disabled` |
+| Voice is enabled and an identity is saved | `voice-disabled`, `identity-unconfigured` |
+| No browser tab can speak the message instead | `tab-available` |
+| The user's local time is outside voice quiet hours | `quiet-hours` |
+| No call is already up | `call-in-progress` |
+| ≥30 minutes since the last call, ≤3 calls in the last 24 h | `too-soon`, `rate-capped` |
+| A call-host tab is attached and the helper dials | `no-call-host`, `dial-failed` |
+
+The caps are counted in durable Persistent Mind state (`callHistory`), so a
+restart, a crash, or a supervisor rewire cannot hand back a fresh allowance. The
+budget is spent only on a call that actually went out. Every decision — placed
+or suppressed, and why — is appended to the trajectory as `mind.call.requested`
+plus `mind.call.placed` / `mind.call.suppressed`; the dialed handle is never
+written there. When a request is refused, the turn's reply is appended with the
+reason, so the mind cannot leave the user waiting for a phone that never rings.
+
+A placed call runs with the mind's persona and a bounded briefing of its
+trajectory, speaks the `openingLine` the moment the far end picks up, and hands
+the transcript back as a Persistent Mind message on hangup, so the next wake
+knows what was said.
+
+**Critical-notification escalation** (Settings → Voice) uses the same gate and
+the same budget, but is authorized by its own `facetime.escalateCritical`
+setting rather than by the mind's grant. When a `critical` notification is
+still unread after `facetime.escalateAfterMinutes` (default 10) and no voice
+tab is available, PortOS asks to ring the user with the notification as the
+opening line. Off by default.
+
+## Self-directed local thinking presets
+
+In the Mind settings drawer, **Models → Self-directed local thinking** lets the
+user enable `chooseThinkingPreset` and approve exact local presets. It defaults
+to off on new and upgraded installs and is independent of task-agent model
+permissions. Saving preferences and loading the catalog perform no inference.
+
+Only configured direct local API runtimes qualify. Account-backed routes,
+CLI/TUI wrappers, and unknown routes are excluded. Approval binds the preset,
+provider name, endpoint and runtime; editing these requires renewed approval.
+Removing a model, preset, or supported effort refuses the pending selection.
+
+The semantic actions `mind.thinking-presets` and
+`mind.request-thinking-preset` expose the approved catalog and a bounded
+`{ presetId, reason }` request. One request borrows a preset for the next
+self-directed wake; queued human messages and the current turn keep their own
+routes. The default profile, memories, and identity are unchanged.
+
+Only one request may be pending or active. At most three are accepted per
+rolling 24 hours, with a 30-minute gap. Admission also advances the recorded
+attempt time so a delayed wake cannot evade these limits. Cancellation, failed
+admission, interruption and restart do not refund allowance. Failed attempts
+retire the alternate and schedule an ordinary wake on the default profile.
+Existing endpoint slots, CoS capacity, autonomy and per-call budgets still gate
+every execution. No tool can extend its own session or edit these permissions.
+
+The same Models panel cancels pending requests and shows recent concise reasons
+and outcomes. Disabling the grant cancels the pending request; revoking it during
+execution refuses further provider calls. Execution receipts in Sessions show
+the actual route and outcome without exposing hidden reasoning. Durable request
+records live alongside the existing machine-local mind state; migration 348
+preserves prior profiles, grants, and counters.
