@@ -1,11 +1,11 @@
 /**
- * The names a module namespace exposes, derived from source instead of by
- * importing it. `Object.keys(await import(file))` is the ground truth for what a
- * barrel exports, but importing `cos.js` transforms its entire service graph
- * (seconds, on every always-run guard). ES module export forms are fully static,
- * so a parse yields the same key set: declarations, `export { a as b }` with or
- * without `from`, `export * as ns`, `export default`, and `export * from`
- * followed recursively.
+ * The names a module namespace exposes, derived from source instead of by importing it.
+ *
+ * `Object.keys(await import(file))` is the ground truth for what a barrel exports,
+ * but importing `cos.js` transforms its entire service graph (seconds, on every
+ * always-run guard). ES module export forms are fully static, so a parse yields
+ * the same key set: declarations, `export { a as b }` with or without `from`,
+ * `export * as ns`, `export default`, and `export * from` followed recursively.
  *
  * A star re-export of a bare package cannot be followed from here, so it throws
  * rather than leaving a hole a guard would read as "nothing forwarded".
