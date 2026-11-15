@@ -1,8 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { expectAuthorizedWorkflows, expectRemoteRefusal } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
@@ -54,8 +52,6 @@ vi.mock('../services/writersRoom/syncedReview.js', () => ({}));
 vi.mock('../services/writersRoom/promoteToPipeline.js', () => ({}));
 vi.mock('../services/catalogExtraction.js', () => ({}));
 
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
-import { createSession } from '../services/auth.js';
 import writersRoomRoutes from './writersRoom.js';
 import cosScheduleRoutes from './cosScheduleRoutes.js';
 const maintenance = vi.hoisted(() => ({
@@ -64,104 +60,35 @@ const maintenance = vi.hoisted(() => ({
 vi.mock('../services/maintenanceRun.js', () => maintenance);
 vi.mock('../services/taskSchedule.js', () => ({}));
 
+// The refusal/principal matrix lives in services/authGate.test.js and
+// hostControlCoverage.test.js; this keeps one refusal before the provider
+// dispatch and the authorized workflow for each Writers Room and maintenance write.
+const mounts = [['/api/writers-room', writersRoomRoutes], ['/api/cos', cosScheduleRoutes]];
 const work = '/api/writers-room/works/wr-work-example';
-const operations = [
-  [`${work}/analysis`, { kind: 'evaluate' }, effects.analysis, 201],
-  [`${work}/polish/start`, { cycles: 1 }, effects.polish, 200],
-  [`${work}/live-suggest`, { before: 'Example draft' }, effects.continuation, 200],
-  [`${work}/cd-bridge/suggest`, { before: 'Example draft' }, effects.bridge, 200],
-  [`${work}/characters/wr-char-example/augment`,
-    { fields: ['want'], providerId: 'example-cli', model: 'example-model' }, effects.augment, 200],
+const augmentBody = { fields: ['want'], providerId: 'example-cli', model: 'example-model' };
+const stagePins = { providerId: 'example-cli', model: 'example-model', effort: 'medium' };
+const workflows = [
+  ['post', `${work}/analysis`, { kind: 'evaluate' }, effects.analysis, 201],
+  ['post', `${work}/polish/start`, { cycles: 1 }, effects.polish, 200],
+  ['post', `${work}/live-suggest`, { before: 'Example draft' }, effects.continuation, 200],
+  ['post', `${work}/cd-bridge/suggest`, { before: 'Example draft' }, effects.bridge, 200],
+  ['post', `${work}/characters/wr-char-example/augment`, augmentBody, effects.augment, 200],
+  ['post', `${work}/polish/cancel`, {}, effects.cancel, 200],
+  ['patch', work, { title: 'Example title' }, effects.updateWork, 200],
+  ['patch', '/api/cos/schedule/maintenance-runs/example-run/steps/example-stage', stagePins, maintenance.updateMaintenanceStep, 200],
 ];
-const appFor = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/writers-room', writersRoomRoutes);
-  app.use('/api/cos', cosScheduleRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
-const call = (app, [path, body], headers = {}) => {
-  const pending = request(app).post(path);
-  for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return pending.send(body);
-};
-const expectNoEffects = () => {
-  for (const effect of Object.values(effects)) expect(effect).not.toHaveBeenCalled();
-};
 beforeEach(() => { vi.clearAllMocks(); auth.enabled = false; });
 
-describe('Writers Room authoring authority', () => {
-  it('refuses a remote caller before reads, records or provider dispatch', async () => {
-    for (const operation of operations) {
-      const response = await call(appFor(), operation);
-      expect([response.status, response.body.code], operation[0]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    expectNoEffects();
+describe('Writers Room and deferred maintenance writes behind the default-deny gate (#16114)', () => {
+  it('refuses a remote caller before records or provider dispatch', async () => {
+    await expectRemoteRefusal(mounts, ['post', `${work}/analysis`, { kind: 'evaluate' }, effects.analysis]);
+    // A pending automatic dispatch must not change either.
+    await expectRemoteRefusal(mounts, ['patch', '/api/cos/schedule/maintenance-runs/example-run/steps/example-stage', stagePins, maintenance.updateMaintenanceStep]);
   });
 
-  it('preserves local and delegated agent workflows and provider selection', async () => {
-    const agent = await createSession({ label: 'agent' });
-    for (const [enabled, address, headers] of [
-      [false, '127.0.0.1', {}],
-      [true, '127.0.0.1', { Authorization: `Bearer ${agent.token}` }],
-    ]) {
-      auth.enabled = enabled;
-      for (const operation of operations) {
-        const response = await call(appFor(address), operation, headers);
-        expect(response.status, `${operation[0]}: ${JSON.stringify(response.body)}`).toBe(operation[3]);
-      }
-    }
-    for (const [, , effect] of operations) expect(effect).toHaveBeenCalledTimes(2);
-    expect(effects.augment).toHaveBeenLastCalledWith('wr-work-example', 'wr-char-example', operations[4][1]);
-  });
-
-  it('keeps remote reads open, refuses remote record edits and cancellation, and applies them locally', async () => {
-    const remote = appFor();
-    expect((await request(remote).get(`${work}/analysis`)).status).toBe(200);
-    for (const response of [
-      await request(remote).patch(work).send({ title: 'Example title' }),
-      await call(remote, [`${work}/polish/cancel`, {}]),
-    ]) expect([response.status, response.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    expect(effects.updateWork).not.toHaveBeenCalled();
-    expect(effects.cancel).not.toHaveBeenCalled();
-    const local = appFor('127.0.0.1');
-    expect((await request(local).patch(work).send({ title: 'Example title' })).status).toBe(200);
-    expect((await call(local, [`${work}/polish/cancel`, {}])).status).toBe(200);
-    expect(effects.updateWork).toHaveBeenCalledOnce();
-    expect(effects.listAnalyses).toHaveBeenCalledOnce();
-    expect(effects.cancel).toHaveBeenCalledOnce();
-    for (const [, , effect] of operations) expect(effect).not.toHaveBeenCalled();
-  });
-});
-
-
-describe('Deferred maintenance stage authority', () => {
-  const path = '/api/cos/schedule/maintenance-runs/example-run/steps/example-stage';
-  const pins = { providerId: 'example-cli', model: 'example-model', effort: 'medium' };
-  it('refuses remote edits before changing a pending automatic dispatch', async () => {
-    const response = await request(appFor()).patch(path).send(pins);
-    expect([response.status, response.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    expect(maintenance.updateMaintenanceStep).not.toHaveBeenCalled();
-  });
-  it('preserves local and delegated-agent provider edits', async () => {
-    const agent = await createSession({ label: 'agent' });
-    for (const [enabled, address, headers] of [
-      [false, '127.0.0.1', {}],
-      [true, '127.0.0.1', { Authorization: `Bearer ${agent.token}` }],
-    ]) {
-      auth.enabled = enabled;
-      const pending = request(appFor(address)).patch(path);
-      for (const [key, value] of Object.entries(headers)) pending.set(key, value);
-      const response = await pending.send(pins);
-      expect(response.status).toBe(200);
-      expect(response.body.run.steps[0]).toMatchObject(pins);
-    }
-    expect(maintenance.updateMaintenanceStep).toHaveBeenCalledTimes(2);
-    expect(maintenance.updateMaintenanceStep).toHaveBeenLastCalledWith('example-run', 'example-stage', pins);
+  it('still runs every write for a local operator and a delegated agent session', async () => {
+    await expectAuthorizedWorkflows({ auth, mounts, workflows });
+    expect(effects.augment).toHaveBeenLastCalledWith('wr-work-example', 'wr-char-example', augmentBody);
+    expect(maintenance.updateMaintenanceStep).toHaveBeenLastCalledWith('example-run', 'example-stage', stagePins);
   });
 });

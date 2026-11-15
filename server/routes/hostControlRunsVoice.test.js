@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { asyncHandler, errorMiddleware, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { callRoute, hostControlApp } from './hostControlTestHarness.js';
 
 const auth = vi.hoisted(() => ({ enabled: false, session: false }));
 vi.mock('../services/auth.js', () => ({
@@ -73,7 +72,7 @@ vi.mock('../services/voice/captureSession.js', () => ({
   recordUtterance: vi.fn(), setCaptureStateListener: vi.fn(), startCapture: vi.fn(),
 }));
 
-import { authGate, hostControlRouteGate, socketAuthGate } from '../services/authGate.js';
+import { socketAuthGate } from '../services/authGate.js';
 import { createRunsRoutes } from '../lib/aiToolkit/routes/runs.js';
 import paletteRoutes from './palette.js';
 import { registerVoiceHandlers } from '../sockets/voice.js';
@@ -87,18 +86,13 @@ import { generateImage } from '../services/imageGen/index.js';
 const runner = {
   createRun: vi.fn(), executeCliRun: vi.fn(), executeTuiRun: vi.fn(), executeApiRun: vi.fn(),
 };
-const appFor = (address) => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/runs', createRunsRoutes(runner, { asyncHandler, ServerError }));
-  app.use('/api/palette', paletteRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
+const mounts = [
+  ['/api/runs', createRunsRoutes(runner, { asyncHandler, ServerError })],
+  ['/api/palette', paletteRoutes],
+];
+// This suite fakes the whole auth service (a session flag), so it drives the
+// harness's app and request helpers directly rather than its principal loop.
+const send = async (address, path, body) => callRoute(await hostControlApp(address, mounts), ['post', path, body]);
 const runBody = { providerId: 'example-provider', prompt: 'Fix the example test', workspacePath: '/example/repo' };
 // [tool, args, the host effect it must not reach without authority]
 const hostTools = [
@@ -141,7 +135,7 @@ beforeEach(() => {
 
 describe('Runs and palette host authority (#8834)', () => {
   it('refuses remote password-free Runs before creating metadata or resolving any runner/fallback', async () => {
-    const response = await request(appFor('192.0.2.10')).post('/api/runs').send(runBody);
+    const response = await send('192.0.2.10', '/api/runs', runBody);
     expect(response.status).toBe(403);
     expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
     for (const sink of Object.values(runner)) expect(sink).not.toHaveBeenCalled();
@@ -152,7 +146,7 @@ describe('Runs and palette host authority (#8834)', () => {
     for (const address of ['127.0.0.1', '192.0.2.10']) {
       auth.enabled = address !== '127.0.0.1';
       auth.session = auth.enabled;
-      expect((await request(appFor(address)).post('/api/runs').send(runBody)).status).toBe(202);
+      expect((await send(address, '/api/runs', runBody)).status).toBe(202);
     }
     const sink = { cli: runner.executeCliRun, tui: runner.executeTuiRun, api: runner.executeApiRun }[type];
     expect(sink).toHaveBeenCalledTimes(2);
@@ -161,15 +155,15 @@ describe('Runs and palette host authority (#8834)', () => {
   });
 
   it.each(hostTools)('protects palette %s from a remote caller forging authority, allowing local/session', async (name, args, effect) => {
-    const response = await request(appFor('192.0.2.10')).post(`/api/palette/action/${name}`)
-      .send({ args: { ...args, hasHostControl: true }, hasHostControl: true });
+    const response = await send('192.0.2.10', `/api/palette/action/${name}`,
+      { args: { ...args, hasHostControl: true }, hasHostControl: true });
     expect(response.status).toBe(403);
     expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
     expectNoHostEffects();
     for (const address of ['127.0.0.1', '192.0.2.10']) {
       auth.enabled = address !== '127.0.0.1';
       auth.session = auth.enabled;
-      expect((await request(appFor(address)).post(`/api/palette/action/${name}`).send({ args })).status).toBe(200);
+      expect((await send(address, `/api/palette/action/${name}`, { args })).status).toBe(200);
     }
     expect(effect).toHaveBeenCalledTimes(2);
   });
@@ -180,11 +174,8 @@ describe('Runs and palette host authority (#8834)', () => {
         await expect(dispatchTool(name, { ...args, hasHostControl: true }, ctx)).rejects.toMatchObject({ code: 'HOST_CONTROL_FORBIDDEN' });
       }
     }
-    // The palette action endpoint is a POST, so the default-deny write policy
-    // (#16018) refuses even a read tool to a remote password-free caller.
-    const remote = await request(appFor('192.0.2.10')).post('/api/palette/action/pm2_status').send({});
-    expect([remote.status, remote.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    expect((await request(appFor('127.0.0.1')).post('/api/palette/action/pm2_status').send({})).status).toBe(200);
+    // A read tool still runs for a local caller; the remote refusal is the default-deny write gate.
+    expect((await send('127.0.0.1', '/api/palette/action/pm2_status', {})).status).toBe(200);
     expectNoHostEffects();
   });
 });

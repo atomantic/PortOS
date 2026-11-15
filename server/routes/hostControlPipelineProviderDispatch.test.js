@@ -1,8 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import express from 'express';
 import { EventEmitter } from 'node:events';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { callRoute, expectRemoteRefusal, hostControlApp } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
@@ -72,31 +70,15 @@ vi.mock('../services/pipeline/seriesCanon.js', async (importOriginal) => ({
   getSeriesCanon: vi.fn(async () => ({ characters: [] })),
 }));
 
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import pipelineRoutes from './pipeline/index.js';
 import { attachClient, isReverseOutlineActive } from '../services/pipeline/reverseOutline.js';
 
+const mounts = [['/api/pipeline', pipelineRoutes]];
 const operations = [
   [`/api/pipeline/series/${SERIES_ID}/reverse-outline/generate`, { providerId: cliProvider.id, force: true }],
   [`/api/pipeline/series/${SERIES_ID}/arc/generate`, { providerOverride: cliProvider.id }],
 ];
-const appFor = (address) => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/pipeline', pipelineRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
-const post = (app, [path, body], headers = {}) => {
-  const pending = request(app).post(path);
-  for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return pending.send(body);
-};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -105,12 +87,10 @@ beforeEach(() => {
 
 describe('Pipeline generation never reaches a CLI provider for unauthorized callers (#10907)', () => {
   it('refuses a remote caller before the provider sink', async () => {
-    for (const operation of operations) {
-      const remote = await post(appFor('192.0.2.10'), operation);
-      expect([remote.status, remote.body.code], operation[0]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    // An in-flight reverse-outline run starts asynchronously; give it a turn to
-    // reach the sink if the gate had let it through.
+    // The reverse-outline run starts asynchronously; the harness's effect check
+    // runs right after the 403, so give a leaked run a turn to reach the sink first.
+    const [path, body] = operations[0];
+    await expectRemoteRefusal(mounts, ['post', path, body, sink.runPromptThroughProvider]);
     await new Promise((resolve) => setImmediate(resolve));
     expect(sink.runPromptThroughProvider).not.toHaveBeenCalled();
   });
@@ -124,7 +104,7 @@ describe('Pipeline generation never reaches a CLI provider for unauthorized call
       auth.enabled = enabled;
       for (const operation of operations) {
         sink.runPromptThroughProvider.mockClear();
-        const response = await post(appFor(address), operation, headers);
+        const response = await callRoute(await hostControlApp(address, mounts), ['post', ...operation], headers);
         expect(response.status, `${operation[0]}: ${JSON.stringify(response.body)}`).toBe(200);
         if (operation[0].includes('/reverse-outline/')) {
           // A provider call is not completion: persistence is still in flight.
