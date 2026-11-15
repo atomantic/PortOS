@@ -3,7 +3,7 @@
 //
 // `pullUniverseCanonReferences(universe, existingReferences)` (#8978) maps a linked universe's
 // characters/places/objects to visual-spec references (character/set/prop roles), skipping images
-// already present and capping at `MUSIC_VIDEO_MAX_REFERENCES` (24, mirrors the server schema). Returns
+// already present and capping at `MUSIC_VIDEO_MAX_REFERENCES` (500, mirrors the server schema). Returns
 // `{ next, added, skipped }`; the caller persists `next` via the ordinary visualSpec PATCH. Used by
 // `components/musicVideo/VisualSpecPanel.jsx`. (The style snapshots are derived server-side, #9105.)
 //
@@ -16,7 +16,8 @@
 
 import { uuidv4 } from './uuid.js';
 
-export const MUSIC_VIDEO_MAX_REFERENCES = 24;
+export const MUSIC_VIDEO_MAX_REFERENCES = 500;
+export const MUSIC_VIDEO_MAX_SUBJECTS = 500;
 
 // Canon kind → visual-spec reference role (server/lib/musicVideoValidation.js
 // MUSIC_VIDEO_REFERENCE_ROLES). Characters are the obvious "character" role;

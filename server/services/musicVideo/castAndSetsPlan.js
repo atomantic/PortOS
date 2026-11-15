@@ -41,6 +41,7 @@
  * its prompt. A code-only project plans no images at all.
  */
 
+import { MUSIC_VIDEO_MAX_SUBJECTS } from '../../lib/musicVideoLimits.js';
 import { FACE_SHEET_ANGLE_TEMPLATE, FACE_SHEET_TEMPLATE_INSTRUCTION } from '../../lib/faceSheetAngleTemplate.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { heightScaleLine, resolveHeight } from '../../lib/characterHeight.js';
@@ -51,6 +52,7 @@ import { peopleLightLine } from '../../lib/musicVideoSnapshotLight.js';
 import { CAST_SETS_SUBJECT_PREFIX, fixedCasting, fixedSupportingCast, formSubjects, leadingAge, musicVideoLipSyncs, songSections, subjectNameParts } from './castAndSetsDirection.js';
 
 export const CAST_SETS_IMAGE_SIZE = Object.freeze({ width: 1536, height: 1024 });
+// Autopilot's own planning budgets: a director adding items by hand is bound only by the per-video limits.
 const MAX_REFERENCES = 24;
 const MAX_SUBJECTS = 24;
 export const CAST_SETS_REF_PREFIX = 'mvr-cs-';
@@ -721,5 +723,5 @@ export function castAndSetsSubjects(project, stage) {
       if (prior?.kind !== s.kind) return s;
       return { ...s, ...(prior.ingredientId ? { ingredientId: prior.ingredientId } : {}), ...(prior.castForm ? { castForm: prior.castForm } : {}), ...(prior.localOnly ? { localOnly: true } : {}), ...(typeof prior.active === 'boolean' ? { active: prior.active } : {}) };
     });
-  return [...authored, ...fresh].slice(0, MAX_SUBJECTS);
+  return [...authored, ...fresh.slice(0, MAX_SUBJECTS)].slice(0, MUSIC_VIDEO_MAX_SUBJECTS);
 }
