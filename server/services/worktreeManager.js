@@ -2351,13 +2351,10 @@ export async function reapMergedWorktrees(sourceWorkspace, {
           && await deleteCompletedLocalBranch(sourceWorkspace, branchName, wt.head);
         if (branchDeleted && appId) {
           const { recordHeldCheckoutRetirement } = await import('./branchReconcileOutcome.js');
-          const recorded = await recordHeldCheckoutRetirement(appId, {
+          await recordHeldCheckoutRetirement(appId, {
             path: wt.path, branch: branchName, head: wt.head, branchDeleted: true,
             ...(checkoutIdentity && { checkoutIdentity }),
-          }).then(outcome => outcome?.retired?.some(row => row.path === wt.path && row.branch === branchName
-            && row.head === wt.head && row.branchDeleted === true && row.archiveDir == null
-            && (!checkoutIdentity || row.checkoutIdentity === checkoutIdentity)) === true, () => false);
-          if (!recorded) { hold('retirement-receipt-unverified'); return; }
+          }).catch(error => console.error(`❌ Retirement history not recorded for ${branchName}: ${error.message}`));
         }
         reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted: Boolean(branchDeleted) });
         if (!branchDeleted) hold('branch-ref-changed-or-new-holder');

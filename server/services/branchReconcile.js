@@ -1624,29 +1624,21 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
     const app = await getAppById(appId);
     if (!app?.repoPath || resolve(app.repoPath) !== resolve(repoPath)) return { ok: false, reason: 'retirement-receipt-scope-unavailable' };
   }
-  let receiptFailed = false;
   const deleted = await deleteCompletedLocalBranch(repoPath, b.branch, expectedHead, {
+    // Display history only: a failed write never fails a completed removal.
     onRetired: async () => {
       if (!appId) return;
-      try {
-        const { recordHeldCheckoutRetirement } = await import('./branchReconcileOutcome.js');
-        const absent = await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${b.branch}`], repoPath, { ignoreExitCode: true });
-        if (absent.exitCode !== 1) throw new Error('retirement-branch-recreated');
-        const outcome = await recordHeldCheckoutRetirement(appId, {
-          ...(b.worktreePath && { path: b.worktreePath }),
-          ...(checkoutIdentity && { checkoutIdentity }),
-          branch: b.branch, head: expectedHead, branchDeleted: true,
-        });
-        const wantedPath = b.worktreePath || null;
-        if (!outcome?.retired?.some(row => (row.path || null) === wantedPath && row.branch === b.branch && row.head === expectedHead
-          && row.branchDeleted === true && row.archiveDir == null)) throw new Error('retirement-receipt-unverified');
-      } catch (error) {
-        receiptFailed = true;
-        throw error;
-      }
+      const absent = await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${b.branch}`], repoPath, { ignoreExitCode: true });
+      if (absent.exitCode !== 1) return;
+      const { recordHeldCheckoutRetirement } = await import('./branchReconcileOutcome.js');
+      await recordHeldCheckoutRetirement(appId, {
+        ...(b.worktreePath && { path: b.worktreePath }),
+        ...(checkoutIdentity && { checkoutIdentity }),
+        branch: b.branch, head: expectedHead, branchDeleted: true,
+      }).catch(error => console.error(`❌ Retirement history not recorded for ${b.branch}: ${error.message}`));
     },
   }).catch(() => false);
-  if (!deleted) return { ok: false, reason: receiptFailed ? 'retirement-receipt-unverified' : 'branch-ref-changed-or-delete-failed' };
+  if (!deleted) return { ok: false, reason: 'branch-ref-changed-or-delete-failed' };
   return { ok: true, prepared };
 }
 
@@ -1719,18 +1711,14 @@ const isStillDetachedOnMerged = async (repoPath, treePath, defaultBranch) => {
 };
 
 /**
- * Settle a removed detached checkout with a checkout-only receipt: it has no
- * branch, so the receipt must not claim one was deleted. With a managed app the
- * receipt is persisted and read back; without one only a stored inventory row
- * for this exact checkout can be settled, never a fabricated receipt.
+ * Best-effort display history for a removed detached checkout: it has no
+ * branch, so the row must not claim one was deleted. Never gates the removal.
  */
 async function recordDetachedRetirement(repoPath, appId, { path, head, checkoutIdentity }) {
   const receipt = { path, head, branchDeleted: false, checkoutOnly: true, ...(checkoutIdentity && { checkoutIdentity }) };
   const outcomes = await import('./branchReconcileOutcome.js');
-  if (!appId) return outcomes.recordWorkspaceCheckoutRetirement(repoPath, receipt).then(() => true, () => false);
-  return outcomes.recordHeldCheckoutRetirement(appId, receipt).then(outcome => outcome?.retired?.some(row => row.path === path
-    && !row.branch && row.head === head && row.checkoutOnly === true && row.branchDeleted === false && row.archiveDir == null
-    && (!checkoutIdentity || row.checkoutIdentity === checkoutIdentity)) === true, () => false);
+  await (appId ? outcomes.recordHeldCheckoutRetirement(appId, receipt) : outcomes.recordWorkspaceCheckoutRetirement(repoPath, receipt))
+    .catch(error => console.error(`❌ Retirement history not recorded for ${path}: ${error.message}`));
 }
 
 /**
@@ -1825,8 +1813,8 @@ async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { active
           verifyRemoval: async holder => await verifyRemoval(holder) || await preservation.verify(holder),
         });
         if (!removed.removed) return removed;
-        return await recordDetachedRetirement(repoPath, appId, { path: tree.path, head: tree.head, checkoutIdentity })
-          ? removed : { removed: false, reason: 'retirement-receipt-unverified' };
+        await recordDetachedRetirement(repoPath, appId, { path: tree.path, head: tree.head, checkoutIdentity });
+        return removed;
       },
     });
     if (!removal.removed) {

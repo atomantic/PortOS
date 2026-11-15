@@ -2083,15 +2083,14 @@ describe('reconcile — detached-HEAD worktrees (#10825)', () => {
     expect(recordWorkspaceCheckoutRetirement).toHaveBeenCalledWith('/repo', expect.objectContaining({ path, checkoutOnly: true, branchDeleted: false }));
   });
 
-  it.each(['rejected', 'unreadback'])('keeps a removed detached tree unresolved when its receipt write is %s', async failure => {
+  it('reports a removed detached tree as cleaned when its display-history write is rejected', async () => {
     const path = '/repo/data/cos/worktrees/agent-1234abcd';
     wt.listWorktrees.mockResolvedValue([MAIN, detachedTree(path)]);
     stubGit();
-    if (failure === 'rejected') recordHeldCheckoutRetirement.mockRejectedValueOnce(new Error('synthetic receipt persistence failure'));
-    else recordHeldCheckoutRetirement.mockResolvedValueOnce({ retired: [] });
+    recordHeldCheckoutRetirement.mockRejectedValueOnce(new Error('synthetic history persistence failure'));
     const res = await reconcile('/repo', { appId: 'app-1' });
-    expect(res.cleaned).not.toContain(path);
-    expect(res.detachedWorktrees).toContainEqual(expect.objectContaining({ path, reason: 'retirement-receipt-unverified' }));
+    expect(res.cleaned).toContain(path);
+    expect(res.detachedWorktrees).not.toContainEqual(expect.objectContaining({ path }));
   });
 
   it.each([
