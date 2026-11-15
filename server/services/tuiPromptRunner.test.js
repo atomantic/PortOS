@@ -990,7 +990,9 @@ describe('executeTuiRun', () => {
       await vi.advanceTimersByTimeAsync(2000);
       expect(pty.write).toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
 
-      // Past PASTE_TO_ENTER_FALLBACK_MS (3500) → '\r' submitted.
+      // The TUI commits the paste (its chip) → '\r' submitted. A paste that
+      // never shows up is retried, not blindly submitted (#16105).
+      pty.emitData('[Pasted text #1 +8 lines]');
       await vi.advanceTimersByTimeAsync(4000);
       expect(pty.write).toHaveBeenCalledWith('\r');
 
@@ -1021,7 +1023,9 @@ describe('executeTuiRun', () => {
       await flushAsync();
       const pty = ptyInstances[0];
       pty.emitData('ready> ');
-      await vi.advanceTimersByTimeAsync(6000);
+      await vi.advanceTimersByTimeAsync(2000);
+      pty.emitData('[Pasted text #1 +8 lines]');
+      await vi.advanceTimersByTimeAsync(4000);
       pty.emitData('Still reasoning');
       await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
       expect(runnerMocks.finalizeRunRecord).not.toHaveBeenCalled();
@@ -1331,7 +1335,9 @@ describe('executeTuiRun', () => {
       await flushAsync();
       const pty = ptyInstances[0];
       pty.emitData('› Ask Codex to do anything\n? for shortcuts');
-      await vi.advanceTimersByTimeAsync(6000);
+      await vi.advanceTimersByTimeAsync(2000);
+      pty.emitData('[Pasted Content 900 chars]');
+      await vi.advanceTimersByTimeAsync(4000);
       responseFiles.set(resolve(runsTmpDirRef.current, runId, 'tui-response.txt'), 'partial response');
       pty.emitData('Ordinary output');
       pty.emitData('\x1b[12;1H');
@@ -1554,6 +1560,9 @@ describe('executeTuiRun', () => {
     // arms a grace window instead of killing the PTY on sight.
     const ELIGIBILITY_BANNER =
       "We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly.";
+    // agy renders a paste inline rather than as a chip; this is the head of the
+    // wrapped prompt executeTuiRun pastes, which the paste driver verifies.
+    const WRAPPED_PROMPT_ECHO = 'IMPORTANT — Output to file:\nWhen you have completed the task below, write your COMPLETE final response';
 
     it('holds a run open for the eligibility banner and resumes when agy starts generating', async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
@@ -1594,7 +1603,10 @@ describe('executeTuiRun', () => {
 
       const pty = ptyInstances[0];
       pty.emitData('agy ready> ');
-      await vi.advanceTimersByTimeAsync(5000); // first delivery
+      await vi.advanceTimersByTimeAsync(2000); // first delivery
+      pty.emitData(WRAPPED_PROMPT_ECHO);
+      pty.emitData(ELIGIBILITY_BANNER);
+      await vi.advanceTimersByTimeAsync(3000);
       const pastes = () => pty.write.mock.calls.filter(([chunk]) => String(chunk).includes(prompt)).length;
       expect(pastes()).toBe(1);
 
@@ -1633,6 +1645,8 @@ describe('executeTuiRun', () => {
       // Only idle composer chrome repaints — no sign of life. Notably this must
       // NOT idle-complete as success and scrape the banner as the response.
       pty.emitData('> ? for shortcuts');
+      await vi.advanceTimersByTimeAsync(2000); // first delivery
+      pty.emitData(WRAPPED_PROMPT_ECHO);
       // Past the full grace window — every re-submission inside it went
       // unanswered too, so the fail-over is the correct verdict.
       await vi.advanceTimersByTimeAsync(130000);
