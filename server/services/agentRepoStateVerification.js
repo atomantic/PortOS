@@ -1736,7 +1736,9 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
     ? { url: observed.prUrl, branch: branchName } : null;
   // Completion observes this exact inventoried target; without it a
   // retirement-only recovery has no deterministic criterion (#16059).
-  const cleanupTarget = retirement && appId ? { appId, release: retirement.release } : null;
+  // An unmerged PR stays on delivery gates even when its URL is unparseable.
+  const cleanupTarget = retirement && appId && !issues.some(issue => issue.code === REPO_STATE_ISSUES.PR_UNMERGED)
+    ? { appId, release: retirement.release } : null;
   const created = await addTask({
     description: `${RECOVERY_TASK_PREFIX} Finish incomplete cleanup for branch ${branchName} in ${appName}`,
     priority: 'HIGH',
