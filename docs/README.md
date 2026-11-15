@@ -38,6 +38,7 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [CODE_ANIMATION_PACKAGES.md](./CODE_ANIMATION_PACKAGES.md) | Versioned portable Code Animation source/brief packages, non-executing validation, and contained production execution |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | System design: React client, Express server, PM2 satellites, PostgreSQL + `data/` files |
 | [GREYBOX.md](./GREYBOX.md) | Environment starter layouts, Blender exports, camera shots, reference captures and AI editing |
+| [features/image-verifier.md](./features/image-verifier.md) | Image Verifier: defect standards, evaluation profiles, model benchmarks, and integration with media jobs and imports |
 | [features/catalog-ingest.md](./features/catalog-ingest.md) | Catalog extraction graph, context budgets, coverage, and review draft contract |
 | [features/catalog-primitives.md](./features/catalog-primitives.md) | Catalog creative primitive ownership, locks, forks, design rounds, and canon description repair HTTP contract |
 | [CATALOG_LOCAL_MERGE.md](./CATALOG_LOCAL_MERGE.md) | Local catalog consolidation, preserved identities and assets, conflict review, and guarded recovery |
@@ -49,8 +50,9 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [REMOTE_DESKTOP.md](./REMOTE_DESKTOP.md) | PortDeck VNC broker security, host setup, and session flow |
 | [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.md) | Authenticated, capacity-aware peer audio provider wire contract and setup |
 | [STORAGE.md](./STORAGE.md) | Storage classification contract — PostgreSQL vs filesystem, new-data-store checklist |
-| [BACKUP.md](./BACKUP.md) | Filesystem snapshots + PostgreSQL dumps, restore semantics |
-| [BACKUP_PUBLICATION_ADMISSION.md](./BACKUP_PUBLICATION_ADMISSION.md) | Shared admission lease between the server and `portos-cos`, and how snapshot and restore cuts drain in-flight asset publications |
+| [BACKUP.md](./BACKUP.md) | Filesystem snapshots + PostgreSQL dumps: what is backed up, anchored excludes and tiers, restore semantics, retention, scheduling |
+| [BACKUP_RUNBOOKS.md](./BACKUP_RUNBOOKS.md) | Operator runbooks: database backend migration, older-snapshot restore, in-server store restores, maintenance admission |
+| [BACKUP_PUBLICATION_ADMISSION.md](./BACKUP_PUBLICATION_ADMISSION.md) | Shared admission lease between the server and `portos-cos`, how snapshot and restore cuts drain in-flight asset publications, and the consistency contract for changing assets |
 | [PORTS.md](./PORTS.md) | Port allocation (5553–5569) and how 5555/5553/5554 relate |
 | [ITERM.md](./ITERM.md) | The Shell page's iTerm2 view — requirements, status states and their fixes, why iTerm2 sessions stay separate from PortOS shells, the clean-room protocol rule |
 | [INSTANCE_FEATURES.md](./INSTANCE_FEATURES.md) | Optional per-install features — registry, client-side nav gating, feature groups, reconcile-at-toggle |

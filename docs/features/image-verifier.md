@@ -1,4 +1,4 @@
-# Image Evaluation & Verification Framework in PortOS (`IMAGE_EVAL.md`)
+# Image Evaluation & Verification Framework in PortOS
 
 This document outlines the architecture, evaluation criteria, model benchmarks, and system integration for the **PortOS Image Verifier**—an automated visual quality assurance and defect detection system for newly generated media and imported images.
 

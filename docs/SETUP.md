@@ -39,7 +39,7 @@ daemon cannot silently redirect an existing install to another database.
 **Existing installs:** retain the backend holding your records. Editing `PGMODE`
 or rerunning setup does not migrate them. Use the coordinated cutover in
 **Settings → Database** to move between backends; see
-[Database backend migration](./BACKUP.md#database-backend-migration).
+[Database backend migration](./BACKUP_RUNBOOKS.md#database-backend-migration).
 For endpoint overrides and readiness checks, see
 [Storage setup](./STORAGE.md#setup-path-npm-run-setupdb).
 

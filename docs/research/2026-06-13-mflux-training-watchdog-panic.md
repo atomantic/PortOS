@@ -417,6 +417,6 @@ The 0.31.2 trio is now pinned (see "Verdict & pin" under the bisect table above)
 
 ## References
 
-- `docs/TROUBLESHOOTING.md` → "GPU watchdog kernel panic during LoRA training"
+- `docs/TROUBLESHOOTING.md` → "GPU watchdog kernel panic during local MLX video renders"
 - `scripts/train_mflux_lora.py` (`TelemetrySidecar`)
 - `server/services/loraTraining/runtimes.js` (`MFLUX_MIN_CHECKPOINTS`)
