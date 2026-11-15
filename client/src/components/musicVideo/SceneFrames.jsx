@@ -7,6 +7,7 @@ import SceneGreyboxReference from './SceneGreyboxReference.jsx';
 import { useEffect, useMemo, useState } from 'react';
 import { Activity, ArrowLeftRight, ArrowRight, Image as ImageIcon, ImagePlus, PencilLine, Shuffle, SkipForward, Wand2, X } from 'lucide-react';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
+import BlurCommitTextarea from '../ui/BlurCommitTextarea.jsx';
 import InfoTooltip from '../ui/InfoTooltip';
 import SceneFrameRenderTarget, { frameRenderTargetOverrides, lastFrameRenderTarget } from './SceneFrameRenderTarget.jsx';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
@@ -50,7 +51,7 @@ function FramePrompt({ id, label, value, help = FRAME_PROMPT_HELP, ...props }) {
         <label htmlFor={id}>{label}</label>
         <InfoTooltip label={`About the ${label.toLowerCase()}`} placement="below" align="start" width={280}>{help}</InfoTooltip>
       </div>
-      <AutoSizeTextarea id={id} value={value} rows={3} {...props}
+      <BlurCommitTextarea id={id} value={value} rows={3} {...props}
         className="block w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm" />
     </>
   );
@@ -165,7 +166,7 @@ export default function SceneFrames({
           openLabel={`View scene ${index + 1} ${start ? 'reference' : 'end'} frame full size`} />
         <FramePrompt id={id(`${which}-prompt`)} label={start ? (fromSheet ? 'General frame prompt' : endFrames ? 'Start frame prompt' : 'Frame prompt') : 'End frame prompt'} value={scene[field] || ''}
           help={start && fromSheet ? GENERAL_PROMPT_HELP : FRAME_PROMPT_HELP}
-          onChange={(e) => onEditLocal(scene.sceneId, { [field]: e.target.value })}
+          onCommit={(text) => onEditLocal(scene.sceneId, { [field]: text })}
           onBlur={(e) => onSave(scene.sceneId, { [field]: e.target.value || null })}
           placeholder={start ? (fromSheet ? 'Anything the shot details don\'t cover' : 'What the frame shows (empty: uses the clip prompt)') : 'Where the shot ends, e.g. her head thrown back, eyes white'} />
         {/* What the frame sends: its prompt plus every addition, as chips. */}
