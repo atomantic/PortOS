@@ -476,6 +476,26 @@ describe('PeerCard snapshot progress', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  it('refetches subscriptions for its own peer only when a schema block event arrives', async () => {
+    renderUI(<PeerCard peer={peer} syncStatus={syncStatus} onRefresh={vi.fn()} />);
+    await act(async () => {});
+    expect(screen.queryByText('Schema version mismatch')).not.toBeInTheDocument();
+    const calls = listPeerSubscriptions.mock.calls.length;
+    const [, onBlocked] = socket.on.mock.calls.find(([event]) => event === 'peerSync:subscription-blocked');
+
+    await act(async () => { onBlocked({ peerId: 'another-peer' }); });
+    expect(listPeerSubscriptions).toHaveBeenCalledTimes(calls);
+
+    listPeerSubscriptions.mockResolvedValueOnce({
+      subscriptions: [{
+        recordKind: 'universe', recordId: 'universe-1', peerId: peer.instanceId,
+        blockedBySchema: { ahead: [], behind: ['universe'], peerPortosVersion: '1.0.0' },
+      }],
+    });
+    await act(async () => { onBlocked({ peerId: peer.instanceId }); });
+    expect(await screen.findByText('Schema version mismatch')).toBeInTheDocument();
+  });
+
   // Active sync takes precedence until the user-triggered request completes.
   it('shows syncing ahead of checksum status and restores status on completion', async () => {
     let resolveSync;

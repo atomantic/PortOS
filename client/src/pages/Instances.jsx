@@ -16,6 +16,7 @@ import { useSearchParams } from 'react-router';
 import Drawer from '../components/Drawer';
 import useDrawerTab from '../hooks/useDrawerTab';
 import { useSocketSubscription } from '../hooks/useSocketSubscription';
+import { useSocketResource } from '../hooks/useSocketResource';
 import toast from '../components/ui/Toast';
 import Pill from '../components/ui/Pill';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -1234,6 +1235,9 @@ function ProbeDiagnostics({ peer, probing, onProbe }) {
   );
 }
 
+const PEER_SUBSCRIPTION_EVENTS = ['peerSync:subscription-blocked', 'peerSync:subscription-unblocked', 'peerSync:subscription:created'];
+const EMPTY_SUBS = [];
+
 export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityReport, focused = false }) {
   const cardRef = useRef(null);
   const [editingName, setEditingName] = useState(false);
@@ -1242,12 +1246,22 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
   const [forwardBusy, setForwardBusy] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
-  // Outbound subscriptions inform per-record schema compatibility.
-  const [peerSubs, setPeerSubs] = useState([]);
-  // A failed read keeps the last good subscriptions and surfaces an error row,
-  // so a hidden "peer is behind" warning is never mistaken for "no mismatch".
-  const [peerSubsError, setPeerSubsError] = useState(null);
-  const [peerSubsAttempt, setPeerSubsAttempt] = useState(0);
+  // Outbound subscriptions inform per-record schema compatibility. A failed
+  // read keeps the last good subscriptions and surfaces an error row, so a
+  // hidden "peer is behind" warning is never mistaken for "no mismatch".
+  const { data: peerSubsData, error: peerSubsError, refetch: retryPeerSubs } = useSocketResource(
+    () => listPeerSubscriptions({ peerId: peer.instanceId }, { silent: true }),
+    {
+      events: PEER_SUBSCRIPTION_EVENTS,
+      // Events carry `peerId`, so only the affected card refetches. A block
+      // or an incoming push's auto-created reverse subscription changes rows
+      // the page-level peers refresh doesn't reach.
+      matchesEvent: (payload) => !payload?.peerId || payload.peerId === peer.instanceId,
+      resourceKey: peer.instanceId,
+      enabled: !!peer.instanceId,
+    }
+  );
+  const peerSubs = peerSubsData?.subscriptions || EMPTY_SUBS;
   // Live sync activity, driven by the `sync:progress` socket event. `syncing`
   // is true between this peer's `start` and `complete`; while it's true every
   // enabled category badge shows "syncing…". On `complete` it clears and the
@@ -1280,53 +1294,6 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
     socket.on('sync:progress', handleProgress);
     return () => socket.off('sync:progress', handleProgress);
   }, [peer.instanceId, onRefresh]);
-
-  useEffect(() => {
-    if (!peer.instanceId) {
-      setPeerSubs([]);
-      setPeerSubsError(null);
-      return;
-    }
-    let cancelled = false;
-    const refetch = () => listPeerSubscriptions({ peerId: peer.instanceId }, { silent: true })
-      .then((r) => {
-        if (cancelled) return;
-        setPeerSubs(r?.subscriptions || []);
-        setPeerSubsError(null);
-      })
-      .catch((err) => {
-        if (!cancelled) setPeerSubsError(err instanceof Error ? err : new Error('Request failed'));
-      });
-    refetch();
-    // When a per-record schema block is persisted server-side, the
-    // subscription's `blockedBySchema` field changes inside
-    // peer_subscriptions.json. The parent Instances component already
-    // refetches `peers` on this event, but its refresh doesn't re-run this
-    // card's `peerSubs` effect (deps are `peer.instanceId` only). Without
-    // a local subscription here, SchemaGapBadge keeps rendering the stale
-    // `blockedBySchema` value until a full page reload.
-    // The event carries `peerId` so only the affected card refetches —
-    // every card listens, but skips events for other peers.
-    const handleSchemaSubChange = (payload) => {
-      if (payload?.peerId && payload.peerId !== peer.instanceId) return;
-      refetch();
-    };
-    socket.on('peerSync:subscription-blocked', handleSchemaSubChange);
-    socket.on('peerSync:subscription-unblocked', handleSchemaSubChange);
-    // An incoming push from this peer auto-created a reverse subscription
-    // back to it (`maybeCreateReverseSubscription`). The new row lives in
-    // peer_subscriptions.json but this card cached `peerSubs` on mount, so
-    // refetch this peer's subs to surface the adopted-from-reverse sub
-    // without a manual page reload. Carries `peerId`, so the same filter
-    // keeps every other card from refetching needlessly.
-    socket.on('peerSync:subscription:created', handleSchemaSubChange);
-    return () => {
-      cancelled = true;
-      socket.off('peerSync:subscription-blocked', handleSchemaSubChange);
-      socket.off('peerSync:subscription-unblocked', handleSchemaSubChange);
-      socket.off('peerSync:subscription:created', handleSchemaSubChange);
-    };
-  }, [peer.instanceId, peerSubsAttempt]);
 
   const StatusIcon = STATUS_ICONS[peer.status] || CircleDot;
   const isInboundOnly = peer.directions?.includes('inbound') && !peer.directions?.includes('outbound');
@@ -1571,7 +1538,7 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
         <ListLoadError
           what="subscriptions used for schema-compatibility warnings"
           error={peerSubsError}
-          onRetry={() => setPeerSubsAttempt((n) => n + 1)}
+          onRetry={retryPeerSubs}
           className="mt-2"
         />
       )}
