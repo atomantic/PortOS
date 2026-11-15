@@ -329,6 +329,10 @@ export const setVideoHidden = (id, hidden, options = {}) => request(`/video-gen/
 export const updateVideoPrompt = (id, prompt, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/prompt`, {
   method: 'PATCH', body: JSON.stringify({ prompt }), ...options,
 });
+// Continue a hosted clip on its model's extend endpoint (#16150). `dryRun: true` returns the exact body and price.
+export const extendVideoHistoryItem = (id, body, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/extend`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
 export const extractLastFrame = (id, options = {}) => request(`/video-gen/last-frame/${encodeURIComponent(id)}`, { method: 'POST', ...options });
 // `method` selects the upscale pass (#6509/#6510): 'lanczos' (the historical
 // ffmpeg-only default, and what every pre-#6510 caller gets by omitting it) or

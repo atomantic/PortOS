@@ -120,7 +120,7 @@ function buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, image
  * history records. Returns the plan with the record of the text fal receives
  * (#11317); the Video Gen form's preview calls it with the same inputs.
  */
-export function falVideoSentPrompt({ hasImage = false, hasEndImage = false, hasAudio = false, guidanceReferences = null, referenceCount = 0, clipReferenceLabels = null, promptAdditions = [], ...spec }) {
+export function falVideoSentPrompt({ hasImage = false, hasVideo = false, hasEndImage = false, hasAudio = false, guidanceReferences = null, referenceCount = 0, clipReferenceLabels = null, promptAdditions = [], ...spec }) {
   const modelId = spec.modelId || (hasImage ? FAL_DEFAULT_IMAGE_MODEL : FAL_DEFAULT_TEXT_MODEL);
   const { negativePrompt } = spec;
   // A storyboard-guided render (`guidanceReferences`: how many reference images
@@ -141,6 +141,7 @@ export function falVideoSentPrompt({ hasImage = false, hasEndImage = false, hasA
       ...(guidance ? { referenceImageUrls: guidance.placeholders }
         : referenceCount > 0 ? { referenceImageUrls: Array.from({ length: referenceCount }, (_, i) => `pending:reference-${i + 1}`) } : {}),
       imageUrl: hasImage ? 'pending:image' : null,
+      videoUrl: hasVideo ? 'pending:video' : null,
       endImageUrl: hasEndImage ? 'pending:end-image' : null,
       audioUrl: hasAudio && !audioAsReference ? 'pending:audio' : null,
       referenceAudioUrls: audioAsReference ? ['pending:audio'] : [],
@@ -186,6 +187,7 @@ async function generateVideoPrepared({
   uploadedTempPath = null, uploadedTempPaths = [],
   resolution = null, generateAudio = false, frameAspect = null, promptAdditions = [], musicVideo = null,
   guidanceImagePath = null, referenceImagePaths = [], clipReferenceLabels = null,
+  sourceVideoPath = null, extendedFrom = null, extendSourceSec = null,
 }) {
   await ensureDir(PATHS.videos);
   const renderStartedAtMs = Date.now();
@@ -239,7 +241,7 @@ async function generateVideoPrepared({
   const guidanceImages = guidanceImagePath ? [guidanceImagePath, ...referenceImagePaths] : referenceImagePaths;
   const { planned, record: sentRecord, prompt: guidedPrompt } = falVideoSentPrompt({
     ...requestSpec, promptAdditions,
-    hasImage: !!sourceImagePath, hasEndImage: !!lastImagePath, hasAudio: !!audioFilePath,
+    hasImage: !!sourceImagePath, hasVideo: !!sourceVideoPath, hasEndImage: !!lastImagePath, hasAudio: !!audioFilePath,
     guidanceReferences: guidanceImagePath ? referenceImagePaths.length : null,
     referenceCount: guidanceImagePath ? 0 : referenceImagePaths.length,
     clipReferenceLabels: guidanceImagePath ? null : clipReferenceLabels,
@@ -272,6 +274,8 @@ async function generateVideoPrepared({
     filename,
     createdAt: new Date().toISOString(),
     mode: sourceImagePath ? 'image' : 'text',
+    // #16150: the clip this render continues.
+    ...(extendedFrom ? { extendedFrom, ...(extendSourceSec ? { extendSourceSec } : {}) } : {}),
     ...storyboardGuidanceMeta(guidanceImagePath, referenceImagePaths),
     ...(clipReferenceLabels != null && !guidanceImagePath ? { clipReferenceFiles: referenceImagePaths.map((path) => basename(path)) } : {}),
     // A lip-sync take syncs a mouth; an audio-to-video take moves the whole frame to the audio.
@@ -284,7 +288,7 @@ async function generateVideoPrepared({
     run: (job) => runFalVideo(job, jobId, {
       apiKey, modelId, prompt, negativePrompt, duration, aspectRatio: effectiveAspectRatio, sourceImagePath, lastImagePath, meta,
       audioFilePath, uploadedTempPath, uploadedTempPaths, enableTranscription: lipSync?.enableTranscription === true,
-      requestSpec: planned ? requestSpec : null, frameAspect, guidanceImages,
+      requestSpec: planned ? requestSpec : null, frameAspect, guidanceImages, sourceVideoPath,
     }),
   });
 }
@@ -301,7 +305,7 @@ function audioMimeType(path) {
 async function runFalVideo(job, jobId, {
   apiKey, modelId, prompt, negativePrompt, duration, aspectRatio, sourceImagePath, lastImagePath, meta,
   audioFilePath = null, uploadedTempPath = null, uploadedTempPaths = [], enableTranscription = false, requestSpec = null,
-  frameAspect = null, guidanceImages = [],
+  frameAspect = null, guidanceImages = [], sourceVideoPath = null,
 }) {
   const { entry, finishFailure, publish, fail } = runner.begin(job, createFalRequestEntry(apiKey), {
     inputs: [uploadedTempPath, audioFilePath, ...(Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [])],
@@ -326,14 +330,16 @@ async function runFalVideo(job, jobId, {
     // Most routes read inputs inline; a model that downloads them gets fal-hosted URLs.
     const hosted = getFalVideoModel(modelId)?.hostedInputs === true;
     const host = (dataUri, name) => (hosted && dataUri ? hostFalDataUri({ apiKey, dataUri, fileName: `${jobId}-${name}` }) : dataUri);
-    const [imageUrl, endImageUrl, audioUrl, ...referenceImageUrls] = await Promise.all([
-      host(imageDataUri, 'start'), host(endImageDataUri, 'end'), host(audioDataUri, 'audio'),
+    // An extend render continues the source clip, hosted like any other input.
+    const videoDataUri = sourceVideoPath ? `data:video/mp4;base64,${(await readFile(sourceVideoPath)).toString('base64')}` : null;
+    const [imageUrl, endImageUrl, audioUrl, videoUrl, ...referenceImageUrls] = await Promise.all([
+      host(imageDataUri, 'start'), host(endImageDataUri, 'end'), host(audioDataUri, 'audio'), host(videoDataUri, 'source'),
       // A storyboard panel and its references go in uncropped: none is a frame of the clip.
       ...guidanceImages.map(async (path, i) => host((await frameDataUriAtAspect(path, null)).dataUri, `reference-${i + 1}`)),
     ]);
     const audioInputs = falHearsAudioReference(getFalVideoModel(modelId)) ? { referenceAudioUrls: audioUrl ? [audioUrl] : [] } : { audioUrl };
     const body = requestSpec
-      ? buildFalVideoRequest({ ...requestSpec, imageUrl, endImageUrl, ...audioInputs, ...(referenceImageUrls.length ? { referenceImageUrls } : {}) }).body
+      ? buildFalVideoRequest({ ...requestSpec, imageUrl, videoUrl, endImageUrl, ...audioInputs, ...(referenceImageUrls.length ? { referenceImageUrls } : {}) }).body
       : audioFilePath
         ? buildLipSyncRequestBody({ imageDataUri: imageUrl, audioDataUri: audioUrl, enableTranscription })
         : buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, imageDataUri: imageUrl });
