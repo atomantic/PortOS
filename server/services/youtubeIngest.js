@@ -90,6 +90,7 @@ import { recordEvents } from './humanActivity.js';
 // behind a brain-side service. The `tasks:changed` event addTask emits is what
 // cos.js listens on to spawn, so queueing behaves identically either way.
 import { addTask } from './cosTaskStore.js';
+import { resolveTrackerFilingBlock } from '../lib/workTracker.js';
 
 // The accept rule and its validator are canonical in `lib/youtubeUrl.js` (#6014);
 // these aliases keep the ingest's established names for existing importers.
@@ -447,7 +448,6 @@ export async function startYoutubeIngest({
       throw new ServerError('Selected analysis app is unavailable', { status: 400, code: 'APP_NOT_FOUND' });
     }
     if (workMode === 'issues') {
-      const { resolveTrackerFilingBlock } = await import('../lib/workTracker.js');
       filing = await resolveTrackerFilingBlock(analysisApp, 'youtube-analysis');
     }
   }
