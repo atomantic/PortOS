@@ -5,7 +5,7 @@ import ConnectionStatusDot from '../../ui/ConnectionStatusDot';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import ListLoadError from '../../ui/ListLoadError';
-import socket from '../../../services/socket';
+import { useSocketResource } from '../../../hooks/useSocketResource';
 import useMoltworldWs from '../../../hooks/useMoltworldWs';
 import { useCooldownTick } from '../../../hooks/useCooldownTick';
 import { timeAgo, formatCooldown, formatClockTime } from '../../../utils/formatters';
@@ -47,6 +47,9 @@ const HISTORY_FILTERS = [
   { value: 'mw_build', label: 'Build' },
   { value: 'mw_heartbeat', label: 'Heartbeat' }
 ];
+
+// Module-level so the resource keeps one stable subscription across renders.
+const QUEUE_EVENTS = ['moltworld:queue:added', 'moltworld:queue:updated', 'moltworld:queue:removed'];
 
 const QUEUE_ACTION_TYPES = [
   { value: 'mw_explore', label: 'Explore' },
@@ -137,8 +140,11 @@ export default function WorldTab({ agentId }) {
   const [historyLoadFailed, setHistoryLoadFailed] = useState(false);
 
   // Action Queue state
-  const [queue, setQueue] = useState([]);
-  const [queueLoading, setQueueLoading] = useState(false);
+  const { data: queueData, loading: queueLoading, error: queueError, refetch: refetchQueue } = useSocketResource(
+    () => api.moltworldGetQueue(agentId),
+    { events: QUEUE_EVENTS, resourceKey: agentId, enabled: Boolean(accountId) }
+  );
+  const queue = queueData ?? [];
   const [showAddForm, setShowAddForm] = useState(false);
   const [newActionType, setNewActionType] = useState('mw_explore');
   const [newActionParams, setNewActionParams] = useState({});
@@ -217,41 +223,19 @@ export default function WorldTab({ agentId }) {
     setHistoryLoading(false);
   }, [agentId, historyFilter]);
 
-  // Fetch action queue
-  const fetchQueue = useCallback(async () => {
-    setQueueLoading(true);
-    const data = await api.moltworldGetQueue(agentId).catch(() => null);
-    if (data) setQueue(data);
-    setQueueLoading(false);
-  }, [agentId]);
-
   // Fetch status + rate limits + queue when account resolves. History has its
   // own effect below so a filter change re-reads only the history.
   useEffect(() => {
     if (!accountId) return;
     fetchStatus();
     fetchRateLimits();
-    fetchQueue();
-  }, [accountId, fetchStatus, fetchRateLimits, fetchQueue]);
+  }, [accountId, fetchStatus, fetchRateLimits]);
 
   // History loads once the account resolves and again on every filter change
   // (fetchHistory is re-created when historyFilter changes).
   useEffect(() => {
     if (accountId) fetchHistory();
   }, [accountId, historyFilter, fetchHistory]);
-
-  // Listen for queue Socket.IO events
-  useEffect(() => {
-    const handleQueueChange = () => fetchQueue();
-    socket.on('moltworld:queue:added', handleQueueChange);
-    socket.on('moltworld:queue:updated', handleQueueChange);
-    socket.on('moltworld:queue:removed', handleQueueChange);
-    return () => {
-      socket.off('moltworld:queue:added', handleQueueChange);
-      socket.off('moltworld:queue:updated', handleQueueChange);
-      socket.off('moltworld:queue:removed', handleQueueChange);
-    };
-  }, [fetchQueue]);
 
   // Calculate cooldown end timestamps from rate limit data
   useEffect(() => {
@@ -788,7 +772,10 @@ export default function WorldTab({ agentId }) {
               </div>
             )}
 
-            {queue.length === 0 && !queueLoading ? (
+            {queueError && (
+              <ListLoadError what="action queue" error={queueError} onRetry={refetchQueue} retrying={queueLoading} className="mb-2" />
+            )}
+            {queue.length === 0 && !queueLoading && !queueError ? (
               <p className="text-sm text-gray-500 text-center py-4">No queued actions</p>
             ) : (
               <div className="space-y-1.5 max-h-[300px] overflow-y-auto">
