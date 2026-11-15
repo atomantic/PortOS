@@ -15,7 +15,7 @@ const barrel = await import('./seriesAutopilot.js');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BARREL_SRC = readFileSync(join(HERE, 'seriesAutopilot.js'), 'utf8');
 const MODULE_FILES = readdirSync(join(HERE, 'seriesAutopilot'))
-  .filter((f) => f.endsWith('.js') && !f.endsWith('.test.js'))
+  .filter((f) => f.endsWith('.js') && !f.endsWith('.test.js') && !f.endsWith('.testFixtures.js'))
   .sort();
 
 // A template `import()` with a literal prefix is compiled by Vite into a glob map frozen at transform
