@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  analyzeLookAroundFrames, composeLookAroundPrompt, estimateHorizontalShift, LOOK_AROUND_MOTION_IDS,
+  analyzeLookAroundFrames, composeLookAroundPrompt, LOOK_AROUND_MOTION_IDS,
   lookAroundAngleLabel, normalizeLookAroundAngle, pickLookAroundStrip,
 } from './catalogLookAround.js';
 
@@ -29,12 +29,13 @@ describe('composeLookAroundPrompt', () => {
 });
 
 describe('frame analysis', () => {
-  // Catches a sign error: content sliding left means the camera turned right.
-  it('reads the pan direction and distance from column profiles', () => {
-    const strip = panorama(400);
-    expect(estimateHorizontalShift(windowAt(strip, 0, 200), windowAt(strip, 18, 200)).shift).toBe(18);
-    expect(estimateHorizontalShift(windowAt(strip, 30, 200), windowAt(strip, 0, 200)).shift).toBe(-30);
-    expect(estimateHorizontalShift(new Float64Array(200).fill(9), new Float64Array(200).fill(9))).toEqual({ shift: 0, correlation: 0 });
+  // Catches a sign error: content sliding right means the camera turned left.
+  it('reads a leftward pan and its distance from column profiles', () => {
+    const strip = panorama(1200);
+    const frames = Array.from({ length: 9 }, (_, i) => ({ atSec: i, sharpness: 0.6, profile: windowAt(strip, 320 - i * 40, 200) }));
+    const result = analyzeLookAroundFrames(frames, { motion: 'full-turn', durationSec: 8, width: 200 });
+    expect(result).toMatchObject({ direction: 'left', directionSource: 'frames', requestedDirection: 'right' });
+    expect(result.frames.map((f) => f.bearingDeg)).toEqual([0, 315, 270, 225, 180, 135, 90, 45, 0]);
   });
 
   // Catches labelling from the prompt: the model turned right although a left half turn was asked for.

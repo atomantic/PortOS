@@ -76,7 +76,7 @@ export function columnProfile(frame) {
  * left, so the camera turned right). Pearson correlation over the overlap, at least half the width.
  * Returns `{ shift, correlation }`; a flat profile pair correlates at 0 and reads as no shift.
  */
-export function estimateHorizontalShift(a, b, { maxShift = Math.floor(Math.min(a.length, b.length) / 4) } = {}) {
+function estimateHorizontalShift(a, b, { maxShift = Math.floor(Math.min(a.length, b.length) / 4) } = {}) {
   const width = Math.min(a.length, b.length);
   const limit = Math.max(0, Math.min(maxShift, Math.floor(width / 2)));
   let best = { shift: 0, correlation: 0 };

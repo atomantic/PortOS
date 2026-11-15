@@ -93,7 +93,7 @@ async function requirePlace(ingredientId, { write = false } = {}) {
 }
 
 /** The place's main plate: a plate that is not itself an angle, else the portrait, else the newest reference. */
-export function mainPlateOf(media) {
+function mainPlateOf(media) {
   const images = (Array.isArray(media) ? media : []).filter(isImageMedia);
   return images.find((m) => m.role === 'plate' && !m.library?.angle)
     || images.find((m) => m.kind === 'portrait')
