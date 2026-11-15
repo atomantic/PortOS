@@ -874,8 +874,8 @@ export function approveProductionStage(project, { stage, basis, proofReview, app
     ...(approvedBy ? { approvedBy } : {}), ...(reviewer ? { reviewer: structuredClone(reviewer) } : {}),
     ...(stage === 'proof' ? { proofReview: structuredClone(proofReview) } : {}) };
   return { ...project, productionReview: { ...project.productionReview,
-    approvalHistory: [...(project.productionReview?.approvalHistory || []), decision].slice(-MAX_APPROVAL_HISTORY),
-    reviewedRevisions: pruneReviewedRevisions({ ...omitKey(project.productionReview?.reviewedRevisions, basis), [basis]: { draft: structuredClone(project.productionReview?.draft || {}), scenes: structuredClone(project.scenes || []), proof: structuredClone(project.productionReview?.proof || null), capturedAt: new Date().toISOString() } }, project.productionReview?.feedback),
+    approvalHistory: slimApprovalHistory([...(project.productionReview?.approvalHistory || []), decision].slice(-MAX_APPROVAL_HISTORY)),
+    reviewedRevisions: pruneReviewedRevisions({ ...omitKey(project.productionReview?.reviewedRevisions, basis), [basis]: { draft: structuredClone(project.productionReview?.draft || {}), scenes: reviewedScenes(project.scenes), proof: structuredClone(project.productionReview?.proof || null), capturedAt: new Date().toISOString() } }, project.productionReview?.feedback),
     approvals: { ...project.productionReview?.approvals, [stage]: decision } } };
 }
 
@@ -976,6 +976,80 @@ const omitKey = (obj, key) => Object.fromEntries(Object.entries(obj || {}).filte
 const MAX_APPROVAL_HISTORY = 50;
 const MAX_RECENT_REVISIONS = 5;
 
+/*
+ * The per-shot plan a reviewed revision keeps (#16210). A snapshot rides every
+ * project write, so it holds what a reviewer judged, never the render history:
+ * `takes` (each with its composed prompt and plate evidence) and other render
+ * bookkeeping are dropped. Nothing recomputes a basis from a snapshot (approval
+ * bases hash the live project), so slimming one never changes what counts as reviewed.
+ * - identity and place: sceneId, order, label, sectionIndex — which shot, in which slot
+ * - timing and lyrics: startSec, endSec, lyricText, lyricAnchor — the span and words it covers
+ * - wording and shot sheet: visualIntent, prompt, framePrompt, camera, shotSheet, shotMode,
+ *   performanceSpeaker, coverage, transitionIn, transitionOut — what the shot shows, as reviewed
+ * - references: frameReferenceIds, clipReferenceIds, setReference, characterVariant — who and where
+ * - selections: referenceImageId, videoHistoryId — the frame and clip on screen when reviewed
+ * - proof inputs: performanceEdit, direction, visualLayer, preMusic, photoSequence,
+ *   templateEffects — the remaining per-shot fields the proof basis hashes
+ *   (`productionReviewBasis`), so a snapshot still shows every shot input a review covered
+ */
+const REVIEWED_SCENE_FIELDS = ['sceneId', 'order', 'label', 'sectionIndex', 'startSec', 'endSec', 'lyricText', 'lyricAnchor',
+  'visualIntent', 'prompt', 'framePrompt', 'camera', 'shotSheet', 'shotMode', 'performanceSpeaker', 'coverage', 'transitionIn', 'transitionOut',
+  'frameReferenceIds', 'clipReferenceIds', 'setReference', 'characterVariant', 'referenceImageId', 'videoHistoryId',
+  'performanceEdit', 'direction', 'visualLayer', 'preMusic', 'photoSequence', 'templateEffects'];
+const REVIEWED_SCENE_FIELD_SET = new Set(REVIEWED_SCENE_FIELDS);
+
+/** One shot as a reviewed revision stores it: the plan a reviewer saw, without takes or render bookkeeping. */
+export function reviewedSceneSnapshot(scene) {
+  if (!scene || typeof scene !== 'object') return scene;
+  return structuredClone(Object.fromEntries(REVIEWED_SCENE_FIELDS.filter(k => scene[k] !== undefined).map(k => [k, scene[k]])));
+}
+const reviewedScenes = scenes => (Array.isArray(scenes) ? scenes : []).map(reviewedSceneSnapshot);
+const sceneIsSlim = scene => !scene || typeof scene !== 'object' || Object.keys(scene).every(k => REVIEWED_SCENE_FIELD_SET.has(k));
+
+// History keeps who decided what, on which basis, and the proof evidence. The
+// per-input hashes and approved values feed the staleness report and revert,
+// which read only `approvals[stage]`; history keeps them on each stage's latest
+// entry and drops them from older ones, where they are dead weight.
+function slimApprovalHistory(history) {
+  if (!Array.isArray(history)) return history;
+  const latest = new Map();
+  history.forEach((entry, i) => latest.set(entry?.stage, i));
+  let changed = false;
+  const next = history.map((entry, i) => {
+    if (latest.get(entry?.stage) === i || !entry || typeof entry !== 'object' || !('inputs' in entry || 'values' in entry)) return entry;
+    changed = true;
+    const { inputs: _inputs, values: _values, ...kept } = entry;
+    return kept;
+  });
+  return changed ? next : history;
+}
+
+/**
+ * Shrink a review record written before #16210: reviewed snapshots keep only
+ * the reviewed shot plan and older history entries lose their input hashes and
+ * values. Approvals, feedback, the draft and the proof are untouched, so every
+ * approval current before is current after. Returns the same object when there
+ * is nothing to slim, so it is idempotent and cheap on every write.
+ */
+export function slimProductionReview(review) {
+  if (!review || typeof review !== 'object') return review;
+  let revisions = review.reviewedRevisions;
+  if (revisions && typeof revisions === 'object' && Object.values(revisions).some(r => Array.isArray(r?.scenes) && !r.scenes.every(sceneIsSlim))) {
+    revisions = Object.fromEntries(Object.entries(revisions).map(([basis, r]) =>
+      [basis, Array.isArray(r?.scenes) && !r.scenes.every(sceneIsSlim) ? { ...r, scenes: reviewedScenes(r.scenes) } : r]));
+  }
+  const approvalHistory = slimApprovalHistory(review.approvalHistory);
+  if (revisions === review.reviewedRevisions && approvalHistory === review.approvalHistory) return review;
+  return { ...review, ...(revisions !== review.reviewedRevisions ? { reviewedRevisions: revisions } : {}),
+    ...(approvalHistory !== review.approvalHistory ? { approvalHistory } : {}) };
+}
+
+/** A whole project with `slimProductionReview` applied; the same object when nothing changed. */
+export function slimProjectReview(project) {
+  const review = slimProductionReview(project?.productionReview);
+  return review === project?.productionReview ? project : { ...project, productionReview: review };
+}
+
 /**
  * Bound the reviewed-revision snapshots, which ride every project write and sync:
  * keep the newest few plus every snapshot an open comment still points at.
@@ -995,7 +1069,7 @@ export function recordProductionFeedback(project, input) {
   if (input.basis !== basis) throw new ServerError('This revision changed. Review the current revision before commenting.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
   const snapshots = { ...review.reviewedRevisions };
   if (!snapshots[basis]) snapshots[basis] = { draft: structuredClone(review.draft || {}),
-    scenes: structuredClone(project.scenes || []), capturedAt: new Date().toISOString() };
+    scenes: reviewedScenes(project.scenes), capturedAt: new Date().toISOString() };
   const entry = { id: randomUUID(), stage: input.stage, target: input.target, text: input.text,
     decision: input.decision, basis, createdAt: new Date().toISOString() };
   const approvals = { ...review.approvals };
