@@ -2,26 +2,6 @@
  * `stripTerminalQueries` removes response-soliciting terminal sequences (DSR, DA, DECRQM, OSC color
  * queries) from a PTY replay buffer so re-attached clients do not answer them.
  *
- * `stripTerminalQueries(text)` — remove response-soliciting terminal sequences (DSR `ESC[6n`, DA,
- * DECRQM, DECRQSS, OSC colour queries) from the re-attach replay buffer a PTY session hands a newly
- * attached client. A TUI emits `ESC[6n` on nearly every render and the 50KB ring buffer stores PTY
- * output verbatim, so replaying it makes the attaching xterm ANSWER every historical query as input —
- * landing cursor-position reports (`56;3R56;3R…`) on the shell prompt the dead TUI left behind, which
- * then echo back into the same buffer and re-flood on every later attach. Applied on the way out, over
- * the joined buffer, so a sequence split across two stored chunks still matches; live output is
- * untouched because a running TUI must still get its replies. Stateful sequences the replay needs
- * (mouse tracking, bracketed paste, alternate screen, SGR) are deliberately preserved — this is NOT
- * `ansiStrip.js`, which removes every sequence to recover plain text. `createTerminalModeTracker()` —
- * `observe(chunk)` follows the same stream’s DEC private modes (alternate screen, mouse tracking and
- * encoding, bracketed paste, DECCKM, cursor visibility) and `preamble()` re-asserts the ones still in
- * force, prepended to the replay: a TUI declares them ONCE at startup, so a session that overflows the
- * 50KB window would otherwise replay as a normal-buffer, mouse-less terminal and become unscrollable.
- * **`createReplayBuffer({ maxBytes })` is the export callers want** — the ring buffer that owns the
- * bytes and applies both corrections to them (`push(chunk)` records and evicts, `render()` returns
- * what an attaching client is handed); `services/shell.js` holds one per PTY session. The two helpers
- * above are its internals, exported for their own direct tests — reach for the buffer rather than
- * re-composing them by hand.
- *
  * Replay correctness for the buffer a PTY session hands a newly attached client
  * (`attachSession` in `services/shell.js`): what must be STRIPPED out of the
  * recorded bytes, and what must be RE-ASSERTED because it was never in them.

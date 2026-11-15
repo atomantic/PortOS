@@ -20,6 +20,7 @@ function excluded(file, name) {
   if (file === 'server/lib/staticExportSurface.js') return true; // Test-only (#16148) — derives a module's export names for structural guards, reached exclusively from *.test.js.
   if (file === 'server/lib/browserSuiteGate.js') return true; // Test-only `canRun` guard (#10312) — reached exclusively from *.browser.test.js.
   if (file === 'server/services/_heldCheckoutRecoveryFixture.js') return true; // Test-only fixture for the real-Git heldCheckoutRecovery.test.js suite.
+  if (/\.test\.fixture\.[cm]?js$/.test(file)) return true; // Test-only suite fixtures (#16215), reached exclusively from their *.test.js suites.
   return false;
 }
 

@@ -163,11 +163,11 @@ Write comments for agents maintaining the code: the why, invariants, non-obvious
 
 Other rules:
 
-- **No changelog entries in PRs.** Commit messages are the record; `/do:release` writes the single `.changelog/RELEASE.md` from the log, so write subjects and bodies for a human reading release notes (`.changelog/README.md`).
+- **No changelog entries in PRs.** Commit messages are the record; `/do:release` writes `.changelog/RELEASE.md` from the log, so write subjects and bodies for a human reading release notes (`.changelog/README.md`).
 - After each change, review the diff for needless complexity and duplication (`/simplify` when available). A review-only request does not authorize shipping.
 - Make routine design decisions instead of parking issues for input; PortOS issue labels come only from `MANDATORY_DISPATCH_HINT_GUIDANCE` in `server/lib/dispatchLabels.js`.
 - **Archive approved design plans**: when a plan is approved out of plan mode, copy it from `~/.claude/plans/` to `./docs/plans/YYYY-MM-DD-<slug>.md` before implementing (`docs/plans/README.md`).
 
 ## Documentation
 
-[ETHOS.md](ETHOS.md) states why unsupervised agent operation is the design target and the commitments a change must not break; read it before proposing supervision gates, per-action confirmations, external edits to a mind's own memories, or new data crossing federation. `docs/README.md` indexes `docs/` (ADRs in `docs/decisions/`, plans in `docs/plans/`); most-referenced: `docs/STORAGE.md`, `docs/ARCHITECTURE.md`, `docs/API.md`.
+[ETHOS.md](ETHOS.md) states why unsupervised agent operation is the design target and the commitments a change must not break; read it before proposing supervision gates, per-action confirmations, external edits to a mind's own memories, or new data crossing federation. `docs/README.md` indexes `docs/` (ADRs in `docs/decisions/`, plans in `docs/plans/`); key: `docs/STORAGE.md`, `docs/ARCHITECTURE.md`, `docs/API.md`.

@@ -1,24 +1,6 @@
 /**
  * Pure data transformations for the YouTube → Brain ingest.
  *
- * Pure data transformations for the brain's YouTube ingest (#6015): `parseVideoMetadata(json)` (yt-dlp
- * `--dump-single-json` → the stored metadata shape, incl. the `subtitles`-vs-`automatic_captions`
- * manual-caption signal), `buildIngestNote({meta,url,transcript,tags,agentPrompt,capturedAt})` (the
- * Obsidian note, whose YAML frontmatter the user's own vault queries key on — every interpolated
- * scalar goes through `yamlString`), `buildAgentTaskContext(...)` (the CoS follow-up prompt, including
- * the untrusted-transcript boundary notice),
- * `resolveObsidianPointer({written,vaultId,notePath,prior})` (keeps the prior note pointer when an
- * ATTEMPTED mirror failed, so an evicted note can't be orphaned — #3706), plus `sanitizeFilename`,
- * `formatDuration` (seconds → `h:mm:ss`) and `yamlString`; and the ingest-history cursor pagination
- * (#8267): `compareIngestsDesc(a,b)` (newest-first order, `ingestedAt` desc with `videoId` desc as a
- * deterministic tie-breaker), `decodeIngestCursor(cursor)` (opaque base64url sort-key token; returns
- * `null` rather than throwing on anything malformed), and `paginateIngests(sorted, {limit, cursor})`
- * (slices a page starting strictly after the decoded cursor and mints the opaque `nextCursor` for the
- * last row returned, so records added/removed elsewhere in the index between pages can't repeat or
- * skip a row). No fs/db/childProcess/SSE imports; orchestration and storage stay in
- * `services/youtubeIngest.js`. Its `formatDuration` and `sanitizeFilename` differ from the
- * same-named helpers in `fileCore.js` and `mimeTypes.js`; import the one you mean.
- *
  * Everything here is a string/object in, string/object out: yt-dlp metadata
  * normalization, the Obsidian note body, the CoS agent task prompt, and the
  * index's Obsidian-pointer reconciliation. Zero filesystem, database,

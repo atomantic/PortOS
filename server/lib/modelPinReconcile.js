@@ -1,23 +1,6 @@
 /**
  * Retired-model-pin reconciliation (#7315).
  *
- * Retired-model-pin AUDIT over the shared membership rule (#7315) —
- * `providerCatalogListsModel(provider, modelId)` (is a stored pin still served? `modelPinIsOffered`
- * from `modelPinMembership.js` verbatim, plus the one case a retirement check answers differently from
- * a spawn-time one: nothing is pinned at all. The agy base-id and OpenCode namespace tolerances used
- * to be layered HERE above a stricter rule, which made the audit and the three spawn-time callers
- * disagree about the same pin; they moved down into the rule in #7327), `catalogOfferings` (the listed
- * ids with sentinels dropped, agy collapsed to base ids for a picker), `reconcileModelPins(pins,
- * providers)` — which pin descriptors name a model their provider no longer lists — and, since #7339,
- * the two helpers that make a pin's provider field singular-or-plural-agnostic: `pinProviderIds(pin)`
- * (THE coercion from `providerId` / `providerIds` to a trimmed id list, called by the audit's
- * descriptor builder too so the two layers cannot drift) and `pinProviderNames(pin, providers)` (how a
- * surface names those records — shared by the warnings panel and the notification card so they cannot
- * describe one pin differently). A reviewer pin names a BINARY several records front, so it is stale
- * only when EVERY named record stops listing the model. Every UNKNOWN case (no pin, empty catalog,
- * unresolved provider) answers "still listed": a false "your pin is gone" tells the user to change a
- * setting that works. Derived on read, never persisted — see `services/modelPinAudit.js`.
- *
  * A vendor retires a model id, the install's catalog refresh picks that up, and
  * every stored pin still naming the retired id keeps sitting in settings —
  * rotting silently until a render or a scheduled run dies with a raw vendor

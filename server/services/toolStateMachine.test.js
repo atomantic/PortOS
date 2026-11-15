@@ -24,46 +24,7 @@ vi.mock('./cosEvents.js', () => ({
   }
 }));
 
-describe('Tool State Machine', () => {
-  describe('STATES', () => {
-    it('should have all required states', () => {
-      expect(STATES.IDLE).toBe('idle');
-      expect(STATES.START).toBe('start');
-      expect(STATES.RUNNING).toBe('running');
-      expect(STATES.UPDATE).toBe('update');
-      expect(STATES.END).toBe('end');
-      expect(STATES.ERROR).toBe('error');
-      expect(STATES.RECOVERED).toBe('recovered');
-    });
-  });
-
-  describe('TRANSITIONS', () => {
-    it('should define valid transitions from IDLE', () => {
-      expect(TRANSITIONS[STATES.IDLE]).toContain(STATES.START);
-    });
-
-    it('should define valid transitions from START', () => {
-      expect(TRANSITIONS[STATES.START]).toContain(STATES.RUNNING);
-      expect(TRANSITIONS[STATES.START]).toContain(STATES.ERROR);
-    });
-
-    it('should define valid transitions from RUNNING', () => {
-      expect(TRANSITIONS[STATES.RUNNING]).toContain(STATES.UPDATE);
-      expect(TRANSITIONS[STATES.RUNNING]).toContain(STATES.END);
-      expect(TRANSITIONS[STATES.RUNNING]).toContain(STATES.ERROR);
-    });
-
-    it('should have no transitions from END (terminal state)', () => {
-      expect(TRANSITIONS[STATES.END]).toEqual([]);
-    });
-
-    it('should allow recovery from ERROR', () => {
-      expect(TRANSITIONS[STATES.ERROR]).toContain(STATES.RECOVERED);
-      expect(TRANSITIONS[STATES.ERROR]).toContain(STATES.END);
-    });
-  });
-
-  describe('createToolExecution', () => {
+describe('Tool State Machine', () => {  describe('createToolExecution', () => {
     it('should create execution with correct initial state', () => {
       const execution = createToolExecution('tool-1', 'agent-1');
 

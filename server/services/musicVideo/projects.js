@@ -97,7 +97,7 @@ export async function getStoredProject(id, options = {}) {
   return presentMusicVideoDependencies(await (await selectBackend()).getProject(id, options));
 }
 
-async function withCatalogDescriptions(project) {
+async function withCatalogDescriptions(project, { catalogReads = null } = {}) {
   let current = project;
   if (getBackendName() === 'postgres' && hasLinkedSubjects(project)) {
     const { resolveProjectCatalogDescriptions } = await import('./subjectDescriptionSync.js');
@@ -105,13 +105,18 @@ async function withCatalogDescriptions(project) {
   }
   if (current?.castAndSets?.source !== 'catalog') return current;
   const { withCatalogCheckin } = await import('./catalogCheckin.js');
-  return withCatalogCheckin(current);
+  return catalogReads ? withCatalogCheckin(current, { reads: catalogReads }) : withCatalogCheckin(current);
 }
 
-/** Null when missing; linked descriptions come from the catalog when usable. */
+/**
+ * Null when missing; linked descriptions come from the catalog when usable.
+ * `options.catalogReads` (catalogCheckin.createCatalogReads) lets a read route reuse this
+ * check-in's catalog reads for the next one it resolves.
+ */
 export async function getProject(id, options = {}) {
+  const { catalogReads = null, ...readOptions } = options;
   const backend = await selectBackend();
-  return presentMusicVideoDependencies(await withCatalogDescriptions(await backend.getProject(id, options)));
+  return presentMusicVideoDependencies(await withCatalogDescriptions(await backend.getProject(id, readOptions), { catalogReads }));
 }
 
 /** Live project ids (or all when includeDeleted) — used by tombstone GC sweeps. */
@@ -392,17 +397,21 @@ export async function addProjectScenes(id, sceneInputs, { source = null } = {}) 
   }, { source });
 }
 
+// Shot edits that answer with shots: the write keeps its clean-up (it still resolves the
+// check-in to drop stale catalog picks) but does not present the saved project afterwards.
+const SCENES_REPLY = Object.freeze({ presentProject: false });
+
 /** Edit against the fresh record so concurrent changes are not overwritten. */
 export async function updateScene(id, sceneId, patch) {
   const { applySceneUpdate } = await import('./projectsLogic.js');
-  const { updated } = await mutateProjectRecord(id, (current) => applySceneUpdate(current, sceneId, patch));
+  const { updated } = await mutateProjectRecord(id, (current) => applySceneUpdate(current, sceneId, patch), SCENES_REPLY);
   return updated;
 }
 
 /** "Vary wipes" over a run of shots (projectsLogic.varySceneWipes). Returns `{ project, scenes }`. */
 export async function varyProjectWipes(id, options) {
   const { varySceneWipes } = await import('./projectsLogic.js');
-  return mutateProjectRecord(id, (current) => varySceneWipes(current, options));
+  return mutateProjectRecord(id, (current) => varySceneWipes(current, options), SCENES_REPLY);
 }
 
 export async function deleteScene(id, sceneId) {
@@ -649,7 +658,7 @@ function fileAppendedTakes(project, placed) {
  * `{ lane: 'image'|'video', error, at }` (#10154). Returns the updated scene.
  */
 export async function recordSceneFailure(id, sceneId, failure) {
-  const { scene } = await mutateProjectRecord(id, (current) => setSceneLastFailure(current, sceneId, failure));
+  const { scene } = await mutateProjectRecord(id, (current) => setSceneLastFailure(current, sceneId, failure), SCENES_REPLY);
   return scene;
 }
 
@@ -715,7 +724,7 @@ export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAsset
       outcome = { ...outcome, project: { ...outcome.project, scenes }, scene: scenes.find((scene) => scene.sceneId === sceneId) };
     }
     return outcome;
-  });
+  }, SCENES_REPLY);
   return scene;
 }
 
@@ -758,7 +767,7 @@ export async function checkSceneTakePlate(id, sceneId, takeId) {
   const frameRole = plateFrameRole(take);
   const evidence = await reviewPlate({ scene, subjects: project.concept?.subjects || [], project, assetId: take.assetId, runId: `manual-${randomUUID()}`, reviewer,
     prompt: plateCheckPrompt(scene, take), frameRole });
-  const { scene: saved } = await mutateProjectRecord(id, (current) => recordTakePlateEvidence(current, sceneId, takeId, evidence));
+  const { scene: saved } = await mutateProjectRecord(id, (current) => recordTakePlateEvidence(current, sceneId, takeId, evidence), SCENES_REPLY);
   return saved;
 }
 
@@ -792,6 +801,9 @@ async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate =
   let descriptions = null;
   const write = mutate || (await selectBackend()).mutateProjectRecord;
   const sceneOnly = options.sceneOnly === true;
+  // A mutator that answers with shots, never the project, skips presenting the saved record:
+  // nothing reads its catalog descriptions or check-in, which re-read every linked record (#16210).
+  const presentProject = options.presentProject !== false;
   const outcome = await write(id, async (stored, context = {}) => {
     if (sceneOnly) {
       const outcome = await transform(stored, { ...context, storedProject: stored });
@@ -843,11 +855,11 @@ async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate =
     // must not report the saved edit as failed and invite a conflicting retry.
     await descriptions.announceDescriptionEdits(catalogRecords)
       .catch((err) => console.error(`🔁 catalog change notification failed: ${err.message}`));
-    outcome.project = await descriptions.resolveProjectCatalogDescriptions(outcome.project);
+    if (presentProject) outcome.project = await descriptions.resolveProjectCatalogDescriptions(outcome.project);
   }
   // Presentation is reconstructed after commit: sockets and mutation replies need
   // the same live catalog state as GET, without storing its derived media list.
-  if (!sceneOnly && outcome.project?.castAndSets?.source === 'catalog') {
+  if (!sceneOnly && presentProject && outcome.project?.castAndSets?.source === 'catalog') {
     const { withCatalogCheckin } = await import('./catalogCheckin.js');
     outcome.project = await withCatalogCheckin(outcome.project);
   }

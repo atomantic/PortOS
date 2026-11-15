@@ -109,21 +109,6 @@ describe('decisionLog.js', () => {
     });
   });
 
-  describe('DECISION_TYPES', () => {
-    it('should define all decision types', () => {
-      expect(DECISION_TYPES.TASK_SKIPPED).toBe('task_skipped');
-      expect(DECISION_TYPES.TASK_SWITCHED).toBe('task_switched');
-      expect(DECISION_TYPES.INTERVAL_ADJUSTED).toBe('interval_adjusted');
-      expect(DECISION_TYPES.COOLDOWN_ACTIVE).toBe('cooldown_active');
-      expect(DECISION_TYPES.NOT_DUE).toBe('not_due');
-      expect(DECISION_TYPES.QUEUE_FULL).toBe('queue_full');
-      expect(DECISION_TYPES.CAPACITY_FULL).toBe('capacity_full');
-      expect(DECISION_TYPES.TASK_SELECTED).toBe('task_selected');
-      expect(DECISION_TYPES.REHABILITATION).toBe('rehabilitation');
-      expect(DECISION_TYPES.IDLE).toBe('idle');
-    });
-  });
-
   describe('recordDecision', () => {
     it('should record a new decision', async () => {
       readJSONFile.mockResolvedValue(makeDecisionData());

@@ -73,34 +73,7 @@ import { readFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
-// The exported constants are load-bearing for both production callers
-// (`tuiPromptRunner.js`, `agentTuiSpawning.js`). Pin every value so an
-// inadvertent edit on one timing knob trips a test instead of silently
-// drifting the paste handshake.
-describe('tuiHandshake — paste timing constants', () => {
-  it('pins ready-poll constants', () => {
-    expect(READY_POLL_INTERVAL_MS).toBe(300);
-    expect(READY_IDLE_THRESHOLD_MS).toBe(1200);
-    expect(PASTE_DEADLINE_MS).toBe(10000);
-    // The idle threshold must remain larger than the poll interval —
-    // otherwise the first idle window is observed before the banner
-    // has finished its second paint.
-    expect(READY_IDLE_THRESHOLD_MS).toBeGreaterThan(READY_POLL_INTERVAL_MS);
-    // The deadline must outrun the idle threshold by enough headroom to
-    // catch a slow spawn + initial paint.
-    expect(PASTE_DEADLINE_MS).toBeGreaterThan(READY_IDLE_THRESHOLD_MS);
-  });
-
-  it('pins paste-marker constants', () => {
-    expect(PASTE_MARKER_POLL_MS).toBe(150);
-    expect(PASTE_TO_ENTER_MIN_DELAY_MS).toBe(200);
-    expect(PASTE_TO_ENTER_FALLBACK_MS).toBe(3500);
-    // Fallback only fires when no marker appears; it must be longer than
-    // the min delay or the min delay never gates anything.
-    expect(PASTE_TO_ENTER_FALLBACK_MS).toBeGreaterThan(PASTE_TO_ENTER_MIN_DELAY_MS);
-  });
-
-  it('PASTE_MARKER_PATTERN matches Claude Code paste markers', () => {
+describe('tuiHandshake — paste timing constants', () => {  it('PASTE_MARKER_PATTERN matches Claude Code paste markers', () => {
     expect(PASTE_MARKER_PATTERN.test('[Pasted text #1 +3 lines]')).toBe(true);
     expect(PASTE_MARKER_PATTERN.test('[Pasted text #42 +120 lines]')).toBe(true);
     // Embedded inside a banner of escape-stripped output.

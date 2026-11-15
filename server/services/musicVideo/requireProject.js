@@ -7,8 +7,9 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { getProject } from './projects.js';
 
-export async function requireProject(id) {
-  const project = await getProject(id);
+/** `options` are getProject's (`catalogReads`); left out, getProject is called with the id alone. */
+export async function requireProject(id, options = null) {
+  const project = await (options ? getProject(id, options) : getProject(id));
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   return project;
 }
