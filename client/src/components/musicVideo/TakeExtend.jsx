@@ -74,7 +74,7 @@ export default function TakeExtend({ projectId, scene, take, busy = false }) {
         className="w-full rounded border border-port-border bg-port-card px-1 py-0.5 text-[11px]" />
       {plan && (
         <div className="space-y-1">
-          <p>{plan.seconds}s at {plan.resolution}, about {formatUsd(plan.estimatedCostUsd, { fallback: 'an unknown price' })}</p>
+          <p>{plan.seconds}s at {plan.resolution}, about {plan.estimatedCostUsd == null ? 'an unknown price' : formatUsd(plan.estimatedCostUsd)}</p>
           <details>
             <summary className="cursor-pointer">Show full request</summary>
             <pre className="whitespace-pre-wrap break-words">{JSON.stringify(plan.body, null, 2)}</pre>
@@ -88,7 +88,7 @@ export default function TakeExtend({ projectId, scene, take, busy = false }) {
         </button>
         <button type="button" disabled={working || !plan} onClick={send}
           className="rounded bg-port-accent/20 px-1.5 py-0.5 text-port-accent pointer-coarse:min-h-11 min-h-[32px] sm:min-h-0 disabled:opacity-50">
-          Send for {plan ? formatUsd(plan.estimatedCostUsd, { fallback: 'unknown price' }) : 'preview first'}
+          Send for {plan ? (plan.estimatedCostUsd == null ? 'unknown price' : formatUsd(plan.estimatedCostUsd)) : 'preview first'}
         </button>
         <button type="button" onClick={() => { setOpen(false); setPlan(null); }}
           className="rounded bg-port-border px-1.5 py-0.5 pointer-coarse:min-h-11 min-h-[32px] sm:min-h-0">Cancel</button>

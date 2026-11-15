@@ -41,4 +41,17 @@ describe('TakeExtend', () => {
     fireEvent.click(screen.getByRole('button', { name: /Send for/ }));
     await waitFor(() => expect(extendVideoHistoryItem).toHaveBeenLastCalledWith('veo2', expect.objectContaining({ prompt: 'Walk on', dryRun: false }), { silent: true }));
   });
+
+  // Uniquely catches formatUsd's nullish contract ($0.00) leaking into an unpriced extend.
+  it('reads an unpriced extend as an unknown price, never $0.00', async () => {
+    getVideoHistoryItem.mockResolvedValue({ modelId: 'fal:fal-ai/veo3.1/fast/image-to-video' });
+    extendVideoHistoryItem.mockResolvedValue({ seconds: 7, resolution: '720p', estimatedCostUsd: null, body: { prompt: 'Walk on' } });
+    render(<TakeExtend projectId="p1" scene={scene} take={take('veo3')} />);
+    fireEvent.click(await screen.findByRole('button', { name: /Extend this clip/ }));
+    fireEvent.change(screen.getByLabelText(/What happens next/), { target: { value: 'Walk on' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview price' }));
+    await screen.findByText(/7s at 720p, about an unknown price/);
+    expect(screen.getByRole('button', { name: 'Send for unknown price' })).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/\$0\.00/);
+  });
 });
