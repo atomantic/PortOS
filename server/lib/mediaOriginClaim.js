@@ -1,8 +1,8 @@
 /**
  * `earliestHolderOrigin({ localId, localMtimeMs, holders })` — the instance id that made an
- * unattributed federated media file, from the strictly earliest file time among its holders
+ * unattributed federated media file, from the strictly earliest file time among its holders.
  *
- * ; null (fail closed) on a tie, clock-skew gap, missing report or a peer that may not delete media
+ * Null (fail closed) on a tie, clock-skew gap, missing report or a peer that may not delete media
  * here. `localOriginMayBeReplaced({ mtimeMs, createdAt })` — whether that proof may replace this
  * machine's own origin claim (file written well after `createdAt`, or no `createdAt`).
  *

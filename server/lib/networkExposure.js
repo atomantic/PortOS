@@ -1,8 +1,8 @@
 /**
  * Runtime scheme/bind/cert snapshot plus the shared ordered Tailscale, MagicDNS, certificate, and
- * trusted-launch setup guide used by CLI and UI
+ * trusted-launch setup guide used by CLI and UI.
  *
- * ; `localApiBaseUrl()` resolves the plain-HTTP loopback origin (mirror port under HTTPS, API port
+ * `localApiBaseUrl()` resolves the plain-HTTP loopback origin (mirror port under HTTPS, API port
  * otherwise) for local scripts and agent-facing curl snippets.
  *
  * Snapshot of how PortOS is exposed on the network — scheme, bind address,

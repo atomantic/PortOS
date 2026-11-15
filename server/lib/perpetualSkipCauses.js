@@ -1,8 +1,8 @@
 /**
  * `formatSkipCauses(skipCauses, maxCauses?, excludeCause?)` — renders a perpetual work-detector's
- * per-cause skip map (`{ 'needs-input': 49, blocked: 17 }`) as a compact largest-first string
+ * per-cause skip map (`{ 'needs-input': 49, blocked: 17 }`) as a compact largest-first string.
  *
- * ; the one definition shared by the park log line, the on-demand toast, and the work-item picker.
+ * The one definition shared by the park log line, the on-demand toast, and the work-item picker.
  * Re-exported at `client/src/lib/perpetualSkipCauses.js`.
  */
 

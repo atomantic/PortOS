@@ -1,7 +1,7 @@
 // Pure row builders for Setup & Capabilities, including strict network/provider first-run readiness
-// and optional-integration health rollups
+// and optional-integration health rollups.
 //
-// ; fed by `routes/capabilities.js`.
+// Fed by `routes/capabilities.js`.
 //
 // Pure row builders for the Capability Map (one page that shows every
 // connected system's status — doubles as a setup checklist and a runtime

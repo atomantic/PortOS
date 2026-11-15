@@ -1,8 +1,8 @@
 /**
  * `useModelInputPreview(fetchPreview, body, { enabled })` — the server's preview of what a render
- * would send to its model (#11317), refreshed 500 ms after the form stops changing
+ * would send to its model (#11317), refreshed 500 ms after the form stops changing.
  *
- * ; superseded responses dropped, a refusal returned as `error`. Use when: Showing the exact prompt
+ * Superseded responses dropped, a refusal returned as `error`. Use when: Showing the exact prompt
  * and its additions beside a render form before Generate.
  */
 

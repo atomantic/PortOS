@@ -1,8 +1,8 @@
 /**
  * Hover/click/pin state machine for an anchored token popover (200ms open, 150ms grace close) plus the
- * `hotRef` cross-link highlight
+ * `hotRef` cross-link highlight.
  *
- * ; returns `{ pop, hotRef, onTokenEnter/Leave/Click, onPopoverEnter/Leave, closePopover }`. Use when:
+ * Returns `{ pop, hotRef, onTokenEnter/Leave/Click, onPopoverEnter/Leave, closePopover }`. Use when:
  * Prose (or any) tokens that open a detail popover on hover and pin on click (WorkEditor ↔
  * ProseTokenPopover).
  */

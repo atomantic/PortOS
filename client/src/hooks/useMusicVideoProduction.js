@@ -1,8 +1,8 @@
 /**
  * Server-owned production run (#9066): start a browserless plan → frames → clips → reviewed-draft run
- * with an allowed provider/model pool and explicit limits, and Stop / Resume / Cancel it
+ * with an allowed provider/model pool and explicit limits, and Stop / Resume / Cancel it.
  *
- * ; applies the project pushed on `music-video:production` and toasts terminal outcomes. Returns `{
+ * Applies the project pushed on `music-video:production` and toasts terminal outcomes. Returns `{
  * busy, start(body), resume(runId, body?), stop(runId), cancel(runId) }`. Use when: The Music Video
  * production panel.
  */

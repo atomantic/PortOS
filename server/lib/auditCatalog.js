@@ -1,7 +1,7 @@
 /**
- * `getAuditScheduleMetadata` derives upgrade-safe display names and cluster labels
+ * `getAuditScheduleMetadata` derives upgrade-safe display names and cluster labels.
  *
- * ; `AUDIT_RUN_GUIDANCE` supplies advisory sequencing. Shared catalog of scheduled AUDIT task types
+ * `AUDIT_RUN_GUIDANCE` supplies advisory sequencing. Shared catalog of scheduled AUDIT task types
  * (`AUDIT_DEFINITIONS` / `AUDIT_TASK_TYPES`) that can either implement a fix or file tracker issues.
  * Filing presets carry `issueLabel` (category) plus `metricLabel`/`extraLabels` so forge issues can be
  * filtered by focus without putting ids in titles. `DO_BETTER_SCOPE_COVERAGE` maps scheduled task

@@ -1,7 +1,7 @@
 // SongBook editor save/dirty boundary: `buildSongBookPatch(draft, savedDraft)` preserves
-// unchanged-link omission
+// unchanged-link omission.
 //
-// ; `songBookDraftsEqual(a, b)` compares the same serialized values. Exports `SCROLL_DURATION_MIN/MAX`
+// `songBookDraftsEqual(a, b)` compares the same serialized values. Exports `SCROLL_DURATION_MIN/MAX`
 // for the form. Page owns defaults and lifecycle; add save normalization here so the navigation guard
 // follows.
 //

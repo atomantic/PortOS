@@ -1,8 +1,8 @@
 /**
  * Detects stale import/runtime-export errors at import and render boundaries, confirms a newer served
- * build before automatic reload, and purges PortOS caches for that recovery
+ * build before automatic reload, and purges PortOS caches for that recovery.
  *
- * ; an explicit route-error retry can also purge them when the live shell is reachable.
+ * An explicit route-error retry can also purge them when the live shell is reachable.
  */
 
 import { safeReadSession, safeWriteSession } from '../lib/safeStorage.js';

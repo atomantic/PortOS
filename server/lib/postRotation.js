@@ -1,8 +1,8 @@
 /**
  * Pure deterministic day-based rotation for POST practice selection — `shuffleForDay` supplies a
- * stable pseudorandom daily mix
+ * stable pseudorandom daily mix.
  *
- * ; `orderByRecencyRotation` sorts candidates fresh-before-recently-practiced, then by priority, and
+ * `orderByRecencyRotation` sorts candidates fresh-before-recently-practiced, then by priority, and
  * rotates equivalent ones by local day so a tier never pins to one drill. Mirrored at
  * `client/src/lib/postRotation.js`.
  */

@@ -1,8 +1,8 @@
 /**
  * Resolve the user's configured IANA timezone (`settings.timezone`) once, falling back to the browser
- * zone then UTC
+ * zone then UTC.
  *
- * ; returns the tz string. Use when: A date-scoped surface that must derive "today" the same way the
+ * Returns the tz string. Use when: A date-scoped surface that must derive "today" the same way the
  * server does (POST launcher/history day keys, #2681).
  */
 

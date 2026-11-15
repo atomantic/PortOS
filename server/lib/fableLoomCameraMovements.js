@@ -1,8 +1,8 @@
 /**
  * FableLoom names for the shared `cameraMovements.js` catalog (generated cut direction and the manual
- * scene editor selector)
+ * scene editor selector).
  *
- * ; persisted ids are unchanged.
+ * Persisted ids are unchanged.
  *
  * Camera-direction vocabulary for FableLoom's AI prompts and editor. The
  * catalog itself lives in the shared `cameraMovements.js` (#10589), which Music

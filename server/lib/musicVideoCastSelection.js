@@ -1,7 +1,7 @@
 /**
- * Resolves one active alternate per character name and excludes references owned by inactive cast
+ * Resolves one active alternate per character name and excludes references owned by inactive cast.
  *
- * ; `musicVideoPrevizForActiveCast(project)` is the previz with every unused alternate's ids read as
+ * `musicVideoPrevizForActiveCast(project)` is the previz with every unused alternate's ids read as
  * the chosen one (cached per previz and cast).
  */
 

@@ -2,11 +2,6 @@
  * Allowlist + path helpers for the same-origin Eidoverse reverse-proxy on `:5555` (`/eidoverse-host`
  * prefix strip and root routes like `/ws` / `/version` while the host is active).
  *
- * Allowlist + path helpers for the same-origin Eidoverse reverse-proxy on `:5555` (`/eidoverse-host`
- * prefix strip and root routes like `/ws` / `/version` while the host is active). Shared by
- * `services/eidoverseProxy.js` so the main server and the optional `:5563` bridge stay in sync with
- * eidoverse-worlds `server/routes.ts`.
- *
  * Shared by `services/eidoverseProxy.js` so the main server and the optional `:5563` bridge stay in
  * sync with the eidoverse-worlds route table.
  */

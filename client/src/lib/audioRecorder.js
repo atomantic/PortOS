@@ -1,7 +1,7 @@
 // `startMemoRecording()` → `{ stream, stop, cancel }` handle whose `stop()` resolves to `{
-// audioBase64, mimeType, peak, durationMs }` (16 kHz mono WAV, base64)
+// audioBase64, mimeType, peak, durationMs }` (16 kHz mono WAV, base64).
 //
-// ; the live `stream` lets a tuner tap the same mic. `createStreamAnalyser(stream, { fftSize })` → `{
+// The live `stream` lets a tuner tap the same mic. `createStreamAnalyser(stream, { fftSize })` → `{
 // analyser, context, close }` taps an `AnalyserNode` off an existing stream (no second getUserMedia).
 // Plus `blobToWav16k` (decode a recorded blob → `{ wav, peak }`), `float32ToWav16k(samples,
 // sourceRate)` (resample a raw Float32 PCM buffer, e.g. an AudioWorklet capture, → `{ wav, peak }`; `{

@@ -1,7 +1,7 @@
 /**
- * Sequential exact-version availability checks for implicit imported draft selection
+ * Sequential exact-version availability checks for implicit imported draft selection.
  *
- * ; stale requests abort, unavailable newer drafts are disclosed, explicit review versions remain
+ * Stale requests abort, unavailable newer drafts are disclosed, explicit review versions remain
  * pinned.
  */
 

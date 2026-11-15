@@ -1,7 +1,7 @@
 /**
- * Deterministic overlap gate selecting at most three of a mind's own memories for a human message
+ * Deterministic overlap gate selecting at most three of a mind's own memories for a human message.
  *
- * ; acknowledgements and unrelated messages select nothing. Pure.
+ * Acknowledgements and unrelated messages select nothing. Pure.
  */
 
 import { STOP_WORDS } from './bm25.js';

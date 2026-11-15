@@ -1,7 +1,7 @@
 /**
- * Frozen version 1 of the text-only photographic Reality starter
+ * Frozen version 1 of the text-only photographic Reality starter.
  *
- * ; migration-safe.
+ * Migration-safe.
  */
 
 /** Frozen shipped text, version 1. Future revisions get a new versioned module. */

@@ -1,8 +1,8 @@
 /**
  * `compareSpeech(script, heard)` / `normalizeSpeech` — normalize case, punctuation and number words,
- * then score word-level (character-level for CJK) edit distance
+ * then score word-level (character-level for CJK) edit distance.
  *
- * ; `matched` at similarity >= 0.90. Used to verify rendered voice-over lines against a speech-to-text
+ * `matched` at similarity >= 0.90. Used to verify rendered voice-over lines against a speech-to-text
  * pass.
  *
  * Speech match — compare what a TTS line was SUPPOSED to say with what a

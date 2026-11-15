@@ -1,8 +1,8 @@
 /**
  * `useSceneClipPlayback(scene)` owns the native clip ref, filename resolution, clip-ID-keyed metadata,
- * dimensions, legacy loop state and speed/offset-adjusted coverage
+ * dimensions, legacy loop state and speed/offset-adjusted coverage.
  *
- * ; returns those values and `onLoadedMetadata`. Use when: Keep unconditional in SceneCard so hiding
+ * Returns those values and `onLoadedMetadata`. Use when: Keep unconditional in SceneCard so hiding
  * its preview preserves measurements, while a replacement clip invalidates them.
  */
 

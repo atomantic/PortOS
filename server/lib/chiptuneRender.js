@@ -1,7 +1,7 @@
 /**
- * Deterministic chiptune score → mono PCM → 16-bit WAV buffer (pure Node, no audio deps)
+ * Deterministic chiptune score → mono PCM → 16-bit WAV buffer (pure Node, no audio deps).
  *
- * ; `renderScoreToPcm` / `pcmToWavBuffer` / `renderScoreToWav`.
+ * `renderScoreToPcm` / `pcmToWavBuffer` / `renderScoreToWav`.
  *
  * Chiptune offline renderer (#2911) — deterministic score → PCM → WAV, pure
  * Node (no audio deps). The OGG encode happens in services/chiptune.js via the

@@ -1,8 +1,8 @@
 /**
  * Catalog ingredient type registry (system + user-defined) merged with the static fallback via a
- * Provider/hook pair
+ * Provider/hook pair.
  *
- * ; synchronous fallback to the built-in six so first render never blanks. Use when: Catalog
+ * Synchronous fallback to the built-in six so first render never blanks. Use when: Catalog
  * list/picker/editor; anywhere the catalog type list/lookup is needed.
  */
 

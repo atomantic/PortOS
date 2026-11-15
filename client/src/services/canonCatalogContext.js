@@ -1,7 +1,7 @@
 /**
- * Lazy universe and batched catalog identity context
+ * Lazy universe and batched catalog identity context.
  *
- * ; preserves embedded IDs, excludes retained shared aliases and refuses ambiguous canon targets.
+ * Preserves embedded IDs, excludes retained shared aliases and refuses ambiguous canon targets.
  */
 
 import { getUniverse } from './apiUniverseBuilder';

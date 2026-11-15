@@ -1,8 +1,8 @@
 /**
  * Fetches the original-vs-cleaned variant set for the one open image (`GET
- * /api/image-gen/:filename/variants`), normalized
+ * /api/image-gen/:filename/variants`), normalized.
  *
- * ; reuses the held group across toggle clicks and aborts a superseded lookup. `null` while unfetched
+ * Reuses the held group across toggle clicks and aborts a superseded lookup. `null` while unfetched
  * or failed, `[]` when the image is not indexed. Use when: `MediaPreview` calls it for every image
  * preview; neither a page-owned ref list nor a 60-row gallery window is a complete source of variant
  * lineage.

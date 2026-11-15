@@ -1,7 +1,7 @@
 /**
- * Clones a drei-cached GLTF scene with skeleton bindings intact and wires its animations
+ * Clones a drei-cached GLTF scene with skeleton bindings intact and wires its animations.
  *
- * ; the colocated `GltfPrimitive` prevents R3F from disposing shared cache resources. Accepts an
+ * The colocated `GltfPrimitive` prevents R3F from disposing shared cache resources. Accepts an
  * optional animation transform for derived clip sets. Use when: Any skinned GLTF rendered from
  * `useGLTF`; render its scene through `GltfPrimitive` so remounts cannot inherit disposed geometry or
  * materials.

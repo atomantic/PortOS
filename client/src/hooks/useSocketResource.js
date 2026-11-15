@@ -1,7 +1,7 @@
 /**
- * Initial resource read plus global/room-event, reconnect and tab-show reconciliation
+ * Initial resource read plus global/room-event, reconnect and tab-show reconciliation.
  *
- * ; single-flight reads, identity guards, an enabled gate and immediate mutation updates. Use when:
+ * Single-flight reads, identity guards, an enabled gate and immediate mutation updates. Use when:
  * Views replacing content polls with existing socket invalidations.
  */
 

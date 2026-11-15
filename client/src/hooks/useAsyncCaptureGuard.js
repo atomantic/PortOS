@@ -1,7 +1,7 @@
 /**
- * Shared pending-request and generation guard for microphone permission prompts
+ * Shared pending-request and generation guard for microphone permission prompts.
  *
- * ; returns `{ tryStart, settleStart, isCurrent, cancel }` and delegates resource teardown plus
+ * Returns `{ tryStart, settleStart, isCurrent, cancel }` and delegates resource teardown plus
  * caller-owned idle reset. Use when: Any capture hook that must reject concurrent `getUserMedia`
  * starts and dispose a stream resolved after cancellation.
  */

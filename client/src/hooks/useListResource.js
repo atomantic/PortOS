@@ -1,8 +1,8 @@
 /**
  * `useListResource(fetcher, { enabled })` → `{ items, state: 'loading'|'ready'|'error', error, retry,
- * setItems }` — one list read whose failure stays distinct from an empty result
+ * setItems }` — one list read whose failure stays distinct from an empty result.
  *
- * ; a superseded response is dropped. `fetcher` must be referentially stable. Use when: Any picker or
+ * A superseded response is dropped. `fetcher` must be referentially stable. Use when: Any picker or
  * list section fed by one list fetch (LoRA library, track library, model catalog) — render
  * `<ListLoadError onRetry={retry}>` on `'error'` and the empty copy only on `'ready'`, never
  * `.catch(() => [])`.

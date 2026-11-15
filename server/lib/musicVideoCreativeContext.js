@@ -1,7 +1,7 @@
 /**
- * `musicVideoDirectionContext(direction)` bounds the authoritative Cast & Sets bible
+ * `musicVideoDirectionContext(direction)` bounds the authoritative Cast & Sets bible.
  *
- * ; `musicVideoCodeDirectionContext(direction)` renders the approved procedural direction (rules +
+ * `musicVideoCodeDirectionContext(direction)` renders the approved procedural direction (rules +
  * reusable character definitions) for code-authoring requests; `musicVideoCreativeContext(concept)`
  * composes the selected universe style and authored cast/place/object bible for planning and
  * generation; `musicVideoSongStyleContext(concept)` splits `concept.songStyle` (a Suno style prompt;

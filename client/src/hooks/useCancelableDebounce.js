@@ -1,8 +1,8 @@
 /**
  * `[schedule, cancel]` — `schedule(fn, delay)` arms a cancelable `setTimeout`, replacing any pending
- * call
+ * call.
  *
- * ; `cancel()` drops it with no replacement. Call `cancel()` synchronously right before a navigation
+ * `cancel()` drops it with no replacement. Call `cancel()` synchronously right before a navigation
  * that a stale debounced write must not be able to race (React's own unmount cleanup runs
  * asynchronously relative to `navigate()`, leaving a window under load). Use when: Any debounced
  * state→URL mirror sitting in front of a route that can change out from under it (Catalog,

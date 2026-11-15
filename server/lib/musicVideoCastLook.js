@@ -1,8 +1,8 @@
 /**
  * `castInputsFromReferences(scene, references)` records the Casting guide keys and Cast & Sets sheet
- * ids a frame submit actually sent
+ * ids a frame submit actually sent.
  *
- * ; `musicVideoCastInputsRecord` stores that snapshot on an image take; `castLookForTake(project,
+ * `musicVideoCastInputsRecord` stores that snapshot on an image take; `castLookForTake(project,
  * scene, take, castMedia)` reports `unknown` (no snapshot, or guides whose media is not loaded),
  * `current`, or `older`.
  */

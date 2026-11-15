@@ -1,8 +1,8 @@
 /**
  * `usePendingDeletePeerNames(rows)` → `{ peerNames, rememberPeerName }` — registry id → peer display
- * name for rows carrying `pendingDelete.peerId`
+ * name for rows carrying `pendingDelete.peerId`.
  *
- * ; one silent registry read per unresolved id. Use when: Any media list that can start a remote
+ * One silent registry read per unresolved id. Use when: Any media list that can start a remote
  * delete and renders `MediaCard`'s pending marker.
  */
 

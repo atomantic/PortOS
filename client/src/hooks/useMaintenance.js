@@ -1,7 +1,7 @@
 /**
- * Server-confirmed maintenance status and `refresh`
+ * Server-confirmed maintenance status and `refresh`.
  *
- * ; `{ mode: 'banner' }` follows the coarse `maintenance:readiness` push instead of refetching. Use
+ * `{ mode: 'banner' }` follows the coarse `maintenance:readiness` push instead of refetching. Use
  * when: Admission hold, blockers, and reconnect invalidation; the global banner.
  */
 

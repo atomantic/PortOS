@@ -1,7 +1,7 @@
 // `evictOldest(map, max, onEvict?)` — evict oldest-first (`map.keys().next().value`) until a Map is
-// within `max`, with an optional per-evicted-key teardown callback for a companion timer map
+// within `max`, with an optional per-evicted-key teardown callback for a companion timer map.
 //
-// ; `ORPHAN_BUFFER_MAX` (64), the shared cap for the orphan-event race-buffers. The one home for the
+// `ORPHAN_BUFFER_MAX` (64), the shared cap for the orphan-event race-buffers. The one home for the
 // "stash an unmatched event in a `jobId → …` Map, evict the oldest on overflow" idiom shared by
 // `useSceneRenderLifecycle`, `useImageGenQueue`, and `clientErrorReporter`.
 //

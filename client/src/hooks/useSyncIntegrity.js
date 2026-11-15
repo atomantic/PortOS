@@ -1,7 +1,7 @@
 /**
- * Fetches per-kind integrity diff from every eligible online peer
+ * Fetches per-kind integrity diff from every eligible online peer.
  *
- * ; reduces to worst-case `statusById` + `byPeer` breakdown maps. Use when: Federated media sync
+ * Reduces to worst-case `statusById` + `byPeer` breakdown maps. Use when: Federated media sync
  * integrity UI — badges, drawers, peer breakdown.
  */
 

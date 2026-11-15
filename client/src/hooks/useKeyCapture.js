@@ -1,8 +1,8 @@
 /**
  * `useKeyCapture({ enabled?, enabledInDialog?, onKeyDown, onKeyUp })` — capture-phase window listener
- * whose handler *claims* an event by returning `true`
+ * whose handler *claims* an event by returning `true`.
  *
- * ; a claimed event is `preventDefault`ed AND `stopImmediatePropagation`ed so no app-global bubble
+ * A claimed event is `preventDefault`ed AND `stopImmediatePropagation`ed so no app-global bubble
  * handler sees it. Which events are offered is decided by the shared `shouldIgnoreGlobalKey` predicate
  * (`lib/a11yKeyboard.js`): never events from an editable field, never Space on a focused button (so
  * native activation still works), and not while an `aria-modal` dialog is open (`{ enabledInDialog:

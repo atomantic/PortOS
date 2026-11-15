@@ -1,7 +1,7 @@
 /**
- * Pure imported Animatic review candidates, newest immutable version first
+ * Pure imported Animatic review candidates, newest immutable version first.
  *
- * ; exact version URLs remain separate from native production approvals.
+ * Exact version URLs remain separate from native production approvals.
  */
 
 /** An imported animatic is a review snapshot, never a native production approval. */

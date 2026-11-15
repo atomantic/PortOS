@@ -1,8 +1,8 @@
 /**
  * A project's development files ("ingredients"): import a file or a new version, add/resolve notes,
- * approve / request changes, remove
+ * approve / request changes, remove.
  *
- * ; applies the returned project. Returns `{ busy, upload, addNote, resolveNote, review, remove }`.
+ * Applies the returned project. Returns `{ busy, upload, addNote, resolveNote, review, remove }`.
  * Use when: The Music Video Development section and viewer drawer.
  */
 

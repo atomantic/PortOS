@@ -1,7 +1,7 @@
 /**
- * Live analyze-phase stage checklist via the `importer:progress` socket (runId-filtered)
+ * Live analyze-phase stage checklist via the `importer:progress` socket (runId-filtered).
  *
- * ; exports `stageStatusIcon` for the status→icon lookup. Use when: Importer analyze progress UI only.
+ * Exports `stageStatusIcon` for the status→icon lookup. Use when: Importer analyze progress UI only.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';

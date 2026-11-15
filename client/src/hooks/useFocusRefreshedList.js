@@ -1,8 +1,8 @@
 /**
  * Load-once list fetcher that reloads on the given socket record events (a burst coalesces into one
- * read) and reconnect, plus a 30s-debounced window-focus refresh
+ * read) and reconnect, plus a 30s-debounced window-focus refresh.
  *
- * ; sorts by name and skips re-render when an `id|name` signature is unchanged. Owns its own
+ * Sorts by name and skips re-render when an `id|name` signature is unchanged. Owns its own
  * warn-on-error. Use when: Any sidebar/nav list of records whose create/rename/delete must show
  * without a reload. Pass a stable `api.*` fetch fn and a module-level events array.
  */

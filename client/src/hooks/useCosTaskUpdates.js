@@ -1,7 +1,7 @@
 /**
- * Shared five-event CoS task lifecycle subscription
+ * Shared five-event CoS task lifecycle subscription.
  *
- * ; re-subscribes on socket reconnect and forwards normalized task updates to the current callback.
+ * Re-subscribes on socket reconnect and forwards normalized task updates to the current callback.
  * Use when: A CoS task surface with its own task-status reducer.
  */
 

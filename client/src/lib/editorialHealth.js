@@ -1,7 +1,7 @@
 // Pure presentation helpers for the editorial health panel (`/pipeline/editorial-checks`, #1316):
-// `scoreBand(score)` bands a 0–100 health score into a label + Tailwind tone
+// `scoreBand(score)` bands a 0–100 health score into a label + Tailwind tone.
 //
-// ; `deltaDisplay(delta)` formats the revision-to-revision score change (arrow + tone);
+// `deltaDisplay(delta)` formats the revision-to-revision score change (arrow + tone);
 // `sparklineGeometry(points, box)` projects the trend's score points into SVG polyline coords;
 // `orderedCategories(openByCategory)` sorts the per-category open-finding breakdown;
 // `orderedChecks(openByCheck, labelFor)` sorts the per-check breakdown resolving each id to its

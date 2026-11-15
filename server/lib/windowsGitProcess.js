@@ -1,8 +1,8 @@
 /**
  * `startGit` multiplexes Windows commands through one private native broker using inherited anonymous
- * control pipes
+ * control pipes.
  *
- * ; each command has its own Job Object, output pipes, cwd and environment. Other platforms use direct
+ * Each command has its own Job Object, output pipes, cwd and environment. Other platforms use direct
  * spawn. Windows PowerShell 5.1 compiles `windowsGitSupervisor.cs` once per Node process into a
  * private temporary executable (15-second compiler budget). `windowsGitFailureMetadata` projects fixed
  * startup phases, numeric compiler exit codes and allowlisted spawn codes without raw error details.

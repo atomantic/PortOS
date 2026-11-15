@@ -1,7 +1,7 @@
 /**
- * Stream one app's `deploy.sh` output via Socket.IO
+ * Stream one app's `deploy.sh` output via Socket.IO.
  *
- * ; reattaches to a running deploy after a reload or reconnect. Use when: App deployment surfaces
+ * Reattaches to a running deploy after a reload or reconnect. Use when: App deployment surfaces
  * only.
  */
 

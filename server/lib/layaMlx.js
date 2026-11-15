@@ -1,7 +1,7 @@
 /**
- * Pinned Laya-MLX experiment model, request validation and probability normalization
+ * Pinned Laya-MLX experiment model, request validation and probability normalization.
  *
- * ; entropy confidence stays distinct from entailment.
+ * Entropy confidence stays distinct from entailment.
  */
 
 import { z } from 'zod';

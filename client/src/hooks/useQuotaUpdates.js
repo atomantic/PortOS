@@ -1,7 +1,7 @@
 /**
- * Reconcile quota cards on scrape completion, reconnect and tab show
+ * Reconcile quota cards on scrape completion, reconnect and tab show.
  *
- * ; the caller owns the entry read. Use when: Usage, Subscriptions and Quota Burn quota cards.
+ * The caller owns the entry read. Use when: Usage, Subscriptions and Quota Burn quota cards.
  */
 
 import { useSocketResource } from './useSocketResource.js';

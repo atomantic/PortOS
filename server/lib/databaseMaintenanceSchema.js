@@ -1,7 +1,7 @@
 /**
- * Shared read-only maintenance-target memory/catalog presence query
+ * Shared read-only maintenance-target memory/catalog presence query.
  *
- * ; not complete runtime/schema compatibility.
+ * Not complete runtime/schema compatibility.
  */
 
 /** The existing fenced startup diagnostic, shared without importing a DB pool. */

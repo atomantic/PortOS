@@ -1,7 +1,7 @@
 /**
- * Owns one memo recorder through permission prompts, stop/cancel, and unmount
+ * Owns one memo recorder through permission prompts, stop/cancel, and unmount.
  *
- * ; exposes `{ recording, starting, start, stop, cancel, stream }`. Use when: Catalog voice memos and
+ * Exposes `{ recording, starting, start, stop, cancel, stream }`. Use when: Catalog voice memos and
  * song takes.
  */
 

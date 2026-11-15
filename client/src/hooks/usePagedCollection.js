@@ -1,8 +1,8 @@
 /**
  * `usePagedCollection(fetchPage, { enabled })` — bounded cursor pages, deduplication by id,
- * single-flight loading, abort/stale-query protection, retry, reset, and local mutation via setItems
+ * single-flight loading, abort/stale-query protection, retry, reset, and local mutation via setItems.
  *
- * ; an optional `meta` returned by `fetchPage` is exposed as the latest page's response-level data.
+ * An optional `meta` returned by `fetchPage` is exposed as the latest page's response-level data.
  * Use when: Growing cursor-based collections; pair with `InfiniteScrollFooter`.
  */
 

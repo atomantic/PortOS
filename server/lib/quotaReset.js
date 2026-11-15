@@ -1,7 +1,7 @@
 /**
- * `parseHumanReset` turns a provider CLI's human reset string into ISO 8601 (call it from the adapter)
+ * `parseHumanReset` turns a provider CLI's human reset string into ISO 8601 (call it from the adapter).
  *
- * ; `normalizeResetAt`/`hoursUntilReset` compute time remaining without treating unknown values as
+ * `normalizeResetAt`/`hoursUntilReset` compute time remaining without treating unknown values as
  * imminent resets; `parseObservedReset` pulls the reset a provider stated in its own refusal text, and
  * `isObservedBlockActive` is the shared "is that refusal still holding?" predicate every
  * observed-refusal ledger uses.

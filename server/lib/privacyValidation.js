@@ -1,8 +1,8 @@
 /**
  * Privacy Center schemas — PII Vault (issue #2140): vault record create/update (partial PUT), list
- * query, UUID params
+ * query, UUID params.
  *
- * ; the vault type/status vocabularies + the sensitive-type
+ * The vault type/status vocabularies + the sensitive-type
  * (`ssn`/`passport`/`drivers_license`/`financial_account`) `useForScans` hard-false rule and per-type
  * scan defaults. Trusted Organizations registry (issue #2141): org create/update (partial PUT), list
  * query, UUID params, and the replace-set holdings schema. Data-broker database + case ledger (issue

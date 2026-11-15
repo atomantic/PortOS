@@ -1,7 +1,7 @@
 /**
- * `launchDetached(executable, args, { graceMs })`: starts a GUI program detached
+ * `launchDetached(executable, args, { graceMs })`: starts a GUI program detached.
  *
- * ; rejects with its last stderr line if it exits within the grace period (e.g. no display), otherwise
+ * Rejects with its last stderr line if it exits within the grace period (e.g. no display), otherwise
  * lets it go.
  */
 

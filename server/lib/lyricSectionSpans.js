@@ -1,8 +1,8 @@
 /**
  * `lyricSectionSpans(cues, markers)` — time spans of a lyric sheet's `[Verse]`/`[Chorus]` sections
- * once its lines are timed
+ * once its lines are timed.
  *
- * ; `lastTimedCueEnd`. Browser-safe; shared by the analysis relabel and the storyboard fit.
+ * `lastTimedCueEnd`. Browser-safe; shared by the analysis relabel and the storyboard fit.
  *
  * Time spans of a lyric sheet's sections (`[Verse 1]`, `[Chorus]`, …) once
  * its lines are timed. Browser-safe: shared by the music video analysis

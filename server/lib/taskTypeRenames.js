@@ -1,7 +1,7 @@
 /**
- * Dependency-free retired-task-name map (`TASK_TYPE_RENAMES`, `currentTaskTypeName`)
+ * Dependency-free retired-task-name map (`TASK_TYPE_RENAMES`, `currentTaskTypeName`).
  *
- * ; re-exported by `scheduledTaskTypes.js`.
+ * Re-exported by `scheduledTaskTypes.js`.
  */
 
 /**

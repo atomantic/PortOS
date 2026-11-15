@@ -1,7 +1,7 @@
 /**
- * Sidebar Pinned + Recent working set (localStorage MRU + pins)
+ * Sidebar Pinned + Recent working set (localStorage MRU + pins).
  *
- * ; resolves stored paths to `{ path, label, icon }` rows via a `resolveNavEntry` arg. Use when:
+ * Resolves stored paths to `{ path, label, icon }` rows via a `resolveNavEntry` arg. Use when:
  * Rendering the sidebar's Pinned/Recent sections.
  */
 

@@ -1,8 +1,8 @@
 /**
  * `buildFalH3MaxPrompt(prompt, negativePrompt)` composes the provider-neutral shot prompt fal's free
- * MiniMax H3 Max tool is driven with
+ * MiniMax H3 Max tool is driven with.
  *
- * ; `FAL_H3_MAX_FREE_URL` and `FAL_H3_MAX_FREE_ALLOWANCE_NOTE` carry the tool URL and current vendor
+ * `FAL_H3_MAX_FREE_URL` and `FAL_H3_MAX_FREE_ALLOWANCE_NOTE` carry the tool URL and current vendor
  * allowance copy. The free web allowance is deliberately a handoff, not the separately metered fal
  * API.
  */

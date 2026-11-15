@@ -1,8 +1,8 @@
 /**
  * `rowOwnerCandidates(row, hostedIndex)` — ordered, de-duplicated instance ids that may hold a media
- * row's bytes (`originInstanceId`, peer-hosted index hits for the filename, `suppliedByInstanceId`)
+ * row's bytes (`originInstanceId`, peer-hosted index hits for the filename, `suppliedByInstanceId`).
  *
- * ; `[]` means unknowable.
+ * `[]` means unknowable.
  */
 
 /**

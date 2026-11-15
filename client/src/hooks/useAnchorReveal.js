@@ -1,8 +1,8 @@
 /**
  * `useAnchorReveal(getTarget, key, { reveal? })` — scroll a freshly-opened element into view + flash a
- * tint over it
+ * tint over it.
  *
- * ; re-fires when `key` changes; no-op when `key` is falsy or `getTarget()` is null. Use when: Reveal
+ * Re-fires when `key` changes; no-op when `key` is falsy or `getTarget()` is null. Use when: Reveal
  * an editorial finding's anchored manuscript text on open / prev-next step (#1601).
  */
 

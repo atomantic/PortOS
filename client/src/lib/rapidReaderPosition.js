@@ -1,8 +1,8 @@
 /**
  * Cursor-to-word mapping plus privacy-preserving Rapid Reader progress persistence keyed by a text
- * fingerprint
+ * fingerprint.
  *
- * ; stores position/settings without storing pasted source text.
+ * Stores position/settings without storing pasted source text.
  */
 
 import {

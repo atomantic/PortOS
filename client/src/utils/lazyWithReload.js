@@ -1,8 +1,8 @@
 /**
  * `React.lazy` wrapper that retries transient import failures and reloads only when a failed chunk
- * belongs to an older build
+ * belongs to an older build.
  *
- * ; the route error screen can explicitly purge PortOS asset caches before retrying a runtime import
+ * The route error screen can explicitly purge PortOS asset caches before retrying a runtime import
  * failure.
  */
 

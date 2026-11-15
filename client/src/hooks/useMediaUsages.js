@@ -1,8 +1,8 @@
 /**
  * `useMediaUsages()` → `{ '<kind>:<ref>': usages[] }`, the records using each media file (`GET
- * /media/usages`), shared by every mounted consumer and fetched on mount/reconnect
+ * /media/usages`), shared by every mounted consumer and fetched on mount/reconnect.
  *
- * ; `refreshMediaUsages()` after a delete. Use when: A media card or viewer that shows where an item
+ * `refreshMediaUsages()` after a delete. Use when: A media card or viewer that shows where an item
  * is used, or guards its delete.
  */
 

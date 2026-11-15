@@ -1,7 +1,7 @@
 /**
- * Loads the universe record for a `universeId` with mount/cancel guards
+ * Loads the universe record for a `universeId` with mount/cancel guards.
  *
- * ; returns `[universe, setUniverse, loading, error]` (setter exposed for optimistic post-mutation
+ * Returns `[universe, setUniverse, loading, error]` (setter exposed for optimistic post-mutation
  * updates). Use when: Any surface that loads a linked universe (pipeline stages, etc.) — use instead
  * of re-rolling the getUniverse-on-mount effect.
  */

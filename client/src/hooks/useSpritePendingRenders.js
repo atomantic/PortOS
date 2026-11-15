@@ -1,7 +1,7 @@
 /**
- * Sprite render map reconciled on scoped queue events, entry, reconnect and tab show
+ * Sprite render map reconciled on scoped queue events, entry, reconnect and tab show.
  *
- * ; submitting sentinel, terminal-before-response recovery and 404-only release. Use when:
+ * Submitting sentinel, terminal-before-response recovery and 404-only release. Use when:
  * Queue-backed sprite reference/walk renders; persisted assets reconcile separately on
  * `sprites:changed`.
  */

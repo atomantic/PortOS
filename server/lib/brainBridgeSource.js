@@ -1,8 +1,8 @@
 /**
  * `BRAIN_BRIDGE_SOURCE_AGENT_ID` — the `source_agent_id` of memories the Brain bridge derives per
- * install
+ * install.
  *
- * ; the memory federation stream excludes them in both directions.
+ * The memory federation stream excludes them in both directions.
  */
 
 /**

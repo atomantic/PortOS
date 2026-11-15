@@ -1,7 +1,7 @@
 /**
- * Client reset-reconciliation maps for Eidoverse source kinds and district asset slots
+ * Client reset-reconciliation maps for Eidoverse source kinds and district asset slots.
  *
- * ; parity-tested against the authoritative server world-design contracts.
+ * Parity-tested against the authoritative server world-design contracts.
  */
 
 export const EIDOVERSE_SOURCE_KIND = Object.freeze({

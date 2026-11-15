@@ -1,7 +1,7 @@
 /**
- * 1-second ticker over a `{ id: epochMs }` cooldown map
+ * 1-second ticker over a `{ id: epochMs }` cooldown map.
  *
- * ; fires `onAllExpired` once when every deadline passes. Use when: Rate-limit countdown labels that
+ * Fires `onAllExpired` once when every deadline passes. Use when: Rate-limit countdown labels that
  * need to refetch when the last cooldown clears (agents tabs pattern).
  */
 

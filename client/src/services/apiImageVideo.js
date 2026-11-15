@@ -1,7 +1,7 @@
 /**
- * `checkHiggsfieldNewModels` (Higgsfield families the picker lacks), Image-gen local backend extras
+ * `checkHiggsfieldNewModels` (Higgsfield families the picker lacks), Image-gen local backend extras.
  *
- * ; bounded image/mixed gallery pages, global facets and collection summaries, exact-reference
+ * Bounded image/mixed gallery pages, global facets and collection summaries, exact-reference
  * `getGalleryImages`, one image's original-vs-cleaned variant set via `listImageVariants`, plus
  * models, LoRAs, cancel and delete.
  */

@@ -1,7 +1,7 @@
 // Pure helpers for the Editorial Checks page (`/pipeline/editorial-checks`, #1285):
-// `groupChecksByScope(checks)` buckets catalog rows into ordered Noun/Scene/Issue/Series sections
+// `groupChecksByScope(checks)` buckets catalog rows into ordered Noun/Scene/Issue/Series sections.
 //
-// ; `groupFindingsByCheck(comments, rowsById)` groups check-sourced review comments per check with
+// `groupFindingsByCheck(comments, rowsById)` groups check-sourced review comments per check with
 // open/total + severity counts; `openFindingsTotal(groups)` sums open findings;
 // `findingManuscriptLink(seriesId, comment)` builds the `?comment=` deep-link into the manuscript
 // editor; the triage filter/sort helpers (#1600) `deriveFindingFacets(groups)` (enumerate present

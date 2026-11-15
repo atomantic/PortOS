@@ -1,7 +1,7 @@
 /**
- * Reads live catalog-only Cast & Sets items, blockers and approval basis
+ * Reads live catalog-only Cast & Sets items, blockers and approval basis.
  *
- * ; refreshes on catalog changes/reconnect and keeps whole-project reference pickers in sync without
+ * Refreshes on catalog changes/reconnect and keeps whole-project reference pickers in sync without
  * persisting copied images. Use when: Catalog-only Look check-in.
  */
 

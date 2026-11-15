@@ -1,8 +1,8 @@
 /**
  * `readGitCommonDirectory(repoPath)` — fresh canonical Git common-directory identity for
- * repository-scoped ownership
+ * repository-scoped ownership.
  *
- * ; aliases and linked worktrees share identity, independent clones do not, and unreadable evidence
+ * Aliases and linked worktrees share identity, independent clones do not, and unreadable evidence
  * returns null.
  */
 

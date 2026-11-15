@@ -1,6 +1,6 @@
-// `gmailConversationThreadKey(apiThreadId)` is the `conv-…` thread key live Gmail sync stores
+// `gmailConversationThreadKey(apiThreadId)` is the `conv-…` thread key live Gmail sync stores.
 //
-// ; `gmailApiThreadIdFromThrid(xGmThrid)` converts Takeout's decimal `X-GM-THRID` to the hex Gmail API
+// `gmailApiThreadIdFromThrid(xGmThrid)` converts Takeout's decimal `X-GM-THRID` to the hex Gmail API
 // thread id (null when malformed), so the importer can find pre-#15308 live rows (#15320).
 //
 // Gmail thread identity shared by live Gmail sync and the Takeout mbox importer

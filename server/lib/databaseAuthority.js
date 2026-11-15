@@ -1,8 +1,8 @@
 /**
  * `createDatabaseAuthority(dataDir?)` durably records which backend a verified cutover released
- * admission to and which it retired
+ * admission to and which it retired.
  *
- * ; `assertDatabasePoolAuthority(pool)` refuses a process whose pool still names the retired source
+ * `assertDatabasePoolAuthority(pool)` refuses a process whose pool still names the retired source
  * (enforced at boot and on every pooled operation).
  */
 

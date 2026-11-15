@@ -1,7 +1,7 @@
 /**
- * Per-kind field-precedence rules
+ * Per-kind field-precedence rules.
  *
- * ; SHORT/RICH/PREVIEW spec tables; `flattenCanonDescriptorFragments` / `mapCanonDescriptorFragments`
+ * SHORT/RICH/PREVIEW spec tables; `flattenCanonDescriptorFragments` / `mapCanonDescriptorFragments`
  * / `descriptorForCanonEntry`.
  *
  * Shared per-kind field-precedence rules for canon entries. Pure ESM, no

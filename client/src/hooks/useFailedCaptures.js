@@ -1,8 +1,8 @@
 /**
  * Recoverable rejected Brain captures: `{ failures, fail(payload, error, id?), markRetrying(id),
- * discard(id) }` keeps each failed submission's immutable payload apart from the composer's next draft
+ * discard(id) }` keeps each failed submission's immutable payload apart from the composer's next draft.
  *
- * ; never re-sends by itself (the host's explicit Retry does). Use when: A capture box that clears its
+ * Never re-sends by itself (the host's explicit Retry does). Use when: A capture box that clears its
  * input on submit (Inbox, Quick Capture) and must not lose the text when the server rejects it. Pair
  * with `components/brain/FailedCaptureList`.
  */

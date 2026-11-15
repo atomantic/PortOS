@@ -1,8 +1,8 @@
 /**
  * `BACKUP_ASSET_OWNERS` inventories every durable file-plus-row owner as `admitted`, `reference-only`,
- * or `outstanding`
+ * or `outstanding`.
  *
- * ; `backupAssetConsistency()` derives the consistency a backup snapshot may claim (`global` only when
+ * `backupAssetConsistency()` derives the consistency a backup snapshot may claim (`global` only when
  * nothing is outstanding, otherwise `admitted-owners` with the outstanding ids). Its test keeps
  * admitted entries and `withBackupAssetPublication` call sites in step.
  *

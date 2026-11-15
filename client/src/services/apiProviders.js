@@ -1,8 +1,8 @@
 /**
  * Explicit vision diagnostics (`getProviderVisionHealth`, `testProviderVision`,
- * `runProviderVisionSuite`)
+ * `runProviderVisionSuite`).
  *
- * ; AI provider configuration, plus provider-runtime (CLI) install readiness for the per-card Install
+ * AI provider configuration, plus provider-runtime (CLI) install readiness for the per-card Install
  * buttons, and the Codex / ChatGPT-subscription account calls (`getCodexAccount`, `startCodexLogin`,
  * `cancelCodexLogin`, `codexLogout`) — sign-in STATE only, never a token. `getProviderCatalog` (`GET
  * /providers/catalog`, #7566) is the composition surface `useProviderCatalog` fetches;

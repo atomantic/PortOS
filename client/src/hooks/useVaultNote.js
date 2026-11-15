@@ -1,7 +1,7 @@
 /**
- * Reads a URL-selected vault note with a sequence guard
+ * Reads a URL-selected vault note with a sequence guard.
  *
- * ; returns `{ note, setNote, loading, error, retry, clear, sequenceRef }` and reports failed reads
+ * Returns `{ note, setNote, loading, error, retry, clear, sequenceRef }` and reports failed reads
  * separately from empty selection. Use when: Brain Notes and Wiki Browse detail panes.
  */
 

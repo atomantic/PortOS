@@ -2,9 +2,6 @@
  * Maturity-aware continuous-play phase picker (explore/construct/maintain/coordinate) from bounded
  * Eidoverse world signals — density, recent failure rate, active peers.
  *
- * Maturity-aware continuous-play phase picker (explore/construct/maintain/coordinate) from bounded
- * Eidoverse world signals — density, recent failure rate, active peers. Pure.
- *
  * Maturity-aware phase picker for the Persistent Mind continuous-play
  * playbook (issue #7458). SwarmWorld-style minds drift among explore,
  * construct, maintain, and coordinate as the shared Eidoverse Commons

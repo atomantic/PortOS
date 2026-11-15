@@ -1,8 +1,8 @@
 /**
  * Re-export of `server/lib/writersRoomPresets.js` — `WORK_KINDS`, `WORK_STATUSES`,
- * `EXERCISE_STATUSES`, `ANALYSIS_KINDS`
+ * `EXERCISE_STATUSES`, `ANALYSIS_KINDS`.
  *
- * ; `writers-room/labels.test.js` requires a label per value.
+ * `writers-room/labels.test.js` requires a label per value.
  */
 
 /**

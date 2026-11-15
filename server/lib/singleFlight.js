@@ -1,8 +1,8 @@
 /**
  * `createSingleFlight()` → `run(key, fn)` — keyed in-flight coalescer: concurrent calls for the same
- * key share one `fn()` execution and result
+ * key share one `fn()` execution and result.
  *
- * ; the slot auto-clears on settle. `createSingleFlight({ exclusive: true })` also keeps different
+ * The slot auto-clears on settle. `createSingleFlight({ exclusive: true })` also keeps different
  * keys from overlapping: a different key waits for the in-flight call, then joins or starts its own
  * (used where the work must never run twice at once, such as starting a local runtime). Minimal by
  * design (no TTL/result cache layered on top, doesn't reject concurrent callers). Used by

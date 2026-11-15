@@ -1,8 +1,8 @@
 /**
  * Clip from a storyboard panel: `storyboardGuidanceText` names the panel as layout/blocking guidance
- * (never the first frame, never its sketch look) and the references as the look
+ * (never the first frame, never its sketch look) and the references as the look.
  *
- * ; `storyboardGuidanceAddition` is its visible prompt chip. `falClipReferenceAddition` names a clip's
+ * `storyboardGuidanceAddition` is its visible prompt chip. `falClipReferenceAddition` names a clip's
  * ordered references and loose opening frame; `falReferenceImageName`, `falStoryboardGuidanceProblem`,
  * `FAL_STORYBOARD_GUIDANCE_MODEL`, `STORYBOARD_GUIDANCE_MAX_REFERENCES`. Shared by the Grok and fal
  * lanes.
