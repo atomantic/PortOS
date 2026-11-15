@@ -18,7 +18,7 @@ vi.mock('./github.js', () => ({ execGh: vi.fn(async args => {
   const status = new URL('https://example.com/' + path).searchParams.get('status');
   return JSON.stringify(f.malformed ? {} : { total_count: f.runs[status] ?? 0 });
 }) }));
-import { releasePreflight } from './releasePreflight.js';
+import { describeReleasePreflightHold, releasePreflight } from './releasePreflight.js';
 import { execGh } from './github.js';
 
 let root, repo, sibling, other;
@@ -73,6 +73,14 @@ describe('release startup pre-flight', () => {
     expect(await run()).toEqual({ ok: false, reason: 'release-tag-present' });
     expect(await run({ version: '1.2.4' })).toEqual({ ok: true });
   });
+  it('admits a fresh dispatch while the development head carries the already published version (#16177)', async () => {
+    // Synchronization lands the published version on main, so v1.2.3 is tagged
+    // there until the coordinator proposes the next version.
+    f.tags = [{ ref: 'refs/tags/v1.2.3' }];
+    expect(await run({ version: undefined })).toEqual({ ok: true });
+    expect(execGh.mock.calls.some(([args]) => args.at(-1).includes('/git/matching-refs/'))).toBe(false);
+    expect(await run()).toEqual({ ok: false, reason: 'release-tag-present' });
+  });
   it('checks unfinished workflow statuses across the whole history, including old re-runs', async () => {
     f.runs = { waiting: 1 };
     expect(await run()).toEqual({ ok: false, reason: 'release-workflow-active' });
@@ -83,5 +91,11 @@ describe('release startup pre-flight', () => {
     await expect(run()).rejects.toThrow('Forge unavailable');
     f.fail = false; f.malformed = true;
     await expect(run()).rejects.toThrow('Invalid release workflow response');
+  });
+  it('describes each refusal with the condition that clears it', () => {
+    expect(describeReleasePreflightHold({ reason: 'release-promotion-active' }))
+      .toBe('release-promotion-active: a pull request targeting the release branch is still open');
+    expect(describeReleasePreflightHold({ reason: 'release-preflight-unavailable', detail: 'Forge unavailable' }))
+      .toBe('release-preflight-unavailable: publication activity could not be read from Git or GitHub (Forge unavailable)');
   });
 });

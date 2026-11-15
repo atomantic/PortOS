@@ -74,6 +74,9 @@ export function createAgentSpawnContext(task) {
   };
 
   context.blockAndBail = async ({ reason, category, infrastructureCode, emit = 'agent:error', emitPayload = {}, persist = true }) => {
+    // An unpersisted hold leaves the task pending for the next dequeue, so this
+    // line is its only record; without it the lane cycles silently (#16177).
+    if (!persist) emitLog('info', `⏸️ Task ${context.task.id} stays pending: ${reason}`, { taskId: context.task.id });
     if (persist) {
       await updateTask(context.task.id, {
         status: 'blocked',
