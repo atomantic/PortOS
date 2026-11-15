@@ -348,10 +348,12 @@ export const WINDOWS_CONTRACT_TESTS = [
 //      re-derives the scanner set from the tree and fails when a new one is
 //      added without being registered here or named as structurally selected.
 //
-// Everything here is deliberately cheap — the whole set runs in ~3s and reads
-// only prompt data or `git` output, which is affordable on every PR including
-// documentation-only ones, where the alternative is reasoning per-scope about
-// what can reach it.
+// Everything here is deliberately cheap: it reads only prompt data or `git`
+// output, which is affordable on every PR including documentation-only ones,
+// where the alternative is reasoning per-scope about what can reach it. The
+// whole set measured ~23s of a 27s focused pregate (#16086), so each guard has
+// a per-file budget (GUARD_BUDGET_MS in scripts/lib/guardBudget.js) that
+// pregate enforces; a behavioural test that no scan needs does not belong here.
 export const ALWAYS_RUN_TESTS = [
   // Doc-parity guards: each compares a .md next to it against source it reads
   // rather than imports. The .md is documentation-only to the planner and the
@@ -379,7 +381,6 @@ export const ALWAYS_RUN_TESTS = [
   // Node-only import and break the client build with no edge back to here.
   'scripts/client-server-import-purity.test.js',
   'scripts/direct-invocation-drift.test.js',
-  'scripts/ensure-deps.test.js',
   // Base-relative: a rename or deletion of a shipped migration touches no file
   // the planner would select for it, so the guard must run on every change (#16094).
   'scripts/migrations/migrationFilenames.guard.test.js',
@@ -854,6 +855,11 @@ const WORKSPACE_CACHE_CLIENT_INPUTS = new Set([
   'lib/portosAuthCore.js', 'server/lib/eidoverseProxyRoutes.js',
 ]);
 
+const ENSURE_DEPS_INPUTS = new Set([
+  'scripts/ensure-deps.js', 'update.sh', 'update.ps1',
+  'package-lock.json', 'client/package-lock.json', 'server/package-lock.json',
+]);
+
 export const structuralTestsFor = (changedFiles, trackedSet) => {
   const selected = [];
   const add = (path) => {
@@ -868,6 +874,11 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
     add('client/src/test/workspaceCaches.test.js');
     // The runner's client enumeration is pinned against `vitest list` from the client workspace, where the client job runs it.
     add('client/src/test/workspaceTests.test.js');
+  }
+  // Behavioural temp-directory test: it imports ensure-deps.js (so the graph
+  // selects it for that file) but only reads the update scripts and lockfiles.
+  if (changedFiles.some((path) => ENSURE_DEPS_INPUTS.has(path))) {
+    add('scripts/ensure-deps.test.js');
   }
   if (changedFiles.some((path) => /^server\/lib\//.test(path))) {
     add('server/lib/index.test.js');
