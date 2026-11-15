@@ -14,7 +14,7 @@ export const pipelineDdl = [
     // trio (updated_at/deleted/deleted_at) populated FROM the record body
     // (mirrorTimestamp), not a DB trigger. NO sync_sequence: pipeline records
     // federate via the EXISTING dataSync snapshot/push model — the storage swap
-    // is invisible to peers (no schema-version bump). Mirrors init-db.sql.
+    // is invisible to peers (no schema-version bump).
     `CREATE TABLE IF NOT EXISTS pipeline_series (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -40,7 +40,6 @@ export const pipelineDdl = [
     // pipeline query, served directly by idx_issues_series (series_id, number).
     // `status` promoted for "issues needing review" dashboards. `ephemeral` +
     // LWW/tombstone trio mirror the body. NO sync_sequence (see pipeline_series).
-    // Mirrors init-db.sql.
     `CREATE TABLE IF NOT EXISTS pipeline_issues (
       id TEXT PRIMARY KEY,
       series_id TEXT NOT NULL,
@@ -67,7 +66,7 @@ export const pipelineDdl = [
     // decide what to even consider pushing, so promoting it avoids deserializing
     // every session's `data` per snapshot tick. `ephemeral` + the LWW/tombstone
     // trio mirror the body. NO sync_sequence (sessions ride the existing dataSync
-    // snapshot/LWW model, not the per-record push pipeline). Mirrors init-db.sql.
+    // snapshot/LWW model, not the per-record push pipeline).
     `CREATE TABLE IF NOT EXISTS story_builder_sessions (
       id TEXT PRIMARY KEY,
       universe_id TEXT,

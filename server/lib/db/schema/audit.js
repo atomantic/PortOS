@@ -1,9 +1,7 @@
 // Record-audit DDL — the audit-log table + the generic record_audit_log()
 // trigger function, the list of audited tables, and the trigger builder.
 // Extracted verbatim from ensureSchemaImpl() in server/lib/db.js (#2832) with
-// zero behavior change. Parity-locked against server/scripts/init-db.sql by
-// db.ddlParity.test.js — keep auditedTables in sync with the audit triggers
-// in init-db.sql.
+// zero behavior change. server/scripts/init-db.sql is generated from it.
 export const auditDdl = [
     // ─── Deletion audit log (incident #1248-follow-up) ──────────────────────
     // Append-only forensic trail of EVERY tombstone (soft-delete), un-tombstone
@@ -14,8 +12,6 @@ export const auditDdl = [
     // this table closes that gap.) `row_snapshot` keeps the OLD row JSON so a
     // wrongful delete is recoverable from the log alone. Local-only, never
     // federated (no sync_sequence) — each install audits its own mutations.
-    // Mirrors the record_audit block in init-db.sql (parity-locked by
-    // db.ddlParity.test.js).
     `CREATE TABLE IF NOT EXISTS record_audit (
       id BIGSERIAL PRIMARY KEY,
       table_name TEXT NOT NULL,
@@ -83,8 +79,7 @@ export const auditDdl = [
 ];
 
 // Attach the audit trigger to every user-authored-content table. Adding a
-// table here is all it takes to audit its deletions. (Keep in sync with the
-// audit triggers in init-db.sql.)
+// table here is all it takes to audit its deletions.
 export const auditedTables = [
     'universes', 'universe_runs', 'pipeline_series', 'pipeline_issues',
     'story_builder_sessions', 'writers_room_works', 'writers_room_folders',

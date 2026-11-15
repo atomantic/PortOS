@@ -32,7 +32,6 @@ export const writersRoomDdl = [
     // SOFT-DELETE added here (`deleted`/`deleted_at`): the file backend hard-deletes
     // via rm -rf; the DB backend aligns with the other stores (import sets
     // deleted = FALSE for all existing works). Soft ref everywhere — no FK.
-    // Mirrors init-db.sql.
     `CREATE TABLE IF NOT EXISTS writers_room_works (
       id TEXT PRIMARY KEY,
       folder_id TEXT,
@@ -57,7 +56,7 @@ export const writersRoomDdl = [
     // disk at data/writers-room/works/<workId>/drafts/<draftId>.md; this row is
     // the queryable index over it: `content_file` (relative path), `content_hash`
     // (sha256 for staleness), `word_count`, `segment_index` (outline), version
-    // lineage. asset-file-db-indexed pattern applied to prose. Mirrors init-db.sql.
+    // lineage. asset-file-db-indexed pattern applied to prose.
     `CREATE TABLE IF NOT EXISTS writers_room_draft_versions (
       id TEXT PRIMARY KEY,
       work_id TEXT NOT NULL,
@@ -75,7 +74,6 @@ export const writersRoomDdl = [
     // Exercise sessions (sprint timer). Monolithic exercises.json → flat table.
     // `work_id`, `status`, started_at promoted for the per-work list (ordered by
     // started_at DESC). prompt/durations/word counts/appendedText stay in `data`.
-    // Mirrors init-db.sql.
     `CREATE TABLE IF NOT EXISTS writers_room_exercises (
       id TEXT PRIMARY KEY,
       work_id TEXT,

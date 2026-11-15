@@ -11,8 +11,8 @@
  *   - the audit-trigger builder emits two statements per audited table.
  *
  * Byte-for-byte equivalence with the pre-split inline arrays was verified at
- * extraction time; catalog↔init-db.sql parity is locked separately by
- * db.ddlParity.test.js.
+ * extraction time; init-db.sql is generated from the composer
+ * (scripts/generate-init-db-sql.js, staleness-checked by db.ddlParity.test.js).
  */
 
 import { describe, it, expect } from 'vitest';
