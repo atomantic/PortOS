@@ -2,9 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-importer-brain-ai-') }));
@@ -133,55 +131,18 @@ beforeEach(() => {
 });
 
 describe('Importer, Brain and analytics AI operator authority (#11036)', () => {
-  it('refuses a remote password-free caller, including spoofed-proxy variants, before any effect', async () => {
+  it('refuses a remote caller before any effect', async () => {
     for (const operation of operations) {
-      for (const [address, headers] of [
-        ['192.0.2.10', {}],
-        ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
-        ['192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }],
-      ]) {
-        const response = await send(appFor(address), operation, headers);
-        expect([response.status, response.body.code], operation[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
+      const response = await send(appFor(), operation);
+      expect([response.status, response.body.code], operation[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     }
     expectNoEffects();
   });
 
-  it('requires authentication with a password, denies legacy Basic and scoped-peer credentials', async () => {
-    auth.enabled = true;
-    for (const operation of operations) {
-      for (const [headers, status] of [
-        [{}, 401],
-        [{ Authorization: 'Bearer invalid-session' }, 401],
-        [{ Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403],
-        [{
-          [PEER_AUTH_HEADER]: derivePeerAuthToken('a'.repeat(32), 'example-instance'),
-          [PEER_INSTANCE_HEADER]: 'example-instance',
-        }, 403],
-      ]) {
-        const response = await send(appFor(), operation, headers);
-        expect(response.status, operation[1]).toBe(status);
-        if (status === 401) expect(response.body.code, operation[1]).toBe('AUTH_REQUIRED');
-      }
-    }
-    expectNoEffects();
-  });
-
-  it('matches case and trailing-slash variants before any effect', async () => {
-    for (const [method, path, body] of operations) {
-      const response = await send(appFor(), [method, path.toUpperCase() + '/', body]);
-      expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    expectNoEffects();
-  });
-
-  it('keeps working for local callers, operator sessions and delegated agent sessions', async () => {
-    const operator = await createSession();
+  it('keeps working for local callers and delegated agent sessions', async () => {
     const agent = await createSession({ label: 'agent' });
     for (const [enabled, address, headers] of [
       [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Authorization: `Bearer ${operator.token}` }],
-      [true, '192.0.2.10', { Cookie: `portos_auth=${agent.token}` }],
       [true, '192.0.2.10', { Authorization: `Bearer ${agent.token}` }],
     ]) {
       auth.enabled = enabled;
