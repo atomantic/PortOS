@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -224,6 +224,15 @@ describe('targetless cleanup recovery resolved from parent evidence', () => {
     expect(store.agent.metadata.cleanupOutcome).toMatchObject({ status: 'verified', reason: 'cleanup-local-target-absent',
       branch: release.branch, path: release.path });
     expect((await execGit(['rev-parse', 'HEAD'], repo)).stdout.trim()).toBe(originalHead);
+  });
+
+  it('matches the captured repository through a symlinked managed-app path', async () => {
+    await retire();
+    const alias = join(scratch, 'repo-alias');
+    await symlink(repo, alias);
+    store.app = { ...store.app, repoPath: alias };
+    await finish('completed');
+    expect(store.agent.result).toMatchObject({ success: true, validationPassed: true });
   });
 
   it('settles a queued retry before another provider dispatch, keeping its failed run and budget', async () => {

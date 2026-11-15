@@ -60,8 +60,10 @@ async function verifyCurrentCleanup(input) {
   if (recorded) target = recorded.target;
   const { getAppById } = await import('./apps.js');
   const app = await getAppById(target.appId);
-  if (recorded && (!app?.repoPath || await realpath(app.repoPath).catch(() => null) !== recorded.repoPath)) {
-    return unverified('cleanup-app-scope-mismatch');
+  if (recorded) {
+    const canonical = path => (path ? realpath(path).catch(() => null) : null);
+    const [appRepo, capturedRepo] = await Promise.all([canonical(app?.repoPath), canonical(recorded.repoPath)]);
+    if (!appRepo || appRepo !== capturedRepo) return unverified('cleanup-app-scope-mismatch');
   }
   return { ...await observeCleanupTarget(app?.repoPath, target.release), target };
 }
