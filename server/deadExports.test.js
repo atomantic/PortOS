@@ -17,6 +17,7 @@ function excluded(file, name) {
   if (file.startsWith('server/integrations/')) return true; // Standalone integration API clients.
   if (file.startsWith('server/lib/aiToolkit/')) return true; // Vendored toolkit public barrel surface.
   if (file === 'server/lib/mockPathsDataRoot.js') return true; // Test-only helper module (#9032) — every export here is meant to be reached exclusively from *.test.js, which this scan intentionally excludes as a "mention".
+  if (file === 'server/lib/staticExportSurface.js') return true; // Test-only (#16148) — derives a module's export names for structural guards, reached exclusively from *.test.js.
   if (file === 'server/lib/browserSuiteGate.js') return true; // Test-only `canRun` guard (#10312) — reached exclusively from *.browser.test.js.
   if (file === 'server/services/_heldCheckoutRecoveryFixture.js') return true; // Test-only fixture for the real-Git heldCheckoutRecovery.test.js suite.
   return false;
@@ -96,6 +97,9 @@ function trackedFilesFrom(root) {
   return execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root, maxBuffer: GIT_MAX_BUFFER })
     .toString('utf8').split('\0').filter(Boolean)
     .filter(file => /\.(?:[cm]?[jt]sx?|json|md)$/.test(file))
+    // deadExports() declares from, and counts mentions in, neither of these, and
+    // they are most of the tree's bytes: don't read them.
+    .filter(file => !/\.test\.[cm]?[jt]sx?$/.test(file) && !/(^|\/)README\.md$/i.test(file))
     .filter(file => existsSync(join(root, file)))
     .map(file => [file, readFileSync(join(root, file), 'utf8')]);
 }

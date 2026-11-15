@@ -97,7 +97,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { blankCommentBodies, blankLiterals, matchBracket } from './lib/sourceScan.js';
+import { blankLiterals, matchBracket } from './lib/sourceScan.js';
 
 const SERVER_ROOT = dirname(fileURLToPath(import.meta.url));
 
@@ -109,6 +109,45 @@ const NO_ENTRY = String.fromCodePoint(0x26d4);          // no entry
 const FAILURE_MARKERS = [CROSS_MARK, NO_ENTRY];
 
 const CONSOLE_LOG_OPEN = /\bconsole\s*\.\s*log\s*\(/g;
+
+// Four scans lex the same ~1,000 sources. One paired traversal yields both views
+// (`blanked` and comment-only `code`), memoized per source text so each file is
+// lexed once per run instead of twice per scan.
+const lexCache = new Map();
+function lexViews(src) {
+  let views = lexCache.get(src);
+  if (!views) {
+    views = blankLiterals(src, { includeCommentOnly: true });
+    lexCache.set(src, views);
+  }
+  return views;
+}
+
+// Source of each tracked file, read once and shared by every scan.
+const sourceCache = new Map();
+function readSource(root, file) {
+  const key = join(root, file);
+  let src = sourceCache.get(key);
+  if (src === undefined) {
+    src = readFileSync(key, 'utf8');
+    sourceCache.set(key, src);
+  }
+  return src;
+}
+
+// 1-based line of an ascending sequence of indexes, counting newlines
+// incrementally instead of re-splitting the prefix for every match.
+function lineCounter(src) {
+  let at = 0;
+  let line = 1;
+  return (index) => {
+    for (let nl = src.indexOf('\n', at); nl !== -1 && nl < index; nl = src.indexOf('\n', at)) {
+      line += 1;
+      at = nl + 1;
+    }
+    return line;
+  };
+}
 const CONSOLE_LOG_SHAPE = /\bconsole\s*\.\s*log\s*\(/;
 
 /**
@@ -122,15 +161,15 @@ const CONSOLE_LOG_SHAPE = /\bconsole\s*\.\s*log\s*\(/;
  * captured whole rather than by a fixed line window.
  */
 export function consoleLogCalls(src) {
-  const blanked = blankLiterals(src);
-  const codeOnly = blankCommentBodies(src);
+  const { blanked, code: codeOnly } = lexViews(src);
   const calls = [];
+  const lineAt = lineCounter(src);
   for (const match of blanked.matchAll(CONSOLE_LOG_OPEN)) {
     const open = blanked.indexOf('(', match.index);
     const close = matchBracket(blanked, open);
     if (close === -1) continue;
     calls.push({
-      line: src.slice(0, match.index).split('\n').length,
+      line: lineAt(match.index),
       // `close` is one past the matching `)`, so `close - 1` drops it. Both
       // copies preserve length, so the span indexes either one.
       args: codeOnly.slice(open + 1, close - 1),
@@ -174,9 +213,9 @@ function splitCallArgs(blanked, codeOnly, open, close) {
 
 /** `line N: <excerpt>` for every quiet emitLog whose message carries a failure marker. */
 export function findMislabeledEmitLogs(src) {
-  const blanked = blankLiterals(src);
-  const codeOnly = blankCommentBodies(src);
+  const { blanked, code: codeOnly } = lexViews(src);
   const hits = [];
+  const lineAt = lineCounter(src);
   for (const match of blanked.matchAll(EMIT_LOG_OPEN)) {
     const open = blanked.indexOf('(', match.index);
     const close = matchBracket(blanked, open);
@@ -185,7 +224,7 @@ export function findMislabeledEmitLogs(src) {
     if (!QUIET_EMIT_LEVEL.test(args[0] ?? '')) continue;
     const message = args[1] ?? '';
     if (!FAILURE_MARKERS.some((marker) => message.includes(marker))) continue;
-    const line = src.slice(0, match.index).split('\n').length;
+    const line = lineAt(match.index);
     hits.push(`line ${line}: ${message.replace(/\s+/g, ' ').trim().slice(0, 120)}`);
   }
   return hits;
@@ -204,15 +243,15 @@ const LEADING_MARKER = /^\p{Extended_Pictographic}/u;
  * string or template cannot split an argument.
  */
 export function consoleCalls(src) {
-  const blanked = blankLiterals(src);
-  const codeOnly = blankCommentBodies(src);
+  const { blanked, code: codeOnly } = lexViews(src);
   const calls = [];
+  const lineAt = lineCounter(src);
   for (const match of blanked.matchAll(CONSOLE_CALL_OPEN)) {
     const open = blanked.indexOf('(', match.index);
     const close = matchBracket(blanked, open);
     if (close === -1) continue;
     calls.push({
-      line: src.slice(0, match.index).split('\n').length,
+      line: lineAt(match.index),
       method: match[1],
       args: splitCallArgs(blanked, codeOnly, open, close),
     });
@@ -273,7 +312,7 @@ describe('failure lines log at error level (#7945)', () => {
     // this guard from lexing 30 MB of unrelated source on every worker while
     // `consoleLogCalls` remains the authority for what counts as a call.
     const withLogs = trackedServerSources().filter((file) => {
-      const src = readFileSync(join(REPO_ROOT, file), 'utf8');
+      const src = readSource(REPO_ROOT, file);
       return CONSOLE_LOG_SHAPE.test(src) && consoleLogCalls(src).length > 0;
     });
     expect(withLogs.length).toBeGreaterThan(100);
@@ -282,7 +321,7 @@ describe('failure lines log at error level (#7945)', () => {
   it('has no emitLog at a non-failure level carrying a failure marker', () => {
     const violations = [];
     for (const file of trackedServerSources()) {
-      const src = readFileSync(join(REPO_ROOT, file), 'utf8');
+      const src = readSource(REPO_ROOT, file);
       if (!/\bemitLog\s*\(/.test(src)) continue;
       if (!FAILURE_MARKERS.some((marker) => src.includes(marker))) continue;
       for (const hit of findMislabeledEmitLogs(src)) violations.push(`${file} ${hit}`);
@@ -299,7 +338,7 @@ describe('failure lines log at error level (#7945)', () => {
   it('has no console.log carrying a failure marker', () => {
     const violations = [];
     for (const file of trackedServerSources()) {
-      const src = readFileSync(join(REPO_ROOT, file), 'utf8');
+      const src = readSource(REPO_ROOT, file);
       if (!CONSOLE_LOG_SHAPE.test(src)) continue;
       if (!FAILURE_MARKERS.some((marker) => src.includes(marker))) continue;
       for (const hit of findMislabeledFailureLogs(src)) violations.push(`${file} ${hit}`);
@@ -321,7 +360,7 @@ describe('failure lines log at error level (#7945)', () => {
 describe('log lines carry a marker and no bare error object (#9951)', () => {
   const scanned = () => trackedServerSources()
     .filter((file) => !LINE_SHAPE_EXEMPT_PREFIXES.some((prefix) => file.startsWith(prefix)))
-    .map((file) => ({ file, src: readFileSync(join(REPO_ROOT, file), 'utf8') }))
+    .map((file) => ({ file, src: readSource(REPO_ROOT, file) }))
     .filter(({ src }) => /\bconsole\s*\.\s*(?:log|warn|error|info|debug)\s*\(/.test(src));
 
   it('has no console call whose message lacks a leading marker emoji', () => {
