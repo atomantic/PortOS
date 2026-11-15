@@ -21,10 +21,10 @@ import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObserva
 import { readLocalBranchPresence } from './repoCleanupObservation.js';
 import { realpathSync } from 'node:fs';
 import { lstat, readlink, stat, symlink, unlink } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { execGit } from '../lib/execGit.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
-import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
+import { decideHeldCheckoutRetirement, decideInventoriedBranchRetirement, decideMergedCheckoutOwner, decideMergedDelivery, decidePendingMergeReceipt } from './branchRetirementDecision.js';
 import { listWorktrees, forceRemoveWorktreeDir, deleteCompletedLocalBranch, classifyWorktreeDirt } from './worktreeManager.js';
 import { getDefaultBranch, getStatusPorcelain, hasBranchMergeEvidence, resolveForgeForRepo } from './git.js';
 import { withClaimOwnershipLock, readClaimOwnershipAgents } from './cosClaimOwnership.js';
@@ -92,59 +92,43 @@ export async function readMergedDelivery(repoPath, { branch, path, head }) {
   ]);
   const clean = porcelain === null ? null : classifyWorktreeDirt(porcelain).clean;
   const ancestry = Boolean(defaultBranch) && await hasBranchMergeEvidence(repoPath, head, defaultBranch).catch(() => false);
-  if (ancestry && clean) return true;
-  const delivery = await readForgeDelivery(repoPath, branch, head);
-  if (delivery === 'exact') return true;
-  if (delivery === null) return null;
-  if (!ancestry && delivery === 'none') return false;
-  // Merged work, but uncommitted files are only disposable at the exact head.
-  return clean;
+  const step = await decideWith(facts => decideMergedDelivery({ clean, ancestry, facts }), {
+    delivery: () => readForgeDelivery(repoPath, branch, head),
+  });
+  return step.merged;
 }
 
-/** Why someone still owns this checkout or branch, or null. Callers reach this
- * only after proving the head merged, so a review-then-merge obligation is moot;
- * a human handoff and unreadable policy records still hold. */
-async function ownerReason({ repoPath, tree, branch, readAgents }) {
-  const agents = await readAgents().catch(() => null);
-  if (!Array.isArray(agents)) return 'claim-ownership-unreadable';
-  const claim = claimCheckoutOwnerReason({ branchName: branch || 'HEAD', holderPath: tree.path, sourceWorkspace: repoPath, agents });
-  if (claim) return claim;
-  const [{ buildActiveOwnerIds, resolveLiveOwnerReason }, { getActiveAgentIds }] = await Promise.all([
-    import('./branchReconcile.js'), import('./agentState.js'),
-  ]);
-  // The released lock is excluded here on purpose: it was matched against the
-  // release above, and a NEW lock is caught by the registration recheck.
-  const live = resolveLiveOwnerReason({ branch, path: tree.path, locked: false, activeAgentIds: buildActiveOwnerIds(new Set(getActiveAgentIds()), agents) });
-  if (live) return live;
-  if (!branch) return null;
-  const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
-  const hold = await readBranchCompletionHold({ repoPath, branch, retirement: true }).catch(() => 'pr-completion-policy-unavailable');
-  return hold === 'pr-completion-review-required' ? null : hold;
+/**
+ * Drive a decide-or-ask decision: read each fact only when it is asked for.
+ * A reader gets the facts so far and the asking step; an undefined answer is a
+ * failed read (null), so the decision never asks for it again.
+ */
+async function decideWith(decide, readers) {
+  const facts = {};
+  for (;;) {
+    const step = decide(facts);
+    if (!step.need) return step;
+    facts[step.need] = (await readers[step.need](facts, step)) ?? null;
+  }
 }
 
-/** Fresh registration that still matches the release, or the reason it does not. */
-async function matchRelease(repoPath, release) {
-  const trees = await listWorktrees(repoPath).catch(() => null);
-  if (!trees?.length) return { reason: 'worktree-ownership-unreadable' };
-  const index = trees.findIndex(tree => resolve(tree.path) === resolve(release.path));
-  if (index === -1) return { reason: 'checkout-not-found' };
-  const tree = trees[index];
-  // Lexical equality alone can collapse '..' across a symlink. Different
-  // spellings must also resolve to the same existing filesystem checkout.
-  if (tree.path !== release.path) {
-    try { if (realpathSync.native(tree.path) !== realpathSync.native(release.path)) return { reason: 'checkout-identity-changed' }; }
-    catch { return { reason: 'checkout-identity-changed' }; }
-  }
-  if (index === 0 || tree.bare) return { reason: 'checkout-primary' };
-  if (tree.prunable) return { reason: 'worktree-prunable' };
-  if (tree.head !== release.head) return { reason: 'checkout-head-changed' };
-  if (shortBranch(tree.branch) !== (release.branch ?? null)) return { reason: 'checkout-branch-changed' };
-  if (Boolean(tree.locked) !== release.locked || (tree.lockReason ?? null) !== (release.lockReason ?? null)) {
-    return { reason: 'checkout-lock-changed' };
-  }
-  // Carry the persisted release spelling through removal and its record.
-  return { tree: { ...tree, path: release.path } };
+/** Readers for `decideMergedCheckoutOwner`'s facts. */
+const ownerReaders = ({ repoPath, branch, readAgents }) => ({
+  agents: () => readAgents().catch(() => null),
+  runtimeAgentIds: async () => new Set((await import('./agentState.js')).getActiveAgentIds()),
+  completionHold: async () => (await import('./branchCompletionPolicy.js'))
+    .readBranchCompletionHold({ repoPath, branch, retirement: true }).catch(() => 'pr-completion-policy-unavailable'),
+});
+
+/** Why someone still owns this checkout or branch, or null (`decideMergedCheckoutOwner`). */
+async function ownerReason({ repoPath, path, branch, readAgents }) {
+  const step = await decideWith(facts => decideMergedCheckoutOwner({ repoPath, path, branch, facts }), ownerReaders({ repoPath, branch, readAgents }));
+  return step.hold?.reason ?? null;
 }
+
+const samePhysicalCheckout = (a, b) => {
+  try { return realpathSync.native(a) === realpathSync.native(b); } catch { return false; }
+};
 
 /** The first link component of a checkout-relative path, never following one.
  * Git for Windows can list a junction's descendants as ordinary files. */
@@ -217,17 +201,19 @@ async function retireHeldCheckout({ repoPath, release }, opts = {}) {
   return withClaimOwnershipLock(async () => {
     if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return refuse('release-not-in-inventory');
     await opts.beforeMutation?.();
-    const matched = await matchRelease(repoPath, release);
-    if (!matched.tree) return refuse(matched.reason);
-    const { tree } = matched;
-    const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path);
-    if (!checkoutIdentity || (release.checkoutIdentity && release.checkoutIdentity !== checkoutIdentity)) return refuse('checkout-identity-changed');
-    if (!await isMergedHead(repoPath, tree.head, defaultBranch, deliveredHead)) return refuse('not-merged-on-recheck');
-    const porcelain = await getStatusPorcelain(tree.path).catch(() => null);
-    if (porcelain === null) return refuse('worktree-status-unavailable');
-    if (!isDisposable(tree.head, porcelain, disposableHead)) return refuse('worktree-dirty');
-    const owner = await ownerReason({ repoPath, tree, branch, readAgents });
-    if (owner) return refuse(owner);
+    const step = await decideWith(facts => decideHeldCheckoutRetirement({ repoPath, release, deliveredHead, disposableHead, facts }), {
+      trees: () => listWorktrees(repoPath).catch(() => null),
+      samePhysical: (_facts, { path }) => samePhysicalCheckout(path, release.path),
+      identity: () => readRetirementCheckoutIdentity(release.path),
+      mergeEvidence: () => hasBranchMergeEvidence(repoPath, release.head, defaultBranch).catch(() => false),
+      clean: async () => {
+        const porcelain = await getStatusPorcelain(release.path).catch(() => null);
+        return porcelain === null ? null : classifyWorktreeDirt(porcelain).clean;
+      },
+      ...ownerReaders({ repoPath, branch, readAgents }),
+    });
+    if (step.hold) return refuse(step.hold.reason);
+    const { tree, checkoutIdentity } = step.admit;
     const result = await removeHeldCheckout({ repoPath, release, tree, branch, defaultBranch, checkoutIdentity, deliveredHead, disposableHead }, opts);
     return result.ok ? { ...result, checkoutIdentity } : result;
   });
@@ -253,7 +239,7 @@ async function removeHeldCheckout({ repoPath, release, tree, branch, defaultBran
     ]);
     if (porcelain === null || !isDisposable(tree.head, porcelain, disposableHead)) return 'worktree-dirty';
     if (!merged) return 'not-merged-on-recheck';
-    return ownerReason({ repoPath, tree, branch, readAgents });
+    return ownerReason({ repoPath, path: tree.path, branch, readAgents });
   };
   const removedLinks = [];
   let linksPrepared = false;
@@ -283,7 +269,7 @@ async function removeHeldCheckout({ repoPath, release, tree, branch, defaultBran
   }
   console.log(`🧹 held-checkout recovery: retired ${tree.path}`);
   if (!branch) return { ok: true, branchDeleted: false };
-  const hold = await ownerReason({ repoPath, tree: { ...tree, path: null }, branch, readAgents });
+  const hold = await ownerReason({ repoPath, path: null, branch, readAgents });
   if (hold) return { ok: true, branchDeleted: false, branchRetainedReason: hold };
   // A new checkout/commit cannot be deleted by a stale name-only operation.
   const holders = await listWorktrees(repoPath).catch(() => null);
@@ -312,20 +298,13 @@ function bindInventoriedRelease(outcome, release) {
  * prove the receipt's own PR merged at the handed-off head or at a descendant of it.
  */
 export async function retirePendingMergeCheckout({ repoPath, release, prUrl, expectedHeadSha }, opts = {}) {
-  if (!release || release.locked !== false || release.lockReason !== null) return { ok: false, reason: 'receipt-checkout-locked' };
-  if (!release.path || !release.branch || typeof expectedHeadSha !== 'string'
-    || !FULL_OBJECT_ID.test(expectedHeadSha) || release.head !== expectedHeadSha) {
-    return { ok: false, reason: 'receipt-checkout-head-unverified' };
-  }
-  const { readMergedPrDelivery } = await import('./mergedPrEvidence.js');
-  const forge = await readMergedPrDelivery(repoPath, release.branch, prUrl, { forgeAccount: opts.forgeAccount ?? null, exactDeliveredHead: expectedHeadSha })
-    .catch(error => ({ error }));
-  if (forge.error) return { ok: false, reason: /^merged-pr-[a-z-]+$/.test(forge.error.message) ? forge.error.message : 'receipt-pr-merge-unverified' };
-  // A PR merged at a later head still delivers this checkout when that head
-  // descends from the handed-off one; retirement then needs a clean tree.
-  const exact = forge.prHead === expectedHeadSha;
-  if (!exact && forge.scopeProof !== 'ancestor-of-delivered-head') return { ok: false, reason: 'receipt-pr-head-changed' };
-  const result = await retireHeldCheckout({ repoPath, release }, { ...opts, delivery: exact ? 'exact' : 'contained' });
+  const step = await decideWith(facts => decidePendingMergeReceipt({ release, expectedHeadSha, facts }), {
+    forge: async () => (await import('./mergedPrEvidence.js'))
+      .readMergedPrDelivery(repoPath, release.branch, prUrl, { forgeAccount: opts.forgeAccount ?? null, exactDeliveredHead: expectedHeadSha })
+      .catch(error => ({ error })),
+  });
+  if (step.hold) return { ok: false, reason: step.hold.reason };
+  const result = await retireHeldCheckout({ repoPath, release }, { ...opts, delivery: step.admit.delivery });
   if (result.ok) {
     const { recordWorkspaceCheckoutRetirement } = await import('./branchReconcileOutcome.js');
     await recordWorkspaceCheckoutRetirement(repoPath, {
@@ -370,36 +349,24 @@ async function retireInventoriedBranch({ appId, repoPath, release }, opts = {}) 
   const { getBranchReconcileOutcome, recordHeldCheckoutRetirement } = await import('./branchReconcileOutcome.js');
   const delivered = DELIVERED.has(await readForgeDelivery(repoPath, release.branch, release.head));
   const ref = `refs/heads/${release.branch}`;
+  const readers = {
+    inventoryRow: async () => (await getBranchReconcileOutcome(appId))?.remaining?.some(row => !row.path && row.branch === release.branch && row.head === release.head),
+    defaultBranch: () => getDefaultBranch(repoPath, { allowRemote: false, strict: true }).catch(() => null),
+    holders: () => listWorktrees(repoPath).catch(() => null),
+    // show-ref exit 1 also covers broken symbolic and malformed loose refs, so
+    // only the bounded files-backend inspection can establish actual absence.
+    presence: () => readLocalBranchPresence(repoPath, release.branch),
+    symbolicExit: async () => (await execGit(['symbolic-ref', '--quiet', ref], repoPath, { ignoreExitCode: true }).catch(() => null))?.exitCode,
+    tip: () => execGit(['rev-parse', '--verify', ref], repoPath).then(row => row.stdout.trim(), () => null),
+    mergeEvidence: facts => hasBranchMergeEvidence(repoPath, release.head, facts.defaultBranch).catch(() => false),
+    ...ownerReaders({ repoPath, branch: release.branch, readAgents: opts.readAgents || readClaimOwnershipAgents }),
+  };
   // Every check re-reads live state; a failure throws its reason and keeps the ref.
   const recheck = async () => {
     await opts.beforeMutation?.();
-    if (!(await getBranchReconcileOutcome(appId))?.remaining?.some(row => !row.path && row.branch === release.branch && row.head === release.head)) {
-      throw new Error('release-not-in-inventory');
-    }
-    const defaultBranch = await getDefaultBranch(repoPath, { allowRemote: false, strict: true }).catch(() => null);
-    if (!defaultBranch) throw new Error('default-branch-unavailable');
-    if (release.branch === defaultBranch) throw new Error('protected-branch');
-    const holders = await listWorktrees(repoPath).catch(() => null);
-    if (!holders || holders.some(row => shortBranch(row.branch) === release.branch)) throw new Error('branch-has-new-holder');
-    // show-ref exit 1 also covers broken symbolic and malformed loose refs, so
-    // only the bounded files-backend inspection can establish actual absence.
-    const presence = await readLocalBranchPresence(repoPath, release.branch);
-    if (presence === null) throw new Error('branch-ref-presence-unverified');
-    if (presence) {
-      // Never treat a symbolic ref as the inventoried direct branch, even if its
-      // target currently resolves to the same commit.
-      const symbolic = await execGit(['symbolic-ref', '--quiet', ref], repoPath, { ignoreExitCode: true }).catch(() => null);
-      if (symbolic?.exitCode !== 1) throw new Error('branch-ref-presence-unverified');
-      const tip = await execGit(['rev-parse', '--verify', ref], repoPath).then(row => row.stdout.trim(), () => null);
-      if (tip !== release.head) throw new Error('branch-ref-changed-or-recreated');
-    }
-    // An already-absent ref records retirement only on the forge's merged
-    // delivery of that head, so an unexplained disappearance stays visible.
-    const merged = delivered || (presence && await hasBranchMergeEvidence(repoPath, release.head, defaultBranch).catch(() => false));
-    if (!merged) throw new Error('not-merged-on-recheck');
-    const owner = await ownerReason({ repoPath, tree: { path: null }, branch: release.branch, readAgents: opts.readAgents || readClaimOwnershipAgents });
-    if (owner) throw new Error(owner);
-    return { missing: !presence };
+    const step = await decideWith(facts => decideInventoriedBranchRetirement({ repoPath, branch: release.branch, head: release.head, delivered, facts }), readers);
+    if (step.hold) throw new Error(step.hold.reason);
+    return step.admit;
   };
   const record = () => recordHeldCheckoutRetirement(appId, { branch: release.branch, head: release.head, branchDeleted: true });
   return withClaimOwnershipLock(async () => {

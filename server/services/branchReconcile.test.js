@@ -504,6 +504,19 @@ describe('cleanupMerged', () => {
     expect(res.cleaned).toEqual(['next/issue-2190']);
   });
 
+  // Merged and superseded retirement share this recorder (#16100).
+  it('reports a retired branch as cleaned when its display-history write is rejected', async () => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    const fallback = gitFixtureResult('', 0);
+    execGit.mockImplementation(async (args, ...rest) => (args[0] === 'show-ref' ? { stdout: '', exitCode: 1 } : fallback(args, ...rest)));
+    wt.deleteCompletedLocalBranch.mockImplementationOnce(async (_repo, _branch, _head, { onRetired }) => { await onRetired(); return true; });
+    recordHeldCheckoutRetirement.mockRejectedValueOnce(new Error('synthetic history persistence failure'));
+    const worktreePath = '/repo/.claude/worktrees/next-2190';
+    const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath }], { appId: 'app-1' });
+    expect(recordHeldCheckoutRetirement).toHaveBeenCalledWith('app-1', expect.objectContaining({ branch: 'next/issue-2190', path: worktreePath, head: RETIRE_HEAD, branchDeleted: true }));
+    expect(res.cleaned).toEqual(['next/issue-2190']);
+  });
+
   it('deletes a merged branch with no worktree', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     const res = await cleanupMerged('/repo', 'main', [{ branch: 'orphan', worktreePath: null }]);

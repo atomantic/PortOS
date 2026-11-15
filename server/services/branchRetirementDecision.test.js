@@ -1,16 +1,19 @@
 /**
  * Hold/retire permutations for checkout retirement, decided over inspected
- * state (#16115). The real-git contract for each outcome stays in
- * branchReconcile.ownership.test.js; these pin every combination of holder,
- * head, merge, dirt, lock, owner and completion evidence, plus the order facts
- * are read in (a hold must not pay for a later, costlier read).
+ * state (#16115, #16153). The real-git contract for each outcome stays in
+ * branchReconcile.ownership.test.js and heldCheckoutRecovery.test.js; these pin
+ * every combination of holder, head, merge, dirt, lock, owner and completion
+ * evidence, plus the order facts are read in (a hold must not pay for a later,
+ * costlier read).
  */
 import { describe, it, expect } from 'vitest';
 import {
-  decideBranchRetirement, decideDetachedRetirement, gatheredHoldReason, recoveryWorktreeReason, supersededPolicyHold,
+  decideBranchRetirement, decideDetachedRetirement, decideHeldCheckoutRetirement, decideInventoriedBranchRetirement, decideMergedCheckoutOwner,
+  decideMergedDelivery, decidePendingMergeReceipt, gatheredHoldReason, recoveryWorktreeReason, supersededPolicyHold,
   SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS,
 } from './branchRetirementDecision.js';
 import { classifyBranches } from './branchReconcile.js';
+import { classifyWorktreeDirt } from './worktreeManager.js';
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -179,6 +182,9 @@ describe('decideBranchRetirement — superseded (unmerged) retirement', () => {
     ['a vanished head holds', 'fix/superseded-gone', `${MANAGED}/superseded`, { facts: { head: null } }, 'branch-head-unavailable'],
     ['a fresh checkout outside the managed roots holds', 'fix/tmp', '/tmp/agent-checkout', {}, 'worktree-unmanaged-location'],
     ['an idle checkout outside the managed roots retires', 'fix/tmp', '/tmp/agent-checkout', { scan: { worktreeAgeMs: 2 * HOUR } }, 'retire'],
+    // These were real-git superseded cases in heldCheckoutRecovery.test.js.
+    ['a live owner of the branch holds', 'feature/superseded', `${MANAGED}/superseded`, { facts: { agents: [live('new-owner', { claimBranches: ['feature/superseded'] })] } }, 'claim-owner-active'],
+    ['a branch with no checkout retires', 'feature/no-worktree', null, {}, 'retire'],
   ])('%s', (_name, branch, path, overrides, expected) => {
     expect(reasonOf(superseded(branch, path, overrides))).toBe(expected);
   });
@@ -276,5 +282,189 @@ describe('recoveryWorktreeReason', () => {
     [{ prunable: false, locked: false, managed: true }, 'checkout-retained'],
   ])('%o → %s', (tree, expected) => {
     expect(recoveryWorktreeReason(tree)).toBe(expected);
+  });
+});
+
+// Held-checkout recovery (#16153). Every row was a real-git case in
+// heldCheckoutRecovery.test.js; that suite keeps one real-git contract per
+// outcome and destructive refusal.
+const HELD = '/work/elsewhere/held';
+const LOCK = 'synthetic external owner';
+
+/** Run a decide-or-ask decision the way heldCheckoutRecovery's driver does. */
+function drive(decision, input, answers) {
+  const facts = {};
+  const asked = [];
+  for (;;) {
+    const step = decision({ ...input, facts });
+    if (!step.need) return { ...step, asked };
+    if (!(step.need in answers)) throw new Error(`decision asked for an unsupplied fact: ${step.need}`);
+    asked.push(step.need);
+    facts[step.need] = answers[step.need];
+  }
+}
+const verdict = step => step.hold?.reason ?? 'retire';
+
+describe('decideHeldCheckoutRetirement', () => {
+  const owners = { agents: [], runtimeAgentIds: new Set(), completionHold: null };
+  /** A locked, inventoried checkout of `feature/held` whose commits are on main, with every fact clean. */
+  const held = ({ release = {}, tree = {}, facts = {}, ...input } = {}) => {
+    const r = { path: HELD, head: HEAD, branch: 'feature/held', locked: true, lockReason: LOCK, ...release };
+    const listed = { path: r.path, branch: r.branch ? `refs/heads/${r.branch}` : null, head: r.head, locked: r.locked, lockReason: r.lockReason, ...tree };
+    return drive(decideHeldCheckoutRetirement, { repoPath: REPO, release: r, ...input }, {
+      trees: [{ path: REPO, branch: 'refs/heads/main', head: MAIN_HEAD }, listed],
+      samePhysical: true, identity: 'checkout-1', mergeEvidence: true, clean: true, ...owners, ...facts,
+    });
+  };
+  const exact = { deliveredHead: HEAD, disposableHead: HEAD };
+  const contained = { deliveredHead: HEAD, disposableHead: null };
+
+  it.each([
+    // [removed real-git case, overrides, verdict]
+    ['clean squash-merged checkout retires with its branch', {}, 'retire'],
+    ['completion-review obligation settles in one step once merged', { facts: { completionHold: 'pr-completion-review-required' } }, 'retire'],
+    ['unmerged completion-review checkout beside a PR merged at another head', { facts: { mergeEvidence: false, completionHold: 'pr-completion-review-required' } }, 'not-merged-on-recheck'],
+    ['unmerged work is refused', { release: { locked: false, lockReason: null }, facts: { mergeEvidence: false } }, 'not-merged-on-recheck'],
+    ['clean checkout contained in a later merged PR head retires', contained, 'retire'],
+    ['dirty checkout contained in a later merged PR head is held', { ...contained, facts: { clean: false } }, 'worktree-dirty'],
+    ['dirty checkout whose PR merged at its exact head retires', { ...exact, facts: { clean: false, mergeEvidence: false } }, 'retire'],
+    ['dirty exact delivery with a submodule retires unlocked too', { ...exact, release: { locked: false, lockReason: null }, facts: { clean: false } }, 'retire'],
+    ['dirty checkout whose PR merged at another head is held', { facts: { clean: false } }, 'worktree-dirty'],
+    ['dirty locked detached checkout is held', { release: { branch: null }, facts: { clean: false } }, 'worktree-dirty'],
+    ['unreadable status holds', { facts: { clean: null } }, 'worktree-status-unavailable'],
+    ['a lock changed since the inventory is an ownership change', { tree: { lockReason: 'new owner took over' } }, 'checkout-lock-changed'],
+    ['a lock released since the inventory is an ownership change', { tree: { locked: false, lockReason: null } }, 'checkout-lock-changed'],
+    ['a moved HEAD since the inventory is an ownership change', { tree: { head: 'e'.repeat(40) } }, 'checkout-head-changed'],
+    ['a receipt checkout whose head moved after the handoff', { ...exact, release: { locked: false, lockReason: null }, tree: { head: 'e'.repeat(40) } }, 'checkout-head-changed'],
+    ['a switched branch is an ownership change', { tree: { branch: 'refs/heads/feature/other' } }, 'checkout-branch-changed'],
+    ['a lexically equal spelling of a different physical checkout', { release: { path: `${HELD}/.` }, tree: { path: HELD }, facts: { samePhysical: false } }, 'checkout-identity-changed'],
+    ['another spelling of the same physical checkout retires', { release: { path: `${HELD}/.` }, tree: { path: HELD } }, 'retire'],
+    ['a checkout Git no longer lists', { tree: { path: '/work/elsewhere/other' } }, 'checkout-not-found'],
+    ['an unreadable worktree list', { facts: { trees: null } }, 'worktree-ownership-unreadable'],
+    ['the primary checkout', { release: { path: REPO }, facts: { trees: [{ path: REPO, branch: 'refs/heads/feature/held', head: HEAD, locked: true, lockReason: LOCK }] } }, 'checkout-primary'],
+    ['a prunable registration', { tree: { prunable: true } }, 'worktree-prunable'],
+    ['an unreadable checkout identity', { facts: { identity: null } }, 'checkout-identity-changed'],
+    ['a recreated checkout at the inventoried path', { release: { checkoutIdentity: 'checkout-0' } }, 'checkout-identity-changed'],
+    ['a manual completion handoff', { facts: { completionHold: 'pr-completion-human-handoff' } }, 'pr-completion-human-handoff'],
+    ['unreadable completion policy', { facts: { completionHold: 'pr-completion-policy-unavailable' } }, 'pr-completion-policy-unavailable'],
+    ['an unreadable owner registry', { facts: { agents: null } }, 'claim-ownership-unreadable'],
+    ['a live run whose workspace is the checkout', { facts: { agents: [{ id: 'agent-live', status: 'running', workspacePath: HELD }] } }, 'claim-owner-active'],
+    ['a live claim bound to the branch', { facts: { agents: [live('new-owner', { claimBranches: ['feature/held'] })] } }, 'claim-owner-active'],
+    ['a running agent in a managed agent checkout', { release: { path: `${MANAGED}/agent-1234abcd` }, facts: { runtimeAgentIds: new Set(['agent-1234abcd']) } }, 'worktree-active-agent'],
+  ])('%s', (_name, overrides, expected) => {
+    expect(verdict(held(overrides))).toBe(expected);
+  });
+
+  it('admits the listed registration under the release spelling with the identity it read', () => {
+    expect(held({ release: { path: `${HELD}/.` }, tree: { path: HELD } }).admit).toEqual({
+      tree: { path: `${HELD}/.`, branch: 'refs/heads/feature/held', head: HEAD, locked: true, lockReason: LOCK }, checkoutIdentity: 'checkout-1',
+    });
+  });
+
+  it('reads facts lazily: a registration change reads nothing else, dirt reads no owner, delivery skips local merge evidence', () => {
+    expect(held({ tree: { head: 'e'.repeat(40) } }).asked).toEqual(['trees']);
+    expect(held({ facts: { clean: false } }).asked).toEqual(['trees', 'identity', 'mergeEvidence', 'clean']);
+    expect(held(exact).asked).toEqual(['trees', 'identity', 'clean', 'agents', 'runtimeAgentIds', 'completionHold']);
+    // The physical check runs only for a different spelling; a detached checkout has no policy to read.
+    expect(held({ release: { path: `${HELD}/.` }, tree: { path: HELD } }).asked.slice(0, 2)).toEqual(['trees', 'samePhysical']);
+    expect(held({ release: { branch: null } }).asked.at(-1)).toBe('runtimeAgentIds');
+  });
+
+  it('asks for the physical identity of the listed spelling', () => {
+    const step = decideHeldCheckoutRetirement({ repoPath: REPO, release: { path: `${HELD}/.`, head: HEAD, branch: null, locked: false, lockReason: null },
+      facts: { trees: [{ path: REPO }, { path: HELD, head: HEAD, branch: null }] } });
+    expect(step).toEqual({ need: 'samePhysical', path: HELD });
+  });
+
+  it('counts a nested repository as uncommitted work', () => {
+    // `git status` lists a nested repository as an untracked directory.
+    expect(classifyWorktreeDirt('?? nested/\n').clean).toBe(false);
+  });
+});
+
+describe('decideMergedCheckoutOwner', () => {
+  const owner = (input, facts) => verdict(drive(decideMergedCheckoutOwner, { repoPath: REPO, ...input },
+    { agents: [], runtimeAgentIds: new Set(), completionHold: null, ...facts }));
+
+  it.each([
+    ['an owner arriving before removal holds the checkout', { path: HELD, branch: null }, { agents: [{ id: 'agent-live', status: 'running', workspacePath: HELD }] }, 'claim-owner-active'],
+    ['a removed checkout\'s branch with no owner is free', { path: null, branch: 'feature/held' }, {}, 'retire'],
+    ['a running agent named by its CoS branch holds the branch', { path: null, branch: 'cos/task-1/agent-1234abcd' }, { runtimeAgentIds: new Set(['agent-1234abcd']) }, 'branch-active-agent'],
+    ['a human handoff keeps the branch after its checkout is gone', { path: null, branch: 'feature/held' }, { completionHold: 'pr-completion-human-handoff' }, 'pr-completion-human-handoff'],
+  ])('%s', (_name, input, facts, expected) => {
+    expect(owner(input, facts)).toBe(expected);
+  });
+});
+
+describe('decidePendingMergeReceipt', () => {
+  const release = { path: HELD, head: HEAD, branch: 'feature/receipt', locked: false, lockReason: null };
+  const receipt = ({ forge = { prHead: HEAD }, ...input } = {}) => drive(decidePendingMergeReceipt, { release, expectedHeadSha: HEAD, ...input }, { forge });
+
+  it.each([
+    ['a PR merged at another head', { forge: { prHead: 'f'.repeat(40) } }, 'receipt-pr-head-changed'],
+    ['a forge refusal keeps its own reason', { forge: { error: new Error('merged-pr-remote-head-changed') } }, 'merged-pr-remote-head-changed'],
+    ['any other forge failure is unverified, never a raw error', { forge: { error: new Error('private diagnostic') } }, 'receipt-pr-merge-unverified'],
+    ['a locked receipt checkout', { release: { ...release, locked: true, lockReason: 'owner' } }, 'receipt-checkout-locked'],
+    ['a receipt for another head', { expectedHeadSha: 'e'.repeat(40) }, 'receipt-checkout-head-unverified'],
+    ['a receipt without a full head', { expectedHeadSha: 'abc123' }, 'receipt-checkout-head-unverified'],
+    ['a receipt without a branch', { release: { ...release, branch: null } }, 'receipt-checkout-head-unverified'],
+  ])('holds %s', (_name, input, expected) => {
+    expect(verdict(receipt(input))).toBe(expected);
+  });
+
+  it('hands retirement an exact or a contained delivery, reading the forge only once the receipt matches', () => {
+    expect(receipt()).toEqual({ admit: { delivery: 'exact' }, asked: ['forge'] });
+    expect(receipt({ forge: { prHead: 'c'.repeat(40), scopeProof: 'ancestor-of-delivered-head', deliveredAncestorHead: HEAD } }).admit).toEqual({ delivery: 'contained' });
+    expect(receipt({ expectedHeadSha: 'e'.repeat(40) }).asked).toEqual([]);
+  });
+});
+
+describe('decideMergedDelivery', () => {
+  const merged = (clean, ancestry, delivery) => drive(decideMergedDelivery, { clean, ancestry }, { delivery }).merged;
+
+  it.each([
+    ['merged and clean, without asking the forge', true, true, undefined, true],
+    ['unmerged with no delivery', true, false, 'none', false],
+    ['unknown when the forge cannot be read', true, false, null, null],
+    ['merged with uncommitted work and no exact delivery', false, true, 'none', false],
+    ['merged with uncommitted work at the exact merged head', false, true, 'exact', true],
+    ['contained in a later merged head and clean', true, false, 'contained', true],
+    ['contained in a later merged head with uncommitted work', false, false, 'contained', false],
+    ['merged work whose status cannot be read', null, true, 'none', null],
+  ])('%s', (_name, clean, ancestry, delivery, expected) => {
+    expect(merged(clean, ancestry, delivery)).toBe(expected);
+  });
+});
+
+describe('decideInventoriedBranchRetirement', () => {
+  const branch = 'feature/inventoried';
+  const inventoried = ({ delivered = false, facts = {} } = {}) => drive(decideInventoriedBranchRetirement, { repoPath: REPO, branch, head: HEAD, delivered }, {
+    inventoryRow: true, defaultBranch: 'main', holders: [{ path: REPO, branch: 'refs/heads/main' }], presence: true, symbolicExit: 1, tip: HEAD,
+    mergeEvidence: true, agents: [], runtimeAgentIds: new Set(), completionHold: null, ...facts,
+  });
+
+  it.each([
+    ['a merged ref is deleted', {}, 'retire'],
+    ['an unmerged ref is kept', { facts: { mergeEvidence: false } }, 'not-merged-on-recheck'],
+    ['an already-absent ref without the forge\'s merge is kept visible', { facts: { presence: false } }, 'not-merged-on-recheck'],
+    ['an already-absent ref the forge delivered settles', { delivered: true, facts: { presence: false } }, 'retire'],
+    ['a row the inventory no longer names', { facts: { inventoryRow: false } }, 'release-not-in-inventory'],
+    ['an unreadable default branch', { facts: { defaultBranch: null } }, 'default-branch-unavailable'],
+    ['the resolved default branch', { facts: { defaultBranch: branch } }, 'protected-branch'],
+    ['a branch checked out again', { facts: { holders: [{ path: HELD, branch: `refs/heads/${branch}` }] } }, 'branch-has-new-holder'],
+    ['an unreadable worktree list', { facts: { holders: null } }, 'branch-has-new-holder'],
+    ['unverifiable ref presence', { facts: { presence: null } }, 'branch-ref-presence-unverified'],
+    ['a symbolic ref at the branch name', { facts: { symbolicExit: 0 } }, 'branch-ref-presence-unverified'],
+    ['a ref that moved or was recreated', { facts: { tip: 'e'.repeat(40) } }, 'branch-ref-changed-or-recreated'],
+    ['a live claim on the branch', { facts: { agents: [live('new-owner', { claimBranches: [branch] })] } }, 'claim-owner-active'],
+  ])('%s', (_name, overrides, expected) => {
+    expect(verdict(inventoried(overrides))).toBe(expected);
+  });
+
+  it('reports a missing ref, and reads local merge evidence only without the forge\'s delivery', () => {
+    expect(inventoried({ delivered: true, facts: { presence: false } }).admit).toEqual({ missing: true });
+    expect(inventoried().admit).toEqual({ missing: false });
+    expect(inventoried({ delivered: true }).asked).not.toContain('mergeEvidence');
+    expect(inventoried({ facts: { presence: false } }).asked).toEqual(['inventoryRow', 'defaultBranch', 'holders', 'presence']);
   });
 });

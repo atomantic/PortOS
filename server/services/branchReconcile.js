@@ -1,6 +1,6 @@
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
-import { STALE_CLAIM_IDLE_MS, SHIPPED_CLAIM_IDLE_MS, buildActiveOwnerIds, decideBranchRetirement, decideDetachedRetirement, gatheredHoldReason, recoveryWorktreeReason, supersededPolicyHold, teardownGate } from './branchRetirementDecision.js';
+import { STALE_CLAIM_IDLE_MS, SHIPPED_CLAIM_IDLE_MS, buildActiveOwnerIds, decideBranchRetirement, resolveLiveOwnerReason, decideDetachedRetirement, gatheredHoldReason, recoveryWorktreeReason, supersededPolicyHold, teardownGate } from './branchRetirementDecision.js';
 /**
  * Branch & PR Reconciler — deterministic core (Tier 1).
  *
@@ -30,7 +30,7 @@ import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { getBranches, getDefaultBranch, hasBranchMergeEvidence, deleteMergedRemoteBranches } from './git.js';
 import { execGit } from '../lib/execGit.js';
 import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, reapMergedWorktrees, readWorktreeStatus } from './worktreeManager.js';
-import { isAgentWorktreeId, isHumanClaimWorktree, knownAgentIds, worktreeAgentId, worktreeOwnershipReason, worktreeHoldExpiresAt } from '../lib/worktreeOwnership.js';
+import { isHumanClaimWorktree, knownAgentIds, worktreeAgentId, worktreeOwnershipReason, worktreeHoldExpiresAt } from '../lib/worktreeOwnership.js';
 import { execGh, ensureForgeReachable, getIssueDispatchHint } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { isForgeNoAccessError, logForgeNoAccessOnce } from '../lib/forgeAccessErrors.js';
@@ -109,7 +109,7 @@ export function prioritizeBranches(branches) {
 // we err far toward preservation: a paused session returned-to within 7 days keeps
 // its worktree, while a genuinely-leaked one (which persists indefinitely) is
 // reaped on the daily recheck once it crosses the threshold.
-export { STALE_CLAIM_IDLE_MS, SHIPPED_CLAIM_IDLE_MS, buildActiveOwnerIds };
+export { STALE_CLAIM_IDLE_MS, SHIPPED_CLAIM_IDLE_MS, buildActiveOwnerIds, resolveLiveOwnerReason };
 
 // The same window, for a claim that has demonstrably SHIPPED (see SHIPPED_CLAIM
 // on cleanupMerged): proof of completion collapses the wait to an idle floor
@@ -495,58 +495,6 @@ export function isAbandonedClaimWorktree({ path, locked, worktreeDirty = false, 
     activeAgentIds,
     allowLiveClaim: true,
   }) === null;
-}
-
-/**
- * Why this branch must be left ALONE this cycle — the dispatch-side counterpart to
- * `worktreeProtectionReason`'s teardown gate. Three cases that gate doesn't cover:
- *
- * 1. **Liveness we could not determine.** An `agent-*` worktree whose owner's
- *    liveness is UNKNOWN (`knownAgentIds` returned null) is presumed live —
- *    the same posture `worktreeProtectionReason` and `isAbandonedAgentWorktree`
- *    take. Fail safe toward not-touching.
- * 2. **A live agent whose worktree is already GONE.** Ownership is in the branch
- *    NAME, not the worktree: CoS branches are `cos/<taskId>/<agentId>` and the
- *    worktree basename is that same `<agentId>`. An agent that removed its worktree
- *    while still running — `/do:pr`'s Phase-7 cleanup does exactly this, before the
- *    session ends — leaves a pushed branch with an open PR and no worktree row, which
- *    otherwise classifies IN_REVIEW and gets handed to the coordinator while its own
- *    agent is still working. That is the bug this whole guard exists to prevent,
- *    surviving in a narrower window. So the branch name is checked too.
- * 3. **A claim directory, which is a claim MARKER and not a live process.** The
- *    claim flow has no durable local agent id for its branch, so treating the
- *    directory's existence as liveness hides clean, open-PR claims after the
- *    claim agent has exited — exactly the branches branch-reconcile exists to
- *    finish. So this side passes `allowLiveClaim`; a dirty claim is then
- *    surfaced as `ABANDONED_WIP` by `isAbandonedClaimWorktree`, while cleanup
- *    keeps its destructive hold through `worktreeProtectionReason` until the
- *    claim is stale or provably shipped. A lock still outranks it: the gate
- *    tests the lock BEFORE the claim, so a locked claim tree reports
- *    `worktree-locked` on its own — and so does a live agent, on the same
- *    ordering. The scheduler augments `activeAgentIds` with the basenames of
- *    live agents' recorded worktree paths, so a claim basename held by a live
- *    agent still wins over the dispatch-side carve-out.
- *
- * A branch with no worktree at all and no live owner is simply free (null).
- *
- * @param {{ branch?:string|null, path:string|null, locked?:boolean, activeAgentIds?:Set<string> }} input
- * @returns {string|null} a stable reason slug, or null when nobody owns it
- */
-export function resolveLiveOwnerReason({ branch, path, locked, activeAgentIds }) {
-  // The branch's own trailing segment is an agent id for CoS branches — checked
-  // FIRST because it holds even after the worktree is gone.
-  const owner = (branch || '').split('/').pop() || '';
-  if (isAgentWorktreeId(owner) && knownAgentIds(activeAgentIds)?.has(owner)) {
-    return 'branch-active-agent';
-  }
-  if (!path) return null;
-  return worktreeOwnershipReason({
-    path,
-    locked,
-    activeAgentIds,
-    allowLiveClaim: true,
-    requireKnownLiveness: true,
-  });
 }
 
 /**

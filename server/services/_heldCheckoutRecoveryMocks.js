@@ -12,7 +12,7 @@ import { lazyTempDataRoot, makePathsProxy, ownFixtureWork } from '../lib/mockPat
 export const owned = ownFixtureWork();
 
 export const SYMLINKS = process.platform !== 'win32';
-export const retirementFaults = { onRemove: null, onBranchDelete: null, scheduleWrites: 0, failScheduleWrite: null };
+export const retirementFaults = { onRemove: null };
 export const injected = { policies: [], schedule: null, app: null, onUnlockedStatus: null, statusReads: 0, onOtherFiles: null };
 
 // Local branch deletion uses PATHS.cos, independently of any checkout path.
@@ -28,7 +28,6 @@ export const mockExecGit = actual => ({ ...actual,
       if (injected.statusReads > 1) await injected.onUnlockedStatus();
     }
     if (retirementFaults.onRemove && args[0] === 'worktree' && args[1] === 'remove') await retirementFaults.onRemove();
-    if (retirementFaults.onBranchDelete && args[0] === 'push' && args.some(arg => arg.startsWith(':refs/heads/'))) await retirementFaults.onBranchDelete();
     const result = await owned.run('git', () => actual.execGit(args, cwd, options));
     // Lets a test reproduce Git for Windows listing a junction's descendants.
     if (injected.onOtherFiles && args[0] === 'ls-files' && args[1] === '--others') return { ...result, stdout: injected.onOtherFiles(result.stdout) };
@@ -45,8 +44,5 @@ export const mockBranchCompletionPolicy = actual => ({
 export const mockTaskScheduleStore = actual => ({
   ...actual,
   loadSchedule: async () => injected.schedule,
-  updateSchedule: async mutate => {
-    if (++retirementFaults.scheduleWrites === retirementFaults.failScheduleWrite) throw new Error('synthetic receipt persistence failure');
-    return (await mutate(injected.schedule)).result;
-  },
+  updateSchedule: async mutate => (await mutate(injected.schedule)).result,
 });
