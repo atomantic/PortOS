@@ -68,6 +68,19 @@ describe('catalog assets offered for a linked character', () => {
     expect(musicVideoSceneCastIds(project(), {})).toEqual([]);
   });
 
+  // Uniquely catches loading (and locking on) every linked cast member for a shot that names one or two.
+  it('needs only the linked subjects the shot names', () => {
+    const other = { id: 'other', kind: 'character', name: 'Other', ingredientId: 'cat-chr-other' };
+    const third = { id: 'third', kind: 'character', name: 'Third', ingredientId: 'cat-chr-third' };
+    const multi = project({
+      concept: { subjects: [subject, other, third] },
+      castAndSets: { source: 'catalog', catalogCheckin: { items: [subject, other, third].map((s) => ({ subjectId: s.id, ingredientId: s.ingredientId, name: s.name, kind: 'character' })) } },
+    });
+    const scene = { frameReferenceIds: [linkedId('face.png')], prompt: 'Lead stares out the window' };
+    expect(musicVideoSceneCastIds(multi, scene)).toEqual([CAST]);
+    expect(musicVideoSceneCastIds(multi, { ...scene, prompt: 'A quiet street' })).toEqual([CAST, 'cat-chr-other', 'cat-chr-third']);
+  });
+
   it('keeps a pick within a five-image renderer in the chosen order', () => {
     const scene = { frameReferenceIds: ['r1', 'r2', 'r3', 'r4', 'r5', linkedId('face.png')] };
     const withRefs = project({ visualSpec: { references: ['r1', 'r2', 'r3', 'r4', 'r5'].map((id) => ({ id, imageId: `${id}.png`, role: 'set' })) } });
