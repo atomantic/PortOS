@@ -22,6 +22,8 @@ import { GOOGLE_DEFAULT_VIDEO_MODEL, getGoogleVideoModel } from './googleVideoMo
 import { falSceneTake, meteredSceneTake, runwaySceneTake } from './musicVideoShotTiming.js';
 
 export const MUSIC_VIDEO_RENDER_TIERS = Object.freeze(['draft', 'final']);
+// How an approved draft shot is upgraded (#16136); lives here so validation imports no shot-prompt closure.
+export const MUSIC_VIDEO_UPGRADE_METHODS = Object.freeze(['upscale', 'rerender']);
 export const isMusicVideoRenderTier = (tier) => MUSIC_VIDEO_RENDER_TIERS.includes(tier);
 export const musicVideoRenderTierLabel = (tier) => (tier === 'draft' ? 'Draft' : tier === 'final' ? 'Final' : null);
 

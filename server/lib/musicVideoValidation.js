@@ -3,7 +3,7 @@
  */
 
 import { CAST_SETS_IMAGE_EDIT_MAX } from './musicVideoCastSetsImageEdit.js';
-import { MUSIC_VIDEO_RENDER_TIERS } from './musicVideoRenderTier.js';
+import { MUSIC_VIDEO_RENDER_TIERS, MUSIC_VIDEO_UPGRADE_METHODS } from './musicVideoRenderTier.js';
 import {
   ROUTE_MAP_FEATURE_KINDS, ROUTE_MAP_FEATURE_LABEL_MAX, ROUTE_MAP_FEATURE_SIDES, ROUTE_MAP_FEATURES_MAX, ROUTE_MAP_HEADINGS, ROUTE_MAP_MAX, ROUTE_MAP_NAME_MAX, ROUTE_MAP_NOTE_MAX, ROUTE_MAP_STOPS_MAX, ROUTE_MAP_TRAVEL_MAX,
 } from './musicVideoRouteMapLimits.js';
@@ -2241,6 +2241,8 @@ export const musicVideoSceneLastFailureSchema = z.object({
 // patch alone (the paired value may live on the existing record), so the merged
 // range is validated in projectsLogic.applySceneUpdate instead.
 export const musicVideoSceneUpdateSchema = z.object({
+  // #16136: approval to upgrade the selected draft clip; derived-valid (see musicVideoFinalApproval.js).
+  finalApproval: z.object({ takeId: z.string().max(128), revision: z.string().max(32) }).nullable().optional(),
   label: z.string().max(120).optional(),
   sectionLabel: z.string().max(120).nullable().optional(),
   prompt: z.string().max(8000).optional(),
@@ -2461,6 +2463,19 @@ export const musicVideoSceneClipRenderSchema = z.object({
 export const musicVideoSceneClipsRenderSchema = musicVideoSceneClipRenderSchema.and(z.object({
   sceneIds: musicVideoSceneIdListSchema,
 }));
+
+// #16136: approve (or clear) shots for the final-resolution upgrade.
+export const musicVideoApproveFinalSchema = z.object({
+  sceneIds: musicVideoSceneIdListSchema,
+  approved: z.boolean(),
+});
+
+// #16136: upgrade approved shots; no sceneIds = every approved shot. dryRun prices the plan and renders nothing.
+export const musicVideoUpgradeSchema = z.object({
+  sceneIds: musicVideoSceneIdListSchema.optional(),
+  method: z.enum(MUSIC_VIDEO_UPGRADE_METHODS),
+  dryRun: z.boolean().optional(),
+});
 
 // Autonomous shot planner (#1855): propose a scene per analyzed audio section.
 // `seedPrompts` (default true) additionally asks the active/given AI provider

@@ -11,9 +11,10 @@ import { z } from 'zod';
 import { musicVideoContinueShotSchema, musicVideoPoolUseSchema } from '../lib/musicVideoValidation.js';
 import { requireProductionReviewer } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, musicVideoSceneCreateSchema, musicVideoSceneUpdateSchema, musicVideoSceneReorderSchema, musicVideoVaryWipesSchema, musicVideoSceneSplitSchema, musicVideoLyricCutSchema, musicVideoSceneStartSchema, musicVideoSceneEndSchema, musicVideoSceneFrameRenderSchema, musicVideoSceneFramesRenderSchema, musicVideoSceneClipRenderSchema, musicVideoSceneClipsRenderSchema, musicVideoTakeInputSchema, musicVideoTakeReviewSchema, musicVideoPerformanceRepairSchema } from '../lib/validation.js';
+import { validateRequest, musicVideoSceneCreateSchema, musicVideoSceneUpdateSchema, musicVideoSceneReorderSchema, musicVideoVaryWipesSchema, musicVideoSceneSplitSchema, musicVideoLyricCutSchema, musicVideoSceneStartSchema, musicVideoSceneEndSchema, musicVideoSceneFrameRenderSchema, musicVideoSceneFramesRenderSchema, musicVideoSceneClipRenderSchema, musicVideoSceneClipsRenderSchema, musicVideoTakeInputSchema, musicVideoTakeReviewSchema, musicVideoPerformanceRepairSchema, musicVideoApproveFinalSchema, musicVideoUpgradeSchema } from '../lib/validation.js';
 import { addProjectScene, updateScene, deleteScene, reorderProjectScenes, varyProjectWipes, splitProjectScene, cutProjectScenesOnLyrics, mergeProjectNextScene, mergeProjectPreviousScene, moveProjectSceneStart, moveProjectSceneEnd, appendSceneTakes, selectSceneTake, placeMediaPoolItem, reviewSceneTake, checkSceneTakePlate, rejectUnusedSceneTakes, swapProjectSceneFrames } from '../services/musicVideo/projects.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
+import { approveFinal, upgradeApproved } from '../services/musicVideo/finalUpgrade.js';
 import { renderSceneClips, renderSceneFrames } from '../services/musicVideo/sceneCardRender.js';
 import { takeAssetExists } from '../services/musicVideo/takeAsset.js';
 
@@ -40,6 +41,15 @@ router.post('/:id/scenes/:sceneId/performance-repair', asyncHandler(async (req, 
 }));
 
 // --- Director scene board ---
+
+// Draft-to-final upgrade (#16136): approve shots, then price or run the upgrade.
+router.post('/:id/scenes/approve-final', asyncHandler(async (req, res) => {
+  res.json(await approveFinal(req.params.id, validateRequest(musicVideoApproveFinalSchema, req.body ?? {})));
+}));
+
+router.post('/:id/upgrade', asyncHandler(async (req, res) => {
+  res.json(await upgradeApproved(req.params.id, validateRequest(musicVideoUpgradeSchema, req.body ?? {})));
+}));
 
 router.post('/:id/scenes', asyncHandler(async (req, res) => {
   const data = validateRequest(musicVideoSceneCreateSchema, req.body);
