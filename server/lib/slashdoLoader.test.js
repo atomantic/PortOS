@@ -80,8 +80,10 @@ describe.skipIf(!hasSubmodule)('slashdo rendering adapter', () => {
     expect(body.indexOf('## Select the Project Release Procedure')).toBeGreaterThanOrEqual(0);
     expect(body.indexOf('## Select the Project Release Procedure')).toBeLessThan(body.indexOf('## Detect Release Workflow'));
     expect(body).toContain('temporary `release/vX.Y.Z` branch into `main`');
-    expect(body).toContain('automation owns tag creation for this project');
-    expect(body).toContain('never pre-create it here');
+    // The ownership rule lives in the deferred documented-release procedure the staged bundle ships beside the entrypoint.
+    const documented = readFileSync(join(dirname(staged), 'lib', 'release-documented.md'), 'utf8');
+    expect(documented).toContain('When automation creates the tag or release, wait for it');
+    expect(documented).toMatch(/do not pre-create\s+its tag/);
     expect(body).toContain('wins over the generic promotion recipe below');
     expect(body).toContain('`~opt` exclusion');
     expect(body).toContain('`capped` vs `guardrail`');
