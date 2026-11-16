@@ -773,29 +773,42 @@ describe('starting on an existing project\'s song (fromProjectId)', () => {
 describe('cancel while the final render is preparing (#11768)', () => {
   // Uniquely catches a canceled run leaving a fresh render job running, or a rejected preparation relabeling the cancel as a failure.
   const deferred = () => { let resolve; let reject; const promise = new Promise((res, rej) => { resolve = res; reject = rej; }); return { promise, resolve, reject }; };
+  // Each entry resolves with `{ done }` once the render double has been CALLED; `done` settles after the
+  // render promise does. The pipeline runs several awaited stages before it dispatches, so no wall-clock
+  // window can bound that on a loaded runner: the double and the run's own change event are the signals.
+  const untilRun = (match) => new Promise((resolve) => {
+    const on = (event) => { if (match(event.run)) { musicVideoEvents.off('autonomous', on); resolve(); } };
+    musicVideoEvents.on('autonomous', on);
+  });
+  const armRender = (render) => {
+    const dispatched = deferred();
+    doubles.renderVideo.mockImplementationOnce(() => { dispatched.resolve(); return render.promise; });
+    return dispatched.promise;
+  };
   const viaFinalRender = async (render) => {
+    const productionStarted = untilRun((run) => run?.output?.productionRunId === 'mvpr-1');
     await service.startAutonomousVideo({ prompt: 'p' });
-    await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
-    doubles.renderVideo.mockImplementationOnce(() => render.promise);
+    await productionStarted;
+    const dispatched = armRender(render);
     const done = service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
-    await vi.waitFor(() => expect(doubles.renderVideo).toHaveBeenCalledOnce());
-    return done;
+    await dispatched;
+    return { done };
   };
   const viaProduceStage = async (render) => {
-    doubles.renderVideo.mockImplementationOnce(() => render.promise);
+    const dispatched = armRender(render);
     await service.startAutonomousVideo({ prompt: 'p', tools: ['code:render'], authoring: { providerId: 'prov', model: 'm' } });
-    await vi.waitFor(() => expect(doubles.renderVideo).toHaveBeenCalledOnce());
+    await dispatched;
+    return { done: service.__testing.settleBackground() };
   };
 
   it.each([['final render', viaFinalRender], ['produce stage', viaProduceStage]])('cancels the job a %s returns after the run was canceled', async (_, begin) => {
     const render = deferred();
-    const done = begin(render);
-    await vi.waitFor(() => expect(doubles.renderVideo).toHaveBeenCalledOnce());
+    const { done } = await begin(render);
     await service.cancelAutonomousVideo('mv-auto');
     expect(doubles.cancelRender).not.toHaveBeenCalled();
     render.resolve({ jobId: 'render-late' });
     await done;
-    await vi.waitFor(() => expect(doubles.cancelRender).toHaveBeenCalledWith('render-late'));
+    expect(doubles.cancelRender).toHaveBeenCalledWith('render-late');
     expect(runOf()).toMatchObject({ status: 'canceled' });
     expect(runOf().output.renderJobId).not.toBe('render-late');
   });
@@ -804,8 +817,7 @@ describe('cancel while the final render is preparing (#11768)', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const render = deferred();
-      const done = begin(render);
-      await vi.waitFor(() => expect(doubles.renderVideo).toHaveBeenCalledOnce());
+      const { done } = await begin(render);
       await service.cancelAutonomousVideo('mv-auto');
       render.reject(Object.assign(new Error('no audio'), { code: 'NO_AUDIO' }));
       await done;
@@ -818,8 +830,9 @@ describe('cancel while the final render is preparing (#11768)', () => {
   });
 
   it('still cancels a render job stored before the cancel', async () => {
+    const productionStarted = untilRun((run) => run?.output?.productionRunId === 'mvpr-1');
     await service.startAutonomousVideo({ prompt: 'p' });
-    await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
+    await productionStarted;
     await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
     await service.cancelAutonomousVideo('mv-auto');
     expect(doubles.cancelRender).toHaveBeenCalledWith('render-1');
