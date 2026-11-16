@@ -6,7 +6,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  fetchJobsWithFailedSteps, githubRequest, isSuccess, repoApiPath, resolveApiBase,
+  fetchJobsWithFailedSteps, fetchRunJobOutcomes, githubRequest, isSuccess, repoApiPath, resolveApiBase,
 } from './githubActionsApi.js';
 
 describe('resolveApiBase', () => {
@@ -157,5 +157,31 @@ describe('fetchJobsWithFailedSteps', () => {
     await expect(fetchJobsWithFailedSteps(unused, { ...TARGET, token: '' })).resolves.toBeNull();
     await expect(fetchJobsWithFailedSteps(unused, { ...TARGET, runId: 'not-a-run' })).resolves.toBeNull();
     expect(unused).not.toHaveBeenCalled();
+  });
+});
+
+describe('fetchRunJobOutcomes', () => {
+  const TARGET = { repoPath: 'https://api.github.com/repos/example/portos', runId: '123456789', token: 'ephemeral-test-token' };
+  const jobs = (value) => vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => value });
+
+  it('separates a never-acquired runner from failures and mid-run cancels', async () => {
+    await expect(fetchRunJobOutcomes(jobs({ jobs: [
+      { name: 'Never ran', conclusion: 'cancelled', steps: [] },
+      { name: 'Cut off', conclusion: 'cancelled', steps: [{ name: 'Run', conclusion: 'cancelled' }] },
+      { name: 'Broke', conclusion: 'failure', steps: [{ name: 'Run', conclusion: 'failure' }] },
+      { name: 'Slow', conclusion: 'timed_out', steps: [] },
+      { name: 'Fine', conclusion: 'success', steps: [{ name: 'Run', conclusion: 'success' }] },
+    ] }), TARGET)).resolves.toEqual({
+      failed: [
+        { name: 'Cut off', steps: [], reason: 'cancelled after it started (a job timeout or a lost runner)' },
+        { name: 'Broke', steps: ['Run'] },
+        { name: 'Slow', steps: [], reason: 'timed out' },
+      ],
+      neverStarted: ['Never ran'],
+    });
+  });
+
+  it('is null, never an empty verdict, when the jobs cannot be read', async () => {
+    await expect(fetchRunJobOutcomes(vi.fn().mockResolvedValue({ ok: false, status: 500 }), TARGET)).resolves.toBeNull();
   });
 });

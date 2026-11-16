@@ -23,7 +23,7 @@
 
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import {
-  currentRunTargetFromEnv, fetchJobsWithFailedSteps, formatFailedJob, githubJson, githubRequest, isSuccess,
+  currentRunTargetFromEnv, fetchRunJobOutcomes, formatFailedJob, githubJson, githubRequest, isSuccess,
 } from './lib/githubActionsApi.js';
 import { safeWorkflowText, writeStepSummary } from './lib/githubOutput.js';
 
@@ -83,7 +83,7 @@ export function buildNightlyReport({ failedJobs, base, head, pulls, truncated = 
   const lines = ['## CI on main failed — suspect merges', ''];
 
   if (failedJobs === null) lines.push("Failing jobs: **could not be read** — open the run's job logs.");
-  else if (!failedJobs.length) lines.push('Failing jobs: none carried a failed step (a cancel or timeout) — open the run.');
+  else if (!failedJobs.length) lines.push('Failing jobs: none could be identified — open the run.');
   else lines.push('Failing jobs:', ...failedJobs.map((job) => `- ${formatFailedJob(job)}`));
   lines.push('');
 
@@ -145,7 +145,7 @@ export function buildMainRedIssueBody({ failedJobs, base, head, runUrl, compareB
   const short = (sha) => String(sha || '').slice(0, 9);
   const lines = ['The latest full CI run on `main` failed.', '', `Run: ${runUrl}`, `Tested commit: \`${short(head)}\``, ''];
   if (failedJobs === null) lines.push('Failed jobs: could not be read; open the run.');
-  else if (!failedJobs.length) lines.push('Failed jobs: none carried a failed step (a cancel or timeout); open the run.');
+  else if (!failedJobs.length) lines.push('Failed jobs: none could be identified; open the run.');
   else lines.push('Failed jobs:', ...failedJobs.map((job) => `- ${formatFailedJob(job)}`));
   lines.push('');
   if (!base) lines.push('Commit range: unknown, no earlier green run on `main` was found.');
@@ -222,7 +222,7 @@ async function syncMainRedIssue({ red, target, fetchImpl, logger, body, runUrl, 
  * @param {{log?: Function, error?: Function}} [options.logger]
  * @param {Function} [options.writeSummary]
  * @param {typeof fetch} [options.fetchImpl]
- * @returns {Promise<{ran: boolean, report?: string, action?: string, syncFailed?: boolean}>}
+ * @returns {Promise<{ran: boolean, inconclusive?: boolean, report?: string, action?: string, syncFailed?: boolean}>}
  */
 export async function reportMainHealth({
   env = process.env,
@@ -250,8 +250,15 @@ export async function reportMainHealth({
   let report;
   let issueBody = '';
   if (red) {
-    const failedJobs = (await fetchJobsWithFailedSteps(fetchImpl, { ...target, timeoutMs: API_TIMEOUT_MS }))
-      ?.filter(({ name }) => !GATE_JOB_NAMES.has(name)) ?? null;
+    const outcomes = await fetchRunJobOutcomes(fetchImpl, { ...target, timeoutMs: API_TIMEOUT_MS });
+    const failedJobs = outcomes?.failed.filter(({ name }) => !GATE_JOB_NAMES.has(name)) ?? null;
+    // The gate went red only because GitHub never ran a job (hosted-runner
+    // capacity, #16488). Nothing about the tested commit was shown broken, so
+    // the issue is left exactly as it was, like a superseded cancel.
+    if (outcomes && !failedJobs.length && outcomes.neverStarted.length) {
+      logger.log(`⏭️ Main health skipped: ${outcomes.neverStarted.join(', ')} never got a runner, so the run proved nothing.`);
+      return { ran: false, inconclusive: true };
+    }
     const lastGreen = await findLastGreenMainRun(target, fetchImpl, logger);
     let pulls = null;
     let truncated = false;

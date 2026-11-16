@@ -157,6 +157,51 @@ describe('reportMainHealth', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  // Run 43934445327: the macOS runner was never acquired, GitHub cancelled the
+  // job with no steps, and the gates failed because a selected job was not green.
+  const GATES = [
+    { name: 'CI Gate', conclusion: 'failure', steps: [{ name: 'Require every selected job to pass', conclusion: 'failure' }] },
+    { name: 'Full CI Gate', conclusion: 'failure', steps: [{ name: 'Require the aggregate gate to have passed', conclusion: 'failure' }] },
+  ];
+  const NEVER_ACQUIRED = { name: 'macOS native release-agent supervision', conclusion: 'cancelled', steps: [] };
+
+  it('changes nothing when the only non-green job never got a runner', async () => {
+    const { fetchImpl, writes, calls } = stubFetch({ '/actions/runs/500/jobs': { jobs: [
+      { name: 'Server tests (1/2)', conclusion: 'success', steps: [] }, NEVER_ACQUIRED, ...GATES,
+    ] }, '/issues?': [OPEN_ISSUE] });
+    const writeSummary = vi.fn();
+    const result = await reportMainHealth({ env: ENV, logger, writeSummary, fetchImpl });
+    expect(result).toEqual({ ran: false, inconclusive: true });
+    expect(writes()).toEqual([]);
+    expect(writeSummary).not.toHaveBeenCalled();
+    expect(calls.some(({ url }) => url.includes('/issues?'))).toBe(false);
+  });
+
+  it('still reports red when a real failure sits beside a never-started job', async () => {
+    const stub = stubFetch({ ...redRoutes([]), '/actions/runs/500/jobs': { jobs: [...RUN_JOBS.jobs, NEVER_ACQUIRED] } });
+    const result = await reportMainHealth({ env: ENV, logger, writeSummary: vi.fn(), fetchImpl: stub.fetchImpl });
+    expect(result.action).toBe('created');
+    expect(stub.writes()[0].body.body).toContain('Windows server unit tests (1/3) — failed step');
+  });
+
+  it('names a job cancelled after it started as a timeout suspect and stays red', async () => {
+    const stub = stubFetch({ ...redRoutes([]), '/actions/runs/500/jobs': { jobs: [
+      { name: 'Browser suites (1/2)', conclusion: 'cancelled', steps: [{ name: 'Run browser suites', conclusion: 'cancelled' }] },
+      ...GATES,
+    ] } });
+    const result = await reportMainHealth({ env: ENV, logger, writeSummary: vi.fn(), fetchImpl: stub.fetchImpl });
+    expect(result.action).toBe('created');
+    expect(stub.writes()[0].body.body).toContain('Browser suites (1/2) — cancelled after it started (a job timeout or a lost runner)');
+  });
+
+  it('names a timed_out job without a failed step', async () => {
+    const stub = stubFetch({ ...redRoutes([]), '/actions/runs/500/jobs': { jobs: [
+      { name: 'DB tests', conclusion: 'timed_out', steps: [] }, ...GATES,
+    ] } });
+    await reportMainHealth({ env: { ...ENV, CI_RUN_CONCLUSION: 'timed_out' }, logger, writeSummary: vi.fn(), fetchImpl: stub.fetchImpl });
+    expect(stub.writes()[0].body.body).toContain('DB tests — timed out');
+  });
+
   it('creates one labelled issue for the first red run and writes the suspect summary', async () => {
     const { fetchImpl, writes } = stubFetch(redRoutes([]));
     const writeSummary = vi.fn();
