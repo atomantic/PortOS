@@ -1,5 +1,6 @@
 /**
- * OpenCode configuration helpers.
+ * OpenCode configuration helpers: builds the `OPENCODE_CONFIG_CONTENT` env for a provider and model.
+ *
  * `buildOpencodeEnvVars(provider, model)` builds `OPENCODE_CONFIG_CONTENT` declaring
  * model ids under the namespace the provider's marker selects: a local runtime
  * (`ollama` / `mtplx` / `llama` / `vllm` / `sglang`, bare ids) or a hosted gateway
