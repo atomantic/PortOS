@@ -1,36 +1,17 @@
 /**
  * The one place a pipeline stage's execution settings land on a task's metadata.
  *
- * `applyStageExecution(metadata, stage, { taskDefaults, clearInheritedExecutionOptions })` — the one
- * place a pipeline stage's model/provider/effort pins, `executionOptions` and behavior flags
- * (read-only default, task-default fallback, draft-delivery guard) land on task metadata. Shared by
- * task creation, the agent-completion stage hand-off and the pr-reviewer security preflight (#14388).
- *
- * Task creation (stage 0), the agent-completion hand-off (stage 1+) and the pr-reviewer security
- * preflight (its synthetic stage 0 -> stage 1) all apply a stage the same way; a policy added here
- * reaches all three.
+ * `applyStageExecution(metadata, stage, { taskDefaults, clearInheritedExecutionOptions })` applies model/provider/effort pins, `executionOptions` and behavior flags (read-only default, task-default fallback, draft-delivery guard). Shared by task creation (stage 0), the agent-completion hand-off (stage 1+) and the pr-reviewer security preflight (#14388), so a policy added here reaches all three.
  */
 import { PIPELINE_STAGE_BEHAVIOR_FLAGS } from './cosValidation.js';
 import { PR_COMPLETIONS } from './prDisposition.js';
 
 /**
- * Apply `stage`'s provider/model/effort pins, `executionOptions` and behavior
- * flags to `metadata`, mutating it in place.
- *
- * - model / provider / effort are SET-only: a stage without its own pin keeps
- *   whatever `metadata` already carries (task-level pin or the prior stage's).
- * - `executionOptions` belong to a provider. With `clearInheritedExecutionOptions`
- *   a stage that pins a provider drops the inherited ones first; the stage's own
- *   `executionOptions` are then copied. Task creation passes false: nothing is
- *   inherited yet, and a task-level option set stays beside stage 0's pin.
- * - A behavior flag resolves stage value, else `false` for a read-only stage,
- *   else the run's `taskDefaults`.
- * - A run whose task defaults require draft delivery keeps it on every stage,
- *   including read-only ones whose output could otherwise publish a merged
- *   snapshot.
- *
- * `readOnly` itself is left to the caller: creation only sets it when the stage
- * declares it, while a hand-off always resets it.
+ * Apply `stage`'s provider/model/effort pins, `executionOptions` and behavior flags to `metadata`, mutating it in place.
+ * - model / provider / effort are SET-only: a stage without its own pin keeps what `metadata` carries (task-level pin or prior stage's).
+ * - `executionOptions` belong to a provider: with `clearInheritedExecutionOptions` a stage pinning a provider drops inherited ones first, then copies its own (task creation passes false: nothing is inherited yet, and a task-level option set stays beside stage 0's pin).
+ * - A behavior flag resolves stage value, else `false` for a read-only stage, else the run's `taskDefaults`; a run whose task defaults require draft delivery keeps it on every stage, including read-only ones whose output could publish a merged snapshot.
+ * `readOnly` itself is left to the caller: creation sets it only when the stage declares it, a hand-off always resets it.
  */
 export function applyStageExecution(metadata, stage, { taskDefaults = {}, clearInheritedExecutionOptions = false } = {}) {
   if (stage.model) metadata.model = stage.model;

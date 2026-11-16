@@ -1,7 +1,7 @@
 /**
-  * POST progressive multiplication ladder (pure).
-  *
-  * mastery-gated difficulty rungs (`[1,1]` → `[1,2]` → `[1,1,1]` → …) resolved from per-level speed+accuracy stats, so the plain multiplication drill ramps up from single-digit × single-digit (it once started everyone at a fixed 2-digit × 2-digit, far too hard as a warm-up) and climbs only after *speed* mastery (fast AND accurate) at the current rung. On by default. It alternates adding a digit and adding a factor so mental load rises gently, and unlike `postAdaptive.js` (symmetric `maxDigits`) it can express asymmetric (1×2) and multi-factor (1×1×1) rungs. Progression derives from scored session history: each drill stamps its `level` into the task config. The generic mastery/floor machinery lives in `postProgression.js` (shared with the cognitive-drill ladders); this is the multiplication-specific ladder plus speed-target curve, the reference ladder the helper was extracted from.
+ * POST progressive multiplication ladder (pure).
+ *
+ * mastery-gated difficulty rungs (`[1,1]` → `[1,2]` → `[1,1,1]` → …) resolved from per-level speed+accuracy stats, so the plain multiplication drill ramps up from single-digit × single-digit (it once started everyone at a fixed 2-digit × 2-digit, far too hard as a warm-up) and climbs only after *speed* mastery (fast AND accurate) at the current rung. On by default. It alternates adding a digit and adding a factor so mental load rises gently, and unlike `postAdaptive.js` (symmetric `maxDigits`) it can express asymmetric (1×2) and multi-factor (1×1×1) rungs. Progression derives from scored session history: each drill stamps its `level` into the task config. The generic mastery/floor machinery lives in `postProgression.js` (shared with the cognitive-drill ladders); this is the multiplication-specific ladder plus speed-target curve, the reference ladder the helper was extracted from.
  */
 
 import { createProgression, PROGRESSION_MASTERY_DEFAULTS } from './postProgression.js';

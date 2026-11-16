@@ -1,7 +1,7 @@
 /**
-  * User-pause hold: the bookkeeping `pauseAgent` stamps onto the paused agent's task and the single definition of when that pause is live.
-  *
-  * A pause parks a task in `blocked` under `agent-paused` plus pointer keys naming the run; three parties read it: the WRITER (`pauseAgent` → `markPausedTask`, agentManagement.js), the READER (`resumeAgent`, requeueing only the task ITS pause parked), and the CLEARER, `updateTask` (cosTaskStore.js), which drops the whole set when the task leaves `blocked` by ANY path (a dedupe revive, autopilot re-dispatch, orphan-cooldown expiry or human unblock all flip it to `pending`; before the clear moved into `updateTask` they left `pausedAt`/`pausedAgentId` on a running task, so the UI showed a live pause). Pure and dependency-free so all three share ONE definition; mirrors `taskRetryHold.js`.
+ * User-pause hold: the bookkeeping `pauseAgent` stamps onto the paused agent's task and the single definition of when that pause is live.
+ *
+ * A pause parks a task in `blocked` under `agent-paused` plus pointer keys naming the run; three parties read it: the WRITER (`pauseAgent` → `markPausedTask`, agentManagement.js), the READER (`resumeAgent`, requeueing only the task ITS pause parked), and the CLEARER, `updateTask` (cosTaskStore.js), which drops the whole set when the task leaves `blocked` by ANY path (a dedupe revive, autopilot re-dispatch, orphan-cooldown expiry or human unblock all flip it to `pending`; before the clear moved into `updateTask` they left `pausedAt`/`pausedAgentId` on a running task, so the UI showed a live pause). Pure and dependency-free so all three share ONE definition; mirrors `taskRetryHold.js`.
  */
 
 /** The `blockedCategory` a user pause stamps: proves a blocked task is parked by a pause, not finished (the failure reaper exempts it; `resumeAgent` requires it before requeueing in place). */

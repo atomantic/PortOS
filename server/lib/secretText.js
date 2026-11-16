@@ -1,21 +1,7 @@
 /**
- * Scrub credential-SHAPED token values out of free text bound for an LLM
- * provider or a world-readable artifact.
+ * Scrub credential-SHAPED token values out of free text bound for an LLM provider or a world-readable artifact.
  *
- * `scrubSecretTokens(text)` — replace credential-SHAPED substrings (prefixed API keys, GitHub/Slack
- * tokens, JWTs, AWS key ids, pasted Bearer headers, 48+-char hex) with `[REDACTED]` in free text bound
- * for an LLM provider or a world-readable artifact; `scrubSecretTokensDeep(value)` walks arrays/plain
- * objects and scrubs every string value. Value-side counterpart to the operator-action ledger's
- * key-based `redactPayload` and `commandSecurity.js#redactOutput`'s JSON patterns; conservative so
- * prose, 40-hex git SHAs, and short ids survive.
- *
- * The operator-action ledger already drops credential-shaped KEYS at record
- * time (`services/userActions.js#redactPayload`), but free-text fields —
- * summaries, target names — can carry a pasted token by VALUE, where no key
- * name exists to match. This is the value-side counterpart: conservative,
- * well-known token shapes only, so ordinary prose, git SHAs (40 hex), and
- * short ids survive untouched. Complements `commandSecurity.js#redactOutput`
- * (JSON key/value patterns) rather than replacing it.
+ * `scrubSecretTokens(text)` replaces prefixed API keys, GitHub/Slack tokens, JWTs, AWS key ids, pasted Bearer headers and 48+-char hex with `[REDACTED]`; `scrubSecretTokensDeep(value)` walks arrays/plain objects and scrubs every string value. The value-side counterpart to the operator-action ledger's key-based `services/userActions.js#redactPayload` (free-text summaries and target names can carry a pasted token by VALUE, with no key name to match) and complement to `commandSecurity.js#redactOutput`'s JSON patterns. Conservative, well-known shapes only, so prose, 40-hex git SHAs and short ids survive.
  */
 
 const SECRET_TOKEN_PATTERNS = [
@@ -42,11 +28,7 @@ export function scrubSecretTokens(text) {
   return SECRET_TOKEN_PATTERNS.reduce((out, pattern) => out.replace(pattern, '[REDACTED]'), text);
 }
 
-/**
- * Apply `scrubSecretTokens` to every string in a JSON-shaped value — arrays and
- * plain objects are walked (values only; key names are handled by the key-based
- * redaction at record time), everything else passes through untouched.
- */
+/** Apply `scrubSecretTokens` to every string in a JSON-shaped value; arrays and plain objects are walked (values only; key names are handled by key-based redaction at record time), everything else passes through. */
 export function scrubSecretTokensDeep(value) {
   if (typeof value === 'string') return scrubSecretTokens(value);
   if (Array.isArray(value)) return value.map(scrubSecretTokensDeep);

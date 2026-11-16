@@ -1,7 +1,7 @@
 /**
-  * Git repository URL parsing, AUTHORITATIVE copy: `parseRepoUrl(url)` → `{ host, provider, owner, repo }`, `isRepoUrl`, `repoCloneUrl`, `repoBrowseUrl`, `parseGitHubUrl`, `isGitHubRepoUrl`.
-  *
-  * The rule for "is this a clonable repo URL?" (github.com and gitlab.com), with per-host behavior (subgroup nesting, clone layout) in the `REPO_HOSTS` table. Lives in `lib/` (not `services/repoCloner.js`, which re-exports it) and is re-exported by `client/src/lib/repoUrl.js` so the Brain capture boxes preview the same answer BEFORE submitting and offer post-clone agent options for exactly the URLs the server will clone. A pure leaf: import no Node built-in and nothing outside `server/lib`.
+ * Git repository URL parsing, AUTHORITATIVE copy: `parseRepoUrl(url)` → `{ host, provider, owner, repo }`, `isRepoUrl`, `repoCloneUrl`, `repoBrowseUrl`, `parseGitHubUrl`, `isGitHubRepoUrl`.
+ *
+ * The rule for "is this a clonable repo URL?" (github.com and gitlab.com), with per-host behavior (subgroup nesting, clone layout) in the `REPO_HOSTS` table. Lives in `lib/` (not `services/repoCloner.js`, which re-exports it) and is re-exported by `client/src/lib/repoUrl.js` so the Brain capture boxes preview the same answer BEFORE submitting and offer post-clone agent options for exactly the URLs the server will clone. A pure leaf: import no Node built-in and nothing outside `server/lib`.
  */
 
 // The host allowlist and the two behaviors that differ between hosts live IN the table, not as `host === 'github.com'` branches, so a new host is one entry and each flag is decided deliberately.

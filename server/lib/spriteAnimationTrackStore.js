@@ -1,7 +1,7 @@
 /**
-  * Sprites: the user-defined animation-track store (#3152).
-  *
-  * The EFFECTIVE track table is the compiled built-ins merged with the user store (one small JSON config), so sprite schemas stay module-load constants. Separate from `animationTracks.js`, which must stay a TRUE LEAF (`animationTracks.test.js`): `validation.js` builds sprite Zod ranges from it and must not pull the native image graph in; this module imports the leaf, never the reverse, and reaches only `fileUtils.js`.
+ * Sprites: the user-defined animation-track store (#3152).
+ *
+ * The EFFECTIVE track table is the compiled built-ins merged with the user store (one small JSON config), so sprite schemas stay module-load constants. Separate from `animationTracks.js`, which must stay a TRUE LEAF (`animationTracks.test.js`): `validation.js` builds sprite Zod ranges from it and must not pull the native image graph in; this module imports the leaf, never the reverse, and reaches only `fileUtils.js`.
  *
  * Reads are SYNCHRONOUS on purpose: every registry reader is sync and `validation.js` builds `spriteRuntimeContractSchema` at MODULE LOAD, where Zod can't await and ESM hoisting breaks "store is read before validation.js imports" ordering. One `readFileSync` per process keeps signatures untouched.
  * The shipped seed is the fallback: when `data/sprites/animation-tracks.json` is ABSENT it reads `data.reference/sprites/animation-tracks.json` (module load precedes boot migrations, else a first boot after upgrade builds a contract schema missing `scannerFrameCount`). An EXISTING store file is authoritative and never merged with the seed, so a deleted `scanner` stays deleted.

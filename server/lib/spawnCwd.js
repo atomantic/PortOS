@@ -1,7 +1,7 @@
 /**
-  * Spawn working-directory resolution for provider runs and agents.
-  *
-  * Every provider run and CoS agent gets a `workspacePath` (the selected app's repoPath) used as the child's cwd; a missing value falls back to the PortOS repo root, which was once *silent* (a prompt like "create HelloWorld.md" wrote into the PortOS checkout while the UI showed the app as selected, #3180). This module makes the decision explicit: it logs the effective cwd for every spawn and rejects a workspace that was requested but doesn't exist (a typo'd or moved repo path). It can only catch a workspace that *resolved to something wrong*; an app resolving to no path is indistinguishable here from "no app selected", so `getAppWorkspace` returns `null` rather than substituting the PortOS root. `withSpawnCwdEnv` covers a CLI that resolves its own cwd from the inherited `PWD` env var (#3193).
+ * Spawn working-directory resolution for provider runs and agents.
+ *
+ * Every provider run and CoS agent gets a `workspacePath` (the selected app's repoPath) used as the child's cwd; a missing value falls back to the PortOS repo root, which was once *silent* (a prompt like "create HelloWorld.md" wrote into the PortOS checkout while the UI showed the app as selected, #3180). This module makes the decision explicit: it logs the effective cwd for every spawn and rejects a workspace that was requested but doesn't exist (a typo'd or moved repo path). It can only catch a workspace that *resolved to something wrong*; an app resolving to no path is indistinguishable here from "no app selected", so `getAppWorkspace` returns `null` rather than substituting the PortOS root. `withSpawnCwdEnv` covers a CLI that resolves its own cwd from the inherited `PWD` env var (#3193).
  */
 
 import { join } from 'path';

@@ -1,7 +1,7 @@
 /**
-  * Provider bench policy: "this run failed.
-  *
-  * should the provider be benched, and for how long?" `resolveProviderBench(analysis)` → `null` (don't bench) / a `usage-limit` marker / an `unavailable` marker with the per-category cooldown from `COOLDOWN_MS_BY_CATEGORY`. Declines request/response-specific categories (`isRequestSpecificCategory` / `isSchemaTypeCategory`) so one bad model id or off-shape response can't take a healthy provider offline. One answer shared by `services/promptRunner.js` (prompt cascade) and `services/agentFinalization.js` (finished CoS agent run): the agent path once benched only usage limits, so an `agy` TUI blocked on account verification stayed "healthy" and was re-picked and died the same way. Pure: no I/O or provider-status handle; callers own the marking.
+ * Provider bench policy: "this run failed.
+ *
+ * should the provider be benched, and for how long?" `resolveProviderBench(analysis)` → `null` (don't bench) / a `usage-limit` marker / an `unavailable` marker with the per-category cooldown from `COOLDOWN_MS_BY_CATEGORY`. Declines request/response-specific categories (`isRequestSpecificCategory` / `isSchemaTypeCategory`) so one bad model id or off-shape response can't take a healthy provider offline. One answer shared by `services/promptRunner.js` (prompt cascade) and `services/agentFinalization.js` (finished CoS agent run): the agent path once benched only usage limits, so an `agy` TUI blocked on account verification stayed "healthy" and was re-picked and died the same way. Pure: no I/O or provider-status handle; callers own the marking.
  */
 
 import { ERROR_CATEGORIES } from './aiToolkit/errorDetection.js';

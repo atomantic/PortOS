@@ -1,7 +1,7 @@
 /**
-  * The retrieval and premise half of "does this change advance what the product says it is for?".
-  *
-  * The QUESTION (three hypotheses plus abstention floor) is a `scope-adherence` entry in `lib/jevDecisions.js`, PortOS's one registry of closed-set questions the local scorer may answer (which gives it agreement counters and a scorability contract test); what lives here is what that registry doesn't model: which CLAUSE to ask about, and how a clause plus a change become one premise.
+ * The retrieval and premise half of "does this change advance what the product says it is for?".
+ *
+ * The QUESTION (three hypotheses plus abstention floor) is a `scope-adherence` entry in `lib/jevDecisions.js`, PortOS's one registry of closed-set questions the local scorer may answer (which gives it agreement counters and a scorability contract test); what lives here is what that registry doesn't model: which CLAUSE to ask about, and how a clause plus a change become one premise.
  *
  * ADVISORY ONLY, BY CONSTRUCTION: nothing here or in its service returns a boolean a caller could gate on ([ETHOS.md](../../ETHOS.md) wants supervision gates justified, and a 4B classifier disagreeing with a
  * prose PRD isn't one). No auto-close, gating label or CI check downstream. Pure (no I/O, scorer or file reads); `services/scopeAdherence.js` owns the ladder (screen → retrieve → decide → advisory verdict).

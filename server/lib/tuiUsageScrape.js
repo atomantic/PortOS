@@ -1,7 +1,7 @@
 /**
-  * `scrapeTuiUsage({ command, slashCommand, … })` + `USAGE_SANDBOX_DIR`.
-  *
-  * drive an agy/grok TUI in a sandbox PTY, send a slash command and return the ANSI-stripped screen (for quota panels `--print` can't reach).
+ * `scrapeTuiUsage({ command, slashCommand, … })` + `USAGE_SANDBOX_DIR`.
+ *
+ * drive an agy/grok TUI in a sandbox PTY, send a slash command and return the ANSI-stripped screen (for quota panels `--print` can't reach).
  */
 
 import { spawn as ptySpawn } from 'node-pty';

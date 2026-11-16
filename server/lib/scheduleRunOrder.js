@@ -1,47 +1,17 @@
 /**
- * Advisory run order for scheduled tasks.
+ * Advisory run order for scheduled tasks: storage rules for a task's `suggestedAfter` list (which OTHER scheduled tasks to run first).
  *
- * Storage rules for a task's advisory `suggestedAfter` list — which OTHER scheduled tasks to run
- * first. `normalizeSuggestedAfter` drops blanks, duplicates and self-references and caps at
- * `SUGGESTED_AFTER_MAX`; the shipped order it defaults to is `auditCatalog.AUDIT_SUGGESTED_AFTER`,
- * layered at read time in `getScheduleStatus`. Advisory only — the ENFORCED dependency field is
- * `runAfter`. Pure — no I/O.
+ * `normalizeSuggestedAfter` drops blanks, duplicates and self-references and caps at `SUGGESTED_AFTER_MAX`; the shipped default is `auditCatalog.AUDIT_SUGGESTED_AFTER`, layered at read time in `getScheduleStatus`. Pure.
  *
- * Every task carries an editable `suggestedAfter` array naming the task types a
- * user should generally run BEFORE it. It answers "which of these do I run
- * first?" by pointing at other scheduled tasks by name, which prose guidance
- * could not do.
- *
- * Advisory is the whole point: nothing here gates dispatch. The ENFORCED
- * dependency field is `runAfter` (taskSchedule.js `checkRunAfterDeps`), which
- * holds a due task until each named type has run since its own last run. A user
- * who wants a hard gate promotes the entry there; `suggestedAfter` only orders
- * the page and labels the cards.
- *
- * The 1-based STEP each task lands on is derived where it is rendered
- * (client/src/components/cos/tabs/schedule/scheduleConstants.js) — it is a
- * property of the whole visible graph, not of a task, so a per-task field on
- * the wire would go stale the moment any other task was edited.
- *
- * Pure — no I/O.
+ * Advisory only: nothing gates dispatch (the ENFORCED field is `runAfter`, `taskSchedule.js` `checkRunAfterDeps`; a user wanting a hard gate promotes the entry there; `suggestedAfter` only orders the page and labels cards). The 1-based STEP is derived where rendered (client/src/components/cos/tabs/schedule/scheduleConstants.js): a property of the whole visible graph, so a per-task wire field would go stale when another task is edited.
  */
 
-/** The only cap on the list — a hand-edited schedule file cannot grow it unbounded. */
+/** The only cap on the list, so a hand-edited schedule file can't grow it unbounded. */
 export const SUGGESTED_AFTER_MAX = 20;
 
 /**
- * Normalize a `suggestedAfter` value into a clean array of task-type ids.
- *
- * Returns `[]` for a missing/invalid value AND for an explicitly emptied list.
- * The absent-vs-cleared distinction is resolved BEFORE this is called, by the
- * `interval.suggestedAfter ?? AUDIT_SUGGESTED_AFTER[taskType]` fallback in
- * `getScheduleStatus`: an absent key inherits the shipped order, while a stored
- * `[]` is the user's deliberate clear and `??` keeps it. That is also why the
- * route stores `[]` rather than nulling it the way `runAfter` does — a null
- * would read back as "never edited" and re-inherit.
- *
- * A self-reference is dropped (a task cannot precede itself), as are blanks and
- * duplicates. Order is preserved — it is the order the user chose.
+ * Normalize a `suggestedAfter` value into a clean array of task-type ids: `[]` for missing/invalid AND explicitly emptied. Absent-vs-cleared is resolved BEFORE this, by `interval.suggestedAfter ?? AUDIT_SUGGESTED_AFTER[taskType]` in `getScheduleStatus` (absent inherits the shipped order; a stored `[]` is a deliberate clear that `??` keeps, which is why the route stores `[]` rather than nulling it as `runAfter` does: null reads back as "never edited" and re-inherits).
+ * Self-references (a task can't precede itself), blanks and duplicates are dropped; order is preserved (the user's choice).
  */
 export function normalizeSuggestedAfter(value, taskType = null) {
   if (!Array.isArray(value)) return [];

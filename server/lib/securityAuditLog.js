@@ -1,19 +1,7 @@
 /**
- * One-line audit trail for security-relevant events — who/what/where, no secrets.
+ * One-line audit trail for security-relevant events (who/what/where, no secrets).
  *
- * `logSecurityEvent(event, { refused, ...fields })` — one-line `🔐`/`⛔ Security [event] key=value`
- * audit trail for sign-ins, password/session/agent-key changes and refused host-control or
- * browser-relay requests. Flattens control characters and truncates values so a caller-controlled
- * path/Host can't forge a log line; refusals use `console.warn`.
- *
- * PortOS holds host-control authority, so a sign-in, a password change, a
- * revoked session, or a refused host-control call must leave a line an operator
- * can find later in `pm2 logs`. Refusals go to `console.warn` (a deliberate
- * refusal); successes stay on `console.log`.
- *
- * Field values are flattened to one line and truncated: a request path, Host
- * header, or label is caller-controlled, and an embedded newline would forge a
- * second log line.
+ * `logSecurityEvent(event, { refused, ...fields })` logs `🔐`/`⛔ Security [event] key=value` for sign-ins, password/session/agent-key changes and refused host-control or browser-relay requests, so an operator can find them in `pm2 logs` (PortOS holds host-control authority). Refusals use `console.warn`; successes `console.log`. Field values are flattened to one line and truncated: a request path, Host header or label is caller-controlled and an embedded newline would forge a second log line.
  */
 
 const MAX_VALUE_LENGTH = 120;
@@ -28,8 +16,7 @@ const formatValue = (value) => {
 
 /**
  * @param {string} event - Dotted event name, e.g. `login.failed`
- * @param {{ refused?: boolean } & Record<string, unknown>} [fields] - `refused: true`
- *   logs through `console.warn`; null/undefined fields are omitted.
+ * @param {{ refused?: boolean } & Record<string, unknown>} [fields] - `refused: true` logs through `console.warn`; null/undefined fields are omitted.
  * @returns {string} the emitted line (handy for assertions)
  */
 export function logSecurityEvent(event, { refused = false, ...fields } = {}) {

@@ -1,25 +1,9 @@
 /**
- * Render-target alphabet (#3231 Phase 2).
+ * Render-target alphabet (#3231): the creative surfaces that enqueue renders, keyed into `settings.renderDefaults`.
  *
- * Render-target alphabet (#3231): `RENDER_TARGET`/`RENDER_TARGETS` name every creative surface that
- * enqueues renders (universe-bible, sprite-reference, music-video, …) — the keys into
- * `settings.renderDefaults` — plus the `RENDER_TARGET_BACKEND_AUTO` fall-through sentinel.
- * Dependency-free leaf; resolved per surface by
- * `services/imageGen/cloudProviderConfig.js#resolveRenderTargetConfig`.
- *
- * A render target names one creative surface that enqueues image (or video)
- * renders — the key into `settings.renderDefaults`, where the user pins an
- * install-wide default backend + model per surface ("Universe Bible renders
- * on Codex; Music Video renders on Agy") without touching the global
- * `settings.imageGen.mode`.
- *
- * Deliberately a dependency-free leaf so `lib/validation.js`, the Settings
- * UI, and every surface resolver derive from ONE enumerable alphabet instead
- * of hand-copying strings. Adding a surface = one entry here + a
- * `resolveRenderTargetConfig(settings, RENDER_TARGET.X, …)` call at the
- * surface's enqueue site (see imageGen/cloudProviderConfig.js) — the guard
- * test in services/imageGen/renderTargets.guard.test.js fails any surface
- * that reaches for resolveCloudProviderConfig directly.
+ * Render-target alphabet (#3231): `RENDER_TARGET`/`RENDER_TARGETS` name every creative surface that enqueues image/video renders (universe-bible, sprite-reference, music-video, …), the keys into `settings.renderDefaults` where the user pins an install-wide default backend + model per surface
+ * ("Universe Bible on Codex; Music Video on Agy") without touching the global `settings.imageGen.mode`, plus the `RENDER_TARGET_BACKEND_AUTO` sentinel. A dependency-free leaf so `lib/validation.js`, the Settings UI and every surface resolver derive from ONE alphabet; resolved by `services/imageGen/cloudProviderConfig.js#resolveRenderTargetConfig`.
+ * Adding a surface = one entry here + a `resolveRenderTargetConfig(settings, RENDER_TARGET.X, …)` call at its enqueue site; `services/imageGen/renderTargets.guard.test.js` fails any surface reaching for resolveCloudProviderConfig directly.
  */
 
 export const RENDER_TARGET = Object.freeze({
@@ -37,35 +21,19 @@ export const RENDER_TARGET = Object.freeze({
 
 export const RENDER_TARGETS = Object.freeze(Object.values(RENDER_TARGET));
 
-// The "no pin — fall through to the install default" sentinel, matching the
-// creative-commission `RENDER_BACKEND_AUTO` convention (an absent/null entry
-// means the same thing; the explicit value exists so a UI select can round-trip
-// the choice).
+// The "no pin, fall through to the install default" sentinel (creative-commission `RENDER_BACKEND_AUTO` convention); an absent/null entry means the same, the explicit value lets a UI select round-trip it.
 export const RENDER_TARGET_BACKEND_AUTO = 'auto';
 
-// Max length for a persisted per-record model-id pin — matches the
-// creative-commission `COMMISSION_RENDER_MODEL_MAX` convention.
+// Max length for a persisted per-record model-id pin (creative-commission `COMMISSION_RENDER_MODEL_MAX` convention).
 export const RECORD_RENDER_MODEL_MAX = 64;
 
-// The ONE normalization rule for render-pin values, shared by the per-record
-// pin below and the settings-registry reader (renderTargetDefaults in
-// imageGen/cloudProviderConfig.js): trim; the `'auto'` sentinel and blank
-// strings collapse to null ("no pin — fall through").
+// The ONE normalization rule for render-pin values, shared by the per-record pin and the settings-registry reader (renderTargetDefaults in imageGen/cloudProviderConfig.js): trim; `'auto'` and blank collapse to null ("no pin").
 export const normalizeRenderPinValue = (v) => {
   const s = typeof v === 'string' ? v.trim() : '';
   return s && s !== RENDER_TARGET_BACKEND_AUTO ? s : null;
 };
 
-/**
- * Normalize a record's persisted render pin (#3231 Phase 3 — the flat
- * `imageMode` / `imageModelId` field pair on universe / series / sprite
- * records, following the creative-commission shape). The `'auto'` sentinel,
- * blank strings, and absent fields all collapse to null ("no pin"), so
- * callers can hand the result straight to `resolveRenderTargetConfig`'s
- * `recordMode` / `recordModel` options without re-checking sentinels. The
- * model id is capped here so every record kind persists the same bounded
- * shape.
- */
+/** Normalize a record's persisted render pin (#3231 Phase 3: the flat `imageMode` / `imageModelId` pair on universe / series / sprite records, the creative-commission shape): `'auto'`, blanks and absent fields collapse to null so callers hand the result to `resolveRenderTargetConfig`'s `recordMode` / `recordModel` without re-checking sentinels; the model id is capped so every record kind persists one bounded shape. */
 export function recordRenderPin(record) {
   const modelId = normalizeRenderPinValue(record?.imageModelId);
   return {
@@ -74,11 +42,7 @@ export function recordRenderPin(record) {
   };
 }
 
-/**
- * The persist-only-when-set spread for a record sanitizer (#3231 Phase 3) —
- * returns `{ imageMode?, imageModelId? }` with each key present only when a
- * real pin exists, so existing records keep their on-disk shape byte-stable.
- */
+/** The persist-only-when-set spread for a record sanitizer (#3231 Phase 3): `{ imageMode?, imageModelId? }` with each key present only for a real pin, so existing records stay byte-stable on disk. */
 export function persistedRenderPinFields(raw) {
   const pin = recordRenderPin(raw);
   return {

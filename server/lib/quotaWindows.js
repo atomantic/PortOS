@@ -1,7 +1,7 @@
 /**
-  * Classify a provider quota window by its PERIOD (`windowPeriodHours`).
-  *
-  * `classifyWindows` splits one card's windows into the weekly allowance that expires unused and the 5-hour one that refuses first, in one pass. `windowLabelOf` names a window; `staleThresholdMs` / `isLimitStale` judge a reading's age against 10% of ITS OWN window period (floored at 5min). Pure: no I/O, no provider knowledge beyond the vocabulary the adapters in `providerUsage.js` emit (`scope`, `label`, optional `periodHours` for a provider stating its window length exactly).
+ * Classify a provider quota window by its PERIOD (`windowPeriodHours`).
+ *
+ * `classifyWindows` splits one card's windows into the weekly allowance that expires unused and the 5-hour one that refuses first, in one pass. `windowLabelOf` names a window; `staleThresholdMs` / `isLimitStale` judge a reading's age against 10% of ITS OWN window period (floored at 5min). Pure: no I/O, no provider knowledge beyond the vocabulary the adapters in `providerUsage.js` emit (`scope`, `label`, optional `periodHours` for a provider stating its window length exactly).
  *
  * Every subscription CLI reports at least a short rolling window (claude/codex `session` ≈ 5h, antigravity `5-hour`) and a long one (`week`, `month`), which answer different questions: the LONG window is the allowance that expires
  * unused (what "burn before it resets" is about; its reset is the deadline), the SHORT one is what actually refuses a request. Selecting "the soonest-resetting window" conflated them: the 5-hour one is almost always soonest,

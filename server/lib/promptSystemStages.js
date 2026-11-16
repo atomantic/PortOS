@@ -1,54 +1,17 @@
 /**
- * The prompt stages PortOS features call by name — the single source of truth
- * for "which stage keys are system stages" (#3314).
+ * Prompt-stage protection (#3314, #3335): the stages PortOS features call by name, split into CURATED badging and DERIVED deletion protection.
  *
- * Prompt-stage protection, split in two (#3335). CURATED (badging): `SYSTEM_STAGE_USAGE` (`key ->
- * usedBy[]` feature-name copy), `SYSTEM_STAGE_KEYS`, `isSystemStage(key)`, `systemStageUsedBy(key)` —
- * what `GET /api/prompts` ships and the Prompt Manager badges/filters; adding a row is a per-stage
- * product decision. DERIVED (deletion): `STAGE_CALL_SITES` / `stageReferencedBy(key)` from the
- * generated manifest, unioned with the curated set into `isProtectedStage(key)` /
- * `PROTECTED_STAGE_KEYS` — what the `DELETE /api/prompts/:stage` force-guard and `canDelete` consult.
- *
- * These stages are resolved by literal key (`getStage('cos-evaluate')`,
- * `runStage('brain-classifier')`, …) rather than authored by the user in the
- * Prompt Manager. Deleting one silently breaks the feature that names it, so
- * `DELETE /api/prompts/:stage` refuses without `?force=true`, and the Prompt
- * Manager badges + filters them.
- *
- * SCOPE: this is the CURATED set — the CoS / Brain / Memory / app-detection
- * stages the delete guard has always covered — and it is what the UI badges
- * and filters. It is NOT an exhaustive index of every literal-key call site:
- * roughly 100 of the 127 shipped stages are resolved by literal key too, and
- * badging all of them would make the SYSTEM badge and the "System only" filter
- * meaningless (#3335). Adding a row here means "this stage is now badged
- * SYSTEM", which is a deliberate choice per stage.
- *
- * Deletion protection is the OTHER half, and it is deliberately wider: the
- * generated `promptStageCallSites.generated.json` indexes every stage key a
- * `server/` source references, and `isProtectedStage()` unions it with this
- * table. So `pipeline-series-concept-judge` is undeletable without `?force=true`
- * while staying out of the badge. See `scripts/generate-prompt-stage-call-sites.js`.
- *
- * The map was previously restated three times — the usage handler's
- * `key -> usedBy[]` table, the DELETE guard's bare key array, and a client-side
- * `SYSTEM_STAGE_KEYS` mirror in `client/src/lib/promptStageGroups.js`. The
- * client copy could (and did) drift out of the server's, which after #3284 was
- * no longer cosmetic: a key missing from the client list made that stage
- * unreachable through the Stages pane's "System only" filter even though the
- * server would refuse to delete it. `GET /api/prompts` now ships the key list
- * so the client has nothing left to guess.
- *
- * Data + predicates, no toolkit dependency. The only read is the generated
- * call-site manifest, loaded once at module init.
+ * CURATED: `SYSTEM_STAGE_USAGE` (`key -> usedBy[]` feature-name copy), `SYSTEM_STAGE_KEYS`, `isSystemStage(key)`, `systemStageUsedBy(key)`: what `GET /api/prompts` ships and the Prompt Manager badges/filters;
+ * adding a row is a per-stage product decision (the CoS / Brain / Memory / app-detection set; ~100 of 127 shipped stages are literal-key resolved too, and badging all would make the SYSTEM badge and "System only" filter meaningless).
+ * DERIVED: `STAGE_CALL_SITES` / `stageReferencedBy(key)` from the generated `promptStageCallSites.generated.json` (every stage key a `server/` source references; `scripts/generate-prompt-stage-call-sites.js`), unioned with the curated set into
+ * `isProtectedStage(key)` / `PROTECTED_STAGE_KEYS`, which the `DELETE /api/prompts/:stage` force-guard and `canDelete` consult, so `pipeline-series-concept-judge` is undeletable without `?force=true` yet unbadged. Deleting a literal-key stage
+ * (`getStage('cos-evaluate')`, `runStage('brain-classifier')`) silently breaks its feature. The key list ships from `GET /api/prompts` so the client mirror in `client/src/lib/promptStageGroups.js` (which drifted, #3284) has nothing to guess.
+ * Data + predicates, no toolkit dependency; the only read is the generated manifest, loaded once at module init.
  */
 
 import { readFileSync } from 'node:fs';
 
-/**
- * `stageKey -> human-readable feature names that call it`. The values are what
- * `GET /api/prompts/:stage/usage` surfaces as `usedBy` in the delete-confirm
- * dialog, so they read as UI copy rather than module paths.
- */
+/** `stageKey -> human-readable feature names that call it`: surfaced as `usedBy` by `GET /api/prompts/:stage/usage` in the delete-confirm dialog, so they read as UI copy. */
 export const SYSTEM_STAGE_USAGE = Object.freeze({
   'cos-evaluate': Object.freeze(['CoS task evaluation']),
   'cos-report-summary': Object.freeze(['CoS daily reports']),
@@ -71,24 +34,12 @@ export function isSystemStage(key) {
   return SYSTEM_STAGE_SET.has(key);
 }
 
-/**
- * The feature names that call `key`, or an empty array for a user-authored
- * stage. Always an array so callers can render it without a null guard.
- *
- * Gated on the Set rather than indexing the object directly — a stage literally
- * named `toString` or `constructor` would otherwise resolve to an inherited
- * `Object.prototype` member and be reported as in-use.
- */
+/** The feature names that call `key`, or `[]` for a user-authored stage (always an array). Gated on the Set, not object indexing: a stage named `toString` or `constructor` would resolve to an inherited `Object.prototype` member and read as in-use. */
 export function systemStageUsedBy(key) {
   return isSystemStage(key) ? SYSTEM_STAGE_USAGE[key] : [];
 }
 
-/**
- * `stageKey -> repo-relative source paths that reference it`, generated by
- * `scripts/generate-prompt-stage-call-sites.js` and drift-guarded by its test.
- * Read here rather than `import … with { type: 'json' }` so the module loads
- * identically under node, vitest, and any bundler in the chain.
- */
+/** `stageKey -> repo-relative source paths that reference it`, generated by `scripts/generate-prompt-stage-call-sites.js` and drift-guarded by its test. Read rather than `import … with { type: 'json' }` so it loads identically under node, vitest and any bundler. */
 export const STAGE_CALL_SITES = Object.freeze(
   Object.fromEntries(
     Object.entries(
@@ -101,26 +52,12 @@ const CALL_SITE_KEYS = new Set(Object.keys(STAGE_CALL_SITES));
 
 const EMPTY = Object.freeze([]);
 
-/**
- * The `server/` source files that name `key` as a string literal, or an empty
- * array when nothing does. Surfaced by `GET /api/prompts/:stage/usage` so the
- * delete-confirm dialog can name what breaks.
- *
- * Gated on the Set for the same reason `systemStageUsedBy` is — `toString`
- * must not resolve through `Object.prototype`.
- */
+/** The `server/` source files naming `key` as a string literal, or `[]`; surfaced by `GET /api/prompts/:stage/usage` so the delete dialog can name what breaks. Gated on the Set like `systemStageUsedBy` (`toString`). */
 export function stageReferencedBy(key) {
   return CALL_SITE_KEYS.has(key) ? STAGE_CALL_SITES[key] : EMPTY;
 }
 
-/**
- * True when deleting `key` would break something: it is either a curated
- * system stage or referenced by literal key somewhere in `server/`.
- *
- * This — not `isSystemStage` — is what the DELETE guard consults. The two are
- * separate on purpose: `isSystemStage` drives user-facing badging and stays
- * small; this one drives safety and covers every call site (#3335).
- */
+/** True when deleting `key` would break something: a curated system stage or referenced by literal key in `server/`. This, not `isSystemStage`, is what the DELETE guard consults: `isSystemStage` drives badging and stays small, this drives safety (#3335). */
 export function isProtectedStage(key) {
   return isSystemStage(key) || CALL_SITE_KEYS.has(key);
 }
