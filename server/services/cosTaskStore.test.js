@@ -123,7 +123,7 @@ import {
   __resetTaskCache
 } from './cosTaskStore.js';
 import { aggregateAutoFixDiagnostics, getAutoFixMetrics } from './autoFixMetrics.js';
-import { PRIORITY_VALUES, generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
+import { PRIORITY_VALUES } from '../lib/taskParser.js';
 import { getTaskPrompt, getTaskContextNote } from '../lib/cosTaskPrompt.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, registerPauseReleaseAdapter, __resetPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
@@ -2713,9 +2713,9 @@ describe('cosTaskStore.mergePeerTasks', () => {
     expect(after.tasks.map(t => t.id)).toContain('sys-x');
   });
 
-  it('adopts a metadata-less remote task through the real markdown generator without throwing', async () => {
+  it('adopts a metadata-less remote task through the real stored form without throwing', async () => {
     // A cross-version/forked peer may advertise a task with no `metadata` (the
-    // wire schema marks it optional). generateTasksMarkdown does
+    // wire schema marks it optional). storedForm does
     // Object.entries(metadata) — undefined would throw and fail the whole merge.
     const remote = [{ id: 'task-nometa', taskType: 'user', status: 'pending', priority: 'HIGH', description: 'no metadata here' }];
     const res = await mergePeerTasks('user', remote, { now: NOW });
@@ -3227,7 +3227,7 @@ describe('cosTaskStore.resolveTaskChallengeWithRecheck (#2471)', () => {
 describe('cosTaskStore — a repaired task is returned exactly as it is persisted (#7239)', () => {
   // The markdown store can only represent five statuses and four priorities, and
   // every write rewrites the whole file. Repairing only inside
-  // generateTasksMarkdown would write one thing and hand back another, so every
+  // storedForm would write one thing and hand back another, so every
   // consumer of the return value / `tasks:changed` would read the pre-repair
   // status until something re-read the file.
   it('updateTask returns the parked status, not the unrepresentable one it was given', async () => {

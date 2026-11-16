@@ -50,7 +50,7 @@ import { join } from 'path';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
 import { readCosConfig } from './_lib.js';
 
-// The task header line, per `server/lib/taskParser.js`. Both spellings — with
+// The task header line, per `server/lib/legacyTaskMarkdown.js`. Both spellings — with
 // and without the AUTO/APPROVAL flag — since internal tasks carry it and the
 // legacy shape does not.
 const TASK_LINE = /^-\s*\[([ x~!?])\]\s*#([\w-]+)\s*\|\s*(?:CRITICAL|HIGH|MEDIUM|LOW)\s*\|\s*(?:(?:AUTO|APPROVAL)\s*\|\s*)?(.+)$/i;

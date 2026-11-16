@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import migration, { stampBurnTaskProvenance } from './225-quota-burn-task-provenance.js';
-import { parseTasksMarkdown } from '../../server/lib/taskParser.js';
+import { parseTasksMarkdown } from '../../server/lib/legacyTaskMarkdown.js';
 
 const burnTask = (id, family = 'agy') => [
   `- [ ] #${id} | MEDIUM | AUTO | [Quota burn: ${family}] Performance issues for PortOS`,

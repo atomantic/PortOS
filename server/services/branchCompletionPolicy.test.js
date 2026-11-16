@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
-import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
+import { storedForm } from '../lib/cosTaskRows.js';
 
 const runtime = vi.hoisted(() => ({ dir: null, agents: {}, trusted: true, tip: 'a'.repeat(40), remoteTip: 'a'.repeat(40), prState: 'OPEN', merged: false, closedPr: false }));
 const repoPath = '/synthetic/repository';
@@ -36,7 +36,7 @@ vi.mock('./github.js', () => ({
   },
   getIssueDispatchHint: async () => ({ status: 'unavailable' }),
 }));
-vi.mock('./cosTaskStore.js', () => ({ addTask: async task => ({ ...parseTasksMarkdown(generateTasksMarkdown([task]))[0], taskType: 'internal' }), updateTask: vi.fn() }));
+vi.mock('./cosTaskStore.js', () => ({ addTask: async task => ({ ...storedForm(task, 'user'), taskType: 'internal' }), updateTask: vi.fn() }));
 vi.mock('./cos.js', () => ({ forceSpawnTask: vi.fn() }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('./cosAgentIndex.js', () => ({

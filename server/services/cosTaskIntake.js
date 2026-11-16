@@ -185,8 +185,8 @@ export function buildTaskMetadata(taskData, taskType, { now = Date.now() } = {})
   if (taskData.attachments?.length > 0) metadata.attachments = taskData.attachments;
     // Structured auto-fix diagnostics: the fallback classifier's { triggerEvent, target,
     // errorType, category, tier, fixStrategy, failureReason } record, persisted so telemetry
-    // can aggregate outcomes by tier / category / failure reason. Round-trips through the
-    // markdown store via the JSON sentinel (taskParser.js escapeNewlines). A non-object /
+    // can aggregate outcomes by tier / category / failure reason. Stored as an object
+    // (`cosTaskRows.storedForm` keeps nested metadata). A non-object /
     // array is ignored.
   if (taskData.diagnostics && typeof taskData.diagnostics === 'object' && !Array.isArray(taskData.diagnostics)) {
     metadata.diagnostics = taskData.diagnostics;

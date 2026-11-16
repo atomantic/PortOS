@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
+import { storedForm } from '../lib/cosTaskRows.js';
 
 // Existing repository-cleanup recoveries (#12251) keep their server-written
 // backlink on the completed parent after an upgrade. They hold no handoff
@@ -67,10 +67,10 @@ import { resolveMergeHandoffOwner } from './mergeHandoffOwner.js';
 const persist = () => { f.disk = structuredClone(f.state); };
 const parentTask = { id: 'task-parent', description: 'Fix the example', metadata: { app: 'example-app', openPR: true, prCompletion: 'merge-on-green' } };
 
-// Queue entries round-trip through TASKS.md, so scalars arrive as strings.
+// Queue entries are stored like real ones, so scalars arrive as strings.
 const queue = (id, taskData) => {
-  const [task] = parseTasksMarkdown(generateTasksMarkdown([{ id, status: 'in_progress', priority: 'HIGH',
-    description: taskData.description, metadata: buildTaskMetadata(taskData, 'user') }]));
+  const task = storedForm({ id, status: 'in_progress', priority: 'HIGH',
+    description: taskData.description, metadata: buildTaskMetadata(taskData, 'user') }, 'user');
   f.tasks[id] = { ...task, taskType: 'user' };
   return f.tasks[id];
 };

@@ -22,7 +22,7 @@ const { checkHealth, close, ensureSchema, query, withTransaction } = await impor
 const { requireDbOrSkip } = await import('../../lib/dbTestGate.js');
 const { up: importUp } = await import('./018-cos-tasks-from-files.js');
 const { up: retireUp } = await import('./019-retire-cos-task-files.js');
-const { parseTasksMarkdown, generateTasksMarkdown } = await import('../../lib/taskParser.js');
+const { parseTasksMarkdown, generateTasksMarkdown } = await import('../../lib/legacyTaskMarkdown.js');
 
 const health = await checkHealth().catch(() => ({ connected: false }));
 if (health.connected) await ensureSchema();
