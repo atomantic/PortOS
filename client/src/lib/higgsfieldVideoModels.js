@@ -12,11 +12,4 @@
  * each family's lengths, sizes and inputs, so the Video Gen picker offers
  * exactly what the server sends.
  */
-export {
-  HIGGSFIELD_DEFAULT_VIDEO_MODEL,
-  HIGGSFIELD_VIDEO_MODELS,
-  HIGGSFIELD_VIDEO_MODEL_IDS,
-  getHiggsfieldVideoModel,
-  higgsfieldCapabilityHint,
-  higgsfieldVideoLengths,
-} from '../../../server/lib/higgsfieldVideoModels.js';
+export { HIGGSFIELD_DEFAULT_VIDEO_MODEL, HIGGSFIELD_VIDEO_MODELS, getHiggsfieldVideoModel, higgsfieldCapabilityHint, higgsfieldVideoLengths } from '../../../server/lib/higgsfieldVideoModels.js';

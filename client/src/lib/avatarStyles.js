@@ -1,6 +1,6 @@
 /**
  * Re-export of `server/lib/avatarStyles.js` — the CoS avatar-style vocabulary (#6253):
- * `AVATAR_STYLES`, `AVATAR_STYLE_IDS`, `AVATAR_STYLE_LABELS`, `WEBGL_AVATAR_STYLE_IDS`.
+ * `AVATAR_STYLE_LABELS`, `WEBGL_AVATAR_STYLE_IDS`.
  *
  * The picker labels, the lazy-load map / WebGL-stage set, and the server's `avatarStyle` zod enum all
  * read the one list.
@@ -16,9 +16,4 @@
  * to a file the server imports breaks the server CI job). This shim keeps the
  * `lib/avatarStyles` import path every UI consumer already uses.
  */
-export {
-  AVATAR_STYLES,
-  AVATAR_STYLE_IDS,
-  AVATAR_STYLE_LABELS,
-  WEBGL_AVATAR_STYLE_IDS,
-} from '../../../server/lib/avatarStyles.js';
+export { AVATAR_STYLE_LABELS, WEBGL_AVATAR_STYLE_IDS } from '../../../server/lib/avatarStyles.js';

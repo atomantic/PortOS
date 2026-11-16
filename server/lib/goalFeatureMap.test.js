@@ -86,7 +86,6 @@ describe('goalFeatureMap — getGoalFeatureAreas', () => {
 describe('goalFeatureMap — server/client mirror parity', () => {
   it('server and client maps are identical', () => {
     expect(clientMap.FEATURE_AREAS).toEqual(FEATURE_AREAS);
-    expect(clientMap.GOAL_CATEGORY_FEATURE_MAP).toEqual(GOAL_CATEGORY_FEATURE_MAP);
     expect([...clientMap.FEATURE_AREA_IDS].sort()).toEqual([...FEATURE_AREA_IDS].sort());
   });
 });

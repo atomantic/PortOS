@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { WORK_KINDS, WORK_STATUSES } from '../../lib/writersRoomPresets.js';
+import { WORK_KINDS, WORK_STATUSES } from '../../../../server/lib/writersRoomPresets.js';
 import { KIND_LABELS, STATUS_LABELS } from './labels.js';
 
 // A kind or status added server-side without a label here would render raw.

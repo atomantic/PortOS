@@ -369,17 +369,6 @@ describe('catalogTypes — media kinds', () => {
     expect(getMediaKind('portrait')?.label).toBe('Portrait');
     expect(getMediaKind('hologram')).toBeUndefined();
   });
-
-  it('client mirror has the same media kind ids + accept filters', async () => {
-    const client = await import('../../client/src/lib/catalogTypes.js');
-    expect(client.MEDIA_KINDS.map((m) => m.id)).toEqual([...MEDIA_KIND_IDS]);
-    for (const serverKind of MEDIA_KINDS) {
-      const clientKind = client.getMediaKind(serverKind.id);
-      expect(clientKind, `client mirror missing media kind ${serverKind.id}`).toBeTruthy();
-      expect(clientKind.label).toBe(serverKind.label);
-      expect(clientKind.accept).toBe(serverKind.accept);
-    }
-  });
 });
 
 describe('payloadSnippet', () => {

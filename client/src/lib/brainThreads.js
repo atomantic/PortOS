@@ -19,13 +19,4 @@
  *
  * A Brain *thread* is a tracked topic or commitment, not a message thread.
  */
-export {
-  THREAD_STATUSES,
-  THREAD_PRIORITIES,
-  THREAD_TERMINAL_STATUSES,
-  THREAD_ACTIVE_STATUSES,
-  isTerminalThreadStatus,
-  isThreadOverdue,
-  threadNextLine,
-  compareThreads,
-} from '../../../server/lib/brainThreads.js';
+export { THREAD_STATUSES, THREAD_PRIORITIES, THREAD_ACTIVE_STATUSES, isTerminalThreadStatus, isThreadOverdue, threadNextLine, compareThreads } from '../../../server/lib/brainThreads.js';

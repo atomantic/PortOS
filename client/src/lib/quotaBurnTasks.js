@@ -260,7 +260,7 @@ export const CREATE_TASK_HREF = '/cos/jobs';
  * there, and this page saves the same steps into a family plan. Re-exported so
  * the guidance banner and the prerequisite check read the same list.
  */
-export { MAINTENANCE_TASK_ORDER, MAINTENANCE_ORDER_GUIDANCE } from '../../../server/lib/maintenanceSequence.js';
+export { MAINTENANCE_ORDER_GUIDANCE } from '../../../server/lib/maintenanceSequence.js';
 
 /** Saved settings required by the maintenance ladder, including actionable patches. */
 export function maintenancePrerequisites(groups, appId, options = {}) {

@@ -1,6 +1,6 @@
 // The storyboards / episode-video stages' INLINE pre-render continuity warnings (#1468).
 //
-// `findAxisReversals` / `findShotTypeMonotony` are re-exported from
+// `findAxisReversals` / `findShotTypeMonotony` are imported from
 // `server/lib/editorial/shotContinuity.js`, the same detectors the authoritative
 // `visual.shot-continuity` check runs; `sceneShotWarnings(scene, opts)` is the client-only composer
 // (the server emits findings in a different shape). Pure/DOM-free.
@@ -17,7 +17,7 @@
 // client-only (the server emits findings in a different shape).
 import { findAxisReversals, findShotTypeMonotony } from '../../../server/lib/editorial/shotContinuity.js';
 
-export { findAxisReversals, findShotTypeMonotony } from '../../../server/lib/editorial/shotContinuity.js';
+
 
 // Screen-direction → reader-facing label, mirroring the server check's
 // DIRECTION_LABEL so the inline warning and the editorial-run finding read the same.
