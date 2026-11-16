@@ -433,6 +433,7 @@ const DB_RISK_RULES = [
   /^scripts\/generate-init-db-sql(?:[.\/]|$)/i,
   /^scripts\/lib\/migrationFiles(?:[.\/]|$)/i,
   /^scripts\/lib\/dbImage(?:[.\/]|$)/i,
+  /^docker-compose\.yml$/i,
   /^server\/lib\/databaseMaintenanceSchema(?:[.\/]|$)/i,
   /^server\/services\/backupDatabaseDump(?:[.\/]|$)/i,
   /^server\/lib\/db(?:\/|\.|$)/i,
