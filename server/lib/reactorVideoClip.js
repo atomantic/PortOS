@@ -1,20 +1,6 @@
 /**
  * The reactor.inc `fast-h3` clip contract: what one enqueued clip may ask for.
  *
- * The reactor.inc `fast-h3` clip contract, dependency-free so the route schema, the FableLoom prompt
- * compiler and the VideoGen picker all read one copy — `REACTOR_MAX_PROMPT_LENGTH` (800; the API
- * rejects a longer prompt rather than truncating it), `REACTOR_MIN_CLIP_SECONDS` /
- * `REACTOR_MAX_CLIP_SECONDS` (5.167–14.375, i.e. 124–345 frames at the `REACTOR_CLIP_FPS` 24 it
- * delivers), `REACTOR_MAX_CLIP_ID_LENGTH`, and the picker list `REACTOR_CLIP_LENGTHS` +
- * `REACTOR_DEFAULT_CLIP_LENGTH` + `reactorClipLengthLabel()` (the two exact endpoints plus every whole
- * second between them, since the accepted range is continuous but starts and ends off a round number).
- * Also the CANVAS contract `set_canvas` accepts: `REACTOR_CANVASES` (`16:9` 1344×768, `4:3` 1024×768,
- * `1:1` 768×768, `9:16` 768×1344 — every one a 768px short edge, so the aspect string is the whole
- * choice), `REACTOR_ASPECTS`, `REACTOR_DEFAULT_ASPECT`, `reactorCanvas(aspect)` and
- * `nearestReactorAspect(width, height)` (closest canvas in log-ratio space; anything unmeasurable
- * answers the default rather than deriving one). Mirrored to `client/src/lib/reactorVideoClip.js`,
- * parity pinned by `reactorVideoClip.test.js`.
- *
  * fast-h3 renders 24fps clips and its `enqueue` command accepts a CONTINUOUS
  * `seconds` value bounded to 5.167–14.375 (124–345 frames at 24fps — the same
  * bounds `scripts/reactor-render.py` re-checks before it opens a session). The

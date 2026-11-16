@@ -3,14 +3,6 @@
  * SLOW to change — provider quota panels, scraped usage, anything behind a
  * multi-second CLI/PTY spawn.
  *
- * `createStaleWhileRevalidate({ ttlMs, failureBackoffMs?, isComplete?, partialTtlMs? })` → `read(key,
- * produce, { wait })` / `clear(key?)` — TTL cache that serves a STALE value immediately and
- * revalidates behind the caller, for readings too slow to block on (10-20s CLI/PTY spawns). `wait`:
- * `'fresh'` bypasses and blocks, `'cached'` (default) blocks only on a cold cache, `'never'` returns
- * the `PENDING` symbol on a cold cache for UIs that render "still reading" and poll. Failures keep the
- * last good value and back off; a cold cache whose producer failed throws rather than promising a
- * reading that isn't coming. Used by `providerUsage.js` (TUI scrapes) and `claudeCodeUsage.js`.
- *
  * The problem it solves: a plain TTL cache blocks the first caller after the TTL
  * lapses. When producing a value costs 10-20 seconds, that caller is a page load
  * rendering nothing, and the number it waited for had moved by single digits. So

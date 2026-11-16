@@ -1,12 +1,6 @@
 // This install's local image-model catalog, plus the model a blank pin
 // resolves to — everything a local-model picker needs.
 //
-// This install's local image-model catalog plus the model a blank pin resolves to
-// (`settings.imageGen.local.modelId` → the shipped default), `enabled`-gated so nothing is probed
-// until a local render is in play. `models` is `null` until fetched, `[]` when genuinely empty. Use
-// when: Any local image-model picker — the Settings Local default, and the per-record pin row on
-// decks/universes/series/sprites/music video.
-//
 // `enabled`-gated in the same shape as `useAgyModels`: the catalog probe reads
 // the model registry and the install's hardware compatibility server-side, and
 // a surface that is rendering on a cloud CLI has no use for it, so nothing is

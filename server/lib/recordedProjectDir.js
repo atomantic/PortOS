@@ -2,19 +2,6 @@
  * Where PortOS remembers a container project it had to go and FIND — one line
  * per stack in the install's own `.env`.
  *
- * Where PortOS remembers a container project it had to go and FIND — one `.env` line per stack in the
- * INSTALL's root (`PATHS.installRoot`, so a worktree-booted server writes where the real install
- * reads). `readRecordedProjectDir(envVar, envPath?)` / `recordProjectDir(envVar, dir, envPath?)` /
- * `projectDirIsSettled(envVar, env?, envPath?)` / `resolveRecordedProjectDir(envVar, defaultDir, env?,
- * envPath?)` are all keyed on the env-var NAME, so the vLLM and SGLang Qwen3.8-27B stacks share one
- * implementation instead of drifting on the precedence rule — exported value (this run's decision) →
- * the record (an earlier run's) → the stack's documented default. Read from the file on every call,
- * never cached: a placement run writes it and the readiness poll in the same process must see it
- * without a restart, and PortOS has no dotenv so `.env` reaches `process.env` for nobody. Writes are
- * atomic and replace the key's line rather than appending (`upsertEnvLine`) — that file also holds the
- * database password. `envPath` is a parameter so a test's sandbox answers instead of the developer's
- * install. Written by `services/wslProjectPlacement.js`.
- *
  * Two runtimes now share this question. On Windows neither the vLLM nor the
  * SGLang Qwen3.8-27B project lives where its default resolves: Docker Desktop's
  * engine IS a WSL2 VM, so the compose project and its ~20 GB of weights sit

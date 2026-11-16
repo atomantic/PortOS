@@ -1,12 +1,6 @@
 /**
  * Persistent Mind decision journal: typed event kinds (decision, commitment, question, risk, goal,
  * preference) and the append/supersede/resolve extraction contract.
- *
- * Persistent Mind decision journal: typed addressable event kinds
- * (decision/commitment/open_question/risk/goal/preference), the closed append/supersede/resolve
- * extraction contract, the deterministic reducer that rejects unsourced operations and retires by
- * status flip rather than deletion, bounded retention, the untrusted-evidence prompt rendering, and
- * the active-only digest the rollup compacts from. Pure.
  */
 
 import { selectPersistentMindContextEvents, renderPersistentMindContextEvent } from './persistentMindContextEvents.js';

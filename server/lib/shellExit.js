@@ -2,14 +2,6 @@
  * Build "run this command, then close the shell with its exit status" for the
  * shell a PTY session is actually running.
  *
- * `buildRunThenExitCommand(commandLine, shell)` — "run this CLI, then close the shell with its
- * status", in the dialect the session speaks. An agent TUI shell exists only to host one CLI and must
- * die with it. The POSIX `cmd; exit $?` was applied everywhere and is actively wrong off-POSIX: in
- * PowerShell `$?` is a BOOLEAN, so `exit $?` reports success as 1 and failure as 0 (inverted) — use
- * `$LASTEXITCODE`, pre-seeded to 1 so a command that never ran still exits non-zero; in cmd.exe `;` is
- * an argument separator, so the CLI is handed `;`/`exit`/`$?` as arguments — use `& exit`. Verified
- * against node-pty on Windows 11 for pwsh 7, PowerShell 5.1 and cmd.exe.
- *
  * An agent TUI session exists only to host one CLI (`claude`, `codex`, …). The
  * shell must die when that CLI does, carrying its status out — otherwise the
  * shell returns to its prompt, the PTY stays open, and the spawner can't see

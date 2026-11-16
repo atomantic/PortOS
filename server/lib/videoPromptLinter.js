@@ -2,19 +2,6 @@
  * Deterministic lint pass for continuous-video clip prompts (part of #6217's chained-generation
  * feature).
  *
- * Deterministic lint pass for continuous-video clip prompts (part of #6217, independent of
- * `scriptVideoCompiler.js` #6225 by interface — lints already-built prompt strings plus
- * caller-supplied framing/reference metadata rather than a compiler-shaped clip).
- * `lintClipPrompt(clip, {bible, maxLength})` checks a single clip: a `cutType: 'continue'` clip must
- * open with `"Hard cut to <framing>:"` and use a framing distinct from `previousFraming`; every
- * `references` entry (`{kind: 'cast'|'locations', id}`) must resolve to a bible descriptor present
- * VERBATIM in the prompt (never paraphrased); the prompt must not contain the banned cross-clip
- * referents (same/still/again/continues/as before), negatives (no/without/never), or UI-overlay terms
- * (text/caption/overlay), matched on word boundaries so substrings like "against" or "context" don't
- * false-positive; and the prompt must be `<= MAX_CLIP_PROMPT_LENGTH` (800) characters. Returns `{pass,
- * reasons[]}`, never throws. `lintClips(clips, {bible, maxLength})` lints an ordered chain, deriving
- * each clip's `previousFraming` from the preceding array element's `framing` when not set explicitly.
- *
  * Catches the prompt patterns that cause visual smear/collapse when a video model chains one clip onto
  * the next: a missing hard-cut opener, a re-used camera framing, a paraphrased bible descriptor, or
  * language that reads fine in prose but breaks a video prompt — referring back to "the same" shot,

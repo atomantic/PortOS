@@ -1,18 +1,6 @@
 /**
  * May this provider record gain the OTHER execution mode of its harness?
  *
- * May an existing record gain the OTHER execution mode of its harness (#7501) —
- * `tuiModeAddition(provider, providers, executionModes?)` is the ONE verdict behind both the
- * `canAddTuiMode` flag `GET /providers` decorates each record with (so the card offers "Add
- * interactive mode") and the refusal `POST /providers/:id/modes/tui` answers with, so a card can never
- * advertise an action the server rejects. Refuses a non-CLI record (the CLI id is the stem, so minting
- * it from a TUI record would be a rename), a record storing no command, and a KNOWN harness declaring
- * no TUI mode; an UNKNOWN harness passes with empty argv rather than a guess, while a known one starts
- * from its recipe’s proven interactive line. Asks whether the harness already HAS its interactive mode
- * (the record’s `providerModeGroups` group — the shipped `grok-cli`/`grok-tui` pair leaves
- * `grok-cli-tui` unclaimed, so an id-only check would mint a third record beside it), and separately
- * 409s on a taken `<id>-tui` rather than suffixing around it. Pure: no I/O.
- *
  * One rule, read by two callers that must never disagree: the provider list
  * decorates each record with `canAddTuiMode` so the card offers the action, and
  * `POST /api/providers/:id/modes/tui` refuses on the same verdict. Gating the

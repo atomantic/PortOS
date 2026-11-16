@@ -2,18 +2,6 @@
  * Video Gen disclosure facts — provenance/licensing metadata for the shipped
  * video models, plus the execution/policy scope of each render backend.
  *
- * Video Gen provenance/licensing + backend policy-scope facts (#3674). `VIDEO_MODEL_DISCLOSURES` maps
- * each shipped video model id to `{ shippedRepo, disclosure }` (model card URL, weights license,
- * runtime license, pinned-snapshot download size in decimal GB, review date) — every value checked
- * against a primary upstream source, and any fact that could not be established is OMITTED so the UI
- * renders "Unknown" instead of guessing. `applyVideoDisclosures(list)` is the load-time backfill (twin
- * of migration 237) with the same preservation guards: an existing `disclosure` key wins, a custom id
- * is skipped, and a `repo` pointed at a fork keeps Unknown. `VIDEO_BACKEND_DISCLOSURES` /
- * `videoBackendDisclosure(id)` state where inference runs (`execution: local or hosted`) and whose
- * policy applies — execution facts only, never a restrictiveness ranking. `APACHE_2` / `GEMMA_TERMS`
- * are the shared license descriptors `videoTextEncoders.js` reuses, so a license-text correction
- * reaches both tables from one edit.
- *
  * Two related concerns, one module, because both answer the same user
  * question: "what actually happens, and under whose terms, when I hit
  * Generate?" (issue #3674).

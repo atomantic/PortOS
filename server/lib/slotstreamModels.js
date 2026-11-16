@@ -2,15 +2,6 @@
  * What an SSD-streaming MoE runtime has on disk, and the memory plan PortOS
  * shows before a start.
  *
- * `isServableCheckpoint(dir)` checks configuration, weights and indexed shards;
- * `SLOTSTREAM_INCOMPLETE_MARKER` keeps interrupted downloads unavailable until retry completes.
- * `listSlotstreamCachedModels({cacheDir?})` → `{models, error}` from a local directory walk of the
- * SSD-streaming MoE cache (no network, no model load), `pickSlotstreamCachedModel(models, requested?)`
- * → the checkpoint id to hand `slotstream serve --model`, and `planSlotstreamMemory({totalBytes?,
- * overrideGb?})` → `{targetGb, expectedPeakGb, expectedWarmDecodeToks, auto}` so the LLMs row can show
- * the memory plan instead of hiding it. `models: null` means the cache could not be READ and is
- * deliberately distinct from `[]` (read, and empty), because a start never fetches weights.
- *
  * A start never downloads weights — an empty cache is reported rather than
  * silently filled. Listing is a local directory walk (no network, no model
  * load). `models: null` means the cache could NOT be read, which is

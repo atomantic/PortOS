@@ -1,12 +1,6 @@
 /**
  * Marker-delimited section replacement (pure, no I/O).
  *
- * Marker-delimited section replacement (pure). `buildMarkers(id)` → `{ start, end }` HTML-comment
- * marker pair; `replaceMarkedSection(content, body, markers)` splices/replaces/removes an
- * auto-generated region without touching surrounding user content (idempotent); `extractMarkedSection`
- * / `hasMarkedSection` read it back. Powers the daily-log activity-digest auto-drafts (#2155) via
- * `brainJournal.upsertAutoSection()`.
- *
  * Lets an automated writer own a clearly-delimited region inside a larger
  * user-authored document (e.g. the auto-generated activity-digest section inside
  * a Brain daily-log entry, #2155) without ever touching the surrounding

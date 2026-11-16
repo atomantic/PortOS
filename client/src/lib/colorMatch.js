@@ -1,17 +1,5 @@
 // Color-match — the grading core for the song system's "sing-to-the-score" training mode.
 //
-// Pure grading core for the song system's color-match training mode: `buildColorMatchTimeline(score, {
-// bpm })` → `{ notes, totalMs, msPerQuarter, bpm }` (each note's target frequency + onset/offset
-// window in ms, keyed by the same global note index the renderer flattens, timing mirroring
-// `scorePlayback`); `gradeNote(hz, targetHz)` classifies a sung pitch against a target into
-// `in-tune`/`close`/`off`/`missed` (octave-folded, thresholds
-// `MATCH_IN_TUNE_CENTS`/`MATCH_CLOSE_CENTS`); `noteAtTime(timeline, tMs, fromIdx)` finds the active
-// note for a rAF cursor; `summarizeAccuracy(grades)` → `{ graded, counts, percentInTune, perNote }`
-// per-take summary (`perNote` is the ordered grade list a saved take persists, mirroring the server
-// sanitizer); `gradesFromPerNote(timeline, perNote)` is its inverse — rebuilds the noteIndex→grade map
-// to repaint a saved take's grading on open without re-grading audio; plus `centsBetween` and the
-// `GRADE` enum. No React, no audio — the `useColorMatch` hook drives it.
-//
 // It walks the notated melody in tempo and judges how well a singer hit each note, so the <ScoreSheet>
 // can paint each notehead green (in tune), yellow (close), or red (off / missed).
 //

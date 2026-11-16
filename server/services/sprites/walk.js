@@ -1509,40 +1509,23 @@ function sourceFrameResponse(runId, run, walkTarget, walkSet, found) {
 
 /**
  * Every frame the run's source video produced, plus the provenance that maps
- * them onto the packed strip (#2980).
+ * Every frame the run's source video produced, plus the provenance mapping them onto the packed
+ * strip (#2980). The Loop Trimmer can only DROP columns from a packed strip, so raw frames are the
+ * only path to a HIGHER frame count; `listSpriteAssets` hides them by design.
  *
- * The Loop Trimmer can only ever DROP columns from an already-packed strip, so
- * the raw frames are the only path back to a HIGHER frame count — and they are
- * invisible everywhere else by design (`listSpriteAssets` skips the directory so
- * ~73 near-identical PNGs don't swamp the asset browser). This is the narrow
- * read that surfaces them, and only them.
+ * Distinct absence sentinels, none a 500 or an empty-looking success:
+ *   - `reason: 'no-source-video'`    no clip on disk at all
+ *   - `reason: 'raw-frames-cleaned'` the clip IS here but its frames were pruned (see `extract`)
+ *   - `reason: 'run-not-packaged'`   a synthesized redraw cycle (#2924) with no clip or run directory
  *
- * Three absence sentinels, kept distinct per the repo's absent-vs-empty rule:
- *   - `available: false, reason: 'no-source-video'`   no clip on disk at all
- *   - `available: false, reason: 'raw-frames-cleaned'` the clip IS here, but its
- *     extracted frames were pruned — recoverable, see `extract` below
- *   - `available: false, reason: 'run-not-packaged'`  a synthesized redraw cycle
- *     (#2924), which never had an i2v clip or a run directory behind it
- * …none of which is a 500, nor an empty-looking success.
+ * `editable`/`lockReason` are SEPARATE from `available`: frames can be listed for a run whose clip was
+ * deleted, and a run with a clip can be locked by approval or a frozen set.
  *
- * `editable`/`lockReason` answer a SEPARATE question from `available`: frames can
- * be listed for a run whose clip has since been deleted (nothing to re-derive
- * from), and a run with a clip can still be locked by approval or by a frozen
- * set. Collapsing the two would make the UI claim a re-derive is possible whenever
- * it had something to show.
- *
- * **`extract` is opt-in, and this read is otherwise side-effect free.** The
- * importer never copies `raw/` (its EXCLUDED_RUN_SEGMENTS skips it), so EVERY
- * imported run reaches this with an empty raw directory — exactly the population
- * the feature exists for. Extracting from the read would therefore mean opening
- * the trimmer and clicking through eight directions silently spawns eight ffmpeg
- * decodes (~96 PNGs each), each holding the per-record write tail while an
- * approve or trim queues behind it, and lands >100MB of re-derivable
- * intermediates that flow into backups — all for a panel the user may never
- * expand. So the plain read reports `raw-frames-cleaned` and the caller asks for
- * `extract: true` from an explicit user action (`POST …/source-frames/extract`).
- * The extraction itself is idempotent (`ffmpeg -y`) and runs inside the
- * per-record write tail like every other walk write.
+ * **`extract` is opt-in; the read is otherwise side-effect free.** Imported runs always arrive with
+ * an empty raw directory, so extracting on read would silently spawn eight ffmpeg decodes (~96 PNGs
+ * each) when the trimmer opens, holding the per-record write tail and adding >100MB of re-derivable
+ * data to backups. The caller asks for `extract: true` from an explicit user action. Extraction is
+ * idempotent (`ffmpeg -y`) and runs inside the per-record write tail.
  */
 export async function getWalkSourceFrames(recordId, runId, { extract = false } = {}) {
   // All three reads are independent — the character gate, the run lookup, and

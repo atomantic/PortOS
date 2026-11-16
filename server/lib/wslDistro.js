@@ -2,19 +2,6 @@
  * Where a native-Win32 PortOS should put Linux-side work, and what that
  * directory is called from Windows.
  *
- * Which WSL2 distro a native-Win32 PortOS should put Linux-side work in. `detectWslProjectDir(leaf)` →
- * `{dir, distro, home}` or `{dir: null, reason}` (`no-wsl` / `no-distro` / `internal-distro` /
- * `unreadable-share`), built from `wsl.exe -e sh -c 'echo "$WSL_DISTRO_NAME"; echo "$HOME"'` — the
- * distro's OWN shell, because `wsl --list` prints UTF-16LE that a UTF-8 reader mangles while an
- * executed program's stdout passes through byte for byte. Verifies the derived `\\wsl.localhost\…`
- * path is readable from Windows before returning it (WSL running and its share answering are separate
- * facts) and refuses a container engine's own distro (`docker-desktop` and friends are recreated on a
- * reset). `parseWslProbe` / `parseWslDistroList` (NUL-stripping the UTF-16 bytes, for an error message
- * only) are exported for their own tests; `WSL_UNC_PREFIX` names the share root for callers writing
- * refusal prose. Exists so the vLLM stack places its ~20 GB of weights on the distro filesystem
- * instead of asking a human to fill in a UNC template — every read from a `C:\` checkout would cross a
- * 9p share.
- *
  * Docker Desktop's engine IS a WSL2 VM. Anything the engine reads out of a
  * Windows path is reached from inside that VM over a 9p share, so a
  * multi-tens-of-gigabytes model checkout placed on `C:\` is slow in a way that

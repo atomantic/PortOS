@@ -1,17 +1,6 @@
 /**
  * `musicVideoAspect(project)` returns the treatment aspect (default 16:9); `musicVideoFrameGenSize`
  * gives the reference-frame generation size matching it.
- *
- * `musicVideoAspect(project)` (treatment brief aspect, default 16:9), `MUSIC_VIDEO_FRAME_GEN_SIZES`
- * and `musicVideoFrameGenSize(project)`: the size every Music Video reference frame is requested at,
- * so a backend never picks portrait for a 16:9 video. `musicVideoLyricLayout(project)` (brief
- * `lyricLayout`: `social` by default keeps portrait lyrics clear of the Shorts/Reels/TikTok control
- * bands, `cinematic` keeps the framed insets). `musicVideoAtAspect(project, aspect)` re-frames the
- * project for one render (a vertical social cut) without touching the record.
- * `musicVideoLocalClipSize(project, model, { endFrame })` sizes a local clip to the aspect,
- * `musicVideoRenderCanvas(aspect, lead)` the final render's frame, and `matchesMusicVideoAspect(w, h,
- * aspect)` tests a frame's shape. Shared by `productionDispatch.js`, `documentRender.js` and the
- * client board.
  */
 
 /**

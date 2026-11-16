@@ -1,12 +1,6 @@
 /**
  * Pure helpers for the Place greybox editor.
  *
- * Pure helpers for the Place greybox editor: lens/aspect to Three.js camera numbers
- * (`fovFromFocalLength`, `aspectRatio`), `shotFromCamera`/`withShot`/`withoutShot` scene edits with
- * server-valid unique ids, `captureForShot` (the media row tagged `greybox-shot:<id>`),
- * `blankGreybox`, `partColor`. The scene is validated server-side (`server/lib/greyboxScene.js`; the
- * client has no zod), so these only read it.
- *
  * The scene itself is validated server-side (`server/lib/greyboxScene.js`; the client has no zod), so
  * these build editable rows and shots, check draft cross-references and numeric bounds, and map a
  * shot's lens/aspect to the numbers a Three.js camera needs.

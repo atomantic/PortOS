@@ -1,14 +1,6 @@
 /**
  * Per-CLI conventions for Moonshot AI's "Kimi Code" coding agent (binary: `kimi`).
  *
- * Moonshot AI Kimi Code (`kimi`) provider helpers — id constants (`KIMI_CLI_ID`/`KIMI_TUI_ID`),
- * `isKimiCommand`/`isKimiCliProvider`/`isKimiTuiProvider` predicates, `ensureKimiHeadlessArgs` (model
- * flag only — non-interactive mode is implicit in `--prompt`, and kimi has no `--print`/`--afk` and
- * refuses approval flags alongside `--prompt`) / `ensureKimiTuiArgs` (`--yolo`) argv builders (model
- * selection uses the `KIMI_CONFIGURED_DEFAULT` sentinel in `providerModels.js` so PortOS omits
- * `--model` like Grok/Antigravity), and `prepareKimiPrompt` (delivers the prompt as the `--prompt
- * <value>` argv, not stdin).
- *
  * Kimi Code (MoonshotAI/kimi-cli, MIT-licensed) ships two PortOS process-provider
  * shapes, distinct from the hosted NVIDIA NIM API gateway:
  *   - `kimi-cli`  (type `cli`) — headless one-shot via `kimi --prompt <value>`.

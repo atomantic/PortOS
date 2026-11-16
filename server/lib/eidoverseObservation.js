@@ -1,20 +1,6 @@
 /**
  * Observation-first discovery for the Eidoverse (#7457, epic #7453).
  *
- * Pure observation-first discovery report for the Eidoverse (#7457) — the read behind
- * `eidoverse.observe`. `buildEidoverseObservation` turns already-collected snapshots (world signals,
- * the install's RESOLVED design districts/includes, the foundation ledger, summarized controller
- * installs) plus the previously persisted visit marker into `{ report, marker }`: districts as places
- * a mind can describe, peers keyed to the foundations inherited through each, a peer contribution's
- * origin/arrival instances, controllers filtered to the ones actually failing, and a `changes` diff
- * against the last visit. Places come from the recipe rather than a constant, so a mind never names a
- * district a later design version renamed; an unreadable source stays `null` and a recipe-disabled one
- * reports `disabled`, neither collapsing to `0`; a first observation reports `firstObservation` rather
- * than declaring a settled world new; and places diff on status flips only so routine signal churn
- * never becomes noise. Scalar-vs-list source shape is shared with the projection via
- * `EIDOVERSE_SCALAR_SOURCE_KEYS`. Pure: the caller passes `observedAt` and decides whether to commit
- * the returned marker.
- *
  * SwarmWorld's finding is that reuse between agents starts with LOOKING at the
  * world, not with asking its author about it. PortOS's mind tools grew the
  * other way round: a mind could speak (`eidoverse.say`), travel

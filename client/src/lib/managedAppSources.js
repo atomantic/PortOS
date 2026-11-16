@@ -3,16 +3,6 @@
  * `GET /api/apps/:id/repository-sources` returns
  * (`server/services/managedAppRepositories.js`).
  *
- * Readers for the managed-app repository-source payload (`GET /api/apps/:id/repository-sources`).
- * `primaryRepositorySource` picks the application checkout out of the source list;
- * `repositoryForkDiverged` / `repositoryForkPushable` / `repositoryForkNeedsSync` answer whether a
- * managed update may ask the server to fast-forward the origin fork (a diverged fork never can, nor
- * can a fork PortOS lacks push access to — a correctness rule, not a label), with
- * `describeForkUnsyncable` explaining why when it may not; `describeRepositorySourcesBehind` renders
- * one clause per checkout an update can actually pull forward, over the shared `countText` pluralizer
- * both surfaces phrase counts with. Shared by the app Git tab's Repository sources panel and the
- * Eidoverse page's out-of-date advisory.
- *
  * Two surfaces read this payload — the app's Git tab and the Eidoverse page's
  * out-of-date advisory — and both must agree on which drift an update can
  * actually clear, because that is a correctness rule, not a formatting one:

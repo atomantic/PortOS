@@ -2,14 +2,6 @@
  * Canonical YouTube single-video URL rule (#6014) — the ONE place the server
  * decides "is this a single YouTube video, and which one?".
  *
- * Canonical YouTube single-video URL rule (#6014). `YOUTUBE_VIDEO_URL_RE` (accepts
- * `watch`/`shorts`/`live`/`embed` plus the `www.`/`m.`/`music.` hosts, rejects playlists, channels,
- * and `/@handle` feeds), `youtubeVideoIdFromUrl(url)` (alias `youtubeVideoId`),
- * `isYoutubeVideoUrl(url)`, and the shared `YOUTUBE_URL_INVALID_MESSAGE`. Single source for the brain
- * ingest, the Takeout importer, the history scrape, the Music Video track import, and (by re-export)
- * `client/src/lib/youtubeUrl.js`. A pure leaf — the throwing form lives in `youtubeUrlAssert.js`, so
- * importing this can never drag `errorHandler.js` into the browser bundle.
- *
  * Before this module the same question was answered four different ways: the
  * Takeout importer owned the id parser (so `server/lib/` tests had to import
  * from `server/services/`, inverting the dependency rule), the brain ingest

@@ -1,14 +1,6 @@
 /**
  * Music Video per-scene "what is wrong with this shot" model (#10152).
  *
- * Music Video per-scene attention model (#10152): `sceneAttention(scene, ctx)` returns the codes
- * (`missing-frame`, `missing-clip`, `under-covered`, `contract-problem`, `perf-blocked`,
- * `candidates-pending`, `plate-unverified`, `no-span`, `last-failure`) behind the collapsed scene-row
- * chips, the Board `?scenes=attention|missing|all` filter (`parseSceneFilter`, `sceneMatchesFilter`)
- * and the Produce per-shot strip; `SCENE_ATTENTION_LABELS`; `sceneMediaKind` (`clip` / `image` /
- * `code` / `card`) and `SCENE_MEDIA_LABELS` for the Board thumbnail badges. Used by
- * `components/musicVideo/SceneCard.jsx`, `stages/BoardStage.jsx` and `stages/ProduceStage.jsx`.
- *
  * One pure answer shared by the collapsed scene row (chips), the Board filter
  * (counts and the `?scenes=` view) and the Produce status strip, so the three
  * never disagree about which shots need work. Each code names a condition the

@@ -1,19 +1,6 @@
 /**
  * Calendar anchor for multi-day autonomous-job cadences (#15395).
  *
- * Calendar anchor for weekly/biweekly/monthly autonomous jobs with a `scheduledTime` (#15395).
- * `scheduleAnchor` is a local weekday 0-6 (weekly, biweekly) or day of month 1-31 (monthly; clamped to
- * the month's last day), so one run stamped >12h late cannot move the job to another weekday.
- * `scheduleAnchorKind(job)` says which anchor a job can carry (null for
- * cron/weekdaysOnly/sub-weekly/on-demand/no time; `scheduleAnchorKindForInterval(interval)` is the
- * cadence-only form the editors use), `isValidScheduleAnchor(kind, v)`, `needsScheduleAnchor(job)`
- * (anchorable but unanchored), `effectiveScheduleAnchor(job)` is the anchor a job schedules by (null =
- * legacy nearest-slot behavior), `deriveScheduleAnchor(job, tz)` picks the day of the slot nearest
- * `lastRun` (or now) so an on-time job's next fire is unchanged, and `nextAnchoredFireTime(job, tz)`
- * returns the first `HH:MM` on the anchor day after `lastRun + intervalMs` minus a slack (1 day; 10
- * days monthly). `nearestLocalTime` is the DST-safe nearest-`HH:MM` primitive shared with
- * `nextIntervalJobFireTime`. Pure.
- *
  * An interval job keeps no weekday of its own: `lastRun + intervalMs` snapped to
  * the nearest `scheduledTime` inherits whatever day `lastRun` landed on, so one
  * run stamped more than ~12h after its slot moved a weekly job to the next

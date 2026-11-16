@@ -2,20 +2,6 @@
  * Provider REFERENCE grammar (#7564, epic #7561): the two spellings a
  * `{ providerId, model, effort }` selection may name a provider by.
  *
- * Provider REFERENCE grammar (#7564, epic #7561) — the two spellings a `{ providerId, model, effort }`
- * selection may name a provider by: a PRESET record id (`PRESET_ID_RE`, the slug `createProvider`
- * mints) or a COMPOSITE `<harness>.<cli|tui|api>@<service-slug>[+<bootstrap-slug>]`
- * (`COMPOSITE_ID_RE`; the bootstrap suffix only with a process method). `parseProviderRef(id)` →
- * `{kind:'preset'}` / `{kind:'composite', harnessId, method, serviceSlug, bootstrapSlug}` / `null`,
- * `isCompositeProviderId` / `isPresetProviderId`, `formatCompositeId(parts)` (throws on parts that
- * would not parse back), `MAX_PROVIDER_REF_LENGTH`, and the two validation messages
- * (`PROVIDER_REF_MESSAGE`, `PRESET_ONLY_MESSAGE`). The zod forms — `providerRefSchema` /
- * `providerRefFieldSchema` (either grammar) and `presetProviderIdSchema` (preset-only, for `PUT
- * /providers/active`, a record's `fallbackProvider`, an app's `taskTypeOverrides` pin) — live in
- * `zodCompat.js` so `cosValidation.js` can share them. Pure and dependency-free; mirrored in
- * `aiToolkit/internal/providerRef.js` (the toolkit may not import out) behind
- * `providerRef.parity.test.js`. Resolution is host-side: `services/compositeProviders.js`.
- *
  *   - a PRESET id — a `data/providers.json` record: `^[a-z0-9][a-z0-9-]*$`
  *     (the same slug `aiToolkit/validation.js#providerSchema.id` mints);
  *   - a COMPOSITE id — `<harness>.<method>@<service-slug>[+<bootstrap-slug>]`,
