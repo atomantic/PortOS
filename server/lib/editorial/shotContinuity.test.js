@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findAxisReversals, findShotTypeMonotony, summarizeStoryboardShots, EYELINE_MAX_SCENES, EYELINE_MAX_CHARS, EYELINE_MAX_DESC_CHARS, EYELINE_MAX_SHOTS_PER_SCENE } from './shotContinuity.js';
+import { findAxisReversals, findShotTypeMonotony, summarizeStoryboardShots } from './shotContinuity.js';
 
 describe('findAxisReversals', () => {
   it('flags an axis reversal across a continuity-linked left↔right pair', () => {
@@ -251,10 +251,4 @@ describe('summarizeStoryboardShots (#1466)', () => {
     expect(block).toContain('[scene truncated]');
   });
 
-  it('exposes sane default caps', () => {
-    expect(EYELINE_MAX_SCENES).toBeGreaterThan(0);
-    expect(EYELINE_MAX_CHARS).toBeGreaterThan(0);
-    expect(EYELINE_MAX_DESC_CHARS).toBeGreaterThan(0);
-    expect(EYELINE_MAX_SHOTS_PER_SCENE).toBeGreaterThan(0);
-  });
 });

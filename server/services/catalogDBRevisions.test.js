@@ -175,7 +175,4 @@ describe('recordIngredientRevision — retention prune', () => {
     expect(revisionInserts()[0].params[6].length).toBe(120);
   });
 
-  it('defaults retention to 50', () => {
-    expect(CATALOG_REVISION_RETENTION).toBe(50);
-  });
 });

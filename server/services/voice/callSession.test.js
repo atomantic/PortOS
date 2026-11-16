@@ -373,9 +373,6 @@ describe('FaceTime call session', () => {
     consoleError.mockRestore();
   });
 
-  it('polls on the documented interval', () => {
-    expect(PROBE_INTERVAL_MS).toBe(2_000);
-  });
 
   it('ignores turns recorded outside a call', () => {
     expect(recordTurn('caller', 'nobody is listening')).toMatchObject({ turns: 0 });

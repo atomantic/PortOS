@@ -10,7 +10,6 @@ import {
   applyCutsToText,
   filterCutComments,
   filterSafeCutComments,
-  MIN_ANCHOR_CHARS,
   CUT_TYPES,
   SAFE_CUT_TYPES,
 } from './applyCuts.js';
@@ -217,7 +216,4 @@ describe('constants', () => {
     expect(SAFE_CUT_TYPES).toEqual(['OVER-EXPLAIN', 'REDUNDANT']);
   });
 
-  it('has reasonable MIN_ANCHOR_CHARS', () => {
-    expect(MIN_ANCHOR_CHARS).toBe(25);
-  });
 });

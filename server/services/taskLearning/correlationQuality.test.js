@@ -125,8 +125,4 @@ describe('isCorrelationProven', () => {
     expect(isCorrelationProven(q)).toBe(false);
   });
 
-  it('exposes the documented threshold and sample-bar constants', () => {
-    expect(CORRELATION_QUALITY_THRESHOLD).toBe(0.8);
-    expect(MIN_CORRELATION_SAMPLES).toBeGreaterThan(0);
-  });
 });

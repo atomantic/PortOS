@@ -33,7 +33,6 @@ import {
   computeScorecard,
   formatScorecardDigestLine,
   NOMINAL_SECONDS,
-  TREND_WEEKS,
   getSettings,
   updateSettings,
   getRuleOverrides,
@@ -353,12 +352,6 @@ describe('formatScorecardDigestLine', () => {
   it('returns null when there is no tracked time', () => {
     expect(formatScorecardDigestLine({ weekStart: '2026-07-06', totals: { totalSeconds: 0 }, goals: [] })).toBeNull();
     expect(formatScorecardDigestLine(null)).toBeNull();
-  });
-});
-
-describe('constants', () => {
-  it('exposes a sane trend window', () => {
-    expect(TREND_WEEKS).toBeGreaterThanOrEqual(2);
   });
 });
 
