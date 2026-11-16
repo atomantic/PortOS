@@ -259,9 +259,7 @@ and the quality-snapshot publisher merge when the forge reports the PR mergeable
 with its required checks green, pinned to the recorded or published head. CI
 already tests each pull request on its merge ref, skips every runner for a
 `.quality.json`-only change because no guard reads that file, and scheduled CI
-on `main` publishes `Full CI Gate` as the post-merge backstop. Snapshot
-checkouts a guarded merge retained before this change are retired once their PR
-is merged or closed.
+on `main` publishes `Full CI Gate` as the post-merge backstop.
 
 
 ### Browser workload partition
@@ -310,20 +308,13 @@ against the pre-change full-suite job wall on `main` (2026-08-16, run
 ### Test environment cost (happy-dom, and skipping the DOM entirely)
 
 `environment` — the per-file cost of constructing the DOM the test runs in — was
-the single largest phase of the client suite. On the 2026-08-16 full run it was
-`environment 489s` against `tests 384s`: building jsdom cost more than running
-the assertions. Two levers cut it, and both are now applied.
+the largest phase of the client suite. Two levers cut it, both applied.
 
 **Lever 1 — don't build a DOM you don't need.** A test file that never touches
 the DOM opts out with a `// @vitest-environment node` pragma on line 1, and pays
 ~0ms instead of ~0.35s (local) / ~0.7s (CI runner) for its environment. Every
 file under `client/src/{lib,utils,services}` that passes in `node` carries the
-pragma. Measured on the 36 files converted in that sweep (#6008):
-
-| environment | wall |
-| --- | --- |
-| jsdom: 12.69s | 1.76s |
-| node: 0.002s | 0.74s |
+pragma.
 
 When adding a test under `client/src/{lib,utils,services}`, default to the
 pragma and only drop it if the file (or the module it imports) genuinely needs
@@ -333,17 +324,9 @@ so because the *module under test* reaches for a browser global — e.g.
 `document.createElement('canvas')`.
 
 **Lever 2 — a cheaper DOM.** `client/vitest.config.js` runs on happy-dom
-(#6144). Full-suite figures for the 834 files, Node 24, same machine, same
-assertions:
-
-| environment | wall |
-| --- | --- |
-| jsdom 30.0.1: 236.86s | 55.68s |
-| happy-dom 20.14.0: 83.65s | 34.83s |
-
-A 65% cut to the environment phase and a 37% cut to wall. jsdom is no longer a
+(#6144), which cut the environment phase 65% and wall time 37%. jsdom is no longer a
 dependency, so `// @vitest-environment jsdom` is not available as a per-file
-escape hatch — a divergence gets fixed in the test, the way the six below were.
+escape hatch — a divergence gets fixed in the test.
 
 **What differs, when a test breaks after touching the DOM.** happy-dom is not
 bug-compatible with jsdom, and the gaps all showed up as tests rather than as
@@ -398,10 +381,7 @@ than written side by side:
 
 **The ordering is the point, not the values.** An inner bound that reaches the
 budget enclosing it can never report its own failure: the test dies first with a
-bare "test timed out" naming nothing it was waiting on. That has shipped twice —
-`WordplayTrainer`'s 5 s drill bound against Vitest's 5 s default, and a
-`{ timeout: 15000 }` in `BeeperTab.test.jsx` that could never wait past 5 s and
-so never helped. `client/src/test/timeouts.test.js` fails CI on an inline
+bare "test timed out" naming nothing it was waiting on. `client/src/test/timeouts.test.js` fails CI on an inline
 `waitFor`/`findBy*` bound at or above the per-test budget — recognised by the
 option object's keys, so `{ timeout, interval }` counts and a fixture record
 that merely holds a `timeout` field does not. It asserts the EFFECTIVE runtime
@@ -409,11 +389,9 @@ values rather than the module constants, so a `configure()` that stopped being
 applied is caught too. A file that raises its own budget with
 `vi.setConfig({ testTimeout })` is exempt.
 
-5000 ms because Testing Library's 1000 ms default, and the 3000 ms this suite
-ran at before #7448, both sat under what a 2-vCPU public runner needs: shard 1
-failed a different `await`-a-mock-call assertion on most runs while passing
-locally every time. A loaded runner should make a test slower, not red. The cost
-is that a genuinely hung assertion reports in 5 s instead of 3.
+5000 ms because Testing Library's 1000 ms default sat under what a 2-vCPU public
+runner needs. A loaded runner should make a test slower, not red; the cost is that
+a genuinely hung assertion reports in 5 s instead of 3.
 
 **A budget is not a race fix.** It buys a slow runner room; it cannot rescue an
 assertion waiting on a call that already happened with the wrong argument. Those
@@ -551,8 +529,7 @@ first parent *is* the base-branch commit the pull request is diffed against.
 `scripts/ci-base-sha.js` reads it (`HEAD^1`) and exports `CI_BASE_SHA` for the
 rest of the job, so the planner's `git diff <base>...HEAD` resolves without
 deeper history. The planner passes the resulting source paths to the runner,
-which resolves them through its own module graph; Vitest no longer performs
-its own Git diff.
+which resolves them through its own module graph.
 
 Reading the base off the checkout rather than `github.event.pull_request.base.sha`
 is also more correct: GitHub rebuilds the merge ref when the base branch moves,
@@ -564,11 +541,7 @@ suite, need no diff at all, and get no base.
 ### Required checks
 
 The `main` ruleset — which also covers `release` — requires exactly one
-context: **`CI Gate`**. The workflow used to carry two extra jobs solely to
-publish historical required-check names (a `lint` job that only echoed the
-client job's result, and `test (24.x)` on the server job); both are retired. A
-`lint` job exists again since #7448, but it is the real linter doing real work,
-not a name-publishing shim. If a required check is ever added, require
+context: **`CI Gate`**. If a required check is ever added, require
 `CI Gate`, never a job name.
 
 The selected work is split across parallel jobs:
@@ -734,12 +707,10 @@ turns `CI_SHARD=<index>/<count>` into a disjoint path-hash file slice before
 launching Vitest; the union is the complete selected suite. Windows uses exact
 native selectors and never repeats a related-graph traversal. Scoped Linux plans fan out the same way
 (`fansOut()` in the planner): a server `related` plan always does, because its
-import-graph reach is unbounded by the explicit selector count (scoped server
-runs took 6.1 min median, 9.4 p90, on one runner), and either runner does when
-its explicit selection exceeds `MAX_TARGETED_TEST_FILES` (125). That cap used to
-force a full plan for the whole repository; it now keeps the scoped selection
-and only partitions it, so a server-only overflow no longer starts three client
-shards, the DB/browser suites, and a Windows run (#11871). Exact-file plans
+import-graph reach is unbounded by the explicit selector count, and either runner does when
+its explicit selection exceeds `MAX_TARGETED_TEST_FILES` (125). That cap keeps the scoped selection and only partitions it, so a server-only
+overflow does not start three client shards, the DB/browser suites, and a Windows
+run (#11871). Exact-file plans
 under the cap and client `related` plans stay on one runner. Vitest refuses a
 shard count above the number of files it resolved, so a runner fans out only
 when at least that many explicit selectors are files the Linux job actually
@@ -856,39 +827,27 @@ The representative `windowsGitProcess.protocol.test.js` plus `zodCompat.js` diff
 therefore retains the schema's primary-platform coverage while selecting the
 native Windows set on one runner.
 
-Before this support-boundary change, pipeline/full plans selected four Windows
-jobs over the server inventory. At that change, they selected one job over 23
-native suites; the curated set can grow as native contracts are added.
-This is a measured selection/setup reduction, not an execution-time or
-runner-minute speedup claim. The obsolete Scalar package/chunk absence suite and
-its extra post-build invocation are retired; the actual rendered API Explorer
+Pipeline/full plans select one Windows job over the native suites (the curated set
+can grow as native contracts are added). This is a selection/setup reduction, not
+an execution-time or runner-minute speedup claim. The actual rendered API Explorer
 contracts and production client build remain.
 
 ### Windows full-suite capacity
 
-Historical full-run evidence is retained for comparison. On run
-[40420582344](https://github.com/atomantic/PortOS/actions/runs/40420582344), the
-workflow took 25m37s; Windows shard 1 took 24m46s, including 23m20s in its test
-step. Windows shard 2 failed native Git startup and cleanup; the other Windows
-shards passed. This was not a controlled before/after experiment and does not
-establish the startup cause or a runtime improvement from the new selection.
-
-Run [40425197057](https://github.com/atomantic/PortOS/actions/runs/40425197057)
-also exposed a 30-second Windows timeout in the Metal profile cache persistence
-test. Its source requests 130 concurrent learn updates against a temporary JSON
-cache to verify the 128-entry bound, reload and expiry. Those assertions retain
-value on the primary platform; they do not justify a native Windows media suite.
-The new native TUI fixture writes only a small script and synthetic reply per
-shell, with no repository/dependency copy, media payload or model data. Cleanup
-waits for actual ConPTY exit before removing its fixture.
+Windows full-run timing is not a controlled before/after measurement and does not
+establish a startup cause or a runtime improvement from selection changes. The
+Metal profile cache persistence test (130 concurrent learn updates against a
+temporary JSON cache) keeps its value on the primary platform and does not justify
+a native Windows media suite. The native TUI fixture writes only a small script
+and synthetic reply per shell, with no repository/dependency copy, media payload
+or model data; cleanup waits for actual ConPTY exit before removing it.
 
 ### Python sidecar scripts
 
-`scripts/*.py` (the LTX-2, MiniMax, FastVideo, and download sidecars) used to
-be "unclassified changed files" and forced the complete matrix on every edit.
-Vitest's import graph cannot reach into them, but ~45 suites pin their
+`scripts/*.py` (the LTX-2, MiniMax, FastVideo, and download sidecars) are
+not reachable through Vitest's import graph, but ~45 suites pin their
 contracts by reading the `.py` source as text (argparse flags, MLX pins, model
-paths). The planner now resolves the suites naming each changed script with
+paths). The planner resolves the suites naming each changed script with
 `git grep` (`sourceReferencePattern`) and runs exactly them in `files` mode,
 failing closed to the full suite for a script nothing names. A `.py` outside
 `scripts/` is still unclassified.
@@ -1067,9 +1026,8 @@ The complete server, client, DB, lint, build, and smoke suite runs:
 - as a reusable workflow called by a release whose tree has no verifiable gate.
 
 A merge commit on `main` is tested because a PR gate only proves the PR
-against the base it was built on: in a 300-run sample 16 of 36 red PR runs were
-inherited from a broken `main` (two PRs that were each green merged into a red
-result; one direct push skipped the gate). There is no merge coordinator (#12247
+against the base it was built on: two PRs that were each green can merge into a
+red result, and a direct push skips the gate. There is no merge coordinator (#12247
 and #14185 built and removed one).
 
 `.github/workflows/main-health.yml` consumes every finished push or scheduled run
@@ -1282,9 +1240,7 @@ successor run".
 - A changed source's basename lookup (`git grep` of test files, #6363) keeps
   every hit for a unique basename. For a basename several tracked sources
   share (`index.js`, `providers.js`), it keeps only tests inside the source's
-  directory subtree or whose text also names its parent directory, so a
-  `server/cos-runner/index.js` edit no longer selects every test naming any
-  `index.js` (#11870). Import-graph selection still reaches real importers.
+  directory subtree or whose text also names its parent directory (#11870). Import-graph selection still reaches real importers.
 - Unmapped executable files use related-test mode. Unclassified artifacts,
   shared roots/config, or more than 30 executable changes fail safe to full
   CI. More than 125 selected tests on one runner keeps the scoped selection
@@ -1476,38 +1432,15 @@ runner `Complete job` → overall job result. A successful repository checkpoint
 cannot attest the later runner/result-service handoff. Keep the ten-minute impact
 timeout, fail-closed `CI Gate`, and real-job-timeout exclusion in cancel recovery.
 
-#### Retained investigation: #13500
+#### Retained evidence rule
 
-The [original attempt-1 impact job](https://github.com/atomantic/PortOS/actions/runs/40115698658/job/120936398030)
-ran head `9ce1866c45a5ae517b81a82bdc31e3cf4af395e9` on merge `47b63aa` with
-base `8b8ffd5e847a6dca5e5c10a479338c94d561195a`. Its planner ran
-17:21:02.180–17:21:02.977 UTC on 2026-10-24. Checkout post-cleanup and job output
-publication ended by 17:21:04.175; the final retained log line begins runner orphan
-cleanup. The job was cancelled at 17:34:22 with the ten-minute timeout annotation.
-
-Initial API reads returned no steps and some reads failed with HTTP 502. Fresh
-reads during this investigation returned successful conclusions for every step,
-including `Complete job`, completed at 17:21:04. That later evidence narrows the
-first unconfirmed boundary to completion of the runner/job-result handoff; the
-log line alone had left orphan cleanup unconfirmed. The API's successful timeline
-record does not prove the overall job result was accepted.
-
-The matching [runner v2.338.0 finalizer](https://github.com/actions/runner/blob/v2.338.0/src/Runner.Worker/JobExtension.cs)
-performs orphan inspection before completing the `Complete job` context. The
-[runner job completion path](https://github.com/actions/runner/blob/v2.338.0/src/Runner.Worker/JobRunner.cs)
-then drains its reporting queue and submits job completion. These source paths
-identify possible boundaries, not a demonstrated cause in this job. No retained
-runner transport trace or matching public GitHub Status incident establishes
-which operation failed. Neither a repository-created orphan nor a specific
-upstream incident has been proved.
-
-The [existing attempt-2 impact job](https://github.com/atomantic/PortOS/actions/runs/40115698658/job/120941724098)
-passed at the same head from 17:44:31–17:44:48. That is non-reproduction, not a
-cause-specific fix. The request to rerun attempt 1 with debugging was refused
-because it was no longer the current attempt; no further rerun was started.
-Preserve attempt 1. Future recurrence needs the fixed-stage evidence plus the
-runner's completion/queue/transport diagnostics, with sensitive fields redacted,
-before changing lifecycle behavior or attributing a GitHub incident.
+An impact job whose last retained log line is runner orphan cleanup, with every
+step later read back as successful, proves nothing about the runner/job-result
+handoff: that boundary stays unconfirmed. Neither a repository-created orphan nor
+a specific upstream incident has been proved. Preserve the cancelled attempt; a
+recurrence needs the fixed-stage evidence plus the runner's completion, queue and
+transport diagnostics (sensitive fields redacted) before changing lifecycle
+behavior or attributing a GitHub incident.
 
 ### Superseded queued aggregate recovery (#13591)
 
