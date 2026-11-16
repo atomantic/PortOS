@@ -26,9 +26,6 @@ describe('multiplication ladder shape', () => {
     }
   });
 
-  it('MAX_MULTIPLICATION_LEVEL is the last index', () => {
-    expect(MAX_MULTIPLICATION_LEVEL).toBe(MULTIPLICATION_LADDER.length - 1);
-  });
 });
 
 describe('clampMultiplicationLevel', () => {

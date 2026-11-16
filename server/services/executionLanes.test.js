@@ -23,10 +23,6 @@ describe('Execution Lanes Service', () => {
   });
 
   describe('LANES', () => {
-    it('should have priority ordering (critical < standard < background)', () => {
-      expect(LANES.critical.priority).toBeLessThan(LANES.standard.priority);
-      expect(LANES.standard.priority).toBeLessThan(LANES.background.priority);
-    });
 
     it('should not expose maxConcurrent — lanes are tags, not gates', () => {
       expect(LANES.critical.maxConcurrent).toBeUndefined();

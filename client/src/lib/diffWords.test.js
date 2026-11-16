@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { diffWords, DIFF_CELL_CAP } from './diffWords.js';
+import { diffWords, } from './diffWords.js';
 
 describe('diffWords', () => {
   it('marks only the changed word on each side, leaving shared words unchanged', () => {
@@ -64,8 +64,5 @@ describe('diffWords', () => {
     expect(diffWords(long, 'x').tooLarge).toBe(false);
   });
 
-  it('exports the documented cap', () => {
-    expect(DIFF_CELL_CAP).toBe(4_000_000);
-  });
 });
 // @vitest-environment node

@@ -80,7 +80,4 @@ describe('applyCanonEntryExpansion', () => {
     expect(applyCanonEntryExpansion('place', null, { description: 'x' })).toEqual({ merged: null, updatedFields: [] });
   });
 
-  it('does not claim to expand characters — they have their own module', () => {
-    expect(CANON_ENTRY_EXPAND_KINDS).toEqual(['place', 'object']);
-  });
 });

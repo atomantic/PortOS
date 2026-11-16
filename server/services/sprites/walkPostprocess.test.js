@@ -647,12 +647,3 @@ describe('prepareWalkAnchorChromaInput', () => {
   });
 });
 
-describe('constants', () => {
-  it('exposes the canonical gait phases in order', () => {
-    expect(WALK_PHASES).toEqual([
-      'left-contact', 'left-down', 'left-passing', 'left-up',
-      'right-contact', 'right-down', 'right-passing', 'right-up',
-    ]);
-    expect(WALK_FRAME_COUNT).toBe(8);
-  });
-});

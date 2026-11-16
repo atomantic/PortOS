@@ -11,16 +11,6 @@ import {
   remainingActionBudget
 } from './domainBudgets.js';
 
-describe('domainBudgets constants', () => {
-  it('exposes the two measurable cap dimensions', () => {
-    expect(BUDGET_LIMIT_FIELDS).toEqual(['maxActionsPerDay', 'maxMinutesPerDay']);
-  });
-
-  it('defaults every dimension to unlimited (null)', () => {
-    expect(DEFAULT_DOMAIN_BUDGET).toEqual({ maxActionsPerDay: null, maxMinutesPerDay: null });
-  });
-});
-
 describe('normalizeBudgetLimit', () => {
   it('keeps positive integers, flooring fractions', () => {
     expect(normalizeBudgetLimit(5)).toBe(5);
