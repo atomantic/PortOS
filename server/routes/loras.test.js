@@ -320,6 +320,13 @@ describe('LoRA list and suggestions query validation', () => {
     expect(listLoras).not.toHaveBeenCalled();
   });
 
+  it('POST /:filename/effect 400s on a repeated force key and never probes', async () => {
+    vi.mocked(probeLoraEffect).mockClear();
+    const res = await request(makeApp()).post('/api/loras/style.safetensors/effect?force=1&force=true');
+    expect(res.status).toBe(400);
+    expect(probeLoraEffect).not.toHaveBeenCalled();
+  });
+
   it('GET /suggestions 400s on a repeated force key', async () => {
     const res = await request(makeApp()).get('/api/loras/suggestions?force=1&force=true');
     expect(res.status).toBe(400);
