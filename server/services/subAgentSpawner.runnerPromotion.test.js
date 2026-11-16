@@ -48,7 +48,6 @@ vi.mock('./updateChecker.js', () => ({ isUpdateInProgress: vi.fn().mockReturnVal
 vi.mock('./agentOrchestrator.js', () => ({
   completeAgent: vi.fn(),
   spawnAgentForTask: vi.fn().mockResolvedValue('agent-1'),
-  terminateAgent: vi.fn(),
 }));
 // Same reason cosLocalEndpointSlots is mocked in the dispatch-holds suite: the
 // real gate reaches the app registry through agentPromptBuilder, whose graph

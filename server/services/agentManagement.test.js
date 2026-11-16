@@ -93,7 +93,6 @@ vi.mock('./cosAgentLifecycle.js', async (importOriginal) => ({
   readAgentRecordOrUnreadable: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('./cosRunnerClient.js', () => ({
-  terminateAgentViaRunner: vi.fn(),
   killAgentViaRunner: vi.fn(),
   pauseAgentViaRunner: vi.fn(),
   getAgentStatsFromRunner: vi.fn(),
@@ -160,7 +159,7 @@ vi.mock('./creativeDirector/local.js', () => ({
 vi.mock('./creativeDirector/planAdvance.js', () => ({ advanceAfterPlanStepSettled: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./creativeDirector/completionHook.js', () => ({ advanceAfterSceneSettled: vi.fn().mockResolvedValue(undefined) }));
 
-import { handleOrphanedTask, pauseAgent, resumeAgent, relaunchAgent, settleOrphanedCreativeDirectorRun, cleanupOrphanedAgents, terminateAgent, killAgent, getAgentProcessStats } from './agentManagement.js';
+import { handleOrphanedTask, pauseAgent, resumeAgent, relaunchAgent, settleOrphanedCreativeDirectorRun, cleanupOrphanedAgents, killAgent, getAgentProcessStats } from './agentManagement.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import * as fileUtils from '../lib/fileUtils.js';
 import { retireDeadAgent, stampLiExecutionVerdict } from './agentFinalization.js';
@@ -172,7 +171,7 @@ import { advanceAfterPlanStepSettled } from './creativeDirector/planAdvance.js';
 import { advanceAfterSceneSettled } from './creativeDirector/completionHook.js';
 import { updateTask, addTask, getTaskById, getAllTasks, reviveBlockedTask } from './cosTaskStore.js';
 import { forceSpawnTask } from './cos.js';
-import { pauseAgentViaRunner, terminateAgentViaRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
+import { pauseAgentViaRunner, killAgentViaRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
 import * as shellService from './shell.js';
 import { readHostShutdownMarker, clearHostShutdownMarker } from '../lib/hostShutdown.js';
 import { committedDuringRun } from '../lib/gitCommitProbe.js';
@@ -2205,7 +2204,7 @@ describe('close-handler skip-finalization — source contract', () => {
   });
 });
 
-describe('terminate/kill drains batched output before completion — source contract', () => {
+describe('kill drains batched output before completion — source contract', () => {
   function fnBody(src, signature) {
     const start = src.indexOf(signature);
     if (start === -1) return '';
@@ -2224,14 +2223,6 @@ describe('terminate/kill drains batched output before completion — source cont
     const flushPos = body.indexOf('flushRunnerOutputBatcher(agentId)');
     const completePos = body.indexOf('completeAgent(');
     expect(flushPos, 'runner batcher must drain before completeAgent').toBeGreaterThan(-1);
-    expect(flushPos).toBeLessThan(completePos);
-  });
-
-  it('terminateAgent (direct) drains agent.flushOutput before completeAgent', () => {
-    const body = fnBody(AGENT_MANAGEMENT_SRC, 'export async function terminateAgent');
-    expect(body).toMatch(/agent\.flushOutput\?\.\(\)/);
-    const flushPos = body.indexOf('agent.flushOutput?.()');
-    const completePos = body.indexOf('completeAgent(');
     expect(flushPos).toBeLessThan(completePos);
   });
 
@@ -2977,16 +2968,16 @@ describe('lifecycle ledger — pause and interruption', () => {
     clearTimeout(activeAgents.get('agent-1')?.killTimer);
   });
 
-  it('records a termination REQUEST before either arm runs', async () => {
+  it('records a kill REQUEST before either arm runs', async () => {
     activeAgents.set('agent-1', { process: fakeChildProcess(), taskId: 'task-1', runId: 'run-1', pid: 123 });
 
-    await terminateAgent('agent-1');
+    await killAgent('agent-1');
 
     expect(ledgerCalls('run.interrupted')).toEqual([expect.objectContaining({
       runId: 'run-1',
       agentId: 'agent-1',
       taskId: 'task-1',
-      data: expect.objectContaining({ reason: 'terminated-by-user', signal: 'SIGTERM', mode: 'direct' })
+      data: expect.objectContaining({ reason: 'killed-by-user', signal: 'SIGKILL', mode: 'direct' })
     })]);
     clearTimeout(activeAgents.get('agent-1')?.killTimer);
   });
@@ -2995,9 +2986,9 @@ describe('lifecycle ledger — pause and interruption', () => {
     // A runner-spawned agent is absent from activeAgents entirely; a boundary
     // that consulted only that map would record the interrupt with no run id.
     runnerAgents.set('runner-1', { taskId: 'task-1', runId: 'run-9' });
-    terminateAgentViaRunner.mockResolvedValue({ success: true });
+    killAgentViaRunner.mockResolvedValue({ success: true });
 
-    await terminateAgent('runner-1');
+    await killAgent('runner-1');
 
     expect(ledgerCalls('run.interrupted')).toEqual([expect.objectContaining({
       runId: 'run-9', agentId: 'runner-1', data: expect.objectContaining({ mode: 'runner' })
@@ -3039,34 +3030,6 @@ describe('credential-bootstrap process-group teardown', () => {
   const wrappedAgent = (kill = vi.fn()) => Object.assign(
     Object.create(ChildProcess.prototype), { kill, pid: 909090 },
   );
-
-  it.skipIf(process.platform === 'win32')('terminateAgent signals the whole group for a wrapped agent', async () => {
-    const kill = vi.fn();
-    activeAgents.set('agent-1', {
-      process: wrappedAgent(kill), processGroup: true, taskId: 'task-1', runId: 'run-1', pid: 909090,
-    });
-
-    await terminateAgent('agent-1');
-
-    expect(killSpy).toHaveBeenCalledWith(-909090, 'SIGTERM');
-    // The group signal landed, so killProcessTree never falls back to the
-    // wrapper's own pid — the harness behind it is covered.
-    expect(kill).not.toHaveBeenCalled();
-    clearTimeout(activeAgents.get('agent-1')?.killTimer);
-  });
-
-  it.skipIf(process.platform === 'win32')('terminateAgent signals only the child for an unwrapped agent', async () => {
-    const kill = vi.fn();
-    activeAgents.set('agent-1', {
-      process: fakeChildProcess(kill), taskId: 'task-1', runId: 'run-1', pid: 123,
-    });
-
-    await terminateAgent('agent-1');
-
-    expect(killSpy).not.toHaveBeenCalledWith(-123, expect.anything());
-    expect(kill).toHaveBeenCalledWith('SIGTERM');
-    clearTimeout(activeAgents.get('agent-1')?.killTimer);
-  });
 
   it.skipIf(process.platform === 'win32')('killAgent SIGKILLs the whole group for a wrapped agent', async () => {
     const kill = vi.fn();

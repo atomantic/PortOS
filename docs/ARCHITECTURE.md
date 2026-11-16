@@ -307,7 +307,7 @@ Each install pulls from its peers (`server/services/syncOrchestrator.js`).
 - Self-improvement task generation
 
 ### Sub-Agent Spawner (`server/services/subAgentSpawner.js`)
-- `initSpawner()`: CoS Runner connection + runner event handlers, the `task:ready` → spawn and `agent:terminate` → terminate listeners, run-directory pruning, orphan sweep
+- `initSpawner()`: CoS Runner connection + runner event handlers, the `task:ready` → spawn listener, run-directory pruning, orphan sweep
 - The work itself lives in focused siblings: `agentLifecycle.js` (spawn/completion), `agentCliSpawning.js` / `agentTuiSpawning.js` (process spawning), `agentModelSelection.js`, `agentPromptBuilder.js`, `agentRunTracking.js`
 
 ### Agent Orchestrator (`server/services/agentOrchestrator.js`)

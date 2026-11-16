@@ -2,11 +2,11 @@
 // at the top for clarity and to match the convention in other test files.
 
 // ── Listener-guard suite support (see "CoS event listener rejection guards").
-// `initSpawner()` wires the real `task:ready` / `agent:terminate` listeners onto
+// `initSpawner()` wires the real `task:ready` listener onto
 // the shared `cosEvents` emitter; these mocks keep that wiring off the network,
 // the runner socket and the agent store, and let a single test force the one
 // rejection it is about.
-const listenerGuardState = vi.hoisted(() => ({ loadStateError: null, terminateError: null }));
+const listenerGuardState = vi.hoisted(() => ({ loadStateError: null }));
 
 vi.mock('./providerStatus.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -52,9 +52,6 @@ vi.mock('./agentOrchestrator.js', async (importOriginal) => {
   return {
     ...actual,
     spawnAgentForTask: vi.fn().mockResolvedValue(undefined),
-    terminateAgent: vi.fn(async () => {
-      if (listenerGuardState.terminateError) throw listenerGuardState.terminateError;
-    }),
   };
 });
 
@@ -224,7 +221,6 @@ describe('Worktree & metadata flag helpers', () => {
       expect(metadata2.openPR).toBe(true);
     });
   });
-
 });
 
 
@@ -263,7 +259,6 @@ describe('CoS event listener rejection guards', () => {
     cosEvents.off('log', collectLog);
     process.off('unhandledRejection', collectUnhandled);
     listenerGuardState.loadStateError = null;
-    listenerGuardState.terminateError = null;
   });
 
   it('logs a task:ready dispatch failure with the task id instead of leaking a rejection', async () => {
@@ -280,17 +275,4 @@ describe('CoS event listener rejection guards', () => {
     expect(errors[0].taskId).toBe('task-x');
   });
 
-  it('logs an agent:terminate failure with the agent id instead of leaking a rejection', async () => {
-    listenerGuardState.terminateError = new Error('Agent not found');
-
-    cosEvents.emit('agent:terminate', 'agent-unknown');
-    await flushMicrotasks();
-
-    expect(unhandled).toEqual([]);
-    const errors = logs.filter(entry => entry.level === 'error');
-    expect(errors).toHaveLength(1);
-    expect(errors[0].message).toContain('agent-unknown');
-    expect(errors[0].message).toContain('Agent not found');
-    expect(errors[0].agentId).toBe('agent-unknown');
-  });
 });

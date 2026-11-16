@@ -706,7 +706,7 @@ export async function spawnDirectly({
     const agentData = activeAgents.get(agentId);
     const duration = Date.now() - (agentData?.startedAt || Date.now());
 
-    // If terminateAgent scheduled a SIGKILL fallback, the process exited
+    // If pauseAgent or killAgent scheduled a SIGKILL fallback, the process exited
     // before it fired — clear it so we don't leak the timer.
     if (agentData?.killTimer) {
       clearTimeout(agentData.killTimer);

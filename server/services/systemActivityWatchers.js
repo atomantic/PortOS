@@ -49,7 +49,6 @@ async function attachWatchers() {
   }
 
   listen(cosEvents, 'agent:spawned', () => noteSystemActivity('agents', 'start'));
-  listen(cosEvents, 'agent:terminate', () => noteSystemActivity('agents', 'cancellation'));
   listen(cosEvents, 'agent:completed', (agent) => noteSystemActivity('agents', agentCompletionPhase(agent)));
   listen(cosEvents, 'tasks:changed', (change) => {
     const phase = taskQueuePhase(change);

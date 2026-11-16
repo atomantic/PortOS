@@ -6,7 +6,7 @@ import { isHostShuttingDown } from '../lib/hostShutdown.js';
  *
  * Owns `initSpawner()`: the CoS Runner connection, the runner event handlers
  * (`agent:output` / `agent:completed` / `agents:orphaned` / `agent:error`), the
- * `task:ready` → spawn and `agent:terminate` → terminate listeners, run-directory
+ * `task:ready` → spawn listener, run-directory
  * pruning, and the delayed orphan sweep. Nothing else.
  *
  * Not a barrel: consumers import `initSpawner` (`bootstrap.js`) and `loadSlashdoCommand` (CoS agent prompts) from
@@ -44,7 +44,7 @@ import { acquireCosGlobalSlot } from './cosAdmissionReservations.js';
 import { releaseAgentReservation } from './agentMaintenanceReservations.js';
 // The three lifecycle transitions this wiring drives come from the facade, not the leaves implementing them.
 // Nothing the facade imports imports this module back, so the edge stays one-directional.
-import { completeAgent, spawnAgentForTask, terminateAgent } from './agentOrchestrator.js';
+import { completeAgent, spawnAgentForTask } from './agentOrchestrator.js';
 import { parseRunnerSecurityScanEvidence } from '../lib/securityScanEvidence.js';
 
 const RUNS_DIR = PATHS.runs;
@@ -386,12 +386,6 @@ async function runInitSpawner() {
   cosEvents.on('task:ready', (task) =>
     handleTaskReady(task).catch(err =>
       emitLog('error', `Task ${task?.id} could not be dispatched: ${err?.message || err}`, { taskId: task?.id })));
-
-  // `terminateAgent` throws for an unknown or already-gone agent id, and this
-  // listener is not on a request path — an unguarded rejection would escape.
-  cosEvents.on('agent:terminate', (agentId) =>
-    terminateAgent(agentId).catch(err =>
-      emitLog('error', `Terminate request for agent ${agentId} failed: ${err?.message || err}`, { agentId })));
 
   // Clean up orphaned agents after a short delay (let other services finish init).
   // setTimeout runs outside the request lifecycle, so guard the async callback.
