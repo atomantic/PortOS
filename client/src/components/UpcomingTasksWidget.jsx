@@ -138,8 +138,6 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
                 <span className="text-sm font-medium text-white truncate">
                   {task.description}
                 </span>
-                  </span>
-                )}
               </div>
               <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
                 <span className="flex items-center gap-1">
@@ -173,8 +171,6 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
                 <span className="text-sm font-medium text-gray-300 truncate">
                   {task.description}
                 </span>
-                  </span>
-                )}
               </div>
               <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
                 <span className="flex items-center gap-1">
