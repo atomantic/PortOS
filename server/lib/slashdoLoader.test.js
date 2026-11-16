@@ -141,6 +141,13 @@ describe('immutable slashdo staging', () => {
     expect(await writeResolvedSlashdoBody('../outside', 'Body')).toBeNull();
     await expect(writeResolvedSlashdoBody('review', 'Body', { files: { '../outside.md': 'Outside' } })).rejects.toThrow('Invalid slashdo supporting file');
     await expect(writeResolvedSlashdoBody('review', 'Body', { files: { 'invalid.md': null } })).rejects.toThrow('Invalid slashdo supporting file');
+    await expect(writeResolvedSlashdoBody('review', 'Body', { files: { '../outside.sh': 'Outside' } })).rejects.toThrow('Invalid slashdo supporting file');
+    await expect(writeResolvedSlashdoBody('review', 'Body', { files: { 'payload.js': 'x' } })).rejects.toThrow('Invalid slashdo supporting file');
     expect(existsSync(join(fixtureRoot, 'outside.md'))).toBe(false);
+  });
+
+  it('stages the runner script the slashdo bundle now ships beside its markdown', async () => {
+    const staged = await writeResolvedSlashdoBody('review', 'Body', { files: { 'local-cli-runner.sh': '#!/bin/bash\n' } });
+    expect(readFileSync(join(dirname(staged), 'lib', 'local-cli-runner.sh'), 'utf8')).toBe('#!/bin/bash\n');
   });
 });

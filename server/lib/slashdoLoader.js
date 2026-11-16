@@ -81,7 +81,7 @@ export async function writeResolvedSlashdoBody(commandName, body, { files = {} }
   if (!body || !isBareName(commandName)) return null;
   const entries = Object.entries(files).sort(([a], [b]) => a.localeCompare(b));
   for (const [name, content] of entries) {
-    if (!/^[a-zA-Z0-9_-][a-zA-Z0-9._-]*\.md$/.test(name) || typeof content !== 'string') {
+    if (!/^[a-zA-Z0-9_-][a-zA-Z0-9._-]*\.(?:md|sh)$/.test(name) || typeof content !== 'string') {
       throw new Error('Invalid slashdo supporting file');
     }
   }
