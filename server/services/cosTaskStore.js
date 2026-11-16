@@ -34,7 +34,7 @@ import { REQUEUED_AT_KEY } from '../lib/taskRequeue.js';
 import { resolveTaskStatusTransition, isTerminalTaskStatus } from '../lib/taskStatusTransition.js';
 import { isInvestigationTask } from '../lib/investigationTasks.js';
 import { PAUSED_BLOCKED_CATEGORIES, USER_DECISION_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
-import { splitTaskPromptFields, TASK_PROMPT_KEY, TASK_CONTEXT_KEY } from '../lib/cosTaskPrompt.js';
+import { isPromptPayload, splitTaskPromptFields } from '../lib/cosTaskPrompt.js';
 import { normalizeOrchestrationMode, normalizeOrchestrationProfile } from '../lib/orchestrationProfile.js';
 import { loadState, withStateLock, readAgentsStateForSafetyCheck } from './cosState.js';
 import { activeAgents, runnerAgents, hasActiveTaskOwner } from './agentState.js';
@@ -47,59 +47,14 @@ import { buildQueuedTask } from './cosTaskIntake.js';
 import { canChallenge, getChallengeCount, buildChallengePatch, buildChallengeResolutionPatch, classifyRecheckOutcome, MAX_CHALLENGES_PER_TASK } from './cosChallenge.js';
 import { runLocalCodeReview, getCodeReviewDefaults } from './codeReview.js';
 
-// First non-empty line of a string — used by addTask's dedup, since stored
-// descriptions are collapsed to their first line on create (see #16466). Declared
+// First non-empty line of a string — addTask's duplicate key, so two tasks that
+// differ only in a multi-line body still collide. Declared
 // in the dependency-free text leaf and re-exported here at the address this
 // module's callers already import it from.
 import { firstLine } from '../lib/textUtils.js';
 export { firstLine };
 
 const CLAIM_KEY_SET = new Set(CLAIM_METADATA_KEYS);
-
-// Heading the update path stamps on text it lifts out of a multi-line description
-// edit and into the newline-safe note, so the provenance survives a later read.
-const DESCRIPTION_OVERFLOW_HEADING = '(from description)';
-
-/**
- * Normalize a multi-line `description` on the UPDATE path, preserving the body.
- *
- * The task files once held a description as ONE line
- * (`- [ ] #id | PRIORITY | <description>`) and read only that first line; the
- * stored form keeps newlines since #16407, and retiring this collapse is #16466. `addTask` has collapsed a
- * multi-line description for exactly that reason since #4153 — `writeTaskUpdate`
- * did not, so saving a multi-line edit from the task editor's textarea wrote the
- * extra lines into the file as free text. Reparsing then silently truncated the
- * description, scraped any `  - key: value` line into the task's OWN metadata
- * (re-targeting its app/provider/prompt), and minted a phantom auto-approved
- * task out of any pasted `- [ ] #id | …` row that the spawner would then run
- * (#7240).
- *
- * Unlike `addTask` this never DROPS the remainder. The full submitted text goes
- * to `metadata.prompt` when the task has none; when it already has one, the text
- * is appended to `metadata.context` instead, because `updateTask` must not
- * overwrite a real prompt (the contract in `server/lib/cosTaskPrompt.js`). Both
- * fields round-trip newlines through the JSON sentinel, and `taskContextBlock`
- * already renders prompt + note together — nothing is lost and nothing is
- * silently replaced. An explicitly-cleared prompt (`''`) counts as present, the
- * same absent-vs-cleared rule the rest of the store follows.
- *
- * Returns `null` when there is nothing to normalize; never mutates its input.
- */
-function normalizeUpdatedDescription(description, metadata) {
-  if (typeof description !== 'string' || !description.includes('\n')) return null;
-  const nextMetadata = { ...metadata };
-  if (typeof nextMetadata[TASK_PROMPT_KEY] === 'string') {
-    const block = `${DESCRIPTION_OVERFLOW_HEADING}\n${description}`;
-    const existing = typeof nextMetadata[TASK_CONTEXT_KEY] === 'string' ? nextMetadata[TASK_CONTEXT_KEY] : '';
-    // Re-saving the same edit must not grow the note without bound.
-    if (!existing.includes(block)) {
-      nextMetadata[TASK_CONTEXT_KEY] = existing ? `${existing}\n\n${block}` : block;
-    }
-  } else {
-    nextMetadata[TASK_PROMPT_KEY] = description;
-  }
-  return { description: firstLine(description), metadata: nextMetadata };
-}
 
 // The `blockedCategory` vocabulary lives in `lib/taskBlockCategories.js` — the
 // pause logic, the failure reaper below, and the investigation auto-retry all
@@ -634,40 +589,22 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
     if (id !== newTask.id) newTask = { ...newTask, id };
   }
 
-  // Route a multi-line context payload to `metadata.prompt` (#4153). Applied to
-  // BOTH branches — the raw path is how the generator, the reference-watch
-  // analysis, and the repo-study filer queue their pre-built tasks, and they
-  // carry the same kind of multi-thousand-character body the direct-write path
-  // does. One classification, at CREATE only: `updateTask` deliberately leaves
-  // both fields alone, because the task editor's textarea is seeded from the
-  // NOTE and re-classifying a multi-line edit of it would overwrite the task's
-  // real prompt. A producer that already wrote `metadata.prompt` wins over the
-  // inference. See `server/lib/cosTaskPrompt.js` for the full contract.
-  // Markdown task rows are one-line records. Preserve every generated prompt
-  // in the newline-safe metadata field before persistence, including raw
-  // on-demand tasks that bypass the queue generator's normalization pass.
+  // Classify a multi-line `context` payload as `metadata.prompt` (#4153), at CREATE
+  // only: the task editor's textarea is seeded from the NOTE, so re-classifying
+  // on `updateTask` would overwrite the task's real prompt. A producer-written
+  // `metadata.prompt` wins over the inference. See `server/lib/cosTaskPrompt.js`.
   //
-  // This runs BEFORE the context reclassification below on purpose: a producer
-  // that hands over a multi-line description AND a multi-line context note (the
-  // pr-reviewer generator's security-scan summary) means the description is the
-  // prompt and the note is the note. Reclassifying first promoted the note to
-  // `prompt`, which then counted as an explicit producer prompt and silently
-  // discarded the stage instructions — Stage 2 ran with no gate rules and no
-  // output contract.
-  if (typeof newTask.description === 'string' && newTask.description.includes('\n')) {
-    newTask = {
-      ...newTask,
-      description: firstLine(newTask.description),
-      metadata: {
-        ...(newTask.metadata || {}),
-        prompt: typeof newTask.metadata?.prompt === 'string'
-          ? newTask.metadata.prompt
-          : newTask.description,
-      },
-    };
+  // A multi-line DESCRIPTION is stored as written and is itself the prompt:
+  // prompt builders fall back to it when there is no `metadata.prompt`. Skip the
+  // promotion in that case — a producer that hands over a multi-line description
+  // AND a multi-line context note (the pr-reviewer generator's security-scan
+  // summary) means the description is the prompt and the note stays a note;
+  // promoting the note made it the "explicit" prompt, which Stage 2 then rendered
+  // as its instructions.
+  if (!isPromptPayload(newTask.description)) {
+    const splitMetadata = splitTaskPromptFields(newTask.metadata);
+    if (splitMetadata !== newTask.metadata) newTask = { ...newTask, metadata: splitMetadata };
   }
-  const splitMetadata = splitTaskPromptFields(newTask.metadata);
-  if (splitMetadata !== newTask.metadata) newTask = { ...newTask, metadata: splitMetadata };
 
   // Never accept proof supplied by an intake caller. A record with prior run
   // accounting is not a new episode merely because it was inserted here.
@@ -1141,26 +1078,19 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
     if (updatedMetadata[key] === undefined) delete updatedMetadata[key];
   });
 
-  // Collapse a multi-line description to one line, re-homing the body into
-  // prompt/context rather than dropping it (#7240). Storage keeps newlines since
-  // #16407; retiring this collapse is #16466.
-  const normalizedDescription = normalizeUpdatedDescription(updates.description, updatedMetadata);
-  const nextMetadata = normalizedDescription ? normalizedDescription.metadata : updatedMetadata;
-  const nextDescription = normalizedDescription ? normalizedDescription.description : updates.description;
-
   // Update the task. Through `toRepresentableTask` so the object we return and
   // emit on `tasks:changed` is the one the file will hold — repairing only inside
   // generateTasksMarkdown would leave every consumer reading the pre-repair status
   // until something re-read the file (#7239).
   const updatedTask = toRepresentableTask({
     ...tasks[taskIndex],
-    ...(updates.description && { description: nextDescription }),
+    ...(updates.description && { description: updates.description }),
     ...(updates.priority && {
       priority: updates.priority.toUpperCase(),
       priorityValue: PRIORITY_VALUES[updates.priority.toUpperCase()] || 2
     }),
     ...(updates.status && { status: updates.status }),
-    metadata: nextMetadata
+    metadata: updatedMetadata
   });
 
   tasks[taskIndex] = updatedTask;

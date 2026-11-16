@@ -188,8 +188,8 @@ export async function handlePipelineProgression(task, agentId, success) {
     for (const key of ['provider', 'providerId', 'model', 'effort', 'executionOptions']) delete nextTask.metadata[key];
   }
   // The previous stage's agent payload must not travel: `description` above IS
-  // this stage's prompt, and addTask only promotes it to `metadata.prompt` when
-  // none is set — an inherited one made every stage after the first run on the
+  // this stage's prompt, and a `metadata.prompt` takes precedence over it for
+  // prompt builders — an inherited one made every stage after the first run on the
   // stage before it's instructions.
   delete nextTask.metadata.prompt;
   // Each stage is a new task with its own spawn budget. The prior stage's

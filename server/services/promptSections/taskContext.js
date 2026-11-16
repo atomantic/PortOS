@@ -118,10 +118,10 @@ function resolveTaskFileRef(ref) {
 }
 
 /**
- * Undo the COS-TASKS.md round-trip split before rendering. The queue path in
- * `cosTaskGenerator.js` moves a generated multi-line prompt into `metadata.prompt`
- * (`metadata.context` before #4153) and keeps only its first line as `description`,
- * so the payload leads with a verbatim copy of `description` and every render path
+ * Undo the legacy one-line-description split before rendering. Tasks stored before
+ * #16466 (and peers not yet upgraded) hold a generated multi-line prompt in
+ * `metadata.prompt` (`metadata.context` before #4153) with only its first line as
+ * `description`, so the payload leads with a verbatim copy of `description` and every render path
  * would emit both (the reported double `# SWARM MODE` header).
  *
  * When the payload's first non-empty line equals `description`, fold it into

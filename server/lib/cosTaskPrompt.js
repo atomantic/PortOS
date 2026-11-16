@@ -1,12 +1,14 @@
 /**
  * The CoS task prompt/note split (#4153).
  *
- * `metadata.prompt` is the full agent-facing
- * payload, `metadata.context` the one-line human note (a newline in `description`
- * corrupts `COS-TASKS.md`, which is why prompts once hid in the escaped `context`).
+ * `metadata.prompt` is an agent-facing payload kept apart from `description`,
+ * `metadata.context` the human note beside it. A task with no `prompt` is
+ * rendered from its `description` alone, which stores newlines as written since
+ * #16407 (#16466 stopped `addTask`/`updateTask` collapsing it into `prompt`).
  *
- * Reads stay tolerant of the legacy shape (peers hold pre-split tasks; migration 270
- * only rewrites local files). Pure, no imports, safe for the migration to reuse.
+ * Reads stay tolerant of the older shapes: rows and peers from before keep a
+ * collapsed one-line `description` with the body in `prompt` (or, before #4153,
+ * in `context`); migration 270 only rewrites local files. Pure, no imports, safe for the migration to reuse.
  */
 
 export const TASK_PROMPT_KEY = 'prompt';
