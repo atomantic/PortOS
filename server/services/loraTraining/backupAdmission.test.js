@@ -28,7 +28,6 @@ vi.mock('./db.js', () => ({
     rows.set(id, typeof patch === 'function' ? patch(current) : { ...current, ...patch });
     return rows.get(id);
   },
-  deleteRun: async (id) => { await beforeRowWrite(id); rows.delete(id); return { ok: true, id }; },
   listRuns: async () => [...rows.values()],
   listActiveRuns: async () => [],
 }));
@@ -51,7 +50,7 @@ vi.mock('../mediaJobQueue/index.js', () => ({
 
 const { PATHS } = await import('../../lib/fileUtils.js');
 const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
-const { deleteTrainingRun, promoteCheckpoint, runDir } = await import('./index.js');
+const { promoteCheckpoint, runDir } = await import('./index.js');
 const { deleteLora, writeLoraSidecar } = await import('../loras.js');
 
 const LORA = 'lora-example-trained.safetensors';
@@ -114,26 +113,7 @@ describe('checkpoint promotion', () => {
   });
 });
 
-describe('run and LoRA deletion', () => {
-  it('keeps the run artifacts, adapter and row until the cut that captured them finishes', async () => {
-    const release = await acquireBackupSnapshotCut();
-    const deletion = deleteTrainingRun('run-1', { withLora: true });
-    await settleSeveral();
-    expect(existsSync(runDir('run-1'))).toBe(true);
-    expect(await readdir(PATHS.loras)).toContain(LORA);
-    expect(rows.has('run-1')).toBe(true);
-    release();
-    expect(await deletion).toEqual({ ok: true, id: 'run-1' });
-    expect(existsSync(runDir('run-1'))).toBe(false);
-    expect(await readdir(PATHS.loras)).not.toContain(LORA);
-  });
-
-  it('refuses to delete an active run before touching its files', async () => {
-    seedRun({ status: 'running' });
-    await expect(deleteTrainingRun('run-1')).rejects.toMatchObject({ code: 'RUN_ACTIVE' });
-    expect(existsSync(runDir('run-1'))).toBe(true);
-  });
-
+describe('LoRA deletion', () => {
   it('holds a manager deletion until the cut finishes, since other rows may still name the LoRA', async () => {
     const release = await acquireBackupSnapshotCut();
     const deletion = deleteLora(LORA);

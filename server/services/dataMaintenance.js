@@ -9,7 +9,6 @@ import { createMutex } from '../lib/asyncMutex.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { listJobs } from './mediaJobQueue/index.js';
 import { trainingRunsBusy } from './dataManagerBusy.js';
-import { getActiveCaptionRun } from './loraDatasetCaption.js';
 
 // Operations own their paths. Neither the client nor a preview can supply one.
 export const MAINTENANCE_OPERATIONS = Object.freeze([
@@ -59,13 +58,10 @@ async function inspect(directory, logicalDirectory = directory) {
 }
 
 async function assertIdle() {
-  // Retired producers cannot start. Outstanding generation/caption requests may
-  // still own dataset inputs, including work admitted by the outgoing server.
+  // Retired producers cannot start; queued or running media work may still own dataset inputs.
   if (listJobs().some(job => ['queued', 'running'].includes(job.status))) throw fail('Media work is queued or running. Wait for it to finish or cancel it explicitly.', 'MAINTENANCE_BUSY');
   const busy = await trainingRunsBusy();
   if (busy.busy !== false) throw fail(busy.reason || 'Training ownership could not be determined.', 'MAINTENANCE_BUSY');
-  const datasets = await readdir(join(PATHS.data, 'lora-datasets')).catch(error => missing(error) || []);
-  if (datasets.some(id => getActiveCaptionRun(id))) throw fail('Dataset captioning is still active; finish or cancel it first.', 'MAINTENANCE_BUSY');
 }
 
 export async function getMaintenanceInventory() {

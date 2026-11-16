@@ -10,17 +10,13 @@ import { request } from '../lib/testHelper.js';
 const svc = vi.hoisted(() => ({ samplesDir: '' }));
 vi.mock('../services/loraTraining/index.js', () => ({
   cancel: vi.fn(() => false),
-  clearDatasetForDeletedLora: vi.fn(),
-  deleteRun: vi.fn(),
   getRunRequired: vi.fn(async (id) => ({ id, status: 'completed' })),
   listCheckpoints: vi.fn(),
   listRuns: vi.fn(),
   listSamples: vi.fn(),
   promoteCheckpoint: vi.fn(),
-  resumeTrainingRun: vi.fn(),
   runDir: vi.fn(),
   runSamplesDir: () => svc.samplesDir,
-  startTrainingRun: vi.fn(),
 }));
 vi.mock('../services/settings.js', () => ({ getSettings: async () => ({}) }));
 vi.mock('../services/mediaJobQueue/index.js', () => ({

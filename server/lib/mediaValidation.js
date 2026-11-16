@@ -161,52 +161,6 @@ export const beeperOutboxListSchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
 }).strict();
 
-// Shared LoRA-training parameter bounds — used by both the settings-slice
-// defaults and the per-run override on POST /api/lora-training/runs.
-const loraTrainingParamsSchema = z.object({
-  steps: z.number().int().min(10).max(10000).optional(),
-  rank: z.number().int().min(1).max(128).optional(),
-  learningRate: z.number().positive().max(0.1).optional(),
-  resolution: z.union([z.literal(512), z.literal(768), z.literal(1024)]).optional(),
-  seed: z.number().int().optional(),
-  checkpointEvery: z.number().int().min(0).max(5000).optional(),
-  sampleEvery: z.number().int().min(0).max(5000).optional(),
-  samplePrompt: z.string().max(2000).optional(),
-  // Per-run frozen-base overrides (issue #1321/#1407), mflux runtime only.
-  // `baseQuant` picks the quant of the frozen base — 16 = unquantized bf16, 8/4
-  // = QLoRA bit-width — letting a run opt into a heavier/lighter base than the
-  // memory-derived default without a code change. `lowRam` toggles the on-disk
-  // latent-cache spill. `null` is the form's "Auto": a deliberate clear that
-  // forces the deriveMfluxMemoryConfig tier even when a saved default exists
-  // (distinct from absent, which lets the saved default merge through). An
-  // values remain accepted as historical configuration after retirement.
-  baseQuant: z.union([z.literal(4), z.literal(8), z.literal(16)]).nullable().optional(),
-  lowRam: z.boolean().nullable().optional(),
-});
-
-// Retired settings remain accepted for older installs and clients. They no
-// longer authorize launch/resume; recovery still honors display and stall settings.
-export const loraTrainingConfigSchema = z.object({
-  // Both nullable — the caption-model picker clears them to null on "Auto"
-  // (defer to the server's vision-model auto-pick).
-  captionProviderId: z.string().max(128).nullable().optional(),
-  captionModel: z.string().max(256).nullable().optional(),
-  defaults: loraTrainingParamsSchema.optional(),
-  // Historical parameters are inert and preserved, not rewritten on upgrade.
-  segmentation: z.boolean().optional(),
-  segmentCooldownSec: z.number().int().min(0).max(3600).optional(),
-  // Surviving trainers retain stall detection; automatic resumes are retired.
-  stallWatchdog: z.boolean().optional(),
-  // Auto display-sleep during training on Apple Silicon (default ON — the
-  // `!== false` read lives in services/loraTraining/displayPower.js
-  // isDisplaySleepEnabled). Sleeps the Mac's display when a run starts
-  // and wakes it when it finishes. This is the validated mitigation for the GPU
-  // watchdog kernel panic (mlx #3267): an active display makes WindowServer
-  // contend for the GPU, which hard-reboots the box during heavy sustained
-  // training. Set false if you drive the display some other way (SSH headless).
-  displaySleep: z.boolean().optional(),
-});
-
 // === Local LLM backends (Ollama / LM Studio) ===
 export const localLlmBackendSchema = z.enum(['ollama', 'lmstudio']);
 // modelId is passed positionally to the `lms` CLI (execFile, no shell) — reject

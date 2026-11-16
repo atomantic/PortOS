@@ -101,11 +101,6 @@ export async function listRuns({ status = null, characterId = null, datasetId = 
   return result.rows.map(rowToRun).filter(Boolean);
 }
 
-export async function deleteRun(id) {
-  await query('DELETE FROM lora_training_runs WHERE id = $1', [id]);
-  return { ok: true, id };
-}
-
 /** Runs persisted as queued/running — boot-time reconcile targets. */
 export async function listActiveRuns() {
   const result = await query(

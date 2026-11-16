@@ -64,7 +64,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
   {
     id: 'lora-dataset-workflows',
     status: 'admitted',
-    modules: ['services/loraDatasets.js', 'services/loraDatasetGenerate.js'],
+    modules: ['services/loraDatasets.js'],
   },
   { id: 'voice-studio', status: 'admitted', modules: ['services/voice/studio.js'] },
   {

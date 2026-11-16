@@ -3,7 +3,7 @@
  * a YouTube URL via yt-dlp, land it in the shared music library (data/music/),
  * and create a Track record pointing at it.
  *
- * Mirrors the render.js / loraDatasetCaption.js job pattern: kickoff returns a
+ * Mirrors the render.js job pattern: kickoff returns a
  * jobId immediately, the download runs detached, progress streams over the
  * shared SSE helpers, and the client attaches with useSseProgress. The yt-dlp
  * download+extract itself is the shared core in `ytdlpAudioImport.js` (reused
