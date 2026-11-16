@@ -293,7 +293,7 @@ describe('stage checklist and project options', () => {
     expect(within(drawer).getByRole('tab', { name: /^Project/ })).toHaveAttribute('aria-selected', 'true');
     expect(within(drawer).getByLabelText('Design and composition media')).toHaveValue('code-images-video');
     fireEvent.change(screen.getByLabelText('Design and composition media'), { target: { value: 'code-only' } });
-    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(project.id, { mediaMode: 'code-only' }, { silent: true }));
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(project.id, { mediaMode: 'code-only' }, expect.objectContaining({ edit: true })));
     fireEvent.click(screen.getByLabelText('Local video gen'));
     await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(project.id, expect.objectContaining({
       mode: 'autonomous', automation: expect.objectContaining({ tools: ['image:local', 'video:local'], guidance: 'g', budgetUsd: 5 }),

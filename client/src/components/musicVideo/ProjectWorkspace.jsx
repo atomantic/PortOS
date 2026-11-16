@@ -158,12 +158,6 @@ export default function ProjectWorkspace({
   const [compositionSavePending, setCompositionSavePending] = useState(0);
   const timedTextSaveChain = useRef(Promise.resolve());
   const editProjectLocal = (patch) => patchProject(selected.id, patch);
-  // The finishing film look, saved whole from the image viewer's editor ("Use on project").
-  const saveFilmLook = (filmLook) => {
-    const projectId = selected.id;
-    return updateMusicVideoProject(projectId, { filmLook }, { silent: true })
-      .then((saved) => patchProject(projectId, { filmLook: saved.filmLook ?? null }));
-  };
   // Sent with its origin and asking for the edit result: a reply with one patches the board and its
   // own change broadcast is skipped. Any other reply (a cast or reference change), or a take decision
   // that started meanwhile, reloads instead.
@@ -185,6 +179,8 @@ export default function ProjectWorkspace({
       .finally(() => setCompositionSavePending((count) => count - 1));
     return timedTextSaveChain.current;
   };
+  // The finishing film look, saved whole from the image viewer's editor ("Use on project").
+  const saveFilmLook = (filmLook) => saveProjectFields({ filmLook });
 
   // The render slot is page-wide; it gates this project's track change and header only while it renders this project.
   const renderTargetsSelected = !!(renderJob.active && selected && renderJob.context === selected.id);
@@ -508,9 +504,7 @@ export default function ProjectWorkspace({
     replaceProject,
     editProjectLocal,
     saveProjectFields,
-    saveMediaMode: (mediaMode) => updateMusicVideoProject(selected.id, { mediaMode }, { silent: true })
-      .then((project) => patchProject(project.id, { mediaMode: project.mediaMode, updatedAt: project.updatedAt }))
-      .catch((err) => toast.error(err?.message || 'Failed to save the media mode')),
+    saveMediaMode: (mediaMode) => saveProjectFields({ mediaMode }),
     setPickerTarget,
     onAddReference: () => setPickerTarget({ type: 'reference' }),
     onAnalyze: () => onAnalyze(),
