@@ -1,36 +1,19 @@
 /**
- * WebVTT / SRT subtitle → readable plain-text transcript.
+ * WebVTT/SRT subtitle → readable prose: `vttToPlainText(vtt)` (paragraph-joined transcript), `vttToLines(vtt)` (cleaned caption lines), `cleanCaptionLine(line)`; used by the brain YouTube ingest.
  *
- * WebVTT/SRT → readable prose. `vttToPlainText(vtt)` (paragraph-joined transcript), `vttToLines(vtt)`
- * (cleaned caption lines), `cleanCaptionLine(line)`. Collapses YouTube auto-captions' rolling
- * repetition and strips inline `<c>`/timestamp markup. Used by the brain YouTube ingest.
- *
- * yt-dlp hands us caption files, not prose. YouTube's AUTO-generated captions in
- * particular are a rolling two-line display: every cue repeats the tail of the
- * previous cue and appends a few new words, so a naive "strip the timings and
- * join" produces a transcript where most of the text appears two or three
- * times. This module owns the de-duplication and inline-tag stripping so the
- * ingest service can stay about orchestration.
- *
- * Pure and side-effect free — no fs, no network — so the messy parsing rules are
- * pinned by unit tests rather than only exercised behind a yt-dlp spawn.
+ * yt-dlp hands us caption files, and YouTube's AUTO captions are a rolling two-line display (each cue repeats the previous cue's tail plus a few new words), so "strip timings and join" repeats most text two or three times; this owns the de-duplication and inline `<c>`/timestamp stripping so ingest stays about orchestration. Pure (no fs/network), so the messy rules are unit-pinned.
  */
 
-// A cue-timing line is the only line that must contain `-->`. VTT allows both
-// `HH:MM:SS.mmm` and `MM:SS.mmm`; SRT uses a comma for the decimal separator.
-// Matching on the arrow alone covers every variant (plus VTT's trailing cue
-// settings, e.g. `align:start position:0%`) without a brittle time regex.
+// A cue-timing line is the only one that must contain `-->`; matching on the arrow alone covers `HH:MM:SS.mmm`, `MM:SS.mmm`, SRT's comma decimal and VTT trailing cue settings (`align:start position:0%`) without a brittle time regex.
 const CUE_TIMING_RE = /-->/;
 
 // WebVTT header + block-level metadata that carries no spoken content.
 const HEADER_RE = /^(WEBVTT|Kind:|Language:|NOTE\b|STYLE\b|REGION\b|X-TIMESTAMP-MAP)/;
 
-// SRT cue indices are a bare integer on their own line. VTT cue *identifiers*
-// can be arbitrary text, but yt-dlp emits numeric ones, so this covers both.
+// SRT cue indices are a bare integer on their own line; VTT identifiers can be arbitrary text but yt-dlp emits numeric ones.
 const CUE_INDEX_RE = /^\d+$/;
 
-// Inline karaoke/positioning markup: `<00:00:01.234>`, `<c.colorE5E5E5>`,
-// `</c>`, `<v Speaker>`, `<b>`… Captions carry these; prose shouldn't.
+// Inline karaoke/positioning markup (`<00:00:01.234>`, `<c.colorE5E5E5>`, `</c>`, `<v Speaker>`, `<b>`…) that captions carry and prose shouldn't.
 const INLINE_TAG_RE = /<[^>]*>/g;
 
 // The handful of entities YouTube actually emits in caption text.
@@ -55,15 +38,8 @@ export function cleanCaptionLine(line) {
 }
 
 /**
- * Extract the spoken lines from a VTT/SRT document, in order, with the rolling
- * auto-caption repetition collapsed.
- *
- * De-duplication is deliberately conservative — it only drops a line that is
- * EXACTLY a line we already kept in the recent window, or that the previous kept
- * line already ends with (the "previous cue's tail is repeated verbatim at the
- * top of this cue" shape). A real repeated phrase further apart than the window
- * survives, because dropping genuinely-spoken repetition would silently rewrite
- * what the speaker said.
+ * Extract the spoken lines from a VTT/SRT document, in order, with rolling auto-caption repetition collapsed. De-duplication is conservative: it drops only a line EXACTLY matching one kept in the recent window, or one the previous kept line already ends with (a cue tail repeated verbatim);
+ * a real repeated phrase further apart survives (dropping spoken repetition would rewrite what the speaker said).
  *
  * @param {string} vtt   Raw subtitle file contents.
  * @param {object} [opts]
@@ -86,9 +62,7 @@ export function vttToLines(vtt, { dedupeWindow = 4 } = {}) {
 
     const recent = kept.slice(-dedupeWindow);
     if (recent.includes(text)) continue;
-    // Rolling auto-captions also emit the previous line *plus* new words as one
-    // cue; when the new cue merely extends the previous one, replace rather than
-    // append so the transcript keeps the longer, complete phrasing exactly once.
+    // Rolling auto-captions also emit the previous line *plus* new words as one cue; when a cue merely extends the previous one, replace rather than append so the longer phrasing appears once.
     const prev = kept[kept.length - 1];
     if (prev && text.startsWith(prev)) {
       kept[kept.length - 1] = text;
@@ -100,12 +74,7 @@ export function vttToLines(vtt, { dedupeWindow = 4 } = {}) {
 }
 
 /**
- * Render a VTT/SRT document as readable prose.
- *
- * Caption lines are ~5 words each, so joining them one-per-line produces a
- * ragged wall. Lines are joined with spaces and broken into paragraphs every
- * `paragraphEvery` lines — arbitrary but stable, and the result reads far better
- * in Obsidian than either extreme.
+ * Render a VTT/SRT document as readable prose: caption lines (~5 words) are joined with spaces and broken into paragraphs every `paragraphEvery` lines (arbitrary but stable; reads well in Obsidian).
  *
  * @param {string} vtt
  * @param {object} [opts]

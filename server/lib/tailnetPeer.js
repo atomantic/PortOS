@@ -1,35 +1,10 @@
 /**
- * Is a peer reachable ONLY over the tailnet — as a security gate.
+ * `isTailnetPeer(peer)`: fail-closed security predicate for "is this peer reachable ONLY over the tailnet", required by the unattended-routing gate in ADR 2026-08-20-federated-visual-prompts.
  *
- * `isTailnetPeer(peer)` — fail-closed security predicate for "is this peer reachable only over the
- * tailnet". Deliberately separate from `instances.js`'s `peerRequiresTailscale()` probe-deferral
- * heuristic so a polling-noise tweak can't widen a privacy boundary; required by the
- * unattended-routing gate in ADR 2026-08-20-federated-visual-prompts.
- *
- * This deliberately duplicates the shape of `peerRequiresTailscale()` in
- * `server/services/instances.js` instead of re-exporting it, because the two
- * answer different questions and must be free to diverge:
- *
- * - That one is an **availability heuristic** driving probe deferral ("don't
- *   spam DNS failures for a tailnet-only peer while Tailscale is down"). It is
- *   tuning, and a future polling-noise fix is entitled to loosen it.
- * - This one is a **security boundary**. ADR
- *   `docs/decisions/2026-08-20-federated-visual-prompts.md` (rule 5) requires an
- *   unattended standing route to refuse a peer that is not a tailnet host: a
- *   standing route exports every future prompt of its kind with nobody
- *   reviewing, so a misconfigured counterparty is a permanent leak rather than a
- *   one-time mistake. Authentication does not save it — the prompt rides the
- *   request body, so an impostor holding the connection reads it before failing
- *   to answer — and `peerFetch` sets `rejectUnauthorized: false`, so a plain-LAN
- *   or non-`.ts.net` peer gets no server authentication at all.
- *
- * Borrowing the heuristic would let a tuning change silently widen a privacy
- * boundary, which is precisely what that ADR ruled out.
- *
- * FAIL-CLOSED, and that is the other real difference: an address this cannot
- * positively recognize as tailnet is treated as NOT tailnet. The heuristic's
- * `false` means "probe it now" (harmless if wrong); this one's `false` means
- * "refuse to export prompts to it" (safe if wrong).
+ * Deliberately duplicates the shape of `peerRequiresTailscale()` (`server/services/instances.js`) instead of re-exporting it: that one is an **availability heuristic** driving probe deferral ("don't spam DNS failures for a tailnet-only peer while Tailscale is down"), which a polling-noise fix may loosen;
+ * this one is a **security boundary**: ADR `docs/decisions/2026-08-20-federated-visual-prompts.md` (rule 5) requires an unattended standing route to refuse a non-tailnet peer, since it exports every future prompt of its kind with nobody reviewing (a misconfigured counterparty is a permanent leak) and authentication doesn't save it (the prompt rides the request body, and `peerFetch`
+ * sets `rejectUnauthorized: false`, so a plain-LAN or non-`.ts.net` peer gets no server authentication). Borrowing the heuristic would let a tuning change silently widen a privacy boundary.
+ * FAIL-CLOSED: an address not positively recognized as tailnet is NOT tailnet (the heuristic's `false` means "probe it now", harmless if wrong; this `false` means "refuse to export prompts", safe if wrong).
  */
 
 // Tailscale's MagicDNS suffix.
@@ -39,9 +14,7 @@ const TAILSCALE_ULA = /^fd7a:115c:a1e0:/i;
 
 const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
 
-// 100.64.0.0/10 — the CGNAT range Tailscale assigns IPv4 addresses from. The
-// second octet must be 64-127; 100.0.0.0/10 and 100.128.0.0/9 are ordinary
-// public space and must NOT read as tailnet.
+// 100.64.0.0/10, the CGNAT range Tailscale assigns IPv4 from: the second octet must be 64-127 (100.0.0.0/10 and 100.128.0.0/9 are ordinary public space).
 function isCgnatV4(address) {
   const match = address.match(/^100\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (!match) return false;
@@ -52,13 +25,11 @@ function isCgnatV4(address) {
 
 /**
  * @param {object} peer - Registered peer record (`host` and/or `address`).
- * @returns {boolean} True only when the peer is positively recognized as a
- *   tailnet host.
+ * @returns {boolean} True only when the peer is positively recognized as a tailnet host.
  */
 export function isTailnetPeer(peer) {
   const host = trimmed(peer?.host);
-  // An explicit host wins: it is what `peerBaseUrl` actually dials, so a
-  // non-tailnet hostname is not rescued by a tailnet-looking `address`.
+  // An explicit host wins: it is what `peerBaseUrl` dials, so a non-tailnet hostname isn't rescued by a tailnet-looking `address`.
   if (host) return MAGIC_DNS.test(host);
   const address = trimmed(peer?.address);
   if (!address) return false;

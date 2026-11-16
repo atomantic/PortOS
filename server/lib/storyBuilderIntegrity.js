@@ -1,27 +1,12 @@
 /**
- * Unified Story Builder — integrity / staleness hashing.
+ * Unified Story Builder integrity / staleness hashing (`hashUpstream`, `computeStaleSteps`, `computeSyncDrift`). Pure.
  *
- * Pure staleness hashing for the Story Builder (`hashUpstream`, `computeStaleSteps`,
- * `computeSyncDrift`).
- *
- * Pure, side-effect-free. When a Story Builder step is locked we snapshot a
- * hash of its *upstream inputs* (the whitelisted universe/series fields the
- * step's content was derived from). If those inputs later change — because the
- * user unlocked an earlier step and revised it — the locked downstream step is
- * "stale" and must be re-reviewed before the wizard advances. Content is never
- * destroyed; only the lock's trust is invalidated.
- *
- * The comparison is computed on read (in the route handler), never persisted:
- * the stored `upstreamHash` is frozen at lock time, and the current hash is
- * recomputed from live records each time the session is fetched.
+ * When a step is locked we snapshot a hash of its *upstream inputs* (the whitelisted universe/series fields its content derived from); if they later change (the user unlocked and revised an earlier step) the locked downstream step is "stale" and must be re-reviewed before the wizard advances (content is never destroyed; only the lock's trust). The comparison is computed on read in the route handler, never persisted: the stored `upstreamHash` is frozen at lock time, the current hash recomputed from live records on each fetch.
  */
 
 import { createHash } from 'crypto';
 
-// Canonical, sorted-key projection so key-order churn (or a re-serialized
-// record) doesn't change the hash. Recurses arrays + plain objects; leaves
-// primitives untouched. Mirrors the canonical-stringify intent of
-// `contentHashForRecord` in conflictJournal.js.
+// Canonical sorted-key projection so key-order churn (or a re-serialized record) doesn't change the hash; mirrors `contentHashForRecord` in conflictJournal.js.
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === 'object') {
@@ -35,24 +20,13 @@ function canonical(value) {
   return value;
 }
 
-/**
- * Hash a step's upstream inputs. `stepId` is folded into the payload so two
- * steps that happen to share identical inputs still get distinct hashes (the
- * comparison is per-step anyway, but this keeps the helper collision-proof).
- * Only ever pass whitelisted SEMANTIC fields here — never `updatedAt` or other
- * churn, or every save would false-positive a staleness flag.
- */
+/** Hash a step's upstream inputs; `stepId` is folded in so steps with identical inputs still hash distinctly. Pass only whitelisted SEMANTIC fields (never `updatedAt` or other churn, or every save false-positives staleness). */
 export function hashUpstream(stepId, inputs) {
   const payload = JSON.stringify({ stepId, inputs: canonical(inputs ?? null) });
   return createHash('sha256').update(payload).digest('hex');
 }
 
-/**
- * Given a session and a map of current upstream hashes (`{ [stepId]: hash }`),
- * return the ids of locked steps whose frozen `upstreamHash` no longer matches.
- * Unlocked steps are never flagged. A step with no current hash available is
- * skipped (we can't compare what we couldn't compute).
- */
+/** The ids of locked steps whose frozen `upstreamHash` no longer matches the current hashes (`{ [stepId]: hash }`); unlocked steps are never flagged and a step with no current hash is skipped (can't compare what couldn't be computed). */
 export function computeStaleSteps(session, currentHashes = {}) {
   const steps = session?.steps || {};
   const stale = [];
@@ -66,16 +40,8 @@ export function computeStaleSteps(session, currentHashes = {}) {
 }
 
 /**
- * For a sync-enabled session, report whether THIS machine's live upstream
- * records have drifted from the session-carried `syncedHashes` baseline (#730).
- * That's the "reconcile would change something" signal: a synced session keys
- * its staleness off `syncedHashes` (so a peer's edit can't false-positive it),
- * but the user may still want to adopt this machine's current records as the new
- * baseline — and they only need to when at least one locked step's live hash no
- * longer matches the carried baseline. A locked step missing from the baseline
- * counts as drift (adopting the records would add a hash the session hasn't
- * recorded); a locked step with no live hash available is skipped. Returns
- * false when the session has no locked steps or every locked step matches.
+ * For a sync-enabled session, whether THIS machine's live upstream records drifted from the session-carried `syncedHashes` baseline (#730): the "reconcile would change something" signal. A synced session keys staleness off `syncedHashes` (a peer's edit can't false-positive it) but the user may adopt this machine's records as the new baseline,
+ * needed only when a locked step's live hash no longer matches. A locked step missing from the baseline counts as drift; one with no live hash is skipped; false with no locked steps or all matching.
  */
 export function computeSyncDrift(session, currentHashes = {}, syncedHashes = {}) {
   const steps = session?.steps || {};
