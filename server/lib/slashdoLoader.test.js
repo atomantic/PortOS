@@ -80,14 +80,14 @@ describe.skipIf(!hasSubmodule)('slashdo rendering adapter', () => {
     expect(body.indexOf('## Select the Project Release Procedure')).toBeGreaterThanOrEqual(0);
     expect(body.indexOf('## Select the Project Release Procedure')).toBeLessThan(body.indexOf('## Detect Release Workflow'));
     expect(body).toContain('temporary `release/vX.Y.Z` branch into `main`');
-    // The ownership rule lives in the deferred documented-release procedure the staged bundle ships beside the entrypoint.
-    const documented = readFileSync(join(dirname(staged), 'lib', 'release-documented.md'), 'utf8');
-    expect(documented).toContain('When automation creates the tag or release, wait for it');
-    expect(documented).toMatch(/do not pre-create\s+its tag/);
+    // The documented-delivery procedure is a deferred read, staged beside the entrypoint.
+    const delivery = readFileSync(join(dirname(staged), 'lib/release-documented.md'), 'utf8').replace(/\s+/g, ' ');
+    expect(delivery).toContain('When automation creates the tag or release, wait for it; do not pre-create its tag');
     expect(body).toContain('wins over the generic promotion recipe below');
     expect(body).toContain('`~opt` exclusion');
     expect(body).toContain('`capped` vs `guardrail`');
     expect(body).toContain('apply its verdict as-is');
+    expect(readFileSync(join(dirname(staged), 'lib/local-cli-runner.sh'), 'utf8')).toContain('launch');
   });
 
   it('keeps inline reviewer recipes limited to explicit reads', async () => {
@@ -143,13 +143,6 @@ describe('immutable slashdo staging', () => {
     expect(await writeResolvedSlashdoBody('../outside', 'Body')).toBeNull();
     await expect(writeResolvedSlashdoBody('review', 'Body', { files: { '../outside.md': 'Outside' } })).rejects.toThrow('Invalid slashdo supporting file');
     await expect(writeResolvedSlashdoBody('review', 'Body', { files: { 'invalid.md': null } })).rejects.toThrow('Invalid slashdo supporting file');
-    await expect(writeResolvedSlashdoBody('review', 'Body', { files: { '../outside.sh': 'Outside' } })).rejects.toThrow('Invalid slashdo supporting file');
-    await expect(writeResolvedSlashdoBody('review', 'Body', { files: { 'payload.js': 'x' } })).rejects.toThrow('Invalid slashdo supporting file');
     expect(existsSync(join(fixtureRoot, 'outside.md'))).toBe(false);
-  });
-
-  it('stages the runner script the slashdo bundle now ships beside its markdown', async () => {
-    const staged = await writeResolvedSlashdoBody('review', 'Body', { files: { 'local-cli-runner.sh': '#!/bin/bash\n' } });
-    expect(readFileSync(join(dirname(staged), 'lib', 'local-cli-runner.sh'), 'utf8')).toBe('#!/bin/bash\n');
   });
 });

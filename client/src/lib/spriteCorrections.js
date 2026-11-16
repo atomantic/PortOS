@@ -2,19 +2,6 @@
  * Sprite correction-note keys + request fragment (#2964, extended to every
  * regeneration surface by #3134).
  *
- * The Sprite Manager's correction-note key vocabulary + request fragment (#2964, extended to every
- * regeneration surface by #3134). Every re-roll surface writes into ONE page-owned `corrections` map
- * (`Sprites.jsx`); this module owns its keys so the pure gating layer (`spriteCollectionActions.js`)
- * and the React surfaces (`CorrectionNote.jsx` + hosts) agree without the pure layer importing a
- * component. Keys are namespaced per SURFACE, not per direction — `anchorCorrectionKey(dir)` keeps the
- * bare direction (pre-#3134 state untouched) while `walkCorrectionKey(dir)` / `MAIN_CORRECTION_KEY` /
- * `AMBIENT_REFERENCE_CORRECTION_KEY` prefix, so a still-image anchor note can never ride a walk-VIDEO
- * re-roll. `trackCorrectionKey(trackId, dir)` (#3136) replaces the per-track keys the scanner/ambient
- * surfaces each spelled by hand, so a user-defined animation track gets a namespaced key with nothing
- * to add here. `correctionPromptPayload(corrections, key)` → `{ correctionPrompt }` only when the note
- * is non-empty after trimming, else `{}` — the guarantee that a blank note leaves the server prompt
- * byte-identical to a blind regenerate. Pure — no React, no I/O.
- *
  * Every Sprite Manager surface that can re-roll a render — the turnaround sheet,
  * the main reference, the 7 directional anchors, and each animation track's
  * reference + clips (`walk` plus whatever the user's registry holds) — writes

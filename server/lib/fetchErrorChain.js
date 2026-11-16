@@ -1,14 +1,6 @@
 /**
  * `describeFetchError(err)` flattens a fetch rejection's nested `cause` chain into one searchable
  * `code: message` string.
- *
- * `describeFetchError(err)` flattens a fetch rejection's whole `cause` chain (depth-bounded,
- * cycle-guarded) into one searchable `code: message` string — undici reports every network failure as
- * the same opaque `TypeError: fetch failed` with the real reason nested inside, so a classifier
- * reading only `err.message` misjudges every one of them. `isReplayableConnectionError(err)` is the
- * narrow predicate over that string for connection-REUSE artifacts (HTTP/2 GOAWAY, reset, hang-up)
- * that are safe to replay once via `fetchWithTimeout`'s `shouldRetry`; it deliberately EXCLUDES
- * timeouts, which broader classifiers like `ollamaManager`'s `isTransientPullError` include.
  */
 
 /**

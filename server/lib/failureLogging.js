@@ -1,10 +1,6 @@
 /**
  * `logFailureWithStack(prefix, error, logger)` logs a failure message plus its stack so
  * fire-and-forget errors keep their source location.
- *
- * `logFailureWithStack(prefix, error, logger = console.error)` — logs `${prefix}: ${message}` plus
- * `error.stack` as a second argument, so a fire-and-forget failure (boot init, a scheduled event
- * handler) keeps its source location instead of collapsing to one message-only line (#6934, #7549).
  */
 
 /**

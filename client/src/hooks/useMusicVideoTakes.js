@@ -268,7 +268,10 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
 
   // Finalize a shot: every take other than its selected frame, end frame and clip is rejected (files kept).
   const rejectUnusedTakes = (scene) => runTakeOp(
-    (projectId) => rejectUnusedMusicVideoSceneTakes(projectId, scene.sceneId, own()).then((res) => res.scene),
+    (projectId) => rejectUnusedMusicVideoSceneTakes(projectId, scene.sceneId, own())
+      // The reply's edit result rides on the scene, as every other take decision's does: without it the page keeps the
+      // pre-decision revision and a later shot edit's reply is diffed against a record this tab never advanced to.
+      .then(({ scene: rejected, edit }) => (edit ? { ...rejected, edit } : rejected)),
     'Failed to reject the unused takes',
   );
 

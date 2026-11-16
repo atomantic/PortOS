@@ -1,12 +1,6 @@
 /**
  * Operator-facing labels for why a trained project head cannot be adopted.
  *
- * Operator-facing labels for why a trained project head cannot be adopted (`jev-head-below-zero-shot`,
- * `-below-majority-class`, `-metrics-invalid`) plus `jevHeadBlockerLabel`. No imports at all, so
- * `client/src/lib/jevHeadReasons.js` re-exports it rather than mirroring it - same contract as
- * `scopeAdherenceReasons.js`. Coverage is asserted in `jevHead.test.js`, so a fourth blocker cannot
- * render as a raw slug.
- *
  * ONE definition, here, re-exported by `client/src/lib/jevHeadReasons.js` — not
  * a table inside the panel component. Same contract as
  * `scopeAdherenceReasons.js`, and for the same reason: these codes are SERVER

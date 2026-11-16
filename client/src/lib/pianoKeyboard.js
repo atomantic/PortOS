@@ -1,21 +1,4 @@
 // Piano-keyboard geometry for the song system's Synthesia-style piano-roll visualizer (`<PianoRoll>`).
-//
-// Pure math, no canvas/React. `keyboardRange(midis, { minSemitones })` → `{ lowMidi, highMidi }`
-// padded out to whole C–B octaves (min 2) so the keyboard always starts on a C / ends on a B and never
-// collapses for a one-note part; `buildKeyboardLayout({ lowMidi, highMidi, width })` → `{
-// keys:[{midi,isBlack,x,w}], whiteWidth, blackWidth }` (white keys tiled edge-to-edge, black keys
-// overlaid centered on the boundary, narrower); plus `isBlackKey(midi)`, `midiNoteName(midi)` (sharps
-// spelling), `pitchClass(midi)` (positive modulo), the canonical `PITCH_CLASS_NAMES` table
-// (re-exported by `referenceAnalysis.js`, consumed by `midiChords.js` — single source for note/chord
-// spelling), and the `BLACK_KEY_RATIO`/`BLACK_KEY_HEIGHT_RATIO` constants. Pairs with
-// `scorePlayback`'s per-note `midi` field.
-//
-// Piano-keyboard geometry for the song system's Synthesia-style piano-roll
-// visualizer (<PianoRoll>). Pure math, no canvas/React — turns a set of MIDI
-// note numbers into a left-to-right key layout (white keys tiled edge-to-edge,
-// black keys overlaid on the boundaries) so the renderer only does drawing and
-// the layout is unit-testable. Companion to scorePlayback.js, whose
-// buildSchedule now carries a `midi` per note.
 
 // Pitch classes (semitone within an octave) that map to WHITE keys. Everything
 // else is a black key.

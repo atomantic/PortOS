@@ -10,60 +10,20 @@ import { resolveWindowsExecutable, prepareWindowsSafeSpawn, resolveCmdShimLaunch
 export { resolveWindowsExecutable, prepareWindowsSafeSpawn, resolveCmdShimLaunch };
 import { withSpawnCwdEnv } from './spawnCwd.js';
 
-/**
- * Shared buffered-spawn + Windows kill-tree machinery used by the app build and
- * update services (`server/services/appBuilder.js`, `server/services/appUpdater.js`).
- *
- * The two call sites historically carried near-identical copies of this logic;
- * they differed only in their result contract:
- *   - appBuilder maps failures to HTTP codes without try/catch, so it needs a
- *     structured non-throwing result.
- *   - appUpdater throws on failure.
- *
- * This module provides ONE structured-result core (`bufferedSpawn`) plus a thin
- * throwing adapter (`bufferedSpawnOrThrow`) so both contracts share the same
- * spawn / buffering / timeout / kill-tree code.
- *
- * Pure module-level constants and platform predicates are exported so callers
- * (and tests, on any platform) can reuse the shell-shim / kill decisions.
- */
+/** Shared buffered-spawn + kill-tree core for appBuilder (structured result) and appUpdater (throwing adapter). */
 
 export const IS_WIN32 = process.platform === 'win32';
 
-// npm/npx are .cmd shims on Windows — enable shell only for these so cmd.exe
-// can resolve them, without enabling shell metacharacter interpretation for
-// native binaries (xcodebuild, swift, make, cargo, git, …).
+// npm/npx are .cmd shims on Windows; shell is enabled only for these so native binaries get no metacharacter interpretation.
 export const WIN_CMD_SHIMS = new Set(['npm', 'npx']);
 
-/**
- * True when a command must run through cmd.exe to be resolved on Windows.
- * Pure and platform-independent in shape — the `IS_WIN32` gate keeps it false
- * everywhere else.
- */
+/** True when a command must run through cmd.exe to be resolved on Windows. */
 export const needsShell = (cmd) => IS_WIN32 && WIN_CMD_SHIMS.has(cmd);
 
 /**
- * Compose `resolveWindowsExecutable` + `prepareWindowsSafeSpawn` into the single
- * `{ command, args }` pair a caller should hand to `spawn()` under the default
- * `shell: false`. This is the canonical fix for spawning a bare npm-installed
- * CLI provider (`opencode`, `codex`, `claude`, …) — a `.cmd`/`.bat` shim on
- * Windows — safely: resolve the bare name to its explicit-extension path, then
- * wrap a `.cmd`/`.bat` target as `cmd.exe /c <path> <args>` (see the two
- * helpers' docstrings for why a direct `.cmd` spawn fails post-CVE-2024-27980
- * and why `shell:true` is unsafe).
- *
- * Every terminal condition off-Windows is a no-op: `resolveWindowsExecutable`
- * returns `null` (so the bare `command` is kept) and `prepareWindowsSafeSpawn`
- * returns `{ command, args }` unchanged — POSIX callers get exactly what they
- * passed in.
- *
- * Resolution reads `searchEnv.PATH`/`.Path` — pass the actual env the child
- * will run under (after merging a provider's `envVars`) so a per-provider PATH
- * override is honored; defaults to `process.env`.
- *
- * The `server/services/runner.js`, `visionCli.js`, and `cliProviderRun.js`
- * paths pre-date this helper and still inline the two-step form; new callers
- * (the Chief-of-Staff agent spawners) use this instead.
+ * Compose `resolveWindowsExecutable` + `prepareWindowsSafeSpawn` into the `{ command, args }` pair to hand to
+ * `spawn()` under `shell: false` (a bare npm-installed CLI is a `.cmd` shim on Windows). Off-Windows it is a no-op.
+ * Resolution reads `searchEnv.PATH`/`.Path`, so pass the env the child will actually run under.
  *
  * @param {string} command - bare command name, or an existing path
  * @param {string[]} args
@@ -76,89 +36,39 @@ export function prepareCliSpawn(command, args, searchEnv = process.env, isWin32 
   return prepareWindowsSafeSpawn(resolved, args, isWin32, searchEnv);
 }
 
-// Cap buffered stdout/stderr so a runaway child can't exhaust memory; we only
-// ever surface a tail of the output anyway.
+// Cap buffered output so a runaway child can't exhaust memory; only a tail is ever surfaced.
 export const MAX_OUTPUT_BYTES = 64 * 1024;
 
 /**
  * Terminate a child process and its descendants.
  *
- * On Windows, SIGTERM kills the cmd.exe shim but orphans its child (npm), so we
- * use `taskkill /T /F` to take down the whole process tree. The taskkill spawn
- * is fire-and-forget: its own `error` is swallowed and the handle is unref'd so
- * it never keeps the event loop alive. Elsewhere, a plain SIGTERM suffices.
+ * Windows: SIGTERM kills the cmd.exe shim but orphans its child, so use `taskkill /T /F` (fire-and-forget,
+ * unref'd). `child.killed` is set by hand because taskkill never touches the ChildProcess and re-entrancy
+ * guards key on it.
  *
- * `child.killed` is set synchronously on the win32 branch (mirroring what
- * Node's own `child.kill()` does for the POSIX branch) — callers elsewhere
- * gate re-entrant kill/abort handling on `.killed`, and `taskkill` runs in a
- * separate detached process that never touches the original ChildProcess
- * object, so without this the flag would stay `false` for the process's
- * entire lifetime and those guards would never engage on Windows.
+ * The win32 taskkill branch applies only to a ChildProcess or a bare `{ pid }` (a process with no handle, e.g.
+ * a detached supervisor job). A non-ChildProcess killable with its own `.kill()` (node-pty IPty, the
+ * cosRunnerClient TUI proxy) always uses it: raw taskkill would leak the ConPTY handle. node-pty on Windows
+ * throws for ANY signal argument, so the signal is offered first and a bare `kill()` is the fallback; dropping
+ * it unconditionally would downgrade a proxy's force-kill to a graceful one.
  *
- * The win32 branch is gated on the target OWNING a `.kill()` of its own — some
- * callers (the aiToolkit runner's `stopRun`, via `registerExternalRun`) pass
- * this a killable that isn't a `child_process` spawn at all, e.g. a node-pty
- * `IPty` TUI session, which also exposes `.kill()`/`.pid`. A raw `taskkill`
- * against a pty's pid bypasses node-pty's own Windows teardown (releasing its
- * native ConPTY handle), leaking it — so any non-ChildProcess killable that
- * brings its own `.kill()` always uses it instead, on every platform.
+ * `processGroup` (POSIX, child spawned `detached`): signal the negative pid so a shell's own children die,
+ * falling back to the single pid. Off by default because a non-detached child shares its parent's group.
  *
- * A bare `{ pid }` target is the third shape: a process this server never held
- * a handle to at all — `spawnDetached`'s Windows supervisor job, and the orphan
- * `reapDetached` finds through a control dir's pid file — so there is no
- * `.kill()` to prefer and the pid is the only address it has. It takes the same
- * tree-kill a ChildProcess does, which is what gives a detached Windows job the
- * "the runner's ffmpeg/python descendants die with it" guarantee POSIX gets
- * from a process-group signal (#4171, #6170).
- *
- * node-pty's Windows backend additionally throws `Signals not supported on
- * windows.` for ANY signal argument, so `kill(signal)` against a pty there never
- * kills anything — it throws past the caller, which typically logs it and moves
- * on while the PTY keeps running. That is why every CoS Runner TUI kill
- * (terminate, force-kill, pause, and the server's post-finalize relay) was a
- * silent no-op on Windows: the codex/claude PTY survived, held its worktree
- * locked, and stayed in the runner's active set — which the PortOS server
- * re-adopted on every orphan sweep and counted against the Update page's
- * "N CoS agents running" gate, pausing updates indefinitely.
- *
- * So a non-ChildProcess killable is offered the caller's signal FIRST and falls
- * back to a bare `kill()` only when the handle rejects it. Dropping the signal
- * unconditionally would be wrong for the other non-ChildProcess killables in
- * this codebase, which do accept one and forward it — `cosRunnerClient`'s TUI
- * proxy relays `{ signal }` over a socket, so an unconditional drop would
- * silently downgrade a force-kill to a graceful one. A bare `kill()` still tears
- * down node-pty's whole console process list, so nothing is lost where the
- * fallback does fire: the graceful/forced distinction simply is not expressible
- * for a Windows pty.
- *
- * `processGroup` is for a child spawned `detached` on POSIX: without it the
- * non-Windows branch signals a single pid, which leaves a shell's own children
- * (the uv / pip / git an installer script shells out to) running. With it the
- * negative pid signals the whole group, falling back to the single pid when the
- * group is already gone. Windows needs no flag — `taskkill /T` is always the
- * tree. Off by default because a non-detached child shares its PARENT's group,
- * where a group signal would reach the wrong processes.
- *
- * `signal` applies to the **POSIX** branch only (`SIGTERM` default → the
- * graceful-then-`SIGKILL`-escalation pattern callers expect). On Windows there
- * is no real POSIX signal — `taskkill /T /F` force-kills the whole tree
- * regardless — so the arg is ignored there. A caller that wraps a `.cmd`/`.bat`
- * shim via `prepareCliSpawn` (its child is a `cmd.exe /c …` parent) MUST use
- * this rather than `child.kill()`, or on Windows only the `cmd.exe` shim dies
- * and the real CLI child is orphaned.
+ * `signal` is POSIX-only; Windows always force-kills the tree. A caller wrapping a `.cmd`/`.bat` shim via
+ * `prepareCliSpawn` MUST use this rather than `child.kill()`, or only the cmd.exe shim dies.
  *
  * @param {import('child_process').ChildProcess|{pid: number, kill?: Function}} child - a ChildProcess, any killable exposing `.pid`/`.kill()`, or a bare `{ pid }`
  * @param {NodeJS.Signals} [signal] - POSIX signal to send (default `SIGTERM`); ignored on Windows
  * @param {{processGroup?: boolean}} [opts] - POSIX: signal the child's process group (it must have been spawned `detached`)
- * @param {boolean} [isWin32] - platform override, injected so the Windows branches are testable off Windows (same shape as `resolveWindowsExecutable`)
+ * @param {boolean} [isWin32] - platform override so the Windows branches are testable elsewhere
  */
 export function killProcessTree(child, signal = 'SIGTERM', { processGroup = false } = {}, isWin32 = IS_WIN32) {
   // A supervised release agent (Windows Job or Linux subreaper) is stopped only
   // through its supervisor, never by a group or PID signal that could kill it.
   if (typeof child.requestWindowsAgentStop === 'function') return child.requestWindowsAgentStop();
   const isChildProcess = child instanceof ChildProcess;
-  // A target with no `.kill()` of its own is addressable only by pid — nothing
-  // to prefer over the platform's own tree/group kill below.
+  // No own `.kill()`: addressable only by pid.
   const isPidOnly = !isChildProcess && typeof child.kill !== 'function';
   if (isWin32 && child.pid && (isChildProcess || isPidOnly)) {
     child.killed = true;
@@ -170,31 +80,21 @@ export function killProcessTree(child, signal = 'SIGTERM', { processGroup = fals
   if (processGroup && child.pid) {
     try {
       process.kill(-child.pid, signal);
-      // Node sets `.killed` only from `child.kill()`, so a group signal would
-      // otherwise leave it false and defeat every `if (!child.killed)` re-entry
-      // guard that gates a second kill — exactly why the Windows branch above
-      // sets it by hand too. Only for a real ChildProcess: a node-pty IPty has
-      // no `killed` of its own, and inventing one would start short-circuiting
-      // PTY teardown paths that deliberately re-kill.
+      // Node sets `.killed` only via `child.kill()`; set it for re-entry guards. Not for an IPty, where an
+      // invented flag would short-circuit PTY teardown paths that deliberately re-kill.
       if (isChildProcess) child.killed = true;
       return;
     }
     catch { /* ESRCH — the group is already gone; fall through to the pid */ }
   }
   if (isPidOnly) {
-    // POSIX, pid-only: the group signal above either landed or the group is
-    // gone, so this is the plain per-pid signal — swallowing ESRCH exactly as
-    // the group attempt does, since a target that already exited is not a
-    // failure to report.
+    // POSIX pid-only: plain per-pid signal; an already-exited target is not a failure.
     try { process.kill(child.pid, signal); }
     catch { /* ESRCH — already gone */ }
     return;
   }
   if (isWin32 && !isChildProcess) {
-    // node-pty rejects the signal outright on Windows (see the note above);
-    // every other killable here accepts and forwards it, so ask first and only
-    // fall back to the signal-free form for the handle that refuses. Retrying a
-    // kill is harmless — the first attempt did nothing.
+    // node-pty rejects signals on Windows; other killables forward them, so ask first and fall back.
     try { child.kill(signal); }
     catch { child.kill(); }
     return;
@@ -204,17 +104,11 @@ export function killProcessTree(child, signal = 'SIGTERM', { processGroup = fals
 
 
 /**
- * Stop a child gracefully with forced escalation: SIGTERM now, SIGKILL after
- * `graceMs` if the child has not exited. The tree's one SIGTERM→SIGKILL
- * pattern (the pm2 CLI runner and `bufferedSpawn`'s timeout path do the same
- * dance): a child that traps or ignores SIGTERM — an npm wrapper, docker
- * compose — must not outlive the caller's idea of "stopped" (#12021).
+ * Stop a child gracefully with forced escalation: SIGTERM now, SIGKILL after `graceMs` if it has not exited,
+ * so a child that ignores SIGTERM (npm wrapper, docker compose) cannot outlive "stopped".
  *
- * Returns a cancel function for the caller's `close`/`error` handler so a
- * child that did exit on SIGTERM never gets a stray SIGKILL aimed at a pid
- * the OS may have reused. The timer is unref'd and never keeps the process
- * alive. On Windows `killProcessTree` is already `taskkill /F`, so there is
- * nothing to escalate to and the cancel is a no-op.
+ * Returns a cancel function for the `close`/`error` handler so an exited child never gets a SIGKILL aimed at a
+ * reused pid. Windows `killProcessTree` is already `taskkill /F`, so the cancel is a no-op there.
  *
  * @param {import('child_process').ChildProcess|{pid: number, kill?: Function}} child
  * @param {{ graceMs?: number, label?: string, processGroup?: boolean }} [opts]
@@ -238,24 +132,11 @@ export function terminateWithEscalation(child, { graceMs = 5000, label = 'child 
 }
 
 /**
- * Spawn a command, buffer its (capped) stdout/stderr, enforce a timeout, and
- * resolve a structured result. NEVER rejects — every terminal condition
- * (clean exit, non-zero exit, spawn error, timeout) resolves a result object.
+ * Spawn a command, buffer its (capped) stdout/stderr, enforce a timeout, and resolve a structured result.
+ * NEVER rejects: every terminal condition resolves a result object.
  *
- * The result is a superset of what both call sites need:
- *   {
- *     success: boolean,        // true iff the process exited 0 within timeout
- *     code: number|null,       // exit code; -1 for timeout/spawn-error
- *     signal: string|null,     // termination signal, when applicable
- *     stdout: string,          // captured stdout (tail-capped, NOT trimmed)
- *     stderr: string,          // captured stderr (tail-capped, NOT trimmed)
- *     timedOut: boolean,       // true iff the timeout fired
- *     error?: Error,           // present only on a spawn 'error' event
- *   }
- *
- * Callers shape this into their own contract (e.g. an `output` tail string, an
- * `exitCode` alias, or a thrown Error) — see `bufferedSpawnOrThrow` and the
- * appBuilder result mappers.
+ *   success: true iff exit 0 within timeout; code: exit code, -1 for timeout/spawn-error;
+ *   signal; stdout/stderr: tail-capped, NOT trimmed; timedOut; error?: present only on a spawn 'error' event.
  *
  * @param {string} cmd
  * @param {string[]} args
@@ -271,11 +152,7 @@ export function bufferedSpawn(cmd, args, { cwd, env = process.env, timeoutMs, ki
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
       cwd,
-      // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). Done in this
-      // shared wrapper rather than at each caller so every present and future
-      // bufferedSpawn user inherits it; `withSpawnCwdEnv` returns an unchanged
-      // copy of process.env when no cwd was given, matching the previous
-      // implicit-inherit behavior exactly.
+      // Pin PWD to the spawn cwd (see withSpawnCwdEnv); unchanged copy of env when no cwd.
       env: withSpawnCwdEnv(env, cwd),
       shell: shell === undefined ? needsShell(cmd) : shell,
     });
@@ -287,8 +164,7 @@ export function bufferedSpawn(cmd, args, { cwd, env = process.env, timeoutMs, ki
       ? setTimeout(() => {
           if (!settled) {
             settled = true;
-            // Fire-and-forget: the timed-out result resolves now and the
-            // escalation timer is unref'd, so no cancel is held here.
+            // Fire-and-forget: the escalation timer is unref'd, so no cancel is held.
             terminateWithEscalation(child, { graceMs: killGraceMs, label: cmd });
             resolve({ success: false, code: -1, signal: null, stdout, stderr, timedOut: true });
           }
@@ -347,13 +223,9 @@ export async function bufferedSpawnOrThrow(cmd, args, options = {}) {
 }
 
 /**
- * The most useful sentence from a FAILED `bufferedSpawn` result.
- *
- * Callers of a `--json` CLI need this rather than a bare exit code, and the
- * naive "last line of stderr, else stdout" walk gets it wrong for exactly those
- * tools: they print their payload to stdout even when they exit non-zero, so the
- * last stdout line is a closing `}` or `]`. Prefers the spawn error, then a
- * stderr line, then a stdout line that isn't just JSON punctuation.
+ * The most useful sentence from a FAILED `bufferedSpawn` result. `--json` CLIs print their payload to stdout
+ * even on non-zero exit, so the last stdout line is a closing `}`/`]`. Prefers the spawn error, then a stderr
+ * line, then a stdout line that isn't JSON punctuation.
  *
  * @param {{error?: Error, stderr?: string, stdout?: string}} result - a `bufferedSpawn` result
  * @param {string} fallback - used when the command failed without saying anything
@@ -370,24 +242,12 @@ export function spawnFailureDetail(result, fallback) {
 }
 
 /**
- * Attach the no-op `'error'` listener every spawned child's `stdin` needs before
- * anything writes to it.
+ * Attach the no-op `'error'` listener every spawned child's `stdin` needs before anything writes to it.
  *
- * A child that dies before reading its stdin (a CLI that isn't on PATH, or one
- * that exits on a bad flag) makes the pipe emit `EPIPE`. A stream `'error'` with
- * no listener is re-thrown by Node, and every spawn site here runs OUTSIDE the
- * Express request lifecycle — there is no `next(err)` to bubble to, so the throw
- * takes down the single server process that owns every live agent run, PTY
- * shell, media job and socket. Swallowing it is correct: the child's own
- * `'error'`/`'exit'`/`'close'` handler is the authoritative settle point and
- * reports the real cause. It is logged rather than dropped, because a child
- * that exits 0 after refusing its prompt would otherwise be recorded as a clean
- * run with no trace of the prompt never having been delivered.
- *
- * A crash guard must never be the crash: a `spawn()` that failed command lookup
- * hands back a handle with no stdio at all, and a child configured with a
- * non-pipe stdin has no emitter to listen on either. Both are a no-op here
- * rather than a `TypeError` thrown from the very line meant to prevent one.
+ * A child that dies before reading stdin emits `EPIPE`; an unlistened stream error is re-thrown, and spawn
+ * sites run outside the Express lifecycle, so it would take down the single server process. The child's own
+ * `'error'`/`'close'` handler is the authoritative settle point. Logged, not dropped, so a child that exits 0
+ * after refusing its prompt leaves a trace. A handle with no stdin (failed lookup, non-pipe stdio) is a no-op.
  *
  * @param {import('child_process').ChildProcess} child
  * @returns {import('child_process').ChildProcess} the same child, for chaining
@@ -402,21 +262,11 @@ export function guardChildStdin(child) {
 }
 
 /**
- * Deliver a prompt on a guarded child's `stdin` and close the pipe.
+ * Deliver a prompt on a guarded child's `stdin` and close the pipe. Pair with `guardChildStdin`.
  *
- * Pair with `guardChildStdin`, which must already have run — this covers the
- * OTHER half of the same hazard, a `write()` that throws *synchronously* (an
- * already-destroyed pipe, or a payload that isn't a string/Buffer). That throw
- * escapes the spawn site the same way an unlistened `'error'` does, so it is
- * caught here.
- *
- * Two things then have to happen, and both were missed by the naive
- * swallow-and-continue: the pipe is destroyed, so a child that IS still reading
- * stdin sees EOF instead of waiting forever on a write that never lands; and
- * the failure is logged, because a provider that gets an empty prompt and exits
- * 0 would otherwise be filed as a clean run with nothing to explain the empty
- * output. The child's own `'error'`/`'close'` handler stays the authoritative
- * settle point, so this deliberately does not rethrow or settle anything.
+ * Catches a *synchronous* `write()` throw (destroyed pipe, non-string payload), destroys the pipe so a
+ * still-reading child sees EOF, and logs, since an empty-prompt exit 0 would look like a clean run. The child's
+ * own `'error'`/`'close'` handler stays the settle point, so this never rethrows or settles.
  *
  * @param {import('child_process').ChildProcess} child
  * @param {string|Buffer|null} payload - written when non-null; pass null when the

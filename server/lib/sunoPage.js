@@ -1,16 +1,6 @@
 /**
  * Suno song page (suno.com/song/<id>): in-page steps for the publish recipe and the M4A export.
  *
- * The in-page steps of the Suno publish recipe and M4A export: `markSunoSongMenu({ songId,
- * menuSelector: SUNO_SONG_MENU_SELECTOR })` tags the song page's OWN options button ("More options for
- * <title>", or plain "More options" on older pages) with `data-portos-song-menu` (false when there is
- * none), skipping the menus of other songs the page shows: the "Cover of" card of the song a cover was
- * made from, the More-by / Similar cards, the playbar. `sunoDownloadDialogSong()` says whether the
- * open Download dialog quotes the page's title (`page`), another one (`other`), or none it can compare
- * (`unknown`). The marker and inspector run inside the page via `page.evaluate`, so they read only
- * `document`; `waitForSunoSongPage(page, { timeoutMs })` bounds readiness on the shared selector or an
- * explicit sign-in redirect; fixture tests live in `client/src/lib/sunoPage.test.js`.
- *
  * Marker/inspection functions run INSIDE the page through Playwright's `page.evaluate(fn, arg)`, so it
  * reads only `document` and its argument. The same functions run against fixture documents in the
  * client's DOM tests.

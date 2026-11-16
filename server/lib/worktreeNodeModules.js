@@ -1,17 +1,6 @@
 /**
  * Workspace-aware `node_modules` provisioning for a worktree (#12633).
  *
- * Workspace-aware `node_modules` provisioning for a worktree (#12633).
- * `provisionWorkspaceNodeModules(sourceRoot, worktreeRoot)` builds a real `node_modules` directory
- * when the source's holds workspace links (`@scope/pkg -> ../../packages/pkg`): every entry is
- * symlinked back to the source except those links, which are recreated so they resolve INSIDE the
- * worktree (a plain directory symlink resolves them against the source checkout, so a worktree ahead
- * of the source's branch silently tests stale workspace code). Returns `false` and creates nothing
- * when there are no workspace links. Every recreated link is checked to resolve inside the worktree,
- * else provisioning fails; `removeProvisionedNodeModules` undoes the farm and only touches a directory
- * carrying `WORKTREE_NODE_MODULES_MARKER`, so a real `npm install` is never mistaken for it. Consumed
- * by `services/worktreeManager.js#linkWorktreeDependencies`.
- *
  * A plain `worktree/node_modules -> source/node_modules` symlink resolves the
  * install's workspace links (`@scope/pkg -> ../../packages/pkg`) against the
  * SOURCE checkout, so a worktree whose base is ahead of the source's checked-out

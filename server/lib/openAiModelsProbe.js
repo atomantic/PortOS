@@ -2,22 +2,6 @@
  * One `GET {base}/models` reachability+listing probe for the local
  * OpenAI-compatible daemons (llama.cpp, Ollama, LM Studio, MTPLX).
  *
- * `probeOpenAiModels(baseUrl, { timeoutMs, apiKey })` → `{ reachable, models, contextWindows, error }`
- * — the one `GET {base}/models` probe for the local OpenAI-compatible daemons, shared by
- * `services/observedContextWindows.js` (and through it `services/providerReadiness.js`) and
- * `services/llamaServerManager.js`. Distinguishes unreachable from reachable-but-unlistable (`models:
- * null`) from up-with-nothing-loaded (`[]`). `contextWindows` keys each served model to the window the
- * listing declared (`max_model_len` / `n_ctx` / `loaded_context_length` / `context_length`, smallest
- * wins), carrying an entry only where one was declared so `{}` reads as unknown — without it a prompt
- * too large for the endpoint was dispatched anyway and stalled until the provider timeout (#7441). It
- * also names the real transport failure via `describeFetchError` (undici reports every one as a bare
- * `fetch failed`), and cancels an unread body on a non-OK response. `apiKey` attaches a Bearer header
- * for a key-gated daemon (vLLM's compose stack), and a 401/403 answers `reachable: true` with `error:
- * 'authentication required'` — a server that refused the request is definitively running, and calling
- * it unreachable would send the user to start it again. Consolidated after the two copies drifted —
- * one passed its timeout as a `timeout` key inside the fetch init object, where it is not an option,
- * silently running a 500ms poll loop on the 15s default.
- *
  * This existed three times in `server/` before it existed once here, and the
  * copies had already drifted: `llamaServerManager`'s passed its timeout as a
  * `timeout` key INSIDE the fetch init object, where it is not an option, so

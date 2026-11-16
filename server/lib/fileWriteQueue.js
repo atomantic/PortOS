@@ -1,15 +1,5 @@
 /**
  * Serialize read-modify-write cycles so they don't interleave.
- *
- * `createFileWriteQueue()` → single-tail `queue(fn)` for one shared file;
- * `createRecordWriteQueue(assertId?)` → id-keyed `queueRecordWrite(id, fn)` where same-id cycles
- * serialize and different-id cycles run in parallel (the queue the PG/file store facades use for
- * `collectionStore.queueRecordWrite` parity); `createKeyedFileWriteQueue()` → `queueKeyedWrite(key,
- * fn)` that collapses the pipeline stage stores' hand-rolled `Map` + per-key `createFileWriteQueue`
- * factory (falsy keys → shared `'__unknown__'` tail; self-pruning via `createKeyCachedQueue`);
- * `trackDetachedWrite(promise)` / `drainDetachedWrites()` → a `globalThis`-backed registry for
- * bookkeeping a caller schedules off a queued turn and never awaits (the settings ledger row), so a
- * teardown or shutdown can wait for it.
  */
 
 import { createKeyCachedQueue } from './createKeyCachedQueue.js';

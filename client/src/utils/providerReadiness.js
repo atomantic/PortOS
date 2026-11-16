@@ -1,12 +1,6 @@
 /**
  * Is a provider READY to run on this install, and why not.
  *
- * Is a provider READY to run on this install, and if not, why: how it
- * authenticates (`credentialSource`), which prerequisite it is missing, the
- * CoS Agent Runner allowlist check for its command, the key its CLI runtime is
- * published under, and the card state the AI Providers page groups by
- * (`providerCardState`).
- *
  * Browser MIRROR of `server/lib/providerPrerequisites.js` (the same
  * computation `getFallbackProvider` routes on — where the server has published
  * `missingPrerequisites` it WINS) and of the normalization in

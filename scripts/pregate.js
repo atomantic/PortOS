@@ -24,7 +24,7 @@ import { needsBrowserFidelity } from './lib/browserFidelity.js';
 import { resolveSpecifier, testReferenceSpecifiers } from './lib/importReach.js';
 import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { ACTIONLINT_VERSION, probeActionlint, selectWorkflowFiles } from './lib/actionlint.js';
-import { GUARD_BUDGET_MS, hostTooBusyForBudget, overBudgetGuards, readGuardDurations, settleOverBudget } from './lib/guardBudget.js';
+import { GUARD_BUDGET_MS, calibrateBudgetScale, hostTooBusyForBudget, overBudgetGuards, readGuardDurations, settleOverBudget } from './lib/guardBudget.js';
 import { buildPregateReport, guardInputSnapshot, PREGATE_REPORT_PATH, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
 import { assertGitMergeTree } from '../lib/gitMergeTree.js';
 import { dependencyConsistencyProblems } from './lib/workspaceDependencies.js';
@@ -857,8 +857,16 @@ async function isolatedGuardDurations(result, files, owner) {
  * stageOutcomeVerdict so the receipt agrees.
  */
 async function guardBudgetVerdict(result, owner) {
-  const over = overBudgetGuards(result.fileDurations);
-  if (over.length === 0) return null;
+  // Calibrate only once a guard looks slow, so the common case pays nothing.
+  const raw = overBudgetGuards(result.fileDurations);
+  if (raw.length === 0) return null;
+  const scale = calibrateBudgetScale();
+  const budgetMs = GUARD_BUDGET_MS * scale;
+  const over = overBudgetGuards(result.fileDurations, budgetMs);
+  if (over.length === 0) {
+    console.log(`🐢 ${result.name} guards over ${formatDuration(GUARD_BUDGET_MS)} but within the ${formatDuration(budgetMs)} budget scaled ${scale.toFixed(1)}x for this machine's speed: ${raw.map(({ file, durationMs }) => `${file} ${formatDuration(durationMs)}`).join('; ')}.`);
+    return null;
+  }
   const describe = ({ file, durationMs, budgetMs }) => `${file} took ${formatDuration(durationMs)} (budget ${formatDuration(budgetMs)})`;
   if (hostTooBusyForBudget()) {
     console.log(`⏭️ ${result.name} budget not enforced, host load exceeds its core count: ${over.map(describe).join('; ')}.`);
@@ -872,7 +880,7 @@ async function guardBudgetVerdict(result, owner) {
   const lines = stillOver.map(({ file, durationMs, isolatedMs, budgetMs }) => `${file} took ${formatDuration(durationMs)} in the stage and ${isolatedMs === null ? 'no reading' : formatDuration(isolatedMs)} in isolation (budget ${formatDuration(budgetMs)})`);
   result.status = 'failed';
   return {
-    failure: `❌ ${result.name} over the ${formatDuration(GUARD_BUDGET_MS)} per-guard budget: ${lines.join('; ')}. Speed the guard up (share one tracked-file listing and one read per source file) rather than raising the budget.`,
+    failure: `❌ ${result.name} over the ${formatDuration(budgetMs)} per-guard budget (${formatDuration(GUARD_BUDGET_MS)} scaled ${scale.toFixed(1)}x for this machine): ${lines.join('; ')}. Speed the guard up (share one tracked-file listing and one read per source file) rather than raising the budget.`,
     exitCode: 1,
   };
 }

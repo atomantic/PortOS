@@ -3,16 +3,6 @@
  * so the list cards and the Overview tab can show *what the director made*
  * rather than a wall of text.
  *
- * `selectProjectPreview(project)` → `{ kind: 'video'|'image'|'audio'|'none', jobId?, src?, poster?,
- * label, durationSec? }` — picks a CD project's representative produced asset (finalVideoId → last
- * rendered scene → last done plan video/image step → `musicBed` audio → startingImageFile) for the
- * list cards + Overview tab (#2702, audio #2772). Pure, computed off the already-returned project
- * payload (no fetch). Plus `previewAspectClass(aspectRatio)` (literal Tailwind classes — a computed
- * `aspect-[w/h]` never lands in the build), `startingImageSrc()` (client mirror of
- * `localImageFilename`), and the `videoSrcForJob`/`videoPosterForJob`/`imageSrcForJob`/`musicBedSrc`
- * path builders — the one client-side definition of the `<jobId>`-named asset convention, shared with
- * `ScenePreview.jsx`.
- *
  * Pure + side-effect-free: everything it needs is already on the project payload
  * returned by `GET /api/creative-director` (the list route does not slim), so a
  * card renders a preview with no extra fetch.

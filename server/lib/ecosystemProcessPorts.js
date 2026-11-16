@@ -1,17 +1,6 @@
 /**
  * Attribute an ecosystem config's parsed port labels to the app that owns them.
  *
- * Attributes a parsed PM2 ecosystem config's port labels to the app that OWNS them (#7357):
- * `processSurface(name)` (a process name minus one trailing role suffix, so
- * `portos-server`/`portos-ui` share surface `portos` while `portos-autofixer-ui` does not),
- * `attributeProcessPorts(processes, app)` (`api`/`ui`/`devUi` resolved from the app's own surface
- * first, then from a carrier whose name declares no role at all, and left undefined when none — which
- * is what lets the served-by-API `uiPort` derivation take over), and
- * `findCrossProcessPortCollision(processes, edits)` (the pre-write guard: a port another process in
- * the same config already holds). Shared by `services/appPortConfig.js` (write-back) and
- * `services/appListEnrichment.js` (read/derive) so a displayed port and a rewritten port can never
- * disagree about whose it is.
- *
  * A PM2 ecosystem config routinely describes SEVERAL product surfaces: PortOS's
  * own config declares `portos-server`/`portos-ui` (the app) alongside
  * `portos-autofixer`/`portos-autofixer-ui` and `portos-browser` (sibling

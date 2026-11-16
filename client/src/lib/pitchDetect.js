@@ -1,15 +1,6 @@
 // Dependency-free vocal pitch-detection core for the song system (tuner / color-match /
 // sing-to-score).
 //
-// `detectFrequency(frame, { sampleRate })` → `{ hz, clarity }` (McLeod NSDF; clarity gate rejects
-// silence/noise); `frequencyToNote(hz, { a4 })` → `{ letter, accidental, octave, step, cents }` (cents
-// ∈ [-50,+50], sharp positive; `step` reuses `scoreNotation`'s `diatonicStep` so detected notes align
-// with the renderer); `noteToFrequency(note, { a4 })` inverse (color-match targets);
-// `createPitchTracker(analyser, { onUpdate })` → `{ stop }` rAF/interval loop with median+EMA
-// smoothing to kill octave jumps; `tuningQuality(cents)` → `{ level, label }` buckets a cents
-// deviation into `in-tune`/`close`/`off`/`none` (thresholds `IN_TUNE_CENTS`/`CLOSE_CENTS`) for the
-// tuner color readout.
-//
 // PortOS vocal pitch detection — a tiny, dependency-free DSP core for the song
 // system's tuner / color-match / sing-to-score features. We estimate the
 // fundamental frequency of a sung frame ourselves (autocorrelation, McLeod's

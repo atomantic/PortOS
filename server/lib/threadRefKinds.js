@@ -1,18 +1,6 @@
 /**
  * Thread ref VOCABULARY — the one `(kind, id)` → label/route table (#7664).
  *
- * Brain THREAD ref vocabulary + route table (#7664) — the one `(kind, id)` → label/URL registry in the
- * repo. A *thread* is a tracked topic or commitment (an open loop), never a message thread.
- * `THREAD_REF_KINDS` is the frozen row-per-kind table (brain records, catalog scraps/ingredients, the
- * five app-native creative kinds, goals/apps/messages/CoS tasks, and the external
- * GitHub/GitLab/JIRA/URL kinds); `threadRefUrl(kind, id, context)` builds the deep link and
- * `threadRefLabel(kind)` the chip text, both degrading to `null`/the raw kind for a kind this build
- * does not know so a peer-sourced ref never throws. `isSafeExternalUrl` scheme-guards an external id
- * before it can become an href. Pure (no zod, no db, no services) and re-exported by
- * `client/src/lib/threadRefKinds.js`, which is how `pages/CatalogIngredient.jsx` renders its
- * inbound-ref chips through the same table. Existence/title lookups live in `services/threadRefs.js`;
- * a drift guard fails CI when a kind here has no resolver there.
- *
  * A Brain *thread* is a tracked topic or commitment (an open loop in the bullet
  * journal sense) — NOT a message thread. `messageSync.js` / `messageGmailSync.js`
  * / `beeperSync.js` own that other sense of the word; nothing here touches it.

@@ -101,7 +101,7 @@ export default function ProjectWorkspace({
   const selectedId = selected.id;
   const previzRunning = usePrevizJobs(selected).running.length > 0;
 
-  const productionReview = useMusicVideoProductionReview({ project: selected, replaceProject });
+  const productionReview = useMusicVideoProductionReview({ project: selected, replaceProject, applyEdit, reloadOpenProject, takesRef });
   // A Blender film's renders live in its workspace, not on the record: one read per open project,
   // kept current over the socket. Held here so the step list knows how far the shots are and unsaved
   // edits in its panel survive a change of step.
@@ -195,6 +195,7 @@ export default function ProjectWorkspace({
   const story = useStoryStageWiring({ selected, patchProject, replaceProject });
   const plan = usePlanStageWiring({
     selected, replaceProject, patchProject, analyzing, onAnalyze, separation, lyricAlign, castSets, creativeSetupPending, styleReferencesPending,
+    applyEdit, reloadOpenProject,
   });
   const { kickoff, autonomous, planning, planningDraft, autopilotBlockedReason } = plan;
   const { sceneMedia, takes, revisions, production } = produce;

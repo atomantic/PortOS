@@ -1,27 +1,6 @@
 // Parser for the PortOS drum-kit notation (#3115) — a dependency-free GRID DSL (`HH: x x x x`) for the
 // SongBook `drum` content format, drawn by `<DrumSheetView>` (hand-rolled SVG, no engraving lib).
 //
-// `parseDrumChart(text)` → `{ time, tempo, subdivision, stepsPerBar,
-// bars:[{index,label,repeat,repeatPass,rows:[{piece,cells}]}], pieces, errors }` — `key: value`
-// headers (`time`/`tempo`/`subdivision`/`kit` row-order override), blank-line-separated bar blocks
-// with a `# label x2` repeat suffix expanded into real bars, nine kit pieces (`CR RD HH T1 T2 S FT K
-// HF`, long aliases accepted), six cell glyphs (`-` rest, `x` normal, `X` accent, `o` open, `g` ghost,
-// `f` flam) with spacing optional. Forgiving: short rows pad with rests, over-long rows truncate,
-// unknown pieces/cells collect into `errors` — never throws. Plus `KIT_PIECES` (label / GM `midi` /
-// synth `sound` / `glyph`), `kitPiece(id)`, `CELL_GLYPHS` (per-glyph velocity + flags),
-// `isDrumNotation(text)` (import-page format sniff, runs BEFORE `tabNotation.detectFormat`),
-// `drumChartHasMusic(text)` and its already-parsed twin `chartHasMusic(chart)`. Also the
-// plain-language explainers the sheet's tap-a-note readout and Legend panel read —
-// `describeDrumCell(pieceId, cell)` → `{ pieceLabel, char, articulation, detail, technique,
-// velocityPercent, rest }` (piece-aware: `o` is "Open" on a hi-hat/cymbal but a normal hit on a drum;
-// a null/unknown cell describes as a rest, an unknown piece returns null), `describeDrumPosition(bar,
-// step, subdivision)` → `bar 6, count “2 e”` (count-along syllables, exact `+n/N` fallback for an
-// unconventional subdivision), `drumGlyphLegend(pieceIds)` (all six cell characters, with the `o` row
-// resolved for the pieces a chart uses — a fixed row would tell a crash-only chart to work the hi-hat
-// pedal; a mixed kit gets every applicable reading) and each `KIT_PIECES` row's `technique` (how that
-// piece is struck). Only the hi-hat voice sustains an `o` in playback, so the `open` wording follows
-// the piece's `sound`, not its glyph shape. NOT the lead-sheet parser (`scoreNotation.js`).
-//
 // PortOS drum-kit notation — a tiny, dependency-free grid DSL for a drum groove
 // and the pure parser that turns it into the structured chart <DrumSheetView>
 // draws and drumPlayback.js sounds. Companion to `scoreNotation.js` (pitched

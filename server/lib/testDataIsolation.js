@@ -1,22 +1,6 @@
 /**
  * Runtime backstop: no test may WRITE into the checkout's real `data/` tree.
  *
- * Runtime backstop against a test WRITING into the install's real `data/` tree — the filesystem
- * analogue of `db.js`'s row-write guard. `isInsideRealDataRoot(path)` canonicalizes a target through
- * symlinked ancestors (it need not exist yet) and tests containment with
- * `pathSafety.js#isPathAtOrInsideDir`, so a `..` climb, a relative path, a `data-archive` sibling, or
- * a differently-cased spelling on a case-insensitive filesystem can't walk in sideways; the real root
- * is re-derived through `dataRoot.js` rather than read from `PATHS`, so a suite that redirects
- * `PATHS.data` to a temp root can't also redirect the guard. `assertNotRealDataWrite(path, operation)`
- * throws under the test runner from `atomicWrite`, the guarded wrappers in `fileCore.js`
- * (`writeFileGuarded`, `appendFileGuarded`, `copyFileGuarded`, `rmGuarded`, `unlinkGuarded`,
- * `createWriteStreamGuarded`), and `collectionStore`'s record delete; `assertNotNewRealDataDir(dir)`
- * is the create-only variant `ensureDir` uses, since `mkdir -p` on an existing directory mutates
- * nothing. Inert outside the runner — the `isTestRunner()` check precedes every syscall. Services
- * mutating files under `data/` route through these guarded wrappers. Closes the write half of the bug
- * class `testDataIsolation.guards.test.js` covers statically and the two-run probe covers for reads
- * (#6176, after #6171, #6203).
- *
  * ## Why a runtime guard, not another static rule
  *
  * `testDataIsolation.guards.test.js` is the always-on *static* half of this

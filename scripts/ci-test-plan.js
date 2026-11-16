@@ -377,10 +377,9 @@ export const EXPLICIT_ALWAYS_RUN_TESTS = [
   'scripts/migrations/shippedPromptHistory.guard.test.js',
   // Compares every reference prompt body and shipped-hashes.json against the merge base (#16090).
   'scripts/migrations/shippedPromptHashes.guard.test.js',
-  // Route policy and write-back scans depend on independently changed files (#13224).
+  // Route policy scans depend on independently changed files (#13224).
   'server/lib/apiRouteParity.test.js',
   'server/lib/hostControlRoutes.test.js',
-  'server/jsonWritebackConventions.test.js',
   // Whole-tree route-mount scan (#12952, #16018).
   'server/hostControlCoverage.test.js',
   // Base-relative server import-growth guard (#7993): a new eager edge in a widely

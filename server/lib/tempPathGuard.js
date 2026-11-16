@@ -1,15 +1,6 @@
 /**
  * "Is this path really a throwaway?" guard for destructive test fixtures (#4554).
  *
- * Throwaway-path guard for destructive test fixtures. `isTempPath(target)` — true only for an absolute
- * path that is a STRICT descendant of `os.tmpdir()` **after symlinks are resolved** (`os.tmpdir()`
- * itself is refused, or `destroyGitSandbox(tmpdir())` would wipe every process's scratch; a `..`
- * segment is refused rather than lexically collapsed; macOS `/var/folders/...` and
- * `/private/var/folders/...` both pass). `assertTempPath(target, operation)` throws otherwise and
- * returns `target` so it can wrap an argument inline. Use it before any fixture `git init` / `git
- * config` / `rm -rf`: `spawn` silently substitutes `process.cwd()` for a missing cwd, which is how a
- * test run once set `core.bare = true` on a real checkout (#4554).
- *
  * Test helpers that `git init`, `git config`, or `rm -rf` a directory are only
  * safe because that directory lives under `os.tmpdir()`. When the path they are
  * handed is `undefined`, empty, or relative, the underlying primitive does not

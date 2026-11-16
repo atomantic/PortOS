@@ -1,13 +1,6 @@
 /**
  * Closed vocabulary for the operator-action ledger (#5594, epic #5593).
  *
- * Closed vocabulary for the operator-action ledger (`user_action_events`, #5594 / #5596):
- * `USER_ACTION_TYPES` (CoS task/feedback/schedule + settings + instance-feature toggles + event-only
- * creative/Brain pointers), `USER_ACTION_ACTORS` (`user` / `mind` / `schedule` / `system`), and the
- * `isUserActionType` / `isUserActionActor` predicates. `recordUserAction` (`services/userActions.js`)
- * throws on a type absent from the list, so a typo fails a test instead of writing a row nothing can
- * filter on.
- *
  * `user_action_events` exists so a later phase can ask "what did the user
  * actually do?" without replaying every log PortOS keeps. That question is only
  * answerable if the type column is a small, stable, enumerable set — an

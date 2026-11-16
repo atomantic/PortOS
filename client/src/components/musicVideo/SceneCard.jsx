@@ -190,7 +190,7 @@ function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImage
 export default function SceneCard({
   scene, posterSrc, index, shotName = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null, videoJobs = null,
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
-  onMove, onDelete, onEditLocal, onSave, onSetDone = null, onApproveFinal = null,
+  onMove, onDelete, onEditLocal, onSave, onApplySaved = null, onSetDone = null, onApproveFinal = null,
   project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
   onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onCheckTake = null, checkingTakes = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, onHandheldClip = null, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false, manifestOwnsShots = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, onMoveEnd = null, nextEndSec = null, falVideoSettings = null, performanceReview = null, onRepairPerformance, repairBusy = false,
@@ -240,6 +240,9 @@ export default function SceneCard({
       .finally(() => { doneSavePending.current = false; setDoneSaving(false); });
   };
   const applyPatch = (patch) => { onEditLocal(scene.sceneId, patch); saveShot(scene.sceneId, patch).catch(() => {}); };
+  // A change a route already saved (a color match's takes): shown as saved, never kept as typed text, or
+  // every later reply and reload would keep this copy of the shot's takes over the server's (#16275).
+  const applySaved = (patch) => (onApplySaved ? onApplySaved(scene.sceneId, patch) : onEditLocal(scene.sceneId, patch));
   const moveCut = (move) => move && ((...args) => {
     const pending = move(...args);
     if (!pending || typeof pending.then !== 'function' || !project?.id || !clipPlayback.clipId) return pending;
@@ -973,11 +976,11 @@ export default function SceneCard({
         {/* This shot's piece of the composed final render: cached or not, Render shot, its film look. */}
         {project?.composition?.mode === 'document' && (
           <>
-            <ShotColorMatch project={project} scene={scene} fieldId={fieldId} onApplied={(patch) => onEditLocal(scene.sceneId, patch)} />
+            <ShotColorMatch project={project} scene={scene} fieldId={fieldId} onApplied={applySaved} />
             <ShotFilmLook project={project} scene={scene} onChange={applyPatch} fieldId={fieldId} />
           </>
         )}
-        {project?.composition?.mode === 'composed' && <ShotFinalRender project={project} scene={scene} onChange={applyPatch} onLocal={(patch) => onEditLocal(scene.sceneId, patch)} fieldId={fieldId} />}
+        {project?.composition?.mode === 'composed' && <ShotFinalRender project={project} scene={scene} onChange={applyPatch} onLocal={applySaved} fieldId={fieldId} />}
         {(scene.visualIntent || scene.direction || scene.direction?.actionContract) && (
           <ShotEditorGroup title="Direction" summary={scene.visualIntent} defaultOpen={false} testId="shot-group-direction">
             <div className="space-y-2 text-[11px] text-port-text-muted">

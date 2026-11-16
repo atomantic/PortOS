@@ -1,18 +1,5 @@
 // Screen-space picking for the 3D brain graph (#4114).
 //
-// Screen-space touch picking for the 3D brain graph (#4114). `projectToScreen(point, viewProjection,
-// width, height)` projects a world point to canvas-local pixels (y down, `null` when the point sits on
-// or behind the camera plane); `pickNearestNodeByScreenDistance({ nodes, viewProjection, width,
-// height, point, threshold })` returns the node whose projected centre is nearest the tap within
-// `TOUCH_PICK_THRESHOLD_PX` (44px — a max-importance sphere only projects to ~38px at `OrbitControls
-// minDistance`, so a tap anywhere inside a node still lands), tie-broken by depth then array order;
-// `isTapGesture(start, end, slop)` separates a tap from a drag (`TAP_SLOP_PX`) — the picking helpers
-// are 3D-only, but this one is the tree-wide movement-slop predicate and takes plain client
-// coordinates, so 2D canvases use it too (`fableloom/LoomCanvas.jsx` passes its own tighter slop for
-// node drag vs pan). Takes the 16 flattened column-major `THREE.Matrix4` elements rather than a
-// camera, so it stays three.js-free and unit-testable — jsdom has no WebGL context and therefore no
-// raycast to exercise.
-//
 // The raw three.js raycast picks a node only when the ray actually hits its
 // sphere. A low-importance node projects to roughly a 10px disc on a phone —
 // well under the ~44px touch-target guidance — so a tap lands on a neighbour or

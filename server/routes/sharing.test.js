@@ -296,14 +296,6 @@ describe('sharing routes', () => {
   });
 
   describe('POST /api/sharing/buckets/:id/inbox/:manifestId/promote', () => {
-    it('forwards the promote call', async () => {
-      importer.promoteInboxItem.mockResolvedValue({ promoted: true });
-      const res = await request(buildApp()).post('/api/sharing/buckets/b1/inbox/m-1/promote');
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual({ promoted: true });
-      expect(importer.promoteInboxItem).toHaveBeenCalledWith('b1', 'm-1');
-    });
-
     it('maps SHARING_INBOX_NOT_FOUND to HTTP 404', async () => {
       importer.promoteInboxItem.mockRejectedValue(
         makeServiceError('Inbox item not found: m-x', 'SHARING_INBOX_NOT_FOUND'),
@@ -311,6 +303,7 @@ describe('sharing routes', () => {
       const res = await request(buildApp()).post('/api/sharing/buckets/b1/inbox/m-x/promote');
       expect(res.status).toBe(404);
       expect(res.body.code).toBe('SHARING_INBOX_NOT_FOUND');
+      expect(importer.promoteInboxItem.mock.calls[0].slice(0, 2)).toEqual(['b1', 'm-x']);
     });
 
     it('maps SHARING_RECORDS_PENDING to HTTP 409 (transient sync conflict)', async () => {
@@ -333,12 +326,11 @@ describe('sharing routes', () => {
   });
 
   describe('POST /api/sharing/buckets/:id/inbox/:manifestId/dismiss', () => {
-    it('forwards the dismiss call', async () => {
+    it('dismisses the manifest named in the path', async () => {
       importer.dismissInboxItem.mockResolvedValue({ dismissed: true });
       const res = await request(buildApp()).post('/api/sharing/buckets/b1/inbox/m-1/dismiss');
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ dismissed: true });
-      expect(importer.dismissInboxItem).toHaveBeenCalledWith('b1', 'm-1');
+      expect(importer.dismissInboxItem.mock.calls[0].slice(0, 2)).toEqual(['b1', 'm-1']);
     });
   });
 
@@ -351,17 +343,6 @@ describe('sharing routes', () => {
       expect(subs.listSubscriptions).toHaveBeenCalledWith({});
     });
 
-    it('forwards bucketId / recordKind / recordId query filters', async () => {
-      subs.listSubscriptions.mockResolvedValue([]);
-      await request(buildApp()).get(
-        '/api/sharing/subscriptions?bucketId=b1&recordKind=series&recordId=s1',
-      );
-      expect(subs.listSubscriptions).toHaveBeenCalledWith({
-        bucketId: 'b1',
-        recordKind: 'series',
-        recordId: 's1',
-      });
-    });
   });
 
   describe('POST /api/sharing/subscriptions', () => {

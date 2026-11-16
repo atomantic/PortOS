@@ -2,60 +2,31 @@
  * Executable Eidoverse world controllers — the install schema, the sandboxed
  * step boundary, and the tick scheduling math (#7456, part of epic #7453).
  *
- * Executable Eidoverse world controllers — the install schema and the sandboxed step boundary (#7456).
- * `eidoverseControllerInstallSchema` / `eidoverseControllerRecordSchema` describe an install (a
- * registry `controllerId`, a bounded `config`, a `tickIntervalMs`, and a `deliverEffects` flag that is
- * FALSE by default, so installing arms bookkeeping and never a world verb).
- * `eidoverseRiddleActionSchema` validates the fixed offer/guess/reveal action with an inspected
- * `expectedRevision`. `runControllerStep` is the sandbox: it hands the controller JSON copies of its
- * state and config, REFUSES a step that returns a Promise (an await is the shape every
- * network/disk/AI-provider call takes, so the tick path is provider-free structurally rather than by
- * convention), caps the state it may return, and validates its effects against a closed vocabulary —
- * `note` (never leaves the ledger), `say`, and `augment`, which reuses `eidoverseValidation.js`'s own
- * world-verb operation schema. `controllerTickDue` / `nextControllerTickAt` are the scheduling math,
- * measured from now so a machine that slept wakes to ONE tick and not a replayed backlog.
- * `summarizeControllerInstall` is the prompt-shaped projection that keeps a 16KB state blob out of a
- * mind turn; it surfaces `derivedFrom`, the edge an install adopted from a peer's foundation carries
- * (#7626). Pure: callers pass `now`.
- *
- * SwarmWorld's strongest result is that technologies are *executable*: they
- * keep running when the agent that authored them is gone. PortOS minds wake
- * intermittently, so a world that only changes during a mind turn is a world
- * that is dead most of the time. A controller is the durable thing that keeps
- * running between wakes — a resource tick, an ambient verb, a gentle NPC, a
- * maintenance hook — supervised by PortOS rather than by whoever installed it.
+ * PortOS minds wake intermittently, so a controller is the durable thing that
+ * keeps running between wakes, supervised by PortOS rather than by its installer.
  *
  * **What "sandboxed" means here, precisely.** The threat is not a hostile
  * shipped module; it is a mind (or an HTTP body) turning a string into code:
  *
  *   1. **Behavior is resolved by ID against a fixed registry, never by path.**
  *      An install names a `controllerId`;
- *      `services/eidoverseControllerRegistry.js` maps that id to a module
- *      PortOS ships. Nothing a caller supplies is ever imported, required, or
- *      evaluated. This is the same rule
- *      `services/eidoverseResilienceContributions.js` already applies to assay
- *      contributions, for the same reason: "import the module this request
- *      names" is arbitrary code execution wearing a feature's clothes.
+ *      `services/eidoverseControllerRegistry.js` maps it to a module PortOS
+ *      ships. Nothing a caller supplies is ever imported or evaluated (the same
+ *      rule as `services/eidoverseResilienceContributions.js`).
  *   2. **A step is SYNCHRONOUS.** `runControllerStep()` refuses a step that
  *      returns a Promise. An await is the shape every network, disk, and AI
- *      provider call takes, so refusing it makes root AGENTS.md's
- *      "no cold-bootstrap LLM calls" a structural property of the tick path
- *      instead of a comment: a controller *cannot* reach a provider, whatever
- *      its author intended. It is the same rule the resilience assay enforces
- *      on the same reasoning, which is why a controller doubles as an assay
- *      contribution for free.
+ *      provider call takes, so refusing it makes "no cold-bootstrap LLM calls"
+ *      structural: a controller *cannot* reach a provider. The resilience assay
+ *      enforces the same rule, so a controller doubles as an assay contribution.
  *   3. **State is DATA, and bounded.** A controller is handed JSON copies of
  *      its state and config, so it can never retain a live reference into the
  *      ledger, and the state it returns must round-trip through JSON under a
- *      byte cap. A controller that cannot serialize is a controller that could
- *      not survive the restart it exists to survive.
+ *      byte cap (it must survive a restart).
  *   4. **Side effects are a closed vocabulary, and they are PROPOSALS.** A
- *      step returns effects, it does not perform them — the same
- *      proposal-versus-consequence separation #7454 gave the construction
- *      tools. `note` never leaves the ledger at all; `say` and `augment` reach
- *      the world only for an install whose `deliverEffects` was explicitly
- *      turned on, and `augment` reuses the already-bounded world verb schema
- *      rather than inventing a second one.
+ *      step returns effects, it does not perform them. `note` never leaves the
+ *      ledger; `say` and `augment` reach the world only for an install whose
+ *      `deliverEffects` was explicitly turned on, and `augment` reuses the
+ *      already-bounded world verb schema.
  *
  * Pure: no I/O, no clock of its own (callers pass `now`), no provider calls.
  * The persisted installs and the supervised tick loop live in
@@ -68,9 +39,8 @@ import { foundationDerivationEdgeSchema } from './eidoverseFoundations.js';
 
 export const EIDOVERSE_CONTROLLER_LIMITS = Object.freeze({
   idMax: 64,
-  // A per-install ceiling on how many controllers can be armed at once. The
-  // supervisor runs every due install in one pass, so this is what keeps a
-  // pass bounded regardless of how enthusiastic an author was.
+  // Ceiling on armed controllers; the supervisor runs every due install in one
+  // pass, so this keeps a pass bounded.
   installs: 24,
   configBytes: 4_096,
   stateBytes: 16_384,
@@ -80,17 +50,13 @@ export const EIDOVERSE_CONTROLLER_LIMITS = Object.freeze({
   recentEffects: 20,
   noteMax: 240,
   reasonMax: 400,
-  // The floor MATCHES the supervisor's own wake interval
-  // (`SUPERVISOR_INTERVAL_MS` in `services/eidoverseControllerRuntime.js`): a
-  // cadence below the resolution at which "due" is noticed is a number the
-  // schema would accept and the supervisor could never honor. A day is the
-  // longest cadence that still reads as "running".
+  // The floor MATCHES the supervisor's wake interval (`SUPERVISOR_INTERVAL_MS` in
+  // `services/eidoverseControllerRuntime.js`); a day is the longest cadence that
+  // still reads as "running".
   minTickIntervalMs: 60_000,
   maxTickIntervalMs: 86_400_000,
   defaultTickIntervalMs: 300_000,
-  // A controller that fails this many ticks in a row is disarmed rather than
-  // retried forever. A broken controller that keeps its schedule is a log the
-  // user never reads; one that stops and says why is a thing they can fix.
+  // Disarm after this many consecutive failed ticks rather than retry forever.
   maxConsecutiveFailures: 3,
 });
 
@@ -102,12 +68,10 @@ const effectTextSchema = z.string().trim().min(1).max(EIDOVERSE_CONTROLLER_LIMIT
 /**
  * One proposed effect from a tick.
  *
- * `note` is bookkeeping the author reads back later and never crosses into the
- * world. `say` and `augment` are world verbs, and `augment` reuses
- * `eidoverseWorldAugmentSchema`'s own operation array — including its verb
- * enum and its 8KB per-argument cap — with a tighter length bound on top, so
- * there is exactly one definition of a legal construction operation in the
- * tree rather than a second one that can drift from it.
+ * `note` never crosses into the world. `say` and `augment` are world verbs;
+ * `augment` reuses `eidoverseWorldAugmentSchema`'s operation array (verb enum and
+ * per-argument cap) with a tighter length bound, so there is one definition of a
+ * legal construction operation.
  */
 export const eidoverseControllerEffectSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('note'), text: effectTextSchema }).strict(),
@@ -130,11 +94,9 @@ const boundedJsonObject = (maxBytes) => z.record(z.string().min(1).max(64), z.un
   .refine((value) => JSON.stringify(value).length <= maxBytes, `must serialize to at most ${maxBytes} bytes`);
 
 /**
- * Where in the world this controller sits. Spatial situation is part of the
- * issue's premise — a controller reads and acts on LOCAL world state — but
- * PortOS does not resolve these ids here: they are carried to the definition
- * as config it may use, and an id naming nothing simply means a controller
- * with nothing local to act on.
+ * Where in the world this controller sits. PortOS does not resolve these ids
+ * here: they are carried to the definition as config, and an id naming nothing
+ * means a controller with nothing local to act on.
  */
 const controllerPlacementSchema = z.object({
   districtId: z.string().trim().min(1).max(64).nullable().default(null),
@@ -144,10 +106,9 @@ const controllerPlacementSchema = z.object({
 /**
  * What a caller (route, mind tool, test) may install.
  *
- * `deliverEffects` defaults to FALSE on purpose. Installing a controller arms
- * bookkeeping; letting it speak and build in the world is a second, explicit
- * decision. Nothing here is ever shared by omission — the same posture the
- * foundation layers take toward promotion.
+ * `deliverEffects` defaults to FALSE on purpose: installing arms bookkeeping;
+ * letting a controller speak and build in the world is a second, explicit
+ * decision.
  */
 export const eidoverseControllerInstallSchema = z.object({
   id: controllerInstallIdSchema,
@@ -166,11 +127,8 @@ export const eidoverseControllerInstallSchema = z.object({
 export const eidoverseControllerIdParamSchema = z.object({ id: controllerInstallIdSchema }).strict();
 
 /**
- * A config-only update: change what an installed controller is configured
- * with while its accumulated `state` survives untouched (#7629). This is the
- * "inherit and modify" verb the epic names — distinct from re-installing the
- * same id, which rebuilds state from the new config and throws the old state
- * away.
+ * A config-only update: the accumulated `state` survives untouched, unlike
+ * re-installing the same id, which rebuilds state from the new config.
  */
 export const eidoverseControllerConfigUpdateSchema = z.object({
   id: controllerInstallIdSchema,
@@ -228,9 +186,8 @@ export const eidoverseControllerRecordSchema = eidoverseControllerInstallSchema.
   installedBy: installedBySchema,
   installedAt: isoDateSchema,
   updatedAt: isoDateSchema,
-  // The controller's own durable state, advanced one step per tick. This is
-  // the whole of what survives a restart — a controller that stashes anything
-  // outside it does not survive the disturbance it claims to.
+  // The controller's durable state, advanced one step per tick; the whole of
+  // what survives a restart.
   state: z.record(z.string().min(1).max(64), z.unknown()),
   tick: z.number().int().min(0),
   nextTickAt: isoDateSchema,
@@ -244,31 +201,18 @@ export const eidoverseControllerRecordSchema = eidoverseControllerInstallSchema.
     summary: z.string().trim().min(1).max(EIDOVERSE_CONTROLLER_LIMITS.effectTextMax),
   }).strict()).max(EIDOVERSE_CONTROLLER_LIMITS.recentEffects).default([]),
   consecutiveFailures: z.number().int().min(0).default(0),
-  // A run of ticks whose STEP succeeded but whose delivery into the world was
-  // refused (#7628) — tracked separately from `consecutiveFailures`, which
-  // only counts a throwing/refusing `step()`. A controller can step cleanly
-  // forever while every write it proposes is rejected; this is what lets that
-  // pattern disarm too, instead of reporting "ok" indefinitely.
+  // Ticks whose STEP succeeded but whose delivery was refused; separate from
+  // `consecutiveFailures` (a throwing/refusing `step()`) so a controller whose
+  // every write is rejected can disarm instead of reporting "ok" forever.
   consecutiveDeliveryFailures: z.number().int().min(0).default(0),
   // Set when the supervisor disarms a controller itself (repeated failures, a
   // controller id that no longer resolves). Distinct from `armed: false`
   // chosen by a human, which carries no reason.
   disarmedReason: z.string().trim().min(1).max(EIDOVERSE_CONTROLLER_LIMITS.reasonMax).nullable().default(null),
-  // `null` on every controller a human or a mind installed from the shipped
-  // registry — the overwhelming majority. Set only when this install was stood
-  // up by ADOPTING a foundation inherited from a peer (#7626), naming the
-  // origin install, the foundation id, and the envelope fingerprint it was
-  // adopted from.
-  //
-  // This is what makes adoption the provenance-KEEPING way to re-use a peer's
-  // contribution, as against reading the body out of the panel and retyping
-  // it, which keeps nothing. It is deliberately the same edge shape a derived
-  // foundation carries: one definition of "this grew out of that", pointing at
-  // the same content-addressed fingerprint, whatever kind of record holds it.
-  //
-  // Additive and nullable on a machine-local store nothing federates, so no
-  // migration is owed — a record written before this field existed reads back
-  // as `null` through this same default.
+  // `null` unless this install ADOPTED a peer's foundation, in which case it
+  // names the origin install, foundation id and envelope fingerprint. Same edge
+  // shape a derived foundation carries. Additive and nullable on a machine-local
+  // store, so no migration: older records read back as `null`.
   derivedFrom: foundationDerivationEdgeSchema.nullable().default(null),
 }).strict();
 
@@ -285,9 +229,8 @@ const stepFailure = (reason) => ({ ok: false, state: null, effects: [], reason }
 /**
  * Run a definition's `invariants` against the state a step just produced, the
  * same `(state, tick) => true | false | { ok, reason }` shape
- * `eidoverseResilienceAssay.js`'s `runInvariants` evaluates them under. The
- * live tick path holds a controller to the same contract the promote gate
- * does, rather than the gate being the stricter of the two (#7629).
+ * `eidoverseResilienceAssay.js`'s `runInvariants` uses, so the live tick path is
+ * held to the same contract as the promote gate.
  */
 function invariantFailures(state, tick, invariants) {
   const failures = [];
@@ -314,16 +257,13 @@ function invariantFailures(state, tick, invariants) {
 /**
  * A JSON round-trip copy, or `null` when the value cannot make the trip.
  *
- * Used on the way IN as well as out: handing a controller a copy is what stops
- * it retaining a live reference into the persisted record, and a config that
- * cannot serialize would have failed at the write anyway.
+ * Used on the way IN as well as out, so a controller never retains a live
+ * reference into the persisted record.
  */
 function jsonCopy(value) {
-  // `JSON.stringify` THROWS on a BigInt and on a circular reference, and
-  // returns `undefined` for a bare function or symbol. All three are the same
-  // verdict here — "this did not survive the trip" — and none of them may
-  // escape as an exception: this runs on a supervised background tick, where
-  // an uncaught throw reaches a timer callback and takes the process down.
+  // `JSON.stringify` throws on a BigInt or cycle and returns `undefined` for a
+  // function or symbol; all mean "did not survive the trip" and none may escape
+  // as an exception on the background tick.
   let json;
   try {
     json = JSON.stringify(value);
@@ -337,12 +277,9 @@ function jsonCopy(value) {
 /**
  * Run ONE controller step under the sandbox rules in the module header.
  *
- * try/catch here is deliberate rather than the "errors bubble to centralized
- * middleware" default (AGENTS.md "Code Conventions"): this is the boundary
- * where PortOS evaluates code on behalf of a supervised background loop, not
- * inside an Express request, and turning a controller's exception into a
- * recorded reason is this function's whole job. An uncaught throw here would
- * reach a timer callback and take the process down.
+ * try/catch is deliberate: this runs in a supervised background loop, not an
+ * Express request, and turning a controller's exception into a recorded reason
+ * is the job; an uncaught throw would reach a timer callback and crash Node.
  *
  * @param {object} options
  * @param {object} options.definition - a registry definition (`{ id, step }`)
@@ -368,9 +305,7 @@ export function runControllerStep({ definition, state, config, tick }) {
   }
   if (isThenable(outcome)) return stepFailure(ASYNC_STEP_REASON);
 
-  // A step that returns nothing is asserting "this tick changed no state",
-  // which is an ordinary outcome for a controller that only acts every Nth
-  // tick — not a failure, and not a reason to lose the state it already had.
+  // A step returning nothing asserts "no state change" (ordinary for an every-Nth-tick controller).
   const nextState = outcome?.state === undefined ? inputState.value : outcome.state;
   if (!nextState || typeof nextState !== 'object' || Array.isArray(nextState)) {
     return stepFailure('step() must return { state } as a plain object (or nothing, to leave state unchanged)');
@@ -422,19 +357,15 @@ export function summarizeControllerEffect(effect) {
 export function controllerTickDue(record, nowMs) {
   if (!record || record.armed !== true) return false;
   const due = Date.parse(record.nextTickAt);
-  // An unparseable `nextTickAt` (hand-edited file, a record from a shape this
-  // version does not know) reads as due rather than as never: a controller
-  // stuck forever is a worse failure than one extra step.
+  // An unparseable `nextTickAt` reads as due: stuck forever is worse than one extra step.
   return Number.isNaN(due) || due <= nowMs;
 }
 
 /**
  * When this install should step next.
  *
- * Deliberately measured from NOW rather than from the tick that was missed: a
- * laptop asleep for three days must wake to ONE tick, not to a backlog of
- * eight hundred replayed ambient verbs. A controller's cadence is "about this
- * often", never a ledger of owed executions.
+ * Measured from NOW, not the missed tick: a machine asleep for days must wake to
+ * ONE tick, not a replayed backlog.
  */
 export function nextControllerTickAt(record, nowMs) {
   return new Date(nowMs + record.tickIntervalMs).toISOString();
@@ -447,11 +378,8 @@ export function nextControllerTickAt(record, nowMs) {
 /**
  * An install record reduced to what a MODEL needs to reason about it.
  *
- * The full record carries the controller's whole durable state — up to 16KB of
- * counters and ring buffers that would ride into every prompt turn for no
- * decision value — so a LIST omits it and an INSPECT of one install includes
- * it. That is the same discipline `summarizeFoundation` applies to a
- * foundation's `style` and packaged candidate.
+ * A LIST omits the durable state (up to 16KB that would ride into every prompt
+ * turn) and an INSPECT of one install includes it, as `summarizeFoundation` does.
  */
 export function summarizeControllerInstall(record, { includeState = false } = {}) {
   return {
@@ -471,19 +399,14 @@ export function summarizeControllerInstall(record, { includeState = false } = {}
     lastTickOk: record?.lastOutcome ? record.lastOutcome.ok === true : null,
     lastTickReason: record?.lastOutcome?.reason ?? null,
     consecutiveFailures: record?.consecutiveFailures ?? 0,
-    // Delivery is a SEPARATE verdict from the step (#7628): a step can read
-    // `ok: true` while every effect it produced was refused by the world.
-    // `null` covers both "delivery is off for this install" and "this tick
-    // produced nothing to deliver" — neither is a failure, so neither
-    // collapses into `false`.
+    // Delivery is a SEPARATE verdict from the step. `null` covers both "delivery
+    // is off" and "nothing to deliver"; neither is a failure.
     lastDelivery: summarizeLastDelivery(record),
     lastCompletedDelivery: record?.lastCompletedDelivery ?? null,
     consecutiveDeliveryFailures: record?.consecutiveDeliveryFailures ?? 0,
     disarmedReason: record?.disarmedReason ?? null,
     note: record?.note ?? null,
-    // Surfaced in the SUMMARY rather than only behind `includeState`: "this
-    // controller came from a peer's foundation" is the first thing a reader of
-    // the list needs, and hiding it would put attribution behind a flag.
+    // In the SUMMARY, not behind `includeState`: attribution is needed in the list.
     derivedFrom: record?.derivedFrom ?? null,
     recentEffects: (record?.recentEffects ?? []).slice(0, 5),
     ...(includeState ? { config: record?.config ?? {}, state: record?.state ?? {} } : {}),
@@ -492,17 +415,14 @@ export function summarizeControllerInstall(record, { includeState = false } = {}
 
 /**
  * The last tick's delivery verdict, distinct from `lastTickOk` (the STEP).
- * `deliverControllerEffects()` in `services/eidoverseControllerRuntime.js`
- * reads the world's own ack/refusal for every effect it sends and folds the
- * result onto `lastOutcome.delivered` / `lastOutcome.deliveryError` — this
- * just reshapes that into the same `{ ok, reason }` verdict shape the rest of
- * the controller surfaces already use.
+ * `deliverControllerEffects()` in `services/eidoverseControllerRuntime.js` folds
+ * the world's ack/refusal onto `lastOutcome.delivered` / `deliveryError`; this
+ * reshapes that into an `{ ok, reason }` verdict.
  */
 function summarizeLastDelivery(record) {
   if (record?.deliverEffects !== true) return { ok: null, delivered: 0, reason: null };
   const outcome = record?.lastOutcome;
-  // No tick yet, or the tick that ran produced nothing to send — delivery was
-  // never attempted, so there is no verdict to report yet.
+  // Delivery never attempted: no verdict yet.
   if (!outcome || outcome.effects === 0) return { ok: null, delivered: outcome?.delivered ?? 0, reason: null };
   return { ok: outcome.deliveryError === null, delivered: outcome.delivered, reason: outcome.deliveryError };
 }

@@ -1,13 +1,5 @@
 // Music Video draft and final clip renders (#16136).
 //
-// Draft and final clip renders (#16136): `MUSIC_VIDEO_RENDER_TIERS`, `isMusicVideoRenderTier`,
-// `musicVideoRenderTierLabel`, `sceneRenderTierPlan(backend, { scene, scenes, videoSettings })` (the
-// field and draft/final resolutions of the shot's fal, Runway, Higgsfield or Google model;
-// `videoSettings.draftResolution` / `finalResolution` are ceilings, unset = lowest / highest; null
-// without tiers), `renderTierVideoSettings` (settings for one tiered render; an explicit resolution
-// wins), `sceneRenderTierChoices` (the shot card's Render draft / Render final with each price).
-// Dependency-free; the client imports it.
-//
 // A hosted model that offers resolution tiers renders a shot's clip at the project's draft tier
 // (cheap) or its final tier (high). `videoSettings.draftResolution` / `finalResolution` are ceilings:
 // a tier renders at the highest resolution the shot's model offers at or under it, and at the model's

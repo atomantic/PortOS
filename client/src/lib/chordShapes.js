@@ -1,23 +1,6 @@
 // Chord-name → per-instrument voicing derivation for the SongBook viewer's instrument-view toggle
 // (#2656).
 //
-// `getChordVoicing(name, instrument)` → guitar `{ frets: [6 × (-1/0/n)], baseFret, bass }`, ukulele
-// (4-string GCEA, exact lowest-position search), or piano `{ notes: ['A','C','E'], bass }` with
-// letter-accurate degree spelling (the 3rd of E is G#, never Ab); guitar shapes come from a curated
-// first-position table + movable E-/A-form barre templates offset by `baseFret` (aug/dim7 exploit
-// shape symmetry). Slash chords voice the base chord and carry `bass` separately.
-// `parseChordName(name)`, `splitJoinedChords('Am-Am7')`, `sheetUsedChords(text)` (every chord a sheet
-// names, unique, in first-appearance order — the viewer's "Chords used" card),
-// `toVoicingInstrument(songInstrument)`, `VOICING_INSTRUMENTS`. `chordTones(name)` returns the
-// instrument-free half — the parse plus `semitones` above the root — so `chordPlayback.js` sounds a
-// sheet without re-typing the interval tables. Reuses `tabNotation.js`'s
-// `CHORD_TOKEN_RE`/`NOTE_TO_PC`/`spellPitchClass` (exported from there for this module) instead of
-// duplicating the tables. Unknown/unparseable chords → null, never throws.
-//
-// Chord-name → per-instrument voicing derivation for the SongBook viewer's
-// instrument-view toggle (guitar / ukulele / piano). Pure and dependency-free
-// (no React, no browser APIs — these tests also run in node env in CI).
-//
 // Reuses tabNotation.js's chord-token grammar (CHORD_TOKEN_RE) and pitch-class
 // tables (NOTE_TO_PC / spellPitchClass) rather than duplicating them.
 //

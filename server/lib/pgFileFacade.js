@@ -1,21 +1,6 @@
 /**
  * PG/file store-backend facade backbone.
  *
- * Shared PG/file store-backend backbone for the six storage dispatchers (pipeline series/issues, story
- * builder, universe builder, catalog user-types, writers room). `isFileBackend()` (dev/test
- * escape-hatch predicate) · `POSTGRES_SETUP_HINT` (the shared "run setup:db / dev-test PGMODE=file"
- * advice every store appends to its requires-PostgreSQL error) · `resolvePgBackend({ requirement,
- * migrate?, loadDb, makePg })` (health-check → `ensureSchema` → one-time migration → import `db.js` →
- * build the PG backend) · `createPgFileFacade({ makeFile, makePg })` (promise-memoized lazy selection
- * so concurrent first calls don't run the migration twice; returns `{ getBackend, getBackendName,
- * reset }`). Each store keeps its own `makeFile`/`makePg` factories + public surface.
- * `createRecordStoreBackendSelector({ label, loadFileBackend, loadDbBackend, requireDbMessage?,
- * isTestMode?, onDbReady? })` wraps the same backbone for the stores whose backends are whole MODULES
- * rather than built objects (Creative Director, Music Video, Sprites) → `{ selectBackend,
- * getBackendName }` where the name is `'file'`/`'postgres'`; `isFileBackend()` is
- * `MEMORY_BACKEND=file` or `isTestRunner()`; `isTestMode` replaces that test signal (Sprites passes
- * `isTestRunner()`).
- *
  * PortOS has six near-identical storage dispatchers (pipeline series/issues,
  * story builder, universe builder, catalog user-types, writers room) that each
  * pick between a PostgreSQL backend (normal installs) and a file/escape-hatch

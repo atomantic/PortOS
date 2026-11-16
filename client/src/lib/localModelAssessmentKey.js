@@ -1,11 +1,6 @@
 /**
  * `encodeLocalModelAssessmentKey`, `decodeLocalModelAssessmentKey` and `localModelAssessmentPath`:
  * reversible base64url identity for a backend/model/tuning assessment.
- *
- * `encodeLocalModelAssessmentKey`, `decodeLocalModelAssessmentKey`, and `localModelAssessmentPath` —
- * reversible base64url identity for a measured backend/model/tuning tuple, including the explicit null
- * backend-default tuning. Invalid keys return `null` so selected-evidence routes can recover without
- * guessing.
  */
 
 const KEY_VERSION = 1;

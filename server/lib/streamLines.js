@@ -1,14 +1,5 @@
 // Buffered chunk→line splitter for child-process stdout/stderr streams.
 //
-// `createLineReader(onLine, {splitRe?, maxCarry?})` + `createOutputTail({budget?})` — buffered
-// chunk→line splitter for child-process stdout/stderr. Carries the partial trailing line across `data`
-// chunks and `flush()`es the final unterminated line on `close`; carry clamp guards a newline-less
-// runaway stream. One reader per stream (a shared buffer corrupts marker lines). `splitRe: /[\r\n]+/`
-// handles torch/tqdm bare-`\r` progress redraws. `createOutputTail` is the sibling rolling buffer of
-// recent lines (char-budgeted, decoration-only lines skipped so an ASCII-art banner cannot push the
-// real error out) that turns "exited with code 1" into what the tool actually printed — used by
-// `streamingSpawn.js`.
-//
 // Node delivers a stream's 'data' chunks on arbitrary byte boundaries, so a
 // single output line can arrive split across two chunks (or several lines can
 // arrive in one chunk). `createLineReader` carries the partial trailing line

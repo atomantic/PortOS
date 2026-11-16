@@ -3,6 +3,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+import { applyMusicVideoEdit } from '../lib/musicVideoEditResult.js';
 
 const author = vi.hoisted(() => ({ sections: [], calls: 0, prompts: [] }));
 vi.mock('../services/promptRunner.js', () => ({
@@ -50,6 +51,8 @@ app.use(express.json()); app.use('/api/music-video', router); app.use(errorMiddl
 let project, base, draft;
 const read = () => request(app).get(`${base}/production-review`);
 const save = body => request(app).put(`${base}/production-review`).send(body);
+// Review actions answer with an edit result, not the project: read the record they saved.
+const stored = async () => (await read()).body.project;
 async function approve(stage, extra = {}) {
   const status = await read();
   const excerpt = status.body.project.excerpts?.find(e => e.id === status.body.project.productionReview?.proof?.excerptId);
@@ -295,7 +298,8 @@ describe('human-reviewed Music Video workflow', () => {
     const saved = await save({ ...draft, timingNotes: 'Checked the updated fixture word onsets.', implementationPlan: 'Keep the existing renderer.' });
     expect(saved.body.readiness.alignment.status).toBe('stale');
     expect(saved.body.readiness.storyboard.problems.join(' ')).toContain('Lyric alignment is provisional or changed');
-    const reverify = (basis = saved.body.readiness.alignment.basis, notes = saved.body.project.productionReview.draft.timingNotes) =>
+    const savedNotes = (await stored()).productionReview.draft.timingNotes;
+    const reverify = (basis = saved.body.readiness.alignment.basis, notes = savedNotes) =>
       request(app).post(`${base}/production-review/alignment`).set('authorization', 'Bearer synthetic-agent').send({ basis, notes });
     auth.authenticated = false;
     expect((await reverify()).status).toBe(401);
@@ -310,8 +314,9 @@ describe('human-reviewed Music Video workflow', () => {
     expect(reviewed.status).toBe(200);
     expect(reviewed.body.readiness.alignment.status).toBe('verified');
     expect(reviewed.body.readiness.storyboard.approved).toBe(false);
-    expect(reviewed.body.project.productionReview.draft.timingNotes).toBe('Checked the updated fixture word onsets.');
-    expect(reviewed.body.project.productionReview.alignmentReview.reviewer).toMatchObject({ kind: 'session', sessionId: 'shared-agent-session' });
+    const reviewedProject = await stored();
+    expect(reviewedProject.productionReview.draft.timingNotes).toBe('Checked the updated fixture word onsets.');
+    expect(reviewedProject.productionReview.alignmentReview.reviewer).toMatchObject({ kind: 'session', sessionId: 'shared-agent-session' });
     expect((await approve('art')).status).toBe(200);
     expect((await approve('storyboard')).status).toBe(200);
   });
@@ -393,14 +398,15 @@ describe('human-reviewed Music Video workflow', () => {
       storyboard: [{ id: 'shot-a', sceneId: null, startSec: 0, endSec: 20, action: 'Open doorway', staging: 'Foreground', camera: 'Dolly', transition: 'Match cut' }] });
     const imported = await request(app).post(`${base}/production-review/import`).send({ source });
     expect(imported.status).toBe(200);
-    expect(imported.body.project.productionReview.approvals).toEqual({});
-    expect(imported.body.project.productionReview.draft.storyboard[0].sceneId).toBeNull();
-    expect(imported.body.project.productionReview.draft.timingStatus).toBe('provisional');
-    const preserved = await request(app).get(`${base}/dev-artifacts/${imported.body.project.productionReview.draft.sourceArtifactId}/file`);
+    const importedProject = imported.body.project;
+    expect(importedProject.productionReview.approvals).toEqual({});
+    expect(importedProject.productionReview.draft.storyboard[0].sceneId).toBeNull();
+    expect(importedProject.productionReview.draft.timingStatus).toBe('provisional');
+    const preserved = await request(app).get(`${base}/dev-artifacts/${importedProject.productionReview.draft.sourceArtifactId}/file`);
     expect(preserved.status).toBe(200);
     const bound = await request(app).post(`${base}/production-review/shots/shot-a/bind`).send({});
     expect(bound.status).toBe(200);
-    expect(bound.body.project.productionReview.draft.storyboard[0].sceneId).toBeTruthy();
+    expect((await stored()).productionReview.draft.storyboard[0].sceneId).toBeTruthy();
     expect((await request(app).post(`${base}/production-review/shots/shot-a/bind`).send({})).status).toBe(409);
     expect(bound.body.readiness.readyForProduction).toBe(false);
   });
@@ -412,12 +418,14 @@ describe('human-reviewed Music Video workflow', () => {
     await request(app).post(`${base}/production-review/import`).send({ source });
     const bound = await request(app).post(`${base}/production-review/shots/rink/bind`).send({});
     expect(bound.status).toBe(200);
-    const scene = id => bound.body.project.scenes.find(s => s.sceneId === id);
-    const [rink] = bound.body.project.productionReview.draft.storyboard;
+    const boundProject = await stored();
+    const scene = id => boundProject.scenes.find(s => s.sceneId === id);
+    const [rink] = boundProject.productionReview.draft.storyboard;
     expect(scene(rink.sceneId).framePrompt).toBe('Mia skates a slow circle Rink floor. In frame: Mia (age 9, red scarf)');
-    const full = await request(app).post(`${base}/production-review/shots/full/bind`).send({});
-    const fs = full.body.project.productionReview.draft.storyboard[1];
-    expect(full.body.project.scenes.find(s => s.sceneId === fs.sceneId).framePrompt).toBe('Mia waves from the rink floor at dusk In frame: Mia (age 9, red scarf)');
+    expect((await request(app).post(`${base}/production-review/shots/full/bind`).send({})).status).toBe(200);
+    const full = await stored();
+    const fs = full.productionReview.draft.storyboard[1];
+    expect(full.scenes.find(s => s.sceneId === fs.sceneId).framePrompt).toBe('Mia waves from the rink floor at dusk In frame: Mia (age 9, red scarf)');
   });
 
   it('retains targeted feedback across revisions and imports without granting production approval', async () => {
@@ -430,7 +438,7 @@ describe('human-reviewed Music Video workflow', () => {
     expect((await read()).body.readiness.art.approved).toBe(false);
     await approve('art'); await approve('storyboard');
     const feedback = await comment('proof', 'request-changes', 'Keep the figure behind the doorway during the camera move.');
-    const entry = feedback.body.project.productionReview.feedback.at(-1);
+    const entry = (await stored()).productionReview.feedback.at(-1);
     expect(feedback.body.feedbackId).toBe(entry.id);
     expect(feedback.body.readiness.art.approved).toBe(true);
     expect(feedback.body.readiness.storyboard.approved).toBe(true);
@@ -509,15 +517,16 @@ describe('document-bound storyboard revision', () => {
     expect((await bind({ documentDirectory, sourceFile: 'engine.js', shots: [shots[0], shots[0]] })).status).toBe(400);
     const bound = await bind({ documentDirectory, sourceFile: 'engine.js', shots });
     expect(bound.status).toBe(200);
-    expect(bound.body.project.scenes).toHaveLength(1);
-    expect(bound.body.project.productionReview.draft.storyboard).toHaveLength(2);
+    const boundProject = await stored();
+    expect(boundProject.scenes).toHaveLength(1);
+    expect(boundProject.productionReview.draft.storyboard).toHaveLength(2);
     const prepared = await request(app).post(`${base}/production-review/prepare`).send({});
     expect(prepared.body.project.productionReview.draft.storyboard).toEqual(shots);
     expect((await request(app).post(`${base}/production-review/shots/authored-intro/bind`).send({})).status).toBe(409);
     expect((await approve('storyboard')).status).toBe(200);
     const accepted = await read();
     const oldBasis = accepted.body.readiness.basis.storyboard;
-    await save({ ...bound.body.project.productionReview.draft, storyboard: shots.map((s, i) => i ? s : { ...s, camera: 'New track' }) });
+    await save({ ...boundProject.productionReview.draft, storyboard: shots.map((s, i) => i ? s : { ...s, camera: 'New track' }) });
     expect((await approve('storyboard')).status).toBe(409);
     await bind({ documentDirectory, sourceFile: 'engine.js', shots });
     expect((await approve('storyboard')).status).toBe(200);
@@ -615,8 +624,9 @@ describe('reverting a changed input to its approved value (#10241)', () => {
     expect((await revert({ stage: 'storyboard', field: 'scene 1 prompt' })).status).toBe(200);
     const done = await revert({ stage: 'art', field: 'concept' });
     expect(done.status).toBe(200);
-    expect(done.body.project.concept).toEqual({ prompt: 'Approved idea' });
-    expect(done.body.project.scenes.find(s => s.sceneId === sceneId).prompt).toBe('A paper figure opens a painted doorway.');
+    const restored = await stored();
+    expect(restored.concept).toEqual({ prompt: 'Approved idea' });
+    expect(restored.scenes.find(s => s.sceneId === sceneId).prompt).toBe('A paper figure opens a painted doorway.');
     expect(done.body.readiness.art.approved).toBe(true);
     expect(done.body.readiness.storyboard.approved).toBe(true);
   });
@@ -641,5 +651,55 @@ describe('reverting a changed input to its approved value (#10241)', () => {
     await store.updateProject(project.id, { concept: { prompt: big } });
     expect((await approve('art')).status).toBe(200);
     expect((await store.getProject(project.id)).productionReview.approvals.art.values).not.toHaveProperty('concept');
+  });
+});
+
+// #16210: a review action answers with the board edit result, not the whole project. Folded into the
+// `GET /:id` the board held before it (by the client's own reducer), it gives the `GET /:id` after it.
+describe('review action replies carry what a reload would show', () => {
+  const full = async () => (await request(app).get(base)).body;
+  async function expectReloadParity(send) {
+    const before = await full();
+    const reply = await send();
+    expect(reply.status).toBe(200);
+    expect(reply.body).not.toHaveProperty('project');
+    const after = await full();
+    expect(applyMusicVideoEdit(before, reply.body.edit)).toEqual(after);
+    expect(reply.body.readiness).toEqual(after.productionReadiness);
+    return { after, reply: reply.body };
+  }
+
+  it('save, approve, feedback, resolve, lyric anchors, stale rows and revert each fold into the reloaded record', async () => {
+    const saved = await expectReloadParity(() => save({ ...draft, implementationPlan: 'Example plan' }));
+    expect(saved.reply.edit.project.productionReview.draft.implementationPlan).toBe('Example plan');
+    const art = await expectReloadParity(() => approve('art'));
+    expect(art.reply.edit.project.productionReadiness.art.approved).toBe(true);
+    await expectReloadParity(() => approve('storyboard'));
+    const basis = (await read()).body.readiness.basis.storyboard;
+    const noted = await expectReloadParity(() => request(app).post(`${base}/production-review/feedback`)
+      .send({ stage: 'storyboard', decision: 'request-changes', text: 'Example change request', target: 'shot 1', basis }));
+    expect(noted.reply.feedbackId).toBe(noted.after.productionReview.feedback.at(-1).id);
+    await expectReloadParity(() => request(app).post(`${base}/production-review/feedback/resolve`)
+      .send({ feedbackId: noted.reply.feedbackId, resolution: 'Example resolution' }));
+    await expectReloadParity(() => request(app).post(`${base}/production-review/lyric-anchors`).send({}));
+    await expectReloadParity(() => request(app).delete(`${base}/production-review/stale-rows`));
+    await store.updateProject(project.id, { concept: { prompt: 'Drifted idea' } });
+    const reverted = await expectReloadParity(() => request(app).post(`${base}/production-review/revert`).send({ stage: 'art', field: 'concept' }));
+    expect(reverted.reply.edit.project.concept).toEqual(reverted.after.concept);
+  });
+
+  it('bind folds in too, the bound shot arriving as a new scene', async () => {
+    const source = JSON.stringify({ storyboard: [{ id: 'shot-a', startSec: 0, endSec: 20, action: 'Open doorway', staging: 'Foreground', camera: 'Dolly', transition: 'Cut' }] });
+    // A plan import saves its source artifact first, a write of its own, so it answers with the project.
+    expect((await request(app).post(`${base}/production-review/import`).send({ source })).body.project.productionReview.draft.storyboard).toHaveLength(1);
+    const bound = await expectReloadParity(() => request(app).post(`${base}/production-review/shots/shot-a/bind`).send({}));
+    const sceneId = bound.after.productionReview.draft.storyboard[0].sceneId;
+    expect(bound.reply.edit.scenes.map(scene => scene.sceneId)).toContain(sceneId);
+  });
+
+  it('answers a readiness read without the project', async () => {
+    const reply = await request(app).get(`${base}/production-review/readiness`);
+    expect(reply.status).toBe(200);
+    expect(reply.body).toEqual({ readiness: (await read()).body.readiness });
   });
 });
