@@ -1,4 +1,5 @@
 // @vitest-environment node
+// test-memo: never (tree-wide scanner)
 
 /**
  * Rule: No local `const`/`let`/`var` binding may shadow a bare-called global (`setTimeout`, `setInterval`, `fetch`, etc.).

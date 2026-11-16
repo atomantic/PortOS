@@ -1,4 +1,5 @@
 // @vitest-environment node
+// test-memo: never (tree-wide scanner)
 
 /**
  * Rule: Pick AI providers through `ProviderModelSelector` (`components/ProviderModelSelector.jsx`), never a hand-rolled `<select>` mapping over a provider list.

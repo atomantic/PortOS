@@ -1,4 +1,5 @@
 // @vitest-environment node
+// test-memo: never (tree-wide scanner)
 
 /**
  * Rule: A stale-response test must flush the resolved promise with `await act(async () => { resolveOld(payload); })` before asserting absence.

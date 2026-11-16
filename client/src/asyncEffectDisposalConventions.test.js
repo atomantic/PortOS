@@ -1,4 +1,5 @@
 // @vitest-environment node
+// test-memo: never (tree-wide scanner)
 
 /**
  * Rule: An async `useEffect` keyed to a switchable dependency must drop superseded responses (local flip flag `let active = true; …`, generation ref, or `AbortController`).

@@ -1,4 +1,5 @@
 // @vitest-environment node
+// test-memo: never (tree-wide scanner)
 
 /**
  * Rule: A page or component list fetch must not collapse a failed read into an empty list (client half of root `AGENTS.md` sentinel rule); `KNOWN` is a shrink-only ratchet.

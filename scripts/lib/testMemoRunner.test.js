@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join, posix, win32 } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  clearVitestDependencies, fileResultsFromReport, findVitestDependenciesFile, passedTestFiles, planTestMemo, readVitestDependencies,
+  clearVitestDependencies, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, passedTestFiles, planTestMemo, readVitestDependencies,
   recordTestMemo, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
 } from './testMemoRunner.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry } from './testMemoStore.js';
@@ -182,6 +182,40 @@ describe('planTestMemo and recordTestMemo', () => {
     // Nothing is analyzed for a files plan with the memo off: the list is the plan.
     expect(off.verdicts.size).toBe(0);
     expect(plan({ memoDir: null, mode: 'related', repoFiles: [], repoSources: ['server/lib/a.js'] }).selected).toEqual(['server/lib/a.test.js']);
+  });
+
+  it('skips closure analysis for a files plan member that can never be memoized but still memoizes ordinary suites', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-memo-never-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-never-store-'));
+    const guard = 'server/lib/layering.test.js'; // always-run guard
+    const listed = 'server/lib/moduleSummaries.test.js'; // TEST_MEMO_NEVER entry
+    const marked = 'server/lib/marked.test.js';
+    const ordinary = 'server/lib/c.test.js';
+    writeRepo(root, {
+      ...FILES,
+      [guard]: "import { it } from 'vitest';\nit('g', () => {});\n",
+      [listed]: "import { it } from 'vitest';\nit('l', () => {});\n",
+      [marked]: "// test-memo: never\nimport { it } from 'vitest';\nit('m', () => {});\n",
+    });
+    const files = [guard, listed, marked, ordinary];
+    const mixed = plan({ repoFiles: files });
+    expect(mixed.unanalyzed).toBe(3);
+    for (const test of [guard, listed, marked]) expect(mixed.verdicts.has(test)).toBe(false);
+    expect(mixed.verdicts.has(ordinary)).toBe(true);
+    expect(mixed.run).toEqual([guard, listed, marked, ordinary].sort());
+
+    writeMemoEntry(memoDir, mixed.verdicts.get(ordinary).floor.key, { test: ordinary, workspace: 'server', source: 'local' });
+    const warm = plan({ repoFiles: files });
+    expect(warm.skipped).toEqual([{ test: ordinary, via: 'floor' }]);
+    expect(warm.run).toEqual([guard, listed, marked].sort());
+
+    // A plan made only of never-memoized files analyzes nothing and says so.
+    const only = plan({ repoFiles: [guard, marked] });
+    expect(only.verdicts.size).toBe(0);
+    expect(only.run).toEqual([guard, marked].sort());
+    expect(memoSummaryLine(only)).toContain('2 never-memoized guards not analyzed.');
+    // Related mode still resolves every closure: the marker only prunes files-mode plans.
+    expect(plan({ mode: 'related', repoFiles: [marked], repoSources: [] }).unanalyzed).toBe(0);
   });
 
   it('reuses a full-run shard memo in a scoped partition and reruns changed or unseeded files', () => {

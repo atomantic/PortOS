@@ -1,3 +1,5 @@
+// test-memo: never (tree-wide scanner)
+
 import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';

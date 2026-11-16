@@ -1,3 +1,5 @@
+// test-memo: never (tree-wide scanner)
+
 /**
  * Rule: A class string that hides a control (`opacity-0`, `hidden`, `invisible`) and reveals it on hover must scope the hide to hover-capable devices (`[@media(hover:hover)]:…`) or restore it on touch (`pointer-coarse:opacity-100`).
  * Fix: Prefix the hide with `[@media(hover:hover)]:` or add `[@media(hover:none)]:opacity-100` / `pointer-coarse:opacity-100`.
