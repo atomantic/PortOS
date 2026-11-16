@@ -118,7 +118,11 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.media.settings', path: '/media/image?settings=1', label: 'Media Gen Settings', section: 'Create', aliases: ['media-settings', 'image-gen-settings', 'sd-settings', 'video-gen-settings'] },
   { id: 'nav.writers-room', path: '/writers-room', label: 'Writers Room', section: 'Create', aliases: ['writers-room', 'writersroom', 'writer', 'write', 'studio', 'novel'], keywords: ['prose', 'screenplay', 'story', 'draft', 'manuscript', 'literary', 'novel', 'short story'] },
   { id: 'nav.writers-room.guide', path: '/writers-room/guide', label: 'Writers Room Guide', section: 'Create', aliases: ['writers-room-guide', 'writing-guide', 'writing-rules', 'word-count', 'length-targets'], keywords: ['microfiction', 'flash fiction', 'short story', 'novelette', 'novella', 'novel length', 'word count', 'character count', 'book length', 'craft', 'writing advice', 'emotional roadmap', 'documentation', 'help'] },
-  { id: 'nav.settings.prompts', path: '/prompts', label: 'Prompts', section: 'Settings', tabId: 'prompts', navGroup: 'Agents', aliases: ['prompts'] },
+  // /prompts lands on its Stages tab; each editor is its own `/prompts/:tab`
+  // route, and a pre-route `/prompts?tab=` link redirects onto it in the page.
+  { id: 'nav.settings.prompts', path: '/prompts', label: 'Prompts', section: 'Settings', tabId: 'prompts', navGroup: 'Agents', aliases: ['prompts', 'prompt-stages'], keywords: ['stage', 'template', 'prompt manager'] },
+  { id: 'nav.settings.prompts.variables', path: '/prompts/variables', label: 'Prompt Variables', section: 'Settings', aliases: ['prompt-variables'], keywords: ['variable', 'snippet', 'prompt manager'] },
+  { id: 'nav.settings.prompts.job-skills', path: '/prompts/job-skills', label: 'Job Skills', section: 'Settings', aliases: ['job-skills', 'prompt-job-skills'], keywords: ['job skill', 'autonomous job', 'skill template', 'prompt manager'] },
   // The AI Providers page is three views over the composed model (#7567, epic
   // #7561): Presets (the stored records, the page's index), Harnesses (the
   // programs and their enablement, plus credential-bootstrap apps) and Services

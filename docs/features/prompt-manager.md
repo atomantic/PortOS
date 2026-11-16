@@ -6,7 +6,8 @@ Customizable AI prompts for all backend AI operations with file-based storage an
 
 - **Prompt Service** (`server/services/promptService.js`): Template loading, variable substitution, stage configuration
 - **Prompt Routes** (`server/routes/prompts.js`): REST API endpoints
-- **Prompt Page** (`client/src/pages/PromptManager.jsx`): Stages, Variables, Elements tabs with live preview
+- **Prompt Page** (`client/src/pages/PromptManager.jsx`): routed tabs at `/prompts/:tab` (`stages`, `variables`, `job-skills`); `/prompts` and legacy `?tab=` links redirect there, keeping `?stage=` / `?var=` / `?skill=`
+- **Editors** (`client/src/components/prompts/`): `StagesEditor`, `VariablesEditor` and `JobSkillsEditor`, each owning its catalogue and state; `useRecordEditor` holds the shared saved / dirty / pending-switch / detail-read state behind the unsaved-changes guard on record and tab switches
 
 ## Features
 
