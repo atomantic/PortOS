@@ -57,15 +57,9 @@
  * decode cheap are mutually exclusive. Everything published that would actually
  * be light — a tiny autoencoder, a quantized repack, a decoder-only head —
  * cannot load through the pinned strict loader, and everything that CAN load is
- * a full-size VAE that saves nothing. Phosphene, the reference install that
- * prompted issue #5423, gets its ~23 MB TAE only by pinning its OWN runner fork
- * that implements a TAE decoder module and takes `--draft-decode tae`. PortOS
- * pins upstream instead, so an asset here would not be a table row — it would
- * be a fork of a multi-hour render path, which is its own decision.
- *
- * Shipping the gates first is still the right call: the day a qualifying asset
- * appears it is one table row plus a migration, and every fallback path it
- * depends on is already covered by tests.
+ * a full-size VAE that saves nothing. An asset here would mean forking the
+ * pinned upstream runner, which is its own decision; the gates ship first so a
+ * qualifying asset later is one table row plus a migration.
  *
  * Pure module: no I/O, and the one import is a sibling lib predicate.
  */

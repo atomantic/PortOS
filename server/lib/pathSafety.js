@@ -15,11 +15,6 @@ import { escapeRegExp } from './textUtils.js';
  * allowed extensions — refuses path-traversal, null bytes, separators, and
  * exact `.` / `..`. Throws a 400 ServerError with code VALIDATION_ERROR
  * so calling routes don't have to repeat the check.
- *
- * Consolidates the two near-identical assertions that used to live in
- * `services/loras.js#assertSafeLoraFilename` (`.safetensors` only) and
- * `services/imageGen/local.js#assertGalleryFilename` (`.png` only).
- *
  * Substring `..` is intentionally allowed (e.g. `foo..bar.png` is fine);
  * only the exact-string traversal cases are rejected. Path separators (`/`
  * and `\`) are rejected on every platform — the same input gets posted
