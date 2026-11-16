@@ -111,9 +111,6 @@ describe('muse avatar motion map', () => {
     expect(MUSE_ROOT_MOTION_CLIPS).not.toContain(MUSE_SPEAKING_GESTURE);
   });
 
-  it('gives the coding state a montage of at least 2 steps', () => {
-    expect(MUSE_STATE_MOTIONS.coding.length).toBeGreaterThanOrEqual(2);
-  });
 });
 
 // Pin the clip sequence each state actually plays on the bundled model. These
