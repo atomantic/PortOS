@@ -586,6 +586,11 @@ const musicVideoPoolAssetSchema = z.object({
   if (!parsed.success) ctx.addIssue({ code: 'custom', path: ['assetId'], message: parsed.error.issues[0].message });
 });
 
+/** `?edit=1` on a project PATCH: the tab asks for the board edit result instead of the project. */
+export const musicVideoProjectPatchQuerySchema = z.object({
+  edit: z.literal('1').optional(),
+}).strict();
+
 /** A search over a video's media pool by the prompts its stills and clips were made from. */
 export const musicVideoPoolSearchQuerySchema = z.object({
   q: z.string().trim().min(1).max(200),
