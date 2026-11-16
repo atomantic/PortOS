@@ -12,9 +12,8 @@ import { fileURLToPath } from 'url';
 import { DAY } from '../../lib/fileUtils.js';
 import { extractTaskType } from '../taskLearning/store.js';
 
-// Tracker labels + slug marker. The slug is the stable dedup key the reasoner
-// chooses; it is embedded in each filed issue body so a later run (or the
-// reasoner reading open issues) can self-avoid duplicates.
+// Tracker labels + slug marker. The slug is the stable dedup key, embedded in each
+// filed issue body so later runs can self-avoid duplicates.
 export const LI_LABEL = 'layered-intelligence';
 export const LI_BLOCKING_LABEL = 'layered-intelligence:blocking';
 
@@ -30,10 +29,8 @@ export const LI_BLOCKING_LABEL_SPEC = Object.freeze({ name: LI_BLOCKING_LABEL, c
 // default for managed apps too.
 export const PLANNED_WORK_LABEL = 'plan';
 
-// How many planned-work items are surfaced to the reasoner. The point is to give
-// it enough of the committed backlog to spot an overlap, not to reproduce the
-// tracker — the count of the FULL set is always reported alongside, so a
-// truncated list never reads as the whole picture.
+// How many planned-work items are surfaced to the reasoner; the FULL count is always
+// reported alongside so a truncated list never reads as the whole backlog.
 export const PLANNED_WORK_MAX_ITEMS = 15;
 
 // Character bound for the rendered plannedWork block, matching the other
@@ -45,16 +42,11 @@ export const PLANNED_WORK_MAX_CHARS = 8000;
 // against it".
 export const PLANNED_WORK_GUIDANCE = 'Cross-reference your proposal against the user\'s actively-planned work above. If your proposal duplicates or conflicts with an active item, DO NOT file — return proposal: null. Only propose genuinely new work that does NOT overlap with what is already in scope.';
 
-// The LI Proposal Playbook (#2763): standing, human-authored guidance distilling
-// which proposals actually land vs. get rejected — scope selection, success/rejection
-// pattern catalogs, task-type selection rules, and a goal-alignment check. Loaded
-// once from the co-located markdown file so the prose stays reviewable-as-prose and
-// buildPrompt can render it verbatim as the always-on `liPlaybook` block. It ships in
-// the SOURCE tree (not seeded to data/prompts/), so it is code-versioned guidance that
-// updates with the code — NOT a user-customizable stage prompt, and thus needs no
-// PROMPT_VERSIONS bump or setup-data migration. Read synchronously at module load so
-// the constant is ready before the first buildPrompt call; the file ships with the
-// module, so a miss is a packaging bug worth surfacing loudly rather than swallowing.
+// The LI Proposal Playbook (#2763): human-authored guidance on which proposals land vs.
+// get rejected, loaded once from the co-located markdown and rendered verbatim as the
+// `liPlaybook` block. It ships in the SOURCE tree (not seeded to data/prompts/), so it
+// needs no PROMPT_VERSIONS bump. Read synchronously at load; a miss is a packaging bug
+// worth failing loudly.
 export const LI_PROPOSAL_PLAYBOOK = readFileSync(
   // `..` — the playbook ships next to the barrel in server/services/, one level
   // up from this module's ./layeredIntelligence/ directory (#2842 split).
@@ -85,11 +77,9 @@ export const LI_JIRA_BLOCKING_LABEL = 'layered-intelligence-blocking';
 // so the loop doesn't immediately re-file something the user just resolved.
 export const CLOSED_SUPPRESSION_MS = 30 * DAY;
 
-// Cosine-similarity floor for the semantic (embedding) near-duplicate guard that
-// layers atop the exact slug/label dedup. A proposal whose embedding is at least
-// this close to an existing dedup-window issue is treated as the same work worded
-// differently and suppressed. Deliberately conservative — only near-identical
-// intent should trip it (768-dim local embeddings put genuine near-dups ≳0.9).
+// Cosine-similarity floor for the embedding near-duplicate guard atop exact slug/label
+// dedup. Deliberately conservative: only near-identical intent trips it (768-dim local
+// embeddings put genuine near-dups at about 0.9 and above).
 export const SEMANTIC_DEDUP_THRESHOLD = 0.9;
 
 // Cap the number of existing issues embedded per run so a repo with a large LI
@@ -97,11 +87,9 @@ export const SEMANTIC_DEDUP_THRESHOLD = 0.9;
 // issues should be few (the loop files ≤1/run), so this is a generous ceiling.
 export const SEMANTIC_DEDUP_MAX_CANDIDATES = 50;
 
-// The id of the RETIRED global autonomous-job that used to drive the whole loop
-// (the cross-app sweep). Layered Intelligence is now a per-app handler-backed
-// scheduled task (#2322), so this constant is kept ONLY so migration 184 can find
-// and tombstone the legacy `data/cos/autonomous-jobs.json` record on installs that
-// still carry it. Nothing dispatches on it anymore.
+// The RETIRED global autonomous-job id that drove the old cross-app sweep. LI is now a
+// per-app handler-backed scheduled task (#2322); kept ONLY so migration 184 can
+// tombstone the legacy record. Nothing dispatches on it.
 export const LI_JOB_ID = 'job-layered-intelligence';
 
 // Every proposal scope the reasoner may return. The handler enforces WHERE each
@@ -126,31 +114,21 @@ export const HANDOFF_COMPLEXITY = 'trivial';
 // Measured over RESOLVED proposals only — see computeOutcomesReport.
 export const LOW_MERGE_RATE_THRESHOLD = 20;
 
-// Minimum RESOLVED proposals before the low-merge-rate alarm is allowed to fire.
-// 0-of-1 and 0-of-50 are both "0%", but only the second is evidence: telling the
-// loop its rate is "critically low" after a single early rejection biases it
-// toward filing nothing, which is self-reinforcing — it can never earn a merge if
-// it stops proposing. A rate needs a sample before it means anything.
+// Minimum RESOLVED proposals before the low-merge-rate alarm fires. A single early
+// rejection must not tell the loop its rate is "critically low": that biases it toward
+// filing nothing, so it could never earn a merge.
 export const LOW_MERGE_RATE_MIN_SAMPLE = 4;
 
 // LI's SCHEDULE name (taskSchedule.js SELF_IMPROVEMENT_TASK_TYPES) — also the key
 // the type-failure ledger uses. NOT the key its runs are recorded under.
 export const LI_SCHEDULED_TASK_TYPE = 'layered-intelligence';
 
-// The `learning.json` byTaskType key LI's own agent runs actually land under — the
-// bucket computeSelfEvalSummary reads to judge whether the LI machinery ITSELF is
-// healthy (as opposed to how its proposals fare downstream once filed).
-//
-// DERIVED, never restated: a scheduled LI task is generated with
-// `metadata.analysisType = 'layered-intelligence'` (cosTaskGenerator's
-// generateSelfImprovementTaskForType), and extractTaskType's FIRST branch turns any
-// task carrying an analysisType into `self-improve:<type>` — so these runs are
-// recorded under `self-improve:layered-intelligence`, not the bare schedule name.
-// The bare name IS correct in two OTHER stores (the schedule map and the
-// type-failure ledger), which makes this an easy and silent thing to get wrong:
-// guessing it would leave the execution-health signal permanently reading "no LI
-// runs recorded yet". Building the key with the same function the WRITER uses means
-// it cannot drift out of sync with however task types are keyed later.
+// The `learning.json` byTaskType key LI's own agent runs land under, read by
+// computeSelfEvalSummary. DERIVED, never restated: a scheduled LI task carries
+// `metadata.analysisType = 'layered-intelligence'`, so extractTaskType records it as
+// `self-improve:<type>`, not the bare schedule name (which is correct only in the
+// schedule map and type-failure ledger). Building the key with the writer's own
+// function keeps it from drifting.
 export const LI_TASK_TYPE = extractTaskType({ metadata: { analysisType: LI_SCHEDULED_TASK_TYPE } });
 
 // LI-task success rate (%) below which selfEval reports the loop's own execution
@@ -160,32 +138,19 @@ export const LI_TASK_TYPE = extractTaskType({ metadata: { analysisType: LI_SCHED
 // being rejected is normal triage, an LI run outright failing is not.
 export const LI_DEGRADED_SUCCESS_THRESHOLD = 50;
 
-// Minimum recorded LI runs before the degraded-execution signal is allowed to
-// fire, for the same reason as LOW_MERGE_RATE_MIN_SAMPLE: 0-of-1 and 0-of-50 are
-// both "0%", but only the second is evidence. Below the floor the rate is
-// reported as-is but is NOT treated as a confidence signal either way.
+// Minimum recorded LI runs before the degraded-execution signal fires (0-of-1 and
+// 0-of-50 are both "0%", only the second is evidence).
 export const LI_DEGRADED_MIN_SAMPLE = 4;
 
-// LI execution health (%) below which the deterministic HARD PRE-FILING EXCLUSION
-// gate (#2824) arms. Distinct from LI_DEGRADED_SUCCESS_THRESHOLD (50 — the "your
-// loop is failing, hold a higher bar" ADVISORY line surfaced to the reasoner): the
-// hard gate does not advise, it SUPPRESSES filing, so it opens a WIDER, more cautious
-// net. Once LI's own runs dip below three-quarters success it stops FILING self-
-// directed work it demonstrably cannot see through, rather than merely being warned.
-// Reuses the SCOPE_PREFER value (75) intentionally: the same "reliably executes" bar
-// that marks a proposal DOMAIN preferable is the bar LI's own execution health must
-// clear before it is trusted to file self-improvement work. The gate arms only on a
-// CONFIDENT read (>= LI_DEGRADED_MIN_SAMPLE runs) — a cold loop is never locked out.
+// LI execution health (%) below which the hard pre-filing exclusion gate (#2824) arms.
+// Unlike LI_DEGRADED_SUCCESS_THRESHOLD (advisory), this SUPPRESSES filing, so it uses a
+// wider net: the SCOPE_PREFER value (75), the bar that marks a domain "reliably
+// executes". Arms only on a confident read (>= LI_DEGRADED_MIN_SAMPLE runs).
 export const LI_HARD_GATE_EXECUTION_THRESHOLD = 75;
 
-// Sliding window for the approval-funnel metrics (#3120) — the span over which the
-// approval rate and the time-to-decision medians are measured. Deliberately SHORTER
-// than the 30-day record retention (CLOSED_SUPPRESSION_MS, which is the hard ceiling on
-// what the store can still see): a window equal to retention would make the "recent"
-// rate identical to the lifetime rate summarizeOutcomeStats already reports, so it would
-// never move when the user's triage behavior changes. Two weeks is long enough to hold
-// several proposals from a loop that files at most one per run, short enough that a
-// change in triage habits shows up within a couple of runs.
+// Window for approval-funnel metrics (#3120). Deliberately shorter than the 30-day
+// retention (CLOSED_SUPPRESSION_MS): a window equal to retention would equal the
+// lifetime rate and never move when triage habits change.
 export const LI_APPROVAL_FUNNEL_WINDOW_MS = 14 * DAY;
 
 // Age thresholds (in days) for the approver-delay buckets (#3120): how many proposals
@@ -194,10 +159,9 @@ export const LI_APPROVAL_FUNNEL_WINDOW_MS = 14 * DAY;
 // Ascending order is load-bearing for the rendered line and the bucket keys.
 export const LI_APPROVAL_DELAY_BUCKET_DAYS = [1, 3, 7];
 
-// Approved proposals need a separate evidence floor from LI's own reasoning runs:
-// a single accepted proposal that is still awaiting execution is not enough evidence
-// to lock the loop out of self-directed work. Once five approvals exist, a poor
-// approval → completion rate is a real delivery signal rather than cold-start noise.
+// Evidence floor for approved proposals, separate from LI's reasoning runs: one accepted
+// proposal awaiting execution must not lock the loop out; five approvals make a poor
+// completion rate a real delivery signal.
 export const LI_DELIVERY_MIN_SAMPLE = 5;
 
 // LI's approval → completion rate (%) below which the hard pre-filing exclusion gate
@@ -206,66 +170,37 @@ export const LI_DELIVERY_MIN_SAMPLE = 5;
 // to reach delivery, and neither rate is allowed to mask the other.
 export const LI_HARD_GATE_DELIVERY_THRESHOLD = 50;
 
-// The resolved outcomes a filed proposal can reach (the feedback loop, #2428).
-// A record with a null outcome is still open/unresolved. All three are
-// auto-derived from the tracker's closed state by deriveOutcome: completed →
-// merged, not_planned → rejected, and any other PRESENT close reason
-// (duplicate/stale/etc.) → abandoned (#2620); a reason-less close falls back
-// to merged for trackers that report no stateReason.
+// Resolved outcomes of a filed proposal (#2428); null means still open. deriveOutcome
+// maps the tracker close state: completed → merged, not_planned → rejected, any other
+// present reason → abandoned (#2620); a reason-less close falls back to merged.
 export const PROPOSAL_OUTCOMES = ['merged', 'rejected', 'abandoned'];
 
-// The EXECUTION outcomes an LI proposal reaches once it is handed off to a coding
-// agent and that agent's run completes (#2765). Distinct from PROPOSAL_OUTCOMES
-// (the FILING fate — did the issue get merged/closed): execution is "did LI's own
-// coding agent successfully implement the proposal it filed". Only populated for
-// proposals that took the Engine-A hand-off path (config.handoff.enabled + a
-// trivial+safe proposal); a filed-but-never-handed-off proposal keeps a null
-// executionOutcome. Environmental failures (rate-limit/outage) are NOT recorded —
-// they say nothing about the proposal's domain (same gate as #2618).
+// EXECUTION outcomes of an LI proposal handed off to a coding agent (#2765), distinct
+// from the filing fate in PROPOSAL_OUTCOMES. Null for proposals never handed off.
+// Environmental failures (rate-limit/outage) are not recorded: they say nothing about
+// the proposal's domain (#2618).
 export const PROPOSAL_EXECUTION_OUTCOMES = ['success', 'failure'];
 
-// Minimum recorded executions before a proposal DOMAIN's success rate is trusted
-// for the per-domain avoid/prefer split (#2765). Lower than SCOPE_AWARENESS_MIN_SAMPLE
-// (3) because each data point here is a REAL, high-signal LI-proposal execution — not
-// install-wide task-type telemetry that a proposal only loosely maps onto — and the
-// hand-off path is rare, so a floor of 2 lets a genuine per-domain signal surface
-// without letting a single fluke mint a list.
+// Minimum recorded executions before a proposal DOMAIN's rate is trusted for the
+// avoid/prefer split (#2765). Lower than SCOPE_AWARENESS_MIN_SAMPLE because each point is
+// a real LI-proposal execution and the hand-off path is rare.
 export const PROPOSAL_EXECUTION_MIN_SAMPLE = 2;
 
-// Scope-awareness thresholds (#2760). LI's own execution data shows several CoS
-// task-type scopes it consistently fails at (e.g. self-improve:layered-intelligence,
-// branch-reconcile, accessibility all sit at 0%) while others succeed reliably
-// (plan-task, test-coverage, performance at ~100%). Since an LI proposal is later
-// EXECUTED as a CoS task, proposing work that maps to a chronically-failing scope is
-// systematic waste. These bound a deterministic, self-clearing classifier
-// (computeScopeAwareness) that surfaces the avoid/prefer split to the reasoner so it
-// can steer proposals toward scopes that actually execute.
-//
-// A scope is "avoid" when its effective (recency-windowed-or-lifetime) success rate is
-// below AVOID and it has enough completed runs to be evidence; "prefer" when at/above
-// PREFER with the same sample floor. Reusing the degraded-execution boundary (50%) for
-// AVOID keeps LI's two success signals — its own loop health and per-scope
-// executability — on the same coin-flip line. The classification is recomputed from
-// fresh metrics every run and keyed on the windowed rate (once the window clears the
-// scheduler's own EFFECTIVE_RATE_MIN_WINDOW_SAMPLES floor), so an "avoid" scope
-// self-clears once it recovers in-window — no persisted avoid-list to go stale (the
-// issue's "dynamic adjustment" requirement). See computeScopeAwareness for why the
-// windowed rate, not the near-permanent lifetime rate, is the right basis.
+// Scope-awareness thresholds (#2760). An LI proposal later runs as a CoS task, so
+// proposing work in a chronically failing scope is waste. A scope is "avoid" when its
+// effective (windowed, else lifetime) success rate is below AVOID with enough completed
+// runs, "prefer" at/above PREFER. AVOID reuses the 50% degraded-execution line. The
+// classification is recomputed each run from the windowed rate, so nothing persisted
+// can go stale (see computeScopeAwareness).
 export const SCOPE_AVOID_SUCCESS_THRESHOLD = LI_DEGRADED_SUCCESS_THRESHOLD; // < 50% → avoid
 export const SCOPE_PREFER_SUCCESS_THRESHOLD = 75;                          // >= 75% → prefer
 
-// Minimum completed runs before a scope's rate is trusted for avoid/prefer, mirroring
-// LI_DEGRADED_MIN_SAMPLE's rationale (0-of-1 and 0-of-50 are both "0%", only the
-// second is evidence). Set to 3 per #2760 — one below the degraded floor because the
-// prompt guidance is advisory (it steers the reasoner, it does not hard-suppress a
-// proposal), so a slightly lower bar to surface the signal is acceptable.
+// Minimum completed runs before a scope's rate is trusted. One below the degraded floor
+// because this guidance is advisory, not a hard suppression.
 export const SCOPE_AWARENESS_MIN_SAMPLE = 3;
 
-// Prompt-size bounds for the scope-awareness block, so a long-lived install with many
-// task types (mission task keys embed an unbounded mission name) can't render an
-// oversized block — the raw cosMetrics source is already char-capped for the same
-// reason. Cap the entries surfaced per list (the lists are sorted sharpest-first, so
-// the cap keeps the most decision-relevant scopes) and truncate any single task-type
-// name so one pathological key can't blow the budget.
+// Prompt-size bounds for the scope-awareness block: task-type keys can embed an
+// unbounded mission name, so cap entries per list (sorted sharpest-first) and truncate
+// any single name.
 export const SCOPE_AWARENESS_MAX_PER_LIST = 12;
 export const SCOPE_AWARENESS_MAX_TYPE_LEN = 80;
