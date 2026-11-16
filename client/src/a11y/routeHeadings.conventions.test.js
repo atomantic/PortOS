@@ -29,14 +29,16 @@ describe('a11y conventions: routeHeadings', () => {
 
   // File -> does the component it exports under `exportedName` put a top-level
   // heading on the page? The file's own <h1>/<PageHeader> first — then the
-  // barrel and thin-wrapper idioms. `seen` bounds the chase so a forwarding
-  // cycle resolves to "no" rather than recursing.
-  const suppliesPageHeading = (file, exportedName, seen = new Set()) => {
+  // barrel and thin-wrapper idioms. `depth` bounds the chase to a fixed nesting
+  // and `seen` only dedupes file#export visits (and breaks forwarding cycles),
+  // so the verdict never depends on how many sibling imports were walked first.
+  const MAX_HEADING_CHASE_DEPTH = 8;
+  const suppliesPageHeading = (file, exportedName, seen = new Set(), depth = 0) => {
     // Error boundaries own a recovery heading only while their children fail.
     // Crediting that heading to a layout exempts every healthy outlet page.
     if (/ErrorBoundary\.jsx$/.test(file)) return false;
     const key = `${file}#${exportedName}`;
-    if (seen.has(key) || seen.size >= 8) return false;
+    if (seen.has(key) || depth >= MAX_HEADING_CHASE_DEPTH) return false;
     seen.add(key);
     const src = maskedSourceOf(file);
     const rendered = renderedTagNames(src);
@@ -48,11 +50,11 @@ describe('a11y conventions: routeHeadings', () => {
       if (/(^|\/)PageHeader\.jsx$/.test(imported)) return true;
     }
     const forwarded = reExportBindings(src, file).get(exportedName);
-    if (forwarded && suppliesPageHeading(forwarded.file, forwarded.exportedName, seen)) return true;
+    if (forwarded && suppliesPageHeading(forwarded.file, forwarded.exportedName, seen, depth + 1)) return true;
     // A thin page that mounts an imported component carrying the heading —
     // Agents mounts AgentList — satisfies the route without writing its own.
     for (const [local, binding] of imports) {
-      if (rendered.has(local) && suppliesPageHeading(binding.file, binding.exportedName, seen)) return true;
+      if (rendered.has(local) && suppliesPageHeading(binding.file, binding.exportedName, seen, depth + 1)) return true;
     }
     return false;
   };
@@ -109,6 +111,7 @@ describe('a11y conventions: routeHeadings', () => {
   it('gives every routed page a top-level heading (#7245)', () => {
     // Probe first — the tree is green, so nothing in it pins what the walk
     // rejects, and a silent change of shape would turn the rule vacuous.
+    const wideFillers = Array.from({ length: 10 }, (_, i) => `ProbeFiller${i}`);
     withVirtualSources({
       'src/ProbeApp.jsx': `
         import { Routes, Route, Navigate } from 'react-router';
@@ -118,6 +121,7 @@ describe('a11y conventions: routeHeadings', () => {
         import Barrel from './pages/ProbeBarrel';
         import Shell from './pages/ProbeShell';
         import ShellBare from './pages/ProbeShellBare';
+        import Wide from './pages/ProbeWide';
         const LazyBad = lazyWithReload(() => import('./pages/ProbeLazyBad'));
         const LazyGood = lazyWithReload(() => import('./pages/ProbeLazyGood'));
         const LazyNamed = lazyWithReload(() => import('./pages/ProbeBarrel').then(m => ({ default: m.ProbeGood })));
@@ -128,6 +132,7 @@ describe('a11y conventions: routeHeadings', () => {
                 <Route index element={<Good />} />
                 <Route path="bad" element={<Bad />} />
                 <Route path="thin" element={<Thin />} />
+                <Route path="wide" element={<Wide />} />
                 <Route path="barrel" element={<Barrel />} />
                 <Route path="lazy-bad" element={<LazyBad />} />
                 <Route path="lazy-good" element={<LazyGood />} />
@@ -145,6 +150,10 @@ describe('a11y conventions: routeHeadings', () => {
       'src/pages/ProbeGood.jsx': 'export default function ProbeGood() { return <h1>Good</h1>; }',
       'src/pages/ProbeBad.jsx': 'export default function ProbeBad() { return <h2>Bad</h2>; }',
       'src/pages/ProbeThin.jsx': "import ProbeGood from './ProbeGood';\nexport default function ProbeThin() { return <ProbeGood />; }",
+      // More heading-less rendered imports than the old shared visit budget
+      // allowed, all ahead of the heading-bearing one.
+      'src/pages/ProbeWide.jsx': `${wideFillers.map((n) => `import ${n} from '../components/${n}';`).join('\n')}\nimport ProbeGood from './ProbeGood';\nexport default function ProbeWide() { return <>${wideFillers.map((n) => `<${n} />`).join('')}<ProbeGood /></>; }`,
+      ...Object.fromEntries(wideFillers.map((n) => [`src/components/${n}.jsx`, `export default function ${n}() { return <p>${n}</p>; }`])),
       'src/pages/ProbeBarrel.jsx': "export { default, default as ProbeGood } from './ProbeGood';",
       'src/pages/ProbeLazyBad.jsx': 'export default function ProbeLazyBad() { return <h2>Lazy</h2>; }',
       'src/pages/ProbeLazyGood.jsx': "import PageHeader from '../components/PageHeader';\nexport default function ProbeLazyGood() { return <PageHeader title=\"Lazy\" />; }",
@@ -157,7 +166,8 @@ describe('a11y conventions: routeHeadings', () => {
         .filter((e) => !suppliesPageHeading(e.file, e.exportedName))
         .map((e) => e.file);
       // ShellBare (no heading of its own), Bad (h2 only), LazyBad — and NOT:
-      // Good (h1), Thin (delegate owns the h1), Barrel + LazyNamed (barrel
+      // Good (h1), Thin (delegate owns the h1), Wide (the delegate owns it past
+      // ten heading-less siblings), Barrel + LazyNamed (barrel
       // target owns it), LazyGood (PageHeader), Navigate/Unbound (no page),
       // and the Bad mounted under Shell's h1 outlet.
       expect(offenders).toEqual([
