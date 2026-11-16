@@ -2,6 +2,7 @@ import express from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, parsePagination, calendarAutoConfigureBodySchema, dailyReviewQuerySchema } from '../lib/validation.js';
+import { limitQuerySchema } from '../lib/queryValidation.js';
 import { UUID_RE } from '../lib/fileUtils.js';
 import { MEETING_URL_MAX } from '../lib/meetingUrl.js';
 import * as calendarAccounts from '../services/calendarAccounts.js';
@@ -120,7 +121,7 @@ router.post('/sync/:accountId', asyncHandler(async (req, res) => {
 // day window comes from localDayWindowUtc (shared with the voice
 // calendar_today tool) so DST-transition days keep the right bounds.
 router.get('/agenda', asyncHandler(async (req, res) => {
-  const { limit } = parsePagination(req.query, { defaultLimit: 8, maxLimit: 20 });
+  const { limit } = parsePagination(validateRequest(limitQuerySchema, req.query), { defaultLimit: 8, maxLimit: 20 });
   const accounts = await calendarAccounts.listAccounts();
   const accountCount = accounts.filter((a) => a.enabled !== false).length;
   if (accountCount === 0) {
@@ -146,12 +147,22 @@ router.get('/agenda', asyncHandler(async (req, res) => {
   });
 }));
 
+const eventsQuerySchema = z.object({
+  accountId: z.string().optional(),
+  search: z.string().optional(),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  limit: z.string().optional(),
+  offset: z.string().optional(),
+});
+
 router.get('/events', asyncHandler(async (req, res) => {
-  const { accountId, search, startDate, endDate } = req.query;
+  const query = validateRequest(eventsQuerySchema, req.query);
+  const { accountId, search, startDate, endDate } = query;
   if (accountId && !UUID_RE.test(accountId)) {
     throw new ServerError('Invalid accountId format', { status: 400 });
   }
-  const { limit: parsedLimit, offset: parsedOffset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+  const { limit: parsedLimit, offset: parsedOffset } = parsePagination(query, { defaultLimit: 50, maxLimit: 200 });
   const result = await calendarSync.getEvents({
     accountId,
     search,
@@ -241,15 +252,19 @@ router.get('/google/auth/url', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+const oauthCallbackQuerySchema = z.object({ state: z.string().optional(), code: z.string().optional() });
+
 router.get('/google/oauth/callback', asyncHandler(async (req, res) => {
   // This endpoint is hit by a BROWSER redirect from Google, not by the SPA —
   // render every outcome as a redirect to the config page (which toasts the
   // oauthError param) instead of the JSON envelope the middleware would send.
-  const configPath = req.query.state === 'messages' ? '/messages/config' : '/calendar/config';
+  // A malformed query (repeated keys) is treated as absent: every outcome here must stay a redirect.
+  const parsed = oauthCallbackQuerySchema.safeParse(req.query);
+  const { state, code } = parsed.success ? parsed.data : {};
+  const configPath = state === 'messages' ? '/messages/config' : '/calendar/config';
   const configUrl = (error) => error
     ? `${configPath}?oauthError=${encodeURIComponent(error)}`
     : configPath;
-  const code = req.query.code;
   if (!code) return res.redirect(configUrl('Missing authorization code'));
   const error = await googleAuth.handleCallback(code).then(() => null)
     .catch((err) => {
@@ -301,8 +316,10 @@ router.post('/sync/:accountId/discover-api', asyncHandler(async (req, res) => {
 
 // === Daily Review Routes ===
 // NOTE: /review/history must come before /review/:date so Express doesn't match "history" as a date param
+const reviewHistoryQuerySchema = z.object({ startDate: z.string().optional(), endDate: z.string().optional() });
+
 router.get('/review/history', asyncHandler(async (req, res) => {
-  const { startDate, endDate } = req.query;
+  const { startDate, endDate } = validateRequest(reviewHistoryQuerySchema, req.query);
   const history = await dailyReview.getDailyReviewHistory(startDate, endDate);
   res.json(history);
 }));

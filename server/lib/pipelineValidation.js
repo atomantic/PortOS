@@ -36,6 +36,15 @@ import { CHECK_SCOPES, CHECK_SEVERITIES } from './editorial/checkInfra/taxonomy.
 import { SHOT_TYPES, SCREEN_DIRECTIONS } from './shotGrammar.js';
 import { characterEvolutionSchema } from './characterEvolutionValidation.js';
 
+// Print-PDF export options. `size` is matched against the known page sizes by the handler (an
+// unknown size falls back to the default); the `skip` toggles only act on the literal value.
+export const pipelinePdfQuerySchema = z.object({
+  size: z.string().optional(),
+  cover: z.string().optional(),
+  backCover: z.string().optional(),
+  colophon: z.string().optional(),
+});
+
 export const pipelineStageRecoverySchema = z.object({ revision: z.string().regex(/^[a-f0-9]{64}$/) });
 
 // =============================================================================

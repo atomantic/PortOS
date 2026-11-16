@@ -13,6 +13,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, isPaginationRequested, paginateArray } from '../lib/validation.js';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import * as authors from '../services/authors/index.js';
 
 const router = Router();
@@ -47,8 +48,9 @@ const patchSchema = z.object({
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
 router.get('/', asyncHandler(async (req, res) => {
   const list = await authors.listAuthors();
-  if (!isPaginationRequested(req.query)) return res.json(list);
-  res.json(paginateArray(list, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  const query = validateRequest(paginationQuerySchema, req.query);
+  if (!isPaginationRequested(query)) return res.json(list);
+  res.json(paginateArray(list, query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

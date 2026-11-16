@@ -15,6 +15,8 @@ import * as goalProgress from '../services/goalProgress.js';
 import * as decisionLog from '../services/decisionLog.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { parsePagination, validateRequest } from '../lib/validation.js';
+import { limitQuerySchema } from '../lib/queryValidation.js';
+import { cosActivityCalendarQuerySchema, cosDecisionsQuerySchema } from '../lib/cosValidation.js';
 import { runningAgentsByTaskId, withoutSpawningTasks } from '../lib/cosSpawnWindow.js';
 import { detectIdleLeftoverBranches } from '../services/userActionDetectors.js';
 import { requestHasHostControl } from '../services/authGate.js';
@@ -26,7 +28,7 @@ router.get('/activity-calendar', asyncHandler(async (req, res) => {
   // Clamped: the grid materializes one object per day, so an unbounded `weeks`
   // (a typo, or a stale client) would build millions of them. 260 weeks is five
   // years, past any window the heatmap renders legibly.
-  const requested = parseInt(req.query.weeks, 10) || 12;
+  const requested = parseInt(validateRequest(cosActivityCalendarQuerySchema, req.query).weeks, 10) || 12;
   res.json(await getActivityCalendar(Math.min(Math.max(requested, 1), 260)));
 }));
 
@@ -228,7 +230,7 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
 
 // GET /api/cos/recent-tasks - Get recent completed tasks for dashboard widget
 router.get('/recent-tasks', asyncHandler(async (req, res) => {
-  const { limit } = parsePagination(req.query, { defaultLimit: 10, maxLimit: 500 });
+  const { limit } = parsePagination(validateRequest(limitQuerySchema, req.query), { defaultLimit: 10, maxLimit: 500 });
   const recentTasks = await getRecentTasks(limit);
   res.json(recentTasks);
 }));
@@ -294,8 +296,9 @@ router.get('/goal-progress/summary', asyncHandler(async (req, res) => {
 
 // GET /api/cos/decisions - Get recent decisions
 router.get('/decisions', asyncHandler(async (req, res) => {
-  const { limit } = parsePagination(req.query, { defaultLimit: 20, maxLimit: 500 });
-  const type = req.query.type || null;
+  const query = validateRequest(cosDecisionsQuerySchema, req.query);
+  const { limit } = parsePagination(query, { defaultLimit: 20, maxLimit: 500 });
+  const type = query.type || null;
   const decisions = await decisionLog.getRecentDecisions(limit, type);
   res.json({ decisions });
 }));

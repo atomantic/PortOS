@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import { z } from 'zod';
+import { validateRequest } from '../lib/validateRequest.js';
 import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
 import { join } from 'path';
@@ -71,12 +73,15 @@ router.head('/model.glb', async (req, res) => {
   return res.status(200).end();
 });
 
+const avatarModelQuerySchema = z.object({ variant: z.string().optional() });
+
 router.get('/model.glb', asyncHandler(async (req, res) => {
-  const path = await resolveAvatarPath(req.query.variant);
+  const { variant } = validateRequest(avatarModelQuerySchema, req.query);
+  const path = await resolveAvatarPath(variant);
   if (!path || !(await pathExists(path))) {
     // A missing model is the normal pre-generation state, not a server fault.
     const severity = 'warning';
-    if (isRiggedSpelling(req.query.variant)) {
+    if (isRiggedSpelling(variant)) {
       throw new ServerError('That animated character is not available. Rig and animate the record first.', { status: 404, severity });
     }
     throw new ServerError('No avatar model configured. Drop a GLB at data/avatar/model.glb', { status: 404, severity });

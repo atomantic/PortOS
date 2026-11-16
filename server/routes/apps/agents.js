@@ -8,6 +8,8 @@ import { Router } from 'express';
 import { getAgentDates, getAgentsByDate } from '../../services/cosAgentIndex.js';
 import { getAgents } from '../../services/cosAgentLifecycle.js';
 import { asyncHandler } from '../../lib/errorHandler.js';
+import { validateRequest } from '../../lib/validateRequest.js';
+import { limitQuerySchema } from '../../lib/queryValidation.js';
 import { toAgentListItems } from '../../lib/cosAgentListProjection.js';
 import { parsePagination } from '../../lib/validation.js';
 import { loadApp } from './shared.js';
@@ -17,7 +19,7 @@ const router = Router();
 // GET /api/apps/:id/agents - Recent CoS agents for this app
 router.get('/:id/agents', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
-  const { limit } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 500 });
+  const { limit } = parsePagination(validateRequest(limitQuerySchema, req.query), { defaultLimit: 50, maxLimit: 500 });
 
   const runningAgents = await getAgents().catch(() => []);
   const appRunning = runningAgents.filter(a =>

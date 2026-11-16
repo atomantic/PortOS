@@ -24,6 +24,7 @@ import {
   creativeDirectorSceneUpdateSchema,
   creativeDirectorAutoCastApplySchema,
   creativeDirectorProjectQuerySchema,
+  creativeDirectorProjectSlimQuerySchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
@@ -73,12 +74,13 @@ function assertVideoDispatchAvailable(project) {
 // placeholders the client would have to filter. Mirrors the catalog's
 // `GET /catalog/ingredients?ids=` batch filter.
 router.get('/', asyncHandler(async (req, res) => {
-  const { ids } = validateRequest(creativeDirectorProjectQuerySchema, req.query);
+  const query = validateRequest(creativeDirectorProjectQuerySchema, req.query);
+  const { ids } = query;
   const projects = ids ? await getProjectsByIds(ids) : await listProjects();
-  if (!isPaginationRequested(req.query)) {
+  if (!isPaginationRequested(query)) {
     return res.json(projects);
   }
-  res.json(paginateArray(projects, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  res.json(paginateArray(projects, query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 // Creative tool catalog (CDO Phase 4, #2186) — the studio Plan board + directive
@@ -123,9 +125,10 @@ function slimProject(p) {
 }
 
 router.get('/:id', asyncHandler(async (req, res) => {
+  const { slim } = validateRequest(creativeDirectorProjectSlimQuerySchema, req.query);
   const p = await getProject(req.params.id);
   if (!p) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  res.json(req.query.slim === '1' ? slimProject(p) : p);
+  res.json(slim === '1' ? slimProject(p) : p);
 }));
 
 router.get('/:id/sources', asyncHandler(async (req, res) => {

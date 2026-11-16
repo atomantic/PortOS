@@ -14,7 +14,8 @@ import { withTransaction } from '../lib/db.js';
 import { changedMusicVideoDescriptionOverLimit, MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../lib/musicVideoSubjectLimits.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, parsePagination } from '../lib/validation.js';
-import { catalogScrapCreateSchema, catalogScrapPatchSchema, catalogIngredientCreateRouteSchema, catalogIngredientPatchSchema, catalogIngredientLinkSchema, catalogRelationLinkSchema, catalogMediaAttachSchema, catalogMediaLibraryPatchSchema, catalogMediaFromMoodBoardSchema, catalogMediaLibraryQuerySchema, catalogMediaDetachSchema, catalogMediaFileUploadSchema, catalogMediaVoiceMemoSchema, catalogPortraitSetSchema, catalogGeneratedImageAttachSchema, catalogIngredientQuerySchema, catalogIngredientDetailQuerySchema, catalogIngredientCardsQuerySchema, catalogIngredientLockSchema, catalogTagQuerySchema, catalogScrapCommitSchema, catalogExtractRequestSchema, catalogPruneRequestSchema, catalogEmbeddingsBackfillSchema, catalogMigrationRerunSchema, catalogMusicVideoImportSchema, catalogBulkImportSchema, catalogBulkEntrySchema, catalogExportQuerySchema, catalogRevisionQuerySchema, catalogRelatedImagesQuerySchema, catalogRevisionRestoreSchema, catalogUrlIngestSchema, catalogFileIngestSchema, catalogVoiceIngestSchema, catalogBrainIngestSchema, catalogUserTypeSchema, catalogUserTypesSettingsSchema, catalogStoryListQuerySchema, catalogStoryParamsSchema, catalogStoryJoinSchema, catalogStoryDraftSchema, catalogVideoSubjectsQuerySchema, catalogVideoSubjectLinksSchema, catalogVideoSubjectSaveSchema, catalogVideoDescriptionRestoreSchema, REF_KINDS, catalogBatchMediaQuerySchema, catalogLookAroundRenderSchema, catalogLookAroundClipParamsSchema, catalogLookAroundFramesSchema, catalogLookAroundAnglesSchema, catalogMergeSchema, catalogMergeHistoryQuerySchema, catalogMergeRecoverSchema } from '../lib/catalogValidation.js';
+import { catalogScrapCreateSchema, catalogScrapPatchSchema, catalogIngredientCreateRouteSchema, catalogIngredientPatchSchema, catalogIngredientLinkSchema, catalogRelationLinkSchema, catalogMediaAttachSchema, catalogMediaLibraryPatchSchema, catalogMediaFromMoodBoardSchema, catalogMediaLibraryQuerySchema, catalogMediaDetachSchema, catalogMediaFileUploadSchema, catalogMediaVoiceMemoSchema, catalogPortraitSetSchema, catalogGeneratedImageAttachSchema, catalogIngredientQuerySchema, catalogIngredientDetailQuerySchema, catalogIngredientCardsQuerySchema, catalogIngredientLockSchema, catalogTagQuerySchema, catalogScrapCommitSchema, catalogExtractRequestSchema, catalogPruneRequestSchema, catalogEmbeddingsBackfillSchema, catalogMigrationRerunSchema, catalogMusicVideoImportSchema, catalogBulkImportSchema, catalogBulkEntrySchema, catalogExportQuerySchema, catalogRevisionQuerySchema, catalogRelatedImagesQuerySchema, catalogRevisionRestoreSchema, catalogUrlIngestSchema, catalogFileIngestSchema, catalogVoiceIngestSchema, catalogBrainIngestSchema, catalogUserTypeSchema, catalogUserTypesSettingsSchema, catalogStoryListQuerySchema, catalogStoryParamsSchema, catalogStoryJoinSchema, catalogStoryDraftSchema, catalogVideoSubjectsQuerySchema, catalogVideoSubjectLinksSchema, catalogVideoSubjectSaveSchema, catalogVideoDescriptionRestoreSchema, REF_KINDS, catalogBatchMediaQuerySchema, catalogLookAroundRenderSchema, catalogLookAroundClipParamsSchema, catalogLookAroundFramesSchema, catalogLookAroundAnglesSchema, catalogMergeSchema, catalogMergeHistoryQuerySchema, catalogMergeRecoverSchema, catalogIncludeEmbeddingQuerySchema, catalogTypeDeleteQuerySchema, catalogSyncQuerySchema } from '../lib/catalogValidation.js';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { getActiveCatalogTypes, setUserCatalogTypes } from '../lib/catalogTypes.js';
 import { updateUserTypes } from '../services/catalogUserTypes/store.js';
 import { parseBulkPayload, bundleToMarkdown, toYamlString } from '../lib/catalogBulkParsers.js';
@@ -51,7 +52,7 @@ router.get('/stats', asyncHandler(async (req, res) => {
 }));
 
 router.get('/scraps', asyncHandler(async (req, res) => {
-  const { limit, offset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+  const { limit, offset } = parsePagination(validateRequest(paginationQuerySchema, req.query), { defaultLimit: 50, maxLimit: 200 });
   res.json(await catalogDB.listScraps({ limit, offset }));
 }));
 
@@ -297,6 +298,7 @@ router.get('/ingredients/media', asyncHandler(async (req, res) => {
 }));
 
 router.get('/ingredients/:id', asyncHandler(async (req, res) => {
+  const { includeEmbedding: includeEmbeddingRaw } = validateRequest(catalogIncludeEmbeddingQuerySchema, req.query);
   const ing = await catalogDB.getIngredient(req.params.id);
   if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
   const [refs, sources] = await Promise.all([
@@ -305,7 +307,7 @@ router.get('/ingredients/:id', asyncHandler(async (req, res) => {
   ]);
   // Detail UI doesn't render the 768-float embedding (~6KB stringified).
   // Strip unless `?includeEmbedding=true` — sync/export consumers can opt in.
-  const includeEmbedding = req.query.includeEmbedding === 'true';
+  const includeEmbedding = includeEmbeddingRaw === 'true';
   const { embedding, ...rest } = ing;
   res.json({
     ...(includeEmbedding ? { ...rest, embedding } : rest),
@@ -1095,7 +1097,7 @@ router.get('/sync', asyncHandler(async (req, res) => {
   // instead of nesting it. We reconstruct the per-kind object ourselves so
   // the documented bracket protocol survives regardless of parser config —
   // otherwise peers would silently keep pulling page 1 and loop on hasMore.
-  const sinceRaw = req.query.since;
+  const { since: sinceRaw, limit: limitRaw } = validateRequest(catalogSyncQuerySchema, req.query);
   let since;
   if (sinceRaw && typeof sinceRaw === 'object' && !Array.isArray(sinceRaw)) {
     since = sinceRaw;
@@ -1118,7 +1120,7 @@ router.get('/sync', asyncHandler(async (req, res) => {
       since = (typeof sinceRaw === 'string' && /^\d+$/.test(sinceRaw)) ? sinceRaw : '0';
     }
   }
-  const { limit } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 1000 });
+  const { limit } = parsePagination({ limit: limitRaw }, { defaultLimit: 100, maxLimit: 1000 });
   const changes = await catalogSync.getChangesSince(since, limit);
   res.json({
     ...changes,
@@ -1261,7 +1263,7 @@ router.patch('/types/:id', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/types/:id', asyncHandler(async (req, res) => {
-  const force = req.query.force === 'true';
+  const force = validateRequest(catalogTypeDeleteQuerySchema, req.query).force === 'true';
   await updateUserTypes(async (slice) => {
     const current = Array.isArray(slice) ? slice : [];
     const idx = current.findIndex((t) => t.id === req.params.id && !t.deletedAt);

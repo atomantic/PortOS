@@ -10,6 +10,7 @@ import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { limitQuerySchema } from '../lib/queryValidation.js';
 import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, releaseSynchronizationResetBodySchema, releaseDeliveryVerificationBodySchema } from '../lib/validation.js';
 import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
@@ -214,7 +215,7 @@ router.get('/schedule', asyncHandler(async (req, res) => {
 
 // GET /api/cos/upcoming - Get upcoming tasks preview
 router.get('/upcoming', asyncHandler(async (req, res) => {
-  const { limit } = parsePagination(req.query, { defaultLimit: 10, maxLimit: 500 });
+  const { limit } = parsePagination(validateRequest(limitQuerySchema, req.query), { defaultLimit: 10, maxLimit: 500 });
   // getUpcomingTasks now rejects (rather than returning a partial []) when an
   // app inventory/override/readiness read fails (#7527) — surface that as a
   // real failure instead of a misleading 200 with incomplete deadlines.

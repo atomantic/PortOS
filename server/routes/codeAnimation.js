@@ -238,14 +238,10 @@ const projectPageSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/).optional(),
 }).strict();
-const projectPage = query => {
-  const { limit, cursor } = validateRequest(projectPageSchema, query);
-  return { limit, cursor };
-};
 const revisionParamsSchema = exportParamsSchema.extend({ revisionId: z.string().uuid() });
 
 router.get('/projects', asyncHandler(async (req, res) => {
-  res.json(await listProductionProjects(projectPage(req.query)));
+  res.json(await listProductionProjects(validateRequest(projectPageSchema, req.query)));
 }));
 router.post('/projects', asyncHandler(async (req, res) => {
   res.status(201).json(await createProductionProject(validateRequest(codeAnimationProjectSchema, req.body)));
@@ -264,7 +260,7 @@ router.get('/projects/:id/preflight', asyncHandler(async (req, res) => {
 }));
 router.get('/projects/:id/history', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);
-  res.json(await getProductionHistory(id, projectPage(req.query)));
+  res.json(await getProductionHistory(id, validateRequest(projectPageSchema, req.query)));
 }));
 router.post('/projects/:id/import', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);

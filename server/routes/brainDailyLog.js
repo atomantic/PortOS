@@ -7,7 +7,7 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, parsePagination, brainJournalAppendBodySchema, brainJournalReplaceBodySchema } from '../lib/validation.js';
-import { dailyLogSettingsSchema, activityDigestSettingsSchema } from '../lib/brainValidation.js';
+import { dailyLogSettingsSchema, activityDigestSettingsSchema, brainDailyLogListQuerySchema } from '../lib/brainValidation.js';
 import * as journal from '../services/brainJournal.js';
 import * as activityDigest from '../services/activityDigest.js';
 
@@ -33,10 +33,11 @@ const resolveJournalDate = async (date) => {
  * List daily log entries (most recent first)
  */
 router.get('/daily-log', asyncHandler(async (req, res) => {
-  const { limit, offset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+  const query = validateRequest(brainDailyLogListQuerySchema, req.query);
+  const { limit, offset } = parsePagination(query, { defaultLimit: 50, maxLimit: 200 });
   // Opt-in to full entries; default is slim summaries (date + segmentCount +
   // obsidianPath) so the sidebar doesn't pull every day's content on load.
-  const includeContent = req.query.includeContent === '1' || req.query.includeContent === 'true';
+  const includeContent = query.includeContent === '1' || query.includeContent === 'true';
   const result = await journal.listJournals({ limit, offset, includeContent });
   res.json(result);
 }));

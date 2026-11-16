@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { universeStarterPatch } from '../../lib/universeStarters.js';
 import { ServerError, asyncHandler } from '../../lib/errorHandler.js';
 import { validateRequest, llmSchema, isPaginationRequested, paginateArray } from '../../lib/validation.js';
+import { paginationQuerySchema } from '../../lib/queryValidation.js';
 import { recordRenderPinFields } from '../../lib/sharedSchemas.js';
 import { pruneStaleReferenceSheets } from '../../lib/storyBible.js';
 import * as svc from '../../services/universeBuilder.js';
@@ -119,10 +120,11 @@ const patchSchema = z.object({
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
 router.get('/', asyncHandler(async (req, res) => {
   const universes = await svc.listUniverses();
-  if (!isPaginationRequested(req.query)) {
+  const query = validateRequest(paginationQuerySchema, req.query);
+  if (!isPaginationRequested(query)) {
     return res.json(universes);
   }
-  res.json(paginateArray(universes, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  res.json(paginateArray(universes, query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

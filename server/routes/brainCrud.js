@@ -16,7 +16,8 @@ import {
   ideaInputSchema,
   adminInputSchema,
   memoryInputSchema,
-  entityQuerySchema
+  entityQuerySchema,
+  entityLegacyListQuerySchema
 } from '../lib/brainValidation.js';
 
 const router = Router();
@@ -36,12 +37,13 @@ async function handleEntityList(req, res, { type, fetchLegacy, fallbackKey }) {
   }
 
   // Legacy paths: unpaginated or offset/limit envelope
-  const records = await fetchLegacy(req.query);
-  if (!isPaginationRequested(req.query)) {
+  const legacyQuery = validateRequest(entityLegacyListQuerySchema, req.query);
+  const records = await fetchLegacy(legacyQuery);
+  if (!isPaginationRequested(legacyQuery)) {
     return res.json(records);
   }
 
-  const { items, total, limit, offset } = paginateArray(records, req.query, { defaultLimit: 50, maxLimit: 500 });
+  const { items, total, limit, offset } = paginateArray(records, legacyQuery, { defaultLimit: 50, maxLimit: 500 });
   return res.json({
     [fallbackKey]: items,
     total,
@@ -101,7 +103,7 @@ router.get('/projects', asyncHandler(async (req, res) => {
   await handleEntityList(req, res, {
     type: 'projects',
     fetchLegacy: (query) => {
-      const status = query?.status || req.query.status;
+      const status = query.status;
       return brainService.getProjects(status ? { status } : undefined);
     },
     fallbackKey: 'projects'
@@ -147,7 +149,7 @@ router.get('/ideas', asyncHandler(async (req, res) => {
   await handleEntityList(req, res, {
     type: 'ideas',
     fetchLegacy: (query) => {
-      const status = query?.status || req.query.status;
+      const status = query.status;
       return brainService.getIdeas(status ? { status } : undefined);
     },
     fallbackKey: 'ideas'
@@ -193,7 +195,7 @@ router.get('/admin', asyncHandler(async (req, res) => {
   await handleEntityList(req, res, {
     type: 'admin',
     fetchLegacy: (query) => {
-      const status = query?.status || req.query.status;
+      const status = query.status;
       return brainService.getAdminItems(status ? { status } : undefined);
     },
     fallbackKey: 'admin'

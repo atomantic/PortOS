@@ -7,6 +7,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { automationSchedulesListQuerySchema } from '../lib/agentValidation.js';
 import { validateRequest, automationScheduleSchema, automationScheduleUpdateSchema } from '../lib/validation.js';
 import * as automationScheduler from '../services/automationScheduler.js';
 import * as platformAccounts from '../services/platformAccounts.js';
@@ -22,7 +23,7 @@ const router = Router();
 // GET / - Get all schedules
 router.get('/', asyncHandler(async (req, res) => {
   console.log('📅 GET /api/agents/schedules');
-  const { agentId, accountId } = req.query;
+  const { agentId, accountId } = validateRequest(automationSchedulesListQuerySchema, req.query);
 
   let schedules;
   if (agentId) {
