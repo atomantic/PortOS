@@ -14,6 +14,7 @@ import { deriveAvailableBackends } from '../lib/imageGenBackends';
  * Load the settings blob once on mount and expose "what will this record's next render run on" as a ready-to-use `imageCfg`, collapsing the `getSettings` + `resolveRenderCfg` pair every single-image-render call site re-implements
  * (Story Builder characters step, universe base-style probe, Decks render bar). The ladder, and why nothing here may read `settings.pipeline.imageGen`, is in `resolveRenderCfg`'s header. Components that already load the full settings blob
  * (e.g. Universe Builder) should call `resolveRenderCfg` against that fetch rather than double-fetching.
+ * @param {object}      [opts]
  * @param {object|null} [opts.record] - Record whose `imageMode`/`imageModelId` pin wins.
  * @param {string|null} [opts.target] - RENDER_TARGET id whose `renderDefaults` pin is next.
  * @param {boolean} [opts.includeExternal] - Also list an enabled external SDAPI backend (default false; the mood-board poster opts in).
