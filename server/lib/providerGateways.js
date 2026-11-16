@@ -1,68 +1,22 @@
 /**
- * `PROVIDER_GATEWAYS` — one row per hosted OpenAI-compatible gateway an OpenCode
- * CLI/TUI wrapper can front-end (OrcaRouter, OpenRouter, NVIDIA NIM).
- *
- * Before this file, OrcaRouter wasn't *a* gateway — it was *the* gateway: the
- * boolean `orcarouterBacked` and the literal id `'orcarouter'` were hand-copied
- * across ~15 server and client files (namespace resolution, the OpenCode config
- * builder, both zod schemas, the model-fetcher table, the sibling-key attach,
- * the prerequisite check, and the two "this is NOT a local runtime" carve-outs).
- * Adding a second gateway that way would have doubled a copy-paste axis — the
- * same pressure `providerVendors.js` was created to relieve (#3618). Every
- * dispatch site now asks this registry instead.
- *
- * A gateway is distinct from a *local runtime* (`ollamaBacked`, `vllmBacked`,
- * `sglangBacked`, …) in three ways every consumer keys on:
- *   - it is REMOTE, so there is no daemon to probe (`localRuntimeKind` and
- *     `isLocalBackedClaude` both exclude it);
- *   - it always AUTHENTICATES, and the wrapper deliberately stores no key — the
- *     sibling API record with the same id as the gateway owns it;
- *   - its upstream models own their own reasoning switch, so it exposes no
- *     thinking toggle (`THINKING_STYLE[<gateway>] === null`).
- *
- * Dependency-light on purpose (mirrors `providerVendors.js` / `cliProviderArgs.js`):
- * it imports only the dependency-free `serviceDefinitions.js` leaf it is derived
- * from, so it stays importable from `providerModels.js`, which the standalone
- * autofixer process pulls in.
- *
- * **Two copies of this table exist, by architecture, and must stay in lockstep:**
- *   1. this file — the PortOS server;
- *   2. `aiToolkit/internal/gateways.js` — the vendored toolkit, which may not
- *      import out of its own directory (see `aiToolkit/AGENTS.md`);
- *      `providerGateways.parity.test.js` fails when the two drift.
- * The browser is not a third: this leaf is pure, so
- * `client/src/utils/providerGateways.js` re-exports it.
+  * `PROVIDER_GATEWAYS`: one row per hosted OpenAI-compatible gateway an OpenCode CLI/TUI wrapper can front-end (OrcaRouter, OpenRouter, NVIDIA NIM).
+  *
+  * OrcaRouter was once *the* gateway (a boolean `orcarouterBacked` and literal id hand-copied across ~15 files), and a second gateway that way would double a copy-paste axis (the pressure `providerVendors.js` relieved, #3618); every dispatch site now asks this registry. A gateway differs from a *local runtime* (`ollamaBacked`, `vllmBacked`, `sglangBacked`, …): it is REMOTE (no daemon to probe; `localRuntimeKind` and `isLocalBackedClaude` exclude it), it always AUTHENTICATES and the wrapper stores no key (the sibling API record with the same id owns it), and its upstream models own their reasoning switch (`THINKING_STYLE[<gateway>] === null`). Dependency-light like `providerVendors.js` / `cliProviderArgs.js`: it imports only the leaf `serviceDefinitions.js`, so it stays importable from `providerModels.js` (pulled by the standalone autofixer process). **Two copies of this table exist by architecture and must stay in lockstep:** this file, and `aiToolkit/internal/gateways.js` (the vendored toolkit may not import out; see `aiToolkit/AGENTS.md`); `providerGateways.parity.test.js` fails on drift. The browser is not a third: `client/src/utils/providerGateways.js` re-exports this pure leaf.
  */
 
 import { SERVICE_DEFINITIONS } from './serviceDefinitions.js';
 
 /**
  * @typedef {object} ProviderGateway
- * @property {string} id — the OpenCode provider namespace, the `gatewayBacked`
- *   marker value, AND the id of the sibling `api` record holding the key. One
- *   string for all three on purpose: the sibling lookup is `providers[gateway.id]`.
- * @property {string} label — human name for UI copy and prerequisite labels.
- * @property {string} baseURL — the OpenAI-compatible endpoint.
- * @property {string} apiKeyEnv — the env var the spawner exports for OpenCode.
- * @property {string} [keyUrl] — where the user obtains an API key for this
- *   gateway, rendered as a "get a key" link on the provider card while the key
- *   is missing. Only gateways with a stable vendor key page carry one.
- * @property {string} [legacyMarker] — the pre-registry per-gateway boolean field
- *   (`orcarouterBacked`). Records written before `gatewayBacked` existed still
- *   carry it, and installs upgrade on their own schedule, so this is read
- *   FOREVER — no migration rewrites stored records.
- * @property {string} [legacyApiKeyField] — a pre-registry alias for the wrapper's
- *   own key field.
+ * @property {string} id — the OpenCode provider namespace, the `gatewayBacked` marker value, AND the id of the sibling `api` record holding the key (one string for all three: the sibling lookup is `providers[gateway.id]`).
+ * @property {string} [keyUrl] — where to obtain an API key, rendered as a "get a key" link while the key is missing (only gateways with a stable vendor key page).
+ * @property {string} [legacyMarker] — the pre-registry boolean field (`orcarouterBacked`); records written before `gatewayBacked` carry it and installs upgrade on their own schedule, so it is read FOREVER (no migration rewrites records).
+ * @property {string} [legacyApiKeyField] — a pre-registry alias for the wrapper's own key field.
  */
 
 /**
  * @type {readonly ProviderGateway[]}
- *
- * DERIVED from the service definitions carrying a `gateway` column
- * (`serviceDefinitions.js`, #7562) rather than typed here: a gateway is a
- * service a harness can be pointed at, and the epic composes routes from that
- * table. The projection keeps this row shape byte-for-byte, so every consumer
- * and the toolkit mirror (`aiToolkit/internal/gateways.js`) are untouched.
+ * DERIVED from the service definitions carrying a `gateway` column (`serviceDefinitions.js`, #7562): a gateway is a service a harness can be pointed at. The projection keeps this row shape byte-for-byte so consumers and the toolkit mirror are untouched.
  */
 export const PROVIDER_GATEWAYS = Object.freeze(SERVICE_DEFINITIONS
   .filter((service) => service.gateway)
@@ -79,22 +33,13 @@ export const PROVIDER_GATEWAYS = Object.freeze(SERVICE_DEFINITIONS
 /** Every gateway id — the namespace key space `opencodeConfig.js` extends. */
 export const PROVIDER_GATEWAY_IDS = Object.freeze(PROVIDER_GATEWAYS.map((g) => g.id));
 
-/** The registry row for a gateway id, or `null` for anything else. */
 export const gatewayById = (id) => PROVIDER_GATEWAYS.find((g) => g.id === id) || null;
 
-/** Is this OpenCode provider namespace a hosted gateway rather than a local runtime? */
 export const isGatewayNamespace = (namespace) => PROVIDER_GATEWAY_IDS.includes(namespace);
 
 /**
- * The gateway a provider record opts into, or `null`.
- *
- * Reads the generic `gatewayBacked: '<id>'` marker first, then each row's
- * `legacyMarker` boolean — so a record stored before this registry existed
- * resolves identically and needs no migration. Registry order breaks a tie on a
- * malformed record carrying two markers, preserving the legacy if-chain outcome.
- *
- * @param {{gatewayBacked?:string, [marker:string]:unknown}|null|undefined} provider
- * @returns {ProviderGateway|null}
+ * The gateway a provider record opts into, or `null`: the generic `gatewayBacked: '<id>'` marker first, then each row's `legacyMarker` boolean (so pre-registry records resolve identically with no migration);
+ * registry order breaks a tie on a malformed record carrying two markers, preserving the legacy if-chain outcome.
  */
 export function gatewayForProvider(provider) {
   if (!provider || typeof provider !== 'object') return null;
@@ -110,24 +55,10 @@ export const gatewayIdForProvider = (provider) => gatewayForProvider(provider)?.
 export const isGatewayBackedProvider = (provider) => gatewayForProvider(provider) !== null;
 
 /**
- * Attach a gateway-backed wrapper's sibling API key for execution, from an
- * already-loaded provider collection.
+ * Attach a gateway-backed wrapper's sibling API key for execution, from an already-loaded provider collection. The synchronous twin of `withGatewayApiKey` in `lib/aiToolkit/providers.js` (live store): `getAllProviders` returns RAW records with
+ * no inherited key, so a fallback pick from such a map would execute with no Authorization header (NVIDIA NIM 401s). Same contract: the key lands as a NON-ENUMERABLE property so it never persists, leaks into responses, or survives a
+ * spread/JSON round-trip (cloners must re-carry it: see `providerForRun` in `services/promptRunner.js`). Pure: returns the input untouched when nothing to attach (not gateway-backed, own key set, or sibling keyless/missing).
  *
- * The synchronous twin of `withGatewayApiKey` in `lib/aiToolkit/providers.js`
- * (which reads the live store): `getAllProviders` returns RAW records with no
- * inherited key, and a fallback pick taken from such a map would otherwise
- * execute with no Authorization header — NVIDIA NIM 401s "Header of type
- * `authorization` was missing" despite a stored key. Same contract: the key
- * lands as a NON-ENUMERABLE property so it never persists, leaks into
- * responses, or survives a spread/JSON round-trip (callers that clone must
- * re-carry it — see `providerForRun` in `services/promptRunner.js`).
- *
- * Pure: returns the input untouched when there is nothing to attach (not
- * gateway-backed, own key already set, or sibling keyless/missing).
- *
- * @param {object|null|undefined} provider — the wrapper to arm for execution
- * @param {Record<string, object>|Array<object>|null|undefined} providers — the sibling collection
- * @returns {object|null|undefined} the key-carrying copy, or the input
  */
 export function attachGatewaySiblingKey(provider, providers) {
   if (!provider || typeof provider !== 'object' || provider.apiKey) return provider;

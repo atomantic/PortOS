@@ -1,28 +1,7 @@
 /**
- * Spawn working-directory resolution for provider runs and agents.
- *
- * Every AI provider run and CoS agent gets a `workspacePath` (the selected
- * app's repoPath) and spawns its CLI/TUI with that as the child's cwd. When the
- * value is missing the spawn falls back to the PortOS repo root — which is a
- * reasonable default, but used to be *silent*: a prompt like "create
- * HelloWorld.md" then wrote into the PortOS checkout while the UI still showed
- * the app as the selected workspace, with nothing anywhere saying which
- * directory had actually been used (issue #3180).
- *
- * This module makes that decision explicit and loud in the two ways that
- * matter: it logs the effective cwd for every spawn, and it rejects a workspace
- * that was requested but does not exist on disk (a typo'd or moved repo path)
- * rather than quietly running somewhere else.
- *
- * Note this can only catch a workspace that *resolved to something wrong*. The
- * other half of #3180 — an app that resolves to no path at all — has to be
- * caught where the app is looked up, because "no path" arrives here
- * indistinguishable from "no app selected". `getAppWorkspace` returns `null`
- * for that case rather than silently substituting the PortOS root.
- *
- * `withSpawnCwdEnv` covers the remaining failure mode: a CLI that resolves its
- * own working directory from the inherited `PWD` env var rather than from the
- * cwd it was actually spawned in (issue #3193).
+  * Spawn working-directory resolution for provider runs and agents.
+  *
+  * Every provider run and CoS agent gets a `workspacePath` (the selected app's repoPath) used as the child's cwd; a missing value falls back to the PortOS repo root, which was once *silent* (a prompt like "create HelloWorld.md" wrote into the PortOS checkout while the UI showed the app as selected, #3180). This module makes the decision explicit: it logs the effective cwd for every spawn and rejects a workspace that was requested but doesn't exist (a typo'd or moved repo path). It can only catch a workspace that *resolved to something wrong*; an app resolving to no path is indistinguishable here from "no app selected", so `getAppWorkspace` returns `null` rather than substituting the PortOS root. `withSpawnCwdEnv` covers a CLI that resolves its own cwd from the inherited `PWD` env var (#3193).
  */
 
 import { join } from 'path';
@@ -32,15 +11,8 @@ import { rm } from 'fs/promises';
 import { expandHome } from './fileUtils.js';
 
 /**
- * Creative Director treatment/plan/evaluate tasks are HTTP-PATCH deliverables
- * (`noCodeOutput`) and never asked for a worktree. Spawning them with
- * `cwd = PATHS.root` lets Claude Code / Codex natively discover the PortOS
- * repo's AGENTS.md files — the same dev-convention bloat the API path already
- * skips via `skipClaudeMd`. A per-agent scratch dir with no AGENTS.md in its
- * tree is the provider-agnostic fix (#4650).
- *
- * `useWorktree: true` keeps the worktree: an explicit isolation request still
- * wins. CD production tasks always set `useWorktree: false`.
+ * Creative Director treatment/plan/evaluate tasks are HTTP-PATCH deliverables (`noCodeOutput`) that never asked for a worktree. With `cwd = PATHS.root` Claude Code / Codex would discover the PortOS repo's AGENTS.md
+ * files (the bloat the API path skips via `skipClaudeMd`); a per-agent scratch dir with no AGENTS.md is the provider-agnostic fix (#4650). `useWorktree: true` keeps the worktree (explicit isolation wins); CD production tasks always set `false`.
  */
 export function usesCreativeDirectorScratchCwd(task) {
   if (!task?.metadata?.creativeDirector) return false;
@@ -48,13 +20,7 @@ export function usesCreativeDirectorScratchCwd(task) {
   return useWorktree !== true && useWorktree !== 'true';
 }
 
-/**
- * Isolated cwd for a CD-marked CLI/TUI run. Lives under the OS temp dir — NOT
- * under the PortOS checkout (`data/cos/agents` is still inside the git tree,
- * so Claude Code / Codex walking parent directories would still find the repo
- * AGENTS.md). `agentId` is required — a missing id would collapse every CD run
- * onto one shared folder.
- */
+/** Isolated cwd for a CD-marked CLI/TUI run, under the OS temp dir, NOT the checkout (`data/cos/agents` is inside the git tree, so parent-directory walks would find AGENTS.md). `agentId` is required (a missing id would collapse every CD run onto one folder). */
 export function creativeDirectorScratchCwd(agentId) {
   if (typeof agentId !== 'string' || !agentId) {
     throw new Error('creativeDirectorScratchCwd requires a non-empty agentId');
@@ -67,11 +33,7 @@ export async function removeCreativeDirectorScratchCwd(agentId) {
   await rm(creativeDirectorScratchCwd(agentId), { recursive: true, force: true });
 }
 
-/**
- * Spawn-site cwd for a CoS agent. CD scratch tasks always resolve to the
- * per-agent scratch path (even if the caller still handed `PATHS.root`);
- * everyone else keeps the existing `workspacePath || fallbackRoot` rule.
- */
+/** Spawn-site cwd for a CoS agent: CD scratch tasks always resolve to the per-agent scratch path (even if handed `PATHS.root`); everyone else keeps `workspacePath || fallbackRoot`. */
 export function resolveAgentCliCwd({ workspacePath, fallbackRoot, task, agentId } = {}) {
   if (usesCreativeDirectorScratchCwd(task)) return creativeDirectorScratchCwd(agentId);
   return workspacePath && typeof workspacePath === 'string' ? workspacePath : fallbackRoot;
@@ -83,30 +45,19 @@ export function resolveAgentCliCwd({ workspacePath, fallbackRoot, task, agentId 
  * @param {string|undefined|null} workspacePath - caller-supplied workspace (app repoPath)
  * @param {string} fallbackRoot - directory to use when no workspace was supplied
  * @param {string} [label] - short run/agent identifier used in the log line
- * @param {{ log?: boolean }} [options] - `log: false` when the caller logs the
- *   final directory itself. An agent prep resolves the source repo here and
- *   then may replace it with a worktree; logging the source as "cwd" reads as
- *   if the agent were about to edit the primary checkout.
+ * @param {{ log?: boolean }} [options] - `log: false` when the caller logs the final directory itself (an agent prep resolves the source repo and may replace it with a worktree)
  * @returns {string} the directory to hand to `spawn`/`pty.spawn` as `cwd`
  * @throws {Error} when `workspacePath` was supplied but is not an existing directory
  */
 export function resolveSpawnCwd(workspacePath, fallbackRoot, label = 'run', { log = true } = {}) {
-  // "Nothing was supplied" and "something blank was supplied" are different
-  // answers and must not collapse. `repoPath` is validated only as
-  // `z.string().min(1)`, so an app can hold "   " — that is a MISCONFIGURED
-  // workspace, not an absent one. Deciding on the trimmed value would turn it
-  // back into the fallback root and silently run in the PortOS checkout: the
-  // exact bug this module exists to prevent, reachable through the one input
-  // the schema still lets through.
+  // "Nothing supplied" and "something blank supplied" must not collapse: `repoPath` is only `z.string().min(1)`, so an app can hold "   ", a MISCONFIGURED workspace; deciding on the trimmed value would fall back to the PortOS checkout, the bug this module prevents.
   const supplied = typeof workspacePath === 'string' && workspacePath.length > 0;
   if (!supplied) {
     if (log) console.log(`📂 ${label} cwd: ${fallbackRoot} (no workspace selected)`);
     return fallbackRoot;
   }
 
-  // expandHome so a repoPath saved as `~/Projects/App` resolves instead of
-  // hard-failing as "does not exist" — every other user-supplied-path boundary
-  // in the repo expands it too.
+  // expandHome so `~/Projects/App` resolves instead of failing as "does not exist" (every other user-supplied-path boundary expands it).
   const requested = expandHome(workspacePath.trim());
   if (!requested) {
     throw new Error(
@@ -115,9 +66,7 @@ export function resolveSpawnCwd(workspacePath, fallbackRoot, label = 'run', { lo
     );
   }
 
-  // Fail loudly instead of silently running in the PortOS checkout. A bad
-  // repoPath is a configuration error the user can fix; running the agent
-  // somewhere else and reporting success is not recoverable after the fact.
+  // Fail loudly: a bad repoPath is a fixable configuration error; running somewhere else and reporting success is not recoverable.
   const stats = statSync(requested, { throwIfNoEntry: false });
   if (!stats) {
     throw new Error(
@@ -136,35 +85,13 @@ export function resolveSpawnCwd(workspacePath, fallbackRoot, label = 'run', { lo
   return requested;
 }
 
-// Windows environment-variable names are case-insensitive, so a spread of
-// `process.env` can surface this variable as `Pwd`/`pwd`. Adding a separate
-// `PWD` key to that object would hand the child two spellings of one variable
-// with no defined winner — so every case variant is dropped before the correct
-// value is set.
+// Windows env names are case-insensitive, so a `process.env` spread can surface `Pwd`/`pwd`; adding a separate `PWD` would give the child two spellings with no defined winner, so every case variant is dropped first.
 const PWD_KEY_RE = /^pwd$/i;
 
 /**
- * Return a copy of `env` whose `PWD` names the directory the child will
- * actually run in.
- *
- * Passing `cwd` to `spawn()` changes the child's real working directory but
- * does NOT rewrite `PWD` in the inherited environment — that variable is
- * maintained by the shell, so a child spawned from the long-running PortOS
- * server inherits `PWD=<the PortOS checkout>` no matter where it was pointed.
- * Most CLIs never notice, because they read `process.cwd()`. OpenCode does:
- * `opencode run` resolves its project root as `process.env.PWD ?? process.cwd()`
- * (`packages/opencode/src/cli/cmd/run.ts`), so it ran every PortOS agent in the
- * PortOS folder while the spawn logs correctly reported the app's workspace —
- * "create HelloWorld.md" landed in the PortOS checkout, and asking the agent to
- * print its own working directory printed the PortOS path (issue #3193,
- * follow-up to #3180). Codex/Claude/Gemini were unaffected, which is why the
- * bug looked OpenCode-specific.
- *
- * Upstream closed that behavior as won't-fix and documented exporting a correct
- * `PWD` as the supported workaround, so PortOS pins it at every spawn site.
- * This is the right fix generally, not just for OpenCode: a `PWD` that
- * disagrees with the child's actual cwd is wrong for any process that reads it,
- * and pinning it costs nothing for the ones that don't.
+ * Return a copy of `env` whose `PWD` names the directory the child will actually run in. `spawn({ cwd })` changes the real working directory but does NOT rewrite the inherited `PWD` (maintained by the shell), so a child of the
+ * PortOS server inherits `PWD=<PortOS checkout>`. Most CLIs read `process.cwd()`, but `opencode run` resolves its root as `process.env.PWD ?? process.cwd()` (`packages/opencode/src/cli/cmd/run.ts`), so every PortOS agent ran in the
+ * PortOS folder while logs reported the app's workspace (#3193, follow-up to #3180). Upstream closed it won't-fix with exporting `PWD` as the workaround, so PortOS pins it at every spawn site; a `PWD` disagreeing with the real cwd is wrong for any reader.
  *
  * @param {NodeJS.ProcessEnv|object} env - env the child would otherwise receive
  * @param {string|undefined|null} cwd - the directory being passed to `spawn` as `cwd`
@@ -172,9 +99,7 @@ const PWD_KEY_RE = /^pwd$/i;
  */
 export function withSpawnCwdEnv(env, cwd) {
   const next = { ...(env || {}) };
-  // No cwd means the child inherits the parent's real working directory, so the
-  // inherited PWD is already truthful — stripping it would substitute a
-  // different lie for the one being fixed.
+  // No cwd means the child inherits the parent's real cwd, so the inherited PWD is already truthful; stripping it would substitute a different lie.
   if (typeof cwd !== 'string' || !cwd) return next;
   for (const key of Object.keys(next)) if (PWD_KEY_RE.test(key)) delete next[key];
   next.PWD = cwd;

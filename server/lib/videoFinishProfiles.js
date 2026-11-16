@@ -1,63 +1,14 @@
 /**
- * Video draft → delivery ("Finish") profiles (issue #3696).
+  * Video draft → delivery ("Finish") profiles (#3696). A *draft* model is a fast low-step variant; a *delivery* model is its slower sibling rendering the same composition at full quality.
+  *
+  * When they share base weights, re-rendering the draft's prompt + resolved seed + dials on the delivery model reproduces the composition instead of re-rolling it (the point of Finish). `VIDEO_FINISH_PROFILES` declares each draft entry id → `{ shippedRepo, finishModelId }` (declared, not inferred from names), only for pairs sharing runtime, base `repo` and `supportedModes` (differing in step count / sampler / adaptor weights). A pair that merely sounds related (distilled Q4 vs a bf16 build of a different checkpoint) is NOT declared: its seeds don't reproduce each other, so "finishing" would silently re-roll. `applyVideoFinishProfiles(list)` is the load-time backfill (twin of migration 238, same pattern as `applyVideoDisclosures` in `lib/videoDisclosure.js`; existing key wins, custom id skipped, forked `repo` skipped); `validateFinishProfileGraph(list)` returns graph problems (missing / self-referencing / chained target, runtime / repo / supportedModes mismatch); `sanitizeFinishProfiles(list)` warns + strips them at load so a typo never surfaces a Finish button targeting nothing and a user-edited registry never crashes boot (`loadMediaModels` runs at import time); `finishTargetForModel(model, availableModels)` resolves the delivery entry scoped to what this install can run.
  *
- * Draft → delivery ("Finish") relationships between video models (#3696). `VIDEO_FINISH_PROFILES`
- * declares each fast draft entry id → `{ shippedRepo, finishModelId }`, only for pairs that share a
- * runtime, base repo and supported modes (the same weights at a different step budget), so
- * re-rendering the draft's seed reproduces its composition instead of re-rolling it.
- * `applyVideoFinishProfiles(list)` is the load-time backfill (twin of migration 238) with the usual
- * preservation guards (existing key wins, custom id skipped, forked `repo` skipped);
- * `validateFinishProfileGraph(list)` returns the graph problems (missing / self-referencing / chained
- * target, runtime / repo / supportedModes mismatch) and `sanitizeFinishProfiles(list)` warns + strips
- * them at load so a typo can never surface a Finish button targeting nothing.
- * `finishTargetForModel(model, availableModels)` resolves the delivery entry scoped to what this
- * install can run.
- *
- * A *draft* model is a fast, low-step variant a user composes with; a
- * *delivery* model is the slower sibling that renders the same composition at
- * full quality. When the two share identical base weights, re-rendering the
- * draft's prompt + resolved seed + dials on the delivery model reproduces the
- * same composition instead of re-rolling it — that is the entire point of the
- * Finish action.
- *
- * The relationship is declared here (not inferred from names) and attached to
- * registry entries as `finishModelId` by `applyVideoFinishProfiles`, the same
- * load-time backfill pattern `applyVideoDisclosures` uses in
- * `lib/videoDisclosure.js`. Migration 238 makes it durable on disk for installs
- * that already persisted `data/media-models.json`.
- *
- * Rules this module exists to enforce:
- *   - Only genuinely compatible pairs are declared. "Compatible" means the
- *     same runtime, the same base `repo`, and the same `supportedModes` — the
- *     pair differs only in the step count / sampler / adaptor weights. A pair
- *     that merely sounds related (a distilled Q4 vs a bf16 build of a different
- *     checkpoint) is NOT declared: its seeds do not reproduce each other's
- *     composition, so "finishing" it would silently be a re-roll.
- *   - The graph is validated (`validateFinishProfileGraph`) so a typo fails
- *     loudly rather than surfacing as a Finish button that targets nothing.
- *     Invalid edges are stripped at load with a warning — a user-edited
- *     registry must never crash boot (`loadMediaModels` runs at import time).
- *
- * NOTE: the I2V lightning → full pair is deliberately NOT declared yet. Finish
- * currently only offers itself for fully reproducible text-to-video records
- * (image-conditioned drafts have no durable reference to re-render from), so an
- * I2V edge would be config that can never fire.
+ * The I2V lightning → full pair is deliberately NOT declared: Finish only offers itself for fully reproducible text-to-video records (image-conditioned drafts have no durable reference), so an I2V edge could never fire.
  */
 
-/**
- * Shipped draft → delivery edges, keyed by the DRAFT entry id.
- *
- * `shippedRepo` is the fork-preservation guard (same contract as
- * `applyVideoDisclosures` / `backfillKvRepo`): the profile is only attached
- * while the entry still points at the repo the pair was established against. A
- * user who re-pointed `repo` at a fork keeps no Finish target rather than
- * inheriting a claim about weights we can no longer vouch for.
- */
+/** Shipped draft → delivery edges, keyed by the DRAFT entry id. `shippedRepo` is the fork-preservation guard (as `applyVideoDisclosures` / `backfillKvRepo`): attached only while the entry still points at the repo the pair was established against. */
 export const VIDEO_FINISH_PROFILES = Object.freeze({
-  // Wan 2.2 T2V A14B: the Lightning entry is the SAME repo at the SAME pinned
-  // revision as the full entry — it differs only by the 4-step Seko LoRA
-  // adaptor, a locked euler sampler, and guidance 1.0. Dropping the adaptor and
-  // rendering the same seed at 20 steps is the canonical draft → delivery hop.
+  // Wan 2.2 T2V A14B: the Lightning entry is the SAME repo and pinned revision as the full entry, differing only by the 4-step Seko LoRA adaptor, a locked euler sampler and guidance 1.0; dropping the adaptor at 20 steps is the canonical draft → delivery hop.
   wan22_t2v_a14b_lightning: Object.freeze({
     shippedRepo: 'AbstractFramework/wan2.2-t2v-a14b-diffusers-8bit',
     finishModelId: 'wan22_t2v_a14b',
@@ -67,14 +18,8 @@ export const VIDEO_FINISH_PROFILES = Object.freeze({
 const isEntry = (entry) => !!entry && typeof entry === 'object' && typeof entry.id === 'string';
 
 /**
- * Attach `finishModelId` to shipped draft entries that don't already carry one.
- * Pure; returns a new array and never mutates the input entries.
- *
- * Preservation contract (mirrors migration 238):
- *   - `'finishModelId' in entry` → user/existing value wins (including `null`,
- *     the explicit "this draft has no delivery target" override).
- *   - entry id not shipped       → custom model, left as-is.
- *   - `repo` differs from shipped → forked weights, left as-is.
+ * Attach `finishModelId` to shipped draft entries that don't already carry one. Pure; never mutates the input. Preservation contract (mirrors migration 238): `'finishModelId' in entry` wins (even `null`,
+ * the explicit "no delivery target" override); unshipped ids (custom) and entries whose `repo` differs (forked weights) are left as-is.
  */
 export const applyVideoFinishProfiles = (list) => {
   if (!Array.isArray(list)) return list;
@@ -89,20 +34,9 @@ export const applyVideoFinishProfiles = (list) => {
 };
 
 /**
- * Validate every `finishModelId` edge in one platform's video model list.
- * Pure — returns an array of `{ id, finishModelId, reason }` problems (empty
- * when the graph is sound). Callers decide whether to warn-and-strip (load
- * path) or fail (the test that pins the shipped registry).
- *
- * Checked, in the order a typo is most likely to hit:
- *   - the value is a non-empty string
- *   - it is not a self-reference
- *   - the target exists in the SAME platform list (a delivery model the user
- *     deleted, or one that only exists on the other platform, is unusable)
- *   - the target is not itself a draft (no chains, and therefore no cycles —
- *     a chain would make "Finish" ambiguous about where it lands)
- *   - runtime, base `repo` and `supportedModes` match, i.e. the pair really is
- *     the same weights at a different step budget
+ * Validate every `finishModelId` edge in one platform's video model list. Pure; returns `{ id, finishModelId, reason }` problems (empty when sound); callers warn-and-strip (load path) or fail (the shipped-registry test).
+ * Checked: the value is a non-empty string; not a self-reference; the target exists in the SAME platform list; the target is not itself a draft (no chains, so no cycles and no ambiguity about where Finish lands);
+ * runtime, base `repo` and `supportedModes` match (the same weights at a different step budget).
  */
 export const validateFinishProfileGraph = (list) => {
   if (!Array.isArray(list)) return [];
@@ -147,13 +81,7 @@ export const validateFinishProfileGraph = (list) => {
   return problems;
 };
 
-/**
- * Load-time guard: strip every invalid `finishModelId` from a video model list,
- * logging each one. A user-edited (or migration-stale) registry must not be
- * able to surface a Finish button that targets a model this install can't run,
- * and must not crash boot. Returns the input array unchanged when the graph is
- * sound, so the common path allocates nothing.
- */
+/** Load-time guard: strip every invalid `finishModelId`, logging each, so a user-edited or migration-stale registry can't surface a Finish button targeting a model this install can't run or crash boot. Returns the input unchanged when sound. */
 export const sanitizeFinishProfiles = (list) => {
   const problems = validateFinishProfileGraph(list);
   if (problems.length === 0) return list;
@@ -168,12 +96,7 @@ export const sanitizeFinishProfiles = (list) => {
   });
 };
 
-/**
- * Resolve the delivery model a draft entry finishes into, scoped to the models
- * this install can actually run (`getVideoModels()` output — already filtered
- * for platform-broken entries). Returns the target entry, or `null` when the
- * draft declares no target or the target isn't available here.
- */
+/** Resolve the delivery model a draft finishes into, scoped to the models this install can run (`getVideoModels()` output, already filtered for platform-broken entries): the target entry, or `null`. */
 export const finishTargetForModel = (model, availableModels) => {
   const targetId = model?.finishModelId;
   if (typeof targetId !== 'string' || targetId.length === 0) return null;
@@ -182,15 +105,8 @@ export const finishTargetForModel = (model, availableModels) => {
 };
 
 /**
- * True when `model` exists in the graph as somebody's DELIVERY target — i.e.
- * another entry names it as its `finishModelId`.
- *
- * That is a stronger statement than "this model is slow": a delivery model is
- * declared as the place a composition is taken once it is settled, so anything
- * that trades fidelity for speed (issue #5423's draft decode) has no business
- * on it, however the request was phrased. Kept here rather than in the consumer
- * so the finish graph stays the single authority on which end of a pair a model
- * sits on.
+ * True when another entry names `model` as its `finishModelId`, i.e. it is somebody's DELIVERY target. Stronger than "slow": a delivery model is where a settled composition is taken, so anything trading fidelity for speed
+ * (#5423's draft decode) has no business on it. Kept here so the finish graph stays the single authority on which end of a pair a model sits on.
  *
  * @param {object|null|undefined} model
  * @param {Array<object>} list - the platform's video model entries

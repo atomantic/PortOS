@@ -1,73 +1,29 @@
 /**
- * `stripTerminalQueries` removes response-soliciting terminal sequences (DSR, DA, DECRQM, OSC color
- * queries) from a PTY replay buffer so re-attached clients do not answer them.
+ * `stripTerminalQueries` removes response-soliciting terminal sequences (DSR, DA, DECRQM, OSC color queries) from a PTY replay buffer so re-attached clients do not answer them.
  *
- * Replay correctness for the buffer a PTY session hands a newly attached client
- * (`attachSession` in `services/shell.js`): what must be STRIPPED out of the
- * recorded bytes, and what must be RE-ASSERTED because it was never in them.
+ * Replay correctness for the buffer `attachSession` (`services/shell.js`) hands a newly attached client: what must be STRIPPED from the recorded bytes, and what must be RE-ASSERTED because it was never in them.
  *
- * ── The bug the stripping fixes ────────────────────────────────────────────────
- * The 50KB ring buffer stores raw PTY output verbatim, and full-screen TUIs
- * (Claude Code / Ink, vim, htop) pepper that output with terminal QUERIES —
- * `ESC[6n` "where is the cursor?" most of all, emitted on essentially every
- * render. A query is not history: it is a question whose answer the terminal
- * emulator sends back as INPUT.
+ * Stripping: the 50KB ring buffer stores raw PTY output verbatim, and full-screen TUIs (Claude Code / Ink, vim, htop) pepper it with QUERIES (`ESC[6n` "where is the cursor?" on nearly every render).
+ * On attach xterm can't tell a replayed query from a live one and answers each (hundreds) through `onData` → `shell:input` → the PTY, where the long-gone asker's replies land on the SHELL PROMPT
+ * (zsh eats the `ESC[` and self-inserts `56;3R56;3R…`). That garbage is itself PTY output appended to the same buffer, so every later attach re-fires the burst.
+ * So the response-soliciting sequences are stripped at attach time over the joined buffer (a sequence split across chunks still matches, no cross-chunk state). LIVE output is untouched: a running TUI must
+ * get its answers. Stripping is visually lossless; stateful sequences the replay needs (mouse tracking, bracketed paste, alternate screen, SGR) are NOT touched.
  *
- * So when a second tab attaches (deep link, reload, session switch, socket
- * reconnect) and the client writes the replay buffer into xterm, xterm cannot
- * tell a replayed historical query from a live one. It dutifully answers every
- * one of them — hundreds, for a buffer that caught a TUI mid-render — and each
- * reply is emitted through `onData` → `shell:input` → straight into the PTY.
- *
- * The TUI that asked is long gone by then, so those replies land on the SHELL
- * PROMPT. zsh's line editor eats the `ESC[` as an unmatched key-binding prefix
- * and self-inserts the remainder as literal text, so the user watches
- * `56;3R56;3R56;3R…` (a cursor-position report for row 56, column 3) pour into
- * their command line. Worse, that echoed garbage is itself PTY output, so it is
- * appended to the same ring buffer — which still holds the queries — and every
- * later attach re-fires the burst and adds more.
- *
- * ── The fix ────────────────────────────────────────────────────────────────────
- * Strip the response-soliciting sequences on the way OUT, at attach time, over
- * the joined (contiguous) buffer — so a sequence split across two stored chunks
- * is still matched, and no state has to be carried between chunks. LIVE output
- * is deliberately untouched: a TUI that is actually running must still get its
- * answers.
- *
- * Removing them is visually lossless. Every sequence below renders nothing; it
- * only asks a question. Stateful sequences that the replay legitimately needs to
- * re-establish (mouse tracking, bracketed paste, alternate screen, SGR) are NOT
- * touched.
- *
- * Not `ansiStrip.js`: that one removes ALL escape sequences to recover plain text
- * for log/summary extraction. The replay buffer is fed back to a real terminal, so
- * it must keep everything that paints — this removes only the questions.
- *
- * The set is exactly what @xterm/xterm actually replies to, verified by feeding
- * each sequence to a real terminal and watching `onData`. Sequences other
- * emulators answer but xterm does not (XTVERSION `ESC[>q`, XTWINOPS `ESC[18t`,
- * XTGETTCAP, kitty `ESC[?u`) are left alone — they cannot produce this bug here,
- * and stripping more than necessary risks eating real output.
+ * Not `ansiStrip.js`, which removes ALL escapes for plain text; this buffer feeds a real terminal and must keep everything that paints. The set is exactly what @xterm/xterm replies to (verified by feeding
+ * each sequence to a real terminal); sequences only other emulators answer (XTVERSION, XTWINOPS, XTGETTCAP, kitty `ESC[?u`) are left alone to avoid eating real output.
  */
 
-// The final byte is the only thing that disambiguates these from the cursor-move
-// and SGR sequences they sit among in real output, so each pattern is anchored on
-// it rather than on the parameters.
+// The final byte is the only thing that disambiguates these from the cursor-move and SGR sequences around them, so each pattern anchors on it, not the parameters.
 const QUERY_PATTERNS = [
-  // DSR — Device Status Report. `ESC[6n` (cursor position) is the one TUIs spam;
-  // `ESC[5n` (operating status) is answered too. `CSI > Ps n` is XTMODKEYS, which
-  // sets state and solicits nothing, so the `>` form is deliberately excluded.
+  // DSR: `ESC[6n` (cursor position, the one TUIs spam) and `ESC[5n` are answered. `CSI > Ps n` is XTMODKEYS (sets state, solicits nothing), so the `>` form is excluded.
   /\x1b\[\??\d*(?:;\d+)*n/g,
-  // DA — Device Attributes. `ESC[c` (DA1) and `ESC[>c` (DA2) both get answered.
+  // DA: `ESC[c` (DA1) and `ESC[>c` (DA2) both get answered.
   /\x1b\[[<>=?]?\d*(?:;\d+)*c/g,
   // DECRQM — request mode state, answered with a DECRPM report.
   /\x1b\[\??\d+(?:;\d+)*\$p/g,
-  // DECRQSS — request a setting's current value, answered with a DECRPSS string.
-  // Lazy to the first ST so an unterminated query can't swallow the rest of the
-  // buffer.
+  // DECRQSS: request a setting's value (answered with DECRPSS). Lazy to the first ST so an unterminated query can't swallow the buffer.
   /\x1bP\$q[\s\S]*?\x1b\\/g,
-  // OSC color queries — `OSC 10/11/12;?` (fg/bg/cursor) and `OSC 4;<n>;?` /
-  // `OSC 5;<n>;?` (palette). Terminated by BEL or ST.
+  // OSC color queries: `OSC 10/11/12;?` (fg/bg/cursor) and `OSC 4;<n>;?` / `OSC 5;<n>;?` (palette), terminated by BEL or ST.
   /\x1b\](?:1[0-2]|[45];\d+);\?(?:\x07|\x1b\\)/g,
 ];
 
@@ -84,42 +40,19 @@ export const stripTerminalQueries = (text) => {
 };
 
 /**
- * ── The other replay bug: modes that scrolled out of the ring buffer ───────────
+ * The other replay bug: modes that scrolled out of the ring buffer. A full-screen TUI declares its terminal state ONCE in its first bytes (alternate screen, mouse tracking and encoding, bracketed paste,
+ * cursor visibility), the buffer keeps only the LAST 50KB and the client `reset()`s before painting, so a long session replays into the DEFAULT state (normal buffer, no mouse). Consumers branching on mode then
+ * misbehave (`client/src/lib/terminalScroll.js` can't scroll a watched TUI-agent run; seen with OpenCode, which passes 120KB in a minute).
+ * Growing the buffer only moves the threshold and pinning its head could replay a declaration the app has since taken back, so modes are tracked over the WHOLE stream and `preamble()` re-declares
+ * what is still in force, prepended to the replay ("state first, then history").
  *
- * A full-screen TUI declares its terminal state ONCE, in its first few hundred
- * bytes — alternate screen, mouse tracking and its encoding, bracketed paste,
- * cursor visibility — and never repeats it. The ring buffer keeps only the LAST
- * 50KB, and the attaching client `reset()`s its terminal before painting the
- * replay, so on any session that has emitted more than that the declaration is
- * gone and the viewer comes up in the DEFAULT state: normal buffer, no mouse.
- *
- * Every consumer that branches on terminal mode then branches wrongly — most
- * visibly `client/src/lib/terminalScroll.js`, which routes a scroll gesture by
- * buffer type and mouse-tracking mode, so a watched TUI-agent run cannot be
- * scrolled at all. (Observed with OpenCode, whose TUI passes 120KB inside a
- * minute; nothing here is specific to it.)
- *
- * Growing the buffer only moves the threshold, and pinning its head would replay
- * a declaration the app may since have taken back. So track the modes over the
- * WHOLE stream and have `preamble()` re-declare whatever is still in force,
- * prepended to the replay: attach becomes "state first, then history".
- *
- * ── Ceiling ────────────────────────────────────────────────────────────────────
- * This covers `CSI ? … h/l` and nothing else. Other sticky state a mid-stream cut
- * destroys — keypad mode (`ESC =` / `ESC >`), scroll region, charset designation,
- * the SGR pen at the cut point — is out of scope. If that starts to matter, the
- * next step is not a third ad-hoc tracker: it is serializing real terminal state
- * from a server-side headless emulator, the way tmux and asciinema do.
+ * Ceiling: this covers `CSI ? … h/l` only. Other sticky state a mid-stream cut destroys (keypad mode, scroll region, charset designation, the SGR pen) is out of scope; the next step would be serializing
+ * real terminal state from a server-side headless emulator (as tmux and asciinema do), not a third ad-hoc tracker.
  */
 
-// The DEC private modes a re-attaching terminal has to inherit, each mapped to
-// the value a freshly-`reset()` terminal already holds — only a departure from
-// that default is worth re-declaring. The test for inclusion is STICKY STATE
-// THAT CHANGES HOW THE TERMINAL INTERPRETS INPUT OR PAINTS OUTPUT, which is why
-// this deliberately excludes begin/end pairs (`?2026` synchronized update —
-// re-declaring a dangling "begin" would freeze the view) and feature negotiation
-// (`?2027`, `?2031`). Alternate-screen modes lead so the replayed frames paint
-// into the buffer they were drawn for.
+// The DEC private modes a re-attaching terminal must inherit, each mapped to the value a freshly-`reset()` terminal already holds (only a departure is re-declared). Inclusion test: STICKY STATE THAT CHANGES
+// HOW THE TERMINAL INTERPRETS INPUT OR PAINTS OUTPUT; so begin/end pairs (`?2026` synchronized update: a dangling "begin" would freeze the view) and feature negotiation (`?2027`, `?2031`) are excluded.
+// Alternate-screen modes lead so replayed frames paint into the buffer they were drawn for.
 const REPLAYED_PRIVATE_MODES = [
   [1049, 'l'], // alternate screen + save cursor (xterm)
   [1047, 'l'], // alternate screen (xterm, no cursor save)
@@ -140,32 +73,23 @@ const REPLAYED_PRIVATE_MODES = [
 
 const TRACKED_MODES = new Set(REPLAYED_PRIVATE_MODES.map(([mode]) => mode));
 
-// `ESC[?1000;1002;1003h` sets three modes in one sequence, so the parameter list
-// is split rather than matched as a single number.
+// `ESC[?1000;1002;1003h` sets three modes in one sequence, so the parameter list is split.
 const PRIVATE_MODE_SEQUENCE = /\x1b\[\?([\d;]*)([hl])/g;
 
-// A mode sequence can straddle two PTY chunks, so a trailing fragment that could
-// still become one — `ESC`, `ESC[`, `ESC[?`, `ESC[?1000;1002` — is carried into
-// the next. Deliberately TIGHTER than the incomplete-CSI grammars in
-// `ansiStrip.js` and `tuiHandshake.js`, which carry any CSI prefix: only
-// `ESC[?<digits>` can become a private-mode set, so an `ESC[38;5` split out of a
-// truecolor run is not worth carrying. The cap bounds the carry so a lone `ESC`
-// in a data stream can't grow one without end.
+// A mode sequence can straddle two PTY chunks, so a trailing fragment that could still become one (`ESC`, `ESC[`, `ESC[?`, `ESC[?1000;1002`) is carried. TIGHTER than the CSI-prefix grammars in
+// `ansiStrip.js` and `tuiHandshake.js`: only `ESC[?<digits>` can become a private-mode set. The cap bounds the carry so a lone `ESC` can't grow one without end.
 const PARTIAL_SEQUENCE = /\x1b(?:\[(?:\?[\d;]*)?)?$/;
 const MAX_PARTIAL_LENGTH = 64;
 
 const trailingPartialSequence = (text) => {
   const windowStart = Math.max(0, text.length - MAX_PARTIAL_LENGTH);
-  // Bounded scan before the slice: plain output has no ESC near its end, and this
-  // is per-chunk code on every PTY in the install. Skipping the slice+match there
-  // is most of the cost and all of the allocation.
+  // Bounded scan before the slice: plain output has no ESC near its end, and this is per-chunk code on every PTY, so skipping the slice+match saves most of the cost and all the allocation.
   if (text.indexOf('\x1b', windowStart) === -1) return '';
   return text.slice(windowStart).match(PARTIAL_SEQUENCE)?.[0] ?? '';
 };
 
 /**
- * Follow the private-mode state of a PTY stream so a later attach can be handed
- * the modes still in force, whatever the ring buffer has since dropped.
+ * Follow the private-mode state of a PTY stream so a later attach can be handed the modes still in force, whatever the ring buffer has dropped.
  *
  * @returns {{ observe: (chunk: string) => void, preamble: () => string }}
  */
@@ -204,15 +128,8 @@ export const createTerminalModeTracker = () => {
 };
 
 /**
- * The re-attach ring buffer itself: the recorded bytes plus BOTH corrections
- * above, behind one object. They are properties of the replay rather than of
- * any caller, so they belong to whatever owns the bytes — `render()` is what
- * guarantees the preamble leads, instead of an attach site having to remember
- * it.
- *
- * Eviction keeps the NEWEST chunk unconditionally: a single chunk larger than
- * the cap is the live screen, and dropping it would hand an attaching client an
- * empty terminal.
+ * The re-attach ring buffer: the recorded bytes plus BOTH corrections above behind one object (properties of the replay, so `render()` guarantees the preamble leads rather than each attach site remembering).
+ * Eviction keeps the NEWEST chunk unconditionally: a single chunk over the cap is the live screen, and dropping it would hand an attaching client an empty terminal.
  *
  * @param {{ maxBytes?: number }} [options]
  * @returns {{ push: (data: string) => void, render: () => string }}

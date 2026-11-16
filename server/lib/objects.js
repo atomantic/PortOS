@@ -1,64 +1,25 @@
 /**
- * Object utilities.
+ * Object utilities: `isPlainObject`, `deepMerge`, `isEmptyScalar`, `POLLUTING_KEYS`, canonical JSON and prefix-fitting helpers.
  *
- * `isPlainObject(v)` — `true` when `v` is a non-null, non-array `object`. The
- * project standard for "is this a `{...}`-shaped value?" — used to gate JSON
- * sanitizers, deep-merge recursion, and LLM-response shape guards. Note that
- * `Date`, `Map`, class instances, etc. also return `true` (matches every
- * inline call-site this helper replaces, which all run against `JSON.parse`
- * output or LLM payloads that never carry exotic prototypes).
- *
- * `deepMerge` is the project's shared deep-merge — promoted from
- * `services/voice/config.js` after the same pattern was reinvented in
- * `services/meatspacePost.js` and `routes/loras.js#POST /auth/civitai`.
- *
- * Semantics (matches the original voice/config.js implementation):
- *   - Both base[k] and patch[k] are plain objects → recurse.
- *   - Arrays are REPLACED, not merged (Object.entries iterates patch's keys
- *     so the entire array under each key is replaced; this matches every
- *     existing call site's expectation that arrays are leaf values).
- *   - Primitives, null, and any non-plain-object value at patch[k] overwrite
- *     base[k] verbatim.
- *   - When patch itself is not a plain object, returns patch directly
- *     (preserving the "patch is the new value" intent), unless patch is
- *     undefined — then returns base unchanged so callers can pass an
- *     optional patch without losing the defaults.
- *   - When `base` is null/undefined/non-object, it's treated as an empty
- *     object — `deepMerge(undefined, { a: 1 })` returns `{ a: 1 }`. This
- *     matches the function's own `base?.[k]` recursion guard, which already
- *     assumes a missing base is fine.
- *
- * Does NOT mutate `base`.
+ * Object utilities. `isPlainObject(v)`: the project standard for "is this a `{...}`-shaped value?" (non-null, non-array `object`), gating JSON sanitizers, deep-merge recursion and LLM-response shape guards; `Date`, `Map` and class instances
+ * also return `true` (matching every call site it replaced, which runs on `JSON.parse` output or LLM payloads).
+ * `deepMerge` is the shared deep-merge (promoted from `services/voice/config.js` after being reinvented in `services/meatspacePost.js` and `routes/loras.js#POST /auth/civitai`). Semantics: both base[k] and patch[k] plain objects → recurse;
+ * arrays are REPLACED as leaf values; primitives, null and any non-plain-object patch[k] overwrite verbatim; a non-plain-object patch is returned directly unless `undefined` (then `base` unchanged, so an optional patch keeps defaults);
+ * a null/undefined/non-object `base` is an empty object (`deepMerge(undefined, { a: 1 })` → `{ a: 1 }`). Does NOT mutate `base`.
  */
 
 export const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
-/**
- * `isEmptyScalar(v)` — `true` when `v` is null, undefined, a whitespace-only
- * string, or an empty array. Used to gate one-way gap-fill logic in merge
- * helpers: only overwrite a field on the survivor when the survivor's value is
- * "empty" by this definition AND the loser's value is not.
- */
+/** `isEmptyScalar(v)`: true for null, undefined, a whitespace-only string or an empty array. Gates one-way gap-fill in merge helpers: overwrite a survivor's field only when its value is "empty" AND the loser's is not. */
 export const isEmptyScalar = (v) => v === null || v === undefined || (typeof v === 'string' && v.trim() === '')
   || (Array.isArray(v) && v.length === 0);
 
-// Prototype-pollution guard: skip keys that would mutate Object.prototype
-// when assigned through normal property access. Every current call site
-// gates input through a Zod schema (which strips unknown keys), but the
-// helper is shared across three routes and a future caller could hand it
-// `req.body` directly or an LLM tool-call payload — defense in depth is
-// cheap. Reflects no behavioral change for valid input.
-//
-// Exported so other sanitizers (e.g. server/services/settings.js
-// stripStoreKeys) can share one canonical denylist instead of redefining
-// it (drift risk on security-relevant constants).
+// Prototype-pollution guard: skip keys that would mutate Object.prototype through normal property access. Call sites gate input through Zod (which strips unknown keys), but the helper is shared and a future caller could hand it
+// `req.body` or an LLM tool-call payload. Exported so other sanitizers (e.g. server/services/settings.js stripStoreKeys) share one denylist.
 export const POLLUTING_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
-// Get-or-create a bucket in a map keyed by an externally supplied string (request
-// body, upload, peer payload, model output). Returns null for POLLUTING_KEYS so the
-// caller skips the record; a bare `map[key] ||= …` would return Object.prototype for
-// `__proto__` and bump a counter on every object in the process. `hasOwn` keeps
-// inherited names such as `toString` from being mistaken for an existing bucket.
+// Get-or-create a bucket in a map keyed by an externally supplied string (request body, upload, peer payload, model output). Returns null for POLLUTING_KEYS so the caller skips the record (a bare `map[key] ||= …` would return
+// Object.prototype for `__proto__` and bump a counter on every object); `hasOwn` keeps inherited names such as `toString` from reading as an existing bucket.
 export const bucketFor = (map, key, init) => {
   if (POLLUTING_KEYS.has(key)) return null;
   if (!Object.hasOwn(map, key)) map[key] = init();
@@ -76,24 +37,11 @@ export const deepMerge = (base, patch) => {
 };
 
 /**
- * Stable, canonical JSON serialization: recursively sorts object keys so two
- * structurally-equal values produce byte-identical strings regardless of the
- * key-insertion order they happened to be built with. Use this when a string
- * (or hash of a string) must be COMPARABLE ACROSS MACHINES — e.g. content-
- * hashing a sidecar's gen-params on a sender and re-deriving the same hash on
- * a receiver where the object was rebuilt in a different key order.
- *
- * Arrays preserve order (order is semantic for arrays); object keys are sorted
- * lexicographically. Only TRUE plain objects (prototype `Object.prototype` or
- * `null`) get key-sorted; everything else — primitives, null, and exotic
- * objects like Date / Map / class instances — serializes via native
- * `JSON.stringify` rules (so e.g. a Date round-trips through `toJSON` to its
- * ISO string instead of collapsing to `{}`). `undefined` and functions are
- * dropped exactly as `JSON.stringify` drops them.
+ * Stable, canonical JSON serialization: recursively sorts object keys so structurally-equal values give byte-identical strings regardless of insertion order; for strings (or hashes) that must be COMPARABLE ACROSS MACHINES (e.g. a sidecar's
+ * gen-params hash re-derived on a receiver where the object was rebuilt in another key order). Arrays preserve order; only TRUE plain objects (prototype `Object.prototype` or `null`) are key-sorted; everything else (primitives, null,
+ * Date / Map / class instances) serializes via native `JSON.stringify` (a Date round-trips via `toJSON`, not `{}`); `undefined` and functions drop as `JSON.stringify` does.
  */
-// NB: isPlainObject() is intentionally loose (true for Date/Map/class
-// instances), so it's WRONG here — it would key-sort a Date's (empty) own keys
-// into `{}`. Require the prototype to be Object.prototype or null instead.
+// NB: isPlainObject() is intentionally loose (true for Date/Map/class instances) and WRONG here (it would key-sort a Date's empty own keys into `{}`); require the prototype to be Object.prototype or null.
 const isCanonicalSortable = (v) => {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) return false;
   const proto = Object.getPrototypeOf(v);
@@ -102,18 +50,14 @@ const isCanonicalSortable = (v) => {
 
 export const canonicalStringify = (value) => {
   if (Array.isArray(value)) {
-    // Array.from (not .map) so SPARSE-array holes are visited and serialized as
-    // `null` — matching JSON.stringify ([1,,2] → "[1,null,2]"). `.map` preserves
-    // holes, and `.join` would then emit invalid JSON ("[1,,2]"), diverging the
-    // cross-machine hash for any value containing a sparse array.
+    // Array.from (not .map) so SPARSE-array holes serialize as `null` like JSON.stringify ([1,,2] → "[1,null,2]"); `.map` keeps holes and `.join` would emit invalid JSON, diverging the cross-machine hash.
     return `[${Array.from(value, (v) => canonicalStringify(v) ?? 'null').join(',')}]`;
   }
   if (isCanonicalSortable(value)) {
     const parts = [];
     for (const key of Object.keys(value).sort()) {
       const serialized = canonicalStringify(value[key]);
-      // Skip keys whose value serializes to undefined (functions / undefined)
-      // — matches JSON.stringify dropping them from objects.
+      // Skip keys whose value serializes to undefined (functions / undefined), as JSON.stringify drops them.
       if (serialized === undefined) continue;
       parts.push(`${JSON.stringify(key)}:${serialized}`);
     }
@@ -123,16 +67,8 @@ export const canonicalStringify = (value) => {
 };
 
 /**
- * The longest prefix of `items` whose JSON encoding fits `maxChars`.
- *
- * The shape every prompt-catalog builder needs: fill until the serialized form
- * would exceed a character budget, then stop. `wrap` lets a caller measure the
- * envelope the items will actually be embedded in rather than the bare array,
- * so a budget covering a whole catalog object stays accurate.
- *
- * Measured on the growing prefix, not estimated per item: an item's cost
- * depends on the separators and escaping around it, and a prompt budget that
- * under-counts is a truncated payload the model reads as complete.
+ * The longest prefix of `items` whose JSON encoding fits `maxChars`, the shape every prompt-catalog builder needs. `wrap` measures the envelope the items are embedded in, not the bare array. Measured on the growing prefix, not estimated per item
+ * (an item's cost depends on separators and escaping; an under-counting budget is a truncated payload the model reads as complete).
  */
 export const boundedByJsonChars = (items, maxChars, wrap = (kept) => kept) => {
   const kept = [];

@@ -1,38 +1,17 @@
 /**
- * Subscription-versus-API savings math for the usage page: `resolveSavingsWindow`,
- * `prorateMonthlyCost` with `DAYS_PER_MONTH` and `MAX_MONTHLY_COST` and savings computation.
- *
- * Subscription-vs-API savings math for the usage page — `resolveSavingsWindow` (clamps an open-ended
- * report range to today / first activity day), `prorateMonthlyCost` (monthly plan price → this
- * window's share, `DAYS_PER_MONTH`, capped by `MAX_MONTHLY_COST`), `savingsPercent` / `costMultiplier`
- * (null, never 0, when the comparison is undefined), `attributeReportCostToFamilies` (groups report
- * rows by their stamped `family`), `roundCents` (the one money rounder), and
- * `buildSubscriptionSavings({ entries, range, unmatchedApiCost })` → per-family rows + totals. Pure.
+  * Subscription-vs-API savings math for the usage page.
+  *
+  * `resolveSavingsWindow` (clamps an open-ended report range to today / first activity day), `prorateMonthlyCost` (monthly plan price → this window's share via `DAYS_PER_MONTH`, capped by `MAX_MONTHLY_COST`), `savingsPercent` / `costMultiplier` (null, never 0, when undefined), `attributeReportCostToFamilies` (groups report rows by stamped `family`), `roundCents` (the one money rounder), and `buildSubscriptionSavings({ entries, range, unmatchedApiCost })` → per-family rows + totals. Pure, so it unit-tests without a settings file or provider config.
  */
 
 import { ymdToUTC } from './postStreak.js';
 
-/**
- * Subscription-vs-API savings math for the /devtools/usage cost report — pure,
- * so the shape can be unit-tested without a settings file or a provider config.
- *
- * PortOS runs on flat-rate subscriptions (Claude Max, ChatGPT Pro, …) while the
- * cost report prices the same traffic at published API rates. The interesting
- * number is the difference: what the quota plans saved over paying per token.
- * That comparison only means anything if BOTH sides cover the same window, so a
- * monthly plan price is prorated across the report range rather than compared
- * whole against a 7-day API estimate.
- */
+/** PortOS runs on flat-rate subscriptions while the cost report prices the same traffic at API rates; the number of interest is what the quota plans saved. Both sides must cover the same window, so a monthly plan price is prorated across the report range rather than compared whole against a 7-day estimate. */
 
-// Average Gregorian month. A plan is billed per calendar month, so proration
-// uses the average month length rather than 30 — over a year the two differ by
-// five days of subscription cost, which is real money on a $200/mo plan.
+// Average Gregorian month (a plan bills per calendar month; 30 would differ by five days of cost per year, real money on a $200/mo plan).
 export const DAYS_PER_MONTH = 365.25 / 12;
 
-// A plan price is a monthly USD figure. The ceiling is a typo guard (a fat-
-// fingered "20000" for $200/mo would otherwise silently swamp every savings
-// figure on the page), not a product limit. Defined here so the route schema
-// and the settings normalizer enforce ONE number.
+// Monthly USD plan price ceiling: a typo guard (a fat-fingered "20000" would swamp every savings figure), not a product limit. Defined here so the route schema and settings normalizer enforce ONE number.
 export const MAX_MONTHLY_COST = 100000;
 
 /** Round a dollar amount to whole cents. Shared by every money figure PortOS derives. */
@@ -44,16 +23,8 @@ const isDay = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test
 const inclusiveDays = (start, end) => Math.floor((ymdToUTC(end) - ymdToUTC(start)) / 86400000) + 1;
 
 /**
- * Resolve the window the subscription cost is prorated over, as
- * `{ start, end, days }` (days is 0 when the window is empty).
- *
- * The report's range is open-ended on both sides, and each open end has a
- * different correct answer:
- * - No `to` (or a `to` in the future) → today. A window that runs to the end of
- *   next month must not bill next month's subscription today.
- * - No `from` ("All time") → the first day usage was actually recorded. Falling
- *   back to today instead would price all-time savings over a single day, and
- *   falling back to epoch would invent years of subscription spend.
+ * Resolve the window the subscription cost is prorated over as `{ start, end, days }` (days 0 when empty). Each open end of the report range has a different answer: no `to` (or a future `to`) → today (a window to next month's end must
+ * not bill next month today); no `from` ("All time") → the first day usage was recorded (today would price all-time savings over one day, epoch would invent years of spend).
  *
  * @param {{ from?: string|null, to?: string|null, firstActivityDay?: string|null, today: string }} args
  */
@@ -71,42 +42,22 @@ export function prorateMonthlyCost(monthlyCost, days) {
   return roundCents((monthlyCost * days) / DAYS_PER_MONTH);
 }
 
-/**
- * Percent of the API bill a subscription avoided, or null when there is no API
- * bill to compare against. Null rather than 0 or 100 on purpose: "we cannot
- * express this as a percentage" is not "you saved nothing" (see the
- * sentinel-vs-empty convention in AGENTS.md), and a UI that prints 0% for an
- * unused-but-paid-for plan is stating a falsehood about the plan.
- */
+/** Percent of the API bill a subscription avoided, or null with no API bill: null rather than 0/100 because "cannot express as a percentage" is not "you saved nothing" (AGENTS.md sentinel convention), and 0% for an unused-but-paid plan is false. */
 export function savingsPercent(apiCost, savings) {
   if (!(apiCost > 0)) return null;
   return Math.round((savings / apiCost) * 100);
 }
 
-/**
- * Value returned per dollar of subscription spend (API cost ÷ prorated plan
- * cost), rounded to one decimal. Null when nothing is being paid — an infinite
- * multiplier is not a number a card can render.
- */
+/** API cost ÷ prorated plan cost, rounded to one decimal; null when nothing is being paid (an infinite multiplier isn't renderable). */
 export function costMultiplier(apiCost, periodCost) {
   if (!(periodCost > 0)) return null;
   return Math.round((apiCost / periodCost) * 10) / 10;
 }
 
 /**
- * Pure: group a cost report's provider rows by the subscription family that
- * covered them, as `{ byFamily: Map<familyId, usd>, unmatched: usd }`.
- *
- * `buildUsageReport` stamps each row's `family` from the live provider config
- * it already had in hand, so this is a plain groupBy — a row with no family
- * (uninstalled provider, `legacy`, `unknown`, a pay-as-you-go API provider)
- * lands in `unmatched` and is reported on its own rather than being credited to
- * a plan no one was paying.
- *
- * `sources` carries each family's provenance (`measured` / `estimate` /
- * `mixed`) so the savings table can say when a plan's API figure is a guess —
- * an estimated row usually UNDERSTATES, which reads as a plan that "cost more
- * than it was worth".
+ * Group a cost report's provider rows by the subscription family covering them: `{ byFamily: Map<familyId, usd>, unmatched: usd }`. `buildUsageReport` stamps each row's `family` from live provider config, so this is a plain groupBy;
+ * a row with no family (uninstalled provider, `legacy`, `unknown`, pay-as-you-go API) lands in `unmatched` rather than crediting a plan nobody paid for. `sources` carries each family's provenance (`measured` / `estimate` / `mixed`)
+ * so the table can say when a plan's API figure is a guess (an estimated row usually UNDERSTATES, reading as a plan that "cost more than it was worth").
  */
 export function attributeReportCostToFamilies(report) {
   const byFamily = new Map();
@@ -125,18 +76,9 @@ export function attributeReportCostToFamilies(report) {
 }
 
 /**
- * Build the savings block from per-family `{ family, label, monthlyCost,
- * apiCost }` entries and a resolved window (prices already normalized by the
- * settings layer — this is arithmetic, not validation).
- *
- * Every entry is returned, including plans priced at 0 — that is the editor's
- * row list, and a family the user has not priced yet must still be visible and
- * editable. Only priced plans (`configured`) contribute to the totals, so an
- * unpriced plan reads as "not counted", never as "free".
- *
- * `unmatchedApiCost` is API-billed usage that belongs to no subscription family.
- * It is reported separately instead of being folded into savings: no plan
- * covered it, so counting it as saved would overstate the plans' value.
+ * Build the savings block from per-family `{ family, label, monthlyCost, apiCost }` entries and a resolved window (prices already normalized by the settings layer: arithmetic, not validation). Every entry is returned, including
+ * plans priced at 0 (the editor's row list: an unpriced family must stay visible and editable); only priced plans (`configured`) feed the totals, so unpriced reads "not counted", never "free". `unmatchedApiCost` (API-billed usage
+ * belonging to no family) is reported separately, since counting it as saved would overstate the plans' value.
  *
  * @param {{ entries: Array, range: { start: string|null, end: string, days: number }, unmatchedApiCost?: number }} args
  */

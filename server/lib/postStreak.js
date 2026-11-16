@@ -1,20 +1,7 @@
 /**
- * POST practice-streak math (pure, side-effect-free).
- *
- * Pure DST-safe POST practice-streak math — the single `computePostStreaks` implementation shared by
- * scored sessions and the training log, plus `computeUnifiedStreak` (a day is active with EITHER a
- * session or a practice entry), `normalizeYmd` (day-key prefix for a date that may be a full ISO
- * timestamp), and `recordDayKey` / `withDerivedDayKeys` (re-derive a record's day key from its
- * `startedAt`/`completedAt`/`timestamp` instant, so readers ignore a `date` frozen in a
- * previously-configured timezone).
- *
- * Extracted from meatspacePost.js so BOTH scored sessions and the training log
- * (Morse / memory practice) compute streaks with ONE implementation — the DST-
- * safe `computePostStreaks` — instead of the two divergent copies that used to
- * disagree (the training log previously rolled its own raw-`Date` streak with no
- * grace window and no longest-streak). Lives in `server/lib/` (rather than being
- * exported from a service) so meatspacePostTraining.js can import it without a
- * circular dependency back into meatspacePost.js.
+  * Pure DST-safe POST practice-streak math: the single `computePostStreaks` shared by scored sessions and the training log (extracted from meatspacePost.js.
+  *
+  * the training log once rolled its own raw-`Date` streak with no grace window), plus `computeUnifiedStreak` (a day is active with EITHER a session or a practice entry), `normalizeYmd`, and `recordDayKey` / `withDerivedDayKeys` (re-derive a record's day key from its `startedAt`/`completedAt`/`timestamp` instant, so readers ignore a `date` frozen in a previously-configured timezone). In `server/lib/` so meatspacePostTraining.js can import it without a cycle back into meatspacePost.js.
  */
 
 import { toUserDayKey } from './activeDays.js';
@@ -32,44 +19,23 @@ export function normalizeYmd(value, timezone) {
   return timezone && raw.includes('T') ? toUserDayKey(raw, timezone) : raw.split('T')[0];
 }
 
-// Field order matters: `startedAt` is when the activity actually happened, and
-// `submitPostSession` deliberately preserves it across an idempotent re-submit,
-// so it is the stable anchor. `completedAt` moves on re-submit and `timestamp`
-// is what the training log / Morse rounds carry instead.
+// Field order matters: `startedAt` is when the activity happened and is preserved across an idempotent re-submit (the stable anchor); `completedAt` moves on re-submit; `timestamp` is what the training log / Morse rounds carry.
 const INSTANT_FIELDS = ['startedAt', 'completedAt', 'timestamp'];
 
-/**
- * Day key for an INSTANT, in the user's timezone — or null when the value isn't
- * one. A bare `YYYY-MM-DD` string is a day LABEL, not an instant: it carries no
- * zone to re-derive from, so `toUserDayKey` takes it as authored rather than
- * reading it as UTC midnight (which would shift it a day west of UTC).
- */
+/** Day key for an INSTANT in the user's timezone, or null. A bare `YYYY-MM-DD` is a day LABEL (no zone to re-derive from), so `toUserDayKey` takes it as authored rather than as UTC midnight (a day west of UTC). */
 function instantDayKey(instant, timezone) {
   if (!timezone) return null;
   if (typeof instant === 'number' && Number.isFinite(instant)) {
     const at = new Date(instant);
-    // Round-trip through ISO so `toUserDayKey` stays the ONE place that turns an
-    // instant into a user-local day (this module keeps its pure, single-import shape).
+    // Round-trip through ISO so `toUserDayKey` stays the ONE place turning an instant into a user-local day.
     return Number.isNaN(at.getTime()) ? null : toUserDayKey(at.toISOString(), timezone);
   }
   return typeof instant === 'string' ? toUserDayKey(instant, timezone) : null;
 }
 
 /**
- * The day key a record belongs to, RE-DERIVED from the instant it happened
- * (`startedAt` / `completedAt` / `timestamp`) rather than read off the stored
- * `date` (issue #4168).
- *
- * A stored `date` is frozen in whatever timezone was configured when it was
- * written, so once the user changes `settings.timezone` the old keys disagree
- * with the new-zone readers — a session saved as `2026-07-15` under one zone
- * reads as "not today" under another. Deriving from the instant makes the
- * stored `date` a pure cache the readers ignore, which is what the reminder
- * path (`meatspacePostReminder.js` `isOnLocalDay`) has always done.
- *
- * Falls back to the stored `date` only when no usable instant survives (legacy
- * records written before the timestamps existed) — there is nothing left to
- * re-derive from there, so it is taken as authored.
+ * The day key a record belongs to, RE-DERIVED from its instant (`startedAt` / `completedAt` / `timestamp`) rather than the stored `date` (#4168), which is frozen in the timezone configured when written and disagrees with
+ * new-zone readers after `settings.timezone` changes (as `meatspacePostReminder.js` `isOnLocalDay` already does). Falls back to the stored `date` only when no usable instant survives (legacy records).
  *
  * @param {object} record - an activity record (session / training entry / round)
  * @param {string} [timezone] - user timezone; without it the stored `date` wins
@@ -85,11 +51,7 @@ export function recordDayKey(record, timezone) {
 }
 
 /**
- * Re-stamp a batch of activity records with their re-derived day key, so every
- * downstream reader (and the client, which receives these records verbatim)
- * sees ONE timezone-current `date`. Apply this at the read boundary — the
- * loaders (`getPostSessions`, `getAllTrainingEntries`) — never on the write
- * path, which must keep stamping and preserving the original stored value.
+ * Re-stamp activity records with their re-derived day key so every reader (and the client) sees ONE timezone-current `date`. Apply at the read boundary (`getPostSessions`, `getAllTrainingEntries`), never on the write path.
  *
  * @param {Array} records
  * @param {string} [timezone]
@@ -100,8 +62,7 @@ export function withDerivedDayKeys(records, timezone) {
   return records.map(r => (r && typeof r === 'object' ? { ...r, date: recordDayKey(r, timezone) } : r));
 }
 
-// Local-date arithmetic on `YYYY-MM-DD` strings via UTC midnight so day math
-// never drifts across DST boundaries (the activity-streak bug class).
+// Local-date arithmetic via UTC midnight so day math never drifts across DST (the activity-streak bug class).
 export function ymdToUTC(s) {
   const [y, m, d] = s.split('-').map(Number);
   return Date.UTC(y, m - 1, d);
@@ -112,18 +73,9 @@ export function ymdShift(s, deltaDays) {
 }
 
 /**
- * Compute POST practice streaks from activity records. Pure (takes `todayStr`
- * explicitly) so it's unit-testable without faking the clock. Each record only
- * needs a `date` (`YYYY-MM-DD` or a full ISO timestamp — both normalized) and,
- * for `todayScore`, an optional numeric `score`.
- *
- * - `completedToday`  — at least one record dated today
- * - `currentStreak`   — consecutive days with a record counting back from
- *   today; a not-yet-done today does NOT break the streak as long as yesterday
- *   has one (grace window), mirroring `usage.js` `calculateStreak`
- * - `longestStreak`   — longest consecutive-day run in all history
- * - `lastDate`        — most recent record date (null if never active)
- * - `todayScore`      — best record score recorded today (null if none)
+ * Compute POST practice streaks from records. Pure (takes `todayStr`, so testable without faking the clock); each record needs a `date` (`YYYY-MM-DD` or full ISO) and, for `todayScore`, an optional numeric `score`.
+ * `completedToday`: a record dated today; `currentStreak`: consecutive days counting back from today, where a not-yet-done today does NOT break it while yesterday has one (grace window, as `usage.js` `calculateStreak`);
+ * `longestStreak`; `lastDate` (null if never active); `todayScore` (best today, null if none).
  *
  * @param {Array} records - activity records with a `date` field
  * @param {string} todayStr - user's local `YYYY-MM-DD` today
@@ -161,11 +113,7 @@ export function computePostStreaks(records, todayStr, timezone) {
 }
 
 /**
- * ONE unified streak across scored sessions AND the training log: a day counts
- * as active if it has EITHER a scored session or a training-log entry (Morse /
- * memory practice). Reuses `computePostStreaks` so the DST-safe grace-window
- * semantics are identical to the scored-session streak. Returns the progress-API
- * shape (`current` / `longest` / `lastActiveDate`).
+ * ONE unified streak across scored sessions AND the training log (Morse / memory practice): a day is active with EITHER, reusing `computePostStreaks` for identical grace-window semantics. Returns the progress-API shape (`current` / `longest` / `lastActiveDate`).
  *
  * @param {Array} sessions - scored POST sessions
  * @param {Array} trainingEntries - training-log entries
@@ -173,9 +121,7 @@ export function computePostStreaks(records, todayStr, timezone) {
  * @param {string} [timezone] - user timezone for legacy ISO dates
  */
 export function computeUnifiedStreak(sessions, trainingEntries, todayStr, timezone) {
-  // Project the day key AND the instants it is re-derived from (#4168) — a bare
-  // `{ date }` projection would strip the timestamps and silently fall the whole
-  // unified streak back onto the stale stored keys.
+  // Project the day key AND the instants it is re-derived from (#4168); a bare `{ date }` would strip the timestamps and fall the unified streak back onto stale stored keys.
   const toActivity = r => ({ date: r?.date, startedAt: r?.startedAt, completedAt: r?.completedAt, timestamp: r?.timestamp });
   const activity = [
     ...(sessions || []).map(toActivity),

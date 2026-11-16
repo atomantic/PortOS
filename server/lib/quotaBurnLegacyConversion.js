@@ -1,40 +1,17 @@
 /**
- * The ONE rule turning a LEGACY quota-burn step (copied prompt + quota-only `jobType`) into a
- * scheduled-task reference, shared by migration 359 and the live compat path so the two cannot drift.
+ * The ONE rule turning a LEGACY quota-burn step into a scheduled-task reference, shared by migration 359 and the live compat path.
  *
- * The ONE rule that turns a LEGACY quota-burn step into a scheduled-task
- * reference — read by the migration that rewrites `data/cos/quota-burn.json`
- * and by the runtime compat path that normalizes an old client's PUT before it
- * reaches disk (`services/quotaBurnConversion.js`).
+ * The ONE rule turning a LEGACY quota-burn step (copied prompt + quota-only `jobType`) into a scheduled-task reference, shared by migration 359 (rewrites `data/cos/quota-burn.json`) and the live compat path
+ * (`services/quotaBurnConversion.js`, normalizing an old client's PUT) so the two cannot drift: it is the one place that must guess what a stored prompt MEANT, and two conversions would disagree
+ * as a duplicated automation or a silently downgraded reference. Three conservative outcomes:
  *
- * A legacy step WAS its work: a copied prompt in a free-form `params` bag keyed
- * by a quota-only `jobType`. A step now REFERENCES a scheduled task the user
- * owns (`quotaBurnTaskRef.js`). Converting between the two is the one place in
- * PortOS that has to guess what a stored prompt MEANT, so it is written once and
- * shared — two conversions would disagree the first time either was tightened,
- * and the disagreement would show up as a duplicated automation or a silently
- * downgraded reference.
+ *   - a RECOGNIZED, unmodified shipped audit preset maps onto its scheduled counterpart (`auditCatalog.js`), issues-only mode pinned explicitly;
+ *   - the two PROGRAMMATIC types map onto the scheduled handler that implements them, carrying run params across;
+ *   - anything else (customized/unrecognized prompt, preset with no target app) becomes a CUSTOM scheduled job holding the user's exact text and settings, which the step references.
  *
- * Three outcomes, and the boundary between them is deliberately conservative:
- *
- *   - a RECOGNIZED, unmodified shipped audit preset maps onto its scheduled
- *     counterpart (`auditCatalog.js`), with issues-only mode pinned explicitly;
- *   - the two PROGRAMMATIC types map onto the scheduled handler that already
- *     implements them, carrying their run params across;
- *   - anything else — a customized prompt, an unrecognized one, a preset with
- *     no target app — becomes a CUSTOM scheduled job holding the user's exact
- *     text and workflow settings, which the step then references.
- *
- * Recognition is `matchStoredAuditPreset` (`quotaBurnPresets.js`), i.e.
- * migration 305's mission-half rule, NOT a byte match (migration 294's failure)
- * and NOT a label or a partial match. A label is a display string the user may
- * have renamed, and a partial mission match would map an edited prompt onto a
- * shipped task — silently discarding the edit and running different work with
- * the user's quota. When in doubt this module chooses the custom lane, because
- * a preserved prompt is always recoverable and a discarded one is not.
- *
- * Pure: shape and decisions only. Job creation, file writes and catalog reads
- * belong to the two adapters.
+ * Recognition is `matchStoredAuditPreset` (`quotaBurnPresets.js`, migration 305's mission-half rule), NOT a byte match (migration 294's failure), a label (user-renameable), or a partial match
+ * (it would map an edited prompt onto a shipped task and silently discard the edit). When in doubt choose the custom lane: a preserved prompt is recoverable, a discarded one is not.
+ * Pure: shape and decisions only; job creation, file writes and catalog reads belong to the two adapters.
  */
 
 import { AUDIT_DEFINITIONS } from './auditCatalog.js';
@@ -44,50 +21,23 @@ import { matchStoredAuditPreset } from './quotaBurnPresets.js';
 import { QUOTA_BURN_TASK_REF_KIND } from './quotaBurnTaskRef.js';
 import { isProgrammaticScheduledTaskType } from './taskTargetScope.js';
 
-/**
- * `<preset id> → <scheduled audit task type>`, INVERTED from the catalog rather
- * than restated. `auditCatalog.test.js` already fails when a burn preset ships
- * without a scheduled counterpart, so deriving the map here means the conversion
- * cannot drift from the pairing that guard enforces.
- */
+/** `<preset id> → <scheduled audit task type>`, INVERTED from the catalog so it can't drift from the pairing `auditCatalog.test.js` enforces. */
 export const AUDIT_TASK_TYPE_BY_PRESET_ID = Object.freeze(Object.fromEntries(
   Object.entries(AUDIT_DEFINITIONS)
     .filter(([, definition]) => typeof definition.quotaBurnId === 'string' && definition.quotaBurnId)
     .map(([taskType, definition]) => [definition.quotaBurnId, taskType]),
 ));
 
-/**
- * The autonomy level a custom job needs for an UNATTENDED burn to run it
- * (`quotaBurnInvoke.js#unattendedApprovalRefusal`). A legacy `agent-prompt` step
- * ran with no approval at all, so a converted job that needed one would be a
- * step that silently stopped burning — the conversion would have "preserved"
- * the plan into something that never runs.
- */
+/** Autonomy a custom job needs for an UNATTENDED burn (`quotaBurnInvoke.js#unattendedApprovalRefusal`); a legacy `agent-prompt` step ran with no approval, so a converted job needing one would silently stop burning. */
 const UNATTENDED_AUTONOMY_LEVEL = 'yolo';
 
-/**
- * Workflow params a recognized preset step may legitimately have DIVERGED from
- * its shipped defaults on, carried across as per-invocation overrides.
- *
- * Restricted to keys `sanitizeTaskMetadata` accepts (`lib/cosValidation.js`),
- * because the generator sanitizes run overrides through exactly that allowlist —
- * carrying a key it drops would be a promise the dispatch cannot keep.
- */
+/** Workflow params a recognized preset step may have DIVERGED on, carried as per-invocation overrides. Restricted to keys `sanitizeTaskMetadata` (`lib/cosValidation.js`) accepts, since the generator sanitizes run overrides through that allowlist. */
 const MATERIAL_PRESET_PARAMS = Object.freeze(['useWorktree', 'openPR', 'simplify', 'discardWorktree']);
 
 /** Job-id alphabet, matching what `createJob` mints. */
 const idSafe = (value) => String(value || '').replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
 
-/**
- * The custom job a converted step points at, keyed by the FAMILY and STEP it
- * came from.
- *
- * Deterministic, and that is the whole idempotency story: re-running the
- * migration (or resuming it after an interrupt) finds the job it created last
- * time by id and reuses it instead of minting a second copy of the same
- * automation. Step ids are preserved by the conversion, so the key is stable
- * across runs.
- */
+/** The custom job a converted step points at, keyed by FAMILY and STEP. Deterministic, which is the idempotency story: a re-run or resumed migration finds its earlier job by id instead of minting a duplicate (step ids are preserved). */
 export const quotaBurnCustomJobId = (familyId, stepId) =>
   `job-burn-${idSafe(familyId)}-${idSafe(stepId)}`.slice(0, QUOTA_BURN_BOUNDS.idLength.max);
 
@@ -95,17 +45,9 @@ const boolParam = (params, key, fallback) => (typeof params?.[key] === 'boolean'
 const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
 
 /**
- * The task posture the retired `quotaBurnJobs/agentPrompt.js` executor derived
- * at dispatch time, computed once here so a converted job keeps running exactly
- * as it ran.
- *
- * The two "lands no code" postures are NOT the same and both had to be honored:
- * `noCodeOutput` means the deliverable is something the agent DOES during the
- * run (files an issue, calls an endpoint), so there is no branch; `discardWorktree`
- * means it wants a scratch checkout but nothing in it may land. Either one
- * forces `openPR`/`simplify` off — both presuppose a diff to ship — and makes a
- * clean tree a SUCCESS rather than the `pr-missing` retry that would otherwise
- * burn up to five agent runs of quota on a job that already did its work.
+ * The task posture the retired `quotaBurnJobs/agentPrompt.js` derived at dispatch, computed once so a converted job runs as before. Two distinct "lands no code" postures: `noCodeOutput` (the deliverable is
+ * something the agent DOES: no branch) and `discardWorktree` (scratch checkout, nothing may land). Either forces `openPR`/`simplify` off and makes a clean tree a SUCCESS rather than a `pr-missing` retry
+ * that would burn up to five agent runs of quota.
  */
 export function legacyAgentTaskMetadata(params) {
   const discardWorktree = params?.discardWorktree === true;
@@ -121,20 +63,9 @@ export function legacyAgentTaskMetadata(params) {
 }
 
 /**
- * The full custom-job RECORD a converted step references — every field
- * `createJob` writes, so the migration (which appends to
- * `data/cos/autonomous-jobs.json` directly) and the runtime adapter (which calls
- * `createJob`) produce the same job. `quotaBurnConversion.test.js` asserts the
- * two agree.
- *
- * `interval: 'on-demand'` is the "disabled from the clock" part: the job never
- * fires on a schedule (`getDueJobs` skips it), so converting a burn step does
- * not silently add a second recurring automation. It is still `enabled`, which
- * is what makes it INVOKABLE — a disabled job resolves the referencing step as
- * unavailable. The exception is a step that could never have run anyway (no
- * target app, or no prompt): that job ships disabled, so the step stays exactly
- * as non-runnable as it was instead of becoming newly live against PortOS's own
- * checkout.
+ * The full custom-job RECORD a converted step references, every field `createJob` writes, so the migration (appends to `data/cos/autonomous-jobs.json` directly) and the runtime adapter (`createJob`)
+ * produce the same job (`quotaBurnConversion.test.js` asserts it). `interval: 'on-demand'` keeps it off the clock (`getDueJobs` skips it) so conversion adds no second recurring automation, yet it stays `enabled`
+ * (a disabled job resolves the step as unavailable). A step that could never have run (no target app or prompt) ships disabled so it stays non-runnable rather than going live against PortOS's own checkout.
  */
 export function buildQuotaBurnCustomJob({ id, familyId, stepId, label, appId, prompt, params, now }) {
   const timestamp = now || new Date().toISOString();
@@ -159,10 +90,7 @@ export function buildQuotaBurnCustomJob({ id, familyId, stepId, label, appId, pr
     autonomyLevel: UNATTENDED_AUTONOMY_LEVEL,
     promptTemplate: prompt,
     dataInputs: [],
-    // A converted step carries no configuration form — its prompt is already
-    // fully specified. Stamped anyway so the record this builder writes straight
-    // into the jobs file stays identical to the one `createJob` produces for an
-    // install that PUT the same legacy body (asserted in quotaBurnConversion.test.js).
+    // No configuration form (the prompt is fully specified), stamped anyway so this record matches what `createJob` produces for the same legacy PUT (quotaBurnConversion.test.js).
     formFields: [],
     formValues: {},
     providerId: null,
@@ -181,8 +109,7 @@ export function buildQuotaBurnCustomJob({ id, familyId, stepId, label, appId, pr
 const refOutcome = (taskRef, params, step) => ({
   taskRef,
   overrides: {
-    // Provider / model / effort pins are the step's own and survive untouched —
-    // they name the subscription this burn is spending, not the work.
+    // Provider / model / effort pins are the step's own and survive untouched: they name the subscription spent, not the work.
     providerId: step?.overrides?.providerId ?? null,
     model: step?.overrides?.model ?? null,
     effort: step?.overrides?.effort ?? null,
@@ -192,14 +119,8 @@ const refOutcome = (taskRef, params, step) => ({
 });
 
 /**
- * Convert ONE normalized legacy step. Returns `null` for a step that already
- * carries a reference (nothing to do — which is what makes a re-run a no-op),
- * or `{ taskRef, overrides, customJob }` where `customJob` is the record the
- * adapter must ensure exists before the reference resolves.
- *
- * An unrecognized `jobType` returns `null` too: there is no work to point at, and
- * inventing one would spend real quota on something the user never configured.
- * The step keeps its settings and stays unavailable with its migration reason.
+ * Convert ONE normalized legacy step. Returns `null` for a step that already carries a reference (a re-run is a no-op) or an unrecognized `jobType` (no work to point at; inventing one would spend
+ * quota on something never configured; the step stays unavailable with its migration reason), else `{ taskRef, overrides, customJob }` where `customJob` must exist before the reference resolves.
  */
 export function planQuotaBurnStepConversion(step, { familyId, now } = {}) {
   if (!step || step.taskRef) return null;
@@ -207,9 +128,7 @@ export function planQuotaBurnStepConversion(step, { familyId, now } = {}) {
   const params = step.params || step.overrides?.params || {};
 
   if (isProgrammaticScheduledTaskType(jobType)) {
-    // The legacy programmatic ids ARE the scheduled task types that implement
-    // them — #6376 moved the implementation and kept the name. Nothing is
-    // re-derived here; the params bag crosses as per-invocation overrides.
+    // The legacy programmatic ids ARE the scheduled task types implementing them (#6376 kept the name); the params bag crosses as per-invocation overrides.
     return refOutcome({ kind: QUOTA_BURN_TASK_REF_KIND.BUILTIN, taskType: jobType, appId: null }, { ...params }, step);
   }
   if (jobType !== QUOTA_BURN_JOB_TYPE.AGENT_PROMPT) return null;
@@ -219,22 +138,13 @@ export function planQuotaBurnStepConversion(step, { familyId, now } = {}) {
   const preset = matchStoredAuditPreset(prompt);
   const taskType = preset ? AUDIT_TASK_TYPE_BY_PRESET_ID[preset.id] : null;
 
-  // A recognized preset still needs a target: the built-in audit lane generates
-  // a MANAGED-APP task, and an app-less request would be routed to the
-  // install-wide self-improvement generator instead — different work. A step
-  // with no app could never run before either, so it takes the custom lane and
-  // stays as non-runnable as it was.
+  // A recognized preset still needs a target: the built-in audit lane generates a MANAGED-APP task, and an app-less request would route to the install-wide generator (different work). An app-less step
+  // could never run, so it takes the custom lane and stays non-runnable.
   if (taskType && appId) {
     return refOutcome({ kind: QUOTA_BURN_TASK_REF_KIND.BUILTIN, taskType, appId }, {
-      // Explicit, even where the shipped scheduled default is `false`: every
-      // burn preset is an issues-only audit, and a migration that let a
-      // catalog default flip it into code-writing work would spend the user's
-      // quota changing their repository without being asked.
+      // Explicit even where the scheduled default is `false`: every burn preset is an issues-only audit, and a catalog default flipping it into code-writing would spend quota changing the repo unasked.
       fileIssues: true,
-      // Only a REAL divergence from the shipped default rides along. `?? false`
-      // supplies the default for a key the preset never set (`discardWorktree`),
-      // so a stored `false` there is recognized as agreement rather than
-      // written back as a no-op override on every converted step.
+      // Only a REAL divergence rides along; `?? false` supplies the default for a key the preset never set, so a stored `false` reads as agreement, not a no-op override.
       ...Object.fromEntries(MATERIAL_PRESET_PARAMS
         .filter((key) => key in params && params[key] !== (preset.params[key] ?? false))
         .map((key) => [key, params[key]])),
@@ -257,13 +167,7 @@ export function planQuotaBurnStepConversion(step, { familyId, now } = {}) {
   };
 }
 
-/**
- * The converted step, with its legacy identity dropped.
- *
- * Everything that is not the step's WORK is carried through untouched — id (the
- * run-once ledger and every dispatch record key on it), label, enabled state and
- * `runOnce` — so a conversion changes what a step points at and nothing else.
- */
+/** The converted step with its legacy identity dropped. Everything that is not the WORK (id, which the run-once ledger and dispatch records key on, label, enabled, `runOnce`) is carried through untouched. */
 export function applyQuotaBurnStepConversion(step, outcome) {
   return { ...step, taskRef: outcome.taskRef, jobType: null, overrides: outcome.overrides, params: outcome.overrides.params, unavailable: null };
 }

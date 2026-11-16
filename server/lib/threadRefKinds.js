@@ -1,47 +1,11 @@
 /**
- * Thread ref VOCABULARY — the one `(kind, id)` → label/route table (#7664).
- *
- * A Brain *thread* is a tracked topic or commitment (an open loop in the bullet
- * journal sense) — NOT a message thread. `messageSync.js` / `messageGmailSync.js`
- * / `beeperSync.js` own that other sense of the word; nothing here touches it.
- *
- * A thread carries `refs: [{ kind, id, label? }]` pointing at the PortOS records
- * and external items that belong to it. This module is the single source of
- * truth for WHICH kinds exist and WHERE each one deep-links to — add a row here
- * and `server/services/threadRefs.js` must gain a matching resolver (a drift
- * guard fails CI otherwise).
- *
- * Deliberately PURE — no db, no services, no zod. `server/lib` may not import
- * upward into `server/services` (see lib/taskTargetScope.js), and the client
- * re-exports this leaf (`client/src/lib/threadRefKinds.js`) so the catalog
- * ingredient page renders its inbound-ref chips through the SAME table instead
- * of its own local switch. Existence/title lookups — everything that needs a
- * store — live in the service.
- *
- * Shape of a row:
- *   label          human name for the chip / group heading
- *   external       true = the id IS an off-PortOS URL; no local target to probe
- *   navPath        the NAV_COMMANDS page this kind lands on (guard-checked)
- *   basePath       URL prefix for a per-record deep link (defaults to navPath;
- *                  must start with navPath so the link stays on that page)
- *   segment        true = append `/<id>` to basePath
- *   suffix         appended after the id segment (e.g. an issue's default stage)
- *   param          append `?<param>=<id>` instead of a path segment
- *   contextSegment a context key inserted as a path segment BEFORE the id
- *                  (catalog ingredients live at /catalog/:type/:id, and the type
- *                  is only known once the record is resolved)
- *
- * A kind with none of segment/param/contextSegment deep-links to its page only —
- * that page has no per-record route yet. That is the pre-existing behavior of
- * the catalog page's `writers-room` arm, kept rather than invented.
+  * Thread ref VOCABULARY: the one `(kind, id)` → label/route table (#7664).
+  *
+  * A Brain *thread* is a tracked topic or commitment (an open loop), NOT a message thread (`messageSync.js` / `messageGmailSync.js` / `beeperSync.js`). It carries `refs: [{ kind, id, label? }]` pointing at PortOS records and external items; this is the single source of truth for WHICH kinds exist and WHERE each deep-links (add a row and `server/services/threadRefs.js` must gain a resolver: a drift guard fails CI). Deliberately PURE (no db, services or zod: `server/lib` may not import upward, see lib/taskTargetScope.js); the client re-exports it (`client/src/lib/threadRefKinds.js`) so the catalog ingredient page's inbound-ref chips use the SAME table. Existence/title lookups live in the service. Row shape: `label` (chip/group heading); `external` (id IS an off-PortOS URL, nothing to probe); `navPath` (the guard-checked NAV_COMMANDS page); `basePath` (per-record deep-link prefix, defaults to navPath and must start with it); `segment` (append `/<id>`); `suffix` (after the id segment, e.g. an issue's default stage); `param` (append `?<param>=<id>`); `contextSegment` (context key inserted BEFORE the id: catalog ingredients live at /catalog/:type/:id, type known only once resolved). A kind with none of segment/param/contextSegment deep-links to its page only (no per-record route yet; the catalog page's `writers-room` arm behavior, kept).
  */
 
 export const THREAD_REF_KINDS = Object.freeze({
-  // ─── Brain records ───────────────────────────────────────────────────────
-  // Most Brain tabs keep their selection in local state rather than the URL, so
-  // there is no per-record route to point at yet; those land on the tab. The
-  // Daily Log is the exception — it is date-addressed (`?date=`), and a journal
-  // record's id IS its date key (brainJournal keys entries by date).
+  // ─── Brain records ─── Most Brain tabs keep selection in local state, not the URL, so those land on the tab; the Daily Log is date-addressed (`?date=`) and a journal record's id IS its date key (brainJournal).
   'brain.idea': { label: 'Idea', external: false, navPath: '/brain/ideas' },
   'brain.project': { label: 'Project', external: false, navPath: '/brain/memory' },
   'brain.person': { label: 'Person', external: false, navPath: '/brain/memory' },
@@ -61,11 +25,7 @@ export const THREAD_REF_KINDS = Object.freeze({
     contextSegment: 'catalogType',
   },
 
-  // ─── App-native creative records ─────────────────────────────────────────
-  // These are the vocabulary `catalog_ingredient_refs` already stores
-  // (server/services/catalogRefResolver.js REF_TARGET_TABLES). Their routes
-  // moved here from the hard-coded switch in client/src/pages/CatalogIngredient.jsx
-  // so there is exactly one kind→route table in the repo.
+  // ─── App-native creative records ─── the vocabulary `catalog_ingredient_refs` stores (server/services/catalogRefResolver.js REF_TARGET_TABLES); routes moved here from client/src/pages/CatalogIngredient.jsx so there is one kind→route table.
   universe: { label: 'Universes', external: false, navPath: '/universes', segment: true },
   series: { label: 'Series', external: false, navPath: '/pipeline', basePath: '/pipeline/series', segment: true },
   issue: { label: 'Issues', external: false, navPath: '/pipeline', basePath: '/pipeline/issues', segment: true, suffix: '/concept' },
@@ -83,10 +43,7 @@ export const THREAD_REF_KINDS = Object.freeze({
   message: { label: 'Message', external: false, navPath: '/messages/inbox' },
   'cos.task': { label: 'Task', external: false, navPath: '/cos/tasks' },
 
-  // ─── External items ──────────────────────────────────────────────────────
-  // The id IS the canonical URL, so it is self-describing across machines and
-  // needs no local lookup. `threadRefUrl` scheme-guards it before it can become
-  // an href (see below).
+  // ─── External items ─── the id IS the canonical URL (self-describing across machines, no lookup); `threadRefUrl` scheme-guards it before it becomes an href.
   'github.issue': { label: 'GitHub issue', external: true },
   'gitlab.issue': { label: 'GitLab issue', external: true },
   'jira.issue': { label: 'JIRA issue', external: true },
@@ -106,56 +63,36 @@ export const EXTERNAL_THREAD_REF_KINDS = Object.freeze(
   THREAD_REF_KIND_IDS.filter((kind) => THREAD_REF_KINDS[kind].external),
 );
 
-// Legacy spellings a stored ref (or a catalog ref row written before the
-// vocabulary settled) can still carry. Resolved to the canonical kind on read
-// so an old record keeps rendering; nothing WRITES these.
+// Legacy spellings a stored ref (or a catalog ref row from before the vocabulary settled) can carry; resolved to the canonical kind on read so old records render; nothing WRITES these.
 const KIND_ALIASES = Object.freeze({
   writersRoom: 'writers-room',
 });
 
-/**
- * The canonical kind id for a possibly-aliased spelling, or the input unchanged.
- * Never throws — an unknown kind stays unknown so the caller can degrade it.
- */
+/** The canonical kind id for a possibly-aliased spelling, or the input unchanged; never throws (an unknown kind stays unknown so the caller can degrade it). */
 export function canonicalThreadRefKind(kind) {
   if (typeof kind !== 'string') return kind;
   return KIND_ALIASES[kind] || kind;
 }
 
-/**
- * Display label for a kind. An unrecognized kind (a peer on newer code can sync
- * one) renders as its own id rather than throwing or reading as empty.
- */
+/** Display label for a kind; an unrecognized kind (a newer peer can sync one) renders as its own id rather than throwing or empty. */
 export function threadRefLabel(kind) {
   const canonical = canonicalThreadRefKind(kind);
   return THREAD_REF_KINDS[canonical]?.label || (typeof kind === 'string' ? kind : '');
 }
 
-// Only these schemes may become an href. A stored ref is user- OR peer-supplied
-// text, so `javascript:`/`data:` must never reach the DOM as a link.
+// Only these schemes may become an href: a stored ref is user- OR peer-supplied, so `javascript:`/`data:` must never reach the DOM as a link.
 const SAFE_EXTERNAL_SCHEMES = new Set(['http:', 'https:']);
 
-/**
- * Is this a link-safe absolute URL? Exported because both the URL builder and
- * the write-schema guard need the same answer.
- */
+/** Is this a link-safe absolute URL? Exported because the URL builder and the write-schema guard need the same answer. */
 export function isSafeExternalUrl(value) {
-  // `canParse` is false for anything that isn't ABSOLUTE, which is the right
-  // answer here: a relative string is not a usable external ref.
+  // `canParse` is false for anything not ABSOLUTE, which is right: a relative string isn't a usable external ref.
   if (typeof value !== 'string' || !URL.canParse(value)) return false;
   return SAFE_EXTERNAL_SCHEMES.has(new URL(value).protocol);
 }
 
 /**
- * The click-through URL for one ref, or `null` when this build can't build one
- * (unknown kind, missing id, or an external id that isn't a safe http(s) URL).
- * Callers render the chip without a link on null — the pre-existing contract of
- * the catalog page's `refPath`.
- *
- * `context` supplies the extra segment a kind declares via `contextSegment`
- * (currently only a catalog ingredient's `catalogType`, which is known only once
- * the record has been looked up). Without it the link degrades to the kind's
- * page rather than producing a route that would 404.
+ * The click-through URL for one ref, or `null` when this build can't build one (unknown kind, missing id, or a non-http(s) external id); callers render the chip without a link on null. `context` supplies the extra segment a kind declares via
+ * `contextSegment` (a catalog ingredient's `catalogType`, known only after lookup); without it the link degrades to the kind's page rather than a route that would 404.
  */
 export function threadRefUrl(kind, id, context = {}) {
   const canonical = canonicalThreadRefKind(kind);
@@ -170,8 +107,7 @@ export function threadRefUrl(kind, id, context = {}) {
 
   if (spec.contextSegment) {
     const extra = context?.[spec.contextSegment];
-    // No context yet (an unresolved or not-yet-hydrated ref) — land on the page
-    // rather than emitting `/catalog/undefined/<id>`.
+    // No context yet (unresolved or not-yet-hydrated ref): land on the page rather than emit `/catalog/undefined/<id>`.
     if (typeof extra !== 'string' || !extra) return basePath;
     return `${basePath}/${encodeURIComponent(extra)}/${encodeURIComponent(id)}${spec.suffix || ''}`;
   }

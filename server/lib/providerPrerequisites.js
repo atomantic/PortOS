@@ -1,41 +1,15 @@
 /**
- * `providerPrerequisites(provider, opts)` reports whether a provider can run on this host, returning
- * `{ met, missing }` for CLI binaries and required API keys.
+ * `providerPrerequisites(provider, opts)` reports whether a provider can run on this host, returning `{ met, missing }` for CLI binaries and required API keys.
  *
- * Provider PREREQUISITES — the things that must already be true on this host
- * before a provider can run at all: the CLI binary it shells out to is on
- * PortOS's PATH, and the credential it authenticates with is stored.
+ * Of three provider questions this is the first: prerequisites (here: can it run at all?), readiness (`services/providerReadiness.js`: is its local daemon up and serving the model?),
+ * availability (`aiToolkit/providerStatus.js`: is it benched after a failure?). It is the server-side copy of the client's `providerCardState` check (#4611), so routing and the API payload
+ * agree with the card instead of discovering a missing binary at spawn as a raw ENOENT. Pure: every input is passed in; probing lives in `services/providerPrerequisites.js`.
  *
- * Three different questions get asked about a provider, and this is the first
- * of them:
+ * SENTINEL DISCIPLINE: `runtime` is `null` for NOT PROBED and must never read as "missing" (it would drop installed providers from the fallback chain). Likewise each `gatewayKeySet` entry:
+ * `false` is "sibling API record holds no key", `null`/absent is "cannot tell". Only a definite negative produces a finding.
  *
- *   1. prerequisites (here)                  — can it run at all?
- *   2. readiness (`services/providerReadiness.js`) — is the local daemon it
- *      points at up and serving the model it asks for?
- *   3. availability (`aiToolkit/providerStatus.js`) — is it benched after a
- *      recent failure?
- *
- * Until #4611 this check existed only in the browser (`providerCardState` in
- * client/src/utils/providerReadiness.js), so it painted a `NEEDS SETUP` card while the
- * server happily routed a run at the very same provider and discovered the
- * missing binary at spawn time as a raw ENOENT. This module is the server-side
- * copy the routing layer and the API payload both read, and the client now
- * consumes the published result — one computation, two consumers, no drift.
- *
- * Pure: every input is passed in, nothing is probed here. The probing half is
- * `services/providerPrerequisites.js`.
- *
- * **SENTINEL DISCIPLINE.** `runtime` is `null` for NOT PROBED, which must never
- * read as "missing" — an unprobed CLI would otherwise take every perfectly
- * installed provider out of the fallback chain the first time a run failed.
- * Same for each entry of `gatewayKeySet`: `false` is "that gateway's sibling API
- * record holds no key", `null`/absent is "the caller cannot tell". Only a
- * definite negative produces a finding.
- *
- * Credentials carried in a secret env var (Bedrock, an Ollama auth token) stay
- * presentation-only here: the provider card resolves them from the sanitized
- * env-var metadata, while routing must not assume the server can inspect the
- * process environment that will ultimately run the provider.
+ * Credentials in a secret env var (Bedrock, an Ollama auth token) stay presentation-only: the card resolves them from sanitized env-var metadata, while routing must not assume the server
+ * can inspect the environment that will run the provider.
  */
 
 import { isProcessProvider } from './providerTypes.js';
@@ -52,35 +26,19 @@ import {
 } from './providerModels.js';
 import { gatewayForProvider } from './providerGateways.js';
 
-// The private-network / loopback classification (RFC1918, Tailscale CGNAT,
-// `.local`/`.ts.net`, single-label hosts) lives in `server/lib/localEndpoint.js`
-// now, alongside the other endpoint-locality predicates it composes with
-// (`isLocalInstanceHost`) — `client/src/utils/providerEndpoints.js` re-exports
-// the same function rather than keeping a browser mirror.
+// The private-network / loopback classification lives in `server/lib/localEndpoint.js` with the other endpoint-locality predicates; `client/src/utils/providerEndpoints.js` re-exports it.
 export { isPrivateNetworkEndpoint };
 
 /**
- * The key a CLI/TUI provider's runtime is published under in the runtimes map
- * from `services/providerRuntimeInstaller.js`, or `null` when that map has
- * nothing to say about this provider.
- *
- * `null` for an API provider (nothing is spawned) and — unlike the client's
- * same-named helper, which uses the key to offer an INSTALL button — `null` for
- * a command carrying an explicit path. The runtime table answers exactly one
- * question: "does the bare binary resolve on PortOS's PATH?" A provider
- * configured as `/opt/tools/codex` is not that question: the runner spawns the
- * configured path against the provider's own env (`buildCliChildEnv`), so
- * basename-matching it would report a perfectly working CLI as missing and drop
- * it from the fallback chain. No key means NOT PROBED, which is the honest
- * answer here.
+ * The key a CLI/TUI provider's runtime is published under in the runtimes map from `services/providerRuntimeInstaller.js`, or `null` when that map has nothing to say.
+ * `null` for an API provider and, unlike the client's same-named helper (which offers an INSTALL button), for a command with an explicit path: the table only answers "does the bare binary resolve
+ * on PortOS's PATH?", and a configured `/opt/tools/codex` is spawned against the provider's own env (`buildCliChildEnv`), so basename-matching would drop a working CLI. No key means NOT PROBED.
  */
 export const providerRuntimeKey = (provider) => {
   if (!isProcessProvider(provider)) return null;
   const command = typeof provider?.command === 'string' ? provider.command.trim() : '';
   if (command === '' || /[\\/]/.test(command)) return null;
-  // Same reasoning as the explicit path: a provider that overrides `PATH` in its
-  // own env is resolved against THAT path at spawn time (`buildCliChildEnv`),
-  // not the one the table scanned, so the table's answer isn't about it.
+  // Same reasoning as the explicit path: a provider overriding `PATH` in its env is resolved against THAT at spawn (`buildCliChildEnv`).
   if (Object.keys(provider?.envVars || {}).some((key) => key.toUpperCase() === 'PATH')) return null;
   return commandBasename(command) || null;
 };
@@ -90,17 +48,8 @@ const providerHasApiKey = (provider) =>
   provider?.hasApiKey === true || Boolean(provider?.apiKey);
 
 /**
- * The ChatGPT-subscription finding for a Codex provider, or `null`.
- *
- * PRESENTATION ONLY — deliberately absent from {@link ROUTING_BLOCKING_CODES}.
- * Codex can authenticate several ways and PortOS's readiness snapshot may be
- * seconds stale, so a card may say "sign in" while the router still tries the
- * run: taking a working provider out of the fallback chain is the worse failure
- * (see the module note above).
- *
- * `readiness: null` is NOT PROBED and produces nothing, and so does every
- * status that isn't a definite negative — `unknown` must never be painted as
- * signed out.
+ * The ChatGPT-subscription finding for a Codex provider, or `null`. PRESENTATION ONLY, absent from {@link ROUTING_BLOCKING_CODES}: Codex can authenticate several ways and the readiness
+ * snapshot may be stale, so removing a working provider from the fallback chain is the worse failure. `readiness: null` (NOT PROBED) and any non-definite-negative status (`unknown`) produce nothing.
  */
 const codexAccountFinding = (provider, readiness) => {
   if (!readiness || !isCodexSubscriptionProvider(provider)) return null;
@@ -115,19 +64,9 @@ const codexAccountFinding = (provider, readiness) => {
 };
 
 /**
- * The 'your own Codex config is re-pointing this provider' notice, or `null`.
- *
- * An ADVISORY, not a prerequisite: it never lands in `missing`, never reaches
- * {@link ROUTING_BLOCKING_CODES}, and never makes a card read NEEDS SETUP.
- * Pointing Codex at a local bridge is a legitimate choice — the only failure is
- * PortOS reporting a ChatGPT account's readiness and quota for work that
- * account never served. So: report it, and offer the opt-out (the provider's
- * `ignoreUserConfig` flag, which appends `--ignore-user-config` at spawn).
- *
- * Silent once the provider already ignores the user config, since then the file
- * describes nothing PortOS runs. Silent on a `null` snapshot too — that is
- * NOT DETERMINED, and accusing an install whose config could not be read would
- * be exactly the false report this exists to prevent.
+ * The 'your own Codex config is re-pointing this provider' notice, or `null`. An ADVISORY: never in `missing` or {@link ROUTING_BLOCKING_CODES}, never makes a card read NEEDS SETUP
+ * (pointing Codex at a local bridge is legitimate; the failure is PortOS reporting a ChatGPT account's readiness and quota for work it never served). Offers the opt-out
+ * (`ignoreUserConfig`, appending `--ignore-user-config` at spawn). Silent once the provider ignores user config, and on a `null` snapshot (NOT DETERMINED).
  */
 const codexRoutingAdvisory = (provider, routing) => {
   if (!routing?.overridden || !isCodexProvider(provider)) return null;
@@ -142,14 +81,8 @@ const codexRoutingAdvisory = (provider, routing) => {
 };
 
 /**
- * The local-backing findings for a codex record, in the order a user should act
- * on them. Both are DEFINITE negatives — the marker is on the record, or the
- * installed binary was probed and answered — so both block routing: spawning
- * either one would run the OpenAI cloud model the user thought they had
- * replaced, or die on an unknown flag mid-run.
- *
- * `support: null` is NOT PROBED and produces nothing, per the sentinel rule at
- * the top of this file.
+ * The local-backing findings for a codex record, in the order a user should act. Both are DEFINITE negatives (marker on the record, or the probed binary answered), so both block routing:
+ * spawning either would run the OpenAI cloud model the user replaced, or die on an unknown flag. `support: null` is NOT PROBED and produces nothing.
  */
 const codexLocalBackingFindings = (provider, codexOssSupport) => {
   if (!isProcessProvider(provider) || !isCodexProvider(provider)) return [];
@@ -173,18 +106,11 @@ const codexLocalBackingFindings = (provider, codexOssSupport) => {
  *
  * @param {object} provider — raw or sanitized provider record
  * @param {object} [options]
- * @param {object|null} [options.runtime] — the provider's entry of the runtimes
- *   map. `null` = NOT PROBED (see the sentinel note at the top of this file).
- * @param {object|null} [options.codexAccount] — the Codex ChatGPT readiness
- *   snapshot, or `null` for NOT PROBED (presentation-only; see
- *   {@link codexAccountFinding}).
- * @param {Record<string, boolean|null>|null} [options.gatewayKeySet] — per gateway
- *   id, does the sibling API provider of that id hold the key an OpenCode
- *   wrapper inherits at spawn time? `false` covers both "no key" and "sibling
- *   deleted"; `null`/absent is "cannot tell".
- * @param {object|null} [options.codexRouting] — the user's `~/.codex/config.toml`
- *   routing snapshot from `lib/codexUserConfig.js`, or `null` for NOT
- *   DETERMINED. Produces an ADVISORY only (see {@link codexRoutingAdvisory}).
+ * @param {object|null} [options.runtime] — the provider's entry of the runtimes map; `null` = NOT PROBED.
+ * @param {object|null} [options.codexAccount] — Codex ChatGPT readiness snapshot, `null` = NOT PROBED (presentation-only; see {@link codexAccountFinding}).
+ * @param {Record<string, boolean|null>|null} [options.gatewayKeySet] — per gateway id, does the sibling API provider hold the key an OpenCode wrapper inherits at spawn?
+ *   `false` covers "no key" and "sibling deleted"; `null`/absent is "cannot tell".
+ * @param {object|null} [options.codexRouting] — the `~/.codex/config.toml` routing snapshot from `lib/codexUserConfig.js`, `null` = NOT DETERMINED; produces an ADVISORY only.
  * @returns {{met: boolean, missing: {code: string, label: string}[], advisories: object[]}}
  */
 export const providerPrerequisites = (provider, {
@@ -199,16 +125,13 @@ export const providerPrerequisites = (provider, {
   if (runtime && runtime.installed === false) {
     missing.push({ code: 'runtime', label: `${runtime.label || 'Runtime'} is not installed` });
   }
-  // API providers auth solely via the stored key — but only an endpoint outside
-  // the private network actually needs one.
+  // API providers auth solely via the stored key, but only an endpoint outside the private network needs one.
   if (provider?.type === PROVIDER_TYPES.API
     && !providerHasApiKey(provider)
     && !isPrivateNetworkEndpoint(provider?.endpoint)) {
     missing.push({ code: 'apiKey', label: 'API key is not set' });
   }
-  // A gateway-backed OpenCode wrapper normally inherits from the sibling API
-  // provider of the same id, but an explicitly stored wrapper key takes
-  // precedence at spawn.
+  // A gateway-backed OpenCode wrapper inherits from the sibling API provider of the same id, but an explicitly stored wrapper key takes precedence at spawn.
   const gateway = gatewayForProvider(provider);
   if (gateway && !providerHasApiKey(provider) && gatewayKeySet?.[gateway.id] === false) {
     missing.push({ code: 'inheritedApiKey', label: `${gateway.label} API provider has no API key` });
@@ -218,9 +141,7 @@ export const providerPrerequisites = (provider, {
   if (codexFinding) missing.push(codexFinding);
   missing.push(...codexLocalBackingFindings(provider, codexOssSupport));
 
-  // Advisories are a SEPARATE list on purpose: everything in `missing` blocks
-  // something (a card's bucket, a strict readiness verdict), and this must
-  // block nothing.
+  // Advisories are a SEPARATE list: everything in `missing` blocks something, and this must block nothing.
   const routingAdvisory = codexRoutingAdvisory(provider, codexRouting);
   return {
     met: missing.length === 0,
@@ -229,29 +150,16 @@ export const providerPrerequisites = (provider, {
   };
 };
 
-/**
- * A one-line reason a provider was skipped, for the run log — "Codex CLI is not
- * installed; API key is not set". `null` when nothing is missing, so a caller
- * can use it as the whole gate.
- */
+/** A one-line reason a provider was skipped, for the run log ("Codex CLI is not installed; API key is not set"); `null` when nothing is missing, so it can be the whole gate. */
 export const describeMissingPrerequisites = (missing) =>
   (Array.isArray(missing) && missing.length > 0)
     ? missing.map((entry) => entry?.label).filter(Boolean).join('; ') || null
     : null;
 
 /**
- * The findings a ROUTING decision is allowed to act on — a deliberately
- * narrower set than what the card displays.
- *
- * A missing binary is unarguable: no credential, env var, or config file makes
- * `spawn codex` work when `codex` is not on PATH, so skipping that candidate
- * can only ever save a doomed run. The credential findings are NOT in that
- * class. This module reads only the provider's own stored key, and a provider
- * can legitimately authenticate another way — a secret env var (Bedrock's AWS
- * credentials, an Ollama auth token), or a gateway wrapper carrying its own
- * key rather than the sibling's. Routing on those would take working providers
- * out of the chain, so they stay presentation-only. The provider card may
- * report those credentials separately without changing the routing gate.
+ * The findings a ROUTING decision may act on, narrower than what the card displays. A missing binary is unarguable (nothing makes `spawn codex` work when it isn't on PATH).
+ * Credential findings are not: this module reads only the provider's own stored key, and a provider may authenticate another way (secret env var, a gateway wrapper's own key),
+ * so routing on them would drop working providers; they stay presentation-only.
  */
 export const ROUTING_BLOCKING_CODES = Object.freeze(['runtime', 'codexOss', 'codexLocalRuntime']);
 

@@ -1,45 +1,16 @@
 /**
- * Where the SGLang Qwen3.8-27B compose project lives, and whether its weights
- * are already on disk.
+ * Where the SGLang Qwen3.8-27B compose project lives, and whether its weights are already on disk.
  *
- * The sibling of `lib/vllmQwenProject.js`, for the same reason and with the same
- * hard rule: **a readiness check only reads directory entries.** It never runs
- * docker, contacts a registry, or reads a weight file. `docker compose up -d` in
- * an unprepared directory would pull a multi-gigabyte image and then ~20 GB of
- * weights — exactly the download PortOS promises never to start on its own.
+ * Sibling of `lib/vllmQwenProject.js` with the same hard rule: **a readiness check only reads directory entries**; it never runs docker, contacts a registry, or reads a weight file
+ * (`docker compose up -d` in an unprepared directory would start the multi-GB download PortOS promises never to start on its own).
+ * Difference: SGLang publishes an official image and no compose project, so the launch line is PortOS's own (`lib/sglangQwenRecipe.js` generates the `docker-compose.yml`; `docs/features/sglang-qwen38.md`
+ * carries it verbatim), and refusals point at that doc rather than a `git clone`.
  *
- * One thing differs from the vLLM path. There, the compose project is upstream's
- * (`syv-ai/qwen38-27b-rtx3090`) and the operator clones it. SGLang publishes an
- * official image and no compose project, so the launch line is PortOS's own:
- * `lib/sglangQwenRecipe.js` generates the `docker-compose.yml`, and
- * `docs/features/sglang-qwen38.md` carries it verbatim for the operator to save
- * into this directory. The refusals below therefore point at that doc rather
- * than at a `git clone`.
- *
- * **Sentinels matter here.** `hasWeights` is tri-state: `true` (a Qwen model
- * directory was found), `false` (every candidate root was readable and none held
- * one), `null` (no candidate root could be read at all). The start path treats
- * anything other than `true` as "not verified" and refuses — but the three cases
- * get different copy, because "your cache is empty" and "I cannot see your
- * cache" send the operator to different fixes. `null` is a real deployment
- * shape, not a bug: a cache kept in a docker named volume is invisible to a
- * PortOS running outside the container, and on Windows the project usually lives
- * inside a WSL2 distro. `SGLANG_QWEN_WEIGHTS_DIR` answers the first.
- *
- * **The operator no longer types the Windows UNC path themselves.** The second
- * case used to be theirs to fix: the default `%USERPROFILE%\sglang-qwen38`
- * resolves to a *Windows* home, the project is inside a WSL2 distro, and the
- * refusal handed them a `\\wsl.localhost\<distro>\home\<user>\…` template with
- * two values to look up. It bit every Windows operator, because SGLang ships no
- * provisioner and preparing it by hand inside the distro is the only path. Now
- * `services/sglangQwenManager.js` asks WSL for those two values (the shared
- * `services/wslProjectPlacement.js` loop) and records the answer through
- * `recordSglangProjectDir` below, so the readiness poll, the Start button and
- * the next boot all resolve the directory that run found.
- *
- * SGLang gets detect + record only, never placement: there is no provisioner to
- * clone into the directory, so a host WSL cannot answer for still gets a refusal
- * pointing at `docs/features/sglang-qwen38.md`.
+ * `hasWeights` is tri-state: `true` (a Qwen model dir was found), `false` (every candidate root readable, none held one), `null` (no candidate root could be read). Start treats anything but `true` as
+ * "not verified" and refuses with different copy per case. `null` is a real deployment shape (a docker named-volume cache is invisible outside the container; on Windows the project usually lives in a WSL2
+ * distro). `SGLANG_QWEN_WEIGHTS_DIR` answers the first; for the second `services/sglangQwenManager.js` asks WSL for the values (`services/wslProjectPlacement.js`) and records them via
+ * `recordSglangProjectDir`, so the readiness poll, Start button and next boot resolve the same directory (the default `%USERPROFILE%\\sglang-qwen38` is a *Windows* home).
+ * SGLang gets detect + record only, never placement (no provisioner), so an unanswerable host still gets a refusal pointing at the doc.
  */
 
 import { readdir, stat } from 'fs/promises';
@@ -52,8 +23,7 @@ import {
   recordProjectDir,
   resolveRecordedProjectDir,
 } from './recordedProjectDir.js';
-// PORTOS_ENV_PATH is declared by portosEnv.js; recordedProjectDir.js imports it
-// for its own defaults but does not re-export it.
+// PORTOS_ENV_PATH is declared by portosEnv.js; recordedProjectDir.js imports but does not re-export it.
 import { PORTOS_ENV_PATH } from './portosEnv.js';
 
 /** Operator override for where the compose project was created. */
@@ -62,11 +32,7 @@ export const SGLANG_PROJECT_DIR_ENV = 'SGLANG_QWEN_PROJECT_DIR';
 /** Operator override for the HuggingFace cache holding the weights. */
 export const SGLANG_WEIGHTS_DIR_ENV = 'SGLANG_QWEN_WEIGHTS_DIR';
 
-/**
- * The user's home, read from the passed env before falling back to the OS — so
- * every path this module derives is injectable, and a test can never be answered
- * by the developer's real HuggingFace cache.
- */
+/** The user's home, read from the passed env before the OS, so every derived path is injectable and a test is never answered by the developer's real HF cache. */
 const resolveHome = (env) =>
   String(env?.HOME || env?.USERPROFILE || '').trim() || homedir();
 
@@ -77,8 +43,7 @@ export const SGLANG_PROJECT_LEAF = 'sglang-qwen38';
 export const sglangDefaultProjectDir = (env = process.env) => join(resolveHome(env), SGLANG_PROJECT_LEAF);
 
 /**
- * This stack's view of the shared `.env` record (`lib/recordedProjectDir.js`),
- * keyed on `SGLANG_QWEN_PROJECT_DIR`.
+ * This stack's view of the shared `.env` record (`lib/recordedProjectDir.js`), keyed on `SGLANG_QWEN_PROJECT_DIR`.
  *
  * @param {string} [envPath]
  * @returns {string}
@@ -98,10 +63,7 @@ export async function recordSglangProjectDir(dir, envPath = PORTOS_ENV_PATH) {
 }
 
 /**
- * Whether anything already answers "where does this project live", so the
- * manager knows whether a WSL probe is still worth a subprocess. Exported so it
- * asks THIS module rather than re-listing the precedence `resolveSglangProjectDir`
- * already owns.
+ * Whether anything already answers "where does this project live", so the manager knows whether a WSL probe is worth a subprocess; asks THIS module so `resolveSglangProjectDir` owns the precedence.
  *
  * @param {NodeJS.ProcessEnv} [env]
  * @param {string} [envPath]
@@ -114,51 +76,30 @@ export function sglangProjectDirIsSettled(env = process.env, envPath = PORTOS_EN
 /** Compose file names docker itself accepts, in its own precedence order. */
 const COMPOSE_FILENAMES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
 
-/**
- * HuggingFace's hub cache names every repo directory `models--<org>--<repo>`.
- * Matching on `qwen` rather than an exact repo id is deliberate: the recipe
- * chooses between the FP8 and NVFP4 repos by card class, and an exact id would
- * report a perfectly prepared Blackwell host as empty.
- */
+/** HF hub cache names repo dirs `models--<org>--<repo>`. Matches on `qwen`, not an exact id: the recipe picks FP8 vs NVFP4 by card class, and an exact id would report a prepared Blackwell host as empty. */
 const QWEN_CACHE_ENTRY = /^models--.*qwen/i;
 
 /** The `--local-dir` layout, for an operator who downloaded weights by hand. */
 const QWEN_LOCAL_ENTRY = /qwen/i;
 
-/**
- * What makes a `qwen`-named directory *weights* rather than a notes folder that
- * happens to share the name: a sharded download writes the index, a single-file
- * one writes the tensor file itself.
- */
+/** What makes a `qwen`-named directory *weights* rather than a notes folder: a sharded download writes the index, a single-file one the tensor file itself. */
 const LOCAL_WEIGHT_MARKERS = ['model.safetensors.index.json', 'model.safetensors'];
 
 const isDirectory = (path) => stat(path).then((s) => s.isDirectory(), () => false);
 const isFile = (path) => stat(path).then((s) => s.isFile(), () => false);
 
 /**
- * The configured project directory, what PortOS recorded, or the documented
- * default — in that order.
- *
- * The process environment outranks the recorded value deliberately: an operator
- * who exports this variable (in their shell, or in `ecosystem.config.cjs`) is
- * making a decision for this run, and a directory PortOS auto-detected on some
- * earlier run must not quietly outlive it.
+ * The configured project directory, what PortOS recorded, or the documented default, in that order. The process environment outranks the recorded value: an explicit export is a decision for this run,
+ * and an earlier auto-detected directory must not outlive it.
  *
  * @param {NodeJS.ProcessEnv} [env]
- * @param {string} [envPath] - which `.env` holds the record; a parameter for the
- *   same reason `resolveHome` reads the passed env — so a test's sandbox answers
- *   instead of whatever the developer's own install happens to have recorded.
+ * @param {string} [envPath] - which `.env` holds the record (a parameter so a test's sandbox answers, not the developer's install)
  */
 export function resolveSglangProjectDir(env = process.env, envPath = PORTOS_ENV_PATH) {
   return resolveRecordedProjectDir(SGLANG_PROJECT_DIR_ENV, () => sglangDefaultProjectDir(env), env, envPath);
 }
 
-/**
- * Candidate HuggingFace caches, most specific first: the operator's explicit
- * override, then the caches the compose file may bind-mount from the project
- * directory (the generated one uses `./hf-cache`), then `HF_HOME` and the
- * user-level default.
- */
+/** Candidate HF caches, most specific first: operator override, caches the compose file may bind-mount from the project dir (the generated one uses `./hf-cache`), then `HF_HOME` and the user default. */
 function weightsCandidateRoots(projectDir, env = process.env) {
   const override = String(env?.[SGLANG_WEIGHTS_DIR_ENV] || '').trim();
   const hfHome = String(env?.HF_HOME || '').trim();

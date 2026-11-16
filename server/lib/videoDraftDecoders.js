@@ -1,144 +1,56 @@
 /**
- * Draft VIDEO DECODE for local video runtimes (issue #5423).
+  * Draft VIDEO DECODE for local video runtimes: a separately downloaded, resource-light replacement for a model's video VAE decoder, used to make previews cheaper.
+  *
+  * This module is the single source of truth for which decoders ship and for the four gates a draft decode must clear before touching a render:
  *
- * A diffusion video model produces a latent sequence; a VAE decoder turns that
- * sequence into pixels. On MiniMax H3 the decode is not a rounding error on the
- * render — it is a full-sequence pass over every latent frame at the output
- * canvas at the end of the render. Each denoise step also decodes a bounded
- * temporal window for the stepwise preview PortOS publishes to the Video Gen
- * stage. Most of the time a user spends looking at an H3 render is spent
- * deciding whether the PROMPT and the COMPOSITION are right, which a
- * lower-fidelity decode answers just as well as the shipped one.
+ *   1. Declaration: the model entry must carry a `draftDecoder` this module attached; nothing is inferred from a runtime or repo name.
+ *   2. Runtime capability: only a runtime whose arg builder emits the draft-decode flags may declare one, and the INSTALLED runner checkout must be the revision
+ *      the asset was verified against (an older checkout silently ignores unknown argv and would report a draft decode it never performed).
+ *   3. Asset readiness: the weights must already be in the local HF cache; PortOS never downloads at render time.
+ *   4. Delivery intent: a model the finish graph names as a delivery target ALWAYS decodes on the full decoder, so a preview-grade asset never reaches a delivery clip.
  *
- * A *draft decoder* is a separately downloaded, resource-light replacement for
- * the model's own video VAE decoder that answers that question faster. This
- * module is the single source of truth for which ones PortOS ships, and — more
- * importantly — for the four gates a draft decode has to clear before it can
- * touch a render:
+ * Every gate returns a REASON rather than throwing and the render proceeds on the full decoder (same "degrade, don't reject" contract as `speedProfileDeclineReason`
+ * in lib/videoSpeedProfiles.js).
  *
- *   1. **Declaration.** The model entry must carry a `draftDecoder` this
- *      module attached. Nothing is inferred from a runtime or a repo name.
- *   2. **Runtime capability.** Only a runtime whose arg builder actually emits
- *      the draft-decode flags may declare one, and the INSTALLED runner
- *      checkout must be the revision the asset was verified against. An older
- *      checkout silently ignores unknown argv, which would leave a full-decode
- *      render reporting a draft one.
- *   3. **Asset readiness.** The weights must already be resolved in the local
- *      HF cache. PortOS never downloads at render time.
- *   4. **Delivery intent.** A model the finish graph names as a delivery
- *      target ALWAYS decodes on the full decoder, whatever was requested, so a
- *      preview-grade asset can never reach a delivery clip. The client's Finish
- *      flow resets the control to Full for the same reason, so the form and the
- *      server agree about what a delivery render will do.
+ * Absence and `'full'` are the same request: `DRAFT_DECODE_FULL` is a named no-op so the picker has a selected option; `resolveVideoDraftDecoder` returns `null` for it,
+ * keeping spawn args byte-identical to a full-decode render.
  *
- * Every one of those returns a REASON rather than throwing, and the render
- * proceeds on the full decoder. Draft decode only ever makes a render cheaper,
- * so failing it closed with a 400 would turn a convenience into an outage — the
- * same "degrade, don't reject" contract `speedProfileDeclineReason` uses in
- * lib/videoSpeedProfiles.js.
- *
- * ## Why absence and `'full'` are the same request
- *
- * `DRAFT_DECODE_FULL` ('full') is the shipped contract: the model's own
- * decoder, exactly as every render before this feature existed. It is a named
- * option so the picker has something to show as selected, and a deliberate
- * NO-OP — `resolveVideoDraftDecoder` returns `null` for it, so a full-decode
- * render builds byte-identical spawn args and stamps no extra history field.
- * Same rule as `'quality'` in lib/videoSpeedProfiles.js and `'stock'` in
- * lib/videoTextEncoders.js.
- *
- * ## Why `VIDEO_DRAFT_DECODERS` currently ships no entry
- *
- * The mechanism is declared and wired; the ASSET is not — and as of 2026-08-30
- * that is a decision, not a gap. The survey is in ADR
- * docs/decisions/2026-08-30-h3-draft-decoder-asset.md.
- *
- * The short version: the shape this shim can host and the shape that makes a
- * decode cheap are mutually exclusive. Everything published that would actually
- * be light — a tiny autoencoder, a quantized repack, a decoder-only head —
- * cannot load through the pinned strict loader, and everything that CAN load is
- * a full-size VAE that saves nothing. An asset here would mean forking the
- * pinned upstream runner, which is its own decision; the gates ship first so a
- * qualifying asset later is one table row plus a migration.
+ * `VIDEO_DRAFT_DECODERS` ships no entry on purpose (ADR docs/decisions/2026-08-30-h3-draft-decoder-asset.md): the pinned strict loader cannot load any
+ * genuinely light decoder, and everything that loads is a full-size VAE that saves nothing. The gates ship first so a qualifying asset is one table row plus a migration.
  *
  * Pure module: no I/O, and the one import is a sibling lib predicate.
  */
 
 import { isDeliveryVideoModel } from './videoFinishProfiles.js';
 
-/**
- * The implicit "unchanged" decode. Never resolves to an override.
- */
+/** The implicit "unchanged" decode. Never resolves to an override. */
 export const DRAFT_DECODE_FULL = 'full';
 
-/**
- * The one non-default decode id. A single named alternative rather than an open
- * enum: a draft decoder is a property of the MODEL entry (there is at most one
- * per entry), so the request only ever selects between "the model's decoder"
- * and "the draft decoder this model declares".
- */
+/** The one non-default decode id: a draft decoder is a property of the MODEL entry (at most one per entry). */
 export const DRAFT_DECODE_DRAFT = 'draft';
 
 export const DRAFT_DECODE_IDS = Object.freeze([DRAFT_DECODE_FULL, DRAFT_DECODE_DRAFT]);
 
 /**
- * Runtimes whose arg builder emits the draft-decode flags AND whose helper
- * loads them. Declared here so a table row can never widen itself onto a runner
- * that would silently ignore the flags — the failure mode that check exists to
- * prevent is a render that reports a draft decode it never performed.
- *
- * Mirrors the `LTX2_FAMILY_RUNTIMES` guard in lib/videoSpeedProfiles.js.
+ * Runtimes whose arg builder emits the draft-decode flags AND whose helper loads them, so a table row can never widen onto a runner that silently ignores the flags.
+ * Mirrors `LTX2_FAMILY_RUNTIMES` in lib/videoSpeedProfiles.js.
  */
 export const DRAFT_DECODE_RUNTIMES = Object.freeze(['minimax_h3']);
 
 /**
  * Shipped draft decoders, keyed by registry entry id.
  *
- * Shape of a row:
+ * Row shape: `shippedRepo`/`shippedRevision` (fork guard: the profile attaches only while the entry still points at the weights the decoder was verified
+ * against; both are guarded because the VAE latent contract is revision-sensitive), and `decoder` { id, label, description, repo, revision (pinned commit, never a branch),
+ * files, sizeLabel, runtimeRevision (runner checkout the asset was verified against) }.
+ * `decoder.files` is an explicit list of exactly ONE entry: the pinned MLX loader opens `video_vae/source/model.safetensors` by name, so a multi-shard decoder has nowhere to go.
  *
- *   shippedRepo      fork-preservation guard — the profile attaches only while
- *   shippedRevision  the entry still points at the weights the decoder was
- *                    verified against. Guards BOTH, like the speed-profile
- *                    table and unlike the finish-profile one: a decoder is
- *                    matched to a specific VAE latent contract, which is
- *                    revision-sensitive.
- *   decoder.id       stable key, persisted in history and submitted by the UI
- *   decoder.label    picker label
- *   decoder.description  one line under the picker; states the trade honestly
- *   decoder.repo     HF repo the asset is downloaded from
- *   decoder.revision exact pinned commit — never a branch
- *   decoder.files    explicit file list, never a repo snapshot (same rule as
- *                    `requiredWeights` in lib/mediaModels.js). Exactly ONE
- *                    entry today: the pinned MLX loader opens
- *                    `video_vae/source/model.safetensors` by name rather than
- *                    globbing, so a multi-shard decoder has nowhere to go —
- *                    validated here so a declaration can never reach a runner
- *                    that would reject it mid-render.
- *   decoder.sizeLabel  download size, shown before the user commits to it
- *   decoder.runtimeRevision  the runner checkout the asset was verified
- *                    against; an install on any other revision declines
- *
- * CHECKLIST a candidate must pass before it is added here — all four, because a
- * decoder that fails any of them produces plausible-looking pixels that are
- * wrong in a way no test can catch:
- *
- *   - **Key contract — check this one FIRST, it disqualifies most candidates.**
- *     `build_draft_decoder_shim` swaps exactly ONE file into upstream's
- *     checkpoint root, and the pinned `load_video_vae` STRICT-matches it
- *     against the WHOLE `VideoVAE` parameter tree. A candidate therefore has
- *     to be a COMPLETE, UNQUANTIZED, full-`VideoVAE`-shaped checkpoint
- *     carrying upstream's exact key set. A tiny autoencoder is a different
- *     module tree; a quantized repack's `.scales`/`.biases` read as unexpected
- *     keys; a decoder-only head is missing every encoder key.
- *   - **Latent contract.** It decodes the SAME latent space — channel count,
- *     `latents_mean`/`latents_std`, and spatial/temporal compression ratios
- *     identical to the model's own decoder.
- *   - **Publicly verifiable.** The repo, its revision and its own statement of
- *     what the weights are must be readable without a gate, so the pin can be
- *     reviewed rather than taken on trust.
- *   - **Preview-honest.** Its own documentation must not disclaim the use PortOS
- *     puts it to. A checkpoint whose authors say "do not use this as a video
- *     decoder" is not made suitable by only showing its output in a preview.
+ * Candidate checklist, all four required (a failing decoder yields plausible-looking wrong pixels no test can catch):
+ *   - Key contract, check first: `build_draft_decoder_shim` swaps ONE file into upstream's checkpoint root and the pinned `load_video_vae` STRICT-matches it
+ *     against the whole `VideoVAE` tree, so it must be a COMPLETE, UNQUANTIZED, full-`VideoVAE`-shaped checkpoint with upstream's exact key set.
+ *   - Latent contract: same channel count, `latents_mean`/`latents_std` and compression ratios as the model's own decoder.
+ *   - Publicly verifiable: repo, revision and its own statement of what the weights are must be readable without a gate.
+ *   - Preview-honest: its documentation must not disclaim the use PortOS puts it to.
  */
 export const VIDEO_DRAFT_DECODERS = Object.freeze({});
 
@@ -146,34 +58,21 @@ const isEntry = (entry) => !!entry && typeof entry === 'object' && typeof entry.
 
 const modelLabel = (model) => model?.name || model?.id || 'This model';
 
-/**
- * Absence and `'full'` are the same request.
- */
+/** Absence and `'full'` are the same request. */
 export const isFullDecode = (id) => id == null || id === '' || id === DRAFT_DECODE_FULL;
 
-/**
- * The draft decoder a model declares, or `null`.
- */
+/** The draft decoder a model declares, or `null`. */
 export const videoDraftDecoder = (model) => {
   const decoder = model?.draftDecoder;
   return decoder && typeof decoder === 'object' && typeof decoder.id === 'string' ? decoder : null;
 };
 
-/**
- * Does this model offer a draft decode at all?
- */
+/** Does this model offer a draft decode at all? */
 export const supportsDraftDecode = (model) => videoDraftDecoder(model) !== null;
 
 /**
- * Attach `draftDecoder` to shipped entries that don't already carry one. Pure;
- * returns a new array and never mutates the input entries.
- *
- * Preservation contract (identical to `applyVideoSpeedProfiles`):
- *   - `'draftDecoder' in entry`      → user/existing value wins, `null`
- *                                      included (the explicit "no draft decode
- *                                      on this entry" override).
- *   - entry id not shipped           → custom model, left as-is.
- *   - `repo`/`revision` differ       → forked or re-pinned weights, left as-is.
+ * Attach `draftDecoder` to shipped entries that don't already carry one. Pure; never mutates the input.
+ * Preservation contract (as `applyVideoSpeedProfiles`): `'draftDecoder' in entry` (even `null`) wins; unshipped ids and entries whose `repo`/`revision` differ are left as-is.
  */
 export const applyVideoDraftDecoders = (list) => {
   if (!Array.isArray(list)) return list;
@@ -189,18 +88,9 @@ export const applyVideoDraftDecoders = (list) => {
 };
 
 /**
- * Validate one platform's video list for draft-decoder problems. Pure — returns
- * `{ id, reason }` rows (empty when sound). Callers decide whether to
- * warn-and-strip (load path) or fail (the test that pins the shipped registry).
- *
- * Checked, in the order a hand-edit is most likely to break it:
- *   - `draftDecoder` is an object (or absent/null)
- *   - the runtime is one whose builder actually emits the flags
- *   - `label`, `repo`, `revision` and `runtimeRevision` are non-empty strings —
- *     every one of them reaches argv or an HF cache lookup — and `id` is
- *     exactly `DRAFT_DECODE_DRAFT`, the only value the request enum accepts
- *   - `files` names exactly one non-empty relative path, with no traversal (it is
- *     joined against a cache snapshot root and handed to a child process)
+ * Validate one platform's video list for draft-decoder problems. Pure; returns `{ id, reason }` rows (empty when sound).
+ * Checks: `draftDecoder` is an object; the runtime emits the flags; `label`/`repo`/`revision`/`runtimeRevision` are non-empty strings and `id` is exactly
+ * `DRAFT_DECODE_DRAFT`; `files` is exactly one non-empty relative path with no traversal (it is joined onto a cache snapshot root and handed to a child process).
  */
 export const validateDraftDecoderTable = (list) => {
   if (!Array.isArray(list)) return [];
@@ -234,16 +124,12 @@ export const validateDraftDecoderTable = (list) => {
       fail(entry.id, 'draftDecoder.files must be a non-empty array of non-empty strings');
       continue;
     }
-    // Mirrors build_draft_decoder_shim in scripts/generate_minimax_h3.py: the
-    // pinned VAE loader reads one named source weight, so a multi-shard
-    // declaration is refused HERE rather than failing minutes into a render.
+    // Mirrors build_draft_decoder_shim in scripts/generate_minimax_h3.py: one named source weight, so refuse multi-shard here rather than minutes into a render.
     if (files.length !== 1) {
       fail(entry.id, `draftDecoder.files must name exactly one weight file (the pinned VAE loader reads one); got ${files.length}`);
       continue;
     }
-    // These are joined onto an HF snapshot root by the resolver and then handed
-    // to a child process, so an absolute or climbing path is a real escape, not
-    // a style nit.
+    // Joined onto an HF snapshot root and handed to a child process: an absolute or climbing path is a real escape.
     const unsafe = files.find((f) => f.startsWith('/') || f.split('/').includes('..'));
     if (unsafe) fail(entry.id, `draftDecoder.files entry "${unsafe}" must be a relative path inside the repo`);
   }
@@ -251,11 +137,8 @@ export const validateDraftDecoderTable = (list) => {
 };
 
 /**
- * Load-time guard: strip every invalid `draftDecoder`, logging each problem. A
- * user-edited (or migration-stale) registry must not be able to offer a decode
- * this build's runner cannot perform, and must not crash boot
- * (`loadMediaModels` runs at import time). Returns the input array unchanged
- * when the table is sound, so the common path allocates nothing.
+ * Load-time guard: strip every invalid `draftDecoder`, logging each problem, so a hand-edited or stale registry can neither offer an unperformable decode nor crash boot
+ * (`loadMediaModels` runs at import time). Returns the input unchanged when sound.
  */
 export const sanitizeDraftDecoders = (list) => {
   const problems = validateDraftDecoderTable(list);
@@ -272,25 +155,16 @@ export const sanitizeDraftDecoders = (list) => {
 };
 
 /**
- * Why a requested draft decode could not be applied — a machine-readable code
- * plus a sentence the UI/log can show verbatim. `null` when it applies.
- *
- * Returned rather than thrown, for the reason in the module header: the render
- * still proceeds, on the model's own decoder.
+ * Why a requested draft decode could not be applied: a machine-readable code plus a UI-ready sentence, or `null` when it applies. Returned, not thrown,
+ * so the render proceeds on the model's own decoder.
  *
  * @param {object}  args.model            resolved video model entry
  * @param {string}  args.decodeId         what the request asked for
- * Every gate FAILS CLOSED on a missing argument. This is a public export, and
- * a caller that omits the model list or the cache verdict has not proved the
- * render may decode at preview fidelity — it has only failed to ask. Defaulting
- * either to "fine" would turn an omission into a silent fidelity downgrade.
+ * Every gate FAILS CLOSED on a missing argument: a caller that omits the model list or the cache verdict has not proved preview fidelity is allowed.
+  *
  *
- * @param {Array}   args.models           the platform's video list, so a model
- *                                        that IS somebody's declared Finish
- *                                        target counts as a delivery model.
- *                                        REQUIRED — a non-array declines.
- * @param {string}  args.runtimeRevision  the INSTALLED runner checkout revision,
- *                                        or null when it could not be read
+ * @param {Array}   args.models           the platform's video list (REQUIRED; a non-array declines) so a declared Finish target counts as a delivery model.
+  * @param {string}  args.runtimeRevision  the INSTALLED runner checkout revision, or null when unreadable
  * @param {boolean} args.assetCached      the pinned files resolved in the HF cache
  */
 export const draftDecodeDeclineReason = ({
@@ -303,12 +177,7 @@ export const draftDecodeDeclineReason = ({
       message: `${modelLabel(model)} — the model list needed to check delivery intent was not supplied, so this render decodes on the full decoder.`,
     };
   }
-  // Delivery intent outranks everything, including a model that declares no
-  // decoder at all: the answer to "may this clip be decoded at preview
-  // fidelity?" is no before the question of "with what?" is even asked. The
-  // finish graph is the authority (lib/videoFinishProfiles.js): a model another
-  // entry names as its Finish target is where compositions are DELIVERED, so a
-  // preview-grade decoder has no business on it however the request was phrased.
+  // Delivery intent outranks everything, even a model with no decoder: the finish graph (lib/videoFinishProfiles.js) is the authority on delivery targets.
   if (isDeliveryVideoModel(model, models)) {
     return {
       code: 'DRAFT_DECODE_DELIVERY_MODEL',
@@ -322,9 +191,7 @@ export const draftDecodeDeclineReason = ({
       message: `${modelLabel(model)} doesn't offer a draft decode — rendering on its own decoder.`,
     };
   }
-  // A checkout at any other revision has a different helper, whose argparse
-  // either rejects the flags outright or (worse, on an older PortOS helper)
-  // ignores them while the render reports a draft decode that never happened.
+  // A checkout at another revision has a different helper that rejects or silently ignores the flags.
   if (runtimeRevision !== decoder.runtimeRevision) {
     return {
       code: 'DRAFT_DECODE_RUNTIME_UNSUPPORTED',
@@ -341,19 +208,12 @@ export const draftDecodeDeclineReason = ({
 };
 
 /**
- * Resolve the draft decoder a render should actually use.
- *
- * Returns `null` whenever anything at all declines — the caller then leaves the
- * decode exactly where it was, and the spawn args stay byte-identical to a
- * pre-feature render.
+ * Resolve the draft decoder a render should actually use, or `null` whenever anything declines (spawn args then stay byte-identical to a full-decode render).
  *
  * @returns {{ id, label, repo, revision, files, runtimeRevision } | null}
  */
 export const resolveVideoDraftDecoder = (args) => {
-  // Checked BEFORE the decline reason, not after: a full decode has no reason
-  // to report (nothing was declined), so a resolver that only asked
-  // `draftDecodeDeclineReason` would fall through and hand a decoder to the
-  // request that explicitly asked for the model's own one.
+  // Checked BEFORE the decline reason: a full decode has no decline reason, so falling through would hand a decoder to a request for the model's own one.
   if (isFullDecode(args?.decodeId)) return null;
   if (draftDecodeDeclineReason(args)) return null;
   const decoder = videoDraftDecoder(args?.model);
@@ -369,11 +229,8 @@ export const resolveVideoDraftDecoder = (args) => {
 };
 
 /**
- * The decode options to put in front of the user for one model, in picker
- * order. EMPTY for a model with no draft decoder, so the client renders no
- * control rather than a one-entry select — the same presentation rule
- * `publicVideoTextEncoderOptions` follows. The full-decode entry is included
- * only when there is a real second choice.
+ * Decode options for the picker, in order. EMPTY for a model with no draft decoder so the client renders no control (as `publicVideoTextEncoderOptions`);
+ * the full-decode entry appears only when there is a real second choice.
  */
 export const publicVideoDraftDecodeOptions = (model) => {
   const decoder = videoDraftDecoder(model);
@@ -395,11 +252,7 @@ export const publicVideoDraftDecodeOptions = (model) => {
   ];
 };
 
-/**
- * Every downloadable draft-decoder asset across a video model list, de-duped by
- * repo+revision. Used by the Video Gen download/repair surface, which needs the
- * targets without caring which entry declared them.
- */
+/** Every downloadable draft-decoder asset across a video model list, de-duped by repo+revision, for the Video Gen download/repair surface. */
 export const downloadableVideoDraftDecoders = (list) => {
   if (!Array.isArray(list)) return [];
   const seen = new Set();

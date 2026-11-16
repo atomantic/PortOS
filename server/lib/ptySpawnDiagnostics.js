@@ -1,94 +1,47 @@
 /**
- * Turn a raw node-pty spawn failure into a diagnosis a human can act on.
- *
- * node-pty reports every POSIX launch failure as the same opaque string —
- * `posix_spawn failed: No such file or directory` — with no indication of WHICH
- * file was missing. Three very different faults collapse into it:
- *
- *   1. the target executable is gone (already ruled out upstream: the CoS runner
- *      resolves it on the child PATH and runs a `--version` capability probe
- *      before it ever opens a PTY);
- *   2. the `cwd` no longer exists — a worktree reaped out from under a spawn;
- *   3. **node-pty's own runtime is broken** — on macOS/Linux `pty.fork()` execs a
- *      sibling `spawn-helper` binary that is read from disk on EVERY spawn, so an
- *      emptied `server/node_modules` breaks all future spawns while the already
- *      loaded binding keeps the runner process itself alive and healthy-looking.
- *
- * (3) is the one that cost a day: `npm ci` run inside a CoS worktree whose
- * `server/node_modules` was symlinked at the primary checkout empties the
- * SYMLINK TARGET and then installs into a fresh real directory in the worktree —
- * see the "Never run `npm ci` … from inside a CoS worktree" rule in the root
- * `AGENTS.md`, which exists to prevent this. The primary checkout is
- * left with an empty `server/node_modules`, `spawn-helper` is gone, and every
- * subsequent agent spawn fails identically forever. Classified as a generic
- * `spawn-rejected` it looks transient, so the fleet retried it: every task type
- * burned MAX_TASK_RETRIES, blocked itself, and filed a meta-investigation task
- * that failed the same way.
- *
- * The probe is what separates (3) from the rest: re-launch a trivially-known-good
- * command in a known-good directory. If THAT fails too, nothing is wrong with the
- * caller's request — the PTY layer itself is unusable.
+  * Turn a raw node-pty spawn failure into an actionable diagnosis.
+  *
+  * node-pty reports every POSIX launch failure as `posix_spawn failed: No such file or directory` without saying WHICH file was missing; three faults collapse into it: (1) the executable is gone (ruled out upstream: the CoS runner resolves it on the child PATH and runs a `--version` probe before opening a PTY); (2) the `cwd` no longer exists (a worktree reaped from under a spawn); (3) **node-pty's own runtime is broken**: on macOS/Linux `pty.fork()` execs a sibling `spawn-helper` read from disk on EVERY spawn, so an emptied `server/node_modules` breaks all future spawns while the loaded binding keeps the runner healthy-looking. (3) cost a day: `npm ci` inside a CoS worktree whose `server/node_modules` symlinks at the primary empties the SYMLINK TARGET (see the "Never run `npm ci` …" rule in root `AGENTS.md`), so every later spawn fails identically; as a generic `spawn-rejected` it looked transient, so every task type burned MAX_TASK_RETRIES, blocked, and filed a meta-investigation that failed the same way. The probe separates (3): re-launch a known-good command in a known-good directory; if THAT fails, the PTY layer itself is unusable.
  */
 
 import { existsSync } from 'fs';
 import { withSpawnCwdEnv } from './spawnCwd.js';
 
-/**
- * Message prefix marking a broken PTY runtime. `agentTuiSpawning.js` matches it
- * to classify the run as actionable-and-blocked instead of retrying, the same way
- * it already special-cases `Command executable unavailable:`. Changing this string
- * means changing that matcher.
- */
+/** Message prefix marking a broken PTY runtime; `agentTuiSpawning.js` matches it to classify the run as actionable-and-blocked instead of retrying (like `Command executable unavailable:`). Changing it means changing that matcher. */
 export const PTY_UNAVAILABLE_PREFIX = 'CoS Runner PTY unavailable:';
 
 /**
- * Message prefix for a spawn whose working directory vanished before launch.
- *
- * Deliberately NOT matched by `agentTuiSpawning.js`: unlike a broken PTY layer this
- * is transient — each retry provisions a fresh worktree at a fresh path — so it
- * falls through to the retrying `spawn-rejected`. Naming it separately is what
- * keeps the two from being collapsed back together; a genuinely misconfigured cwd
- * still surfaces by failing every attempt and blocking on MAX_TASK_RETRIES.
+ * Message prefix for a spawn whose working directory vanished before launch. Deliberately NOT matched by `agentTuiSpawning.js`: unlike a broken PTY layer it is transient (each retry provisions a fresh worktree), so it falls through to the retrying
+ * `spawn-rejected`; a genuinely misconfigured cwd still fails every attempt and blocks on MAX_TASK_RETRIES.
  */
 export const PTY_WORKSPACE_MISSING_PREFIX = 'CoS Runner workspace missing:';
 
-/**
- * A command guaranteed to exist on the host, used only to prove the PTY layer can
- * still fork at all. Never runs long enough to matter: the probe kills it.
- */
+/** A command guaranteed to exist on the host, used only to prove the PTY layer can fork; the probe kills it immediately. */
 const PROBE_COMMAND = process.platform === 'win32' ? 'cmd.exe' : '/bin/echo';
 const PROBE_ARGS = process.platform === 'win32' ? ['/c', 'exit'] : ['portos-pty-probe'];
 
 /**
- * Can node-pty still fork? Spawns {@link PROBE_COMMAND} in `probeCwd` and kills it
- * immediately — we care only whether the constructor threw.
+ * Can node-pty still fork? Spawns {@link PROBE_COMMAND} in `probeCwd` and kills it; only whether the constructor threw matters.
  *
  * @param {object} pty - the node-pty module (injected so this stays testable)
  * @param {string} probeCwd - a directory known to exist (the runner's own root)
  * @returns {boolean} true when the PTY layer is usable
  */
 export function probePtyRuntime(pty, probeCwd) {
-  // Catching here is the point of the function, not an escape from the no-try/catch
-  // rule: "did this throw?" IS the answer being computed. It also runs while the
-  // caller is already handling a failure, so a probe that explodes on its own must
-  // not replace the original error with its own.
+  // Catching is the point ("did this throw?" IS the answer), and the probe runs while the caller is already handling a failure, so it must not replace the original error with its own.
   try {
     const probe = pty.spawn(PROBE_COMMAND, PROBE_ARGS, {
       name: 'xterm-256color',
       cols: 80,
       rows: 24,
       cwd: probeCwd,
-      // The probe's child is a bare `echo`, which never reads PWD — but the
-      // tree-wide guard in spawnCwd.test.js rightly refuses to special-case that
-      // judgment, since it is the kind of thing that stops being true when
-      // someone swaps the probe command. Pin it like every other cwd-passing
-      // spawn rather than claiming an exemption (#3193).
+      // The child is a bare `echo` that never reads PWD, but the tree-wide guard in spawnCwd.test.js refuses special-casing (it stops being true if the probe command changes); pin it like every other cwd-passing spawn (#3193).
       env: withSpawnCwdEnv(process.env, probeCwd),
     });
     try {
       probe.kill();
     } catch {
-      // Already exited — `echo` is fast enough to beat the kill. Still a success.
+      // Already exited (`echo` beat the kill): still a success.
     }
     return true;
   } catch {
@@ -97,25 +50,15 @@ export function probePtyRuntime(pty, probeCwd) {
 }
 
 /**
- * Explain a `pty.spawn` throw.
- *
- * Order matters: the workspace check is a cheap `existsSync` on the exact path the
- * caller asked for, and a missing worktree is a per-request fault that says nothing
- * about the runtime. Only once that is ruled out do we spend a probe fork asking
- * whether the PTY layer is broken for everyone.
+ * Explain a `pty.spawn` throw. Order matters: the workspace check is a cheap `existsSync` on the requested path and a missing worktree is a per-request fault saying nothing about the runtime; only then is a probe fork spent on whether the PTY layer is broken for everyone.
  *
  * @param {Error} err - what `pty.spawn` threw
  * @param {object} options
  * @param {string} options.cwd - the working directory the spawn requested
  * @param {string} options.probeCwd - a directory known to exist, for the probe
- * @param {(probeCwd: string) => boolean} options.runtimeProbe - returns whether the
- *   PTY layer still works; injected so callers own the node-pty import
- * @returns {{ diagnosed: boolean, message: string }} `diagnosed: false` means the
- *   failure matched neither known fault, so the caller should let the original error
- *   bubble rather than dress an unknown cause in a confident explanation. Whether a
- *   named fault is worth RETRYING is the caller's policy, not this function's — the
- *   two differ: a reaped worktree clears on the next attempt (which provisions a
- *   fresh one), while a broken PTY layer reproduces forever.
+ * @param {(probeCwd: string) => boolean} options.runtimeProbe - whether the PTY layer still works; injected so callers own the node-pty import
+ * @returns {{ diagnosed: boolean, message: string }} `diagnosed: false` means neither known fault matched, so the caller lets the original error bubble rather than dress an unknown cause in a confident explanation.
+ *   Whether a named fault is worth RETRYING is the caller's policy: a reaped worktree clears on retry (fresh one), a broken PTY layer reproduces forever.
  */
 export function diagnosePtySpawnFailure(err, { cwd, probeCwd, runtimeProbe }) {
   const raw = err?.message || String(err);
