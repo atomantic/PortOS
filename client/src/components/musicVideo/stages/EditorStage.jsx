@@ -1,7 +1,10 @@
+import { useMemo } from 'react';
 import { MousePointerClick } from 'lucide-react';
 import ShotTimeline from '../ShotTimeline.jsx';
 import ShotCardHost, { blenderShotPosters, shotNamer, useLinkedStoryboard } from '../ShotCardHost.jsx';
 import { reorderedSceneIds, timelineShots } from '../../../lib/musicVideoTimeline.js';
+import { plannedTransitions } from '../../../lib/musicVideoCutEffects.js';
+import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 
 /**
  * The editor: the shots on a timeline under the preview player, with the open
@@ -19,6 +22,12 @@ export default function EditorStage({ board }) {
   const [storyboard, setStoryboard] = useLinkedStoryboard(project.storyboardId);
   const { shotName } = shotNamer(project);
   const scenes = project.scenes || [];
+  // What the Shots board's effect badges read, so the timeline's effects track shows the same effects.
+  const storyboardRows = project.productionReview?.draft?.storyboard;
+  const layered = isLayeredComposition(project);
+  const effectOptions = useMemo(() => ({ layered, planned: plannedTransitions(storyboardRows), cameras: project.cameras }),
+    [layered, storyboardRows, project.cameras]);
+  const editShot = (sceneId, patch) => { board.editSceneLocal(sceneId, patch); return board.saveScene(sceneId, patch); };
   const openShot = (scene) => {
     board.seekToScene?.(scene);
     onToggleSceneExpand?.(scene.sceneId, true);
@@ -50,7 +59,8 @@ export default function EditorStage({ board }) {
           posters={blenderShotPosters(project, board.blender)}
           onSeek={(t) => board.seekToScene?.({ startSec: t })} onOpenShot={openShot}
           onMoveCut={board.locked ? null : (sceneId, edge, t) => (edge === 'end' ? board.onMoveSceneEnd(sceneId, t) : board.onMoveSceneStart(sceneId, t))}
-          onReorder={board.locked || orderOwned ? null : reorder} />
+          onReorder={board.locked || orderOwned ? null : reorder}
+          effectOptions={effectOptions} onEditShot={board.locked ? null : editShot} />
       </div>
       <section aria-label="Shot" className="min-w-0 rounded-lg border border-port-border bg-port-card">
         {open ? (
