@@ -136,6 +136,7 @@ vi.mock('react-router', () => ({
 import Review from './Review';
 import * as api from '../services/api';
 import socket from '../services/socket';
+import toast from '../components/ui/Toast';
 import { __resetActionQueue } from '../hooks/useActionQueue';
 
 const SUMMARY_COUNTS = { total: 8, alert: 3, todo: 1, briefing: 0, cos: 4 };
@@ -694,8 +695,24 @@ describe('Actions commitments workspace (#7739)', () => {
 
     await waitFor(() => expect(api.createThread).toHaveBeenCalledWith(
       { title: 'Track the example follow-up' },
-      { silent: true },
     ));
+  });
+
+  it('shows the failure and keeps the typed action when the create fails', async () => {
+    const real = await vi.importActual('../services/apiBrainThreads');
+    api.createThread.mockImplementationOnce(real.createThread);
+    const toastError = vi.spyOn(toast, 'error').mockImplementation(() => {});
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: 'Server refused the save' }) }));
+    render(<Review />);
+    const input = await screen.findByLabelText('Quick add action');
+    fireEvent.change(input, { target: { value: 'Track the example follow-up' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith('Server refused the save'));
+    expect(input).toHaveValue('Track the example follow-up');
+    expect(routerState.navigate).not.toHaveBeenCalled();
+    toastError.mockRestore();
+    vi.unstubAllGlobals();
   });
 
   it('opens a newly added thread in a view where an open commitment is visible', async () => {

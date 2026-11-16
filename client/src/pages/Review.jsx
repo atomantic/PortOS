@@ -208,10 +208,12 @@ export default function Review() {
   const handleCreateTodo = async (e) => {
     e.preventDefault();
     if (!newTodo.trim()) return;
-    const thread = await api.createThread({ title: newTodo.trim() }, { silent: true }).catch(() => null);
+    // Failure toasts via the shared request wrapper; keep the typed text so it can be retried.
+    const thread = await api.createThread({ title: newTodo.trim() }).catch(() => null);
+    if (!thread) return;
     setNewTodo('');
     await fetchQueue();
-    if (thread?.id) {
+    if (thread.id) {
       const threadView = actionView === 'all' || actionView === 'today' ? actionView : 'today';
       navigate(`/review/${encodeURIComponent(`threads:${thread.id}`)}?view=${threadView}`);
     }

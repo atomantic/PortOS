@@ -33,6 +33,7 @@ vi.mock('../../hooks/usePipelineProgress', () => ({
 
 import {
   startPipelineSeriesReview,
+  cancelPipelineSeriesReview,
   getPipelineSeriesReview,
   getPipelineSeriesReviewStatus,
   startPipelineSeriesFix,
@@ -90,6 +91,21 @@ describe('SeriesReviewPanel — review kickoff conflict', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Review series/i }));
     await waitFor(() => expect(screen.getByRole('button', { name: /Stop/i })).toBeInTheDocument());
     expect(toast.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('SeriesReviewPanel — cancel failure', () => {
+  it('shows the server error when stopping the review fails', async () => {
+    const real = await vi.importActual('../../services/apiPipeline');
+    cancelPipelineSeriesReview.mockImplementation(real.cancelPipelineSeriesReview);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: 'Server refused the save' }) }));
+    startPipelineSeriesReview.mockResolvedValue({ runId: 'run-1', alreadyRunning: false });
+    await renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: /Review series/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Stop/i }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Server refused the save'));
+    vi.unstubAllGlobals();
   });
 });
 

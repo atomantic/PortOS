@@ -20,7 +20,8 @@ const providerHook = vi.hoisted(() => ({
 vi.mock('../../services/api', () => api);
 vi.mock('../../services/apiLocalLlm', () => ({ getToolUseModels: api.getToolUseModels }));
 vi.mock('../../hooks/useProviderModels', () => ({ default: () => providerHook }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+vi.mock('../ui/Toast', () => ({ default: toastMock }));
 
 import ConfigTab from './ConfigTab.jsx';
 
@@ -50,6 +51,24 @@ describe('Feature agent AI provider controls', () => {
       providerId: 'codex',
       model: 'gpt-5',
       effort: 'high',
-    }), { silent: true }));
+    })));
+  });
+});
+
+describe('Feature agent save failures', () => {
+  it('shows the server error through the shared request wrapper and keeps the form', async () => {
+    const real = await vi.importActual('../../services/apiAgents');
+    api.createFeatureAgent.mockImplementation(real.createFeatureAgent);
+    toastMock.error.mockClear();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: 'Agent store unavailable' }) }));
+    render(<ConfigTab isCreate apps={[{ id: 'app-example', name: 'Example App' }]} />);
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Example Agent' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Improve the example app' } });
+    fireEvent.change(screen.getByLabelText('App'), { target: { value: 'app-example' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Agent' }));
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('Agent store unavailable'));
+    expect(screen.getByLabelText('Name')).toHaveValue('Example Agent');
+    vi.unstubAllGlobals();
   });
 });
