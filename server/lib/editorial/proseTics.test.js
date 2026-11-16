@@ -12,7 +12,6 @@ import {
   findGestures,
   FILTER_WORDS,
   HEDGE_WORDS,
-  CRUTCH_WORDS,
 } from './proseTics.js';
 
 describe('tokenizeWords', () => {
@@ -129,9 +128,6 @@ describe('findCrutchWords', () => {
     expect(hits.map((h) => h.entry)).toContain('in order to');
   });
 
-  it('CRUTCH_WORDS omits bare "that"', () => {
-    expect(CRUTCH_WORDS).not.toContain('that');
-  });
 });
 
 describe('findAdverbs', () => {

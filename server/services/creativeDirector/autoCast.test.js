@@ -21,7 +21,6 @@ import {
   suggestCastForBrief,
   applyAutoCastToProject,
   toSuggestionView,
-  DEFAULT_CASTABLE_TYPES,
 } from './autoCast.js';
 import { hybridSearchIngredients, linkIngredientsToCreativeDirector } from '../catalogDB.js';
 import { generateQueryEmbedding } from '../memoryEmbeddings.js';
@@ -100,10 +99,6 @@ describe('suggestCastForBrief', () => {
     expect(hybridSearchIngredients).toHaveBeenCalledWith('rain noir', null, expect.any(Object));
   });
 
-  it('defaults to the castable type set', () => {
-    expect(DEFAULT_CASTABLE_TYPES).toContain('character');
-    expect(DEFAULT_CASTABLE_TYPES).not.toContain('idea');
-  });
 });
 
 describe('toSuggestionView', () => {

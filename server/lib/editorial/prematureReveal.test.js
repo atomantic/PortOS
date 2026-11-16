@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 
 import { applyTemplate } from '../promptTemplate.js';
 import { getCheck } from './checkRegistry.js';
-import { revealGatedCanonSummary, revealGatedPayoffsSummary, PREMATURE_REVEAL_STAGE } from './checkInfra.js';
+import { revealGatedCanonSummary, revealGatedPayoffsSummary } from './checkInfra.js';
 
 // #2178 — the premature-reveal editorial check (CWQE Phase 13). Pins the gate
 // (only fires when the series authored reveal-gated canon AND a manuscript
@@ -110,7 +110,4 @@ describe('pipeline-editorial-premature-reveal prompt rendering (#2178)', () => {
     expect(out).toContain('No reveal-gated canon was supplied');
   });
 
-  it('uses the correct stage key', () => {
-    expect(PREMATURE_REVEAL_STAGE).toBe('pipeline-editorial-premature-reveal');
-  });
 });

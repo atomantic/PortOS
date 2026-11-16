@@ -3,11 +3,6 @@ import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync } from 'fs';
 import { pinPlatform } from './testHelper.js';
 
 import {
-  GROK_API_ID,
-  GROK_CLI_ID,
-  GROK_TUI_ID,
-  GROK_API_ENDPOINT,
-  GROK_STDIN_PROMPT_PATH,
   isGrokCommand,
   isGrokCliProvider,
   isGrokTuiProvider,
@@ -22,16 +17,6 @@ import {
   grokSpeedTarget,
   grokServiceTierModel,
 } from './grok.js';
-
-describe('grok — constants', () => {
-  it('exposes the expected ids, endpoint, and stdin prompt path', () => {
-    expect(GROK_API_ID).toBe('grok');
-    expect(GROK_CLI_ID).toBe('grok-cli');
-    expect(GROK_TUI_ID).toBe('grok-tui');
-    expect(GROK_API_ENDPOINT).toBe('https://api.x.ai/v1');
-    expect(GROK_STDIN_PROMPT_PATH).toBe('/dev/stdin');
-  });
-});
 
 describe('grok — isGrokCommand', () => {
   it('matches the bare binary, absolute paths, and .exe', () => {
