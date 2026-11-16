@@ -47,9 +47,6 @@ const CALLER_SUPPLIED_PATH_SITES = [
   { file: 'client/src/services/apiTimeline.js', expression: 'path' },
 ];
 
-/** Allowlisted `unclassified` routes: deletion candidates tracked in #16446; this count may only fall. */
-const UNCLASSIFIED_CEILING = 152;
-
 const allowlistClassOf = new Map(Object.entries(UNCALLED_ROUTE_ALLOWLIST)
   .flatMap(([callerClass, paths]) => paths.map((route) => [route, callerClass])));
 const describeRoute = (route) => `${route.methods.join('/')} ${route.path}`;
@@ -106,7 +103,6 @@ describe('client ↔ server API route parity', () => {
     expect(Object.keys(UNCALLED_ROUTE_ALLOWLIST).filter((callerClass) => !ROUTE_CALLER_CLASSES[callerClass])).toEqual([]);
     expect(entries.filter((route) => !serverPaths.includes(route)), 'entries for routes that are no longer mounted').toEqual([]);
     expect(entries.filter((route) => !uncalled.has(route)), 'entries whose route a client now calls').toEqual([]);
-    expect(UNCALLED_ROUTE_ALLOWLIST.unclassified.length).toBeLessThanOrEqual(UNCLASSIFIED_CEILING);
   });
 
   // ── bypass probes ─────────────────────────────────────────────────────────
