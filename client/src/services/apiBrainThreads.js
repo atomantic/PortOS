@@ -2,33 +2,15 @@
  * API client for Brain threads (tracked-topic open loops): filtered `listThreads`, full records with
  * resolved refs, and thread mutations.
  *
- * Brain threads — the bullet journal's open loops (`/brain/threads`, Brain `threads` entity; a
- * *thread* is a tracked topic, never a message thread): filtered list (`listThreads({ status,
- * priority, tag, pinned, refKind, q })`), full record with `resolvedRefs` (`getThread`), create /
- * defaults-free PUT / tombstone delete, per-ref attach/detach (`addThreadRef`, `removeThreadRef`),
- * attach (`attachToThread`), and explicit assigned GitHub ingestion (`syncGithubThreads({ appId,
- * pinned })`).
+ * Brain threads: the bullet journal's open loops (`/brain/threads`, Brain `threads` entity; a *thread* is a tracked topic, never a message thread): filtered `listThreads`, full record with `resolvedRefs` (`getThread`), create / defaults-free PUT / tombstone delete, ref attach/detach, `attachToThread`, and explicit assigned GitHub ingestion (`syncGithubThreads`).
  */
 
 import { request, queryString } from './apiCore.js';
 
-// Brain Threads API surface — the bullet journal's open loops at
-// /brain/threads (#7664). A *thread* here is one tracked topic or commitment
-// with a status, a next action and refs to the records that belong to it — NOT
-// a message thread (messages/ owns that sense of the word).
-//
-// Every helper takes an optional `options` arg so a caller with its own error
-// UI can pass `{ silent: true }` (project convention). Path params are
-// URL-encoded — an external ref's id is a full URL.
-//
-// Server contract notes (server/routes/brainThreads.js):
-// - The list projection omits `notes`; the full record (with `resolvedRefs`,
-//   hydrated for display) comes from getThread.
-// - PUT is a defaults-free partial. `source`, `externalState` and `closedAt`
-//   are server-managed and stripped from a client write — never send them.
-// - POST /:id/refs is idempotent by (kind, id); both ref writes return the
-//   same detail shape as getThread (with `resolvedRefs`), so the open record
-//   can be swapped in place.
+// Brain Threads API surface (#7664): a *thread* is one tracked topic or commitment with a status, a next action and refs to its records, NOT a message thread (messages/ owns that). Every helper takes an optional `options`
+// so a caller with its own error UI can pass `{ silent: true }`. Path params are URL-encoded (an external ref's id is a full URL).
+// Server contract (server/routes/brainThreads.js): the list projection omits `notes`; getThread returns the full record with hydrated `resolvedRefs`. PUT is a defaults-free partial; `source`, `externalState` and `closedAt`
+// are server-managed and stripped, so never send them. POST /:id/refs is idempotent by (kind, id) and both ref writes return the getThread detail shape, so the open record can be swapped in place.
 
 const enc = encodeURIComponent;
 

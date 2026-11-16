@@ -1,26 +1,8 @@
 /**
- * Add the optional `replace` (with-edits) field to the manuscript-completeness
- * ("Finish the draft") prompt.
+ * Add the optional `replace` (with-edits) field to the manuscript-completeness ("Finish the draft") prompt.
  *
- * The editorial review can now run in a "generate edits for every finding" mode:
- * the same completeness pass returns, alongside each finding's advisory
- * `suggestion`, a concrete `replace` — the rewritten text that substitutes for
- * `anchorQuote` to close the gap. The manuscript editor seeds each comment's
- * `fix` from `{ find: anchorQuote, replace }`, so the user reviews the full diff
- * and accepts edits one-by-one without a per-comment "Generate fix" call.
- *
- * The new `replace` field + its rule live inside a `{{#withEdits}}` Mustache
- * section, so the findings-only pass renders the prompt exactly as before — only
- * the with-edits pass sees the additional instruction. See
- * server/services/pipeline/arcPlanner.js (shapeCompletenessFindings) and
- * manuscriptReview.js (seedReviewFromFindings).
- *
- * `scripts/setup-data.js` only copies *missing* prompts, so existing installs
- * keep their old template until this migration rewrites it. Customization-safe:
- * only installs whose copy still hashes to the known pre-change shipped version
- * are auto-updated; customized prompts are left intact and warned about.
- *
- * Strategy: hash-driven prompt-replace via `./_lib.js`. Idempotent.
+ * The editorial review can run in a "generate edits for every finding" mode: the same completeness pass returns, alongside each finding's advisory `suggestion`, a concrete `replace` (the rewritten text substituting for `anchorQuote`), and the manuscript editor seeds each comment's `fix` from `{ find: anchorQuote, replace }` so the user accepts edits one by one without a per-comment "Generate fix" call. The field and its rule live inside a `{{#withEdits}}` section, so the findings-only pass renders as before (see server/services/pipeline/arcPlanner.js shapeCompletenessFindings and manuscriptReview.js seedReviewFromFindings).
+ * `scripts/setup-data.js` only copies *missing* prompts, so existing installs keep the old template until this rewrites it. Customization-safe: only copies hashing to the known pre-change shipped version are auto-updated; customized prompts are left intact and warned about. Strategy: hash-driven prompt-replace via `./_lib.js`. Idempotent.
  */
 
 import { makePromptReplaceMigration } from './_lib.js';

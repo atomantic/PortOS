@@ -1,46 +1,15 @@
 /**
  * Migration 211 — give existing installs an editable animation-track store.
  *
- * Until #3152, `scanner` and `ambient` were COMPILED rows in
- * `server/services/sprites/animationTracks.js`. They are now ordinary user-defined
- * rows in `data/sprites/animation-tracks.json`, seeded verbatim from
- * `data.reference/sprites/animation-tracks.json` — so a user can retune their
- * bounds, reword their prompts, or delete them outright without a PortOS release.
- * `walk` stays the one mandatory built-in and is deliberately NOT in the store.
- *
- * **The regression this exists to prevent is a silent one.** An install holding an
- * approved scanner set or ambient loop validates that set by its exact `setKind`
- * string (`finalized-eight-direction-scanner-set`), and the runtime-contract Zod
- * schema builds its `scannerFrameCount` / `ambientFrameCount` fields from the
- * effective registry. Without the rows, the compiler would report "unknown
- * animation track 'scanner'" on a record that compiled fine yesterday, and a
- * publish binding pinning `scannerFrameCount` would have that field silently
- * stripped by Zod. So the rows must be present on every upgraded install.
- *
- * **Why this migration is a convenience, not a correctness dependency.** The store
- * falls back to reading `data.reference/sprites/animation-tracks.json` whenever
- * the user copy is absent (see `animationTrackStore.js`) — which is what makes the
- * upgrade safe even on the very first boot, where module load happens before
- * migrations run. This migration's actual job is to materialize an EDITABLE copy
- * under `data/`, so the "Manage animation types" UI (#3153) and a hand-editing
- * user have a file to change. That split is deliberate: correctness never depends
- * on migration ordering, and the user still gets a real file.
- *
- * Idempotent and non-destructive. A store file that already exists is NEVER
- * touched — not merged, not topped up — because a user who deleted `scanner` must
- * have it stay deleted, and a merge would resurrect it on every upgrade. An
- * unreadable existing store is likewise left alone: possibly-recoverable user data
- * beats a clean reseed.
+ * Until #3152 `scanner` and `ambient` were COMPILED rows in `server/services/sprites/animationTracks.js`; they are now user-defined rows in `data/sprites/animation-tracks.json`, seeded verbatim from `data.reference/sprites/animation-tracks.json`, so a user can retune or delete them without a release. `walk` stays the one mandatory built-in and is NOT in the store.
+ * **The regression this prevents is silent:** an install holding an approved scanner set or ambient loop validates it by its exact `setKind`, and the runtime-contract Zod schema builds `scannerFrameCount` / `ambientFrameCount` from the effective registry; without the rows the compiler reports "unknown animation track 'scanner'" on a record that compiled yesterday and a publish binding would have that field silently stripped.
+ * **This migration is a convenience, not a correctness dependency:** the store falls back to `data.reference/sprites/animation-tracks.json` when the user copy is absent (`animationTrackStore.js`), which keeps even a first boot safe (module load precedes migrations). Its job is to materialize an EDITABLE copy for the "Manage animation types" UI (#3153) and hand-editors.
+ * Idempotent and non-destructive: an existing store file is NEVER touched (a user who deleted `scanner` must keep it deleted; a merge would resurrect it), and an unreadable one is left alone (possibly-recoverable user data beats a clean reseed).
  */
 
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-// `atomicWrite` (ensureDir + temp + rename) rather than mkdir+writeFile, the same
-// helper `_seedStageHelpers.js` and 30-odd sibling migrations use. Not cosmetic
-// here: a truncated store would make this migration's own existence check report
-// `already-present` forever while the store throws "not valid JSON" at module
-// load, taking down everything that imports validation.js. It passes a string
-// through unchanged, so the seed still lands byte-for-byte.
+// `atomicWrite` (ensureDir + temp + rename), as `_seedStageHelpers.js` and sibling migrations use: a truncated store would make this migration's existence check report `already-present` forever while the store throws "not valid JSON" at module load. It passes a string through unchanged, so the seed lands byte-for-byte.
 import { atomicWrite, pathExists } from '../../server/lib/fileUtils.js';
 
 const STORE_REL = join('sprites', 'animation-tracks.json');

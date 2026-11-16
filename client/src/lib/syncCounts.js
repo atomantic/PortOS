@@ -7,22 +7,9 @@
 // toPull, toPush })` renders the plain-language `{ state, text }` ("in sync" / "N to pull · M to push"
 // / "checking…"). No React — `SyncStatusBadge` drives it.
 //
-// PortOS federation sync is PULL-based — each instance pulls changes from its
-// peers — so "push pending" is really "items of ours the peer hasn't pulled yet."
-// Two directions, both derived from monotonic change-log sequences:
-//
-//   toPull = peerMax        - ourCursor        (their items we haven't pulled)
-//   toPush = ourLocalMax    - peerCursorForUs  (our items they haven't pulled)
-//
-// Sequences arrive as numbers (brain) or numeric strings (memory BIGSERIAL),
-// so compare as BigInt to stay exact past Number.MAX_SAFE_INTEGER.
-//
-// Sentinel discipline (see AGENTS.md): a MISSING input must NOT collapse to 0.
-// - For pull, an absent `ourCursor` legitimately means "pulled nothing" → treat
-//   as 0 (the caller passes `ourCursor ?? 0`). An absent `peerMax` means the
-//   peer hasn't been probed yet → unknown (null).
-// - For push, an absent `peerCursorForUs` means the peer is too old to report
-//   it (or hasn't probed us) → unknown (null), never a misleading 0.
+// PortOS federation sync is PULL-based, so "push pending" is really "items of ours the peer hasn't pulled yet": toPull = peerMax - ourCursor (their items we haven't pulled), toPush = ourLocalMax - peerCursorForUs.
+// Sequences are numbers (brain) or numeric strings (memory BIGSERIAL), so compare as BigInt to stay exact past MAX_SAFE_INTEGER.
+// Sentinel discipline (AGENTS.md): a MISSING input must NOT collapse to 0. An absent `ourCursor` means "pulled nothing" (caller passes `ourCursor ?? 0`); an absent `peerMax` (not probed yet) or `peerCursorForUs` (peer too old to report it) is unknown (null), never a misleading 0.
 
 function toBig(v) {
   if (typeof v === 'number' && Number.isFinite(v) && v >= 0) return BigInt(Math.trunc(v));
@@ -41,11 +28,7 @@ export function diffSeq(ahead, behind) {
   if (a === null || b === null) return null;
   const d = a - b;
   if (d <= 0n) return 0;
-  // The seqs themselves can exceed Number.MAX_SAFE_INTEGER (that's why we
-  // compare as BigInt), but the DELTA is a pending-item backlog between two
-  // syncs — realistically tiny. Should it ever exceed the safe integer range,
-  // cap at MAX_SAFE_INTEGER so the count degrades to a still-honest "very large
-  // backlog" rather than a precise-looking-but-wrong Number from a lossy cast.
+  // The seqs can exceed MAX_SAFE_INTEGER (hence BigInt) but the DELTA is a pending backlog, realistically tiny; if it ever exceeds the safe range cap it so the count degrades to an honest "very large backlog" rather than a lossy-cast wrong number.
   const MAX = BigInt(Number.MAX_SAFE_INTEGER);
   return Number(d > MAX ? MAX : d);
 }

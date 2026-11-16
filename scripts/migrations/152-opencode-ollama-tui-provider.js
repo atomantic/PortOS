@@ -1,25 +1,9 @@
 /**
- * Ship the "OpenCode Ollama TUI" provider to existing installs.
+ * Ship the "OpenCode Ollama TUI" provider to existing installs (issue-1814, follow-up to issue-1802 / migration 149, which shipped only the headless CLI variant).
  *
- * Background: issue-1814 (follow-up to issue-1802, which shipped only the headless
- * CLI variant via migration 149). The CLI variant completes through the graceful
- * CLI light path; the TUI was held back because the CoS TUI-task completion path
- * assumed slashdo (`/do:pr` / `/do:push`), which OpenCode can't execute. issue-1814
- * makes `buildTuiCompletionSection` provider-aware (a slashdo-free TUI gets a plain
- * `git` / `gh` commit→push→PR→sentinel workflow), so the OpenCode TUI can now
- * complete an automated task — hence shipping the provider here.
- *
- * `setup-data.js` merges *missing* provider entries from data.reference, but only
- * when an install actually re-runs setup. This migration delivers the provider on
- * a plain server restart too, and is the canonical path for deployed installs to
- * pick it up. Purely additive: a brand-new id, so there's no rename or pinned-id
- * rewrite to do. Adds the provider only when missing — idempotent; an existing key
- * is left untouched.
- *
- * Kept in lockstep with data.reference/providers.json and
- * server/lib/aiToolkit/defaults/providers.sample.json. Frozen here as the
- * historical record this migration installs; later default changes ride their own
- * migrations rather than mutating this one.
+ * The TUI was held back because the CoS TUI-task completion path assumed slashdo (`/do:pr` / `/do:push`), which OpenCode can't execute; issue-1814 made `buildTuiCompletionSection` provider-aware (a slashdo-free TUI gets a plain `git` / `gh` commit→push→PR→sentinel workflow), so it can now complete an automated task.
+ * `setup-data.js` merges missing providers only when an install re-runs setup; this delivers the provider on a plain server restart too. Purely additive (a brand-new id), idempotent, an existing key is left untouched.
+ * Kept in lockstep with data.reference/providers.json and server/lib/aiToolkit/defaults/providers.sample.json; frozen here as the historical record, later default changes ride their own migrations.
  */
 
 import { makeProviderSeedMigration } from './_lib.js';

@@ -10,17 +10,7 @@ import { parseBareUrl } from '../lib/bareUrl.js';
 import { parseRepoUrl } from '../lib/repoUrl.js';
 
 /**
- * The Brain capture boxes' "this URL is a repository" state.
- *
- * A bare repo URL (github.com / gitlab.com) is always cloned by the server,
- * which unlocks two opt-in post-clone CoS agent runs (malware scan / repo
- * study). Both preferences are sticky — same pattern as the Creative toggle —
- * so a user who always wants a malware scan ticks it once.
- *
- * The study knobs come from the shared `useRepoStudyConfig`, so the capture
- * boxes and the Links tab's on-demand re-study send the same payload shape.
- * Rendering lives in `components/brain/RepoIntakeOptions.jsx`, which takes the
- * `repo` this returns rather than re-parsing the text.
+ * The Brain capture boxes' "this URL is a repository" state. A bare repo URL (github.com / gitlab.com) is always cloned by the server, unlocking two opt-in post-clone CoS agent runs (malware scan / repo study), both sticky preferences (like the Creative toggle). The study knobs come from the shared `useRepoStudyConfig` so the capture boxes and the Links tab's re-study send the same payload; rendering lives in `components/brain/RepoIntakeOptions.jsx`, which takes the `repo` this returns rather than re-parsing.
  */
 
 /** localStorage keys, by action. Reordering the UI table must not rebind these. */

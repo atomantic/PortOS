@@ -1,38 +1,20 @@
 /**
  * How the Agent Operations panel renders the bundled slashdo workflows (#3114).
  *
- * The Agent Operations buttons. `SLASHDO_WORKFLOWS` is `server/lib/slashdoCatalog.js`'s list decorated
- * with a per-command Tailwind tone, and `slashdoWorkflowsForApp(isSwiftApp)` filters it through the
- * server's own `slashdoWorkflowAppliesTo` — so the panel cannot be a workflow short.
- * `SLASHDO_NAMESPACE` + `slashdoLabel(command)` (the `/do:x` UI spelling) stay local: the server
- * module that owns the namespace reaches for the provider registry.
- *
- * WHICH workflows exist, what each does, and which app types each applies to are
- * defined once in `server/lib/slashdoCatalog.js` and read from there — the panel
- * cannot be a workflow short, and a description cannot say two different things
- * on the two sides. What stays here is the button styling the server has no
- * business knowing: `WORKFLOW_TONE` maps a command to a Tailwind class set, and
- * `SLASHDO_WORKFLOWS` is the server list decorated with it.
+ * `SLASHDO_WORKFLOWS` is `server/lib/slashdoCatalog.js`'s list (which workflows exist, what each does, which app types they apply to) decorated with a per-command Tailwind tone, and `slashdoWorkflowsForApp(isSwiftApp)` filters it through the server's own `slashdoWorkflowAppliesTo`,
+ * so the panel cannot be a workflow short and a description cannot differ across sides. `SLASHDO_NAMESPACE` + `slashdoLabel(command)` (the `/do:x` UI spelling) stay local: the server module that owns the namespace reaches for the provider registry.
  */
 import { SLASHDO_WORKFLOWS as SERVER_WORKFLOWS, slashdoWorkflowAppliesTo } from '../../../server/lib/slashdoCatalog.js';
 
 
 
 /**
- * slashdo's command namespace. Kept local rather than imported from
- * `server/lib/slashdoInvocation.js`, which owns it: that module reaches for the
- * provider registry and is not importable from a browser bundle.
+ * slashdo's command namespace, kept local: `server/lib/slashdoInvocation.js` owns it but reaches for the provider registry, so it isn't importable from a browser bundle.
  */
 export const SLASHDO_NAMESPACE = 'do';
 
 /**
- * How a slashdo workflow is SPELLED in PortOS UI — `/do:review`. Users know these
- * workflows by their Claude Code slash-command form, so that's what buttons,
- * chips, and tooltips show. This is a UI string only: the shape actually sent to
- * an agent is resolved per provider server-side (`resolveSlashdoInvocation`), and
- * for a codex/grok host it is a skill name, not a slash command.
- * @param {string} command - bare command name (`plan-task`)
- * @returns {string}
+ * How a slashdo workflow is SPELLED in PortOS UI (`/do:review`), the Claude Code slash-command form users know. UI string only: the shape sent to an agent is resolved per provider server-side (`resolveSlashdoInvocation`; a skill name for a codex/grok host).
  */
 export function slashdoLabel(command) {
   return `/${SLASHDO_NAMESPACE}:${command}`;
@@ -48,9 +30,7 @@ const CLASSES = {
   slate: 'bg-slate-500/20 text-slate-300 hover:bg-slate-500/30 border-slate-500/30',
 };
 
-// Button tone per workflow. A command with no row falls back to `slate`, so a
-// workflow added server-side renders as a working (if unstyled) button rather
-// than as `className="… undefined …"`.
+// Button tone per workflow; a command with no row falls back to `slate` so a server-added workflow renders as a working button, not `className="… undefined …"`.
 const WORKFLOW_TONE = {
   'plan-task': CLASSES.slate,
   next: CLASSES.blue,

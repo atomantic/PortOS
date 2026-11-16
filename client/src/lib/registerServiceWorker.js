@@ -1,34 +1,12 @@
-// Service-worker registration — the modern replacement for AppCache, giving
-// PortOS an offline-capable app shell and low-bandwidth asset caching.
+// Service-worker registration: an offline-capable app shell and low-bandwidth asset caching (`client/public/sw.js`, served at `/sw.js` so its scope is `/`).
 //
-// `registerServiceWorker()` / `unregisterServiceWorkers()` — wires up the offline app-shell +
-// low-bandwidth asset-caching service worker (`public/sw.js`). Registers only in a production secure
-// context (HTTPS or localhost); no-ops over plain-HTTP Tailnet and tears down any stale SW in dev.
-// Called once from `main.jsx`.
-//
-// The worker itself lives at `client/public/sw.js` (served from `/sw.js` at the
-// site root so its scope is `/`). This module only decides *whether* to
-// register it and wires the register/unregister lifecycle. It is intentionally
-// side-effect-free at import time — call `registerServiceWorker()` explicitly
-// (from `main.jsx`) so importing it in tests stays inert.
-//
-// Secure-context note: `navigator.serviceWorker` only exists in a secure
-// context — HTTPS, or `http://localhost`. PortOS accessed over a plain-HTTP
-// Tailnet hostname (no cert provisioned) is NOT a secure context, so the
-// feature simply no-ops there. Provisioning a cert (`npm run setup:cert`)
-// flips the app to HTTPS and the worker activates. This is a progressive
-// enhancement — the app is fully functional without it.
+// `registerServiceWorker()` registers only in a production secure context (HTTPS or localhost), no-ops over plain-HTTP Tailnet (`navigator.serviceWorker` only exists in a secure context; `npm run setup:cert` flips the app to HTTPS and the worker activates) and tears down any stale SW in dev;
+// `unregisterServiceWorkers()` is the teardown. Called once from `main.jsx`; side-effect-free at import time so tests stay inert. A progressive enhancement: the app is fully functional without it.
 
 const SW_URL = '/sw.js';
 
-// True only under the Vite dev server, where a caching SW would fight
-// hot-module reload. `import.meta.hot` is the HMR handle the dev server
-// injects; a production `vite build` statically replaces it with `undefined`.
-// We deliberately do NOT gate on `import.meta.env.PROD`: Vite derives that from
-// `NODE_ENV`, and a CoS/worktree (or any) build shell that exports
-// `NODE_ENV=development` would flip it to `false` and silently disable the SW
-// in a real production bundle. `import.meta.hot` depends only on the dev-server
-// vs. build distinction, not on the ambient environment.
+// True only under the Vite dev server, where a caching SW would fight hot-module reload. `import.meta.hot` is the HMR handle the dev server injects (a production build replaces it with `undefined`). NOT gated on `import.meta.env.PROD`: Vite derives that from
+// `NODE_ENV`, so a build shell exporting `NODE_ENV=development` would silently disable the SW in a real production bundle.
 function isDevServer() {
   return Boolean(import.meta.hot);
 }
@@ -44,7 +22,6 @@ function swSupported() {
  *
  * Registration is deferred to the window `load` event so it never competes
  * with first paint for bandwidth — the whole point is a faster first load.
- *
  * @returns {void}
  */
 export function registerServiceWorker() {
@@ -76,7 +53,6 @@ export function registerServiceWorker() {
 /**
  * Unregister every service worker for this origin. Used to disable caching in
  * dev, or as an escape hatch if the SW ever needs to be pulled.
- *
  * @returns {Promise<void>}
  */
 export async function unregisterServiceWorkers() {

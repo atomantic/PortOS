@@ -1,13 +1,7 @@
 /**
  * The agent programs PortOS drives, as the browser needs to name them.
  *
- * Read straight off `PROVIDER_HARNESSES` in `server/lib/providerHarnesses.js`
- * through `harnessById`, so a harness added to the registry is named here
- * without a second edit. Only the label is read: the registry's other columns
- * are decided server-side and arrive on the wire already resolved — `matches`
- * classifies a provider RECORD (the browser is handed a `harnessId`), `modes`
- * is already reflected by the routes a binding actually owns, and `protocol`
- * is a transport decision no picker makes.
+ * Read off `PROVIDER_HARNESSES` in `server/lib/providerHarnesses.js` through `harnessById`, so a harness added to the registry is named here without a second edit. Only the label is read: `matches` classifies a provider RECORD (the browser gets a `harnessId`), `modes` is reflected by the routes a binding owns, and `protocol` is a transport decision no picker makes.
  */
 
 import {
@@ -17,12 +11,7 @@ import {
 } from '../../../server/lib/providerHarnesses.js';
 
 /**
- * What to call a binding's harness.
- *
- * `null` is the DIRECT API case and has a name of its own — it is a real
- * binding with a real route, not a missing value. An id this build does not
- * know is shown verbatim rather than hidden: an unmapped harness stays a
- * visible legacy route, which is exactly what the graph promises.
+ * What to call a binding's harness. `null` is the DIRECT API case and has a name of its own (a real binding with a real route, not a missing value); an id this build doesn't know is shown verbatim, so an unmapped harness stays a visible legacy route.
  */
 export const harnessLabel = (harnessId) => {
   if (harnessId === null || harnessId === undefined) return 'Direct API';
@@ -30,11 +19,7 @@ export const harnessLabel = (harnessId) => {
 };
 
 /**
- * Where a preset is edited (#7567): `/ai/presets/:presetId`. Preset ids are
- * slugified from the display name, so a preset named "New" gets the id `new`
- * and would be shadowed by the static `/ai/presets/new` create route — that
- * one record keeps the legacy `/ai/edit/:providerId` alias, which App.jsx
- * serves as a working route for exactly this reason.
+ * Where a preset is edited (#7567): `/ai/presets/:presetId`. Preset ids are slugified from the display name, so a preset named "New" (id `new`) would be shadowed by the static `/ai/presets/new` create route; that one record keeps the legacy `/ai/edit/:providerId` alias App.jsx serves.
  */
 export const presetEditPath = (presetId) => (
   presetId === 'new' ? '/ai/edit/new' : `/ai/presets/${encodeURIComponent(presetId)}`
@@ -60,7 +45,6 @@ export const providerHarnessId = (provider) =>
  * a newer install), and a final "Other" bucket for records no harness claims. Empty buckets are omitted and
  * each record's position within its bucket is the input order, so a caller's
  * own ordering survives the grouping.
- *
  * @param {object[]} providers
  * @returns {{harnessId: string, label: string, providers: object[]}[]}
  */

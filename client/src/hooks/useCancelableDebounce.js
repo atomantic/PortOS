@@ -11,22 +11,9 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 
-// A setTimeout-backed debounce whose pending callback can be cancelled
-// synchronously by the caller — not only via the arming effect's own unmount
-// cleanup. React's unmount runs asynchronously relative to a `navigate()`
-// call made in the same tick (it waits for the router to re-render and
-// commit), so a debounce timer armed well before that `navigate()` can still
-// fire in the gap under load, landing a stale write after a route change is
-// already in flight and clobbering it (#8187 — MediaCollections' query→URL
-// mirror overwrote a just-opened collection's detail route). Storing the
-// timer id in a ref that outlives a single render lets both the effect's own
-// cleanup AND an imperative call site (e.g. right before `navigate()`) cancel
-// the exact same pending write.
-//
-// `[schedule, cancel]`: `schedule(fn, delay)` replaces any pending call with
-// a new one; `cancel()` drops a pending call with no replacement. Call
-// `cancel()` immediately before any navigation that a stale debounced write
-// must not be allowed to race.
+// A setTimeout-backed debounce whose pending callback the caller can cancel synchronously, not only via the arming effect's unmount cleanup: React's unmount runs asynchronously relative to a same-tick `navigate()`, so a timer armed earlier can fire in the gap under load
+// and land a stale write after a route change is already in flight (#8187: MediaCollections' query→URL mirror overwrote a just-opened collection's detail route). Keeping the timer id in a ref lets both the effect cleanup AND an imperative call site cancel the same pending write.
+// `[schedule, cancel]`: `schedule(fn, delay)` replaces any pending call; `cancel()` drops it with no replacement. Call `cancel()` right before any navigation that a stale debounced write must not race.
 export default function useCancelableDebounce() {
   const timerRef = useRef(null);
 

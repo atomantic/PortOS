@@ -9,25 +9,13 @@
  */
 
 /**
- * How the LoRA manager card renders an adapter-effect measurement (#4872).
- *
- * The status vocabulary is re-exported from `server/lib/loraEffect.js` — the
- * server measures and records the report, so a new verdict there reaches the
- * badge table below without a second edit. The badge tones and
- * `loraEffectDetail` are client-only: the server's `formatLoraEffect` always
- * returns a sentence for its log line, while the card needs `null` when the
- * badge already says everything (or it prints "Unreadable — unreadable").
+ * Status vocabulary re-exported from `server/lib/loraEffect.js` (the server measures and records the report, so a new verdict reaches the badge table without a second edit).
  */
 export { LORA_EFFECT_STATUSES } from '../../../server/lib/loraEffect.js';
 
-// Badge text + Tailwind tone per status. Presentation is legitimately
-// client-only, but it lives beside the mirrored status list so a new verdict
-// can't render as a bare slug — one table rather than two parallel maps, which
-// is the pair that would otherwise drift.
+// Badge text + Tailwind tone per status: presentation is client-only but lives beside the mirrored status list so a new verdict can't render as a bare slug (one table, not two parallel maps that would drift).
 export const LORA_EFFECT_BADGES = Object.freeze({
-  // Only `zero` refuses a render server-side, so only `zero` is styled as an
-  // error. `nonfinite` is a genuinely broken adapter the user should see, but
-  // it still renders — warning, not error.
+  // Only `zero` refuses a render server-side, so only `zero` is an error; `nonfinite` is a broken adapter that still renders (warning).
   ok: { label: 'Active', tone: 'text-port-success' },
   zero: { label: 'No effect', tone: 'text-port-error' },
   nonfinite: { label: 'Diverged', tone: 'text-port-warning' },
@@ -39,11 +27,7 @@ export const loraEffectBadge = (status) => LORA_EFFECT_BADGES[status]
   || { label: status || 'Unknown', tone: 'text-gray-400' };
 
 /**
- * One-line detail line for a measurement, worded like the server’s
- * `formatLoraEffect` log line but returning `null` where that returns a status.
- *
- * Returns `null` when there is nothing to add beyond the badge, so a caller can
- * omit the separator rather than printing "Unreadable — Unreadable".
+ * One-line detail for a measurement, worded like the server's `formatLoraEffect` log line but returning `null` where that returns a status, so a caller can omit the separator rather than print "Unreadable — Unreadable".
  */
 export const loraEffectDetail = (report) => {
   if (!report) return null;

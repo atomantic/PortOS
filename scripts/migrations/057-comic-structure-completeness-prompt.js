@@ -1,23 +1,8 @@
 /**
  * Add `comic-structure` category to the manuscript-completeness prompt.
  *
- * The prompt previously had five finding categories (missing-content, arc-gap,
- * character-gap, pacing, continuity) — all narrative-level. Comic scripts have
- * a structural failure mode that none of them catch: pages where an author or AI
- * stage dumps all scene content into the page-level description instead of
- * breaking it into panel definitions. The image generator and letterer work
- * panel-by-panel, so such pages cannot be rendered.
- *
- * The new `comic-structure` category surfaces these pages as `high`-severity
- * findings and requires the suggestion to be a full panel-by-panel rewrite of
- * the malformed page (directly substitutable via the find-and-replace fix path).
- *
- * `scripts/setup-data.js` only copies *missing* prompts, so existing installs
- * keep their old template until this migration rewrites it. Customization-safe:
- * only installs whose copy still hashes to the known pre-change shipped version
- * are auto-updated; customized prompts are left intact and warned about.
- *
- * Strategy: hash-driven prompt-replace via `./_lib.js`. Idempotent.
+ * The five narrative finding categories (missing-content, arc-gap, character-gap, pacing, continuity) miss a structural comic failure: pages where an author or AI stage dumps all scene content into the page-level description instead of panel definitions, which the panel-by-panel image generator and letterer can't render. `comic-structure` surfaces these as `high` findings whose suggestion is a full panel-by-panel rewrite of the page (directly substitutable via the find-and-replace fix path).
+ * `scripts/setup-data.js` only copies *missing* prompts, so existing installs keep the old template until this rewrites it. Customization-safe: only copies hashing to the known pre-change shipped version are auto-updated; customized prompts are left intact and warned about. Strategy: hash-driven prompt-replace via `./_lib.js`. Idempotent.
  */
 
 import { makePromptReplaceMigration } from './_lib.js';

@@ -7,21 +7,8 @@
 
 import { useRef, useState, useEffect } from 'react';
 
-// Shared 1-second cooldown ticker for the agents tabs. Three near-identical
-// implementations (`OverviewTab`, `ToolsTab`, `WorldTab`) each ran their own
-// `setInterval` that bumped a local `tick` so countdown labels re-rendered and
-// fired a refetch once every cooldown expired. Collapsed into one hook.
-//
-// `cooldownEnds` is a `{ [actionId]: epochMillis }` map; the interval only runs
-// while at least one entry is still in the future. `onAllExpired` fires once,
-// the first tick after every entry crosses the deadline, and the interval is
-// cleared at that same tick so a missing/no-op callback can't leave us spinning
-// forever. When the caller's expiry handler swaps in a fresh `cooldownEnds`
-// (new ref, new deadlines), the effect re-runs and a new interval starts.
-// Latest-callback is kept in a ref so consumers don't have to memoize it — the
-// interval's lifecycle is driven by `cooldownEnds` alone, matching the
-// originals where the surrounding account/refetch dep only affected the
-// *closure*, not the timer's start/stop.
+// Shared 1-second cooldown ticker for the agents tabs (collapsing the `OverviewTab` / `ToolsTab` / `WorldTab` copies). `cooldownEnds` is a `{ [actionId]: epochMillis }` map; the interval runs only while an entry is in the future. `onAllExpired` fires once, the first tick after every entry crosses its deadline, and the interval is cleared at that tick so a missing/no-op callback can't spin forever;
+// if the expiry handler swaps in a fresh `cooldownEnds` the effect re-runs and a new interval starts. The latest callback lives in a ref so consumers needn't memoize it; the interval's lifecycle is driven by `cooldownEnds` alone.
 export function useCooldownTick(options = {}) {
   const { cooldownEnds = {}, onAllExpired } = options;
   const [, setTick] = useState(0);

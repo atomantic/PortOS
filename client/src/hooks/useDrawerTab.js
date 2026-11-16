@@ -9,20 +9,9 @@
 import { useCallback } from 'react';
 import { useSearchParams } from 'react-router';
 
-// Deep-linkable active-tab state for a tabbed <Drawer>, backed by a URL search
-// param so the open section is shareable, bookmarkable, and reload-safe — the
-// same "URL is the source of truth for what's open" convention the rest of the
-// app follows. Returns `[activeTab, setActiveTab]`.
-//
-// The caller owns the param name (a page may host more than one drawer, e.g.
-// `?settingsTab=backend`) and passes the tab id list so a stale/hand-edited
-// deep link degrades to `defaultTab` instead of a blank panel. Writing the
-// default tab (or null) drops the param entirely so a pristine URL stays clean;
-// every write uses `replace` so flipping tabs doesn't pile history entries.
-//
-// Tabs live in a search param — not a route `:tab` segment (that's `useValidTab`)
-// — because a drawer is an overlay on top of an already-routed page and can't own
-// a path segment.
+// Deep-linkable active-tab state for a tabbed <Drawer>, backed by a URL search param so the open section is shareable, bookmarkable and reload-safe (the "URL is the source of truth for what's open" convention). Returns `[activeTab, setActiveTab]`.
+// The caller owns the param name (a page may host more than one drawer, e.g. `?settingsTab=backend`) and passes the tab id list so a stale/hand-edited link degrades to `defaultTab` instead of a blank panel. Writing the default tab (or null) drops the param so a pristine URL stays clean; every write uses `replace` so flipping tabs doesn't pile history.
+// A search param, not a route `:tab` segment (`useValidTab`), because a drawer overlays an already-routed page and can't own a path segment.
 export default function useDrawerTab(paramName, defaultTab, tabIds = null) {
   const [searchParams, setSearchParams] = useSearchParams();
   const raw = searchParams.get(paramName);

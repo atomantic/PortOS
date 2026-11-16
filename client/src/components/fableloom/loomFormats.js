@@ -1,11 +1,7 @@
 /**
  * Client mirror of the loom scene formats (`server/services/fableLoom/formats.js`).
  *
- * The server owns the prompt contracts; the client owns only the labels and the
- * option order, so the index form's select, the settings drawer's select, and
- * the index card's badge all read the same list. Keep the ids in step with
- * `LOOM_FORMATS` server-side — a format the server rejects would fail the
- * PATCH at the door.
+ * The server owns the prompt contracts; the client owns only the labels and option order, so the index form's select, the settings drawer's select and the index card's badge read one list. Keep ids in step with `LOOM_FORMATS` server-side (a format the server rejects fails the PATCH at the door).
  */
 
 export const LOOM_FORMATS = [
@@ -20,11 +16,7 @@ export const loomFormatHint = (id) => LOOM_FORMATS.find((f) => f.id === id)?.hin
 export const isTeleplayFormat = (id) => id === 'teleplay';
 
 /**
- * Does this scene still need rewriting into `format`? Mirrors the server's own
- * filter (`needsReformat` in `server/services/fableLoom/weave.js`): a scene is
- * pending when it HAS prose and that prose isn't already stamped with the
- * target format. Title-only placeholders are never sent — there is no beat in
- * them to preserve, so the model would invent one.
+ * Does this scene still need rewriting into `format`? Mirrors `needsReformat` in `server/services/fableLoom/weave.js`: pending when it HAS prose not already stamped with the target format; title-only placeholders are never sent (no beat to preserve, so the model would invent one).
  */
 export const sceneNeedsReformat = (node, format) =>
   !!node?.prose?.trim() && node.format !== format;

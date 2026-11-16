@@ -1,27 +1,8 @@
 /**
- * Make the manuscript-fix prompt's JSON example obviously schematic so weaker
- * models stop echoing it back as their answer.
+ * Make the manuscript-fix prompt's JSON example obviously schematic so weaker models stop echoing it back as their answer.
  *
- * Symptom: a "Generate fix" run returned the example's VALUES verbatim —
- * `find: "a verbatim excerpt copied EXACTLY from that issue's manuscript above
- * — the span you are replacing"`, `replace: "that same span rewritten to close
- * the gap"` — instead of a real manuscript span + rewrite. The old example read
- * like filled-in content, so the model copied it.
- *
- * This migration replaces those prose-style placeholder values with bracketed
- * `<…>` field descriptions and adds an explicit "the bracketed values are
- * descriptions, do not copy them" rule. A runtime guard in
- * server/services/pipeline/manuscriptFix.js (normalizeFix → isEchoedPlaceholder)
- * also drops an edit whose find/replace still matches either the old or new
- * placeholder text, so an echo collapses to the existing "did not return a
- * usable fix — try again" retry instead of surfacing an un-appliable fuzzy edit.
- *
- * `scripts/setup-data.js` only copies *missing* prompts, so existing installs
- * keep their old template until this migration rewrites it. Customization-safe:
- * only installs whose copy still hashes to a known prior shipped version are
- * auto-updated; customized prompts are left intact and warned about.
- *
- * Strategy: hash-driven prompt-replace via `./_lib.js`. Idempotent.
+ * A "Generate fix" run returned the example's VALUES verbatim (`find: "a verbatim excerpt copied EXACTLY…"`, `replace: "that same span rewritten…"`) instead of a real span + rewrite, because the old example read like filled-in content. This replaces those prose-style placeholders with bracketed `<…>` field descriptions and adds an explicit "bracketed values are descriptions, do not copy them" rule; a runtime guard in server/services/pipeline/manuscriptFix.js (normalizeFix → isEchoedPlaceholder) also drops an edit whose find/replace still matches either the old or new placeholder text, so an echo collapses to the existing "did not return a usable fix — try again" retry.
+ * `scripts/setup-data.js` only copies *missing* prompts, so existing installs keep the old template until this rewrites it. Customization-safe: only copies hashing to a known prior shipped version are auto-updated; customized prompts are left intact and warned about. Strategy: hash-driven prompt-replace via `./_lib.js`. Idempotent.
  */
 
 import { makePromptReplaceMigration } from './_lib.js';

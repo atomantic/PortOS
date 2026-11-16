@@ -7,12 +7,7 @@
 // `{ next, added, skipped }`; the caller persists `next` via the ordinary visualSpec PATCH. Used by
 // `components/musicVideo/VisualSpecPanel.jsx`. (The style snapshots are derived server-side, #9105.)
 //
-// Pure (aside from minting reference ids) and read-only: the caller owns persisting the result via the
-// ordinary visualSpec PATCH (see VisualSpecPanel.jsx).
-//
-// Mirrors the server's 24-reference cap
-// (server/lib/musicVideoValidation.js musicVideoVisualSpecSchema) so a pull
-// can never produce a spec the server would reject.
+// Pure (aside from minting reference ids) and read-only: the caller persists the result via the ordinary visualSpec PATCH. Mirrors the server's reference cap (server/lib/musicVideoValidation.js musicVideoVisualSpecSchema) so a pull can never produce a spec the server would reject.
 
 import { uuidv4 } from './uuid.js';
 

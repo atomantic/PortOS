@@ -2,16 +2,8 @@
  * Read the CENTRAL HuggingFace token status (`GET /image-gen/setup/hf-token-status`,
  * backed by `server/services/hfToken.js`: stored token → env vars → `hf auth login` file).
  *
- * Every gated-model surface needs the same three-state answer — token present / not
- * present / not yet known — and each one had grown its own copy with its own failure
- * policy, so the same offline blip rendered a nag on one page and nothing on another.
- * This is the single reader.
- *
- * `present` is deliberately tri-state: `null` means "not fetched yet or the fetch
- * failed", NOT "absent". Callers must branch on all three, or a slow status call
- * flashes "add a token" at a user who already has one (the absent-vs-unknown rule in
- * AGENTS.md). A surface that would rather offer the paste form on a failed fetch opts
- * in explicitly with `errorAs: 'absent'`.
+ * Every gated-model surface needs the same three-state answer (token present / not present / not yet known) and each had grown its own copy with its own failure policy, so one offline blip nagged on one page and nothing on another; this is the single reader.
+ * `present` is deliberately tri-state: `null` means "not fetched yet or the fetch failed", NOT "absent". Callers must branch on all three, or a slow status call flashes "add a token" at a user who has one (AGENTS.md absent-vs-unknown). A surface that would rather offer the paste form on a failed fetch opts in with `errorAs: 'absent'`.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';

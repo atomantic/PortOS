@@ -1,33 +1,9 @@
 /**
- * Surface the series' ticking clock (countdown the reader anticipates) in the
- * idea / beat-sheet stage prompt, and fix the idea template's broken `{{.}}`
- * dot-references inside string-valued Mustache sections.
+ * Surface the series' ticking clock (countdown the reader anticipates) in the idea / beat-sheet stage prompt, and fix the idea template's broken `{{.}}` dot-references inside string-valued Mustache sections.
  *
- * Two changes ship in `pipeline-idea-expansion.md`:
- *
- *   1. A new `{{#tickingClock}}` section renders the pre-built ticking-clock
- *      guidance (from `renderTickingClock(series.arc.tickingClock)`) so the beat
- *      sheet plants, sustains, and pays off the countdown. The arc-level prompts
- *      already fold the clock into their `{{{shapeGuidance}}}` block (#1289);
- *      the per-issue idea stage needed a NEW template variable, which per
- *      CLAUDE.md requires this migration. Follow-up of #1289 (issue #1356).
- *
- *   2. The idea template referenced section values with `{{.}}` inside
- *      string-valued sections (`{{#arcRole}}…{{.}}`, `{{#beats}}…{{.}}`,
- *      `{{#synopsis}}…{{.}}`). PortOS's template engine only binds `{{.}}` to the
- *      current item during *array* iteration — a truthy *string* section renders
- *      its body against the parent context, so `{{.}}` resolved to the whole
- *      context object and emitted the literal `[object Object]`. The neighbor
- *      beat sheets / synopses and the arc-role label were silently corrupted in
- *      every idea prompt. Switched to named references (`{{arcRole}}`,
- *      `{{beats}}`, `{{synopsis}}`), which resolve correctly.
- *
- * `scripts/setup-data.js` only copies *missing* prompts, so existing installs
- * keep their old template until this migration rewrites it. Customization-safe:
- * only installs whose copy still hashes to the known pre-change shipped version
- * are auto-updated; customized prompts are left intact and warned about.
- *
- * Strategy: hash-driven prompt-replace via `./_lib.js`. Idempotent.
+ * Two changes ship in `pipeline-idea-expansion.md`: (1) a new `{{#tickingClock}}` section renders the pre-built guidance (`renderTickingClock(series.arc.tickingClock)`) so the beat sheet plants, sustains and pays off the countdown (arc-level prompts already fold it into `{{{shapeGuidance}}}`, #1289; a NEW template variable requires a migration per CLAUDE.md; issue #1356);
+ * (2) the template used `{{.}}` inside string-valued sections (`{{#arcRole}}…{{.}}`, `{{#beats}}…`, `{{#synopsis}}…`), but PortOS's engine binds `{{.}}` to the current item only during *array* iteration (a truthy *string* section renders against the parent context), so it emitted the literal `[object Object]` and silently corrupted beat sheets, synopses and the arc-role label in every idea prompt; switched to named references.
+ * `scripts/setup-data.js` only copies *missing* prompts, so existing installs keep the old template until this rewrites it. Customization-safe: only copies hashing to the known pre-change shipped version are auto-updated; customized prompts are left intact and warned about. Strategy: hash-driven prompt-replace via `./_lib.js`. Idempotent.
  */
 
 import { makePromptReplaceMigration } from './_lib.js';

@@ -2,31 +2,15 @@
  * API client for the SongBook repertoire tracker: song CRUD, stage patch, `practiceSong` graded
  * practice logging, URL import drafts and attachments.
  *
- * SongBook repertoire tracker (`/songbook` — Brain `songs` entity): song CRUD + stage PATCH,
- * `practiceSong(id, quality)` (logs a 0..5-graded practice run; the server owns the SM-2 advance and
- * the resulting `stage`/`practice`), URL import draft, and attachments (base64 upload, present-flag
- * list, raw serve URL via `songAttachmentUrl`).
+ * `/songbook` (Brain `songs` entity): song CRUD + stage PATCH, `practiceSong(id, quality)` (logs a 0..5-graded run; the server owns the SM-2 advance and the resulting `stage`/`practice`), URL import draft, and attachments (base64 upload, present-flag list, raw serve URL via `songAttachmentUrl`).
  */
 
 import { request } from './apiCore.js';
 
-// SongBook API surface (Brain repertoire tracker — guitar tabs / chord sheets /
-// sheet music at /songbook). Every helper takes an optional `options` arg so
-// callers with their own `.catch` toast can pass `{ silent: true }` to avoid a
-// double-toast (project convention). Path params are URL-encoded.
-//
-// Server contract notes (server/routes/brainSongbook.js):
-// - POST / and POST /:id/attachments return 201 with the created record /
-//   `{ attachment }` in the body.
-// - PATCH is a defaults-free partial, BUT a nested `content` object fills inner
-//   defaults — callers must always send the WHOLE content object
-//   ({ format, text }), never `{ content: { text } }` alone (format would
-//   reset to 'tab'). Never send `attachments` (server-managed; stripped).
-// - DELETE /:id/attachments/:filename returns
-//   `{ success, filename, attachments }` — `attachments` is the updated meta
-//   list, usable directly for reactive state.
-// - GET /:id/attachments entries carry `present: boolean` (bytes exist on this
-//   machine); serving an absent file 404s with code NOT_ON_THIS_MACHINE.
+// SongBook API surface (Brain repertoire tracker: guitar tabs / chord sheets / sheet music at /songbook). Every helper takes an optional `options` so callers with their own `.catch` toast can pass `{ silent: true }`. Path params are URL-encoded.
+// Server contract (server/routes/brainSongbook.js): POST / and POST /:id/attachments return 201 (the record / `{ attachment }`). PATCH is a defaults-free partial BUT a nested `content` object fills inner defaults, so always send the WHOLE
+// content ({ format, text }), never `{ content: { text } }` alone (format would reset to 'tab'); never send `attachments` (server-managed). DELETE /:id/attachments/:filename returns `{ success, filename, attachments }` (the updated meta list).
+// GET /:id/attachments entries carry `present: boolean` (bytes exist on this machine); serving an absent file 404s with code NOT_ON_THIS_MACHINE.
 
 const enc = encodeURIComponent;
 
@@ -45,17 +29,11 @@ export const updateSong = (id, patch, options) =>
 export const deleteSong = (id, options) =>
   request(`/brain/songbook/${enc(id)}`, { method: 'DELETE', ...options });
 
-// Log one practice run, graded 0..5 (`SONG_PRACTICE_RATINGS` in
-// components/songbook/constants.js) → the updated song record. The server owns
-// the SM-2 advance and the resulting `stage`/`practice` — the grade is the only
-// input, and a client-supplied `practice` object is stripped (#4102).
+// Log one practice run, graded 0..5 (`SONG_PRACTICE_RATINGS` in components/songbook/constants.js) → the updated song. The server owns the SM-2 advance; a client-supplied `practice` object is stripped (#4102).
 export const practiceSong = (id, quality, options) =>
   request(`/brain/songbook/${enc(id)}/practice`, { method: 'POST', body: JSON.stringify({ quality }), ...options });
 
-// Fetch + extract a draft from a tab/chord-sheet URL → { draft: { title,
-// artist, content: { format, text }, sourceUrl } }. Nothing is stored — the
-// user reviews and saves explicitly. Error codes: 400 UNSAFE_URL,
-// 502 SONG_IMPORT_FETCH_FAILED, 422 SONG_IMPORT_EMPTY.
+// Fetch + extract a draft from a tab/chord-sheet URL → { draft: { title, artist, content: { format, text }, sourceUrl } }; nothing is stored. Errors: 400 UNSAFE_URL, 502 SONG_IMPORT_FETCH_FAILED, 422 SONG_IMPORT_EMPTY.
 export const importSongFromUrl = (url, options) =>
   request('/brain/songbook/import/url', { method: 'POST', body: JSON.stringify({ url }), ...options });
 

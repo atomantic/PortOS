@@ -7,20 +7,9 @@
 
 import { useEffect, useRef } from 'react';
 
-// Calls onOutside when a mousedown lands outside the ref'd element(s).
-// Listener only attaches while `active` is true so closed menus don't pay
-// the per-click cost.
-//
-// `ref` accepts a single ref OR an array of refs, and fires only when the click
-// missed every one of them. The array form is what a portaled popover needs: its
-// panel renders into <body>, so it is NOT inside the trigger's DOM subtree and a
-// single-ref containment check would treat every click on the panel itself as an
-// outside click and close it. Pass [triggerRef, panelRef] instead of hand-rolling
-// the two-ref effect.
-//
-// `onOutside` is read through a ref, so an inline arrow recreated every parent
-// render (the common call-site shape) doesn't tear down + re-add the global
-// mousedown listener on each render — only `active`/`ref` flip the subscription.
+// Calls onOutside when a mousedown lands outside the ref'd element(s); the listener attaches only while `active` so closed menus don't pay the per-click cost.
+// `ref` is a single ref OR an array, firing only when the click missed every one: a portaled popover's panel renders into <body>, outside the trigger's DOM subtree, so a single-ref check would close it on a click on the panel itself (pass [triggerRef, panelRef]).
+// `onOutside` is read through a ref, so an inline arrow recreated every parent render doesn't re-add the global mousedown listener; only `active`/`ref` flip the subscription.
 export default function useClickOutside(ref, active, onOutside) {
   const onOutsideRef = useRef(onOutside);
   onOutsideRef.current = onOutside;
