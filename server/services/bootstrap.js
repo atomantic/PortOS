@@ -444,6 +444,15 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // Stamp uncertain publications before later boot steps read the journal.
   // Sync and non-throwing; CoS may be off. Smoke boot skips this whole function.
   reconcileDeadOwnerReservations();
+  // Detached-launch writer records a restart stranded would otherwise block the
+  // database cutover preflight; sweep the proven-quiescent ones. File I/O and
+  // `ps` only, no provider calls.
+  import('../lib/detachedSpawn.js')
+    .then(({ sweepQuiescentWriters }) => sweepQuiescentWriters())
+    .then(({ retired, skipped }) => console.log(skipped
+      ? `⏭️ Detached writer sweep skipped (${skipped})`
+      : `🧹 Detached writer sweep retired ${retired} quiescent record(s)`))
+    .catch((err) => logBootstrapFailure('❌ Detached writer sweep failed', err));
   startHarnessActionRecovery();
 
   // Keep the opt-in agent API key file current (Settings > Security). A no-op

@@ -6,9 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import * as childProcess from './childProcess.js';
 import { spawn, spawnSync } from 'node:child_process';
-import { classifyWriterQuiescence, createDatabaseWriterRegistry } from './databaseWriterRegistry.js';
+import { classifyWriterQuiescence, createDatabaseWriterRegistry, retireQuiescentWriters } from './databaseWriterRegistry.js';
 import { createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
-import { spawnDetached } from './detachedSpawn.js';
+import { spawnDetached, sweepQuiescentWriters } from './detachedSpawn.js';
 
 const context = vi.hoisted(() => ({ data: undefined, setupBarrier: null }));
 vi.mock('./paths.js', async original => {
@@ -194,5 +194,71 @@ describe('classifyWriterQuiescence zombies', () => {
     expect(classifyWriterQuiescence(row, [member('Z')]).verdict).toBe('quiescent');
     expect(classifyWriterQuiescence(row, [member('Z+')]).verdict).toBe('quiescent');
     expect(classifyWriterQuiescence(row, [member('S')]).verdict).toBe('orphaned');
+  });
+});
+
+describe('retireQuiescentWriters boot sweep', () => {
+  const noWait = () => Promise.resolve();
+  const sweep = (snapshot, extra = {}) => retireQuiescentWriters({ snapshot, dataDir: context.data, wait: noWait, ...extra });
+  const launchedWriter = (launcherPid, jobPid) => {
+    const writer = registry.reserve(join(root, `control-${launcherPid}`));
+    writer.launcher(launcherPid);
+    writer.launched(jobPid);
+    return writer;
+  };
+  const liveMember = (launcherPid, jobPid) => ({ pid: jobPid, pgid: launcherPid, state: 'S', startedAt: Date.now(), command: 'sh' });
+
+  it('retires every quiescent record and keeps the running and pending ones', async () => {
+    const quiescent = [launchedWriter(41001, 41002), launchedWriter(41003, 41004), launchedWriter(41005, 41006)];
+    const abandoned = registry.reserve(join(root, 'control-abandoned'));
+    abandoned.abandoned();
+    const running = launchedWriter(42001, 42002);
+    const pending = registry.reserve(join(root, 'control-pending'));
+
+    const snapshot = vi.fn(async () => [liveMember(42001, 42002)]);
+    const result = await sweep(snapshot);
+
+    expect(result).toEqual({ retired: 4 });
+    expect(snapshot).toHaveBeenCalledTimes(2);
+    expect(registry.read().map(row => row.id).sort()).toEqual([running.id, pending.id].sort());
+    expect(quiescent.every(writer => !registry.read().some(row => row.id === writer.id))).toBe(true);
+  });
+
+  it('keeps a record that stops looking quiescent between the two snapshots', async () => {
+    const writer = launchedWriter(43001, 43002);
+    const snapshot = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([liveMember(43001, 43003)]);
+    expect(await sweep(snapshot)).toEqual({ retired: 0 });
+    expect(registry.read().map(row => row.id)).toEqual([writer.id]);
+  });
+
+  it('does nothing under a maintenance fence', async () => {
+    launchedWriter(44001, 44002);
+    journal.begin({ source, target });
+    const snapshot = vi.fn(async () => []);
+    expect(await sweep(snapshot)).toEqual({ retired: 0, skipped: 'maintenance fence' });
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(registry.read()).toHaveLength(1);
+  });
+
+  it('is a no-op on win32', async () => {
+    launchedWriter(45001, 45002);
+    const snapshot = vi.fn(async () => []);
+    expect(await sweep(snapshot, { platform: 'win32' })).toEqual({ retired: 0, skipped: 'win32' });
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(registry.read()).toHaveLength(1);
+  });
+
+  it.runIf(process.platform !== 'win32')('sweeps through the real process table via sweepQuiescentWriters', async () => {
+    launchedWriter(2147483000, 2147483001);
+    expect(await sweepQuiescentWriters({ dataDir: context.data, intervalMs: 0 })).toEqual({ retired: 1 });
+    expect(registry.read()).toEqual([]);
+  });
+
+  it('leaves an unreadable inventory alone instead of retiring around it', async () => {
+    launchedWriter(46001, 46002);
+    writeFileSync(join(context.data, 'database-writers', 'unexpected.txt'), 'unknown');
+    expect(await sweep(async () => [])).toEqual({ retired: 0, skipped: 'unreadable inventory' });
   });
 });
