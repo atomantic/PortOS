@@ -16,9 +16,10 @@
  */
 
 import { Router } from 'express';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError, createServiceErrorMapper } from '../lib/errorHandler.js';
-import { validateRequest, mediaCollectionBulkItemsSchema, isPaginationRequested, paginateArray, paginationQuerySchema } from '../lib/validation.js';
+import { validateRequest, mediaCollectionBulkItemsSchema, isPaginationRequested, paginateArray } from '../lib/validation.js';
 import * as svc from '../services/mediaCollections.js';
 import { resolveMediaLocations, unmarkHosted, findHostPeer } from '../services/peerHostedMedia.js';
 import { pullMissingAssetsFromPeer, collectionVideoRefToFilename } from '../services/sharing/peerSyncAssets.js';

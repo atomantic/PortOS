@@ -5,7 +5,7 @@
  */
 
 import { Router } from 'express';
-import { refreshQuerySchema } from '../lib/routeQueryValidation.js';
+import { refreshQuerySchema } from '../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, quotaBurnConfigUpdateSchema, quotaBurnRearmSchema, quotaBurnRunSchema } from '../lib/validation.js';
 import { clearQuotaBurnJobCompletion } from '../services/quotaBurnCompletions.js';

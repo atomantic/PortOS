@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { forceQuerySchema } from '../lib/routeQueryValidation.js';
+import { forceQuerySchema } from '../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { promptStageNameSchema, promptVariableKeySchema, promptStageCreateBodySchema, promptStageUpdateBodySchema, promptVariableCreateBodySchema, validateRequest, promptVariableUpdateBodySchema, promptJobSkillBodySchema, promptPreviewBodySchema } from '../lib/validation.js';
 import {

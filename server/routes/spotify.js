@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { spotifyOauthCallbackQuerySchema } from '../lib/routeQueryValidation.js';
+import { spotifyOauthCallbackQuerySchema } from '../lib/queryValidation.js';
 import { z } from 'zod';
 
 import { asyncHandler } from '../lib/errorHandler.js';

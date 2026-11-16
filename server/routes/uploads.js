@@ -7,7 +7,7 @@
  */
 
 import { Router } from 'express';
-import { confirmQuerySchema } from '../lib/routeQueryValidation.js';
+import { confirmQuerySchema } from '../lib/queryValidation.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { readdir, stat } from 'fs/promises';
 import { join, resolve } from 'path';

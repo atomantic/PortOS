@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { refreshQuerySchema } from '../lib/routeQueryValidation.js';
+import { refreshQuerySchema } from '../lib/queryValidation.js';
 import * as usage from '../services/usage.js';
 import { getClaudeCodeUsage } from '../services/claudeCodeUsage.js';
 import { refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsage.js';

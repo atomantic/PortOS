@@ -1,5 +1,5 @@
 import express from 'express';
-import { paginationQuerySchema } from '../lib/routeQueryValidation.js';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';

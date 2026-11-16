@@ -7,7 +7,7 @@
  */
 
 import { Router } from 'express';
-import { viteHostCheckQuerySchema } from '../../lib/routeQueryValidation.js';
+import { viteHostCheckQuerySchema } from '../../lib/queryValidation.js';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, atomicWrite } from '../../lib/fileUtils.js';

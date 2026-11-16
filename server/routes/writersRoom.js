@@ -4,7 +4,7 @@
  */
 
 import { Router } from 'express';
-import { writersRoomExercisesQuerySchema } from '../lib/routeQueryValidation.js';
+import { writersRoomExercisesQuerySchema } from '../lib/queryValidation.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {

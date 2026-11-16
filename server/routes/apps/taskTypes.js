@@ -20,7 +20,7 @@
  */
 
 import { Router } from 'express';
-import { workItemsQuerySchema } from '../../lib/routeQueryValidation.js';
+import { workItemsQuerySchema } from '../../lib/queryValidation.js';
 import { logCosScheduleUpdate } from '../../services/userActionScheduleLog.js';
 import * as appsService from '../../services/apps.js';
 import { PORTOS_APP_ID } from '../../services/apps.js';

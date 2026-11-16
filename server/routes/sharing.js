@@ -13,7 +13,7 @@
  */
 
 import { Router } from 'express';
-import { sharingSubscriptionsQuerySchema } from '../lib/routeQueryValidation.js';
+import { sharingSubscriptionsQuerySchema } from '../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
