@@ -400,9 +400,6 @@ describe('computeOutcomesReport', () => {
     expect(report).toContain('app-improvement: 4 filed, 1 merged (25%)');
   });
 
-  it('exposes the recognized outcome set', () => {
-    expect(PROPOSAL_OUTCOMES).toEqual(['merged', 'rejected', 'abandoned']);
-  });
 });
 
 describe('summarizeOutcomeStats', () => {

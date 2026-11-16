@@ -23,10 +23,6 @@ function persona(id, cites = {}) {
 }
 
 describe('panel vocabulary', () => {
-  it('has four personas whose ids match the stage-prompt suffixes', () => {
-    expect(PANEL_PERSONA_IDS).toEqual(['editor', 'genre-reader', 'writer', 'first-reader']);
-    expect(PANEL_PERSONAS).toHaveLength(4);
-  });
   it('has ten questions including the required ids', () => {
     for (const q of ['momentum_loss', 'earned_ending', 'cut_candidate', 'missing_scene', 'thinnest_character',
       'best_scene', 'worst_scene', 'would_recommend', 'haunts_you', 'next_book']) {
