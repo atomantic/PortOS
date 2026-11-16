@@ -125,10 +125,10 @@ function InputToggle({ id, label, input, onChange }) {
   );
 }
 
-/** The card's "Sent to the model" block: the exact prompt and the inputs going with it. */
-export default function SceneRenderInputs({ id, request, onChange, grokPreview = null, previewRevision = null }) {
+/** The card's "Sent to the model" block: the exact prompt and the inputs going with it. `shown` false (the shot editor is on its frames view) holds the prompt preview request until the clip view shows. */
+export default function SceneRenderInputs({ id, request, onChange, grokPreview = null, previewRevision = null, shown = true }) {
   const { authored, prompt, promptAdditions, promptUsed, maxChars, endFrame, songAudio, wholeLine } = request;
-  const preview = useModelInputPreview(previewVideoPrompt, grokPreview, { enabled: !!grokPreview, revision: previewRevision });
+  const preview = useModelInputPreview(previewVideoPrompt, grokPreview, { enabled: !!grokPreview && shown, revision: previewRevision });
   const over = maxChars != null && prompt.length > maxChars;
   return (
     <div className="min-w-0 space-y-1 rounded border border-port-border p-2 text-xs" data-testid="render-inputs">

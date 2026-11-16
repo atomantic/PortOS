@@ -882,7 +882,7 @@ export default function SceneCard({
           )}
           {timingPlan}
           {layer === 'footage' && (
-            <SceneRenderInputs id={fieldId('inputs')} request={previewRequest} onChange={(patch) => setRenderInputs((prev) => ({ ...prev, ...patch,
+            <SceneRenderInputs id={fieldId('inputs')} request={previewRequest} shown={view === 'clip'} onChange={(patch) => setRenderInputs((prev) => ({ ...prev, ...patch,
               ...(patch.songAudio === true || patch.endFrame === true ? { ltxReferences: false } : {}) }))}
               grokPreview={(!renderSettings?.backend || renderSettings.backend === 'grok') && project?.id && scene.referenceImageId ? {
                 ...(renderSettings?.backend ? { backend: renderSettings.backend } : {}), prompt: cardRequest.authored, mode: 'image', sourceImageFile: scene.referenceImageId,
