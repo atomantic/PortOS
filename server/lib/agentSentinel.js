@@ -6,12 +6,10 @@
  * (`.agent-done-<agentId>`, see `doneSentinelName`) because worktree-less runs
  * share one workspace and would otherwise clobber each other's signal.
  *
- * Historically it held a plain-markdown
- * task summary that gets appended to the agent's output. Programmatic-I/O task
- * types (see docs/plans/2026-07-09-programmatic-io-scheduled-tasks.md) also need
- * a STRUCTURED result back — e.g. Layered Intelligence's reasoner JSON — so the
- * sentinel may instead be a JSON object `{ summary, payload }` where `payload`
- * is the machine-readable result a `processTaskOutput` hook consumes.
+ * It holds a plain-markdown task summary appended to the agent's output, or —
+ * for programmatic-I/O task types (docs/plans/2026-07-09-programmatic-io-scheduled-tasks.md)
+ * — a JSON object `{ summary, payload }` where `payload` is the machine-readable
+ * result a `processTaskOutput` hook consumes.
  *
  * `parseSentinelPayload` is pure and back-compat: a plain-text sentinel yields
  * `{ summary: <text>, payload: null }`; a JSON object yields its `summary`
@@ -33,29 +31,19 @@ export const DONE_SENTINEL_NAME = '.agent-done';
  * `buildProgrammaticOutputCompletionSection` in agentPromptBuilder.
  *
  * A task-type hook renders its prompt BEFORE spawn, so it cannot know the
- * per-instance filename (`.agent-done-<agentId>`) and must point the agent at
- * the briefing instead. That pointer only works if both sides agree on the
- * heading, hence one exported constant rather than the string typed twice.
- * Pointing POSITIVELY at this section is also the whole contract: a prompt that
- * warns against some other filename is the only place the agent would learn
- * that filename exists.
+ * per-instance filename and must point the agent at the briefing; both sides
+ * share this constant. Point POSITIVELY at this section: a prompt that warns
+ * against some other filename is the only place the agent would learn it exists.
  */
 export const PROGRAMMATIC_OUTPUT_COMPLETION_HEADING = 'Completion (Reasoning-Only Task)';
 
 /**
  * The sentinel filename for one agent instance: `.agent-done-<agentId>`.
  *
- * Agents that run WITHOUT a worktree (`useWorktree: false` — e.g. the
- * issue-filing and reasoning task types) all share the primary checkout as
- * their workspace, so a single shared `.agent-done` is a cross-run hazard: two
- * concurrent agents overwrite each other's summary, and whichever poll fires
- * first finalizes the *other* agent's run on a sentinel it never wrote. Scoping
- * the filename to the agent id keeps each run's done-signal its own file.
- *
- * The id goes through the shared `sanitizeFilename` (not a private charset
- * regex) so this filename answers "is this token safe on disk" the same way the
- * rest of the repo does. Falls back to the bare name when no usable id is
- * available, so a caller without one still resolves to something readable.
+ * Agents without a worktree (`useWorktree: false`) share the primary checkout,
+ * so one shared `.agent-done` would let concurrent agents overwrite each other's
+ * summary and finalize the *other* run. Falls back to the bare name when no
+ * usable id is available.
  */
 export function doneSentinelName(agentId) {
   const slug = typeof agentId === 'string' ? sanitizeFilename(agentId.trim()).slice(0, 64) : '';
