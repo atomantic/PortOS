@@ -403,5 +403,8 @@ export function reviewSceneTake(project, sceneId, takeId, { status, note, acknow
     takes: takes.map((t) => (t.takeId === takeId ? updated : t)),
     ...(updated.status === 'rejected' && scene[field] === take.assetId ? { [field]: null } : {}),
   };
-  return { project: replaceScene(project, idx, next), scene: next };
+  const saved = replaceScene(project, idx, next);
+  // The saved scene carries freshly computed take states; `next` still holds each take's state from
+  // before this review, so a confirmed frame would read stale until the next load (#16274).
+  return { project: saved, scene: saved.scenes[idx] };
 }

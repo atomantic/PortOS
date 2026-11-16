@@ -468,6 +468,24 @@ export function musicVideoSceneCastIds(project, scene) {
 }
 
 /**
+ * The catalog cast a shot names, from stored fields only: its look variant plus the linked
+ * active characters its shot sheet lists. A fingerprint input (a frame's `frameCast`), never a
+ * conditioning set: unlike musicVideoSceneCastIds it must not read the read-time catalog check-in,
+ * or the same shot fingerprints differently on the stored and the presented record (#16274).
+ */
+export function musicVideoShotSheetCastIds(project, scene) {
+  const variant = sceneCastVariant(scene);
+  const listed = (Array.isArray(scene?.shotSheet?.characters) ? scene.shotSheet.characters : [])
+    .map((name) => (typeof name === 'string' ? name.trim().toLowerCase() : '')).filter(Boolean);
+  // Same identity rule as sceneCatalogSubjectIds' character match: an id or a name, case-insensitive.
+  const linked = listed.length ? activeMusicVideoSubjects(project?.concept)
+    .filter((subject) => subject?.kind === 'character' && subject.ingredientId
+      && [subject.id, subject.ingredientId, subject.name].some((value) => typeof value === 'string' && listed.includes(value.trim().toLowerCase())))
+    .map((subject) => subject.ingredientId) : [];
+  return [...new Set([...(variant ? [variant.ingredientId] : []), ...linked])];
+}
+
+/**
  * A shot's picked catalog assets (guides included) that do not resolve: their cast media failed to
  * load, or the asset has since left the catalog's approved set. Resolving would
  * silently drop them, so a frame render must stop instead of spending a take.

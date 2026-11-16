@@ -772,8 +772,13 @@ export async function swapProjectSceneFrames(id, sceneId) {
 /** Reject/restore a take and/or set its note. Returns the updated scene. */
 export async function reviewSceneTake(id, sceneId, takeId, review) {
   const { reviewSceneTake: reviewTake } = await import('./takes.js');
-  const { scene } = await mutateProjectRecord(id, (current) => reviewTake(current, sceneId, takeId, review), SCENE_ONLY);
-  return scene;
+  const { project, scene } = await mutateProjectRecord(id, (current) => reviewTake(current, sceneId, takeId, review), SCENE_ONLY);
+  // A scene-only write presents takes against the stored record. A confirmation's reply is what the
+  // board shows as cleared, so present it as GET does, with the catalog check-in (#16274).
+  if (!review.confirmFrame || project?.castAndSets?.source !== 'catalog') return scene;
+  const { withCatalogCheckin } = await import('./catalogCheckin.js');
+  const presented = presentMusicVideoDependencies(await withCatalogCheckin(project));
+  return presented.scenes.find((entry) => entry.sceneId === sceneId) || scene;
 }
 
 /**
