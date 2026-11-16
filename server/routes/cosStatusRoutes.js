@@ -5,6 +5,7 @@ import { persistentMindMaintainerSchema } from '../lib/persistentMindMaintainer.
 
 import { Router } from 'express';
 import { getConfig } from '../services/cosState.js';
+import { RETIRED_CONFIG_KEYS } from '../lib/cosRetiredConfigKeys.js';
 import { getStatus, pause, resume, start, stop, updateConfig } from '../services/cos.js';
 import { getAllDomainUsageToday } from '../services/domainUsage.js';
 import { reinitialize as reinitializeEmbeddings } from '../services/memoryEmbeddings.js';
@@ -31,11 +32,9 @@ const pauseSchema = z.object({
 });
 
 export const cosConfigSchema = z.object({
-  goalsFile: z.string().optional(),
   healthCheckIntervalMs: z.number().int().min(1000).optional(),
   maxConcurrentAgents: z.number().int().min(1).optional(),
   maxConcurrentAgentsPerProject: z.number().int().min(1).optional(),
-  maxProcessMemoryMb: z.number().int().min(128).optional(),
   maxTotalProcesses: z.number().int().min(1).optional(),
   mcpServers: z.array(z.object({
     name: z.string(),
@@ -66,6 +65,9 @@ export const cosConfigSchema = z.object({
   comprehensiveAppImprovement: z.boolean().optional(),
   immediateExecution: z.boolean().optional(),
   proactiveMode: z.boolean().optional(),
+  // Config keys nothing reads any more (see RETIRED_CONFIG_KEYS): cached clients
+  // may still echo them back, so accept any value and discard it below.
+  ...Object.fromEntries(RETIRED_CONFIG_KEYS.map((key) => [key, z.unknown().optional()])),
   autonomousJobsEnabled: z.boolean().optional(),
   autonomyLevel: z.enum(['standby', 'assistant', 'manager', 'yolo']).optional(),
   autoApproveInvestigations: z.boolean().optional(),
@@ -97,14 +99,9 @@ export const cosConfigSchema = z.object({
       ).strict().optional()
     ]))
   ).strict().optional(),
-  rehabilitationGracePeriodDays: z.number().int().min(1).optional(), // retired; discarded below
   completedAgentRetentionMs: z.number().int().min(0).optional(),
   embeddingProviderId: z.string().optional(),
   embeddingModel: z.string().optional(),
-  autoFixThresholds: z.object({
-    maxLinesChanged: z.number().int().min(1).optional(),
-    allowedCategories: z.array(z.string()).optional()
-  }).optional(),
   // Safety-kind override (#2440): which outward-facing/irreversible kinds always
   // require human approval, orthogonal to confidence. updateConfig() replaces the
   // whole object, so the client sends the full slice.
@@ -118,7 +115,7 @@ export const cosConfigSchema = z.object({
   delete supportedConfig.comprehensiveAppImprovement;
   delete supportedConfig.immediateExecution;
   delete supportedConfig.proactiveMode;
-  delete supportedConfig.rehabilitationGracePeriodDays;
+  for (const key of RETIRED_CONFIG_KEYS) delete supportedConfig[key];
   return supportedConfig;
 });
 

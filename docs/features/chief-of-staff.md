@@ -420,7 +420,6 @@ Nothing picks a tier automatically — not the description, priority, context si
 | healthCheckIntervalMs | 900000 | Health check interval (15 minutes) |
 | maxConcurrentAgents | 3 | Max parallel agents (global) |
 | maxConcurrentAgentsPerProject | 2 | Max parallel agents per project |
-| maxProcessMemoryMb | 2048 | Memory alert threshold |
 | maxTotalProcesses | 50 | Process-count alert threshold |
 | alwaysOn | false | Start on server boot (`autoStart` is a legacy compatibility alias). Off by default so a never-configured install does not begin autonomous LLM-backed work on its own |
 | improvementEnabled | true | Allow improvement work for PortOS and managed apps |

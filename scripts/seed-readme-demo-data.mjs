@@ -183,7 +183,6 @@ writeJson('cos/config.json', {
   healthCheckIntervalMs: 900000,
   maxConcurrentAgents: 3,
   maxConcurrentAgentsPerProject: 2,
-  maxProcessMemoryMb: 2048,
   maxTotalProcesses: 50,
   autoStart: false,
   alwaysOn: false,
