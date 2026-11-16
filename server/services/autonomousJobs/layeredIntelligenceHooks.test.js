@@ -76,7 +76,7 @@ vi.mock('../layeredIntelligence.js', () => ({
   applyJiraBlockingLabel: vi.fn().mockResolvedValue({ success: true }),
   computeOutcomesReport: vi.fn(() => ''),
   // Delivery block folded into cosMetrics (#3085). Both are pure and unit-tested in
-  // layeredIntelligence.test.js; spies here so the hook's WIRING can be asserted —
+  // the per-leaf layeredIntelligence/*.test.js suites; spies here so the hook's WIRING can be asserted —
   // that the POST-reconciliation outcomes are what get projected, and that the
   // re-rendered document (not gatherSources' first pass) reaches buildPrompt.
   computeDeliveryMetrics: vi.fn(() => ({
@@ -86,24 +86,24 @@ vi.mock('../layeredIntelligence.js', () => ({
   formatDeliveryThrottleGuidance: vi.fn(() => 'LI proposal throttle: unavailable — no delivery data'),
   renderCosMetricsSource: vi.fn(() => 'RE-RENDERED COS METRICS'),
   // selfEval (#2700). The summary's own semantics (signal sentinels, confidence,
-  // degraded guidance) are unit-tested in layeredIntelligence.test.js; these are
+  // degraded guidance) are unit-tested in the per-leaf layeredIntelligence/*.test.js suites; these are
   // spies so the hook's WIRING can be asserted — which inputs it feeds in.
   computeSelfEvalSummary: vi.fn(() => 'LI self-evaluation:\n- Reasoning confidence: low'),
   // Per-proposal-domain execution awareness (#2765). Semantics are unit-tested in
-  // layeredIntelligence.test.js; a spy here so the hook's WIRING (computed from the
+  // the per-leaf layeredIntelligence/*.test.js suites; a spy here so the hook's WIRING (computed from the
   // loaded outcomes and passed to buildPrompt) can be asserted.
   computeProposalExecutionAwareness: vi.fn(() => ''),
   // Cross-reference analysis (#2764 §3). Semantics are unit-tested in
-  // layeredIntelligence.test.js; a spy here so the hook's WIRING (computed from the
+  // the per-leaf layeredIntelligence/*.test.js suites; a spy here so the hook's WIRING (computed from the
   // loaded outcomes and passed to buildPrompt) can be asserted.
   computeCrossReferenceAnalysis: vi.fn(() => ''),
   // Hand-off routing gate (#2764 §4). Semantics are unit-tested in
-  // layeredIntelligence.test.js; here it's a spy so the hook's WIRING (consulted
+  // the per-leaf layeredIntelligence/*.test.js suites; here it's a spy so the hook's WIRING (consulted
   // before enqueuing, suppressing on handoff:false) can be asserted. Defaults to
   // "allow the hand-off" so the existing hand-off path is unaffected.
   computeHandoffRouting: vi.fn(() => ({ handoff: true, reason: null })),
   // Hard exclusion gate (#2824). Semantics are unit-tested in
-  // layeredIntelligence.test.js; here spies so the hook's WIRING (the notice fed to
+  // the per-leaf layeredIntelligence/*.test.js suites; here spies so the hook's WIRING (the notice fed to
   // buildPrompt, the gate consulted before filing and suppressing on excluded:true)
   // can be asserted. Default to "not excluded" / "no notice" so the existing filing
   // path is unaffected.
@@ -115,7 +115,7 @@ vi.mock('../layeredIntelligence.js', () => ({
   })),
   readLiTaskMetrics: vi.fn().mockResolvedValue({ read: true, metrics: null }),
   // The predicate's own semantics (listing vs. either sentinel) are unit-tested in
-  // layeredIntelligence.test.js; here it's a spy so the hook's WIRING can be
+  // the per-leaf layeredIntelligence/*.test.js suites; here it's a spy so the hook's WIRING can be
   // asserted — that the gathered plannedWork string is what gets classified.
   hasPlannedWorkListing: vi.fn((s) => typeof s === 'string' && !!s.trim())
 }));
