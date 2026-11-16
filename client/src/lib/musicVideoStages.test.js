@@ -116,6 +116,8 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveStages(ready).current).toBe('review');
     expect(deriveNextAction(ready)).toMatchObject({ id: 'render-final', kind: 'run', disabled: false });
     expect(deriveNextAction(ready, { renderBlockedByOther: true })).toMatchObject({ id: 'render-final', disabled: true });
+    // A technical problem disables the render even when the approvals read as current.
+    expect(deriveNextAction(ready, { readiness: { ...APPROVED, storyboard: { approved: true, technicalProblems: ['Gap.'] }, renderable: false } })).toMatchObject({ id: 'render-final', disabled: true, reason: 'Gap.' });
     expect(deriveNextAction(ready, { renderActive: true, renderProgress: 41.6 })).toMatchObject({ id: 'render-progress', disabled: true, label: 'Rendering… 42%' });
 
     // A composed render needs its text cues before Make is done.
@@ -724,6 +726,15 @@ describe('stageChecklist', () => {
       '3 shots missing timing, action, staging, camera or transition.',
       '2 shots need lyric anchors reviewed.',
     ]);
+  });
+
+  it('counts shots missing their timing and shots missing only fields on one line', () => {
+    const readiness = { ...NOT_APPROVED, storyboard: withProblems({ approved: false }, [
+      problem('shot-timing', 'Complete timing, action, staging, camera and transition for Shot 1.', 's1'),
+      problem('shot-incomplete', 'Complete timing, action, staging, camera and transition for Shot 2.', 's2'),
+    ]) };
+    const shots = stageChecklist('board', castProject({ scenes: [scene()] }), readiness).find((i) => i.id === 'board-shots');
+    expect(shots.details).toEqual(['2 shots missing timing, action, staging, camera or transition.']);
   });
 
   it('groups and links by problem code, whatever wording the server uses', () => {

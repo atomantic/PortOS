@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { expectAuthorizedWorkflows, expectRemoteRefusal } from './hostControlTestHarness.js';
+import { callRoute, expectAuthorizedWorkflows, expectRemoteRefusal, hostControlApp } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
@@ -152,6 +152,7 @@ import { compileTreatment } from '../services/musicVideo/treatmentService.js';
 import { draftPublishKitCopy } from '../services/musicVideo/publishKit.js';
 import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../services/musicVideo/codeGeneration.js';
 import { generateMixedMediaDocument, reviseMixedMediaEvents, regenerateMixedMediaSection } from '../services/musicVideo/documentGeneration.js';
+import { DIRECTOR_STARTED } from '../services/musicVideo/productionReview.js';
 import { startAutoReview, resumeAutoReview } from '../services/musicVideo/autoReviewService.js';
 import { startProduction, resumeProduction } from '../services/musicVideo/productionService.js';
 import { startCastAndSets, regenerateCastAndSets, editCastAndSetsDirection, resumeCastAndSets, applyCastAndSetsFeedback } from '../services/musicVideo/castAndSetsService.js';
@@ -180,6 +181,24 @@ describe('media authoring behind the default-deny gate (#9512, #9869, #16114)', 
     ] });
     // The provider/model selection reaches the service unchanged.
     expect(writeLyrics.mock.lastCall.find(value => value && typeof value === 'object')).toEqual(expect.objectContaining(picker));
+  });
+
+  it('marks code and document authoring started from these routes as director-started, and refuses a body that claims it', async () => {
+    const forged = { ...picker };
+    const workflows = [
+      ['post', `/api/music-video/${id}/code/generate`, forged, generateMusicVideoCode, 200],
+      ['post', `/api/music-video/${id}/code/sections/a/regenerate`, forged, regenerateMusicVideoCodeSection, 200],
+      ['post', `/api/music-video/${id}/composition/document/generate`, forged, generateMixedMediaDocument, 201],
+      ['post', `/api/music-video/${id}/composition/document/events/revise`, { ...forged, expectedDraft: 'music-video/example/composition/example' }, reviseMixedMediaEvents, 201],
+      ['post', `/api/music-video/${id}/composition/document/sections/a/regenerate`, { ...forged, expectedDraft: 'music-video/example/composition/example' }, regenerateMixedMediaSection, 201],
+    ];
+    await expectAuthorizedWorkflows({ auth, mounts, workflows });
+    auth.enabled = false;
+    const claim = await callRoute(await hostControlApp('127.0.0.1', mounts), ['post', `/api/music-video/${id}/code/generate`, { ...picker, startedBy: 'director' }]);
+    expect(claim.status).toBe(400);
+    for (const [,,, effect] of workflows) {
+      expect(effect.mock.lastCall.find(value => value && typeof value === 'object' && 'startedBy' in value).startedBy).toBe(DIRECTOR_STARTED);
+    }
   });
 
   it('refuses a remote caller before authoring and keeps the pinned or default reviewer choice for an agent', async () => {

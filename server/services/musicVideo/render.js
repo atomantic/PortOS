@@ -1404,7 +1404,7 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
 async function assertCurrentRenderApproval(projectId, preparedProject, options) {
   const current = await getProject(projectId);
   // The final render needs the approved storyboard; the animated proof is optional.
-  assertProductionApproval(current, 'storyboard');
+  assertProductionApproval(current, 'storyboard', { startedBy: options.startedBy });
   if (productionReviewBasis(current).proof !== productionReviewBasis(preparedProject).proof) {
     throw new ServerError('The reviewed film changed during render preparation.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
   }
@@ -1419,7 +1419,7 @@ export async function renderMusicVideo(projectId, options = {}) {
 
 async function renderAdmittedMusicVideo(projectId, options, permit) {
   const project = await requireProject(projectId);
-  assertProductionApproval(project, 'storyboard');
+  assertProductionApproval(project, 'storyboard', { startedBy: options?.startedBy });
   if (typeof options?.codeDirectory === 'string' && options.codeDirectory) {
     throw new ServerError('Import and select the composition document before rendering.', { status: 409, code: 'MUSIC_VIDEO_UNREVIEWED_DIRECTORY' });
   }

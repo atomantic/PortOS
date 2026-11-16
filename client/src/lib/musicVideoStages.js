@@ -690,12 +690,14 @@ function produceNextAction({ project, run }) {
 }
 
 // Final render: watch a current one, else render (again, once scene edits made the last one stale).
-function finalRenderAction({ project, renderBlockedByOther }) {
+function finalRenderAction({ project, readiness, renderBlockedByOther }) {
   const stale = isFinalRenderStale(project);
   if (project.renderHistoryId && !stale) return { id: 'goto-final', kind: 'goto', stage: 'review', anchor: 'mv-final-video', label: 'Watch final video', shortLabel: 'Watch' };
   return {
     id: 'render-final', kind: 'run', label: stale ? 'Re-render final video' : 'Render final video', shortLabel: stale ? 'Re-render' : 'Render',
-    disabled: renderBlockedByOther, reason: renderBlockedByOther ? 'Wait for the other project render to finish' : undefined,
+    ...(renderBlockedByOther ? { disabled: true, reason: 'Wait for the other project render to finish' }
+      : readiness?.renderable === false ? { disabled: true, reason: readiness.storyboard?.technicalProblems?.[0] || 'Finish the storyboard first' }
+        : { disabled: false }),
   };
 }
 
@@ -798,6 +800,8 @@ export const publishRowAnchor = (target) => `mv-post-${target}`;
 // The server names every unfinished shot in its own sentence; on a long song
 // that is dozens of near-identical lines. The director judges shots by
 // watching the preview, so each per-shot problem kind collapses into one count.
+// A shot missing its timing ('shot-timing') and one missing only text fields count on one line.
+const perShotKind = (code) => (code === 'shot-timing' ? 'shot-incomplete' : code);
 const PER_SHOT_PROBLEMS = {
   'shot-incomplete': (n) => `${n} shot${n === 1 ? '' : 's'} missing timing, action, staging, camera or transition.`,
   'lyric-anchors': (n) => `${n} shot${n === 1 ? '' : 's'} need${n === 1 ? 's' : ''} lyric anchors reviewed.`,
@@ -807,13 +811,14 @@ export const problemItemsOf = (section) => section?.problemItems || [];
 /** Problem items with each per-shot kind folded into one count item, in first-seen order. */
 export function summarizeStoryboardProblems(problems = []) {
   const counts = new Map();
-  for (const { code } of problems) if (PER_SHOT_PROBLEMS[code]) counts.set(code, (counts.get(code) || 0) + 1);
+  for (const { code } of problems) if (PER_SHOT_PROBLEMS[perShotKind(code)]) counts.set(perShotKind(code), (counts.get(perShotKind(code)) || 0) + 1);
   return problems.flatMap((problem) => {
-    const line = PER_SHOT_PROBLEMS[problem.code];
+    const kind = perShotKind(problem.code);
+    const line = PER_SHOT_PROBLEMS[kind];
     if (!line) return [problem];
-    if (!counts.has(problem.code)) return [];
-    const folded = { code: problem.code, message: line(counts.get(problem.code)) };
-    counts.delete(problem.code); // only the first of its kind carries the count line
+    if (!counts.has(kind)) return [];
+    const folded = { code: kind, message: line(counts.get(kind)) };
+    counts.delete(kind); // only the first of its kind carries the count line
     return [folded];
   });
 }
@@ -945,7 +950,7 @@ function checklistShotLabel(scenes, sceneId) {
  * sentence or count.
  */
 function namedShots(item, readiness, scenes, problems) {
-  const detailsWithout = (code) => problems.filter((p) => p.code !== code).map((p) => p.message);
+  const detailsWithout = (kind) => problems.filter((p) => perShotKind(p.code) !== kind).map((p) => p.message);
   const label = (sceneId) => checklistShotLabel(scenes, sceneId);
   const byShot = (entries, text) => [...entries.reduce((map, entry) => map.set(entry.sceneId,
     [...(map.get(entry.sceneId) || []), text(entry)]), new Map())].map(([sceneId, lines]) => ({ sceneId, label: label(sceneId), text: lines.join(' · ') }));
@@ -1231,7 +1236,7 @@ function produceChecklist({ project, readiness, scenes, mode }) {
 function reviewChecklist({ project, readiness }) {
   return [{
     id: 'final', label: 'Final video rendered', done: !!project.renderHistoryId && !isFinalRenderStale(project),
-    detail: isFinalRenderStale(project) ? `${STALE_RENDER_MESSAGE}.${finishedOutside(project) && !readiness?.readyForProduction ? ` ${FINISHED_OUTSIDE_RERENDER_NOTE}` : ''}` : null,
+    detail: isFinalRenderStale(project) ? `${STALE_RENDER_MESSAGE}.${finishedOutside(project) && !(readiness?.renderable ?? readiness?.readyForProduction) ? ` ${FINISHED_OUTSIDE_RERENDER_NOTE}` : ''}` : null,
     action: project.renderHistoryId && !isFinalRenderStale(project) ? null : { label: project.renderHistoryId ? 'Re-render' : 'Render', anchor: 'mv-final-video' },
   }];
 }

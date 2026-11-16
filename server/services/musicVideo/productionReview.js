@@ -590,10 +590,22 @@ const unresolvedFeedback = (review, stage) => (review.feedback || []).filter(f =
  * a per-shot problem belongs to.
  */
 const problem = (code, message, sceneId) => ({ code, message, ...(sceneId ? { sceneId } : {}) });
+const technicalFields = items => {
+  const technical = problemFields(items.filter(i => TECHNICAL_PROBLEM_CODES.has(i.code)));
+  return { technicalProblems: technical.problems, technicalProblemItems: technical.problemItems };
+};
 const problemFields = items => {
   const unique = [...new Map(items.map(i => [JSON.stringify([i.code, i.message, i.sceneId ?? null]), i])).values()];
   return { problems: [...new Set(items.map(i => i.message))], problemItems: unique };
 };
+/**
+ * Storyboard problems that make a render impossible or wrong whoever starts it: no analysed song,
+ * lyrics or word timings missing, shots that leave the song uncovered, untimed or unbound. Everything
+ * else on the storyboard (change requests, the art and lyric-timing approvals, anchor and field
+ * review) is approval state, which the director sees as advice and unattended runs still wait on.
+ */
+const TECHNICAL_PROBLEM_CODES = new Set(['song-unanalyzed', 'lyrics-missing', 'instrumental-has-lyrics', 'word-timings', 'manifest-stale',
+  'document-shot-ids', 'shot-unbound', 'stale-rows', 'shot-duplicate-scene', 'no-shots', 'coverage', 'shot-timing', 'anchor-word-untimed']);
 const feedbackProblems = (review, stage) => unresolvedFeedback(review, stage).map(f => problem('feedback', `Resolve ${stage} feedback for ${f.target}: ${f.text}`));
 
 const ART_GUIDE_FIELDS = [['cast', 'Cast guide'], ['environments', 'Environment guide'],
@@ -701,11 +713,12 @@ function shotProblems(project, draft, scenes, { documentShots, cues, duration })
   const songEnd = duration + pastSongSlack(project);
   for (const scene of scenes) {
     const shot = documentShots ? scene : draft.storyboard?.find(s => s.sceneId === scene.sceneId) || boardShotFromScene(project, scene);
-    const missing = !(Number.isFinite(scene.startSec) && scene.endSec > scene.startSec) ? ['timing']
-      : scene.endSec > songEnd ? ['an end inside the song'] : [];
+    const untimed = !(Number.isFinite(scene.startSec) && scene.endSec > scene.startSec);
+    const missing = untimed ? ['timing'] : scene.endSec > songEnd ? ['an end inside the song'] : [];
+    const timingMissing = missing.length > 0;
     missing.push(...(documentShots ? DOCUMENT_SHOT_FIELDS : BOARD_SHOT_FIELDS).filter(key => !text(shot?.[key])));
     if (missing.length) {
-      problems.push(problem('shot-incomplete', `Complete timing, action, staging, camera and transition for ${scene.label || 'each shot'}.`, scene.sceneId));
+      problems.push(problem(timingMissing ? 'shot-timing' : 'shot-incomplete', `Complete timing, action, staging, camera and transition for ${scene.label || 'each shot'}.`, scene.sceneId));
       incompleteShots.push({ sceneId: scene.sceneId, missing });
     }
     // A shot anchors every line sung over it, counted from the line's first sung word (lib/musicVideoLyricAnchors.js).
@@ -784,7 +797,7 @@ export function productionReadiness(project) {
   const proof = proofReadiness(project, review, basis, storyboardApproved);
   return { basis, inputs, alignment: { basis: alignmentBasis, status: alignmentStatus(draft, alignmentVerified) }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, ...problemFields(artProblems), stale: artApproved ? null : staleApproval(project, 'art', basis.art, inputs) },
     // The overlay text check is advice on the storyboard, like camera variety; it never blocks approval.
-    storyboard: { approved: storyboardApproved, ...problemFields(boardProblems), camera, selectedTakeMarkedBad,
+    storyboard: { approved: storyboardApproved, ...problemFields(boardProblems), ...technicalFields(boardProblems), camera, selectedTakeMarkedBad,
       // Board shots as reviewed, derived rows included, so the editor and approval card show what the gate checked.
       shots: documentShots ? null : boardStoryboard(project), lyricAnchors: shots.lyricAnchors, staleRows, coverage, incompleteShots: shots.incompleteShots, text: overlayTextReport(project, overlayTextBasis), stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs),
       shotLocks: locks, unlocked: byShot ? unlocked : [], clipLocks: clips,
@@ -794,7 +807,9 @@ export function productionReadiness(project) {
     castAndSets: castAndSetsApproval(project),
     selectedTakeMarkedBad,
     // The animated proof is optional review evidence: the approved storyboard is what the final render needs.
-    readyForProduction: storyboardApproved };
+    readyForProduction: storyboardApproved,
+    // The storyboard has no technical problem: what a render the director starts needs (approvals are advice there).
+    renderable: boardProblems.every(i => !TECHNICAL_PROBLEM_CODES.has(i.code)) };
 }
 
 /**
@@ -862,8 +877,21 @@ export function revertApprovedInput(project, { stage, field }) {
   throw unavailable('That input cannot be reverted.');
 }
 
-export function assertProductionApproval(project, stage = 'proof') {
+/**
+ * Marks a render or generation a director started from a user-facing route. A symbol, so no request
+ * body can carry it: only server code that knows the entry point passes it. Production runs, autopilot
+ * and every other unattended caller omit it and keep the full approval gate.
+ */
+export const DIRECTOR_STARTED = Symbol('music-video.director-started');
+
+export function assertProductionApproval(project, stage = 'proof', { startedBy } = {}) {
   const readiness = productionReadiness(project);
+  if (startedBy === DIRECTOR_STARTED && stage === 'storyboard') {
+    // The owner's own render is not gated on approvals: only the technical problems refuse it.
+    const [first] = readiness.storyboard.technicalProblems;
+    if (first) throw new ServerError(first, { status: 409, code: 'MUSIC_VIDEO_STORYBOARD_INCOMPLETE', context: { stage, readiness } });
+    return;
+  }
   if (!readiness[stage].approved) throw new ServerError(
     readiness[stage].problems[0] || `A reviewer must approve the current ${stage === 'art' ? 'art direction' : stage} in Production review.`,
     { status: 409, code: 'MUSIC_VIDEO_APPROVAL_REQUIRED', context: { stage, readiness } });

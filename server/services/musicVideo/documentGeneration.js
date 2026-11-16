@@ -369,9 +369,9 @@ function buildGeneratedManifest(project, context, prior, { ids, sharedStyle, upd
   };
 }
 
-async function runAuthoring(projectId, { providerId, model, effort, sectionId = null, eventRevision = false, expectedDraft = null, feedback = '', beforeSubmit = null, verifyCurrent = () => {}, promptBudgetChars = null } = {}) {
+async function runAuthoring(projectId, { providerId, model, effort, startedBy, sectionId = null, eventRevision = false, expectedDraft = null, feedback = '', beforeSubmit = null, verifyCurrent = () => {}, promptBudgetChars = null } = {}) {
   const project = await requireProject(projectId);
-  assertProductionApproval(project, 'storyboard');
+  assertProductionApproval(project, 'storyboard', { startedBy });
   const context = await authoringContext(project);
   const prior = await loadRevisionBase(project, context, { sectionId, eventRevision, expectedDraft });
   const ids = requestedSectionIds(context, prior, { sectionId, eventRevision });
@@ -393,7 +393,7 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
   const withFeedback = (prompt) => (feedback ? `${prompt}\n\nReview findings for this section (retain the approved medium and selected assets; never invent a footage fallback):\n${feedback}` : prompt);
   const guardedBeforeSubmit = async (submission) => {
     const current = await getProject(projectId);
-    assertProductionApproval(current, 'storyboard');
+    assertProductionApproval(current, 'storyboard', { startedBy });
     verifyCurrent(current);
     if (basisFor(current) !== context.basis) throw fail('The approved plan changed before authoring', 'COMPOSITION_DRAFT_STALE', 409);
     await beforeSubmit?.(submission);
@@ -490,7 +490,7 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
   const result = await stageGeneratedDocument(projectId, generatedFiles(manifest), {
     renderer: manifest.renderer,
     verifyCurrent: (current) => {
-      assertProductionApproval(current, 'storyboard');
+      assertProductionApproval(current, 'storyboard', { startedBy });
       verifyCurrent(current);
       if (basisFor(current) !== context.basis || (current.composition?.document?.directory || null) !== active
         || (current.composition?.documentDraft?.directory || null) !== draft) {
