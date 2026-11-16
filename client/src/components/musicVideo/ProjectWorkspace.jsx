@@ -195,6 +195,7 @@ export default function ProjectWorkspace({
   const story = useStoryStageWiring({ selected, patchProject, replaceProject });
   const plan = usePlanStageWiring({
     selected, replaceProject, patchProject, analyzing, onAnalyze, separation, lyricAlign, castSets, creativeSetupPending, styleReferencesPending,
+    applyEdit, reloadOpenProject,
   });
   const { kickoff, autonomous, planning, planningDraft, autopilotBlockedReason } = plan;
   const { sceneMedia, takes, revisions, production } = produce;
