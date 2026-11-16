@@ -275,15 +275,9 @@ export async function upsertParticipant({
   });
 
   const participant = await getParticipant(conversationId, sourceUserId);
-  // Gated on the cache being empty ONLY (#96). It used to also require the
-  // row's own handle, on the reasoning that a handle-less participant had
-  // nothing to resolve against — true until the `kind='beeper-user'` claim
-  // existed, and the reason a hand-linked Messenger participant came back
-  // unlinked after a purge + resweep: the resweep re-minted the row with a
-  // NULL cache and the auto-resolve that would have re-filled it never ran.
-  // The extra cost for a genuinely unclaimed handle-less participant is one
-  // indexed `tribe_identities` lookup; the phone matcher (the expensive leg)
-  // still only runs for a phone-shaped handle.
+  // Gated on the cache being empty only: with the `kind='beeper-user'` claim a handle-less participant is resolvable, so a
+  // hand-linked one re-fills after a purge + resweep. Cost is one indexed `tribe_identities` lookup; the phone matcher
+  // (the expensive leg) still only runs for a phone-shaped handle.
   // A soft-deleted owner is unlinked in the read model even while its raw FK
   // remains. Apply the same rule to the write, preserving only live links.
   if (!participant.tribePersonId) {
@@ -539,13 +533,8 @@ export async function createPersonAndLinkParticipant({
     name: personName,
     ring,
     relationship,
-    // Just "Imported from Beeper" (#99) — the network used to be baked into
-    // this string because there was nowhere else to show it; now the Tribe
-    // person form's "Linked on Beeper" block reads it from the identity read
-    // model instead (`listPersonIdentitiesWithConversations` below), so a
-    // second network linked later no longer leaves a stale first-network
-    // mention sitting in Notes. Existing notes are left untouched (no
-    // migration) — only new imports get the shorter text.
+    // Just "Imported from Beeper": the network is shown by the person form's "Linked on Beeper" block
+    // (`listPersonIdentitiesWithConversations`), so a later second network leaves no stale mention in Notes.
     notes: 'Imported from Beeper',
     channel: 'Beeper',
   });
@@ -596,11 +585,8 @@ export async function logSenderTouchpoints(candidates = [], { personIndex = null
     const personId = personCache.get(cacheKey);
     if (!personId) continue;
     matched++;
-    // Normalize to an ISO date before slicing — String(c.sentAt) on a live
-    // Date OBJECT (as opposed to an already-ISO string) yields its
-    // toString() form ("Wed Sep 03 2026 ..."), whose first 10 characters are
-    // NOT a date, silently breaking the `beeper:<day>` dedupe key. Falls back
-    // to the old slice for a value Date can't parse, rather than throwing.
+    // Normalize to an ISO date first: String() of a Date object gives its toString() form, whose first 10 characters
+    // are not a date and would break the `beeper:<day>` dedupe key. Falls back to the raw slice for an unparseable value.
     const parsedSentAt = new Date(c.sentAt);
     const day = Number.isNaN(parsedSentAt.getTime())
       ? String(c.sentAt).slice(0, 10)

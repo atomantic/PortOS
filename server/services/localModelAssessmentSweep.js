@@ -1,66 +1,40 @@
 /**
  * Measure a batch of local models in one pass — the overnight sweep.
  *
- * Measuring one model takes minutes; measuring a machine's worth of them takes
- * hours. That is a job you start at the end of the day and read in the morning,
- * which rules out the shape the single-model path uses (one blocking POST held
- * open by the browser tab). This module runs the queue SERVER-SIDE: the request
- * that starts it returns immediately, the loop keeps going with nobody watching,
- * and the page reads its progress from a status endpoint plus the existing
- * `localLlm:progress` socket event.
+ * The queue runs SERVER-SIDE: the starting request returns immediately, the loop keeps
+ * going with nobody watching, and the page reads progress from a status endpoint plus
+ * the `localLlm:progress` socket event.
  *
  * ## Two dimensions, one queue
  *
- * The queue walks a list of (model, tuning) pairs, and which list it walks is
- * the only difference between the two sweeps this module serves:
+ *   - **Model sweep**: every model a scope covers, each under its own tuning.
+ *   - **Tuning sweep**: one model across a grid of tunings
+ *     (`lib/localModelTuning.js#tuningGridFor`), which `compareTunings` ranks.
  *
- *   - **Model sweep** — every model a scope covers, each under the tuning it
- *     already carries. Answers "which of my models is worth using?".
- *   - **Tuning sweep** — one model across a grid of tunings
- *     (`lib/localModelTuning.js#tuningGridFor`). Answers "which flags suit this
- *     model here?", which is what `compareTunings` ranks.
- *
- * They deliberately share the queue rather than getting one each: cancellation,
- * progress, the accelerator claim, and the "one measurement at a time" rule are
- * identical, and a second queue could run concurrently with this one — which
- * would make every number either produced describe the contention.
+ * They share one queue (cancellation, progress, accelerator claim, one-at-a-time rule);
+ * a second queue could run concurrently and make every number describe the contention.
  *
  * ## AI Provider Usage Policy (root AGENTS.md) — read before editing
  *
  * A sweep calls a provider once per queued measurement, so it is STRICTLY
- * user-triggered, the same as the single-model run:
- *
+ * user-triggered:
  *   - `startSweep()` is reachable only from `POST /api/local-llm/assessments/sweep`,
- *     behind a consent gate that names the exact measurement count (models, or
- *     tuning variants) and the total generation count.
- *   - `getSweepStatus()` reads module state only. Zero LLM calls, safe to reconcile.
+ *     behind a consent gate naming the measurement and generation counts.
+ *   - `getSweepStatus()` reads module state only; zero LLM calls.
  *
- * The prohibition the single-model service states — "no scheduler, no boot hook,
- * no background sweep" — is about work the user did not ask for. This IS the ask:
- * a button they pressed, having been told what it will run. What must never
- * appear is a cron entry, a boot hook, or an auto-start that fires this without a
- * click. Do not add one.
+ * Never add a cron entry, boot hook, or auto-start that fires this without a click.
  *
- * `lib/sseUtils.js#createSseRunner` owns a similar lifecycle (runId, abort,
- * cancel, active-guard) but is SSE-transport-bound and keeps no cumulative record
- * of what a run has produced so far — which is the one thing a page reloaded at
- * 3am needs. Hence a small queue of its own rather than a transport it would have
- * to work around.
+ * `lib/sseUtils.js#createSseRunner` is SSE-transport-bound and keeps no cumulative
+ * record of a run, which a page reloaded at 3am needs; hence a small queue of its own.
  *
  * ## Restart behavior
  *
- * The queue lives in module memory, so a server restart mid-sweep ends it. That
- * is deliberate rather than unfinished: every COMPLETED measurement is already
- * durable (`runAssessment` persists as it goes), so a restart costs the model in
- * flight and nothing else, and re-running the sweep afterwards picks up exactly
- * what is still unmeasured. Persisting the queue would buy a resumable pointer
- * into a job that is cheap to restart and must never auto-resume on boot.
- *
- * One consequence is worth naming: a restart during a MODEL or TUNING sweep
- * also loses the captured launch configuration, so llama-server stays on
- * whichever variant/model was in flight. That is visible and fixable on the
- * LLMs page, and the alternative — persisting it and relaunching a daemon at
- * boot to put it back — is exactly the boot-time work this module refuses to do.
+ * The queue lives in module memory, so a restart mid-sweep ends it, deliberately: every
+ * COMPLETED measurement is already durable (`runAssessment`), so a restart costs only the
+ * model in flight and a re-run picks up what is unmeasured. The queue must never
+ * auto-resume on boot. A restart also loses the captured launch configuration, so
+ * llama-server stays on the in-flight variant (visible and fixable on the LLMs page);
+ * relaunching a daemon at boot to restore it is boot-time work this module refuses.
  */
 
 import { selectSweepTargets, SWEEP_SCOPES } from '../lib/localModelAssessment.js';
@@ -82,25 +56,17 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
 // model at a time anyway.
 let sweep = null;
 
-// Held across `startSweep`'s `await getAssessmentReport()`. The `sweep` object
-// itself cannot be published until the targets are known, so without this a
-// second request arriving during that await passes the "already running" check,
-// and both requests go on to assign `sweep` and launch a detached loop — two
-// overnight queues measuring the same models against each other, with only the
-// second one's status visible. The slot has to be reserved SYNCHRONOUSLY, before
-// the first await, or the check and the claim are not atomic.
+// Held across `startSweep`'s `await getAssessmentReport()`: `sweep` can't be published
+// until targets are known, so the slot is reserved SYNCHRONOUSLY before the first await
+// or a second request would pass the "already running" check and launch a second queue.
 let startingSweep = false;
 
-// A sweep is sequential BY DESIGN. Two models measured at once contend for the
-// same memory and the same GPU, and every number either one produces would
-// describe that contention rather than the model — which is the one thing this
-// whole feature exists to measure accurately.
+// Sequential BY DESIGN: models measured at once contend for memory and GPU, and every
+// number would describe that contention.
 
-// How long one model waits for the machine-wide accelerator claim before giving
-// up on its turn. An interactive Measure click refuses immediately; a queue
-// running unattended should ride out a short image render rather than throwing
-// away a model's slot over it — but not wait all night behind a LoRA training
-// run, which would leave the sweep looking hung with nothing to show.
+// How long one model waits for the machine-wide accelerator claim. An interactive
+// Measure click refuses immediately; an unattended queue should ride out a short image
+// render but not wait all night behind LoRA training and look hung.
 const CLAIM_WAIT_MS = 10 * 60 * 1000;
 
 const nowIso = () => new Date().toISOString();

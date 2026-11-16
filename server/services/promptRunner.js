@@ -4,29 +4,13 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * Shared LLM runner wrapper.
  *
- * Four near-identical implementations of "create run → branch on
- * provider.type → executeCliRun/executeApiRun → accumulate streamed text
- * → reject on error" had drifted in failure-handling:
+ * Unifies "create run → branch on provider.type → executeCliRun/executeApiRun → accumulate streamed
+ * text → reject on error". Rejects on `success === false` OR truthy `error` for BOTH CLI and API, so a
+ * silent API "soft failure" (no `error`, `success: false`) is not an empty success.
  *
- *   - universeBuilderExpand#callLLM        — CLI: `error || success === false`, API: `error` only
- *   - stageRunner#awaitRunnerCall       — CLI: `error || success === false`, API: `error` only
- *   - mediaPromptRefiner#runRefinePrompt — both: `error || success === false`
- *   - messageEvaluator#runPrompt        — CLI: `error || success === false`, API: `error` only
- *
- * This unified runner picks the strictest discriminator: reject on
- * `success === false` OR truthy `error` for BOTH CLI and API. The
- * per-site drift was the bug — silent API "soft failures" (e.g. an
- * empty completion that doesn't set `error` but does set
- * `success: false`) used to flow through as a successful empty string.
- *
- * Returns `{ text, runId, model }`. `text` is the full streamed body;
- * `runId` is the persisted run id so callers can log it and surface
- * data/runs/<runId>/output.txt for offline debugging; `model` is the
- * effective model that actually executed after the per-provider
- * override gate (null when neither the caller's model nor
- * provider.defaultModel applies). Callers should log/return THIS
- * `model`, not the value they passed in, so logs and run records
- * stay honest about what the runner actually executed.
+ * Returns `{ text, runId, model }`: `runId` points at data/runs/<runId>/output.txt; `model` is the
+ * effective model that actually executed after the per-provider override gate (null when neither the
+ * caller's model nor provider.defaultModel applies). Log THIS `model`, not the value passed in.
  */
 
 import { LOCAL_LLM_MAX_CONCURRENCY, acquireLocalSlot, releaseLocalSlot } from '../lib/localLlmConcurrency.js';
@@ -35,11 +19,8 @@ import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFla
 import { getActiveProvider, getProviderById, getAllProviders } from './providers.js';
 import { isCompositeProviderId } from '../lib/providerRef.js';
 import { peekFallbackChain } from '../lib/providerFallbackChainCache.js';
-// `./tuiPromptRunner.js` (which drags node-pty in through `./shell.js`) and
-// `./providerExecutionReadiness.js` are imported lazily on the branches that
-// actually execute a run — see their call sites below. promptRunner.js is reached
-// by ~160 suites that only build or classify a run, and a static edge instantiated
-// both subtrees in every one of them.
+// `./tuiPromptRunner.js` (drags node-pty in via `./shell.js`) and `./providerExecutionReadiness.js`
+// are imported lazily on the branches that execute a run: ~160 suites only build or classify runs.
 import { ServerError } from '../lib/errorHandler.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { analyzeError, ERROR_CATEGORIES, isRunCanceledError, isRuntimeBudgetError, isContentRefusalError } from '../lib/aiToolkit/errorDetection.js';
@@ -57,18 +38,12 @@ import { DEFAULT_OUTPUT_RESERVE_TOKENS, estimateTokens, localOutputReserveTokens
 import { allowedModesFor, callerModeRejection } from '../lib/callerModePolicy.js';
 import { attachGatewaySiblingKey } from '../lib/providerGateways.js';
 
-// The fallback-lifecycle notifiers live in services/autoFixer.js, which
-// pulls in services/cos.js. initAutoFixer() registers them through this leaf;
-// neither a static nor a lazy import of autoFixer.js belongs here, because
-// `vitest related` follows both into the CoS cluster (#12285).
+// Fallback-lifecycle notifiers live in services/autoFixer.js (which pulls in cos.js); initAutoFixer()
+// registers them through this leaf. Never import autoFixer.js here: `vitest related` follows it (#12285).
 import { getProviderRecoveryHandlers } from './providerRecoveryHooks.js';
 
-// Deferred so the static closure stays small: `observedContextWindows.js`
-// reaches `lib/localProviderRuntime.js` and the endpoint probe, which
-// promptRunner.js itself never needs, and ~160 suites only build or classify a
-// run. A static edge instantiated that subtree in every one of them and pushed
-// the server suite past its import budget (see "Import scoping" in
-// server/AGENTS.md).
+// Deferred: `observedContextWindows.js` reaches `lib/localProviderRuntime.js` and the endpoint probe,
+// which ~160 suites never need (see "Import scoping" in server/AGENTS.md).
 let observedContextWindowsLoadPromise;
 function loadObservedContextWindows() {
   if (!observedContextWindowsLoadPromise) {
@@ -81,35 +56,23 @@ function loadObservedContextWindows() {
 }
 
 /**
- * `withObservedContextWindows(provider)` behind that deferred load — the ONE
- * operation both readers of the module want (the dispatch gate below, and
- * `stageRunner.resolveStageContext` for the budgeter). Exported as the operation
- * rather than the loader so neither caller hard-codes which named export to
- * destructure, and both share one dynamic import and one settled promise.
- *
- * Rejects on a load or probe failure; error policy is the caller's, because the
- * two differ deliberately — the gate lets it surface, the budgeter degrades to
- * the provider as stored rather than turning planning into a new failure mode.
+ * `withObservedContextWindows(provider)` behind the deferred load, shared by the dispatch gate and
+ * `stageRunner.resolveStageContext`. Rejects on load/probe failure; error policy is the caller's:
+ * the gate lets it surface, the budgeter degrades to the provider as stored.
  */
 export async function withObservedContextWindowsLazy(provider) {
   const { withObservedContextWindows } = await loadObservedContextWindows();
   return withObservedContextWindows(provider);
 }
 
-// The category an oversized prompt already carries everywhere else in PortOS —
-// `agentErrorAnalysis.js` extracts it from a failed agent's output and
-// `codexTurn.js` maps Codex's `contextWindowExceeded` tag to it. It is a plain
-// string rather than an `ERROR_CATEGORIES` member on purpose: the toolkit's
-// enum is for provider-health categories, and this one is REQUEST-specific
-// (`providerCooldown.isSchemaTypeCategory` covers it, so it never benches).
+// The category an oversized prompt already carries elsewhere (`agentErrorAnalysis.js`, `codexTurn.js`).
+// A plain string, not an `ERROR_CATEGORIES` member: that enum is provider-health, this is
+// REQUEST-specific (`providerCooldown.isSchemaTypeCategory` covers it, so it never benches).
 const CONTEXT_LENGTH_CATEGORY = 'context-length';
 
 export const DEFAULT_TIMEOUT_MS = 300000;
-// Grace window past the runner's own API deadline before promptRunner's
-// backstop timer fires. Lets executeApiRun's internal timers win (aborting +
-// finalizing as ERROR_CATEGORIES.TIMEOUT) so the normal path is classified
-// correctly; the backstop only intervenes if the runner never reports
-// completion at all.
+// Grace past the runner's own API deadline: lets executeApiRun's timers win and classify TIMEOUT;
+// the backstop fires only if the runner never reports completion.
 const API_TIMEOUT_BACKSTOP_GRACE_MS = 2000;
 const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : (chunk?.text || ''));
 
@@ -127,25 +90,14 @@ export function buildRequestCapabilities({ prompt, screenshots, outputReserveTok
 }
 
 // ── Local-backend concurrency gate ─────────────────────────────────────────
-// A local LLM server (Ollama / LM Studio on localhost) runs inference on one
-// GPU. Firing N stage calls at it concurrently (e.g. the 3 parallel
-// canon-extraction kinds) gains nothing — the backend serializes on the GPU
-// regardless — and, if the backend is configured for parallelism
-// (OLLAMA_NUM_PARALLEL > 1), it loads N model contexts at once and can spike
-// VRAM into an OOM/thrash. Cloud HTTP and CLI/TUI providers have no such
-// constraint. Local TUI providers still share this gate because their readiness
-// hook can start the same daemon before the PTY is spawned. So we cap concurrent
-// IN-FLIGHT calls per LOCAL endpoint and queue
-// the rest (FIFO). Default 1 (serialize); a beefy box can lift it with
-// LOCAL_LLM_MAX_CONCURRENCY. Keyed by endpoint so two distinct local servers
-// still run in parallel with each other.
+// A local LLM server (Ollama / LM Studio) runs inference on one GPU; concurrent calls gain nothing
+// and, with OLLAMA_NUM_PARALLEL > 1, load N contexts and can OOM. So cap IN-FLIGHT calls per LOCAL
+// endpoint and queue the rest FIFO (default 1; LOCAL_LLM_MAX_CONCURRENCY lifts it). Local TUI
+// providers share the gate because their readiness hook can start the same daemon. Keyed by endpoint
+// so distinct servers run in parallel.
 //
-// The gate lives HERE (the actual execution layer) rather than at the
-// stageRunner call site so it covers EVERY local execution: the initially
-// selected provider, a proactive createRun swap, AND a runtime fallback that
-// lands on a local backend after a remote/CLI primary fails. Gating only the
-// outer stageRunner call missed the fallback path — a failure storm could still
-// fire N concurrent calls at one local endpoint.
+// The gate lives HERE so it covers every local execution: the selected provider, a proactive
+// createRun swap, AND a runtime fallback landing on a local backend.
 export const isLocalEndpoint = isLoopbackEndpoint;
 
 export { LOCAL_LLM_MAX_CONCURRENCY };
@@ -166,15 +118,9 @@ export async function withLocalConcurrencyGate(provider, fn) {
 }
 
 /**
- * Returns true when the runner+provider pair will actually honor a
- * per-call `model` override. For API providers the model is a
- * first-class arg to `executeApiRun`. For CLI/TUI providers,
- * `runner.js#buildCliArgs` / `tuiHandshake.js#buildTuiInvocation`
- * translate the resolved `defaultModel` into a `--model`/`-m` flag — BUT
- * only when the user hasn't already baked a model flag into `provider.args`.
- * If a flag is baked in, the runner-injected one is suppressed and the
- * args-baked model wins; so claim "doesn't honor" for that case to keep
- * the run-record honest.
+ * True when the runner+provider pair will honor a per-call `model` override. API providers take
+ * the model as an arg; CLI/TUI providers get `--model`/`-m` from the resolved `defaultModel` UNLESS
+ * a model flag is baked into `provider.args` (then it wins and we claim "doesn't honor").
  */
 export const providerHonorsModelOverride = (provider) => (
   provider?.type === PROVIDER_TYPES.API
@@ -182,18 +128,10 @@ export const providerHonorsModelOverride = (provider) => (
 );
 
 /**
- * Resolve the model id that will ACTUALLY execute against the provider,
- * for accurate logging + run-record persistence.
- *
- * Decision table:
- *   - Provider honors per-call override (API or CLI w/o baked args flag)
- *     → callerModel || provider.defaultModel || provider.models[0]
- *   - CLI with a baked --model/-m in provider.args (runner.js will
- *     suppress its own injection and let the args-pinned model win)
- *     → extractBakedModel(args) || provider.defaultModel || models[0]
- *
- * Returns null when no fallback resolves (so logs read "(default)" instead
- * of an inaccurate value).
+ * Resolve the model id that will ACTUALLY execute, for logging + run-record persistence.
+ *   - Provider honors the override: callerModel || provider.defaultModel || provider.models[0]
+ *   - CLI with a baked --model/-m in args: extractBakedModel(args) || defaultModel || models[0]
+ * Returns null when nothing resolves, so logs read "(default)".
  *
  * @param {object} provider
  * @param {string} [callerModel] — the per-call model the caller asked for
@@ -201,10 +139,8 @@ export const providerHonorsModelOverride = (provider) => (
  */
 export function resolveEffectiveModel(provider, callerModel) {
   if (providerHonorsModelOverride(provider)) {
-    // A stale config can leave an embedding-only id in callerModel/defaultModel
-    // (the UI only hides+clears embedding models when the provider is edited);
-    // skip those so an unchanged older provider can't route a generation/fallback
-    // run to e.g. nomic-embed-text. Falls through to the first generation model.
+    // Stale config can leave an embedding-only id in callerModel/defaultModel; skip those so it
+    // can't route a generation run to e.g. nomic-embed-text.
     return firstNonEmbedding(callerModel, provider?.defaultModel)
       || firstGenerationModel(provider) || null;
   }
@@ -226,13 +162,9 @@ function firstNonEmbedding(...candidates) {
 }
 
 /**
- * First model in `provider.models` usable for generation (skips embedding-only
- * models). Without this, a local provider whose `models[0]` is an embedding
- * model (e.g. Ollama with `nomic-embed-text:latest` listed first and a null
- * defaultModel) would resolve the embedding model for a chat/fallback run and
- * fail — the exact nomic-embed-text fallback bug. Falls back to `models[0]`
- * only when every listed model looks like an embedding model (better to try
- * something than resolve null).
+ * First model in `provider.models` usable for generation (skips embedding-only ids; a local
+ * provider listing `nomic-embed-text` first would otherwise fail chat runs). Falls back to
+ * `models[0]` only when every listed model looks like an embedding model.
  */
 function firstGenerationModel(provider) {
   const models = provider?.models || [];
@@ -240,20 +172,11 @@ function firstGenerationModel(provider) {
 }
 
 /**
- * Tier-1 (config/env) deterministic fix for a `model-not-found` /
- * `model-not-supported` failure (issue #2342): the request named a model id the
- * (reachable) provider doesn't serve, so pick a DIFFERENT valid generation
- * model that the provider DOES list and retry the SAME provider with it —
- * cheaper than benching the provider and switching to a fallback (Tier 3).
- *
- * Pure — no I/O. Returns null (⇒ Tier 1 declines, cascade falls through) when:
- *   - the provider carries no enumerable `models` list (nothing to correct to), OR
- *   - the only listed models are the failed one and/or embedding-only ids.
- *
- * The failed id is excluded so we never re-issue the same broken request, and
- * embedding-only ids are skipped (mirrors `firstGenerationModel`) so a
- * generation call can't get corrected onto e.g. `nomic-embed-text`.
- *
+ * Tier-1 (config/env) deterministic fix for `model-not-found` / `model-not-supported` (#2342): pick a
+ * DIFFERENT valid generation model the (reachable) provider lists and retry the SAME provider,
+ * cheaper than benching it for Tier 3. Pure. Returns null (Tier 1 declines) when the provider has no
+ * enumerable `models`, or only the failed id and/or embedding-only ids. The failed id is excluded so
+ * the same broken request is never re-issued.
  * @param {object} provider
  * @param {string} [failedModel] — the model id that just failed model-not-found
  * @returns {string|null}
@@ -264,35 +187,25 @@ export function pickConfigCorrectedModel(provider, failedModel) {
   return models.find((m) => m && m !== failedModel && isGenerationModel(m)) || null;
 }
 
-// ── Tier-2 (schema/type) request/response correction (issue #2350) ─────────
-// At the runner layer a schema/type failure never arrives as a provider ERROR —
-// errorDetection.js only categorizes transport/auth/model failures, so a
-// malformed *response* surfaces as a run that SUCCEEDED at the transport layer
-// but whose text doesn't satisfy the caller's declared schema. Tier-2 therefore
-// validates a successful response against a caller-supplied `responseSchema`
-// (or `repair` normalizer), attempts a bounded deterministic JSON coercion in
-// place, and — only when that can't recover the shape — re-requests the SAME
-// provider with a schema-strengthened prompt before the cascade escalates to a
-// Tier-3 fallback / Tier-4 investigation task.
+// ── Tier-2 (schema/type) request/response correction (#2350) ──
+// A schema/type failure never arrives as a provider ERROR (errorDetection.js only categorizes
+// transport/auth/model failures): the run SUCCEEDS but its text misses the caller's `responseSchema`
+// (or `repair` normalizer). Tier-2 tries bounded in-place JSON coercion, then re-requests the SAME
+// provider with a schema-strengthened prompt, before escalating to Tier-3/4.
 
 // Re-exported from providerCooldown.js, which owns it alongside the cooldown
 // table that consults it (the tier classification and the "don't bench a healthy
 // provider over one off-shape response" rule are the same judgement).
 export { isSchemaTypeCategory };
 
-// Deterministic instruction appended to the prompt on a schema/type re-request
-// when the caller declared a schema but supplied no custom `repair`. Names the
-// two failure modes coercion couldn't fix (fenced/prose-wrapped output) so the
-// model returns a bare, parseable value on the retry.
+// Appended on a schema/type re-request when the caller gave no `repair`; names the failure modes
+// coercion couldn't fix (fenced/prose-wrapped output).
 const SCHEMA_RETRY_INSTRUCTION = '\n\n---\nIMPORTANT: Your previous response could not be parsed into the required structured format. Respond with ONLY the raw JSON value that satisfies the required schema — no markdown code fences, and no explanatory text before or after the JSON.';
 
 /**
- * Normalize a caller `responseSchema` into a predicate over a PARSED JSON value
- * (issue #2350). Accepts a Zod-style schema (duck-typed via `.safeParse`/`.parse`
- * — promptRunner takes no zod dependency), a bare predicate `(value)=>boolean`,
- * or null/undefined (⇒ null, feature off). An unrecognized truthy value degrades
- * to "any JSON parses" so a loose schema hint still enables fence/prose stripping
- * without throwing. Pure.
+ * Normalize a caller `responseSchema` into a predicate over a PARSED JSON value (#2350). Accepts a
+ * Zod-style schema (duck-typed; no zod dependency), a bare predicate, or null/undefined (⇒ null,
+ * feature off). An unrecognized truthy value degrades to "any JSON parses". Pure.
  * @returns {((value:unknown)=>boolean)|null}
  */
 export function normalizeResponseSchema(schema) {
@@ -318,11 +231,8 @@ function responseSatisfiesSchema(text, predicate) {
   return parsed.ok && (!predicate || predicate(parsed.value));
 }
 
-// Pick which top-level JSON shape to try first based on the first structural
-// char, so a top-level array isn't mis-picked as its first inner object (and
-// vice-versa). Deterministic; always returns both types so the other is still
-// tried. `[`/`{` never appear inside a ```json fence marker, so scanning the raw
-// text is sufficient without stripping fences first.
+// Pick which top-level JSON shape to try first from the first structural char so an array isn't
+// mis-picked as its first inner object. Both types are still tried.
 function detectBlockOrder(text) {
   const firstBrace = text.indexOf('{');
   const firstBracket = text.indexOf('[');
@@ -331,11 +241,9 @@ function detectBlockOrder(text) {
 }
 
 /**
- * Deterministic Tier-2 JSON coercion keyed on the caller's schema (issue #2350).
- * Reuses jsonExtract.extractJson to strip markdown fences / prose and pull the
- * first balanced JSON block whose shape satisfies the schema predicate — the
- * "JSON coercion, field-shape fix keyed on that schema" the issue calls for.
- * Returns the coerced value plus its canonical `JSON.stringify` text. Pure.
+ * Deterministic Tier-2 JSON coercion keyed on the caller's schema (#2350): jsonExtract.extractJson
+ * strips fences/prose and pulls the first balanced block satisfying the schema predicate. Returns the
+ * coerced value plus its canonical `JSON.stringify` text. Pure.
  * @param {string} text — raw response text
  * @param {*} schema — a responseSchema (see normalizeResponseSchema)
  * @returns {{ ok:true, value:unknown, text:string } | { ok:false }}
@@ -344,10 +252,7 @@ export function coerceResponseToSchema(text, schema) {
   if (typeof text !== 'string' || !text.trim()) return { ok: false };
   const predicate = normalizeResponseSchema(schema);
   for (const blockType of detectBlockOrder(text)) {
-    // extractJson's `parsedHolder` fallback returns the first PARSEABLE block
-    // even when it doesn't match the shape predicate (so a top-level `null` can
-    // flow through) — so re-check the predicate here and only accept a block
-    // that actually satisfies the schema.
+    // extractJson's fallback returns the first PARSEABLE block even if off-shape, so re-check the predicate.
     const { value } = extractJson(text, { shapePredicate: predicate || undefined, blockType });
     if (value !== undefined && (!predicate || predicate(value))) {
       return { ok: true, value, text: JSON.stringify(value) };
@@ -371,18 +276,15 @@ async function callRepair(repair, payload, field) {
 }
 
 /**
- * Validate a run RESULT against the caller's declared `responseSchema` (issue
- * #2350) and, when it doesn't match, attempt a bounded deterministic correction
- * IN PLACE: first the caller's `repair({ phase:'response' })` normalizer, then
- * the schema-keyed JSON coercion. Never throws. Returns:
+ * Validate a run RESULT against `responseSchema` (#2350); on mismatch try, IN PLACE, the caller's
+ * `repair({ phase:'response' })` then the schema-keyed JSON coercion. Never throws. Returns:
  *   { ok:true, result }                — no schema declared, or already valid
  *   { ok:true, result, coerced:true }  — recovered in place (⇒ mark Tier-2)
  *   { ok:false }                        — response is off-shape and uncoercible
  */
 async function correctResponseToSchema(result, { responseSchema, repair, prompt }) {
   const predicate = normalizeResponseSchema(responseSchema);
-  // Response validation requires a declared schema — a `repair`-only caller has
-  // no way for the runner to know a response is malformed, so leave it untouched.
+  // Needs a declared schema: a `repair`-only caller gives no way to know a response is malformed.
   if (!predicate) return { ok: true, result };
   const text = typeof result?.text === 'string' ? result.text : '';
   if (responseSatisfiesSchema(text, predicate)) return { ok: true, result };
@@ -397,12 +299,9 @@ async function correctResponseToSchema(result, { responseSchema, repair, prompt 
 }
 
 /**
- * Build the Tier-2 corrected REQUEST for a schema/type failure. Prefers the
- * caller's `repair({ phase:'request' })` normalizer; otherwise, when a
- * `responseSchema` is declared, appends a deterministic schema-conformance
- * instruction to the original prompt. Returns null (⇒ Tier-2 declines, cascade
- * falls through to Tier-3) when no correction is available or it wouldn't change
- * the prompt.
+ * Build the Tier-2 corrected REQUEST: the caller's `repair({ phase:'request' })`, else (with a
+ * `responseSchema`) the prompt plus a schema-conformance instruction. Returns null (Tier-2 declines)
+ * when no correction exists or it wouldn't change the prompt.
  */
 async function buildSchemaCorrectedPrompt({ prompt, responseSchema, repair, category, error }) {
   const repaired = await callRepair(repair, { phase: 'request', prompt, category, error }, 'prompt');
@@ -415,14 +314,10 @@ async function buildSchemaCorrectedPrompt({ prompt, responseSchema, repair, cate
 }
 
 /**
- * Synthesize a schema/type failure Error so an uncoercible response re-enters
- * the SAME fallback cascade as a transport failure (Tier-2 re-request → Tier-3
- * fallback → Tier-4 escalate) with the identical noteFallback* reconciliation.
- * Carries `effectiveProvider`/`effectiveModel` (the annotations the cascade
- * keys on) from the run that actually produced the bad response, a 'parse-error'
- * category (⇒ isSchemaTypeCategory, and skipped by markProviderUnavailableFromError
- * so a healthy provider isn't benched for one off-shape response), and a
- * `schemaFailure` marker for diagnostics.
+ * Synthesize a schema/type failure Error so an uncoercible response re-enters the same fallback
+ * cascade as a transport failure. Carries `effectiveProvider`/`effectiveModel`, a 'parse-error'
+ * category (schema-type, so a healthy provider isn't benched for one off-shape response), and a
+ * `schemaFailure` marker.
  */
 function buildSchemaFailureError(result) {
   const err = new Error('AI response did not match the declared schema and could not be coerced');
@@ -434,19 +329,10 @@ function buildSchemaFailureError(result) {
 }
 
 /**
- * Resolve `{provider, selectedModel}` for an LLM caller. Prefers
- * `providerId` — any `getProviderById` failure (stale id, lookup
- * error, network blip) falls through to `getActiveProvider`. Returns
- * `{provider: null, selectedModel: null}` when neither resolves a
- * provider (e.g. no providers configured), so callers throw their own
+ * Resolve `{provider, selectedModel}` for an LLM caller. Prefers `providerId`; any
+ * `getProviderById` failure falls through to `getActiveProvider` (whose errors still propagate).
+ * Returns `{provider: null, selectedModel: null}` when neither resolves, so callers throw their own
  * typed error.
- *
- * Note: errors from `getActiveProvider` (e.g. toolkit not initialized)
- * still propagate — only `getProviderById` failures are swallowed.
- * This mirrors the inline pattern this helper replaced. If a caller
- * wants total "always-null on failure" semantics, wrap the call in
- * their own try/catch.
- *
  * @param {object} args
  * @param {string} [rawArgs.providerId]
  * @param {string} [args.model]
@@ -460,12 +346,9 @@ export async function resolveProviderAndModel({ providerId, model } = {}) {
 }
 
 /**
- * Throw a typed "no AI provider available" error when `provider` is falsy.
- *
- * Sites that surface to HTTP route handlers should pass `code` (+ optional
- * `status`, defaults to 503) so the centralized error middleware emits a
- * structured response. Sites that are internal-only (service-to-service)
- * can omit both and get a plain `Error` — matching the legacy shape.
+ * Throw a typed "no AI provider available" error when `provider` is falsy. HTTP-facing sites pass
+ * `code` (+ optional `status`, default 503) for the structured error response; internal sites omit
+ * both and get a plain `Error`.
  *
  * @param {object|null} provider
  * @param {object} opts
@@ -480,20 +363,11 @@ export function assertProvider(provider, { message, code, status = 503 } = {}) {
 }
 
 /**
- * Guard a vision run against a transport that did not receive images.
- *
- * API providers base64-inline images, while the shared CLI lifecycle stages
- * file attachments for Codex and Claude Code. Codex TUI forwards native image
- * arguments. Other TUI and CLI providers must
- * not be accepted because they would answer from the text prompt alone.
- * `runPromptThroughProvider` can swap the provider two ways — a proactive swap
- * inside createRun (`result.provider`) or a retry fallback after failure
- * (`result.fallbackProvider`) — so the provider that ACTUALLY ran is the first
- * of those, else the requested one. Throw
- * VISION_FALLBACK_DROPPED_IMAGES when it isn't an API provider so callers don't
- * report image-grounded output that was really text-only.
- *
- * Returns the provider that ran so callers can read its id/type.
+ * Guard a vision run against a transport that did not receive images. API providers base64-inline
+ * images; the shared CLI lifecycle stages attachments for Codex and Claude Code; Codex TUI forwards
+ * native image args. Other TUI/CLI providers would answer from text alone, so throw
+ * VISION_FALLBACK_DROPPED_IMAGES for them. The provider that ACTUALLY ran is `result.provider`
+ * (proactive swap in createRun), else `result.fallbackProvider` (retry), else the requested one.
  *
  * @param {object} result — the runPromptThroughProvider result
  * @param {object} requestedProvider — the provider the caller asked to run
@@ -503,10 +377,8 @@ export function assertVisionRunUsedImages(result, requestedProvider) {
   const ran = result?.provider || result?.fallbackProvider || requestedProvider;
   const usedImages = ran?.type === 'api' || isVisionCapableCliProvider(ran) || isVisionCapableCodexTuiProvider(ran);
   if (ran?.type && !usedImages) {
-    // Name both providers so the cause is actionable. The usual trigger is a
-    // proactive/retry swap because the requested API provider is in a temporary
-    // cooldown (e.g. a prior model-not-found benched it for several minutes) —
-    // NOT that the user picked a non-vision provider. Point them at the real fix.
+    // Name both providers: the usual trigger is a proactive/retry swap because the requested API
+    // provider is in cooldown, NOT a user-picked non-vision provider.
     const requestedName = requestedProvider?.name || requestedProvider?.id || 'the selected provider';
     const ranName = ran?.name || ran?.id || 'a non-vision provider';
     const swapped = ran?.id && requestedProvider?.id && ran.id !== requestedProvider.id;
@@ -538,14 +410,10 @@ function createRecoveryInvestigationScope({ failed, failedModel, firstError }) {
     }
   };
 
-  // Track every provider+model key whose deferred investigation task we
-  // suppress across the cascade, so (a) a recovery at ANY tier cancels ALL of
-  // them, (b) a give-up releases them without leaking autoFixer's in-flight
-  // set, and (c) the `finally` safety-net releases any left unresolved by an
-  // unexpected throw (e.g. coalesceFallbackMarkAndPick) — which would
-  // otherwise suppress every future identical failure for the process
-  // lifetime. Keyed by a NUL-joined string (provider names / model ids both
-  // contain '-'); the value carries the original key object + resolution state.
+  // Every provider+model key whose deferred investigation we suppress across the cascade, so a
+  // recovery at ANY tier cancels ALL of them, a give-up releases them, and the `finally` releases
+  // any left over after an unexpected throw (which would suppress identical failures process-wide).
+  // Keyed by a NUL-joined string; the value carries the key object + resolution state.
   const suppressed = new Map();
   const keyStr = (k) => `${k.provider}\x00${k.model}`;
   const suppress = async (key) => {
@@ -608,15 +476,9 @@ function createRecoveryInvestigationScope({ failed, failedModel, firstError }) {
 }
 
 /**
- * Run a prompt through a provider and resolve with the streamed text +
- * run id. Rejects (via the strictest discriminator) on any runner-
- * reported failure.
- *
- * Per-call `model` overrides are silently dropped for providers that
- * don't honor them (see `providerHonorsModelOverride`). This keeps the
- * persisted run record honest about which model actually ran — passing
- * the user's selection downstream when the runner can't apply it would
- * make `/runs` and SSE status events lie about model usage.
+ * Run a prompt through a provider; resolves with the streamed text + run id, rejects (strictest
+ * discriminator) on any runner-reported failure. Per-call `model` overrides are dropped for providers
+ * that don't honor them (`providerHonorsModelOverride`) so run records stay honest.
  *
  * @param {object} args
  * @param {object} rawArgs.provider — { id, type: 'cli'|'api'|'tui', timeout?, ... }
@@ -625,20 +487,13 @@ function createRecoveryInvestigationScope({ failed, failedModel, firstError }) {
  *   `'media-prompt-refine'`, `'messages-triage'`, `'staged-llm'`, etc.)
  * @param {string} [args.model]  — model id hint; ignored when the
  *   provider doesn't honor it (claude-code, antigravity-cli today).
- * @param {string} [args.effort] — reasoning-effort override for effort-capable
- *   CLI/TUI providers (claude `--effort`, agy `--effort`, codex
- *   `-c model_reasoning_effort=`). Clamped to the provider's (and, for agy, the
- *   selected model's) ladder and dropped entirely for providers with no effort
- *   control, so it is safe to pass unconditionally — including through the
- *   fallback cascade, which may land on a provider that has none.
+ * @param {string} [args.effort] — reasoning-effort override for effort-capable CLI/TUI providers.
+ *   Clamped to the provider's ladder and dropped for providers without one, so it is safe to pass
+ *   unconditionally, including through the fallback cascade.
  * @param {string} [args.runId]  — caller-supplied run id (skip createRun
  *   round-trip when the caller has already created the run)
- * @param {(chunk: string) => void} [args.onData] — incremental stream
- *   callback; receives each output chunk as it arrives. Useful for live
- *   progress UI (loops, live transcripts). Does NOT change the resolved
- *   `text` value — callers receive the full buffered text either way.
- *   For TUI providers the stripped chunks are emitted; the final `text`
- *   is the cleaned response with the prompt-echo elided.
+ * @param {(chunk: string) => void} [args.onData] — incremental stream callback; does NOT change the
+ *   resolved `text`. For TUI providers the stripped chunks are emitted.
  * @param {(runId:string,meta:object)=>void} [args.onRunCreated] — called immediately after
  *   each concrete primary/correction/fallback run id is known. Observational;
  *   callback errors are logged and ignored.
@@ -664,74 +519,38 @@ function createRecoveryInvestigationScope({ failed, failedModel, firstError }) {
  * @param {number} [args.outputReserveTokens=8000] — expected completion budget
  *   included in fallback context admission. Callers with a tighter known
  *   output budget may lower it.
- * @param {string} [args.cwd] — working directory for the spawned process.
- *   Defaults to `process.cwd()`. Callers that run AI against external
- *   directories (loops with `loop.cwd`, pm2Standardizer with a repo path)
- *   must pass this — without it, the CLI/TUI spawn lands in PortOS's own
- *   cwd and the analysis runs against the wrong files. No-op for API
- *   providers (no spawn).
- * @param {string|string[]|object} [args.callerPolicy] — this caller's
- *   EXECUTION-MODE policy (a name from `lib/callerModePolicy.js`, a mode array,
- *   or an inline policy object). Set it when the call site genuinely cannot run
- *   every mode — a context with no PTY to drive a TUI, or one that must stay on
- *   a harness-free direct API provider. The policy gates the EXPLICIT provider
- *   (422 `PROVIDER_MODE_NOT_PERMITTED`, before any run record is written) and
- *   rides along on `requestCapabilities` so createRun's proactive swap and the
- *   Tier-3 retry fallback skip ineligible candidates too. Omit (the default) and
- *   nothing is constrained.
- * @param {boolean} [args.allowFallback=true] — set false when provider/model
- *   identity is part of the feature contract. Disables proactive provider
- *   substitution and every model/provider retry tier after the first attempt.
- *   It does NOT disable provider-health bookkeeping: a failure that benches the
- *   provider still benches it, so the Providers page and every unpinned caller
- *   learn that this provider is sick. The one exception is a usage limit, whose
- *   observed-block ledger a pinned caller records itself.
- * @param {boolean} [args.toolFree=false] — the prompt carries text this caller
- *   does not control (AI app detection, #9008). A headless CLI run then gets no
- *   approval-bypass flag and, where its vendor has one, its tool-disable switch
- *   (`toolFreeOneShotArgs` in lib/providerVendors.js). Rides every fallback tier.
- *   It does not reach a TUI run, whose interactive argv has no such posture —
- *   a caller that must stay tool-free gates on `isToolFreeOneShotProvider`
- *   and disables fallback.
- * @param {*} [args.responseSchema] — the caller's declared response schema
- *   (issue #2350). A Zod-style schema (`.safeParse`/`.parse`) or a bare
- *   predicate `(parsedValue) => boolean`. When set, the runner enables Tier-2
- *   (schema/type): it validates a SUCCESSFUL run's response against the schema
- *   and, when it doesn't match, attempts a deterministic JSON coercion in place
- *   (strip fences/prose, pull the first schema-matching block); if that can't
- *   recover the shape it re-requests the SAME provider once with a
- *   schema-strengthened prompt before falling through to a Tier-3 fallback and
- *   Tier-4 investigation task. Left unset (the default), the runner behaves
- *   exactly as before — no validation, no coercion.
+ * @param {string} [args.cwd] — working directory for the spawned process (default `process.cwd()`).
+ *   Required for callers that run AI against external directories; no-op for API providers.
+ * @param {string|string[]|object} [args.callerPolicy] — this caller's EXECUTION-MODE policy (a name
+ *   from `lib/callerModePolicy.js`, a mode array, or an inline policy). Gates the EXPLICIT provider
+ *   (422 `PROVIDER_MODE_NOT_PERMITTED`, before any run record) and rides on `requestCapabilities` so
+ *   createRun's swap and the Tier-3 fallback skip ineligible candidates. Omit for no constraint.
+ * @param {boolean} [args.allowFallback=true] — false when provider/model identity is part of the
+ *   feature contract: disables proactive substitution and every retry tier. Provider-health
+ *   bookkeeping still runs (a failure that benches the provider still benches it), except usage
+ *   limits, whose observed-block ledger a pinned caller records itself.
+ * @param {boolean} [args.toolFree=false] — the prompt carries text this caller does not control
+ *   (#9008). A headless CLI run gets no approval-bypass flag and, where the vendor has one, its
+ *   tool-disable switch (`toolFreeOneShotArgs`). Rides every fallback tier; does not reach TUI runs,
+ *   so a caller that must stay tool-free gates on `isToolFreeOneShotProvider` and disables fallback.
+ * @param {*} [args.responseSchema] — the caller's declared response schema (#2350): a Zod-style
+ *   schema or bare predicate. Enables Tier-2: validate a SUCCESSFUL response, coerce JSON in place,
+ *   else re-request the SAME provider once with a schema-strengthened prompt before Tier 3/4. Unset =
+ *   no validation or coercion.
  * @param {(ctx: { phase: 'response'|'request', text?: string, prompt?: string,
  *   category?: string, error?: Error }) => ({ text?: string, prompt?: string }|null|undefined)}
- *   [args.repair] — optional caller-owned deterministic normalizer (issue #2350).
- *   `phase:'response'` fires when a successful response fails `responseSchema`;
- *   return `{ text }` to substitute a corrected response (tried before the
- *   built-in JSON coercion). `phase:'request'` fires on a schema/type failure;
- *   return `{ prompt }` to re-request the SAME provider with a corrected prompt
- *   (tried before the built-in schema-strengthened prompt). Must be deterministic
- *   (no LLM calls); may be async. Errors are logged and treated as a decline.
+ *   [args.repair] — optional deterministic caller normalizer (#2350), may be async, no LLM calls;
+ *   errors are logged as a decline. `phase:'response'` (response failed `responseSchema`): return
+ *   `{ text }` to substitute, tried before built-in coercion. `phase:'request'` (schema/type
+ *   failure): return `{ prompt }` to re-request the SAME provider, tried before the built-in prompt.
  * @returns {Promise<{ text: string, runId: string, model: string|null, provider: object, usedFallback?: boolean, fixTier?: number, fixStrategy?: string, coercedResponse?: boolean, fallbackFrom?: { id: string, name: string }, fallbackProvider?: object }>}
- *   — `model` is the resolved model that actually executed (null when
- *   neither override nor provider.defaultModel applies). `provider` is the
- *   provider object that actually ran, reflecting createRun's proactive swap
- *   (read this to detect a proactive fallback; `usedFallback`/`fallbackProvider`
- *   only cover the retry-fallback path). `runId` always
- *   points to the run record that *actually* ran — on fallback recovery
- *   this is the fresh fallback runId, NOT the failed primary's. When
- *   `usedFallback` is true, `fallbackFrom` identifies the failed primary
- *   and `fallbackProvider` is the full provider object that actually ran
- *   (so callers persisting run attribution can write the correct
- *   providerId without re-picking the fallback themselves). `fixTier` /
- *   `fixStrategy` (issue #2342/#2350) record WHICH fallback tier recovered the
- *   failure — `1`/`'config/env'` when a same-provider model correction
- *   recovered it, `2`/`'schema/type'` when the response was coerced in place or
- *   re-requested to match the caller's declared schema (`coercedResponse:true`
- *   flags the pure in-place coercion, which needs no retry — `usedFallback`
- *   stays unset there since the same provider succeeded), `3`/
- *   `'constrained-agent-retry'` for a fallback-provider retry — so callers can
- *   log/attribute the deterministic recovery path.
+ *   — `model` is the model that actually executed. `provider` is the provider that actually ran,
+ *   reflecting createRun's proactive swap (`usedFallback`/`fallbackProvider` cover only the retry
+ *   path). `runId` is the run that actually ran (the fallback's on recovery). With `usedFallback`,
+ *   `fallbackFrom` names the failed primary. `fixTier`/`fixStrategy` (#2342/#2350) record which tier
+ *   recovered: `1`/'config/env' same-provider model correction, `2`/'schema/type' in-place coercion
+ *   (`coercedResponse:true`, `usedFallback` unset) or schema re-request, `3`/'constrained-agent-retry'
+ *   fallback-provider retry.
  */
 export async function runPromptThroughProvider(rawArgs) {
   return maintenance.run('provider', rawArgs?.source ?? 'prompt', () => runPromptThroughProviderAdmitted(rawArgs), { continuation: true });
@@ -810,28 +629,14 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
   }
 
   if (rawArgs.allowFallback === false) {
-    // A pinned caller takes no retry tier — but provider HEALTH is not routing.
-    // Skipping the mark here left a provider that had failed every call for
-    // hours still reading green on the Providers page, and every *other*
-    // (unpinned) caller still routing to it, because the only code path that
-    // benches lived inside the fallback cascade this caller opts out of.
+    // A pinned caller takes no retry tier, but provider HEALTH is not routing: without the mark a
+    // provider failing every call stays green on the Providers page, unpinned callers keep routing
+    // to it, and the pinned caller burns the full timeout per wake. With it, createRun refuses the
+    // next pinned call in milliseconds until the cooldown expires.
     //
-    // It also kept the pinned caller itself in a burn loop: the persistent mind
-    // is pinned, so ten consecutive runs each spent the provider's full
-    // configured timeout before failing. With the mark in place the next pinned
-    // call is refused by createRun in milliseconds ("unavailable … and fallback
-    // is disabled") until the cooldown expires, so a sick local backend costs
-    // one timeout per cooldown window instead of one per wake.
-    //
-    // `resolveProviderBench` still declines request-specific categories (a
-    // content refusal, a bad model id, an off-schema response), so a pinned
-    // caller's prompt-specific failure never benches a healthy provider.
-    //
-    // Only the `unavailable` markers. A usage limit is left exactly as it is
-    // today: `markProviderUsageLimit` writes the Usage page's observed-block
-    // ledger, and the pinned caller that cares already calls it for this same
-    // failure (persistentMindSupervisor autopauses and probes for recovery), so
-    // benching it here would record the one block twice.
+    // `resolveProviderBench` still declines request-specific categories, so a prompt-specific failure
+    // never benches a healthy provider. Only `unavailable` markers: a usage limit is left alone because
+    // `markProviderUsageLimit` writes the observed-block ledger and the pinned caller records it itself.
     if (firstError?.effectiveProvider) {
       await markProviderUnavailableFromError(
         firstError.effectiveProvider,
@@ -858,26 +663,17 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
       throw stripFallbackContext(firstError);
     }
 
-    // The runner already wrote a failed metadata.json and the onRunFailed
-    // hook in server/index.js queued a deferred investigation task keyed on
-    // (providerName, model). We now walk the deterministic fallback cascade
-    // (issue #2342), attempting the CHEAPEST tier that can plausibly recover
-    // the failure and escalating to the queued investigation task (Tier 4)
-    // only when every deterministic tier declines or fails:
-    //   Tier 1 config/env  — retry the SAME provider with a valid model
-    //                         (deterministic; no persisted config change)
-    //   Tier 2 schema/type  — re-request the SAME provider with a schema-
-    //                         corrected prompt (issue #2350), when the caller
-    //                         declared a `responseSchema`/`repair`; else falls
-    //                         through (the in-place response coercion already
-    //                         ran on the success path above)
+    // The runner already wrote a failed metadata.json and the onRunFailed hook queued a deferred
+    // investigation task keyed on (providerName, model). Walk the deterministic cascade (#2342),
+    // cheapest tier first, escalating to that task (Tier 4) only when every tier declines or fails:
+    //   Tier 1 config/env  — retry the SAME provider with a valid model (no persisted config change)
+    //   Tier 2 schema/type  — re-request the SAME provider with a schema-corrected prompt (#2350)
+    //                         when a `responseSchema`/`repair` was declared (in-place coercion already
+    //                         ran on the success path)
     //   Tier 3 constrained-agent-retry — bounded retry via a fallback provider
     //   Tier 4 escalate     — the deferred investigation task the hook queued
     //
-    // `failed` is the provider that ACTUALLY ran — usually equals
-    // rawArgs.provider, but createRun may have proactively swapped to a
-    // different fallback if the requested primary was already marked
-    // unavailable. Always dedupe against what actually ran so the
+    // `failed` is the provider that ACTUALLY ran (createRun may have proactively swapped), so the
     // task-suppression notifiers cancel the right queued task.
     const failed = firstError.effectiveProvider;
     const failedModel = firstError.effectiveModel || resolveEffectiveModel(failed, args.model);
@@ -897,23 +693,15 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
     };
 
     try {
-      // ── Tier 1 — config/env correction (issue #2342) ───────────────────────
-      // A model-not-found/model-not-supported failure is request-specific: the
-      // provider is reachable but doesn't serve the requested model id. Before
-      // escalating to a whole-provider fallback (Tier 3), attempt the cheapest
-      // deterministic fix — retry the SAME provider with a valid model it lists.
-      // No config is persisted; on success the user's own provider keeps serving.
+      // ── Tier 1 — config/env correction (#2342) ──
+      // A model-not-found/model-not-supported failure is request-specific: retry the SAME provider
+      // with a valid model it lists, cheaper than a Tier-3 provider fallback. No config is persisted.
       //
-      // Gated on `providerHonorsModelOverride`: a CLI/TUI provider with a model
-      // flag baked into its args ignores the per-call `model`, so the "corrected"
-      // model would silently be the same failed one — a pointless retry that
-      // would also mis-key the corrected task onto the primary key. Skip Tier 1
-      // for those and let the cascade fall through to a real fallback provider.
-      // Only a wrong-model failure is config-correctable here. Compare against
-      // string literals, not `ERROR_CATEGORIES.MODEL_NOT_SUPPORTED` — that member
-      // does NOT exist (it would be `undefined`, matching a category-less failure
-      // and wrongly engaging Tier 1). 'model-not-supported' is autoFixer's own
-      // Tier-1 category (from CoS agent analysis), matched here for parity.
+      // Gated on `providerHonorsModelOverride`: a model flag baked into CLI/TUI args ignores the per-call
+      // `model`, so the "corrected" retry would be the same failed model.
+      // Compare against string literals: `ERROR_CATEGORIES.MODEL_NOT_SUPPORTED` does NOT exist
+      // (`undefined` would match a category-less failure and wrongly engage Tier 1).
+      // 'model-not-supported' is autoFixer's own Tier-1 category, matched for parity.
       if ((category === ERROR_CATEGORIES.MODEL_NOT_FOUND || category === 'model-not-supported')
         && providerHonorsModelOverride(failed)) {
         const correctedModel = pickConfigCorrectedModel(failed, failedModel);
@@ -1125,12 +913,9 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
 const _fallbackMarkAndPick = createSingleFlight();
 
 /**
- * Mark the failed provider unavailable and pick its fallback, coalescing
- * concurrent calls for the same provider id onto one shared promise.
- * Resolves to the same `{ provider, model }` shape as `pickFallbackProvider`
- * (or null when no usable fallback exists). The mark is skipped when no
- * fallback is available — matching the prior ordering where the original
- * error is rethrown without benching a provider that has no recovery path.
+ * Mark the failed provider unavailable and pick its fallback, coalescing concurrent calls for the
+ * same provider id onto one shared promise. Resolves like `pickFallbackProvider` (null when none);
+ * the mark is skipped when no fallback exists, so a provider with no recovery path isn't benched.
  *
  * @param {object} failed — the provider that actually ran and failed
  * @param {Error} firstError — the execution error (carries message + errorAnalysis)
@@ -1149,18 +934,12 @@ function coalesceFallbackMarkAndPick(failed, firstError, requestCapabilities) {
 }
 
 /**
- * Pick a fallback provider for `failed`. Honors the failed provider's
- * `fallbackProvider` field first, then the toolkit's system priority
- * list. Returns `{ provider, model }` (or null when no usable fallback
- * exists). `model` is the configured `fallbackModel` hint for the chosen
- * fallback (null for system-priority picks, meaning "use the fallback's
- * own default") — never the failed provider's model.
+ * Pick a fallback for `failed`: its `fallbackProvider` field first, then the toolkit's system
+ * priority list. Returns `{ provider, model }` or null. `model` is the configured `fallbackModel`
+ * hint (null for system-priority picks) — never the failed provider's model.
  *
- * The toolkit's `getFallbackProvider` reads `providers[failed.id]` to
- * look up the `fallbackProvider` field, so the primary MUST stay in the
- * map. Self-loop protection (`fallbackProvider === self`) lives in
- * `getFallbackProvider`; the system priority loop already excludes
- * `failed.id` by construction.
+ * The toolkit's `getFallbackProvider` reads `providers[failed.id]`, so the primary MUST stay in the
+ * map. Self-loop protection lives there; the system priority loop excludes `failed.id`.
  */
 async function pickFallbackProvider(failed, requestCapabilities) {
   const toolkit = getAIToolkitInstance();
@@ -1198,19 +977,13 @@ async function pickFallbackProvider(failed, requestCapabilities) {
 }
 
 /**
- * Translate the runner's failure into an availability marker on the
- * failed provider. Reuses the runner's precomputed error analysis when
- * present, otherwise falls back to analyzeError to categorize and pick a
- * cooldown; usage-limit failures route through `markUsageLimit` so the
- * parsed wait time (e.g. "reset 5pm") is honored.
+ * Translate the runner's failure into an availability marker on the failed provider, reusing the
+ * precomputed error analysis when present (else `analyzeError`). Usage-limit failures route through
+ * `markUsageLimit` so the parsed wait time is honored. Skips the mark when `executeApiRun` already
+ * marked inline (RATE_LIMIT/USAGE_LIMIT), which would double-increment `failureCount`.
  *
- * Skips the mark when the toolkit's `executeApiRun` has already marked
- * the provider unavailable inline (it does this for RATE_LIMIT and
- * USAGE_LIMIT before firing onComplete) — re-marking would double-
- * increment `failureCount` and re-write the status file for no gain.
- *
- * `skipUsageLimit` declines the usage-limit marker entirely (bench AND ledger),
- * for a caller that records that marker itself. Everything else still benches.
+ * `skipUsageLimit` declines the usage-limit marker entirely (bench AND ledger) for a caller that
+ * records it itself. Everything else still benches.
  */
 async function markProviderUnavailableFromError(failed, errorMessage, runnerAnalysis, runModel = null, { skipUsageLimit = false } = {}) {
   const toolkit = getAIToolkitInstance();
@@ -1295,21 +1068,14 @@ function isLocalInferenceProvider(provider) {
 }
 
 /**
- * The output reserve (and generation cap) for a run on a LOCAL model.
+ * The output reserve (and generation cap) for a run on a LOCAL model. A caller's declared
+ * `outputReserveTokens` is cloud-sized (the persistent mind declares 8,192), which alone is half a
+ * 16K local window and refused prompts that fit (#9437). For a local provider with a KNOWN window the
+ * reserve shrinks to `localOutputReserveTokens` (floor 2,048, ⅛ of the window, never above what was
+ * declared) and `max_tokens`/`num_predict` is capped at the same number.
  *
- * A caller's declared `outputReserveTokens` is a cloud-sized number (the
- * persistent mind declares 8,192). On a 16K local daemon that reserve alone is
- * half the window, so since #9437 made the mind declare it on every wake, a
- * ~13.5K-token prompt that fits was refused before dispatch ("known 16384-token
- * context is below the 21744-token request budget"). For a local provider with
- * a KNOWN window the reserve shrinks to `localOutputReserveTokens` (floor 2,048,
- * ⅛ of the window, never above what was declared), and the request's
- * `max_tokens` / `num_predict` is capped at the same number so generation
- * cannot outgrow the room the gate planned for.
- *
- * Unchanged when the caller named its own `maxTokens` (it sized the answer
- * deliberately), declared no reserve, the window is unknown, or the provider
- * is not local.
+ * Unchanged when the caller named its own `maxTokens`, declared no reserve, the window is unknown, or
+ * the provider is not local.
  *
  * @returns {Promise<{ outputReserveTokens: number|undefined, maxTokens: number|undefined }>}
  */
@@ -1323,14 +1089,11 @@ async function resolveLocalOutputBudget(provider, model, { outputReserveTokens, 
 }
 
 /**
- * The prompt room a LOCAL provider leaves once its output reserve is planned,
- * for callers that build their own prompt and want to fit it rather than be
- * refused (the persistent mind's tool rounds). Uses the same window lookup and
- * the same `localOutputReserveTokens` sizing as the dispatch gate, so a prompt
- * kept under `maxPromptTokens` (chars/4) is one the gate admits.
- *
- * Returns `null` for a cloud / CLI provider, an undeclared reserve, or an
- * unknown window — callers then build exactly as before.
+ * The prompt room a LOCAL provider leaves once its output reserve is planned, for callers that build
+ * their own prompt and want to fit it (the persistent mind's tool rounds). Same window lookup and
+ * `localOutputReserveTokens` sizing as the dispatch gate, so a prompt under `maxPromptTokens`
+ * (chars/4) is one the gate admits. Returns `null` for a cloud/CLI provider, an undeclared reserve,
+ * or an unknown window.
  *
  * @param {{ provider: object, model?: string|null, outputReserveTokens: number }} args
  * @returns {Promise<{ contextWindow: number, outputReserveTokens: number, maxPromptTokens: number }|null>}
@@ -1346,21 +1109,11 @@ export async function resolveLocalPromptBudget({ provider, model = null, outputR
 }
 
 /**
- * The budget a pre-dispatch REFUSAL is allowed to act on.
- *
- * `requiredContextTokens` is the prompt plus an output reserve, and when the
- * caller named no reserve that is `DEFAULT_OUTPUT_RESERVE_TOKENS` — 8,000
- * tokens nobody asked for. Ranking fallback candidates on that optimistic
- * budget is fine (it prefers a provider with room to answer), but REFUSING on
- * it turns "provably cannot fit" into "probably cannot fit": a pinned caller
- * sending a 26K-token prompt to a 32K endpoint and expecting three sentences
- * back would be refused, though it succeeds today — these daemons size the
- * answer from what the window has left.
- *
- * So a refusal uses the provable floor — the prompt alone — unless the caller
- * declared its own `outputReserveTokens`, which is it telling us how much room
- * the answer genuinely needs. Candidate ranking in `getFallbackProvider` keeps
- * using the full budget, exactly as it did before this gate existed.
+ * The budget a pre-dispatch REFUSAL may act on. `requiredContextTokens` is the prompt plus an output
+ * reserve, which defaults to `DEFAULT_OUTPUT_RESERVE_TOKENS` (8,000 tokens nobody asked for). That
+ * is fine for ranking fallbacks, but refusing on it turns "provably cannot fit" into "probably
+ * cannot fit". So a refusal uses the provable floor (the prompt alone) unless the caller declared its
+ * own `outputReserveTokens`; ranking in `getFallbackProvider` keeps the full budget.
  */
 function refusalCapabilities({ requestCapabilities, prompt, outputReserveTokens }) {
   if (Number.isFinite(Number(outputReserveTokens))) return requestCapabilities;
@@ -1368,35 +1121,21 @@ function refusalCapabilities({ requestCapabilities, prompt, outputReserveTokens 
 }
 
 /**
- * Refuse a prompt that provably cannot fit the provider about to run it.
+ * Refuse a prompt that provably cannot fit the provider about to run it. Before #7441 the context
+ * check ran only inside `getFallbackProvider`, never on the happy path (see
+ * `services/observedContextWindows.js`).
  *
- * Before #7441 the context check ran ONLY inside `getFallbackProvider`, so it
- * judged the candidates a failure had already escalated to and never the
- * provider on the happy path — see `services/observedContextWindows.js` for the
- * stall that cost.
- *
- * Four rules, all deliberate:
- *
- *   - An UNKNOWN window is not a rejection. `contextWindowRejection` answers
- *     `null` whenever nothing declared a window, and nothing infers one from a
- *     model id — so a provider PortOS has no data about dispatches exactly as
- *     it does today.
- *   - What it compares is `refusalCapabilities`, not the raw routing budget:
- *     a reserve the caller never asked for must not manufacture a refusal.
- *   - The refusal is an ORDINARY failure, not a new category or exception class.
- *     `context-length` is what `agentErrorAnalysis.js` and `codexTurn.js`
- *     already tag an oversized prompt, and it is request-specific
- *     (`providerCooldown.isSchemaTypeCategory`), so it never benches a server
- *     that is perfectly healthy for smaller prompts, and `autoFixer` already
- *     knows its tier. It carries `effectiveProvider`, so the cascade in
- *     `runPromptThroughProvider` routes it to a fallback with a wider window
- *     (Tier 3, which applies this same rule to every candidate). A pinned
- *     (`allowFallback: false`) caller gets the message in milliseconds instead
- *     of the ten-minute stall — which is the whole point.
- *   - It judges the REQUESTED provider, ahead of `createRun`'s proactive swap.
- *     A provider that swap lands on was already asked the same question by
- *     `capabilityRejection`, so the only cost is a cached listing spent on a
- *     primary that turns out to be benched.
+ *   - An UNKNOWN window is not a rejection: `contextWindowRejection` answers `null` when nothing
+ *     declared a window, and nothing infers one from a model id.
+ *   - It compares `refusalCapabilities`, not the raw routing budget: an unrequested reserve must not
+ *     manufacture a refusal.
+ *   - The refusal is an ORDINARY failure with the existing `context-length` category, which is
+ *     request-specific (`providerCooldown.isSchemaTypeCategory`) so it never benches a healthy
+ *     server. It carries `effectiveProvider`, so the cascade routes it to a wider-window fallback
+ *     (Tier 3 applies the same rule); a pinned (`allowFallback: false`) caller gets the message
+ *     in milliseconds instead of a ten-minute stall.
+ *   - It judges the REQUESTED provider, ahead of `createRun`'s proactive swap; a swap target was
+ *     already vetted by `capabilityRejection`.
  */
 async function assertRequestFitsContext(provider, model, requestCapabilities, { runId = null, startTime = null } = {}) {
   const required = Number(requestCapabilities?.requiredContextTokens);
