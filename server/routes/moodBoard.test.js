@@ -255,3 +255,12 @@ describe('mood-board generate routes', () => {
     expect((await request(makeApp()).get('/api/mood-boards/example/generate')).body.status).toBe('queued');
   });
 });
+
+describe('mood-board list query validation', () => {
+  it('GET / 400s on a repeated pagination key and never lists boards', async () => {
+    vi.clearAllMocks();
+    const res = await request(makeApp()).get('/api/mood-boards?limit=1&limit=2');
+    expect(res.status).toBe(400);
+    expect(svc.listBoards).not.toHaveBeenCalled();
+  });
+});

@@ -272,6 +272,12 @@ describe('GET /api/meatspace/post/review/reps', () => {
     expect(getPostReviewReps).toHaveBeenCalledWith(expect.any(Date), 2);
   });
 
+  it('400s on a repeated limit key and never reads reps', async () => {
+    const r = await request(app).get('/api/meatspace/post/review/reps?limit=1&limit=2');
+    expect(r.status).toBe(400);
+    expect(getPostReviewReps).not.toHaveBeenCalled();
+  });
+
   it('clamps the limit query param to 0..5', async () => {
     getPostReviewReps.mockResolvedValue([]);
     await request(app).get('/api/meatspace/post/review/reps?limit=99');

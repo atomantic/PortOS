@@ -311,3 +311,17 @@ describe('POST /api/loras/:filename/effect', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('LoRA list and suggestions query validation', () => {
+  it('GET / 400s on a repeated pagination key and never lists LoRAs', async () => {
+    listLoras.mockClear();
+    const res = await request(makeApp()).get('/api/loras?limit=1&limit=2');
+    expect(res.status).toBe(400);
+    expect(listLoras).not.toHaveBeenCalled();
+  });
+
+  it('GET /suggestions 400s on a repeated force key', async () => {
+    const res = await request(makeApp()).get('/api/loras/suggestions?force=1&force=true');
+    expect(res.status).toBe(400);
+  });
+});

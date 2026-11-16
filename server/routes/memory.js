@@ -10,7 +10,7 @@ import * as memorySync from '../services/memorySync.js';
 import { findRecentRunsUsingMemory } from '../services/memoryRunUsage.js';
 import { checkHealth } from '../lib/db.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, parsePagination } from '../lib/validation.js';
+import { validateRequest, parsePagination, paginationQuerySchema } from '../lib/validation.js';
 import {
   memoryCreateSchema,
   memoryUpdateSchema,
@@ -195,7 +195,7 @@ router.get('/:id/versions', asyncHandler(async (req, res) => {
 
 // GET /api/memory/:id/related - Get related memories
 router.get('/:id/related', asyncHandler(async (req, res) => {
-  const { limit } = parsePagination(req.query, { defaultLimit: 10, maxLimit: 500 });
+  const { limit } = parsePagination(validateRequest(paginationQuerySchema, req.query), { defaultLimit: 10, maxLimit: 500 });
   const related = await memory.getRelatedMemories(req.params.id, limit);
   res.json(related);
 }));

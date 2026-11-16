@@ -42,6 +42,7 @@ vi.mock('../../services/spotifyBrowserImport.js', () => fnMap([
 import digitalTwinRoutes from './index.js';
 import * as digitalTwinService from '../../services/digital-twin.js';
 import * as spotifyBrowserImport from '../../services/spotifyBrowserImport.js';
+import * as feedbackService from '../../services/feedbackLoop.js';
 
 const VALID_UUID = '11111111-1111-1111-1111-111111111111';
 
@@ -64,6 +65,21 @@ describe('Digital Twin Routes', () => {
     });
   });
 
+  describe('feedback', () => {
+    it('GET /feedback/recent 400s on a repeated contentType key and never reads feedback', async () => {
+      const res = await request(app).get('/api/digital-twin/feedback/recent?contentType=a&contentType=b');
+      expect(res.status).toBe(400);
+      expect(feedbackService.getRecentFeedback).not.toHaveBeenCalled();
+    });
+
+    it('GET /feedback/recent clamps limit to 50 and passes a null filter by default', async () => {
+      feedbackService.getRecentFeedback.mockResolvedValue([]);
+      const res = await request(app).get('/api/digital-twin/feedback/recent?limit=999');
+      expect(res.status).toBe(200);
+      expect(feedbackService.getRecentFeedback).toHaveBeenCalledWith(null, 50);
+    });
+  });
+
   describe('documents', () => {
     it('GET /documents lists documents', async () => {
       digitalTwinService.getDocuments.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);
@@ -83,6 +99,12 @@ describe('Digital Twin Routes', () => {
       expect(res.body.total).toBe(5);
       expect(res.body.limit).toBe(2);
       expect(res.body.offset).toBe(1);
+    });
+
+    it('GET /documents 400s on a repeated limit key and never lists', async () => {
+      const res = await request(app).get('/api/digital-twin/documents?limit=2&limit=3');
+      expect(res.status).toBe(400);
+      expect(digitalTwinService.getDocuments).not.toHaveBeenCalled();
     });
 
     it('GET /documents/:id returns 404 for an unknown doc', async () => {

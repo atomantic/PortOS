@@ -378,6 +378,12 @@ describe('Messages Routes', () => {
   // === Draft Routes ===
 
   describe('GET /api/messages/drafts', () => {
+    it('400s on a repeated status key and never lists drafts', async () => {
+      const res = await request(app).get('/api/messages/drafts?status=a&status=b');
+      expect(res.status).toBe(400);
+      expect(messageDrafts.listDrafts).not.toHaveBeenCalled();
+    });
+
     it('should pass accountId and status filters', async () => {
       messageDrafts.listDrafts.mockResolvedValue([]);
 

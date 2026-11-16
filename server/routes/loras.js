@@ -11,7 +11,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { deepMerge, isPlainObject } from '../lib/objects.js';
-import { emptyToUndefined, validateRequest, isPaginationRequested, paginateArray, parsePagination } from '../lib/validation.js';
+import { emptyToUndefined, validateRequest, isPaginationRequested, paginateArray, parsePagination, paginationQuerySchema } from '../lib/validation.js';
 import {
   deleteLora,
   getLora,
@@ -35,17 +35,21 @@ const router = Router();
 
 // `?force=1` / `?force=true` busts a server-side cache. Shared by the suggestions
 // refresh and the LoRA effect re-check so the two can't drift on what counts.
-const forceRequested = (req) => req.query.force === '1' || req.query.force === 'true';
+const forceRequested = (query) => query.force === '1' || query.force === 'true';
+
+// `force` is read as a raw string; `limit`/`offset` keep parsePagination's lenient fallback.
+const suggestionsQuerySchema = paginationQuerySchema.extend({ force: z.string().optional() });
 
 // Backward-compatible by default: returns the full LoRA array. When a client
 // passes `limit`/`offset`, the response becomes the bounded
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
 router.get('/', asyncHandler(async (req, res) => {
+  const query = validateRequest(paginationQuerySchema, req.query);
   const loras = await listLoras();
-  if (!isPaginationRequested(req.query)) {
+  if (!isPaginationRequested(query)) {
     return res.json(loras);
   }
-  res.json(paginateArray(loras, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  res.json(paginateArray(loras, query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 // LoRA suggestions — Civitai image LoRAs per runner family (mflux / flux2 /
@@ -54,8 +58,9 @@ router.get('/', asyncHandler(async (req, res) => {
 // Default 4 cards per family — enough to show breadth without overwhelming the
 // panel; users can paste a URL for anything specific.
 router.get('/suggestions', asyncHandler(async (req, res) => {
-  const force = forceRequested(req);
-  const { limit } = parsePagination(req.query, { defaultLimit: 4, maxLimit: 24 });
+  const query = validateRequest(suggestionsQuerySchema, req.query);
+  const force = forceRequested(query);
+  const { limit } = parsePagination(query, { defaultLimit: 4, maxLimit: 24 });
   const [civitai, video] = await Promise.all([
     getSuggestions({ force, limit }),
     getVideoSuggestions({ force }),
@@ -284,7 +289,7 @@ router.get('/:filename', asyncHandler(async (req, res) => {
 // a probe failure — an unmeasurable verdict is a legitimate answer about this
 // machine, and the response carries its reason.
 router.post('/:filename/effect', asyncHandler(async (req, res) => {
-  const force = forceRequested(req);
+  const force = forceRequested(req.query);
   res.json(await probeLoraEffect(req.params.filename, { force }));
 }));
 

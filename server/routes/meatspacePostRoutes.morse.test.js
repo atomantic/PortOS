@@ -95,6 +95,12 @@ describe('GET /api/meatspace/post/morse/progress', () => {
     expect(morseService.getMorseProgress).toHaveBeenCalledWith(30);
   });
 
+  it('400s on a repeated days key and never reads progress', async () => {
+    const r = await request(app).get('/api/meatspace/post/morse/progress?days=7&days=30');
+    expect(r.status).toBe(400);
+    expect(morseService.getMorseProgress).not.toHaveBeenCalled();
+  });
+
   it('clamps days to the 365 ceiling', async () => {
     await request(app).get('/api/meatspace/post/morse/progress?days=9999');
     expect(morseService.getMorseProgress).toHaveBeenCalledWith(365);

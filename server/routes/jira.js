@@ -10,6 +10,11 @@ import { getAppById } from '../services/apps.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, jiraTicketKeySchema } from '../lib/validation.js';
 
+// Scalar-only query strings (Express turns a repeated key into an array); values keep the services' own handling.
+const boardColumnsQuerySchema = z.object({ boardId: z.string().optional() });
+const epicSearchQuerySchema = z.object({ q: z.string().optional() });
+const reportListQuerySchema = z.object({ appId: z.string().optional() });
+
 const validateTicketParam = (req, res, next, value) => {
   const parsed = jiraTicketKeySchema.safeParse(value);
   if (!parsed.success) {
@@ -295,10 +300,11 @@ router.get('/instances/:instanceId/my-sprint-tickets/:projectKey', asyncHandler(
  * Resolve the ordered workflow columns (full lifecycle) for the Kanban board.
  */
 router.get('/instances/:instanceId/board-columns/:projectKey', asyncHandler(async (req, res) => {
+  const { boardId } = validateRequest(boardColumnsQuerySchema, req.query);
   const result = await jiraService.getBoardColumns(
     req.params.instanceId,
     req.params.projectKey,
-    req.query.boardId
+    boardId
   );
   res.json(result);
 }));
@@ -365,10 +371,11 @@ router.get('/instances/:instanceId/issues/:issueKey', readTicket);
  * Search for epics by name in a project
  */
 router.get('/instances/:instanceId/projects/:projectKey/epics', asyncHandler(async (req, res) => {
+  const { q } = validateRequest(epicSearchQuerySchema, req.query);
   const epics = await jiraService.searchEpics(
     req.params.instanceId,
     req.params.projectKey,
-    req.query.q || ''
+    q || ''
   );
   res.json(epics);
 }));
@@ -382,7 +389,8 @@ router.get('/instances/:instanceId/projects/:projectKey/epics', asyncHandler(asy
  * List all JIRA status reports, optionally filtered by appId
  */
 router.get('/reports', asyncHandler(async (req, res) => {
-  const reports = await jiraReports.listReports(req.query.appId || null);
+  const { appId } = validateRequest(reportListQuerySchema, req.query);
+  const reports = await jiraReports.listReports(appId || null);
   res.json(reports);
 }));
 

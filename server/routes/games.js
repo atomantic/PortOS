@@ -17,6 +17,7 @@ import {
   gameUpdateSchema,
   isPaginationRequested,
   paginateArray,
+  paginationQuerySchema,
   validateRequest,
 } from '../lib/validation.js';
 import {
@@ -46,11 +47,12 @@ const router = Router();
 // passes `limit`/`offset`, the response becomes the bounded
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
 router.get('/', asyncHandler(async (req, res) => {
+  const query = validateRequest(paginationQuerySchema, req.query);
   const games = await listGames();
-  if (!isPaginationRequested(req.query)) {
+  if (!isPaginationRequested(query)) {
     return res.json(games);
   }
-  res.json(paginateArray(games, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  res.json(paginateArray(games, query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

@@ -161,13 +161,16 @@ router.post('/series/:id/manuscript/completeness/cancel', asyncHandler(async (re
 // `?type=` selects the format; absent → the series' pinned primaryManuscriptType,
 // else the auto-detected dominant format. Returns the requested format's
 // sections plus the metadata the editor's format switcher needs.
+const manuscriptViewQuerySchema = z.object({ type: z.string().optional() });
+
 router.get('/series/:id/manuscript', asyncHandler(async (req, res) => {
+  const { type } = validateRequest(manuscriptViewQuerySchema, req.query);
   const series = await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   const { sectionsByType, availableTypes, detectedPrimary } = await arcPlanner.collectManuscriptByType(req.params.id);
   // Resolve the primary (source-of-truth) format: pinned bible value wins, then
   // detection, then a stable default so the editor always has something to show.
   const primaryStageId = series.primaryManuscriptType || detectedPrimary || 'prose';
-  const requested = seriesSvc.MANUSCRIPT_TYPES.includes(req.query.type) ? req.query.type : null;
+  const requested = seriesSvc.MANUSCRIPT_TYPES.includes(type) ? type : null;
   const viewType = requested || primaryStageId;
   res.json({
     sections: sectionsByType[viewType] || [],

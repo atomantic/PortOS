@@ -281,3 +281,33 @@ describe('ticket id path-traversal guard', () => {
     expect((await request(makeApp()).get(`${base}/10001`)).status).toBe(200);
   });
 });
+
+describe('JIRA query validation', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('GET board-columns 400s on a repeated boardId and never reaches JIRA', async () => {
+    const res = await request(makeApp()).get('/api/jira/instances/i1/board-columns/PROJ?boardId=1&boardId=2');
+    expect(res.status).toBe(400);
+    expect(jiraService.getBoardColumns).not.toHaveBeenCalled();
+  });
+
+  it('GET epics 400s on a repeated q and defaults q to an empty search otherwise', async () => {
+    const bad = await request(makeApp()).get('/api/jira/instances/i1/projects/PROJ/epics?q=a&q=b');
+    expect(bad.status).toBe(400);
+    expect(jiraService.searchEpics).not.toHaveBeenCalled();
+    jiraService.searchEpics.mockResolvedValueOnce([]);
+    const ok = await request(makeApp()).get('/api/jira/instances/i1/projects/PROJ/epics');
+    expect(ok.status).toBe(200);
+    expect(jiraService.searchEpics).toHaveBeenCalledWith('i1', 'PROJ', '');
+  });
+
+  it('GET /reports 400s on a repeated appId and lists all reports when absent', async () => {
+    const bad = await request(makeApp()).get('/api/jira/reports?appId=a&appId=b');
+    expect(bad.status).toBe(400);
+    expect(jiraReports.listReports).not.toHaveBeenCalled();
+    jiraReports.listReports.mockResolvedValueOnce([]);
+    const ok = await request(makeApp()).get('/api/jira/reports');
+    expect(ok.status).toBe(200);
+    expect(jiraReports.listReports).toHaveBeenCalledWith(null);
+  });
+});

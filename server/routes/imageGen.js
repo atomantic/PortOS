@@ -453,17 +453,26 @@ const removeWatermarkSchema = z.object({
   }).optional(),
 });
 
+// `mode` keeps tolerating a repeated key (array) and an unknown value: both fall back to the saved
+// default below. `modelId` is a registry id, so a repeated or over-long one is refused.
+const statusQuerySchema = z.object({
+  mode: z.union([z.string(), z.array(z.string())]).optional(),
+  modelId: z.string().max(64).optional(),
+});
+const regenAvailabilityQuerySchema = z.object({ filename: z.string().optional() });
+
 router.get('/status', asyncHandler(async (req, res) => {
+  const query = validateRequest(statusQuerySchema, req.query);
   // Optional ?mode= override lets the Image Gen page probe a specific
   // backend (e.g. when the user flips the per-render chip to Codex but
   // hasn't saved Codex as the default yet). Express's default query
   // parser turns duplicated keys (?mode=local&mode=codex) into arrays,
   // so guard on string type before forwarding so `mode` always reaches
   // the dispatcher as `string | undefined`.
-  const rawMode = req.query.mode;
+  const rawMode = query.mode;
   const mode = typeof rawMode === 'string' && IMAGE_GEN_MODES.includes(rawMode) ? rawMode : undefined;
-  const rawModelId = req.query.modelId;
-  const modelId = typeof rawModelId === 'string' && rawModelId.length <= 64 ? rawModelId : undefined;
+  const rawModelId = query.modelId;
+  const modelId = rawModelId || undefined;
   res.json(await imageGen.checkConnection({ mode, ...(modelId ? { modelId } : {}) }));
 }));
 
@@ -516,7 +525,7 @@ router.get('/agy/models', asyncHandler(async (_req, res) => {
 // reported `modelId` matches the exact model a regen of THAT image would run —
 // the annotate re-render dialog must disclose the real model before the render.
 router.get('/regen/availability', asyncHandler(async (req, res) => {
-  const rawFilename = req.query.filename;
+  const rawFilename = validateRequest(regenAvailabilityQuerySchema, req.query).filename;
   const galleryPath = typeof rawFilename === 'string' && rawFilename ? resolveGalleryImage(rawFilename) : null;
   let sourceModelId;
   if (galleryPath) {

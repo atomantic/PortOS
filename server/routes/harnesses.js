@@ -25,6 +25,7 @@ import { streamHarnessAction } from '../services/harnessActionStream.js';
 import { listHarnesses, refreshHarnessModels } from '../services/harnesses.js';
 
 const router = Router();
+const listQuerySchema = z.object({ fresh: z.string().optional() });
 const reviewUpdateSchema = harnessRefreshSchema.extend({
   expectedVersion: z.string().max(100).regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/),
   candidateVersion: z.string().max(100).regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/),
@@ -38,7 +39,8 @@ const reviewUpdateSchema = harnessRefreshSchema.extend({
  * waiting out a cache.
  */
 router.get('/', asyncHandler(async (req, res) => {
-  res.json({ harnesses: await listHarnesses({ fresh: req.query.fresh === '1' }) });
+  const { fresh } = validateRequest(listQuerySchema, req.query);
+  res.json({ harnesses: await listHarnesses({ fresh: fresh === '1' }) });
 }));
 
 // Reference data is scoped to a currently actionable, fixed-registry harness.
@@ -71,10 +73,7 @@ router.post('/review-update', asyncHandler(async (req, res) => {
  * installer — `action` rides beside it for the same reason.
  */
 router.post('/action', asyncHandler(async (req, res) => {
-  const { runtime, action } = validateRequest(harnessActionSchema, {
-    runtime: req.query.runtime,
-    action: req.query.action,
-  });
+  const { runtime, action } = validateRequest(harnessActionSchema, req.query);
   await streamHarnessAction(req, res, { runtime, action });
 }));
 
@@ -87,7 +86,7 @@ router.post('/action', asyncHandler(async (req, res) => {
  * renders the reason verbatim.
  */
 router.post('/models/refresh', asyncHandler(async (req, res) => {
-  const { runtime } = validateRequest(harnessRefreshSchema, { runtime: req.query.runtime });
+  const { runtime } = validateRequest(harnessRefreshSchema, req.query);
   const result = await refreshHarnessModels(runtime);
   if (!result.ok) {
     throw new ServerError(result.reason, { status: 409, code: 'HARNESS_MODELS_UNAVAILABLE', context: { runtime } });

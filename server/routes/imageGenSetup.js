@@ -330,6 +330,8 @@ const installSchema = z.object({
   packages: z.array(z.string().min(1)).min(1).max(40),
 });
 
+const installQuerySchema = z.object({ pythonPath: z.string().optional(), packages: z.string().optional() });
+
 // Backward-compatible read surface for stale installer URLs. It returns the
 // same setup status as /check and never starts pip.
 router.get('/install', asyncHandler(sendSetupCheck));
@@ -337,8 +339,9 @@ router.get('/install', asyncHandler(sendSetupCheck));
 // Fetch-stream consumers re-run /setup/check on `complete` to refresh status.
 const packageInstallsInFlight = new Map();
 router.post('/install', asyncHandler(async (req, res) => {
-  const pythonPath = req.query.pythonPath;
-  const packages = String(req.query.packages || '').split(',').filter(Boolean);
+  const query = validateRequest(installQuerySchema, req.query);
+  const pythonPath = query.pythonPath;
+  const packages = String(query.packages || '').split(',').filter(Boolean);
   const input = validateRequest(installSchema, { pythonPath, packages });
   if (!isAllowedPython(input.pythonPath)) {
     throw new ServerError('pythonPath must be a python interpreter', {
