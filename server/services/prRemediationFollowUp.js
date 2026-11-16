@@ -51,6 +51,7 @@
 import { emitLog } from './cosEvents.js';
 import { addTask } from './cosTaskStore.js';
 import { buildCiMergeGateSteps, buildForkBranchInstructions } from './promptSections/reviewLifecycle.js';
+import { isMergeHandoffEnabled } from '../lib/mergeGateContract.js';
 import { normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';
 import { UNTRUSTED_PULL_REQUEST_NOTICE } from '../lib/promptFencing.js';
 import { PR_WRITE_ACCESS } from '../lib/prHandbackPolicy.js';
@@ -59,7 +60,7 @@ import { PR_WRITE_ACCESS } from '../lib/prHandbackPolicy.js';
  * The remediation procedure. `reason` names why the PR did not land, so the
  * agent starts from the right end of the problem instead of re-deriving it.
  */
-function renderContext({ repoFullName, number, url, headRefName, headSha, authorLogin, reason, writeAccess, forkHead }) {
+function renderContext({ repoFullName, number, url, headRefName, headSha, authorLogin, reason, writeAccess, forkHead, mergeHandoff = false }) {
   const [owner, repo] = repoFullName.split('/');
   const prRef = `${number} --repo ${repoFullName}`;
   // Both halves stay conditional: a same-repo head has no contributor who "left
@@ -75,6 +76,7 @@ function renderContext({ repoFullName, number, url, headRefName, headSha, author
     forge: 'github',
     alreadyMergedHint: '',
     deleteBranch: false,
+    mergeHandoff,
   });
 
   return [
@@ -185,6 +187,7 @@ export async function spawnPrRemediationFollowUp({ app, repoFullName, pullReques
       authorLogin,
       reason: reason || 'the review did not clear it for an automatic merge',
       writeAccess,
+      mergeHandoff: isMergeHandoffEnabled(app?.mergeHandoffMinQueuedRuns),
     }),
     // PortOS provisions the worktree and checks out the PR's head branch, fork
     // or not (see the module header).

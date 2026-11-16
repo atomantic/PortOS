@@ -69,7 +69,7 @@ vi.mock('./worktreeManager.js', () => ({ listWorktrees: vi.fn().mockResolvedValu
 vi.mock('./branchReconcile.js', () => ({
   listRemoteHeads: vi.fn().mockResolvedValue(new Map()),
   cleanupMerged: vi.fn().mockResolvedValue({ cleaned: [] }),
-  driveToMerge: (pr) => `merge ${pr} from the repo root once CI is green`,
+  driveToMerge: (pr, { mergeHandoff = false } = {}) => `merge ${pr} from the repo root once CI is green (handoff ${mergeHandoff ? 'on' : 'off'})`,
 }));
 vi.mock('./git.js', () => ({
   getDefaultBranch: vi.fn().mockResolvedValue('main'),
@@ -1775,6 +1775,16 @@ describe('verifyAgentRepoState — divergent runs', () => {
       expect(recordBranchReconcileOutcome).not.toHaveBeenCalled();
       expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     });
+  });
+
+  it.each([
+    ['carries', true, 'handoff on'],
+    ['omits', false, 'handoff off'],
+  ])('the unmerged-PR remediation %s the pending-merge handoff per the app setting', (_label, mergeHandoff, expected) => {
+    const text = REPO_STATE_REMEDIATIONS[REPO_STATE_ISSUES.PR_UNMERGED]({ prUrl: 'https://github.com/example/repo/pull/1', forgeCli: 'gh', mergeHandoff });
+    expect(text).toContain(expected);
+    // An absent flag (no app threshold) is the same as off.
+    if (!mergeHandoff) expect(REPO_STATE_REMEDIATIONS[REPO_STATE_ISSUES.PR_UNMERGED]({ prUrl: 'https://github.com/example/repo/pull/1', forgeCli: 'gh' })).toContain('handoff off');
   });
 
   it('files ONE recovery task for a leftover worktree and branch after a merged PR', async () => {

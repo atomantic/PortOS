@@ -52,6 +52,7 @@ import { addTask, updateTask, getTaskById } from './cosTaskStore.js';
 import * as git from './git.js';
 import { listWorktrees } from './worktreeManager.js';
 import { listRemoteHeads, driveToMerge } from './branchReconcile.js';
+import { isMergeHandoffEnabled } from '../lib/mergeGateContract.js';
 import { readAllTasksFlat } from './investigationTaskProducer.js';
 import { execGit } from '../lib/execGit.js';
 import { PATHS } from '../lib/fileUtils.js';
@@ -1642,9 +1643,9 @@ export const REPO_STATE_REMEDIATIONS = Object.freeze({
   // Forge-aware: `driveToMerge` emits a `gh pr merge` procedure, which a GitLab
   // recovery agent cannot run. Its non-gh caveats still apply on either forge —
   // merge from the repo ROOT and preserve all checkout/ref evidence.
-  [REPO_STATE_ISSUES.PR_UNMERGED]: ({ prUrl, prNumber, forgeCli }) => (forgeCli === 'glab'
+  [REPO_STATE_ISSUES.PR_UNMERGED]: ({ prUrl, prNumber, forgeCli, mergeHandoff }) => (forgeCli === 'glab'
     ? `Finish the merge request${prUrl ? ` ${prUrl}` : ''}: fix failing pipeline jobs and resolve review threads, retain delivery ownership until required checks and reviews pass, revalidate its exact reviewed head under merge admission, then merge from the repo ROOT with "glab mr merge ${prNumber ?? '<iid>'} --yes" while preserving source branches and checkouts. Confirm MERGED and release admission; never request source-branch deletion during merge.`
-    : `Finish the pull request${prUrl ? ` ${prUrl}` : ''}. ${driveToMerge(prUrl || '<num>')}`),
+    : `Finish the pull request${prUrl ? ` ${prUrl}` : ''}. ${driveToMerge(prUrl || '<num>', { mergeHandoff })}`),
 });
 
 /**
@@ -1659,7 +1660,10 @@ export const REPO_STATE_REMEDIATIONS = Object.freeze({
 async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, retirement = null, claimRun = false }) {
   const appName = task?.metadata?.appName || appId || 'PortOS';
   const base = observed.defaultBranch || 'the default branch';
-  const ctx = { branchName, base, prUrl: observed.prUrl, prNumber: observed.prNumber, worktreePath, forgeCli: observed.forgeCli };
+  // The handoff is opt-in per app; a lookup failure keeps it off (the safe default).
+  const ownerApp = appId ? await (await import('./apps.js')).getAppById(appId).catch(() => null) : null;
+  const ctx = { branchName, base, prUrl: observed.prUrl, prNumber: observed.prNumber, worktreePath, forgeCli: observed.forgeCli,
+    mergeHandoff: isMergeHandoffEnabled(ownerApp?.mergeHandoffMinQueuedRuns) };
 
   const retirementInstructions = `After confirming MERGED and releasing admission, request branch-reconcile through POST /api/cos/schedule/trigger with ${JSON.stringify({ taskType: 'branch-reconcile', appId })} using authenticated PortOS transport. Keep checkout and refs for its exact inventory and retirement: a merged checkout is removed with its branch. Report cleanup pending until branch-reconcile removes it with ok:true and branchDeleted:true. Do not copy the checkout into an archive.`;
   const context = [
