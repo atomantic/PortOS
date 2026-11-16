@@ -5,7 +5,13 @@
  */
 import { detectShellFlavor } from './shellCd.js';
 
-/** `commandLine` is already quoted for `shell` (the session's shell binary; see detectShellFlavor); returns one command line, no trailing terminator. */
+/**
+ * `commandLine` is already quoted for `shell` (the session's shell binary; see detectShellFlavor); returns one command line, no trailing terminator.
+ *
+ * @param {string} commandLine - the command to run, already quoted for `shell`
+ * @param {string} [shell] - the session's shell binary; see detectShellFlavor
+ * @returns {string} a single command line, no trailing terminator
+ */
 export function buildRunThenExitCommand(commandLine, shell) {
   switch (detectShellFlavor(shell)) {
     case 'cmd': return `${commandLine} & exit`;

@@ -21,8 +21,10 @@ const dropCache = async () => {
 
 /**
  * Bind a temp data root to the settings direct-write helpers.
+ *
  * @param {string} dataRoot - the temp dir standing in for `PATHS.data`.
- * @returns {{ writeSettingsFile: (obj: object) => Promise<void>, mergeSettingsFile: (patch: object) => Promise<void> }}
+ * @returns {{ writeSettingsFile: (obj: object) => Promise<void>,
+ *             mergeSettingsFile: (patch: object) => Promise<void> }}
  */
 export function bindSettingsFile(dataRoot) {
   // Write the FULL settings object, then invalidate the read cache.

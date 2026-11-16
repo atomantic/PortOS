@@ -8,8 +8,10 @@ const DEFAULT_MAX = 30;
 const DEFAULT_REFILL_MS = 60_000;
 
 /**
+ *
  * @param {{ max?: number, refillMs?: number }} [opts]
- * @returns {{ consume: () => boolean }} `consume()` takes a token, returning false when the bucket is empty for the current window.
+ * @returns {{ consume: () => boolean }} `consume()` takes a token, returning
+ *   false when the bucket is empty for the current window.
  */
 export function createTokenBucket({ max = DEFAULT_MAX, refillMs = DEFAULT_REFILL_MS } = {}) {
   let tokens = max;

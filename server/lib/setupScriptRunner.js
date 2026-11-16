@@ -18,7 +18,12 @@ const IS_WIN = process.platform === 'win32';
 
 export const SETUP_IMAGE_VIDEO_SCRIPT = join(PATHS.root, 'scripts', 'setup-image-video.sh');
 
-/** Spawn the installer with `INSTALL_*` env vars pre-set. Takes no script path (`PYTHON_BIN` is this script's own variable, so this is its runner, not a general `.sh` spawner). `envVars`: extra env for the child → ChildProcess, stdout/stderr piped, stdin ignored. */
+/**
+ * Spawn the installer with `INSTALL_*` env vars pre-set. Takes no script path (`PYTHON_BIN` is this script's own variable, so this is its runner, not a general `.sh` spawner). `envVars`: extra env for the child → ChildProcess, stdout/stderr piped, stdin ignored.
+ *
+ * @param {Record<string,string>} [envVars] - extra env for the child
+ * @returns {import('child_process').ChildProcess} stdout/stderr piped, stdin ignored
+ */
 export function spawnSetupScript(envVars = {}) {
   const env = { ...envVars };
   // An explicit PYTHON_BIN (caller or environment) is the documented override and wins over anything detected.
@@ -35,7 +40,12 @@ export function spawnSetupScript(envVars = {}) {
   }));
 }
 
-/** Terminate a running installer and its descendants; safe on an already-dead or never-spawned child (`signal`: POSIX signal, ignored on Windows). */
+/**
+ * Terminate a running installer and its descendants; safe on an already-dead or never-spawned child (`signal`: POSIX signal, ignored on Windows).
+ *
+ * @param {import('child_process').ChildProcess|null} child
+ * @param {NodeJS.Signals} [signal] - POSIX signal; ignored on Windows
+ */
 export function stopSetupScript(child, signal = 'SIGTERM') {
   if (!child?.pid || child.killed) return;
   killProcessTree(child, signal, { processGroup: true });

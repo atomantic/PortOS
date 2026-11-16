@@ -24,7 +24,13 @@ export function detectShellFlavor(shell, platform = process.platform) {
   return platform === 'win32' ? 'powershell' : 'posix';
 }
 
-/** Quote one token for a shell dialect. PowerShell and cmd.exe quote every token so Windows paths and provider arguments pass literally; PowerShell needs the call operator for a quoted command-position token, not for arguments. */
+/**
+ * Quote one token for a shell dialect. PowerShell and cmd.exe quote every token so Windows paths and provider arguments pass literally; PowerShell needs the call operator for a quoted command-position token, not for arguments.
+ *
+ * @param {*} value - token to quote
+ * @param {'cmd'|'powershell'|'posix'} flavor - shell dialect
+ * @param {'command'|'argument'} [position='argument'] - token position
+ */
 export function quoteForShell(value, flavor = 'posix', position = 'argument') {
   const text = String(value ?? '');
   switch (flavor) {
@@ -41,6 +47,11 @@ export function quoteForShell(value, flavor = 'posix', position = 'argument') {
   }
 }
 
+/**
+ * @param {string} dirPath - directory to change into
+ * @param {string} [shell] - the session's shell binary; see detectShellFlavor
+ * @returns {string} a single command line, no trailing newline
+ */
 export function buildCdCommand(dirPath, shell) {
   // Control characters are stripped, not escaped: a newline would end the `cd` line and run the rest as its own command, and no directory name has one.
   const path = String(dirPath ?? '').replace(/[\u0000-\u001f\u007f]/g, '');
@@ -57,6 +68,11 @@ export function buildCdCommand(dirPath, shell) {
  * (`agentTuiSpawning.js#buildTuiSpawnConfig`) and the AI Providers page's
  * "Launch in Shell" deep link, so a provider launched by hand is quoted exactly
  * the way the agent runner would quote it.
+ *
+ * @param {string} command - the binary (command position — PowerShell needs `&`)
+ * @param {string[]} [args] - argv tokens
+ * @param {string} [shell] - the session's shell binary; see detectShellFlavor
+ * @returns {string} a single command line, no trailing newline
  */
 export function formatShellCommandLine(command, args = [], shell) {
   const flavor = detectShellFlavor(shell);

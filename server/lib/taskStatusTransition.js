@@ -10,6 +10,15 @@ export const isTerminalTaskStatus = (status) => status === 'completed' || status
 /**
  * Classify one `(previousStatus, nextStatus)` pair. `nextStatus` is the patch's `status` AS PASSED: `undefined`/empty means the write carries no status, which is not "unchanged" (a lease-renewal heartbeat passes none and must release nothing, while an explicit write to the held status applies that status's rules).
  * Fields gating a RELEASE therefore require a status to be present; fields describing the resulting state fall back to `previousStatus`.
+ *
+ * @param {string|undefined} previousStatus - the task's status before the write
+ * @param {string|undefined} nextStatus - `updates.status`, or undefined/'' when absent
+ * @returns {{
+ *   action: 'unblocked'|'requeued'|'updated',
+ *   isRevive: boolean, isRequeue: boolean,
+ *   entersInProgress: boolean, leavesInProgress: boolean,
+ *   leavesBlocked: boolean, isTerminal: boolean
+ * }}
  */
 export function resolveTaskStatusTransition(previousStatus, nextStatus) {
   // A falsy `nextStatus` is "no status in this patch" (`writeTaskUpdate` uses the same truthiness test), so '' never lands.
