@@ -169,3 +169,7 @@ unless asked. Publishing stays manual.
   session may run it: `POST /api/code-animation/execution/probe`, then read `lanes.blender` in the answer (or
   `tool` in the film state). If it still is not ready, report `lanes.blender.reason` to the operator and stop:
   do not edit the Blender path, mode or engine to get past it.
+
+## Review and publication authority
+
+**Creative review and public publication are separate.** Configured, authenticated agents may create music videos, review art/storyboards/proofs, resolve feedback, render final files and prepare drafts without per-approval prompts; review decisions bind to exact revisions and genuine inspection evidence with server-derived audit identity. Only public Suno publication and social-media posting need the human. Provider permissions, quotas, budgets and purchase authorization still apply.

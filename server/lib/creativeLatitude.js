@@ -31,6 +31,23 @@
  * tags share a vocabulary (`pipeline-…`, `universe-…`, `cd-…`), so classifying
  * them twice would mean deciding twice. `withCreativeLatitude` is idempotent,
  * so a stage prompt that also carries a creative source passes through once.
+ *
+ * Maintainer contract (moved here from server/AGENTS.md):
+ * Creative prompts get the IP-latitude clause by classification, not by
+ * wrapping call sites. PortOS is an artist's tool: genericizing or disclaiming
+ * a deliberate IP reference is defective output, and clearance is the
+ * operator's job. `server/lib/creativeLatitude.js` owns the clause and
+ * classification table, applied at three transports:
+ * `promptService.buildPrompt` (stage name, failing safe),
+ * `promptRunner.runPromptThroughProvider` (`source` allowlist),
+ * `aiProvider.callProviderAISimple` (`creative: true`). Classify a new
+ * creative stage or service there; `creativeLatitude.test.js` and
+ * `creativeLatitude.sources.test.js` fail on unclassified entries. Context
+ * budgeting before the stamp reserves `CREATIVE_LATITUDE_TOKENS`. The clause
+ * is shown, never hidden (#11317): where the user typed the LLM's text, the
+ * service stamps with `withCreativeLatitude` and returns the sent text plus
+ * `CREATIVE_LATITUDE_ADDITION` as `promptAdditions` for `SentPromptPanel`
+ * (`services/mediaPromptRefiner.js`).
  */
 
 import { estimateTokens } from './contextBudget.js';
