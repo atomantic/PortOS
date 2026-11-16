@@ -46,6 +46,7 @@ import {
 } from './cosTaskPrompts.js';
 import { resolveAppWorkTracker, githubApiHost } from '../lib/workTracker.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
+import { isMergeHandoffEnabled } from '../lib/mergeGateContract.js';
 import { listProviders } from './providers.js';
 
 // gh api defaults to github.com, so collaborator identity and member probes
@@ -760,6 +761,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
       branchesPerAgent: metadata.branchesPerAgent,
       repoPath: app.repoPath,
       appId: app.id,
+      mergeHandoff: isMergeHandoffEnabled(app.mergeHandoffMinQueuedRuns),
       detachedWorktrees: result.detachedWorktrees
     }),
     supersededBlock

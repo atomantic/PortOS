@@ -1147,7 +1147,7 @@ describe('buildLightContextPrompt', () => {
 
     it('disables external review when a TUI task opens a PR without a Review Loop', () => {
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: { simplify: true, openPR: true } }),
+        makeTask({ metadata: { mergeHandoffMinQueuedRuns: 3, simplify: true, openPR: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
         { isTui: true });
@@ -2054,7 +2054,7 @@ describe('buildLightContextPrompt', () => {
 
     it('emits a slashdo Completion block (/simplify + /do:pr) for Claude Code CLI + openPR', () => {
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: true } }),
+        makeTask({ metadata: { mergeHandoffMinQueuedRuns: 3, openPR: true, reviewLoop: true, simplify: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
         { isTui: false, providerId: 'claude-code' });
@@ -2189,7 +2189,7 @@ describe('buildLightContextPrompt', () => {
 
     it('renders the review-loop follow-up block when reviewLoopFollowUp is set', () => {
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: {
+        makeTask({ metadata: { mergeHandoffMinQueuedRuns: 3,
           reviewLoopFollowUp: true,
           reviewLoopReviewers: ['copilot'],
           reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
@@ -2231,7 +2231,7 @@ describe('buildLightContextPrompt', () => {
       // Review Loop off: PortOS opened the PR and spawned this follow-up purely to
       // land it. The block must gate on CI, never invoke or wait for a reviewer.
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: {
+        makeTask({ metadata: { mergeHandoffMinQueuedRuns: 3,
           reviewLoopFollowUp: true,
           reviewLoopMergeOnly: true,
           reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
@@ -3071,7 +3071,7 @@ describe('buildAgentPrompt — provider type routing', () => {
     // built-in fallback template (review-loop follow-up agents intentionally
     // skip the user-side prompt template — see buildAgentPrompt).
     const prompt = await buildAgentPrompt(
-      makeTask({ metadata: {
+      makeTask({ metadata: { mergeHandoffMinQueuedRuns: 3,
         reviewLoopFollowUp: true,
         reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
         reviewLoopPRBranch: 'b',
@@ -3864,6 +3864,38 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
       slashdoTask(), {}, '/r', null,
       { providerType: 'cli', providerId: 'claude-code' });
     expect(prompt).toContain('/do:plan-task');
+  });
+
+  it('sends no pending-merge handoff text to an app without mergeHandoffMinQueuedRuns', async () => {
+    const forbidden = ['mergeHandoffMinQueuedRuns', '/api/cos/merge-handoff', 'pending-merge receipt', 'PortOS pending-merge handoff'];
+    const followUp = await buildAgentPrompt(
+      makeTask({ metadata: {
+        reviewLoopFollowUp: true, reviewLoopReviewers: ['copilot'],
+        reviewLoopPRUrl: 'https://github.com/o/r/pull/9', reviewLoopPRBranch: 'b', reviewLoopPRNumber: 9,
+        reviewLoopPROwner: 'o', reviewLoopPRRepo: 'r', sourceTaskId: 'task-src-1',
+      } }),
+      {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' },
+      { defaultReviewers: ['copilot'], agentId: 'registered-coordinator' });
+    const tui = await buildAgentPrompt(
+      makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: true } }),
+      {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' },
+      { isTui: false, providerId: 'claude-code', agentId: 'registered-coordinator' });
+    expect(followUp).toContain('## Hosting-provider merge authority');
+    for (const prompt of [followUp, tui]) {
+      for (const needle of forbidden) expect(prompt).not.toContain(needle);
+    }
+    // The same follow-up with a positive threshold carries the full handoff text.
+    const enabled = await buildAgentPrompt(
+      makeTask({ metadata: {
+        mergeHandoffMinQueuedRuns: 3,
+        reviewLoopFollowUp: true, reviewLoopReviewers: ['copilot'],
+        reviewLoopPRUrl: 'https://github.com/o/r/pull/9', reviewLoopPRBranch: 'b', reviewLoopPRNumber: 9,
+        reviewLoopPROwner: 'o', reviewLoopPRRepo: 'r', sourceTaskId: 'task-src-1',
+      } }),
+      {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' },
+      { defaultReviewers: ['copilot'], agentId: 'registered-coordinator' });
+    expect(enabled).toContain('/api/cos/merge-handoff');
+    expect(enabled).toContain('mergeHandoffMinQueuedRuns');
   });
 
   it('renders a release task body once when its description already carries the prompt', async () => {
