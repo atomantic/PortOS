@@ -9,7 +9,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const ROOT = mkdtempSync(join(tmpdir(), 'mv-continue-shot-'));
-const mocks = vi.hoisted(() => ({ project: null, appended: [], selected: [] }));
+const mocks = vi.hoisted(() => ({ project: null, started: [] }));
 
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -19,11 +19,8 @@ vi.mock('../instanceIdentity.js', () => ({ UNKNOWN_INSTANCE_ID: 'unknown', getIn
 vi.mock('../videoGen/history.js', () => ({ getHistoryItem: vi.fn(async (id) => (['clip-a', 'clip-30'].includes(id) ? { id, filename: `${id}.mp4` } : null)) }));
 vi.mock('./projects.js', () => ({
   getProject: vi.fn(async () => mocks.project),
-  appendSceneTakes: vi.fn(async (_id, _sceneId, inputs) => {
-    mocks.appended.push(...inputs);
-    return { appended: inputs.map((input, i) => ({ ...input, takeId: `t${mocks.appended.length - inputs.length + i}` })) };
-  }),
-  selectSceneTake: vi.fn(async (_id, sceneId, takeId) => { mocks.selected.push(takeId); return { sceneId }; }),
+  // The take and selection writes (one edit-result write) are covered in routes/musicVideoEditResult.test.js.
+  startSceneFromFrame: vi.fn(async (_id, sceneId, input) => { mocks.started.push(input); return { scene: { sceneId }, edit: { sceneIds: [sceneId] } }; }),
 }));
 
 const { findFfmpeg, runFfmpegProcess, probeVideoStreamInfo } = await import('../../lib/ffmpeg.js');
@@ -50,8 +47,7 @@ describe.skipIf(!ffmpeg)('continueFromPreviousShot', () => {
     expect(frame).toEqual({ imageId: 'handoff-clip-a-958.png', atSec: 0.958, fromSceneId: 'a' });
     expect(existsSync(join(ROOT, 'images', frame.imageId))).toBe(true);
     expect((await probeVideoStreamInfo(join(ROOT, 'images', frame.imageId))).width).toBe(320);
-    expect(mocks.appended.map((t) => [t.kind, t.assetId])).toEqual([['image', 'handoff-clip-a-958.png'], ['endImage', 'planned.png']]);
-    expect(mocks.selected).toEqual(['t0', 't1']);
+    expect(mocks.started).toEqual([{ imageId: 'handoff-clip-a-958.png', keepStillAsEnd: true, prompt: 'Out-frame of the previous shot at 0.958s of its clip' }]);
   });
 
   // Uniquely catches a handoff frame with no owner: its delete would send peers no realtime frame.
@@ -79,18 +75,18 @@ describe.skipIf(!ffmpeg)('continueFromPreviousShot', () => {
 
   // Uniquely catches a still shot handing over the stale clip it kept, which the cut never shows.
   it('starts from a still shot\'s end frame, never its stale clip', async () => {
-    mocks.appended.length = 0; mocks.selected.length = 0;
+    mocks.started.length = 0;
     mocks.project = { id: 'mv-1', composition: { mode: 'composed' }, scenes: [
       { sceneId: 'a', startSec: 0, endSec: 1, visualLayer: 'still', imageEffect: 'end-glitch', referenceImageId: 'still.png', endImageId: 'end.png', videoHistoryId: 'clip-a' },
       { sceneId: 'b', startSec: 1, endSec: 3 },
     ] };
     const { frame } = await continueFromPreviousShot('mv-1', 'b');
     expect(frame).toEqual({ imageId: 'end.png', atSec: null, fromSceneId: 'a' });
-    expect(mocks.appended.map((t) => [t.kind, t.assetId])).toEqual([['image', 'end.png']]);
+    expect(mocks.started.map((input) => input.imageId)).toEqual(['end.png']);
   });
 
   it('continues from the last displayed photo in a repeating still sequence', async () => {
-    mocks.appended.length = 0; mocks.selected.length = 0;
+    mocks.started.length = 0;
     mocks.project = { id: 'mv-1', composition: { mode: 'composed' }, scenes: [
       { sceneId: 'a', startSec: 0, endSec: 1, visualLayer: 'still', referenceImageId: 'unused.png',
         photoSequence: { imageIds: ['one.png', 'two.png', 'three.png', 'four.png', 'five.png'], intervalFrames: 6 } },
@@ -98,7 +94,7 @@ describe.skipIf(!ffmpeg)('continueFromPreviousShot', () => {
     ] };
     const { frame } = await continueFromPreviousShot('mv-1', 'b');
     expect(frame).toEqual({ imageId: 'four.png', atSec: null, fromSceneId: 'a' });
-    expect(mocks.appended.map(t => [t.kind, t.assetId])).toEqual([['image', 'four.png']]);
+    expect(mocks.started.map((input) => input.imageId)).toEqual(['four.png']);
   });
 
   it('refuses the first shot and a previous shot without a clip', async () => {
@@ -108,7 +104,7 @@ describe.skipIf(!ffmpeg)('continueFromPreviousShot', () => {
   });
 
   it('uses the composed render frame rate when continuing a photo sequence', async () => {
-    mocks.appended.length = 0; mocks.selected.length = 0;
+    mocks.started.length = 0;
     mocks.project = { id: 'mv-1', composition: { mode: 'composed' }, scenes: [
       { sceneId: 'lead', order: 0, startSec: 0, endSec: 0.5, videoHistoryId: 'clip-30' },
       { sceneId: 'photos', order: 1, startSec: 0.5, endSec: 1.5, visualLayer: 'still',

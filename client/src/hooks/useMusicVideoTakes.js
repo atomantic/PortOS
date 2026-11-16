@@ -213,12 +213,16 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
     };
   };
   // A derived copy of the shot's clip (`make` resolves to the new gallery video) becomes a new clip take, and the selected one.
+  // Two writes, so each reply's edit result is applied in turn: the select's diff starts from the revision the add left.
   const deriveClipTake = (scene, make, source, failMessage) => {
     const provenance = clipProvenance(scene);
     return runTakeOp(
       (projectId) => make(scene.videoHistoryId)
-        .then(({ video }) => addMusicVideoSceneTake(projectId, scene.sceneId, { kind: 'video', assetId: video.id, source, ...provenance }, { silent: true }))
-        .then(({ take }) => selectMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, { silent: true })),
+        .then(({ video }) => addMusicVideoSceneTake(projectId, scene.sceneId, { kind: 'video', assetId: video.id, source, ...provenance }, own()))
+        .then(({ take, edit }) => {
+          if (edit && applyEdit && runningRef.current === 1) applyEdit(projectId, edit);
+          return selectMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, own());
+        }),
       failMessage,
     );
   };
@@ -229,7 +233,7 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
   // Continuing shot: the previous shot's last on-screen frame becomes this
   // scene's start frame; `keepStillAsEnd` keeps the current one as its end frame.
   const continueFromPrevious = (scene, { keepStillAsEnd = false } = {}) => runTakeOp(
-    (projectId) => continueMusicVideoSceneFromPrevious(projectId, scene.sceneId, { keepStillAsEnd }, { silent: true }).then((res) => res.scene),
+    (projectId) => continueMusicVideoSceneFromPrevious(projectId, scene.sceneId, { keepStillAsEnd }, own()).then(({ scene: started, edit }) => ({ ...started, edit })),
     'Failed to continue from the previous shot',
   );
 
@@ -246,11 +250,18 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
 
   // A vision check can take minutes, so it stays off the serialized chain; its answer is the scene as saved after it.
   const [checking, setChecking] = useState(() => new Set());
+  // Its reply carries the edit result, applied unless a take decision started while the check ran: its optimistic
+  // change is not in the reply's copy of the shot, so then only the take list is patched, as before.
   const checkTake = (scene, take) => {
     const projectId = project.id;
+    const mark = startedRef.current;
     setChecking((prev) => new Set(prev).add(take.takeId));
-    return checkMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, { silent: true })
-      .then((saved) => { applyScene(projectId, saved); return true; })
+    return checkMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, own())
+      .then(({ edit, ...saved }) => {
+        if (edit && applyEdit && settledSince(mark)) applyEdit(projectId, edit);
+        else applyScene(projectId, saved);
+        return true;
+      })
       .catch((err) => { toast.error(err?.message || 'Failed to check the frame'); return false; })
       .finally(() => setChecking((prev) => { const next = new Set(prev); next.delete(take.takeId); return next; }));
   };
@@ -299,7 +310,7 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
   const importTake = (scene, item) => runTakeOp(
     (projectId) => addMusicVideoSceneTake(projectId, scene.sceneId, {
       kind: 'image', assetId: item.filename, source: 'imported',
-    }, { silent: true }).then((res) => res.scene),
+    }, own()).then(({ scene: imported, edit }) => ({ ...imported, edit })),
     'Failed to import take',
   );
 
@@ -309,7 +320,7 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
   const importClipTake = (scene, item) => runTakeOp(
     (projectId) => addMusicVideoSceneTake(projectId, scene.sceneId, {
       kind: 'video', assetId: item.id, source: 'imported',
-    }, { silent: true }).then((res) => res.scene),
+    }, own()).then(({ scene: imported, edit }) => ({ ...imported, edit })),
     'Failed to import clip take',
   );
 

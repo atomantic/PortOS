@@ -687,13 +687,42 @@ export async function markMediaPoolAssets(id, keys, mark, options = {}, { edit: 
 // Append candidate takes to one scene: `{ scene, appended }`. A take fills its
 // slot only while the slot is empty, unless `replaceSelection` names a still
 // re-render (takes.js).
-export async function appendSceneTakes(id, sceneId, inputs) {
+export async function appendSceneTakes(id, sceneId, inputs, { edit: answerEdit = false } = {}) {
   const { appendSceneTakes: append } = await import('./takes.js');
-  const outcome = await mutateProjectRecord(id, current => append(current, sceneId, inputs), {
-    source: inputs.some(input => input.source === 'generated') ? 'generation-completion' : null,
-  });
+  const source = inputs.some(input => input.source === 'generated') ? 'generation-completion' : null;
+  const transform = current => append(current, sceneId, inputs);
+  if (!answerEdit) {
+    const outcome = await mutateProjectRecord(id, transform, { source });
+    await fileAppendedTakes(outcome.project, outcome.appended.map(take => ({ sceneId, take })));
+    return { scene: outcome.project.scenes.find(scene => scene.sceneId === sceneId), appended: outcome.appended };
+  }
+  const { outcome, edit } = await editWrite(id, transform, { source });
   await fileAppendedTakes(outcome.project, outcome.appended.map(take => ({ sceneId, take })));
-  return { scene: outcome.project.scenes.find(scene => scene.sceneId === sceneId), appended: outcome.appended };
+  const { edit: result } = await withEditResult({}, edit);
+  // The edit result's copy of the shot is presented as GET presents it; an import of a take the shot already has changes nothing.
+  return { scene: result.scenes.find(scene => scene.sceneId === sceneId) || outcome.scene, appended: outcome.appended, edit: result };
+}
+
+/**
+ * Start a shot from a frame: the frame becomes a take and the shot's start frame; with `keepStillAsEnd`
+ * its current start frame becomes its end frame (continue from previous). One write, so the reply's edit
+ * result covers the whole change. Returns `{ scene, edit }`.
+ */
+export async function startSceneFromFrame(id, sceneId, { imageId, prompt, keepStillAsEnd = false }) {
+  const { appendSceneTakes: append, selectSceneTake: select } = await import('./takes.js');
+  const { outcome, edit } = await editWrite(id, (current) => {
+    const scene = current.scenes?.find(entry => entry.sceneId === sceneId);
+    const plannedStill = keepStillAsEnd && scene?.referenceImageId && scene.referenceImageId !== imageId ? scene.referenceImageId : null;
+    let result = append(current, sceneId, [
+      { kind: 'image', assetId: imageId, source: 'generated', provider: 'portos', prompt },
+      ...(plannedStill ? [{ kind: 'endImage', assetId: plannedStill, source: 'imported', provider: 'portos' }] : []),
+    ]);
+    for (const take of result.appended) result = { ...select(result.project, sceneId, take.takeId), appended: result.appended };
+    return result;
+  }, { source: 'generation-completion' });
+  await fileAppendedTakes(outcome.project, outcome.appended.map(take => ({ sceneId, take })));
+  const { edit: result } = await withEditResult({}, edit);
+  return { scene: result.scenes.find(scene => scene.sceneId === sceneId) || outcome.scene, edit: result };
 }
 
 // Every take that lands also lands in the project's own collection (mediaPool.js).
@@ -812,7 +841,7 @@ export async function reviewSceneTake(id, sceneId, takeId, review, { edit: answe
  * default (Codex when ready, else an API provider).
  * Its evidence carries a manual run id, so a production run still reviews for itself.
  */
-export async function checkSceneTakePlate(id, sceneId, takeId) {
+export async function checkSceneTakePlate(id, sceneId, takeId, { edit: answerEdit = false } = {}) {
   const { plateCheckPrompt, plateCheckTake, recordTakePlateEvidence } = await import('./takes.js');
   const { plateFrameRole } = await import('../../lib/musicVideoPlateEvidence.js');
   const project = await getProject(id);
@@ -824,8 +853,11 @@ export async function checkSceneTakePlate(id, sceneId, takeId) {
   const frameRole = plateFrameRole(take);
   const evidence = await reviewPlate({ scene, subjects: project.concept?.subjects || [], project, assetId: take.assetId, runId: `manual-${randomUUID()}`, reviewer,
     prompt: plateCheckPrompt(scene, take), frameRole });
-  const { scene: saved } = await mutateProjectRecord(id, (current) => recordTakePlateEvidence(current, sceneId, takeId, evidence), SCENES_REPLY);
-  return saved;
+  const record = (current) => recordTakePlateEvidence(current, sceneId, takeId, evidence);
+  if (!answerEdit) return (await mutateProjectRecord(id, record, SCENES_REPLY)).scene;
+  const { outcome, edit } = await editWrite(id, record);
+  const { edit: result } = await withEditResult({}, edit);
+  return { scene: result.scenes.find((entry) => entry.sceneId === sceneId) || outcome.scene, edit: result };
 }
 
 /**

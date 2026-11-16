@@ -52,10 +52,10 @@ beforeEach(async () => {
 afterAll(cleanupTempDataRoots);
 
 // The edit's reply, folded into the read before it, is the read after it.
-async function expectReloadParity(send) {
+async function expectReloadParity(send, status = 200) {
   const before = await read();
   const reply = await send();
-  expect(reply.status).toBe(200);
+  expect(reply.status).toBe(status);
   expect(reply.body).not.toHaveProperty('project');
   expect(reply.body.edit).toMatchObject({ sceneIds: expect.any(Array), scenes: expect.any(Array), project: expect.any(Object), removed: expect.any(Array) });
   const after = await read();
@@ -169,6 +169,27 @@ describe('board edit replies carry what a reload would show', () => {
     await expectReloadParity(() => request(app).post(`${base()}/scenes/b/takes/reject-unused`).send({}));
     const marked = await expectReloadParity(() => request(app).patch(`${base()}/media-pool/marks`).send({ items: [{ kind: 'image', assetId: 'c.png' }], mark: 'bad' }));
     expect(marked.reply.assetMarks).toBeTruthy();
+  });
+
+  // Uniquely catches a take import whose reply is the bare scene, which forces the board to reload after the import.
+  it('importing a still or a clip answers with an edit that folds into the reloaded board', async () => {
+    const still = await expectReloadParity(() => request(app).post(`${base()}/scenes/c/takes`).send({ kind: 'endImage', assetId: 'spare.png', source: 'imported' }), 201);
+    expect(still.reply.take).toMatchObject({ kind: 'endImage', assetId: 'spare.png' });
+    expect(still.reply.scene).toMatchObject({ sceneId: 'c', endImageId: 'spare.png' });
+    const clip = await expectReloadParity(() => request(app).post(`${base()}/scenes/a/takes`).send({ kind: 'video', assetId: 'clip-b', source: 'imported' }), 201);
+    expect(clip.reply.take).toMatchObject({ kind: 'video', assetId: 'clip-b' });
+    // A take the shot already has changes nothing, and the board is already right.
+    await expectReloadParity(() => request(app).post(`${base()}/scenes/a/takes`).send({ kind: 'video', assetId: 'clip-b', source: 'imported' }), 201);
+  });
+
+  // Uniquely catches a continuing shot that writes the frame, the start selection and the end selection as three
+  // revisions, which no single edit result can describe.
+  it('starting a shot from a frame is one write whose edit folds into the reloaded board', async () => {
+    const before = await read();
+    const { scene, edit } = await projects.startSceneFromFrame(project.id, 'b', { imageId: 'spare.png', prompt: 'Out-frame of the previous shot', keepStillAsEnd: true });
+    expect(scene).toMatchObject({ sceneId: 'b', referenceImageId: 'spare.png', endImageId: 'b.png' });
+    expect(edit.baseUpdatedAt).toBe(before.updatedAt);
+    expect(applyMusicVideoEdit(before, edit)).toEqual(await read());
   });
 
   it('the change broadcast names the tab that asked, and only that one', async () => {
