@@ -1,6 +1,7 @@
 /**
  * Resolves which provider/model a record uses (`resolveEffectiveProvider`, `resolveSeriesRunLlm`) plus
  * shared option helpers for assignment editors.
+ *
  * `resolveSeriesRunLlm` mirrors `server/lib/seriesLlmOverride.js`.
  */
 
