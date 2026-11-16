@@ -1,11 +1,7 @@
 /**
- * Layered Intelligence — Jira filer (#2842 split of layeredIntelligence.js).
- *
- * Jira has no forge CLI — it goes through the PortOS Jira REST service
- * (server/services/jira.js). Dedup + pause are label-based (same as the forges)
- * via JQL, with the slug marker embedded in the ticket description. The Jira deps
- * (search/create/addLabel) are injectable so tests drive the dispatch without a
- * live Jira instance.
+ * Layered Intelligence: Jira filer (#2842 split of layeredIntelligence.js).
+ * Goes through the PortOS Jira REST service (server/services/jira.js); dedup and pause are
+ * label-based via JQL with the slug marker in the description. Jira deps are injectable.
  */
 
 import { jiraIssueLabels, normalizeIssueHardwareRequirements } from '../../lib/dispatchLabels.js';
@@ -14,14 +10,6 @@ import { LI_LABEL, PLANNED_WORK_LABEL, LI_JIRA_BLOCKING_LABEL } from './constant
 import { slugMarker, extractSlugFromBody } from './dedup.js';
 import { normalizeIssueLabels } from './forgeFiler.js';
 import { scrubForgeIssueText } from '../appIssues.js';
-
-// ---------------------------------------------------------------------------
-// Jira filer. Jira has no forge CLI — it goes through the PortOS Jira REST
-// service (server/services/jira.js). Dedup + pause are label-based (same as the
-// forges) via JQL, with the slug marker embedded in the ticket description.
-// The Jira deps (search/create/addLabel) are injectable so tests drive the
-// dispatch without a live Jira instance.
-// ---------------------------------------------------------------------------
 
 /**
  * Normalize a Jira status CATEGORY to `open` / `closed`. Jira's three canonical
@@ -57,9 +45,7 @@ export async function listJiraIssues({ instanceId, projectKey, jql, searchOption
       state: normalizeJiraState(i.statusCategory),
       closedAt: i.resolutiondate || null,
       labels: normalizeIssueLabels(i.labels),
-      // Jira DOES have a real priority field (unlike the forges) — but only when
-      // the caller asked searchIssues for it. Absent → null → the renderer omits
-      // it, rather than a fabricated default.
+      // Real priority field, only when the caller asked searchIssues for it; absent is null, not a default.
       priority: typeof i.priority === 'string' && i.priority.trim() ? i.priority.trim() : null,
       slug: extractSlugFromBody(i.description || '') || extractSlugFromBody(i.summary || '')
     }))
@@ -67,25 +53,12 @@ export async function listJiraIssues({ instanceId, projectKey, jql, searchOption
 }
 
 /**
- * The JQL for a Jira project's committed backlog (#2698): `plan`-labeled tickets
- * that aren't Done, highest priority first.
- *
- * The label filter is NOT optional — it is what makes this source mean the same
- * thing on Jira as on a forge. Without it the query returns every open ticket,
- * i.e. the untriaged backlog nobody has committed to (plus LI's own past
- * proposals), which would then render under a header asserting the user
- * "already committed to" them and instruct the reasoner to suppress against
- * essentially the whole tracker — and duplicate the `openIssues` source besides.
- * A project that doesn't use the label reports a truthful "nothing planned"
- * rather than a backlog-shaped lie.
- *
- * Deliberately NOT `sprint in openSprints()` — the Sprint field only exists on
- * Scrum-board-backed projects, and JQL referencing an absent field is a hard 400
- * rather than an empty result, which would make gatherPlannedWork report
- * "unavailable" forever on every Kanban/basic project. `labels` exists on every
- * project shape. Priority is an ORDER BY rather than a filter for the same
- * reason: priority NAMES are scheme-specific (a project can rename or drop
- * "Highest"), so filtering on them risks the same permanent-400.
+ * The JQL for a Jira project's committed backlog (#2698): `plan`-labeled tickets that
+ * aren't Done, highest priority first. The label filter is required: without it the query
+ * returns the whole untriaged backlog under a header claiming the user committed to it.
+ * Deliberately NOT `sprint in openSprints()` (absent on non-Scrum projects, where JQL on a
+ * missing field is a hard 400), and priority is an ORDER BY, not a filter, because
+ * priority names are scheme-specific.
  */
 export function plannedWorkJql(projectKey) {
   return `project = "${escapeJql(projectKey)}" AND labels = "${PLANNED_WORK_LABEL}" AND statusCategory != Done ORDER BY priority DESC, updated DESC`;
@@ -108,13 +81,9 @@ export async function listJiraBlockingIssues({ instanceId, projectKey, search = 
 }
 
 /**
- * File ONE proposal ticket in a Jira project. Embeds the slug marker in the
- * description (searchable for dedup) and tags it with the layered-intelligence
- * label. The summary and description go through the same scrubber every forge
- * filer shares (`scrubForgeIssueText`, #8460); the slug marker is appended
- * after it so redaction can never rewrite the dedup identity. Returns
- * `{ success, key, url }` — Jira issues are keyed strings
- * (`PROJ-123`), not integers, so the handler resolves pause targets by key.
+ * File ONE proposal ticket. The slug marker (dedup identity) is appended after the shared
+ * `scrubForgeIssueText` pass (#8460) so redaction cannot rewrite it. Returns
+ * `{ success, key, url }`: Jira keys are strings (`PROJ-123`), not integers.
  */
 export async function fileProposalToJira({
   instanceId, projectKey, issueType = 'Task', title, body, slug,
@@ -136,12 +105,7 @@ export async function fileProposalToJira({
   return { success: true, key: res.ticketId || null, url: res.url || null };
 }
 
-/**
- * Resolve a Jira pause target to a concrete issue KEY. `"this"` → the just-filed
- * ticket's key; an integer → `<projectKey>-<n>` (a pre-existing ticket in the
- * same project). Returns null when it can't resolve (e.g. `"this"` but nothing
- * was filed, or no project key for an integer target).
- */
+/** Resolve a Jira pause target to an issue KEY: `"this"` is the just-filed ticket, an integer is `<projectKey>-<n>`; null when unresolvable. */
 export function resolveJiraBlockKey(pause, filedKey, projectKey) {
   if (!pause) return null;
   if (pause.blockOnIssue === 'this') return filedKey || null;

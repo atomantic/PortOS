@@ -53,15 +53,10 @@ const failure = (code) => ({ ok: false, code });
 const headPath = (decisionId, options) => join(jevHeadsDir(), jevHeadFileName(decisionId, options));
 
 /**
- * Which decisions have an applicable adopted head, by id.
- *
- * The VERDICT, not the head: the sole caller (`runJevDecision`) turns it into a
- * slug-or-null and the weights are read by the sidecar from disk, so caching
- * the parsed artifact would pin megabytes of float arrays in module scope for
- * the process lifetime to answer a boolean. A `false` entry is cached too — a
- * no-head install is the common case and must not re-stat per clause.
- *
- * Invalidated by every write path in this module, and by the test seam below.
+ * Which decisions have an applicable adopted head, by id. The VERDICT, not the head: the
+ * sidecar reads weights from disk, so caching the artifact would pin megabytes in module
+ * scope to answer a boolean. `false` entries are cached too (no-head is the common case).
+ * Invalidated by every write path here and by the test seam below.
  */
 let adoptedCache = null;
 
@@ -77,19 +72,11 @@ async function readHeadFile(path) {
 }
 
 /**
- * The head slug `decisionId` is currently scored with, or null.
- *
- * The slug IS the decision id — `jevHeadSlug` owns that mapping — and the
- * sidecar resolves it inside the heads directory. Returning it rather than the
- * artifact is what lets a caller pass it straight through without ever holding
- * the weights.
- *
- * Returns null — never a failure — for every reason a head might not apply:
- * none adopted, an unreadable file, a head fit on a different encoder
- * revision. Scoring falls back to the stock zero-shot classifier in all three
- * cases, because that is what the install did before any head existed and it
- * is always correct. An operator who wants to know WHY sees it in the panel,
- * which calls `describeJevHeads` instead.
+ * The head slug `decisionId` is currently scored with, or null. The slug IS the decision id
+ * (`jevHeadSlug`); the sidecar resolves it in the heads directory, so callers never hold
+ * the weights. Null, never a failure, for every reason a head might not apply (none
+ * adopted, unreadable, different encoder revision): scoring falls back to the stock
+ * zero-shot classifier. `describeJevHeads` explains why.
  */
 export async function getAdoptedJevHeadSlug(decisionId) {
   if (!JEV_DECISION_IDS.includes(decisionId)) return null;
@@ -102,12 +89,9 @@ export async function getAdoptedJevHeadSlug(decisionId) {
 }
 
 /**
- * Operator-facing state for every decision that has an artifact on disk.
- *
- * Reports the metrics and the adoption blocker, never a corpus row, a premise
- * or a path. `compatible: false` is stated rather than silently hidden: a head
- * that stopped applying because the pinned model revision moved is a fact the
- * operator needs, not an absence.
+ * Operator-facing state for every decision with an artifact on disk: metrics and the
+ * adoption blocker, never a corpus row, premise or path. `compatible: false` is stated, not
+ * hidden: a head that stopped applying because the pinned model revision moved is a fact.
  */
 export async function describeJevHeads() {
   const dir = jevHeadsDir();
@@ -123,9 +107,8 @@ export async function describeJevHeads() {
         continue;
       }
       const { head } = result;
-      // The blocker is computed ONCE and `beatsBaselines` derived from it:
-      // `headBeatsBaselines` re-validates the same metrics object, so asking
-      // both would parse it twice to answer one question two ways.
+      // Blocker computed ONCE; `beatsBaselines` derived from it (`headBeatsBaselines`
+      // would re-validate the same metrics).
       const blocker = headAdoptionBlocker(head.metrics);
       rows.push({
         decisionId,
@@ -160,11 +143,9 @@ export async function saveCandidateJevHead(decisionId, raw) {
 }
 
 /**
- * Promote the candidate for `decisionId` into the adopted slot.
- *
- * THE GATE LIVES HERE. A head that does not beat both the stock zero-shot
- * classifier and the majority class on the held-out gold set cannot be adopted
- * through any surface, and the refusal names which baseline it lost to.
+ * Promote the candidate for `decisionId` into the adopted slot. THE GATE LIVES HERE: a head
+ * that does not beat both the stock zero-shot classifier and the majority class on the
+ * held-out gold set cannot be adopted through any surface; the refusal names the baseline.
  */
 export async function adoptJevHead(decisionId) {
   if (!JEV_DECISION_IDS.includes(decisionId)) return failure('jev-head-invalid');
@@ -176,9 +157,8 @@ export async function adoptJevHead(decisionId) {
   if (blocker) return failure(blocker);
   await ensureDir(jevHeadsDir());
   await atomicWrite(headPath(decisionId), head);
-  // The candidate is consumed, not kept: leaving a byte-identical copy beside
-  // the adopted head would make the panel show the same artifact twice, in two
-  // states, with no way to tell which one is answering.
+  // The candidate is consumed, not kept: a copy beside the adopted head would show the
+  // same artifact twice in two states.
   await unlink(headPath(decisionId, { candidate: true })).catch(() => null);
   resetJevHeadCache();
   notifyJevChanged('heads');
@@ -186,11 +166,8 @@ export async function adoptJevHead(decisionId) {
 }
 
 /**
- * Discard an artifact.
- *
- * Discarding the ADOPTED head returns the decision to the stock zero-shot
- * classifier immediately — which is the state every install ships in, so there
- * is nothing to restore and nothing to warn about.
+ * Discard an artifact. Discarding the ADOPTED head returns the decision to the stock
+ * zero-shot classifier, the state every install ships in.
  */
 export async function discardJevHead(decisionId, { candidate = true } = {}) {
   if (!JEV_DECISION_IDS.includes(decisionId)) return failure('jev-head-invalid');

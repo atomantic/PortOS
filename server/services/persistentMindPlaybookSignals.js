@@ -1,16 +1,11 @@
 /**
- * Live-signal gathering for the Persistent Mind continuous-play playbook
- * phase (issue #7458). The pure picker lives in
- * `../lib/persistentMindPlaybookPhase.js`; this module owns the I/O that
- * feeds it — the bounded Eidoverse world-signal projection the World Design
- * recipe renders into districts, plus the observation report that says what
- * arrived from a peer since this mind last looked.
+ * Live-signal gathering for the Persistent Mind continuous-play playbook phase
+ * (issue #7458). The pure picker lives in `../lib/persistentMindPlaybookPhase.js`;
+ * this module owns the I/O: the bounded Eidoverse world-signal projection plus the
+ * observation report of what arrived from a peer since the mind last looked.
  *
- * Both collaborators are dynamically imported so a mind running in `default`
- * playbook mode (the common case) never pays for the ~20 parallel service
- * reads they perform; only an active `continuous-play` wake reaches this
- * module at all. The projection is collected once and handed to the
- * observation so the wake does not fan out across those reads twice.
+ * Both collaborators are dynamically imported so `default`-mode minds never pay for
+ * their ~20 service reads; the projection is collected once.
  */
 
 import {
@@ -19,9 +14,9 @@ import {
 } from '../lib/persistentMindPlaybookPhase.js';
 
 /**
- * Degrade one signal read to `null` ("unknown") rather than parking the wake.
- * An abort is NOT a signal failure — the turn was interrupted, and swallowing
- * it here would let the wake continue against a world nobody read.
+ * Degrade one signal read to `null` ("unknown") rather than parking the wake. An
+ * abort is NOT a signal failure: swallowing it would let the wake continue
+ * against a world nobody read.
  */
 const orNull = (what, signal) => (error) => {
   if (signal?.aborted) throw error;
@@ -31,13 +26,12 @@ const orNull = (what, signal) => (error) => {
 
 /**
  * Resolve the current continuous-play phase from live PortOS/Eidoverse world
- * signals. Never throws (except on abort): a signal read failure degrades to
- * the picker's `explore` default rather than parking the wake.
+ * signals. Never throws except on abort: a failed read degrades to the picker's
+ * `explore` default.
  *
- * `commit: false` on the observation is load-bearing. Observing normally
- * advances the visit marker, and the picker must not consume the "what is new
- * since I last looked" trail that the mind's own `eidoverse.observe` call —
- * and the very `coordinate` phase this resolves — depends on.
+ * `commit: false` on the observation is load-bearing: observing advances the visit
+ * marker, and the picker must not consume the "what is new since I last looked"
+ * trail the mind's own `eidoverse.observe` call (and the `coordinate` phase) needs.
  */
 export async function resolvePersistentMindPlaybookPhase({ signal } = {}) {
   const worldSignals = await import('./eidoverseWorldSources.js')

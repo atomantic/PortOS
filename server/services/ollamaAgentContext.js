@@ -1,30 +1,20 @@
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 /**
  * Pre-spawn context-window preparation for Ollama-backed *agent harnesses*
- * (`claude-ollama`, `claude-ollama-tui`, `opencode-ollama`, …).
+ * (`claude-ollama`, `opencode-ollama`, ...).
  *
- * These providers launch a real CLI/TUI that speaks to Ollama directly, so —
- * unlike `api`-type providers, where the toolkit runner attaches a per-request
- * `num_ctx` — PortOS has no way to influence the window from inside the
- * request. The only lever is the daemon's `OLLAMA_CONTEXT_LENGTH`, which is why
- * a provider's `numCtx` is enforced here by (re)loading the daemon at that
- * window before the harness starts.
- *
- * When the provider carries no `numCtx`, nothing is restarted — Ollama's
- * VRAM-based auto-pick stands — but a too-small window is warned about up
- * front, because the alternative is a run that dies an hour in with
- * `exceed_context_size_error`.
- *
- * The same "prepare the daemon before the harness starts" role covers the
- * model's reasoning capability: Ollama rejects a whole request when a model
- * that never implements thinking is asked to think, so
- * `dropUnsupportedOllamaThinking` resolves that ahead of the spawn too.
+ * The harness talks to Ollama directly, so the only lever is the daemon's
+ * `OLLAMA_CONTEXT_LENGTH`: a provider's `numCtx` is enforced by (re)loading the
+ * daemon at that window before the harness starts. Without `numCtx` nothing is
+ * restarted, but a too-small window is warned about up front
+ * (`exceed_context_size_error` would otherwise kill the run late).
+ * `dropUnsupportedOllamaThinking` likewise resolves the model's reasoning
+ * capability ahead of the spawn.
  */
 
 import { isOllamaBackedProvider } from './providers.js'
-// Straight from `internal/` on purpose: it is deliberately NOT re-exported from
-// providers.js, and re-deriving the normalization here is exactly the drift that
-// exclusion exists to prevent.
+// Straight from `internal/`: deliberately not re-exported from providers.js, so
+// the normalization cannot drift.
 import { ollamaBaseFromProvider } from '../lib/aiToolkit/internal/ollamaBacked.js'
 import {
   OLLAMA_AGENT_MIN_CONTEXT,
@@ -39,12 +29,7 @@ import { LIFECYCLE_LINES } from '../lib/agentOutputMarkers.js'
  * Prepare the Ollama daemon for an agent harness run.
  *
  * Never throws and never blocks a spawn: a daemon that refuses to restart is
- * reported through `warning` (and the run proceeds on whatever window it has)
- * rather than failing the agent before it starts.
- *
- * Non-Ollama providers return `{ skipped: true }`. Call sites gate on
- * `isOllamaBackedProvider` too, so a cloud run takes no async hop at all; this
- * guard is the module's own contract, not the hot path.
+ * reported through `warning`. Non-Ollama providers return `{ skipped: true }`.
  *
  * @param {{id?:string, name?:string, defaultModel?:string|null, numCtx?:number|null, envVars?:object, endpoint?:string, ollamaBacked?:boolean}|null} provider
  * @param {{ env?: Record<string, string|undefined>, model?: string|null }} [options]
@@ -52,10 +37,8 @@ import { LIFECYCLE_LINES } from '../lib/agentOutputMarkers.js'
  */
 export async function ensureOllamaAgentContext(provider, { env = process.env, model = provider?.defaultModel ?? null } = {}) {
   if (!provider || !isOllamaBackedProvider(provider)) return { skipped: true }
-  // A provider can point at a REMOTE Ollama host. `ollamaManager` only ever
-  // starts, stops, and inspects the local daemon, so acting on one of those
-  // would reload an unrelated local daemon and still leave the provider's real
-  // daemon at its old window.
+  // `ollamaManager` only controls the LOCAL daemon; acting on it for a remote
+  // provider would reload an unrelated daemon.
   if (!isSameOllamaDaemon(ollamaBaseFromProvider(provider), getBaseUrl())) {
     return { skipped: true, reason: 'remote-daemon' }
   }
@@ -88,15 +71,9 @@ export async function ensureOllamaAgentContext(provider, { env = process.env, mo
 /**
  * Does this run's Ollama model reject a thinking request?
  *
- * `true` only when we KNOW it does — the daemon answered `/api/show` with a
- * capability list that omits `thinking`. A failed probe (`null`) and an empty
- * list both mean *unknown*, not *unsupported*, so they leave the controls
- * alone rather than silently dropping a level the model does accept. Mirrors
- * `modelRejectsThinking` in `codeReview.js`, which solves the same problem for
- * the local code reviewer's own HTTP calls.
- *
- * A provider pointed at a REMOTE daemon is never probed: `ollamaManager` only
- * inspects the local one, so its answer would describe the wrong host.
+ * `true` only when `/api/show` answered with capabilities that omit `thinking`; a
+ * failed probe or empty list means unknown, not unsupported. A REMOTE daemon is
+ * never probed. Mirrors `modelRejectsThinking` in `codeReview.js`.
  *
  * @param {object|null} provider
  * @param {string|null} model
@@ -113,20 +90,11 @@ export async function ollamaModelRejectsThinking(provider, model) {
 /**
  * Drop a run's reasoning controls when its Ollama model cannot think.
  *
- * Ollama rejects the WHOLE request rather than ignoring a field a model has no
- * answer for — `"<model>" does not support thinking`, both on native
- * `/api/chat` (`think: true`) and through the OpenAI-compatible
- * `reasoning_effort` an OpenCode `agent.*.reasoningEffort` becomes. So an
- * agent dispatched at `effort: medium` onto a non-reasoning local model
- * (gemma3, most plain chat models) dies on its first turn with exit 1 and no
- * output, which is how a `pr-reviewer` stage pinned to `gemma3:27b` failed
- * three times over. The level carries no information for such a model, so
- * dropping it loses nothing; keeping it loses the run.
- *
- * Resolved once per spawn, on the provider every path shares, so the two
- * carriers of the level — the `--effort` argv and OpenCode's config block —
- * cannot disagree. `thinking: false` is preserved: that is a request NOT to
- * think, which every model accepts.
+ * Ollama rejects the WHOLE request (`"<model>" does not support thinking`) for
+ * `think: true` or an OpenAI-compatible `reasoning_effort`, so an `effort: medium`
+ * agent on a non-reasoning model (gemma3) dies on its first turn. The level is
+ * meaningless there, so it is dropped once per spawn on the shared provider so the
+ * `--effort` argv and OpenCode's config block agree. `thinking: false` is kept.
  *
  * @param {object|null} provider - the run's provider, task overrides already merged
  * @param {string|null} model - the model this run was dispatched with

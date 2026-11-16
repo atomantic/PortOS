@@ -17,64 +17,43 @@ import { diagnosisOptedIn } from './diagnosisCore.js';
 // mid-run can still read it (SSE replay only carries `lastPayload`).
 export const runs = new Map();
 
-// In-process progress bus (CDO Phase 3, #2185). Every SSE frame the run
-// broadcasts to attached HTTP clients is ALSO emitted here keyed by seriesId, so
-// a SERVER-SIDE consumer — the Creative Director plan-advance loop running an
-// autopilot as one plan step — can observe progress/pause/terminal frames
-// without opening an HTTP/SSE client. SSE behavior is unchanged; this is a
-// parallel tap, not a replacement. Listeners are per-seriesId and short-lived
-// (attached for the life of one plan step), but a busy install could run several
-// concurrently, so lift the default 10-listener cap to avoid a spurious leak
-// warning. The payloads are the exact SSE frames (they carry `type`).
+// In-process progress bus (CDO Phase 3, #2185): every SSE frame is ALSO emitted here
+// keyed by seriesId so a server-side consumer (the Creative Director plan-advance
+// loop) can observe frames without an HTTP client. Listeners are short-lived but may
+// run concurrently, so the 10-listener cap is lifted.
 export const autopilotEvents = new EventEmitter();
 autopilotEvents.setMaxListeners(0);
 
-// The frame `type`s that mean the run reached a terminal/paused state — a
-// server-side consumer settles its plan step on any of these. `complete` (or a
-// dry-run `complete`), `paused` (convergence/budget/child pause), `canceled`
-// (user stop), and `error` (run-ending throw) are exhaustive of the run's exit
-// frames (see the fire-and-forget coordinator in startSeriesAutopilot).
+// Frame `type`s meaning the run reached a terminal/paused state; a server-side
+// consumer settles its plan step on any of these (see the coordinator in
+// startSeriesAutopilot).
 export const AUTOPILOT_TERMINAL_TYPES = new Set(['complete', 'paused', 'canceled', 'error']);
 
 // ---------------------------------------------------------------------------
-// Diagnosable-signal retention (feeds the opt-in self-improvement post-mortem,
-// `selfImprove.js`). It lives here rather than there because it is run-RECORD
-// state — `session.js#broadcast` writes it on the record this module owns, and
-// keeping it here is what lets the diagnosis import the registry instead of the
-// registry importing the diagnosis (an import cycle through session.js, which
-// this package has been bitten by before — see the barrel's TDZ note).
+// Diagnosable-signal retention (feeds `selfImprove.js`). Lives here because it is
+// run-RECORD state written by `session.js#broadcast`, which lets the diagnosis
+// import the registry instead of the reverse (an import cycle through session.js;
+// see the barrel's TDZ note).
 // ---------------------------------------------------------------------------
 
-// Frame types worth keeping as diagnosis evidence. Deliberately excludes the
-// high-volume happy-path frames (`start` / `step:start` / `step:complete`) — the
-// step SEQUENCE is reconstructable from the outcome, while these carry the
-// "something went sideways" detail a diagnosis actually reasons over. The
-// terminal frames (`complete` / `paused` / `error`) are excluded too: the
-// diagnosis runs BEFORE them, and their content reaches it as the `outcome` +
-// `reason` arguments instead.
-// `resolve:no-change` is here for the same reason the loop emits it at all: the
-// convergence guard counts a resolver attempt that wrote nothing exactly like
-// one that did, so a pause reading "no net progress over 2 rounds of
-// auto-resolve" was handed a log with no frame for those rounds — the diagnosis
-// could see the attempts had happened only by inference. Bounded by the gate's
-// round cap, and it carries counts + an enum, so retaining it costs one small
-// frame per attempt.
+// Frame types kept as diagnosis evidence: the "something went sideways" detail.
+// Excludes happy-path frames (the step sequence is reconstructable) and terminal
+// frames (the diagnosis runs BEFORE them; they arrive as `outcome` + `reason`).
+// `resolve:no-change` is kept because the convergence guard counts a resolver
+// attempt that wrote nothing like one that did; without it the log had no frame for
+// those rounds. Bounded by the gate's round cap.
 export const SIGNAL_FRAME_TYPES = Object.freeze(new Set([
   'note', 'step:skip', 'verify:round', 'resolve:round', 'resolve:no-change', 'resolve:rollback', 'resolve:isolate', 'check:complete',
   'foundation:round', 'foundation:fix', 'foundation:rollback', 'canon:repair', 'child:retry', 'child:escalate',
   'revision:cycle', 'revision:converged', 'gap:filed',
 ]));
 
-// Ceiling on the retained log. A long run emits a `verify:round` per gate round
-// and a `check:complete` per check per pass; past this the overflow is counted,
-// not stored, so a runaway run can't grow the record unbounded (or blow the
-// diagnosis prompt's context).
+// Ceiling on the retained log; overflow is counted, not stored, so a runaway run
+// can't grow the record or blow the diagnosis prompt's context.
 export const MAX_SIGNALS = 200;
 
-// A `check:complete` frame is only evidence when the check MISBEHAVED — a check
-// that ran and reported findings is the system working. Without this filter a
-// 40-check pass would flood the log with healthy frames and crowd out the
-// failures that matter.
+// A `check:complete` frame is evidence only when the check MISBEHAVED; healthy
+// frames would crowd out the failures.
 const isNoisyHealthyFrame = (payload) => payload?.type === 'check:complete'
   && !payload.error && !payload.skipped;
 
@@ -86,11 +65,9 @@ export function isSignalFrame(payload) {
 }
 
 /**
- * Record one broadcast frame onto the run's signal log. Called from `broadcast`
- * for EVERY frame of EVERY run, so the opt-out must come first and stay cheap: a
- * run that opted into no diagnosis pass (`diagnosisOptedIn` — which also
- * excludes dry-runs, whose telemetry isn't worth diagnosing) does a few
- * property reads and returns. True when retained.
+ * Record one broadcast frame onto the run's signal log. Runs for EVERY frame of
+ * EVERY run, so the opt-out comes first and stays cheap (`diagnosisOptedIn` also
+ * excludes dry-runs). True when retained.
  */
 export function noteSignal(run, payload) {
   if (!diagnosisOptedIn(run)) return false;
@@ -116,15 +93,10 @@ export function summarizeSignals(run) {
 }
 
 // ---------------------------------------------------------------------------
-// Live progress snapshot — the milestone map's "where are we" half (the plan on
-// the `start` frame is the "what's the whole job" half).
-//
-// Everything here is already derivable from frames the run broadcasts, but only
-// by a client that watched the WHOLE stream: SSE replays a single payload, so a
-// panel opened mid-run (the normal case for a long unattended run) would show an
-// empty map. Folding it onto the run record instead means the snapshot has ONE
-// implementation, published two ways — a `progress` frame after every frame that
-// moves it, and the same object on the status route for a mid-run attach.
+// Live progress snapshot (the milestone map's "where are we" half). SSE replays a
+// single payload, so a panel opened mid-run would show an empty map; folding the
+// snapshot onto the run record gives ONE implementation, published as a `progress`
+// frame and on the status route.
 // ---------------------------------------------------------------------------
 
 /** A fresh, empty progress snapshot (the shape every consumer can assume). */
@@ -137,10 +109,8 @@ export const emptyProgress = () => ({
 });
 
 /**
- * A detached copy of the run's live progress. The fold MUTATES the maps it owns,
- * so handing the live object to an SSE payload / event listener would let a
- * later step silently rewrite a frame that was already delivered — the reader
- * would see counts from the future. One shallow clone per published snapshot.
+ * A detached copy of the live progress: the fold MUTATES its maps, so handing the
+ * live object to a payload/listener would let later steps rewrite delivered frames.
  */
 export function snapshotProgress(run) {
   const p = run?.progress;
@@ -149,14 +119,12 @@ export function snapshotProgress(run) {
 }
 
 /**
- * Fold one broadcast frame into the run's progress snapshot. Returns true when
- * the snapshot MOVED (so the caller publishes it) and false otherwise, which is
- * the common case — most frames are chatter the map doesn't track.
+ * Fold one broadcast frame into the progress snapshot. Returns true when it MOVED
+ * (the caller then publishes it).
  *
- * Deliberately never folds a terminal frame: the caller publishes the snapshot
- * as a follow-up frame, and SSE replay keeps only the last payload, so a
- * `progress` frame emitted after `complete`/`paused` would hide the terminal
- * from a client that attaches late.
+ * Never folds a terminal frame: the snapshot is published as a follow-up frame and
+ * SSE replay keeps only the last payload, so a `progress` frame after
+ * `complete`/`paused` would hide the terminal from a late-attaching client.
  */
 export function noteProgress(run, payload) {
   if (!run || !payload) return false;
@@ -168,25 +136,18 @@ export function noteProgress(run, payload) {
       p.currentStepComplete = false;
       return true;
     case 'step:complete':
-      // `currentStep` is deliberately NOT cleared: the next step:start replaces
-      // it within the same tick, and leaving it set means a run that pauses or
-      // ends right here still names the step it was on. `currentStepComplete` is
-      // what separates the two readings — without it, a gate the run RE-ENTERS
-      // (the foundation gate re-checks after an arc repair) is indistinguishable
-      // from one it just finished, and the map shows the wrong row working.
+      // `currentStep` is NOT cleared: a run that pauses or ends here still names its
+      // step. `currentStepComplete` separates a gate the run RE-ENTERS (the
+      // foundation gate re-checks after an arc repair) from one just finished.
       if (payload.kind) p.completed[payload.kind] = (p.completed[payload.kind] || 0) + 1;
       if (!payload.kind || payload.kind === p.currentStep) p.currentStepComplete = true;
       return true;
     case 'step:skip':
-      // Sub-step skips (one issue's render, one script's craft pass) — the step
-      // itself still completes, so these annotate a milestone rather than
-      // advancing it.
+      // Sub-step skips annotate a milestone; the step itself still completes.
       if (payload.kind) p.skipped[payload.kind] = (p.skipped[payload.kind] || 0) + 1;
       return true;
-    // Both gate-telemetry frames are broadcast from INSIDE the step they
-    // measure, so the step already being tracked IS the milestone they belong
-    // to. Keying off it (rather than translating the frame's `scope`) means a
-    // new gate needs no naming table kept in sync with its emitter.
+    // Gate telemetry is broadcast from INSIDE the step it measures, so the tracked
+    // step IS the milestone; no naming table to keep in sync with emitters.
     case 'verify:round':
       if (!p.currentStep) return false;
       p.verified[p.currentStep] = {

@@ -1,32 +1,18 @@
 /**
  * Goal deletion tombstones for the `goals` snapshot category (#9816).
  *
- * The goals snapshot merges by union (a goal present on either peer survives),
- * which cannot represent a delete: absence is not a signal, so the peer that
- * still holds the goal re-adds it on the next sync. A deletion therefore leaves
- * `{ id, deletedAt }` in the goals document itself (under `goalTombstones`,
- * written inside the same serialized goals queue as the delete). The list rides
- * every snapshot, unions in both directions, and suppresses a stale live copy.
- *
- * Rules, all inherited from `lib/tombstones.js`:
+ * The goals snapshot merges by union, which cannot represent a delete (the peer still
+ * holding the goal re-adds it). A deletion therefore leaves `{ id, deletedAt }` in the goals
+ * document under `goalTombstones`, written inside the goals write queue; the list unions in
+ * both directions and suppresses a stale live copy. Rules, inherited from `lib/tombstones.js`:
  *  - Timestamps parse to epoch ms; an unparseable stamp never wins.
- *  - A goal survives its tombstone only when its own live stamp (the newer of
- *    `createdAt` / `updatedAt`) is STRICTLY newer than `deletedAt` — i.e. it was
- *    edited or re-created after the deletion. That edit is the explicit
- *    "restoration" rule: a delete beats every copy that has not been touched
- *    since, and an edit made after it beats the delete and retires the
- *    tombstone so it cannot bounce back from a peer that has not seen the edit.
- *  - A legacy document with no `goalTombstones` field is an empty list. No
- *    migration invents past deletions, and the field is only written once a
- *    delete (or a peer's tombstone) puts something in it.
+ *  - A goal survives its tombstone only when its live stamp (newer of `createdAt` /
+ *    `updatedAt`) is STRICTLY newer than `deletedAt`: an edit after the delete beats it.
+ *  - A legacy document with no `goalTombstones` field is an empty list; no migration.
  *
- * Resurrection horizon: the list is capped at `DEFAULT_TOMBSTONE_LIMIT` (200)
- * deletions, oldest dropped first. A peer that stays offline across more than
- * that many later goal deletions can resurrect an old one — a bounded document
- * is preferred over unbounded growth. An older (pre-#9816) receiver ignores the
- * field entirely, so it cannot enforce a deletion until it is upgraded; an
- * upgraded receiver keeps the tombstones it already holds when such a peer omits
- * them.
+ * Resurrection horizon: capped at `DEFAULT_TOMBSTONE_LIMIT` (200), oldest dropped first, so
+ * a peer offline across more later deletions can resurrect an old goal. A pre-#9816 receiver
+ * ignores the field; an upgraded one keeps tombstones it holds when such a peer omits them.
  */
 
 import { compareNewerWins, parseTsMs } from '../../lib/lwwTimestamp.js';
@@ -66,19 +52,14 @@ export function tombstoneGoal(doc, goal, now = new Date().toISOString()) {
 }
 
 /**
- * Apply a tombstone list to a goals array. Pure: returns new arrays and never
- * mutates its inputs.
+ * Apply a tombstone list to a goals array. Pure: returns new arrays.
  *
- *  1. Goals the tombstones cover (and that were not edited after the deletion)
- *     are removed.
- *  2. Their children are reparented to the deleted goal's own parent (walking up
- *     through any other removed goal) — the same cleanup `deleteGoal` performs
- *     locally, replayed when a deletion arrives from a peer. The reparent is
- *     stamped deterministically (`supersedingTimestamp` over the child's own
- *     stamp, anchored on the tombstone) so every peer computes the same record
- *     and a replay settles instead of ping-ponging. It only runs when this side
- *     still holds the removed goal's record: without it the parent is unknown and
- *     the child is left as it is (a missing parent already renders as a root).
+ *  1. Goals the tombstones cover (and not edited after the deletion) are removed.
+ *  2. Their children are reparented to the deleted goal's own parent (walking up through
+ *     other removed goals), replaying `deleteGoal`'s cleanup for a peer's deletion. The
+ *     stamp is deterministic (`supersedingTimestamp` anchored on the tombstone) so peers
+ *     converge. Only runs when this side still holds the removed goal's record; otherwise
+ *     the child is left alone (a missing parent renders as a root).
  *  3. Tombstones a surviving goal has superseded are pruned.
  *
  * @returns {{ goals: object[], tombstones: object[] }}

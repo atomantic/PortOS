@@ -1,64 +1,38 @@
 /**
- * createMediaJobImageHook — shared tag-dispatch scaffold for the media-job
- * scene-asset completion hooks (#1791, generalized to video in #1760 Phase 1).
+ * createMediaJobImageHook: shared tag-dispatch scaffold for media-job scene-asset
+ * completion hooks (#1791, generalized to video in #1760 Phase 1). Each hook subscribes to
+ * `mediaJobEvents 'completed'`, ignores jobs of the wrong `kind`, decodes and validates a
+ * destination tag off `job.params`, and attaches the rendered asset (image filename or video
+ * history id) to a record, serialized per key. A new "attach a render to record X" feature
+ * is a new config object, not another listener.
  *
- * Four completion hooks (writers-room #1363, catalog #1359, music-video scene
- * image #1760 Phase 1b, music-video scene video #1760 Phase 1) each subscribe to
- * `mediaJobEvents 'completed'` and do the same shape of work: ignore jobs of the
- * wrong `kind`, decode a destination tag off `job.params`, validate its fields,
- * attach the rendered asset (an image filename or a video history id) onto a
- * record (serialized per-key so two renders for the same record can't clobber
- * each other), and — for the scene-frame hooks — drop an out-of-order older
- * render so it can't overwrite a newer one. This factory owns that copy-pasted
- * skeleton so each hook becomes a small config; a new "attach a render to record
- * X" feature is a new config object, not another hand-wired listener. The job
- * `kind` and the attached-value extraction are config knobs (`kind`,
- * `extractResult`) so the scaffold covers both image and video jobs.
+ * The scaffold owns:
+ *   - idempotent init (no double-registered listener);
+ *   - sync listener -> async IIFE -> top-level catch (EventEmitter does not catch async
+ *     rejections, which are process-killing on Node >=15);
+ *   - kind / missing-tag / missing-filename guards;
+ *   - per-`serializeKey` serialization via `createKeyCachedQueue`;
+ *   - opt-in newest-render-wins guard keyed on `sceneKey` (drops a render whose
+ *     `job.queuedAt` is older than the newest applied to that slot);
+ *   - best-effort error logging (logged, never thrown);
+ *   - `__testing.reset()` and `__testing.settled()` (resolves once every accepted completion
+ *     finished, so a test proves "nothing was written" without a sleep, #12047).
  *
- * The shared skeleton this owns:
- *   - the idempotent init (a stray double-init must not double-register the
- *     listener and double-file every render);
- *   - the sync listener → async IIFE → top-level catch pattern (EventEmitter
- *     does not await async listeners or catch their rejections, so a throw would
- *     surface as a process-killing unhandled rejection on Node ≥15);
- *   - the `job.kind !== 'image'` / missing-tag / missing-filename guards;
- *   - per-`serializeKey` serialization via the shared `createKeyCachedQueue`;
- *   - the opt-in newest-render-wins guard keyed on `sceneKey` (drop a render
- *     whose `job.queuedAt` is older than the newest already applied to that
- *     scene slot — read+written inside the serialize section so it never races);
- *   - best-effort error logging (a bookkeeping miss is logged, never thrown);
- *   - `__testing.reset()` (off the listener, clear the queue + guard) and
- *     `__testing.settled()` (resolves once every completion the listener has
- *     accepted has finished, so a test proves "nothing was written" without a
- *     real sleep — #12047).
+ * Config:
+ *   - `label`, `initLog`: failure/crash log label and the emoji-prefixed init line.
+ *   - `tagKey`: the `job.params` key carrying the destination tag.
+ *   - `identify(tag, job)`: validate and return the `ctx` identity (plus `job`, `tag`,
+ *     `filename`) passed to the callbacks, or null to ignore the job.
+ *   - `serializeKey(ctx)`: per-record write-serialization key.
+ *   - `sceneKey(ctx)`: OPTIONAL; enables the newest-wins guard.
+ *   - `attach(ctx)`: async durable attach; a falsy result means "nothing emitted".
+ *   - `onAttached(ctx, result)`: emit the domain event + success log, only when `attach`
+ *     returned a result the guard did not drop.
+ *   - `onTerminal(ctx, status, job)`: OPTIONAL; also subscribes to `failed` / `canceled` for
+ *     tagged jobs that ended without a result. A rejection is logged, never thrown.
  *
- * What each hook supplies via config:
- *   - `label`        — used in the failure / crash log lines.
- *   - `initLog`      — the full emoji-prefixed init console line.
- *   - `tagKey`       — the `job.params` key carrying the destination tag.
- *   - `identify(tag, job)` — validate the tag and return an identity object, or
- *                      null to ignore the job. Whatever it returns is the `ctx`
- *                      the callbacks below receive (plus `job`, `tag`, `filename`).
- *   - `serializeKey(ctx)`  — the per-record write-serialization key.
- *   - `sceneKey(ctx)`      — OPTIONAL; when present, enables the newest-wins
- *                      guard keyed on the returned scene-slot string.
- *   - `attach(ctx)`  — async; perform the durable attach, return its result
- *                      (or a falsy value to signal "nothing emitted").
- *   - `onAttached(ctx, result)` — emit the domain event + success log. Only
- *                      called when `attach` resolved to a non-null result that
- *                      was not dropped by the guard.
- *   - `onTerminal(ctx, status, job)` — OPTIONAL; when present the hook also
- *                      subscribes to `failed` / `canceled` and calls it for
- *                      every tagged job that ended without a result, decoded
- *                      through the same `identify` (no `extractResult`, since
- *                      there is nothing to extract). Async; a rejection is
- *                      logged, never thrown.
- *
- * The canceled→client-spinner bridge that #1791 also adds is intentionally NOT
- * here: every client spinner correlates by media-job id (`generationId`), not by
- * the per-domain scene identity, so it lives once at the socket layer
- * (`image-gen:canceled` / `video-gen:canceled` in socket.js) rather than as a
- * per-hook event. See that bridge for the rationale.
+ * The canceled-to-client-spinner bridge (#1791) is NOT here: spinners correlate by media-job
+ * id, so it lives once at the socket layer (`image-gen:canceled` / `video-gen:canceled`).
  */
 
 import { mediaJobEvents } from './mediaJobQueue/index.js';
@@ -66,9 +40,7 @@ import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { createNewestWinsGuard } from '../lib/createNewestWinsGuard.js';
 
-// The render filename is `${jobId}.<ext>`; prefer the job id, fall back to
-// stripping the extension so an attach records a stable jobId either way.
-// Shared by the hook configs so each doesn't carry its own copy.
+// The render filename is `${jobId}.<ext>`; prefer the job id, else strip the extension.
 export const deriveRenderJobId = (job, filename) =>
   (typeof job?.id === 'string' && job.id ? job.id : String(filename).replace(/\.[a-z0-9]+$/i, ''));
 
@@ -83,19 +55,12 @@ export function createMediaJobImageHook(config) {
     attach,
     onAttached,
     onTerminal = null,
-    // Optional: ctx → a short per-record routing string appended to the failure
-    // log (e.g. `workId/sceneId`), so a "render didn't attach" line is traceable
-    // to a specific record the way each hand-written hook's log used to be.
+    // Optional: ctx -> short routing string (e.g. `workId/sceneId`) appended to the failure log.
     describe = null,
-    // The media-job kind this hook attaches. Defaults to 'image' (the three
-    // scene-image hooks); the music-video i2v hook (#1760) passes 'video' to
-    // ride this same scaffold for a different job kind.
+    // The media-job kind this hook attaches; defaults to 'image', the i2v hook (#1760) passes 'video'.
     kind = 'image',
-    // Pull the fields to merge into `ctx` off a completed job, or return null to
-    // ignore it. The default surfaces the rendered image filename as
-    // `ctx.filename` (string-required) — the shape the three image hooks consume.
-    // The video hook overrides it to surface `ctx.videoHistoryId` (the clip's
-    // history id) instead, so each hook's attach/onAttached reads its own field.
+    // Pull the fields to merge into `ctx` off a completed job, or null to ignore it. The
+    // default surfaces `ctx.filename` (image hooks); the video hook surfaces `ctx.videoHistoryId`.
     extractResult = (job) => {
       const f = job.result?.filename;
       return (f && typeof f === 'string') ? { filename: f } : null;
@@ -107,8 +72,7 @@ export function createMediaJobImageHook(config) {
 
   let completedHandler = null;
   let terminalHandlers = null;
-  // Every accepted completion's work, so tests can await the outcome instead
-  // of sleeping past it. Entries remove themselves when they settle.
+  // Every accepted completion's work, so tests can await the outcome; entries remove themselves.
   const inFlight = new Set();
 
   // The tag → identity half of `decode`, shared with the terminal path (a
@@ -121,24 +85,19 @@ export function createMediaJobImageHook(config) {
     return id ? { ...id, job, tag } : null;
   }
 
-  // Decode the job into the hook's identity context, or null to ignore it, so
-  // the kind/tag/result guards live in one place (the result fields are pulled
-  // by the configurable `extractResult`).
+  // Decode the job into the hook's identity context (or null to ignore), keeping the kind/tag/result guards in one place.
   function decode(job) {
     const ctx = identity(job);
     if (!ctx) return null;
     const fields = extractResult(job);
     if (!fields) return null;
-    // Normalize queuedAt once here so the guard below AND any consumer's attach
-    // (e.g. catalog's portrait guard) read the same `ctx.queuedAt` instead of
-    // re-deriving it.
+    // Normalize queuedAt once so the guard and any consumer's attach read the same `ctx.queuedAt`.
     const queuedAt = typeof job.queuedAt === 'string' ? job.queuedAt : null;
     return { ...ctx, ...fields, queuedAt };
   }
 
   function init() {
-    // Idempotent: a stray double-init (test reload, future refactor) would
-    // otherwise register two listeners and double-file every completed image.
+    // Idempotent: a double-init would register two listeners and double-file every render.
     if (completedHandler) return;
 
     completedHandler = (job) => {
@@ -150,22 +109,16 @@ export function createMediaJobImageHook(config) {
         const sKey = sceneKey ? sceneKey(ctx) : null;
 
         const result = await serialize(serializeKey(ctx), async () => {
-          // Newest-render-wins: drop an out-of-order older render so it can't
-          // clobber a newer frame on the same scene slot (returns null, the same
-          // "nothing applied" signal as a declined/failed attach). Checked +
-          // recorded inside the serialize section so the read/write never races.
+          // Newest-render-wins: drop an out-of-order older render (null, same as a declined
+          // attach); checked and recorded inside the serialize section so it never races.
           if (sKey && guard.isStale(sKey, ctx.queuedAt)) return null;
           const r = await attach(ctx);
-          // Only record the slot's newest queuedAt once the attach actually
-          // applied — a failed attach (null) must not advance the guard, or a
-          // later legitimate render would be wrongly dropped as stale.
+          // Record the slot's newest queuedAt only once the attach applied: a failed attach must not advance the guard.
           if (sKey && r != null) guard.mark(sKey, ctx.queuedAt);
           return r;
         }).catch((err) => {
           const where = describe ? ` → ${describe(ctx)}` : '';
-          // `ctx.filename` is the image lanes' attached value; the video lane has
-          // no filename (it attaches a history id), so fall back to the routing
-          // string from `describe` for a still-traceable line.
+          // The video lane has no filename (it attaches a history id); fall back to `describe`.
           console.log(`⚠️ ${label} hook failed for ${ctx.filename || 'render'}${where}: ${err?.message || String(err)}`);
           return null;
         });
@@ -196,8 +149,7 @@ export function createMediaJobImageHook(config) {
     console.log(initLog);
   }
 
-  // Test-only reset so suites that re-init can do so cleanly. Removes the
-  // previously registered listener so re-init doesn't leak handlers.
+  // Test-only reset; removes the registered listener so re-init does not leak handlers.
   const __testing = {
     reset: () => {
       if (completedHandler) {
@@ -212,8 +164,7 @@ export function createMediaJobImageHook(config) {
       serialize.clear();
       guard.clear();
     },
-    // Loops because a settling attach may not be the last: a completion
-    // emitted while an earlier one was in flight joins the set late.
+    // Loops: a completion emitted while an earlier one was in flight joins the set late.
     settled: async () => {
       while (inFlight.size > 0) await Promise.allSettled([...inFlight]);
     },

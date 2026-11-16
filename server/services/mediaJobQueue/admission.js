@@ -1,27 +1,19 @@
 /**
- * Media-queue admission contract — the refusal codes, the pending-job ceiling,
- * and the errors that carry them.
- *
- * Kept apart from the queue so a producer can recognize a refused admission
- * without importing the queue (creativeDirector/videoExecution.js cannot: the
- * queue dynamically imports it, and a static edge back would close a cycle).
+ * Media-queue admission contract: refusal codes, the pending-job ceiling and their errors.
+ * Kept apart from the queue so creativeDirector/videoExecution.js can import it without
+ * closing a cycle (the queue dynamically imports that module).
  */
 import { ServerError } from '../../lib/errorHandler.js';
 
-// Hard ceiling on WAITING jobs across every lane (#8326). Separate from each
-// lane's running concurrency: it bounds the in-memory queue and the snapshot
-// every admission rewrites, so a runaway producer cannot grow either without
-// limit. Never enforced by eviction — a restored backlog above it is kept and
-// only new admissions wait for it to drain.
+// Hard ceiling on WAITING jobs across every lane (#8326): bounds the in-memory queue and
+// per-admission snapshot. Never enforced by eviction; a restored backlog above it is kept.
 export const MAX_PENDING_MEDIA_JOBS = 250;
 
-// The job was withdrawn before any dispatch because its snapshot write failed
-// (#8325).
+// Withdrawn before dispatch because its snapshot write failed (#8325).
 export const MEDIA_QUEUE_PERSIST_FAILED = 'MEDIA_QUEUE_PERSIST_FAILED';
 // The job was never created: the queue already holds MAX_PENDING_MEDIA_JOBS.
 export const MEDIA_QUEUE_FULL = 'MEDIA_QUEUE_FULL';
-// A batch preflight asked for more room than the ceiling itself — no amount of
-// draining admits it, so it is not a retryable refusal.
+// Batch larger than the ceiling itself: not retryable.
 export const MEDIA_BATCH_TOO_LARGE = 'MEDIA_BATCH_TOO_LARGE';
 
 const REFUSAL_CODES = new Set([MEDIA_QUEUE_PERSIST_FAILED, MEDIA_QUEUE_FULL]);
@@ -32,13 +24,9 @@ const REFUSAL_CODES = new Set([MEDIA_QUEUE_PERSIST_FAILED, MEDIA_QUEUE_FULL]);
  */
 export const isMediaAdmissionRefusal = (error) => REFUSAL_CODES.has(error?.code);
 
-/**
- * The queue-full refusal. 429 like the federated provider's MEDIA_PROVIDER_BUSY:
- * capacity, not a fault, and safe to retry once jobs finish.
- */
+/** The queue-full refusal: 429 (capacity, not a fault; retry once jobs finish). */
 export function mediaQueueFullError({ pending, requested = 1 }) {
-  // A batch bigger than the whole ceiling can never fit, so waiting would not
-  // help — say so instead of inviting a retry that always fails.
+  // A batch over the ceiling can never fit; do not invite a retry.
   if (requested > MAX_PENDING_MEDIA_JOBS) {
     return new ServerError(
       `This batch needs ${requested} jobs but the media queue holds at most ${MAX_PENDING_MEDIA_JOBS} waiting — render a smaller selection.`,
@@ -56,12 +44,7 @@ export function mediaQueueFullError({ pending, requested = 1 }) {
   });
 }
 
-/**
- * Re-throwable error for a batch whose admission was refused part-way: the
- * jobs already admitted keep running, so the caller is told how many landed
- * rather than seeing a bare failure (or, worse, a success). Any other error,
- * or a refusal before anything landed, passes through unchanged.
- */
+/** Error for a batch refused part-way: reports how many landed; other errors pass through. */
 export function partialBatchAdmissionError(error, { admitted, total, noun = 'jobs' }) {
   if (!admitted || !isMediaAdmissionRefusal(error)) return error;
   return new ServerError(`Queued ${admitted} of ${total} ${noun} — ${error.message}`, {

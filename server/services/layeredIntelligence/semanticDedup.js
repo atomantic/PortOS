@@ -7,32 +7,19 @@
 import { SEMANTIC_DEDUP_THRESHOLD, SEMANTIC_DEDUP_MAX_CANDIDATES } from './constants.js';
 import { isIssueWithinDedupWindow, issueEmbedSeed, findSemanticDuplicate } from './dedup.js';
 
-/** Lazily resolve the default embedder so the pure module doesn't statically pull
- * in the embeddings/settings/provider graph (matches the handler's dynamic-import
- * pattern for heavy deps). Only reached in production — tests inject `embed`. */
+/** Lazily resolve the default embedder to keep the embeddings graph out of this pure module; tests inject `embed`. */
 async function defaultEmbed(text) {
   const { embedText } = await import('../embeddings.js');
   return embedText(text);
 }
 
 /**
- * SEMANTIC dedup guard — the embedding-similarity layer ON TOP OF the exact
- * slug/label dedup (`isProposalDuplicate`). Catches a proposal that describes the
- * same work as an existing issue but was worded differently (so its slug differs).
- * Runs only AFTER slug dedup passes, so it's a best-effort extra catch.
- *
- * Returns `{ available, duplicate, match }`:
- *   - `available:false` when semantic dedup couldn't run (no embeddable candidates,
- *     or the embeddings provider is off / the proposal embed failed). This is a
- *     SENTINEL, distinct from `available:true, duplicate:false` ("checked, no
- *     near-dup"): the handler treats unavailable as "proceed to file" because slug
- *     dedup already guarded the exact case — losing the semantic catch just
- *     restores pre-feature behavior, it never files a slug-duplicate.
- *   - `duplicate:true` with `match` = the highest-scoring near-duplicate issue.
- *
- * No cold-bootstrap risk: `embed` degrades to `{ skipped:true }` when no
- * embeddings provider is configured, and this only runs inside the user-enabled
- * scheduled sweep. `embed` is injectable for tests.
+ * SEMANTIC dedup guard: the embedding layer on top of slug/label dedup
+ * (`isProposalDuplicate`), run only after slug dedup passes. Returns
+ * `{ available, duplicate, match }`; `available:false` (nothing embeddable, provider off,
+ * embed failed) is a sentinel distinct from "checked, no near-dup": the handler proceeds
+ * to file. `match` is the highest-scoring near-duplicate. `embed` degrades to
+ * `{ skipped:true }` with no provider (no cold-bootstrap) and is injectable for tests.
  */
 export async function checkSemanticDuplicate({ proposal, existingIssues = [], now = Date.now(), embed = defaultEmbed, threshold = SEMANTIC_DEDUP_THRESHOLD } = {}) {
   const unavailable = { available: false, duplicate: false, match: null };
@@ -45,12 +32,8 @@ export async function checkSemanticDuplicate({ proposal, existingIssues = [], no
     .slice(0, SEMANTIC_DEDUP_MAX_CANDIDATES);
   if (candidates.length === 0) return unavailable;
 
-  // A failing embed (transient provider blip, malformed response) must degrade to
-  // the available:false sentinel — NOT reject through processApp and mark the
-  // whole app run 'error'. Deferring the call into a promise chain then catching
-  // absorbs BOTH an async rejection AND a synchronous throw from the (injectable)
-  // embedder, mirroring this file's fetchHttpSource / jira-search failure idiom
-  // (no non-boundary try/catch).
+  // A failing embed must degrade to the available:false sentinel, not reject through
+  // processApp. Deferring into a promise chain absorbs both async rejection and a sync throw.
   const safeEmbed = (text) => Promise.resolve().then(() => embed(text)).catch(() => null);
 
   const proposalRes = await safeEmbed(issueEmbedSeed({ title: proposal.title, body: proposal.body }));
