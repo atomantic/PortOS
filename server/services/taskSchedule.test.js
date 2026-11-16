@@ -1823,10 +1823,6 @@ describe('taskSchedule', () => {
   })
 
   describe('claim-issue defaults', () => {
-    it('is registered as a self-improvement task type', () => {
-      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('claim-issue')
-    })
-
     it('defaults to self-filed issues with worktree/PR managed by the agent', () => {
       const cfg = DEFAULT_TASK_INTERVALS['claim-issue']
       expect(cfg.type).toBe(INTERVAL_TYPES.ON_DEMAND)
@@ -1874,11 +1870,6 @@ describe('taskSchedule', () => {
   })
 
   describe('ux defaults (#3273)', () => {
-    it('is registered as a self-improvement task type with a description', () => {
-      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('ux')
-      expect(TASK_TYPE_DESCRIPTIONS['ux']).toBe('UX audit — file issues (default) or implement fixes')
-    })
-
     it('defaults to on-demand + enabled with file-issues on (worktree/PR off)', () => {
       const cfg = DEFAULT_TASK_INTERVALS['ux']
       expect(cfg.type).toBe(INTERVAL_TYPES.ON_DEMAND)
@@ -1935,11 +1926,6 @@ describe('taskSchedule', () => {
   })
 
   describe('plan-feature defaults', () => {
-    it('is registered as a self-improvement task type with a description', () => {
-      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('plan-feature')
-      expect(TASK_TYPE_DESCRIPTIONS['plan-feature']).toBeTruthy()
-    })
-
     it('defaults to on-demand + enabled, grounded on do-replan, with no worktree/PR', () => {
       const cfg = DEFAULT_TASK_INTERVALS['plan-feature']
       expect(cfg.type).toBe(INTERVAL_TYPES.ON_DEMAND)

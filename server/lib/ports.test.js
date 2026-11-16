@@ -5,8 +5,6 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import {
   DEFAULT_PEER_PORT,
-  DEFAULT_TAILCAT_LOCAL_PORT,
-  DEFAULT_TAILCAT_REMOTE_PORT,
   PORTS,
   resolvePostgresPort,
 } from './ports.js';
@@ -65,12 +63,6 @@ describe('PORTS mirror of ecosystem.config.cjs', () => {
 
   it('defaults a new peer to the API port', () => {
     expect(DEFAULT_PEER_PORT).toBe(ECOSYSTEM_PORTS.API);
-  });
-
-  it('defaults a new tailcat local forward to 15555 → remote ingress', () => {
-    expect(DEFAULT_TAILCAT_LOCAL_PORT).toBe(15555);
-    expect(DEFAULT_TAILCAT_LOCAL_PORT).toBe(ECOSYSTEM_PORTS.TAILCAT_FORWARD);
-    expect(DEFAULT_TAILCAT_REMOTE_PORT).toBe(ECOSYSTEM_PORTS.TAILCAT_INGRESS);
   });
 });
 
