@@ -21,10 +21,6 @@ import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 import { resolveStoryboardGuidanceInputs, storyboardGuidanceRequestError } from './storyboardGuidance.js';
 import { falVideoSentPrompt } from './fal.js';
 import { musicVideoClipReferenceCapacity } from '../../lib/musicVideoConditioning.js';
-import { getProject } from '../musicVideo/projects.js';
-import { defaultVideoModelId, listVideoModels } from './local.js';
-import { resolveVideoLoras } from './renderArgs.js';
-import { captureSystemCapabilities } from '../../lib/systemCapabilities.js';
 
 export const PREVIEW_UPLOAD_FIELDS = ['sourceImage', 'lastImage', 'audioFile', ...REFERENCE_AUDIO_FIELDS, ...VIDEO_REFERENCE_IMAGE_FIELDS, 'icReference', 'runwayVideo', 'runwayCharacterVideo'];
 const UPLOADED_SOURCE_IMAGE = '(uploaded image)';
@@ -80,8 +76,8 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
     const startFrameLayout = body.musicVideo?.startFrameLayout === true;
     if (body.musicVideo) {
       if (!sourceImagePath) throw new ServerError('Music Video scene render needs a resolvable reference frame.', { status: 400, code: 'MUSIC_VIDEO_SOURCE_REQUIRED' });
-      const [{ loadMusicVideoGreybox }, { composeShotPrompt }, { musicVideoClipCastReferences }] = await Promise.all([
-        import('../musicVideo/greyboxReferences.js'),
+      const [{ getProject }, { loadMusicVideoGreybox }, { composeShotPrompt }, { musicVideoClipCastReferences }] = await Promise.all([
+        import('../musicVideo/projects.js'), import('../musicVideo/greyboxReferences.js'),
         import('../musicVideo/submissionGuards.js'), import('../musicVideo/clipCastReferences.js'),
       ]);
       const project = await getProject(body.musicVideo.projectId);
@@ -163,6 +159,10 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
   // Gemini's composer takes the prompt exactly as written (videoGen/geminiWeb.js).
   if (backend === VIDEO_GEN_MODE.GEMINI) return asWritten(body, { backend });
   if (backend === VIDEO_GEN_MODE.LOCAL) {
+    // The local runner's modules load only for a local preview.
+    const [{ defaultVideoModelId, listVideoModels }, { resolveVideoLoras }, { captureSystemCapabilities }] = await Promise.all([
+      import('./local.js'), import('./renderArgs.js'), import('../../lib/systemCapabilities.js'),
+    ]);
     const loraFilenames = body.loraFilenames || [];
     // The render's own LoRA refusals (missing file, not a video LoRA), minus
     // its one-time effect probe, which spawns Python and is cached for the render.
