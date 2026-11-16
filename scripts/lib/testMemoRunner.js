@@ -32,12 +32,26 @@ import { tmpdir } from 'node:os';
 import * as nodePath from 'node:path';
 import { join, relative, sep } from 'node:path';
 import { resolveTestChrome } from './testChrome.js';
-import { WORKSPACE_BASE_INPUTS, WORKSPACE_SETUP_ENTRIES, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
+import { getAlwaysRunTests } from '../ci-test-plan.js';
+import { NEVER_MARKER, TEST_MEMO_NEVER, WORKSPACE_BASE_INPUTS, WORKSPACE_SETUP_ENTRIES, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
 import { TEST_SCOPES, listWorkspaceTests, toRepoPath, toWorkspacePath, workspaceOf } from './workspaceTests.js';
 
 const uniqueSorted = (values) => [...new Set(values)].sort();
 const VIRTUAL_MODULE = /(?:^|\/)@vite\/|^\0|^virtual:/;
+
+/**
+ * True when the analyzer could only conclude "not memoizable" for `test`: it is
+ * an always-run guard, is named in `TEST_MEMO_NEVER`, or carries the
+ * `// test-memo: never` marker itself. Deciding that here is what spares a
+ * files-mode plan of tree-wide guards the closure walk (seconds per stage)
+ * whose only possible answer is "run it". An unreadable file is not decided
+ * here; the analyzer reports it.
+ */
+const neverMemoized = (test, repoRoot, alwaysRun) => {
+  if (alwaysRun.has(test) || TEST_MEMO_NEVER[test]) return true;
+  try { return NEVER_MARKER.test(readFileSync(join(repoRoot, ...test.split('/')), 'utf8')); } catch { return false; }
+};
 
 /**
  * The runner's selection and memo verdicts for one workspace.
@@ -54,10 +68,19 @@ const VIRTUAL_MODULE = /(?:^|\/)@vite\/|^\0|^virtual:/;
 export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, shardSlice = vitestShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry }) {
   const workspaceTests = listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel));
   const candidates = mode === 'files' ? uniqueSorted(repoFiles) : uniqueSorted([...workspaceTests, ...repoFiles]);
+  // Files mode only: the other modes need every closure to resolve their selection.
+  const alwaysRun = new Set(getAlwaysRunTests());
+  const unmemoizable = new Set(mode === 'files' ? candidates.filter((test) => neverMemoized(test, repoRoot, alwaysRun)) : []);
   const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion };
-  const analyzer = createTestMemoAnalyzer(options);
-  const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS[scope], WORKSPACE_SETUP_ENTRIES[scope]);
-  const analyze = (test, recorded) => analyzer.analyzeTest(test, { baseClosure, recorded });
+  // Built on first use: a plan whose candidates are all unmemoizable never pays for the base closure.
+  let primary = null;
+  const analyze = (test, recorded) => {
+    if (!primary) {
+      const analyzer = createTestMemoAnalyzer(options);
+      primary = { analyzer, baseClosure: analyzer.workspaceBase(WORKSPACE_BASE_INPUTS[scope], WORKSPACE_SETUP_ENTRIES[scope]) };
+    }
+    return primary.analyzer.analyzeTest(test, { baseClosure: primary.baseClosure, recorded });
+  };
   // A second analyzer with empty caches re-reads every input after the run,
   // so an entry is written only for inputs that did not change meanwhile.
   let fresh = null;
@@ -75,7 +98,7 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   // least of all for a launcher the browser supervisor holds to a deadline.
   const verdicts = new Map();
   if (memoDir || mode === 'related') {
-    for (const test of candidates) verdicts.set(test, analyze(test, memoDir ? readRecord(memoDir, scope, test) : null));
+    for (const test of candidates) if (!unmemoizable.has(test)) verdicts.set(test, analyze(test, memoDir ? readRecord(memoDir, scope, test) : null));
   }
 
   const selected = mode === 'related'
@@ -86,8 +109,10 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   const skipped = [];
   const reasons = new Map();
   const run = [];
+  let unanalyzed = 0;
   for (const test of slice) {
     const info = verdicts.get(test);
+    if (unmemoizable.has(test)) unanalyzed += 1;
     const via = !memoDir || !info ? null
       : info.recorded?.memoizable && readEntry(memoDir, info.recorded.key, { test, workspace: scope }) ? 'recorded'
         : info.floor.memoizable && readEntry(memoDir, info.floor.key, { test, workspace: scope }) ? 'floor'
@@ -96,11 +121,11 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
     run.push(test);
     if (info && !info.floor.memoizable) reasons.set(test, info.recorded?.memoizable ? 'no green entry yet (recorded key)' : info.recorded?.reason ?? info.floor.reason);
   }
-  return { selected, slice, run, skipped, reasons, analyze, freshAnalyze, verdicts };
+  return { selected, slice, run, skipped, reasons, unanalyzed, analyze, freshAnalyze, verdicts };
 }
 
 export function memoSummaryLine(plan) {
-  return `🧠 Test memo: skipped ${plan.skipped.length} of ${plan.slice.length} selected files (closure unchanged); running ${plan.run.length}.`;
+  return `🧠 Test memo: skipped ${plan.skipped.length} of ${plan.slice.length} selected files (closure unchanged); running ${plan.run.length}.${plan.unanalyzed ? ` ${plan.unanalyzed} never-memoized guards not analyzed.` : ''}`;
 }
 
 /** Vitest's `BaseSequencer.calculateShardRange`: the [start, end) slice of `count` hash-sorted files for shard `index` of `total`. */

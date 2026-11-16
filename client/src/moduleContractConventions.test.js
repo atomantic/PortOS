@@ -1,3 +1,5 @@
+// test-memo: never (tree-wide scanner)
+
 /**
  * Rule: Member reads on `CONTRACT_MODULES` and literal `vi.mock` factories must only reference real exports (via `scripts/lib/mockContractScan.js`), and no browser `alert`/`confirm`/`prompt` (`client/src/AGENTS.md`).
  * Fix: Fix the missing export/member name, update the mock factory, or replace `alert`/`confirm`/`prompt` with inline confirmations or toasts.

@@ -1,3 +1,5 @@
+// test-memo: never (tree-wide scanner)
+
 /**
  * Repo-wide: a wrapping `<pre>` also has to break unbroken tokens.
  *

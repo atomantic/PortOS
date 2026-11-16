@@ -1,4 +1,5 @@
 // @vitest-environment node
+// test-memo: never (tree-wide scanner)
 
 /**
  * Rule: Client files emitting `<ns>:subscribe` for a `registerSubscriber` namespace must use `hooks/useSocketSubscription.js` (except allowlisted legacy hooks).

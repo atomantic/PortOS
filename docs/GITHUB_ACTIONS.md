@@ -1018,7 +1018,10 @@ skip reason). Every key is recomputed after the run and written only when it
 still matches, so a file edited while Vitest ran is never attributed to the
 verdict. The runner prints one line —
 `🧠 Test memo: skipped N of M selected files (closure unchanged); running K.`
-— and lists the skipped files under `PORTOS_TEST_MEMO_VERBOSE=1`. When every
+(plus `U never-memoized guards not analyzed.` when U > 0: in a files-mode plan an
+always-run guard, a `TEST_MEMO_NEVER` entry or a test file carrying the
+`// test-memo: never` marker is decided before any closure walk, and a plan made
+only of those never builds the workspace base closure) — and lists the skipped files under `PORTOS_TEST_MEMO_VERBOSE=1`. When every
 selected file is memoized nothing is launched and the job exits 0.
 
 **Shards.** A matrix shard takes its slice of the FULL selected list with

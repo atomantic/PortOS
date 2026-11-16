@@ -1,3 +1,5 @@
+// test-memo: never (tree-wide scanner)
+
 /**
  * Rule: A JSX element spreading dnd-kit `listeners` must carry `touch-none` in its opening tag (or be in `TOUCH_SENSOR_EXEMPT` with a delayed `TouchSensor`).
  * Fix: Add `touch-none` to the drag handle's `className`.

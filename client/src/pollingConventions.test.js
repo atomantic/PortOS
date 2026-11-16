@@ -1,4 +1,5 @@
 // @vitest-environment node
+// test-memo: never (tree-wide scanner)
 
 /**
  * Rule: No `setInterval` under `src/components/` or `src/pages/` unless allowlisted; use `useAutoRefetch` (`hooks/useAutoRefetch.js`) for data-fetch polling.

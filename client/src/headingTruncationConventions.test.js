@@ -1,3 +1,5 @@
+// test-memo: never (tree-wide scanner)
+
 /**
  * Rule: A dynamic `<h1>` using an unprefixed `truncate` must also carry a `title` attribute so the full value stays reachable.
  * Fix: Drop `truncate` for `line-clamp-2 break-words` and/or add `title={…}`.
