@@ -44,6 +44,12 @@ describe('Apps Vite Dev-UI host guard', () => {
     writeFileSync(join(repoDir, 'vite.config.js'), content);
 
   describe('GET /:id/vite-host-check', () => {
+  it('rejects a repeated query key with 400 (vite-host-check, #16428)', async () => {
+    appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'A', repoPath: repoDir });
+    const res = await request(app).get('/api/apps/app-001/vite-host-check?host=a&host=b');
+    expect(res.status).toBe(400);
+  });
+
     it('reports hostAllowed=false + canAutoFix for a Vite app missing the host', async () => {
       writeViteConfig("export default { server: { port: 5173 } };");
       appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'A', repoPath: repoDir });

@@ -375,3 +375,14 @@ export const peerPullMetadataSchema = z.object({
   // .trim() so a stray-whitespace filename normalizes instead of passing validation then failing disk lookup.
   filenames: z.array(z.string().trim().min(1).max(300)).max(5000),
 }).strict();
+
+// Query strings of the GET peer-sync routes. Scalar strings only; the handlers trim and match them
+// against their own allow-lists, and unknown keys are stripped so peers on other versions keep working (#16428).
+const peerQueryScalar = z.string().optional();
+// A repeated or nested key is dropped, not refused: GET /subscriptions has always treated a non-string filter as absent.
+const lenientPeerQueryScalar = peerQueryScalar.catch(undefined);
+export const peerSubscriptionsQuerySchema = z.object({ peerId: lenientPeerQueryScalar, recordKind: lenientPeerQueryScalar, recordId: lenientPeerQueryScalar });
+export const peerManifestQuerySchema = z.object({ kind: peerQueryScalar });
+export const peerCosAgentArchiveQuerySchema = z.object({ date: peerQueryScalar, agentId: peerQueryScalar, file: peerQueryScalar });
+export const peerRecordQuerySchema = z.object({ kind: peerQueryScalar, id: peerQueryScalar });
+export const peerIntegrityQuerySchema = z.object({ peerId: peerQueryScalar, kind: peerQueryScalar });

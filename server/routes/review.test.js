@@ -37,6 +37,11 @@ afterEach(() => {
 });
 
 describe('GET /api/review/queue', () => {
+  it('rejects a repeated query key with 400 (items, #16428)', async () => {
+    const res = await request(makeApp()).get('/api/review/items?status=a&status=b');
+    expect(res.status).toBe(400);
+  });
+
   it('passes the requested page through without reapplying the old source cap', async () => {
     const items = Array.from({ length: 40 }, (_, index) => ({ id: `brain:b${index}` }));
     buildQueue.mockResolvedValue({

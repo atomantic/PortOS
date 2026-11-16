@@ -1,4 +1,5 @@
 import { sanitizeContinuation } from '../lib/videoContinuationProvenance.js';
+import { runtimeQuerySchema } from '../lib/routeQueryValidation.js';
 import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from '../lib/videoLoraStageValidation.js';
 /**
  * Video Generation Routes — local LTX backend.
@@ -736,7 +737,7 @@ router.get('/reactor/token', asyncHandler(async (_req, res) => {
 // aborted) leaves a venv directory present but no torch, which would
 // hide the banner and make every render fail with a deep ImportError.
 const sendRuntimeStatus = async (req, res) => {
-  const runtime = String(req.query?.runtime || '');
+  const runtime = String(validateRequest(runtimeQuerySchema, req.query).runtime || '');
   res.json(await getVideoRuntimeStatus(runtime));
 };
 
@@ -747,9 +748,10 @@ router.get('/setup/runtime-status', asyncHandler(sendRuntimeStatus));
 router.get('/setup/runtime-install', asyncHandler(sendRuntimeStatus));
 
 router.post('/setup/runtime-install', asyncHandler(async (req, res) => {
+  const runtime = String(validateRequest(runtimeQuerySchema, req.query).runtime || '');
   const { send, safeEnd } = openSseStream(res);
   await streamVideoRuntimeInstall({
-    runtime: String(req.query?.runtime || ''),
+    runtime,
     send,
     safeEnd,
     onDisconnect: (handler) => res.on('close', handler),

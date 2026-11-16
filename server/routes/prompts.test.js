@@ -47,6 +47,11 @@ function makeApp(overrides = {}) {
 }
 
 describe('prompts routes — system stages', () => {
+  it('rejects a repeated query key with 400 (protected-stage force, #16428)', async () => {
+    const res = await request(app).delete('/api/prompts/any-stage?force=true&force=true');
+    expect(res.status).toBe(400);
+  });
+
   let app;
   let deleteStage;
   beforeEach(() => {

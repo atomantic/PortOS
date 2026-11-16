@@ -119,6 +119,11 @@ describe('OpenClaw Routes', () => {
   // ===========================================================================
 
   describe('GET /api/openclaw/sessions/:id/messages', () => {
+  it('rejects a repeated query key with 400 (session messages, #16428)', async () => {
+    const res = await request(app).get('/api/openclaw/sessions/main/messages?limit=1&limit=2');
+    expect(res.status).toBe(400);
+  });
+
     it('should return messages for a session', async () => {
       openclawApi.isConfigured.mockResolvedValue({ configured: true, enabled: true });
       openclawApi.getSessionMessages.mockResolvedValue({

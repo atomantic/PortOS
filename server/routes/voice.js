@@ -1,4 +1,5 @@
 import { observeModelResource, observeModelMutations } from '../services/modelObservation.js';
+import { voiceEngineQuerySchema } from '../lib/routeQueryValidation.js';
 /**
  * Voice Routes
  *
@@ -205,7 +206,7 @@ for (const command of ['probe', 'call', 'hangup']) {
 }
 
 router.get('/voices', asyncHandler(async (req, res) => {
-  res.json(await listVoices(validEngine(req.query?.engine)));
+  res.json(await listVoices(validEngine(validateRequest(voiceEngineQuerySchema, req.query).engine)));
 }));
 
 const voiceProfileListSchema = z.object({

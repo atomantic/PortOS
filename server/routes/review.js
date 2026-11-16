@@ -1,4 +1,5 @@
 import express from 'express';
+import { reviewItemsQuerySchema } from '../lib/routeQueryValidation.js';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { reviewQueueQuerySchema, validateRequest } from '../lib/validation.js';
@@ -25,7 +26,7 @@ const bulkStatusSchema = z.object({
 
 // GET /api/review/items — list all items (optional ?status=pending&type=todo filters)
 router.get('/items', asyncHandler(async (req, res) => {
-  const { status, type } = req.query;
+  const { status, type } = validateRequest(reviewItemsQuerySchema, req.query);
   const items = await reviewService.getItems({ status, type });
   res.json(items);
 }));

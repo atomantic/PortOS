@@ -48,6 +48,21 @@ const CONVERSATION_ID = '55555555-5555-4555-8555-555555555555';
 const IDENTITY_ID = '77777777-7777-4777-8777-777777777777';
 
 describe('Tribe Routes', () => {
+  it('rejects a repeated query key with 400 (touchpoints, #16428)', async () => {
+    const res = await request(app).get('/api/tribe/people/00000000-0000-4000-8000-000000000001/touchpoints?limit=1&limit=2');
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a repeated query key with 400 (outreach, #16428)', async () => {
+    const res = await request(app).get('/api/tribe/outreach?limit=1&limit=2');
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a repeated query key with 400 (care, #16428)', async () => {
+    const res = await request(app).get('/api/tribe/care?limit=1&limit=2');
+    expect(res.status).toBe(400);
+  });
+
   let app;
   let emit;
 

@@ -20,6 +20,7 @@
  */
 
 import { Router } from 'express';
+import { workItemsQuerySchema } from '../../lib/routeQueryValidation.js';
 import { logCosScheduleUpdate } from '../../services/userActionScheduleLog.js';
 import * as appsService from '../../services/apps.js';
 import { PORTOS_APP_ID } from '../../services/apps.js';
@@ -86,7 +87,7 @@ router.get('/:id/work-tracker', loadApp, asyncHandler(async (req, res) => {
 // items the run would then skip. Read-only: no LLM call, no claim markers set.
 router.get('/:id/work-items', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
-  const requested = req.query.issueAuthorFilter;
+  const { issueAuthorFilter: requested } = validateRequest(workItemsQuerySchema, req.query);
   const explicit = ISSUE_AUTHOR_FILTERS.includes(requested) ? requested : undefined;
   // `issueExcludeLabels` has no query-param override (unlike the author
   // filter) — the drawer preview always reflects the app's configured value,

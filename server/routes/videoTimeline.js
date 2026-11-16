@@ -7,6 +7,7 @@
  */
 
 import { Router } from 'express';
+import { paginationQuerySchema } from '../lib/routeQueryValidation.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, isPaginationRequested, paginateArray } from '../lib/validation.js';
@@ -132,11 +133,12 @@ const updateBodySchema = z.object({
 // passes `limit`/`offset`, the response becomes the bounded
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
 router.get('/projects', asyncHandler(async (req, res) => {
+  const page = validateRequest(paginationQuerySchema, req.query);
   const projects = await listProjects();
-  if (!isPaginationRequested(req.query)) {
+  if (!isPaginationRequested(page)) {
     return res.json(projects);
   }
-  res.json(paginateArray(projects, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  res.json(paginateArray(projects, page, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/projects', asyncHandler(async (req, res) => {

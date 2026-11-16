@@ -63,6 +63,11 @@ describe('Apps Task-Type Routes', () => {
   });
 
   describe('GET /api/apps/:id/work-items', () => {
+  it('rejects a repeated query key with 400 (work-items, #16428)', async () => {
+    const res = await request(app).get('/api/apps/app-001/work-items?issueAuthorFilter=a&issueAuthorFilter=b');
+    expect(res.status).toBe(400);
+  });
+
     beforeEach(() => {
       appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'App' });
       resolveClaimWorkMetadata.mockResolvedValue({ metadata: {}, interval: {} });

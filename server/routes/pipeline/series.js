@@ -5,6 +5,7 @@
  */
 
 import { Router } from 'express';
+import { paginationQuerySchema } from '../../lib/routeQueryValidation.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import {
@@ -355,9 +356,10 @@ const issueCreateSchema = z.object({
 // =====================
 
 router.get('/series', asyncHandler(async (req, res) => {
+  const page = validateRequest(paginationQuerySchema, req.query);
   const series = await seriesSvc.listSeries();
-  if (!isPaginationRequested(req.query)) return res.json(series);
-  res.json(paginateArray(series, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  if (!isPaginationRequested(page)) return res.json(series);
+  res.json(paginateArray(series, page, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.get('/series/names', asyncHandler(async (_req, res) => {
