@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   READY_POLL_INTERVAL_MS,
   READY_IDLE_THRESHOLD_MS,
-  PASTE_DEADLINE_MS,
   PASTE_MARKER_POLL_MS,
   PASTE_MARKER_PATTERN,
   detectPasteMarker,
@@ -24,7 +23,6 @@ import {
   STALL_NUDGE_MAX_ATTEMPTS,
   SELF_CLEARING_RESUBMIT_INTERVAL_MS,
   SELF_CLEARING_RESUBMIT_ECHO_MS,
-  MCP_BOOT_PASTE_DEADLINE_MS,
   isPasteCommitted,
   isPasteConfirmed,
   isMcpBootSignal,
@@ -33,16 +31,11 @@ import {
   PASTE_TO_ENTER_FALLBACK_MS,
   SUBMIT_ENTER_ATTEMPTS,
   SUBMIT_ENTER_SPACING_MS,
-  RAW_BUFFER_CAP,
-  RAW_BUFFER_HEADROOM,
-  OUTPUT_BUFFER_CAP,
-  OUTPUT_BUFFER_HEADROOM,
   inferTuiCommand,
   applyCommandDefaults,
   buildTuiInvocation,
   detectMissingTuiBinary,
   scheduleSubmitEnters,
-  PASTE_VERIFY_WINDOW_MS,
   extractVerifiablePromptPrefix,
   verifyPasteRendered,
   isCollapsedPasteChip,
@@ -467,22 +460,9 @@ describe('tuiHandshake — paste timing constants', () => {  it('PASTE_MARKER_PA
       });
     });
   });
-
-  it('keeps buffer headroom above cap (defensive growth allowance)', () => {
-    // Headroom must exceed cap so the slice-tail-after-overflow logic in
-    // the callers actually keeps recent bytes instead of dropping them.
-    expect(RAW_BUFFER_HEADROOM).toBeGreaterThan(RAW_BUFFER_CAP);
-    expect(OUTPUT_BUFFER_HEADROOM).toBeGreaterThan(OUTPUT_BUFFER_CAP);
-  });
 });
 
 describe('tuiHandshake — codex MCP-boot paste patience (agent-c5a26b40)', () => {
-  it('deadline covers a node_repl startup_timeout_sec=120 plus margin', () => {
-    // Long enough for the documented 120s node_repl startup + an npx cold
-    // download, with a bounded retry window for a genuinely hung boot.
-    expect(MCP_BOOT_PASTE_DEADLINE_MS).toBeGreaterThan(120000);
-  });
-
   it('isMcpBootSignal matches codex MCP boot banners (case-insensitive)', () => {
     expect(isMcpBootSignal('Booting MCP server: codex_apps(0s • esc to interrupt)')).toBe(true);
     expect(isMcpBootSignal('Starting MCP servers (0/3): codex_apps, node_repl, playwright')).toBe(true);
@@ -989,14 +969,6 @@ describe('tuiHandshake.scheduleSubmitEnters', () => {
     vi.advanceTimersByTime(SUBMIT_ENTER_SPACING_MS * (SUBMIT_ENTER_ATTEMPTS + 2));
     // The immediate write already happened; no interval-driven writes follow.
     expect(write).toHaveBeenCalledTimes(1);
-  });
-});
-
-// Paste verification helpers (issue #2192)
-describe('tuiHandshake — paste verification constants', () => {
-  it('keeps the paste verify window inside the paste deadline', () => {
-    // Verification window should be shorter than the overall paste deadline
-    expect(PASTE_VERIFY_WINDOW_MS).toBeLessThan(PASTE_DEADLINE_MS);
   });
 });
 

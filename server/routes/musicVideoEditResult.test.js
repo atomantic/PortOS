@@ -100,6 +100,17 @@ describe('board edit replies carry what a reload would show', () => {
     expect(reply.previous).toMatchObject({ sceneId: 'b', endSec: 9 });
   });
 
+  // Uniquely catches an added shot whose reply is the bare scene, which forces the board to reload.
+  it('adding a shot answers with the new shot and an edit that folds into the reloaded board', async () => {
+    const before = await read();
+    const reply = await request(app).post(`${base()}/scenes`).send({ prompt: 'A new shot' });
+    expect(reply.status).toBe(201);
+    expect(reply.body).toMatchObject({ prompt: 'A new shot', sceneId: expect.any(String) });
+    expect(reply.body).not.toHaveProperty('project');
+    expect(reply.body.edit.scenes.map((scene) => scene.sceneId)).toContain(reply.body.sceneId);
+    expect(applyMusicVideoEdit(before, reply.body.edit)).toEqual(await read());
+  });
+
   it('split, merge, delete and reorder each fold into the reloaded board', async () => {
     const split = await expectReloadParity(() => request(app).post(`${base()}/scenes/a/split`).send({ atSec: 2.5 }));
     expect(split.reply.scenes).toHaveLength(2);
