@@ -16,6 +16,7 @@ import { buildFalVideoRequest } from '../../lib/falVideoModels.js';
 import {
   planProjectSequenceCoverage, SEQUENCE_PROMPT_EXPANSION, sequenceGroupInput, sequenceModelId,
 } from '../../lib/musicVideoSequenceCoverage.js';
+import { assertShotActionContract } from '../../lib/musicVideoActionContract.js';
 
 function previewRequest(project, group, { modelId, members, prompt, resolution, promptAdditions }) {
   const backend = project?.videoSettings?.backend;
@@ -55,9 +56,9 @@ const refuse = (status, code, message) => { throw new ServerError(message, { sta
  * run no longer matches the plan. Returns `{ jobId, sceneIds, prompt }`.
  */
 export async function submitSequenceCoverage(projectId, { sceneIds } = {}) {
-  const [{ requireProject }, { musicVideoBriefAllowsVideo }, { assertShotActionContract }, { captureTakeDependencies },
+  const [{ requireProject }, { musicVideoBriefAllowsVideo }, { captureTakeDependencies },
     { resolveGalleryImage }, { musicVideoAspect }] = await Promise.all([
-    import('./requireProject.js'), import('../../lib/musicVideoMediumPlan.js'), import('../../lib/musicVideoActionContract.js'),
+    import('./requireProject.js'), import('../../lib/musicVideoMediumPlan.js'),
     import('../../lib/musicVideoDependencies.js'), import('../../lib/pathSafety.js'), import('../../lib/musicVideoAspect.js'),
   ]);
   const project = await requireProject(projectId);

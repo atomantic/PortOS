@@ -85,6 +85,7 @@ import {
 } from '../services/persistentMindSupervisor.js';
 
 import { getCosToolCatalog, readCosToolRecipeCatalog } from '../services/cosToolRegistry.js';
+import { readPersistentMindManagedApps } from '../services/persistentMindManagedApps.js';
 const router = Router();
 router.use('/mind/recipes', mindToolRecipeRoutes);
 
@@ -352,8 +353,7 @@ router.get('/mind/tools', asyncHandler(async (_req, res) => {
   // issues, `granted` for both. Loading it per grant would let either editor
   // narrow the list from a partial view and silently revoke the other's apps.
   const managedApps = capabilities.createTasks || capabilities.fileIssues
-    ? import('../services/persistentMindManagedApps.js')
-      .then(({ readPersistentMindManagedApps }) => readPersistentMindManagedApps())
+    ? readPersistentMindManagedApps()
     : null;
   const [recipes, roster, reportAccess] = await Promise.all([
     readCosToolRecipeCatalog({ scope: 'mind' }),

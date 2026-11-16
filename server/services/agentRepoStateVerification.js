@@ -326,8 +326,8 @@ function manualSwarmContinuationPending(agent) {
 }
 
 async function notifyDeliveredSwarmCleanup(agentId, { notify = true } = {}) {
-  const [{ getAgentRecord }, { getTaskById }, { getInstanceId }, contract] = await Promise.all([
-    import('./cosAgentLifecycle.js'), import('./cosTaskStore.js'), import('./instanceIdentity.js'), import('./swarmCleanupDelivery.js'),
+  const [{ getAgentRecord }, contract] = await Promise.all([
+    import('./cosAgentLifecycle.js'), import('./swarmCleanupDelivery.js'),
   ]);
   let agent = await getAgentRecord(agentId);
   const task = agent && await getTaskById(agent.taskId);
@@ -556,9 +556,7 @@ export async function verifyAgentRepoState(input) {
 
 /** Recheck one current cleanup owner without starting another provider task. */
 export async function recheckAgentCleanup(agentId, taskId) {
-  const [{ getAgentRecord }, { getTaskById }] = await Promise.all([
-    import('./cosAgentLifecycle.js'), import('./cosTaskStore.js'),
-  ]);
+  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const agent = await getAgentRecord(agentId);
   const task = await getTaskById(taskId);
   if (!agent || !task || agent.taskId !== taskId || agent.status !== 'completed'

@@ -36,7 +36,7 @@ import { countAheadBehind, detectOperationInProgress } from './repoSync.js';
 import { classifyWorktreeDirt } from './worktreeManager.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { inspectPinnedSubmoduleDrift } from './gitPinnedSubmodules.js';
-import { REPO_REPAIR_TASK_DESCRIPTION } from './updateRepoRepairCompletion.js';
+import { REPO_REPAIR_TASK_DESCRIPTION, captureRepoRepairContract } from './updateRepoRepairCompletion.js';
 
 /** First line of the repair task — stable so `addTask`'s dedup collapses reruns. */
 export { REPO_REPAIR_TASK_DESCRIPTION };
@@ -297,8 +297,8 @@ export async function queueRepoRepairTask(verdict) {
     'Work in the primary checkout, not a worktree — the state that needs fixing is there.',
   ].filter((line) => line !== null).join('\n');
 
-  return Promise.all([import('./cosTaskStore.js'), import('./updateRepoRepairCompletion.js')])
-    .then(async ([{ addTask }, { captureRepoRepairContract }]) => {
+  return import('./cosTaskStore.js')
+    .then(async ({ addTask }) => {
       const repoRepairContract = await captureRepoRepairContract(verdict);
       return addTask({
         description: REPO_REPAIR_TASK_DESCRIPTION,

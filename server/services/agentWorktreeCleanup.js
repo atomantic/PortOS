@@ -22,9 +22,9 @@ import { forceSpawnTask } from './cos.js';
 import { getAgents, getAgentRecord, getAgent, updateAgent, recordRepoStateVerification, recordCleanupOutcome } from './cosAgentLifecycle.js';
 import * as git from './git.js';
 import { resolveTaskHookType } from './taskTypeHooks.js';
-import { removeWorktree, classifyWorktreeDirt, listWorktrees } from './worktreeManager.js';
+import { removeWorktree, classifyWorktreeDirt, listWorktrees, forceRemoveWorktreeDir, deleteCompletedLocalBranch } from './worktreeManager.js';
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
-import { claimContinuationPointer } from '../lib/claimContinuation.js';
+import { claimContinuationPointer, claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 import { isTruthyMeta } from './agentState.js';
 import { isFalsyMeta } from '../lib/metadataFlags.js';
 import { canonicalizePath } from '../lib/pathContainment.js';
@@ -41,6 +41,8 @@ import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SE
 import { findPullRequestForBranch } from './github.js';
 import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
+import { completedCheckoutReceiptValid, readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
+import { withClaimOwnershipLock, readClaimOwnershipAgents as readClaimOwnershipStateAgents } from './cosClaimOwnershipState.js';
 
 // In-flight cleanup per agentId, so two completion paths racing to clean the
 // SAME agent coalesce onto one run instead of tripping over each other.
@@ -226,11 +228,8 @@ async function worktreeCleanupContext(agentId, options) {
 async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBranches, agentState, remoteTimeoutMs }) {
   if (!sourceWorkspace || !Array.isArray(claimBranches) || !claimBranches.length) return [];
   const remoteOpts = remoteTimeoutMs ? { timeout: remoteTimeoutMs } : {};
-  const [{ probePrForBranch, isExactMergedPrHead }, { completedCheckoutReceiptValid, readCompletedCheckoutIdentity },
-    { withClaimOwnershipLock, readClaimOwnershipAgents }, { claimCheckoutOwnerReason },
-    { forceRemoveWorktreeDir, deleteCompletedLocalBranch }, { readCheckoutPathPresence, readLocalBranchPresence }] = await Promise.all([
-    import('./prProbe.js'), import('./completedCheckoutEvidence.js'), import('./cosClaimOwnershipState.js'),
-    import('../lib/claimContinuation.js'), import('./worktreeManager.js'), import('./repoCleanupObservation.js'),
+  const [{ probePrForBranch, isExactMergedPrHead }, { readCheckoutPathPresence, readLocalBranchPresence }] = await Promise.all([
+    import('./prProbe.js'), import('./repoCleanupObservation.js'),
   ]);
   const warnings = [];
   const held = (branch, reason) => `Claim cleanup ${branch} incomplete — ${reason}`;
@@ -263,7 +262,7 @@ async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBran
       warnings.push(held(branch, 'merged head not verified'));
       continue;
     }
-    const owner = () => readClaimOwnershipAgents().then(agents => claimCheckoutOwnerReason({
+    const owner = () => readClaimOwnershipStateAgents().then(agents => claimCheckoutOwnerReason({
       branchName: branch, holderPath: capture.path, sourceWorkspace, agents, ignoreIds: [agentId],
     }));
     const ownerHold = () => withClaimOwnershipLock(owner).catch(() => 'claim-ownership-unreadable');

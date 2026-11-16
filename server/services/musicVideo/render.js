@@ -75,6 +75,7 @@ import { musicVideoWipeFilter, wipeCuts } from '../../lib/musicVideoWipes.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { isEndFrameImageEffect, musicVideoImageEffectFilter, photoSequenceArrivals, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 import { trackedRenderMap } from '../renderActivity.js';
+import { normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
 // parallel; same-project re-entry returns 409 with the live jobId for re-attach).
@@ -1442,10 +1443,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     if (seeked && cold.length) {
       let allowed = new Set();
       if (project.composition?.mode === 'blender') {
-        const [{ readBlenderManifest }, { normalizeBlenderRecord }] = await Promise.all([
-          import('./blender/manifest.js'),
-          import('../../lib/musicVideoBlender.js'),
-        ]);
+        const { readBlenderManifest } = await import('./blender/manifest.js');
         const manifest = await readBlenderManifest(project.id);
         const sceneMap = normalizeBlenderRecord(project.blender).sceneMap || {};
         allowed = new Set((manifest?.shots || []).filter((shot) => shot.start < 0).map((shot) => sceneMap[shot.id]).filter(Boolean));

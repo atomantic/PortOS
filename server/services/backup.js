@@ -38,6 +38,7 @@ import { convertRestoredLegacySplitStores, describeLegacySplitStores, snapshotLe
 import { noteSystemActivity } from './systemActivityNotify.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { settleAdmissionEventually } from '../lib/maintenanceSettlementRetry.js';
+import { resetInstanceIdCache } from './instanceIdentity.js';
 
 // Module-level state
 let isRunning = false;
@@ -2266,9 +2267,8 @@ function withLiveFileRestoreOwners(scope, srcDir, operation) {
  */
 async function transferWithIdentityFence({ installsIdentity, assertIdentityUnchanged, transferFiles }) {
   if (!installsIdentity) return transferFiles();
-  const [{ withPeerExecutionIdentityRestore }, { resetInstanceIdCache }, { resetSelfInstanceIdCache }] = await Promise.all([
+  const [{ withPeerExecutionIdentityRestore }, { resetSelfInstanceIdCache }] = await Promise.all([
     import('./peerExecutionRuntime.js'),
-    import('./instanceIdentity.js'),
     import('../lib/peerHttpClient.js'),
   ]);
   return withPeerExecutionIdentityRestore(async () => {

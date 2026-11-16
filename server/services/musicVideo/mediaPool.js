@@ -363,8 +363,8 @@ export async function assertNewMediaSelections(before, after) {
   const previous = usedKeys(before);
   const added = [...usedKeys(after)].filter(key => !previous.has(key));
   if (!added.length) return;
-  const [{ resolveGalleryImage }, { getHistoryItem }, { ServerError }] = await Promise.all([
-    import('../../lib/pathSafety.js'), import('../videoGen/history.js'), import('../../lib/errorHandler.js'),
+  const [{ resolveGalleryImage }, { getHistoryItem }] = await Promise.all([
+    import('../../lib/pathSafety.js'), import('../videoGen/history.js'),
   ]);
   for (const key of added) {
     const separator = key.indexOf(':');
@@ -553,8 +553,8 @@ export async function searchMediaLibraryForPool(project, query) {
  * a clip keeps whatever provenance stamp it has. Resolves `{ added }`.
  */
 export async function addLibraryMediaToPool(project, items) {
-  const [{ findOrCreateMusicVideoCollection, bulkUpdateCollectionItems }, { resolveGalleryImage }, { getHistoryItem }, { ServerError }] = await Promise.all([
-    import('../mediaCollections.js'), import('../../lib/pathSafety.js'), import('../videoGen/history.js'), import('../../lib/errorHandler.js'),
+  const [{ findOrCreateMusicVideoCollection, bulkUpdateCollectionItems }, { resolveGalleryImage }, { getHistoryItem }] = await Promise.all([
+    import('../mediaCollections.js'), import('../../lib/pathSafety.js'), import('../videoGen/history.js'),
   ]);
   for (const { kind, assetId } of items) {
     const exists = kind === 'image' ? resolveGalleryImage(assetId) : await getHistoryItem(assetId);

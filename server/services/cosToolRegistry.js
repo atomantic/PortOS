@@ -72,6 +72,8 @@ import { ensureInstanceId } from './instanceIdentity.js';
 import { choosePersistentMindName, reviewPersistentMindMemory, protectPersistentMindMemory } from './persistentMindContext.js';
 import { getPersistentMindThinkingRequestCatalog, requestPersistentMindThinkingPreset } from './persistentMindThinkingRequests.js';
 import { loadState, saveState, withStateLock } from './cosState.js';
+import { listUserActions } from './userActions.js';
+import { scrubSecretTokens, scrubSecretTokensDeep } from '../lib/secretText.js';
 
 const MAX_CALL_RESULTS = 500;
 const MAX_IDEMPOTENCY_TOMBSTONES = 10_000;
@@ -1136,10 +1138,6 @@ const readArtistProfiles = async (tool, args) => {
 };
 
 const listUserActionEvents = async (tool, args) => {
-  const [{ listUserActions }, { scrubSecretTokens, scrubSecretTokensDeep }] = await Promise.all([
-    import('./userActions.js'),
-    import('../lib/secretText.js'),
-  ]);
   // Refinements do not survive the input schema's JSON-Schema round trip, so
   // date parseability is enforced here — with field attribution, since the
   // failure surfaces to the model as this error string.

@@ -10,7 +10,7 @@ const router = Router();
 // What the optional motion toolkit (`npm run setup:motion`) has installed, so
 // the launch-video form can offer only components that are actually present.
 router.get('/toolkit', asyncHandler(async (req, res) => {
-  const [{ findFfmpeg }, { detectMotionSkills }] = await Promise.all([import('../lib/ffmpeg.js'), import('../lib/motionSkills.js')]);
+  const { findFfmpeg } = await import('../lib/ffmpeg.js');
   res.json({ ffmpeg: Boolean(await findFfmpeg()), skillPacks: detectMotionSkills() });
 }));
 

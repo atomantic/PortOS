@@ -44,6 +44,7 @@ import { adoptNpmGlobalBinDir, inspectNpmGlobalCommand } from '../lib/npmGlobalB
 import { findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
 import { PROVIDER_VENDORS } from '../lib/providerVendors.js';
 import { isTestRunner } from '../lib/runtimeEnv.js';
+import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../lib/aiToolkit/internal/windowsSafeSpawn.js';
 
 // Stand-in for `findCommandOnPath` OR `commandOutput` when a real PATH scan /
 // spawn is skipped (below) — both answer "nothing to report" (`null`) on any
@@ -124,10 +125,9 @@ const RUNTIME_ROWS = [
     // the harness-table alternative to `modelsArgs` for exactly this shape: a
     // lister that cannot be driven by a bare argv + stdout capture (#8497).
     listModels: async ({ probeAs, resolvedCommand, env, timeoutMs }) => {
-      const [{ resolveCliSpawn }, { probeCodexModelsViaAppServer }, { prepareWindowsSafeSpawn, resolveWindowsExecutable }] = await Promise.all([
+      const [{ resolveCliSpawn }, { probeCodexModelsViaAppServer }] = await Promise.all([
         import('../lib/credentialBootstrap.js'),
         import('../lib/aiToolkit/internal/codexModelListProbe.js'),
-        import('../lib/aiToolkit/internal/windowsSafeSpawn.js'),
       ]);
       const spawned = resolveCliSpawn(probeAs, resolvedCommand, ['app-server'], env);
       const isWin32 = process.platform === 'win32';

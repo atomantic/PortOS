@@ -101,6 +101,8 @@ import {
   detectSystemCapabilities,
   withProviderHardwareCompatibility,
 } from '../lib/systemCapabilities.js';
+import { SERVICE_DEFINITIONS } from '../lib/serviceDefinitions.js';
+import { presentServiceDefinition } from '../lib/providerServiceInstances.js';
 
 /**
  * The CoS Agent Runner's exec allowlist, published read-only so the AI
@@ -589,10 +591,6 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
    * subtree through this route file alone (server/AGENTS.md "Import scoping").
    */
   router.get('/service-definitions', asyncHandler(async (_req, res) => {
-    const [{ SERVICE_DEFINITIONS }, { presentServiceDefinition }] = await Promise.all([
-      import('../lib/serviceDefinitions.js'),
-      import('../lib/providerServiceInstances.js'),
-    ]);
     res.json({ definitions: SERVICE_DEFINITIONS.map(presentServiceDefinition) });
   }));
 

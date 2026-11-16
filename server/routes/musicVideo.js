@@ -685,8 +685,7 @@ router.delete('/:id/film-looks/:lookId', asyncHandler(async (req, res) => {
 // before the song: the same mix the final render lays in front of it.
 router.post('/:id/cold-open/audio', asyncHandler(async (req, res) => {
   validateRequest(musicVideoColdOpenAudioSchema, req.body ?? {});
-  const [{ coldOpenPreviewAudio }, { requireProject }] = await Promise.all([
-    import('../services/musicVideo/coldOpen.js'), import('../services/musicVideo/requireProject.js')]);
+  const { coldOpenPreviewAudio } = await import('../services/musicVideo/coldOpen.js');
   const path = await coldOpenPreviewAudio(await requireProject(req.params.id));
   if (!path) throw new ServerError('No shot plays before the song', { status: 409, code: 'NO_COLD_OPEN' });
   res.json({ name: basename(path) });
