@@ -125,9 +125,8 @@ export function resolveEffortHint(stage, options = {}) {
 }
 
 // The local-backend concurrency gate lives in promptRunner.js (the execution layer, covering
-// swaps and runtime fallbacks) and is re-exported here for its historical path.
+// swaps and runtime fallbacks).
 // `isLocalEndpoint` is shared so the context-window heuristic below agrees on "local".
-export { withLocalConcurrencyGate, LOCAL_LLM_MAX_CONCURRENCY } from './promptRunner.js';
 export { isLocalEndpoint };
 
 // CLI/TUI providers are frontier models and non-local API providers are cloud; only local

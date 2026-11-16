@@ -9,7 +9,6 @@ import { request } from '../lib/testHelper.js';
 // of scope for the drill-cache consent change that added these two routes.
 vi.mock('../services/meatspacePostDrillCache.js', () => ({
   // postValidation.js's postDrillCacheFillSchema enum-validates against this.
-  CACHEABLE_TYPES: ['compound-chain', 'bridge-word', 'double-meaning', 'idiom-twist'],
   getCacheStats: vi.fn(() => ({
     'compound-chain': { count: 3, cold: false },
     'bridge-word': { count: 0, cold: true },

@@ -7,23 +7,9 @@ vi.mock('./cosState.js', () => ({ getConfig: vi.fn().mockResolvedValue({ autoApp
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn().mockResolvedValue('fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./cosTaskStore.js', () => ({ addTask: vi.fn(), updateTask: vi.fn(), getAllTasks: vi.fn() }));
 
-import {
-  analyzeAgentFailure,
-  COMPLETION_REASON_ANALYSES,
-  ERROR_PATTERNS,
-  SNIPPET_RAW_MAX_CHARS,
-  resolveFailedTaskDecision,
-  resolveTypeFailureSignal,
-  maybeCreateInvestigationTask,
-  createInvestigationTask,
-  redactFailureSnippet,
-  endsAwaitingUserInput,
-  AWAITING_INPUT_TAIL_CHARS,
-  MAX_TASK_RETRIES,
-  INVESTIGATION_CIRCUIT_WINDOW_MS,
-  INVESTIGATION_CIRCUIT_MAX_CREATIONS,
-  __resetInvestigationCircuit
-} from './agentErrorAnalysis.js';
+import { analyzeAgentFailure, COMPLETION_REASON_ANALYSES, ERROR_PATTERNS, SNIPPET_RAW_MAX_CHARS, resolveFailedTaskDecision, resolveTypeFailureSignal, maybeCreateInvestigationTask, createInvestigationTask, redactFailureSnippet, endsAwaitingUserInput, AWAITING_INPUT_TAIL_CHARS, MAX_TASK_RETRIES } from './agentErrorAnalysis.js';
+import { INVESTIGATION_CIRCUIT_WINDOW_MS, INVESTIGATION_CIRCUIT_MAX_CREATIONS } from '../lib/investigationTasks.js';
+import { __resetInvestigationCircuit } from './investigationTaskProducer.js';
 // The pure policy + fingerprint moved to the shared leaf so every failure-driven
 // producer reads one definition; the create path here still applies it.
 import {

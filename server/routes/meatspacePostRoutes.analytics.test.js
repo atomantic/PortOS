@@ -20,7 +20,6 @@ vi.mock('../services/meatspacePost.js', () => ({
   getPostReviewReps: vi.fn(),
 }));
 vi.mock('../services/meatspacePostDrillCache.js', () => ({
-  CACHEABLE_TYPES: ['compound-chain'],
   getCacheStats: vi.fn(() => ({})),
   requestCacheFill: vi.fn(),
   getCachedDrill: vi.fn(() => null),

@@ -56,7 +56,7 @@ import { buildSongDocument } from './codeTimeline.js';
 import { resolveNarrativeEvents, narrativeFrameState } from '../../lib/musicVideoNarrativeEvents.js';
 import { DOCUMENT_RENDER_FPS, documentRenderClock, documentSongDuration } from './documentTiming.js';
 
-export { DOCUMENT_RENDER_FPS, documentRenderClock, documentSongDuration } from './documentTiming.js';
+export { documentRenderClock, documentSongDuration } from './documentTiming.js';
 // The frame each project aspect renders at (the composition browser's sizes).
 export const DOCUMENT_FRAME_SIZES = Object.freeze({
   '16:9': Object.freeze({ width: 1920, height: 1080 }),

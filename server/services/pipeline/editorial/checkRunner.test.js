@@ -99,7 +99,8 @@ vi.mock('../reverseOutline.js', () => ({ getReverseOutline: vi.fn(async () => ou
 let editorialState = { characters: [] };
 vi.mock('../editorialAnalysis.js', () => ({ getSeriesEditorial: vi.fn(async () => editorialState) }));
 
-const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness, enabledChecksConsumeReverseOutline, buildReverseOutlineGateContext, summarizeCheckErrors, previewCustomCheck, buildScopedPriorFindings, effectiveCheckSources, __testing: checkRunnerTesting } = await import('./checkRunner.js');
+const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness, enabledChecksConsumeReverseOutline, buildReverseOutlineGateContext, summarizeCheckErrors, previewCustomCheck, buildScopedPriorFindings, __testing: checkRunnerTesting } = await import('./checkRunner.js');
+const { effectiveCheckSources } = await import('./reviewStaleness.js');
 const { runStagedLLM, resolveStageContext } = await import('../../stageRunner.js');
 const { buildCompletenessContext, collectManuscriptSections, completenessSourceHash, sectionsCorpus } = await import('../arcPlanner.js');
 const { getSeriesCanon } = await import('../seriesCanon.js');

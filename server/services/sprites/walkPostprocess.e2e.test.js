@@ -23,10 +23,8 @@ import { join } from 'path';
 import sharp from 'sharp';
 import { mkdir, readFile } from 'fs/promises';
 import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
-import {
-  runWalkPostprocess, walkPhaseLabels, WALK_PHASES, WALK_CELL_SIZE,
-  WALK_DEFAULT_FRAME_COUNT, WALK_DEFAULT_FPS,
-} from './walkPostprocess.js';
+import { runWalkPostprocess, WALK_PHASES, WALK_CELL_SIZE, WALK_DEFAULT_FRAME_COUNT, WALK_DEFAULT_FPS } from './walkPostprocess.js';
+import { walkPhaseLabels } from './walkBounds.js';
 
 vi.mock('./animationTrackStore.js', async () => {
   const { ANIMATION_TRACKS } = await import('../../lib/spriteAnimationTracks.js');

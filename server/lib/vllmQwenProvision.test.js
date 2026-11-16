@@ -1,14 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  generateVllmApiKey,
-  isWsl2Engine,
-  mergeEnvFileContents,
-  parseEnvContents,
-  upsertEnvLine,
-  vllmEnvDefaults,
-  VLLM_API_KEY_VAR,
-} from './vllmQwenProvision.js';
+import { generateVllmApiKey, isWsl2Engine, mergeEnvFileContents, vllmEnvDefaults, VLLM_API_KEY_VAR } from './vllmQwenProvision.js';
+import { parseEnvContents, upsertEnvLine } from './portosEnv.js';
 import { vllmExtraArgs } from './qwenAgentParsers.js';
 
 const defaults = (wsl2 = false) => vllmEnvDefaults({ apiKey: 'generated-key', wsl2 });

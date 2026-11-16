@@ -35,7 +35,6 @@
 // `CATALOG_REVISION_RETENTION` is a public export that lives on the leaf module;
 // `export *` on a function seam does not forward a binding it merely imports, so
 // re-export it explicitly here to preserve the `catalogDB.js` import path.
-export { CATALOG_REVISION_RETENTION } from './catalogDB/shared.js';
 export * from './catalogDB/scraps.js';
 export * from './catalogDB/ingredients.js';
 export * from './catalogDB/refs.js';

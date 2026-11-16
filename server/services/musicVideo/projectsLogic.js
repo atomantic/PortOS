@@ -36,6 +36,7 @@ import { audioRevisionOf } from '../../lib/musicVideoSongAudio.js';
 import { stripMusicVideoLocalRenderPins } from '../../lib/syncWire.js';
 import { persistedRenderPinFields } from '../../lib/renderTargets.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
+import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
 import { isPerformanceScene, planShotSplit, shotSplitLimit } from '../../lib/musicVideoShotTiming.js';
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
 import { normalizeLyricMarkers, remapLyricMarkers } from '../../lib/lyricMarkers.js';
@@ -65,10 +66,8 @@ import { migrateMusicVideoPreviz } from '../../../scripts/migrations/459-music-v
 /** The vocal-stem fields cleared together whenever the stem stops belonging to the song (#8977). */
 export const CLEARED_VOCAL_STEM = Object.freeze({ vocalStemFilename: null, vocalStemMasterFilename: null, vocalStemDerived: null });
 
-export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
 // Re-exported for the PG backend's typed mirror columns (mirrors the CD store).
-export { mirrorTimestamp } from '../../lib/pgTimestamp.js';
 
 const STATUS_COLUMN_MAX = 32;
 
@@ -999,6 +998,10 @@ export function applySceneUpdate(project, sceneId, patch) {
  * each replacing that shot's glitch out. The last shot has no cut out and is
  * skipped. Returns `{ project, scenes }`, `scenes` the changed shots.
  */
+// projectDbStore reaches this through the injected `logic` namespace, so no file
+// imports the name from here and a word scan cannot see the caller.
+export { mirrorTimestamp };
+
 export function varySceneWipes(project, { fromSceneId, count, styles, lengthSec = null, color = null, seed = 1 }) {
   const timed = (project.scenes || []).filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
   const start = timed.findIndex((scene) => scene.sceneId === fromSceneId);

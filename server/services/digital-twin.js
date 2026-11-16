@@ -19,15 +19,8 @@
  *   digital-twin-status.js     — getDigitalTwinStatus, getSoulStatus
  */
 
-export { ENRICHMENT_CATEGORIES, SCALE_QUESTIONS } from './digital-twin-constants.js';
 
-export {
-  digitalTwinEvents,
-  loadMeta,
-  saveMeta,
-  updateMeta,
-  updateSettings
-} from './digital-twin-meta.js';
+export { digitalTwinEvents, loadMeta, updateSettings } from './digital-twin-meta.js';
 
 export {
   getDocuments,
@@ -81,26 +74,16 @@ export {
   getEnrichmentListItems
 } from './digital-twin-enrichment.js';
 
-export {
-  getExportFormats,
-  exportDigitalTwin,
-  exportSoul
-} from './digital-twin-export.js';
+export { getExportFormats, exportDigitalTwin } from './digital-twin-export.js';
 
 export {
   buildAvatarBio,
   polishAvatarBio,
 } from './digital-twin-avatar-bio.js';
 
-export {
-  getDigitalTwinForPrompt,
-  getSoulForPrompt
-} from './digital-twin-context.js';
+export { getDigitalTwinForPrompt } from './digital-twin-context.js';
 
-export {
-  getDigitalTwinStatus,
-  getSoulStatus
-} from './digital-twin-status.js';
+export { getDigitalTwinStatus } from './digital-twin-status.js';
 
 export {
   validateCompleteness,

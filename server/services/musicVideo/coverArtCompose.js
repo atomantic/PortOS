@@ -17,9 +17,7 @@ import {
   COVER_ART_SIZE, YOUTUBE_THUMBNAIL_SIZE, coverOverlaySvg, fontAttrs, normalizeCoverDesign, tagTextFor, titleLinesFor,
 } from '../../lib/musicVideoCoverOverlay.js';
 
-export {
-  COVER_ART_SIZE, COVER_DESIGN_OPTIONS, DEFAULT_COVER_DESIGN, YOUTUBE_THUMBNAIL_SIZE, coverOverlaySvg, normalizeCoverDesign,
-} from '../../lib/musicVideoCoverOverlay.js';
+export { normalizeCoverDesign } from '../../lib/musicVideoCoverOverlay.js';
 
 const escapeXml = (s) => String(s).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' })[c]);
 

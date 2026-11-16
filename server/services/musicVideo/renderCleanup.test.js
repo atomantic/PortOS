@@ -43,7 +43,8 @@ vi.mock('./shotSegments.js', () => ({
   getSegmentCleanup: async () => ({ stale: [], unusedLooks: [] }),
 }));
 
-const { cleanupSupersededFinals, cleanupRenders, getRenderCleanup, withRenderCleanupReservation, assertRenderCleanupIdle } = await import('./renderCleanup.js');
+const { cleanupSupersededFinals, cleanupRenders, getRenderCleanup, assertRenderCleanupIdle } = await import('./renderCleanup.js');
+const { withRenderCleanupReservation } = await import('./renderCleanupActivity.js');
 const { PATHS } = await import('../../lib/fileUtils.js');
 const { saveHistory, loadHistory, getHistoryItem, mutateVideoHistory } = await import('../videoGen/history.js');
 const { holdsBackupAssetPublication } = await import('../../lib/backupSnapshotBoundary.js');

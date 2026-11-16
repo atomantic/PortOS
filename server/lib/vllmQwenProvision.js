@@ -116,7 +116,6 @@ function appendEnvLines(base, lines) {
 // Re-export parse helpers from the canonical server-side .env helper so
 // existing deep imports (`…/vllmQwenProvision.js`) keep working after the
 // collapse onto `portosEnv.js`. New code should import from `portosEnv.js`.
-export { parseEnvContents, upsertEnvLine } from './portosEnv.js';
 
 /**
  * Append the missing defaults to an existing `.env`, changing nothing else.

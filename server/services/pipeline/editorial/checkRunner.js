@@ -38,7 +38,7 @@ import {
   fingerprintForCheck,
 } from './reviewStaleness.js';
 
-export { effectiveCheckSources, getReviewWithStaleness } from './reviewStaleness.js';
+export { getReviewWithStaleness } from './reviewStaleness.js';
 
 // Per-check severity breakdown for telemetry (#1578). Bucket a check's findings
 // by severity so the autopilot SSE stream can show a per-check high/medium/low

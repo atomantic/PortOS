@@ -19,36 +19,8 @@ function getTempRoot() {
 // test here is pure. Re-rooting PATHS keeps it off the real data/cos tree.
 vi.mock('../../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => getTempRoot() }));
-import {
-  extractTaskType,
-  calculateDurationETA,
-  classifyUntypedTask,
-  isSandboxedTaskType,
-  summarizeFailureSignatures,
-  appendInsight,
-  buildRecurrenceInsight,
-  recurrenceMilestoneReached,
-  RECURRENCE_INSIGHT_MILESTONES,
-  INSIGHT_CAP,
-  EXTERNAL_UNTYPED_TASK_TYPE,
-  appendRecentOutcome,
-  computeWindowedStats,
-  computeEffectiveSuccessRate,
-  isSkipCandidate,
-  EFFECTIVE_RATE_MIN_WINDOW_SAMPLES,
-  RECENT_OUTCOMES_CAP,
-  DEFAULT_WINDOW_MAX_COUNT,
-  loadLearningData,
-  saveLearningData,
-  clearLearningCache,
-  loadDismissedRecommendations,
-  saveDismissedRecommendations,
-  executionDurationKey,
-  executionKeyPrefix,
-  executionKeyPrefixOf,
-  EXECUTION_EFFORT_NONE,
-  EXECUTION_BUCKET_CAP
-} from './store.js';
+import { extractTaskType, calculateDurationETA, classifyUntypedTask, isSandboxedTaskType, summarizeFailureSignatures, appendInsight, buildRecurrenceInsight, recurrenceMilestoneReached, RECURRENCE_INSIGHT_MILESTONES, INSIGHT_CAP, EXTERNAL_UNTYPED_TASK_TYPE, appendRecentOutcome, computeWindowedStats, computeEffectiveSuccessRate, isSkipCandidate, EFFECTIVE_RATE_MIN_WINDOW_SAMPLES, RECENT_OUTCOMES_CAP, DEFAULT_WINDOW_MAX_COUNT, loadLearningData, saveLearningData, clearLearningCache, loadDismissedRecommendations, saveDismissedRecommendations, executionDurationKey, executionKeyPrefix, executionKeyPrefixOf, EXECUTION_BUCKET_CAP } from './store.js';
+import { EXECUTION_EFFORT_NONE } from '../../lib/executionDurationKey.js';
 
 afterAll(() => { if (tempRoot) rmSync(tempRoot, { recursive: true, force: true }); });
 

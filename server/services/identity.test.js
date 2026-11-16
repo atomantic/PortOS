@@ -3,16 +3,9 @@ import { basename, dirname } from 'path';
 import { pinPlatform } from '../lib/testHelper.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-import {
-  extractSleepMarkers,
-  extractCaffeineMarkers,
-  extractLongevityMarkers,
-  extractCardiovascularMarkers,
-  computeLifeExpectancy,
-  computeChronotype,
-  computeRecommendations,
-  computeGoalUrgency
-} from './identity.js';
+import { extractSleepMarkers, extractCaffeineMarkers, extractLongevityMarkers, extractCardiovascularMarkers, computeLifeExpectancy } from './identity/markers.js';
+import { computeChronotype, computeRecommendations } from './identity/chronotype.js';
+import { computeGoalUrgency } from './identity/goals.js';
 
 // identity/store.js now persists via the canonical atomicWrite (#1837), which
 // writes to a temp file then renames it over the target (with unlink cleanup on

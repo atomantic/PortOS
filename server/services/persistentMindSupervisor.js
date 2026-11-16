@@ -43,11 +43,7 @@ import {
   resolveMessageAttachments,
 } from './persistentMindAttachments.js';
 
-export {
-  cleanupPersistentMindAttachments,
-  createPersistentMindAttachment,
-  deletePersistentMindAttachment,
-} from './persistentMindAttachments.js';
+export { createPersistentMindAttachment, deletePersistentMindAttachment } from './persistentMindAttachments.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { schedule, cancel, getEvent } from './eventScheduler.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';

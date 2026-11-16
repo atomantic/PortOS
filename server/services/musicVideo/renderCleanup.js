@@ -10,7 +10,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { listProjects, withProjectMediaMutation } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { withRenderCleanupReservation } from './renderCleanupActivity.js';
-export { assertRenderCleanupIdle, withRenderCleanupReservation } from './renderCleanupActivity.js';
+export { assertRenderCleanupIdle } from './renderCleanupActivity.js';
 import { musicVideoEvents } from './events.js';
 import { loadHistory, mutateVideoHistory, HISTORY_UNCHANGED } from '../videoGen/history.js';
 

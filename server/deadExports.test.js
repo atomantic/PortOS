@@ -94,15 +94,31 @@ function trackedFiles() {
   return trackedFilesFrom(ROOT);
 }
 
+// The two full-tree scans below share one listing and one read per file for the
+// real tree (the structural-guard budget is per file); fixtures in a temp
+// repo change between calls, so they bypass the cache.
+const treeCache = { listing: null, sources: new Map() };
+function listTree(root) {
+  if (root === ROOT && treeCache.listing) return treeCache.listing;
+  const listing = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root, maxBuffer: GIT_MAX_BUFFER })
+    .toString('utf8').split('\0').filter(Boolean);
+  if (root === ROOT) treeCache.listing = listing;
+  return listing;
+}
+function readTree(root, file) {
+  if (root !== ROOT) return readFileSync(join(root, file), 'utf8');
+  if (!treeCache.sources.has(file)) treeCache.sources.set(file, readFileSync(join(root, file), 'utf8'));
+  return treeCache.sources.get(file);
+}
+
 function trackedFilesFrom(root) {
-  return execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root, maxBuffer: GIT_MAX_BUFFER })
-    .toString('utf8').split('\0').filter(Boolean)
+  return listTree(root)
     .filter(file => /\.(?:[cm]?[jt]sx?|json|md)$/.test(file))
     // deadExports() declares from, and counts mentions in, neither of these, and
     // they are most of the tree's bytes: don't read them.
     .filter(file => !/\.test\.[cm]?[jt]sx?$/.test(file) && !/(^|\/)README\.md$/i.test(file))
     .filter(file => existsSync(join(root, file)))
-    .map(file => [file, readFileSync(join(root, file), 'utf8')]);
+    .map(file => [file, readTree(root, file)]);
 }
 
 // --- Re-export shims and test hooks (#16230) -------------------------------
@@ -119,48 +135,6 @@ const HOOK_DECLARATION = /^export\s+(?:async\s+)?(?:function\*?|const|let|class)
 const HOOK_SCOPE = /^server\/(?:services|lib)\/(?!aiToolkit\/)[^]*\.js$/;
 const isTestFile = file => /\.test\.[cm]?[jt]sx?$/.test(file);
 
-// Test-only importers through a shim, and musicVideo names kept out of this
-// slice to avoid colliding with concurrent music-video work. Shrink-only: the
-// guard fails on an entry that is no longer an offender, so delete entries as
-// importers are repointed at the declaring module.
-const SHIM_TEST_ONLY_IMPORTERS = 'test-only importers through the shim; repoint them at the declaring module and drop the re-export';
-const SHIM_MUSIC_VIDEO_DEFERRED = 'music-video tree deferred from the first #16230 slice to avoid concurrent-edit collisions';
-const REEXPORT_ALLOWLIST = new Map(Object.entries({
-  'server/services/musicVideo/blender/state.js': ['BLENDER_NEEDS_TRUSTED_LOCAL'],
-  'server/services/musicVideo/coverArtCompose.js': ['COVER_ART_SIZE', 'COVER_DESIGN_OPTIONS', 'DEFAULT_COVER_DESIGN', 'YOUTUBE_THUMBNAIL_SIZE', 'coverOverlaySvg'],
-  'server/services/musicVideo/documentRender.js': ['DOCUMENT_RENDER_FPS'],
-  'server/services/musicVideo/projectsLogic.js': ['sanitizeProjectForSync', 'mirrorTimestamp'],
-  'server/services/musicVideo/renderCleanup.js': ['withRenderCleanupReservation'],
-}).flatMap(([file, names]) => names.map(name => [`${file}:${name}`, SHIM_MUSIC_VIDEO_DEFERRED])));
-for (const [file, names] of Object.entries({
-  'server/services/videoGen/generateVideo.js': ['computeFflfLtx2PixelBudget', 'computeFflfSafeFrames', 'resolveT2vTwoStageOverride', 'icLoraArgs', 'ltx25TextEncoderArgs'],
-  'server/lib/untrustedContent.js': ['UNTRUSTED_CONTENT_SOURCES'],
-  'server/lib/vllmQwenProvision.js': ['parseEnvContents', 'upsertEnvLine'],
-  'server/services/agentErrorAnalysis.js': ['INVESTIGATION_CIRCUIT_WINDOW_MS', 'INVESTIGATION_CIRCUIT_MAX_CREATIONS', '__resetInvestigationCircuit'],
-  'server/services/agentWorkspacePrep.js': ['resolveTaskExistingBranch'],
-  'server/services/catalogDB.js': ['CATALOG_REVISION_RETENTION'],
-  'server/services/creativeDirector/local.js': ['trimRuns'],
-  'server/services/creativeDirector/projectsLogic.js': ['sanitizeProjectForSync'],
-  'server/services/digital-twin.js': ['ENRICHMENT_CATEGORIES', 'SCALE_QUESTIONS', 'saveMeta', 'updateMeta', 'exportSoul', 'getSoulForPrompt', 'getSoulStatus'],
-  'server/services/eidoverseWorldSources.js': ['eidoversePeerId'],
-  'server/services/huggingFaceCatalog.js': ['fetchRepoPublishedDates'],
-  'server/services/identity.js': ['extractSleepMarkers', 'extractCaffeineMarkers', 'extractLongevityMarkers', 'extractCardiovascularMarkers', 'computeLifeExpectancy', 'computeChronotype', 'computeRecommendations', 'computeGoalUrgency'],
-  'server/services/meatspacePostDrillCache.js': ['CACHEABLE_TYPES'],
-  'server/services/mtplxServerManager.js': ['mtplxCachedModelIds'],
-  'server/services/persistentMindSupervisor.js': ['cleanupPersistentMindAttachments'],
-  'server/services/persistentMindWorkspacePreflight.js': ['satisfiesVersionRequirement'],
-  'server/services/pipeline/editorial/checkRunner.js': ['effectiveCheckSources'],
-  'server/services/readinessNotify.js': ['READINESS_COALESCE_MS'],
-  'server/services/sprites/walkPostprocess.js': ['WALK_FRAME_COUNT', 'walkPhaseLabels'],
-  'server/services/stageRunner.js': ['withLocalConcurrencyGate', 'LOCAL_LLM_MAX_CONCURRENCY'],
-  'server/services/taskLearning/store.js': ['EXECUTION_EFFORT_NONE'],
-  'server/services/taskPromptDefaults.js': ['UNPERSISTED_PROMPT_KEYS'],
-  'server/services/taskSchedule.js': ['isRefillRequest', 'isUserOriginRequest', 'DEFAULT_BRANCHES_PER_AGENT', 'MANAGED_APP_TARGET_TASK_TYPES', 'MANAGED_AGENT_OPTIONS', 'PERPETUAL_DRAIN_DISPATCH_CAP', 'TASK_TYPE_DESCRIPTIONS', 'TASK_TYPE_INVOCATION', 'TASK_TYPE_PROMPT_INFO', 'getTaskTypePromptInfo', 'PROGRAMMATIC_SCHEDULED_TASK_TYPES', 'FAILURE_BACKOFF_BASE_MS', 'FAILURE_BACKOFF_CAP_MS', 'FAILURE_PARK_THRESHOLD', 'clearTaskTypeFailurePark', 'computeFailureBackoffMs'],
-  'server/services/voice/proactiveSpeech.js': ['parseHHMM'],
-})) {
-  for (const name of names) REEXPORT_ALLOWLIST.set(`${file}:${name}`, SHIM_TEST_ONLY_IMPORTERS);
-}
-
 function stripComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 }
@@ -169,10 +143,9 @@ function stripComments(source) {
 // underscore hook (a test importer never keeps a re-export alive), so a test
 // file is reduced to its `_`-prefixed words.
 function codeFiles(root = ROOT) {
-  return execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root, maxBuffer: GIT_MAX_BUFFER })
-    .toString('utf8').split('\0').filter(file => /^(?:server|scripts|lib|autofixer|client\/src)\/.*\.[cm]?[jt]sx?$/.test(file) && existsSync(join(root, file)))
+  return listTree(root).filter(file => /^(?:server|scripts|lib|autofixer|client\/src)\/.*\.[cm]?[jt]sx?$/.test(file) && existsSync(join(root, file)))
     .map(file => {
-      const source = readFileSync(join(root, file), 'utf8');
+      const source = readTree(root, file);
       return [file, isTestFile(file) ? (source.match(/\b_[\w$]*/g) || []).join(' ') : source];
     });
 }
@@ -369,10 +342,7 @@ describe('server dead exports', () => {
   it('keeps server re-exports used and test hooks referenced', () => {
     const files = codeFiles();
     const index = referenceIndex(files);
-    const reExports = callerlessReExports(files, index);
-    expect(reExports.filter(entry => !REEXPORT_ALLOWLIST.has(entry))).toEqual([]);
-    // Shrink-only: an allowlisted entry that no longer offends must be deleted.
-    expect([...REEXPORT_ALLOWLIST.keys()].filter(entry => !reExports.includes(entry))).toEqual([]);
+    expect(callerlessReExports(files, index)).toEqual([]);
     expect(unreferencedTestHooks(files, index)).toEqual([]);
   });
 });
