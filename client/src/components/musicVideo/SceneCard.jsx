@@ -351,6 +351,8 @@ export default function SceneCard({
   // Grok can take the start frame as a layout reference instead of the locked opening frame,
   // so the people it shows can take the clip references' likeness.
   const startFrameLayout = referenceBackend === 'grok' && !storyboardDefault && renderInputs.startFrameLayout === true;
+  // Higgsfield sends a frame plus sheets as the first reference image; ticking this renders plain image-to-video instead.
+  const higgsfieldFrameOnly = referenceBackend === 'higgsfield' && renderInputs.frameRoute === 'image';
   const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn, startFrameLayout });
   const guidesPending = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined);
   // A failed read (null) would otherwise send the clip without the member's guides.
@@ -401,6 +403,7 @@ export default function SceneCard({
       ...(useLtxReferences ? { ltxReferences: true, songAudio: false, endFrame: false, expectedClipReferenceLabels: referenceLabels }
         : canUseLtxReferences && ltxReferencesProjectDefault ? { ltxReferences: false } : {}),
       ...(startFrameLayout ? { startFrameLayout: true } : {}),
+      ...(higgsfieldFrameOnly ? { frameRoute: 'image' } : {}),
     };
     onGenerateVideo?.(scene, { ...(renderOverrides ? { target: renderOverrides } : {}), card, ...(tier ? { tier } : {}) });
   };
@@ -868,6 +871,15 @@ export default function SceneCard({
               <input type="checkbox" checked={startFrameLayout}
                 onChange={(event) => setRenderInputs((prev) => ({ ...prev, startFrameLayout: event.target.checked }))} />
               Start frame for layout only (its people take the clip references' looks; the clip may not open on it exactly)
+            </label>
+          )}
+          {layer === 'footage' && referenceBackend === 'higgsfield' && scene.referenceImageId && (
+            <label className="flex items-center gap-2 text-xs text-port-text-muted">
+              <input type="checkbox" checked={higgsfieldFrameOnly}
+                onChange={(event) => setRenderInputs((prev) => ({ ...prev, frameRoute: event.target.checked ? 'image' : undefined }))} />
+              {higgsfieldFrameOnly
+                ? 'Image-to-video from the start frame (clip references left out)'
+                : 'Route: start frame sent as the first reference image when the shot has clip references; tick for plain image-to-video'}
             </label>
           )}
           {layer === 'footage' && <SceneClipReferences project={project} scene={scene} castMedia={castMedia} startFrameLayout={startFrameLayout}
