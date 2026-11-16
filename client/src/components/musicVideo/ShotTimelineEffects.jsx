@@ -189,6 +189,34 @@ export function TimelineInShotEffects({ lanes, pxPerSec, shotName, selectedId = 
 }
 
 /**
+ * The effects library: every in-shot effect style, each a button that adds it
+ * at the playhead to the shot on screen (`onAdd(style)`, null when nothing can
+ * take one).
+ */
+export function TimelineEffectLibrary({ onAdd, shotName }) {
+  return (
+    <div className="space-y-2 p-2">
+      <div className="flex items-baseline justify-between gap-2 px-1">
+        <h3 className="text-sm font-medium text-port-text">Effects</h3>
+        <span className="truncate text-xs text-port-text-muted">{onAdd ? `Tap to add to ${shotName} at the playhead` : 'Move the playhead onto a shot to add one'}</span>
+      </div>
+      <ul className="grid grid-cols-2 gap-1">
+        {MUSIC_VIDEO_TRANSITIONS.map((style) => (
+          <li key={style}>
+            <button type="button" onClick={() => onAdd?.(style)} disabled={!onAdd}
+              aria-label={`Add ${MUSIC_VIDEO_TRANSITION_LABELS[style]} at the playhead`}
+              className="flex min-h-[44px] w-full items-center gap-1.5 rounded border border-port-border bg-port-bg px-2 text-left text-xs text-port-text hover:border-port-accent disabled:opacity-50 pointer-fine:min-h-[32px]">
+              <Zap size={12} aria-hidden="true" className="shrink-0 text-port-accent" />
+              <span className="truncate">{MUSIC_VIDEO_TRANSITION_LABELS[style]}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
  * The selected in-shot effect's style as a row of one-tap swaps: each tap saves
  * the new style and replays the moment (`onPreview()`), so styles can be tried
  * one after another while the preview loops over it.

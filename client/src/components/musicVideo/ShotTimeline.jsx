@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Maximize2, Repeat, Zap, ZoomIn, ZoomOut } from 'lucide-react';
 import { scenePosterSrc } from '../../lib/musicVideoPreview.js';
 import { formatTimecode } from '../../utils/formatters.js';
@@ -10,7 +11,7 @@ import {
 import { effectNaturalSec, effectTimeAt } from '../../lib/musicVideoTimelineEffects.js';
 import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT } from '../../lib/musicVideoTransitions.js';
 import { NEW_GLITCH_STYLE } from './SceneGlitches.jsx';
-import { TimelineEffectSpans, TimelineEffectsPanel, TimelineInShotEffects, timelineEffectLanes } from './ShotTimelineEffects.jsx';
+import { TimelineEffectLibrary, TimelineEffectSpans, TimelineEffectsPanel, TimelineInShotEffects, timelineEffectLanes } from './ShotTimelineEffects.jsx';
 
 const zoomButtonCls = 'flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded border border-port-border bg-port-bg text-port-text hover:border-port-accent disabled:opacity-40 pointer-fine:sm:min-h-[28px] pointer-fine:sm:min-w-[28px]';
 // How far inside the right edge the playhead may run before the view follows it.
@@ -76,8 +77,12 @@ const cssUrl = (src) => `url("${src.replace(/["\\\n]/g, (ch) => encodeURICompone
  * the toolbar. Tapping an in-shot effect selects it: `onPreview(t)` plays the
  * song from `t`, so the selected effect plays from just before it and, with
  * Loop on, again each time playback passes it; a style swap replays it too.
+ *
+ * The effect controls show under the timeline, or in `inspectorEl` when the
+ * page gives one; with `libraryEl` an effects library fills it, whose styles
+ * add at the playhead.
  */
-export default function ShotTimeline({ project, activeSceneId = null, songClock = null, onSeek, onOpenShot, shotName, posters = null, onMoveCut = null, onReorder = null, effectOptions = null, onEditShot = null, onPreview = null }) {
+export default function ShotTimeline({ project, activeSceneId = null, songClock = null, onSeek, onOpenShot, shotName, posters = null, onMoveCut = null, onReorder = null, effectOptions = null, onEditShot = null, onPreview = null, libraryEl = null, inspectorEl = null }) {
   const { shots: savedShots, off } = useMemo(() => timelineShots(project), [project]);
   const durationSec = timelineDurationSec(project, savedShots);
   // A cut being dragged, or one let go and still saving, shows where it will land.
@@ -316,11 +321,18 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
   const effectsShot = effectOptions ? savedShots.find((shot) => shot.sceneId === effectsOfId) || null : null;
   const playheadShot = savedShots.find((shot) => shot.sceneId === onScreenId) || null;
   const playheadGlitches = Array.isArray(playheadShot?.scene.glitches) ? playheadShot.scene.glitches : [];
-  const addEffect = () => {
-    const { atSec } = effectTimeAt(playheadShot, timeRef.current);
-    onEditShot(playheadShot.sceneId, { glitches: [...playheadGlitches, { atSec, style: NEW_GLITCH_STYLE }] });
-    setEffectsOfId(playheadShot.sceneId);
-    setSelectedFx({ sceneId: playheadShot.sceneId, index: playheadGlitches.length });
+  // A new in-shot effect at the playhead, selected and played.
+  const addEffect = (style = NEW_GLITCH_STYLE) => {
+    const t = timeRef.current;
+    const shot = timelineShotAt(savedShots, t);
+    if (!shot || t >= shot.endSec || !onEditShot) return;
+    const glitches = Array.isArray(shot.scene.glitches) ? shot.scene.glitches : [];
+    if (glitches.length >= MUSIC_VIDEO_SHOT_GLITCH_LIMIT) return;
+    const { atSec } = effectTimeAt(shot, t);
+    onEditShot(shot.sceneId, { glitches: [...glitches, { atSec, style }] });
+    setEffectsOfId(shot.sceneId);
+    setSelectedFx({ sceneId: shot.sceneId, index: glitches.length });
+    onPreview?.(Math.round(Math.max(0, shot.startSec + atSec - LOOP_LEAD_SEC) * 1000) / 1000);
   };
   const nameOf = (shot) => (shotName ? shotName(shot.scene) : `Shot ${shot.number}`);
   const effectLanes = useMemo(() => (effectOptions ? timelineEffectLanes(shots, effectOptions) : null), [shots, effectOptions]);
@@ -393,7 +405,7 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
           </div>
         )}
         {effectOptions && onEditShot && (
-          <button type="button" className={zoomButtonCls} onClick={addEffect}
+          <button type="button" className={zoomButtonCls} onClick={() => addEffect()}
             disabled={!playheadShot || playheadGlitches.length >= MUSIC_VIDEO_SHOT_GLITCH_LIMIT}
             aria-label="Add an effect at the playhead" title="Add an effect at the playhead">
             <Zap size={14} aria-hidden="true" />
@@ -522,13 +534,24 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
         </div>
       </div>
       </div>
-      {effectsShot && (
+      {libraryEl && effectOptions && createPortal(
+        <TimelineEffectLibrary onAdd={onEditShot && playheadShot ? (style) => addEffect(style) : null} shotName={playheadShot ? nameOf(playheadShot) : null} />,
+        libraryEl,
+      )}
+      {inspectorEl && effectOptions && !effectsShot && createPortal(
+        <p className="p-3 text-sm text-port-text-muted">Tap an effect on the timeline, or a shot's in-shot effects lane, to set it here.</p>,
+        inspectorEl,
+      )}
+      {effectsShot && (() => {
+        const panel = (
         <TimelineEffectsPanel scene={effectsShot.scene} name={nameOf(effectsShot)} options={effectOptions}
           isLast={project.scenes[project.scenes.length - 1]?.sceneId === effectsShot.sceneId}
           onChange={onEditShot ? (patch) => onEditShot(effectsShot.sceneId, patch) : null}
           selectedIndex={selectedFx?.sceneId === effectsShot.sceneId && fxGlitch ? selectedFx.index : null} onPreview={preview}
           onClose={() => { setEffectsOfId(null); setSelectedFx(null); }} />
-      )}
+        );
+        return inspectorEl ? createPortal(panel, inspectorEl) : panel;
+      })()}
       {off.length > 0 && (
         <div role="group" aria-label="Shots off the timeline" className="flex min-w-0 flex-wrap items-center gap-1 border-t border-port-border px-2 py-1 text-xs">
           <span className="text-port-text-muted">Off the song's clock</span>

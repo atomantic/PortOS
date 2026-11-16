@@ -218,4 +218,22 @@ describe('ShotTimeline', () => {
     await waitFor(() => expect(onPreview).toHaveBeenCalledTimes(3));
     expect(onPreview).toHaveBeenLastCalledWith(5.25);
   });
+
+  // Uniquely catches the library adding to the wrong shot or time, and the controls failing to reach the page's inspector panel.
+  it('puts the effects library and the selected effect\'s controls in the panels the page gives it', async () => {
+    const onEditShot = vi.fn();
+    const library = document.createElement('div');
+    const inspector = document.createElement('div');
+    document.body.append(library, inspector);
+    render(<ShotTimeline project={project} shotName={shotName} onOpenShot={() => {}} onSeek={() => {}} effectOptions={{}} onEditShot={onEditShot}
+      onPreview={() => {}} songClock={() => ({ t: 6, playing: false })} libraryEl={library} inspectorEl={inspector} />);
+    expect(within(inspector).getByText(/Tap an effect on the timeline/)).toBeInTheDocument();
+    const add = within(library).getAllByRole('button', { name: /^Add .+ at the playhead$/ })[0];
+    await waitFor(() => expect(add).toBeEnabled());
+    fireEvent.click(add);
+    expect(onEditShot).toHaveBeenCalledWith('s2', { glitches: [{ atSec: 2, style: expect.any(String) }] });
+    expect(within(inspector).getByRole('region', { name: 'Effects of Shot s2' })).toBeInTheDocument();
+    library.remove();
+    inspector.remove();
+  });
 });
