@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildProjectRecord, cloneProjectRecord, applyProjectPatch, setAudioAnalysis, setMidiTranscription, addScene, addScenes, applySceneUpdate, removeScene, reorderScenes, afterLoad, mergeNextScene, mergePreviousScene, splitScene, replaceScenes, mirrorStatus, mergeProjectRecord } from './projectsLogic.js';
+import { buildProjectRecord, cloneProjectRecord, applyProjectPatch, setAudioAnalysis, setMidiTranscription, addScene, addScenes, applySceneUpdate, removeScene, reorderScenes, afterLoad, beforeSave, mergeNextScene, mergePreviousScene, splitScene, replaceScenes, mirrorStatus, mergeProjectRecord } from './projectsLogic.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
 import { productionReviewBasis } from './productionReview.js';
@@ -1465,5 +1465,22 @@ describe('board time order', () => {
     const project = { ...built, scenes: [...built.scenes].reverse(),
       productionReview: { approvals: { storyboard: { stage: 'storyboard', basis: 'old', shotsBasis: 'old' } } } };
     expect(afterLoad(project).productionReview.approvals.storyboard).toEqual({ stage: 'storyboard', basis: 'old', shotsBasis: 'old' });
+  });
+});
+
+describe('beforeSave frame cast re-stamp (#16375)', () => {
+  it('rewrites an accepted legacy frameCast stamp to the canonical value on write', () => {
+    const subjects = [{ id: 'subj-a', kind: 'character', name: 'Ada', ingredientId: 'cat-chr-a' },
+      { id: 'subj-p', kind: 'place', name: 'Harbor', ingredientId: 'cat-plc' }];
+    const scene = { sceneId: 's1', shotSheet: { characters: ['Ada'] }, frameReferenceIds: ['mvr-linked-0000000000000001'], takes: [] };
+    const project = { id: 'mv-synthetic', concept: { subjects }, scenes: [scene] };
+    const legacy = canonicalSnapshotChecksum({ names: ['Ada'], ids: ['cat-chr-a', 'cat-plc'] });
+    const take = { kind: 'image', assetId: 'a.png', frameDependencies: { version: 1, references: [
+      { role: 'frameCast', sceneId: 's1', assetId: 'start', revision: legacy }] } };
+    const saved = beforeSave({ ...project, scenes: [{ ...scene, takes: [take] }] });
+    const revision = saved.scenes[0].takes[0].frameDependencies.references[0].revision;
+    expect(revision).not.toBe(legacy);
+    expect(revision).toBe(canonicalSnapshotChecksum({ names: ['Ada'], ids: ['cat-chr-a'] }));
+    expect(beforeSave(saved)).toBe(saved);
   });
 });

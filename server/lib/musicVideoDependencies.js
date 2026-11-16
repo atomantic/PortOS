@@ -107,6 +107,41 @@ function isLegacyFrameCastRevision(project, scene, revision) {
   const { catalogCheckin: _presented, ...stored } = stage;
   return legacy({ ...project, castAndSets: stored }) === revision;
 }
+/**
+ * Write-time re-stamp (#16375): a legacy `frameCast` stamp that currently reads as accepted is
+ * rewritten to the canonical value, so a later unrelated subject change (a place or prop added to
+ * the concept) cannot invalidate it. The legacy unnarrowed form hashed every linked subject id of
+ * any kind (musicVideoLinkedCastIds covers characters, sets and props), so it cannot be recognised
+ * from characters alone; every form ever written stays recognised. A stamp that already matches the
+ * canonical value, or no longer reads current, is left alone. Returns the same project when nothing
+ * changes so the stores' no-op detection by identity holds.
+ */
+export function restampLegacyFrameCasts(project) {
+  if (!Array.isArray(project?.scenes)) return project;
+  let changed = false;
+  const scenes = project.scenes.map((scene) => {
+    if (!Array.isArray(scene?.takes)) return scene;
+    let sceneChanged = false;
+    const takes = scene.takes.map((take) => {
+      const references = take?.frameDependencies?.references;
+      if (!Array.isArray(references)) return take;
+      const canonical = checksum(frameCastValue(project, scene));
+      let takeChanged = false;
+      const next = references.map((ref) => {
+        if (ref?.role !== 'frameCast' || ref.revision === canonical || !isLegacyFrameCastRevision(project, scene, ref.revision)) return ref;
+        takeChanged = true;
+        return { ...ref, revision: canonical };
+      });
+      if (!takeChanged) return take;
+      sceneChanged = true;
+      return { ...take, frameDependencies: { ...take.frameDependencies, references: next } };
+    });
+    if (!sceneChanged) return scene;
+    changed = true;
+    return { ...scene, takes };
+  });
+  return changed ? { ...project, scenes } : project;
+}
 const frameReferenceValue = (scene) => (Array.isArray(scene?.frameReferenceIds) ? scene.frameReferenceIds.slice().sort() : null);
 const frameRef = (scene, slot, role, value) => ({
   role, sceneId: scene.sceneId, assetId: frameSlot(slot), revision: checksum(value),
