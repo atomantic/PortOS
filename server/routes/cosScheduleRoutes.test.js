@@ -128,14 +128,6 @@ describe('CoS Schedule Routes', () => {
       expect(recovered.status).toBe(200);
       expect(recovered.body).toEqual({ tasks: {}, onDemandRequests: [] });
     });
-
-    it('should return schedule status', async () => {
-      taskSchedule.getScheduleStatus.mockResolvedValue({ tasks: [], enabled: true });
-
-      const response = await request(app).get('/api/cos/schedule');
-
-      expect(response.status).toBe(200);
-    });
   });
 
   describe('manual maintenance runs', () => {
@@ -570,6 +562,7 @@ describe('CoS Schedule Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
+      expect(taskSchedule.clearOnDemandRequest.mock.calls[0][0]).toBe('req-1');
     });
 
     it('should return 404 if request not found', async () => {
@@ -590,6 +583,7 @@ describe('CoS Schedule Routes', () => {
         .send({ taskType: 'review' });
 
       expect(response.status).toBe(200);
+      expect(taskSchedule.resetExecutionHistory.mock.calls[0][0]).toBe('review');
     });
 
     it('rejects missing or malformed taskType before resetting execution history', async () => {
@@ -661,6 +655,7 @@ describe('CoS Schedule Routes', () => {
       const response = await request(app).delete('/api/cos/schedule/templates/tmpl-1');
 
       expect(response.status).toBe(200);
+      expect(taskSchedule.deleteTemplateTask.mock.calls[0][0]).toBe('tmpl-1');
     });
 
     it('should return 404 on delete error', async () => {
