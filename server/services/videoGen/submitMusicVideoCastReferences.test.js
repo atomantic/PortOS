@@ -60,12 +60,23 @@ beforeEach(() => {
 });
 
 describe('Music Video cast references at video submission', () => {
-  it('refuses a Higgsfield shot that cannot retain its selected start frame with cast references', async () => {
+  it('queues a Higgsfield shot with its start frame and cast references for the reference route', async () => {
     m.settings.videoGen.higgsfield = { apiKey: 'test-key' };
     m.hostedReferences.mockResolvedValue([{ path: '/mock/images/cast.png', label: 'Cast' }, { path: '/mock/images/set.png', label: 'Set' }]);
-    await expect(submitVideoGenJob(body({ backend: 'higgsfield' }), {})).rejects.toThrow(/start frame or reference images, not both/);
+    await submitVideoGenJob(body({ backend: 'higgsfield' }), {});
     expect(m.hostedReferences).toHaveBeenCalledWith(tag, Infinity, { excludePath: '/mock/images/still.png' });
-    expect(m.enqueue).not.toHaveBeenCalled();
+    expect(m.enqueue.mock.calls[0][0].params).toMatchObject({
+      sourceImagePath: '/mock/images/still.png', referenceImagePaths: ['/mock/images/cast.png', '/mock/images/set.png'],
+    });
+  });
+
+  it('renders plain image-to-video when the shot sets frameRoute to image', async () => {
+    m.settings.videoGen.higgsfield = { apiKey: 'test-key' };
+    m.hostedReferences.mockResolvedValue([{ path: '/mock/images/cast.png', label: 'Cast' }]);
+    await submitVideoGenJob(body({ backend: 'higgsfield', musicVideo: { ...tag, frameRoute: 'image' } }), {});
+    const params = m.enqueue.mock.calls[0][0].params;
+    expect(params.sourceImagePath).toBe('/mock/images/still.png');
+    expect(params.referenceImagePaths).toBeUndefined();
   });
 
   it('keeps an unreferenced Higgsfield shot anchored to its frame', async () => {

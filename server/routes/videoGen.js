@@ -611,6 +611,9 @@ export const generateBodySchema = z.object({
       // The shot card's "Start frame for layout only" (Grok): the frame is sent as a
       // scene reference instead of the locked first frame, so its people can take the references' likeness.
       startFrameLayout: z.boolean().optional(),
+      // Higgsfield/fal reference models: 'image' renders plain image-to-video from the frame and leaves
+      // the clip references out; unset sends the frame as the first reference when the shot has references.
+      frameRoute: z.enum(['reference', 'image']).optional(),
       // Names the overnight batch this take was queued in (musicVideo/overnightRenders.js).
       batchId: z.string().uuid().optional(),
       // The shot card's Render draft / Render final (#16136); the take records it.

@@ -22,14 +22,41 @@ describe('buildHiggsfieldVideoRequest', () => {
 
   it('refuses input combinations and over-limit prompts instead of dropping or truncating', () => {
     expect(() => buildHiggsfieldVideoRequest({ modelId: 'nope', prompt: 'a' })).toThrow(/not a Higgsfield video model/);
-    expect(() => buildHiggsfieldVideoRequest({ prompt: 'a', imageUrl: 'u', referenceImageUrls: ['r'] })).toThrow(/not both/);
-    expect(() => buildHiggsfieldVideoRequest({ prompt: 'a', imageUrl: 'u', audioUrls: ['song.wav'] })).toThrow(/cannot combine anchored/);
-    expect(() => buildHiggsfieldVideoRequest({ prompt: 'a', imageUrl: 'u', endImageUrl: 'end', audioUrls: ['song.wav'] })).toThrow(/cannot combine anchored/);
+    expect(() => buildHiggsfieldVideoRequest({ modelId: 'kling-video/v3.0/pro', prompt: 'a', imageUrl: 'u', referenceImageUrls: ['r'] })).toThrow(/not both/);
+    expect(() => buildHiggsfieldVideoRequest({ prompt: 'a', imageUrl: 'u', endImageUrl: 'end', referenceImageUrls: ['r'] })).toThrow(/end frame with reference images/);
+    expect(() => buildHiggsfieldVideoRequest({ prompt: 'a', imageUrl: 'u', referenceImageUrls: Array(30).fill('r') })).toThrow(/at most 30/);
     expect(() => buildHiggsfieldVideoRequest({ modelId: 'kling-video/v3.0/std', prompt: 'a', referenceImageUrls: ['r'] })).toThrow(/no reference images/);
     expect(() => buildHiggsfieldVideoRequest({ prompt: 'a', endImageUrl: 'u' })).toThrow(/needs a start frame/);
     expect(() => buildHiggsfieldVideoRequest({ prompt: '' })).toThrow(/Prompt is required/);
     expect(() => buildHiggsfieldVideoRequest({ modelId: 'kling-video/v3.0/pro', prompt: 'x'.repeat(2501) })).toThrow(/2501\/2500/);
     expect(buildHiggsfieldVideoRequest({ prompt: '', imageUrl: 'u' }).route).toBe('image');
+  });
+
+  it('sends a start frame plus references on the reference route, frame first, with a role line', () => {
+    const request = buildHiggsfieldVideoRequest({ prompt: 'ride', imageUrl: 'frame', referenceImageUrls: ['lead', 'bike'] });
+    expect(request.route).toBe('reference');
+    expect(request.frameAsReference).toBe(true);
+    expect(request.body.image_urls).toEqual(['frame', 'lead', 'bike']);
+    expect(request.body).not.toHaveProperty('image_url');
+    expect(request.body.prompt).toMatch(/^ride\nThe first reference image is the opening frame/);
+  });
+
+  it('keeps a frame-only shot on image-to-video', () => {
+    const request = buildHiggsfieldVideoRequest({ prompt: 'ride', imageUrl: 'frame' });
+    expect(request.route).toBe('image');
+    expect(request.frameAsReference).toBe(false);
+    expect(request.body.prompt).toBe('ride');
+  });
+
+  it('renders silent with a notice when song audio meets a start frame', () => {
+    const frame = buildHiggsfieldVideoRequest({ prompt: 'ride', imageUrl: 'frame', audioUrls: ['song.wav'] });
+    expect(frame.route).toBe('image');
+    expect(frame.body).not.toHaveProperty('audio_urls');
+    expect(frame.silentNotice).toMatch(/Rendered without song audio/);
+    const withRefs = buildHiggsfieldVideoRequest({ prompt: 'ride', imageUrl: 'frame', referenceImageUrls: ['lead'], audioUrls: ['song.wav'] });
+    expect(withRefs.body).not.toHaveProperty('audio_urls');
+    expect(withRefs.silentNotice).toBeTruthy();
+    expect(buildHiggsfieldVideoRequest({ prompt: 'ride', referenceImageUrls: ['lead'], audioUrls: ['song.wav'] }).silentNotice).toBeNull();
   });
 
   it('sends Seedance reference audio and user words unchanged, and refuses other families', () => {

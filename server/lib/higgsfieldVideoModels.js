@@ -130,6 +130,12 @@ export function higgsfieldCapabilityHint(model) {
   ].filter(Boolean).join(' · ');
 }
 
+/**
+ * The line PortOS adds when a shot's start frame rides as the first reference image, so the
+ * reference endpoint (which has no first-frame field) still opens on it. Shown as a chip.
+ */
+export const HIGGSFIELD_FRAME_ROLE_LINE = 'The first reference image is the opening frame of the shot: begin exactly from it and keep its place, light, framing and people.';
+
 const refuse = (message) => Object.assign(new Error(message), { status: 400, code: 'HIGGSFIELD_VIDEO_INPUT_INVALID' });
 
 // Non-numeric ratios ('adaptive') are only ever an explicit pick, never the nearest match.
@@ -155,7 +161,7 @@ export const higgsfieldVideoPromptText = (prompt = '', negativePrompt = '') => {
  * placeholders for a dry run; the route is chosen from which are present.
  * Throws a 400-shaped error rather than dropping or truncating an input.
  *
- * @returns {{ model, route, endpointId, body, seconds, resolution, generateAudio, estimatedCostUsd: null }}
+ * @returns {{ model, route, endpointId, body, seconds, resolution, generateAudio, estimatedCostUsd: null, frameAsReference, silentNotice }}
  */
 export function buildHiggsfieldVideoRequest({
   modelId = HIGGSFIELD_DEFAULT_VIDEO_MODEL, prompt = '', negativePrompt = '', seconds, resolution, width, height,
@@ -163,16 +169,26 @@ export function buildHiggsfieldVideoRequest({
 }) {
   const model = getHiggsfieldVideoModel(modelId);
   if (!model) throw refuse(`"${modelId}" is not a Higgsfield video model PortOS offers`);
-  const refs = (Array.isArray(referenceImageUrls) ? referenceImageUrls : []).filter(Boolean);
-  if (refs.length && imageUrl) throw refuse(`${model.label} takes either a start frame or reference images, not both`);
+  let refs = (Array.isArray(referenceImageUrls) ? referenceImageUrls : []).filter(Boolean);
+  // The reference endpoints have no first-frame field: a start frame plus references goes as
+  // the first reference image, and the prompt says it is the opening frame.
+  const frameAsReference = Boolean(refs.length && imageUrl && model.endpoints.reference);
+  if (refs.length && imageUrl && !frameAsReference) throw refuse(`${model.label} takes either a start frame or reference images, not both`);
+  if (frameAsReference && endImageUrl) throw refuse(`${model.label} cannot combine an end frame with reference images; remove the end frame or the references`);
+  if (frameAsReference) { refs = [imageUrl, ...refs]; imageUrl = null; }
   if (refs.length && !model.endpoints.reference) throw refuse(`${model.label} takes no reference images; use a start frame instead`);
   if (refs.length > model.maxReferenceImages) throw refuse(`${model.label} takes at most ${model.maxReferenceImages} reference images (received ${refs.length})`);
   if (endImageUrl && !imageUrl) throw refuse('An end frame needs a start frame');
   if (endImageUrl && !model.endFrameField) throw refuse(`${model.label} takes no end frame`);
   if (audioUrls.length > (model.maxReferenceAudio || 0)) throw refuse(`${model.label} takes at most ${model.maxReferenceAudio || 0} audio references (received ${audioUrls.length})`);
-  if (imageUrl && audioUrls.length) throw refuse(`${model.label} cannot combine anchored start or end frames with reference audio; remove the frames or song audio`);
+  // Anchored frames cannot ride with reference audio: the take renders silent (a cutaway's
+  // song is its soundtrack anyway) and says so instead of refusing the shot.
+  const frameAnchored = Boolean(imageUrl) || (frameAsReference && audioUrls.length > 0);
+  const silentNotice = frameAnchored && audioUrls.length
+    ? `Rendered without song audio: ${model.label} cannot combine a start frame with reference audio.` : null;
+  if (silentNotice) audioUrls = [];
   const route = refs.length || audioUrls.length ? 'reference' : imageUrl ? 'image' : 'text';
-  const text = higgsfieldVideoPromptText(prompt, negativePrompt);
+  const text = higgsfieldVideoPromptText(prompt, negativePrompt) + (frameAsReference ? `\n${HIGGSFIELD_FRAME_ROLE_LINE}` : '');
   // The image route is the one where the start frame can carry the whole instruction.
   if (!String(prompt ?? '').trim() && !String(negativePrompt ?? '').trim() && route !== 'image') throw refuse('Prompt is required');
   if (model.promptMax && text.length > model.promptMax) {
@@ -203,7 +219,7 @@ export function buildHiggsfieldVideoRequest({
   const seedNum = typeof seed === 'number' ? seed : (typeof seed === 'string' && seed.trim() ? Number(seed) : NaN);
   if (model.seed && Number.isInteger(seedNum) && seedNum >= model.seed.min && seedNum <= model.seed.max) body.seed = seedNum;
   return {
-    model, route, endpointId: model.endpoints[route], body, seconds: sec, resolution: tier, generateAudio: audio, estimatedCostUsd: null,
+    model, route, endpointId: model.endpoints[route], body, seconds: sec, resolution: tier, generateAudio: audio, estimatedCostUsd: null, frameAsReference, silentNotice,
   };
 }
 
