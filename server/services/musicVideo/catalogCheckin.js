@@ -86,6 +86,8 @@ export function dropStaleCatalogPicks(current, next) {
  */
 export const createCatalogReads = () => new Map();
 
+// The shot editor re-reads this only when client/src/lib/musicVideoCatalogCheckinInputs.js changes: keep the project
+// fields read here listed there.
 export async function resolveCatalogCheckin(project, {
   catalog, exists = existsOnDisk, client, includeShotChecks = true, includeRepairPatches = false, reads = null,
 } = {}) {

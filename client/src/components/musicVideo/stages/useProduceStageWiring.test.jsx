@@ -29,9 +29,9 @@ import { findEnabledByRole } from '../../../test/enabledBarrier.js';
 import { MemoryRouter } from 'react-router';
 import toast from '../../ui/Toast';
 import { createTestPhaseDiagnostics } from '../../../../../server/test/testPhaseDiagnostics.js';
-import { approveMusicVideoFinal, rejectUnusedMusicVideoSceneTakes, measureMusicVideoColorMatch, listMusicVideoProjects, renderMusicVideoProject, reorderMusicVideoScenes, updateMusicVideoProject, updateMusicVideoScene, proposeMusicVideoShotSheet, splitMusicVideoScene, moveMusicVideoSceneStart, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff, addMusicVideoSceneTake, getMusicVideoHandoffBundle, getMusicVideoProject, startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision, renderMusicVideoSceneFrame, getMusicVideoBlender } from '../../../services/apiMusicVideo.js';
+import { approveMusicVideoFinal, rejectUnusedMusicVideoSceneTakes, measureMusicVideoColorMatch, listMusicVideoProjects, renderMusicVideoProject, reorderMusicVideoScenes, updateMusicVideoProject, updateMusicVideoScene, proposeMusicVideoShotSheet, splitMusicVideoScene, moveMusicVideoSceneStart, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff, addMusicVideoSceneTake, getMusicVideoHandoffBundle, getMusicVideoProject, startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision, renderMusicVideoSceneFrame, getMusicVideoBlender, getMusicVideoCastAndSets } from '../../../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../../../services/apiSystem.js';
-import { generateVideo, getVideoGenStatus, getVideoHistoryItem, previewVideoPrompt, trimVideo } from '../../../services/apiImageVideo.js';
+import { generateVideo, getVideoGenStatus, getVideoHistoryItem, previewImagePrompt, previewVideoPrompt, trimVideo } from '../../../services/apiImageVideo.js';
 import { downloadBlob } from '../../../lib/downloadBlob.js';
 import { blenderFilmProject, blenderFilmState } from '../../../test/blenderFilmFixture.js';
 import { finalApprovalPatch } from '../../../../../server/lib/musicVideoFinalApproval.js';
@@ -1672,5 +1672,128 @@ describe('take decisions then shot edits keep the takes as the server holds them
     await waitFor(() => expect(reads()).toBeGreaterThan(loaded));
     await waitFor(() => expect(unusedControl()).toBeNull());
     expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).toBeChecked();
+  });
+
+  // #16306: the Cast & Sets check re-reads only after an edit that can change it, once, after the reply applied.
+  describe('Cast & Sets reads', () => {
+    const catalogBoard = {
+      ...board,
+      castAndSets: { source: 'catalog', status: 'approved' },
+      concept: { subjects: [{ id: 'c1', kind: 'character', name: 'Lead', ingredientId: 'ing-1' }] },
+      visualSpec: { references: [
+        { id: 'r1', imageId: 'mood.png', role: 'character', label: 'Lead', note: '', condition: true },
+        { id: 'r2', imageId: 'set.png', role: 'set', label: 'Pier', note: '', condition: false },
+      ] },
+      scenes: [{ ...first, frameReferenceIds: ['r1', 'r2'] }, second],
+    };
+    const checkinReads = () => getMusicVideoCastAndSets.mock.calls.length;
+    // Past the read's settle window (useCatalogCastSetsCheckin CHECKIN_INPUT_SETTLE_MS), so a read it would send has been sent.
+    const pastSettle = () => act(() => new Promise((resolve) => { setTimeout(resolve, 700); }));
+    const deferredReply = (mock) => {
+      const real = mock.getMockImplementation();
+      let answer;
+      mock.mockImplementationOnce((...args) => new Promise((resolve) => { answer = () => resolve(real(...args)); }));
+      // The take chain starts the request a microtask after the click.
+      return async () => {
+        await waitFor(() => expect(answer).toBeTypeOf('function'));
+        await act(async () => answer());
+      };
+    };
+
+    // Uniquely catches a take decision or Done re-reading the whole-video check, and Reject unused looking unchanged while it waits.
+    it('Reject unused shows it is saving, ignores a second press, and with Done sends no cast and sets read', async () => {
+      fakeServer(catalogBoard);
+      await openShot(/^Open Shot 1/, catalogBoard);
+      await waitFor(() => expect(checkinReads()).toBe(1));
+      const answer = deferredReply(rejectUnusedMusicVideoSceneTakes);
+      fireEvent.click(screen.getByRole('button', { name: 'Reject unused (2)' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Reject 2' }));
+      const saving = screen.getByRole('button', { name: 'Rejecting 2 unused takes…' });
+      expect(saving).toBeDisabled();
+      await waitFor(() => expect(rejectUnusedMusicVideoSceneTakes).toHaveBeenCalledTimes(1));
+      fireEvent.click(saving);
+      await settle();
+      expect(rejectUnusedMusicVideoSceneTakes).toHaveBeenCalledTimes(1);
+      await answer();
+      await waitFor(() => expect(unusedControl()).toBeNull());
+      await markDone();
+      await pastSettle();
+      expect(checkinReads()).toBe(1);
+    });
+
+    it('Use shows the take saving until its reply, and sends no cast and sets read', async () => {
+      fakeServer(catalogBoard);
+      await openShot(/^Open Shot 1/, catalogBoard);
+      await waitFor(() => expect(checkinReads()).toBe(1));
+      await showFrames();
+      const answer = deferredReply(selectMusicVideoSceneTake);
+      const take = () => within(screen.getByRole('list', { name: /Frame takes/ })).getAllByRole('listitem')[1];
+      fireEvent.click(within(take()).getByRole('button', { name: /Use/ }));
+      expect(within(take()).getByRole('status')).toHaveTextContent('Saving…');
+      await answer();
+      await waitFor(() => expect(within(take()).queryByRole('status')).toBeNull());
+      await pastSettle();
+      expect(selectMusicVideoSceneTake).toHaveBeenCalledTimes(1);
+      expect(checkinReads()).toBe(1);
+    });
+
+    // The clip prompt is text the check reads (a subject it names), so its edit reads once, after the reply.
+    it('a clip prompt edit reads the check once, after its reply', async () => {
+      fakeServer(catalogBoard);
+      await openShot(/^Open Shot 1/, catalogBoard);
+      await waitFor(() => expect(checkinReads()).toBe(1));
+      const prompt = screen.getByLabelText(/^(Clip|Shot) prompt$/);
+      fireEvent.change(prompt, { target: { value: 'Lead waves, at dusk' } });
+      fireEvent.blur(prompt);
+      await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', { prompt: 'Lead waves, at dusk' }, expect.anything()));
+      await waitFor(() => expect(checkinReads()).toBe(2));
+      await pastSettle();
+      expect(checkinReads()).toBe(2);
+    });
+
+    it('a reference pick reads the check once', async () => {
+      fakeServer(catalogBoard);
+      await openShot(/^Open Shot 1/, catalogBoard);
+      await waitFor(() => expect(checkinReads()).toBe(1));
+      await showFrames();
+      fireEvent.click(within(screen.getByRole('group', { name: 'References selected for the frames' })).getByRole('button', { name: "Don't send Pier" }));
+      await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', { frameReferenceIds: ['r1'] }, expect.anything()));
+      await waitFor(() => expect(checkinReads()).toBe(2));
+      await pastSettle();
+      expect(checkinReads()).toBe(2);
+    });
+
+    it('a shot sheet cast change reads the check once', async () => {
+      fakeServer(catalogBoard);
+      await openShot(/^Open Shot 1/, catalogBoard);
+      await waitFor(() => expect(checkinReads()).toBe(1));
+      fireEvent.click(within(screen.getByRole('group', { name: 'Who' })).getByRole('button', { name: 'Lead' }));
+      await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', { shotSheet: expect.objectContaining({ characters: ['Lead'] }) }, expect.anything()));
+      await waitFor(() => expect(checkinReads()).toBe(2));
+      await pastSettle();
+      expect(checkinReads()).toBe(2);
+    });
+
+    // Uniquely catches the check or a hidden frame prompt preview starting before the project is on screen.
+    it('opening a shot reads the check only once the project shows, and previews no frame prompt while the clip view shows', async () => {
+      fakeServer(catalogBoard);
+      await asThisTab();
+      let answerProject;
+      getMusicVideoProject.mockImplementationOnce(() => new Promise((resolve) => { answerProject = () => resolve(catalogBoard); }));
+      listMusicVideoProjects.mockResolvedValue([catalogBoard]);
+      renderMV('/music-video/mv-2/produce/scene/s1');
+      await waitFor(() => expect(getMusicVideoProject).toHaveBeenCalled());
+      await pastSettle();
+      expect(checkinReads()).toBe(0);
+      expect(previewImagePrompt).not.toHaveBeenCalled();
+      await act(async () => answerProject());
+      await screen.findByRole('heading', { level: 2, name: catalogBoard.name });
+      await waitFor(() => expect(checkinReads()).toBe(1));
+      await screen.findByRole('group', { name: 'Show' });
+      await pastSettle();
+      expect(previewImagePrompt).not.toHaveBeenCalled();
+      await showFrames();
+      await waitFor(() => expect(previewImagePrompt).toHaveBeenCalled());
+    });
   });
 });

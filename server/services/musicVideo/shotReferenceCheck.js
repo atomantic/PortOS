@@ -71,7 +71,11 @@ function plateProvenance(project) {
   };
 }
 
-/** Advisory check-in rows. Only the repair service needs the proposed reference arrays. */
+/**
+ * Advisory check-in rows. Only the repair service needs the proposed reference arrays.
+ * A project or scene field read here must also be in client/src/lib/musicVideoCatalogCheckinInputs.js, or the
+ * shot editor will not re-read the check after an edit to it.
+ */
 export async function musicVideoShotReferenceChecks(project, media) {
   const scenes = project.scenes || [];
   if (!scenes.length || project.castAndSets.catalogCheckin.problems.length) return [];
