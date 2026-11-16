@@ -1,54 +1,33 @@
 /**
- * Sprites — authoring the user-defined animation-track store (#3153).
+ * Sprites — the write half of the user-defined animation-track store.
  *
- * #3152 made the track registry a merge of compiled `walk` plus a JSON store, and
- * #3136 made every track's generate/review/approve workflow generic — so a new
- * animation type already needs no code. What it still needed was a way to *author*
- * one: the store was a file the user had to hand-edit, which is not a feature so
- * much as a documented workaround. This module is the write half of that store.
+ * **Separate from `animationTrackStore.js`.** That module is imported by
+ * `server/lib/validation.js` (which builds sprite Zod ranges from the effective
+ * registry at load), and its tests pin how narrow its import graph may be.
+ * Refusing to delete a track with authored work means scanning every record, which
+ * reaches `records.js` and the native image graph (sharp). Reads stay in the
+ * leaf-ish store; writes live here, with the route layer as the only consumer.
  *
- * **Why a module of its own, not writers on `animationTrackStore.js`.** That module
- * is imported by `server/lib/validation.js` (which builds its sprite Zod ranges
- * from the effective registry at module load), and `animationTrackStore.test.js`
- * plus `animationTracks.test.js` pin how narrow its import graph is allowed to be —
- * `validation.js` must not drag the native image graph into request validation.
- * Refusing to delete a track that has authored work on disk means scanning every
- * record, which reaches `records.js` and the workflow's on-disk layout, i.e. sharp.
- * So reads stay in the leaf-ish store and writes live here, where the route layer
- * (which already imports `atlas.js`) is the only consumer.
+ * **Five row fields are DERIVED from the id, never typed.**
+ * `assertAnimationTrackRows` refuses two rows claiming the same
+ * `contractFrameCountField`, `selectionKind` or `setKind`; those strings name
+ * on-disk files and publish-contract keys, so a typo would let another track's
+ * finalized set satisfy this one's evidence check. A derived value that collides is
+ * refused at save time by the same assert, naming the conflict.
  *
- * **Five row fields are DERIVED from the id, never typed.** `assertAnimationTrackRows`
- * refuses two rows claiming the same `contractFrameCountField`, `selectionKind`, or
- * `setKind`, and those strings name on-disk files and publish-contract keys — asking
- * a user to invent globally-unique `kind` discriminators is a trap with no upside,
- * and a typo in one would surface as another track's finalized set satisfying this
- * one's evidence check. The user types the id and the derivation is total. A derived
- * value that DOES collide (id `directional-scanner` derives the seeded scanner's
- * `reviewed-directional-scanner-selection`) is refused at save time by the same
- * assert, naming the conflict — which is the point of validating the merged table
- * here rather than discovering it at the next boot.
+ * `standaloneContract` is derived too: it is a cross-row invariant (exactly one
+ * standalone track per record kind), so the correct value depends on the rest of the
+ * table. A new row is the baseline exactly when none of the kinds it claims already
+ * has one; a row spanning a kind with a baseline and one without is refused by name.
  *
- * `standaloneContract` is derived too, for the same reason: it is a cross-row
- * invariant (`assertAnimationTrackRows` requires exactly one standalone track per
- * record kind), so the only correct value depends on what else is in the table. A
- * new row is the baseline exactly when none of the kinds it claims already has one
- * — which is what makes "delete ambient, then add your own place loop" work. A row
- * spanning a kind that has a baseline and one that doesn't has no valid answer, and
- * the assert refuses it by naming the kind.
+ * **Writes are serialized and the cache invalidated.** One `data/` file, one
+ * `createFileWriteQueue` tail, so a create cannot read a stale pre-image mid-delete.
+ * Every mutation ends in `__resetAnimationTrackStore()`.
  *
- * **The writes are serialized and the cache is invalidated.** One `data/` file, one
- * `createFileWriteQueue` tail, so a create landing while a delete is mid-flight
- * cannot read a stale pre-image (the AGENTS.md rule for a service that owns a single
- * JSON state file). Every mutation ends in `__resetAnimationTrackStore()` so the
- * running server serves the table it just wrote instead of reporting success against
- * a cache nothing dropped.
- *
- * **A mutation still reports `restartRequired`.** Per #3136/#3152's scope the
- * registry itself is live after the cache reset, but `server/lib/validation.js`
- * builds `spriteRuntimeContractSchema`'s per-track contract fields ONCE at module
- * load — so a brand-new track's `<id>FrameCount` key is stripped by Zod until the
- * process restarts. Saying so in the response is the difference between a documented
- * boundary and a field that silently does nothing.
+ * **A mutation still reports `restartRequired`.** The registry is live after the
+ * cache reset, but `validation.js` builds `spriteRuntimeContractSchema`'s per-track
+ * fields once at module load, so a new track's `<id>FrameCount` key is stripped by
+ * Zod until the process restarts.
  */
 
 import { atomicWrite, pathExists } from '../../lib/fileUtils.js';
@@ -66,9 +45,7 @@ import {
 } from './animationTrackStore.js';
 import { recordsCarryingTrack } from './animationTrackWorkflow.js';
 
-// One store file, so ONE tail — per AGENTS.md's "collapse the queue to a single
-// tail per shared file". A per-id queue would let two different tracks' writes
-// interleave on the same JSON and lose one of them.
+// One store file, so ONE tail: a per-id queue would let two tracks' writes interleave on the same JSON.
 const queueStoreWrite = createFileWriteQueue();
 
 /** The stored (non-builtin) rows, in registration order. */
@@ -78,13 +55,9 @@ const builtinRows = (tracks) => Object.values(tracks).filter((row) => row.builti
 
 /**
  * Run a registry call whose failure is a bare `Error`, as a 409 the form can show.
- *
- * Both the store's load and `assertAnimationTrackRows` throw plain Errors — correct
- * for boot, where a loud crash naming the field is the whole point, but wrong on this
- * surface: here it is a *response* to a request the user made about that very file,
- * and an unrecognized error becomes an opaque 500 that says nothing about which row
- * is broken. The registry's messages already name the field, the two claimants, or
- * the record kind, so they are surfaced verbatim with an actionable status.
+ * Boot wants a loud crash; here the error answers a user request about that file, and
+ * the registry's messages already name the field, claimants or record kind, so they
+ * are surfaced verbatim instead of as an opaque 500.
  */
 function asConflict(fn) {
   try {
@@ -96,11 +69,8 @@ function asConflict(fn) {
 
 /**
  * The user-facing subset of a row, in the shape the CRUD surface accepts.
- *
- * Whitelisted from `AUTHORED_TRACK_FIELDS` rather than spread-minus-derived, so a
- * round-trip through the editor can't carry an unknown key from a hand-edited store
- * back into a saved row and have it silently persist — and so this list and the
- * request schema's cannot drift (see that constant's header).
+ * Whitelisted from `AUTHORED_TRACK_FIELDS` so a hand-edited unknown key cannot
+ * round-trip into a saved row and the two lists cannot drift.
  */
 const authoredFields = (row) => ({
   id: row.id,
@@ -111,22 +81,16 @@ const authoredFields = (row) => ({
 
 /**
  * Whether a row is its record kinds' publishable baseline: true only when NONE of
- * the kinds it claims is already owned by another row in the SAME prospective table.
+ * the kinds it claims is owned by another row in the same prospective table.
  *
- * `rows` is the whole post-mutation row set (not the pre-image), which is what makes
- * a promotion work: deleting `place`'s baseline must let a surviving `place` track
- * become one, and deriving against the table as it WAS would instead leave that kind
- * with zero owners and 409 on a delete that should have succeeded.
- *
- * Order-dependent by design: within one table the earlier row wins a contested kind,
- * matching the registry's `walk`-first registration order, so the answer is stable
- * across installs rather than dependent on which row happened to be recomposed
- * first.
+ * `rows` is the whole post-mutation set, so deleting a kind's baseline lets a
+ * surviving track become one instead of 409ing. Order-dependent by design: the
+ * earlier row wins a contested kind (matching `walk`-first registration), keeping
+ * the answer stable across installs.
  */
 function withDerivedBaselines(rows, builtins) {
-  // Seed from the BUILTINS only: their claim is compiled in and fixed, while every
-  // stored row's answer is what this function decides below (a row arrives from
-  // `composeRow` with no `standaloneContract` at all).
+    // Seed from the BUILTINS only: their claim is fixed; stored rows arrive from
+    // `composeRow` with no `standaloneContract` and are decided below.
   const claimed = new Set();
   for (const row of builtins) {
     if (row.standaloneContract) for (const kind of row.kinds) claimed.add(kind);
@@ -140,16 +104,12 @@ function withDerivedBaselines(rows, builtins) {
 
 /**
  * A stored row's PortOS-owned fields, minus `standaloneContract` (a cross-row answer
- * `withDerivedBaselines` fills in once the whole table is known).
+ * `withDerivedBaselines` fills in later).
  *
- * `existing` is the row already on disk, and its presence is load-bearing: when
- * there is one, the five discriminators are carried over VERBATIM rather than
- * re-derived. A row whose `setKind` was hand-edited (or seeded under different
- * wording — the shipped `scanner` row's `reviewed-directional-scanner-selection` is
- * not what `deriveTrackFields('scanner')` produces) names files an approved set on
- * this machine already carries, so re-deriving during an unrelated label edit would
- * rename the artifact the atlas compiler re-verifies and silently orphan that set.
- * Only a brand-new id derives them.
+ * When `existing` is on disk the five discriminators are carried over VERBATIM, not
+ * re-derived: a hand-edited or differently-seeded `setKind` (the shipped `scanner`
+ * row) names files an approved set already carries, so re-deriving on a label edit
+ * would orphan it. Only a brand-new id derives them.
  */
 const composeRow = (authored, existing = null) => ({
   ...authored,
@@ -164,12 +124,10 @@ const composeRow = (authored, existing = null) => ({
 });
 
 /**
- * The prospective stored-row set for a mutation, with every row's discriminators
- * preserved and every `standaloneContract` re-derived over the RESULT.
- *
- * `added` is a brand-new authored row, `replacement` swaps in for its own id, and
- * `dropId` removes one — the three mutations expressed as one table rebuild, so
- * baseline promotion/demotion is computed the same way whichever one ran.
+ * The prospective stored-row set for a mutation: discriminators preserved, every
+ * `standaloneContract` re-derived over the RESULT. `added`, `replacement` (swaps in
+ * for its own id) and `dropId` are the three mutations as one rebuild, so baseline
+ * promotion/demotion is computed identically for each.
  */
 const nextStoredRows = (tracks, { added = null, replacement = null, dropId = null } = {}) => {
   const kept = storedRows(tracks)
@@ -183,18 +141,14 @@ const nextStoredRows = (tracks, { added = null, replacement = null, dropId = nul
 };
 
 /**
- * The effective table — every read on this surface goes through this rather than the
- * store's getter, so a hand-broken store can't reach one path as a 409 and another
- * as a 500.
+ * The effective table. Every read on this surface goes through this rather than the
+ * store's getter, so a hand-broken store is a 409 on every path, never a 500 on one.
  */
 const effectiveTracksOrThrow = () => asConflict(getEffectiveAnimationTracks);
 
 /**
- * Every track the effective registry knows, built-in first.
- *
- * Returns the FULL rows (derived fields included), because the drawer shows the
- * user which on-disk kinds and contract field their id produced — that is how a
- * collision refusal below becomes actionable rather than mysterious.
+ * Every track the effective registry knows, built-in first. Returns FULL rows
+ * (derived fields included) so a collision refusal is actionable.
  */
 export function listAnimationTracks() {
   return {
@@ -204,11 +158,8 @@ export function listAnimationTracks() {
 }
 
 /**
- * Persist a stored-row set, then drop the registry cache.
- *
- * The seed's `_comment` is deliberately NOT carried over: once the user has saved
- * through the UI this file is theirs, and a note explaining which rows shipped as
- * seed data stops being true the moment they edit one.
+ * Persist a stored-row set, then drop the registry cache. The seed's `_comment` is
+ * deliberately not carried over: once saved through the UI the file is the user's.
  */
 async function writeStoredRows(rows) {
   await atomicWrite(animationTrackStorePath(), {
@@ -219,10 +170,8 @@ async function writeStoredRows(rows) {
 }
 
 /**
- * Validate the prospective merged table (compiled `walk` plus these stored rows)
- * through the SAME guard the store runs at load — so a row saved here can never be
- * one that bricks the next boot. That is the difference between "refused at save time
- * with a message naming the conflict" and a server that won't start.
+ * Validate the prospective merged table (compiled `walk` plus stored rows) through
+ * the SAME guard the store runs at load, so a saved row can never brick the next boot.
  */
 function assertTableValid(tracks, rows) {
   const byId = [...builtinRows(tracks), ...rows].map((row) => [row.id, row]);
@@ -230,13 +179,10 @@ function assertTableValid(tracks, rows) {
 }
 
 /**
- * Refuse a mutation to a built-in track by name.
- *
- * `walk` is the one mandatory baseline: its bounds feed the Zod schemas and its
- * `setKind` gates every character compile, so editing or deleting it through a data
- * edit would brick authoring with no code change to point at. The store's loader
- * already refuses a row that shadows it; this is the same refusal at the surface
- * where the user would otherwise get a 404 for a track they can plainly see.
+ * Refuse a mutation to a built-in track by name. `walk` is the mandatory baseline:
+ * its bounds feed the Zod schemas and its `setKind` gates every character compile.
+ * The loader already refuses a shadowing row; this gives the user a refusal instead
+ * of a 404 for a track they can see.
  */
 function refuseBuiltin(trackId, tracks) {
   const row = tracks[trackId];
@@ -265,15 +211,13 @@ function requireStored(trackId, tracks) {
  * Refuse a mutation that would orphan authored work, listing the records.
  *
  * "In use" is any record carrying this track's finalized set OR a review selection
- * with at least one approved direction — both are renders the user approved, both
- * are keyed by the `setKind`/`selectionKind` strings a delete removes from the
- * registry, and after either mutation the atlas compiler would find on-disk
- * evidence for a track it no longer knows (or, on a directionality flip, would
- * expect a different number of rows than the set was frozen with).
+ * with at least one approved direction. Both are keyed by the `setKind`/
+ * `selectionKind` strings a delete removes, so the atlas compiler would find
+ * evidence for an unknown track (or, on a directionality flip, expect a different
+ * row count than the set was frozen with).
  *
- * No force flag, deliberately (#3153): a force-delete that silently drops approved
- * renders is worse than a refusal the user can act on by reopening those sets
- * first. The message names the records so that action is obvious.
+ * No force flag: silently dropping approved renders is worse than a refusal the user
+ * can act on by reopening those sets first.
  */
 async function refuseIfInUse(trackId, action) {
   const recordIds = await recordsCarryingTrack(trackId);
@@ -309,15 +253,13 @@ export function createAnimationTrack(input) {
 }
 
 /**
- * Update one user-defined animation type. `id` is immutable — renaming would have
- * to migrate the on-disk `<trackId>/` directories, every run's `track` field and
- * every manifest, so it is a delete-plus-create the user makes explicitly.
+ * Update one user-defined animation type. `id` is immutable: renaming would migrate
+ * on-disk `<trackId>/` directories, every run's `track` field and manifest, so it is
+ * an explicit delete-plus-create.
  *
- * A directionality FLIP on an in-use track is refused like a delete: the finalized
- * set was frozen with a `directionOrder` derived from the old value and the
- * compiler validates row counts against the new one, so the two would disagree
- * about what is on disk. Every other field (label, bounds, prompt) is safe to
- * retune with work already authored — the packer clamps into the new range.
+ * A directionality FLIP on an in-use track is refused like a delete: the frozen set's
+ * `directionOrder` would disagree with the compiler's new row count. Other fields
+ * (label, bounds, prompt) are safe to retune; the packer clamps into the new range.
  */
 export function updateAnimationTrack(trackId, patch) {
   return queueStoreWrite(async () => {
@@ -348,11 +290,8 @@ export function deleteAnimationTrack(trackId) {
 }
 
 /**
- * Whether this install has its own store file yet, and where the rows came from.
- *
- * Surfaced so the drawer can say "these are the shipped starter types" before the
- * first save — a user who deletes one needs to know the file is about to become
- * theirs and stop tracking the seed.
+ * Whether this install has its own store file yet, and where the rows came from, so
+ * the drawer can say "these are the shipped starter types" before the first save.
  */
 export async function animationTrackStoreOrigin() {
   return (await pathExists(animationTrackStorePath())) ? 'store' : 'seed';

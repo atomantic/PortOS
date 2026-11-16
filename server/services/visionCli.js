@@ -1,26 +1,19 @@
 /**
  * Vision via CLI providers (codex / claude-code with vision).
  *
- * The API-provider vision path (`describeImageDataUrlDetailed` in
- * `visionTest.js`) POSTs a base64 `image_url` block to an OpenAI-compatible
- * `/chat/completions`. CLI providers have no such endpoint — they read a prompt
- * from stdin and (for the vision-capable ones) an image from a FILE. So this
- * module decodes the in-memory data URL to a temp PNG, attaches it the way each
- * CLI expects, spawns the provider, and returns the model's text in the SAME
- * `{ text, finishReason, usage, reasoning }` shape the API path returns — so
- * `loraDatasetCaption.js` consumes either provider type uniformly.
+ * The API vision path (`describeImageDataUrlDetailed` in `visionTest.js`) POSTs a base64
+ * `image_url` block. CLI providers read a prompt from stdin and an image from a FILE, so
+ * this module decodes the data URL to a temp PNG, attaches it the way each CLI expects,
+ * spawns the provider, and returns the same `{ text, finishReason, usage, reasoning }`
+ * shape so `loraDatasetCaption.js` consumes either provider type uniformly.
  *
  * Attachment conventions (mirrors `imageGen/codex.js` for codex):
- *   - codex:  `codex exec -i <file> '<prompt>'` — the `-i` flag feeds the file
- *     to the model; the prompt is a positional arg.
- *   - others (claude-code): the image is written into a fresh temp dir that
- *     becomes the spawn cwd, and the prompt (over stdin) references it by
- *     basename so the CLI can read it with its file tools in print mode.
+ *   - codex:  `codex exec -i <file> '<prompt>'`.
+ *   - others (claude-code): the image is written into a fresh temp dir that becomes the
+ *     spawn cwd, and the stdin prompt references it by basename.
  *
- * CLI providers don't report `finish_reason` / token usage / reasoning, so
- * those come back null/'' — the caption diagnostics degrade gracefully (an
- * empty CLI reply is reported as a plain refusal rather than a token-budget
- * guess).
+ * CLI providers don't report `finish_reason` / usage / reasoning, so those come back
+ * null/''; an empty CLI reply is reported as a plain refusal, not a token-budget guess.
  */
 
 import { spawn } from '../lib/childProcess.js';
@@ -38,14 +31,12 @@ import { resolveCliSpawn, needsProcessGroup, trackDetachedGroup } from '../lib/c
 const CLI_VISION_TIMEOUT_MS = 120000;
 const IMAGE_BASENAME = 'vision-input.png';
 
-// Codex matches on id OR command basename (via the shared isCodexProvider) so a
-// renamed/duplicated/path-configured codex provider still takes the `-i` path.
-// Everything else uses the cwd-local-file convention.
+// Codex matches on id OR command basename (shared isCodexProvider) so a renamed or
+// path-configured codex provider still takes the `-i` path.
 
 /**
- * Decode a `data:image/...;base64,...` URL to raw bytes. Throws on a malformed
- * URL (same contract as the API path's up-front data-URL check). Pure —
- * exported for tests.
+ * Decode a `data:image/...;base64,...` URL to raw bytes. Throws on a malformed URL.
+ * Pure; exported for tests.
  */
 export function decodeImageDataUrl(dataUrl) {
   if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) {
@@ -59,16 +50,15 @@ export function decodeImageDataUrl(dataUrl) {
 
 /**
  * Build the spawn invocation (command, argv, stdin, cwd) for a vision CLI call.
- * `imageDir` is the temp dir holding the image file(s). Pure — exported so the
- * per-provider attachment convention is unit-testable without spawning.
+ * `imageDir` is the temp dir holding the image file(s). Pure; exported so the
+ * per-provider attachment convention is testable without spawning.
  *
- * `opts.imageNames` defaults to `[IMAGE_BASENAME]` (the single-file caption
- * path). A multi-frame call passes `vision-1.jpg`, `vision-2.jpg`, … and the
- * prompt text names them in chronological order.
+ * `opts.imageNames` defaults to `[IMAGE_BASENAME]`; a multi-frame call passes
+ * `vision-1.jpg`, `vision-2.jpg`, … and the prompt names them in chronological order.
  *
  * `opts.effort` is a per-call reasoning-effort override (same contract as
- * `runPromptThroughProvider`). Codex gets `-c model_reasoning_effort=…`;
- * Claude/other stdin CLIs inherit it through `buildCliArgs`.
+ * `runPromptThroughProvider`): codex gets `-c model_reasoning_effort=…`, other stdin
+ * CLIs inherit it through `buildCliArgs`.
  *
  * @returns {{ command: string, args: string[], stdin: string|null, cwd: string }}
  */
@@ -80,19 +70,17 @@ export function buildCliVisionInvocation(provider, model, imageDir, prompt, opts
   if (isCodexProvider(provider)) {
     const baseArgs = Array.isArray(provider.args) ? provider.args : [];
     const hasExec = baseArgs.includes('exec');
-    // Resolve the codex sentinel (`codex-configured-default`) to null so we omit
-    // `-m` and let codex fall back to ~/.codex/config.toml — passing the
-    // sentinel verbatim makes `codex exec` try a non-existent model. Same
-    // resolution buildCliArgs applies on the normal CLI run path.
+    // Resolve the codex sentinel (`codex-configured-default`) to null so `-m` is omitted
+    // and codex uses ~/.codex/config.toml; the sentinel verbatim names a non-existent
+    // model. Same resolution as buildCliArgs.
     const codexModel = resolveCliModel(model);
     const imageFlags = imageNames.flatMap((name) => ['-i', join(imageDir, name)]);
     const args = [
       ...(hasExec ? baseArgs : [...baseArgs, 'exec']),
       '--skip-git-repo-check',
-      // Disable codex's startup update check (see buildCodexStartupArgs): this
-      // path runs under a hard vision timeout, so an update-check network stall
-      // or an unattended `brew upgrade` would blow the caption call. No-op when
-      // the user pinned the key in provider.args.
+      // Disable codex's startup update check (see buildCodexStartupArgs): this path runs
+      // under a hard vision timeout that a network stall or `brew upgrade` would blow.
+      // No-op when the user pinned the key in provider.args.
       ...buildCodexStartupArgs(baseArgs),
       ...imageFlags,
       ...buildEffortArgs(effort, provider, baseArgs, model),
@@ -102,9 +90,8 @@ export function buildCliVisionInvocation(provider, model, imageDir, prompt, opts
     return { command: provider.command || 'codex', args, stdin: null, cwd: imageDir };
   }
 
-  // Claude Code (and any other stdin CLI): buildCliArgs gives the `-p -`
-  // stdin convention + `--model` + optional `--effort`; the image(s) ride in
-  // the spawn cwd so the CLI can open them by basename with its file tools.
+  // Claude Code and other stdin CLIs: buildCliArgs gives `-p -` + `--model` + optional
+  // `--effort`; the image(s) ride in the spawn cwd, opened by basename.
   const args = buildCliArgs({ ...provider, defaultModel: model, effort });
   const listed = imageNames.map((n) => `"${n}"`).join(', ');
   const stdin = imageNames.length === 1
@@ -114,9 +101,9 @@ export function buildCliVisionInvocation(provider, model, imageDir, prompt, opts
 }
 
 /**
- * Stage already-validated image files for the ordinary CLI runner.
- * The caller owns the returned cleanup function and must keep the directory
- * alive until the child process has reached a terminal state.
+ * Stage already-validated image files for the ordinary CLI runner. The caller owns the
+ * returned cleanup function and must keep the directory alive until the child has
+ * reached a terminal state.
  */
 export async function prepareCliVisionRun({ provider, imagePaths, prompt, model, effort }) {
   const paths = (Array.isArray(imagePaths) ? imagePaths : []).filter((value) => typeof value === 'string' && value);
@@ -138,8 +125,8 @@ export async function prepareCliVisionRun({ provider, imagePaths, prompt, model,
 }
 
 /**
- * Run a vision prompt against a CLI provider and resolve with the model's text
- * in the API-compatible diagnostic shape. `spawnImpl` is injectable for tests.
+ * Run a vision prompt against a CLI provider and resolve with the model's text in the
+ * API-compatible diagnostic shape. `spawnImpl` is injectable for tests.
  *
  * @param {object} opts
  * @param {object} opts.provider — a CLI-type provider object
@@ -177,10 +164,9 @@ export async function describeImageViaCli({
 }
 
 /**
- * Same spawn + diagnostic shape as {@link describeImageViaCli}, but the
- * images are already on disk (gallery stills, extracted video frames).
- * Copies them into a fresh temp dir as `vision-1.ext`… so concurrent calls
- * can't collide, then attaches every file the way the CLI expects.
+ * Same spawn + diagnostic shape as {@link describeImageViaCli}, but the images are
+ * already on disk. Copies them into a fresh temp dir as `vision-1.ext`… so concurrent
+ * calls can't collide.
  *
  * @param {object} opts
  * @param {object} opts.provider
@@ -215,43 +201,31 @@ export async function describeImagesFromPaths({
 // the prompt-file cleanup from prepareCliPrompt (Grok-on-Windows temp file).
 async function runCliVisionSpawn({ provider, model, invocation, timeout, spawnImpl, setCleanup, beforeExecute }) {
   const { command, args, stdin, cwd } = invocation;
-  // Deliver the prompt per provider convention: antigravity as the --print
-  // VALUE (agy doesn't read stdin); grok's --prompt-file /dev/stdin via stdin
-  // (POSIX) / temp file (Windows); every other provider via stdin.
+  // Prompt delivery per provider: antigravity as the --print VALUE (agy doesn't read
+  // stdin); grok via --prompt-file /dev/stdin (POSIX) / temp file (Windows); others stdin.
   const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup } = prepareCliPrompt(command, args, stdin, { cwd });
   setCleanup?.(cleanup);
 
-  // Shared composition (provider.envVars + OpenCode models map + PWD pin +
-  // CLAUDECODE strip) — see buildCliChildEnv. The PWD pin is load-bearing
-  // here: the non-codex branch above tells the CLI the image is "in the
-  // current directory", and the vision provider is user-configurable — so on
-  // OpenCode (which resolves its project root from PWD) a stale value both
-  // hides vision-input.png and turns the CLI loose in the PortOS checkout.
-  // Routing through the shared builder also brings the OpenCode declared-models
-  // map here for the first time, so the `--model` buildCliVisionInvocation
-  // injects isn't rejected by an Ollama-backed OpenCode provider (the #2190
-  // fix, previously applied only at the runner/agent sites). No `guard` —
-  // vision is a one-shot describe, not an agent.
+  // Shared composition (provider.envVars + OpenCode models map + PWD pin + CLAUDECODE
+  // strip), see buildCliChildEnv. The PWD pin is load-bearing: the non-codex branch tells
+  // the CLI the image is "in the current directory", and OpenCode resolves its project
+  // root from PWD, so a stale value hides vision-input.png and loosens the CLI into the
+  // PortOS checkout. The OpenCode declared-models map also keeps the injected `--model`
+  // from being rejected by an Ollama-backed provider. No `guard`: vision is a one-shot
+  // describe, not an agent.
   const childEnv = buildCliChildEnv({ provider, model, cwd });
 
-  // npm-installed CLI providers are .cmd/.bat shims on Windows; resolve+wrap
-  // (cmd.exe /c) instead of enabling a shell. This matters even more here
-  // than at other call sites: the codex branch of buildCliVisionInvocation
-  // puts the free-text `prompt` directly into `args` (see above), and
-  // shell:true + an args array does NOT escape arguments (DEP0190) — any
-  // prompt containing a space would silently mis-split into extra shell
-  // tokens, corrupting or shell-injecting the invocation. The cmd.exe
-  // wrapper instead relies on Node's own correct non-shell argv escaping,
-  // which DOES preserve spaces within each arg as a single token. Resolved
-  // against `childEnv` so a provider-configured PATH override is honored.
-  // `resolveCliSpawn` also applies a credential-bootstrap wrap
-  // (credentialBootstrap.js) when configured — applied AFTER prepareCliPrompt
-  // (above), which still keys prompt-delivery convention off the harness's
-  // own command, not the bootstrap CLI's.
+  // npm-installed CLI providers are .cmd/.bat shims on Windows; resolve+wrap (cmd.exe /c)
+  // instead of enabling a shell. Critical here: the codex branch puts the free-text
+  // `prompt` directly into `args`, and shell:true + an args array does NOT escape
+  // arguments (DEP0190), so a prompt with spaces would mis-split or shell-inject. The
+  // cmd.exe wrapper relies on Node's non-shell argv escaping. Resolved against `childEnv`
+  // so a provider PATH override is honored. `resolveCliSpawn` also applies the
+  // credential-bootstrap wrap (credentialBootstrap.js), AFTER prepareCliPrompt, which
+  // keys prompt-delivery off the harness's own command, not the bootstrap CLI's.
   const { command: spawnCommand, args: spawnArgs, wrapped } = resolveCliSpawn(provider, command, deliveredArgs, childEnv);
-  // A bootstrap-wrapped child is the WRAPPER supervising the harness, so both
-  // kills below must signal the whole process group (#7496). False — and so
-  // byte-identical to today — for every unwrapped provider.
+  // A bootstrap-wrapped child is the WRAPPER supervising the harness, so both kills below
+  // must signal the whole process group. False for every unwrapped provider.
   const processGroup = needsProcessGroup(wrapped);
   if (beforeExecute) await beforeExecute();
 
@@ -262,17 +236,15 @@ async function runCliVisionSpawn({ provider, model, invocation, timeout, spawnIm
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: processGroup,
     });
-    // Remember the detached group so the graceful-shutdown sweep can reach it:
-    // detaching moved this child out of the server's own process group, and a
-    // shutdown driven by a signal to THAT group would otherwise orphan it (#7496).
+    // Remember the detached group so the graceful-shutdown sweep can reach it: detaching
+    // moved this child out of the server's process group and would otherwise orphan it.
     trackDetachedGroup(child, processGroup);
     let out = '';
     let err = '';
     let killTimer = null;
-    // On timeout, SIGTERM the child AND reject now — don't wait on `close`. A
-    // wedged CLI that ignores SIGTERM would otherwise never emit `close`, so
-    // the promise would hang forever and the temp dir (cleaned in `finally`)
-    // would leak. Escalate to SIGKILL on a short grace timer.
+    // On timeout, SIGTERM the child AND reject now rather than wait on `close`: a wedged
+    // CLI that ignores SIGTERM never emits `close`, hanging the promise and leaking the
+    // temp dir (cleaned in `finally`). Escalate to SIGKILL on a short grace timer.
     const timer = timeout > 0 ? setTimeout(() => {
       if (!child.killed) killProcessTree(child, 'SIGTERM', { processGroup });
       killTimer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) killProcessTree(child, 'SIGKILL', { processGroup }); }, 5000);
@@ -287,21 +259,17 @@ async function runCliVisionSpawn({ provider, model, invocation, timeout, spawnIm
     child.stderr?.on('data', (d) => { err += d.toString(); });
     child.on('close', (code) => {
       clearTimers();
-      // `codex exec` prints the whole session transcript (banner, echoed
-      // prompt, tool sections, `tokens used` footer) to stdout — carve out
-      // the assistant reply so captioning doesn't persist the transcript as
-      // the caption. Newer Codex emits the final reply AFTER the `tokens used`
-      // footer (extractCodexAssistantTail), older versions before it
-      // (extractCodexAssistant); try tail first, then the legacy extractor,
-      // both no-ops for non-codex output (tail → null, legacy → input).
+      // `codex exec` prints the whole session transcript to stdout; carve out the
+      // assistant reply so captioning doesn't persist the transcript. Newer Codex emits
+      // the reply AFTER the `tokens used` footer (extractCodexAssistantTail), older ones
+      // before it (extractCodexAssistant); try tail first, both no-ops for non-codex.
       if (code === 0) return resolve((extractCodexAssistantTail(out) ?? extractCodexAssistant(out)).trim());
       const tail = err.trim().split('\n').slice(-4).join('\n');
       reject(new Error(`${command} vision call exited ${code}${tail ? `: ${tail}` : ''}`));
     });
 
-    // Guard the pipe before writing — a vision CLI that exits before reading
-    // stdin emits EPIPE, and an unlistened stream 'error' out here crashes the
-    // server rather than rejecting this promise. See guardChildStdin.
+    // Guard the pipe before writing: a CLI that exits before reading stdin emits EPIPE,
+    // and an unlistened stream 'error' crashes the server. See guardChildStdin.
     guardChildStdin(child);
 
     // When grok is delivered via a Windows temp file the prompt is already on

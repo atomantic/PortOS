@@ -2,28 +2,23 @@
  * Measured local-model assessments — the durable store and the environment the
  * measurements are only valid for.
  *
- * Split out of `localModelAssessments.js` so the READ side has no path to a
- * provider. Two reasons that matters:
+ * Split out of `localModelAssessments.js` so the READ side has no path to a provider:
  *
- *   1. **AI Provider Usage Policy** (root AGENTS.md). Everything here touches
- *      disk (plus, on the run path, one cheap version probe). Nothing in this
- *      file can reach an LLM, so importing it from a status/catalog read is safe
- *      by construction rather than by review.
- *   2. **No import cycle.** `localModelAssessments.js` imports `localLlm.js`
- *      (for the installed-model list), so `localLlm.js` could not import the
- *      store back from there. It imports this module instead.
+ *   1. **AI Provider Usage Policy** (root AGENTS.md). Everything here touches disk (plus,
+ *      on the run path, one cheap version probe); nothing can reach an LLM, so a
+ *      status/catalog read importing it is safe by construction.
+ *   2. **No import cycle.** `localModelAssessments.js` imports `localLlm.js`, so
+ *      `localLlm.js` imports this module instead.
  *
  * Storage: `file-primary` (`data/local-llm/assessments.json`) — machine-local, never
- * federated: an assessment describes THIS machine's hardware (an 8 GB laptop must
- * not inherit a 128 GB box's "fits"). One capped record per model, no sync cursor
- * or tombstone; backed up because a run costs minutes of local compute.
+ * federated: an assessment describes THIS machine's hardware. One capped record per
+ * model, no sync cursor or tombstone; backed up because a run costs minutes of compute.
  *
  * ## Privacy
  *
- * The recorded environment is deliberately coarse — platform, arch, CPU count,
- * total/available memory, backend version. It never captures a hostname, a
- * username, a path, or any other machine identity, because assessments are
- * user-visible and end up in bug reports.
+ * The recorded environment is coarse — platform, arch, CPU count, total/available memory,
+ * backend version. Never a hostname, username, path, or other machine identity, because
+ * assessments are user-visible and end up in bug reports.
  */
 
 import { join } from 'path';
@@ -37,9 +32,8 @@ import { compareEnvironments, describeStaleness, measuredFitVerdict } from '../l
 import { ASSESSABLE_RUNTIMES } from '../lib/localProviderRuntime.js';
 import { getVersion as getOllamaVersion } from './ollamaManager.js';
 
-// Resolved lazily, not at import time: `PATHS.data` is patched by suites that
-// re-root the data dir, and a module-level `join()` would capture (or crash on)
-// whatever the value happened to be the moment this module was first imported.
+// Resolved lazily: `PATHS.data` is patched by suites that re-root the data dir, and a
+// module-level `join()` would capture the value at first import.
 const assessmentsDir = () => join(PATHS.data, 'local-llm');
 const assessmentsFile = () => join(assessmentsDir(), 'assessments.json');
 
@@ -52,9 +46,8 @@ const GB = 2 ** 30;
 // ---- environment ------------------------------------------------------------
 
 /**
- * The machine facts that are free to read: no subprocess, no network. Used on
- * every READ path (catalog badges, status) to decide whether a stored
- * measurement still describes this machine.
+ * The machine facts that are free to read (no subprocess, no network). Used on every READ
+ * path to decide whether a stored measurement still describes this machine.
  */
 export function captureDurableEnvironment() {
   return {
@@ -66,20 +59,19 @@ export function captureDurableEnvironment() {
 }
 
 /**
- * Coarse description of the machine a measurement was taken on. Deliberately
- * carries NO machine identity (see the privacy note at the top of this file).
+ * Coarse description of the machine a measurement was taken on, with NO machine identity
+ * (see the privacy note above).
  *
- * Costs a `vm_stat` subprocess (macOS) and, for Ollama, one loopback HTTP GET —
- * so this is the RUN-path capture. Read paths use `captureDurableEnvironment()`
- * plus, where they can afford it, `captureLiveEnvironments()`.
+ * Costs a `vm_stat` subprocess (macOS) and, for Ollama, one loopback HTTP GET, so this is
+ * the RUN-path capture. Read paths use `captureDurableEnvironment()` plus, where affordable,
+ * `captureLiveEnvironments()`.
  *
  * @param {{ backend?: string }} [options]
  */
 export async function captureEnvironment({ backend } = {}) {
   const totalGb = os.totalmem() / GB;
-  // `null` (not `0`) when the probe fails — an unknown budget must not read as
-  // "no memory available", which would make every model look like it fits
-  // nothing.
+  // `null` (not `0`) when the probe fails: an unknown budget must not read as "no memory
+  // available", which would make every model look like it fits nothing.
   const availableGb = await getAvailableMemoryGb().catch(() => null);
   return {
     ...captureDurableEnvironment(),
@@ -90,22 +82,17 @@ export async function captureEnvironment({ backend } = {}) {
     memoryBudgetGb: Number.isFinite(availableGb)
       ? Number(Math.min(totalGb, availableGb).toFixed(1))
       : null,
-    // `null` = not recorded, which is the honest answer for LM Studio (it
-    // exposes no version endpoint) and for a stopped Ollama. It must never
-    // default to a string, or a later comparison would read a fabricated
-    // "unchanged".
+    // `null` = not recorded (LM Studio exposes no version endpoint; Ollama may be stopped). Never
+    // default to a string, or a later comparison would read a fabricated "unchanged".
     backendVersion: backend === 'ollama' ? await getOllamaVersion().catch(() => null) : null,
   };
 }
 
-// A backend UPDATE is one of the things that invalidates a measurement, so the
-// read paths have to see the live version too — but the catalog path runs on
-// every debounced keystroke, and an unconditional probe there would be one
-// loopback GET per keystroke. Cache it briefly instead.
+// A backend UPDATE invalidates a measurement, so read paths need the live version, but the
+// catalog path runs on every debounced keystroke; cache the probe briefly.
 //
-// `fetched` is the sentinel that keeps "never probed" distinct from "probed and
-// Ollama is down" (a legitimate `null`); without it a down backend would be
-// re-probed on every single call.
+// `fetched` keeps "never probed" distinct from "probed and Ollama is down" (a legitimate
+// `null`), so a down backend is not re-probed on every call.
 const VERSION_CACHE_MS = 60000;
 let versionCache = { value: null, at: 0, fetched: false };
 
@@ -126,9 +113,9 @@ export function __resetBackendVersionCache() {
 }
 
 /**
- * Live environment for a STALENESS comparison, including the backend version.
- * Costs one loopback GET for Ollama, so it belongs on paths that already talk to
- * the backend (the assessments report) — not on the catalog badge path.
+ * Live environment for a STALENESS comparison, including the backend version. Costs one
+ * loopback GET for Ollama, so it belongs on paths that already talk to the backend, not the
+ * catalog badge path.
  *
  * @param {{ backends?: string[] }} [options]
  * @returns {Promise<Record<string, object>>} keyed by backend
@@ -147,10 +134,9 @@ export async function captureLiveEnvironments({ backends = ASSESSABLE_RUNTIMES }
 /**
  * Identity of one stored measurement.
  *
- * `tuningKey` is the stable signature from `lib/localModelTuning.js`. An UNTUNED
- * measurement passes `''` and keys exactly as it did before tuning existed — so
- * every record already on disk keeps resolving with no migration, and a tuned
- * run of the same model lands beside it instead of overwriting it.
+ * `tuningKey` is the stable signature from `lib/localModelTuning.js`. An UNTUNED measurement
+ * passes `''`, so records stored before tuning existed keep resolving without a migration and
+ * a tuned run of the same model lands beside it.
  */
 export const assessmentKey = (backend, modelId, tuningKey = '') =>
   (tuningKey ? `${backend}:${modelId}@${tuningKey}` : `${backend}:${modelId}`);
@@ -158,26 +144,21 @@ export const assessmentKey = (backend, modelId, tuningKey = '') =>
 /** The key of a stored record, from whichever fields it carries. */
 export const keyOfAssessment = (a) => assessmentKey(a?.backend, a?.modelId, a?.tuningKey || '');
 
-// Move an unparseable store aside so a fresh one can be written without losing
-// whatever the old file held. Best-effort: if the rename fails there is nothing
-// further to preserve, and refusing the write outright would leave assessments
-// permanently unusable.
+// Move an unparseable store aside so a fresh one can be written without losing the old
+// contents. Best-effort: refusing the write would leave assessments permanently unusable.
 async function quarantineStore(reason) {
   const parked = `${assessmentsFile()}.corrupt-${Date.now()}`;
   const moved = await rename(assessmentsFile(), parked).then(() => true).catch(() => false);
   console.error(`❌ Local LLM: ${reason} — ${moved ? `parked the old file as ${parked.split('/').pop()}` : 'could not park the old file'}`);
 }
 
-// One tail for the whole file: save and delete are read-modify-write cycles over
-// the same JSON document, so a delete overlapping a run's save would otherwise
-// persist whichever pre-image it read.
+// One tail for the whole file: save and delete are read-modify-write cycles over the same
+// document, so a delete overlapping a save would otherwise persist its stale pre-image.
 const queueWrite = createFileWriteQueue();
 
 /**
- * 503 for a store whose bytes could not be read (EACCES / EIO / ...). Unlike a
- * malformed file this is not provably corrupt — it may be perfectly good — so a
- * writer must refuse rather than park or replace it. Shared with the capability
- * store.
+ * 503 for a store whose bytes could not be read (EACCES / EIO / ...). Not provably corrupt,
+ * so a writer must refuse rather than park or replace it. Shared with the capability store.
  */
 export const unreadableStoreError = (label) =>
   new ServerError(`${label} could not be read from disk; refusing to overwrite it`, { status: 503, code: 'UNREADABLE_STORE' });
@@ -202,12 +183,11 @@ export async function loadStore() {
 }
 
 /**
- * Read the persisted assessments. Disk only — never calls a provider, so this is
- * safe from boot, a poll, or any read path.
+ * Read the persisted assessments. Disk only — never calls a provider, so it is safe from
+ * boot, a poll, or any read path.
  *
- * @returns {Promise<Array<object>>} `[]` means "no assessments recorded", which
- *   is a real, measured-empty answer — distinct from a read failure, which is
- *   surfaced by `loadStore().readError`.
+ * @returns {Promise<Array<object>>} `[]` means measured-empty, distinct from a read failure,
+ *   which is surfaced by `loadStore().readError`.
  */
 export async function loadAssessments() {
   return (await loadStore()).assessments;
@@ -216,18 +196,14 @@ export async function loadAssessments() {
 export const saveAssessment = (assessment) => queueWrite(async () => {
   const { assessments, readError, unreadable } = await loadStore();
   if (unreadable) throw unreadableStoreError('Local model assessments');
-  // An unreadable store reports zero assessments, and writing on top of that
-  // would replace every prior measurement with this one record — a read failure
-  // silently destroying data the user spent minutes of compute on. Quarantine
-  // the unreadable file instead: nothing is lost, and the feature keeps working
-  // rather than wedging on a file the user has no way to repair from the UI.
+  // An unreadable store reports zero assessments; writing on top of it would silently replace
+  // every prior measurement. Quarantine the file instead so nothing is lost and the feature
+  // keeps working.
   if (readError) await quarantineStore(readError);
   const key = keyOfAssessment(assessment);
-  // One record per (backend, model, TUNING): the newest measurement supersedes
-  // the old one for that exact configuration. History within one tuning is not
-  // kept — a stale reading from a different memory state is worse than no
-  // reading, and the run is cheap to repeat. Two DIFFERENT tunings are two
-  // different answers to two different questions, so they both survive.
+  // One record per (backend, model, TUNING): the newest supersedes the old for that exact
+  // configuration (a stale reading from a different memory state is worse than none). Different
+  // tunings answer different questions, so both survive.
   const next = assessments.filter((a) => keyOfAssessment(a) !== key);
   next.push(assessment);
   await ensureDir(assessmentsDir());
@@ -236,8 +212,7 @@ export const saveAssessment = (assessment) => queueWrite(async () => {
 });
 
 /**
- * Drop one recorded assessment. Returns whether a record was actually removed,
- * so the caller can 404 rather than reporting a phantom success.
+ * Drop one recorded assessment. Returns whether a record was removed so the caller can 404.
  */
 export const deleteAssessment = (backend, modelId, tuningKey = '') => queueWrite(async () => {
   const { assessments, readError, unreadable } = await loadStore();
@@ -257,8 +232,8 @@ export const deleteAssessment = (backend, modelId, tuningKey = '') => queueWrite
 // ---- measured evidence for the ESTIMATE-driven surfaces ---------------------
 
 /**
- * Annotate one assessment with how well its recorded environment still matches
- * the machine as it is now.
+ * Annotate one assessment with how well its recorded environment still matches the machine
+ * as it is now.
  *
  * @param {object} assessment
  * @param {object|null} liveEnvironment
@@ -272,12 +247,11 @@ export function withStaleness(assessment, liveEnvironment) {
 }
 
 /**
- * Compact measured-fit records the catalog badge and the editorial
- * recommendation fold in, keyed by model id for one backend.
+ * Compact measured-fit records the catalog badge and editorial recommendation fold in, keyed
+ * by model id for one backend.
  *
- * Disk only apart from a 60s-cached backend-version probe: the memory/CPU facts
- * are free to read, and the version is what catches a backend update, which is
- * just as stale-making as a RAM change.
+ * Disk only apart from a 60s-cached backend-version probe (a backend update is as stale-making
+ * as a RAM change).
  *
  * @param {string} backend
  * @returns {Promise<Record<string, {fit:string|null, verdict:string, assessedAt:string|null, stale:boolean, staleReason:string|null, meanCharsPerSecond:number|null, residentGb:number|null}>>}
@@ -286,11 +260,8 @@ export async function getMeasuredFits(backend) {
   const { assessments } = await loadStore();
   const live = { ...captureDurableEnvironment(), backendVersion: await liveBackendVersion(backend) };
   const out = {};
-  // A model can now hold several measurements (one per tuning). The badge has
-  // room for ONE, so the newest wins: it describes the configuration the user
-  // most recently cared about, and every tuning is visible in full on the
-  // Performance page. Records with no timestamp sort last rather than
-  // masquerading as the newest.
+  // A model can hold several measurements (one per tuning); the badge shows the newest (every
+  // tuning is visible on the Performance page). Records with no timestamp sort last.
   const newestFirst = [...assessments].sort(
     (a, b) => String(b?.assessedAt || '').localeCompare(String(a?.assessedAt || ''))
   );
@@ -310,15 +281,12 @@ export async function getMeasuredFits(backend) {
         ? assessment.performance.meanCharsPerSecond
         : null,
       residentGb: Number.isFinite(assessment.residentGb) ? assessment.residentGb : null,
-      // LM Studio model ids are repo-level and carry no quant, so the quant the
-      // measurement actually ran has to travel separately or a Q4 reading would
-      // decorate every quant of the repo. `null` = the record predates this
-      // field (or the backend reported none), and a consumer must then decline
-      // to match a quantized variant rather than guess.
+      // LM Studio model ids are repo-level with no quant, so the measured quant travels separately
+      // or a Q4 reading would decorate every quant. `null` = unrecorded; a consumer must decline to
+      // match a quantized variant rather than guess.
       quantization: assessment.quantization ?? null,
-      // Which launch configuration produced this reading. `null` = the record
-      // predates tuning (or ran on backend defaults), which is a real answer —
-      // not an unknown.
+      // Which launch configuration produced this reading. `null` = backend defaults/untuned, a
+      // real answer, not unknown.
       tuningLabel: assessment.tuningLabel ?? null,
     };
   }

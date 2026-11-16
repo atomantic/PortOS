@@ -1,21 +1,11 @@
 /**
- * Image-to-3D — pluggable target registry.
+ * Image-to-3D — pluggable target registry: the source of truth for selectable image→3D "processing targets".
+ * Adding a target is a registration here, not a rewrite of dispatch/install/UI (cf. `imageGen/modes.js`).
  *
- * Single source of truth for the selectable image→3D "processing targets"
- * (TRELLIS.2 today; other models later). Adding a target is a registration
- * here, not a rewrite of the dispatch/install/UI — mirroring the role
- * `imageGen/modes.js` plays for the 2D image backends.
- *
- * This module is intentionally dependency-light: the registry is a set of pure
- * descriptors, and the resolver functions are pure — they take the host's
- * capabilities as an injected argument rather than probing hardware themselves.
- * Only `detectHostCapabilities()` touches the real machine, so it's the one
- * impure boundary (mirroring `platform.js`'s "detect at the route boundary and
- * pass into pure services" contract) — and the only async export here, because
- * sizing an NVIDIA card means shelling to `nvidia-smi`. A target's installer/runner is
- * wired separately, in `adapters.js` — keeping runner imports out of this file
- * is what lets it stay a pure, no-side-effect registry that boot and tests can
- * import for free (#3080).
+ * Dependency-light: descriptors are pure and the resolvers take host capabilities as an injected argument.
+ * `detectHostCapabilities()` is the one impure (and async, since sizing an NVIDIA card shells to `nvidia-smi`)
+ * boundary. A target's installer/runner is wired in `adapters.js`; keeping runner imports out of this file lets
+ * boot and tests import the registry for free.
  */
 
 import os from 'os';
@@ -23,9 +13,8 @@ import { isAppleSilicon } from '../../lib/platform.js';
 import { getCudaCapability } from '../../lib/cudaCapability.js';
 
 /**
- * How a target's inference actually runs. A target declares exactly one lane;
- * the lane decides which hardware gate `unavailableReason` applies and (later)
- * which installer/runner the service dispatches to.
+ * How a target's inference runs. A target declares exactly one lane; the lane decides which hardware gate
+ * `unavailableReason` applies and which installer/runner the service dispatches to.
  */
 export const EXECUTION_LANE = Object.freeze({
   LOCAL_MPS: 'local-mps', // PyTorch MPS on Apple Silicon (on-device, private)
@@ -43,26 +32,19 @@ export const OUTPUT_KIND = Object.freeze({
 export const OUTPUT_KINDS = Object.freeze(Object.values(OUTPUT_KIND));
 
 /**
- * The registry. Each entry is a frozen, pure descriptor — no imported runners,
- * no side effects — so a new model is one object added here.
+ * The registry. Each entry is a frozen, pure descriptor (no imported runners), so a new model is one object here.
  *
- * `requires` states the hardware floor for the target's declared lane; the pure
- * resolvers below read it. A target's installer/runner is wired in `adapters.js`,
- * keyed by this registry's `id` (not imported here — see the file header).
+ * `requires` states the hardware floor for the target's lane; the pure resolvers below read it. Runners are wired
+ * in `adapters.js`, keyed by `id`.
  *
- * Beyond `id`/`label`/`description`/`executionLane`/`outputKind`/`requires`, a
- * descriptor carries:
- *  - `installNotes` — prose for the shared install modal. **Required for a target with
- *    an install step**, because that modal is shared by every target and has no
- *    per-target copy of its own; `registry.test.js` enforces it.
- *  - `installBlockedReason` — why Install and Repair are unavailable. Existing
- *    runtimes can still render if they meet the host requirements.
- *  - `gatedRepos` — Hugging Face repos whose terms the user must accept. Omit when the
- *    target pulls only ungated weights; the auth-failure help reads it.
- *  - `supportsRenderOptions` — per-run knobs the target's runner does NOT honor, e.g.
- *    `{ steps: false }`. Absent means all of them are honored. This is what stops the
- *    UI offering a control that does nothing and stops the run ledger recording a
- *    value the subprocess never received.
+ * Beyond `id`/`label`/`description`/`executionLane`/`outputKind`/`requires`, a descriptor carries:
+ *  - `installNotes` — prose for the shared install modal. **Required for a target with an install step**, since
+ *    the modal has no per-target copy; `registry.test.js` enforces it.
+ *  - `installBlockedReason` — why Install and Repair are unavailable. Existing runtimes can still render if they
+ *    meet the host requirements.
+ *  - `gatedRepos` — Hugging Face repos whose terms the user must accept; omit for ungated weights.
+ *  - `supportsRenderOptions` — per-run knobs the runner does NOT honor, e.g. `{ steps: false }`; absent means all
+ *    are honored. Stops the UI offering a dead control and the run ledger recording a value never received.
  *  - `upstream` / `port` / `weightsRepo` — links surfaced on the target card.
  */
 export const IMAGE_TO_3D_TARGETS = Object.freeze({
@@ -82,14 +64,11 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
       diskGb: 15,
       python: '3.13',
     }),
-    // Maps the shared abstract detail tiers onto this port's own `--pipeline-type`
-    // values. `auto` is absent deliberately: it means "derive from unified memory"
-    // and is resolved by the runner, not by a lookup here.
-    //
-    // The 512 tier is genuinely fast rather than merely smaller — upstream's own
-    // benchmark is ~3m20s of generate+bake on an M4 Pro, against 13–20 minutes
-    // measured for 1024_cascade on a 64 GB M5 Max. It is worth exposing as a
-    // preview tier even on a host whose memory qualifies for max.
+    // Maps the shared abstract detail tiers onto this port's `--pipeline-type` values. `auto` is absent on purpose:
+        // the runner derives it from unified memory.
+        //
+        // The 512 tier is genuinely fast (upstream benchmark ~3m20s on an M4 Pro vs 13–20 minutes for 1024_cascade on a
+        // 64 GB M5 Max), so it is worth exposing as a preview tier even where memory qualifies for max.
     detailTiers: Object.freeze({
       fast: '512',
       balanced: '1024',
@@ -103,9 +82,7 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
       'Requires macOS 26+, full Xcode 26+ with the Metal Toolchain, and Python 3.13. '
       + 'Installs the verified Torch 2.15 / Metal profile; Repair rebuilds the private '
       + 'environment and retains downloaded models.',
-    // Optional user-actionable prerequisites. The target descriptor is the source
-    // for both the API/UI notice and runner auth guidance, so new targets do not
-    // need their gated Hugging Face dependencies duplicated in either consumer.
+    // Optional user-actionable prerequisites; the single source for both the API/UI notice and runner auth guidance.
     gatedRepos: Object.freeze([
       Object.freeze({
         label: 'facebook/dinov3-vitl16-pretrain-lvd1689m',
@@ -125,19 +102,15 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
       + 'locally through the community Apple Silicon MPS/Metal port.',
     executionLane: EXECUTION_LANE.LOCAL_MPS,
     outputKind: OUTPUT_KIND.GLB_MESH,
-    // The Mac port is designed for Apple Silicon and uses the same conservative
-    // 24 GB floor as the existing TRELLIS.2 MPS lane. Its 1024 cascade is the safe
-    // PortOS default; the native port also has a slower 1536 cascade for direct use.
+    // Same conservative 24 GB floor as the TRELLIS.2 MPS lane; the 1024 cascade is the safe PortOS default.
     requires: Object.freeze({
       appleSilicon: true,
       minUnifiedMemoryGb: 24,
       diskGb: 40,
       python: '3.13',
     }),
-    // PortOS starts the fork at its 1024 cascade. The 1536 cascade is intentionally
-    // not exposed through the shared detail control yet: the community port documents
-    // runs that can take up to roughly an hour on a high-memory Mac, and the shared
-    // labels describe TRELLIS.2's different tier vocabulary.
+    // Starts at the 1024 cascade. The 1536 cascade is not exposed through the shared detail control: it can take
+        // roughly an hour on a high-memory Mac, and the shared labels describe TRELLIS.2's different tier vocabulary.
     supportsRenderOptions: Object.freeze({ detail: false, alphaMode: false, normalMap: false }),
     upstream: 'https://github.com/TencentARC/Pixal3D',
     port: 'https://github.com/pawel-mazurkiewicz/Pixal3D-mac',
@@ -148,9 +121,8 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
       + 'BVH and neighborhood-attention packages. The first render downloads the model '
       + 'weights from Hugging Face; budget roughly 40 GB of disk and several minutes per '
       + '1024-cascade render.',
-    // The Mac port uses public mirrors for its DINOv3 and MoGe dependencies. A token is
-    // still passed to the child for Hugging Face rate-limit headroom, but no terms need
-    // to be accepted in the install card.
+    // Public mirrors for the DINOv3 and MoGe dependencies; a token is still passed for rate-limit headroom but no
+        // terms need accepting.
   }),
   trellis2Cuda: Object.freeze({
     id: 'trellis2Cuda',
@@ -160,12 +132,9 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
       + 'on an NVIDIA GPU via the upstream CUDA build.',
     executionLane: EXECUTION_LANE.LOCAL_CUDA,
     outputKind: OUTPUT_KIND.GLB_MESH,
-    // Upstream's own stated floor: "An NVIDIA GPU with at least 24GB of memory is
-    // necessary", CUDA 12.4, Python 3.8+, and "currently tested only on Linux".
-    // `linuxHost` is therefore a real requirement, not conservatism — `setup.sh`
-    // builds CUDA extensions (flash-attn, nvdiffrast, nvdiffrec, cumesh) from
-    // source against a POSIX toolchain. A Windows box with a 24 GB card reaches
-    // this lane through WSL2, where PortOS reports `linuxHost: true`.
+    // Upstream's stated floor: NVIDIA GPU with 24GB+, CUDA 12.4, Python 3.8+, tested only on Linux. `linuxHost` is a
+        // real requirement: `setup.sh` builds CUDA extensions from source against a POSIX toolchain. A Windows box with
+        // a 24 GB card reaches this lane through WSL2, where PortOS reports `linuxHost: true`.
     requires: Object.freeze({
       cuda: true,
       minVramGb: 24,
@@ -173,22 +142,16 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
       diskGb: 15,
       python: '3.11',
     }),
-    // Upstream's CUDA entrypoint takes no pipeline-type override and PortOS's
-    // runner for it emits no alpha-mode flag, so both controls are declared
-    // unsupported rather than rendered as settings the runner would drop.
+    // Upstream's CUDA entrypoint takes no pipeline-type override and the runner emits no alpha-mode flag, so both
+        // controls are declared unsupported.
     supportsRenderOptions: Object.freeze({ detail: false, alphaMode: false, normalMap: false }),
     upstream: 'https://github.com/microsoft/TRELLIS.2',
     weightsRepo: 'microsoft/TRELLIS.2-4B',
     installNotes: 'The locked Linux x86_64 profile requires CUDA toolkit 12.6.3 (nvcc 12.6.85), GCC 11.3, '
       + 'compute capability 8.6 and 24 GiB VRAM. Other existing CUDA environments can still render.',
-    // Same two gated repos as the MPS port, because this lane loads the same weights:
-    // `microsoft/TRELLIS.2-4B`'s `pipeline.json` names `briaai/RMBG-2.0` as its
-    // `rembg_model`, and `Trellis2ImageTo3DPipeline.run` defaults `preprocess_image=True`
-    // — so feeding it the raw image (which is what both upstream's example and PortOS's
-    // runner do) is precisely what makes it matte the background with RMBG. An earlier
-    // revision claimed this lane "does not use RMBG-2.0" and omitted the repo, which
-    // would leave a CUDA user whose HF account hasn't accepted the RMBG terms staring at
-    // a 401 at pipeline load with nothing naming the repo to go accept.
+    // Same two gated repos as the MPS port: `TRELLIS.2-4B`'s `pipeline.json` names `briaai/RMBG-2.0` as its
+        // `rembg_model` and the pipeline defaults `preprocess_image=True`, so the raw image gets RMBG-matted. Omitting
+        // the repo would leave a user who hasn't accepted its terms at a 401 with nothing naming it.
     gatedRepos: Object.freeze([
       Object.freeze({
         label: 'facebook/dinov3-vitl16-pretrain-lvd1689m',
@@ -209,13 +172,10 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
       + 'geometry fidelity at a longer render time.',
     executionLane: EXECUTION_LANE.LOCAL_CUDA,
     outputKind: OUTPUT_KIND.GLB_MESH,
-    // The floor is DELIBERATELY lower than the TRELLIS.2 CUDA lane's 24 GB, not an
-    // oversight: upstream's merged low-VRAM mode loads one pipeline stage onto the GPU
-    // at a time, bringing peak to ~10-12 GB at 1024 (Pixal3D issue #12). Full-quality 1536
-    // wants up to ~36 GB, but that is a QUALITY tier the runner selects from the card's
-    // actual VRAM (`selectPixal3dRenderBudget`) — not an availability gate, because a
-    // 12 GB card still produces a real mesh. `diskGb` covers ~24 GB of Pixal3D weights
-    // plus its own TRELLIS.2 checkout and conda env.
+    // The floor is DELIBERATELY lower than the TRELLIS.2 CUDA lane's 24 GB: upstream's low-VRAM mode loads one
+        // pipeline stage at a time (~10-12 GB peak at 1024). Full-quality 1536 wants ~36 GB, but that is a QUALITY tier
+        // the runner picks from actual VRAM (`selectPixal3dRenderBudget`), not an availability gate. `diskGb` covers
+        // ~24 GB of weights plus its own TRELLIS.2 checkout and conda env.
     requires: Object.freeze({
       cuda: true,
       minVramGb: 12,
@@ -225,24 +185,17 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
     }),
     upstream: 'https://github.com/TencentARC/Pixal3D',
     weightsRepo: 'TencentARC/Pixal3D',
-    // Upstream's `inference.py` has no per-phase step override, so its runner validates
-    // `steps` and drops it. Declared here so the UI disables the Quality control rather
-    // than offering a setting that silently does nothing, and so the run entry records
-    // `steps: null` instead of a value that never applied.
-    // `detail: false` even though this lane DOES have 1024/1536 resolutions, and
-    // that is deliberate rather than an oversight. Its tier is chosen from the
-    // card's actual VRAM by `selectPixal3dRenderBudget` (1536 wants up to ~36 GB),
-    // so letting a request override it would hand a 12 GB card a configuration
-    // that OOMs mid-render. Exposing it needs a VRAM-safety story first — until
-    // then the honest answer is that the runner does not honor a caller's choice.
-    // `alphaMode: false` because its runner emits no such flag.
+    // Upstream's `inference.py` has no per-phase step override, so the runner drops `steps`; declared so the UI
+        // disables Quality and the run entry records `steps: null`.
+        // `detail: false` despite 1024/1536 resolutions: the tier is chosen from actual VRAM by
+        // `selectPixal3dRenderBudget`, and a caller override could hand a 12 GB card a configuration that OOMs. Exposing
+        // it needs a VRAM-safety story first.
+        // `alphaMode: false` because its runner emits no such flag.
     supportsRenderOptions: Object.freeze({ steps: false, detail: false, alphaMode: false, normalMap: false }),
     installNotes: 'Native Linux x86_64 only; CUDA 12.6.3 (nvcc 12.6.85), GCC 11.3, compute capability 8.6 and 12 GiB VRAM. NATTEN build failure uses lower-detail DINO interpolation.',
-    // No `gatedRepos`, and that is verified rather than assumed: `inference.py` loads
-    // DINOv3 from the ungated `camenduru/dinov3-vitl16-pretrain-lvd1689m` mirror and
-    // MoGe from `Ruicheng/moge-2-vitl`, so unlike `trellis2Cuda` nothing here needs
-    // terms accepted. A Hugging Face token still helps with download rate limits,
-    // which is why the adapter still resolves one.
+    // No `gatedRepos` (verified): DINOv3 loads from the ungated `camenduru/dinov3-vitl16-pretrain-lvd1689m` mirror
+        // and MoGe from `Ruicheng/moge-2-vitl`. A Hugging Face token still helps download rate limits, so the adapter
+        // still resolves one.
   }),
 });
 
@@ -280,10 +233,8 @@ export function unavailableReason(target, caps = {}) {
       return 'insufficient-memory';
     }
   } else if (t.executionLane === EXECUTION_LANE.LOCAL_CUDA) {
-    // Order matters: report the most fundamental unmet requirement first, so a Mac
-    // is told it needs an NVIDIA GPU (true and final) rather than that it needs
-    // Linux (true but beside the point), while a Windows box WITH a 24 GB card is
-    // told the one thing it can actually act on.
+    // Order matters: report the most fundamental unmet requirement first, so a Mac is told it needs an NVIDIA GPU
+        // rather than Linux, while a Windows box WITH a 24 GB card is told the one thing it can act on.
     if (!caps.cuda) {
       // "The probe couldn't run" is not "there is no GPU" — never report absent
       // hardware we failed to look for (AGENTS.md sentinel rule).
@@ -291,9 +242,8 @@ export function unavailableReason(target, caps = {}) {
     }
     if (req.linuxHost && !caps.linuxHost) return 'requires-linux-host';
     if (req.minVramGb) {
-      // A card whose VRAM column didn't parse is a known GPU of unknown size; that
-      // is a failed measurement, not a small card, so it must not read as
-      // "insufficient" (which would tell the user to buy hardware they may own).
+      // A VRAM column that didn't parse is a failed measurement, not a small card, so it must not read as
+            // "insufficient" (which would tell the user to buy hardware they may own).
       if (!Number.isFinite(caps.cudaVramGb)) return 'cuda-probe-failed';
       if (caps.cudaVramGb < req.minVramGb) return 'insufficient-vram';
     }
@@ -303,10 +253,9 @@ export function unavailableReason(target, caps = {}) {
 }
 
 /**
- * Which per-run render options a target's runner does NOT honor, or null when it honors
- * all of them. Pure. Read by the record route so a detail view (which loads a record,
- * not the target list) can disable a control the runner would silently ignore, and by
- * `beginRender` so the run ledger records what the subprocess actually received.
+ * Which per-run render options a target's runner does NOT honor, or null when it honors all of them. Pure. Read by
+ * the record route (a detail view has a record, not the target list) so it can disable a control the runner would
+ * ignore, and by `beginRender` so the run ledger records what the subprocess actually received.
  * @param {string} targetId
  * @returns {object|null}
  */
@@ -325,43 +274,29 @@ export function isTargetAvailable(target, caps = {}) {
 }
 
 /**
- * Every reason code `unavailableReason` can return, mapped to the user-facing
- * label. This is the LABEL side the codes never had: the API/SSE surfaces and
- * the client both render from here rather than each re-declaring the set, so a
- * new code is a one-line addition next to the branch that returns it.
+ * Every reason code `unavailableReason` can return, mapped to its user-facing label. API/SSE surfaces and the client
+ * render from here rather than re-declaring the set.
  *
- * MIRRORED verbatim to `client/src/lib/imageTo3dReasons.js`; the parity test
- * (`unavailableReasons.parity.test.js`) asserts the two never drift AND that
- * the key set still equals the codes `unavailableReason` actually returns — so
- * adding a code without a label fails CI instead of rendering as the generic
- * "Unsupported on this host" fallback.
+ * MIRRORED verbatim to `client/src/lib/imageTo3dReasons.js`; `unavailableReasons.parity.test.js` asserts the two
+ * never drift and that the key set equals the codes `unavailableReason` returns, so a code without a label fails CI.
  *
- * These labels are mirrored to the client, which has no registry to read, so they are
- * prose rather than interpolated values. **Only mention a GB figure when every target
- * that can produce the code shares it.** `insufficient-memory` names 24 GB because one
- * MPS target produces it; `insufficient-vram` names none, because the CUDA lanes'
- * floors have diverged (24 GB for TRELLIS.2, 12 GB for Pixal3D) and a single number
- * would be wrong for one of them. The per-target figure travels to the client on the
- * descriptor (`requires.minVramGb`) for any UI that wants to name it.
+ * Labels are prose (the client has no registry). **Only mention a GB figure when every target that can produce the
+ * code shares it.** `insufficient-memory` names 24 GB because one MPS target produces it; `insufficient-vram` names
+ * none because CUDA floors diverge (24 GB TRELLIS.2, 12 GB Pixal3D). The per-target figure travels on the
+ * descriptor (`requires.minVramGb`).
  */
 export const UNAVAILABLE_REASONS = Object.freeze({
   'unknown-target': 'Unavailable',
   'requires-apple-silicon': 'Requires an Apple Silicon Mac',
   'insufficient-memory': 'Needs 24 GB+ of unified memory',
   'requires-cuda': 'Requires an NVIDIA CUDA GPU',
-  // Shown on a Windows host that HAS a qualifying card: upstream TRELLIS.2 builds
-  // its CUDA extensions against a POSIX toolchain and is Linux-only, so WSL2 is the
-  // supported route — name it, since this blocker is the one the user can act on.
-  // Caveat this label cannot express (it is per-CODE, not per-target): WSL2 gets the
-  // TRELLIS.2 lane running, but Pixal3D has a known NAF-upsampler driver fault there
-  // (Pixal3D issue #31). That one surfaces at render time via
-  // `PIXAL3D_CUDA_NAF_DEVICE_NOT_READY`, whose help text names native Linux.
+  // Shown on a Windows host that HAS a qualifying card: upstream TRELLIS.2 builds CUDA extensions against a POSIX
+    // toolchain, so WSL2 is the supported route and this is the blocker the user can act on.
+    // Caveat this per-CODE label cannot express: Pixal3D has a known NAF-upsampler driver fault under WSL2, surfaced
+    // at render time via `PIXAL3D_CUDA_NAF_DEVICE_NOT_READY` whose help text names native Linux.
   'requires-linux-host': 'Requires a Linux host (use WSL2 on Windows)',
-  // Deliberately carries NO GB figure. It used to read "Needs a 24 GB+ NVIDIA GPU"
-  // when every CUDA target shared that floor; `pixal3dCuda` runs from 12 GB, so a
-  // single number here would be wrong for one lane or the other. The per-target
-  // requirement travels to the client on the descriptor (`requires.minVramGb`) for a
-  // UI that wants to name it.
+  // Deliberately NO GB figure: `pixal3dCuda` runs from 12 GB while TRELLIS.2 needs 24, so one number would be wrong
+    // for a lane. The per-target requirement travels on the descriptor (`requires.minVramGb`).
   'insufficient-vram': 'This NVIDIA GPU has too little VRAM',
   // The probe itself failed — say so rather than claiming the GPU isn't there.
   'cuda-probe-failed': 'Could not detect this host’s GPU',
@@ -382,16 +317,12 @@ export function unavailableReasonLabel(reason, fallback = UNAVAILABLE_REASON_FAL
 }
 
 /**
- * Reason codes meaning "this machine's hardware will never run that target" — as
- * opposed to a blocker the user can act on (install an OS in WSL2, fix a driver,
- * install the model). This is a property of the REASON, not of any one target, so it
- * is classified once here rather than restated per descriptor: every lane gets the
- * same treatment, and a new target inherits it without re-deriving the policy.
+ * Reason codes meaning "this machine's hardware will never run that target", as opposed to a blocker the user can
+ * act on. A property of the REASON, classified once here so every lane and new target inherits the policy.
  *
- * `listTargets` omits a target blocked for one of these, so a Mac isn't shown a
- * permanently-red NVIDIA card and an NVIDIA box isn't shown a permanently-red Apple
- * Silicon one. Note `cuda-probe-failed` is deliberately NOT here — "we couldn't tell"
- * is worth surfacing, and it only ever arises on a host that does have a driver.
+ * `listTargets` omits a target blocked for one of these, so a Mac isn't shown a permanently-red NVIDIA card.
+ * `cuda-probe-failed` is deliberately NOT here: "we couldn't tell" is worth surfacing and only arises on a host
+ * that has a driver.
  */
 export const UNFIXABLE_HARDWARE_REASONS = Object.freeze([
   'requires-apple-silicon',
@@ -410,9 +341,8 @@ export function isUnfixableHardwareReason(reason) {
 }
 
 /**
- * Resolve the effective target for a request. Pure — no fallback to a *different*
- * model is applied here (that's a caller policy); the requested/default target is
- * returned with an availability verdict so the caller can 400 or prompt-to-install.
+ * Resolve the effective target for a request. Pure; no fallback to a *different* model (a caller policy). The
+ * requested/default target is returned with an availability verdict so the caller can 400 or prompt-to-install.
  *
  * @param {string} [requestedId] the requested target id (falls back to defaultId).
  * @param {object} [caps] host capabilities (see `detectHostCapabilities`).
@@ -428,13 +358,10 @@ export function resolveTarget(requestedId, caps = {}, { defaultId = DEFAULT_IMAG
 }
 
 /**
- * Every registered target annotated with its availability on a host — the shape
- * the API/UI consume to render a target selector with disabled/needs-install
- * states. Pure.
+ * Every registered target annotated with its availability on a host, for the API/UI target selector. Pure.
  *
- * A target blocked by hardware this host doesn't have is omitted entirely rather
- * than listed with a permanently-red badge (see `UNFIXABLE_HARDWARE_REASONS`);
- * every other blocker still renders, so a fixable one is never silently hidden.
+ * A target blocked by hardware this host doesn't have is omitted (see `UNFIXABLE_HARDWARE_REASONS`); every other
+ * blocker still renders, so a fixable one is never hidden.
  *
  * @param {object} [caps]
  * @returns {Array<object>}
@@ -450,27 +377,18 @@ export function listTargets(caps = {}) {
 }
 
 /**
- * The one impure boundary: read this machine's capabilities. Injectable so
- * routes/tests can supply deterministic values. `unifiedMemoryGb` is rounded to
- * the nearest whole GB (physical RAM reads a hair under the marketed size, so a
- * "24 GB" Mac rounds cleanly to 24 rather than tripping the floor at 23.98);
- * `cudaVramGb` is rounded the same way, for the same reason.
+ * The one impure boundary: read this machine's capabilities. Injectable so routes/tests can supply deterministic
+ * values. `unifiedMemoryGb` is rounded to whole GB (physical RAM reads a hair under the marketed size, so a "24 GB"
+ * Mac must not trip the floor at 23.98); `cudaVramGb` is rounded the same way.
  *
- * **Async because CUDA detection is a subprocess.** Apple-Silicon and memory reads
- * are synchronous, but there is no way to size an NVIDIA card without shelling to
- * `nvidia-smi`. Rather than keep a second, sync-but-lying capability shape (which
- * would report `cuda: false` on a real CUDA box until some background warm-up
- * finished), this stays the single boundary and awaits the cached probe — cached,
- * so the per-request cost after the first call is nil. The pure resolvers above are
- * unaffected: they still take `caps` as a plain injected object.
+ * **Async because CUDA detection is a subprocess** (`nvidia-smi` is the only way to size an NVIDIA card). Awaiting
+ * the cached probe keeps this the single boundary rather than a sync shape that reports `cuda: false` on a real
+ * CUDA box until a warm-up finishes. The pure resolvers still take `caps` as a plain object.
  *
- * Pass an explicit `cuda` (and optionally `cudaVramGb`) to skip the probe entirely —
- * that is how tests and callers with pre-resolved capabilities stay deterministic.
+ * Pass an explicit `cuda` (and optionally `cudaVramGb`) to skip the probe.
  *
- * `cudaProbe` carries the probe's three-way status (`'available'` / `'absent'` /
- * `'unknown'`) so consumers can distinguish "this host has no NVIDIA GPU" from "we
- * could not find out" — `unavailableReason` uses exactly that to pick between
- * `requires-cuda` and `cuda-probe-failed`.
+ * `cudaProbe` carries the three-way status (`'available'` / `'absent'` / `'unknown'`) so `unavailableReason` can
+ * pick between `requires-cuda` and `cuda-probe-failed`.
  *
  * @param {{appleSilicon?: boolean, totalMemBytes?: number, linuxHost?: boolean,
  *          cuda?: boolean, cudaVramGb?: number|null}} [overrides]
