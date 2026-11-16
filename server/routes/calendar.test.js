@@ -353,6 +353,14 @@ describe('Calendar Routes — normalized error handling', () => {
       expect(googleAuth.handleCallback).not.toHaveBeenCalled();
     });
 
+    it('treats a malformed (repeated) code as missing and still redirects', async () => {
+      const response = await request(app).get('/api/calendar/google/oauth/callback?code=a&code=b');
+
+      expect(response.body.landed).toBe(true);
+      expect(response.body.oauthError).toBe('Missing authorization code');
+      expect(googleAuth.handleCallback).not.toHaveBeenCalled();
+    });
+
     it('redirects with oauthError when the token exchange fails', async () => {
       googleAuth.handleCallback.mockRejectedValue(new ServerError('invalid_grant', { status: 400 }));
 

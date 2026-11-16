@@ -6,6 +6,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { agentPersonalitiesListQuerySchema } from '../lib/agentValidation.js';
 import {
   validateRequest,
   agentSchema,
@@ -21,7 +22,7 @@ const router = Router();
 
 // GET / - Get all agent personalities
 router.get('/', asyncHandler(async (req, res) => {
-  const { userId } = req.query;
+  const { userId } = validateRequest(agentPersonalitiesListQuerySchema, req.query);
 
   const agents = userId
     ? await agentPersonalities.getAgentsByUser(userId)

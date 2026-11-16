@@ -338,6 +338,21 @@ export const inboxQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).optional().default(0)
 });
 
+// Legacy (non-cursor) entity list: `status` filter plus opt-in limit/offset pagination.
+export const entityLegacyListQuerySchema = z.object({
+  status: z.string().optional(),
+  limit: z.string().optional(),
+  offset: z.string().optional(),
+});
+
+export const brainDailyLogListQuerySchema = z.object({
+  limit: z.string().optional(),
+  offset: z.string().optional(),
+  includeContent: z.string().optional(),
+});
+
+export const chatgptArchiveQuerySchema = z.object({ preview: z.string().optional() });
+
 // Entity collection query schema (people, projects, ideas, admin, memories)
 export const entityQuerySchema = z.object({
   status: z.string().max(50).optional(),

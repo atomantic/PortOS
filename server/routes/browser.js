@@ -18,6 +18,7 @@ const router = express.Router();
 const NAVIGATE_SETTLE_MS = 1000;
 
 // Validation schemas
+const downloadQuerySchema = z.object({ attachment: z.string().optional() });
 // Reuses the PM2 logs bound (1..5000) but keeps this route's historical 50-line default.
 const browserLogsQuerySchema = logsQuerySchema.pick({ lines: true }).extend({
   lines: z.coerce.number().int().min(1).max(5000).default(50),
@@ -210,13 +211,14 @@ const RISKY_DOWNLOAD_EXTS = new Set(['.html', '.htm', '.svg', '.js', '.mjs', '.x
 // Inline by default so previewable types (images, PDFs, videos) open in the
 // browser; the listing UI passes ?attachment=1 + HTML5 `download` for save-to-disk.
 router.get('/downloads/:name', asyncHandler(async (req, res) => {
+  const { attachment } = validateRequest(downloadQuerySchema, req.query);
   const file = await browserService.resolveDownload(req.params.name);
   if (!file) throw new ServerError('File not found', { status: 404 });
   res.set('X-Content-Type-Options', 'nosniff');
   // Files of the same name can be replaced by a fresh Chrome download; bypass
   // any aggressive client/intermediary caching so the user always sees current.
   res.set('Cache-Control', 'no-cache, must-revalidate');
-  const forceAttachment = RISKY_DOWNLOAD_EXTS.has(file.ext) || req.query.attachment === '1';
+  const forceAttachment = RISKY_DOWNLOAD_EXTS.has(file.ext) || attachment === '1';
   if (forceAttachment) {
     // RFC 5987: ASCII-safe fallback + utf-8 form for non-ASCII names.
     const ascii = file.name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '');

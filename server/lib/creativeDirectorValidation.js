@@ -294,7 +294,13 @@ export const creativeDirectorProjectQuerySchema = z.object({
   // project that arrived from a peer may carry anything that contract accepts,
   // and such a project must still be resolvable through this batch.
   ids: csvIdsParam({ max: CREATIVE_DIRECTOR_IDS_BATCH_MAX, maxIdLength: 120 }),
+  // Opt-in pagination; value leniency stays in parsePagination.
+  limit: z.string().optional(),
+  offset: z.string().optional(),
 });
+
+// `?slim=1` strips the project detail down to its summary projection.
+export const creativeDirectorProjectSlimQuerySchema = z.object({ slim: z.string().optional() });
 
 // One scene in the treatment, written by the agent on the treatment task.
 export const creativeDirectorSceneSchema = z.object({

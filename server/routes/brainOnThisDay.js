@@ -7,12 +7,14 @@
 import { Router } from 'express';
 import { getOnThisDay } from '../services/brainOnThisDay.js';
 import { asyncHandler } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { limitQuerySchema } from '../lib/queryValidation.js';
 import { parsePagination } from '../lib/validation.js';
 
 const router = Router();
 
 router.get('/on-this-day', asyncHandler(async (req, res) => {
-  const { limit } = parsePagination(req.query, { defaultLimit: 8, maxLimit: 20 });
+  const { limit } = parsePagination(validateRequest(limitQuerySchema, req.query), { defaultLimit: 8, maxLimit: 20 });
   res.json(await getOnThisDay({ limit }));
 }));
 

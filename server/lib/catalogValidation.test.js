@@ -16,6 +16,7 @@ import {
   catalogIngredientCreateSchema,
   catalogIngredientPatchSchema,
   catalogIngredientQuerySchema,
+  catalogSyncQuerySchema,
   catalogIngredientCardsQuerySchema,
   catalogIngredientLinkSchema,
   catalogScrapCommitSchema,
@@ -731,5 +732,17 @@ describe('catalogMediaLibraryPatchSchema review', () => {
     const patch = (status) => catalogMediaLibraryPatchSchema.safeParse({ mediaKey: 'a.png', kind: 'reference', review: { status } }).success;
     expect(['unreviewed', 'good', 'bad'].map(patch)).toEqual([true, true, true]);
     expect(patch('rejected')).toBe(false);
+  });
+});
+
+describe('catalogSyncQuerySchema (#16428)', () => {
+  it('accepts a bare pull, a count cursor and the since[kind] bracket keys, and strips unknown keys', () => {
+    expect(catalogSyncQuerySchema.safeParse({}).success).toBe(true);
+    expect(catalogSyncQuerySchema.parse({ since: '12', limit: '50', extra: 'x' })).toEqual({ since: '12', limit: '50' });
+    expect(catalogSyncQuerySchema.safeParse({ 'since[scraps]': '3', since: { scraps: '3' } }).success).toBe(true);
+  });
+
+  it('rejects a repeated limit', () => {
+    expect(catalogSyncQuerySchema.safeParse({ limit: ['1', '2'] }).success).toBe(false);
   });
 });

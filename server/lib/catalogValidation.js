@@ -293,6 +293,17 @@ export const catalogIngredientCreateRouteSchema = catalogIngredientCreateSchema.
 
 // Casting / Environments / Objects story filters and New from prompt.
 const storyKind = z.enum(['storyboard', 'music-video', 'series']);
+// `?includeEmbedding=true` on the ingredient detail read; any other value keeps the embedding stripped.
+export const catalogIncludeEmbeddingQuerySchema = z.object({ includeEmbedding: z.string().optional() });
+
+// `?force=true` on a user-type delete. Unknown keys are stripped, never rejected.
+export const catalogTypeDeleteQuerySchema = z.object({ force: z.string().optional() });
+
+// Sync pull cursor. `since` is a count string or the `since[kind]=N` bracket form, which the
+// handler reconstructs itself, so only `limit` is shaped here; the `since` shapes stay lenient
+// (a malformed cursor degrades to '0' in the handler, not a 400).
+export const catalogSyncQuerySchema = z.object({ limit: z.string().optional(), since: z.unknown().optional() });
+
 export const catalogStoryListQuerySchema = z.object({ type: z.enum(['character', 'place', 'object']).optional() }).strict();
 export const catalogStoryJoinSchema = z.object({ ingredientId: z.string().trim().min(1).max(128) }).strict();
 export const catalogStoryParamsSchema = z.object({ kind: storyKind, id: z.string().trim().min(1).max(120) }).strict();

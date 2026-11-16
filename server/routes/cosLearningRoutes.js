@@ -13,7 +13,10 @@ import {
   restoreRecommendationSchema,
   generateWeeklyDigestSchema,
   parsePagination,
+  validateRequest,
 } from '../lib/validation.js';
+import { limitQuerySchema } from '../lib/queryValidation.js';
+import { cosDigestCompareQuerySchema } from '../lib/cosValidation.js';
 
 const router = Router();
 
@@ -83,7 +86,7 @@ router.get('/learning/summary', asyncHandler(async (req, res) => {
 
 // GET /api/cos/learning/insights - Get recent learning insights
 router.get('/learning/insights', asyncHandler(async (req, res) => {
-  const { limit } = parsePagination(req.query, { defaultLimit: 10, maxLimit: 500 });
+  const { limit } = parsePagination(validateRequest(limitQuerySchema, req.query), { defaultLimit: 10, maxLimit: 500 });
   const insights = await taskLearning.getRecentInsights(limit);
   res.json({
     count: insights.length,
@@ -198,7 +201,7 @@ router.get('/digest/text', asyncHandler(async (req, res) => {
 
 // GET /api/cos/digest/compare - Compare two weeks (must be before :weekId)
 router.get('/digest/compare', asyncHandler(async (req, res) => {
-  const { week1, week2 } = req.query;
+  const { week1, week2 } = validateRequest(cosDigestCompareQuerySchema, req.query);
 
   if (!week1 || !week2) {
     throw new ServerError('Both week1 and week2 query parameters are required', { status: 400, code: 'VALIDATION_ERROR' });

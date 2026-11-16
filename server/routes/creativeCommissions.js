@@ -21,6 +21,7 @@ import {
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import * as svc from '../services/creativeCommissions/store.js';
 
 const router = Router();
@@ -33,8 +34,9 @@ const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS);
 
 router.get('/', asyncHandler(async (req, res) => {
   const items = await svc.listCommissions();
-  if (!isPaginationRequested(req.query)) return res.json(items);
-  res.json(paginateArray(items, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  const query = validateRequest(paginationQuerySchema, req.query);
+  if (!isPaginationRequested(query)) return res.json(items);
+  res.json(paginateArray(items, query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

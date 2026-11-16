@@ -18,6 +18,20 @@ import { z } from 'zod';
 import { partialWithoutDefaults } from './zodCompat.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 
+// Query schemas for the agent routes. Unknown keys are stripped (older clients keep working).
+export const agentPersonalitiesListQuerySchema = z.object({ userId: z.string().optional() });
+export const agentToolsAccountQuerySchema = z.object({ accountId: z.string().min(1) });
+export const agentToolsPublishedQuerySchema = z.object({
+  agentId: z.string().min(1),
+  accountId: z.string().min(1),
+  days: z.string().default('7'),
+});
+export const agentToolsDraftQuerySchema = z.object({ agentId: z.string().min(1) });
+export const automationSchedulesListQuerySchema = z.object({
+  agentId: z.string().optional(),
+  accountId: z.string().optional(),
+});
+
 // =============================================================================
 // AGENT PERSONALITY SCHEMAS
 // =============================================================================

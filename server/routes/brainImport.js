@@ -21,6 +21,7 @@ import { z } from 'zod';
 import { unlink } from 'fs/promises';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
+import { chatgptArchiveQuerySchema } from '../lib/brainValidation.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { parseExport, stripPreview, importConversations, readArchivedConversation } from '../services/chatgptImport.js';
 import { importChatgptZip } from '../services/chatgptZipImport.js';
@@ -123,11 +124,12 @@ router.post('/chatgpt/zip', uploadZip, asyncHandler(async (req, res) => {
 // the Memory conversation viewer (the Memory record itself stores a truncated
 // preview; the archive holds the complete thread).
 router.get('/chatgpt/archive/:name', asyncHandler(async (req, res) => {
+  const { preview } = validateRequest(chatgptArchiveQuerySchema, req.query);
   const archived = await readArchivedConversation(req.params.name);
   if (!archived) {
     throw new ServerError('Archived conversation not found', { status: 404, code: 'NOT_FOUND' });
   }
-  res.json(req.query.preview === 'images' ? { images: markdownImages(archived.transcript) } : archived);
+  res.json(preview === 'images' ? { images: markdownImages(archived.transcript) } : archived);
 }));
 
 export default router;

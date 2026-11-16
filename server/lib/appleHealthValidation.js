@@ -55,6 +55,9 @@ export const healthIngestSchema = z.object({
 });
 
 // Repeated keys (?metrics=a&metrics=b) parse to an array; z.string() refuses them with a 400.
+// `from`/`to` pass straight to the day-file readers, which treat absent and unparsable bounds leniently.
+export const appleHealthRangeQuerySchema = z.object({ from: z.string().optional(), to: z.string().optional() });
+
 export const appleHealthLatestMetricsQuerySchema = z.object({
   metrics: z.string().max(2000).optional()
 });

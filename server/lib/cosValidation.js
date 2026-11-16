@@ -207,6 +207,13 @@ const taskStatusInputSchema = z.preprocess(
   z.enum(TASK_STATUS_VALUES).optional()
 );
 
+// Query schemas for the CoS insight/learning/workflow reads. Counts stay strings: each handler
+// clamps or defaults them itself, so a bad number degrades exactly as before; unknown keys are stripped.
+export const cosActivityCalendarQuerySchema = z.object({ weeks: z.string().optional() });
+export const cosDecisionsQuerySchema = z.object({ limit: z.string().optional(), type: z.string().optional() });
+export const cosDigestCompareQuerySchema = z.object({ week1: z.string().optional(), week2: z.string().optional() });
+export const cosWorkflowQuerySchema = z.object({ hours: z.string().optional() });
+
 export const cosTaskTypeSchema = z.enum(['user', 'internal']);
 export const cosTaskDeleteQuerySchema = z.object({ type: cosTaskTypeSchema.default('user') });
 
