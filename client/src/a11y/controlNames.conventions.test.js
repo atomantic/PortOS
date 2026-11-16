@@ -21,6 +21,7 @@ describe('a11y conventions: controlNames', () => {
     const offenders = [];
     for (const file of trackedJsxFiles()) {
       const src = rawSourceOf(file);
+      if (!src.includes('<button')) continue;
       for (const node of forEachOpeningTag(src, 'button')) {
         if (!isUnnamedIconOnlyButton(src, node)) continue;
         offenders.push(`${file}:${lineOf(src, node.index)}`);
@@ -40,6 +41,7 @@ describe('a11y conventions: controlNames', () => {
     for (const file of trackedJsxFiles()) {
       const src = rawSourceOf(file);
       for (const tagName of ['button', 'a', 'Link']) {
+        if (!src.includes(`<${tagName}`)) continue;
         for (const node of forEachOpeningTag(src, tagName)) {
           if (!isResponsiveHiddenOnlyLabelControl(src, node)) continue;
           offenders.push(`${file}:${lineOf(src, node.index)}`);
@@ -96,6 +98,9 @@ describe('a11y conventions: controlNames', () => {
     // role + tabIndex + onKeyDown out in full.
     const offenders = [];
     for (const file of trackedJsxFiles()) {
+      // Masking only removes text, so no `onClick` in the raw source means none
+      // in the masked source; skip the per-character comment lexer.
+      if (!rawSourceOf(file).includes('onClick')) continue;
       const src = maskedSourceOf(file);
       for (const { name, index } of mouseOnlyClickables(src)) {
         offenders.push(`${file}:${lineOf(src, index)} <${name}>`);
