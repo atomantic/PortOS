@@ -17,7 +17,7 @@ import storyRoutes from './musicVideoStory.js';
 import festivalPacketRoutes from './musicVideoFestivalPacket.js';
 import researchSeedRoutes from './musicVideoResearchSeed.js';
 import blenderRoutes from './musicVideoBlender.js';
-import { musicVideoColdOpenAudioSchema, musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoColdOpenAudioSchema, musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoProjectPatchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema } from '../lib/musicVideoValidation.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, musicVideoAudioTimingPreviewSchema, musicVideoAudioTimingApplySchema, musicVideoProjectCreateSchema, musicVideoProjectCloneSchema, musicVideoProjectUpdateSchema, musicVideoPacingRecutSchema, musicVideoPlanRequestSchema, musicVideoManualAnalysisSchema, musicVideoSectionsEditSchema, musicVideoTranscribeMidiRequestSchema, musicVideoLyricsImportSchema, musicVideoLyricsImportTrackSchema, musicVideoLyricsAlignSchema, musicVideoLyricsVerifySchema, musicVideoSongPrepareSchema, musicVideoTakeInputSchema, musicVideoHandoffImportSchema, musicVideoTreatmentUpdateSchema, musicVideoTreatmentCompileSchema, musicVideoTreatmentApplySchema, musicVideoTreatmentSyncShotSheetSchema, musicVideoSequenceRenderSchema, musicVideoSequenceTakeSchema, musicVideoTreatmentProofReviewSchema, musicVideoCodeGenerateSchema, isPaginationRequested, parsePagination } from '../lib/validation.js';
@@ -195,8 +195,9 @@ router.patch('/:id', asyncHandler(async (req, res) => {
       }
     }
   }
-  const updated = await updateProject(req.params.id, data);
-  res.json(updated);
+  // `?edit=1`: a tab that applies board edits answers `{ edit }` where the patch allows it.
+  const answerEdit = validateRequest(musicVideoProjectPatchQuerySchema, req.query).edit === '1';
+  res.json(await (answerEdit ? updateProject(req.params.id, data, { edit: true }) : updateProject(req.params.id, data)));
 }));
 
 // Names references saved before catalog naming existed; answers only the labels it filled.

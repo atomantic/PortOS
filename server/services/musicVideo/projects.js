@@ -300,7 +300,12 @@ export async function cloneProject(id, options = {}) {
   return withCatalogDescriptions(project);
 }
 
-export async function updateProject(id, patch) {
+/**
+ * Merge a project patch. With `{ edit: true }` a patch that touches neither the cast, the references
+ * nor a style snapshot answers `{ edit }` (editResult.js) instead of the project, so the editing tab
+ * patches its board; any other patch still answers the project, which the caller reloads from.
+ */
+export async function updateProject(id, patch, { edit: answerEdit = false } = {}) {
   const backend = await selectBackend();
   const seeded = await seedTrackMetadataOnUpdate(id, patch);
   const { catalogDescriptionBases = [], ...projectPatch } = seeded;
@@ -311,6 +316,12 @@ export async function updateProject(id, patch) {
   // A reference added from the gallery or a mood board takes its catalog record's name.
   // Linking the cast alone leaves approvals current, so naming then must not stale them.
   const referencesChanged = resolved?.visualSpec?.references !== undefined;
+  if (answerEdit && !needsSnapshot && !castChanged && !referencesChanged) {
+    const { applyProjectPatch } = await import('./projectsLogic.js');
+    const { edit } = await editWrite(id, (current) => ({ project: applyProjectPatch(current, resolved) }),
+      { catalogDescriptionBases, includeNewLinks: true });
+    return withEditResult({}, edit);
+  }
   const nameReferences = async (saved) => (referencesChanged || castChanged
     ? (await labelProjectReferences(id, { backfill: !referencesChanged }))?.project || saved : saved);
   if (!castChanged && !Array.isArray(resolved.scenes)) {

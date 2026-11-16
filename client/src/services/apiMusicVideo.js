@@ -43,7 +43,9 @@ export const createMusicVideoProject = (data, options = {}) => request('/music-v
 export const cloneMusicVideoProject = (id, data = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/clone`, {
   method: 'POST', body: JSON.stringify(data), ...options,
 });
-export const updateMusicVideoProject = (id, patch, options = {}) => request(`/music-video/${encodeURIComponent(id)}`, {
+// `edit: true` asks for the board edit result (`{ edit }`) where the patch allows it; the reply
+// is otherwise the whole project, so check `reply.edit` before relying on either.
+export const updateMusicVideoProject = (id, patch, { edit = false, ...options } = {}) => request(`/music-video/${encodeURIComponent(id)}${edit ? '?edit=1' : ''}`, {
   method: 'PATCH', body: JSON.stringify(patch), ...options,
 });
 export const measureMusicVideoColorMatch = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/color-match/measure`, {

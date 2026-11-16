@@ -20,6 +20,7 @@ import {
   forceRerender,
   renderMVWithNav,
   installMusicVideoPageHooks,
+  editResult,
 } from '../../../test/musicVideoPageMocks.jsx';
 import { screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import toast from '../../ui/Toast';
@@ -121,13 +122,14 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
     expect(line).toHaveValue('second line');
     expect(screen.getByLabelText('Lyrics to import')).toHaveValue('');
 
+    updateMusicVideoProject.mockResolvedValue({ edit: editResult([], [], { updatedAt: '2026-01-01T00:00:01.000Z', project: { lyricCues: cues } }) });
     fireEvent.change(line, { target: { value: 'second line, retold' } });
     expect(alignMusicVideoLyrics).not.toHaveBeenCalled();
     fireEvent.blur(line);
     await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(
       'mv-3',
       { lyricCues: [cues[0], { ...cues[1], text: 'second line, retold' }] },
-      { silent: true },
+      { silent: true, edit: true },
     ));
   });
 

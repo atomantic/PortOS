@@ -224,7 +224,7 @@ export default function useProduceStageWiring({
       takes,
       revisions,
       canContinueShot,
-      saveCompositionGrade: (patch) => saveProjectFields(patch, { applyComposition: true }),
+      saveCompositionGrade: (patch) => saveProjectFields(patch),
       applyShotReferenceRepair: ({ sceneId, patch, updatedAt }) => patchProject(selected.id, (project) => {
         if (project.updatedAt > updatedAt) return {};
         const unsaved = unsavedSceneFields.current.get(sceneId);
