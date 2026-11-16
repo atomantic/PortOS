@@ -1068,10 +1068,8 @@ The complete server, client, DB, lint, build, and smoke suite runs:
 - as a reusable workflow called by a release whose tree has no verifiable gate.
 
 A merge commit on `main` is tested because a PR gate only proves the PR
-against the base it was built on: in a 300-run sample 16 of 36 red PR runs were
-inherited from a broken `main` (two PRs that were each green merged into a red
-result; one direct push skipped the gate). There is no merge coordinator (#12247
-and #14185 built and removed one).
+against the base it was built on, so two green PRs can merge into a red result.
+There is no merge coordinator.
 
 `.github/workflows/main-health.yml` consumes every finished push or scheduled run
 on `main` (`workflow_run`) and runs `scripts/ci-nightly-report.js`:
