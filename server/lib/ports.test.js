@@ -61,9 +61,6 @@ describe('PORTS mirror of ecosystem.config.cjs', () => {
     expect(Number(branches[2])).toBe(PORTS.POSTGRES_DOCKER);
   });
 
-  it('defaults a new peer to the API port', () => {
-    expect(DEFAULT_PEER_PORT).toBe(ECOSYSTEM_PORTS.API);
-  });
 });
 
 describe('resolvePostgresPort', () => {

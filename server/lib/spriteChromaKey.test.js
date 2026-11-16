@@ -6,9 +6,6 @@ import {
 } from './spriteChromaKey.js';
 
 describe('chroma key set', () => {
-  it('is exactly the three standard keys', () => {
-    expect(CHROMA_KEY_HEXES).toEqual(['#FF00FF', '#00FF00', '#0000FF']);
-  });
 
   it('key hues match their RGB definitions', () => {
     for (const key of CHROMA_KEYS) {

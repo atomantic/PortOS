@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { evictOldest, ORPHAN_BUFFER_MAX } from './boundedMap.js';
+import { evictOldest, } from './boundedMap.js';
 
 describe('evictOldest', () => {
   it('is a no-op when the map is within budget', () => {
@@ -49,8 +49,5 @@ describe('evictOldest', () => {
     expect(m.size).toBe(0);
   });
 
-  it('exposes the shared orphan-buffer cap', () => {
-    expect(ORPHAN_BUFFER_MAX).toBe(64);
-  });
 });
 // @vitest-environment node

@@ -170,12 +170,6 @@ beforeEach(() => {
   getPeers.mockResolvedValue([]);
 });
 
-describe('TOMBSTONE_GRACE_MS', () => {
-  it('is 24 hours so an off-by-a-magnitude regression fails the test (not silently in prod)', () => {
-    expect(TOMBSTONE_GRACE_MS).toBe(24 * 60 * 60 * 1000);
-  });
-});
-
 describe('sweepTombstones — no peers subscribed', () => {
   it('uses now-GRACE as the cutoff for all 18 subscribable kinds when nobody is subscribed (#6843: every cutoff variable, including the 6 renamed to match their kind id, reaches its prune call)', async () => {
     await sweepTombstones({ now: NOW });

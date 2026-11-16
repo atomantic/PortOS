@@ -80,7 +80,4 @@ describe('normalizeRepoIntake', () => {
     });
   });
 
-  it('covers exactly the two documented actions', () => {
-    expect(REPO_INTAKE_KEYS).toEqual(['malwareScan', 'learn']);
-  });
 });

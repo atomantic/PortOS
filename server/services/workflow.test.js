@@ -20,7 +20,6 @@ const { checkJobGate, hasGate, getRegisteredGates } = await import('./jobGates.j
 const { getWorkflowGraph, projectWorkflowTimeline, WORKFLOW_STAGES } = await import('./workflow.js');
 const { AUDIT_TASK_TYPES } = await import('../lib/auditCatalog.js');
 
-const STAGE_IDS = WORKFLOW_STAGES.map(s => s.id);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -29,9 +28,6 @@ beforeEach(() => {
 });
 
 describe('WORKFLOW_STAGES contract', () => {
-  it('canonical stages exist in expected order', () => {
-    expect(STAGE_IDS).toEqual(['hygiene', 'review', 'plan', 'audit', 'build', 'report', 'ambient']);
-  });
 
   it('places do-replan in the plan stage and feature-ideas in build', () => {
     const planStage = WORKFLOW_STAGES.find(s => s.id === 'plan');

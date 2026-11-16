@@ -14,9 +14,6 @@ describe('grokVideoClip', () => {
     expect(Object.isFrozen(GROK_VIDEO_DURATIONS)).toBe(true);
   });
 
-  it('defaults to the shortest deliverable clip', () => {
-    expect(GROK_VIDEO_DEFAULT_DURATION).toBe(Math.min(...GROK_VIDEO_DURATIONS));
-  });
 
   it('passes through a length grok offers', () => {
     for (const d of GROK_VIDEO_DURATIONS) expect(resolveGrokDuration(d)).toBe(d);

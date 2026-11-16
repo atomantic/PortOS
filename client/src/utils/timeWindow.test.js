@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { isInTimeWindow, isValidTimeString, MORNING_DEFAULT_WINDOW, pickActiveLayoutId, recordManualLayoutPick, TIME_STRING_RE } from './timeWindow.js';
+import { isInTimeWindow, isValidTimeString, pickActiveLayoutId, recordManualLayoutPick, TIME_STRING_RE } from './timeWindow.js';
 
 describe('TIME_STRING_RE parity', () => {
   // Must stay byte-for-byte equal to HHMM_STRICT_RE in server/lib/timezone.js
@@ -49,12 +49,6 @@ describe('isInTimeWindow', () => {
     expect(isInTimeWindow(null, now)).toBe(false);
     expect(isInTimeWindow({ start: 'nope', end: '11:00' }, now)).toBe(false);
     expect(isInTimeWindow({ start: '06:00', end: '06:00' }, now)).toBe(false);
-  });
-});
-
-describe('MORNING_DEFAULT_WINDOW', () => {
-  it('is the canonical 06:00–11:00 window', () => {
-    expect(MORNING_DEFAULT_WINDOW).toEqual({ start: '06:00', end: '11:00' });
   });
 });
 

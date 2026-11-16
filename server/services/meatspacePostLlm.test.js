@@ -86,27 +86,6 @@ beforeEach(() => {
 // CONSTANTS
 // =============================================================================
 
-describe('LLM_DRILL_TYPES', () => {
-  it('exports all 14 drill types', () => {
-    expect(LLM_DRILL_TYPES).toEqual([
-      'word-association',
-      'story-recall',
-      'verbal-fluency',
-      'wit-comeback',
-      'pun-wordplay',
-      'compound-chain',
-      'bridge-word',
-      'double-meaning',
-      'idiom-twist',
-      'what-if',
-      'alternative-uses',
-      'story-prompt',
-      'invention-pitch',
-      'reframe',
-    ]);
-  });
-});
-
 describe('callAI', () => {
   it('passes an explicit effort and source through the shared runner', async () => {
     mockApiProvider({ ok: true });

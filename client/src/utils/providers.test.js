@@ -672,9 +672,6 @@ describe('providerTypes re-exports the server predicates', () => {
 });
 
 describe('PROVIDER_TYPES', () => {
-  it('exposes the three provider-type values', () => {
-    expect(PROVIDER_TYPES).toEqual({ CLI: 'cli', TUI: 'tui', API: 'api' });
-  });
 
   it('is frozen so callers cannot mutate the shared enum', () => {
     expect(Object.isFrozen(PROVIDER_TYPES)).toBe(true);

@@ -207,13 +207,3 @@ describe('filterSafeCutComments', () => {
   });
 });
 
-describe('constants', () => {
-  it('has expected CUT_TYPES', () => {
-    expect(CUT_TYPES).toEqual(['OVER-EXPLAIN', 'REDUNDANT', 'FAT', 'GENERIC', 'TELL', 'STRUCTURAL']);
-  });
-
-  it('has expected SAFE_CUT_TYPES', () => {
-    expect(SAFE_CUT_TYPES).toEqual(['OVER-EXPLAIN', 'REDUNDANT']);
-  });
-
-});

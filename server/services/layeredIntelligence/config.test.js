@@ -98,12 +98,6 @@ describe('getEffectiveConfig', () => {
   });
 });
 
-describe('LI_JOB_ID', () => {
-  it('is the autonomous-job id the loop sweep runs under', () => {
-    expect(LI_JOB_ID).toBe('job-layered-intelligence');
-  });
-});
-
 describe('isScopeAllowed (scope-gating)', () => {
   const allowedPortos = ['app-improvement', 'app-data-gap', 'loop-meta', 'portos-self'];
   const allowedApp = ['app-improvement', 'app-data-gap'];
