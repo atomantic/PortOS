@@ -2,14 +2,6 @@
  * Sole owner of the strict `pm2 jlist` stdout parser (issue #8164, consolidating
  * #968, #2991, #5732).
  *
- * Sole owner of the strict `pm2 jlist` stdout parser: `parsePm2JlistStdout(stdout)` returns the parsed
- * process array (incl. `[]` for a genuine empty read) or `null` when the read effectively failed
- * (empty/garbage/non-array stdout) — the absent-vs-empty contract from issue #968, consolidated by
- * #8164. Zero imports so `autofixer/shared.js` can use it without the server dependency graph.
- * `services/pm2.js` re-exports it as `parseJlistStdout` for compatibility;
- * `services/pm2.js#listProcessesStrict` and `autofixer/shared.js` are the only non-test callers
- * permitted to execute raw `pm2 jlist`.
- *
  * `pm2 jlist` always emits a JSON array (`[]` when there are no processes), so
  * an exit-0 read with empty or garbage stdout — no array literal at all — is a
  * FAILED read, not a successful "no processes." Returning `[]` there would

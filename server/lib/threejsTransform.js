@@ -2,17 +2,6 @@
  * Affine transform primitives shared by every server-side gate that has to
  * reconstruct where a Three.js scene-spec part actually sits in the world.
  *
- * Affine transform primitives shared by every server-side gate that reconstructs where a Three.js
- * scene-spec part sits in the world — `rotationMatrix` (row-major 3×3 matching `THREE.Euler` order
- * `XYZ`, the composition the preview canvas and exported factory both apply), `scaleLinear`,
- * `multiplyLinear`, `applyLinear`, `applyTransform`, `composeTransform(parent, { position,
- * rotationDegrees, scale })`, `vectorLength`, `degreesToRadians`, `IDENTITY_LINEAR` /
- * `IDENTITY_TRANSFORM`. One owner for math `threejsModel.js`, `threejsModelPenetration.js` and
- * `threejsModelPhysicalAudit.js` each used to spell separately. A non-finite rotation component reads
- * as `0` degrees and a non-finite scale component as `1`, matching what the renderer does with a
- * malformed stored spec — feeding `null`/`NaN` through instead produced `NaN` bounds that the audits
- * read as "no overlap" and "no defect".
- *
  * `threejsModel.js` (flatness), `threejsModelPenetration.js` (cross-part
  * overlap) and `threejsModelPhysicalAudit.js` (bounds and pose) each used to
  * carry their own row-major 3x3 copy of this math. They were algebraically

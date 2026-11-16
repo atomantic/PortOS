@@ -1,17 +1,7 @@
 /**
  * Static ES-module import scanning — one parser for every import-graph guard.
  *
- * Several suites assert structural properties of the module graph rather than
- * runtime behavior: `agentImportCycles.test.js` proves the agent-lifecycle
- * cluster is acyclic, and `spriteAnimationTracks.test.js` proves the
- * request-validation graph never reaches the native image dependencies
- * (sharp/ffmpeg). Both need the same thing — "which modules does this file
- * statically import?" — and both had their own copy of the regex pair and the
- * `exec` drain loop, which is exactly how a guard rots: a fix to one parser
- * (multi-line import lists, `export * from`, a new specifier shape) lands in
- * one copy while the other keeps silently under-reporting. `buildStaticImportGraph`
- * and the cycle walks live here for the same reason — `serviceImportCycles`,
- * `agentImportCycles` and `twinImportCycles` all walk `server/services` for rings.
+ * Guards use it to prove the request-validation graph never reaches native dependencies (sharp/ffmpeg).
  *
  * **Static imports only.** `await import('./x.js')` is deferred to call time,
  * so it can neither produce a load-time cycle nor drag a native dependency into

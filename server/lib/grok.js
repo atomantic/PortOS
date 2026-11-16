@@ -1,20 +1,6 @@
 /**
  * Per-CLI conventions for xAI's "Grok Build" coding agent (binary: `grok`).
  *
- * xAI Grok Build (`grok`) provider helpers — id/endpoint constants
- * (`GROK_API_ID`/`GROK_CLI_ID`/`GROK_TUI_ID`/`GROK_API_ENDPOINT`),
- * `isGrokCommand`/`isGrokCliProvider`/`isGrokTuiProvider` predicates,
- * `ensureGrokHeadlessArgs`/`ensureGrokTuiArgs` argv builders (grok reads its prompt from
- * `--prompt-file /dev/stdin`, not raw stdin; model selection uses the `GROK_CONFIGURED_DEFAULT`
- * sentinel in `providerModels.js` so PortOS omits `--model` like Antigravity),
- * `grokSpeedTarget`/`grokServiceTierModel` (pair a catalog base with its `-build-fast` sibling;
- * explicit speed becomes `<base>[fast=true|false]`), `prepareGrokPromptFile` (Windows temp-file
- * delivery fallback; `cleanup({ throwOnError: true })` reports cleanup failure to an owning
- * lifecycle), and the no-tool posture — `GROK_BUILTIN_TOOLS`/`GROK_NO_TOOL_ARGS` (plan mode plus
- * `--disallowed-tools` for every built-in, since an empty `--tools ''` removes none, #14476) and
- * `grokToolsEscapingNoToolPosture` (the reviewer transcript's drift probe for a tool grok shipped
- * later).
- *
  * Grok Build ships three PortOS provider shapes:
  *   - `grok`      (type `api`) — OpenAI-compatible chat completions at
  *                 https://api.x.ai/v1, handled generically by the API runner.

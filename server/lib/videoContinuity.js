@@ -1,17 +1,6 @@
 /**
  * Video Gen — how chunk N+1 of a chained render is conditioned on chunk N.
  *
- * Runtime-specific temporal continuation contracts (`continuationContract(runtime)`), capability
- * (`supportsContextWindow`) and strategy selection. `resolveContextFrames` preserves the legacy
- * 0/22/121 pixel-frame window bounds. `extendLatentFrames(pixelFrames, runtime)` /
- * `extendedPixelFrames(latents, runtime)` separate extension latent positions from new pixel output;
- * `contextPrefixFrames({runtime, totalFrames, extendLatents})` measures echoed history.
- * `planExtendSplice({runtime, sourceFrames, outputFrames, extendLatents})` joins the original source
- * to new output only for a verified layout. Timing calls require an explicit runtime and refuse
- * unavailable contracts; H3 MLX/CUDA remain unavailable with backend-specific reasons.
- * `tailWindowStartFrame` is runtime-independent. Picker capability is mirrored in
- * `client/src/lib/videoGenParams.js` and parity-tested.
- *
  * Two strategies exist, and which one a request gets is decided here so the
  * route, `prepareParams.js` and the chain orchestrator in `local.js` can't
  * drift on the rule:

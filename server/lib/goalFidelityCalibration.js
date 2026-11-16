@@ -1,23 +1,6 @@
 /**
  * Goal-fidelity CALIBRATION contract — pure.
  *
- * Goal-fidelity CALIBRATION contract — what happens when the follow-up investigation overturns a
- * finding, i.e. the objective WAS delivered and the reviewer misjudged it.
- * `GOAL_FIDELITY_CONTEXT_GAPS` is the closed vocabulary of what the reviewer could not see
- * (`truncated-diff`, `truncated-objective`, `objective-omits-context`, `work-outside-diff`,
- * `execution-step-misread`, `rubric-gap`, `other`), enforced ONLY by `normalizeGoalFidelityContextGap`
- * (the report route takes a bounded string, so a near-miss gap name folds to `other` with its
- * diagnosis intact instead of 400ing the report away). `GOAL_FIDELITY_REVIEW_SURFACES` addresses the
- * reviewer's three context surfaces once — objective / diff / rubric — and
- * `GOAL_FIDELITY_CONTEXT_GAP_FIXES` maps each gap onto one of them, so a rename cannot leave seven
- * prose copies lying (`goalFidelityCalibration.pointers.test.js` walks the table against the real
- * files). `goalFidelityCalibrationFingerprint(gap)` keys the dedup on the GAP alone, so many false
- * positives from one blind spot fold into one fix instead of minting an agent each.
- * `buildGoalFidelityCalibrationTask` composes the PortOS-side task body (including the
- * do-not-disarm-the-detector contract) and `buildGoalFidelityFalsePositiveReportBlock` the `curl`
- * instructions appended to a follow-up task, taking `apiBase` as an argument and the call shape from
- * `agentApiToken.js`. I/O lives in `services/goalFidelityCalibration.js`.
- *
  * `goalFidelity.js` owns the verdict, `goalFidelityFollowUp.js` owns what
  * happens when the verdict found a problem. This module owns the third case,
  * which until now had nowhere to go: the follow-up investigator looked at the

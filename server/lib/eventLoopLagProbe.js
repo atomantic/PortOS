@@ -1,16 +1,6 @@
 /**
  * Scoped event-loop lag attribution for slow-operation diagnostics (#12329).
  *
- * `createEventLoopLagProbe({ clock, intervalMs, toleranceMs, resources, attributeAboveMs })` opens
- * phase-tracking spans that charge overdue time of one shared, span-scoped tick to the current phase,
- * so a slow-operation diagnostic splits each phase into event-loop/host scheduling lag and
- * asynchronous wait (#12329), and a span charged more than `attributeAboveMs` of lag carries `load`
- * (process `cpuMs`, `gcMs`, `invCtx`, host `load1`/`cpus`) to tell a busy process from a starved one
- * (#12852); `beginLoadSample(resources)`, `formatLoadAttribution(load)` and `systemResources` (the
- * same counters for a caller without a span); `systemClock` (globals resolved at call time),
- * `__createManualClock()` (deterministic `advance` = on-time timers vs `stall` = blocked loop, for
- * tests), `roundMs`, and `phaseGroup(summary, name)` (a phase plus its `name.` sub-phases).
- *
  * A stopwatch around an awaited phase measures asynchronous wait (storage, the
  * libuv threadpool, a queue) plus delayed scheduling, and cannot tell them
  * apart. While at least one span is open, one shared tick is rescheduled every

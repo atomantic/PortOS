@@ -2,25 +2,6 @@
  * `clickableProps` and `onActivateKeyDown` make non-button elements with onClick keyboard-operable via
  * Enter/Space, tabIndex and role=button, with activation-key predicates.
  *
- * `clickableProps(handler, { role?, disabled? })` → `{ role, tabIndex, onKeyDown }` and
- * `onActivateKeyDown(handler)` — make a non-`<button>` element with an `onClick` keyboard-accessible
- * (Enter/Space activation, focusable, `role="button"`). Spread `clickableProps` next to the existing
- * `onClick`. Use instead of hand-rolling `role`/`tabIndex`/`onKeyDown` on clickable
- * `<div>`/`<span>`/`<li>`. Also the shared predicate every app-global key handler consults:
- * `shouldIgnoreGlobalKey(event, { enabledInDialog?, ignoreRepeat?, allowChords? })` — the single "must
- * this handler stand down?" answer (editable target, native Space button activation, ⌘/Ctrl/Alt chord,
- * OS auto-repeat, open `aria-modal` dialog), used by `useKeyboardShortcuts`, `useKeyCapture` AND the
- * voice widget's push-to-talk hotkey so their guard lists can't drift. Add a new guard there, not at
- * one caller. Its parts are exported too: `isEditableTarget(el)`, `isButtonActivation(event)` (true
- * when Space would natively activate the focused button) and `isPressKey(event)` (Enter or Space by
- * either `key` or `code`). Also `isFocusEscapeKey(event)` — the shared "leave this widget" gesture
- * (Shift+Tab backtab) that a key-capturing widget must release to the browser; the Shell terminal's
- * `attachCustomKeyEventHandler` consults it so focus can escape the xterm trap. Plus
- * `noPointerFocusSurfaceProps` — spread on the ROOT of a surface that owns a key globally (a
- * Space-scored drill, the Morse keyer, RapidReader, the OpenWorld HUD); one capture-phase handler
- * stops a mouse click anywhere inside from parking focus on a button and taking that key over via
- * native activation, covering controls added later too.
- *
  * Keyboard-activation helpers: making a non-`<button>` element that carries an
  * `onClick` keyboard-operable, plus the shared predicates for "is this keystroke
  * an activation?" that global key handlers consult before claiming a key.

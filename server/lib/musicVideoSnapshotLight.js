@@ -1,14 +1,6 @@
 /**
  * Lighting rules for people in Music Video images: `isAmateurLook` detects snapshot or home-video
  * looks and `peopleLightLine` returns the matching light prompt line.
- *
- * Lighting rules for people in Music Video images: `isAmateurLook(...texts)` spots a snapshot /
- * home-video / VHS / Super 8 / Polaroid look, and `peopleLightLine(lookTexts, { always })` returns the
- * authentic snapshot line (people underexposed, unevenly lit, no light the place lacks) for such a
- * look; what a clause says after an exclusion word ("avoid VHS, camcorder grain") does not count,
- * while what comes before it does ("home video with no studio lights"), else the
- * keep-them-in-the-scene-light line when `always`, else an empty string. Used by Cast & Sets test
- * frames and shot stills (`people-light` block).
  */
 
 /**

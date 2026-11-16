@@ -1,13 +1,6 @@
 /**
  * Gemini Omni 1.2 Flash as the Gemini web app serves it: clip length, reference limit and the
  * composer's aspect choice.
- *
- * Gemini Omni 1.2 Flash as the Gemini web app serves it. There is no API on this
- * route: PortOS drives gemini.google.com in the signed-in PortOS Browser, so the
- * app's composer sets what a render can ask for. It offers only two aspect
- * ratios and no length control, and it delivers a 1280x720 clip of about 10 s.
- * Asking for a length in the prompt does not change that: requests for 5 s and
- * 15 s both came back at 10.03 s on 2026-11-05, though the API model goes to 15 s.
  */
 
 export const GEMINI_OMNI_WEB_MODEL = Object.freeze({

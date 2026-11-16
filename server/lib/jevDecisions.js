@@ -3,16 +3,6 @@
  * entailment scorer instead of a chat completion, and the exact hypothesis
  * wording each one scores.
  *
- * `JEV_DECISIONS` — the closed-set decisions PortOS may answer with the local scorer instead of a chat
- * completion, each with its frozen hypothesis wording and its abstention floor. `getJevDecision` /
- * `jevHypotheses` / `jevValueForHypothesis` map between an enum value and the hypothesis that stands
- * for it; `jevMinMarginFor` composes the per-decision floor, the per-OPTION floor (a destructive
- * `delete` clears a far wider margin than the `archive` beside it), and the operator setting, which
- * can only RAISE the bar. `isValidJevDecision` is the contract every shipped descriptor is tested
- * against. `source` names the ingress CHANNEL and is `null` for a decision that has none
- * (`scope-adherence` asks about the operator's own product documents). Pure. Routing, mode resolution
- * and the counts-only agreement store live in `services/jevRouter.js`.
- *
  * These hypotheses are PROMPTS. They are the entire instruction surface of the
  * feature, so they live here — frozen, versioned with the file, reviewable in a
  * diff — rather than as string literals inside the four services that consume

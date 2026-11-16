@@ -2,28 +2,6 @@
  * Pure readings of Music Video Blender state: `blenderShotRenderStatus` and film progress for each
  * shot's preview and final render.
  *
- * Music Video "Blender film" render style, pure readings of the Blender state:
- * `blenderShotRenderStatus(state, shotId, quality)` (none / queued / rendering n% / encoding / done /
- * stale / partial / failed, with tone and detail), `blenderShotStage` (one word per shot for the
- * timeline), `blenderShotPlayable`, `blenderShotClip(renders)` (the render a shot shows in the live
- * film preview: a current final, else a current preview, else an out-of-date final, else an
- * out-of-date preview) and `blenderSceneClips({ shots, renders, sceneMap })` (that clip for each Board
- * scene, keyed by scene id), `blenderShotThumbPath`, `blenderFilmSummary(state)` (the server's `{
- * total, finalReady, ready }` plus `finalStale`, `finalMissing`, `previewReady`),
- * `blenderBulkPlan(state, quality, scope)` (the request body and expected shots of a bulk render),
- * `blenderStaleReason`, `blenderRenderBlocker` (why a sync or render cannot start) and
- * `blenderShotRenderBlocker` (renders also wait when the frame rate moved off the synced one), the job
- * helpers (`mergeBlenderJob`, `sortBlenderJobs`, `blenderJobPercent`, `blenderJobTitle`,
- * `blenderSyncJob`, `isBlenderJobActive` / `isBlenderJobTerminal`), the settings form helpers
- * (`BLENDER_SETTING_LIMITS`, `blenderSettingsProblems`, `changedBlenderSettings`, and for film options
- * `blenderOptionFields` / `blenderOptionChanges`), re-exports of the rules shared with the server
- * (`summarizeBlenderShots`, `blenderShotsReady`, `blenderEffectiveOptions` from
- * `server/lib/musicVideoBlender.js`), `blenderStillPreviewItems` (lightbox items for rendered stills)
- * and `blenderAgentBrief({ projectId, state })` (the ready-to-paste brief for a coding agent). Used by
- * `hooks/useMusicVideoBlender.js`, `components/musicVideo/BlenderFilmPanel.jsx` and its `blender/`
- * tabs, `components/musicVideo/StoryboardAnimatic.jsx` (the live film preview), and
- * `components/musicVideo/ProjectWorkspace.jsx`.
- *
  * Music Video "Blender film" render style: pure readings of the Blender state
  * the server answers for a project — what each shot's preview and final render
  * is doing, how far the film is, what a bulk render would cover — plus the

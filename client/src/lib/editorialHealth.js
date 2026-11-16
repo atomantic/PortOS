@@ -1,23 +1,5 @@
 // Pure presentation helpers for the editorial health panel (`/pipeline/editorial-checks`, #1316):
 // `scoreBand(score)` bands a 0–100 health score into a label + Tailwind tone.
-//
-// `deltaDisplay(delta)` formats the revision-to-revision score change (arrow + tone);
-// `sparklineGeometry(points, box)` projects the trend's score points into SVG polyline coords;
-// `orderedCategories(openByCategory)` sorts the per-category open-finding breakdown;
-// `orderedChecks(openByCheck, labelFor)` sorts the per-check breakdown resolving each id to its
-// catalog label (#1597); `checkCountSeries(points, checkId)` extracts one check's count series across
-// the trend points; `countSparklineGeometry(values, box)` projects a non-negative count series into
-// SVG polyline coords normalized to its own max (per-check finding-count sparkline);
-// `diffCountMaps(current, previous)` lists the buckets whose open-finding count changed between two
-// snapshots (#1630); `snapshotDiff(point, previous)` builds a trend snapshot's drill-down (its own
-// breakdown + per-severity/category/check diff vs the prior revision, null-aware for pre-#1597
-// per-check telemetry, #1630); plus the `SEVERITY_ORDER`/`SEVERITY_LABELS` and
-// `READINESS_GATE_LABELS`/`READINESS_GATE_ORDER` tables. No React/window — the panel and its tests
-// share them.
-//
-// Pure presentation helpers for the editorial health panel (#1316) — score
-// banding, trend sparkline geometry, and severity/category ordering. No React,
-// no window: the panel component and its unit tests both consume these.
 
 export const SEVERITY_ORDER = Object.freeze(['high', 'medium', 'low']);
 export const SEVERITY_LABELS = Object.freeze({ high: 'High', medium: 'Medium', low: 'Low' });

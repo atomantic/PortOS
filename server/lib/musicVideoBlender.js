@@ -2,17 +2,6 @@
  * Shared Music Video Blender film vocabulary: engine, quality and note-status enums, shot-id and path
  * rules, default settings, and `normalizeBlender*` helpers.
  *
- * Music Video Blender film vocabulary shared by server, driver and client: engine, quality and
- * note-status enums, the shot-id and source-path rules, `MUSIC_VIDEO_BLENDER_DEFAULT_SETTINGS`,
- * `normalizeBlenderRecord(value)` (the install-local `blender` field with defaulted settings),
- * `blenderRenderFrame(settings, quality)` (pixel size, scale and samples),
- * `blenderShotFrameRange(shot, fps)`, `blenderSourceFileKind(path)`, the film-option rules
- * (`MUSIC_VIDEO_BLENDER_OPTION_KEY` / `_TYPES`, `blenderOptionValueProblem(option, value)`,
- * `blenderValidOptionValues(declared, saved)`, `blenderEffectiveOptions(declared, saved)` =
- * `ctx.options`), `blenderRenderWanted(render, { force, onlyStale })` (which renders a request takes),
- * `summarizeBlenderShots(shots, renders)` (`{ total, finalReady, ready }`, the `blenderShots` field on
- * project reads) and `blenderShotsReady(progress)` (the Shots step). Pure and browser-safe.
- *
  * Shared vocabulary of the Music Video "Blender film" render style
  * (`composition.mode === 'blender'`): the settings shape, the id and path
  * rules, and the frame arithmetic the server, the Python driver and the client

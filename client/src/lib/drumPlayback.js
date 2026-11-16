@@ -1,27 +1,6 @@
 // Synthesized drum-kit play-along for the SongBook `drum` format (#3115) — the third consumer of
 // `lookaheadTransport.js` alongside `scorePlayback`/`midiPlayback`.
 //
-// `buildDrumSchedule(chart, { bpm, loop, countInBars })` is the PURE chart→`[{ bar, step, piece,
-// sound, velocity, startSec, durSec, countIn }]` mapping (one notated beat = `60/bpm`, one grid step =
-// beat/`subdivision`; per-glyph velocity; a looped bar range is sliced and rebased while keeping the
-// CHART's bar numbers for the playhead) — unit-tested with no Web Audio; `resolveLoopRange(barCount,
-// loop)` clamps/normalizes a 1-based inclusive bar range; the count-in is scheduled as real `countIn:
-// true` events on the same clock so there is no second timer. `createDrumPlayer(chart, { bpm,
-// countInBars, loopBars, clickEnabled, clickVolume, kit, onStep, onEnded })` sounds it on the shared
-// `AudioContext` from a SYNTHESIZED kit (no shipped samples — recipes in `drumKits.js`, realized here
-// as per-layer oscillator/noise + optional tanh drive + optional filter into a soft-clipped master
-// bus; open-hat tail, flam grace note) with an optional layered metronome click, loops the range
-// scheduler-exactly (count-in only on the first pass), and reports `onStep({ bar, step, countIn })`
-// for the `<DrumSheetView>` playhead. The metronome — the through-music click AND the count-in, which
-// both sound `CLICK_VOICE`, never a kit piece — rides its OWN gain bus into the master, so
-// `setClickVolume(0–1)` moves clicks already queued in the lookahead window instead of only the next
-// ones (a level of 0 additionally schedules no click voice at all — the level persists, so a silenced
-// click must not keep building a voice per beat forever) (`clampClickVolume` returns null for an
-// unset/garbled level so a caller can tell "never chosen" from a stored
-// `DEFAULT_CLICK_VOLUME`-vs-silence). `setKit(id)`, `setClick(enabled)` and `setClickVolume(level)`
-// apply LIVE (they touch no timing, unlike `setBpm`/`setLoop`/`setCountIn`, which only rebuild while
-// idle). Pure (no React) — `SongBookViewer` owns the transport UI.
-//
 // Drum-kit playback for the SongBook `drum` format — turns a parsed drum chart
 // (see drumNotation.js) into an audible groove you can practice along with at a
 // tempo you control. The third consumer of the shared lookahead transport

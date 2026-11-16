@@ -1,16 +1,6 @@
 /**
  * Fit a reactor.inc `starting_frame` to the fast-h3 session canvas.
  *
- * Fits a reactor.inc `starting_frame` to the fast-h3 session canvas before it is uploaded.
- * `readImageSize(path)` → `{width,height}` or `null` (never a guessed dimension), and
- * `prepareReactorStartingFrame(sourceImagePath, requestedAspect, outputPath)` → `{ aspect, canvas,
- * framePath, fittedPath }`: an absent `requestedAspect` DERIVES the canvas from the frame's own shape
- * (`nearestReactorAspect`), then centre cover-crops the frame to that canvas's exact pixel size so
- * reactor's own "fitted to the session canvas" step is a no-op. `fittedPath` is the temp file the
- * caller deletes; `null` means the original was uploaded unchanged. A frame sharp cannot decode (or a
- * resize that fails) passes through untouched on the default canvas rather than failing a render
- * PortOS merely could not measure — reactor decodes more containers than sharp does.
- *
  * fast-h3 renders at ONE resolution per session — whichever `set_canvas`
  * aspect the session opened with (`reactorVideoClip.js#REACTOR_CANVASES`) — and
  * the API's own contract for a starting frame is "common formats decode; the

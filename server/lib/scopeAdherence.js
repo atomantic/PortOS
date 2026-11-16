@@ -2,15 +2,6 @@
  * The retrieval and premise half of "does this change advance what the product
  * says it is for?".
  *
- * The retrieval and premise half of "does this change advance the stated product goal?" — the QUESTION
- * itself is the `scope-adherence` entry in `jevDecisions.js`. `selectCandidateClauses` fuses two BM25
- * views of the change (prose, changed files) with `fuseRankingsRRF`, so scoring is bounded by k rather
- * than the whole corpus; `buildClauseIndex` is exported so a caller can cache the index beside the
- * corpus. `formatChangeEvidence` builds the change half ONCE — the same string is screened and scored,
- * so the two cannot drift — and `composeAdherencePremise` puts the clause first and in full. Also the
- * route-input `scopeAdherenceRequestSchema`. ADVISORY ONLY: nothing here returns a gateable boolean.
- * Pure; the ladder lives in `services/scopeAdherence.js`.
- *
  * The QUESTION itself — the three hypotheses and the abstention floor — is a
  * `scope-adherence` entry in `lib/jevDecisions.js`, beside the four
  * untrusted-content rungs, because that is PortOS's one registry of closed-set

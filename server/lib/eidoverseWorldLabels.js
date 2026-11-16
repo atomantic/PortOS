@@ -1,21 +1,6 @@
 /**
  * Human-readable labels for the entities PortOS projects into Eidoverse.
  *
- * The `comp.label` component PortOS attaches to every entity it projects into Eidoverse
- * (eidoverse-worlds#5), so a rendered building says what it represents instead of only naming its
- * decorative model. `buildEidoverseLabel(component, alias?)` reads one already-built `comp.portos`
- * payload and returns `{name, description?, visibility, offset?}` — district and world-identity
- * landmarks always visible, live indicators labelled `nearby`, path markers `inspect`-only so a
- * walkway cannot bury the district it leads to — and `null` for anything not `managedBy: 'portos'`, so
- * a caller cannot label somebody else's entity. Names and descriptions are built from PortOS's own
- * vocabulary (district label, kind label, resource category, coarse status, freshness) plus an opaque
- * hashed resource ref for disambiguation, never from record contents, machine identity, addresses, or
- * filesystem paths — the append-only world log is the strictest privacy boundary PortOS writes to.
- * Also owns bounded opaque-key alias normalization and V1 renderer capability parsing; aliases are
- * explicit opt-in names and are never inferred from private records. Owns `safeWorldText`, the one
- * control-character/length sanitizer shared with `services/eidoverseWorldProjection.js` so a component
- * field and the label built from it cannot disagree about what is safe. Pure.
- *
  * A projected building renders, but a model file cannot say what it stands for.
  * `buildEidoverseLabel` turns one already-built `comp.portos` payload into the
  * renderer-generic `comp.label` component (eidoverse-worlds#5), so the initial

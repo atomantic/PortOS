@@ -2,18 +2,6 @@
  * Finish a video draft (#3696) — decide whether one stored render can be
  * re-rendered on its declared delivery model, and which model that is.
  *
- * Finish-a-draft gate (#3696). `isReproducibleTextToVideo(record)` is true only for a single
- * text-to-video render whose history record already carries everything a re-render needs —
- * `renderInputsVersion` (the positive marker that its conditioning inventory is trustworthy, so legacy
- * records degrade to not-finishable rather than reading as unconditioned), an empty `conditioning`
- * array, a resolved seed, a real prompt, and no stitched/chained/upscaled provenance.
- * `finishTargetForRecord(record, models)` additionally resolves the draft model's server-declared
- * `finishModelId` against the models this install can actually run, returning the delivery model entry
- * or `null`. `isDeliveryVideoModel(model, models)` is the other end of the same graph — true when some
- * entry names `model` as its `finishModelId`, which is what makes a delivery render always decode on
- * the full decoder (#5423). Mirrors `finishTargetForModel` / `isDeliveryVideoModel` in
- * `server/lib/videoFinishProfiles.js`; the pair table itself stays server-side.
- *
  * A draft is finishable only when the record alone is enough to reproduce the
  * same composition at higher quality. That means all of:
  *   - it was written by the finish-aware writer (`renderInputsVersion`), so its

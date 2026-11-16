@@ -2,16 +2,6 @@
  * Environment world-map helpers for previz: other environments pinned as sets at positions, joined by
  * road, footpath, track or corridor paths.
  *
- * World map of an Environment (`payload.world`) for previz: other environments pinned as sets at a
- * position and turn, joined by paths (road, footpath, track, corridor; a road picks its
- * `infrastructure`: overhead, buried, rural or none, plus `poleSide` and `poleSpacing`) lined with
- * buildings, fence, open ground or nothing; a setting (outdoor, indoor, space).
- * `draftWorldFromRouteMaps(project, { newId, footprints })` (a first world from a music video's route
- * maps, spaced so sets never overlap), `worldSetFootprint(greybox)`, `worldFill(world)` (deterministic
- * filler and lamps from the paths and seed, never stored), `worldSkyAt(clockMinutes, setting)` (light
- * by time of day outdoors, fixed indoors and in space), `worldSunDirection(sky)`, `worldProblems`,
- * `worldClockText`. Pure, browser-safe.
- *
  * World map of an Environment (catalog `place`, `payload.world`): one map that
  * places other Environments (the sets, each with its own greybox) and joins
  * them with paths, so a music video's previz can follow people through a

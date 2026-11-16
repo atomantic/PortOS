@@ -2,15 +2,6 @@
  * Pure helpers for the "Review this series" SSE progress stream
  * (`server/services/pipeline/seriesReview.js#runSeriesReview`).
  *
- * Pure helpers for the "Review this series" SSE progress stream (`SeriesReviewPanel.jsx`, #4108):
- * `REVIEW_STEP_LABELS` + `reviewFrameLabel(frame)` label a single frame, and
- * `summarizeReviewProgress(frames)` folds the whole stream into `{ headline, alsoRunning }`. Since the
- * review runs the foundation judge and canon readiness concurrently with the editorial-checks pass,
- * frames interleave — labelling only the newest frame made the headline flicker between a background
- * step that just settled and the current check. The summarizer tracks which steps are still in flight,
- * gives the headline to the editorial-checks pass while it runs, and reports the other in-flight steps
- * alongside it. No React/window.
- *
  * Since #4108 the review runs the foundation judge and canon readiness
  * CONCURRENTLY with the editorial-checks pass, so the frame stream interleaves:
  * a `step:complete` for `foundation`/`canon` can land in the middle of a run of

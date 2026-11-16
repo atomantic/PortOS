@@ -1,19 +1,6 @@
 /**
  * Presentation helpers for the Persistent Mind's temporary thinking sessions.
  *
- * Presentation helpers for the Persistent Mind's temporary thinking sessions (#6285).
- * `classifyMindRouteBilling(provider)` answers the question the composer must settle without
- * contacting anything: does borrowing this route run on THIS machine (`local`), stand behind a
- * credential/subscription (`account`), or can PortOS not tell (`unknown`)? Unknown is treated as
- * billable — guessing "free" is the one direction that costs money. Plus `formatMindRoute` (the one
- * "provider / model · effort" phrasing), `sameMindRoute` (client mirror of the server's route-only
- * equality, so a label rename does not read as a changed route), `findMindThinkingPreset` /
- * `mintMindPresetId` (a server-legal id minted from a label), and the receipt readers
- * `formatMindCallUsage` / `formatMindCallOutcome` / `formatMindElapsed` / `mindTurnOutcome` /
- * `mindTurnElapsedMs` / `temporaryMindTurns` — all of which keep "the provider reported nothing"
- * rendering as unknown rather than as a free, instant, successful call. Pure; no fetches, so
- * previewing a preset can never start an inference.
- *
  * The mechanism (saved presets, exact-or-refuse resolution, per-call receipts)
  * lives on the server. This module answers only the questions the Mind page has
  * to answer BEFORE the user commits: what exact route is about to be borrowed,

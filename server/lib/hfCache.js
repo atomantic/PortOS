@@ -1,20 +1,6 @@
 // HuggingFace Hub cache inspection (`inspectModelCache(repoId,{revision?})` →
 // `{cached,sizeBytes,snapshotPath}`, `isModelCached`, `getHfCacheRoot`).
 //
-// Drives the inline "Available / Download" badge on the image + video gen forms. Also
-// `verifyModelCache(repoId,{deep,revision?})` (structural safetensors-header + optional sha256
-// integrity check) and `repairModelCache(repoId,{deep,revision?})` (delete corrupt weight files so the
-// download path re-fetches them) — power the "Repair model" banner.
-// `findCachedRepoSnapshot(repoId,revision)` resolves an immutable local snapshot;
-// `findCachedRepoFile(repoId,filename,{revision?})` resolves ONE known file without walking it, and
-// `findCachedRepoFiles(repoId,filenames,{revision?})` is its all-or-nothing plural form (paths in
-// request order, or `null` if ANY is missing — a caller needing several pinned files, e.g. the shards
-// of one checkpoint, can do nothing useful with a partial set); `isSafeHfRepoRelativePath` rejects
-// traversal/absolute dependency filenames; `verifyCachedRepoFiles` / `repairCachedRepoFiles` apply
-// that revision-aware exact-file contract to pinned adapter pairs; and
-// `repairCachedFile(path,{snapshotPath?})` is the containment-checked matching single-file repair.
-// `verifySafetensorsStructure(path,size)` is the reusable header/size structural check.
-//
 // HuggingFace Hub cache inspection — detect whether a model repo has been
 // downloaded into `~/.cache/huggingface/hub/` (or wherever HF_HOME points)
 // so the image/video gen forms can show "Available" vs "Download" inline

@@ -2,20 +2,6 @@
  * The spawn-time preconditions a public-content review stage must satisfy
  * before an agent is started for it.
  *
- * The ordered spawn-time preconditions a public-content review stage must clear before `runAgentSpawn`
- * starts an agent for it — `checkPublicReviewSpawnPreconditions` returns the FIRST failing gate as `{
- * reason, category, emit }` (or null), running them in the order that is the contract:
- * `publicReviewScanBlock` (the model-abuse scan cleared at least one PR),
- * `publicReviewEligibilityBlock` (a complete eligibility verdict COVERING every PR the issue watcher
- * saw — a partial gate is not a pass), `publicReviewProviderBlock` from `providerVendors.js` (the
- * vendor row declares a maintained recipe for the requested posture; it owns the ordinary-task `null`
- * posture, the re-derivation #5866 got wrong), then the model itself. `emit` tells the caller how to
- * announce it: `warn-log` for the two fail-closed CONTENT gates, whose block must not raise an
- * investigator that could retry the same unvalidated input, `agent:error` for a provider/model
- * misconfiguration that should. `validateModel` is injected rather than imported — it is the one gate
- * that probes a live runtime, so taking it as a parameter keeps this leaf out of the local-LLM graph
- * and makes the gate ORDER testable with a stub.
- *
  * These four gates used to sit inline in `runAgentSpawn`, each followed by its
  * own hand-copied "block the task and bail" epilogue. Collecting them here
  * makes the ORDER the contract — the scan clears the input, the eligibility
