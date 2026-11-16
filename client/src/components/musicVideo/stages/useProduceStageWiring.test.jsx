@@ -29,7 +29,7 @@ import { findEnabledByRole } from '../../../test/enabledBarrier.js';
 import { MemoryRouter } from 'react-router';
 import toast from '../../ui/Toast';
 import { createTestPhaseDiagnostics } from '../../../../../server/test/testPhaseDiagnostics.js';
-import { approveMusicVideoFinal, rejectUnusedMusicVideoSceneTakes, measureMusicVideoColorMatch, listMusicVideoProjects, renderMusicVideoProject, reorderMusicVideoScenes, updateMusicVideoProject, updateMusicVideoScene, proposeMusicVideoShotSheet, splitMusicVideoScene, moveMusicVideoSceneStart, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff, addMusicVideoSceneTake, getMusicVideoHandoffBundle, getMusicVideoProject, startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision, renderMusicVideoSceneFrame, getMusicVideoBlender, getMusicVideoCastAndSets } from '../../../services/apiMusicVideo.js';
+import { addMusicVideoScene, approveMusicVideoFinal, rejectUnusedMusicVideoSceneTakes, measureMusicVideoColorMatch, listMusicVideoProjects, renderMusicVideoProject, reorderMusicVideoScenes, updateMusicVideoProject, updateMusicVideoScene, proposeMusicVideoShotSheet, splitMusicVideoScene, moveMusicVideoSceneStart, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff, addMusicVideoSceneTake, getMusicVideoHandoffBundle, getMusicVideoProject, startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision, renderMusicVideoSceneFrame, getMusicVideoBlender, getMusicVideoCastAndSets } from '../../../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../../../services/apiSystem.js';
 import { generateVideo, getVideoGenStatus, getVideoHistoryItem, previewImagePrompt, previewVideoPrompt, trimVideo } from '../../../services/apiImageVideo.js';
 import { downloadBlob } from '../../../lib/downloadBlob.js';
@@ -1418,6 +1418,21 @@ describe('shot edits apply their reply without a project read', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'Done', exact: true }));
     await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', { shotSheet: { checked: true } }, ownOrigin));
     await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).toBeChecked());
+    await settle();
+    expect(reads()).toBe(loaded);
+  });
+
+  // Uniquely catches an added shot that is appended unpresented and then reloaded by its own broadcast.
+  it('adds a shot from the reply alone', async () => {
+    await asThisTab();
+    const added = { ...first, sceneId: 's3', order: 2, startSec: 14, endSec: 18, label: 'Third' };
+    addMusicVideoScene.mockResolvedValue({ ...added, edit: editResult([first, second, added], ['s3'], { updatedAt: '2026-01-01T00:00:01.000Z' }) });
+    await openProject(board, 'produce');
+    const loaded = reads();
+    fireEvent.click(await screen.findByRole('button', { name: /Add scene/ }));
+    await waitFor(() => expect(addMusicVideoScene).toHaveBeenCalledWith('mv-2', { prompt: '' }, ownOrigin));
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^Open Shot \d+ · / })).toHaveLength(3));
+    await pushSocket('music-video:project:changed', { id: 'mv-2', origin: 'tab-socket' });
     await settle();
     expect(reads()).toBe(loaded);
   });

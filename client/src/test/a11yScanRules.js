@@ -1,4 +1,4 @@
-import { trackedJsxFiles, maskedSourceOf, forEachOpeningTag, skipString, matchingBraceEnd } from './a11yScanCore.js';
+import { trackedJsxFiles, maskedSourceOf, rawSourceOf, forEachOpeningTag, skipString, matchingBraceEnd } from './a11yScanCore.js';
 import { attributeValue, normalizedAttributeValue } from './a11yScanNames.js';
 import { isNamedByWrapper, hasAccessibleControlName, controlSourceAnchor } from './a11yScanWrappers.js';
 
@@ -342,6 +342,9 @@ export const unnamedControlAnchors = (tagName) => {
   if (cached) return cached;
   const anchors = new Set();
   for (const file of trackedJsxFiles()) {
+    // Masking only removes text, so a file whose raw source never spells the
+    // tag cannot have one in its masked source; skip the per-character lexer.
+    if (!rawSourceOf(file).includes(`<${tagName}`)) continue;
     const scanSrc = maskedSourceOf(file);
     for (const node of forEachOpeningTag(scanSrc, tagName)) {
       if (hasAccessibleControlName(scanSrc, node, tagName, file)) continue;
