@@ -14,13 +14,9 @@ import { getSeries } from './series.js';
 import { pickRenderedFilename } from '../../lib/renderSlot.js';
 import { readImageFromMedia, embedImageBytes, fitImage } from '../../lib/pdfImageEmbed.js';
 import { codedError } from '../../lib/codedError.js';
+import { PAGE_SIZES, DEFAULT_PAGE_SIZE, resolvePageSize } from '../../lib/pdfPageSizes.js';
 
-export const PAGE_SIZES = Object.freeze({
-  'us-letter': { width: 612, height: 792 },
-  'a4':        { width: 595.28, height: 841.89 },
-  'tabloid':   { width: 792, height: 1224 },
-});
-export const DEFAULT_PAGE_SIZE = 'us-letter';
+export { PAGE_SIZES, DEFAULT_PAGE_SIZE };
 
 export const ERR_NO_RENDERED_PAGES = 'PIPELINE_COMIC_PDF_NO_PAGES';
 
@@ -34,7 +30,7 @@ export async function buildComicPdf(issueId, opts = {}) {
   const issue = await getIssue(issueId);
   const series = await getSeries(issue.seriesId);
 
-  const sizeKey = PAGE_SIZES[opts.size] ? opts.size : DEFAULT_PAGE_SIZE;
+  const sizeKey = resolvePageSize(opts.size);
   const { width: pageW, height: pageH } = PAGE_SIZES[sizeKey];
   const includeCover = opts.includeCover !== false;
   const includeBackCover = opts.includeBackCover !== false;
