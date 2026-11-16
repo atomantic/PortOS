@@ -1436,10 +1436,8 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
         : `sys-${app.id.slice(0, 8)}-${nextType}-${Date.now().toString(36)}`;
       if (continuationSourceAgentId) task.metadata = { ...task.metadata, cleanupRefillSource: continuationSourceAgentId };
 
-      // Queue path: addTask's raw branch persists the task through COS-TASKS.md,
-      // which folds multi-line descriptions to first line + full body in
-      // metadata.prompt (#4153). On-demand path: emits unpersisted task on
-      // task:ready, renders full description via getTaskPrompt.
+      // Queue path: addTask's raw branch stores the multi-line description as
+      // written. On-demand path: emits an unpersisted task on task:ready.
       const newTask = await persistTask(task, 'internal', { raw: true, ignoreTaskId, suppressDequeue: true,
         ...(nextType === 'do-release' && deliveredReleaseIds.size > 0 && { deliveredReleaseTaskIds: [...deliveredReleaseIds] }),
         ...(continuationSourceAgentId && { idempotencyKey: `swarm-cleanup-refill:${continuationSourceAgentId}` }) });
@@ -1450,9 +1448,9 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
       if (newTask?.error) throw new Error(newTask.error);
       if (continuationSourceAgentId) continuationSatisfied = true;
       // Recorded from `pendingPerpetualDispatch` — the RECORD prepare returned —
-      // never from `task` or `newTask`: addTask hands back a different object
-      // whenever the description is multi-line, so recording must not depend on
-      // which one the caller is holding (#6871).
+      // never from `task` or `newTask`: addTask hands back a stored copy,
+      // not the caller's object, so recording must not depend on which one the
+      // caller is holding (#6871).
       await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskSchedule);
       if (wakeAfterRecord) cosEvents.emit('cos:dequeue-requested');
 

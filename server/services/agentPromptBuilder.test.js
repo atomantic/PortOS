@@ -3911,6 +3911,33 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
     expect(prompt.match(/# Release candidate check/g)).toHaveLength(1);
   });
 
+  // #16466: storage keeps a multi-line description, so a task carries its body in
+  // `description` alone, while a row stored before that (or synced from an older
+  // peer) holds the first line plus the full body in `metadata.prompt`/`context`.
+  // Every shape must render its body exactly once on both prompt paths.
+  describe.each([
+    ['description only (stored as written)', { description: 'Fix the login flow\n\nSteps:\n1. UNIQ-OPEN-PAGE\n2. click login', metadata: {} }],
+    ['description + slashdo invocation', { description: 'Fix the login flow\n\nSteps:\n1. UNIQ-OPEN-PAGE\n2. click login', metadata: { slashdoCommand: 'release' } }],
+    ['collapsed description + metadata.prompt (older row)', { description: 'Fix the login flow', metadata: { prompt: 'Fix the login flow\n\nSteps:\n1. UNIQ-OPEN-PAGE\n2. click login' } }],
+    ['collapsed description + metadata.context (older row)', { description: 'Fix the login flow', metadata: { context: 'Fix the login flow\n\nSteps:\n1. UNIQ-OPEN-PAGE\n2. click login' } }],
+    ['collapsed description + slashdo + prompt (older row)', { description: 'Fix the login flow', metadata: { slashdoCommand: 'release', prompt: 'Fix the login flow\n\nSteps:\n1. UNIQ-OPEN-PAGE\n2. click login' } }],
+  ])('task body is rendered once: %s', (_label, shape) => {
+    it('on the light-context path', () => {
+      const light = buildLightContextPrompt(makeTask(shape), '/r', null, {});
+      const text = typeof light === 'string' ? light : JSON.stringify(light);
+      expect(text.match(/UNIQ-OPEN-PAGE/g)).toHaveLength(1);
+    });
+
+    it.each([['cli', 'light'], ['api', 'full']])('on the %s provider path (%s prompt)', async (providerType) => {
+      vi.mocked(loadSlashdoFile).mockResolvedValue('# Release\n\nCanonical release procedure.');
+      const prompt = await buildAgentPrompt(
+        makeTask(shape), {}, '/r', null, { providerType, providerId: providerType === 'cli' ? 'codex' : undefined });
+      vi.mocked(loadSlashdoFile).mockResolvedValue(null);
+      expect(prompt.match(/UNIQ-OPEN-PAGE/g)).toHaveLength(1);
+      expect(prompt.match(/2\. click login/g)).toHaveLength(1);
+    });
+  });
+
   it('pins the bundled release workflow to PortOS Code Review Defaults', async () => {
     vi.mocked(getCodeReviewDefaults).mockResolvedValueOnce({ reviewers: ['codex'] });
     vi.mocked(loadSlashdoFile).mockResolvedValueOnce('# Release\n\nCanonical release procedure.');
