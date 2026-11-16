@@ -1,20 +1,6 @@
 /**
  * Data-root resolution + worktree-checkout detection.
  *
- * Data-root resolution + worktree-checkout detection (#1947). `resolveInstallRoot(fallbackRoot)`
- * prefers the `PORTOS_DATA_ROOT` env var (pinned at real launch in `ecosystem.config.cjs`) over an
- * `import.meta.url`-derived fallback, so a process booted from inside a CoS agent git worktree still
- * resolves `data/`/`data.reference/` to the real install instead of the worktree's empty tree.
- * `isWorktreeRoot(rootDir)` is the boot-migration backstop — true when `rootDir` lives under
- * `data/cos/worktrees/` (keyed on the path segment only, so a fresh install's empty `data/` isn't a
- * false positive). `resolveCodeRootForModule(moduleUrl)` is the single source of truth for the "two
- * directories above this file" depth assumption — `paths.js`'s `CODE_ROOT` and
- * `services/userActions.js`'s data-root guard both derive through it so they cannot silently drift
- * apart. `DATA_ROOT_ENV` is the env-var name constant. The one pin a worktree-executing process honors
- * is a DISPOSABLE root — one carrying `DISPOSABLE_ROOT_MARKER` (`isDisposableRoot(dir)`), which the
- * boot smoke creates (#8343); a live install never carries it. Consumed by `fileUtils.js` (`PATHS`),
- * `server/index.js`, and `scripts/run-migrations.js`.
- *
  * PortOS derives its "install root" (the directory that contains `data/`,
  * `data.reference/`, `scripts/`) from where the executing file lives
  * (`import.meta.url`). That silently breaks when a process boots from inside a

@@ -2,21 +2,6 @@
  * Image-based lighting for the validated procedural sculpt spec
  * (`server/lib/threejsModel.js`).
  *
- * Image-based lighting for the procedural sculpt spec, used by the Three.js Models preview.
- * `spec.lights` are punctual — they light a surface but give it nothing to REFLECT, so `metalness`,
- * `transmission`, `clearcoat` and `iridescence` read off an environment or read off nothing, and a
- * plausible conductor renders near-black without one. `createSculptEnvironmentTarget(renderer,
- * preset)` builds a preset locally from three's own primitives and prefilters it through
- * `PMREMGenerator` — `neutral` is three's bundled `RoomEnvironment`, `studio` a dark shell with three
- * emissive softbox panels plus a floor bounce — returning null for `none`; the caller owns the render
- * TARGET and disposes it (disposing only `.texture` leaks the framebuffer behind it).
- * `THREEJS_RENDER_PROFILE` mirrors the server's colour-space/tone-map/exposure contract so the preview
- * renders at what the export stamps on the model. Deliberately NOT drei's `<Environment preset=…>`,
- * which fetches an HDR from a CDN: rendering a local model makes no outbound request.
- * `resolveSculptEnvironment(spec)` is the client mirror of `resolveThreejsEnvironment` in
- * `server/lib/threejsModel.js`, reading a spec with no `environment` key as the `none` it was actually
- * authored against.
- *
  * `spec.lights` are punctual: they light a surface but give it nothing to
  * REFLECT. Every reflective PBR channel the material schema accepts —
  * `metalness`, `transmission`, `clearcoat`, `iridescence` — reads off an

@@ -1,15 +1,4 @@
 // Allowlist of safe commands
-//
-// Two allowlists, one parser. `validateCommand(cmd)` gates the OPERATOR-driven runner against
-// `ALLOWED_COMMANDS` (+ `validatePm2Command(args)`, which rejects daemon-wide `pm2
-// kill`/`startup`/`unstartup` and `<verb> all`). `validateUnattendedCommand(cmd)` gates the UNATTENDED
-// lane (Layered Intelligence `cmd` sources) against the far narrower `UNATTENDED_READONLY_COMMANDS` —
-// read-only inspection binaries only, no `npx`/`node`/`python`/`pip`/`curl`/`wget`/`brew`, since those
-// execute network code with no shell metacharacter — then applies a per-binary SUBCOMMAND gate to the
-// multi-purpose survivors, so `git reset --hard` / `git commit`, `find -delete` / `-exec`, and
-// `gh`/`glab` writes (`api -X POST`, `pr merge`) are rejected while `git log`, `find -name` and `gh pr
-// list` pass. Both share one parse + `DANGEROUS_SHELL_CHARS` body. Mirrored by the `agentGuard/` PATH
-// shim for agentic paths.
 export const ALLOWED_COMMANDS = new Set([
   'npm', 'npx', 'pnpm', 'yarn', 'bun',
   'node', 'deno',

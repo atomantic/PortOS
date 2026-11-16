@@ -46,6 +46,7 @@ import { ensureManagedRuntimeReady } from './providerExecutionReadiness.js';
 import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
 import { iterateOpenAiChat } from '../lib/openAiChatStream.js';
 
+import { spawn } from '../lib/childProcess.js';
 // Re-export so the route can keep importing modes via askService — but
 // askConversations is the source of truth (it owns the persistence schema).
 export const VALID_MODES = STORAGE_VALID_MODES;
@@ -511,7 +512,6 @@ async function* streamCompletion(provider, model, prompt, signal) {
   // because Ask prompts can run tens of thousands of characters once
   // sources + history are concatenated, which exceeds OS argv limits
   // (especially on Windows ~32k).
-  const { spawn } = await import('../lib/childProcess.js');
   let args = [...(provider.args || [])];
   // OpenCode runs headless via the `run` subcommand (reads the prompt from
   // stdin); ensure it leads the argv even if a customized/TUI provider config

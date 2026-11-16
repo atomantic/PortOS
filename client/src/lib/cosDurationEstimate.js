@@ -24,7 +24,7 @@
 import { extractCosTaskType } from './cosTaskType.js';
 
 import { executionDurationKey, executionKeyPrefix, MIN_EXECUTION_SAMPLES } from '../../../server/lib/executionDurationKey.js';
-export { EXECUTION_EFFORT_NONE, executionDurationKey, executionKeyPrefix, MIN_EXECUTION_SAMPLES } from '../../../server/lib/executionDurationKey.js';
+
 
 // Rungs 3 and 4 deliberately carry no threshold here: getAllTaskDurations
 // pre-filters the published task-type and overall rows at one completion.

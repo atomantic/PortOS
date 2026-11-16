@@ -1,53 +1,13 @@
 // Shared, dependency-free text helpers for server-side prose analysis.
 //
-// Pure dependency-free prose helpers. `isStr(v)` and `isNonBlankStr(v)` are the ONLY string predicates
-// under `server/` (#6837) — the bare type check, and type check plus a non-empty `trim()` for ids,
-// keys, hosts, model names and prose fields where whitespace-only is already invalid; the "no private
-// string predicate or bounder" guard in `textUtils.test.js` fails the suite when a copy of either, or
-// a `trimTo`-shaped bounder, is re-declared in any non-test source under `server/` or any source under
-// `client/src/` (`client/src/lib/textUtils.js` re-exports both for the browser bundle).
-// `countWords(text)` is the canonical whitespace-token count (`\S+`) and the only one — every server
-// word count (Writers Room, lettering density, rapid reader, autobiography, script-video beats) and
-// the client's (`client/src/lib/textUtils.js` re-exports it) resolve here, and the "no private
-// countWords" guard in `textUtils.test.js` fails the suite when a re-spelled count (the
-// whitespace-token match, a split-and-filter, or a helper under either conventional name) reappears in
-// any non-test source under `server/` or any source under `client/src/`; the editorial prose-analysis
-// checks deliberately count LETTER words instead, through `editorial/proseTics.js#tokenizeWords`,
-// which owns that tokenizer the same way; `trimTo(value, max)` trims and bounds strings without
-// coercing non-strings, and is safe for shared modules consumed by the browser; `escapeRegExp(value)`
-// is the one to import instead of re-inlining the escape (the sibling guard in `textUtils.test.js`
-// fails the suite when a copy reappears in any non-test source under `server/`, or in ANY source under
-// `client/src/`, tests and `.jsx` included — `client/src/lib/textUtils.js` re-exports this module for
-// the browser bundle); `trimToClause(v, max)` is its boundary-aware twin for PROSE fields — it backs
-// off to the last sentence terminator, then the last clause boundary, then the last whole word, so a
-// capped field never ends mid-thought (it lives here rather than in `storyBible.js`, which re-exports
-// it, so the pure story-model leaves the browser bundle shares can cap prose without pulling `crypto`
-// / `fileUtils`); `kebabCase(text)` is the canonical ASCII slug transform (PLAN.md `[slug]` ids and
-// `planner:<model>` labels), and `truncateOnBoundary(slug, max)` is its bounder — back off to the last
-// `-` at or before `max` so a slug a human reads (a PLAN.md id, the app segment of a CoS worktree
-// directory) is never cut mid-word, which `trimTo` would reintroduce; `clampToCharLimit(text, max)` is
-// `trimTo`'s reader-facing twin — it cuts on a sentence end (when one sits 60%+ into the allowance) or
-// a word boundary rather than mid-word and returns `{ text, truncated }` so the caller can say the
-// text was cut, which is what bounds an AI-enhanced render prompt to a backend's hard cap (reactor.inc
-// fast-h3 rejects an over-length prompt outright). `firstLine(text)` is the first non-blank line,
-// trimmed — the CoS task headline `addTask` dedupes on, declared here rather than in the task store so
-// a closure-sensitive caller can reach it (`cosTaskStore.js` re-exports it).
-//
-// `countWords` was previously re-implemented three times with subtly different
-// regexes (`server/services/writersRoom/local.js`, `server/lib/issueLength.js`,
-// and the client's `client/src/utils/formatters.js`). They all converge on the
-// same intent — count whitespace-delimited tokens — so this is the canonical
-// server-side home. `client/src/lib/textUtils.js` re-exports `escapeRegExp` from
-// here, so keep this module pure: no Node built-in, nothing outside `server/lib`.
+// Canonical server-side home for `countWords`. `client/src/lib/textUtils.js`
+// re-exports `escapeRegExp` from here, so keep this module pure: no Node
+// built-in, nothing outside `server/lib`.
 
 /**
  * The one string-type predicate under `server/` (and, via the client mirror, the
- * browser bundle). Every sanitizer used to carry its own copy — 16 of them under
- * this exact body, the rest under `isString` / `hasText` / `isNonEmptyStr`
- * with drifting semantics — because the only exported one lived in
- * `storyBible.js` behind `crypto` / `fileUtils`. The "no private string
- * predicate or bounder" guard in `textUtils.test.js` fails the suite when a
- * copy reappears (#6837).
+ * browser bundle). The "no private string predicate or bounder" guard in
+ * `textUtils.test.js` fails the suite when a copy reappears (#6837).
  *
  * @param {unknown} v
  * @returns {v is string}
@@ -95,33 +55,23 @@ export const trimTo = (value, max) => (
   typeof value === 'string' ? value.trim().slice(0, max) : ''
 );
 
-// Smallest share of the budget a sentence-boundary cut may keep. A cut that
-// lands above this wins over a mid-sentence clip; below it, gutting the record
-// costs more than the ragged edge does.
-//
-// This was 0.6, which rejected a valid sentence break at 53% of a field's budget
-// and fell through to a nearly-at-cap whole-word fragment. The next verification
-// round then flagged the sanitizer-authored incomplete sentence, and every
-// over-cap replacement reproduced it. A single-sentence field (logline, ending
-// hook) is the common case: its first terminator is often its ONLY one, so a
-// floor near the top of the budget rejects the clean cut it was meant to prefer.
+// Smallest share of the budget a sentence-boundary cut may keep. A cut above
+// this wins over a mid-sentence clip; below it, gutting the record costs more
+// than the ragged edge. Kept low because a single-sentence field (logline,
+// ending hook) often has only one terminator, early in the budget.
 const SENTENCE_CUT_FLOOR = 0.3;
 
 // A sentence terminator that actually ENDS a sentence: `.`/`!`/`?` plus any
 // closing quote or bracket, and then either whitespace or the end of the window.
-// Requiring that lookahead is what keeps "Dr. Vey" and "3.5" from reading as
-// breaks; allowing `$` is what lets a terminator sitting flush against the
-// budget edge count, which `lastIndexOf('. ')` missed because it demanded a
-// trailing space that the slice had already cut off.
+// The lookahead keeps "Dr. Vey" and "3.5" from reading as breaks; `$` lets a
+// terminator flush against the budget edge count (the slice already cut off any
+// trailing space).
 const SENTENCE_END_RE = /[.!?]["'’”)\]]*(?=\s|$)/g;
 const COMMON_ABBREVIATION_RE = /\b(?:dr|etc|jr|mr|mrs|ms|prof|sr|st|vs)\.$/i;
 
 // A clause boundary — the weaker cut used when a short field holds no sentence
-// terminator at all. Short caps (a 200-char transition label) routinely hold one
-// long clause-chained sentence, where the whole-word fallback leaves a dangling
-// half-clause ("...escrows the proceeds with no repayment lien, no") that reads
-// as an authoring gap to the next verify round. Because it is weaker than a
-// sentence break, it has to keep more of the field to be worth taking.
+// terminator, where the whole-word fallback would leave a dangling half-clause.
+// Weaker than a sentence break, so it has to keep more of the field.
 const CLAUSE_END_RE = /[,;:—–]/g;
 const CLAUSE_CUT_FLOOR = 0.6;
 
@@ -139,11 +89,8 @@ const CLAUSE_CUT_FLOOR = 0.6;
  * last whitespace boundary so the result still ends on a whole word. Never
  * returns more than `max` chars.
  *
- * Lives here rather than in `storyBible.js` (which re-exports it, so every
- * existing caller is unchanged) because `storyBible.js` pulls `crypto` +
- * `fileUtils`: the pure story-model leaves the browser bundle shares —
- * `characterFramework.js`, `characterEvolution.js` — need the boundary-aware
- * cap without dragging Node built-ins into the client build.
+ * Lives here (re-exported by `storyBible.js`) so browser-shared story-model
+ * leaves get the cap without importing `storyBible.js`'s Node built-ins.
  */
 export function trimToClause(v, max) {
   if (typeof v !== 'string') return '';

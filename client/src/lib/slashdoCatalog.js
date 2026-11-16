@@ -16,7 +16,7 @@
  */
 import { SLASHDO_WORKFLOWS as SERVER_WORKFLOWS, slashdoWorkflowAppliesTo } from '../../../server/lib/slashdoCatalog.js';
 
-export { SLASHDO_APP_TYPES } from '../../../server/lib/slashdoCatalog.js';
+
 
 /**
  * slashdo's command namespace. Kept local rather than imported from

@@ -19,6 +19,7 @@ import { peerFetch } from '../lib/peerHttpClient.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { getNavPageForPath } from '../lib/navManifest.js';
+import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
 
 const ENABLED_KEY = 'PORTOS_FLEET_LLM_ENABLED';
 const MODEL = 'qwen3.8-27b';
@@ -344,7 +345,6 @@ async function configure({ emit, isCancelled }) {
   const endpoint = `http://127.0.0.1:${PORTS.FLEET_LLM}/v1`;
   const existing = providers.find((provider) => provider.type === 'api' && provider.endpoint === endpoint);
   const record = { name: 'Dedicated Qwen API', type: 'api', endpoint, apiKey, models: [MODEL], defaultModel: MODEL, vllmBacked: true, enabled: true, thinking: false, temperature: 0.7, timeout: 600000 };
-  const { localRuntimeForProvider } = await import('../lib/localProviderRuntime.js');
   for (const provider of providers) {
     const localRuntime = localRuntimeForProvider(provider);
     if (['lmstudio', 'ollama', 'llama', 'sglang', 'slotstream'].includes(localRuntime?.kind)) {

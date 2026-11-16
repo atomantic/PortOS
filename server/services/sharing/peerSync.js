@@ -82,9 +82,11 @@ import {
   unsubscribePeer,
 } from './peerSubscriptions.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
+import { listUniverses } from '../universeBuilder.js';
+import { listSeries } from '../pipeline/series.js';
 
-// Re-export the decomposed modules' public surface so existing deep importers
-// keep working without a re-import. (#1830)
+// Re-export the decomposed modules' surface that importers of this file use.
+// Names with no importer through here live only in their declaring module. (#1830)
 export {
   PEER_SUBSCRIBABLE_KINDS,
   peerSyncEvents,
@@ -93,11 +95,6 @@ export {
   ERR_SCHEMA_VERSION_AHEAD,
 } from './peerSyncShared.js';
 export {
-  buildAssetManifest,
-  collectCollectionAssetReferences,
-  diffAssetManifestAgainstLocal,
-} from './peerSyncAssets.js';
-export {
   assetIntegrityForRecord,
   assetShaListForRecord,
 } from './recordKinds.js';
@@ -105,31 +102,23 @@ export { pushRecordToPeer } from './peerSyncPush.js';
 export { applyIncomingPush } from './peerSyncReceive.js';
 export {
   listPeerSubscriptions,
-  findPeerSubscription,
   getOutboundCoverageForPeer,
   subscribePeer,
   unsubscribePeer,
 } from './peerSubscriptions.js';
 export {
   buildMediaLibraryManifest,
-  libraryKindsExcludedByPatterns,
-  syncMediaLibraryFromPeer,
   syncMediaLibraryWithAllPeers,
 } from './peerMediaLibrarySync.js';
 export {
   buildCosHistoryManifest,
-  diffCosHistoryManifestAgainstLocal,
-  syncCosHistoryFromPeer,
   syncCosHistoryWithAllPeers,
   buildCosTasksPayload,
-  syncCosTasksFromPeer,
   syncCosTasksWithAllPeers,
 } from './peerCosSync.js';
 export {
   buildEidoverseFoundationOffering,
-  syncEidoverseFoundationsFromPeer,
   syncEidoverseFoundationsWithAllPeers,
-  __resetEidoverseFoundationSweepForTests,
 } from './peerEidoverseFoundationSync.js';
 
 
@@ -194,13 +183,11 @@ const RECORD_KIND_LISTERS = {
   // Dynamic-imported to avoid a static cycle (peerSync already imports its
   // merge entry point).
   universe: async () => {
-    const { listUniverses } = await import('../universeBuilder.js');
     return listUniverses({ includeDeleted: false });
   },
   // Dynamic-imported to avoid a static cycle (peerSync already imports its
   // merge entry point).
   series: async () => {
-    const { listSeries } = await import('../pipeline/series.js');
     return listSeries({ includeDeleted: false });
   },
   mediaCollection: () => listCollections({ includeDeleted: false }),

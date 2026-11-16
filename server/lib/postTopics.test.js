@@ -35,10 +35,6 @@ describe('POST_TOPICS registry (issue #3252)', () => {
     expect(getTopic('morse').module).toBeNull();
   });
 
-  it('SESSION_TOPIC_IDS is exactly the composable subset', () => {
-    expect(SESSION_TOPIC_IDS).toEqual(['math', 'memory', 'wordplay', 'verbal', 'imagination', 'cognitive']);
-  });
-
   // The registry partitions the SAME drill types the config schema validates. If
   // it drifts, a drill type would either be ungated (no topic owns it) or the
   // Practice Plan would render a toggle the schema then rejects on save.

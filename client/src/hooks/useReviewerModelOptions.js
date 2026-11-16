@@ -2,83 +2,64 @@
  * Provides selectable model ids and provider defaults per model-taking reviewer for the ReviewerPicker
  * Model column, from local LLM status and provider lists.
  *
- * Selectable model ids and concrete provider defaults per model-taking reviewer for `ReviewerPicker`'s
- * Model column — local-LLM ids from `/api/local-llm/status`, codex/claude/antigravity tiers from
- * `/api/providers` (claude's list also spans installed Ollama ids for an Ollama-backed CLI; agy's list
- * collapses to base ids since the row has its own Effort cell). Returns `{ optionsByReviewer,
- * defaultModels, freeText, unavailable, loaded, reviewers }`. Use when: Every surface that renders
- * `ReviewerPicker` (Code Review Defaults, TaskAddForm, ScheduleTab, SlashDoRunDrawer) — the picker
- * never fetches; pass this as its `modelOptions`.
+ * Every picker surface (Code Review Defaults, TaskAddForm, ScheduleTab,
+ * SlashDoRunDrawer) passes this as its `modelOptions`; the picker never fetches.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import * as api from '../services/api';
 import { filterSelectableModels, selectableModelsForProvider } from '../utils/providers';
-// THE reviewer -> provider-record table, shared with the retired-pin audit
-// (#7339). Taken from the server leaf rather than mirrored: the picker offering
-// a tier the audit calls retired — or the audit flagging a pin the picker just
-// handed the user — is exactly the drift a second copy would reintroduce.
+// THE reviewer -> provider-record table, shared with the retired-pin audit so the
+// picker and the audit cannot drift on what counts as a retired tier.
 import { REVIEWER_PROVIDER_MATCHERS, providersForReviewer } from '../../../server/lib/reviewerProviderMatchers.js';
 import { MODEL_SELECTABLE_REVIEWERS } from '../components/cos/constants';
 import { reviewerEffortLevels, LOCAL_LLM_REVIEWERS } from '../lib/reviewerPins';
 import { LOCAL_LLM_BACKENDS } from '../lib/localLlmBackends';
 
-// Local backends whose installed-model list `/api/local-llm/status` actually
-// probes — the same roster the Runtimes/Model Library views render a catalog for,
-// reused so the two can't drift. `mtplx` is a local backend but is NOT in it: its
+// Local backends whose installed-model list `/api/local-llm/status` probes, the
+// same roster the Runtimes/Model Library views use. `mtplx` is NOT in it: its
 // listing runs the `mtplx` wrapper, so it stays catalog-sourced and free-text.
 const PROBED_LOCAL_BACKENDS = LOCAL_LLM_BACKENDS.map((b) => b.id);
 
 /**
- * Selectable model ids per model-taking reviewer, for `ReviewerPicker`'s Model
- * column. One hook so all four picker surfaces (Code Review Defaults, TaskAddForm,
- * ScheduleTab, SlashDoRunDrawer) offer the SAME options instead of only the
- * settings panel having them (#3133).
+ * Selectable model ids per model-taking reviewer, so every picker surface offers
+ * the SAME options.
  *
- * Two sources, because the two reviewer kinds are different things:
- * - `lmstudio` / `ollama` ids come from `/api/local-llm/status`, so they reflect
- *   what's actually installed rather than a provider's stale stored `models`.
+ * Two sources:
+ * - `lmstudio` / `ollama` ids come from `/api/local-llm/status`, reflecting what
+ *   is actually installed rather than a provider's stale stored `models`.
  * - Every other reviewer's tiers come from the provider catalog
- *   (`/api/providers`), unioned across the records listed in
- *   `REVIEWER_PROVIDER_MATCHERS`. That includes `mtplx`: its installed
- *   checkpoints live behind `/api/local-llm/mtplx/status`, which INVOKES the
- *   `mtplx` wrapper (a several-hundred-MB venv bootstrap on a cold version — see
- *   `server/lib/mtplxRuntime.js`), and a picker mount must never pay that. The
- *   shipped provider's catalog plus a free-text field is the honest trade.
+ *   (`/api/providers`), unioned across the records in
+ *   `REVIEWER_PROVIDER_MATCHERS`. That includes `mtplx`: its checkpoints live
+ *   behind `/api/local-llm/mtplx/status`, which INVOKES the `mtplx` wrapper (a
+ *   several-hundred-MB venv bootstrap on a cold version, see
+ *   `server/lib/mtplxRuntime.js`), and a picker mount must never pay that.
  *
  * The `claude` list spans BOTH usage modes: the `claude-code`/`claude-code-tui`
- * provider tiers and the installed Ollama ids (an Ollama-backed `claude` CLI,
- * where `--model` selects the local model). Deduped, order-preserving.
+ * tiers and the installed Ollama ids (an Ollama-backed CLI, where `--model`
+ * selects the local model). Deduped, order-preserving.
  *
- * `freeText` marks a reviewer whose picker must ALSO accept a typed id, not only
- * a pick: an Ollama-backed `claude` can run any locally-installed id, and a
- * Bedrock/Vertex install needs its environment's own id form, neither of which a
- * catalog can enumerate. Those still render a dropdown of the catalog — the flag
- * adds a "Custom…" escape to it (see `ReviewerPicker`'s Model cell); a reviewer
- * marked `false` gets a closed list, because its options came from a live probe.
+ * `freeText` marks a reviewer whose picker must ALSO accept a typed id (an
+ * Ollama-backed `claude`, or a Bedrock/Vertex id a catalog can't enumerate); it
+ * adds a "Custom…" escape to the dropdown. `false` gets a closed list because
+ * its options came from a live probe.
  *
- * `unavailable` distinguishes "backend is down" from "backend has no models" so
- * the empty state can say the useful thing. Absent = not probed (every reviewer
- * outside PROBED_LOCAL_BACKENDS, `mtplx` included).
+ * `unavailable` distinguishes "backend is down" from "backend has no models".
+ * Absent = not probed (every reviewer outside PROBED_LOCAL_BACKENDS).
  *
  * `providerDisabled[reviewer]` is true when the reviewer HAS provider records on
- * this install and every one of them is switched off — the signal
- * `ReviewerPicker` uses to drop it from the Add row, so a machine that never
- * enabled Kimi or Cursor isn't offered them. Only ever true from a landed fetch:
- * a null/failed `/api/providers` matches no record, which reads as "nothing
- * known", never as "switched off". Always false for a LOCAL_LLM_REVIEWERS
- * backend, whose review never reads a provider record at all — see the exemption
- * at the return site.
+ * this install and every one is switched off, so `ReviewerPicker` can drop it
+ * from the Add row. Only true from a landed fetch: a null/failed
+ * `/api/providers` reads as "nothing known", never "switched off". Always false
+ * for a LOCAL_LLM_REVIEWERS backend (see the exemption at the return site).
  *
- * `loaded` flips once both fetches settle, so a consumer can tell "no options
- * yet" from "genuinely no options" (an empty list is a real answer, not a
- * pre-fetch placeholder).
+ * `loaded` flips once both fetches settle, so "no options yet" differs from
+ * "genuinely no options".
  *
- * `modelEffortLevels(reviewer, model)` narrows a reviewer's effort ladder by its
- * PINNED MODEL, because `agy` validates the model/effort PAIR (`gemini-3.1-pro`
- * has no `medium` tier) — see #3733. Only `antigravity` narrows today; every other
- * reviewer returns its static ladder. Lives here rather than in the picker so the
- * picker keeps doing no fetching of its own.
+ * `modelEffortLevels(reviewer, model)` narrows an effort ladder by the PINNED
+ * MODEL, because `agy` validates the model/effort PAIR (`gemini-3.1-pro` has no
+ * `medium` tier). Only `antigravity` narrows today. Lives here so the picker does
+ * no fetching of its own.
  *
  * @returns {{ optionsByReviewer: Record<string, string[]>, defaultModels: Record<string, string|null>, freeText: Record<string, boolean>, unavailable: Record<string, boolean>, providerDisabled: Record<string, boolean>, modelEffortLevels: (reviewer: string, model?: string|null) => readonly string[]|null, loaded: boolean, reviewers: string[] }}
  */
@@ -90,8 +71,7 @@ export default function useReviewerModelOptions() {
 
   useEffect(() => {
     let cancelled = false;
-    // Secondary controls — a failed fetch degrades the Model column to free-text
-    // rather than toasting over whatever page hosts the picker.
+    // Secondary controls — a failed fetch degrades to free-text, not a toast.
     Promise.all([
       api.getLocalLlmStatus({ silent: true }).catch(() => null),
       api.getProviders({ silent: true }).catch(() => null),
@@ -110,11 +90,9 @@ export default function useReviewerModelOptions() {
       .map((m) => m.id || m.name)
       .filter(Boolean);
 
-    // Resolved ONCE for the whole roster rather than per lookup — the option
-    // list, the shown default, the agy raw catalog and `providerDisabled` all
-    // ask the same question, and a per-call helper re-walked the provider array
-    // for every one of them. Ordering and de-duping are `providersForReviewer`'s
-    // own contract; see its JSDoc.
+    // Resolved ONCE for the whole roster: the option list, default, agy catalog and
+    // `providerDisabled` all ask the same question. Ordering/de-duping are
+    // `providersForReviewer`'s contract.
     const providersByReviewer = Object.fromEntries(
       Object.keys(REVIEWER_PROVIDER_MATCHERS).map((reviewer) => [reviewer, providersForReviewer(reviewer, providers)])
     );
@@ -122,13 +100,12 @@ export default function useReviewerModelOptions() {
     const providerReviewers = (providers || []).map(provider => `provider:${provider.id}`);
     const providersFor = (reviewer) => providersByReviewer[reviewer] || [];
 
-    // `selectableModelsForProvider` owns the per-provider normalization (today:
-    // agy's one-id-per-effort-tier catalog collapsed to base ids, so the row's
-    // separate Effort cell stays the effort control). Going through it rather
-    // than special-casing agy here keeps the rule in one place.
+    // `selectableModelsForProvider` owns per-provider normalization (agy's
+    // one-id-per-effort-tier catalog collapses to base ids so the Effort cell stays
+    // the effort control).
     const selectableModels = (provider) => {
-      // `models` may be empty on a CLI provider configured with only a
-      // defaultModel — `[]` is truthy, so a bare `||` wouldn't fall through.
+      // `models` may be `[]` on a CLI provider with only a defaultModel; `[]` is
+      // truthy, so a bare `||` wouldn't fall through.
       const models = provider.models?.length ? provider.models : [provider.defaultModel];
       return filterSelectableModels(selectableModelsForProvider(provider, models));
     };
@@ -136,10 +113,9 @@ export default function useReviewerModelOptions() {
     const providerTiers = (reviewer) =>
       Array.from(new Set(providersFor(reviewer).flatMap(selectableModels)));
 
-    // Show the configured provider default in the picker even when the user has
-    // not saved a per-reviewer override. A concrete default is useful context;
-    // configured-default sentinels intentionally resolve to null because the CLI
-    // owns the choice and there is no model id PortOS can honestly display.
+    // Show the configured provider default even without a saved override.
+    // Configured-default sentinels resolve to null: the CLI owns the choice, so
+    // there is no model id to display.
     const providerDefault = (reviewer) => {
       const provider = providersFor(reviewer)[0];
       if (!provider?.defaultModel) return null;
@@ -148,8 +124,8 @@ export default function useReviewerModelOptions() {
       ).find(Boolean) || null;
     };
 
-    // Local backend model lists come from the live runtime probe, so only show a
-    // provider default when it is present in that authoritative list.
+    // Local model lists come from the live probe, so only show a provider default
+    // present in that list.
     const localDefault = (backend) => {
       const candidate = providersFor(backend)[0]?.defaultModel;
       return candidate && localIds(backend).includes(candidate) ? candidate : null;
@@ -161,30 +137,22 @@ export default function useReviewerModelOptions() {
       lmstudio: localIds('lmstudio'),
       ollama,
       codex: providerTiers('codex'),
-      // Claude tiers first (the common case), then installed Ollama ids for an
-      // Ollama-backed `claude`. Deduped, order-preserving.
+      // Claude tiers first, then installed Ollama ids for an Ollama-backed `claude`.
       claude: Array.from(new Set([...providerTiers('claude'), ...ollama].filter(Boolean))),
       antigravity: providerTiers('antigravity'),
-      // The shipped grok provider carries only the configured-default sentinel,
-      // which `filterSelectableModels` strips — so this is legitimately `[]` until
-      // the user lists real ids on the provider. The Model cell stays useful
-      // regardless because grok, like every CLI reviewer, is free-text.
+      // The shipped grok provider carries only the configured-default sentinel
+      // (stripped by `filterSelectableModels`), so this is `[]` until the user lists
+      // real ids; the cell stays usable because every CLI reviewer is free-text.
       grok: providerTiers('grok'),
       cursor: providerTiers('cursor'),
       pi: providerTiers('pi'),
-      // Legitimately empty, for grok's documented reason: the shipped kimi
-      // provider carries only the configured-default sentinel, which
-      // `filterSelectableModels` strips. Free-text keeps the cell usable.
+      // Empty for grok's reason: the shipped kimi provider carries only the sentinel.
       kimi: providerTiers('kimi'),
-      // The namespaced `opencode/*` ids the seeded Zen CLI/TUI records carry,
-      // which the Harnesses page refreshes from `opencode models` — so the cell
-      // is a dropdown of what this account can actually run instead of the plain
-      // text input it used to be. Still free-text underneath: `opencode -m` takes
-      // any `provider/model` the user's own config resolves.
+      // The namespaced `opencode/*` ids the Harnesses page refreshes from
+      // `opencode models`. Still free-text: `opencode -m` takes any `provider/model`
+      // the user's own config resolves.
       opencode: providerTiers('opencode'),
-      // Kilo forks OpenCode's `provider/model` ids and its `models` subcommand,
-      // so this is whatever the Harnesses page last refreshed onto the shipped
-      // records — empty until then, with free-text keeping the cell usable.
+      // Kilo forks OpenCode's ids; empty until the Harnesses page refreshes them.
       kilo: providerTiers('kilo'),
       mtplx: providerTiers('mtplx'),
     };
@@ -201,32 +169,26 @@ export default function useReviewerModelOptions() {
       pi: null, // A bare reviewer uses Pi's own configured default.
 
       kimi: providerDefault('kimi'),
-      // Deliberately null even though the Zen records carry one: the reviewer
-      // spawns a BARE `opencode`, which falls back to whatever the user's own
-      // config names — not to the PortOS record's default. Naming a model here
-      // would claim a default the run won't use.
+      // Deliberately null: the reviewer spawns a BARE `opencode`, which uses the
+      // user's own config, not the PortOS record's default.
       opencode: null,
-      // Same reasoning as `opencode`: the reviewer spawns a bare `kilo`, which
-      // falls back to the model the user's own Kilo config names.
+      // Same as `opencode`: a bare `kilo` uses the user's own Kilo config.
       kilo: null,
       mtplx: providerDefault('mtplx'),
     };
 
-    // The agy providers' RAW catalog — one id per effort tier
-    // (`gemini-3.6-flash-low|-medium|-high`), which is exactly what the narrowing
-    // reads. Deliberately NOT `optionsByReviewer.antigravity`: that list has
-    // already had the suffixes collapsed away, so it carries no tier information.
+    // The agy providers' RAW catalog (one id per effort tier,
+    // `gemini-3.6-flash-low|-medium|-high`), which the narrowing reads. NOT
+    // `optionsByReviewer.antigravity`, whose suffixes are already collapsed.
     const antigravityCatalog = Array.from(new Set(
       providersFor('antigravity').flatMap((provider) => provider.models || [])
     ));
-    // The effort ladder a reviewer offers ONCE ITS MODEL IS PINNED. `agy` validates
-    // the pair, so a model with no `-medium` sibling must not offer `medium`
-    // (#3733). `antigravityModelEffortLevels` returns null for "can't tell" —
-    // empty catalog, unset model, or the configured-default sentinel — and the legacy
-    // runtime ladder stands there, the same null-means-fall-back contract
-    // `effortLevelsForProvider` uses. `[]` is a real answer: that model has no
-    // effort tiers at all. For `codex`, the model gates `minimal` on gpt-6 family
-    // models that reject it (model-gating is already handled by reviewerEffortLevels).
+    // The effort ladder offered ONCE ITS MODEL IS PINNED: `agy` validates the pair,
+    // so a model with no `-medium` sibling must not offer `medium`.
+    // `antigravityModelEffortLevels` returns null for "can't tell" (empty catalog,
+    // unset model, configured-default sentinel) and the runtime ladder stands; `[]`
+    // is a real answer (no effort tiers). `codex` model-gating is handled by
+    // reviewerEffortLevels.
     const modelEffortLevels = (reviewer, model = null) => reviewerEffortLevels(reviewer, model, antigravityCatalog);
 
     return {
@@ -235,18 +197,15 @@ export default function useReviewerModelOptions() {
       optionsByReviewer,
       defaultModels,
       modelEffortLevels,
-      // A PROBED backend's id list is authoritative, so keep those pickers a closed
-      // `<select>`. Gated on PROBED_LOCAL_BACKENDS rather than LOCAL_LLM_REVIEWERS
-      // because `mtplx` is a local backend we deliberately do NOT probe here — a
-      // closed select over its stored catalog would forbid a checkpoint the user
-      // has actually pulled. Every CLI reviewer is free-text too: `claude` for
-      // the Ollama-backed / Bedrock-form cases above, `codex`/`antigravity`/`grok`/`cursor`
-      // because their catalogs are stored snapshots that can lag a newly-released
-      // tier — grok's shipped catalog holds no real id at all, so a typed id is the
-      // ONLY way to pin one (an agy pin may also be typed effort-suffixed — the
-      // server splits it) — and `opencode` because a user's own config can declare
-      // namespaces the Zen catalog never lists. Derived from the rosters so a
-      // reviewer added to either one can't silently default to the wrong control.
+      // A PROBED backend's id list is authoritative, so those stay a closed
+      // `<select>`. Gated on PROBED_LOCAL_BACKENDS, not LOCAL_LLM_REVIEWERS: a closed
+      // select over `mtplx`'s stored catalog would forbid a checkpoint the user has
+      // pulled. Every CLI reviewer is free-text: `claude` for the Ollama-backed /
+      // Bedrock cases, `codex`/`antigravity`/`grok`/`cursor` because stored catalogs
+      // lag new tiers (grok's holds no real id, so typing is the ONLY way to pin one;
+      // an agy pin may be typed effort-suffixed, the server splits it), `opencode`
+      // because user config can declare namespaces the Zen catalog never lists.
+      // Derived from the rosters so a new reviewer can't default to the wrong control.
       freeText: Object.fromEntries(
         [...MODEL_SELECTABLE_REVIEWERS, ...providerReviewers].map((r) => [r, !PROBED_LOCAL_BACKENDS.includes(r)])
       ),
@@ -254,29 +213,24 @@ export default function useReviewerModelOptions() {
         lmstudio: localStatus?.lmstudio?.available === false,
         ollama: localStatus?.ollama?.available === false,
       },
-      // `every` over a NON-EMPTY match list, so the two ways to have no enabled
-      // record stay apart: an install that switched every Kimi record off is
-      // `true` (hide it), while a reviewer with no records at all — or a fetch
-      // that failed or hasn't landed — is `false` (nothing is known, so hide
-      // nothing). `enabled === false` rather than falsiness, which deliberately
-      // reads a record with no `enabled` key as ON — the opposite of
-      // `providerCardState`'s stricter test, because this answer HIDES a control
-      // and incomplete data must never do that.
+      // `every` over a NON-EMPTY match list keeps the two no-enabled-record cases
+      // apart: every Kimi record switched off is `true` (hide), while no records at
+      // all, or a failed/unlanded fetch, is `false` (nothing known, hide nothing).
+      // `enabled === false` rather than falsiness: a record with no `enabled` key
+      // reads ON, the opposite of `providerCardState`, because this answer HIDES a
+      // control and incomplete data must never do that.
       //
       // A LOCAL-LLM reviewer is exempt: `lmstudio`/`ollama`/`mtplx` reviews go
-      // straight to the daemon's own base URL (`BACKEND_BASE_URLS` in
-      // server/services/codeReview.js), so a switched-off AI-provider record
-      // named after the same backend does not stop the review from running. Left
-      // in, it reported a reachable LM Studio serving models as unusable and
-      // hid the row behind "show hidden reviewers". The live probe below
-      // (`unavailable`) is the authoritative signal for these three.
+      // straight to the daemon's base URL (`BACKEND_BASE_URLS` in
+      // server/services/codeReview.js), so a switched-off provider record of the same
+      // name doesn't stop them; `unavailable` is authoritative for those.
       providerDisabled: Object.fromEntries(
         Object.entries(providersByReviewer).map(([reviewer, matched]) =>
           [reviewer, !LOCAL_LLM_REVIEWERS.includes(reviewer) && matched.length > 0 && matched.every((p) => p.enabled === false)]
         )
       ),
       loaded,
-      // Exposed so a consumer can assert it covers every model-taking reviewer.
+      // So a consumer can assert it covers every model-taking reviewer.
       reviewers: MODEL_SELECTABLE_REVIEWERS,
     };
   }, [localStatus, providers, loaded, providersLoaded]);

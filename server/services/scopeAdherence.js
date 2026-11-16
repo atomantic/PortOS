@@ -48,7 +48,6 @@ import {
 // Re-exported, not re-declared: the codes live beside their operator-facing
 // labels in a pure leaf, so the test that pairs them need not import this
 // service's closure (`lib/importScoping.test.js`).
-export { SCOPE_ADHERENCE_FAILURE_CODES } from '../lib/scopeAdherenceReasons.js';
 
 const failure = (code) => ({ ok: false, code });
 

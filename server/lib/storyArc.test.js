@@ -22,12 +22,10 @@ const {
   FORESHADOW_LIMITS,
   renderTickingClock,
   TICKING_CLOCK_LIMITS,
-  TICKING_CLOCK_KINDS,
   ARC_LIMITS,
   ARC_SHAPES,
   ARC_SHAPE_IDS,
   READER_MAP_LIMITS,
-  READER_MAP_BEAT_KINDS,
   getArcShape,
   renderArcShapeGuidance,
   describeArcShapePositionForSeason,
@@ -172,10 +170,6 @@ describe('storyArc — sanitizeTickingClock', () => {
       .toHaveLength(TICKING_CLOCK_LIMITS.REMINDERS_MAX);
   });
 
-  it('exposes a non-empty kind vocabulary', () => {
-    expect(TICKING_CLOCK_KINDS).toContain('deadline');
-    expect(TICKING_CLOCK_KINDS).toContain('custom');
-  });
 });
 
 describe('storyArc — renderTickingClock', () => {
@@ -258,10 +252,6 @@ describe('storyArc — sanitizeReaderMap', () => {
     expect(bad.payoffs[0].resolvesHookId).toBe(null);
   });
 
-  it('exposes a non-empty beat-kind vocabulary', () => {
-    expect(READER_MAP_BEAT_KINDS).toContain('hook');
-    expect(READER_MAP_BEAT_KINDS).toContain('cliffhanger');
-  });
 });
 
 describe('storyArc — sanitizeSeason', () => {

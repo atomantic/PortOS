@@ -8,6 +8,8 @@ import { shotCameraLabel } from '../../lib/cameraMovements.js';
 import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput, anchorShotsToSungLyrics, dropStaleStoryboardRows, carryStoryboardApproval } from './productionReview.js';
 import { sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 
+import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
+import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 const reviewProcessId = randomUUID();
 
 const present = project => ({ project, readiness: productionReadiness(project) });
@@ -18,6 +20,25 @@ function changed(project) {
 }
 
 export const getProductionReview = async id => present(await requireProject(id));
+export const getProductionReadiness = async id => ({ readiness: productionReadiness(await requireProject(id)) });
+
+/**
+ * A review action's one write. Service callers (autopilot, production runs) get `{ project, readiness }`.
+ * With `answerEdit` (the routes) the reply is `{ readiness, edit }` instead, where `edit` is the board
+ * edit result (editResult.js): the open board patches it in rather than replacing the whole project,
+ * reading it again for readiness, and reloading on its change broadcast (#16210). It skips the
+ * project-bearing notification too: every tab already hears the write's `project:changed`.
+ */
+async function reviewWrite(id, transform, { answerEdit = false, ...options } = {}) {
+  if (!answerEdit) {
+    const outcome = await mutateProjectRecord(id, transform, options);
+    return { outcome, reply: changed(outcome.project) };
+  }
+  const edit = {};
+  const outcome = await mutateProjectRecord(id, transform, { ...options, presentProject: false, edit });
+  const { presentEditResult } = await import('./editResult.js');
+  return { outcome, reply: { readiness: productionReadiness(edit.after), edit: await presentEditResult({ before: edit.before, after: edit.after }) } };
+}
 
 /**
  * A director's own shot still or clip is never gated on an approval: the owner
@@ -61,13 +82,13 @@ export async function importProductionPlanning(id, source) {
   const { escapeHtml } = await import('./castAndSetsSheet.js');
   const { artifact } = await saveGeneratedDevArtifact(id, { kind: 'other', title: 'Original planning import — unapproved',
     html: `<!doctype html><html><head><meta charset="utf-8"><title>Original planning import</title></head><body><h1>Original planning import — unapproved</h1><pre style="white-space:pre-wrap">${escapeHtml(source)}</pre></body></html>`, source: 'planning-import' });
-  const { project } = await mutateProjectRecord(id, current => ({ project: { ...current,
+  const { reply } = await reviewWrite(id, current => ({ project: { ...current,
     productionReview: { ...current.productionReview, draft: { ...draft, sourceArtifactId: artifact.id }, approvals: {}, proof: null } } }));
-  return changed(project);
+  return reply;
 }
 
 /** A director supplies source-authored shot IDs/times; never infer shots from a generic Board row. */
-export async function importDocumentShots(id, input) {
+export async function importDocumentShots(id, input, { edit: answerEdit = false } = {}) {
   const before = await requireProject(id);
   if (!before.productionReview?.draft) throw new ServerError('Save a planning draft before importing document shots.', { status: 409, code: 'PLANNING_DRAFT_REQUIRED' });
   if (before.composition?.mode !== 'document' || before.composition.document?.directory !== input.documentDirectory || productionAlignmentBasis(before) !== input.audioBasis) {
@@ -76,7 +97,7 @@ export async function importDocumentShots(id, input) {
   const { resolveDocumentFile } = await import('./compositionDocument.js');
   await resolveDocumentFile(before, input.sourceFile);
   const alignment = productionAlignmentBasis(before);
-  const { project } = await mutateProjectRecord(id, current => {
+  const { reply } = await reviewWrite(id, current => {
     if (current.composition?.document?.directory !== input.documentDirectory || productionAlignmentBasis(current) !== alignment) {
       throw new ServerError('Document or audio changed during import.', { status: 409, code: 'DOCUMENT_STORYBOARD_STALE' });
     }
@@ -85,8 +106,8 @@ export async function importDocumentShots(id, input) {
     next.productionReview.documentStoryboard = { directory: input.documentDirectory, sourceFile: input.sourceFile,
       basis: documentStoryboardBasis(next), importedAt: new Date().toISOString() };
     return { project: next };
-  });
-  return changed(project);
+  }, { answerEdit });
+  return reply;
 }
 
 /** Stills render from framePrompt alone, so it must carry who and what, not only where.
@@ -115,9 +136,9 @@ function composeShotFramePrompt(shot, cast) {
 }
 
 /** Explicitly create and bind an unbound draft shot, under the project write lock. */
-export async function bindProductionShot(id, shotId) {
+export async function bindProductionShot(id, shotId, { edit: answerEdit = false } = {}) {
   const { addScene } = await import('./projectsLogic.js');
-  const { project } = await mutateProjectRecord(id, current => {
+  const { reply } = await reviewWrite(id, current => {
     const draft = current.productionReview?.draft;
     if (draft?.storyboardSource === 'document') throw new ServerError('Document shots are edited in their authored source, not bound to Board scenes.', { status: 409, code: 'DOCUMENT_STORYBOARD' });
     const shot = draft?.storyboard.find(s => s.id === shotId);
@@ -128,8 +149,8 @@ export async function bindProductionShot(id, shotId) {
     out.project.productionReview = { ...current.productionReview, draft: { ...draft,
       storyboard: draft.storyboard.map(s => s === shot ? { ...s, sceneId: out.scene.sceneId } : s) } };
     return { project: out.project };
-  });
-  return changed(project);
+  }, { answerEdit });
+  return reply;
 }
 
 /** Creative decisions use an existing authenticated session, including agents.
@@ -142,9 +163,9 @@ export async function requireProductionReviewer(req) {
   return reviewer;
 }
 
-export async function saveProductionDraft(id, draft) {
+export async function saveProductionDraft(id, draft, { edit: answerEdit = false } = {}) {
   const guard = await validateGuideSelection(await requireProject(id), () => draft.guideArtifactId);
-  const { project } = await mutateProjectRecord(id, current => {
+  const { reply } = await reviewWrite(id, current => {
     guard(current);
     // An editor copy saved after a shot was cut must not bring that shot's row back.
     return { project: dropStaleStoryboardRows({ ...current,
@@ -152,43 +173,42 @@ export async function saveProductionDraft(id, draft) {
       alignmentBasis: draft.timingStatus === 'verified'
         ? (current.productionReview?.draft?.timingStatus !== 'verified' ? productionAlignmentBasis(current) : current.productionReview?.alignmentBasis)
         : null } }) };
-  });
-  return changed(project);
+  }, { answerEdit });
+  return reply;
 }
 
 /** Only the explicit authenticated action can rebind already-verified timings. */
-export async function reverifyProductionAlignment(id, { basis, notes, reviewer }) {
-  const { project } = await mutateProjectRecord(id, current => {
+export async function reverifyProductionAlignment(id, { basis, notes, reviewer }, { edit: answerEdit = false } = {}) {
+  const { reply } = await reviewWrite(id, current => {
     if (basis !== productionAlignmentBasis(current)) throw new ServerError('The word timings changed while you were reviewing. Inspect them again.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
     const draft = current.productionReview?.draft;
     if (!draft || draft.lyricsMode !== 'vocal') throw new ServerError('Save a vocal planning draft before verifying alignment.', { status: 409, code: 'PLANNING_DRAFT_REQUIRED' });
     return { project: { ...current, productionReview: { ...current.productionReview,
       draft: { ...draft, timingStatus: 'verified', timingNotes: notes }, alignmentBasis: basis,
       alignmentReview: { basis, reviewer, reviewedAt: new Date().toISOString() } } } };
-  });
-  return changed(project);
+  }, { answerEdit });
+  return reply;
 }
 
 /** Restore one changed input to the value its approval was granted on (#10241). */
-export async function revertProductionInput(id, input) {
+export async function revertProductionInput(id, input, { edit: answerEdit = false } = {}) {
   await requireProject(id);
-  const { project } = await mutateProjectRecord(id, current => ({ project: revertApprovedInput(current, input) }));
-  return changed(project);
+  const { reply } = await reviewWrite(id, current => ({ project: revertApprovedInput(current, input) }), { answerEdit });
+  return reply;
 }
 
-export async function approveProductionReview(id, input) {
+export async function approveProductionReview(id, input, { edit: answerEdit = false } = {}) {
   const guard = await validateGuideSelection(await requireProject(id), current => current.productionReview?.draft?.guideArtifactId);
-  const { project } = await mutateProjectRecord(id, current => {
+  const { reply } = await reviewWrite(id, current => {
     guard(current);
     return { project: approveProductionStage(current, input) };
-  });
-  return changed(project);
+  }, { answerEdit });
+  return reply;
 }
 
 // Historical guides remain readable. Selecting or approving one validates its
 // immutable bytes under today's policy, including HTML saved before narrowing.
 async function validateGuideSelection(project, selectedId) {
-  const { musicVideoMediaMode } = await import('../../lib/musicVideoMediaPolicy.js');
   const signature = current => {
     const id = selectedId(current);
     const artifact = current.devArtifacts?.find(entry => entry.id === id && !entry.deleted);
@@ -301,7 +321,6 @@ export async function renderProductionProof(id, { startSec, endSec, kind = 'proo
 
 /** An existing, dependency-checked asset pilot becomes a human review candidate. */
 export async function attachProductionPilotProof(id, excerptId) {
-  const { musicVideoDependencyChanges } = await import('../../lib/musicVideoDependencies.js');
   const { project } = await mutateProjectRecord(id, current => {
     const excerpt = current.excerpts?.find(e => e.id === excerptId);
     if (excerpt?.status !== 'complete' || !excerpt.filename || musicVideoDependencyChanges(current, excerpt.dependencies).length) {
@@ -315,19 +334,19 @@ export async function attachProductionPilotProof(id, excerptId) {
   return changed(project);
 }
 
-export async function addProductionFeedback(id, input) {
-  const { project, feedbackId } = await mutateProjectRecord(id, current => {
+export async function addProductionFeedback(id, input, { edit: answerEdit = false } = {}) {
+  const { outcome, reply } = await reviewWrite(id, current => {
     const next = recordProductionFeedback(current, input);
     return { project: next, feedbackId: next.productionReview.feedback.at(-1).id };
-  });
-  return { ...changed(project), feedbackId };
+  }, { answerEdit });
+  return { ...reply, feedbackId: outcome.feedbackId };
 }
 /**
  * Anchor shots to the lyric lines sung over them: the shots named, else every
  * shot the storyboard check flags. Each also shows those lines as its lyric.
  */
-export async function syncLyricAnchors(id, { sceneIds = null } = {}) {
-  const { project } = await mutateProjectRecord(id, current => {
+export async function syncLyricAnchors(id, { sceneIds = null } = {}, { edit: answerEdit = false } = {}) {
+  const { reply } = await reviewWrite(id, current => {
     const ids = sceneIds || productionReadiness(current).storyboard.lyricAnchors.map(entry => entry.sceneId);
     if (!ids.length) return { project: current };
     const anchored = anchorShotsToSungLyrics(current, ids);
@@ -336,23 +355,23 @@ export async function syncLyricAnchors(id, { sceneIds = null } = {}) {
       return { ...scene, lyricText: sungLyricTextWithin(anchored.lyricCues, scene.startSec, scene.endSec) };
     });
     return { project: { ...anchored, scenes, updatedAt: new Date().toISOString() } };
-  });
-  return changed(project);
+  }, { answerEdit });
+  return reply;
 }
 
 /** Remove the storyboard rows left from deleted shots, keeping a current storyboard approval. */
-export async function removeStaleStoryboardRows(id) {
-  const { project } = await mutateProjectRecord(id, current => {
+export async function removeStaleStoryboardRows(id, { edit: answerEdit = false } = {}) {
+  const { reply } = await reviewWrite(id, current => {
     const pruned = dropStaleStoryboardRows(current);
     if (pruned === current) return { project: current };
     return { project: carryStoryboardApproval(current, { ...pruned, updatedAt: new Date().toISOString() }, 'Removed rows left from deleted shots') };
-  });
-  return changed(project);
+  }, { answerEdit });
+  return reply;
 }
 
-export async function closeProductionFeedback(id, input) {
-  const { project } = await mutateProjectRecord(id, current => ({ project: resolveProductionFeedback(current, input) }));
-  return changed(project);
+export async function closeProductionFeedback(id, input, { edit: answerEdit = false } = {}) {
+  const { reply } = await reviewWrite(id, current => ({ project: resolveProductionFeedback(current, input) }), { answerEdit });
+  return reply;
 }
 
 const openChangeRequests = (project, stage) => (project.productionReview?.feedback || [])

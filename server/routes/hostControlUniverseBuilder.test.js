@@ -1,11 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
+import { callRoute, expectAuthorizedWorkflows, expectRemoteRefusal, hostControlApp } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 // Production router composition and auth gates; double the effect boundaries
 // so refusal proves that no provider, queue, store or image lookup was reached.
@@ -81,8 +77,6 @@ vi.mock('../services/universeCharacterSheet.js', () => ({
 }));
 vi.mock('../services/universeGraph.js', () => ({ buildUniverseGraph: vi.fn() }));
 
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
-import { createSession } from '../services/auth.js';
 import universeRoutes from './universeBuilder/index.js';
 
 const base = '/api/universe-builder';
@@ -90,45 +84,27 @@ const world = `${base}/example-world`;
 const character = `${world}/characters/example-character`;
 const picker = { providerId: 'example-cli', model: 'example-model' };
 const images = [{ source: 'gallery', filename: 'example.png' }];
-const operations = [
-  [`${base}/expand`, { starterPrompt: 'Example starter', ...picker }, effects.expand],
-  [`${base}/generate-variations`, { category: 'landscapes', count: 1, ...picker }, effects.variations],
-  [`${base}/refine-prompts`, { starterPrompt: 'Example starter', feedback: 'Example feedback', image: 'example.png', ...picker }, effects.refine],
-  [`${world}/promote-variation`, { category: 'landscapes', label: 'Example landscape', ...picker }, effects.promote],
-  [`${world}/auto-sort`, picker, effects.sort],
-  [`${world}/extract-canon`, { corpus: 'Example prose', providerOverride: picker.providerId }, effects.extract],
-  [`${character}/refine`, picker, effects.refineCharacter],
-  [`${character}/expand`, picker, effects.expandCharacter],
-  [`${world}/characters/integrity/review`, picker, effects.reviewCast],
-  [`${character}/augment`, { fields: ['motivations'], ...picker }, effects.augment],
-  [`${world}/characters/differentiate-cast`, picker, effects.differentiate],
-  [`${base}/merge/ai-resolve`, { survivorId: 'example-world', loserId: 'example-other-world', fields: ['premise'], ...picker }, effects.mergeAI],
-  [`${base}/describe-from-images`, { kind: 'character', images, ...picker }, effects.describe],
-  [`${character}/expand-from-images`, { images, ...picker }, effects.expandImages],
-  [`${world}/canon/character/example-character/correct-from-image`, { image: 'example.png', ...picker }, effects.correctImage],
-  [`${base}/analyze-style-reference`, { image: 'example.png', prompt: 'Example style', ...picker }, effects.analyzeStyle],
-  [`${world}/render`, { mode: 'codex', extraStyle: 'Example style' }, effects.render],
-  [`${character}/render-reference-sheet`, { overridePrompt: 'Example sheet prompt' }, effects.sheet],
+const generation = [
+  ['post', `${base}/expand`, { starterPrompt: 'Example starter', ...picker }, effects.expand, 200],
+  ['post', `${base}/generate-variations`, { category: 'landscapes', count: 1, ...picker }, effects.variations, 200],
+  ['post', `${base}/refine-prompts`, { starterPrompt: 'Example starter', feedback: 'Example feedback', image: 'example.png', ...picker }, effects.refine, 200],
+  ['post', `${world}/promote-variation`, { category: 'landscapes', label: 'Example landscape', ...picker }, effects.promote, 200],
+  ['post', `${world}/auto-sort`, picker, effects.sort, 200],
+  ['post', `${world}/extract-canon`, { corpus: 'Example prose', providerOverride: picker.providerId }, effects.extract, 200],
+  ['post', `${character}/refine`, picker, effects.refineCharacter, 200],
+  ['post', `${character}/expand`, picker, effects.expandCharacter, 200],
+  ['post', `${world}/characters/integrity/review`, picker, effects.reviewCast, 200],
+  ['post', `${character}/augment`, { fields: ['motivations'], ...picker }, effects.augment, 200],
+  ['post', `${world}/characters/differentiate-cast`, picker, effects.differentiate, 200],
+  ['post', `${base}/merge/ai-resolve`, { survivorId: 'example-world', loserId: 'example-other-world', fields: ['premise'], ...picker }, effects.mergeAI, 200],
+  ['post', `${base}/describe-from-images`, { kind: 'character', images, ...picker }, effects.describe, 200],
+  ['post', `${character}/expand-from-images`, { images, ...picker }, effects.expandImages, 200],
+  ['post', `${world}/canon/character/example-character/correct-from-image`, { image: 'example.png', ...picker }, effects.correctImage, 200],
+  ['post', `${base}/analyze-style-reference`, { image: 'example.png', prompt: 'Example style', ...picker }, effects.analyzeStyle, 200],
+  ['post', `${world}/render`, { mode: 'codex', extraStyle: 'Example style' }, effects.render, 200],
+  ['post', `${character}/render-reference-sheet`, { overridePrompt: 'Example sheet prompt' }, effects.sheet, 200],
 ];
-const appFor = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use(base, universeRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
-const call = (app, [path, body], headers = {}, method = 'post') => {
-  const pending = request(app)[method](path);
-  for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return pending.send(body);
-};
-const expectNoEffects = () => {
-  for (const effect of Object.values(effects)) expect(effect).not.toHaveBeenCalled();
-};
+const mounts = [[base, universeRoutes]];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -138,86 +114,33 @@ beforeEach(() => {
   effects.persistIds.mockResolvedValue(true);
 });
 
-describe('Universe Builder agent workflow authority (#10669)', () => {
-  it('refuses every remote operation before provider, queue, store or image effects, even for API-first requests', async () => {
-    for (const [path, body] of operations) {
-      for (const candidate of [body, { ...body, providerId: 'example-api', providerOverride: 'example-api' }]) {
-        const response = await call(appFor(), [path, candidate]);
-        expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
-      const variant = await call(appFor(), [path.toUpperCase() + '/', body]);
-      expect([variant.status, variant.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    expectNoEffects();
+describe('Universe Builder agent workflows behind the default-deny gate (#10669, #16114)', () => {
+  it('refuses a remote caller before any provider, queue, store or image effect, even for an API-first request', async () => {
+    const [, path, body] = generation[0];
+    await expectRemoteRefusal(mounts, ['post', path, { ...body, providerId: 'example-api' }, effects.expand]);
+    for (const effect of Object.values(effects)) expect(effect).not.toHaveBeenCalled();
   });
 
-  it('refuses proxy-marked, anonymous auth-on, Basic and scoped-peer callers', async () => {
-    for (const [enabled, address, headers, status, code] of [
-      [false, '127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }, 403, 'HOST_CONTROL_FORBIDDEN'],
-      [true, '192.0.2.10', {}, 401, 'AUTH_REQUIRED'],
-      [true, '192.0.2.10', { Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403, 'HOST_CONTROL_FORBIDDEN'],
-      [true, '192.0.2.10', {
-        [PEER_AUTH_HEADER]: derivePeerAuthToken('a'.repeat(32), 'example-instance'),
-        [PEER_INSTANCE_HEADER]: 'example-instance',
-      }, 403, 'PEER_SCOPE_FORBIDDEN'],
-    ]) {
-      auth.enabled = enabled;
-      for (const operation of operations) {
-        const response = await call(appFor(address), operation, headers);
-        expect([response.status, response.body.code], operation[0]).toEqual([status, code]);
-      }
-    }
-    expectNoEffects();
-  });
-
-  it('preserves genuine local, operator-session and delegated-agent workflows', async () => {
-    const operator = await createSession();
-    const agent = await createSession({ label: 'agent' });
-    for (const [enabled, address, headers] of [
-      [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Cookie: `portos_auth=${operator.token}` }],
-      [true, '127.0.0.1', { Authorization: `Bearer ${agent.token}` }],
-    ]) {
-      auth.enabled = enabled;
-      for (const [path, body, effect] of operations) {
-        const before = effect.mock.calls.length;
-        const response = await call(appFor(address), [path, body], headers);
-        expect(response.status, `${path}: ${JSON.stringify(response.body)}`).toBe(200);
-        expect(effect, path).toHaveBeenCalledTimes(before + 1);
-      }
-    }
-    expect(effects.expand).toHaveBeenLastCalledWith(expect.objectContaining(picker));
-    expect(effects.sheet).toHaveBeenLastCalledWith('example-world', 'example-character', { overridePrompt: 'Example sheet prompt' });
-    expect(effects.persistIds).toHaveBeenCalledTimes(3);
-    expect(effects.update).toHaveBeenCalledTimes(3);
-  });
-
-  it('keeps remote history reads open, refuses remote record writes, and runs CRUD, proposal application, merge, locks and backfill locally', async () => {
+  it('still runs the agent workflows, record CRUD, proposal application, merge, locks and backfill for local and agent callers', async () => {
     const merge = { survivorId: 'example-world', loserId: 'example-other-world' };
-    for (const [method, path, body, effect, status] of [
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: [
+      ...generation,
       ['post', base, { name: 'Example World' }, effects.create, 201],
       ['patch', world, { premise: 'Example premise' }, effects.update, 200],
       ['delete', world, undefined, effects.delete, 200],
-      ['post', `${base}/merge/preview`, merge, effects.merge, 200],
       ['post', `${base}/merge`, merge, effects.merge, 200],
       ['post', `${world}/canon/character/example-character/apply-image-correction`, { description: 'Example corrected', imageFilename: 'example.png' }, effects.applyImage, 200],
       ['post', `${character}/augment/apply`, { fields: [{ field: 'motivations', value: 'Example revised' }] }, effects.applyAugment, 200],
       ['post', `${world}/canon/backfill-descriptions`, {}, effects.backfill, 200],
       ['patch', `${world}/canon/character/example-character/lock`, { locked: true }, effects.lock, 200],
-      ['get', `${world}/runs`, undefined, effects.listRuns, 200],
-    ]) {
-      const before = effect.mock.calls.length;
-      if (method !== 'get') {
-        const remote = await call(appFor(), [path, body], {}, method);
-        expect([remote.status, remote.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-        expect(effect).toHaveBeenCalledTimes(before);
-      }
-      const response = await call(appFor(method === 'get' ? '192.0.2.10' : '127.0.0.1'), [path, body], {}, method);
-      expect(response.status, `${path}: ${JSON.stringify(response.body)}`).toBe(status);
-      expect(effect).toHaveBeenCalledTimes(before + 1);
-    }
-    for (const [, , effect] of operations) expect(effect).not.toHaveBeenCalled();
-    expect(effects.gallery).not.toHaveBeenCalled();
-    expect(effects.persistIds).not.toHaveBeenCalled();
+    ] });
+    expect(effects.expand).toHaveBeenLastCalledWith(expect.objectContaining(picker));
+    expect(effects.sheet).toHaveBeenLastCalledWith('example-world', 'example-character', { overridePrompt: 'Example sheet prompt' });
+  });
+
+  it('keeps remote history reads open', async () => {
+    const response = await callRoute(await hostControlApp('192.0.2.10', mounts), ['get', `${world}/runs`]);
+    expect(response.status).toBe(200);
+    expect(effects.listRuns).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,17 +1,6 @@
 /**
  * OpenCode's `--format json` event stream — one parser, shared.
  *
- * OpenCode's `--format json` event stream — ONE parser, shared by
- * `services/localModelAgentBenchmark.js` (which wants chars/tokens) and
- * `services/modelCapabilityTests.js` (which wants a readable transcript). `eventPart` (accepts the
- * flat `{part}` and nested `{properties.part}` envelopes OpenCode has both used), `isToolEvent` /
- * `eventText`, `parseAgentLine` / `parseAgentEvents` (blank and unparsable lines yield nothing rather
- * than throwing), `formatAgentEvent` (one frame → a transcript line a person can read, with the path
- * or command the tool acted on), and `summarizeOpenCodeEvents` (assistant chars, tool calls, and
- * output tokens — `null`, never 0, when OpenCode reported no usage; tool ARGUMENTS are deliberately
- * not counted as answer text). Pure. The runner that produces the stream is
- * `services/opencodeTask.js`.
- *
  * Two PortOS features drive an OpenCode agent and read its stdout: the runtime
  * agent-task benchmark (`services/localModelAgentBenchmark.js`, which wants
  * chars and token counts) and the capability test suite

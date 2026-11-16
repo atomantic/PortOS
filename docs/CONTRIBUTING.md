@@ -148,7 +148,7 @@ On POSIX, incomplete process inventories also retain stale roots; a dead runner
 does not prove its children exited. Pending identity checks apply to pool-close
 cleanup as well as later sweeps.
 
-`npm run pregate` on POSIX or `node scripts/pregate.js` on Windows is the lightweight local gate: lint/format checks, always-run and diff-selected structural guards, and directly owned unit tests. It selects edited test files and sibling tests for changed sources, including untracked new tests, without expanding through transitive imports. Browser, database, build and boot-smoke suites stay with hosted CI. Run a focused public-boundary regression for changed behavior that has no sibling test; automatic selection does not replace engineering judgment.
+`npm run pregate` on POSIX or `node scripts/pregate.js` on Windows is the lightweight local gate: lint/format checks, always-run and diff-selected structural guards, and directly owned unit tests. It selects edited test files, sibling tests for changed sources, and tests whose relative `import`, `import()` or `vi.mock` specifier resolves directly to a changed source (one hop, at most 25 suites per source; the overflow is listed under `skipped` in the report and left to CI), including untracked new tests, without expanding through transitive imports. Browser, database, build and boot-smoke suites stay with hosted CI. Run a focused public-boundary regression for changed behavior that has no sibling test; automatic selection does not replace engineering judgment.
 
 `npm run pregate -- --full` on POSIX or `node scripts/pregate.js --full` on Windows explicitly runs the broad CI plan locally, including selected browser/DB/build/smoke stages when prerequisites are present. Missing prerequisites and `--skip-*` options remain explicit in the receipt. DB stages run last against `portos_test` only. Required hosted checks and configured reviews remain mandatory.
 
@@ -228,7 +228,8 @@ no username is synthesized and no credential allowlist is expanded.
 ### Changelog
 
 Nothing to write here — there is no per-branch changelog file or fragment.
-`/do:release` synthesizes the release notes from the commit log when it runs,
+`/do:release` synthesizes the release notes (the single `.changelog/RELEASE.md`)
+from the commit log when it runs,
 so write commit subjects/bodies for a human release-note reader (see Commit
 Messages below). See [`.changelog/README.md`](../.changelog/README.md) for
 details.
@@ -366,6 +367,11 @@ A passing run without a reproduced slow phase does not resolve the timeout.
 - **Default to the highest practical public boundary** (route, service workflow, store adapter, socket exchange, rendered interaction): success plus materially different failure/compatibility paths, not every branch. Don't unit-test a helper a stable caller already exercises, add coverage-only tests, or table-drive permutations proving one outcome.
 - **Focused unit tests earn their place** where a higher-level test can't pin behavior precisely or cheaply: parsers/algorithms with a real input matrix; security, privacy, data-isolation and destructive-action guards; migrations and cross-version compatibility; serialization/schema boundaries; retry, timeout and process-lifecycle state machines; edge cases ambiguous through integration. Real timeout behavior gets one fake-time contract test, never repeated production sleeps.
 - **Name the regression a new test uniquely catches** before adding it. In review, remove tests that duplicate a stronger assertion, mirror implementation details, only verify mocks calling mocks, or cover impossible states. Count and coverage are diagnostics; CI time, determinism and regression-detection value are the goals.
+- **Route tests assert what the route owns, not what it forwards.** With the service mocked that is: refusals (4xx and the service never reached), arguments the route derives (defaults, coercion, clamping, stripped keys, identity from the session or peer headers, which service function a flag selects), error-to-status mapping, response shaping and emitted socket events.
+- **No test whose only proof is that a request value reached the mock, or that the body equals what the mock returned.** One success-path test per endpoint may check the identifying argument (the `:id`, the owner) so a swapped parameter fails; the rest of a pass-through belongs to the service suite. One normaliser gets its input matrix once, on the helper or schema, not as N route cases.
+- **Pin the argument, not the argument list.** Assert the positions and keys the route owns (`expect(fn.mock.calls[0][0]).toBe(id)`, `expect.objectContaining({ limit: 50 })`). Exact whole-call equality is for cases where absence is the contract (unknown keys stripped, no mass assignment). An optional argument added later must not break an unrelated suite.
+- **Prefer the real service when it is cheap.** A file-backed service runs behind the route over `lazyTempDataRoot` + `makePathsProxy` (`server/routes/storyboards.test.js`), asserted through follow-up requests. Mock it when it reaches Postgres, a subprocess, a provider or the network.
+- **A router with no validation and no derivation needs no suite of its own.** List it in `UNTESTED_ALLOWLIST` (`server/routeTestCoverageConventions.test.js`), naming the service suite that covers it.
 
 For server watch mode, run this alternative from the repository root:
 
@@ -393,7 +399,7 @@ being released. See [GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md).
 
 ## API Documentation
 
-See [API.md](./API.md) for the complete REST API and WebSocket event reference.
+See [API.md](./API.md) for API conventions and the route-domain index; the complete endpoint list is the API Explorer (`/api-reference/catalog`).
 
 ## Reporting Bugs / Proposing Features
 

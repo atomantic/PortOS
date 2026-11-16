@@ -67,8 +67,9 @@ const { lockReference, loadManifest } = await import('./reference.js');
 const { compileAtlas, getAtlasState, ATLAS_COLUMNS, DEFAULT_ATLAS_GEOMETRY } = await import('./atlas.js');
 const { SPRITE_DIRECTIONS } = await import('./prompts.js');
 const {
-  WALK_PHASES, walkPhaseLabels, WALK_FPS, WALK_MIN_FRAME_COUNT,
+  WALK_PHASES, WALK_FPS, WALK_MIN_FRAME_COUNT,
 } = await import('./walkPostprocess.js');
+const { walkPhaseLabels } = await import('./walkBounds.js');
 const { buildAtlasGrid, compiledGridUpToDate } = await import('./atlasGrid.js');
 const { getAnimationTrack, SCANNER_TRACK, AMBIENT_TRACK } = await import('./animationTracks.js');
 // #3152 — `scanner`/`ambient` are seeded STORE rows, so the compiler's real table

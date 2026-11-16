@@ -26,7 +26,7 @@ const DISMISSED_RECS_FILE = join(DATA_DIR, 'dismissed-recommendations.json');
 // Re-export the infra that sibling modules consume so they import from one
 // place. (ensureDir / readJSONFile / atomicWrite stay internal to this file.)
 export { cosEvents, emitLog, tryReadFile };
-export { EXECUTION_EFFORT_NONE, executionKeyPrefix, executionKeyPrefixOf, executionDurationKey } from '../../lib/executionDurationKey.js';
+export { executionKeyPrefix, executionKeyPrefixOf, executionDurationKey } from '../../lib/executionDurationKey.js';
 
 /**
  * Calculate ETA-oriented duration stats from success-only metrics with fallback.
@@ -43,41 +43,20 @@ export function calculateDurationETA(metrics) {
   return { avgDurationMs: avg, maxDurationMs: max, p80DurationMs: p80 };
 }
 
-// ---------------------------------------------------------------------------
-// Execution-scoped duration buckets (issue #8001)
-//
-// `byTaskType` averages every run of a task type together, so the same
-// `self-improve:release-check` on a slow local Ollama model and on a fast cloud
-// model land in one bucket and the card's "N min remaining" is wrong for both.
-// The provider/model/effort a run actually executed on is the largest single
-// driver of its wall-clock time, so `byTaskTypeExecution` keys a second,
-// duration-only aggregate by that concrete identity. It is a FLAT map under one
-// composed key rather than a 4-level nest: cheaper to prune, iterate and cap.
-//
-// Duration only — no `recentOutcomes` ring. The LI success-rate signal keeps
-// reading `byTaskType`; this dimension exists solely to sharpen the ETA.
-// ---------------------------------------------------------------------------
+// Execution-scoped duration buckets (#8001): `byTaskType` blends slow local and fast
+// cloud runs and skews ETAs, so `byTaskTypeExecution` keys a duration-only aggregate
+// by provider/model/effort. FLAT map under one composed key (cheaper to prune, iterate
+// and cap than a nest). The LI success-rate signal keeps reading `byTaskType`.
 
 // Ceiling on retained execution buckets. This dimension multiplies task types by
 // every provider/model/effort the install has ever run, so the <2-completions/30-day
 // prune `byTaskType` gets is not enough on its own — see `saveLearningData`.
 export const EXECUTION_BUCKET_CAP = 200;
 
-// ---------------------------------------------------------------------------
-// Recent-outcomes ring (issue #2460)
-//
-// Lifetime `byTaskType` counters (completed/succeeded/failed/successRate) are
-// cumulative and never decay, so a burst of since-resolved failures (a provider
-// misconfig, PTY-capture artifacts on a now-retired task type) permanently
-// depresses the success rate the Layered Intelligence reasoner reads via its
-// `cosMetrics` source and keeps signaling "work needed" long after the root cause
-// is fixed. To let that signal self-heal WITHOUT destroying the lifetime stats the
-// dashboards display, each task-type bucket also carries a bounded ring of recent
-// outcomes (`{ t: ISO timestamp, s: success bool }`). `computeWindowedStats`
-// derives a recency-windowed success rate from it (bounded by BOTH count and age)
-// that LI consumes instead of the lifetime rate. Mirrors the existing
-// `failureSignatures.recent` / `recentUnknownErrors` rolling-buffer precedent.
-// ---------------------------------------------------------------------------
+// Recent-outcomes ring (#2460): lifetime `byTaskType` counters never decay, so
+// since-resolved failures would depress the success rate LI reads indefinitely. Each
+// bucket also keeps a bounded ring `{ t: ISO, s: success }`; `computeWindowedStats`
+// derives a rate bounded by BOTH count and age, leaving dashboard lifetime stats intact.
 
 // Cap on retained recent-outcome samples per task type (oldest pruned first).
 export const RECENT_OUTCOMES_CAP = 50;
@@ -89,13 +68,9 @@ export const DEFAULT_WINDOW_MAX_COUNT = 30;
 export const DEFAULT_WINDOW_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 /**
- * Append a recent outcome to a task-type metrics bucket's bounded ring (issue
- * #2460). Mutates `metrics` in place and returns it for chaining. Stores the compact `{ t, s }`
- * shape (ISO timestamp + success bool), plus `d` (duration ms) when a finite
- * duration was measured — omitted when unknown so a pre-duration sample and a
- * duration-less new sample stay the same shape (absent ≠ 0). Tolerates a bucket
- * that predates the ring (older learning.json before migration 188) by
- * initializing it. Enforces `RECENT_OUTCOMES_CAP`, dropping the oldest sample first.
+ * Append `{ t, s }` (plus `d` duration ms when finite; omitted when unknown so absent
+ * != 0) to a bucket's bounded ring. Mutates and returns `metrics`; initializes the
+ * ring on pre-migration-188 buckets and drops the oldest past `RECENT_OUTCOMES_CAP`.
  */
 export function appendRecentOutcome(metrics, { success, at, durationMs } = {}) {
   if (!metrics || typeof metrics !== 'object') return metrics;
@@ -113,14 +88,9 @@ export function appendRecentOutcome(metrics, { success, at, durationMs } = {}) {
 }
 
 /**
- * Compute recency-windowed success stats from a task-type recent-outcomes ring
- * (issue #2460). Pure / no I/O. Windows the ring by BOTH a max sample count and a
- * max age, then computes the success rate over just that window.
- *
- * Sentinel discipline (repo "absent vs empty" rule): `windowedSuccessRate` is
- * `null` when the window contains NO samples — never 0 — so a task type with no
- * recent runs is distinguishable from one that recently failed everything. LI
- * falls back to the lifetime rate on null rather than reading a fabricated 0%.
+ * Recency-windowed success stats from a recent-outcomes ring (#2460), windowed by max
+ * count AND max age. Pure. `windowedSuccessRate` is `null` (never 0) for an empty
+ * window so LI falls back to the lifetime rate instead of a fabricated 0%.
  *
  * @param {Array<{t:string,s:boolean}>} recentOutcomes - the bucket's ring
  * @param {{ maxCount?:number, maxAgeMs?:number, now?:number }} [opts]
@@ -164,20 +134,10 @@ export function computeWindowedStats(recentOutcomes, {
 export const EFFECTIVE_RATE_MIN_WINDOW_SAMPLES = 5;
 
 /**
- * Effective success rate for DECISION paths (issue #2617). Pure / no I/O.
- *
- * Lifetime `successRate` never decays, so a burst of since-fixed failures
- * permanently depresses it — cooldown/skip/approval decisions built on it keep
- * punishing a task type long after it recovered. This returns the recency-
- * windowed rate (`computeWindowedStats` over the bucket's `recentOutcomes`
- * ring) whenever the window holds at least `minWindowSamples` outcomes, and
- * falls back to the lifetime rate otherwise — so a type with a thin/empty
- * window behaves exactly as before, while a type with a healthy recent record
- * recovers as soon as it starts succeeding again.
- *
- * Sentinel discipline: `successRate` is `null` (never a fabricated 0) when the
- * fallback lifetime rate is itself absent. `source` names which rate was used
- * (`'windowed'` | `'lifetime'`) so decisions can surface it in reasons/logs.
+ * Effective success rate for DECISION paths (#2617). Pure. The never-decaying
+ * lifetime rate keeps punishing recovered types, so this returns the windowed rate
+ * once the window holds `minWindowSamples` outcomes, else the lifetime rate.
+ * `successRate` is `null` when the fallback is absent; `source` names the one used.
  *
  * @param {Object|null|undefined} metrics - a `byTaskType` bucket
  * @param {{ minWindowSamples?:number, maxCount?:number, maxAgeMs?:number, now?:number }} [opts]
@@ -194,16 +154,9 @@ export function computeEffectiveSuccessRate(metrics, opts = {}) {
 }
 
 /**
- * Shared skip predicate (issue #2617): a task type is a skip candidate when it
- * has ≥5 lifetime completions AND its EFFECTIVE success rate is <30%. Pure.
- *
- * This is THE definition of "skipped" — used by the scheduling decision
- * (`getAdaptiveCooldownMultiplier`'s skip branch mirrors it), the skip list
- * (`getSkippedTaskTypes`), the rehabilitation/status views, AND the health
- * summaries (`getPerformanceSummary`, `getLearningSummary`). Keeping every
- * consumer on one predicate is what stops a dashboard/alert surface from
- * claiming a type is skipped after the actual decision path stopped skipping
- * it (or vice versa).
+ * Shared skip predicate (#2617): >=5 lifetime completions AND EFFECTIVE success rate
+ * <30%. Pure. The single definition of "skipped" for scheduling, skip list and health
+ * views, so no surface disagrees with the decision path.
  */
 export function isSkipCandidate(metrics) {
   if (!metrics || (metrics.completed ?? 0) < 5) return false;
@@ -211,43 +164,22 @@ export function isSkipCandidate(metrics) {
   return successRate !== null && successRate < 30;
 }
 
-/**
- * Default learning data structure
- */
-// Environmental/infrastructure error categories (issue #2618): failures that say
-// nothing about the task or the model — a provider outage, an exhausted quota, a
-// revoked key, a dead network, an agent that never started. These are EXCLUDED
-// from the success-rate aggregates (`byTaskType` / `byModelTier` /
-// `routingAccuracy` / `totals` / the `recentOutcomes` windowed ring / the
-// correlation window) so an hour of provider 529s can't crater a task type's
-// rate, steer routing off a healthy tier, or trip the <30% skip gate. They are
-// instead counted in `data.environmentalFailures[category]` (count +
-// lastOccurred + affected task types) so the events stay visible, and they STILL
-// feed `errorPatterns` / `failureSignatures` — prompt recommendations and
-// diagnostics appropriately consume those.
+// Environmental/infrastructure failure categories (#2618): outage, exhausted quota,
+// revoked key, dead network, agent never started. They say nothing about the task or
+// model, so they are EXCLUDED from every success-rate aggregate (byTaskType,
+// byModelTier, routingAccuracy, totals, recentOutcomes, correlation window) and counted
+// in `data.environmentalFailures`; they still feed errorPatterns / failureSignatures.
 //
-// Covers BOTH classifier vocabularies that can stamp `errorAnalysis.category`:
-// agentErrorAnalysis's ERROR_PATTERNS (`rate-limit`, `usage-limit`, `auth-error`,
-// `forbidden`, `billing-error`, `network-error`, `claude-error` —
-// `overloaded_error`, `startup-failure`, `model-not-found`,
-// `model-not-supported`) and agentRunTracking's extractErrorFromOutput (`auth`,
-// `connection`, `rate-limit`). `model-not-available` is the legacy naming for
-// the model-unavailability class (still present in stored learning data /
-// prompt insights).
+// Covers both classifier vocabularies that stamp `errorAnalysis.category`
+// (agentErrorAnalysis ERROR_PATTERNS, agentRunTracking extractErrorFromOutput);
+// `model-not-available` is the legacy name kept for stored data.
 //
-// Deliberately EXCLUDES `timeout`, `unknown`, `process-killed`, and the generic
-// `api-error`: each can be genuine task/model signal (a task too big for its
-// tier times out or blows resource limits; an uncategorized or generic API
-// failure may be anything, including a task-induced bad request). Also EXCLUDES
-// the mixed-provenance categories `server-error` and `spawn-error`: their
-// classifier regexes (`/server error|internal error/`, `command not found`)
-// match ordinary task output too — a genuinely failing app test printing
-// "Internal Server Error" must keep denting the rate, not vanish as an
-// "outage". Superset of agentErrorAnalysis's `API_ACCESS_ERROR_CATEGORIES`
-// (auth-error / forbidden / usage-limit — asserted by a cross-check test in
-// agentErrorAnalysis.test.js) but defined here as its own leaf constant:
-// importing agentErrorAnalysis.js would drag the cos.js task-store graph into
-// every taskLearning consumer and suite.
+// Deliberately EXCLUDES `timeout`, `unknown`, `process-killed`, `api-error` (can be real
+// task/model signal) and `server-error` / `spawn-error` (their regexes match ordinary
+// task output, e.g. a failing test printing "Internal Server Error").
+// A superset of agentErrorAnalysis's `API_ACCESS_ERROR_CATEGORIES` (cross-checked in
+// agentErrorAnalysis.test.js), defined as a local leaf: importing it would drag the
+// cos.js task-store graph into every taskLearning consumer.
 export const ENVIRONMENTAL_ERROR_CATEGORIES = new Set([
   'rate-limit',
   'usage-limit',
@@ -434,16 +366,10 @@ export async function saveLearningData(data) {
 }
 
 /**
- * Summarize the enriched `failureSignatures` map (issues #2329/#2333) into a
- * ranked, display-ready list. Reads each category's `recent[]` samples to add
- * provider/model attribution and success-criteria (validation) miss counts that
- * the coarser `errorPatterns` aggregate can't express — so the self-improvement
- * loop (insights + prompt recommendations) can say WHICH provider/model recently
- * failed for a task type, not just how often a category occurred.
- *
- * Pure / read-only. When `taskType` is given, only samples recorded for that
- * task type count (and categories with no matching sample are dropped) so a
- * per-type recommendation never inherits another type's failures.
+ * Summarize `failureSignatures` (#2329/#2333) into a ranked, display-ready list with
+ * provider/model attribution and validation-miss counts the coarser `errorPatterns`
+ * can't express. Pure. With `taskType`, only that type's samples count (categories
+ * with none are dropped), so a recommendation never inherits another type's failures.
  *
  * @param {Object} failureSignatures - `data.failureSignatures`: `{ [category]: { count, lastOccurred, recent: [] } }`
  * @param {Object} [opts]
@@ -493,16 +419,10 @@ export function summarizeFailureSignatures(failureSignatures, { taskType = null,
   return summaries.sort((a, b) => b.count - a.count).slice(0, Math.max(0, limit));
 }
 
-// ---------------------------------------------------------------------------
-// Human-readable insights (issue #2443)
-//
-// The insights array is the ONE prose channel in the learning store: standing
-// "operating notes" the user reads in the CoS UI. It is runtime data in
-// `data/cos/learning.json` — never committed to git and never federated — so
-// auto-recorded insight text must stay free of hostnames/paths/PII (build it
-// only from controlled labels: error category, counts, task type, provider/model
-// ids, agent id — never the raw error message, which can embed a path).
-// ---------------------------------------------------------------------------
+// Human-readable insights (#2443): the ONE prose channel in the learning store, runtime
+// data in `data/cos/learning.json` (never committed or federated). Auto-recorded text
+// must come only from controlled labels (category, counts, task type, provider/model
+// ids, agent id), never the raw error message, which can embed paths/PII.
 
 // Cap on retained insights (oldest pruned first). Matches the pre-existing cap
 // that `recordLearningInsight` enforced before it was factored out here.
@@ -521,11 +441,9 @@ export function recurrenceMilestoneReached(count) {
 }
 
 /**
- * Append an insight to `data.insights`, stamping `recordedAt` and defaulting
- * `origin` to `'user'` (a manual API insight) unless the caller marks it
- * `'auto-incident'`. Pure over `data` (mutates + returns it); enforces the
- * `INSIGHT_CAP` (oldest pruned). Shared by the manual route (`recordLearningInsight`)
- * and the failure-path auto-recorder so both stay in one shape.
+ * Append an insight to `data.insights`, stamping `recordedAt` and defaulting `origin`
+ * to `'user'` (`'auto-incident'` for the failure-path recorder). Mutates and returns
+ * `data`; enforces `INSIGHT_CAP` (oldest pruned).
  */
 export function appendInsight(data, insight) {
   if (!Array.isArray(data.insights)) data.insights = [];
@@ -537,12 +455,9 @@ export function appendInsight(data, insight) {
 }
 
 /**
- * Build a provenance-stamped, privacy-safe insight for a recurring failure
- * category (issue #2443). Pure — no I/O. Uses only controlled fields (category
- * label, recurrence count, task type, provider/model ids, agent id); it reads
- * the enriched `failureSignatures` map for provider/model attribution but never
- * echoes the raw error message (which can embed a path/PII). `origin` is
- * `'auto-incident'` so the UI can distinguish it from user-authored notes.
+ * Build a privacy-safe insight for a recurring failure category (#2443). Pure. Uses
+ * only controlled fields and never echoes the raw error message (can embed paths/PII);
+ * `origin: 'auto-incident'` distinguishes it from user-authored notes.
  */
 export function buildRecurrenceInsight({ category, count, taskType, agentId = null, failureSignatures = {} } = {}) {
   const summary = summarizeFailureSignatures(failureSignatures, { taskType })

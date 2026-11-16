@@ -1,27 +1,6 @@
 /**
  * Draft VIDEO DECODE for local video runtimes (issue #5423).
  *
- * Preview-fidelity ("draft") video decode (#5423). `VIDEO_DRAFT_DECODERS` declares each entry id → a
- * separately downloaded decoder asset, pin-guarded on repo AND revision;
- * `applyVideoDraftDecoders(list)` is the load-time backfill and `validateDraftDecoderTable` /
- * `sanitizeDraftDecoders` warn + strip a hand-edited row (missing pin, a multi-shard or
- * path-traversing file list, a runtime whose builder emits no draft flags) so a full decode can never
- * report itself as a draft one. `DRAFT_DECODE_FULL` (`'full'`) is a deliberate NO-OP —
- * `isFullDecode(id)` makes absence and that sentinel the same request, so a full-decode render builds
- * byte-identical spawn args. `draftDecodeDeclineReason({ model, decodeId, models, runtimeRevision,
- * assetCached })` RETURNS (never throws) the reason a draft decode does not apply — the model is a
- * delivery target in the finish graph (`isDeliveryVideoModel`), it declares no decoder, the installed
- * runner checkout is not the revision the asset was verified against, or the weights are not
- * downloaded — because a knob that only makes a render cheaper must degrade rather than 400 a
- * submitted job; `resolveVideoDraftDecoder()` returns the concrete asset or `null`.
- * `publicVideoDraftDecodeOptions(model)` is the picker payload (empty for a model with no decoder, so
- * the client renders no control) and `downloadableVideoDraftDecoders(list)` the download targets. The
- * table ships NO entry, and as of 2026-08-30 that is a decision rather than a gap
- * ([ADR](../../docs/decisions/2026-08-30-h3-draft-decoder-asset.md)): the shim substitutes one file
- * into upstream’s checkpoint root under a STRICT key match, so a candidate must be a complete
- * unquantized full-`VideoVAE` checkpoint — which every genuinely light decoder (TAE, quantized repack,
- * decoder-only head) is not.
- *
  * A diffusion video model produces a latent sequence; a VAE decoder turns that
  * sequence into pixels. On MiniMax H3 the decode is not a rounding error on the
  * render — it is a full-sequence pass over every latent frame at the output
@@ -78,15 +57,9 @@
  * decode cheap are mutually exclusive. Everything published that would actually
  * be light — a tiny autoencoder, a quantized repack, a decoder-only head —
  * cannot load through the pinned strict loader, and everything that CAN load is
- * a full-size VAE that saves nothing. Phosphene, the reference install that
- * prompted issue #5423, gets its ~23 MB TAE only by pinning its OWN runner fork
- * that implements a TAE decoder module and takes `--draft-decode tae`. PortOS
- * pins upstream instead, so an asset here would not be a table row — it would
- * be a fork of a multi-hour render path, which is its own decision.
- *
- * Shipping the gates first is still the right call: the day a qualifying asset
- * appears it is one table row plus a migration, and every fallback path it
- * depends on is already covered by tests.
+ * a full-size VAE that saves nothing. An asset here would mean forking the
+ * pinned upstream runner, which is its own decision; the gates ship first so a
+ * qualifying asset later is one table row plus a migration.
  *
  * Pure module: no I/O, and the one import is a sibling lib predicate.
  */

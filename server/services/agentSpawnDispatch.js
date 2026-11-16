@@ -41,6 +41,9 @@ import { cosEvents, emitLog } from './cosEvents.js';
 import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
+import { updateClaimOwnership } from './cosClaimOwnership.js';
+import { getTaskDurationEstimate } from './taskLearning.js';
+import { withClaimOwnershipLock } from './cosClaimOwnershipState.js';
 
 const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
@@ -55,9 +58,7 @@ export async function dispatchAgentRun(context, opts) {
   try {
     const type = currentTaskTypeName(context.task.metadata?.analysisType || context.task.metadata?.selfImprovementType);
     if (type === 'do-release' || type === 'release-sync') {
-      const [{ withClaimOwnershipLock }, { observeReleaseDeliveries, releaseTaskDispatchDisposition }] = await Promise.all([
-        import('./cosClaimOwnershipState.js'), import('./releaseSynchronization.js'),
-      ]);
+      const { observeReleaseDeliveries, releaseTaskDispatchDisposition } = await import('./releaseSynchronization.js');
       const deliveryObservations = await observeReleaseDeliveries(context.task, { ignoreAgentId: context.agentId }).catch(() => new Map());
       const disposition = await withClaimOwnershipLock(() => releaseTaskDispatchDisposition(context.task, { ignoreAgentId: context.agentId, deliveryObservations }));
       if (['retired-continuation', 'delivered-continuation', 'wait-for-synchronization', 'review-policy-unverified'].includes(disposition)) {
@@ -231,12 +232,11 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       ? planLocalPromptBudget({
         prompt,
         endpoint: localEndpoint,
-        baseDurationMs: await import('./taskLearning.js')
-          .then((tl) => tl.getTaskDurationEstimate(task.description, {
+        baseDurationMs: await getTaskDurationEstimate(task.description, {
             providerId: provider.id,
             model: selectedModel,
             effort: taskEffort,
-          }))
+          })
           .then((estimate) => estimate?.estimatedDurationMs ?? null)
           .catch(() => null),
       })
@@ -333,7 +333,6 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       // The run now exists to own the checkout PortOS cut for it. Binding it is
       // what the agent-cut flow does after `git worktree add`: it settles the
       // pinned selection and records the checkout's physical generation.
-      const { updateClaimOwnership } = await import('./cosClaimOwnership.js');
       const bound = await updateClaimOwnership({ agentId, action: 'bind', branch: claimCheckout.branchName })
         .catch(error => ({ bound: false, reason: error.message }));
       if (bound?.bound !== true) {

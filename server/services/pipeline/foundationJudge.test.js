@@ -87,7 +87,6 @@ const {
   foundationInputsHash,
   FOUNDATION_DIMENSIONS,
   FOUNDATION_WEIGHTS,
-  DEFAULT_FOUNDATION_THRESHOLD,
   __testing,
 } = await import('./foundationJudge.js');
 
@@ -1955,9 +1954,3 @@ describe('applyFoundationFix — dimension → owning-service routing table', ()
   });
 });
 
-describe('DEFAULT_FOUNDATION_THRESHOLD', () => {
-  it('mirrors autonovel\'s 7.5 foundation bar', () => {
-    expect(DEFAULT_FOUNDATION_THRESHOLD).toBe(SERIES_AUTOPILOT_DEFAULTS.foundationThreshold);
-    expect(DEFAULT_FOUNDATION_THRESHOLD).toBe(7.5);
-  });
-});

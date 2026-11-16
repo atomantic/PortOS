@@ -12,6 +12,10 @@
  * history (drafts[]); store.js decomposes drafts[] into draft-version rows on
  * the PG backend and reassembles them on read, so this module's public API and
  * the manifest shape are unchanged. See docs/features/writers-room.md.
+ *
+ * Storage: `file-primary` (draft `.md` bodies; metadata rows are `db-primary`) —
+ * federated through the Writers Room peer sync (sync.js ships bodies as assets).
+ * Long prose stays an editable file; the DB only indexes it.
  */
 
 import { ServerError } from '../../lib/errorHandler.js';

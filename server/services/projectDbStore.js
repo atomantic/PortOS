@@ -12,9 +12,27 @@ import {
 } from '../lib/conflictJournal.js';
 import { toPgJson } from '../lib/pgJson.js';
 
-export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel, logic }) {
+// Every write rewrites the whole JSONB document, so a record this large makes each edit slow (#16210).
+const LARGE_PROJECT_RECORD_BYTES = 5 * 1024 * 1024;
+const MB = 1024 * 1024;
+
+export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel, logic, largeRecordBytes = LARGE_PROJECT_RECORD_BYTES }) {
   if (!/^[a-z][a-z0-9_]*$/.test(table)) throw new Error(`Invalid project table: ${table}`);
   const sync = makeSyncKind(kind);
+  // Highest whole MB already logged per record, so a large record logs once per MB it grows, not on every edit.
+  const loggedLargeMb = new Map();
+
+  function noteRecordSize(id, json) {
+    const bytes = Buffer.byteLength(json);
+    if (bytes < largeRecordBytes) {
+      loggedLargeMb.delete(id);
+      return;
+    }
+    const mb = Math.floor(bytes / MB);
+    if (mb <= (loggedLargeMb.get(id) ?? -1)) return;
+    loggedLargeMb.set(id, mb);
+    console.log(`🐢 ${logLabel} project ${id} stored record is ${(bytes / MB).toFixed(1)} MB (over ${(largeRecordBytes / MB).toFixed(0)} MB); every write rewrites it whole`);
+  }
 
   function rowToProject(row) {
     if (!row) return null;
@@ -30,6 +48,9 @@ export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel
       });
     }
     const prepared = logic.beforeSave ? logic.beforeSave(project) : project;
+    // `toStored` encodes only the JSONB written (#16210); the caller gets the record `rowToProject` reads back.
+    const data = toPgJson(logic.toStored ? logic.toStored(prepared) : prepared);
+    noteRecordSize(prepared.id, data);
     const now = new Date().toISOString();
     const createdAt = logic.mirrorTimestamp(prepared.createdAt, now);
     await exec(
@@ -44,7 +65,7 @@ export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel
       [
         prepared.id,
         logic.mirrorStatus(prepared.status),
-        toPgJson(prepared),
+        data,
         createdAt,
         logic.mirrorTimestamp(prepared.updatedAt, createdAt),
         prepared.deleted === true,

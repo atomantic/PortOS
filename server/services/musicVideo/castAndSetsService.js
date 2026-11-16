@@ -1,4 +1,4 @@
-import { isCatalogCheckin, resolveCatalogCheckin, withCatalogCheckin, assertCatalogCheckinReady, assertLegacyCheckin, remapCatalogShotReferences } from './catalogCheckin.js';
+import { createCatalogReads, isCatalogCheckin, resolveCatalogCheckin, withCatalogCheckin, assertCatalogCheckinReady, assertLegacyCheckin, remapCatalogShotReferences } from './catalogCheckin.js';
 import { previewCastSetsImageEdit, requestCastSetsImageEdit, settleCastSetsImageEdit, acceptCastSetsImageEdit, discardCastSetsImageEdit } from './castAndSetsImageEdit.js';
 import { musicVideoAllowsMedia, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 import { castAndSetsApprovalInputs, castAndSetsApprovalValues, castAndSetsStoryInputs, directorArtGuides, productionFeedbackContext, seedArtDraft, selectArtGuideIfNone } from './productionReview.js';
@@ -104,6 +104,8 @@ import { catalogSheetImageFiles, renderCatalogCastAndSetsSheet } from './castAnd
 import { loadCastAndSetsCatalogLikeness } from './castAndSetsCatalogLikeness.js';
 import { findDevArtifact, reviewDevArtifact, resolveDevArtifactNotes } from './devArtifacts.js';
 import { PRODUCTION_RESUMABLE_STATUSES, findProductionRun, haltProduction, rebaseProductionAfterCheckin, reserveProductionStep, settleProductionStep } from './production.js';
+import { getSettings } from '../settings.js';
+import { getTrack } from '../tracks/index.js';
 
 const PROCESS_ID = `proc-${randomUUID()}`;
 const short = (id) => String(id || '').slice(3, 11);
@@ -118,7 +120,7 @@ const defaults = {
   reviewImage: async (opts) => (await import('./castAndSetsInspection.js')).reviewCastSetsImage(opts),
   resolveProvider: async (opts) => resolveMusicVideoLlm(opts),
   runPrompt: async (opts) => (await import('../promptRunner.js')).runPromptThroughProvider(opts),
-  getSettings: async () => (await import('../settings.js')).getSettings(),
+  getSettings: async () => getSettings(),
   enqueue: async (job) => (await import('../mediaJobQueue/index.js')).enqueueJob(job),
   queueSnapshot: async (jobId, { projectId, key, revision } = {}) => {
     const queue = await import('../mediaJobQueue/index.js');
@@ -130,7 +132,7 @@ const defaults = {
   },
   loadBoard: async (id) => (await import('../moodBoard/index.js')).getBoard(id),
   boardItemImage: async () => (await import('../moodBoard/logic.js')).boardItemLocalImage,
-  loadTrack: async (id) => (await import('../tracks/index.js')).getTrack(id),
+  loadTrack: async (id) => getTrack(id),
   sheetImage: (path) => sheetImage(path),
   imageParams: (settings, route, common) => imageJobParams(settings, route, common),
   resolveRoute: null,
@@ -1406,8 +1408,10 @@ export async function getCastAndSetsCastingChanges(projectId) {
 
 /** The stage as the director sees it. */
 export async function getCastAndSets(projectId) {
-  const project = await requireProject(projectId);
-  return { stage: presentStage(project), catalogCheckin: await resolveCatalogCheckin(project, { catalog: deps.catalog }) };
+  // The project read resolves the light check-in; the full one here reuses its catalog reads.
+  const reads = createCatalogReads();
+  const project = await requireProject(projectId, { catalogReads: reads });
+  return { stage: presentStage(project), catalogCheckin: await resolveCatalogCheckin(project, { catalog: deps.catalog, reads }) };
 }
 
 /** Recompute the offered repair under the project's serialized write. */

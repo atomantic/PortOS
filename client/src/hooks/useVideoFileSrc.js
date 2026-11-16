@@ -1,13 +1,5 @@
 /**
  * `useVideoFileSrc(jobId, { enabled })` → `{ src, resolving, retry }`.
- *
- * Resolves a video-history **id** to the file it really points at (`/data/videos/<filename>`) via the
- * by-id lookup `GET /api/video-gen/history/:id`. Returns source `fps` when known; opt-in `{ geometry:
- * true }` measures missing dimensions/cadence through the one-record read. Use when: Any surface
- * rendering a video by history id where the id is NOT the filename stem — notably a CD `finalVideoId`
- * (the timeline renderer mints `timeline-*.mp4` beside a `randomUUID()` id, so `/data/videos/<id>.mp4`
- * 404s while `<id>.jpg` poster loads). Pass the result to `<ScenePreview src=…>`. Gate autoplay on
- * `resolving`.
  */
 
 import { useCallback, useEffect, useState } from 'react';

@@ -1,19 +1,6 @@
 /**
  * A connection read as a SERVICE INSTANCE (#7563, epic #7561) — the pure bridge between
  * `ai_connections` rows and `serviceDefinitions.js`.
- *
- * `definitionIdForKind` / `kindForDefinition` translate a row's `kind` (`ollama`, `gateway:<id>`,
- * `api`, `vendor` + its binding's harness) to a definition id and back; `allocateServiceSlug` mints
- * `base`, `base-2`, …; `serviceColumnsForConnection` / `planServiceColumnBackfill` are the boot-time
- * backfill (slug, definition, first plan) the reconcile pass applies to rows that predate the columns
- * — row-derived, idempotent, never a seed; `takenServiceSlugs` is the set every allocation avoids;
- * `storedTransports` is the transports map a new instance's row stores; `applyServicePlanFilter`
- * narrows a listing to a plan; `credentialSourceFor` reports where an instance's credential comes from
- * (`settings`, `env-file`, `env`, `cli`, `config`, `none`, the inventory's own precedence) without a
- * value; `instanceApiKeyFor(connection, definition, env)` is the key it RUNS under (`stored` → the
- * row, `env` → the definition's conventional variable, else none), shared by the catalog refresh and
- * the composite resolver (#7564); `toServiceDto` (`serviceDtoSchema`, the connection DTO extended,
- * strict) is the sanitized `GET /api/providers/services` row with a one-word `readiness`.
  */
 
 import { z } from 'zod';

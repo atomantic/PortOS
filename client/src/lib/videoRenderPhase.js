@@ -1,41 +1,22 @@
 /**
- * Video render phase → named progress step (#5872).
+ * Video render phase → named progress step.
  *
- * Video render phase → named progress step (#5872). `resolveVideoRenderSteps({ generating, phase,
- * progressPct, remote })` → `{ activeId, steps: [{ id, label, state: 'done'|'active'|'pending' }] }`,
- * collapsing the runners' fine-grained `STAGE:` vocabulary (`load-transformer`, `encode-prompt`,
- * `sampling`, `mux`, …) onto six steps a person can read — the queue's own `queued` is one of them, so
- * a caller needs no separate flag. Family prefixes (`download-*`, `load-*`, `wan-*`, …) absorb markers
- * a future runner adds; `videoRenderStepFor(phase, { remote })` returns `null` for a genuinely unknown
- * one, never step 0. `remote: true` swaps in the four-step provider ladder
- * (`REMOTE_VIDEO_RENDER_STEPS`: queued → submit → render → fetch) for a render an external API owns,
- * where the local weight/load/encode steps describe work this machine never does. Consumed by
- * `components/videoGen/RenderStatusCard.jsx`.
+ * A local video render spends most of its wall clock outside the sampler
+ * (resolving a cache, streaming weights onto the GPU, encoding the prompt,
+ * decoding latents, muxing audio). Runners announce their phase with
+ * `STAGE:<phase>` markers (every helper under `scripts/`) and the server forwards
+ * that id on status/progress frames. This maps the fine-grained vocabulary onto a
+ * short ordered list a person can read ("Loading model — step 2 of 5"). Pure: the
+ * caller owns every input.
  *
- * A local video render spends most of its wall clock somewhere other than the
- * sampler: resolving a cache, streaming tens of gigabytes of weights onto the
- * GPU, encoding the prompt, decoding latents, muxing audio. The runners already
- * announce which of those they are in — every helper under `scripts/` emits
- * `STAGE:<phase>` markers, and the server now forwards that id on its status and
- * progress frames — but the page had nowhere to put it, so a FastH3 render (an
- * ~89 GB INT4 DiT, no per-step progress until denoising starts) showed a
- * motionless "0%" and the word "Starting render…" for many minutes.
+ * External provider backends (Grok, fal.ai, reactor.inc) get a shorter ladder
+ * (REMOTE_VIDEO_RENDER_STEPS): they render on someone else's hardware, so local
+ * markers never arrive and the card would pin "Loading model" until completion.
  *
- * This maps the runner's fine-grained phase vocabulary onto a short, ordered
- * list of steps a person can actually read, so the UI can say "Loading model —
- * step 2 of 5" instead of nothing. Pure: the caller owns every input.
- *
- * External provider backends (Grok, fal.ai, reactor.inc) get their own, shorter
- * ladder: they render on someone else's hardware, so every local step below the
- * handover describes work that never happens here — and with none of those
- * markers able to arrive, the card pinned "Loading model" from submit to
- * completion. See REMOTE_VIDEO_RENDER_STEPS.
- *
- * The step list is deliberately coarse. Runners disagree on how finely they
- * subdivide their work (`load-transformer` / `load-text-encoder` /
- * `from-pretrained` / `move-to-device` are all one wait as far as the user is
- * concerned), and a list that grew a row per marker would be a changelog of the
- * Python scripts rather than a description of the render.
+ * The list is deliberately coarse: runners subdivide differently
+ * (`load-transformer` / `load-text-encoder` / `from-pretrained` /
+ * `move-to-device` are one wait to the user), and a row per marker would be a
+ * changelog of the Python scripts, not a description of the render.
  */
 
 /** Ordered coarse steps. `id` is stable; `label` is what the user reads. */
@@ -49,13 +30,9 @@ export const VIDEO_RENDER_STEPS = Object.freeze([
 ].map(Object.freeze));
 
 /**
- * Ordered coarse steps for a render this machine does not run: an external
- * provider API (Grok, fal.ai, reactor.inc). The provider owns the weights, the
- * sampler and the encode, so the local ladder above describes work that never
- * happens here — and because none of its markers can ever arrive, the card used
- * to sit on "Loading model" from submit to completion and then jump straight to
- * done. What a caller CAN observe is the round trip: hand the job over, wait for
- * the provider to render it, pull the finished file back.
+ * Ordered coarse steps for a render this machine does not run (an external
+ * provider API). The provider owns the weights, sampler and encode, so what a
+ * caller CAN observe is the round trip: hand the job over, wait, pull the file back.
  */
 export const REMOTE_VIDEO_RENDER_STEPS = Object.freeze([
   { id: 'queued', label: 'Queued' },
@@ -64,17 +41,14 @@ export const REMOTE_VIDEO_RENDER_STEPS = Object.freeze([
   { id: 'fetch', label: 'Downloading result' },
 ].map(Object.freeze));
 
-// Exact runner `STAGE:` id → coarse step, for the markers that carry no useful
-// family prefix. Keys are what the helpers under `scripts/` actually emit (grep
-// `STAGE:` there); anything unmatched falls through to `null`, which the caller
-// must treat as "unknown phase", never as step 0 — reporting "Queued" for an
-// unrecognized marker would read as the render having gone backwards.
+// Exact runner `STAGE:` id → coarse step, for markers with no useful family
+// prefix (keys are what the helpers under `scripts/` emit). Unmatched → `null`,
+// which the caller must treat as "unknown phase", never step 0: "Queued" for an
+// unrecognized marker would read as the render going backwards.
 const PHASE_STEP = Object.freeze(Object.assign(Object.create(null), {
-  // The bare marker, which is what a `DOWNLOAD:` line sets and what
-  // hf_download_repo.py emits as `STAGE:download:<n>/<total>:<file>`. It does
-  // NOT match the `download-` prefix below, so without this entry the step
-  // this list exists for never activates and a multi-GB first-run download
-  // reads as "Rendering".
+  // The bare marker a `DOWNLOAD:` line sets and hf_download_repo.py emits as
+  // `STAGE:download:<n>/<total>:<file>`. It doesn't match the `download-` prefix
+  // below, so without this a multi-GB first-run download reads as "Rendering".
   download: 'download',
   // The download helper's own preamble, not separate user-visible work.
   'resolve-cache': 'download',
@@ -82,8 +56,7 @@ const PHASE_STEP = Object.freeze(Object.assign(Object.create(null), {
   list: 'download',
   bytes: 'download',
 
-  // Getting the pipeline resident. The single longest phase on a large
-  // quantized checkpoint, and the one that used to show nothing at all.
+  // Getting the pipeline resident: the longest phase on a large quantized checkpoint.
   'from-pretrained': 'load',
   'move-to-device': 'load',
   'apply-loras': 'load',
@@ -93,13 +66,11 @@ const PHASE_STEP = Object.freeze(Object.assign(Object.create(null), {
   'encode-prompt': 'encode',
   conditioning: 'encode',
   'precompute-latents': 'encode',
-  // …and its END marker, which means the OPPOSITE of the one above. It is the
-  // last STAGE line generate_ltx2.py emits before denoising, and the server
-  // pins it as the phase on every progress frame that follows, so mapping it
-  // back to `encode` (as its `encode-prompt` prefix otherwise would) leaves
-  // LTX-2 — the primary local runtime — reading "Encoding prompt" for the
-  // whole sampler run. Exact entries win over prefixes, which is what makes
-  // this correction possible.
+  // The END marker, the OPPOSITE of the one above: the last STAGE line
+  // generate_ltx2.py emits before denoising, pinned as the phase on every later
+  // progress frame. Mapped to `encode` via its prefix it would leave LTX-2 (the
+  // primary local runtime) reading "Encoding prompt" for the whole sampler run.
+  // Exact entries win over prefixes.
   'encode-prompt-done': 'render',
 
   // The sampler itself.
@@ -115,16 +86,14 @@ const PHASE_STEP = Object.freeze(Object.assign(Object.create(null), {
   mux: 'finalize',
   complete: 'finalize',
 
-  // The queue's own state, so a caller has one vocabulary rather than a
-  // separate "is it queued" flag alongside the phase.
+  // The queue's own state, so callers have one vocabulary.
   queued: 'queued',
 }));
 
-// Prefix families, longest-prefix-first. The runners name their markers by
-// family (`download-text-encoder`, `load-transformer`, `swap-video-decoder`,
-// `wan-i2v`, `ref2va-mux`), and each family already ends up in one step — so
-// matching the prefix absorbs the markers a future runner adds instead of
-// silently degrading them to "unknown phase".
+// Prefix families, longest-prefix-first. Runners name markers by family
+// (`download-text-encoder`, `load-transformer`, `wan-i2v`), each ending up in one
+// step, so prefix matching absorbs a future runner's markers instead of degrading
+// them to "unknown phase".
 const PHASE_PREFIX_STEP = Object.freeze([
   ['download-', 'download'],
   ['load-', 'load'],
@@ -134,13 +103,11 @@ const PHASE_PREFIX_STEP = Object.freeze([
   ['wan-', 'render'],
 ]);
 
-// Provider phase → remote step. The cloud lanes in server/services/videoGen/
-// emit `submit` / `render` / `fetch` (CLOUD_RENDER_PHASE) on their status
-// frames, plus the queue's own `queued`; the few one-word synonyms beside them
-// spare a future lane from matching the vocabulary letter for letter.
-// Deliberately NOT merged into PHASE_STEP: `download` means "streaming weights
-// onto this GPU" there and "pulling the finished clip back" here, so one table
-// would have to answer both and no single answer is right.
+// Provider phase → remote step. The cloud lanes in server/services/videoGen/ emit
+// `submit` / `render` / `fetch` (CLOUD_RENDER_PHASE) plus the queue's `queued`;
+// the one-word synonyms spare a future lane an exact match. NOT merged into
+// PHASE_STEP: `download` means "streaming weights onto this GPU" there and
+// "pulling the finished clip back" here.
 const REMOTE_PHASE_STEP = Object.freeze(Object.assign(Object.create(null), {
   queued: 'queued',
   submit: 'submit',
@@ -152,29 +119,23 @@ const REMOTE_PHASE_STEP = Object.freeze(Object.assign(Object.create(null), {
 }));
 
 /**
- * The coarse step a runner phase belongs to, or `null` when the phase is
- * unrecognized. Case-insensitive because BYOV helpers are not required to agree
- * on capitalization (the server normalizes STAGE tags the same way).
- *
- * `remote: true` resolves against the provider ladder instead — a render an
- * external API owns speaks a different, much shorter vocabulary.
+ * The coarse step a runner phase belongs to, or `null` when unrecognized.
+ * Case-insensitive (BYOV helpers needn't agree on capitalization). `remote: true`
+ * resolves against the provider ladder.
  */
 export function videoRenderStepFor(phase, { remote = false } = {}) {
   if (typeof phase !== 'string' || !phase) return null;
-  // Null-prototype lookup (see PHASE_STEP): a runner is free to emit
-  // `STAGE:constructor`, and on a plain object literal that would resolve to
-  // `Object` and hand the caller a step id no list contains.
+  // Null-prototype lookup (see PHASE_STEP): `STAGE:constructor` on a plain object
+  // literal would resolve to `Object` and hand back a step id no list contains.
   const id = phase.toLowerCase();
   if (remote) return REMOTE_PHASE_STEP[id] || null;
   if (PHASE_STEP[id]) return PHASE_STEP[id];
   return PHASE_PREFIX_STEP.find(([prefix]) => id.startsWith(prefix))?.[1] || null;
 }
 
-// One frozen step list per possible active step, plus the all-pending list.
-// `resolveVideoRenderSteps` is called on every render of a page that re-renders
-// on each keystroke and each SSE frame, and there is only a handful of answers
-// per ladder — so they are built once at import and shared, which also gives
-// callers a stable identity to memo on.
+// One frozen step list per possible active step, plus the all-pending list,
+// built once: `resolveVideoRenderSteps` runs on every keystroke and SSE frame,
+// and sharing gives callers a stable identity to memo on.
 const stepsByActiveId = (steps) => {
   const stepIndex = Object.fromEntries(steps.map((step, index) => [step.id, index]));
   return Object.freeze(Object.fromEntries(
@@ -192,31 +153,23 @@ const STEPS_BY_ACTIVE_ID = stepsByActiveId(VIDEO_RENDER_STEPS);
 const REMOTE_STEPS_BY_ACTIVE_ID = stepsByActiveId(REMOTE_VIDEO_RENDER_STEPS);
 
 /**
- * Project a render's live state onto the step list.
+ * Project a render's live state onto the step list. `phase` is the runner's marker
+ * (absent until the first status frame; set to `'queued'` by the page while in
+ * line). `progressPct` only decides whether the sampler has demonstrably started:
+ * numeric progress means rendering even if the phase marker never arrived.
+ * `remote` selects the provider ladder; its silent default is `submit`, not `load`,
+ * since nothing loads here and the job has been handed over.
  *
- * `phase` is the runner's marker (absent until the first status frame, and set
- * to `'queued'` by the page while the job is still in line), and `progressPct`
- * is only used to decide whether the sampler has demonstrably started — a
- * runner that reports numeric progress is rendering even if its phase marker
- * never arrived.
- *
- * `remote` selects the provider ladder (REMOTE_VIDEO_RENDER_STEPS) for a render
- * an external API owns. Its silent default is `submit`, not `load`: nothing is
- * loading on this machine, and the job has demonstrably been handed over.
- *
- * Returns `{ steps, activeId }` where each step carries `state`:
- * `'done' | 'active' | 'pending'`. `activeId` is `null` only when there is
- * nothing to show (not generating).
+ * Returns `{ steps, activeId }`, each step carrying `state`:
+ * `'done' | 'active' | 'pending'`. `activeId` is `null` only when not generating.
  */
 export function resolveVideoRenderSteps({ generating = false, phase = null, progressPct = null, remote = false } = {}) {
   const byActiveId = remote ? REMOTE_STEPS_BY_ACTIVE_ID : STEPS_BY_ACTIVE_ID;
-  // Order of preference: an explicit phase, then "the sampler is visibly
-  // running", then the honest default for a render that has started but told us
-  // nothing yet — which is loading, or, on the provider ladder, submitting.
+  // Preference: an explicit phase, then "sampler visibly running", then the honest
+  // default for a started render that told us nothing (loading / submitting).
   const activeId = !generating ? null
     : videoRenderStepFor(phase, { remote })
       || (Number.isFinite(progressPct) && progressPct > 0 ? 'render' : (remote ? 'submit' : 'load'));
-  // `?? byActiveId.null` so an id outside the step list can never hand the
-  // caller `undefined` to map over.
+  // `?? byActiveId.null` so an id outside the list never yields `undefined`.
   return { activeId, steps: byActiveId[String(activeId)] ?? byActiveId.null };
 }

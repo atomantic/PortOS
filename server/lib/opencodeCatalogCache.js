@@ -3,17 +3,6 @@
  * what OpenCode actually offers today rather than what it offered the last time
  * its own background fetch happened to succeed.
  *
- * Primes the on-disk catalog `opencode models` prints from — `primeOpencodeCatalogCache()` fetches
- * OpenCode's `api.json` with Node's fetch and atomically writes `$XDG_CACHE_HOME/opencode/models.json`
- * (`~/.cache` when unset). OpenCode refreshes that file from a forked task whose failures it swallows
- * (`opencode models --refresh` still prints `Models cache refreshed`) and its HTTP client has no Happy
- * Eyeballs, so a host advertising an unreachable IPv6 default route freezes the catalog indefinitely
- * while other machines on the same account list newer models. Refuses to fetch or write when
- * `OPENCODE_MODELS_PATH` / a custom `OPENCODE_MODELS_URL` / `OPENCODE_DISABLE_MODELS_FETCH` means
- * PortOS cannot be sure which file OpenCode reads, when the file is under five minutes old, or when
- * the body did not parse as a catalog — a stale list beats an empty picker. Never throws; the caller
- * probes either way.
- *
  * **The failure this exists for.** `opencode models` does NOT go to the network:
  * it reads `$XDG_CACHE_HOME/opencode/models.json` (falling back to
  * `~/.cache/opencode/models.json`) and prints the models it can resolve out of

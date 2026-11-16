@@ -1,32 +1,8 @@
 /**
- * Repo-wide responsive-grid convention.
- *
- * `client/src/AGENTS.md` requires every page to be mobile responsive, and the
- * overwhelming majority of grids in the tree already carry a column breakpoint
- * (`grid-cols-1 sm:grid-cols-2 xl:grid-cols-3`). The failure mode this guard
- * catches is the one that keeps slipping through review: a stat/summary bar
- * hard-coding four or five columns with no breakpoint prefix at all. At a 360px
- * viewport that leaves each card ~65px of outer width — after its own padding,
- * ~34px of content — so a label like "Platform Accounts" wraps to five lines and
- * the whole above-the-fold region becomes unreadable (issue #5679).
- *
- * The rule: a `className` string holding a bare `grid-cols-N` for N >= 4 must
- * also hold at least one *prefixed* `…:grid-cols-*` in the same string, so the
- * column count is conditional on available width instead of frozen at every
- * viewport. Any variant prefix counts — a media breakpoint (`sm:`), a container
- * query (`@3xl:`), or a custom variant.
- *
- * Deliberately NOT "the unprefixed default must be <= 3 columns": a grid of
- * square thumbnails or heatmap cells is legitimately four to six wide on a
- * phone (`grid-cols-4 sm:grid-cols-8 lg:grid-cols-12` over sprite frames,
- * `grid-cols-6 sm:grid-cols-12` over a 24-hour heatmap) because the cell holds
- * no text to wrap. The defect this guard exists for is the *frozen* count — a
- * grid that never learned the viewport changes — and the author who writes a
- * breakpoint at all has demonstrably thought about the narrow case.
- *
- * Scoped to git-tracked non-test sources under `client/src` so an untracked
- * scratch file can't fail the suite. Comments are masked first: a doc comment
- * quoting an example class string is documentation, not markup.
+ * Rule: A `className` with bare `grid-cols-N` (N >= 4) must also include a prefixed `…:grid-cols-*` variant in the same string (see `client/src/AGENTS.md`).
+ * Fix: Add a responsive/container column breakpoint (e.g. `grid-cols-1 sm:grid-cols-2 lg:grid-cols-4`).
+ * What this guard cannot see:
+ *   - Scoped to git-tracked non-test sources under `client/src` (comments masked).
  */
 
 import { describe, it, expect } from 'vitest';

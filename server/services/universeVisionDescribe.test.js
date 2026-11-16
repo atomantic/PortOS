@@ -25,7 +25,7 @@ const aiProvider = await import('./aiProvider.js');
 const promptRunner = await import('./promptRunner.js');
 const universeBuilder = await import('./universeBuilder.js');
 const {
-  describeEntityFromImages, correctEntityFromImage, VISION_KINDS, VISION_MAX_IMAGES, __testing,
+  describeEntityFromImages, correctEntityFromImage, VISION_MAX_IMAGES, __testing,
 } = await import('./universeVisionDescribe.js');
 
 const apiProvider = { id: 'ollama', type: 'api', defaultModel: 'llava' };
@@ -146,9 +146,6 @@ describe('describeEntityFromImages', () => {
       .rejects.toMatchObject({ code: 'VISION_EMPTY', status: 502 });
   });
 
-  it('exports the three canon kinds', () => {
-    expect(VISION_KINDS).toEqual(['character', 'place', 'object']);
-  });
 });
 
 describe('buildVisionCorrectPrompt', () => {

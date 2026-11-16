@@ -1,6 +1,12 @@
 import { musicVideoMediaMode, musicVideoDocumentRenderer, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 import { assertProductionApproval } from './productionReview.js';
-/** User-triggered mixed-media document authoring. No provider runs on read or boot. */
+/**
+ * User-triggered mixed-media document authoring. No provider runs on read or boot.
+ *
+ * Storage: `ephemeral-file` (`data/cache/music-video-authoring/<project-id>.json`) — machine-local, never
+ * federated, excluded from backup by `/cache/`. One checkpoint per unfinished authoring attempt, keyed
+ * on basis/prompt/provider/document pointers so edits replace it; publication removes it, absent is empty.
+ */
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';

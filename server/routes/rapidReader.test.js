@@ -1,23 +1,25 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
+// Real shelf service (one JSON record per entry) over a temp data root. Doubled: the Accelerando
+// book (a network download) and the SSRF-guarded page fetch, the shelf's only external boundaries.
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-rapid-reader-') }));
+vi.mock('../lib/safeUrlFetch.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  fetchPublicText: vi.fn(),
+}));
 vi.mock('../services/rapidReader.js', () => ({
   getAccelerandoBook: vi.fn(),
 }));
-
-vi.mock('../services/rapidReaderLibrary.js', () => ({
-  listRapidReaderLibrary: vi.fn(),
-  getRapidReaderLibraryEntry: vi.fn(),
-  createPastedRapidReaderEntry: vi.fn(),
-  fetchRapidReaderEntry: vi.fn(),
-  deleteRapidReaderLibraryEntry: vi.fn(),
-}));
+afterAll(cleanupTempDataRoots);
 
 const routes = (await import('./rapidReader.js')).default;
 const service = await import('../services/rapidReader.js');
-const library = await import('../services/rapidReaderLibrary.js');
+const { fetchPublicText } = await import('../lib/safeUrlFetch.js');
 
 const BOOK = {
   id: 'accelerando',
@@ -36,7 +38,6 @@ function makeApp() {
 }
 
 beforeEach(() => vi.clearAllMocks());
-
 describe('GET /api/rapid-reader/accelerando', () => {
   it('returns the book and prevents shared HTTP caching', async () => {
     service.getAccelerandoBook.mockResolvedValue(BOOK);
@@ -49,72 +50,65 @@ describe('GET /api/rapid-reader/accelerando', () => {
   });
 });
 
-const SHELF_META = {
-  id: 'shelf-1', title: 'Saved Article', author: null, sourceUrl: 'https://example.com/a',
-  sourceType: 'fetch', wordCount: 2, addedAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
-};
+const app = makeApp();
+const SHELF = '/api/rapid-reader/library';
+const shelfIds = async () => (await request(app).get(SHELF)).body.map((e) => e.id);
 
 describe('rapid reader shelf routes', () => {
-  it('lists shelf metadata', async () => {
-    library.listRapidReaderLibrary.mockResolvedValue([SHELF_META]);
-
-    const response = await request(makeApp()).get('/api/rapid-reader/library');
-
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual([SHELF_META]);
-  });
-
-  it('returns one entry with its text, and 404s an unknown id', async () => {
-    library.getRapidReaderLibraryEntry.mockResolvedValueOnce({ ...SHELF_META, text: 'alpha bravo' });
-    const found = await request(makeApp()).get('/api/rapid-reader/library/shelf-1');
-    expect(found.status).toBe(200);
-    expect(found.body.text).toBe('alpha bravo');
-    expect(library.getRapidReaderLibraryEntry).toHaveBeenCalledWith('shelf-1');
-
-    library.getRapidReaderLibraryEntry.mockRejectedValueOnce(Object.assign(new Error('Shelf entry not found'), { status: 404, code: 'NOT_FOUND' }));
-    const missing = await request(makeApp()).get('/api/rapid-reader/library/nope');
-    expect(missing.status).toBe(404);
-  });
-
-  it('creates a pasted entry and rejects an invalid body without calling the service', async () => {
-    library.createPastedRapidReaderEntry.mockResolvedValue({ ...SHELF_META, id: 'shelf-2', sourceType: 'paste', text: 'alpha bravo' });
-
-    const created = await request(makeApp()).post('/api/rapid-reader/library').send({ title: 'Notes', text: 'alpha bravo' });
+  it('persists a pasted entry so it lists without its text and reads back with it', async () => {
+    const created = await request(app).post(SHELF).send({ title: 'Notes', text: 'alpha bravo' });
     expect(created.status).toBe(201);
-    expect(library.createPastedRapidReaderEntry).toHaveBeenCalledWith({ title: 'Notes', text: 'alpha bravo' });
+    const { id } = created.body;
+    expect(created.body).toMatchObject({ title: 'Notes', sourceType: 'paste', wordCount: 2 });
 
-    const invalid = await request(makeApp()).post('/api/rapid-reader/library').send({ title: '', text: '' });
-    expect(invalid.status).toBe(400);
-    expect(library.createPastedRapidReaderEntry).toHaveBeenCalledTimes(1);
+    const listed = (await request(app).get(SHELF)).body.find((e) => e.id === id);
+    expect(listed).toMatchObject({ title: 'Notes', sourceType: 'paste' });
+    expect(listed).not.toHaveProperty('text');
+
+    const one = await request(app).get(`${SHELF}/${id}`);
+    expect(one.status).toBe(200);
+    expect(one.body.text).toBe('alpha bravo');
   });
 
-  it('routes /library/fetch to the importer rather than treating "fetch" as an id', async () => {
-    library.fetchRapidReaderEntry.mockResolvedValue({ ...SHELF_META, text: 'alpha bravo' });
+  it('404s an unknown id', async () => {
+    expect((await request(app).get(`${SHELF}/nope`)).status).toBe(404);
+  });
 
-    const response = await request(makeApp()).post('/api/rapid-reader/library/fetch').send({ url: 'https://example.com/a' });
+  it('rejects an invalid body without persisting anything', async () => {
+    const before = await shelfIds();
+    expect((await request(app).post(SHELF).send({ title: '', text: '' })).status).toBe(400);
+    expect(await shelfIds()).toEqual(before);
+  });
+
+  it('routes /library/fetch to the importer, storing the page text under the page title', async () => {
+    fetchPublicText.mockResolvedValue('<html><head><title>Saved Article</title></head><body><p>alpha bravo</p></body></html>');
+
+    const response = await request(app).post(`${SHELF}/fetch`).send({ url: 'https://example.com/a' });
 
     expect(response.status).toBe(201);
-    expect(library.fetchRapidReaderEntry).toHaveBeenCalledWith({ url: 'https://example.com/a' });
-    expect(library.getRapidReaderLibraryEntry).not.toHaveBeenCalled();
+    expect(fetchPublicText).toHaveBeenCalledWith('https://example.com/a', expect.objectContaining({ blockPrivate: true }));
+    expect(response.body).toMatchObject({ title: 'Saved Article', sourceType: 'fetch', sourceUrl: 'https://example.com/a' });
+    expect((await request(app).get(`${SHELF}/${response.body.id}`)).body.text).toContain('alpha bravo');
   });
 
-  it('rejects a non-http URL before fetching, and surfaces an unsafe target', async () => {
-    const rejected = await request(makeApp()).post('/api/rapid-reader/library/fetch').send({ url: 'file:///etc/passwd' });
-    expect(rejected.status).toBe(400);
-    expect(library.fetchRapidReaderEntry).not.toHaveBeenCalled();
+  it('rejects a non-http URL before fetching, and stores nothing for an unsafe target', async () => {
+    const before = await shelfIds();
+    expect((await request(app).post(`${SHELF}/fetch`).send({ url: 'file:///etc/passwd' })).status).toBe(400);
+    expect(fetchPublicText).not.toHaveBeenCalled();
 
-    library.fetchRapidReaderEntry.mockRejectedValueOnce(Object.assign(new Error('Refused to fetch a private address'), { status: 400, code: 'UNSAFE_URL' }));
-    const unsafe = await request(makeApp()).post('/api/rapid-reader/library/fetch').send({ url: 'http://192.0.2.10/a' });
+    fetchPublicText.mockRejectedValueOnce(Object.assign(new Error('Refused to fetch a private address'), { status: 400, code: 'UNSAFE_URL' }));
+    const unsafe = await request(app).post(`${SHELF}/fetch`).send({ url: 'http://192.0.2.10/a' });
     expect(unsafe.status).toBe(400);
     expect(unsafe.body.code).toBe('UNSAFE_URL');
+    expect(await shelfIds()).toEqual(before);
   });
 
-  it('deletes one entry with no content', async () => {
-    library.deleteRapidReaderLibraryEntry.mockResolvedValue(undefined);
+  it('deletes one entry with no content, after which it is gone', async () => {
+    const { id } = (await request(app).post(SHELF).send({ title: 'Doomed', text: 'x y z' })).body;
 
-    const response = await request(makeApp()).delete('/api/rapid-reader/library/shelf-1');
+    expect((await request(app).delete(`${SHELF}/${id}`)).status).toBe(204);
 
-    expect(response.status).toBe(204);
-    expect(library.deleteRapidReaderLibraryEntry).toHaveBeenCalledWith('shelf-1');
+    expect((await request(app).get(`${SHELF}/${id}`)).status).toBe(404);
+    expect(await shelfIds()).not.toContain(id);
   });
 });

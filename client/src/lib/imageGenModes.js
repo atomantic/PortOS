@@ -1,15 +1,6 @@
 /**
  * Node-safe image/video backend constants + pure helpers.
  *
- * Re-exports the backend / render-target / lane alphabets from the server leaves
- * `server/lib/generationModes.js` + `server/lib/renderTargets.js` (see its header for why nothing is
- * copied); adds the Settings rows (`RENDER_TARGET_OPTIONS`), `applyRecordRenderPin` (fold a record's
- * `imageMode`/`imageModelId` pin over a settings-derived cfg), `isCloudCliMode`/`isCloudVideoMode`,
- * `modeLabel`, `mediaJobLane` (a projected media job's scheduler lane, re-derived for responses
- * predating the server's `executionLane` field), and the cloud/model-override/i2i capability mirrors
- * of the server service specs. Imported by the server-side parity suite — must stay importable without
- * client packages.
- *
  * Image/video render-backend constants + pure helpers — the NODE-SAFE half of
  * `imageGenBackends.js`, split out (#3231 Phase 4) because the server-side
  * parity suite (`server/lib/renderTargets.parity.test.js`) and the server CI

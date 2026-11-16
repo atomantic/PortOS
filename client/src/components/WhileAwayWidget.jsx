@@ -1,5 +1,3 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import useMounted from '../hooks/useMounted';
 import { Link } from 'react-router';
 import {
   Moon,
@@ -8,10 +6,11 @@ import {
   Clock,
   Eye,
   Loader2,
-  Sparkles
+  Sparkles,
+  AlertTriangle
 } from 'lucide-react';
 import * as api from '../services/api';
-import socket from '../services/socket';
+import { useSocketResource } from '../hooks/useSocketResource';
 import { timeAgo } from '../utils/formatters';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 
@@ -61,40 +60,23 @@ function ActivityRow({ item, kind }) {
   );
 }
 
+// A finished agent run can change the queue while you're looking at it, so the
+// card refreshes on completion (mirrors ReviewHubCard).
+const WHILE_AWAY_EVENTS = ['cos:agent:completed'];
+
+// The marker is captured at fetch time so "Mark as seen" and the header label
+// reflect the window we actually queried (not a value that drifted since).
+const fetchWhileAway = async () => {
+  const since = readLastSeen();
+  return { ...(await api.getCosWhileAwayActivity(since, { silent: true })), since };
+};
+
 export default function WhileAwayWidget() {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  // The marker captured at fetch time, so "Mark as seen" and the header label
-  // reflect the window we actually queried (not a value that drifted since).
-  const sinceRef = useRef(null);
-  // A socket-driven refresh can land after the widget unmounts — guard the
-  // async setState so it doesn't fire into the void (AGENTS.md unmount rule).
-  const mountedRef = useMounted();
-
-  const load = useCallback(() => {
-    const since = readLastSeen();
-    sinceRef.current = since;
-    return api.getCosWhileAwayActivity(since, { silent: true })
-      .then((res) => { if (mountedRef.current) setData(res); })
-      .catch(() => null)
-      .finally(() => { if (mountedRef.current) setLoading(false); });
-  }, []);
-
-  useEffect(() => {
-    load();
-    // A finished agent run can change the queue while you're looking at it —
-    // refresh on completion so the card stays live (mirrors ReviewHubCard).
-    const refresh = () => load();
-    socket.on('cos:agent:completed', refresh);
-    return () => {
-      socket.off('cos:agent:completed', refresh);
-    };
-  }, [load]);
+  const { data, loading, error, refetch } = useSocketResource(fetchWhileAway, { events: WHILE_AWAY_EVENTS });
 
   const markSeen = () => {
     writeLastSeen(new Date().toISOString());
-    setLoading(true);
-    load();
+    refetch();
   };
 
   if (loading && !data) {
@@ -105,13 +87,22 @@ export default function WhileAwayWidget() {
     );
   }
 
-  if (!data) return null;
+  if (!data) {
+    // A failed read is not "nothing happened": surface it with a retry.
+    return error ? (
+      <div role="alert" className="@container bg-port-card border border-port-border rounded-xl p-4 flex items-center gap-2 text-sm text-port-error">
+        <AlertTriangle size={14} className="shrink-0" />
+        <span className="min-w-0 flex-1">Could not load recent agent activity.</span>
+        <button type="button" onClick={refetch} className="px-2.5 py-1.5 min-h-[36px] text-xs bg-port-bg border border-port-border rounded-lg text-gray-300 hover:border-port-accent/50">Retry</button>
+      </div>
+    ) : null;
+  }
 
   const { stats, time, accomplishments = [], incidents = [] } = data;
   const total = stats?.completed ?? 0;
   // The header window: prefer the per-device marker; if absent, the server
   // fell back to 24h and reports the window it actually used via sinceIso.
-  const windowSince = sinceRef.current || data.sinceIso;
+  const windowSince = data.since || data.sinceIso;
 
   return (
     <div className="@container min-w-0 bg-port-card border border-port-border rounded-xl p-4">

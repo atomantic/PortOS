@@ -173,7 +173,7 @@ tags) so vault queries and Dataview can find it.
 
 **Storage.** `data/brain/youtube/index.json` is machine-local and never
 federated — every field in it is a local path, an Obsidian vault id, or a local
-video-history id. See [STORAGE.md](../STORAGE.md).
+video-history id. See the storage header in [`youtubeIngest.js`](../../server/services/youtubeIngest.js).
 
 **Requirements.** `yt-dlp` on PATH for any ingest; `ffmpeg` additionally for the
 video/audio switches (a transcript-only ingest works without it).

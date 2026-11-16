@@ -29,6 +29,13 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
  * training and idempotent remote jobs reconcile against their surviving work.
  * Completed/failed/canceled entries older than 24h or beyond the 500-most-
  * recent are pruned to keep the file small.
+ *
+ * Storage: `ephemeral-file` — machine-local dispatch state, never federated or
+ * sent in peer capability/status payloads; covered by the filesystem backup.
+ * Admission is durable (a job resolves only once a snapshot holding it is
+ * written) and an unreadable snapshot latches persistence off to preserve it.
+ * `videoHolds`, `videoExecution(s)` receipts and `durabilityPending` live in
+ * this same envelope; job history and lineage are the `db-primary` target.
  */
 
 import { EventEmitter } from 'events';
@@ -75,6 +82,7 @@ import { jobScheduleState, scheduledWaitMessage, SCHEDULED_WAIT_PATTERN, SCHEDUL
 import {
   MAX_PENDING_MEDIA_JOBS, MEDIA_QUEUE_PERSIST_FAILED, mediaQueueFullError,
 } from './admission.js';
+import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
 
 // The admission contract lives in ./admission.js so producers that cannot
 // import the queue can still recognize a refusal; re-exported where callers
@@ -259,6 +267,14 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
     modules: { default: () => import('../videoGen/stitchJob.js') },
     invoke: (mod, request) => mod.runVideoStitch(request),
   },
+  // "Make it vertical": ffmpeg only, local-only, same lane rules as the stitch.
+  'video-vertical': {
+    events: videoGenEvents,
+    verb: 'Reframing',
+    watchdogMs: flatWatchdog(WATCHDOG_VIDEO_MS),
+    modules: { default: () => import('../videoGen/verticalJob.js') },
+    invoke: (mod, request) => mod.runVideoVertical(request),
+  },
   'video-sharing': {
     events: videoGenEvents,
     verb: 'Generating',
@@ -423,7 +439,7 @@ export function setCodexParallelLimit(n) {
   return codexParallelLimit;
 }
 
-export function _getParallelLimit(target, maybeMode) {
+function _getParallelLimit(target, maybeMode) {
   const kind = typeof target === 'string' ? target : target?.kind;
   const mode = typeof target === 'string' ? maybeMode : (target?.params?.mode || target?.mode);
   if (kind && mode) {
@@ -436,7 +452,7 @@ export function _getParallelLimit(target, maybeMode) {
   return PARALLEL_LIMIT_DEFAULT;
 }
 
-export function _setParallelLimit(target, modeOrN, maybeN) {
+function _setParallelLimit(target, modeOrN, maybeN) {
   let kind, mode, n;
   if (typeof target === 'string') {
     kind = target;
@@ -487,7 +503,7 @@ export async function refreshCodexParallelLimit() {
   return setCodexParallelLimit(s?.imageGen?.codex?.parallelLimit ?? CODEX_PARALLEL_DEFAULT);
 }
 
-export function _getEffectiveParallelLimit(target, maybeMode, now = Date.now()) {
+function _getEffectiveParallelLimit(target, maybeMode, now = Date.now()) {
   const job = typeof target === 'string' ? { kind: target, params: { mode: maybeMode } } : target;
   const configured = getParallelLimit(job);
   const cooldown = getRateLimitCooldown(job, now);
@@ -497,7 +513,7 @@ export function _getEffectiveParallelLimit(target, maybeMode, now = Date.now()) 
   return configured;
 }
 
-export function _getRateLimitCooldown(target, maybeModeOrNow, maybeNow) {
+function _getRateLimitCooldown(target, maybeModeOrNow, maybeNow) {
   let job, now;
   if (typeof target === 'string') {
     job = { kind: target, params: { mode: maybeModeOrNow } };
@@ -519,7 +535,7 @@ export function _getRateLimitCooldown(target, maybeModeOrNow, maybeNow) {
   return null;
 }
 
-export function _recordRateLimitCooldown(target, errorTextOrMode, payloadOrReset, now = Date.now()) {
+function _recordRateLimitCooldown(target, errorTextOrMode, payloadOrReset, now = Date.now()) {
   let job, errorText, payload;
   if (typeof target === 'string') {
     job = { kind: target, params: { mode: errorTextOrMode } };
@@ -570,12 +586,6 @@ export {
 function rateLimitWaitMessage(effectiveLimit, expiresAt) {
   const at = new Date(expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   return `Rate-limited (429) — cooling down (limit: ${effectiveLimit}) until ${at}`;
-}
-
-export function __resetRateLimitCooldownsForTest() {
-  rateLimitCooldowns.clear();
-  parallelLimits.clear();
-  codexParallelLimit = CODEX_PARALLEL_DEFAULT;
 }
 
 // jobId → entry consumed by lib/sseUtils.js#{broadcastSse,attachSseClient,
@@ -1084,11 +1094,6 @@ function restoreQuotaCooldowns(raw, now = Date.now()) {
     if (resumeAt > now) quotaCooldowns.set(mode, resumeAt);
   }
   return ok;
-}
-
-/** Test-only reset so a suite cannot leak a cooldown into the next case. */
-export function __resetQuotaCooldownsForTest() {
-  quotaCooldowns.clear();
 }
 
 function captureQueueSnapshot() {
@@ -2650,7 +2655,6 @@ async function assertMusicVideoJobPolicy(kind, params) {
   // video itself may contain) does not govern it.
   if (params?.musicVideo?.projectId && !params.musicVideo.coverArt && ['image', 'video'].includes(kind)) {
     const { getProject } = await import('../musicVideo/projects.js');
-    const { assertMusicVideoMedia } = await import('../../lib/musicVideoMediaPolicy.js');
     const project = await getProject(params.musicVideo.projectId);
     if (!project) throw new Error('Music Video project not found');
     assertMusicVideoMedia(project, kind, 'generation');

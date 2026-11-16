@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { diffLineBlocks, LINE_DIFF_CELL_CAP } from './diffLines.js';
+import { diffLineBlocks, } from './diffLines.js';
 
 // Reassemble each side from the block stream — the tiling invariant every
 // renderer depends on.
@@ -87,8 +87,5 @@ describe('diffLineBlocks', () => {
     expect(blocks[1].oldLines).toHaveLength(2500);
   });
 
-  it('exports the documented cap', () => {
-    expect(LINE_DIFF_CELL_CAP).toBe(4_000_000);
-  });
 });
 // @vitest-environment node

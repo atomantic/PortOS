@@ -1,24 +1,6 @@
 /**
  * Pure model helpers for the layered video timeline (schemaVersion 2).
  *
- * Pure model helpers for the layered video timeline, mirroring
- * `server/services/videoTimeline/segments.js` so the browser preview and the ffmpeg export make the
- * same cut/geometry/mix decisions: `segmentDuration`/`timelineDuration`/`findSegmentAt` (project-time
- * ↔ segment mapping), `fadeMultiplier` (linear, matching ffmpeg's default `tri` curve),
- * `overlayOpacityAt`, `audioTrackStateAt`, `segmentVolumeAt` (clipVolume × segment volume × fade — the
- * product the export writes into each segment audio chain, so the preview auditions the mix that
- * renders), `assetUrl(assetKind, assetFile)`, the edit clamps `clampTrim` (keeps ≥ 1 frame, matching
- * the server's CLIP_TOO_SHORT floor) and `fitFadePatch` (shrinks an over-long fade pair proportionally
- * instead of letting the PATCH 400), the index summary `projectSummary(project, thumbnailFor)` (block
- * count / duration / card thumbnail — reads the `segments` lane, NEVER the derived `clips` mirror,
- * which omits stills), and the save helpers `stripKey`/`withKeys`/`timelinePatch`. Change a rule here
- * and in the server module in the same commit. Fade fitting re-exports the shared
- * `server/lib/videoTimelineFades.js` leaf, and the source-span rules come from
- * `server/lib/videoTimelineSourceSpans.js`: `resolvePlaybackLanes(lanes, { sourceDurationFor,
- * bedDurationFor })` turns the authored lanes into what the export renders (clip trims clamped to the
- * history clip length, beds to their measured file length, fades refit; an unknown length keeps the
- * authored span), `projectSummary` takes an optional `sourceDurationFor` so the index total agrees.
- *
  * Mirrors server/services/videoTimeline/segments.js so the browser preview and
  * the ffmpeg export make the SAME cut, geometry, and mix decisions — the whole
  * point of the lane model is that what the editor shows is what renders. When
@@ -44,7 +26,7 @@ import {
   resolveAudioSpan,
 } from '../../../server/lib/videoTimelineSourceSpans.js';
 
-export { fitFades } from '../../../server/lib/videoTimelineFades.js';
+
 export { historySourceDuration };
 
 // Query for GET /api/video-gen/history that returns every clip as stat-free,

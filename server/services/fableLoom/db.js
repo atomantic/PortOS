@@ -2,6 +2,10 @@
  * PostgreSQL leaf I/O for FableLoom records. The full sanitized record lives
  * in JSONB; name/universe_id/series_id/updated_at are mirrored for the common
  * list/filter paths; delete markers are mirrored for federated tombstone GC.
+ *
+ * Storage: `db-primary` — federated through the opt-in per-record `fableLoom` category
+ * (whole-record LWW, soft-delete tombstones, hashed scene-media manifests; no
+ * `sync_sequence`). db-primary because looms relate to universes/series (soft refs).
  */
 
 import { query, withTransaction } from '../../lib/db.js';

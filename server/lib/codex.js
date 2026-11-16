@@ -1,17 +1,6 @@
 /**
  * OpenAI Codex CLI provider helpers: command/id constants, `isCodexCommand`, vision-capability
  * predicate, and `ensureCodexTuiArgs` for TUI launch arguments.
- *
- * OpenAI Codex CLI (`codex`) provider helpers — the `CODEX_COMMAND`/`CODEX_CLI_ID` constants, the
- * `isCodexCommand` and `isVisionCapableCodexTuiProvider` predicates, and `ensureCodexTuiArgs` (injects
- * `--dangerously-bypass-approvals-and-sandbox` + disables the startup update-check config, skipped
- * when the argv already declares an approval/sandbox posture via `argvHasFlag`). Extracted from
- * `tuiHandshake.js` (#3618) to match the one-file-per-vendor shape of
- * `antigravity.js`/`grok.js`/`kimi.js`/`cursor.js`, which `providerVendors.js` consumes as registry
- * rows. Also owns `buildCodexOssArgs` — the `--oss --local-provider <ns>` pair emitted from a record's
- * `ollamaBacked` marker, so the Codex harness runs on a local model without rewriting the user's
- * `~/.codex/config.toml` (the record-classification half of that lives in `providerModels.js`, so
- * `providerPrerequisites.js` can classify a codex record without importing a vendor argv module).
  */
 
 import { executionOptionsError } from './executionOptions.js';
@@ -135,6 +124,7 @@ export function buildCodexAuthModeArgs(provider, existingArgs = []) {
   return ['-c', `forced_login_method="${mode}"`];
 }
 
+// Selects the local model through argv flags only; the user's ~/.codex/config.toml is never rewritten.
 export function buildCodexOssArgs(provider, existingArgs = []) {
   const localProvider = codexOssLocalProvider(provider);
   if (!localProvider) return [];

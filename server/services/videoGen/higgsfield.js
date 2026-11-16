@@ -16,7 +16,7 @@ import { readFile } from 'fs/promises';
 import { basename } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, buildHiggsfieldVideoRequest, getHiggsfieldVideoModel } from '../../lib/higgsfieldVideoModels.js';
+import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, HIGGSFIELD_FRAME_ROLE_LINE, buildHiggsfieldVideoRequest, getHiggsfieldVideoModel } from '../../lib/higgsfieldVideoModels.js';
 import { videoGenEvents } from './events.js';
 import { emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 import { createHostedVideoJobRunner } from './hostedJobRunner.js';
@@ -63,7 +63,10 @@ export function higgsfieldVideoSentPrompt({
   const record = sentPromptRecord({
     sentPrompt: planned.body.prompt ?? '',
     carried: carriedPromptAdditions({ promptAdditions }),
-    added: [promptAddition('avoid', 'Negative prompt, sent as "Avoid:"', spec.negativePrompt)],
+    added: [
+      promptAddition('avoid', 'Negative prompt, sent as "Avoid:"', spec.negativePrompt),
+      planned.frameAsReference ? promptAddition('start-frame-role', 'Start frame sent as the first reference', HIGGSFIELD_FRAME_ROLE_LINE) : null,
+    ],
   });
   return { planned, record };
 }
@@ -108,6 +111,10 @@ async function generateVideoPrepared({
     ...(planned.body.seed != null ? { seed: planned.body.seed } : {}),
     estimatedCostUsd: null,
     ...sentRecord,
+    // Which endpoint family carried the take (text / image / reference), so a take can be explained after the fact.
+    higgsfieldRoute: planned.route,
+    ...(planned.frameAsReference ? { startFrameAsReference: true } : {}),
+    ...(planned.silentNotice ? { notice: planned.silentNotice } : {}),
     filename,
     createdAt: new Date().toISOString(),
     mode: sourceImagePath ? 'image' : 'text',
@@ -152,7 +159,8 @@ async function runHiggsfieldVideo(job, jobId, {
     const referenceImageUrls = [];
     for (const path of referenceImagePaths) referenceImageUrls.push((await uploadFrame({ apiKey, path, aspect: null, signal })).url);
     if (entry.aborted) return finishFailure('Canceled');
-    const audioUrls = audioFilePath ? [await uploadHiggsfieldFile({ apiKey, bytes: await readFile(audioFilePath), contentType: 'audio/wav', signal })] : [];
+    // The catalog renders a frame-anchored take silent, so the song window is not uploaded for it.
+    const audioUrls = audioFilePath && !start ? [await uploadHiggsfieldFile({ apiKey, bytes: await readFile(audioFilePath), contentType: 'audio/wav', signal })] : [];
     const request = buildHiggsfieldVideoRequest({ ...spec, imageUrl: start?.url ?? null, endImageUrl: end?.url ?? null, referenceImageUrls, audioUrls });
     meta.sentRequest = { endpoint: request.endpointId, body: structuredClone(request.body) };
     Object.assign(job, { sentRequest: meta.sentRequest });

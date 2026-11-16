@@ -10,7 +10,7 @@
  */
 
 import { spawn, spawnSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, mkdtempSync, rmSync, symlinkSync, writeSync } from 'fs';
 import { constants, homedir, tmpdir } from 'os';
 import { setTimeout as delay } from 'timers/promises';
 import { execFileSync } from 'child_process';
@@ -21,9 +21,10 @@ import { getAlwaysRunTests, FULL_SUITE_SHARDS, structuralTestsFor } from './ci-t
 import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
+import { resolveSpecifier, testReferenceSpecifiers } from './lib/importReach.js';
 import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { ACTIONLINT_VERSION, probeActionlint, selectWorkflowFiles } from './lib/actionlint.js';
-import { GUARD_BUDGET_MS, hostTooBusyForBudget, overBudgetGuards, readGuardDurations } from './lib/guardBudget.js';
+import { GUARD_BUDGET_MS, calibrateBudgetScale, hostTooBusyForBudget, overBudgetGuards, readGuardDurations, settleOverBudget } from './lib/guardBudget.js';
 import { buildPregateReport, guardInputSnapshot, PREGATE_REPORT_PATH, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
 import { assertGitMergeTree } from '../lib/gitMergeTree.js';
 import { dependencyConsistencyProblems } from './lib/workspaceDependencies.js';
@@ -106,6 +107,9 @@ export function uncoveredSuites(plan, { options = {}, downgraded = false, prereq
   }
   if (suiteSelected(plan, 'macosNative')) {
     uncovered.push({ suite: 'macosNative', reason: 'a dedicated macOS CI job; the focused local stages do not select it', remedy: UNCOVERED_SUITES.macosNative });
+  }
+  for (const { source, count } of plan.relatedOverflow ?? []) {
+    uncovered.push({ suite: 'related tests', reason: `${count} suite(s) referencing ${source} beyond the ${RELATED_SUITE_CAP}-suite cap`, remedy: 'run the referencing suites directly with `server/node_modules/.bin/vitest run <files>`; CI runs them' });
   }
   return uncovered;
 }
@@ -342,31 +346,71 @@ export function downgradeFullPlan(plan, trackedFiles, changedFiles = []) {
   };
 }
 
-/** Local selection never expands through the transitive server import graph.
- * A sibling test or an explicitly edited test owns the focused check; broader
- * integration coverage and unowned changes remain with hosted CI.
+/** Suites one changed source may add through a differently named import or mock. */
+export const RELATED_SUITE_CAP = 25;
+
+/**
+ * Local selection owns the edited tests, same-stem siblings and tests one hop
+ * away: a test whose relative import, `import()` or `vi.mock` specifier
+ * resolves to a changed source (a route suite mocking the service it fronts).
+ * It never expands transitively; broader integration coverage and unowned
+ * changes remain with hosted CI. Past RELATED_SUITE_CAP referencing suites for
+ * one source the overflow stays with CI and is recorded in `relatedOverflow`.
  */
-export function focusedLocalPlan(plan, trackedFiles, changedFiles) {
+export function focusedLocalPlan(plan, trackedFiles, changedFiles, readText = readRepoText) {
   const local = downgradeFullPlan(plan, trackedFiles, changedFiles);
   const tracked = new Set(trackedFiles);
   const browser = new Set(plan.browser.files);
   const unitTest = path => !browser.has(path) && /\.test\.[cm]?[jt]sx?$/.test(path)
     && !/(?:\.(?:db|browser|live)\.test\.|\/db\.test\.)/.test(path);
   const focused = new Set();
+  const changedSources = [];
   for (const path of changedFiles) {
     if (unitTest(path) && tracked.has(path)) focused.add(path);
     if (!/\.[cm]?[jt]sx?$/.test(path) || /\.test\./.test(path)) continue;
+    if (tracked.has(path)) changedSources.push(path);
     const stem = path.replace(/\.[cm]?[jt]sx?$/, '');
     for (const suffix of ['.test.js', '.test.jsx', '.test.ts', '.test.tsx', '.test.mjs', '.test.cjs']) {
       const test = `${stem}${suffix}`;
       if (tracked.has(test) && unitTest(test)) focused.add(test);
     }
   }
+  const relatedOverflow = [];
+  if (changedSources.length) {
+    const byBase = changedSources.map(source => ({ source, base: source.slice(source.lastIndexOf('/') + 1).replace(/\.[cm]?[jt]sx?$/, '') }));
+    const referencing = new Map(changedSources.map(source => [source, []]));
+    for (const test of trackedFiles.filter(path => unitTest(path) && !focused.has(path))) {
+      const text = readText(test);
+      if (text == null) continue;
+      // Cheap prefilter: a resolved specifier always spells the source's base name.
+      const candidates = byBase.filter(({ base }) => text.includes(base));
+      if (!candidates.length) continue;
+      const known = new Set(candidates.map(({ source }) => source));
+      for (const spec of testReferenceSpecifiers(text)) {
+        const target = resolveSpecifier(test, spec, known);
+        if (target) referencing.get(target).push(test);
+      }
+    }
+    for (const [source, tests] of referencing) {
+      const unique = [...new Set(tests)].sort();
+      unique.slice(0, RELATED_SUITE_CAP).forEach(test => { focused.add(test); });
+      if (unique.length > RELATED_SUITE_CAP) relatedOverflow.push({ source, count: unique.length - RELATED_SUITE_CAP });
+    }
+  }
   for (const scope of ['server', 'client']) {
     const files = [...new Set([...local[scope].files, ...[...focused].filter(path => scope === 'client' ? path.startsWith('client/') : !path.startsWith('client/'))])];
     local[scope] = { mode: files.length ? 'files' : 'skip', files, sources: [] };
   }
+  local.relatedOverflow = relatedOverflow;
   return local;
+}
+
+function readRepoText(path) {
+  try {
+    return readFileSync(join(REPO_ROOT, path), 'utf8');
+  } catch {
+    return null;
+  }
 }
 
 const git = (args) => execFileSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' }).trim();
@@ -787,20 +831,56 @@ function stageOutcomeVerdict(result, outcome) {
 }
 
 /**
- * Fail a passed guard stage whose files overran their budget, naming each one.
- * Marks `result` failed like stageOutcomeVerdict so the receipt agrees.
+ * Re-run only the over-budget guard files once, serially, and return their
+ * isolated wall times. Sibling agents' Vitest runs can stretch a guard past
+ * budget while the load average still fits the core count (#16279). The memo
+ * is bypassed so the files really execute.
  */
-function guardBudgetVerdict(result) {
-  const over = overBudgetGuards(result.fileDurations);
-  if (over.length === 0) return null;
-  const lines = over.map(({ file, durationMs, budgetMs }) => `${file} took ${formatDuration(durationMs)} (budget ${formatDuration(budgetMs)})`);
-  if (hostTooBusyForBudget()) {
-    console.log(`⏭️ ${result.name} budget not enforced, host load exceeds its core count: ${lines.join('; ')}.`);
+async function isolatedGuardDurations(result, files, owner) {
+  const dir = mkdtempSync(join(tmpdir(), 'portos-pregate-durations-'));
+  const path = join(dir, 'durations.json');
+  try {
+    await runStage({
+      ...result,
+      env: { ...result.env, CI_TEST_FILES: JSON.stringify(files), PORTOS_TEST_MEMO: 'off', PORTOS_PREGATE_DURATIONS_PATH: path },
+    }, owner);
+    return readGuardDurations(path);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Fail a passed guard stage whose files overran their budget, naming each one.
+ * A file over budget in the stage is re-timed alone before failing; only files
+ * still over in that isolated run fail. Marks `result` failed like
+ * stageOutcomeVerdict so the receipt agrees.
+ */
+async function guardBudgetVerdict(result, owner) {
+  // Calibrate only once a guard looks slow, so the common case pays nothing.
+  const raw = overBudgetGuards(result.fileDurations);
+  if (raw.length === 0) return null;
+  const scale = calibrateBudgetScale();
+  const budgetMs = GUARD_BUDGET_MS * scale;
+  const over = overBudgetGuards(result.fileDurations, budgetMs);
+  if (over.length === 0) {
+    console.log(`🐢 ${result.name} guards over ${formatDuration(GUARD_BUDGET_MS)} but within the ${formatDuration(budgetMs)} budget scaled ${scale.toFixed(1)}x for this machine's speed: ${raw.map(({ file, durationMs }) => `${file} ${formatDuration(durationMs)}`).join('; ')}.`);
     return null;
   }
+  const describe = ({ file, durationMs, budgetMs }) => `${file} took ${formatDuration(durationMs)} (budget ${formatDuration(budgetMs)})`;
+  if (hostTooBusyForBudget()) {
+    console.log(`⏭️ ${result.name} budget not enforced, host load exceeds its core count: ${over.map(describe).join('; ')}.`);
+    return null;
+  }
+  const { cleared, stillOver } = settleOverBudget(over, await isolatedGuardDurations(result, over.map(({ file }) => file), owner));
+  if (cleared.length > 0) {
+    console.log(`🐢 ${result.name} guards over budget under load, within it in isolation: ${cleared.map(({ file, durationMs, isolatedMs }) => `${file} ${formatDuration(durationMs)} → ${formatDuration(isolatedMs)}`).join('; ')}.`);
+  }
+  if (stillOver.length === 0) return null;
+  const lines = stillOver.map(({ file, durationMs, isolatedMs, budgetMs }) => `${file} took ${formatDuration(durationMs)} in the stage and ${isolatedMs === null ? 'no reading' : formatDuration(isolatedMs)} in isolation (budget ${formatDuration(budgetMs)})`);
   result.status = 'failed';
   return {
-    failure: `❌ ${result.name} over the ${formatDuration(GUARD_BUDGET_MS)} per-guard budget: ${lines.join('; ')}. Speed the guard up (share one tracked-file listing and one read per source file) rather than raising the budget.`,
+    failure: `❌ ${result.name} over the ${formatDuration(budgetMs)} per-guard budget (${formatDuration(GUARD_BUDGET_MS)} scaled ${scale.toFixed(1)}x for this machine): ${lines.join('; ')}. Speed the guard up (share one tracked-file listing and one read per source file) rather than raising the budget.`,
     exitCode: 1,
   };
 }
@@ -1050,7 +1130,7 @@ async function main() {
       result.fileDurations = readGuardDurations(durationsPath);
       rmSync(durationsDir, { recursive: true, force: true });
     }
-    const verdict = stageOutcomeVerdict(result, outcome) ?? guardBudgetVerdict(result);
+    const verdict = stageOutcomeVerdict(result, outcome) ?? await guardBudgetVerdict(result, owner);
     if (verdict) {
       ({ failure, exitCode } = verdict);
     } else {

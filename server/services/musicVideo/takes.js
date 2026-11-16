@@ -27,6 +27,7 @@ import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { musicVideoCastInputsRecord } from '../../lib/musicVideoCastLook.js';
 import { captureImageFrameDependencies, captureTakeDependencies, musicVideoTakeChanges, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { extendTakeRecord, sequenceTakeRecord, sequenceTakeSelectionPatch } from '../../lib/musicVideoSequenceTake.js';
+import { isMusicVideoRenderTier } from '../../lib/musicVideoRenderTier.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
@@ -220,6 +221,7 @@ export function setSceneLastFailure(project, sceneId, failure) {
       lane: failure.lane === 'video' ? 'video' : 'image',
       error: trimTo(String(failure.error || '').replace(/\s+/g, ' ').trim(), MAX_FAILURE_ERROR_CHARS) || 'Render failed',
       at: failure.at || new Date().toISOString(),
+      ...(failure.lane === 'video' && isMusicVideoRenderTier(failure.tier) ? { tier: failure.tier } : {}),
     } }
     : rest;
   return { project: replaceScene(project, idx, scene), scene };
@@ -401,5 +403,8 @@ export function reviewSceneTake(project, sceneId, takeId, { status, note, acknow
     takes: takes.map((t) => (t.takeId === takeId ? updated : t)),
     ...(updated.status === 'rejected' && scene[field] === take.assetId ? { [field]: null } : {}),
   };
-  return { project: replaceScene(project, idx, next), scene: next };
+  const saved = replaceScene(project, idx, next);
+  // The saved scene carries freshly computed take states; `next` still holds each take's state from
+  // before this review, so a confirmed frame would read stale until the next load (#16274).
+  return { project: saved, scene: saved.scenes[idx] };
 }

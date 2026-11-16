@@ -1,4 +1,13 @@
-/** Private incremental audit ledger. No inference, repair dispatch or raw public prose. */
+/**
+ * Private incremental audit ledger. No inference, repair dispatch or raw public prose.
+ *
+ * Storage: `file-primary` (`data/cos/persistent-mind-process-audit.json`) —
+ * machine-local, never federated. Turn reservations, evidence hashes, outcomes and
+ * publication intents must outlive log retention and restarts; strict reads and
+ * serialized atomic writes, missing = empty, corrupt = unavailable. At 2,000 records
+ * it refuses new work rather than lose dedup history (deleting it loses
+ * duplicate-publication protection). No seed or migration; CoS backups include it.
+ */
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PATHS, atomicWrite, readJSONFileStrict } from '../lib/fileUtils.js';
@@ -9,7 +18,7 @@ import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabi
 import { normalizePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 import { PROCESS_AUDIT_LIMITS as LIMITS, processAuditFingerprint, processAuditSignals, processAuditMetrics, renderProcessAuditFinding,
   processAuditNextSchema, processAuditReadSchema, processAuditOutcomeSchema, processAuditFixSchema } from '../lib/persistentMindProcessAudit.js';
-import { loadState } from './cosState.js';
+import { loadState, AGENTS_DIR } from './cosState.js';
 import { readPersistentMindManagedApps } from './persistentMindManagedApps.js';
 import { isUpstreamFullName } from '../lib/gitRemote.js';
 
@@ -85,7 +94,6 @@ function workflowOf(record) {
 async function transcript(record, offset = 0) {
   const date = (await loadAgentIndex()).get(record.id);
   if (!safeAgentId(record.id) || !/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return { state: 'missing', excerpt: '', nextOffset: null };
-  const { AGENTS_DIR } = await import('./cosState.js');
   const path = join(AGENTS_DIR, date, record.id, 'output.txt');
   let file;
   try {

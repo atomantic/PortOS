@@ -53,7 +53,6 @@ import {
   renderComicForProseSync,
   proseSyncPairs,
   PROSE_SYNC_PROSE_CHAR_CAP,
-  ON_THE_NOSE_SUBTYPES,
 } from './checkRegistry.js';
 
 const NAMING = 'naming.dissimilar-names';
@@ -5430,9 +5429,6 @@ describe('dialogue-craft bundle (#1307)', () => {
       expect(findings[0].subtype).toBeNull();
     });
 
-    it('only declares the three documented subtypes', () => {
-      expect(ON_THE_NOSE_SUBTYPES).toEqual(['exposition', 'emotion-tell', 'relationship-report']);
-    });
   });
 
   describe('dialogue.voice-distinctiveness — LLM check', () => {

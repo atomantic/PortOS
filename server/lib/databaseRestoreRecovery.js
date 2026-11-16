@@ -11,6 +11,11 @@
  * nothing else — the operation id, the admitted dump digest, the ORIGINAL pre-replay sync feed
  * positions and the pending stage. No credentials, no copied records.
  *
+ * Storage: `file-primary` — machine-local, never federated; `data/database-restore-recovery.json` must be
+ * readable before the database is trusted, and it is a non-overridable backup exclude (a restored copy would
+ * fence the database for an operation that no longer exists). Its companion `restore_receipts` table is `db-primary`, machine-local,
+ * written inside the replay transaction so the receipt commits atomically with the replay.
+ *
  * Stages:
  *   replaying — published BEFORE the destructive replay. Whether the replay
  *               committed is unknown until its transactional receipt (a row in

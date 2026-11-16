@@ -25,6 +25,7 @@ import { CODE_TOOLS, CODE_INTENT_RE } from './tools/code.js';
 import { CATALOG_TOOLS, CATALOG_INTENT_RE, catalogTypeEnum, matchesCustomCatalogNoun } from './tools/catalog.js';
 import { WORKSPACE_TOOLS, WORKSPACE_INTENT_RE } from './tools/workspace.js';
 import { UI_KINDS } from './tools/shared.js';
+import { ServerError } from '../../lib/errorHandler.js';
 
 // Re-exported for pipeline.js (UI_KINDS, UI_INTENT_RE) and the form-fill
 // suppression check.
@@ -231,9 +232,7 @@ export const dispatchTool = async (name, args, ctx) => {
   // A function supplied by our HTTP/socket/internal adapter cannot be forged
   // in JSON tool arguments. Missing context fails closed, even when enabled.
   if (tool.hostControl && (typeof ctx?.hasHostControl !== 'function' || await ctx.hasHostControl() !== true)) {
-    const [{ HOST_CONTROL_FORBIDDEN_MESSAGE }, { ServerError }] = await Promise.all([
-      import('../authGate.js'), import('../../lib/errorHandler.js'),
-    ]);
+    const { HOST_CONTROL_FORBIDDEN_MESSAGE } = await import('../authGate.js');
     throw new ServerError(HOST_CONTROL_FORBIDDEN_MESSAGE, { status: 403, code: 'HOST_CONTROL_FORBIDDEN' });
   }
   return tool.execute(args || {}, ctx || { sideEffects: [] });

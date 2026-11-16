@@ -1,56 +1,21 @@
 /**
  * Ollama runtime context-window helpers.
  *
- * Ollama runtime context-window reasoning. `resolveOllamaContextLength(provider, env)` → the window
- * PortOS should hold the daemon at (`provider.numCtx`, then `OLLAMA_CONTEXT_LENGTH`, then `null` =
- * leave Ollama's VRAM-based auto-pick alone); `withOllamaContextEnv(env, n)` builds the `ollama serve`
- * child env; `parseOllamaContextOverflow(text)` recognizes the `exceed_context_size_error` rejection
- * and pulls `{ promptTokens, contextLength }` out of either the JSON body or the human message;
- * `describeOllamaContextOverflow` / `describeOllamaContextTooSmall` render the actionable one-liners;
- * `normalizeOllamaBaseUrl(raw)` (scheme, no trailing slash, no `/v1`),
- * `isSameOllamaDaemon(providerBase, managedBase)` compares host+port so a provider pointed at a
- * *remote* Ollama never triggers a local-daemon reload, with `managedOllamaBaseUrl(env)` supplying the
- * managed side (`OLLAMA_URL` → `OLLAMA_HOST` → the stock local daemon);
- * `managedOllamaContextLength(provider, env)` is `resolveOllamaContextLength` gated on that
- * comparison, and `withOllamaRuntimeContextWindow(provider, env)` stamps it onto an in-memory provider
- * projection as `runtimeContextWindow` — how the env rung reaches the vendored toolkit’s
- * `clampToRuntimeContextWindow`, which may not import out here (#7472); `OLLAMA_AGENT_MIN_CONTEXT` is
- * the window below which an agent harness is warned. Pure — the daemon side lives in
- * `services/ollamaManager.js` (`ensureContextWindow`), the pre-spawn enforcement in
- * `services/ollamaAgentContext.js`.
+ * Ollama auto-picks the runtime window (`n_ctx`) from VRAM, too small for agent harnesses, which
+ * size compaction against an Anthropic-sized window and die mid-task with `exceed_context_size_error`.
+ * Harnesses speak Ollama's compatible endpoints directly, so PortOS cannot attach a per-request
+ * `num_ctx`; the only lever is `OLLAMA_CONTEXT_LENGTH` on the daemon PortOS starts.
  *
- * Ollama picks a model's runtime window (`n_ctx`) from available VRAM —
- * `OLLAMA_CONTEXT_LENGTH` documents the default as "4k/32k/256k based on VRAM".
- * That auto-pick is fine for a chat turn and far too small for an agent harness:
- * Claude Code / OpenCode ship a system prompt plus tool schemas plus a growing
- * transcript, and they size their own compaction against the window they *think*
- * they have (an Anthropic-sized one), not the window Ollama actually loaded. The
- * result is a run that works for an hour and then dies mid-task with
- * `exceed_context_size_error` at 100% prompt utilisation.
- *
- * The only lever that reaches those harnesses is the daemon default: they speak
- * Ollama's Anthropic/OpenAI-compatible endpoints directly, so PortOS cannot
- * attach a per-request `num_ctx` the way the toolkit runner does for `api`
- * providers. Hence `OLLAMA_CONTEXT_LENGTH` on the daemon PortOS starts.
- *
- * Pure — no I/O, no daemon calls. `server/services/ollamaManager.js` owns the
- * daemon side (starting/restarting with the resolved window) and
- * `server/services/ollamaAgentContext.js` owns the pre-spawn enforcement.
+ * Pure — no I/O. `services/ollamaManager.js` owns the daemon side and
+ * `services/ollamaAgentContext.js` the pre-spawn enforcement.
  */
 
-// The `internal/` leaf on purpose: the toolkit's public barrel reaches `fs` and
-// `child_process`, and this module sits in the closure of the prompt budgeter
-// and the dispatch gate, both inside the server suite's import budget. The leaf
-// imports nothing.
+// The `internal/` leaf on purpose: the toolkit barrel reaches `fs`/`child_process`, and this module is in
+// the prompt budgeter and dispatch gate closure (import budget).
 import { isOllamaBackedProvider, ollamaBaseFromProvider, withRuntimeContextWindow } from './aiToolkit/internal/ollamaBacked.js'
 import { LIFECYCLE_LINES } from './agentOutputMarkers.js'
 
-/**
- * Smallest runtime window an Ollama-backed *agent harness* can realistically
- * finish a task in. Not a hard requirement — it is the threshold below which
- * PortOS warns before spawning, because 32K (the common VRAM auto-pick) is
- * routinely consumed by scaffold + tools + a few file reads.
- */
+/** Threshold below which PortOS warns before spawning: 32K (the common VRAM auto-pick) is consumed by scaffold, tools and a few reads. */
 export const OLLAMA_AGENT_MIN_CONTEXT = 65536
 
 /** Ollama's own env knob for the daemon-wide default window. */
@@ -64,15 +29,10 @@ const positiveInt = (value) => {
 /**
  * The context window PortOS should hold the Ollama daemon at for `provider`.
  *
- * Explicit provider config wins (`numCtx` — the same field the toolkit runner
- * sends as a per-request `num_ctx` for `api` providers, reused here as "the
- * window this provider needs"), then the ambient `OLLAMA_CONTEXT_LENGTH`, then
- * `null`.
+ * Provider `numCtx` wins, then ambient `OLLAMA_CONTEXT_LENGTH`, then `null`.
  *
- * `null` means **leave Ollama's VRAM-based auto-pick alone**. That is the
- * deliberate default: forcing a window larger than VRAM allows does not fail
- * loudly, it silently offloads layers to CPU and turns a fast local model into
- * an unusable one. Only the user knows their machine's headroom.
+ * `null` means leave Ollama's VRAM auto-pick alone: a window larger than VRAM allows silently
+ * offloads layers to CPU rather than failing, and only the user knows their headroom.
  *
  * @param {{numCtx?: number|null}|null|undefined} provider
  * @param {Record<string, string|undefined>} [env]
@@ -86,10 +46,7 @@ export function resolveOllamaContextLength(provider, env = process.env) {
  * The base URL of the Ollama daemon THIS install manages — `OLLAMA_URL`, then
  * the `OLLAMA_HOST` (`host:port`) convention, then the stock local daemon.
  *
- * Declared here rather than restated at each reader because it is half of the
- * `isSameOllamaDaemon` comparison below, and a second spelling of it is a second
- * answer to "is this provider's daemon the one PortOS launched?".
- * `services/ollamaManager.js` normalizes the result into its own config.
+ * Declared once because it is half of the `isSameOllamaDaemon` comparison.
  *
  * @param {Record<string, string|undefined>} [env]
  * @returns {string}
@@ -116,16 +73,13 @@ export function normalizeOllamaBaseUrl(raw) {
  * The window PortOS holds `provider`'s daemon at, or `null` when it holds it at
  * none (Ollama's VRAM auto-pick stands).
  *
- * {@link resolveOllamaContextLength} gated on the daemon being the one this
- * install manages. The gate matters because the ambient `OLLAMA_CONTEXT_LENGTH`
- * only ever reaches the daemon PortOS launches (`withOllamaContextEnv`): applied
- * to a provider pointed at a REMOTE Ollama it would describe a window nobody
- * set, and budget that remote daemon down to a local machine's VRAM headroom.
- * The same gate `services/ollamaAgentContext.js` puts on the reload.
+ * {@link resolveOllamaContextLength} gated on the daemon being the one this install manages: the
+ * ambient `OLLAMA_CONTEXT_LENGTH` only reaches the daemon PortOS launches (`withOllamaContextEnv`),
+ * so for a REMOTE Ollama it would budget to a window nobody set. Same gate as
+ * `services/ollamaAgentContext.js`.
  *
- * `numCtx` is deliberately NOT gated with it — an `api`-type provider's
- * `numCtx` rides the request as `num_ctx` and binds a remote daemon just as
- * well, which is why the clamp reads that rung straight off the record.
+ * `numCtx` is NOT gated: an `api` provider sends it as `num_ctx` and it binds a remote daemon too,
+ * so the clamp reads that rung straight off the record.
  *
  * @param {object|null|undefined} provider
  * @param {Record<string, string|undefined>} [env]
@@ -138,15 +92,13 @@ export function managedOllamaContextLength(provider, env = process.env) {
 }
 
 /**
- * `provider` with that window stamped on for a caller about to ask a context
- * question about it — the ONE operation the prompt budgeter
- * (`services/stageRunner.js#effectiveContextWindow`) and the pre-dispatch gate
- * (`services/promptRunner.js#assertRequestFitsContext`) both want.
+ * `provider` with that window stamped on, for the prompt budgeter
+ * (`services/stageRunner.js#effectiveContextWindow`) and pre-dispatch gate
+ * (`services/promptRunner.js#assertRequestFitsContext`).
  *
- * This is how the env rung reaches the vendored toolkit, which may not import
- * out to this module: as data on an in-memory projection, never persisted. See
- * `aiToolkit/internal/ollamaBacked.js#withRuntimeContextWindow` for the field's
- * contract and #7472 for the failure it closes.
+ * This is how the env rung reaches the vendored toolkit (which may not import this module): as data
+ * on an in-memory projection, never persisted. See
+ * `aiToolkit/internal/ollamaBacked.js#withRuntimeContextWindow`.
  *
  * @param {object|null|undefined} provider
  * @param {Record<string, string|undefined>} [env]
@@ -160,20 +112,17 @@ export function withOllamaRuntimeContextWindow(provider, env = process.env) {
 function hostOf(baseUrl) {
   const raw = String(baseUrl || '').trim()
   if (!raw) return null
-  // A bare `host:port` (the OLLAMA_HOST convention) is not a valid URL, so give
-  // it a scheme before parsing rather than string-comparing the two spellings.
+  // A bare `host:port` (OLLAMA_HOST convention) is not a valid URL; add a scheme before parsing.
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw)
     ? raw.replace(/^(https?:\/\/):(?=\d|$)/i, '$1localhost:')
     : /^:\d+(?:\/.*)?$/.test(raw)
       ? `http://localhost${raw}`
       : `http://${raw}`
-  // `URL.parse` returns null on invalid input instead of throwing (Node ≥22.1;
-  // every supported PortOS runtime is newer), so no try/catch is needed here.
+  // `URL.parse` returns null on invalid input instead of throwing.
   const url = URL.parse(withScheme)
   if (!url) return null
 
-  // Ollama treats loopback aliases as the same local daemon. Compare a
-  // canonical hostname plus the parsed port so 127.0.0.1, [::1], and an empty
+  // Loopback aliases are the same local daemon; canonicalize so 127.0.0.1, [::1] and an empty
   // OLLAMA_HOST hostname cannot make a local provider look remote.
   const hostname = url.hostname.replace(/^\[|\]$/g, '').toLowerCase()
   const canonicalHostname = ['127.0.0.1', '::1', 'localhost'].includes(hostname)
@@ -185,16 +134,12 @@ function hostOf(baseUrl) {
 /**
  * Whether `providerBaseUrl` names the same Ollama daemon as `managedBaseUrl`.
  *
- * `isOllamaBackedProvider` matches any provider whose tokens come from Ollama,
- * including one pointed at a *remote* daemon — but PortOS can only start, stop,
- * or hand a context window to the local one it manages. Reloading the local
- * daemon for a provider served by another host would disrupt unrelated local
- * work AND leave the provider's real daemon untouched, so the daemon-management
- * path gates on this.
+ * `isOllamaBackedProvider` also matches a provider on a *remote* daemon, but PortOS can only manage
+ * the local one; reloading it for a remote-served provider would disrupt local work and leave the
+ * real daemon untouched, so daemon management gates on this.
  *
- * Compares host + port only: scheme and `/v1` suffix vary between how a provider
- * spells the endpoint and how `ollamaManager` normalizes it. Unparseable on
- * either side → false, so an ambiguous value never authorizes a restart.
+ * Compares host + port only (scheme and `/v1` vary). Unparseable either side → false, so an
+ * ambiguous value never authorizes a restart.
  *
  * @param {string|null|undefined} providerBaseUrl
  * @param {string|null|undefined} managedBaseUrl
@@ -221,10 +166,8 @@ export function withOllamaContextEnv(env, contextLength) {
   return { ...env, [OLLAMA_CONTEXT_ENV_VAR]: String(n) }
 }
 
-// Ollama's overflow rejection, in both the shapes it reaches us in: the JSON
-// error body (`n_prompt_tokens` / `n_ctx`) and the human message the harness
-// prints ("request (N tokens) exceeds the available context size (M tokens)").
-// Matched independently so a truncated/re-wrapped copy of either still parses.
+// Ollama's overflow rejection in both shapes: the JSON error body (`n_prompt_tokens` / `n_ctx`) and
+// the harness message ("request (N tokens) exceeds ..."). Matched independently so a truncated copy still parses.
 const OVERFLOW_TYPE_RE = /exceed_context_size_error/
 const OVERFLOW_MESSAGE_RE = /request \((\d+) tokens?\) exceeds the available context size \((\d+) tokens?\)/i
 const N_PROMPT_TOKENS_RE = /"n_prompt_tokens"\s*:\s*(\d+)/
@@ -233,9 +176,7 @@ const N_CTX_RE = /"n_ctx"\s*:\s*(\d+)/
 /**
  * Recognize an Ollama context-overflow rejection in a chunk of agent output.
  *
- * Returns `null` for anything else — including a generic 400 — so callers can
- * use it as the guard for "is this the too-small-window failure?" rather than
- * pattern-matching the raw JSON at every call site.
+ * Returns `null` for anything else, including a generic 400, so it works as the too-small-window guard.
  *
  * @param {string|null|undefined} text
  * @returns {{ promptTokens: number|null, contextLength: number|null }|null}
@@ -253,10 +194,7 @@ export function parseOllamaContextOverflow(text) {
 const tokenLabel = (n) => (n ? `${Math.round(n / 1024)}K` : 'unknown')
 
 /**
- * One actionable line explaining an overflow. The raw Ollama body is a JSON
- * blob whose "try increasing it" says nothing about *where* — this names the
- * knob (the provider's `num_ctx`) and the fact that the daemon reloads to apply
- * it, so the run's output is enough to fix the run.
+ * One actionable line for an overflow: names the knob (the provider's `num_ctx`) and that the daemon reloads, since the raw body doesn't say where to raise it.
  *
  * @param {{ promptTokens: number|null, contextLength: number|null }} overflow
  * @param {{ model?: string|null, providerName?: string|null }} [options]
@@ -272,17 +210,14 @@ export function describeOllamaContextOverflow(overflow, { model = null, provider
 }
 
 /**
- * One actionable line warning that the daemon's current window is below
- * {@link OLLAMA_AGENT_MIN_CONTEXT}, emitted before a spawn rather than an hour
- * into a doomed run.
+ * Pre-spawn warning that the daemon's window is below {@link OLLAMA_AGENT_MIN_CONTEXT}.
  *
  * @param {number} runtimeContext - the window the daemon actually loaded
  * @param {{ providerName?: string|null }} [options]
  * @returns {string}
  */
 export function describeOllamaContextTooSmall(runtimeContext, { providerName = null } = {}) {
-  // A pre-spawn warning that lands in the agent's output buffer, so its text is
-  // the lifecycle line the PR-body reader knows to strip.
+  // Lands in the agent's output buffer, so it is the lifecycle line the PR-body reader strips.
   return LIFECYCLE_LINES.ollamaContextTooSmall({
     who: providerName || 'This provider',
     runtime: tokenLabel(runtimeContext),

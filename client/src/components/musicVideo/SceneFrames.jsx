@@ -79,10 +79,11 @@ const RERENDER_HINT = 'Renders this frame again from the current Casting look an
  * With `endFrameToggle` (footage, and a still whose picture is an end-frame effect),
  * Use end frame switches the end frame off (`scene.endFrameOff`): its column hides and
  * the shot plays its start frame only, keeping its selection, prompt and takes for switching back on.
+ * `shown` false (the shot editor is on its clip view) holds the frame prompt previews until the frames show.
  */
 export default function SceneFrames({
   project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, greyboxSaving = false, onGreyboxSaving, scene, index, endFrames: endFramesAllowed, endFrameToggle = false, plainStill = false, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame, onImageTargetChange = null,
-  onEditLocal, onSave, onOpenPreview, takeBusy = false, onSelectTake, onReviewTake, onSwap = null, onImportTake = null,
+  onEditLocal, onSave, onOpenPreview, shown = true, takeBusy = false, pendingTakes = null, onSelectTake, onReviewTake, onSwap = null, onImportTake = null,
   onContinueFromPrevious = null, previousHasClip = false, onSwapFrames = null, assetMarks = null, onMarkTake = null, onCheckTake = null, checkingTakes = null, onApplyCameos = null,
 }) {
   const endFrameOff = endFrameToggle && (plainStill || scene.endFrameOff === true);
@@ -170,7 +171,7 @@ export default function SceneFrames({
           onBlur={(e) => onSave(scene.sceneId, { [field]: e.target.value || null })}
           placeholder={start ? (fromSheet ? 'Anything the shot details don\'t cover' : 'What the frame shows (empty: uses the clip prompt)') : 'Where the shot ends, e.g. her head thrown back, eyes white'} />
         {/* What the frame sends: its prompt plus every addition, as chips. */}
-        {project && <SceneFramePromptPreview project={project} scene={scene} castMedia={castMedia} greybox={greybox} slot={which} referenceImageId={ref ? frames[ref] : null} />}
+        {project && <SceneFramePromptPreview project={project} scene={scene} castMedia={castMedia} greybox={greybox} slot={which} referenceImageId={ref ? frames[ref] : null} enabled={shown} />}
         {project && <SceneFrameReferenceLimitNotice project={project} scene={scene} castMedia={castMedia} greybox={greybox} sourceImageId={ref ? frames[ref] : null} />}
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" onClick={render} disabled={sharedTake || greyboxBlocked || !!generating || needsPrompt} className={PRIMARY_BUTTON}
@@ -237,7 +238,7 @@ export default function SceneFrames({
               Include shot reference images
             </label>
             <p className="text-xs text-port-text-muted">{includeReferences ? 'Sends this image plus the shot’s references, including mood-board and greybox images.' : 'Sends only the image to refine with your instruction.'}</p>
-            {project && <SceneFramePromptPreview project={project} scene={scene} slot={which} referenceImageId={refineImageId} instruction={instruction} includeReferences={includeReferences} />}
+            {project && <SceneFramePromptPreview project={project} scene={scene} slot={which} referenceImageId={refineImageId} instruction={instruction} includeReferences={includeReferences} enabled={shown} />}
           </form>
           {project && includeReferences && <SceneFrameReferenceLimitNotice project={project} scene={scene} castMedia={castMedia} greybox={greybox} sourceImageId={refineImageId} />}
         </>)}
@@ -271,7 +272,7 @@ export default function SceneFrames({
             From previous shot: keep this frame as the end frame
           </label>
         )}
-        <SceneTakeStrip project={project} scene={scene} kind={start ? 'image' : 'endImage'} busy={takeBusy} grid
+        <SceneTakeStrip project={project} scene={scene} kind={start ? 'image' : 'endImage'} busy={takeBusy} saving={pendingTakes} grid
           onRefine={(take) => openRefine(which, take.assetId)} refineDisabled={sharedTake || !!generating}
           onSelect={(take) => onSelectTake?.(scene, take)}
           onReview={(take, review) => onReviewTake?.(scene, take, review)}

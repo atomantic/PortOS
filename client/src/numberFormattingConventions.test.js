@@ -1,58 +1,11 @@
 // @vitest-environment node
 
 /**
- * Repo-wide guard: `formatCount` (`utils/formatters.js`) is the canonical
- * grouped-integer renderer; a bare `.toLocaleString()` on a number is not.
- *
- * The two disagree in a user-visible way, not just stylistically (#7433):
- *
- *   - Locale. `formatCount` pins `en-US` so a grouped count matches the `$`
- *     beside it (`formatUsd` also pins `en-US`). A bare `.toLocaleString()`
- *     follows the BROWSER locale, so on a non-`en` browser the same screen
- *     renders "1.234" in one span and "1,234" in the next.
- *   - Fractions. `.toLocaleString()` defaults to up to 3 fraction digits;
- *     `formatCount` rounds to 0.
- *   - Missing vs. zero. `formatCount(x)` renders '—' for an unmeasured count
- *     and takes `{ fallback: '0' }` where a measured zero is meant. The
- *     `.toLocaleString()` call sites each hand-rolled their own `?? 0` / `|| 0`
- *     coalesce, inconsistently.
- *
- * `new Date(x).toLocaleString()` is the same anti-pattern for a date/time
- * render — root `AGENTS.md` forbids the inline form; route it through
- * `formatDateTime` or the date helper matching the shape wanted.
- *
- * The rule is therefore structural rather than per-site: any `.toLocaleString(`
- * call outside the allowlist fails this suite.
- *
- * Percent and USD have the same shape of drift (#9951): a hand-rolled
- * `` `${x.toFixed(1)}%` `` renders `%` for a missing value and keeps trailing
- * zeros, and `` `$${x.toFixed(2)}` `` drops thousands grouping and the sign
- * handling `formatUsd` owns. Both route through `formatPercent` / `formatUsd`;
- * a `toFixed(...)` whose next token is `%`, or whose result is the amount
- * after a `$`, fails this suite. `formatters.js` is exempt (it implements them).
- *
- * ## Allowlist
- *
- * - `src/utils/formatters.js` — it IS the canonical implementation (`formatCount`
- *   grouping numbers; `formatDateTime`/`formatWeekdayTime`/`formatEventDateTime`
- *   rendering dates through the browser locale on purpose).
- * - `src/components/usage/UsageMeter.jsx` — `formatResetsAt` renders a quota
- *   reset as a compact "Sep 16, 1:30 AM" (month + day + time, no year, no
- *   weekday). No existing helper matches that shape, and it has exactly one
- *   caller — same reasoning `storageConventions.test.js` uses to allowlist
- *   `timeWindow.js` rather than add a single-caller helper. Move it off this
- *   allowlist (into a named `utils/formatters.js` helper) the day a second
- *   caller wants the same shape.
- *
- * ## What this guard CANNOT see
- *
- * It is a source grep, not an AST pass. Comments are stripped (both forms,
- * with a `:` lookbehind so a `https://` URL is not read as a line comment) so
- * prose mentioning "toLocaleString" does not trip the guard; string literals
- * are NOT stripped. Aliasing (`const f = n.toLocaleString`), a computed
- * member (`n['toLocaleString']()`), or a call funneled through a helper in
- * another file all slip through. Those are unusual enough here that the grep
- * earns its keep; closing them means moving to an AST pass.
+ * Rule: Use `formatCount`, `formatPercent`, `formatUsd`, and `formatDateTime` (`utils/formatters.js`) instead of bare `.toLocaleString()` or hand-rolled `toFixed` percent/USD strings (see root `AGENTS.md`).
+ * Fix: Replace `.toLocaleString()` with `formatCount` / `formatDateTime`, and replace `` `${x.toFixed(...)}%` `` / `` `$${x.toFixed(...)}` `` with `formatPercent` / `formatUsd`.
+ * What this guard cannot see:
+ *   - String literals are not stripped (comments are stripped).
+ *   - Aliasing (`const f = n.toLocaleString`), computed members (`n['toLocaleString']()`), or calls funneled through another file's helper.
  */
 
 import { describe, it, expect } from 'vitest';

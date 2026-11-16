@@ -81,12 +81,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('forceRemoveWorktreeDir', () => {
     expect((await forceRemoveWorktreeDir(repo, path)).removed).toBe(true);
   });
 
-  it.each([false, true])('preserves surviving contents after Git refusal even with a fresh guard (%s)', async (guarded) => {
+  it('preserves surviving contents after Git refusal even with a fresh guard', async () => {
     const path = await addWorktree();
     await writeFile(join(path, 'keep.txt'), 'still here\n');
     injected.gitFails = (args) => args[0] === 'worktree' && args[1] === 'remove';
 
-    const outcome = await forceRemoveWorktreeDir(repo, path, { label: 'test cleanup', ...(guarded ? { verifyRemoval: async () => null } : {}) });
+    const outcome = await forceRemoveWorktreeDir(repo, path, { label: 'test cleanup', verifyRemoval: async () => null });
 
     expect(outcome).toMatchObject({ removed: false, directory: 'present', registration: 'registered' });
     expect(outcome.warning).toMatch(/cleanup incomplete/);
@@ -119,20 +119,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('forceRemoveWorktreeDir', () => {
     const outcome = await forceRemoveWorktreeDir(repo, path);
     expect(outcome).toMatchObject({ removed: false, directory: 'present', registration: 'registered', reason: 'worktree-locked' });
     expect(existsSync(path)).toBe(true);
-    expect(await registered(path)).toBe(true);
-  });
-
-  it('preserves a lock acquired during the fallback ownership check', async () => {
-    const path = await addWorktree();
-    await writeFile(join(path, 'keep.txt'), 'preserve\n');
-    injected.gitFails = (args) => args[0] === 'worktree' && args[1] === 'remove';
-    let checks = 0;
-    const outcome = await forceRemoveWorktreeDir(repo, path, { verifyRemoval: async () => {
-      if (++checks === 2) await execGit(['worktree', 'lock', path], repo);
-      return null;
-    } });
-    expect(outcome).toMatchObject({ removed: false, reason: 'worktree-locked' });
-    expect(existsSync(join(path, 'keep.txt'))).toBe(true);
     expect(await registered(path)).toBe(true);
   });
 

@@ -1,4 +1,10 @@
-/** Machine-local preview/final batch intent. Callers serialize via the project queue. */
+/**
+ * Machine-local preview/final batch intent. Callers serialize via the project queue.
+ *
+ * Storage: `ephemeral-file` — `renders/pending.json`, never federated, cloned or
+ * backed up. A batch-resume marker (shot ids, bounded retry counts) removed on
+ * settlement/cancel; absence means no interrupted batch, so no seed or migration.
+ */
 import { mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomicWrite } from '../../lib/fileCore.js';

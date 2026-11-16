@@ -1,7 +1,7 @@
 /**
  * The streamed dump scanner must see table headers and the terminal marker
  * wherever the 64 KiB read chunks happen to split a real file (#8782). The
- * restore-level contracts live in backup.test.js / backup.db.test.js.
+ * restore-level contracts live in the backup.*.test.js suites.
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync } from 'fs';

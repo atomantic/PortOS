@@ -252,9 +252,9 @@ export default function BoardStage({ board }) {
         </div>
       )}
       {scenes.length > 0 && <SharedTakeOffers scenes={scenes} onSave={board.saveScene} />}
-      {scenes.length > 1 && <SequenceTakePanel key={project.id} project={project} shotName={shotName} disabled={locked} />}
+      {scenes.length > 1 && <SequenceTakePanel key={`sequence-take-${project.id}`} project={project} shotName={shotName} disabled={locked} />}
       {scenes.length > 0 && board.approveFinal && (
-        <FinalUpgradePanel key={project.id} project={project} shotName={shotName} disabled={locked} onApprove={board.approveFinal}
+        <FinalUpgradePanel key={`final-upgrade-${project.id}`} project={project} shotName={shotName} disabled={locked} onApprove={board.approveFinal}
           onOpenShot={(sceneId) => onToggleSceneExpand?.(sceneId, true)} />
       )}
       {scenes.length > 0 && (
@@ -363,6 +363,7 @@ export default function BoardStage({ board }) {
               onRepairPerformance={['code', 'document', 'blender'].includes(project.composition?.mode) ? null : board.onRepairPerformance}
               repairBusy={board.repairBusy || videoSettings.saving}
               onEditLocal={board.editSceneLocal}
+              onApplySaved={board.applySavedScene}
               onSave={board.saveScene}
               onGenerateFrame={sceneMedia.generateFrame}
               castMedia={sceneMedia.castMedia} onReloadCastMedia={sceneMedia.reloadCastMedia} greyboxPlaces={sceneMedia.greyboxPlaces}
@@ -372,6 +373,7 @@ export default function BoardStage({ board }) {
               onContinueVideo={sceneMedia.continueSceneVideo}
               onOpenPreview={board.openPreview}
               takeBusy={takes.busy}
+              pendingTakes={takes.pending}
               onSelectTake={takes.selectTake}
               onReviewTake={takes.reviewTake}
               onRejectUnusedTakes={takes.rejectUnusedTakes}

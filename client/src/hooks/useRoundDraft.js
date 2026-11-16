@@ -1,15 +1,6 @@
 /**
  * Hook for the Round editor's draft lifecycle: loads `/rounds/:id`, resets on id change, holds the
  * in-memory draft and handles saving.
- *
- * The Round editor's draft lifecycle: load `/rounds/:id` (resetting to loading on every id change so a
- * partner-link navigation can't save the old draft into the new song), hold the in-memory draft, a
- * non-404 read failure as `loadError` with `reload` (a 404 leaves `song` null for the not-found view),
- * explicit `save` (`buildRoundPatch`, re-points an open `?analyze=` deep link at a freshly-saved
- * reference's twin), `refreshTemplate`, and the AI `applyGenerated` merge. `baseDirty` compares the
- * draft's score/key against the last server-persisted `savedBase` so the derive-harmony action can
- * gate on SAVED state. Returns `{ song, setSong, loading, loadError, reload, savedBase, baseDirty,
- * setField, save, saving, refreshTemplate, refreshing, applyGenerated }`. Use when: `/rounds/:id`.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';

@@ -1,17 +1,19 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
+import { callRoute, expectAuthorizedWorkflows, expectRemoteRefusal, hostControlApp } from './hostControlTestHarness.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-// Real mounted routers, auth policy, SSE and Music/Video installer state
-// machines. Only runtime probes, processes, Docker and store effects are doubled.
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-media-installers-') }));
+afterAll(cleanupTempDataRoots);
+
+// Installer writes are plain writes under the default-deny gate (#16018, #9513);
+// the principal matrix lives in services/authGate.test.js. Real mounted routers,
+// SSE and Music/Video installer state machines; runtime probes, processes,
+// Docker and store effects are doubled.
 const state = vi.hoisted(() => ({ enabled: false, installed: new Set(), onSpawn: null }));
-vi.mock('../services/auth.js', () => ({
-  isAuthEnabled: vi.fn(async () => state.enabled),
-  verifyRequestSession: vi.fn(async req => req.headers.authorization === 'Bearer example-session'),
-  verifyPassword: vi.fn(async () => true),
+vi.mock('../services/auth.js', async (importOriginal) => ({
+  ...await importOriginal(), isAuthEnabled: vi.fn(async () => state.enabled),
 }));
 vi.mock('../services/settings.js', () => ({
   settingsEvents: new EventEmitter(),
@@ -90,7 +92,6 @@ vi.mock('../services/videoUpload.js', () => ({}));
 vi.mock('../services/mediaJobQueue/remoteMediaJob.js', () => ({}));
 vi.mock('../services/videoGen/displayPower.js', () => ({}));
 
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import musicRoutes from './music.js';
 import videoRoutes from './videoGen.js';
 import superColliderRoutes from './superCollider.js';
@@ -107,36 +108,11 @@ const installers = [
   ['/api/video-gen/setup/runtime-install?runtime=example', {}],
   ['/api/music/supercollider/setup', { rebuild: true }],
 ];
-const appFor = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/video-gen', videoRoutes);
-  app.use('/api/music/supercollider', superColliderRoutes);
-  app.use('/api/music', musicRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
-const call = (app, [path, body], headers = {}) => {
-  const pending = request(app).post(path);
-  for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return pending.send(body);
-};
-const expectNoSetup = () => {
-  for (const effect of [spawnSetupScript, setupSuperColliderRuntime,
-    invalidateByovReadyCache, invalidateByovLoraCapabilityCache, invalidateRuntimeFingerprintCache]) {
-    expect(effect).not.toHaveBeenCalled();
-  }
-};
-const expectNoProbes = () => {
-  for (const probe of [isEngineHealthy, isEnginePlatformSupported,
-    isByovRuntimeInstalled, isByovRuntimeCurrent, isByovRuntimeReady, getSuperColliderStatus]) {
-    expect(probe).not.toHaveBeenCalled();
-  }
-};
+const mounts = [
+  ['/api/video-gen', videoRoutes],
+  ['/api/music/supercollider', superColliderRoutes],
+  ['/api/music', musicRoutes],
+];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -146,68 +122,34 @@ beforeEach(() => {
 });
 
 describe('media installer operator authority (#9513)', () => {
-  it('refuses remote and dev-proxied setup before SSE, readiness probes or installation', async () => {
-    for (const installer of installers) {
-      for (const [address, headers] of [
-        ['192.0.2.10', {}],
-        ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
-        ['192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }],
-      ]) {
-        const response = await call(appFor(address), installer, headers);
-        expect([response.status, response.body.code], installer[0]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-        expect(response.headers['content-type']).toMatch(/^application\/json/);
-      }
+  it('refuses a remote caller before SSE, readiness probes or installation', async () => {
+    await expectRemoteRefusal(mounts, ['post', installers[0][0], installers[0][1], spawnSetupScript]);
+    for (const probe of [isEngineHealthy, isEnginePlatformSupported,
+      isByovRuntimeInstalled, isByovRuntimeCurrent, isByovRuntimeReady, getSuperColliderStatus]) {
+      expect(probe).not.toHaveBeenCalled();
     }
-    expectNoProbes();
-    expectNoSetup();
   });
 
-  it('rejects password-enabled anonymous and legacy Basic setup before opening SSE', async () => {
-    state.enabled = true;
-    for (const installer of installers) {
-      for (const [headers, status, code] of [
-        [{}, 401, 'AUTH_REQUIRED'],
-        [{ Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403, 'HOST_CONTROL_FORBIDDEN'],
-      ]) {
-        const response = await call(appFor(), installer, headers);
-        expect([response.status, response.body.code], installer[0]).toEqual([status, code]);
-        expect(response.headers['content-type']).toMatch(/^application\/json/);
-      }
-    }
-    expectNoProbes();
-    expectNoSetup();
-  });
-
-  it('preserves local and operator streamed installs, including explicit rebuilds', async () => {
-    for (const [enabled, address, headers] of [
-      [false, '127.0.0.1', {}],
-      [false, '127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '::ffff:127.0.0.1' }],
-      [true, '192.0.2.10', { Authorization: 'Bearer example-session' }],
-    ]) {
-      state.enabled = enabled;
-      state.installed.clear();
-      for (const installer of installers) {
-        const response = await call(appFor(address), installer, headers);
-        expect(response.status, installer[0]).toBe(200);
-        expect(response.headers['content-type']).toMatch(/^text\/event-stream/);
-        expect(response.text, installer[0]).toContain('"type":"complete"');
-      }
-    }
-    expect(spawnSetupScript).toHaveBeenCalledTimes(6);
+  it('preserves local and delegated-agent streamed installs, including explicit rebuilds', async () => {
+    // The installer short-circuits an installed runtime, so each pass starts bare.
+    await expectAuthorizedWorkflows({ auth: state, mounts, rearm: () => state.installed.clear(), workflows: [
+      ['post', installers[0][0], installers[0][1], spawnSetupScript, 200],
+      ['post', installers[1][0], installers[1][1], spawnSetupScript, 200],
+      ['post', installers[2][0], installers[2][1], setupSuperColliderRuntime, 200],
+    ] });
     expect(spawnSetupScript).toHaveBeenCalledWith({ INSTALL_EXAMPLE_MUSIC: '1' });
     expect(spawnSetupScript).toHaveBeenCalledWith({ INSTALL_EXAMPLE_VIDEO: '1' });
-    expect(setupSuperColliderRuntime).toHaveBeenCalledTimes(3);
     expect(setupSuperColliderRuntime).toHaveBeenLastCalledWith({ rebuild: true, onLine: expect.any(Function) });
   });
 
   it.each(installers.slice(0, 2))('retains single-flight installation for %s', async (path, body) => {
     const spawned = Promise.withResolvers();
     state.onSpawn = spawned.resolve;
-    const app = appFor('127.0.0.1');
-    const first = Promise.resolve(call(app, [path, body]));
+    const app = await hostControlApp('127.0.0.1', mounts);
+    const first = Promise.resolve(callRoute(app, ['post', path, body]));
     const complete = await spawned.promise;
     try {
-      const second = await call(app, [path, body]);
+      const second = await callRoute(app, ['post', path, body]);
       expect(second.status).toBe(200);
       expect(second.text).toContain('already running');
       expect(spawnSetupScript).toHaveBeenCalledTimes(1);
@@ -219,7 +161,7 @@ describe('media installer operator authority (#9513)', () => {
   });
 
   it('keeps status aliases read-only and contained rendering separate from installation', async () => {
-    const app = appFor();
+    const app = await hostControlApp('192.0.2.10', mounts);
     for (const path of [
       '/api/music/setup/runtime-status?runtime=example',
       '/api/music/setup/runtime-install?runtime=example',
@@ -227,18 +169,18 @@ describe('media installer operator authority (#9513)', () => {
       '/api/video-gen/setup/runtime-install?runtime=example',
       '/api/music/supercollider/status',
     ]) {
-      const response = await request(app).get(path);
+      const response = await callRoute(app, ['get', path]);
       expect(response.status, path).toBe(200);
       expect(response.headers['content-type']).toMatch(/^application\/json/);
     }
     // Render runs caller SuperCollider source in a container, so it needs host
     // control (#13055); a local caller still renders without setup.
-    const render = await request(appFor('127.0.0.1')).post('/api/music/supercollider/render')
-      .send({ code: 'Pbind()', durationSec: 4, seed: 1 });
+    const render = await callRoute(await hostControlApp('127.0.0.1', mounts),
+      ['post', '/api/music/supercollider/render', { code: 'Pbind()', durationSec: 4, seed: 1 }]);
     expect(render.status).toBe(202);
     expect(enqueueJob).toHaveBeenCalledWith({ kind: 'supercollider', params: {
       source: 'Pbind()', sourceHash: 'example-source-hash', durationSec: 4, seed: 1,
     } });
-    expectNoSetup();
+    expect(setupSuperColliderRuntime).not.toHaveBeenCalled();
   });
 });

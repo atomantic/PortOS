@@ -10,9 +10,12 @@
  *   hold <file>").
  * Reported holdings (filenames, plus each inventory scope's file modify times
  * that origin attribution reads, services/mediaOriginReconcile.js) and this
- * machine's queued release commands live in `data/media-holders.json`:
- * machine-local evidence (`file-primary`, docs/STORAGE.md) that never federates
- * as a file.
+ * machine's queued release commands live in `data/media-holders.json`.
+ *
+ * Storage: `file-primary` — machine-local evidence and pending work, never
+ * federated as a file (the primary designation syncs on the row instead). No
+ * seed: an absent file is empty. Reports older than 7 days stop counting, and a
+ * removed peer's entries are pruned.
  *
  * A release keeps the row and drops only the bytes: the holder seeds its hosted
  * index with the primary, so the item streams from there, then trashes its copy.

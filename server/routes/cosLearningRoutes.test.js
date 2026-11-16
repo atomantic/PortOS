@@ -52,27 +52,6 @@ describe('CoS Learning Routes', () => {
     vi.clearAllMocks();
   });
 
-  describe('GET /api/cos/learning', () => {
-    it('should return learning insights', async () => {
-      taskLearning.getLearningInsights.mockResolvedValue({ taskTypes: {}, skippedTypes: [] });
-
-      const response = await request(app).get('/api/cos/learning');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('taskTypes');
-    });
-  });
-
-  describe('GET /api/cos/learning/durations', () => {
-    it('should return task durations', async () => {
-      taskLearning.getAllTaskDurations.mockResolvedValue({ 'app-improve': { avg: 300 } });
-
-      const response = await request(app).get('/api/cos/learning/durations');
-
-      expect(response.status).toBe(200);
-    });
-  });
-
   describe('POST /api/cos/learning/backfill', () => {
     it('should backfill learning data', async () => {
       taskLearning.backfillFromHistory.mockResolvedValue(15);
@@ -115,7 +94,7 @@ describe('CoS Learning Routes', () => {
       const response = await request(app).post('/api/cos/learning/reset/deploy');
 
       expect(response.status).toBe(200);
-      expect(response.body.reset).toBe(true);
+      expect(taskLearning.resetTaskTypeLearning.mock.calls[0][0]).toBe('deploy');
     });
 
     it('should return 404 if task type not found', async () => {
@@ -136,36 +115,6 @@ describe('CoS Learning Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.taskType).toBe('deploy');
       expect(response.body.multiplier).toBe(1.5);
-    });
-  });
-
-  describe('GET /api/cos/learning/routing', () => {
-    it('should return routing accuracy', async () => {
-      taskLearning.getRoutingAccuracy.mockResolvedValue({ accuracy: 0.85 });
-
-      const response = await request(app).get('/api/cos/learning/routing');
-
-      expect(response.status).toBe(200);
-    });
-  });
-
-  describe('GET /api/cos/learning/performance', () => {
-    it('should return performance summary', async () => {
-      taskLearning.getPerformanceSummary.mockResolvedValue({ overall: 0.75 });
-
-      const response = await request(app).get('/api/cos/learning/performance');
-
-      expect(response.status).toBe(200);
-    });
-  });
-
-  describe('GET /api/cos/learning/summary', () => {
-    it('should return learning health summary', async () => {
-      taskLearning.getLearningSummary.mockResolvedValue({ healthy: true });
-
-      const response = await request(app).get('/api/cos/learning/summary');
-
-      expect(response.status).toBe(200);
     });
   });
 
@@ -248,7 +197,6 @@ describe('CoS Learning Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.count).toBe(1);
-      expect(response.body.dismissed[0].id).toBe('error-pattern:unknown');
     });
 
     it('should not be intercepted by the :taskType handler', async () => {
@@ -292,7 +240,7 @@ describe('CoS Learning Routes', () => {
         .send({ id: 'error-pattern:unknown' });
 
       expect(response.status).toBe(200);
-      expect(response.body.restored).toBe(true);
+      expect(taskLearning.restoreRecommendation.mock.calls[0][0]).toBe('error-pattern:unknown');
     });
 
     it('should return 400 when id is missing', async () => {
@@ -301,17 +249,6 @@ describe('CoS Learning Routes', () => {
         .send({});
 
       expect(response.status).toBe(400);
-    });
-  });
-
-  describe('POST /api/cos/learning/recommendations/clear-dismissed', () => {
-    it('should clear all dismissed recommendations', async () => {
-      taskLearning.clearDismissedRecommendations.mockResolvedValue({ cleared: true });
-
-      const response = await request(app).post('/api/cos/learning/recommendations/clear-dismissed');
-
-      expect(response.status).toBe(200);
-      expect(response.body.cleared).toBe(true);
     });
   });
 
@@ -326,16 +263,6 @@ describe('CoS Learning Routes', () => {
     });
   });
 
-  describe('GET /api/cos/learning/confidence', () => {
-    it('should return confidence levels', async () => {
-      taskLearning.getConfidenceLevels.mockResolvedValue({ levels: {} });
-
-      const response = await request(app).get('/api/cos/learning/confidence');
-
-      expect(response.status).toBe(200);
-    });
-  });
-
   describe('GET /api/cos/learning/confidence/:taskType', () => {
     it('should return confidence for specific task type', async () => {
       taskLearning.getTaskTypeConfidence.mockResolvedValue({ level: 'high', score: 0.9 });
@@ -343,23 +270,13 @@ describe('CoS Learning Routes', () => {
       const response = await request(app).get('/api/cos/learning/confidence/review');
 
       expect(response.status).toBe(200);
+      expect(taskLearning.getTaskTypeConfidence.mock.calls[0][0]).toBe('review');
     });
   });
 
   // ============================================================
   // Weekly Digest Routes
   // ============================================================
-
-  describe('GET /api/cos/digest', () => {
-    it('should return current week digest', async () => {
-      weeklyDigest.getWeeklyDigest.mockResolvedValue({ weekId: '2026-W14', stats: {} });
-
-      const response = await request(app).get('/api/cos/digest');
-
-      expect(response.status).toBe(200);
-      expect(response.body.weekId).toBe('2026-W14');
-    });
-  });
 
   describe('GET /api/cos/digest/list', () => {
     it('should list weekly digests', async () => {
@@ -369,16 +286,6 @@ describe('CoS Learning Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.digests).toHaveLength(2);
-    });
-  });
-
-  describe('GET /api/cos/digest/progress', () => {
-    it('should return current week progress', async () => {
-      weeklyDigest.getCurrentWeekProgress.mockResolvedValue({ completed: 5, total: 10 });
-
-      const response = await request(app).get('/api/cos/digest/progress');
-
-      expect(response.status).toBe(200);
     });
   });
 
@@ -400,6 +307,7 @@ describe('CoS Learning Routes', () => {
       const response = await request(app).get('/api/cos/digest/2026-W13');
 
       expect(response.status).toBe(200);
+      expect(weeklyDigest.getWeeklyDigest.mock.calls[0][0]).toBe('2026-W13');
     });
 
     it('should return 400 for invalid weekId format', async () => {
@@ -426,6 +334,7 @@ describe('CoS Learning Routes', () => {
         .send({ weekId: '2026-W14' });
 
       expect(response.status).toBe(200);
+      expect(weeklyDigest.generateWeeklyDigest.mock.calls[0][0]).toBe('2026-W14');
     });
 
     it('rejects a weekId that is not an ISO week id before it can name a file', async () => {

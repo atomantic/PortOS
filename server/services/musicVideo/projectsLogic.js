@@ -36,6 +36,7 @@ import { audioRevisionOf } from '../../lib/musicVideoSongAudio.js';
 import { stripMusicVideoLocalRenderPins } from '../../lib/syncWire.js';
 import { persistedRenderPinFields } from '../../lib/renderTargets.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
+import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
 import { isPerformanceScene, planShotSplit, shotSplitLimit } from '../../lib/musicVideoShotTiming.js';
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
 import { normalizeLyricMarkers, remapLyricMarkers } from '../../lib/lyricMarkers.js';
@@ -52,7 +53,8 @@ import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
 import { normalizeCreditsOutro } from '../../lib/musicVideoCreditsOutro.js';
 import { MUSIC_VIDEO_EDGED_WIPES, sceneWipe, varyWipes } from '../../lib/musicVideoWipes.js';
 import { carryTreatmentThroughSceneOrder, remapTreatmentForClone, scenesFingerprint } from './treatment.js';
-import { anchorShotsToSungLyrics, carryReviewThroughSceneOrder, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
+import { packTakePrompts, unpackTakePrompts } from './takePromptPool.js';
+import { anchorShotsToSungLyrics, carryReviewThroughSceneOrder, carryStoryboardApproval, dropStaleStoryboardRows, slimProjectReview } from './productionReview.js';
 import { cuesSungWithin, lyricAnchorOnset, lyricWordCuts, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 import { normalizeShotSheet } from '../../lib/musicVideoShotSheet.js';
@@ -64,10 +66,8 @@ import { migrateMusicVideoPreviz } from '../../../scripts/migrations/459-music-v
 /** The vocal-stem fields cleared together whenever the stem stops belonging to the song (#8977). */
 export const CLEARED_VOCAL_STEM = Object.freeze({ vocalStemFilename: null, vocalStemMasterFilename: null, vocalStemDerived: null });
 
-export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
 // Re-exported for the PG backend's typed mirror columns (mirrors the CD store).
-export { mirrorTimestamp } from '../../lib/pgTimestamp.js';
 
 const STATUS_COLUMN_MAX = 32;
 
@@ -682,17 +682,39 @@ function sceneListInTimeOrder(scenes) {
 }
 
 /**
- * Load-time repair for a project whose scenes drifted out of time order
- * (#16117). Reorders only; labels, times and selections are untouched, and
- * every review binding that held before still holds: the bases hash `scenes`
+ * Load-time read of a stored record: take prompts unpacked from the record's
+ * line pool (#16210, `takePromptPool.js`), then the repair for a project whose
+ * scenes drifted out of time order (#16117). The repair reorders only; labels,
+ * times and selections are untouched, and every review binding that held before still holds: the bases hash `scenes`
  * by position, and the repair moves no shot in the cut, so it must not stale
  * an approval, the rendered proof or the treatment. Pure and idempotent, with
  * `updatedAt` left alone, so the stores run it on every load.
  */
-export function afterLoad(project) {
+export function afterLoad(stored) {
+  const project = unpackTakePrompts(stored);
   const scenes = sceneListInTimeOrder(project?.scenes);
   if (scenes === project?.scenes) return project;
   return carryReviewThroughSceneOrder(project, carryTreatmentThroughSceneOrder(project, { ...project, scenes }));
+}
+
+/**
+ * Write-time clean-up both stores run on every persisted record (#16210): a
+ * review record from before slim snapshots shrinks at its next write. Reads
+ * never call it, so a pure read neither rewrites the record nor moves
+ * `updatedAt`; readers tolerate both shapes. Idempotent, and it leaves every
+ * approval as it was.
+ */
+export function beforeSave(project) {
+  return slimProjectReview(project);
+}
+
+/**
+ * The bytes both stores write, from the `beforeSave` record (#16210): take
+ * prompts packed into the record's line pool. Only the write sees this shape;
+ * the stores return the unpacked record and `afterLoad` unpacks on every read.
+ */
+export function toStored(project) {
+  return packTakePrompts(project);
 }
 
 /** Where a new scene goes: before the first timed scene that starts after it; untimed scenes go last. */
@@ -976,6 +998,10 @@ export function applySceneUpdate(project, sceneId, patch) {
  * each replacing that shot's glitch out. The last shot has no cut out and is
  * skipped. Returns `{ project, scenes }`, `scenes` the changed shots.
  */
+// projectDbStore reaches this through the injected `logic` namespace, so no file
+// imports the name from here and a word scan cannot see the caller.
+export { mirrorTimestamp };
+
 export function varySceneWipes(project, { fromSceneId, count, styles, lengthSec = null, color = null, seed = 1 }) {
   const timed = (project.scenes || []).filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
   const start = timed.findIndex((scene) => scene.sceneId === fromSceneId);

@@ -13,12 +13,12 @@
     "better-test-quality": "8e305f986e9c9066da5db2aee76fc024",
     "branch-cleanup": "3ae50eec50fe2dea33575c5ab6d56716",
     "branch-reconcile": "84e3e34112ed761c85df1f58c8c6faed",
-    "claim-issue": "79054dd4f4b099a61df308eefa80a405",
-    "claim-issue-gitlab": "d9dc33d452b9fe5b9c74599e43fb5a54",
+    "claim-issue": "ff5a5685634b28bbe357564c2dfccb28",
+    "claim-issue-gitlab": "78cd1e2b88ced728279e1049e8aaaf89",
     "claim-issue-jira": "8eb786c1ffbb0e589d7959ff829ed875",
     "code-quality": "175fab48fc713b71b4f0574b7cc5fe0b",
-    "code-reviewer-implement": "f8cb11be6796874018d0a4d776c8931d",
-    "code-reviewer-review": "10037a8a366f5c98482d2de11cdb127a",
+    "code-reviewer-implement": "0f3459ff958f97ace12f61430ede70d7",
+    "code-reviewer-review": "aa8fbd3878dfd441955f2182c22a1699",
     "console-errors": "5a7f6fd0b119db9d0e01c7f44a7a061c",
     "copy": "6a0959e898d37fb4d4d7445dfc8008c9",
     "cost-efficiency": "239bad18c51b50c80599d30b2fb0ad15",
@@ -26,12 +26,12 @@
     "data-safety": "9e930585587a475901a4673427c9d87f",
     "dependency-updates": "9fd54b2e77fc90ca17e166ed1bd908ac",
     "design": "118ab916feb90ff079f6e6449f60e7fe",
-    "do-release": "1e69a4fedeb5e6446cc4ae9f61166854",
+    "do-release": "b57b0520691aeab4ec4b952d0a498359",
     "do-replan": "35660eb7b43e4259a6a9253ed288a1db",
     "documentation": "c94797b4bd3a0d554e225888ed48b76b",
     "error-handling": "416b4e9aa2c1fcc3bfea7a2d38814ae5",
     "feature-completeness": "00d8916cc6032e74817657375375115b",
-    "feature-ideas": "804f62f1dadadbfa8a0bcd4aff16b2e8",
+    "feature-ideas": "d5300180b45a1019326ab740ce1a3c28",
     "infrastructure": "f019bab508f95278ea00c33d69f85818",
     "issue-reconcile": "1ecd57af9e923a33e28570aa1888f494",
     "jira-sprint-manager": "3e63c8a3bdf0d5a05a30faaa2dc07980",
@@ -43,7 +43,7 @@
     "observability": "243e58bcfae2759f82caf3ff6c8fc9c5",
     "over-engineering": "fadf29ccd1bad774a5b8918ac21fa8d1",
     "performance": "199e7e4cc0429f8d96380b31563400dc",
-    "plan-feature": "7f859397ff16889ffc0cf5a8ba6bddab",
+    "plan-feature": "f586392c97f2725eac868cd8f268e775",
     "plan-task": "de878963a1325ae796c74e81ba8deafb",
     "plan-task-claim": "2acac033c34658a4b7d0c64f6cb69ecd",
     "pr-reviewer": "de9c295018df7c403a722a9ac2e780af",
@@ -82,8 +82,8 @@
     "better-test-quality": 2,
     "branch-cleanup": 4,
     "branch-reconcile": 13,
-    "claim-issue": 62,
-    "claim-issue-gitlab": 54,
+    "claim-issue": 65,
+    "claim-issue-gitlab": 57,
     "claim-issue-jira": 29,
     "code-quality": 6,
     "code-reviewer-a": 1,
@@ -95,12 +95,12 @@
     "data-safety": 4,
     "dependency-updates": 11,
     "design": 1,
-    "do-release": 27,
+    "do-release": 28,
     "do-replan": 2,
     "documentation": 9,
     "error-handling": 4,
     "feature-completeness": 1,
-    "feature-ideas": 11,
+    "feature-ideas": 12,
     "infrastructure": 3,
     "issue-reconcile": 11,
     "jira-sprint-manager": 1,
@@ -112,7 +112,7 @@
     "observability": 2,
     "over-engineering": 1,
     "performance": 8,
-    "plan-feature": 6,
+    "plan-feature": 7,
     "plan-task": 30,
     "plan-task-claim": 7,
     "pr-reviewer": 5,
@@ -259,7 +259,10 @@
       "8ce75abd48c80ac22a750285faa7eba3",
       "9b03ffa00588f7cc1e7e7f47aee72155",
       "b4f2bd36cfaef67a002aed16157b524b",
-      "86db6485a66c180077d61bd540d400fa"
+      "86db6485a66c180077d61bd540d400fa",
+      "79054dd4f4b099a61df308eefa80a405",
+      "f0e63fc0a9b53bab74f5b28d72c34c0f",
+      "4c61f5490c7d13161dfd0e3e1dda1b81"
     ],
     "claim-issue-gitlab": [
       "fae92c45c89c65455930b4b06a1b88c4",
@@ -314,7 +317,10 @@
       "1551a0567c1049d7c08926c2558523e2",
       "f3458aa910dd16b5998336131664ff0a",
       "d4e07862598ab51a62940aacabeedf56",
-      "188ffd2e5546234c0b92b5015624b449"
+      "188ffd2e5546234c0b92b5015624b449",
+      "d9dc33d452b9fe5b9c74599e43fb5a54",
+      "5fd42d061786a5563f19ffa06f56ab0a",
+      "4ab72e1d1197ce97e360ef57b92aeaa5"
     ],
     "claim-issue-jira": [
       "496638ec099de9d57686a61a015a3c03",
@@ -407,7 +413,8 @@
       "0770a37985af6fd232ff275b983e36b0",
       "9c621e6dc024fd6a5ad8367db5a6081f",
       "da374e670f5b84144b7ef734377be4d7",
-      "e5458a260bd5781b1533aea56b658849"
+      "e5458a260bd5781b1533aea56b658849",
+      "1e69a4fedeb5e6446cc4ae9f61166854"
     ],
     "do-replan": [
       "59a57f1bb445138c30ab4fa23630c6f8"
@@ -438,7 +445,8 @@
       "d076e19a6848f6452f4d1078b096ba4b",
       "73cdc70f8d14fc909668054bbcee1259",
       "0741418bd275b8953131155f8bc89460",
-      "d3282f16da29efe2d53595b3b34778bc"
+      "d3282f16da29efe2d53595b3b34778bc",
+      "804f62f1dadadbfa8a0bcd4aff16b2e8"
     ],
     "infrastructure": [
       "b4ad755eb115b82679c601a0df1ffd7b",
@@ -493,7 +501,8 @@
       "a707866783fd0d8c1037489f23ff66de",
       "b20980c8eda2256060d09d4bca397244",
       "3df6f0a46f2a524af1dc4f83dfdf0647",
-      "87f71a894757f89354da4e2119e07118"
+      "87f71a894757f89354da4e2119e07118",
+      "7f859397ff16889ffc0cf5a8ba6bddab"
     ],
     "plan-task": [
       "4df36bed4974ff41f369c86828e7f94f",

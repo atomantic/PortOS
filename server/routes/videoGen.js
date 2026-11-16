@@ -65,6 +65,8 @@ import { assertNoPendingTopaz, enqueueTopazUpscale, reconcileTopazStatus, recove
 import { enqueueStitch } from '../services/videoGen/stitchJob.js';
 import { trimHistoryItem } from '../services/videoGen/trim.js';
 import { handheldHistoryItem } from '../services/videoGen/handheld.js';
+import { enqueueVertical } from '../services/videoGen/verticalJob.js';
+import { VERTICAL_RATIO_IDS } from '../lib/verticalReframe.js';
 import { extendHistoryClip } from '../services/videoGen/extendHosted.js';
 import { HANDHELD_SEED_MAX } from '../lib/handheldCamera.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
@@ -76,7 +78,7 @@ import { MAX_VIDEO_BATCH_SIZE } from '../services/videoGen/batch.js';
 import { VIDEO_GEN_LOCAL_ONLY_FIELDS, REFERENCE_AUDIO_FIELDS, VIDEO_REFERENCE_IMAGE_FIELDS, MAX_VIDEO_REFERENCE_LABEL_LENGTH } from '../services/videoGen/requestFields.js';
 import { attachSseClient, cancelJob, listJobs, laneConcurrencyFor } from '../services/mediaJobQueue/index.js';
 import { mediaJobExecutionLane } from '../lib/generationModes.js';
-import { getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
+import { getTextEncoderRepo, isHfRepoId, getVideoModels } from '../lib/mediaModels.js';
 import {
   IC_LORA_MODE_VALUES, icLoraSpecForMode, listIcLoraWeights, listIcLoraRemixModes,
   icLoraWeightCandidates, findCachedIcLoraWeight, icLoraWeightKey, icLoraProbesExactFile,
@@ -112,6 +114,7 @@ import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES, RUNWAY_ACT_TWO_RATIOS, RUNWAY_ALEPH_ASPECTS } from '../lib/runwaySpecialVideoModels.js';
 import { HIGGSFIELD_VIDEO_MODEL_IDS } from '../lib/higgsfieldVideoModels.js';
 import { GOOGLE_VIDEO_MODEL_IDS } from '../lib/googleVideoModels.js';
+import { getProject } from '../services/musicVideo/projects.js';
 
 const router = Router();
 
@@ -609,6 +612,9 @@ export const generateBodySchema = z.object({
       // The shot card's "Start frame for layout only" (Grok): the frame is sent as a
       // scene reference instead of the locked first frame, so its people can take the references' likeness.
       startFrameLayout: z.boolean().optional(),
+      // Higgsfield/fal reference models: 'image' renders plain image-to-video from the frame and leaves
+      // the clip references out; unset sends the frame as the first reference when the shot has references.
+      frameRoute: z.enum(['reference', 'image']).optional(),
       // Names the overnight batch this take was queued in (musicVideo/overnightRenders.js).
       batchId: z.string().uuid().optional(),
       // The shot card's Render draft / Render final (#16136); the take records it.
@@ -1136,9 +1142,8 @@ const overnightBodySchema = z.object({
 
 router.post('/overnight', asyncHandler(async (req, res) => {
   const { projectId, sceneIds, modelIds, startAt, stopBy } = validateRequest(overnightBodySchema, req.body ?? {});
-  const [{ getProject }, { musicVideoClipReferences }, { getVideoModels }, { overnightModelKind, overnightRenderBodies }] = await Promise.all([
-    import('../services/musicVideo/projects.js'), import('../services/musicVideo/clipCastReferences.js'),
-    import('../lib/mediaModels.js'), import('../services/musicVideo/overnightRenders.js'),
+  const [{ musicVideoClipReferences }, { overnightModelKind, overnightRenderBodies }] = await Promise.all([
+    import('../services/musicVideo/clipCastReferences.js'), import('../services/musicVideo/overnightRenders.js'),
   ]);
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Music video not found', { status: 404, code: 'NOT_FOUND' });
@@ -1614,6 +1619,16 @@ router.post('/history/:id/handheld', asyncHandler(async (req, res) => {
   if (!parsed.success) failValidation(parsed);
   const body = validateRequest(handheldBodySchema, req.body ?? {});
   res.json({ ok: true, video: await handheldHistoryItem(parsed.data, body) });
+}));
+
+// "Make it vertical" (lib/verticalReframe.js): the clip centred over a blurred copy of itself on
+// a 9:16, 4:5 or 1:1 canvas. Queued as a media job; a repeat request returns the live job.
+const verticalBodySchema = z.object({ ratio: z.enum(VERTICAL_RATIO_IDS) }).strict();
+router.post('/history/:id/vertical', asyncHandler(async (req, res) => {
+  const parsed = historyIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const body = validateRequest(verticalBodySchema, req.body ?? {});
+  res.json({ ok: true, job: await enqueueVertical(parsed.data, body.ratio) });
 }));
 
 // Continue a hosted clip on its model's extend endpoint (#16150); `dryRun` returns the exact body and price.

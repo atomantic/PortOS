@@ -45,7 +45,7 @@ router.get('/actions', asyncHandler(async (req, res) => {
 // DELETE /api/history/:id - Delete single entry
 router.delete('/:id', asyncHandler(async (req, res) => {
   const result = await history.deleteEntry(req.params.id);
-  if (!result) throw new ServerError('Entry not found', { status: 404, code: 'NOT_FOUND' });
+  if (!result?.deleted) throw new ServerError('Entry not found', { status: 404, code: 'NOT_FOUND' });
   res.json(result);
 }));
 

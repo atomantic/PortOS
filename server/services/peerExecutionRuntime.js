@@ -1,4 +1,10 @@
-/** Lazy production composition. Reading setup never creates an execution grant. */
+/**
+ * Lazy production composition. Reading setup never creates an execution grant.
+ *
+ * Storage: `file-primary` (`data/peer-execution-grants.json`) — machine-local operator config, never
+ * federated or restored from snapshots. Strict bounded schema; absent grants nothing, and generations are
+ * fenced by the permanent PostgreSQL floors and the non-rewound epoch. No seed or migration creates authority.
+ */
 import { watch, mkdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -10,6 +16,7 @@ import { createPeerExecutionGrants } from './peerExecutionGrants.js';
 import { createPeerExecutionReceiver } from './peerExecution.js';
 import { withInstanceIdentityLock, registerInstanceExecutionAuthorityGuard } from './instanceIdentity.js';
 import { peerAdminCaller, peerAdminIdentity } from './peerAdministration.js';
+import { createPeerExecutionAuthority } from '../lib/peerExecutionAuthority.js';
 
 let singleton;
 let io;
@@ -78,7 +85,6 @@ export function _getPeerExecutionWatcher() {
 }
 
 export async function withPeerExecutionIdentityRestore(fn) {
-  const { createPeerExecutionAuthority } = await import('../lib/peerExecutionAuthority.js');
   return withInstanceIdentityLock(async () => {
     createPeerExecutionAuthority(PATHS.data).invalidate();
     return fn();

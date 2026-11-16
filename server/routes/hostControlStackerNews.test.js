@@ -1,12 +1,8 @@
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { callRoute, hostControlApp, REMOTE_ADDRESS } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
-import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { hashStackerNewsRules, POLICY_VERSION } from '../services/stackerNewsPolicy.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
@@ -20,11 +16,6 @@ vi.mock('../services/auth.js', async (importOriginal) => ({
 }));
 vi.mock('../services/settings.js', () => ({
   settingsEvents: new EventEmitter(), getSettings: vi.fn(async () => ({})),
-}));
-vi.mock('../services/instanceIdentity.js', () => ({
-  loadData: vi.fn(async () => ({ peers: [{
-    id: 'example-peer', instanceId: 'example-instance', enabled: true, syncSecret: 'a'.repeat(32),
-  }] })),
 }));
 vi.mock('../services/stackerNewsScheduler.js', () => ({ reconcileStackerNewsSchedulers: vi.fn() }));
 vi.mock('../services/stackerNewsBrowser.js', () => ({
@@ -44,7 +35,6 @@ vi.mock('../integrations/stackerNews/index.js', () => ({
 
 // Mount the actual authorization middleware, router, and action service. Only
 // persistence/credentials and the external publication adapter are synthetic.
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import stackerNewsRoutes from './stackerNews.js';
 
@@ -112,45 +102,23 @@ beforeEach(() => {
   });
 });
 
-const appFor = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/stacker-news', stackerNewsRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
-const post = (app, path, body = {}, headers = {}) => {
-  const pending = request(app).post(path);
-  for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return pending.send(body);
-};
+const mounts = [['/api/stacker-news', stackerNewsRoutes]];
+const appFor = (address = REMOTE_ADDRESS) => hostControlApp(address, mounts);
+const post = async (app, path, body = {}, headers = {}) => callRoute(await app, ['post', path, body], headers);
 const actionPath = (suffix, id = action.id) => `/api/stacker-news/actions/${id}/${suffix}`;
 
-describe('Stacker News review and publication authority', () => {
-  it.each([
-    ['remote without auth', false, '192.0.2.10', {}, 403, 'HOST_CONTROL_FORBIDDEN'],
-    ['forwarded remote without auth', false, '127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }, 403, 'HOST_CONTROL_FORBIDDEN'],
-    ['anonymous with auth', true, '192.0.2.10', {}, 401, 'AUTH_REQUIRED'],
-    ['Basic password', true, '192.0.2.10', { Authorization: `Basic ${Buffer.from(':example-password').toString('base64')}` }, 403, 'HOST_CONTROL_FORBIDDEN'],
-    ['scoped peer', true, '192.0.2.10', {
-      [PEER_AUTH_HEADER]: derivePeerAuthToken('a'.repeat(32), 'example-instance'), [PEER_INSTANCE_HEADER]: 'example-instance',
-    }, 403, 'PEER_SCOPE_FORBIDDEN'],
-  ])('refuses %s before approval persistence or saved-key execution', async (_name, enabled, address, headers, status, code) => {
-    auth.enabled = enabled;
-    const app = appFor(address);
-    const review = await post(app, actionPath('review'), { state: 'approved' }, headers);
-    expect(review.status, JSON.stringify(review.body)).toBe(status);
-    expect(review.body.code).toBe(code);
+// The refusal/principal matrix lives in services/authGate.test.js and
+// hostControlCoverage.test.js; this keeps one refusal and the real consumer workflow.
+describe('Stacker News review and publication behind the default-deny gate (#16114)', () => {
+  it('refuses a remote caller before approval persistence or saved-key execution, for any case or slash spelling', async () => {
+    const app = appFor();
+    const review = await post(app, `${actionPath('review').toUpperCase()}/`, { state: 'approved' });
+    expect([review.status, review.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     expect(action.state).toBe('pending_review');
 
     action = seedAction('approved');
-    const execute = await post(app, actionPath('execute'), {}, headers);
-    expect(execute.status, JSON.stringify(execute.body)).toBe(status);
-    expect(execute.body.code).toBe(code);
+    const execute = await post(app, actionPath('execute'), {});
+    expect([execute.status, execute.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
     expect(action.state).toBe('approved');
     expect(storage.query).not.toHaveBeenCalled();
     expect(decryptValue).not.toHaveBeenCalled();
@@ -158,26 +126,16 @@ describe('Stacker News review and publication authority', () => {
     expect(events).toEqual([]);
   });
 
-  it('protects Express case and trailing-slash aliases and rejected reviews too', async () => {
-    const app = appFor();
-    const review = await post(app, `${actionPath('review').toUpperCase()}/`, { state: 'rejected' });
-    const execute = await post(app, `${actionPath('execute').toUpperCase()}/`);
-    expect(review.status).toBe(403);
-    expect(execute.status).toBe(403);
-    expect(storage.query).not.toHaveBeenCalled();
-  });
-
   it.each([
-    ['local', 'publish_comment'], ['operator session', 'publish_post'], ['delegated agent', 'publish_comment'],
+    ['local', 'publish_comment'], ['delegated agent', 'publish_post'],
   ])('preserves %s review and execution through the real consumer', async (principal, kind) => {
     const headers = {};
     if (principal !== 'local') {
-      const session = await createSession({ label: principal === 'delegated agent' ? 'agent' : 'operator' });
+      const session = await createSession({ label: 'agent' });
       auth.enabled = true;
-      if (principal === 'delegated agent') headers.Authorization = `Bearer ${session.token}`;
-      else headers.Cookie = `portos_auth=${session.token}`;
+      headers.Authorization = `Bearer ${session.token}`;
     }
-    const app = appFor(principal === 'operator session' ? '192.0.2.10' : '127.0.0.1');
+    const app = appFor('127.0.0.1');
     const payload = kind === 'publish_post' ? { title: 'Example title', body: 'Example post' } : { body: 'Example reply' };
     const created = await post(app, '/api/stacker-news/actions', {
       accountId: account.id, territoryId: territory.id, kind, payload,
@@ -198,17 +156,10 @@ describe('Stacker News review and publication authority', () => {
     expect(events.map((event) => event[2])).toEqual(['pending_review', 'approved', 'executing', 'completed']);
   });
 
-  it('keeps remote action reads available and lets a local caller prepare a draft without granting approval', async () => {
-    const app = appFor();
-    const read = await request(app).get(`/api/stacker-news/accounts/${account.id}/actions`);
-    expect(read.status).toBe(200);
-    const draftBody = {
+  it('lets a local caller prepare a draft without granting approval', async () => {
+    const draft = await post(appFor('127.0.0.1'), '/api/stacker-news/actions', {
       accountId: account.id, itemId: item.id, kind: 'draft_comment', payload: { body: 'Example local draft' },
-    };
-    const refused = await post(app, '/api/stacker-news/actions', draftBody);
-    expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    expect(events).toEqual([]);
-    const draft = await post(appFor('127.0.0.1'), '/api/stacker-news/actions', draftBody);
+    });
     expect(draft.status, JSON.stringify(draft.body)).toBe(201);
     expect(draft.body.state).toBe('pending_review');
     expect(executeStackerNewsOperation).not.toHaveBeenCalled();

@@ -38,13 +38,14 @@ import { CD_MAX_SCENE_RETRIES } from '../creativeDirectorPrompts.js';
 import { extractLastFrame, sampleEvaluationFrames } from '../videoGen/local.js';
 import { VIDEO_GEN_MODE } from '../videoGen/modes.js';
 import { videoBackendJobParams, resolveVideoBackendPin } from '../videoGen/backendPin.js';
-import { mediaJobEvents } from '../mediaJobQueue/index.js';
+import { mediaJobEvents, getJob } from '../mediaJobQueue/index.js';
 import { enqueueUnattendedMediaJob, hasConfiguredMediaRoute } from '../federatedMedia/defaultRouting.js';
 import { getSettings } from '../settings.js';
 import { updateScene, updateProject, getProject } from './local.js';
 import { dispatchSceneEvaluation } from './sceneEvaluator.js';
 import { videoAudioIsDisabled } from './videoAudio.js';
 import { logFailureWithStack } from '../../lib/failureLogging.js';
+import { addItem } from '../mediaCollections.js';
 
 // Max render+eval attempts per scene (shared with the evaluator so render-retry
 // and eval-retry caps can't silently diverge — both bump the same scene.retryCount).
@@ -329,7 +330,6 @@ export async function runSceneRender(project, scene) {
   mediaJobEvents.on('failed', onFailed);
   mediaJobEvents.on('canceled', onCanceled);
   if (project.workspace === 'video') {
-    const { getJob } = await import('../mediaJobQueue/index.js');
     const settled = getJob(jobId);
     if (settled?.status === 'completed') onCompleted(settled);
     if (settled?.status === 'failed') onFailed(settled);
@@ -413,7 +413,6 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
       },
     });
     if (fresh.collectionId) {
-      const { addItem } = await import('../mediaCollections.js');
       await addItem(fresh.collectionId, { kind: 'video', ref: jobId })
         .catch((e) => console.log(`⚠️ CD auto-accept addItem failed: ${e.message}`));
     }

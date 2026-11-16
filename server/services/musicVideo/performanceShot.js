@@ -56,6 +56,7 @@ import { getProject } from './projects.js';
 import { clipLocks, nameShots } from './productionReview.js';
 import { assertVocalStemMatchesSong, resolveVocalStemPath } from './vocalStem.js';
 
+import { getTrack } from '../tracks/index.js';
 export const SHOT_INSTRUCTION_VERSION = 2;
 
 const hashFile = (path) => new Promise((resolve, reject) => {
@@ -130,7 +131,6 @@ function legacyMasterLookup(project, masterPath) {
     if (candidates) return candidates;
     candidates = [];
     if (!project?.trackId) return candidates;
-    const { getTrack } = await import('../tracks/index.js');
     const track = await getTrack(project.trackId).catch(() => null);
     const seen = new Set([masterPath]);
     for (const render of Array.isArray(track?.renders) ? track.renders : []) {

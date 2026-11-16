@@ -5,7 +5,7 @@
  * Scene-take review + external-asset handoff for the Music Video board (#8965): serialized select /
  * reject / note / gallery-import take mutations folded back as scene patches, the handoff manifest
  * download, and the handoff import (gallery upload per file, then scene association by file tag with
- * provider provenance). Returns `{ busy, selectTake, reviewTake, importTake, exportHandoff,
+ * provider provenance). Returns `{ busy, pending, selectTake, reviewTake, importTake, exportHandoff,
  * importHandoffFiles }`. Use when: The Music Video board's take strips, contact sheet and handoff row
  * — don't re-sequence take mutations per call site.
  */
@@ -28,8 +28,8 @@ import {
   importMusicVideoHandoff,
 } from '../services/apiMusicVideo.js';
 import { uploadGalleryImage } from '../services/apiSystem.js';
-import socket from '../services/socket.js';
-import { selectTakePatch, reviewTakePatch, markTakeAssetMarks } from '../lib/musicVideoTakes.js';
+import { ownWrite } from '../services/socketWriteOrigin.js';
+import { selectTakePatch, reviewTakePatch, markTakeAssetMarks, takeControl, reviewTakeControl } from '../lib/musicVideoTakes.js';
 import { handheldVideo, trimVideo, uploadGalleryVideo } from '../services/apiImageVideo.js';
 import { downloadBlob } from '../lib/downloadBlob.js';
 import { validateImageFile } from '../utils/fileUpload.js';
@@ -64,12 +64,14 @@ const handoffBundleFilename = (name) => `${handoffSlug(name)}-handoff.zip`;
  * is folded in only when no later decision on that shot is still queued (that
  * one's reply is fresher), and a refused one reloads the project. Each request
  * names this tab's socket, so the broadcast of its own change is not refetched.
+ * `writeMark()` / `settledSince(mark)` let a board edit tell whether a take decision started or is
+ * still running while it was in flight: then its reply may predate that decision, and it reloads.
  *
  * Handoff import uploads each picked file through the ordinary gallery upload
  * routes (image → data/images, video → video history), then asks the server to
  * associate them with scenes by the file tags the exported manifest assigned.
  */
-export default function useMusicVideoTakes({ project, applyScenePatch, patchProject = null, reloadProject = null }) {
+export default function useMusicVideoTakes({ project, applyScenePatch, patchProject = null, reloadProject = null, applyEdit = null }) {
   const [busy, setBusy] = useState(false);
   const chainRef = useRef(Promise.resolve());
   const [reconcileError, setReconcileError] = useState(null);
@@ -84,7 +86,10 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
     else queuedRef.current.delete(sceneId);
   };
   // This tab's own writes: the server names it on the change broadcast, so the page skips that refetch.
-  const own = () => ({ silent: true, ...(socket.id ? { headers: { 'X-PortOS-Origin': socket.id } } : {}) });
+  const own = () => ownWrite();
+  // Every take decision started, and those not yet answered (see writeMark / settledSince).
+  const startedRef = useRef(0);
+  const runningRef = useRef(0);
 
   const applyScene = (projectId, scene) => !queuedRef.current.has(scene.sceneId) && applyScenePatch?.(projectId, scene.sceneId, {
     referenceImageId: scene.referenceImageId ?? null,
@@ -93,17 +98,47 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
     takes: scene.takes || [],
   });
 
+  // The take controls waiting on a reply, by `control` key (`pendingKey`): the pressed control shows it is
+  // saving, and pressing it again before the reply sends nothing (#16306). The ref answers a double click
+  // that lands before React renders the disabled control.
+  const [pending, setPending] = useState(() => new Set());
+  const pendingRef = useRef(new Set());
+  const settlePending = (control) => {
+    if (!control) return;
+    pendingRef.current.delete(control);
+    setPending(new Set(pendingRef.current));
+  };
+
   // Serialize take mutations; a failure toasts and leaves the chain usable.
   // `optimistic(projectId)` applies the change before the request; a refusal then reloads the project.
-  // Resolves true when the change landed, false when it was refused.
-  const runTakeOp = (work, failMessage, { sceneId = null, optimistic = null } = {}) => {
+  // Resolves true when the change landed, false when it was refused or `control` was already waiting.
+  const runTakeOp = (work, failMessage, { sceneId = null, optimistic = null, control = null } = {}) => {
     const projectId = project.id;
+    if (control) {
+      if (pendingRef.current.has(control)) return Promise.resolve(false);
+      pendingRef.current.add(control);
+      setPending(new Set(pendingRef.current));
+    }
     queue(sceneId, 1);
+    startedRef.current += 1;
+    runningRef.current += 1;
     optimistic?.(projectId);
     const run = chainRef.current.then(() => work(projectId));
-    chainRef.current = run.then((scene) => { queue(sceneId, -1); if (scene) applyScene(projectId, scene); return true; })
+    chainRef.current = run.then((scene) => {
+      // A reply that carries the edit result also corrects readiness and the neighbours' take staleness. Its
+      // copy of the shots predates any decision still queued behind this one, so then only this shot is patched.
+      const alone = runningRef.current === 1;
+      runningRef.current -= 1;
+      queue(sceneId, -1);
+      if (scene?.edit && applyEdit && alone) applyEdit(projectId, scene.edit);
+      else if (scene) applyScene(projectId, scene);
+      settlePending(control);
+      return true;
+    })
       .catch((err) => {
+        runningRef.current -= 1;
         queue(sceneId, -1);
+        settlePending(control);
         toast.error(err?.message || failMessage);
         // Back to the saved record, read once the decisions queued behind this one land.
         // `reloadProject(fresh)` applies it (the page keeps shot text typed and not yet saved).
@@ -148,13 +183,17 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
   const selectTake = (scene, take) => runTakeOp(
     (projectId) => selectMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, own()),
     'Failed to select take',
-    { sceneId: scene.sceneId, optimistic: (projectId) => applyScenePatch?.(projectId, scene.sceneId, (current) => selectTakePatch(current, take)) },
+    { sceneId: scene.sceneId, control: takeControl.select(scene, take), optimistic: (projectId) => applyScenePatch?.(projectId, scene.sceneId, (current) => selectTakePatch(current, take)) },
   );
 
   // An unused still or clip from the project's pool becomes this shot's selection (with its partner, when picked).
   // The still's frame prompt comes with it, so the start or end prompt shows what made the picture.
+  // Its reply carries the edit result: the placed shot, any shot whose takes went stale, and readiness.
   const placePoolItem = (scene, pick) => runTakeOp(
-    (projectId) => placeMusicVideoPoolItem(projectId, scene.sceneId, pick, { silent: true }).then(({ scene: placed }) => {
+    (projectId) => placeMusicVideoPoolItem(projectId, scene.sceneId, pick, applyEdit ? own() : { silent: true }).then(({ scene: placed, edit }) => {
+      // Only when no other take decision is queued: one behind it would be painted over by this reply's
+      // copy of its shot, which predates it. Otherwise patch the shot as the other take decisions do.
+      if (applyEdit && edit && runningRef.current === 1) { applyEdit(projectId, edit); return null; }
       const field = pick.kind === 'endImage' ? 'endFramePrompt' : 'framePrompt';
       const stillPlaced = pick.kind !== 'video' || Boolean(pick.withAssetId);
       if (stillPlaced && placed[field] !== scene[field]) applyScenePatch?.(projectId, placed.sceneId, { [field]: placed[field] ?? null });
@@ -174,12 +213,16 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
     };
   };
   // A derived copy of the shot's clip (`make` resolves to the new gallery video) becomes a new clip take, and the selected one.
+  // Two writes, so each reply's edit result is applied in turn: the select's diff starts from the revision the add left.
   const deriveClipTake = (scene, make, source, failMessage) => {
     const provenance = clipProvenance(scene);
     return runTakeOp(
       (projectId) => make(scene.videoHistoryId)
-        .then(({ video }) => addMusicVideoSceneTake(projectId, scene.sceneId, { kind: 'video', assetId: video.id, source, ...provenance }, { silent: true }))
-        .then(({ take }) => selectMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, { silent: true })),
+        .then(({ video }) => addMusicVideoSceneTake(projectId, scene.sceneId, { kind: 'video', assetId: video.id, source, ...provenance }, own()))
+        .then(({ take, edit }) => {
+          if (edit && applyEdit && runningRef.current === 1) applyEdit(projectId, edit);
+          return selectMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, own());
+        }),
       failMessage,
     );
   };
@@ -190,7 +233,7 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
   // Continuing shot: the previous shot's last on-screen frame becomes this
   // scene's start frame; `keepStillAsEnd` keeps the current one as its end frame.
   const continueFromPrevious = (scene, { keepStillAsEnd = false } = {}) => runTakeOp(
-    (projectId) => continueMusicVideoSceneFromPrevious(projectId, scene.sceneId, { keepStillAsEnd }, { silent: true }).then((res) => res.scene),
+    (projectId) => continueMusicVideoSceneFromPrevious(projectId, scene.sceneId, { keepStillAsEnd }, own()).then(({ scene: started, edit }) => ({ ...started, edit })),
     'Failed to continue from the previous shot',
   );
 
@@ -198,19 +241,27 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
   const reviewTake = (scene, take, review) => runTakeOp(
     (projectId) => reviewMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, review, own()),
     'Failed to update take',
-    review.acknowledgeRenderQuality || review.confirmFrame ? {} : {
+    review.acknowledgeRenderQuality || review.confirmFrame ? { control: reviewTakeControl(scene, take, review) } : {
       sceneId: scene.sceneId,
+      control: reviewTakeControl(scene, take, review),
       optimistic: (projectId) => applyScenePatch?.(projectId, scene.sceneId, (current) => reviewTakePatch(current, take, review)),
     },
   );
 
   // A vision check can take minutes, so it stays off the serialized chain; its answer is the scene as saved after it.
   const [checking, setChecking] = useState(() => new Set());
+  // Its reply carries the edit result, applied unless a take decision started while the check ran: its optimistic
+  // change is not in the reply's copy of the shot, so then only the take list is patched, as before.
   const checkTake = (scene, take) => {
     const projectId = project.id;
+    const mark = startedRef.current;
     setChecking((prev) => new Set(prev).add(take.takeId));
-    return checkMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, { silent: true })
-      .then((saved) => { applyScene(projectId, saved); return true; })
+    return checkMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, own())
+      .then(({ edit, ...saved }) => {
+        if (edit && applyEdit && settledSince(mark)) applyEdit(projectId, edit);
+        else applyScene(projectId, saved);
+        return true;
+      })
       .catch((err) => { toast.error(err?.message || 'Failed to check the frame'); return false; })
       .finally(() => setChecking((prev) => { const next = new Set(prev); next.delete(take.takeId); return next; }));
   };
@@ -228,11 +279,12 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
       .then((result) => {
         // A later mark still queued answers with fresher marks; this reply keeps only its shots.
         const later = (queuedRef.current.get(MARKS_QUEUE) || 0) > 1;
+        if (result.edit && applyEdit && runningRef.current === 1) { applyEdit(projectId, result.edit); return null; }
         applyPoolMarks(projectId, later ? { scenes: result.scenes } : result);
         return null;
       }),
     'Failed to mark the take',
-    { sceneId: MARKS_QUEUE, optimistic: patchProject && ((projectId) => patchProject(projectId, (current) => ({ assetMarks: markTakeAssetMarks(current.assetMarks, take, mark) }))) },
+    { sceneId: MARKS_QUEUE, control: takeControl.mark(take), optimistic: patchProject && ((projectId) => patchProject(projectId, (current) => ({ assetMarks: markTakeAssetMarks(current.assetMarks, take, mark) }))) },
   );
 
   // Start and end frames trade places, each bringing its prompt along.
@@ -246,15 +298,19 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
 
   // Finalize a shot: every take other than its selected frame, end frame and clip is rejected (files kept).
   const rejectUnusedTakes = (scene) => runTakeOp(
-    (projectId) => rejectUnusedMusicVideoSceneTakes(projectId, scene.sceneId, own()).then((res) => res.scene),
+    (projectId) => rejectUnusedMusicVideoSceneTakes(projectId, scene.sceneId, own())
+      // The reply's edit result rides on the scene, as every other take decision's does: without it the page keeps the
+      // pre-decision revision and a later shot edit's reply is diffed against a record this tab never advanced to.
+      .then(({ scene: rejected, edit }) => (edit ? { ...rejected, edit } : rejected)),
     'Failed to reject the unused takes',
+    { control: takeControl.rejectUnused(scene) },
   );
 
   // A frame picked from (or uploaded into) the gallery for one scene.
   const importTake = (scene, item) => runTakeOp(
     (projectId) => addMusicVideoSceneTake(projectId, scene.sceneId, {
       kind: 'image', assetId: item.filename, source: 'imported',
-    }, { silent: true }).then((res) => res.scene),
+    }, own()).then(({ scene: imported, edit }) => ({ ...imported, edit })),
     'Failed to import take',
   );
 
@@ -264,7 +320,7 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
   const importClipTake = (scene, item) => runTakeOp(
     (projectId) => addMusicVideoSceneTake(projectId, scene.sceneId, {
       kind: 'video', assetId: item.id, source: 'imported',
-    }, { silent: true }).then((res) => res.scene),
+    }, own()).then(({ scene: imported, edit }) => ({ ...imported, edit })),
     'Failed to import clip take',
   );
 
@@ -323,5 +379,8 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
     if (failures.length) toast.error(failures.slice(0, 3).join(' · '));
   };
 
-  return { busy, reconcileError: reconcileError?.projectId === project.id ? reconcileError : null, reconciling, retryReconcile: () => reconcileProject(project.id), afterTakeWrites, selectTake, placePoolItem, trimClipTake, handheldClipTake, reviewTake, checkTake, checking, rejectUnusedTakes, swapFrames, markTake, applyPoolMarks, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
+  const writeMark = () => startedRef.current;
+  const settledSince = (mark) => startedRef.current === mark && runningRef.current === 0;
+
+  return { busy, pending, writeMark, settledSince, reconcileError: reconcileError?.projectId === project.id ? reconcileError : null, reconciling, retryReconcile: () => reconcileProject(project.id), afterTakeWrites, selectTake, placePoolItem, trimClipTake, handheldClipTake, reviewTake, checkTake, checking, rejectUnusedTakes, swapFrames, markTake, applyPoolMarks, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
 }

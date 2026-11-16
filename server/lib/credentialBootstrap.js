@@ -2,122 +2,32 @@
  * `resolveBootstrapEnv` runs a provider's optional envCommand to obtain KEY=value credentials for
  * CLI/TUI providers, parsing without evaluation and caching them for one minute.
  *
- * resolveBootstrapEnv(provider, { safetyProfile }) runs an optional `envCommand` argv for ordinary
- * provider runs or a no-tool review, parses KEY=value output without evaluation, and caches
- * credentials in memory for one minute — the alternative for a bootstrap that PRINTS credentials
- * rather than exec'ing the harness; a record that only names the wrap form is credentialed by the wrap
- * and gets `{}`. Generic support for a CLI/TUI provider whose auth is provisioned by an external CLI
- * at spawn time (e.g. a short-lived token for a proxy) rather than a static `apiKey` PortOS stores — a
- * `provider.credentialBootstrap: { setupCommand?, command, args?, harnessId?, argsSeparator? }`
- * record. `hasCredentialBootstrap(provider)` and `applyCredentialBootstrap(provider, command, args)`
- * (pure) return the command+args PortOS should actually spawn: `<command> <args...> <harnessId ??
- * command> [<argsSeparator>] <args...>` — the bootstrap CLI in front of the harness invocation, naming
- * the harness as `harnessId` when the bootstrap CLI uses its own identifier rather than the binary
- * name, and inserting `argsSeparator` (e.g. `--`) before the harness's own args when the bootstrap CLI
- * needs its flags kept apart from the wrapped program's. `resolveCliSpawn(provider, command, args,
- * childEnv)` composes that with Windows shim resolution (`bufferedSpawn.js`) for the three headless
- * spawn sites that repeated the same sequence (`runner.js`, `cliProviderRun.js`, `visionCli.js`) — the
- * argv analog of why `cliChildEnv.js`'s `buildCliChildEnv` exists. Every call site keeps resolving
- * `provider.command`/`args` unchanged for vendor detection, prompt-delivery convention, and the TUI's
- * own ready-text heuristics, and only asks this module for the pair handed to the literal
- * `spawn`/`pty.spawn` call — plus anything that observes the launching shell or PATH (missing-binary
- * detection, readiness probes), which must read the SPAWNED pair. The `sandboxed-actions` posture is
- * never wrapped — it executes contributor-supplied code inside a sandbox spelled entirely in the
- * recipe's argv, so nothing may sit in front of the harness and rewrite it; the `no-tool` postures
- * (the tool-free reviewer among them) ARE wrapped, because spawned bare they carry no credential at
- * all (#7720). The split lives in the helper, keyed on `safetyProfile`. The pure argv composition
- * lives in `aiToolkit/internal/credentialBootstrap.js` (`composeBootstrapSpawn` /
- * `hasCredentialBootstrap`, dependency-free), re-exported through here so the vendored toolkit's own
- * catalog probes compose the same shape without importing out. Every provider spawn site goes through
- * here — a bare-harness spawn runs with no credential and falls through to ambient vendor auth. Both
- * also return `wrapped`, because a wrapped spawn's direct child is the SUPERVISING wrapper rather than
- * the harness: `needsProcessGroup(wrapped)` says whether to spawn `detached` and kill with `{
- * processGroup: true }` (POSIX only — Windows' `taskkill /T` is already tree-wide), and
- * `processGroupKillable(child, processGroup)` adapts a child for the aiToolkit runner's external-run
- * registry, whose vendored `killProcessTree` has no group option. Without them a stop/timeout/cancel
- * signals the wrapper alone and leaves the harness running. `trackDetachedGroup(child, processGroup)`
- * / `signalDetachedGroups(signal, logFailure)` are the other side of that trade: detaching also moves
- * a child OUT of the server's own process group, so the shutdown handler sweeps this registry to keep
- * a signal aimed at that group (Ctrl-C at `npm start`) from orphaning one.
+ * Credential bootstrap wrapping for a CLI/TUI provider whose auth is minted by an external CLI at
+ * spawn time (no stored `apiKey`): the bootstrap CLI is spawned in front of the harness, as
+ * `<bootstrap> run <harness> <harness args...>`. PortOS never interprets the credential.
  *
- * Generic "credential bootstrap" wrapping for a CLI/TUI provider whose auth is
- * provisioned by an external CLI at spawn time, rather than a static `apiKey`
- * PortOS stores — e.g. a company-internal tool that mints a short-lived token
- * for an OpenAI-compatible proxy and execs the harness itself once it's ready.
- * PortOS never needs to understand the credential, the proxy, or how the
- * bootstrap CLI hands the token to its child: it only needs to spawn the
- * bootstrap CLI in front of the harness invocation instead of the harness
- * directly, exactly the way a person would type `<bootstrap> run <harness>
- * <harness args...>` at a shell.
+ * `provider.command`/`args` keep naming the harness everywhere (vendor detection, prompt
+ * delivery, TUI ready-text heuristics key off it). Spawn sites ask this module for the pair to hand
+ * to `spawn`/`pty.spawn` right before that call. Anything observing the launching shell (PATH
+ * probe, missing-binary detector) reads `spawnCommand`, never `command`.
  *
- * `provider.command`/`args` keep naming the actual harness (claude, opencode,
- * …) everywhere else in the codebase — vendor detection, prompt-delivery
- * convention, and the TUI's own ready-text heuristics all key off it, and
- * would silently break if the harness's identity were replaced by the
- * bootstrap binary's. So every spawn site keeps resolving the harness's own
- * command/args exactly as it does today, and only asks this module for the
- * pair to actually hand to `spawn`/`pty.spawn`, right before that call. The
- * one heuristic that must key on the SPAWNED pair instead is anything that
- * observes the launching shell rather than the harness — a login shell's
- * `command not found` names the bootstrap binary, so a PATH probe or a
- * missing-binary detector reads `spawnCommand`, never `command`.
+ * EVERY site spawning a provider's `command` must go through here: a bare harness runs with no
+ * credential and silently falls back to ambient vendor auth (the wrong backend).
  *
- * EVERY site that spawns a provider's `command` must go through here — a site
- * that spawns the bare harness runs it with no credential, and the harness
- * then falls through to whatever ambient vendor auth the machine has, sending
- * the prompt to the wrong backend with no error. Wrapped sites: the headless
- * runners (`runner.js`, `cliProviderRun.js`, `visionCli.js`, `askService.js`,
- * `opencodeTask.js`), the agent spawners (`agentCliSpawning.js`,
- * `agentTuiSpawning.js`), the one-shot TUI runner (`tuiPromptRunner.js`), the
- * "Launch in Shell" line (`tuiShellLaunch.js`), the TUI usage scrape
- * (`providerUsage.js`), the model-catalog probes behind Refresh Models (the
- * toolkit's `_execCliModelList` / `_fetchCodexModels`, which reach the shape
- * through the leaf below), and the readiness probes (`providerPrerequisites.js`,
- * the toolkit's `testProvider`).
+ * The `sandboxed-actions` posture (`isPublicReviewActionsProfile`) is NEVER wrapped: it executes
+ * contributor code inside the vendor sandbox spelled in the recipe's argv, and an intermediary able
+ * to rewrite that argv could turn a screened patch loose. The `no-tool` postures ARE wrapped: spawned
+ * bare they have no credential at all, and the wrap mints it into the child's env downstream of the
+ * `buildCliChildEnv` allowlist. `resolveBootstrapEnv` is the alternative for a bootstrap that PRINTS
+ * credentials rather than exec'ing the harness.
  *
- * The `sandboxed-actions` posture (`isPublicReviewActionsProfile`) is NEVER
- * wrapped, at any site. That stage EXECUTES contributor-supplied code inside
- * the vendor's own maintained sandbox, and the sandbox is spelled entirely in
- * the recipe's argv — so an intermediary free to rewrite that argv before the
- * harness ever sees it is the one place the wrap could turn a screened patch
- * loose on the machine. It fails closed.
+ * Wrapping also changes teardown: the direct child is the WRAPPER, so a per-pid SIGTERM can leave the
+ * harness running. `needsProcessGroup`, `trackDetachedGroup`, `signalDetachedGroups` and
+ * `processGroupKillable` are that half of the contract.
  *
- * The `no-tool` postures ARE wrapped, and must be (#7720). A reasoning-only
- * stage spawned bare runs with NO credential: it falls through to whatever
- * ambient vendor auth the machine happens to have — none, for a bootstrap-only
- * record — and the harness answers "no matching provider is authenticated",
- * which a review gate reads as a transient outage and waits out forever (the
- * stall #7660 exists to prevent). The wrap is also how a credential reaches
- * that stage at all: the bootstrap mints it into the environment of the child
- * IT spawns, downstream of the allowlist `buildCliChildEnv` already applied, so
- * PortOS's env boundary is untouched. Nothing about that posture is
- * argv-enforced in a way a credential minter threatens — its threat model is
- * "the model must not reach tools" — and the bootstrap binary is the operator's
- * own configuration, exactly as `provider.command` (which the posture already
- * spawns) is. `resolveBootstrapEnv` below stays available for a bootstrap that
- * PRINTS credentials rather than exec'ing the harness; it is an alternative to
- * the wrap for those records, not a precondition for a review.
- *
- * Both halves of that split live here rather than at each call site so a new
- * spawn site can't forget either one.
- *
- * Wrapping also changes TEARDOWN, so every site that spawns a long-lived child
- * here owes a second thing: the direct child is then the WRAPPER, and nothing
- * obliges it to `exec`-replace itself, so a per-pid SIGTERM can leave the
- * harness running. `needsProcessGroup` + `trackDetachedGroup` /
- * `signalDetachedGroups` / `processGroupKillable` below are that half of the
- * contract — see `needsProcessGroup` (#7496).
- *
- * The argv SHAPE is composed one layer down, by the dependency-free
- * `aiToolkit/internal/credentialBootstrap.js` leaf (which documents why it sits
- * there); this module adds the posture split above, the Windows resolution, and
- * the teardown half above.
- *
- * Imports only `bufferedSpawn.js`, `agentExecutionProfiles.js` (both of which
- * `cliProviderRun.js` already depends on directly) and that leaf, so any spawn
- * site — including the standalone `portos-autofixer` process via
- * `cliProviderRun.js` — can import this module without dragging in the rest of
- * the AI toolkit or the data layer.
+ * The argv shape is composed by the dependency-free `aiToolkit/internal/credentialBootstrap.js`
+ * leaf. This module imports only that leaf, `bufferedSpawn.js` and `agentExecutionProfiles.js`, so
+ * any spawn site (including the standalone autofixer) can import it cheaply.
  */
 
 import { IS_WIN32, resolveWindowsExecutable, prepareWindowsSafeSpawn, prepareCliSpawn, killProcessTree } from './bufferedSpawn.js';
@@ -135,14 +45,9 @@ const bootstrapEnvCache = new Map();
 const BOOTSTRAP_ENV_TTL_MS = 60_000;
 
 /**
- * Materialize credentials independently of a review, for a bootstrap that
- * PRINTS `KEY=value` assignments rather than exec'ing the harness itself. The
- * command gets neither the prompt nor the enforced harness argv. Ordinary provider runs and no-tool
- * callers may opt in; sandboxed public actions must never acquire these credentials.
- *
- * Optional: a record that only names the ordinary wrap form is credentialed by
- * the wrap (see module doc), and returns `{}` here. Nothing about a review
- * requires an `envCommand`.
+ * Materialize credentials for a bootstrap that PRINTS `KEY=value` assignments rather than exec'ing
+ * the harness. The command gets neither the prompt nor the harness argv. Sandboxed public actions
+ * must never acquire these credentials. Returns `{}` when no `envCommand` is configured.
  */
 export async function resolveBootstrapEnv(provider, { safetyProfile = null, timeoutMs = 15_000, signal = undefined } = {}) {
   if (signal?.aborted) throw new Error('Bootstrap credential command cancelled.');
@@ -165,8 +70,7 @@ export async function resolveBootstrapEnv(provider, { safetyProfile = null, time
   const childEnv = withSpawnCwdEnv({ ...process.env, ...provider.envVars }, cwd);
   const spawnConfig = prepareCliSpawn(argv[0], argv.slice(1), childEnv);
   const env = await new Promise((resolve, reject) => {
-    // execFile never evaluates output or invokes a shell. Bound runtime and
-    // output, and never propagate stderr/stdout or the command in an error.
+    // No shell, bounded runtime/output, and errors never carry stderr/stdout or the command.
     execFile(spawnConfig.command, spawnConfig.args, {
       cwd, env: childEnv,
       shell: false, timeout: Math.max(1, Math.min(15_000, timeoutMs)), signal, killSignal: 'SIGKILL', maxBuffer: 64 * 1024,
@@ -186,61 +90,33 @@ export async function resolveBootstrapEnv(provider, { safetyProfile = null, time
 }
 
 /**
- * The command+args PortOS should actually spawn for this provider: the
- * bootstrap CLI in front of the harness invocation when configured, or the
- * harness invocation unchanged otherwise. Pure — never touches the filesystem
- * or PATH; Windows shim resolution still happens downstream, against whichever
- * command this returns.
- *
- * The shape it composes — and why `harnessId` and `argsSeparator` exist — is
- * documented on `composeBootstrapSpawn`. What this adds is the safety skip: the
- * `sandboxed-actions` posture, and only it, is returned UNWRAPPED (see module
- * doc). A `no-tool` posture wraps like any other spawn, because a
- * reasoning-only stage spawned bare has no credential at all.
+ * The command+args to actually spawn: the bootstrap CLI in front of the harness when configured,
+ * else the harness unchanged. Pure; Windows shim resolution happens downstream. The shape is
+ * documented on `composeBootstrapSpawn`; this adds the `sandboxed-actions` skip (see module doc).
  *
  * @param {{credentialBootstrap?: {command: string, args?: string[], harnessId?: string, argsSeparator?: string}}|null|undefined} provider
  * @param {string} command - the harness binary PortOS would otherwise spawn
  * @param {string[]} [args] - the harness's own argv
- * `wrapped` reports whether the wrap actually applied — including the
- * actions-posture skip, so a posture that is deliberately NOT wrapped also keeps
- * the unwrapped teardown. It matters for process teardown, not argv: once a
- * bootstrap CLI sits in front of the harness, the direct child PortOS holds is
- * the WRAPPER, and `<bootstrap> run <harness> -- <args>` is the shape of a
- * supervising parent. A plain SIGTERM to the direct child then leaves the
- * harness running. See `needsProcessGroup` (#7496).
+ * `wrapped` reports whether the wrap applied (false for the actions-posture skip) and drives
+ * teardown: see `needsProcessGroup`.
  *
  * @param {{safetyProfile?: string|null}} [options] - the run's execution
  *   profile; the `sandboxed-actions` posture is returned unwrapped (see module doc)
  * @returns {{command: string, args: string[], wrapped: boolean}}
  */
 export function applyCredentialBootstrap(provider, command, args, { safetyProfile = null } = {}) {
-  // The skipped posture composes against NO provider rather than short-circuiting,
-  // so argv normalization — and the `wrapped` flag teardown keys on — is stated
-  // in exactly one place.
+  // The skipped posture composes against NO provider so argv normalization and `wrapped` stay in one place.
   return composeBootstrapSpawn(isPublicReviewActionsProfile(safetyProfile) ? null : provider, command, args);
 }
 
 /**
- * Should this spawn get its own process group, so stop/timeout/cancel reaches
- * the harness BEHIND the bootstrap wrapper and not just the wrapper itself?
+ * Should this spawn get its own process group, so stop/timeout/cancel reaches the harness BEHIND
+ * the bootstrap wrapper? A surviving harness keeps running, possibly with a minted credential,
+ * after the run is finalized. On POSIX a per-pid signal misses it when the wrapper doesn't forward
+ * SIGTERM; `detached: true` lets `killProcessTree(child, sig, { processGroup: true })` signal both.
  *
- * Stop/timeout/cancel is a safety control: a harness that survives it keeps
- * running — possibly with `--dangerously-skip-permissions` in a worktree,
- * holding a freshly minted credential — after PortOS has finalized the run and
- * released the lane. On POSIX a signal to the direct child's pid reaches only
- * that pid, so a forking wrapper that does not forward SIGTERM orphans the
- * harness. Spawning `detached: true` puts wrapper and harness in one process
- * group that `killProcessTree(child, sig, { processGroup: true })` signals
- * whole.
- *
- * POSIX-only, deliberately:
- *   - On Windows `killProcessTree` already uses `taskkill /T`, which is
- *     tree-wide rather than group-based, so the hole does not exist there.
- *   - `detached: true` on Windows opens a new console window per spawn.
- *
- * False for an unwrapped spawn — including the `sandboxed-actions` posture,
- * which is never wrapped — so nothing changes for those: the harness is the
- * direct child there and today's per-pid signal is exact.
+ * POSIX-only: Windows `taskkill /T` is already tree-wide and `detached` opens a console window per
+ * spawn. False for unwrapped spawns, where the harness is the direct child.
  *
  * @param {boolean} wrapped - the `wrapped` flag from applyCredentialBootstrap/resolveCliSpawn
  * @param {boolean} [isWin32] - injectable for tests; defaults to the real platform
@@ -251,37 +127,19 @@ export function needsProcessGroup(wrapped, isWin32 = IS_WIN32) {
 }
 
 /**
- * pids of the children this process spawned into their own process group.
- *
- * Detaching is what makes stop/timeout/cancel reach the harness, but it also
- * moves the child OUT of the server's process group — so a shutdown driven by a
- * signal aimed at THAT group (Ctrl-C at an `npm start` terminal, `kill -<pgid>`)
- * no longer reaches it. pm2's TreeKill walks the pid tree and is unaffected.
- * This set is what lets the shutdown handler restore exactly that lost reach,
- * across every detached spawn site at once, rather than each registry (agents,
- * runs, vision calls, ask calls) having to be swept separately and one forgotten.
+ * pids of children spawned into their own process group. Detaching moves them out of the server's
+ * group, so a group-aimed shutdown signal (Ctrl-C, `kill -<pgid>`) no longer reaches them; the
+ * shutdown handler sweeps this set instead of every per-feature registry.
  */
 const detachedGroupPids = new Set();
 
 /**
- * Remember a detached child's process group until it closes. No-op — and the
- * child is returned untouched — when the spawn was not detached.
+ * Remember a detached child's process group until it closes; returns the child untouched, and does
+ * nothing when the spawn was not detached. Keyed by pid so the sweep needs only `process.kill`.
  *
- * Keyed by pid rather than by handle so the shutdown sweep needs nothing but
- * `process.kill`.
- *
- * Cleared on `close` — NOT on `exit`, and adding `exit` would defeat the whole
- * point. `exit` fires when the WRAPPER is reaped; `close` waits for its stdio to
- * close, which the harness is still holding precisely in the case this registry
- * exists for (a wrapper that forked and left the harness running). Forgetting the
- * group at `exit` would drop it exactly when the harness is its only member —
- * the orphan we are trying to reach.
- *
- * That deferral does not risk signalling a recycled pid: `kill(-pid)` addresses a
- * process GROUP, and a pgid cannot be reallocated while its group still has a
- * member. So as long as anything in the group is alive the number stays ours,
- * and once the group empties the harness's descriptors are closed, so `close`
- * has fired. `error` covers a child that never started and will emit neither.
+ * Cleared on `close`, NOT `exit`: `exit` fires when the wrapper is reaped, while `close` waits for
+ * stdio the orphaned harness still holds. A pgid cannot be recycled while its group has a member,
+ * so deferring is safe. `error` covers a child that never started.
  *
  * @template T
  * @param {T & {pid?: number, once?: Function}} child
@@ -299,9 +157,8 @@ export function trackDetachedGroup(child, processGroup) {
 }
 
 /**
- * SIGTERM every live detached process group. Best-effort and synchronous: it
- * runs inside the graceful-shutdown window, where an already-dead group (ESRCH)
- * is not a fault and nothing may propagate out of a signal handler.
+ * SIGTERM every live detached process group. Best-effort and synchronous (runs in the shutdown
+ * window): an already-dead group (ESRCH) is not a fault and nothing may escape a signal handler.
  *
  * @param {NodeJS.Signals} [signal]
  * @param {(label: string, err: Error) => void} [logFailure]
@@ -322,18 +179,11 @@ export function resetDetachedGroupsForTests() {
 }
 
 /**
- * Wrap a spawned child in the minimal `{ pid, killed, kill(signal) }` shape the
- * aiToolkit runner's external-run registry consumes (`registerExternalRun`),
- * so its `stopRun` — the /runs Stop button — signals the whole process group
- * instead of the wrapper alone.
- *
- * The toolkit carries its OWN self-contained `killProcessTree` with no
- * `processGroup` option (see `server/lib/aiToolkit/AGENTS.md` — that directory
- * imports nothing out to PortOS), and it reaches a non-ChildProcess killable
- * through the handle's own `.kill()`. Handing it this adapter is therefore how
- * a host-owned group kill reaches a toolkit-driven stop without editing the
- * vendored copy. Returns the child UNCHANGED when `processGroup` is false, so
- * an unwrapped run registers exactly what it registers today.
+ * Wrap a child in the `{ pid, killed, kill(signal) }` shape the aiToolkit external-run registry
+ * consumes (`registerExternalRun`), so its `stopRun` signals the whole process group. The vendored
+ * toolkit `killProcessTree` has no `processGroup` option and imports nothing from PortOS
+ * (`server/lib/aiToolkit/AGENTS.md`), but calls a non-ChildProcess handle's `.kill()`. Returns the
+ * child UNCHANGED when `processGroup` is false.
  *
  * @param {import('child_process').ChildProcess|{pid?: number, kill: Function}} child
  * @param {boolean} processGroup
@@ -348,17 +198,9 @@ export function processGroupKillable(child, processGroup) {
 }
 
 /**
- * `applyCredentialBootstrap` + Windows shim resolution in one call — the
- * shape every headless spawn site needs immediately before its literal
- * `spawn()` call. Mirrors why `cliChildEnv.js`'s `buildCliChildEnv` exists:
- * three sites (`runner.js`, `cliProviderRun.js`, `visionCli.js`) independently
- * repeated the same "wrap, then resolve, then prepare" sequence with the same
- * explanatory comment — precisely the copy-paste `cliChildEnv.js`'s own
- * docblock describes for env composition, one layer up for argv.
- *
- * TUI/PTY spawn sites (`agentTuiSpawning.js`, `tuiPromptRunner.js`) do their
- * own Windows resolution (or none) and are NOT expected to call this — see
- * their own `applyCredentialBootstrap` call sites.
+ * `applyCredentialBootstrap` + Windows shim resolution in one call, for headless spawn sites right
+ * before `spawn()`. TUI/PTY sites (`agentTuiSpawning.js`, `tuiPromptRunner.js`) do their own
+ * Windows resolution and call `applyCredentialBootstrap` directly.
  *
  * @param {object|null|undefined} provider
  * @param {string} command - the harness binary PortOS would otherwise spawn

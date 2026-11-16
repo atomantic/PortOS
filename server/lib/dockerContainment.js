@@ -1,13 +1,6 @@
 /**
  * Docker containment profile for untrusted install/build/test runs (#12844).
  *
- * Docker containment profile for untrusted install/build/test runs (#12844), pure: digest-pinned Node
- * images and Node-major selection, `buildDockerContainmentRunArgs` (read-only `/src`, work volume, no
- * host env, `--network none` for validate / per-run proxy network for install),
- * `assertDockerMountSource` (refuses engine sockets, the data dir, the home and credential stores),
- * the in-container driver that emits a tracked-file patch, volume-init/proxy/network argv and `.npmrc`
- * registry-host parsing. Runner: `services/dockerContainment.js`.
- *
  * Pure: no filesystem, process, docker or settings access. The executor
  * (`services/dockerContainment.js`) resolves realpaths, picks the engine and
  * runs the argv built here; `docs/CONTAINMENT.md` compares this profile with

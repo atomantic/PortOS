@@ -99,9 +99,6 @@ describe('planTargetDimensions', () => {
 });
 
 describe('contract constants', () => {
-  it('keeps lanczos first so it stays the historical default', () => {
-    expect(UPSCALE_METHODS).toEqual(['lanczos', 'ltx']);
-  });
 
   it('maps each supported host class to the runtime that carries the adapter', () => {
     expect(ltxUpscaleRuntimeId('darwin')).toBe('ltx25');

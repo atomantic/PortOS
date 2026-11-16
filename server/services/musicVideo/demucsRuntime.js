@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { isAppleSilicon } from '../../lib/platform.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { runStreamingCommand } from '../../lib/streamingSpawn.js';
+import { whichFirst } from '../../lib/processEnv.js';
 
 const LOCK = fileURLToPath(new URL('../../../scripts/requirements-demucs.lock.txt', import.meta.url));
 const TIMEOUT = 45 * 60_000;
@@ -48,7 +49,6 @@ with tempfile.TemporaryDirectory(prefix='portos-demucs-probe-') as directory:
 
 async function defaultBasePython(plan) {
   const { classifyVenvBases, probePythonVersion, probePythonArch } = await import('../../lib/pythonSetup.js');
-  const { whichFirst } = await import('../../lib/processEnv.js');
   const { supported } = await classifyVenvBases().catch(() => ({ supported: [] }));
   const candidates = [...supported, await whichFirst('python3.11')].filter(Boolean);
   for (const candidate of candidates) {

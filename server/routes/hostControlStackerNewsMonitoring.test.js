@@ -1,8 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import express from 'express';
 import { EventEmitter } from 'node:events';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { expectAuthorizedWorkflows, expectRemoteRefusal } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 vi.mock('../lib/fileUtils.js', async (original) => makePathsProxy(await original(), {
@@ -31,140 +29,40 @@ vi.mock('../services/stackerNews.js', () => ({
   listTerritories: async () => state.territory ? [state.territory] : [],
 }));
 vi.mock('../services/stackerNewsScheduler.js', () => effects);
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
-import { createSession } from '../services/auth.js';
 import routes from './stackerNews.js';
 const accountId = '00000000-0000-4000-8000-000000000001';
 const territoryId = '00000000-0000-4000-8000-000000000002';
 const base = '/api/stacker-news';
-const mutations = [
-  ['post', '/accounts', { label: 'Example account', username: 'example_user' }, 'createAccount'],
-  ['patch', `/accounts/${accountId}`, {}, 'updateAccount'],
-  ['post', '/territories', { accountId, slug: 'example' }, 'createTerritory'],
-  ['patch', `/territories/${territoryId}`, {}, 'updateTerritory'],
+const mounts = [[base, routes]];
+// The refusal/principal matrix lives in services/authGate.test.js and
+// hostControlCoverage.test.js; every write here is gated by the method default,
+// so this keeps one refusal and the authorized workflow of each write.
+const workflows = [
+  ['post', `${base}/accounts/${accountId}/sync`, {}, effects.syncAccount, 200],
+  ['post', `${base}/accounts/${accountId}/browser-identity`, {}, effects.getBrowserIdentity, 200],
+  ['post', `${base}/accounts/${accountId}/verify`, {}, effects.verifyConnection, 200],
+  ['post', `${base}/accounts`, { label: 'Example account', username: 'example_user', monitoringEnabled: true }, effects.createAccount, 201],
+  ['patch', `${base}/accounts/${accountId}`, { monitoringEnabled: true }, effects.updateAccount, 200],
+  ['post', `${base}/territories`, { accountId, slug: 'example', monitoringEnabled: true }, effects.createTerritory, 201],
+  ['patch', `${base}/territories/${territoryId}`, { monitoringEnabled: true }, effects.updateTerritory, 200],
+  ['delete', `${base}/accounts/${accountId}`, {}, effects.deleteAccount, 204],
+  ['delete', `${base}/territories/${territoryId}`, {}, effects.deleteTerritory, 204],
 ];
-const appFor = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => { Object.defineProperty(req.socket, 'remoteAddress', { value: address }); next(); });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use(base, routes); app.use(errorMiddleware);
-  return app;
-};
-const call = (app, [method, path, body], headers = {}) => {
-  const pending = request(app)[method](base + path);
-  for (const [key, value] of Object.entries(headers)) pending.set(key, value);
-  return pending.send(body);
-};
 beforeEach(() => {
   vi.clearAllMocks(); auth.enabled = false;
   state.account = { id: accountId, enabled: true, monitoringEnabled: false };
   state.territory = { id: territoryId, accountId, monitoringEnabled: false };
 });
 
-describe('Stacker News browser and monitoring authority', () => {
-  it('refuses remote browser operations and explicit monitoring opt-ins before effects', async () => {
-    for (const suffix of ['sync', 'browser-identity', 'verify']) {
-      const res = await call(appFor(), ['post', `/accounts/${accountId}/${suffix}`, {}]);
-      expect([res.status, res.body.code], suffix).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    for (const [method, path, body] of mutations) {
-      const res = await call(appFor(), [method, path, { ...body, monitoringEnabled: true }]);
-      expect([res.status, res.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
+describe('Stacker News browser and monitoring writes behind the default-deny gate (#16114)', () => {
+  it('refuses a remote monitoring opt-in before any effect', async () => {
+    await expectRemoteRefusal(mounts, ['patch', `${base}/accounts/${accountId}`, { monitoringEnabled: true }, effects.updateAccount]);
     for (const effect of Object.values(effects)) expect(effect).not.toHaveBeenCalled();
   });
 
-  it('preserves local, operator-session and delegated-agent browser operations and monitoring opt-ins', async () => {
-    const operator = await createSession();
-    const agent = await createSession({ label: 'agent' });
-    for (const [enabled, address, headers] of [
-      [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Cookie: `portos_auth=${operator.token}` }],
-      [true, '127.0.0.1', { Authorization: `Bearer ${agent.token}` }],
-    ]) {
-      auth.enabled = enabled;
-      for (const suffix of ['sync', 'browser-identity', 'verify']) {
-        const res = await call(appFor(address), ['post', `/accounts/${accountId}/${suffix}`, {}], headers);
-        expect(res.status, suffix).toBe(200);
-      }
-      for (const [method, path, body, effect] of mutations) {
-        effects[effect].mockClear();
-        const res = await call(appFor(address), [method, path, { ...body, monitoringEnabled: true }], headers);
-        expect(res.status, path).toBe(method === 'post' ? 201 : 200);
-        expect(effects[effect]).toHaveBeenCalledOnce();
-      }
-    }
-    expect(effects.syncAccount).toHaveBeenCalledTimes(3);
-    expect(effects.verifyConnection).toHaveBeenCalledTimes(3);
-    expect(effects.getBrowserIdentity).toHaveBeenCalledTimes(3);
-    expect(effects.reconcileStackerNewsSchedulers).toHaveBeenCalledTimes(12);
-  });
-
-  it('stores unchanged monitoring, labels, disabling and deletes for a local caller and refuses them remotely', async () => {
-    state.account.monitoringEnabled = true;
-    state.territory.monitoringEnabled = true;
-    for (const [method, path, body, effect] of mutations) {
-      for (const addition of [{ monitoringEnabled: false }, { label: 'Changed label' }]) {
-        // Creating an inherited territory under an enabled account is an opt-in.
-        if (path === '/territories' && addition.monitoringEnabled === undefined) continue;
-        const remote = await call(appFor(), [method, path, { ...body, ...addition }]);
-        expect([remote.status, remote.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-        expect(effects[effect], path).not.toHaveBeenCalled();
-        const res = await call(appFor('127.0.0.1'), [method, path, { ...body, ...addition }]);
-        expect(res.status, path).toBe(method === 'post' ? 201 : 200);
-        expect(effects[effect], path).toHaveBeenCalledOnce();
-        effects[effect].mockClear();
-      }
-    }
-    for (const [path, effect] of [[`/accounts/${accountId}`, 'deleteAccount'], [`/territories/${territoryId}`, 'deleteTerritory']]) {
-      const remote = await call(appFor(), ['delete', path, {}]);
-      expect([remote.status, remote.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      expect(effects[effect], path).not.toHaveBeenCalled();
-      expect((await call(appFor('127.0.0.1'), ['delete', path, {}])).status).toBe(204);
-      expect(effects[effect], path).toHaveBeenCalledOnce();
-    }
-  });
-
-  it('refuses inherited monitoring and re-enabling a disabled monitored account', async () => {
-    state.account.monitoringEnabled = true;
-    for (const data of [{}, { monitoringEnabled: null }]) {
-      const res = await call(appFor(), ['post', '/territories', { accountId, slug: 'example', ...data }]);
-      expect([res.status, res.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    const inherited = await call(appFor(), ['patch', `/territories/${territoryId}`, { monitoringEnabled: null }]);
-    expect([inherited.status, inherited.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    state.account.enabled = false;
-    for (const monitoringEnabled of [null, true]) {
-      state.territory.monitoringEnabled = monitoringEnabled;
-      const res = await call(appFor(), ['patch', `/accounts/${accountId}`, { enabled: true }]);
-      expect([res.status, res.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    for (const effect of Object.values(effects)) expect(effect).not.toHaveBeenCalled();
-  });
-
-  it('re-enables an account for a local caller when no territory would be monitored', async () => {
-    state.account.enabled = false;
-    state.account.monitoringEnabled = true;
-    for (const territory of [state.territory, null]) {
-      state.territory = territory;
-      expect((await call(appFor('127.0.0.1'), ['patch', `/accounts/${accountId}`, { enabled: true }])).status).toBe(200);
-    }
-    expect(effects.updateAccount).toHaveBeenCalledTimes(2);
-  });
-
-  it('stores dormant inheritance and re-enabling with all monitoring disabled for a local caller', async () => {
-    const local = appFor('127.0.0.1');
-    for (const operation of [
-      ['post', '/territories', { accountId, slug: 'example' }],
-      ['patch', `/territories/${territoryId}`, { monitoringEnabled: null }],
-    ]) expect((await call(local, operation)).status).toBe(operation[0] === 'post' ? 201 : 200);
-    state.account.enabled = false;
-    expect((await call(local, ['patch', `/accounts/${accountId}`, { enabled: true, monitoringEnabled: false }])).status).toBe(200);
-    // Re-saving an already inherited opt-in does not arm anything new.
-    state.account.enabled = true; state.account.monitoringEnabled = true; state.territory.monitoringEnabled = null;
-    expect((await call(local, ['patch', `/territories/${territoryId}`, { monitoringEnabled: null }])).status).toBe(200);
-    expect(effects.createTerritory).toHaveBeenCalledOnce();
-    expect(effects.updateTerritory).toHaveBeenCalledTimes(2);
-    expect(effects.updateAccount).toHaveBeenCalledOnce();
+  it('still runs browser operations, monitoring opt-ins and deletes for a local operator and an agent session', async () => {
+    await expectAuthorizedWorkflows({ auth, mounts, workflows });
+    // Each opt-in write re-reconciles the schedulers, once per principal.
+    expect(effects.reconcileStackerNewsSchedulers).toHaveBeenCalled();
   });
 });

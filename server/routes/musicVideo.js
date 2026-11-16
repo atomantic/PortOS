@@ -8,7 +8,7 @@
  * arranged against the beat grid".
  */
 
-import { musicVideoColorMatchMeasureSchema, musicVideoColorMatchReferenceUpdateSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoColorMatchMeasureSchema, musicVideoColorMatchReferenceUpdateSchema, musicVideoSongDraftSchema, musicVideoSongActionSchema, musicVideoSongSelectSchema, musicVideoSongFromTrackSchema, musicVideoSongSceneActionSchema, musicVideoMakingOfSelectionSchema } from '../lib/musicVideoValidation.js';
 import { activeDcp } from '../services/musicVideo/dcp.js';
 import { pipeline } from 'stream/promises';
 import { basename } from 'path';
@@ -17,9 +17,7 @@ import storyRoutes from './musicVideoStory.js';
 import festivalPacketRoutes from './musicVideoFestivalPacket.js';
 import researchSeedRoutes from './musicVideoResearchSeed.js';
 import blenderRoutes from './musicVideoBlender.js';
-import { musicVideoColdOpenAudioSchema, musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema } from '../lib/musicVideoValidation.js';
-import { productionReadiness } from '../services/musicVideo/productionReview.js';
-import { presentMusicVideoDependencies } from '../lib/musicVideoDependencies.js';
+import { musicVideoColdOpenAudioSchema, musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoProjectPatchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema } from '../lib/musicVideoValidation.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, musicVideoAudioTimingPreviewSchema, musicVideoAudioTimingApplySchema, musicVideoProjectCreateSchema, musicVideoProjectCloneSchema, musicVideoProjectUpdateSchema, musicVideoPacingRecutSchema, musicVideoPlanRequestSchema, musicVideoManualAnalysisSchema, musicVideoSectionsEditSchema, musicVideoTranscribeMidiRequestSchema, musicVideoLyricsImportSchema, musicVideoLyricsImportTrackSchema, musicVideoLyricsAlignSchema, musicVideoLyricsVerifySchema, musicVideoSongPrepareSchema, musicVideoTakeInputSchema, musicVideoHandoffImportSchema, musicVideoTreatmentUpdateSchema, musicVideoTreatmentCompileSchema, musicVideoTreatmentApplySchema, musicVideoTreatmentSyncShotSheetSchema, musicVideoSequenceRenderSchema, musicVideoSequenceTakeSchema, musicVideoTreatmentProofReviewSchema, musicVideoCodeGenerateSchema, isPaginationRequested, parsePagination } from '../lib/validation.js';
@@ -42,7 +40,6 @@ import { renderMusicVideo, attachRenderSseClient, cancelRender, getActiveRenderJ
 import { prepareCodeRender } from '../services/musicVideo/codeRender.js';
 import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../services/musicVideo/codeGeneration.js';
 import { getActivePublishKitBuild } from '../services/musicVideo/publishKit.js';
-import { presentProjectAutonomousRun } from '../services/musicVideo/autonomousService.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import { parseLyricCues } from '../services/musicVideo/timedText.js';
 import { attachLyricAlignSseClient, cancelLyricAlign, getActiveLyricAlignJobId, startLyricAlign } from '../services/musicVideo/lyricAlignJob.js';
@@ -51,7 +48,7 @@ import { importTrackLyrics, MAX_LYRIC_CUES } from '../services/musicVideo/trackL
 import { offsetLyricMarkers } from '../lib/lyricMarkers.js';
 import { updateTreatment, compileTreatment, previewTreatmentApply, applyTreatment, syncTreatmentFromShotSheet, reviewProof } from '../services/musicVideo/treatmentService.js';
 import { writeOriginScope } from '../lib/writeOrigin.js';
-import { presentProjectCastAndSets } from '../services/musicVideo/castAndSetsService.js';
+import { presentProjectForRead } from '../services/musicVideo/projectPresentation.js';
 import { summarizeMusicVideoProject, compareMusicVideoProjectsNewestFirst } from '../lib/musicVideoSummary.js';
 import { takeAssetExists } from '../services/musicVideo/takeAsset.js';
 import sceneRoutes from './musicVideoScenes.js';
@@ -62,6 +59,8 @@ import devArtifactRoutes from './musicVideoDevArtifacts.js';
 import runRoutes from './musicVideoRuns.js';
 import deliveryRoutes from './musicVideoDelivery.js';
 import compositionRoutes from './musicVideoComposition.js';
+import { getMusicVideoMediaPool, searchMusicVideoMediaPool, importMusicVideoPool, searchMediaLibraryForPool, addLibraryMediaToPool, deleteMusicVideoPoolAssets } from '../services/musicVideo/mediaPool.js';
+import { getMusicVideoOutroStats } from '../services/musicVideo/statsOutro.js';
 
 const router = Router();
 // A take decision's reply carries the change, so its own tab can skip the refetch its broadcast asks for.
@@ -79,47 +78,13 @@ router.use(writeOriginScope);
 const projectCreateSchema = musicVideoProjectCreateSchema.extend(recordRenderPinFields);
 const projectUpdateSchema = musicVideoProjectUpdateSchema.extend(recordRenderPinFields);
 
-// Backward-compatible by default: returns the full projects array. When a client
+// Unpaged, the list is every project's summary projection (#16210): full records of every
+// project ran past 100 MB, and nothing reads them; a full record is GET /:id. When a client
 // passes `limit`/`offset`, the response becomes the bounded
-// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+// `{ items, total, limit, offset }` envelope every paginated PortOS list shares, of full records.
 // `summary=1` (#10169) swaps each record for its bounded summary projection —
 // newest first, with a `nextCursor` — for the project index and header picker, so
 // they never load every project's scenes, runs and reviews.
-// Both pins are process-local, so only the server can say which stages a restart orphaned.
-// Approvals decide stage completion and only the server computes them (#10136), so the read
-// response carries `productionReadiness` — stages derive from one record, never "not done" while a
-// second request is in flight. GET /:id/production-review still serves the full review payload.
-// A restart archives a thumbnail paint without clearing `pending`. Heal on read,
-// and only when one is present, so a project list does not load the image stack.
-async function presentProjectForRead(project) {
-  let current = project;
-  if (project?.publishKit?.youtubeThumbnail?.pending) {
-    const { reconcileInterruptedYoutubeThumbnail } = await import('../services/musicVideo/youtubeThumbnail.js');
-    current = await reconcileInterruptedYoutubeThumbnail(project);
-  }
-  if (current?.castAndSets?.source === 'catalog') {
-    const { withCatalogCheckin } = await import('../services/musicVideo/catalogCheckin.js');
-    current = await withCatalogCheckin(current);
-  }
-  // A Blender film's Shots step is decided by renders on this machine's disk, which only the server can read.
-  let filmFinalStale = false;
-  if (current?.composition?.mode === 'blender') {
-    const { blenderFilmReadState } = await import('../services/musicVideo/blender/renderIndex.js');
-    const film = await blenderFilmReadState(current);
-    current = { ...current, blenderShots: film.shots };
-    filmFinalStale = film.finalStale === true;
-  }
-  const dependencies = presentMusicVideoDependencies(current);
-  // The final video is joined from shot renders the record does not hold, so its evidence cannot
-  // see a shot that went out of date or was rendered again since: the film's own reading adds that.
-  const presented = presentProjectAutonomousRun(presentProjectCastAndSets(filmFinalStale ? { ...dependencies, renderDependencyState: {
-    status: 'stale', reasons: [...new Set([...(dependencies.renderDependencyState?.reasons || []), 'Blender shots changed or were rendered again after this final was joined'])],
-  } } : dependencies));
-  // The track's audio can be replaced in place, so only the server can say the timing predates it (#14793).
-  const { projectSongAudioChange } = await import('../services/musicVideo/songAudio.js');
-  return { ...presented, productionReadiness: productionReadiness(presented), songAudioChange: await projectSongAudioChange(presented) };
-}
-
 router.get('/', asyncHandler(async (req, res) => {
   const query = validateRequest(musicVideoProjectListQuerySchema, req.query);
   const summary = query.summary === '1' || query.summary === 'true';
@@ -135,7 +100,8 @@ router.get('/', asyncHandler(async (req, res) => {
     const next = Math.min(page.offset + page.limit, page.total);
     return res.json({ ...page, items, ...(summary ? { nextCursor: next < page.total ? String(next) : null } : {}) });
   }
-  res.json(await Promise.all((await listProjects()).map((project) => presentProjectForRead(project))));
+  const presented = await Promise.all((await listProjects()).map((project) => presentProjectForRead(project)));
+  res.json(presented.map((project) => summarizeMusicVideoProject(project, project.productionReadiness)));
 }));
 
 // Sidebar sub-nav rows; registered before /:id so "names" is not read as an id.
@@ -167,7 +133,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const p = await requireProject(req.params.id);
   // Transient (never persisted): lets a reloaded page reattach to a running publishing-kit build.
   const activePublishKitBuild = getActivePublishKitBuild(p.id);
-  const presented = await presentProjectForRead(p);
+  const presented = await presentProjectForRead(p, { catalogCheckinResolved: true });
   const activeDcpBuild = activeDcp(p.id);
   res.json({ ...presented, ...(activePublishKitBuild ? { activePublishKitBuild } : {}), ...(activeDcpBuild ? { activeDcpBuild } : {}) });
 }));
@@ -179,38 +145,32 @@ router.post('/', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/song-revision', asyncHandler(async (req, res) => {
-  const { musicVideoSongDraftSchema } = await import('../lib/musicVideoValidation.js');
   const fields = validateRequest(musicVideoSongDraftSchema, req.body);
   const { saveSongRevision } = await import('../services/musicVideo/songRevision.js');
   res.json(await saveSongRevision(req.params.id, fields));
 }));
 router.post('/:id/song-revision/generate', asyncHandler(async (req, res) => {
-  const { musicVideoSongActionSchema } = await import('../lib/musicVideoValidation.js');
   const { revisionId } = validateRequest(musicVideoSongActionSchema, req.body);
   const { generateSongRevision } = await import('../services/musicVideo/songRevision.js');
   res.status(202).json(await generateSongRevision(req.params.id, revisionId));
 }));
 router.post('/:id/song-revision/cancel', asyncHandler(async (req, res) => {
-  const { musicVideoSongActionSchema } = await import('../lib/musicVideoValidation.js');
   const { revisionId } = validateRequest(musicVideoSongActionSchema, req.body);
   const { cancelSongRevision } = await import('../services/musicVideo/songRevision.js');
   res.json(await cancelSongRevision(req.params.id, revisionId));
 }));
 router.post('/:id/song-revision/select', asyncHandler(async (req, res) => {
-  const { musicVideoSongSelectSchema } = await import('../lib/musicVideoValidation.js');
   const { revisionId, songId } = validateRequest(musicVideoSongSelectSchema, req.body);
   const { selectSongRevision } = await import('../services/musicVideo/songRevision.js');
   res.json(await selectSongRevision(req.params.id, revisionId, songId));
 }));
 
 router.post('/:id/song-revision/track', asyncHandler(async (req, res) => {
-  const { musicVideoSongFromTrackSchema } = await import('../lib/musicVideoValidation.js');
   const { trackId } = validateRequest(musicVideoSongFromTrackSchema, req.body);
   const { reviseSongFromTrack } = await import('../services/musicVideo/songRevision.js');
   res.status(201).json(await reviseSongFromTrack(req.params.id, { trackId }));
 }));
 router.post('/:id/song-revision/scenes', asyncHandler(async (req, res) => {
-  const { musicVideoSongSceneActionSchema } = await import('../lib/musicVideoValidation.js');
   const body = validateRequest(musicVideoSongSceneActionSchema, req.body);
   const { resolveSongRevisionScenes } = await import('../services/musicVideo/songRevision.js');
   res.json(await resolveSongRevisionScenes(req.params.id, body));
@@ -235,8 +195,9 @@ router.patch('/:id', asyncHandler(async (req, res) => {
       }
     }
   }
-  const updated = await updateProject(req.params.id, data);
-  res.json(updated);
+  // `?edit=1`: a tab that applies board edits answers `{ edit }` where the patch allows it.
+  const answerEdit = validateRequest(musicVideoProjectPatchQuerySchema, req.query).edit === '1';
+  res.json(await (answerEdit ? updateProject(req.params.id, data, { edit: true }) : updateProject(req.params.id, data)));
 }));
 
 // Names references saved before catalog naming existed; answers only the labels it filled.
@@ -724,8 +685,7 @@ router.delete('/:id/film-looks/:lookId', asyncHandler(async (req, res) => {
 // before the song: the same mix the final render lays in front of it.
 router.post('/:id/cold-open/audio', asyncHandler(async (req, res) => {
   validateRequest(musicVideoColdOpenAudioSchema, req.body ?? {});
-  const [{ coldOpenPreviewAudio }, { requireProject }] = await Promise.all([
-    import('../services/musicVideo/coldOpen.js'), import('../services/musicVideo/requireProject.js')]);
+  const { coldOpenPreviewAudio } = await import('../services/musicVideo/coldOpen.js');
   const path = await coldOpenPreviewAudio(await requireProject(req.params.id));
   if (!path) throw new ServerError('No shot plays before the song', { status: 409, code: 'NO_COLD_OPEN' });
   res.json({ name: basename(path) });
@@ -793,14 +753,12 @@ router.get('/:id/making-of/catalog', asyncHandler(async (req, res) => {
 }));
 
 router.post('/making-of/preview', asyncHandler(async (req, res) => {
-  const { musicVideoMakingOfSelectionSchema } = await import('../lib/musicVideoValidation.js');
   const input = validateRequest(musicVideoMakingOfSelectionSchema, req.body ?? {});
   const { compileMakingOf } = await import('../services/musicVideo/makingOf.js');
   res.json(await compileMakingOf(input));
 }));
 
 router.post('/making-of/export', asyncHandler(async (req, res) => {
-  const { musicVideoMakingOfSelectionSchema } = await import('../lib/musicVideoValidation.js');
   const input = validateRequest(musicVideoMakingOfSelectionSchema, req.body ?? {});
   const { compileMakingOf } = await import('../services/musicVideo/makingOf.js');
   const { zip } = await compileMakingOf(input, { download: true });
@@ -833,7 +791,6 @@ router.post('/:id/pacing-recut', asyncHandler(async (req, res) => {
 // Every still and clip generated for this video, each naming the shots using it now (the shot card's Swap picker).
 router.get('/:id/media-pool', asyncHandler(async (req, res) => {
   const project = await requireProject(req.params.id);
-  const { getMusicVideoMediaPool } = await import('../services/musicVideo/mediaPool.js');
   res.json(await getMusicVideoMediaPool(project));
 }));
 
@@ -841,14 +798,12 @@ router.get('/:id/media-pool', asyncHandler(async (req, res) => {
 router.get('/:id/media-pool/search', asyncHandler(async (req, res) => {
   const { q } = validateRequest(musicVideoPoolSearchQuerySchema, req.query);
   const project = await requireProject(req.params.id);
-  const { searchMusicVideoMediaPool } = await import('../services/musicVideo/mediaPool.js');
   res.json({ items: await searchMusicVideoMediaPool(project, q) });
 }));
 
 // The cutting room floor outro's tally: what was made, kept and turned down for this video.
 router.get('/:id/stats-outro', asyncHandler(async (req, res) => {
   const project = await requireProject(req.params.id);
-  const { getMusicVideoOutroStats } = await import('../services/musicVideo/statsOutro.js');
   res.json({ stats: await getMusicVideoOutroStats(project) });
 }));
 
@@ -862,7 +817,7 @@ router.get('/:id/credits-prefill', asyncHandler(async (req, res) => {
 // The asset manager: mark unused stills and clips ★ ingredient / ✕ bad, or delete them from the library.
 router.patch('/:id/media-pool/marks', asyncHandler(async (req, res) => {
   const { items, mark, ...options } = validateRequest(musicVideoPoolMarkSchema, req.body);
-  res.json(await markMediaPoolAssets(req.params.id, items.map((item) => `${item.kind}:${item.assetId}`), mark, options));
+  res.json(await markMediaPoolAssets(req.params.id, items.map((item) => `${item.kind}:${item.assetId}`), mark, options, { edit: true }));
 }));
 
 // Bring an earlier draft's stills and clips into this video's assets (references; the draft is untouched).
@@ -871,7 +826,6 @@ router.post('/:id/media-pool/import', asyncHandler(async (req, res) => {
   if (fromProjectId === req.params.id) throw new ServerError('Pick another video', { status: 400, code: 'VALIDATION_ERROR' });
   const [project, from] = await Promise.all([getProject(req.params.id), getProject(fromProjectId)]);
   if (!project || !from) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  const { importMusicVideoPool, getMusicVideoMediaPool } = await import('../services/musicVideo/mediaPool.js');
   const result = await importMusicVideoPool(project, from);
   res.json({ ...result, items: (await getMusicVideoMediaPool(project)).items });
 }));
@@ -880,14 +834,12 @@ router.post('/:id/media-pool/import', asyncHandler(async (req, res) => {
 router.get('/:id/media-pool/library', asyncHandler(async (req, res) => {
   const { q } = validateRequest(musicVideoLibrarySearchQuerySchema, req.query);
   const project = await requireProject(req.params.id);
-  const { searchMediaLibraryForPool } = await import('../services/musicVideo/mediaPool.js');
   res.json(await searchMediaLibraryForPool(project, q));
 }));
 
 router.post('/:id/media-pool/add', asyncHandler(async (req, res) => {
   const { items } = validateRequest(musicVideoPoolAddSchema, req.body);
   const project = await requireProject(req.params.id);
-  const { addLibraryMediaToPool, getMusicVideoMediaPool } = await import('../services/musicVideo/mediaPool.js');
   const result = await addLibraryMediaToPool(project, items);
   res.json({ ...result, items: (await getMusicVideoMediaPool(project)).items });
 }));
@@ -895,7 +847,6 @@ router.post('/:id/media-pool/add', asyncHandler(async (req, res) => {
 router.post('/:id/media-pool/delete', asyncHandler(async (req, res) => {
   const { items } = validateRequest(musicVideoPoolDeleteSchema, req.body);
   const project = await requireProject(req.params.id);
-  const { deleteMusicVideoPoolAssets } = await import('../services/musicVideo/mediaPool.js');
   res.json(await deleteMusicVideoPoolAssets(project, items));
 }));
 

@@ -132,6 +132,7 @@ describe('Calendar account availability', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(screen.getByRole('button', { name: 'Retrying…' })).toBeDisabled();
     expect(screen.getByText(account.name)).toBeVisible();
+    await waitFor(() => expect(resolveRetry).toBeTypeOf('function'));
     const recovered = { ...account, id: 'recovered-account', name: 'Recovered Calendar' };
     await act(async () => resolveRetry([recovered]));
 
@@ -163,14 +164,11 @@ describe('Calendar account availability', () => {
     expect(screen.queryByText('No calendar accounts configured')).toBeNull();
   });
 
-  it('ignores a superseded mount read failure after the current snapshot succeeds', async () => {
-    let rejectFirst;
-    api.getCalendarAccounts.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject; }))
-      .mockResolvedValueOnce([account]);
+  it('reads once under StrictMode remounts and shows the snapshot without an alert', async () => {
+    api.getCalendarAccounts.mockResolvedValue([account]);
     renderCalendar('/calendar/config', true);
 
     expect(await screen.findByText(account.name)).toBeVisible();
-    await act(async () => rejectFirst(new Error('Superseded read')));
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByText('1 account')).toBeVisible();
   });
@@ -192,8 +190,9 @@ it('reconciles configuration without replacing an edited form and ignores obsole
   await act(async () => { changed(); });
   expect(input).toHaveValue('Unsaved calendar');
   await act(async () => { reconnect(); });
-  expect(await screen.findByText('Current calendar')).toBeVisible();
+  // Reads are single-flight: the newer reconnect read runs after the obsolete one settles and wins.
   await act(async () => resolveOld([account]));
+  expect(await screen.findByText('Current calendar')).toBeVisible();
   expect(screen.queryByText(account.name)).toBeNull();
   expect(input).toHaveValue('Unsaved calendar');
   mounted.unmount();

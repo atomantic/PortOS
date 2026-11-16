@@ -133,6 +133,19 @@ describe('claim ownership binding instructions (#10089)', () => {
   });
 });
 
+// The completion section is the last thing a claim agent reads; when it let a
+// merged slice end the run, multi-PR issues advanced one PR per manual launch.
+describe('multi-slice claim completion', () => {
+  it('keeps a merging claim working past its first merged slice', () => {
+    const merging = buildClaimFlowCompletionSection({ agentId: 'parent-example', isTui: true, sentinelPath: '/tmp/example.json' });
+    expect(merging).toContain('A merged slice is not the end of the claim');
+    expect(merging).toContain('never to leave remaining scope for a later run');
+    expect(merging).toContain('every PR or MR URL this run shipped');
+    expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', prStaysOpen: true }))
+      .not.toContain('A merged slice is not the end of the claim');
+  });
+});
+
 describe('hosting-provider merge instructions', () => {
   it('keeps assigned scope and provider authority without a second admission ceremony', () => {
     const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });

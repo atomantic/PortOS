@@ -2,21 +2,6 @@
  * Client-side facet classifier for the Sprite Manager's asset collection (#2931), mirroring the source
  * pipeline's `classify_asset()`.
  *
- * `classifySpriteAsset(path)` decodes a record-relative asset path into `{ family, status, role,
- * direction, runId }` — `status ∈ runtime/approved/candidate/superseded/rejected/source`, `role ∈
- * reference/strip/animation/frame/atlas/evidence/sprite/manifest` — and is total (an unknown path
- * degrades to `sprite`/`source` rather than throwing). `classifySpriteAssets(assets)` adds the one
- * facet only knowable across a listing: an approved asset below the highest `-vN` of its stem becomes
- * `superseded`. `groupSpriteAssetsByRole(assets)` returns render-ready `{ role, label, assets }`
- * sections in `SPRITE_ASSET_ROLES` order — it does NOT render a `manifest` group: each runtime atlas's
- * sidecar manifest is folded onto its atlas row as `row.manifest`, and other behind-the-scenes JSON is
- * omitted. `runtimeVersionDir(path)` / `isRuntimeVersionPath(path)` / `isRuntimeSidecarManifest(path)`
- * expose the `runtime/vN` grammar (the sidecar-pairing key and the "is this a build manifest"
- * predicate) so callers like `AssetInspector` reuse one definition instead of re-regexing. Also
- * exports `SPRITE_DIRECTIONS` (mirror of `server/services/sprites/prompts.js`) — the
- * `direction`/`runId` facets are what drive the collection's Regenerate and Edit-in-Loop-Trimmer
- * actions. Pure — no React, no I/O.
- *
  * Sprite asset facets (#2931) — classify a record-relative sprite asset path
  * into `{ family, status, role, direction, runId }` so the character asset
  * collection can group by what an asset *is* rather than by which directory it

@@ -3,13 +3,15 @@ import { act, renderHook } from '@testing-library/react';
 
 vi.mock('../services/apiMusicVideo.js', () => ({
   placeMusicVideoPoolItem: vi.fn(), selectMusicVideoSceneTake: vi.fn(), reviewMusicVideoSceneTake: vi.fn(),
-  markMusicVideoPoolAssets: vi.fn(), getMusicVideoProject: vi.fn(),
+  markMusicVideoPoolAssets: vi.fn(), getMusicVideoProject: vi.fn(), rejectUnusedMusicVideoSceneTakes: vi.fn(),
+  continueMusicVideoSceneFromPrevious: vi.fn(), checkMusicVideoSceneTake: vi.fn(),
 }));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('../services/socket.js', () => ({ default: { id: 'socket-example' } }));
 
-import { placeMusicVideoPoolItem, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, getMusicVideoProject } from '../services/apiMusicVideo.js';
+import { placeMusicVideoPoolItem, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, getMusicVideoProject, rejectUnusedMusicVideoSceneTakes, continueMusicVideoSceneFromPrevious, checkMusicVideoSceneTake } from '../services/apiMusicVideo.js';
 import useMusicVideoTakes from './useMusicVideoTakes.js';
+import { takeControl } from '../lib/musicVideoTakes.js';
 
 // A held reply: resolve it when the test says the server answered.
 const deferred = () => {
@@ -121,4 +123,83 @@ describe('useMusicVideoTakes decisions', () => {
     expect(board.current().referenceImageId).toBeNull();
   });
 
+});
+
+describe('useMusicVideoTakes rejectUnusedTakes', () => {
+  // Uniquely catches Reject unused dropping its reply's edit result: the board then keeps the pre-decision
+  // revision, so the next shot edit (Done) is diffed against a record this tab never advanced to.
+  it('hands the reply\'s edit result to the board', async () => {
+    const applyEdit = vi.fn();
+    const applyScenePatch = vi.fn();
+    const scene = { sceneId: 's1', takes: [] };
+    const edit = { updatedAt: '2026-01-02T00:00:00.000Z', baseUpdatedAt: '2026-01-01T00:00:00.000Z', sceneIds: ['s1'], scenes: [] };
+    rejectUnusedMusicVideoSceneTakes.mockResolvedValueOnce({ scene, rejected: 2, edit });
+    const { result } = renderHook(() => useMusicVideoTakes({ project: { id: 'mv-1' }, applyScenePatch, applyEdit }));
+    await act(() => result.current.rejectUnusedTakes(scene));
+    expect(applyEdit).toHaveBeenCalledWith('mv-1', edit);
+  });
+
+  // Uniquely catches #16306: a second press during a slow reply sending a second request, or the control
+  // never leaving its pending state, after either answer.
+  it('holds the pressed control pending until its reply and ignores a second press meanwhile', async () => {
+    const scene = { sceneId: 's1', takes: [] };
+    const reply = deferred();
+    rejectUnusedMusicVideoSceneTakes.mockReset().mockReturnValueOnce(reply.promise).mockRejectedValueOnce(new Error('Refused'));
+    const { result } = renderHook(() => useMusicVideoTakes({ project: { id: 'mv-1' }, applyScenePatch: vi.fn() }));
+    let first;
+    let second;
+    act(() => { first = result.current.rejectUnusedTakes(scene); second = result.current.rejectUnusedTakes(scene); });
+    expect(result.current.pending.has(takeControl.rejectUnused(scene))).toBe(true);
+    expect(await second).toBe(false);
+    reply.resolve({ scene, rejected: 1 });
+    await act(() => first);
+    expect(rejectUnusedMusicVideoSceneTakes).toHaveBeenCalledTimes(1);
+    expect(result.current.pending.size).toBe(0);
+    await act(() => result.current.rejectUnusedTakes(scene));
+    expect(rejectUnusedMusicVideoSceneTakes).toHaveBeenCalledTimes(2);
+    expect(result.current.pending.size).toBe(0);
+  });
+});
+
+const EDIT = { updatedAt: '2026-01-02T00:00:00.000Z', baseUpdatedAt: '2026-01-01T00:00:00.000Z', sceneIds: ['s1'], scenes: [] };
+const OWN = { silent: true, headers: { 'X-PortOS-Origin': 'socket-example' } };
+
+describe('useMusicVideoTakes edit results beyond the take decisions', () => {
+  // Uniquely catches Continue from previous patching only the shot: the board would keep the pre-continue revision.
+  it('applies the edit result of continuing from the previous shot, sent with this tab\'s origin', async () => {
+    const applyEdit = vi.fn();
+    const applyScenePatch = vi.fn();
+    const scene = { sceneId: 's1', takes: [] };
+    continueMusicVideoSceneFromPrevious.mockResolvedValueOnce({ scene, frame: { imageId: 'f.png' }, edit: EDIT });
+    const { result } = renderHook(() => useMusicVideoTakes({ project: { id: 'mv-1' }, applyScenePatch, applyEdit }));
+    await act(() => result.current.continueFromPrevious(scene, { keepStillAsEnd: true }));
+    expect(continueMusicVideoSceneFromPrevious).toHaveBeenCalledWith('mv-1', 's1', { keepStillAsEnd: true }, OWN);
+    expect(applyEdit).toHaveBeenCalledWith('mv-1', EDIT);
+    expect(applyScenePatch).not.toHaveBeenCalled();
+  });
+
+  // Uniquely catches the plate check's verdict painting over a decision made while the check ran, or never reaching the board.
+  it('applies a plate check\'s edit result, and patches only the take list when a decision started meanwhile', async () => {
+    const applyEdit = vi.fn();
+    const applyScenePatch = vi.fn();
+    const scene = { sceneId: 's1', takes: [] };
+    const take = { takeId: 't-a', kind: 'image', assetId: 'a.png' };
+    checkMusicVideoSceneTake.mockResolvedValueOnce({ ...scene, edit: EDIT });
+    const { result } = renderHook(() => useMusicVideoTakes({ project: { id: 'mv-1' }, applyScenePatch, applyEdit }));
+    await act(() => result.current.checkTake(scene, take));
+    expect(checkMusicVideoSceneTake).toHaveBeenCalledWith('mv-1', 's1', 't-a', OWN);
+    expect(applyEdit).toHaveBeenCalledWith('mv-1', EDIT);
+
+    applyEdit.mockClear();
+    const reply = deferred();
+    checkMusicVideoSceneTake.mockReturnValueOnce(reply.promise);
+    reviewMusicVideoSceneTake.mockResolvedValueOnce({ ...scene, edit: null });
+    let checking;
+    act(() => { checking = result.current.checkTake(scene, take); });
+    await act(() => result.current.reviewTake(scene, take, { note: 'Typed meanwhile' }));
+    reply.resolve({ ...scene, takes: [], edit: EDIT });
+    await act(() => checking);
+    expect(applyEdit).not.toHaveBeenCalled();
+    expect(applyScenePatch).toHaveBeenCalledWith('mv-1', 's1', expect.objectContaining({ takes: [] }));
+  });
 });

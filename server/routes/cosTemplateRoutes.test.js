@@ -1,223 +1,91 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
-import templateRoutes from './cosTemplateRoutes.js';
+import { errorMiddleware } from '../lib/errorHandler.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-vi.mock('../services/taskTemplates.js', () => ({
-  getAllTemplates: vi.fn(),
-  getPopularTemplates: vi.fn(),
-  getCategories: vi.fn(),
-  createTemplate: vi.fn(),
-  createTemplateFromTask: vi.fn(),
-  recordTemplateUsage: vi.fn(),
-  updateTemplate: vi.fn(),
-  deleteTemplate: vi.fn()
-}));
+// Real task-templates service (cos/task-templates.json) over a temp data root.
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-cos-templates-routes-') }));
+afterAll(cleanupTempDataRoots);
 
-import * as taskTemplates from '../services/taskTemplates.js';
+const { default: templateRoutes } = await import('./cosTemplateRoutes.js');
 
-describe('CoS Template Routes', () => {
-  let app;
+const app = express();
+app.use(express.json());
+app.use('/api/cos', templateRoutes);
+app.use(errorMiddleware);
 
-  beforeEach(() => {
-    app = express();
-    app.use(express.json());
-    app.use('/api/cos', templateRoutes);
-    vi.clearAllMocks();
+const api = (method, path, body) => request(app)[method](`/api/cos/templates${path}`).send(body);
+const listed = async () => (await api('get', '')).body.templates;
+const userTemplates = async () => (await listed()).filter((t) => !t.isBuiltin);
+
+describe('CoS template routes', () => {
+  it('creates a user template that lists with the built-ins, then updates, records usage on and deletes it', async () => {
+    const builtinCount = (await listed()).filter((t) => t.isBuiltin).length;
+    expect(builtinCount).toBeGreaterThan(0);
+
+    const created = await api('post', '', { name: 'Fix Bug', description: 'Fix a bug in the app', category: 'bugs' });
+    expect(created.status).toBe(200);
+    const { id } = created.body.template;
+    expect(created.body.template).toMatchObject({ name: 'Fix Bug', isBuiltin: false, category: 'bugs' });
+    expect(await listed()).toContainEqual(expect.objectContaining({ id, name: 'Fix Bug', useCount: 0 }));
+
+    const updated = await api('put', `/${id}`, { name: 'Fix Bugs' });
+    expect(updated.status).toBe(200);
+    // An absent field leaves the stored value alone.
+    expect((await userTemplates()).find((t) => t.id === id)).toMatchObject({ name: 'Fix Bugs', description: 'Fix a bug in the app', category: 'bugs' });
+
+    expect((await api('post', `/${id}/use`)).body.useCount).toBe(1);
+    expect((await api('post', `/${id}/use`)).body.useCount).toBe(2);
+    expect((await listed()).find((t) => t.id === id).useCount).toBe(2);
+    expect((await api('get', '/popular?limit=1')).body.templates.map((t) => t.id)).toEqual([id]);
+    expect((await api('get', '/categories')).body.categories).toContainEqual({ name: 'bugs', count: 1 });
+
+    const deleted = await api('delete', `/${id}`);
+    expect(deleted.status).toBe(200);
+    expect(deleted.body.success).toBe(true);
+    expect((await listed()).map((t) => t.id)).not.toContain(id);
+    expect((await listed()).filter((t) => t.isBuiltin)).toHaveLength(builtinCount);
   });
 
-  describe('GET /api/cos/templates', () => {
-    it('should return all templates', async () => {
-      taskTemplates.getAllTemplates.mockResolvedValue([{ id: 't1', name: 'Fix Bug' }]);
-
-      const response = await request(app).get('/api/cos/templates');
-
-      expect(response.status).toBe(200);
-      expect(response.body.templates).toHaveLength(1);
-    });
+  it('serves the default popular limit of five', async () => {
+    expect((await api('get', '/popular')).body.templates).toHaveLength(5);
   });
 
-  describe('GET /api/cos/templates/popular', () => {
-    it('should return popular templates with default limit', async () => {
-      taskTemplates.getPopularTemplates.mockResolvedValue([{ id: 't1', useCount: 10 }]);
+  it('snapshots a task into a from-task template and falls back to a derived name', async () => {
+    const named = await api('post', '/from-task', { task: { description: 'Fix login', app: 'demo' }, templateName: 'Login Fix' });
+    expect(named.status).toBe(200);
+    expect(named.body.template).toMatchObject({ name: 'Login Fix', category: 'from-task', description: 'Fix login', app: 'demo' });
 
-      const response = await request(app).get('/api/cos/templates/popular');
-
-      expect(response.status).toBe(200);
-      expect(taskTemplates.getPopularTemplates).toHaveBeenCalledWith(5);
-    });
-
-    it('should respect custom limit', async () => {
-      taskTemplates.getPopularTemplates.mockResolvedValue([]);
-
-      const response = await request(app).get('/api/cos/templates/popular?limit=3');
-
-      expect(response.status).toBe(200);
-      expect(taskTemplates.getPopularTemplates).toHaveBeenCalledWith(3);
-    });
+    const derived = await api('post', '/from-task', { task: { description: 'Fix login' } });
+    expect(derived.body.template.name).toBe('Custom: Fix login...');
+    expect((await userTemplates()).map((t) => t.id)).toEqual(expect.arrayContaining([named.body.template.id, derived.body.template.id]));
   });
 
-  describe('GET /api/cos/templates/categories', () => {
-    it('should return template categories', async () => {
-      taskTemplates.getCategories.mockResolvedValue(['bugs', 'features']);
-
-      const response = await request(app).get('/api/cos/templates/categories');
-
-      expect(response.status).toBe(200);
-      expect(response.body.categories).toEqual(['bugs', 'features']);
-    });
+  it('persists a valid slashdo binding on a user template', async () => {
+    const settings = { useWorktree: false, openPR: false, simplify: false };
+    const { body } = await api('post', '', { name: 'Plan', description: 'Plan a task', slashdoCommand: 'plan-task', settings });
+    expect((await userTemplates()).find((t) => t.id === body.template.id)).toMatchObject({ slashdoCommand: 'plan-task', settings });
   });
 
-  describe('POST /api/cos/templates', () => {
-    it('should create a new template', async () => {
-      const templateData = { name: 'Fix Bug', description: 'Fix a bug in the app', category: 'bugs' };
-      taskTemplates.createTemplate.mockResolvedValue({ id: 't1', ...templateData });
-
-      const response = await request(app)
-        .post('/api/cos/templates')
-        .send(templateData);
-
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-      expect(response.body.template.name).toBe('Fix Bug');
-    });
-
-    it('should return 400 if name is missing', async () => {
-      const response = await request(app)
-        .post('/api/cos/templates')
-        .send({ description: 'No name' });
-
-      expect(response.status).toBe(400);
-    });
-
-    it('should return 400 if description is missing', async () => {
-      const response = await request(app)
-        .post('/api/cos/templates')
-        .send({ name: 'No description' });
-
-      expect(response.status).toBe(400);
-    });
-
-    // The bare command name is joined into a `commands/do/<name>.md` path by
-    // loadSlashdoFile, so the schema is the boundary that keeps it inert (#3089).
-    it('rejects a slashdoCommand that is not a bare command name', async () => {
-      const response = await request(app)
-        .post('/api/cos/templates')
-        .send({ name: 'Escape', description: 'nope', slashdoCommand: '../../etc/passwd' });
-
-      expect(response.status).toBe(400);
-      expect(taskTemplates.createTemplate).not.toHaveBeenCalled();
-    });
-
-    it('rejects a settings block with an unknown toggle', async () => {
-      const response = await request(app)
-        .post('/api/cos/templates')
-        .send({ name: 'Odd', description: 'nope', settings: { autoMerge: true } });
-
-      expect(response.status).toBe(400);
-      expect(taskTemplates.createTemplate).not.toHaveBeenCalled();
-    });
-
-    it('accepts a valid slashdo binding and forwards it to the service', async () => {
-      taskTemplates.createTemplate.mockResolvedValue({ id: 't3' });
-
-      const response = await request(app)
-        .post('/api/cos/templates')
-        .send({
-          name: 'Plan',
-          description: 'Plan a task',
-          slashdoCommand: 'plan-task',
-          settings: { useWorktree: false, openPR: false, simplify: false }
-        });
-
-      expect(response.status).toBe(200);
-      expect(taskTemplates.createTemplate).toHaveBeenCalledWith(expect.objectContaining({
-        slashdoCommand: 'plan-task',
-        settings: { useWorktree: false, openPR: false, simplify: false }
-      }));
-    });
+  it('refuses invalid creates and from-task bodies without persisting anything', async () => {
+    const before = await userTemplates();
+    expect((await api('post', '', { description: 'No name' })).status).toBe(400);
+    expect((await api('post', '', { name: 'No description' })).status).toBe(400);
+    // The bare command name is joined into a commands/do/<name>.md path, so the schema keeps it inert (#3089).
+    expect((await api('post', '', { name: 'Escape', description: 'nope', slashdoCommand: '../../etc/passwd' })).status).toBe(400);
+    expect((await api('post', '', { name: 'Odd', description: 'nope', settings: { autoMerge: true } })).status).toBe(400);
+    expect((await api('post', '/from-task', {})).status).toBe(400);
+    expect((await api('post', '/from-task', { task: {} })).status).toBe(400);
+    expect(await userTemplates()).toEqual(before);
   });
 
-  describe('POST /api/cos/templates/from-task', () => {
-    it('should create template from task', async () => {
-      taskTemplates.createTemplateFromTask.mockResolvedValue({ id: 't2', name: 'From Task' });
-
-      const response = await request(app)
-        .post('/api/cos/templates/from-task')
-        .send({ task: { description: 'Fix login' }, templateName: 'Login Fix' });
-
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-    });
-
-    it('should return 400 if task is missing', async () => {
-      const response = await request(app)
-        .post('/api/cos/templates/from-task')
-        .send({});
-
-      expect(response.status).toBe(400);
-    });
-
-    it('should return 400 if task has no description', async () => {
-      const response = await request(app)
-        .post('/api/cos/templates/from-task')
-        .send({ task: {} });
-
-      expect(response.status).toBe(400);
-    });
-  });
-
-  describe('POST /api/cos/templates/:id/use', () => {
-    it('should record template usage', async () => {
-      taskTemplates.recordTemplateUsage.mockResolvedValue(5);
-
-      const response = await request(app).post('/api/cos/templates/t1/use');
-
-      expect(response.status).toBe(200);
-      expect(response.body.useCount).toBe(5);
-      expect(taskTemplates.recordTemplateUsage).toHaveBeenCalledWith('t1');
-    });
-  });
-
-  describe('PUT /api/cos/templates/:id', () => {
-    it('should update a template', async () => {
-      taskTemplates.updateTemplate.mockResolvedValue({ id: 't1', name: 'Updated' });
-
-      const response = await request(app)
-        .put('/api/cos/templates/t1')
-        .send({ name: 'Updated' });
-
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-    });
-
-    it('should return 400 on update error', async () => {
-      taskTemplates.updateTemplate.mockResolvedValue({ error: 'Template not found' });
-
-      const response = await request(app)
-        .put('/api/cos/templates/t999')
-        .send({ name: 'Fail' });
-
-      expect(response.status).toBe(400);
-    });
-  });
-
-  describe('DELETE /api/cos/templates/:id', () => {
-    it('should delete a template', async () => {
-      taskTemplates.deleteTemplate.mockResolvedValue({ success: true });
-
-      const response = await request(app).delete('/api/cos/templates/t1');
-
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-    });
-
-    it('should return 400 on delete error', async () => {
-      taskTemplates.deleteTemplate.mockResolvedValue({ error: 'Template not found' });
-
-      const response = await request(app).delete('/api/cos/templates/t999');
-
-      expect(response.status).toBe(400);
-    });
+  it('answers 400 when updating or deleting an unknown template and when deleting a built-in', async () => {
+    expect((await api('put', '/user-missing', { name: 'Fail' })).status).toBe(400);
+    expect((await api('delete', '/user-missing')).status).toBe(400);
+    const builtin = (await listed()).find((t) => t.isBuiltin);
+    expect((await api('delete', `/${builtin.id}`)).status).toBe(400);
+    expect((await listed()).map((t) => t.id)).toContain(builtin.id);
   });
 });

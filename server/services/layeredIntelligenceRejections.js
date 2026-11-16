@@ -1,51 +1,27 @@
 /**
- * Layered Intelligence rejection taxonomy + classifier (#2689).
+ * Layered Intelligence rejection taxonomy + classifier.
  *
- * `deriveOutcome` (layeredIntelligence.js) answers *whether* a filed proposal was
- * merged, rejected, or abandoned. It does not answer *why* — the store's
- * `outcomeReason` slot held whatever raw string the tracker happened to report
- * (GitHub's `not_planned`, or the literal filler `auto-derived from tracker state`
- * on trackers that report nothing). That is unusable as a feedback signal: the
- * reasoner was told "common rejection reasons: not_planned", which restates the
- * outcome rather than diagnosing it.
+ * `deriveOutcome` says whether a proposal was merged, rejected or abandoned; this
+ * module owns the structured vocabulary for why, and the deterministic mapping onto
+ * it. Pure, no I/O, no LLM call (the "no cold-bootstrap LLM calls" policy). The
+ * implementing-PR failure signal needs a `gh pr view` read; the reconciler owns that
+ * I/O and passes the resolved token in.
  *
- * This module owns the structured vocabulary and the deterministic mapping onto
- * it. Pure, no I/O, no LLM call — every classifier here derives its token from data
- * handed to it, so classification never adds a provider round-trip (the
- * "no cold-bootstrap LLM calls" policy). One signal, the implementing-PR failure
- * (#2748, deliverable 2), needs a `gh pr view` read the pure classifiers can't do —
- * the RECONCILER owns that I/O (bounded to non-merged proposals that carry a PR ref
- * and whose free signals left them undiagnosed) and passes the resolved token in, so
- * this module stays pure.
+ * A LEAF module: imports nothing from the LI graph so `layeredIntelligence.js` and
+ * `layeredIntelligenceOutcomes.js` can both use it without a cycle.
  *
- * A LEAF module by design: it imports nothing from the LI graph, so both
- * `layeredIntelligence.js` (which formats the reports) and
- * `layeredIntelligenceOutcomes.js` (which persists the classification) can use it
- * without an import cycle.
+ * KNOWN LIMITATION: classification runs only on outcomes `deriveOutcome` already called
+ * non-merged, and that maps a closed issue with NO `stateReason` to `merged` (glab and
+ * jira never report one). So a GitLab issue closed with a bare `wontfix` label reads as
+ * merged and is never classified. Letting labels override the merged fallback is not
+ * safe: the label map mixes FINAL DISPOSITION labels (`wontfix`, `duplicate`,
+ * `declined`, `out-of-scope`) with labels for a STATE THE ISSUE PASSED THROUGH
+ * (`blocked`, `needs-input`, `invalid`, `conflict`), and a stale `blocked` on a
+ * completed issue would corrupt the merge rate the other way. The fix needs a
+ * disposition/state split plus a `deriveOutcome` change. Tracked on #2689.
  *
- * KNOWN LIMITATION — label-only closures on trackers with no close reason.
- * Classification runs only on an outcome `deriveOutcome` already called non-merged,
- * and that fallback maps a closed issue with NO `stateReason` to `merged` (glab and
- * jira never report one, and their ordinary close IS a merge). So a GitLab issue
- * closed with a bare `wontfix` label reads as merged and is never classified — its
- * label signal is wasted, and it inflates the merge rate.
- *
- * Fixing it is NOT as simple as letting labels override the merged fallback: the
- * map below mixes labels that state a FINAL DISPOSITION (`wontfix`, `duplicate`,
- * `declined`, `out-of-scope` — the issue is over, and this is why) with labels that
- * describe a STATE THE ISSUE PASSED THROUGH (`blocked`, `needs-input`, `invalid`,
- * `conflict`). Only the first group can justify overriding `merged`; a stale
- * `blocked` label left on a genuinely completed GitLab issue would otherwise flip it
- * to rejected and corrupt the merge rate in the opposite direction — worse than the
- * gap it closes. The fix therefore needs a disposition/state split here plus a
- * change to `deriveOutcome`'s merge-rate semantics (#2620's territory), so it is
- * deliberately left to a follow-up rather than bolted on. Tracked on #2689.
- *
- * The tally + top-N-line render engine (the commonest-first sort with a
- * taxonomy-order tie-break, the three-bucket `{entries, unknown, unclassified,
- * diagnosed, total}` discipline, and `normalizeToken`) lives in the shared leaf
- * `lib/taxonomyTally.js` (#2800); this module supplies only the vocabulary, gloss
- * maps, and classifiers.
+ * The tally + render engine lives in the shared leaf `lib/taxonomyTally.js`; this
+ * module supplies the vocabulary, gloss maps, and classifiers.
  */
 
 import { REJECTION_REASON_LABELS } from '../lib/layeredIntelligenceRejectionLabels.js';
@@ -55,85 +31,54 @@ import {
   createTaxonomyTally
 } from '../lib/taxonomyTally.js';
 
-// The rejection-reason vocabulary. Stored on the outcome record and rendered into
-// the reasoner's prompt, so these tokens are a persisted contract: rename one and
-// old records fail the sanitizer's membership check and re-classify (which is the
-// designed self-heal, but it discards history — prefer adding over renaming).
-//
-// Only the tokens marked (live) are reachable from the signals the reconciler has
-// today. The rest are declared now because they are the vocabulary this taxonomy
-// is meant to express, and because the sanitizer must already accept them: a later
-// PR that classifies from the implementing PR's checks can then persist them
-// WITHOUT a record-shape migration.
+// The rejection-reason vocabulary. Persisted on outcome records and rendered into the
+// reasoner's prompt: renaming a token makes old records fail the sanitizer's membership
+// check and re-classify (discarding history), so prefer adding. Declared tokens the
+// reconciler can't yet produce must still be accepted by the sanitizer.
 export const REJECTION_REASONS = [
-  // (live) stateReason `duplicate`, or a duplicate/dupe label.
+  // stateReason `duplicate`, or a duplicate/dupe label.
   'duplicate',
-  // (live) GitHub's "closed as not planned", or a wontfix/declined label — a human
-  // looked at it and said no.
+  // GitHub's "closed as not planned", or a wontfix/declined label.
   'user-rejected',
-  // (live) An explicit tracker label, OR the deterministic closing-comment keyword
-  // pass (#2748) — a human who declined in prose without applying a matching label.
+  // An explicit tracker label, or the closing-comment keyword pass.
   'scope-mismatch',
   'missing-context',
   'quality-issue',
-  // Label-only today.
+  // Label-only.
   'environment-blocker',
-  // (live) From a human-applied label, OR the implementing-PR state read (#2748,
-  // deliverable 2): these are properties of the PR that IMPLEMENTS a proposal, and
-  // LI tracks proposals as issues. The reconciler now threads the implementing-PR ref
-  // (`closedByPullRequestsReferences`, additive/null-default) and reads its merge
-  // state / checks via `classifyPrFailure`, so a conflicted or CI-failed implementing
-  // PR is reachable without a record-shape migration.
+  // A human-applied label, or the implementing-PR state read (`classifyPrFailure`):
+  // properties of the PR that implements a proposal.
   'merge-conflict',
   'validation-failed'
 ];
 
 /**
- * The explicit "we classified this and found no signal" sentinel. NOT a member of
- * REJECTION_REASONS: it is the absence of a diagnosis, not a diagnosis. Kept
- * distinct from a `null` rejectionReason, which means "not classified yet" —
- * conflating the two would either hide the data gap this issue exists to measure
- * or re-classify the same record forever. See sanitizeOutcomeRecord.
+ * Sentinel: "classified, found no signal". NOT a member of REJECTION_REASONS and distinct
+ * from a `null` rejectionReason ("not classified yet"); conflating them would hide the
+ * data gap or re-classify the same record forever. See sanitizeOutcomeRecord.
  */
 export const UNKNOWN_REJECTION_REASON = 'unknown-reason';
 
-// Every value the store may legitimately hold in `rejectionReason` for a
+// Every value the store may hold in `rejectionReason` for a non-merged proposal.
 // non-merged proposal.
 export const REJECTION_REASON_VALUES = [...REJECTION_REASONS, UNKNOWN_REJECTION_REASON];
 
-// Human-readable gloss (REJECTION_REASON_LABELS, shared with the client) renders
-// the prompt blocks. A token with no gloss degrades to the raw token.
+// Glosses (REJECTION_REASON_LABELS, shared with the client) render the prompt blocks;
+// an unglossed token degrades to the raw token.
 
-/**
- * Render one token as prose for the reasoner. An unglossed token passes through;
- * a nullish (unclassified) input renders as '' — mapping it onto the sentinel
- * would invert this module's central rule by dressing "not classified" up as
- * "classified, and we found nothing".
- */
+/** Render one token as prose. Nullish (unclassified) renders '' — never the sentinel, which would dress "not classified" up as "found nothing". */
 export function formatRejectionReason(reason) {
   return formatTaxonomyToken(reason, REJECTION_REASON_LABELS);
 }
 
-// Label → reason. Every key here must be a label that states a JUDGEMENT ABOUT THE
-// PROPOSAL'S MERIT — by a human, or by another agent that actually assessed it.
-// That is what earns labels their precedence over the generic stateReason
-// (`not_planned` + a `duplicate` label is a duplicate, not a bare user rejection),
-// and `needs-input` qualifies even though an agent applies it: it is a finding that
-// the proposal under-specified itself, which is exactly `missing-context`.
+// Label -> reason. Keys must be labels stating a JUDGEMENT ABOUT THE PROPOSAL'S MERIT
+// (by a human or an agent that assessed it); that earns them precedence over the generic
+// stateReason. `needs-input` qualifies: the proposal under-specified itself.
 //
-// LI's OWN BOOKKEEPING must never appear here, however suggestive it looks. LI
-// stamps `layered-intelligence:blocking` on its proposals to record that the loop
-// is paused there (applyBlockingLabel ← the reasoner's `pause.blockOnIssue`), and
-// `layered-intelligence` to mark authorship — neither says anything about why a
-// proposal failed. Mapping the blocking label to `environment-blocker` would
-// outrank a real `not_planned` close and feed the loop "blocked on the environment"
-// when the user simply declined: LI corrupting the very signal this taxonomy exists
-// to produce, through its own marker. The `blocked` / `environment-blocker` entries
-// below carry that meaning legitimately because someone diagnosed the proposal to
-// apply them.
-//
-// Keys are normalizeToken'd; add conventions here rather than teaching callers to
-// pre-map.
+// LI's OWN BOOKKEEPING must never appear here: `layered-intelligence:blocking` records
+// that the loop is paused and `layered-intelligence` marks authorship; mapping them
+// would outrank a real `not_planned` close and corrupt the signal. Keys are
+// normalizeToken'd; add conventions here rather than pre-mapping in callers.
 const LABEL_REASONS = new Map(Object.entries({
   'duplicate': 'duplicate',
   'dupe': 'duplicate',
@@ -155,69 +100,45 @@ const LABEL_REASONS = new Map(Object.entries({
   'ci-failure': 'validation-failed'
 }));
 
-// stateReason → reason. Only GitHub reports one; `completed`/absent never reach
-// here because the caller classifies non-merged outcomes only.
+// stateReason -> reason. Only GitHub reports one; `completed`/absent never reach here.
 const STATE_REASON_REASONS = new Map(Object.entries({
   'not-planned': 'user-rejected',
   'duplicate': 'duplicate'
 }));
 
-// Diagnoses that name only THAT a proposal was declined, not WHY — GitHub's
-// generic `not_planned` close. A specific closing-comment rationale is allowed to
-// refine one of these into a precise taxonomy token (not_planned + "out of scope"
-// → scope-mismatch); a SPECIFIC close reason (duplicate) is never refined. The
-// refinement changes only the reason token, never the OUTCOME (deriveOutcome has
-// already fixed that), so the merge rate the reasoner calibrates on is untouched.
+// Diagnoses naming only THAT a proposal was declined (GitHub's generic `not_planned`).
+// A closing-comment rationale may refine these; a specific close reason (duplicate)
+// is never refined. Refinement changes only the token, never the outcome.
 const GENERIC_REJECTION_REASONS = new Set(['user-rejected']);
 
 /**
- * The reasons a PR-state read (#2748, deliverable 2) is ALLOWED to refine: the honest
- * `unknown-reason` and the generic user-rejection. A SPECIFIC diagnosis — a
- * scope/quality/duplicate label, a `duplicate` close reason, or a closing-comment
- * rationale — already states WHY, so the reconciler skips the `gh pr view` round-trip
- * for those (the read is bounded to the records prFailure could actually change).
- *
- * The gate is intentionally coarse: `user-rejected` also comes from a `wontfix`/
- * `declined` LABEL, not only the generic `not_planned` state, and this predicate can't
- * tell those apart from the reason token alone. So a labeled-wontfix record that also
- * carries a PR ref pays one superfluous fetch — but NOT a wrong diagnosis: on the
- * refine pass, `classifyRejection`'s step-1 label precedence returns `user-rejected`
- * before it ever reaches the step-4 `prFailure`, so the human's label still wins and
- * the stored token is unchanged. Distinguishing label- from state-derived
- * `user-rejected` here would need threading the signal source through, which isn't
- * worth it to save a bounded, harmless round-trip.
+ * Reasons a PR-state read is ALLOWED to refine: `unknown-reason` and the generic
+ * user-rejection. A specific diagnosis already states why, so the reconciler skips the
+ * `gh pr view` round-trip. Intentionally coarse: `user-rejected` also comes from a
+ * `wontfix` LABEL, costing one superfluous fetch, but never a wrong diagnosis since
+ * `classifyRejection`'s label precedence wins before `prFailure`.
  */
 export function isPrRefinableReason(reason) {
   return reason === UNKNOWN_REJECTION_REASON || GENERIC_REJECTION_REASONS.has(reason);
 }
 
-// PR-check verdicts that mean the implementing change FAILED validation. gh's
-// statusCheckRollup mixes CheckRun (`conclusion`) and StatusContext (`state`) rows;
-// both are normalized to upper-case and tested against this set. Deliberately
-// conservative — CANCELLED/SKIPPED/NEUTRAL are ambiguous (superseded runs, opt-out
-// checks) and excluded, so a miss falls through to the honest `unknown-reason`
-// rather than a fabricated validation-failed.
+// PR-check verdicts meaning the implementing change FAILED validation. gh's
+// statusCheckRollup mixes CheckRun (`conclusion`) and StatusContext (`state`); both are
+// upper-cased. Conservative: CANCELLED/SKIPPED/NEUTRAL are ambiguous and excluded so a
+// miss yields `unknown-reason`, not a fabricated validation-failed.
 const FAILED_CHECK_VERDICTS = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'STARTUP_FAILURE', 'ACTION_REQUIRED']);
 
 /**
- * Classify why the PR that was meant to IMPLEMENT a proposal failed, from a
- * `gh pr view --json state,mergeStateStatus,statusCheckRollup` read (#2748,
- * deliverable 2). Pure, total, deterministic — the reconciler owns the I/O and hands
- * the parsed object here. Returns a REJECTION_REASONS token, or null when the PR
- * merged or nothing indicates a failure (→ the caller keeps the honest fallback).
+ * Classify why the PR meant to IMPLEMENT a proposal failed, from a
+ * `gh pr view --json state,mergeStateStatus,statusCheckRollup` read. Pure and total.
+ * Returns a REJECTION_REASONS token, or null when merged or no failure is indicated.
  *
- *   - `merge-conflict`    — the branch could not be merged (`mergeStateStatus` DIRTY).
- *                           GitHub only computes mergeability while the PR is open, so
- *                           this fires on an open/last-known-dirty PR; it is checked
- *                           first because a conflicted branch is the more fundamental
- *                           blocker than a failed check on top of it.
- *   - `validation-failed` — a required check reported a failing verdict. Readable even
- *                           on a CLOSED (abandoned) PR from its last recorded rollup,
- *                           which is the common terminal state for a proposal whose
- *                           implementing PR was given up on.
+ *   - `merge-conflict`    — `mergeStateStatus` DIRTY. Checked first: a conflicted
+ *                           branch is the more fundamental blocker.
+ *   - `validation-failed` — a check reported a failing verdict; readable on a CLOSED PR
+ *                           from its last recorded rollup.
  *
- * A MERGED PR is never a failure (returns null): if it merged, the proposal's outcome
- * is `merged` and there is no rejection to diagnose.
+ * A MERGED PR is never a failure.
  */
 export function classifyPrFailure(prView) {
   if (!prView || typeof prView !== 'object') return null;
@@ -231,11 +152,8 @@ export function classifyPrFailure(prView) {
   return null;
 }
 
-// The REJECTION_REASONS subset that classifyPrFailure produces (#2748, deliverable 2).
-// Once a record carries one of these it was already diagnosed from its implementing
-// PR's state, so re-reading that PR on a later reconcile can only reproduce the same
-// token — the reconciler consults this to STOP re-spawning `gh pr view` for an
-// already-settled PR diagnosis on every scheduler tick across the 30-day retention.
+// The REJECTION_REASONS subset classifyPrFailure produces. A record carrying one was
+// already diagnosed, so the reconciler stops re-spawning `gh pr view` for it.
 export const PR_FAILURE_REASONS = ['merge-conflict', 'validation-failed'];
 
 /** Whether `reason` is a PR-state-derived diagnosis (merge-conflict / validation-failed). */
@@ -243,24 +161,12 @@ export function isPrFailureReason(reason) {
   return PR_FAILURE_REASONS.includes(reason);
 }
 
-// Closing-comment keyword pass (#2748). Some closures state their rationale only in
-// prose — a human declines in a comment without applying a matching label or (on
-// glab/jira) any close reason at all. This is a DETERMINISTIC keyword/heuristic
-// scan of that prose, NOT an LLM call: it adds no provider round-trip (the
-// "no cold-bootstrap LLM" policy) and no tracker fetch beyond the comment text the
-// reconciler already read.
-//
-// It is deliberately a LAST-RESORT signal, weaker than a label or a close reason:
-// classifyRejection consults it only when both of those miss. Free text is noisier
-// than a label a human deliberately applied, so it must never override one. Groups
-// are ordered and the FIRST group with any match wins, so the order below is the
-// tiebreak when one comment trips more than one bucket — most-specific intent
-// (scope) before the vaguer quality catch-all. Patterns are conservative: a miss
-// (→ null → the honest `unknown-reason`) is the correct failure, better than a
-// confident wrong diagnosis feeding the reasoner a fabricated pattern. There is no
-// negation handling — a keyword pass can't reliably parse "not out of scope" — so
-// patterns favor phrasings that read unambiguously when they appear; the safety net
-// is that this only ever refines an already-decided rejection, never the outcome.
+// Closing-comment keyword pass: a deterministic scan (NOT an LLM call) of prose for
+// closures that state their rationale only in a comment. A LAST-RESORT signal, weaker
+// than a label or close reason; classifyRejection consults it only when both miss.
+// The FIRST group with a match wins, so order is the tiebreak (specific scope before the
+// vague quality catch-all). Patterns are conservative: a miss (-> `unknown-reason`) beats
+// a confident wrong diagnosis. No negation handling, so patterns favor unambiguous phrasings.
 const CLOSING_COMMENT_PATTERNS = [
   {
     reason: 'scope-mismatch',
@@ -301,16 +207,10 @@ const CLOSING_COMMENT_PATTERNS = [
   }
 ];
 
-/**
- * Classify a rejection rationale from the closing comment's TEXT. Pure, total,
- * deterministic: same string always yields the same token. Returns a
- * REJECTION_REASONS token, or null when no keyword matched (a nullish/blank comment
- * included) so the caller can fall through to the honest `unknown-reason`.
- */
+/** Classify a rationale from closing-comment TEXT. Pure; returns a REJECTION_REASONS token or null when nothing matched. */
 export function classifyClosingComment(text) {
   if (typeof text !== 'string' || !text.trim()) return null;
-  // Lowercase + collapse whitespace so a rationale split across newlines still
-  // matches multi-word patterns.
+  // Collapse whitespace so rationale split across newlines matches multi-word patterns.
   const normalized = text.toLowerCase().replace(/\s+/g, ' ');
   for (const { reason, patterns } of CLOSING_COMMENT_PATTERNS) {
     for (const re of patterns) {
@@ -321,100 +221,43 @@ export function classifyClosingComment(text) {
 }
 
 /**
- * Classify WHY a filed proposal ended up not merged.
+ * Classify WHY a filed proposal ended up not merged. Returns `null` for a merged or
+ * unresolved proposal (never invent a rejection), a REJECTION_REASONS token when a signal
+ * supports it, else UNKNOWN_REJECTION_REASON (the honest answer; never dress it up).
  *
- * Returns:
- *   - `null` for a merged or still-unresolved proposal — there is no rejection to
- *     diagnose. Never invent one: a merged jira/plan proposal (whose tracker
- *     reports no stateReason at all) must not acquire a rejection reason just
- *     because the signals are empty.
- *   - a REJECTION_REASONS token when a tracker signal supports it.
- *   - UNKNOWN_REJECTION_REASON when the proposal was demonstrably not merged but
- *     no signal explains it. This is the honest answer and the metric the issue
- *     asks for — "how much of our rejection history is undiagnosed" — so it must
- *     never be silently dressed up as a real reason.
- *
- * Signal precedence (most authoritative first):
- *   1. a human-applied label (the most deliberate signal);
- *   2. a SPECIFIC tracker close reason (duplicate);
- *   3. the deterministic closing-comment keyword pass (#2748);
- *   4. an implementing-PR failure token (#2748, deliverable 2) — a mechanical fact
- *      about the PR that was meant to implement the proposal (`merge-conflict` /
- *      `validation-failed`), pre-resolved by the reconciler from a `gh pr view` read;
- *   5. a GENERIC tracker close reason (GitHub `not_planned` → user-rejected: it
- *      says the proposal was declined, but not why).
- * The comment and the PR-failure both sit BELOW a label/specific reason but ABOVE the
- * generic decline, so each REFINES a bare not_planned into a precise token instead of
- * being shadowed by it. The PR-failure sits below the closing comment on purpose: a
- * human who stated a rationale in prose ("out of scope") outranks the mechanical fact
- * that the implementing PR happened to have a conflict — the PR-failure only speaks
- * for the records a human left otherwise undiagnosed. Every refinement changes only
- * the reason token, never the outcome deriveOutcome already fixed, so none can move
- * the merge rate. The pass NEVER overrides the merged fallback (deriveOutcome runs
- * first and never reaches here for a merge), so the reasonless-close-reads-as-merged
- * gap the module header documents is untouched.
- *
- * Deterministic and total: same inputs always yield the same token.
+ * Precedence, most authoritative first: (1) human-applied label; (2) SPECIFIC tracker
+ * close reason (duplicate); (3) closing-comment keyword pass; (4) implementing-PR failure
+ * token, below the comment so a human's stated rationale outranks a mechanical conflict;
+ * (5) GENERIC close reason (`not_planned` -> user-rejected). Refinements change only the
+ * token, never the outcome, so none moves the merge rate.
  */
 export function classifyRejection({ outcome = null, stateReason = null, labels = [], closingComment = null, prFailure = null } = {}) {
-  // Only a resolved, non-merged proposal has a rejection to explain.
   if (outcome !== 'rejected' && outcome !== 'abandoned') return null;
 
-  // 1. A human-applied label is the most specific signal available; first match
-  //    wins in the tracker's own label order.
+  // 1. First label match wins in the tracker's own order.
   for (const label of Array.isArray(labels) ? labels : []) {
     const hit = LABEL_REASONS.get(normalizeToken(label));
     if (hit) return hit;
   }
 
-  // 2. A SPECIFIC tracker close reason (duplicate) outranks free-text prose.
+  // 2. A specific close reason outranks free-text prose.
   const stateHit = STATE_REASON_REASONS.get(normalizeToken(stateReason));
   if (stateHit && !GENERIC_REJECTION_REASONS.has(stateHit)) return stateHit;
 
-  // 3. The closing-comment keyword pass — refines a generic decline, or diagnoses a
-  //    close whose (abandoned) reason isn't otherwise recognized.
+  // 3. Closing-comment keyword pass.
   const commentHit = classifyClosingComment(closingComment);
   if (commentHit) return commentHit;
 
-  // 4. The implementing-PR failure (#2748, deliverable 2) — only a member of
-  //    REJECTION_REASONS is honoured, so a caller can't inject a foreign token.
+  // 4. Implementing-PR failure; only a REJECTION_REASONS member is honoured.
   if (prFailure && REJECTION_REASONS.includes(prFailure)) return prFailure;
 
-  // 5. The generic close reason, when nothing more specific named the rationale.
+  // 5. Generic close reason.
   if (stateHit) return stateHit;
 
   return UNKNOWN_REJECTION_REASON;
 }
 
-/**
- * Tally rejection reasons across every non-merged RESOLVED proposal. A pending
- * proposal is awaiting triage, not rejected, and a merged one has nothing to
- * explain — neither is counted.
- *
- * Returns `{ entries, unknown, unclassified, diagnosed, total }`:
- *   - `entries`      — `[{ reason, count }]` of REAL diagnoses only, commonest first.
- *   - `unknown`      — classified as `unknown-reason`: we looked and no signal
- *                      explained it. A MEASURED gap.
- *   - `unclassified` — no valid diagnosis stored at all: written before the taxonomy
- *                      existed, or reconcile hasn't reached it yet. An UNMEASURED
- *                      gap — a different fact from `unknown`, with a different
- *                      remedy (reconcile it vs. enrich the signals).
- *   - `diagnosed`    — records carrying a real diagnosis (sum of `entries`).
- *   - `total`        — every non-merged resolved proposal: the full population being
- *                      diagnosed. `total === 0` means, and only means, "nothing has
- *                      been closed unmerged".
- *
- * The three buckets stay apart for the same reason the record field is three-valued:
- * collapsing them would either fabricate a diagnosis or hide the data gap this
- * metric exists to track. `unknown`/`unclassified` stay OUT of `entries` so they
- * can't crowd real diagnoses out of a caller's top-N list — they measure missing
- * data, they are not findings.
- */
-// The shared tally + render engine, bound to the rejection taxonomy. The counting
-// rules, commonest-first sort, taxonomy-order tie-break, three-bucket discipline,
-// and top-N-line render live in `lib/taxonomyTally.js` (#2800); this module supplies
-// only the population predicate, the stored-token accessor, the vocabulary/sentinel,
-// the gloss, and the gap wording.
+// Shared tally + render engine (lib/taxonomyTally.js) bound to the rejection taxonomy.
 const rejectionTally = createTaxonomyTally({
   predicate: (o) => o.outcome === 'rejected' || o.outcome === 'abandoned',
   select: (o) => o.rejectionReason,
@@ -423,50 +266,30 @@ const rejectionTally = createTaxonomyTally({
   sentinel: UNKNOWN_REJECTION_REASON,
   glossFn: formatRejectionReason,
   gapWording: {
-    // "3 of 3 closed with no recorded reason" is a real, actionable fact about the
-    // loop's own blind spot, and the honest line when it's all we have.
+    // Honest line when no reasons are recorded.
     unknown: (n, total) => `${n} of ${total} closed with no recorded reason`,
     unclassified: (n, total) => `${n} of ${total} not yet classified`
   }
 });
 
-/**
- * Tally rejection reasons across every non-merged RESOLVED proposal. A pending
- * proposal is awaiting triage, not rejected, and a merged one has nothing to
- * explain — neither is counted.
+/** Tally rejection reasons across non-merged RESOLVED proposals into `{ entries, unknown, unclassified, diagnosed, total }`.
  *
- * Returns `{ entries, unknown, unclassified, diagnosed, total }`:
- *   - `entries`      — `[{ reason, count }]` of REAL diagnoses only, commonest first.
- *   - `unknown`      — classified as `unknown-reason`: we looked and no signal
- *                      explained it. A MEASURED gap.
- *   - `unclassified` — no valid diagnosis stored at all: written before the taxonomy
- *                      existed, or reconcile hasn't reached it yet. An UNMEASURED
- *                      gap — a different fact from `unknown`, with a different
- *                      remedy (reconcile it vs. enrich the signals).
- *   - `diagnosed`    — records carrying a real diagnosis (sum of `entries`).
- *   - `total`        — every non-merged resolved proposal: the full population being
- *                      diagnosed. `total === 0` means, and only means, "nothing has
- *                      been closed unmerged".
+ *   - `entries`      — `[{ reason, count }]` of real diagnoses, commonest first.
+ *   - `unknown`      — classified `unknown-reason`: a MEASURED gap.
+ *   - `unclassified` — no valid diagnosis stored: an UNMEASURED gap (reconcile it).
+ *   - `diagnosed`    — sum of `entries`.
+ *   - `total`        — every non-merged resolved proposal; 0 means nothing closed unmerged.
  *
- * The three buckets stay apart for the same reason the record field is three-valued:
- * collapsing them would either fabricate a diagnosis or hide the data gap this
- * metric exists to track. `unknown`/`unclassified` stay OUT of `entries` so they
- * can't crowd real diagnoses out of a caller's top-N list — they measure missing
- * data, they are not findings.
+ * `unknown`/`unclassified` stay OUT of `entries` so they cannot crowd real diagnoses out of
+ * a top-N list.
  */
 export function summarizeRejectionReasons(outcomes = []) {
   return rejectionTally.summarize(outcomes);
 }
 
 /**
- * Render a tally as one prompt line: the commonest `limit` diagnoses, glossed,
- * followed by whichever gaps are non-zero.
- *
- * Returns '' ONLY when nothing has been closed unmerged, so a caller may safely read
- * '' as "there is nothing to explain". It must never fall silent merely because the
- * closures are undiagnosed: a report that says "Rejected: 2" and then "nothing has
- * been closed unmerged yet" is a self-contradiction, and staying quiet about a gap
- * is exactly the blindness this taxonomy exists to remove.
+ * Render a tally as one prompt line: top `limit` diagnoses, glossed, then non-zero gaps.
+ * Returns '' ONLY when nothing was closed unmerged; never silent about undiagnosed gaps.
  */
 export function formatRejectionReasons(outcomes = [], limit = 3) {
   return rejectionTally.format(outcomes, limit);

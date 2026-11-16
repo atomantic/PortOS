@@ -287,7 +287,7 @@ function handleDockerUnavailable(message, issue) {
   console.error('   Restore Docker and re-run: npm run setup:db');
   console.error('   Keeping the selected database unchanged. Setup never switches backends.');
   console.error('   For a fresh native install, select PGMODE=native in .env before setup.');
-  console.error('   Existing installs require coordinated maintenance cutover; see docs/STORAGE.md.');
+  console.error('   Existing installs require coordinated maintenance cutover; see docs/STORAGE.md#moving-between-docker-and-native.');
   process.exit(1);
 }
 

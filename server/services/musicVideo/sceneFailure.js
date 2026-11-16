@@ -13,7 +13,7 @@ import { musicVideoEvents } from './events.js';
 
 export async function recordSceneLastFailure({ projectId, sceneId }, status, job, lane) {
   if (status !== 'failed') return;
-  const scene = await recordSceneFailure(projectId, sceneId, { lane, error: job?.error });
+  const scene = await recordSceneFailure(projectId, sceneId, { lane, error: job?.error, tier: job?.params?.musicVideo?.tier });
   musicVideoEvents.emit('scene-failure', { projectId, sceneId, lastFailure: scene.lastFailure ?? null });
   console.log(`⚠️ music-video scene ${lane} failed ${projectId.slice(0, 8)}/${sceneId}: ${scene.lastFailure?.error}`);
 }

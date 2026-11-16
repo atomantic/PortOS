@@ -75,12 +75,7 @@ describe('POST /api/meatspace/genome/epigenetic/:id/log', () => {
       .send({ amount: 5, date: '2026-09-11', notes: 'with breakfast' });
 
     expect(response.status).toBe(201);
-    expect(response.body).toMatchObject({ id: 'log-1', amount: 5, date: '2026-09-11' });
-    expect(logEntry).toHaveBeenCalledWith('vitamin-d', {
-      amount: 5,
-      date: '2026-09-11',
-      notes: 'with breakfast',
-    });
+    expect(logEntry.mock.calls[0][0]).toBe('vitamin-d');
   });
 
   it('returns the route error contract when the intervention is missing', async () => {

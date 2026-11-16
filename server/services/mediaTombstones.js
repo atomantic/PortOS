@@ -5,6 +5,12 @@
  * Persists to data/media-tombstones.json as `{ version, video: [], image: [] }`,
  * plus a machine-local `inFlight` section while a local delete is underway.
  *
+ * Storage: `file-primary` — strict read, no seed or migration (absent = nothing
+ * deleted). Video tombstones ride the `videoHistory` snapshot; image tombstones
+ * ride the library manifest, only to receivers sending
+ * `X-PortOS-Library-Tombstones: 1`. Capped at 5000 per kind, oldest first: a delete
+ * that falls off the cap lets a peer holding the copy bring it back.
+ *
  * In-flight: a local delete records its tombstone before trashing the files
  * (crash safety) but the trash can still fail and withdraw it. Until the trash
  * commits, the tombstone filters rows HERE but is never exported (snapshot,

@@ -26,7 +26,6 @@ export {
 } from './integrity.js';
 export { requestGameFeedback } from './feedback.js';
 export {
-  _resetGamesBackend,
   gameRecordDir,
   isValidGameId,
   verifySchemaVersion,

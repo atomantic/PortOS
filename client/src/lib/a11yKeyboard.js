@@ -1,49 +1,9 @@
 /**
- * `clickableProps` and `onActivateKeyDown` make non-button elements with onClick keyboard-operable via
- * Enter/Space, tabIndex and role=button, with activation-key predicates.
+ * Keyboard-activation helpers for non-`<button>` clickables and global key handlers.
  *
- * `clickableProps(handler, { role?, disabled? })` → `{ role, tabIndex, onKeyDown }` and
- * `onActivateKeyDown(handler)` — make a non-`<button>` element with an `onClick` keyboard-accessible
- * (Enter/Space activation, focusable, `role="button"`). Spread `clickableProps` next to the existing
- * `onClick`. Use instead of hand-rolling `role`/`tabIndex`/`onKeyDown` on clickable
- * `<div>`/`<span>`/`<li>`. Also the shared predicate every app-global key handler consults:
- * `shouldIgnoreGlobalKey(event, { enabledInDialog?, ignoreRepeat?, allowChords? })` — the single "must
- * this handler stand down?" answer (editable target, native Space button activation, ⌘/Ctrl/Alt chord,
- * OS auto-repeat, open `aria-modal` dialog), used by `useKeyboardShortcuts`, `useKeyCapture` AND the
- * voice widget's push-to-talk hotkey so their guard lists can't drift. Add a new guard there, not at
- * one caller. Its parts are exported too: `isEditableTarget(el)`, `isButtonActivation(event)` (true
- * when Space would natively activate the focused button) and `isPressKey(event)` (Enter or Space by
- * either `key` or `code`). Also `isFocusEscapeKey(event)` — the shared "leave this widget" gesture
- * (Shift+Tab backtab) that a key-capturing widget must release to the browser; the Shell terminal's
- * `attachCustomKeyEventHandler` consults it so focus can escape the xterm trap. Plus
- * `noPointerFocusSurfaceProps` — spread on the ROOT of a surface that owns a key globally (a
- * Space-scored drill, the Morse keyer, RapidReader, the OpenWorld HUD); one capture-phase handler
- * stops a mouse click anywhere inside from parking focus on a button and taking that key over via
- * native activation, covering controls added later too.
- *
- * Keyboard-activation helpers: making a non-`<button>` element that carries an
- * `onClick` keyboard-operable, plus the shared predicates for "is this keystroke
- * an activation?" that global key handlers consult before claiming a key.
- *
- * A `<div onClick>` / `<span onClick>` is invisible to keyboard and
- * screen-reader users: it isn't focusable and Enter/Space do nothing. Native
- * `<button>` is always preferable, but when a clickable element can't be a
- * button (it wraps block content, participates in drag-and-drop, or would lose
- * its layout styling), these helpers restore the missing semantics without a
- * visual change:
- *
- *   - `role="button"` so assistive tech announces it as activatable,
- *   - `tabIndex={0}` so it enters the keyboard tab order,
- *   - an `onKeyDown` that fires the handler on Enter and Space (and
- *     `preventDefault`s Space so the page doesn't scroll).
- *
- * Usage — keep the existing `onClick` and spread the a11y props:
- *
- *   <div onClick={select} {...clickableProps(select)}>…</div>
- *
- * For a disabled clickable, pass `{ disabled: true }` — it drops `tabIndex`
- * and the key handler and sets `aria-disabled` so the element is announced as
- * unavailable but stays out of the tab order.
+ * Makes an element with `onClick` keyboard-operable (`role="button"`, `tabIndex=0`,
+ * Enter/Space handler), plus the shared predicates global key handlers consult
+ * before claiming a key. Native `<button>` is preferable; usage: `<div onClick={select} {...clickableProps(select)}>`.
  */
 
 /**
@@ -58,18 +18,9 @@
 export function onActivateKeyDown(handler) {
   if (typeof handler !== 'function') return undefined;
   return (event) => {
-    // Only activate when the key event ORIGINATED on the element this handler
-    // is attached to — not when it bubbled up from a focusable descendant.
-    // A clickable container often wraps its own action buttons (a row with a
-    // Delete/Stop/Remove button, an expandable card with a caret toggle);
-    // without this guard, pressing Enter/Space while focused on the inner
-    // button would bubble here, fire the container's handler, AND
-    // `preventDefault` the button's native activation — so "Delete" would
-    // select the row instead of deleting. Only focusable descendants can be a
-    // distinct key-event target (a non-focusable <span>/<div> never receives
-    // the keydown), so this precisely excludes the controls we must not hijack.
-    // `currentTarget` is only null outside a live dispatch (synthetic test
-    // events) — there the guard is a no-op and activation proceeds.
+    // Ignore keys bubbled from a focusable descendant (e.g. a row's Delete
+    // button), or we'd preventDefault its native activation. `currentTarget`
+    // is null only for synthetic test events, where the guard is a no-op.
     if (event.currentTarget != null && event.target !== event.currentTarget) return;
     // `' '` is the modern key value; `'Spacebar'` covers legacy engines.
     if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
@@ -154,12 +105,9 @@ export function isEditableTarget(el) {
 }
 
 /**
- * The one predicate every app-global key handler consults before acting on a
- * window keystroke: "is this event off-limits to me?". `useKeyboardShortcuts`
- * (bubble-phase shortcut maps) and `useKeyCapture` (capture-phase key claiming)
- * both route through it, so a guard added here lands for both instead of having
- * to be re-remembered at each hook — the drift that let `useKeyCapture` swallow
- * native button activation while the other two Space paths stood down (#4748).
+ * The one predicate every app-global key handler (`useKeyboardShortcuts`,
+ * `useKeyCapture`) consults before acting on a window keystroke: "is this event
+ * off-limits to me?". Add new guards here, never at one caller (#4748).
  *
  * Always ignored, with no opt-out:
  * - **Editable targets** — typing into an input/textarea/select/contentEditable.
@@ -188,9 +136,7 @@ export function isEditableTarget(el) {
  * @returns {boolean} true when the handler must stand down
  */
 export function shouldIgnoreGlobalKey(event, { enabledInDialog = false, ignoreRepeat = true, allowChords = false } = {}) {
-  // Cheapest guards first: plain flags, then a property read, then an ancestor
-  // walk, and only then the full-document query — this runs on every keystroke
-  // of every mounted consumer.
+  // Cheapest guards first: runs on every keystroke of every mounted consumer.
   if (!allowChords && (event.metaKey || event.ctrlKey || event.altKey)) return true;
   if (ignoreRepeat && event.repeat) return true;
   if (isEditableTarget(event.target)) return true;
@@ -200,23 +146,11 @@ export function shouldIgnoreGlobalKey(event, { enabledInDialog = false, ignoreRe
 }
 
 /**
- * True when a keystroke is the focus-escape gesture — a backtab (Shift+Tab),
- * the conventional "leave this widget" move — that a key-capturing widget must
- * release to the browser instead of consuming.
- *
- * The consumer is a widget whose input surface claims nearly every keystroke —
- * the Shell page's xterm terminal, whose helper textarea sits in the tab order
- * but whose `_keyDown` `preventDefault`s Tab, Shift+Tab and Escape alike
- * (WCAG 2.1.2 keyboard trap). Installed as
- * `term.attachCustomKeyEventHandler((e) => !isFocusEscapeKey(e))`, the `false`
- * return makes xterm bail before it cancels the event, so the browser performs
- * the backtab and focus lands on the previous tabbable element — and nothing
- * is sent to the PTY. Plain Tab stays claimed: it is shell completion, and
- * forward-leaving is what the controls laid out before the terminal are for.
- *
- * Chorded variants are deliberately not excluded — a Ctrl/Alt+Shift+Tab the
- * browser or OS owns (previous browser tab, window switching) must pass
- * through rather than be eaten by the widget too.
+ * True for a backtab (Shift+Tab), the "leave this widget" gesture a
+ * key-capturing widget must release to the browser (WCAG 2.1.2 keyboard trap).
+ * Used as `term.attachCustomKeyEventHandler((e) => !isFocusEscapeKey(e))` for
+ * the Shell xterm; plain Tab stays claimed for shell completion. Chorded
+ * variants are deliberately not excluded so browser/OS shortcuts pass through.
  *
  * @param {KeyboardEvent} event
  * @returns {boolean}
@@ -226,29 +160,15 @@ export function isFocusEscapeKey(event) {
 }
 
 /**
- * Props for the ROOT of a surface that owns a key globally — a drill scored on
- * Space, the Morse keyer, RapidReader, the OpenWorld rig.
- *
- * On such a surface a button that keeps focus after a mouse click silently takes
- * the key over: `shouldIgnoreGlobalKey` correctly stands the global handler down
- * for native button activation, so the next Space presses the lingering button
- * instead of driving the surface. `preventDefault` on `mousedown` is what
- * suppresses that focus — it leaves the click itself, and every keyboard path,
- * untouched, so a user who TABS to the button still focuses and activates it.
- *
- * This sits on the surface root rather than on each button deliberately. The
- * per-button form has to be remembered for every control on the surface and for
- * every control added later — the same "re-remember it at each site" drift that
- * made #4748 a bug in the first place — and these surfaces render their buttons
- * across several child components. One capture-phase handler at the root covers
- * all of them, including ones that don't exist yet.
+ * Props for the ROOT of a surface that owns a key globally (drill, keyer, rig).
+ * A button focused by a mouse click would take the key over, since
+ * `shouldIgnoreGlobalKey` stands down for native button activation; suppressing
+ * `mousedown` focus leaves clicks and keyboard (Tab) paths untouched. Placed on
+ * the root so every current and future child control is covered.
  */
-// The control whose pointer focus was last suppressed. A button that opens a
-// dialog never becomes `document.activeElement`, so `useFocusTrap` would capture
-// `<body>` as the element to restore focus to on close (WCAG 2.4.3) — this is
-// what it falls back to instead. No staleness guard is needed beyond
-// `isConnected`: the fallback is only ever consulted when nothing else holds
-// focus, and anything else taking focus is exactly what makes that untrue.
+// Last control whose pointer focus was suppressed: `useFocusTrap` falls back to
+// it for focus restoration (WCAG 2.4.3) since it never became `activeElement`.
+// Only `isConnected` is checked; it is consulted only when nothing holds focus.
 let pointerFocusSuppressed = null;
 
 export const noPointerFocusSurfaceProps = {

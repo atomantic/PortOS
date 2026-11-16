@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { searchHuggingFaceModels, enrichCatalogWithVariants, applyMeasuredFit, fetchRepoPublishedDates } from './huggingFaceCatalog.js'
+import { searchHuggingFaceModels, enrichCatalogWithVariants, applyMeasuredFit } from './huggingFaceCatalog.js';
+import { fetchRepoPublishedDates } from './huggingFaceMetadata.js';
 import { fetchRepoPublishedDates as fetchMetadataDates } from './huggingFaceMetadata.js'
 import { __resetOllamaRegistryCache } from './ollamaRegistryCatalog.js'
 

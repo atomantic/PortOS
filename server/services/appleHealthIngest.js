@@ -3,6 +3,9 @@
  *
  * Handles JSON ingest from Health Auto Export app, deduplication by
  * metric+origin+source+timestamp, and day-partitioned file storage at data/health/YYYY-MM-DD.json.
+ *
+ * Storage: `file-primary` — machine-local, no peer sync category. Sensitive health
+ * records stay out of the app DB until that boundary is designed.
  */
 
 import { invalidateMeatspace } from './meatspaceEvents.js';
@@ -85,6 +88,11 @@ export function withLiveHealthRestore(transfer) {
   });
   restoreTail = run.catch(() => {});
   return run;
+}
+
+/** Test settle signal: whether a live restore is parked draining admitted day cycles. */
+export function _healthRestoreDrainingForTests() {
+  return admission.drained !== null;
 }
 
 // === Pure Functions ===

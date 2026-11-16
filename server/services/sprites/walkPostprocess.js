@@ -46,11 +46,7 @@ import { WALK_TRACK, getAnimationTrack, clampTrackFrameCount, clampTrackFps } fr
 import { getEffectiveAnimationTracks } from './animationTrackStore.js';
 import { trackColumnLabels } from './atlasGrid.js';
 
-export {
-  WALK_PHASES, WALK_FRAME_COUNT, WALK_DEFAULT_FRAME_COUNT, WALK_DEFAULT_FPS,
-  WALK_MIN_FRAME_COUNT, WALK_MAX_FRAME_COUNT, WALK_MIN_FPS, WALK_MAX_FPS,
-  walkPhaseLabels, clampFrameCount, clampFps,
-} from './walkBounds.js';
+export { WALK_PHASES, WALK_DEFAULT_FRAME_COUNT, WALK_DEFAULT_FPS, WALK_MIN_FRAME_COUNT, WALK_MAX_FRAME_COUNT, WALK_MIN_FPS, WALK_MAX_FPS, clampFrameCount, clampFps } from './walkBounds.js';
 
 // Preserve the sprite lane's established median deep-import surface while the
 // implementation lives in the shared leaf.

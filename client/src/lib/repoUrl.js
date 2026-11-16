@@ -1,5 +1,5 @@
 /**
- * `parseRepoUrl(url)` / `isRepoUrl(url)` / `repoBrowseUrl(parsed)` / `parseGitHubUrl(url)` /
+ * `parseRepoUrl(url)` / `repoBrowseUrl(parsed)` / `parseGitHubUrl(url)` /
  * `isGitHubRepoUrl(url)` — re-exported from `server/lib/repoUrl.js`, the authoritative repo-URL rule.
  */
 
@@ -10,12 +10,4 @@
  * imported rather than copied so the two runtimes cannot drift. The file stays
  * so every `lib/repoUrl` import path in the client is unchanged.
  */
-export {
-  MAX_REPO_PATH_DEPTH,
-  REPO_HOSTS,
-  isGitHubRepoUrl,
-  isRepoUrl,
-  parseGitHubUrl,
-  parseRepoUrl,
-  repoBrowseUrl,
-} from '../../../server/lib/repoUrl.js';
+export { isGitHubRepoUrl, parseGitHubUrl, parseRepoUrl, repoBrowseUrl } from '../../../server/lib/repoUrl.js';

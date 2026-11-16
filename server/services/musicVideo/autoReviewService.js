@@ -76,6 +76,7 @@ import {
   FREEZE_MIN_SEC,
 } from './autoReviewJudge.js';
 
+import { encodeFileContactSheetAtTimes } from '../htmlComposition/encode.js';
 const execFileAsync = promisify(execFile);
 // A run takes at most this many steps per advance before yielding — a guard
 // against a step that fails to change the record looping forever.
@@ -171,7 +172,6 @@ async function callReviewer(run, prompt, screenshots, projectId) {
 // the times actually captured (a failed sheet drops its own times, keeping
 // tiles and the prompt's frameTimes aligned).
 async function extractStripSheets(excerptPath, jobId, times) {
-  const { encodeFileContactSheetAtTimes } = await import('../htmlComposition/encode.js');
   const info = await probeVideoStreamInfo(excerptPath).catch(() => ({}));
   const fps = info.fps > 0 ? info.fps : 24;
   await ensureDir(PATHS.videoThumbnails);

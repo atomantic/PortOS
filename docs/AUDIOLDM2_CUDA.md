@@ -30,55 +30,23 @@ never download weights or generate audio.
 
 ## Regenerating locks
 
-Edit `scripts/requirements-audioldm2-cuda.txt` with exact direct pins. Use
-hash-verified uv 0.13.7 and the [scoped-index recipe](./WAN22_CUDA.md#regenerating-locks),
-substituting the AudioLDM2 source/output names and scoping only Torch to the
-CUDA index (AudioLDM2 has no Torchvision dependency). Keep CPython 3.11 and
-both x86_64 target platforms. Preserve the existing output pins, markers and
-unrelated hash blocks; advance the cutoff to at least seven days ago.
-
-Do not resolve ordinary PyPI packages from the CUDA mirror: some entries have
-no upload date and fail cooldown validation. The
-[bounded #15988 procedure](./PYTHON_RUNTIME_REFRESH.md#newly-cooled-follow-on-2026-11-13-15988)
-describes complete-closure constraints and selective generated-block transfer.
-Installation retains its existing indexes and exact hash restrictions.
-
-Query OSV for **every resolved package**, including `MAL-` records, immediately
-before merge. This standard-library Python check normalizes CUDA local build
-tags to the upstream version and fails on any advisory or unreadable response:
+Edit `scripts/requirements-audioldm2-cuda.txt` with exact direct pins, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks) with these values:
 
 ```bash
-python3 - <<'PY'
-import json
-import re
-import urllib.request
-from pathlib import Path
-
-for target in ("windows", "linux"):
-    lock = Path(f"scripts/requirements-audioldm2-cuda-{target}.lock.txt")
-    pins = re.findall(r"^([\w.-]+)==([^\s\\;]+)", lock.read_text(), re.M)
-    assert pins, f"{target}: empty lock"
-    queries = [{"package": {"name": name, "ecosystem": "PyPI"},
-                "version": version.split("+")[0]} for name, version in pins]
-    request = urllib.request.Request(
-        "https://api.osv.dev/v1/querybatch",
-        json.dumps({"queries": queries}).encode(),
-        {"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(request, timeout=60) as response:
-        results = json.load(response)["results"]
-    assert len(results) == len(pins), "incomplete OSV response"
-    findings = [(pins[i], v["id"]) for i, result in enumerate(results)
-                for v in result.get("vulns", [])]
-    print(target, len(pins), "packages", findings)
-    assert not findings, "resolve all advisories before merge"
-PY
+SLUG=audioldm2-cuda
+LABEL="AudioLDM2 CUDA"
+DOC=docs/AUDIOLDM2_CUDA.md
+CUDA_SCOPED="torch"
 ```
+
+AudioLDM2 has no Torchvision dependency, so only Torch is scoped to the CUDA index.
+
+Run the [OSV audit](./RUNTIME_LOCKS.md#osv-audit) with `audioldm2-cuda` before merge.
 
 ## Fresh install and readiness evidence
 
-Use an isolated home/data directory to exercise the actual installer without
-replacing a working runtime. From Bash, with no other runtime install flags set:
+Follow the [shared evidence procedure](./RUNTIME_LOCKS.md#fresh-install-and-readiness-evidence)
+with:
 
 ```bash
 export HOME="$PWD/.cache/audioldm2-validation-home"
@@ -94,11 +62,3 @@ also run:
 ```bash
 "$HOME/.portos/venv-audioldm2/bin/python3" -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
 ```
-
-(`Scripts/python.exe` on Windows) and expect `True`. Record OS, GPU model,
-driver/driver-supported CUDA, Python/torch/bundled CUDA versions, selected lock
-and redacted probe output in the PR. Run `uv pip check --python` with the
-installed interpreter and verify Repair leaves the lock's versions unchanged. A
-Windows probe does not certify the Linux target; untested targets retain their
-hardware evidence requirement. Import/readiness evidence does not claim render
-quality or speed.

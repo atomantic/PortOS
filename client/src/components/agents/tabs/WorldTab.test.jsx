@@ -16,6 +16,7 @@ vi.mock('../../../services/socket', () => ({
 }));
 
 import * as api from '../../../services/api';
+import socket from '../../../services/socket';
 import WorldTab from './WorldTab.jsx';
 
 const MW_ALL = ['mw_explore', 'mw_build', 'mw_think', 'mw_say', 'mw_heartbeat', 'mw_interact'];
@@ -97,5 +98,31 @@ describe('WorldTab activity history', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
     expect(await screen.findByText('build')).toBeInTheDocument();
     expect(screen.queryByText(/Could not load activity history/)).toBeNull();
+  });
+
+  it('refetches the action queue when a queue socket event arrives', async () => {
+    render(<WorldTab agentId="agent-1" />);
+    await screen.findByText('No queued actions');
+    api.moltworldGetQueue.mockResolvedValue([
+      { id: 'q-1', actionType: 'mw_think', status: 'pending', params: { thought: 'hello' } },
+    ]);
+    const [, onAdded] = socket.on.mock.calls.find(([event]) => event === 'moltworld:queue:added');
+    await act(async () => { onAdded({}); });
+    expect(await screen.findByText('1 item')).toBeInTheDocument();
+    expect(screen.queryByText('No queued actions')).toBeNull();
+  });
+
+  it('shows a queue error with Retry instead of an empty queue when the read fails', async () => {
+    api.moltworldGetQueue.mockRejectedValue(new Error('queue down'));
+    render(<WorldTab agentId="agent-1" />);
+    expect(await screen.findByText(/Could not load action queue — queue down/)).toBeInTheDocument();
+    expect(screen.queryByText('No queued actions')).toBeNull();
+
+    api.moltworldGetQueue.mockResolvedValue([]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    });
+    expect(await screen.findByText('No queued actions')).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load action queue/)).toBeNull();
   });
 });

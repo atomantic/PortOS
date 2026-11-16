@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   READY_POLL_INTERVAL_MS,
   READY_IDLE_THRESHOLD_MS,
-  PASTE_DEADLINE_MS,
   PASTE_MARKER_POLL_MS,
   PASTE_MARKER_PATTERN,
   detectPasteMarker,
@@ -24,30 +23,19 @@ import {
   STALL_NUDGE_MAX_ATTEMPTS,
   SELF_CLEARING_RESUBMIT_INTERVAL_MS,
   SELF_CLEARING_RESUBMIT_ECHO_MS,
-  MCP_BOOT_PASTE_DEADLINE_MS,
   isPasteCommitted,
   isPasteConfirmed,
-  MCP_BOOT_PASTE_RETRY_DELAY_MS,
   isMcpBootSignal,
   createMcpBootTracker,
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
   SUBMIT_ENTER_ATTEMPTS,
   SUBMIT_ENTER_SPACING_MS,
-  DEFAULT_TUI_PROMPT_DELAY_MS,
-  RAW_BUFFER_CAP,
-  RAW_BUFFER_HEADROOM,
-  OUTPUT_BUFFER_CAP,
-  OUTPUT_BUFFER_HEADROOM,
   inferTuiCommand,
   applyCommandDefaults,
   buildTuiInvocation,
   detectMissingTuiBinary,
   scheduleSubmitEnters,
-  PASTE_VERIFY_POLL_MS,
-  PASTE_VERIFY_WINDOW_MS,
-  PASTE_RETRY_MAX_ATTEMPTS,
-  PASTE_RETRY_BASE_DELAY_MS,
   extractVerifiablePromptPrefix,
   verifyPasteRendered,
   isCollapsedPasteChip,
@@ -73,34 +61,7 @@ import { readFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
-// The exported constants are load-bearing for both production callers
-// (`tuiPromptRunner.js`, `agentTuiSpawning.js`). Pin every value so an
-// inadvertent edit on one timing knob trips a test instead of silently
-// drifting the paste handshake.
-describe('tuiHandshake — paste timing constants', () => {
-  it('pins ready-poll constants', () => {
-    expect(READY_POLL_INTERVAL_MS).toBe(300);
-    expect(READY_IDLE_THRESHOLD_MS).toBe(1200);
-    expect(PASTE_DEADLINE_MS).toBe(10000);
-    // The idle threshold must remain larger than the poll interval —
-    // otherwise the first idle window is observed before the banner
-    // has finished its second paint.
-    expect(READY_IDLE_THRESHOLD_MS).toBeGreaterThan(READY_POLL_INTERVAL_MS);
-    // The deadline must outrun the idle threshold by enough headroom to
-    // catch a slow spawn + initial paint.
-    expect(PASTE_DEADLINE_MS).toBeGreaterThan(READY_IDLE_THRESHOLD_MS);
-  });
-
-  it('pins paste-marker constants', () => {
-    expect(PASTE_MARKER_POLL_MS).toBe(150);
-    expect(PASTE_TO_ENTER_MIN_DELAY_MS).toBe(200);
-    expect(PASTE_TO_ENTER_FALLBACK_MS).toBe(3500);
-    // Fallback only fires when no marker appears; it must be longer than
-    // the min delay or the min delay never gates anything.
-    expect(PASTE_TO_ENTER_FALLBACK_MS).toBeGreaterThan(PASTE_TO_ENTER_MIN_DELAY_MS);
-  });
-
-  it('PASTE_MARKER_PATTERN matches Claude Code paste markers', () => {
+describe('tuiHandshake — paste timing constants', () => {  it('PASTE_MARKER_PATTERN matches Claude Code paste markers', () => {
     expect(PASTE_MARKER_PATTERN.test('[Pasted text #1 +3 lines]')).toBe(true);
     expect(PASTE_MARKER_PATTERN.test('[Pasted text #42 +120 lines]')).toBe(true);
     // Embedded inside a banner of escape-stripped output.
@@ -499,36 +460,9 @@ describe('tuiHandshake — paste timing constants', () => {
       });
     });
   });
-
-  it('pins provider-default constants', () => {
-    expect(DEFAULT_TUI_PROMPT_DELAY_MS).toBe(2500);
-  });
-
-  it('pins buffer caps with headroom > cap (defensive growth allowance)', () => {
-    expect(RAW_BUFFER_CAP).toBe(512 * 1024);
-    expect(RAW_BUFFER_HEADROOM).toBe(640 * 1024);
-    // OUTPUT cap was bumped 1MB → 8MB so realistic full-context LLM responses
-    // (~600KB UTF-8 from a 200K-token window + screen chrome) fit cleanly
-    // when the file-write path falls back to the buffer scrape. A regression
-    // back to ~1MB would silently mid-token-truncate large fallback responses.
-    expect(OUTPUT_BUFFER_CAP).toBe(8 * 1024 * 1024);
-    expect(OUTPUT_BUFFER_HEADROOM).toBe(10 * 1024 * 1024);
-    // Headroom must exceed cap so the slice-tail-after-overflow logic in
-    // the callers actually keeps recent bytes instead of dropping them.
-    expect(RAW_BUFFER_HEADROOM).toBeGreaterThan(RAW_BUFFER_CAP);
-    expect(OUTPUT_BUFFER_HEADROOM).toBeGreaterThan(OUTPUT_BUFFER_CAP);
-  });
 });
 
 describe('tuiHandshake — codex MCP-boot paste patience (agent-c5a26b40)', () => {
-  it('deadline covers a node_repl startup_timeout_sec=120 plus margin', () => {
-    // Long enough for the documented 120s node_repl startup + an npx cold
-    // download, with a bounded retry window for a genuinely hung boot.
-    expect(MCP_BOOT_PASTE_DEADLINE_MS).toBe(150000);
-    expect(MCP_BOOT_PASTE_DEADLINE_MS).toBeGreaterThan(120000);
-    expect(MCP_BOOT_PASTE_RETRY_DELAY_MS).toBe(5000);
-  });
-
   it('isMcpBootSignal matches codex MCP boot banners (case-insensitive)', () => {
     expect(isMcpBootSignal('Booting MCP server: codex_apps(0s • esc to interrupt)')).toBe(true);
     expect(isMcpBootSignal('Starting MCP servers (0/3): codex_apps, node_repl, playwright')).toBe(true);
@@ -1035,18 +969,6 @@ describe('tuiHandshake.scheduleSubmitEnters', () => {
     vi.advanceTimersByTime(SUBMIT_ENTER_SPACING_MS * (SUBMIT_ENTER_ATTEMPTS + 2));
     // The immediate write already happened; no interval-driven writes follow.
     expect(write).toHaveBeenCalledTimes(1);
-  });
-});
-
-// Paste verification helpers (issue #2192)
-describe('tuiHandshake — paste verification constants', () => {
-  it('pins paste verification constants', () => {
-    expect(PASTE_VERIFY_POLL_MS).toBe(200);
-    expect(PASTE_VERIFY_WINDOW_MS).toBe(2000);
-    expect(PASTE_RETRY_MAX_ATTEMPTS).toBe(3);
-    expect(PASTE_RETRY_BASE_DELAY_MS).toBe(800);
-    // Verification window should be shorter than the overall paste deadline
-    expect(PASTE_VERIFY_WINDOW_MS).toBeLessThan(PASTE_DEADLINE_MS);
   });
 });
 

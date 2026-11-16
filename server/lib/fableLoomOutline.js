@@ -16,7 +16,7 @@ import { LOOM_LIMITS } from './fableLoomLimits.js';
 import { FABLELOOM_PROTAGONIST_PRESENCE } from './fableLoomPlayback.js';
 import { trimTo, isNonBlankStr } from './textUtils.js';
 
-const isObject = (value) => value && typeof value === 'object';
+const isNonNullObject = (value) => value && typeof value === 'object';
 
 export const OUTLINE_ISSUE_CODES = Object.freeze({
   NO_SCENES: 'NO_SCENES',
@@ -97,10 +97,10 @@ const uniqueKey = (candidate, index, seen) => {
 };
 
 const sanitizeValidation = (raw) => {
-  if (!isObject(raw)) return { status: 'draft', issues: [] };
+  if (!isNonNullObject(raw)) return { status: 'draft', issues: [] };
   const status = OUTLINE_STATUSES.has(raw.status) ? raw.status : 'draft';
   const issues = asArray(raw.issues)
-    .filter(isObject)
+    .filter(isNonNullObject)
     .slice(0, LOOM_LIMITS.OUTLINE_ISSUES_MAX)
     .map((issue) => ({
       code: trimTo(issue.code, 80),
@@ -125,7 +125,7 @@ const sanitizeValidation = (raw) => {
  * explain the broken edge instead of silently changing the author's arc.
  */
 export function sanitizeStoryOutline(raw, { participationMode = 'protagonist' } = {}) {
-  if (!isObject(raw)) return null;
+  if (!isNonNullObject(raw)) return null;
   const rawScenes = asArray(raw.scenes).slice(0, LOOM_LIMITS.OUTLINE_SCENES_MAX);
   const seen = new Set();
   const keyByRawKey = new Map();
@@ -134,7 +134,7 @@ export function sanitizeStoryOutline(raw, { participationMode = 'protagonist' } 
     if (isNonBlankStr(scene?.key) && !keyByRawKey.has(scene.key.trim())) keyByRawKey.set(scene.key.trim(), key);
     const transitions = asArray(scene?.transitions)
       .slice(0, LOOM_LIMITS.OUTLINE_TRANSITIONS_MAX)
-      .filter(isObject)
+      .filter(isNonNullObject)
       .map((transition) => ({
         targetKey: isNonBlankStr(transition.targetKey)
           ? transition.targetKey.trim().slice(0, LOOM_LIMITS.OUTLINE_KEY_MAX)

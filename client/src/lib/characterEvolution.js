@@ -1,17 +1,6 @@
 /**
  * The five-stage character evolution lens as the editors consume it (#6440).
  *
- * The five-stage character evolution lens as the editors consume it. Re-exports `EVOLUTION_STAGES` /
- * `EVOLUTION_OUTCOMES` / `EVOLUTION_STAGE_LABELS` / `EVOLUTION_STAGE_TEXT_FIELDS` /
- * `EVOLUTION_EVIDENCE_FIELDS` / `EVOLUTION_EVIDENCE_STATUSES` / `CHARACTER_EVOLUTION_LIMITS` /
- * `evolutionEvidenceStatus` / `isDeclaredEvolution` from the pure leaf
- * `server/lib/characterEvolution.js` (a guard in `server/lib/characterEvolution.test.js` fails if this
- * file ever restates a vocabulary instead of re-exporting it), adds the editor descriptors
- * `EVOLUTION_STAGE_EDITOR_FIELDS` / `EVOLUTION_OUTCOME_HINTS` (#6440), and the draft-mutation helpers
- * `evolutionStage` / `patchEvolution` / `patchEvolutionStage` / `patchEvolutionEvidence` that keep an
- * editor's draft collapsing to the same shape the server sanitizer produces — so a present-but-empty
- * field is a real clear (#6441).
- *
  * Re-exports the vocabularies from the pure server leaf
  * `server/lib/characterEvolution.js` — imported rather than copied so the two
  * runtimes cannot drift — and adds the editor-only descriptors (label,

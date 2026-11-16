@@ -112,7 +112,7 @@ import { startSignalScheduler } from './signalScheduler.js';
 import { startSpotifyScheduler } from './spotifyScheduler.js';
 import { startYoutubeScheduler } from './youtubeScheduler.js';
 import { reconcileStackerNewsSchedulers } from './stackerNewsScheduler.js';
-import { onProvidersSaved as onProvidersSavedForGraph } from './providerGraph.js';
+import { onProvidersSaved as onProvidersSavedForGraph, initProviderGraph } from './providerGraph.js';
 import { reportRetiredModelPins } from './modelPinAuditNotifier.js';
 import { startBrainScheduler } from './brainScheduler.js';
 import { startActivityDigestScheduler } from './activityDigestScheduler.js';
@@ -137,7 +137,7 @@ import { recoverStuckAnalyses } from './writersRoom/evaluator.js';
 import { recoverStuckGeneratingStages } from './pipeline/textStages.js';
 import { recoverStuckAutoRuns } from './pipeline/autoRunner.js';
 import { recoverStuckAutopilots } from './pipeline/seriesAutopilot.js';
-import { recoverInFlightProjects } from './creativeDirector/recovery.js';
+import { recoverInFlightProjects, markRecoveryDone } from './creativeDirector/recovery.js';
 import { recoverStuckMusicVideoRenders } from './musicVideo/render.js';
 import { recoverStuckMusicVideoExcerpts } from './musicVideo/excerptRender.js';
 import { recoverInterruptedModels as recoverInterruptedThreejsModels } from './threejsModels/index.js';
@@ -198,6 +198,12 @@ import { initFallbackChain } from './providerFallbackChain.js';
 import { localCachedModelIds } from './localCachedModels.js';
 import { stopCodexAppServer } from './codexAppServer.js';
 import { logFailureWithStack as logBootstrapFailure } from '../lib/failureLogging.js';
+import { listProjects } from './creativeDirector/local.js';
+import { isFileBackend } from '../lib/pgFileFacade.js';
+import { checkHealth, ensureSchema } from '../lib/db.js';
+import { initializeMessageDrafts } from './messageDrafts.js';
+import { isInstanceFeatureEnabled } from './instanceFeatures.js';
+import { initImageOriginStamping } from './imageGen/imageRecords.js';
 
 /**
  * Pre-route boot. Everything a route handler may depend on being ready the
@@ -290,7 +296,6 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
     applyDataMigrations: async () => {
       await runMigrations({ rootDir: resolveInstallRoot(join(serverDir, '..')) });
       // Local recovery only: no mail, browser, or LLM provider calls.
-      const { initializeMessageDrafts } = await import('./messageDrafts.js');
       await initializeMessageDrafts();
     },
 
@@ -475,8 +480,8 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // Docker containment (#12844): sweep containers/volumes a crash or restart
   // left behind — only when the user turned the feature on, so a fresh install
   // makes no Docker call at boot.
-  Promise.all([import('./instanceFeatures.js'), import('./dockerContainment.js')])
-    .then(async ([{ isInstanceFeatureEnabled }, { reconcileDockerContainment }]) => {
+  import('./dockerContainment.js')
+    .then(async ({ reconcileDockerContainment }) => {
       if (await isInstanceFeatureEnabled('docker-containment')) await reconcileDockerContainment({ enabled: true, reason: 'boot' });
     })
     .catch(err => logBootstrapFailure('⚠️ Docker containment boot reconcile deferred', err));
@@ -827,8 +832,6 @@ const initMediaJobDependentHooks = () => {
  */
 const runDatabaseBootPhase = () => runDatabasePhase({
   gate: async () => {
-    const { checkHealth, ensureSchema } = await import('../lib/db.js');
-    const { isFileBackend } = await import('../lib/pgFileFacade.js');
     const { dbReady } = await gateOnDatabase({
       checkHealth,
       ensureSchema,
@@ -899,7 +902,7 @@ const runDatabaseBootPhase = () => runDatabasePhase({
     // earlier step, so it can still be in flight here. listProjects() forces
     // selectBackend() → the (idempotent, marker-gated) import to completion,
     // which the prune below depends on.
-    warmCreativeDirector: async () => (await import('./creativeDirector/local.js')).listProjects(),
+    warmCreativeDirector: async () => listProjects(),
     // Legacy artifact prune: removes the `.imported` / `.bak-NNN` recovery
     // copies the migrators parked aside, but ONLY when the live row count
     // matches the marker's recorded import (a wiped/restored DB keeps the
@@ -911,7 +914,7 @@ const runDatabaseBootPhase = () => runDatabasePhase({
   // into ai_connections / ai_harness_bindings / ai_route_bindings; later runs
   // reconcile against providers.json. Reads and writes local state only.
   reconcileProviderGraph: async () => {
-    await (await import('./providerGraph.js')).initProviderGraph();
+    await initProviderGraph();
     // Per-harness enablement (#7564): normalize the settings slice and prime
     // the composite cache's revision. Settings-only — no provider is contacted.
     await (await import('./harnessEnablement.js')).reconcileHarnessEnablement();
@@ -1047,7 +1050,6 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
     // timeout fallback for nothing.
     recoverCreativeDirectorProjects: () => recoverInFlightProjects().catch(async (e) => {
       logBootstrapFailure('⚠️ CD boot recovery failed', e, console.log);
-      const { markRecoveryDone } = await import('./creativeDirector/recovery.js');
       markRecoveryDone();
     }),
 
@@ -1103,8 +1105,7 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
           .then(({ initMediaHolders }) => initMediaHolders())
           .catch((err) => logBootstrapFailure('❌ Media release queue init failed', err));
         // Gallery renders record this machine as their origin, which remote delete targets.
-        void import('./imageGen/imageRecords.js')
-          .then(({ initImageOriginStamping }) => initImageOriginStamping())
+        void Promise.resolve().then(() => initImageOriginStamping())
           .catch((err) => logBootstrapFailure('❌ Image origin stamping init failed', err));
       },
       // Brain digests/reviews call an AI provider, so the scheduler arms only
@@ -1399,6 +1400,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     await scheduledEventsDrained;
     await catalogFilingFlushed;
     timing.mark('dbPool');
+    // Kept dynamic: bootstrap.shutdown.test.js runs this handler in a vm with module loading injected.
     const { close } = await import('../lib/db.js');
     if (typeof close === 'function') {
       // Bound the DB pool close: pool.end() waits for every checked-out client to

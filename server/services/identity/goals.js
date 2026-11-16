@@ -19,6 +19,7 @@ import {
 } from './store.js';
 import { applyFreshTimeHorizons, deriveLongevity } from './longevity.js';
 import { tombstoneGoal } from './goalTombstones.js';
+import { getActiveProvider, getProviderById } from '../providers.js';
 
 /**
  * Read the longevity snapshot with `timeHorizons` re-derived against today (#4122).
@@ -266,6 +267,7 @@ export async function setBirthDate(birthDate) {
   });
 
   // External work stays outside the goal queue.
+  // Lazy: meatspace.js reads PATHS at load; suites that mock paths.js load goals.js without it.
   const { updateBirthDate } = await import('../meatspace.js');
   await updateBirthDate(birthDate, { syncGoals: false });
   const longevity = await deriveLongevity(birthDate);
@@ -696,7 +698,6 @@ function assertNoScheduledEvents(goal) {
 }
 
 export async function generateGoalPhases(goalId, { providerId, model } = {}) {
-  const { getActiveProvider, getProviderById } = await import('../providers.js');
   const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
   const goal = goals.goals.find(g => g.id === goalId);
   if (!goal) throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
@@ -778,7 +779,6 @@ export async function acceptGoalPhases(goalId, phases) {
 // "now hand-add every todo" gap. Returns the proposal WITHOUT persisting so the
 // user can review/edit before accept (mirrors generate → accept-phases).
 export async function decomposeGoal(goalId, { providerId, model } = {}) {
-  const { getActiveProvider, getProviderById } = await import('../providers.js');
   const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
   const goal = goals.goals.find(g => g.id === goalId);
   if (!goal) throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
@@ -893,7 +893,6 @@ export async function completeMilestoneTask(goalId, milestoneId, taskId) {
 // =============================================================================
 
 export async function organizeGoals({ providerId, model } = {}) {
-  const { getActiveProvider, getProviderById } = await import('../providers.js');
   const goals = await getGoals();
   const activeGoals = goals.goals.filter(g => g.status === 'active');
 
@@ -1012,7 +1011,6 @@ export async function applyGoalOrganization(organization) {
 // =============================================================================
 
 export async function checkInGoal(goalId, { providerId, model } = {}) {
-  const { getActiveProvider, getProviderById } = await import('../providers.js');
   const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
   const goal = goals.goals.find(g => g.id === goalId);
   if (!goal) throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });

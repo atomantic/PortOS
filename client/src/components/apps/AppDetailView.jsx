@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router';
 import {
   ArrowLeft, Play, Square, RotateCcw, ExternalLink, Gamepad2, Hammer, RefreshCw,
@@ -13,7 +13,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import StatusBadge from '../StatusBadge';
 import * as api from '../../services/api';
 import { getLaunchUrls } from '../../services/appUrls';
-import socket from '../../services/socket';
+import { useSocketResource } from '../../hooks/useSocketResource';
 import { APP_DETAIL_TABS, NON_PM2_TYPES, getAppTypeLabel, isAppFeatureEnabled, resolveLaunchPanelProcess } from './constants';
 import { useProcessSnapshot } from '../../hooks/useProcessSnapshot.js';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
@@ -57,6 +57,8 @@ export const APP_DETAIL_TAB_ICONS = {
   update: RefreshCw,
 };
 
+const APP_EVENTS = ['apps:changed'];
+
 export default function AppDetailView() {
   const { appId } = useParams();
   // Route identity owns all detail state, including child tabs and async actions.
@@ -69,10 +71,6 @@ function AppDetail() {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = tab || 'overview';
 
-  const [app, setApp] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
-  const [loadError, setLoadError] = useState(null);
   const [actionLoading, setActionLoading] = useState(null);
   // PM2 process whose live output the desktop launch panel is tailing (null = hidden).
   const [launchProcess, setLaunchProcess] = useState(null);
@@ -87,35 +85,26 @@ function AppDetail() {
   const [viteFixing, setViteFixing] = useState(null); // 'allow-all' | 'ai' while a fix is in flight
   const { features: instanceFeatures, error: instanceFeaturesError } = useInstanceFeatures();
 
-  const fetchSeqRef = useRef(0);
-  const appRef = useRef(null);
-  const fetchApp = useCallback(async () => {
-    const seq = ++fetchSeqRef.current;
-    if (!appRef.current) setLoading(true);
-    const result = await api.getApp(appId, { includeQuality: true, silent: true })
-      .then(data => ({ data }))
-      .catch(error => ({ error }));
-    if (seq !== fetchSeqRef.current) return;
-    if (result.error) {
-      const missing = result.error.status === 404;
-      appRef.current = null;
-      setApp(null);
-      setNotFound(missing);
-      setLoadError(missing ? null : result.error);
-      setLoading(false);
-      return;
+  // The route key remounts per app, so appId is stable for this resource. A 404
+  // is "no such app" (null), distinct from a failed read (error).
+  const readApp = useCallback(() => api.getApp(appId, { includeQuality: true, silent: true })
+    .catch(error => { if (error.status === 404) return null; throw error; }), [appId]);
+  const matchesAppEvent = useCallback((change) => {
+    // Unscoped events invalidate the fleet; scoped events affect only one app.
+    if (change?.appId != null && change.appId !== appId) return false;
+    // The delete event reaches this mounted detail view before the DELETE
+    // response can navigate it away. Avoid refetching the known-deleted app,
+    // which would turn the expected 404 into an error toast beside success.
+    if (change?.action === 'delete' && change.appId === appId) {
+      navigate('/apps');
+      return false;
     }
-    appRef.current = result.data;
-    setNotFound(!result.data);
-    setLoadError(null);
-    setApp(result.data);
-    setLoading(false);
-  }, [appId]);
-
-  useEffect(() => {
-    fetchApp();
-    return () => { ++fetchSeqRef.current; };
-  }, [fetchApp]);
+    return true;
+  }, [appId, navigate]);
+  const { data: app, loading, error: loadError, refetch } = useSocketResource(readApp, {
+    events: APP_EVENTS, matchesEvent: matchesAppEvent, resourceKey: appId,
+  });
+  const notFound = !loading && !loadError && !app;
 
   // Deep-link into the Edit App drawer (e.g. the Layered Intelligence overview
   // links here with `?edit=1&appTab=intelligence` to open the Intelligence tab).
@@ -128,24 +117,6 @@ function AppDetail() {
     next.delete('edit');
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
-
-  // Real-time updates
-  useEffect(() => {
-    const handleAppsChanged = (change) => {
-      // Unscoped events invalidate the fleet; scoped events affect only one app.
-      if (change?.appId != null && change.appId !== appId) return;
-      // The delete event reaches this mounted detail view before the DELETE
-      // response can navigate it away. Avoid refetching the known-deleted app,
-      // which would turn the expected 404 into an error toast beside success.
-      if (change?.action === 'delete' && change.appId === appId) {
-        navigate('/apps');
-        return;
-      }
-      fetchApp();
-    };
-    socket.on('apps:changed', handleAppsChanged);
-    return () => socket.off('apps:changed', handleAppsChanged);
-  }, [appId, fetchApp, navigate]);
 
   const handleStart = async () => {
     setActionLoading('start');
@@ -287,7 +258,7 @@ function AppDetail() {
               </p>
               <div className="mt-4 flex flex-wrap items-center gap-3">
                 <button
-                  onClick={fetchApp}
+                  onClick={refetch}
                   className="inline-flex min-h-[40px] items-center gap-2 rounded-lg bg-port-accent px-4 py-2 text-sm text-white hover:bg-port-accent/80"
                 >
                   <RefreshCw size={16} aria-hidden="true" />
@@ -319,7 +290,7 @@ function AppDetail() {
   const renderTab = () => {
     switch (effectiveTab) {
       case 'overview':
-        return <OverviewTab app={app} onRefresh={fetchApp} />;
+        return <OverviewTab app={app} onRefresh={refetch} />;
       case 'tasks':
         return <TasksTab appId={appId} />;
       case 'automation':
@@ -337,7 +308,7 @@ function AppDetail() {
       case 'pull-requests':
         return <PullRequestsTab appId={appId} appName={app.name} />;
       case 'jira':
-        return <JiraTab app={app} onRefresh={fetchApp} />;
+        return <JiraTab app={app} onRefresh={refetch} />;
       case 'launch-video':
         return <LaunchVideoPanel app={app} />;
       case 'processes':
@@ -359,7 +330,7 @@ function AppDetail() {
         }
         return <UpdateTab />;
       default:
-        return <OverviewTab app={app} onRefresh={fetchApp} />;
+        return <OverviewTab app={app} onRefresh={refetch} />;
     }
   };
 
@@ -432,7 +403,7 @@ function AppDetail() {
                 // PM2 read failed — don't offer a misleading Start; surface the
                 // gap and let the user re-check. Mirrors the Apps list page.
                 <button
-                  onClick={fetchApp}
+                  onClick={refetch}
                   disabled={actionLoading}
                   className="px-2 py-1 pointer-coarse:min-h-11 pointer-coarse:rounded-lg pointer-coarse:border pointer-coarse:border-port-border bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 flex items-center gap-1"
                   title="PM2 status could not be read — refresh to retry"
@@ -617,7 +588,7 @@ function AppDetail() {
         <EditAppDrawer
           app={app}
           onClose={() => setEditing(false)}
-          onSave={() => { setEditing(false); fetchApp(); }}
+          onSave={() => { setEditing(false); refetch(); }}
         />
       )}
     </div>

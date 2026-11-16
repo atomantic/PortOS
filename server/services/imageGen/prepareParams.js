@@ -51,7 +51,7 @@ import {
 import { RENDER_TARGET, recordRenderPin } from '../../lib/renderTargets.js';
 import { CLOUD_IMAGE_GEN_MODES, QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
-import { getUniverseRenderPin } from '../universeBuilder/crud.js';
+import { getUniverseRenderPin, getUniverseVisualProfile } from '../universeBuilder/crud.js';
 import { getImageModels, isFlux2, isEditOnly } from '../../lib/mediaModels.js';
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { usesFlux3, usesMossSwift, usesMinimaxH3Image } from '../../lib/imageRuntimeRemedies.js';
@@ -339,7 +339,6 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   if (data.quickEdit) data = withQuickEditInstruction(data);
   let profile = data.visualProfileOverride;
   if (profile === undefined && !data.musicVideo && data.universeRun?.universeId) {
-    const { getUniverseVisualProfile } = await import('../universeBuilder/crud.js');
     profile = await getUniverseVisualProfile(data.universeRun.universeId);
   }
   // FableLoom's canon compiler owns the photography block. Keep authored

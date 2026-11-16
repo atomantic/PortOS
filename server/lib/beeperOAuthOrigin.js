@@ -2,17 +2,6 @@
  * Which origin the Beeper OAuth `redirect_uri` may be built from (fork issue
  * #1, final live pass).
  *
- * Which origin the Beeper OAuth `redirect_uri` is built from: `parseBrowserOrigin` (a bare
- * `http(s)://host[:port]`, else null), `hostnameOf`, `isLoopbackHostname` (the loopback-spelling
- * predicate reused by the `settings.beeper.baseUrl` gate and the OAuth token-endpoint host pin), and
- * `resolveOAuthOrigin({ clientOrigin, requestOrigin, configuredOrigins })` → `{ origin, source,
- * rejectedClientOrigin }`. The browser sends `window.location.origin` because the request-derived
- * origin is the API's own under the Vite dev proxy (`changeOrigin`, no `x-forwarded-*`), which sends
- * the consent redirect to a host the TLS cert does not cover; the value is untrusted, so it is
- * accepted only for a loopback host, the request's own host, or a configured
- * `PORTOS_UI_URL`/`PORTOS_API_URL` host — port unpinned, since UI and API are different ports of one
- * install. Rejection falls back to the request origin. Pure.
- *
  * The redirect URI used to be derived from `req.protocol` + `req.headers.host`
  * alone. Under the Vite dev proxy that is wrong in the one way that breaks the
  * flow: the proxy sets `changeOrigin: true` and forwards no `x-forwarded-*`, so

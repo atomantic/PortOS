@@ -4,7 +4,7 @@ import { googleShotRequestFields } from '../../lib/googleVideoModels.js';
 // callers share one resolver, so a request that names only the project, shot
 // and slot still sends the references the card would.
 
-import { ServerError } from '../../lib/errorHandler.js';
+import { ServerError, failValidation } from '../../lib/errorHandler.js';
 import { musicVideoClipConditioningReferences } from '../../lib/musicVideoConditioning.js';
 import { preMusicClipSound } from '../../lib/musicVideoColdOpen.js';
 import { sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
@@ -70,6 +70,7 @@ function clipTag(project, scene, input, extra = {}) {
     ...(typeof card.songAudio === 'boolean' && !isPerformanceScene(scene) ? { songAudio: card.songAudio } : {}),
     ...(card.wholeLine && isPerformanceScene(scene) ? { wholeLine: true } : {}),
     ...(card.startFrameLayout ? { startFrameLayout: true } : {}),
+    ...(card.frameRoute ? { frameRoute: card.frameRoute } : {}),
     ...(input.tier ? { tier: input.tier } : {}),
     ...extra,
   };
@@ -220,7 +221,6 @@ export async function renderSceneClips(project, { sceneId, sceneIds, ...input } 
       const body = await buildSceneClipSubmission(project, scene, input);
       const { generateBodySchema } = await import('../../routes/videoGen.js');
       const { submitVideoGenJob } = await import('../videoGen/submitJob.js');
-      const { failValidation } = await import('../../lib/errorHandler.js');
       const parsed = generateBodySchema.safeParse(body);
       if (!parsed.success) failValidation(parsed);
       const queued = await submitVideoGenJob(parsed.data, {});

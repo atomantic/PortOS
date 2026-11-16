@@ -37,7 +37,6 @@ const {
   readHostShutdownMarker,
   clearHostShutdownMarker,
   hostShutdownMarkerPath,
-  HOST_SHUTDOWN_REASON,
 } = await import('./hostShutdown.js');
 
 beforeEach(() => {
@@ -59,9 +58,6 @@ describe('in-process shutdown flag', () => {
     expect(isHostShuttingDown()).toBe(true);
   });
 
-  it('names a stable completion reason', () => {
-    expect(HOST_SHUTDOWN_REASON).toBe('host-shutdown');
-  });
 
   it('abandons only unfinished, unpaused runs that were not user-terminated', () => {
     markHostShuttingDown();

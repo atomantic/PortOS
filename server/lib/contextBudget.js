@@ -1,17 +1,6 @@
 /**
  * Context-window budgeter for manuscript editorial passes.
  *
- * Context-window budgeter for editorial passes. `estimateTokens`/`estimateTokensFromChars` (chars/4),
- * `usableInputTokens`, `manuscriptContentBudgetChars` (single-block content cap floored at a
- * manuscript minimum so a standalone stage trims to fit a small window instead of overflowing a fixed
- * 48–60K floor, #1488), `planManuscriptPass({ contextWindow, sections })` → `{ mode: 'whole' |
- * 'chunked', chunks }`. Also `fitContextToManuscriptFloor`/`capContextOverhead`/`trimContextToBudget`
- * — trim a re-sent context block (scene map, character arcs, …) so a large reverse outline on a small
- * window can't starve the manuscript chunk below a budget floor (#1459). Decides whole-manuscript vs
- * chunked given a model's window. `localOutputReserveTokens(declared, window)` shrinks a caller's
- * output reserve for a local model with a known window (floor 2,048, ⅛ of the window, capped at ¼ of
- * the window and at the declared reserve).
- *
  * The editorial passes (completeness, manuscript-fix, per-issue analysis) feed
  * manuscript text to an LLM. Whether the whole manuscript fits in one call —
  * or has to be chunked — depends on the target model's context window. This

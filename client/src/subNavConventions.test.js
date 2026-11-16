@@ -1,22 +1,8 @@
 /**
- * Repo-wide sub-nav convention.
- *
- * `client/src/AGENTS.md` requires a section sub-nav that doesn't fit a phone
- * to collapse to icon links via `TabPills.mobileCompact`, not a `<select>` and
- * not a hand-rolled underline bar. Every bar that already routes through
- * `TabPills` gets that treatment; the failure mode this guard catches is a new
- * `<nav>`/`<div>` that maps a tab array onto `border-b-2`-styled buttons or
- * `Link`s and so ships a third answer to "what does a sub-nav do on a phone".
- *
- * The rule is deliberately blunt: **no `border-b-2` in a class string** under
- * `src/` except in the primitive itself and an allowlisted file carrying a
- * one-line reason. TabPills owns that underline token; a caller that needs it
- * is a caller that should be a TabPills. Unbounded record switchers (shell
- * sessions, manuscript issues, Beeper accounts) do not use this token and so
- * do not match — they are not section sub-navs.
- *
- * Scoped to git-tracked non-test sources under `client/src`. Comments are
- * masked first: a doc comment quoting `border-b-2` is documentation, not markup.
+ * Rule: No `border-b-2` in a class string under `client/src/` outside `TabPills` and allowlisted files (see `client/src/AGENTS.md`).
+ * Fix: Replace hand-rolled underline sub-navs with `TabPills` (`TabPills.mobileCompact`).
+ * What this guard cannot see:
+ *   - Scoped to git-tracked non-test sources under `client/src` (comments masked).
  */
 
 import { describe, it, expect } from 'vitest';

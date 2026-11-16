@@ -1,21 +1,12 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
+import { expectAuthorizedWorkflows, expectRemoteRefusal } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-deck-chiptune-authority-') }));
 afterAll(cleanupTempDataRoots);
 afterEach(() => vi.restoreAllMocks());
-vi.mock('../services/instanceIdentity.js', () => ({
-  loadData: vi.fn(async () => ({ peers: [{
-    id: 'example-peer', instanceId: 'example-instance', enabled: true, syncSecret: 'a'.repeat(32),
-  }] })),
-}));
 
 // Mount the production Decks and Tracks routers behind the real gates. Only
 // persistence, provider, queue and app-file effects are doubled (#10893).
@@ -78,10 +69,8 @@ vi.mock('../services/chiptune.js', () => ({
   publishChiptuneTrack: vi.fn(async () => ({ published: true })),
 }));
 
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import decksRoutes from './decks.js';
 import tracksRoutes from './tracks.js';
-import { createSession, revokeSessionById } from '../services/auth.js';
 import { getDeck, applyCardGenerations } from '../services/decks.js';
 import { analyzeDeckSample } from '../services/deckStyleAnalysis.js';
 import { generateDeckCardPrompts } from '../services/deckPrompts.js';
@@ -90,149 +79,35 @@ import { beginPromptProgress } from '../services/deckPromptProgress.js';
 import { getTrack } from '../services/tracks/index.js';
 import { generateChiptuneScore, renderChiptuneTrack, publishChiptuneTrack } from '../services/chiptune.js';
 
-let ownerSession;
-// An API-first pick (the shared runner can still fall back to a CLI/TUI) and an
-// explicit tool-capable pick must be gated identically: authority never depends
-// on the selected backend.
-const apiPick = { providerId: 'example-api-provider', model: 'example-model' };
+// The refusal/principal matrix lives in services/authGate.test.js and
+// hostControlCoverage.test.js; backend choice never changes authority, so each
+// route keeps one refusal-or-allow case, not one per provider or render mode.
+const mounts = [['/api/decks', decksRoutes], ['/api/tracks', tracksRoutes]];
 const cliPick = { providerId: 'example-cli-provider', model: 'example-model' };
-const operations = [
-  [`/api/decks/${deckId}/analyze-sample`, { image: 'example.png', ...apiPick }, analyzeDeckSample, 200],
-  [`/api/decks/${deckId}/analyze-sample`, { image: 'example.png', ...cliPick }, analyzeDeckSample, 200],
-  [`/api/decks/${deckId}/generate-prompts`, { ...apiPick }, generateDeckCardPrompts, 200],
-  [`/api/decks/${deckId}/generate-prompts`, { ...cliPick }, generateDeckCardPrompts, 200],
-  [`/api/decks/${deckId}/render`, { mode: 'local' }, renderDeckCards, 200],
-  [`/api/decks/${deckId}/render`, { mode: 'grok' }, renderDeckCards, 200],
-  [`/api/decks/${deckId}/cards/${cardId}/render`, { mode: 'local' }, renderDeckCards, 200],
-  [`/api/decks/${deckId}/cards/${cardId}/render`, { mode: 'codex' }, renderDeckCards, 200],
-  [`/api/tracks/${deckId}/chiptune/generate`, { prompt: 'Example tune', ...apiPick }, generateChiptuneScore, 200],
-  [`/api/tracks/${deckId}/chiptune/generate`, { prompt: 'Example tune', ...cliPick }, generateChiptuneScore, 200],
-  [`/api/tracks/${deckId}/chiptune/publish`, { appId: 'example-app' }, publishChiptuneTrack, 200],
+const workflows = [
+  ['post', `/api/decks/${deckId}/analyze-sample`, { image: 'example.png', ...cliPick }, analyzeDeckSample, 200],
+  ['post', `/api/decks/${deckId}/generate-prompts`, { ...cliPick }, generateDeckCardPrompts, 200],
+  ['post', `/api/decks/${deckId}/render`, { mode: 'grok' }, renderDeckCards, 200],
+  ['post', `/api/decks/${deckId}/cards/${cardId}/render`, { mode: 'codex' }, renderDeckCards, 200],
+  ['post', `/api/tracks/${deckId}/chiptune/generate`, { prompt: 'Example tune', ...cliPick }, generateChiptuneScore, 200],
+  ['post', `/api/tracks/${deckId}/chiptune/render`, {}, renderChiptuneTrack, 200],
+  ['post', `/api/tracks/${deckId}/chiptune/publish`, { appId: 'example-app' }, publishChiptuneTrack, 200],
 ];
-const effects = [
-  getDeck, applyCardGenerations, analyzeDeckSample, generateDeckCardPrompts, renderDeckCards,
-  beginPromptProgress, getTrack, generateChiptuneScore, publishChiptuneTrack,
-];
-const expectNoEffects = () => {
-  for (const effect of effects) expect(effect).not.toHaveBeenCalled();
-};
-const appFor = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/decks', decksRoutes);
-  app.use('/api/tracks', tracksRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
-const call = (app, [path, body], headers = {}) => {
-  const pending = request(app).post(path);
-  for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return pending.send(body);
-};
 
-beforeEach(async () => {
+beforeEach(() => {
   vi.clearAllMocks();
   auth.enabled = false;
-  ownerSession = await createSession();
 });
 
-describe('Deck and chiptune host-action authority (#10893)', () => {
-  it('refuses remote password-free and dev-proxy callers before any route, provider, store or app-file effect', async () => {
-    for (const operation of operations) {
-      for (const [address, headers] of [
-        ['192.0.2.10', {}],
-        ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
-        ['192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }],
-      ]) {
-        const response = await call(appFor(address), operation, headers);
-        expect([response.status, response.body.code], operation[0]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
-    }
-    expectNoEffects();
+describe('Deck and chiptune writes behind the default-deny gate (#10893, #16114)', () => {
+  it('refuses a remote caller before body validation and any provider, store or app-file effect', async () => {
+    const [method, path, body, effect] = workflows[0];
+    await expectRemoteRefusal(mounts, [method, path, { ...body, unexpected: true }, effect]);
   });
 
-  it('gates before body validation so malformed requests learn nothing from a remote caller', async () => {
-    for (const [path] of operations) {
-      const response = await call(appFor(), [path, { unexpected: true }]);
-      expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    expectNoEffects();
-  });
-
-  it('requires authentication with a password, denies legacy Basic, and rejects scoped-peer credentials', async () => {
-    auth.enabled = true;
-    for (const operation of operations) {
-      for (const [headers, status, code] of [
-        [{}, 401, 'AUTH_REQUIRED'],
-        [{ Authorization: 'Bearer invalid-session' }, 401, 'AUTH_REQUIRED'],
-        [{ Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403, 'HOST_CONTROL_FORBIDDEN'],
-        [{
-          [PEER_AUTH_HEADER]: derivePeerAuthToken('a'.repeat(32), 'example-instance'),
-          [PEER_INSTANCE_HEADER]: 'example-instance',
-        }, 403, 'PEER_SCOPE_FORBIDDEN'],
-      ]) {
-        const response = await call(appFor(), operation, headers);
-        expect([response.status, response.body.code], operation[0]).toEqual([status, code]);
-      }
-    }
-    const revoked = await createSession({ label: 'agent' });
-    await revokeSessionById(revoked.id);
-    const response = await call(appFor(), operations[0], { Cookie: `portos_auth=${revoked.token}` });
-    expect(response.status).toBe(401);
-    expectNoEffects();
-  });
-
-  it('matches case and trailing-slash variants', async () => {
-    for (const [path, body] of operations) {
-      const response = await call(appFor(), [path.toUpperCase() + '/', body]);
-      expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    expectNoEffects();
-  });
-
-  it('retains genuine local, operator and delegated-agent workflows with the chosen backend untouched', async () => {
-    const agentSession = await createSession({ label: 'agent' });
-    for (const [enabled, address, headers] of [
-      [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Authorization: `Bearer ${ownerSession.token}` }],
-      [true, '192.0.2.10', { Cookie: `portos_auth=${agentSession.token}` }],
-      [true, '192.0.2.10', { Authorization: `Bearer ${agentSession.token}` }],
-    ]) {
-      auth.enabled = enabled;
-      for (const operation of operations) {
-        const response = await call(appFor(address), operation, headers);
-        expect(response.status, `${operation[0]}: ${JSON.stringify(response.body)}`).toBe(operation[3]);
-      }
-    }
-    expect(analyzeDeckSample).toHaveBeenCalledTimes(8);
-    expect(analyzeDeckSample.mock.calls.map(([args]) => args.providerId))
-      .toEqual(Array(4).fill(['example-api-provider', 'example-cli-provider']).flat());
-    expect(generateDeckCardPrompts).toHaveBeenCalledTimes(8);
-    expect(renderDeckCards).toHaveBeenCalledTimes(16);
-    expect(renderDeckCards.mock.calls.map(([, options]) => options.mode)).toEqual(
-      Array(4).fill(['local', 'grok', 'local', 'codex']).flat());
-    expect(generateChiptuneScore).toHaveBeenCalledTimes(8);
-    expect(generateChiptuneScore.mock.calls.map(([args]) => args.providerId))
-      .toEqual(Array(4).fill(['example-api-provider', 'example-cli-provider']).flat());
-    expect(publishChiptuneTrack).toHaveBeenCalledTimes(4);
-  });
-
-  it('keeps deck reads open remotely and runs the deterministic chiptune render alone for a local caller', async () => {
-    const remote = appFor();
-    expect((await request(remote).get('/api/decks')).status).toBe(200);
-    const refused = await call(remote, [`/api/tracks/${deckId}/chiptune/render`, {}]);
-    expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    expect(renderChiptuneTrack).not.toHaveBeenCalled();
-    expect((await call(appFor('127.0.0.1'), [`/api/tracks/${deckId}/chiptune/render`, {}])).status).toBe(200);
-    expect(renderChiptuneTrack).toHaveBeenCalledTimes(1);
-    expect(generateChiptuneScore).not.toHaveBeenCalled();
-    expect(publishChiptuneTrack).not.toHaveBeenCalled();
-    expect(analyzeDeckSample).not.toHaveBeenCalled();
-    expect(generateDeckCardPrompts).not.toHaveBeenCalled();
-    expect(renderDeckCards).not.toHaveBeenCalled();
+  it('still runs every deck and chiptune write for a local operator and an agent session', async () => {
+    await expectAuthorizedWorkflows({ auth, mounts, workflows });
+    expect(analyzeDeckSample.mock.calls.map(([args]) => args.providerId)).toEqual(Array(2).fill(cliPick.providerId));
+    expect(renderDeckCards.mock.calls.map(([, options]) => options.mode)).toEqual(['grok', 'codex', 'grok', 'codex']);
   });
 });

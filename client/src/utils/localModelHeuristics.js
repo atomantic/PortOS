@@ -2,28 +2,10 @@
  * Judges an untyped local model's capabilities from its id: `isEmbeddingModel`, `isVisionModel`,
  * `isToolUseModel` and picker annotations, re-exported from the server leaf.
  *
- * What an untyped LOCAL model can do, judged from its id: `isEmbeddingModel` / `isVisionModel` /
- * `isToolUseModel` (re-exported from the pure leaf `server/lib/localModelHeuristics.js` — one regex
- * per family; a model card's explicit capability metadata outranks the id regex),
- * `isVisionCapableCliProvider`, `isVisionCapableCodexTuiProvider` (shared native image-attachment
- * capability), `filterGenerationModels` (sentinels and embedding-only models dropped),
- * `visionLocalModelFilter` and `localToolUseHint` / `withToolUseOptionLabel` (unioned with the
- * server's authoritative per-provider capability maps from `useVisionModelIds` / `useToolUseModelIds`;
- * tool-use is an annotation plus warning, never a filter), and `modelCapabilityInfo` (capability
- * badges for a selected model without over-sharing a local runtime's answer with another provider).
- *
- * What an untyped LOCAL model can do, judged from its id: the embedding /
- * vision / tool-use family regexes, the picker annotations built on them, and
- * the union with the backend's own capability report where the server could
- * probe one (`useToolUseModelIds` / `useVisionModelIds`).
- *
- * The family predicates (`isEmbeddingModel` / `isVisionModel` /
- * `isToolUseModel`) are re-exported from the pure leaf
- * `server/lib/localModelHeuristics.js`. They take a bare id string (the case
- * every caller here has) or a model card, whose explicit capability metadata
- * outranks the id regex.
- *
- * Re-exported by `./providers.js` for existing `utils/providers` imports.
+ * The family predicates are re-exported from the pure leaf
+ * `server/lib/localModelHeuristics.js` and take an id or a model card whose
+ * metadata outranks the regex; the picker annotations built on them are unioned
+ * with the backend's own capability report (`useToolUseModelIds` / `useVisionModelIds`).
  */
 
 import { isLocalInstanceProvider, localBackendForProvider } from './providerEndpoints.js';
@@ -36,64 +18,31 @@ export { isVisionCapableCodexTuiProvider } from '../../../server/lib/codex.js';
 export { isEmbeddingModel, isToolUseModel, isVisionModel } from '../../../server/lib/localModelHeuristics.js';
 
 /**
- * Whether a CLI-type provider can read an image file (its CLI accepts a
- * vision attachment). The client's own take on `isVisionCapableCliProvider`
- * in server/lib/localModelHeuristics.js: keyed on the command basename so a
- * path-configured Claude, Codex or Grok still qualifies, as on the server.
- * Grok reads a staged image with its read_file tool (#15576).
- * API providers return false; use
- * `visionLocalModelFilter` for their model lists.
- * @param {{type?:string, command?:string}|null|undefined} provider
- * @returns {boolean}
+ * Whether a CLI-type provider can read an image file. Keyed on the command
+ * basename (as on the server) so a path-configured Claude/Codex/Grok qualifies;
+ * API providers use `visionLocalModelFilter`.
  */
 export const isVisionCapableCliProvider = (provider) =>
   provider?.type === 'cli'
   && ['codex', 'claude', 'grok'].includes(commandBasename(provider.command));
 
 /**
- * Agent-picker tool-use annotation for a model id. Agent / CoS tasks (the CD
- * treatment + plan stages, coding agents) only work with a model that can emit
- * native tool calls — a local model that can't (e.g. Gemma) narrates a
- * done-message instead of acting, silently wedging the task. This decides the
- * per-option marker + the "pick a tool-capable model" warning in agent pickers.
+ * Agent-picker tool-use annotation for a model id: a model that can't emit native
+ * tool calls (e.g. Gemma) narrates a done-message and wedges the task. An
+ * ANNOTATION, never a filter: {@link isToolUseModel} is a positive allowlist, so a
+ * non-match is not a proven negative (see {@link withToolUseOptionLabel}).
  *
- * Tool-use is surfaced as an ANNOTATION + warning, never as a filter: the
- * heuristic is a positive allowlist, so a non-match is "not a recognized
- * tool-caller", not a proven negative, and hiding those options would make a
- * newer tool-capable family unselectable (see {@link withToolUseOptionLabel}).
+ * Returns `null` for cloud / API providers (ids don't encode a family). LOCAL =
+ * a direct Ollama / LM Studio backend ({@link localBackendForProvider}) OR an
+ * Ollama-BACKED CLI/TUI wrapper ({@link isOllamaBackedProvider}), which keeps
+ * `ollamaBacked` even when a rename loses what `localBackendForProvider` matches.
  *
- * Returns `null` for cloud / API providers: their model ids don't encode their
- * family, so the name heuristic would mislabel them. LOCAL backends return
- * `{ toolCapable }` — where "local" is BOTH a direct Ollama / LM Studio backend
- * ({@link localBackendForProvider}) AND an Ollama-BACKED CLI/TUI wrapper
- * ({@link isOllamaBackedProvider}): a renamed `claude-ollama-tui` / OpenCode
- * wrapper keeps `ollamaBacked: true` but may lose the "ollama"
- * name/endpoint/id that `localBackendForProvider` matches on, and that wrapper
- * is exactly the incident's provider class — so it must still be flagged, not
- * silently skipped.
- *
- * `toolUseIdsByProvider` is the AUTHORITATIVE map the server reports from each
- * backend's own capability metadata (Ollama `/api/show` `tools`) keyed by the
- * PROVIDER ID the server says serves each model — see `useToolUseModelIds`. It
- * is UNIONED with, never substituted for, {@link isToolUseModel}: the regex is a
- * positive allowlist that goes stale every time a new function-calling family
- * ships (`phi4-mini`, newer Gemma builds got "⚠ no known tool use" while the
- * Local LLMs tab's "Agents" badge, reading these same capabilities, said
- * otherwise), while the map can't speak for a provider the server never
- * enumerated. Pass `null` (the default) when it hasn't loaded — that degrades to
- * regex-only, the behavior this picker has always had.
- *
- * Keyed by the ENUMERATED PROVIDER, not flattened and not keyed by backend,
- * because a bare id is not a capability: a CUSTOM provider (or an Ollama-backed
- * CLI wrapper) pointed at a *different* Ollama/LM Studio host resolves to the
- * same backend, but the server never enumerated that host — so a local model's
- * id must not vouch for a remote model that merely shares its name. Such a
- * provider stays regex-only, which is the conservative direction: a false
- * "tool-capable" sends an agent to a model that narrates instead of acting.
- * @param {string} id
- * @param {object} [provider]
- * @param {Record<string, Set<string>>|null} [toolUseIdsByProvider]
- * @returns {{toolCapable:boolean}|null}
+ * `toolUseIdsByProvider` is the server's AUTHORITATIVE capability map
+ * (`useToolUseModelIds`), keyed by the PROVIDER ID serving each model, UNIONED
+ * with the regex (which goes stale as families ship); `null` = regex-only. Not
+ * keyed by backend: a CUSTOM provider on a *different* Ollama/LM Studio host
+ * resolves to the same backend, and a local id must not vouch for a remote model
+ * that merely shares its name.
  */
 export const localToolUseHint = (id, provider, toolUseIdsByProvider = null) =>
   (localBackendForProvider(provider) || isOllamaBackedProvider(provider) || provider?.lmstudioBacked === true || provider?.mtplxBacked === true || provider?.llamaBacked === true || provider?.vllmBacked === true || provider?.sglangBacked === true)
@@ -102,26 +51,12 @@ export const localToolUseHint = (id, provider, toolUseIdsByProvider = null) =>
     : null;
 
 /**
- * Suffix a native `<option>` label with a tool-use marker for an agent picker.
- * No-op (returns `label` unchanged) for cloud providers or a blank id, so it's
- * safe to wrap every option. Pairs with {@link localToolUseHint} for the
- * below-the-select warning. Emoji (not lucide icons) because native `<option>`
- * elements can't render markup.
+ * Suffix a native `<option>` label with a tool-use marker for an agent picker
+ * (emoji, since `<option>` can't render markup). Returns `label` unchanged for
+ * cloud providers or a blank id. Pairs with {@link localToolUseHint}.
  *
- * The signal is asymmetric because {@link isToolUseModel} is a *positive
- * allowlist* of families with dependable function-calling: a match is a reliable
- * "tool-capable", but a NON-match only means "not a recognized tool-caller" —
- * NOT a proven negative (a newer tool-capable family whose id isn't in the regex
- * yet would fall here). So the negative marker is worded as unverified, not a
- * false-certain "no tool use". Passing `toolUseIdsByProvider` (from
- * `useToolUseModelIds`) shrinks that unverified band to the models the server
- * couldn't speak for; see {@link localToolUseHint} for the union rule.
- * @param {string} id - model id (drives the heuristic)
- * @param {string} label - display label to annotate (often === id)
- * @param {object} [provider] - the selected provider object
- * @param {Record<string, Set<string>>|null} [toolUseIdsByProvider] - authoritative
- *   server-reported tool-capable ids, keyed by provider id; `null` = regex-only
- * @returns {string}
+ * A match is a reliable "tool-capable"; a NON-match only means "not recognized",
+ * so the negative marker is worded as unverified.
  */
 export const withToolUseOptionLabel = (id, label, provider, toolUseIdsByProvider = null) => {
   const hint = localToolUseHint(id, provider, toolUseIdsByProvider);
@@ -130,9 +65,8 @@ export const withToolUseOptionLabel = (id, label, provider, toolUseIdsByProvider
 };
 
 /**
- * Annotate a native model option with the capabilities the picker knows about.
- * Keep the decoration here so model selectors do not each invent their own
- * capability wording or combine tool and image-analysis signals differently.
+ * Annotate a native model option with the capabilities the picker knows about,
+ * so selectors share one capability wording and tool/image signal combination.
  */
 export const withModelCapabilityOptionLabel = (
   id,
@@ -150,73 +84,42 @@ export const withModelCapabilityOptionLabel = (
   return badges.length ? `${label} · ${badges.join(' · ')}` : label;
 };
 
-/**
- * Selectable models for a generation/chat picker: drops internal sentinels AND
- * embedding-only models. Use anywhere the user picks a model that will run a
- * prompt (provider editor model lists, fallback model, manuscript review).
- * @param {string[]} models
- * @returns {string[]}
- */
+/** Selectable models for a generation/chat picker: drops internal sentinels AND embedding-only models. */
 export const filterGenerationModels = (models) =>
   filterSelectableModels(models).filter((m) => !isEmbeddingModel(m));
 
 /**
- * Per-model filter for a VISION picker: restrict LOCAL backends (Ollama /
- * LM Studio) to vision-capable models by id, but leave cloud/API providers'
- * lists untouched — `isVisionModel` is a local-name heuristic and would wrongly
- * hide multimodal cloud models whose ids don't encode vision (`gpt-4o`,
- * `claude-*`). Pass as `useProviderModels({ modelFilter: visionLocalModelFilter })`.
+ * Per-model filter for a VISION picker: restrict LOCAL backends to vision-capable
+ * models, but leave cloud/API lists untouched (`isVisionModel` is a local-name
+ * heuristic and would hide `gpt-4o`, `claude-*`). Pass as
+ * `useProviderModels({ modelFilter: visionLocalModelFilter })`.
  *
- * `visionIdsByProvider` is the AUTHORITATIVE map the server reports from each
- * backend's own capability metadata (Ollama `/api/show`, LM Studio
- * `type: 'vlm'`), keyed by the PROVIDER ID the server says serves each model —
- * see `useVisionModelIds`. It is unioned with, not substituted for, the id
- * regex: the regex alone goes stale every time a new multimodal family ships
- * (it knew `gemma-3` but not `gemma4`, so a user with only `gemma4:e4b` +
- * `qwen3.6:35b` installed saw an EMPTY vision picker), while the map alone
- * can't speak for a provider the server never enumerated. Pass `null` (the
- * default) when it hasn't loaded — that degrades to regex-only.
+ * `visionIdsByProvider` is the server's AUTHORITATIVE capability map
+ * (`useVisionModelIds`), keyed by the PROVIDER ID serving each model and unioned
+ * with the id regex; `null` = regex-only. Keyed by provider, not flattened or by
+ * backend, because a bare id is not a capability: the same id can be a VLM on one
+ * backend and text-only on another, the server reports `backend: 'cli'` rows
+ * asserting vision for EVERY model of a claude/codex CLI, and a CUSTOM provider
+ * pointed at a different Ollama/LM Studio host resolves to the same backend
+ * without having been enumerated. Unenumerated local providers stay regex-only;
+ * sceneEvaluator honors a pin's model verbatim, so a wrong yes sends frames to a
+ * model that cannot see them.
  *
- * Keyed by the ENUMERATED PROVIDER, not flattened and not keyed by backend,
- * because a bare id is not a capability:
- *   - The same id can be a VLM on one backend and text-only on another, and the
- *     server also reports `backend: 'cli'` rows asserting vision for EVERY model
- *     of a claude/codex CLI (that CLI reads an image file whatever model it
- *     fronts). Flattening let an ollama-backed Claude CLI's text-only ids — which
- *     collide with the real `ollama` provider's list — pass this filter.
- *   - Keying by backend alone still over-shares: a CUSTOM provider pointed at a
- *     *different* Ollama/LM Studio host (endpoint `:11434` on another machine)
- *     resolves to the same backend, but the server never enumerated that host,
- *     so a local VLM's id would vouch for a remote model that merely shares it.
- * An unenumerated local provider therefore stays on the regex-only path. This
- * matters because sceneEvaluator honors a pin's model verbatim — a wrong yes
- * here sends frames to a model that cannot see them.
- *
- * @param {string} id
- * @param {{id?:string,endpoint?:string,name?:string}} [provider]
- * @param {Record<string, Set<string>>|null} [visionIdsByProvider]
- * @returns {boolean}
  */
 export const visionLocalModelFilter = (id, provider, visionIdsByProvider = null) => {
-  // Cloud/API providers are left intact — the regex is a local-name heuristic
-  // and would wrongly hide multimodal cloud ids like `gpt-4o`.
+  // Cloud/API providers are left intact (see the docblock).
   if (!localBackendForProvider(provider)) return true;
   return visionIdsByProvider?.[provider?.id]?.has(id) === true || isVisionModel(id);
 };
 
 /**
- * Resolve the capability badges for a selected model without over-sharing a
- * local runtime's answer with another provider. The status endpoint is keyed
- * by backend, but only the canonical `ollama` / `lmstudio` provider records
- * are known to point at this install's daemon; custom or remote providers stay
- * on conservative inference. This mirrors the provider-scoped boundary used
- * by `useToolUseModelIds` and `useVisionModelIds`.
+ * Resolve capability badges for a selected model without over-sharing a local
+ * runtime's answer: the status endpoint is keyed by backend, but only the
+ * canonical `ollama` / `lmstudio` records are known to point at this install's
+ * daemon; custom or remote providers stay on conservative inference.
  *
- * `[]` is a valid runtime answer meaning no optional capabilities were
- * reported. `null` means the capability set is unknown, and `source` tells the
- * UI whether that is because the runtime is still loading, the runtime probe
- * failed, the provider gave a harness-level fact, or no authoritative metadata
- * exists.
+ * `[]` is a valid runtime answer (none reported); `null` means unknown, and
+ * `source` says why (loading, probe failed, harness-level fact, no metadata).
  *
  * @param {{id?:string,type?:string,command?:string,endpoint?:string,name?:string,ollamaBacked?:boolean}|null|undefined} provider
  * @param {string|null|undefined} model
@@ -256,8 +159,7 @@ export const modelCapabilityInfo = (provider, model, {
   }
 
   // A Codex or Claude CLI can attach/read an image and invoke tools through its
-  // harness. That is deliberately labelled as provider-level below; it is not
-  // pretending that the provider published per-model metadata.
+  // harness; labelled provider-level, not per-model published metadata.
   if (isVisionCapableCliProvider(provider)) {
     return { capabilities: ['tools', 'vision'], source: 'provider', recommendation: null };
   }

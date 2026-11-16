@@ -1,40 +1,21 @@
 import { invalidateModelObservation } from './modelObservation.js';
 /**
- * "Is everything this provider needs actually installed and running?"
+ * Per-provider requirements checklist for providers backed by a LOCAL daemon: the CLI binary being installed
+ * (`providerRuntimeInstaller.js`) is only half the story, since a run still dies with "Cannot connect to API" when
+ * the daemon is missing, stopped, or serving a different model alias than the provider asks for.
  *
- * The Providers page could already tell you whether the CLI binary a provider
- * shells out to exists (`providerRuntimeInstaller.js`). For a provider backed by
- * a LOCAL daemon that is only half the story: `opencode` can be perfectly
- * installed and the run still ends at
- *
- *     Cannot connect to API: Unable to connect. Is the computer able to access the url
- *
- * because `llama-server` was never installed, or was installed but never
- * started, or is running but serving a different model alias than the provider
- * asks for. Those are three distinct fixes, and none of them was visible from
- * the provider card — the user had to read a failed agent transcript to learn
- * that a second piece of software (and a multi-gigabyte model download) was
- * still missing.
- *
- * This module turns that into a per-provider requirements checklist:
- *
- *   1. runtime  — the daemon's binary is on PortOS's PATH (or something is
- *                 already answering, which proves it another way)
- *   2. server   — the endpoint the provider points at answers `GET /v1/models`
+ *   1. runtime  — the daemon's binary is on PortOS's PATH (or something already answers, which proves it)
+ *   2. server   — the provider's endpoint answers `GET /v1/models`
  *   3. model    — the provider's default model is one the endpoint serves
- *   4. catalog  — every OTHER model the provider offers is one the endpoint
- *                 serves, so a task or pipeline stage cannot pin an id that
- *                 only fails once the agent has already spawned
+ *   4. catalog  — every OTHER model the provider offers is servable, so a task or stage cannot pin an id
+ *                 that only fails after the agent has spawned
  *
- * Checks are reported in fix order, each with what to do about it. Only
- * local-daemon providers get a report at all (`localProviderRuntime.js` decides
- * which those are); everything else returns `null` and renders nothing. That
- * deliberately excludes a provider pointed at ANOTHER machine's OpenAI-compatible
- * server — an external endpoint is somebody else's install to run, so PortOS
- * neither probes this host for it nor offers to start it here.
+ * Checks are reported in fix order, each with what to do about it. Only local-daemon providers get a report
+ * (`localProviderRuntime.js` decides which); everything else returns `null`. A provider pointed at ANOTHER
+ * machine's OpenAI-compatible server is excluded: that endpoint is somebody else's install to run.
  *
- * No LLM call is ever made here — `GET /v1/models` is a listing, so this is safe
- * to poll from a settings page under the no-cold-bootstrap policy in AGENTS.md.
+ * No LLM call is made here (`GET /v1/models` is a listing), so polling from a settings page is safe under the
+ * no-cold-bootstrap policy in AGENTS.md.
  */
 
 import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
@@ -49,18 +30,14 @@ import { actionCovers, describeRuntimeSetup, readRuntimeWeights, weightsBlockSta
 import { isAppInstalled as isLmStudioAppInstalled } from './lmStudioManager.js';
 
 /**
- * Same 60s TTL and reasoning as `providerRuntimeInstaller.js`'s status cache:
- * availability changes only when someone installs or removes a binary, and
- * `findCommandOnPath` is a SYNCHRONOUS PATH walk (a stat per directory), so an
- * uncached miss blocks the event loop on every 20s poll from every open tab.
+ * Same 60s TTL as `providerRuntimeInstaller.js`'s status cache: availability changes only on install/remove, and
+ * `findCommandOnPath` is a SYNCHRONOUS PATH walk, so an uncached miss blocks the event loop on every 20s poll.
  */
 const BINARY_TTL_MS = 60_000;
 
 /**
- * A `mtplx models --json` listing walks the cache directories to size them, so
- * it is far too expensive to repeat on every 20s page poll — and the answer
- * only changes when a `mtplx pull` finishes, which is minutes of downloading
- * away. Longer than the probe TTL for exactly that reason.
+ * A `mtplx models --json` listing walks cache directories to size them, so it is too expensive for every 20s poll;
+ * the answer only changes when a `mtplx pull` finishes. Longer than the probe TTL for that reason.
  */
 const WEIGHTS_TTL_MS = 60_000;
 
@@ -71,19 +48,12 @@ const binaryCache = new Map();
 const weightsCache = new Map();
 
 /**
- * What a runtime's own model cache holds, for the runtimes that have one PortOS
- * can read without starting them (today: MTPLX).
+ * What a runtime's own model cache holds, for runtimes with one PortOS can read without starting them (today: MTPLX).
+ * Reading it here lets the checklist offer the download up front instead of a Start that fails because no weights
+ * are cached.
  *
- * This is the fact that turned the MTPLX checklist into a catch-22: "installed
- * ✓ / server not responding ✗ — use Start MTPLX, PortOS does this for you",
- * and Start then failed with "no model weights are cached, so its server exits
- * before it binds a port". Reading the cache HERE is what lets the checklist
- * say so up front and offer the download instead of the start.
- *
- * A cache that could not be read reports `'unknown'` — never `'empty'`, which
- * would claim a fact PortOS does not have, and so does a runtime with no cache
- * PortOS can read offline (`readRuntimeWeights` answers those without spending
- * a subprocess).
+ * A cache that could not be read reports `'unknown'`, never `'empty'` (a fact PortOS does not have); so does a
+ * runtime with no offline-readable cache (`readRuntimeWeights` answers those without a subprocess).
  *
  * TTL-cached — see WEIGHTS_TTL_MS.
  *
@@ -93,9 +63,8 @@ function readWeightsStateCached(kind) {
   const now = Date.now();
   const cached = weightsCache.get(kind);
   if (cached && now - cached.at < WEIGHTS_TTL_MS) return cached.promise;
-  // Cached BEFORE the await so concurrent providers on one runtime share the
-  // subprocess; dropped on an unexpected throw so a transient failure cannot
-  // poison the entry for its whole TTL (same shape as the probe cache above).
+  // Cached BEFORE the await so concurrent providers on one runtime share the subprocess; dropped on an unexpected
+    // throw so a transient failure cannot poison the entry for its TTL.
   const promise = readRuntimeWeights(kind).catch((err) => {
     weightsCache.delete(kind);
     throw err;
@@ -122,15 +91,11 @@ export function servedModelId(provider, kind) {
 }
 
 /**
- * The model ids this provider OFFERS beyond its pinned default — the catalog a
- * task or a pipeline stage picks a model out of.
+ * The model ids this provider OFFERS beyond its pinned default — the catalog a task or stage picks from.
  *
- * The pin is excluded because `modelCheck` already covers it; what is left is
- * the part of the provider nothing was checking. A provider that pins NO model
- * (the shipped OpenCode local wrappers all ship `defaultModel: null`) had no
- * model check at all, so its whole catalog could name ids the daemon has not
- * served since the day they were pulled — and every run dispatched onto one
- * died at spawn with no output instead of failing resolution up front (#6125).
+ * The pin is excluded because `modelCheck` covers it. A provider that pins NO model (the shipped OpenCode local
+ * wrappers) otherwise had no model check, so a catalog id the daemon no longer serves died at spawn with no output
+ * instead of failing resolution up front.
  */
 function offeredModelIds(provider, kind) {
   const pinned = servedModelId(provider, kind);
@@ -143,43 +108,34 @@ function offeredModelIds(provider, kind) {
 /**
  * The fix hint for a check the one-click setup button already covers.
  *
- * `setup.actionLabel` names a button rendered right below the checklist, so the
- * hint points AT it rather than repeating a terminal recipe — and a runtime this
- * host cannot set up at all says why instead of sending the user to a doc that
- * would not help them either.
+ * `setup.actionLabel` names a button rendered below the checklist, so the hint points AT it; a runtime this host
+ * cannot set up says why instead of pointing at a doc.
  *
- * `null` means "no button covers this", and the caller falls back to its own
- * prose. `covers` is the action the check needs: an install-only button does
- * nothing for a `server` check.
+ * `null` means no button covers this and the caller falls back to its own prose. `covers` is the action the check
+ * needs: an install-only button does nothing for a `server` check.
  */
 function setupHint(setup, capability) {
   if (!setup) return null;
   if (setup.blockedReason) return setup.blockedReason;
-  // `capability` is one of `installs` / `starts` / `provisions`, asked of the
-  // action table rather than matched against the action's spelling. The old
-  // substring test worked only because every action name happened to contain
-  // the word — `provision-start` does not contain `pull`, and a hint that
-  // vanishes when an action is renamed fails no test.
+  // `capability` is one of `installs` / `starts` / `provisions`, asked of the action table rather than matched
+    // against the action's spelling, so renaming an action cannot silently drop the hint.
   return actionCovers(setup.action, capability)
     ? `Use “${setup.actionLabel}” below — PortOS does this for you.`
     : null;
 }
 
 /**
- * What a runtime's own model cache says while its server is down — the half of
- * the model check `GET /v1/models` cannot answer because nothing is listening.
+ * What a runtime's own model cache says while its server is down — the half of the model check
+ * `GET /v1/models` cannot answer because nothing is listening.
  *
- * `capability` is one of `installs` / `starts` / `provisions` — the axes
- * `localRuntimeSetup.js` declares for every action.
+ * `capability` is one of `installs` / `starts` / `provisions` (the axes `localRuntimeSetup.js` declares).
  *
  * `null` when there is nothing to add, so the caller keeps its own prose.
  */
 function weightsDetail(runtime, weights) {
-  // A runtime whose local setup is not "a model cache" describes its own states
-  // — vLLM's is a compose project that was never cloned or prepared, and
-  // "no model weights cached" would send the operator after a download that was
-  // never the first step. Keyed by STATE rather than one override per divergence,
-  // so the next runtime supplies whichever states read wrong for it.
+  // A runtime whose local setup is not "a model cache" describes its own states (vLLM's is a compose project never
+    // cloned or prepared); "no model weights cached" would send the operator after the wrong first step. Keyed by
+    // STATE so the next runtime supplies whichever states read wrong for it.
   const override = runtime.setupStateDetail?.[weights];
   if (override) return override;
   if (weights === 'empty') return `${runtime.label} has no model weights cached, so its server exits before it binds a port.`;
@@ -191,15 +147,11 @@ function weightsDetail(runtime, weights) {
 /**
  * The page that manages this runtime, named the way the sidebar names it.
  *
- * Every hint below used to say "Models → LLMs" outright, which was true while
- * that one page owned every local server. #7414 moved server lifecycle to
- * Models → Runtimes and left the weights catalog on LLMs, so a fixed breadcrumb
- * now sends half these runtimes to the wrong sibling. Resolving it from the
- * route each runtime ALREADY links to keeps the prose and the link agreeing,
- * per runtime, without this module knowing which pages exist.
+ * Server lifecycle lives on Models → Runtimes and the weights catalog on LLMs, so a fixed breadcrumb would send some
+ * runtimes to the wrong sibling. Resolving it from the route each runtime already links to keeps prose and link
+ * agreeing without this module knowing which pages exist.
  *
- * `null` for a runtime with no page (vLLM, SGLang) — callers drop the clause
- * rather than inventing a destination.
+ * `null` for a runtime with no page (vLLM, SGLang) — callers drop the clause rather than invent a destination.
  */
 const managePage = (runtime) => getNavPageForPath(runtime.manageUrl)?.breadcrumb ?? null;
 
@@ -234,9 +186,8 @@ function serverCheck(runtime, { installed, result, setup, weights = 'unknown' })
   const fallback = installed
     ? `${start} ${modelsHint}`
     : `Install ${runtime.label} first, then start it. ${modelsHint}`;
-  // Name the blocker in the SAME line that says nothing answered. Otherwise the
-  // checklist reads "installed ✓ / not responding — just press Start", and
-  // Start is the thing that cannot work until the weights land.
+  // Name the blocker in the same line that says nothing answered, or the checklist says "just press Start" when
+    // Start cannot work until the weights land.
   const blocked = weightsBlockStart(weights) ? weightsDetail(runtime, weights) : null;
   return {
     id: 'server',
@@ -248,15 +199,12 @@ function serverCheck(runtime, { installed, result, setup, weights = 'unknown' })
 }
 
 /**
- * The `detail`/`fixHint` a model-facing check reports when the endpoint never
- * answered, or answered unreadably. Shared by both such checks so a listing
- * PortOS could not read is reported as unknown, never as missing — the user
- * chases the check that IS actionable.
+ * The `detail`/`fixHint` a model-facing check reports when the endpoint never answered, or answered unreadably.
+ * A listing PortOS could not read is reported as unknown, never missing, so the user chases the actionable check.
  */
 function unreadableListing(runtime, probeError, weights, setup) {
-  // A server that answered 401 IS responding — "until the server responds"
-  // would send the user to start a container that is already up, when the
-  // actual fix is to paste its key onto this provider.
+  // A server that answered 401 IS responding; the fix is to paste its key onto this provider, not to start a
+    // container that is already up.
   const detail = probeError === 'authentication required'
     ? `${runtime.label} refused the model listing without an API key — paste the server's key on this provider.`
     : weightsDetail(runtime, weights) || 'Cannot be checked until the server responds.';
@@ -267,9 +215,8 @@ function unreadableListing(runtime, probeError, weights, setup) {
 }
 
 /**
- * The `model` check — does the running daemon serve what this provider asks
- * for? This is the alias mismatch: `llama-server --alias dflash` against a
- * provider pinned to `dspark` fails HERE rather than inside a dead agent run.
+ * The `model` check — does the running daemon serve what this provider asks for? An alias mismatch
+ * (`llama-server --alias dflash` vs a provider pinned to `dspark`) fails HERE rather than inside a dead agent run.
  */
 function modelCheck(runtime, wanted, served, probeError = null, { weights = 'unknown', setup = null } = {}) {
   const label = `Model \`${wanted}\` available`;
@@ -280,21 +227,16 @@ function modelCheck(runtime, wanted, served, probeError = null, { weights = 'unk
     return { id: 'model', label, ok: true, detail: `${runtime.label} is serving \`${wanted}\`.`, fixHint: null };
   }
   const listed = served.slice(0, 3).map((id) => `\`${id}\``).join(', ');
-  // WHY only one id is listed, in the same line that lists it. A daemon that
-  // serves one model per process is not "missing" the others — nothing was ever
-  // started under those names — and without saying so the checklist reads as a
-  // missing multi-gigabyte download, which is the wrong fix and an expensive one
-  // to chase.
+  // Say WHY only one id is listed: a daemon serving one model per process is not "missing" the others, and
+    // otherwise the checklist reads as a missing multi-gigabyte download.
   const oneModel = runtime.servesOneModel
     ? ` ${runtime.label} serves one model per process${runtime.aliasFlag ? `, answering under the id its \`${runtime.aliasFlag}\` set rather than the weights' own name` : ''}.`
     : '';
   const detail = served.length === 0
     ? `${runtime.label} is running but has no model loaded.`
     : `${runtime.label} is serving ${listed}${served.length > 3 ? ` +${served.length - 3} more` : ''}.${oneModel}`;
-  // A runtime whose served id is a launch-line LABEL can be renamed onto the
-  // weights it is already running — no download, no model swap. That makes the
-  // mismatch fixable from EITHER end, so the hint names both rather than
-  // implying the provider is the only thing that may move.
+  // A runtime whose served id is a launch-line LABEL can be renamed onto the weights it already runs, so the
+    // mismatch is fixable from either end and the hint names both.
   const renameTo = served.length > 0 && runtime.aliasFlag ? wanted : null;
   const page = managePage(runtime);
   const fixHint = served.length === 0
@@ -320,19 +262,13 @@ function modelCheck(runtime, wanted, served, probeError = null, { weights = 'unk
 /**
  * The `catalog` check — can this provider dispatch the models it OFFERS?
  *
- * `modelCheck` above validates the pin. This validates everything else in the
- * provider's `models` list, which is what a task or a pipeline stage actually
- * picks from. Without it a provider that pins nothing (every shipped OpenCode
- * local wrapper) passed readiness while its whole catalog named ids the daemon
- * stopped serving — a stage pinned to one spawned, produced no output, and died
- * at spawn time rather than failing resolution up front (#6125).
+ * `modelCheck` validates the pin; this validates the rest of the provider's `models` list, which is what a task or
+ * stage picks from. Without it a provider that pins nothing passed readiness while its catalog named ids the
+ * daemon no longer served, and a stage pinned to one died at spawn.
  *
- * `servesOneModel` runtimes are graded leniently on purpose: llama.cpp, MTPLX,
- * vLLM, SGLang and Slotstream run ONE checkpoint per process, so a catalog
- * listing the other presets is normal configuration rather than rot. One
- * servable id is all such a provider ever needs. A multi-model daemon (Ollama,
- * LM Studio) serves everything it holds at once, so there any unservable id is
- * a real pin waiting to fail.
+ * `servesOneModel` runtimes are graded leniently: llama.cpp, MTPLX, vLLM, SGLang and Slotstream run ONE checkpoint
+ * per process, so a catalog listing other presets is normal and one servable id is all they need. A multi-model
+ * daemon (Ollama, LM Studio) serves everything it holds, so there any unservable id is a real pin waiting to fail.
  */
 function catalogCheck(runtime, offered, served, probeError = null, { weights = 'unknown', setup = null, pinned = null } = {}) {
   const label = `Offered models available (${offered.length})`;
@@ -349,9 +285,8 @@ function catalogCheck(runtime, offered, served, probeError = null, { weights = '
   }
   const listed = unserved.slice(0, 3).map((id) => `\`${id}\``).join(', ');
   const more = unserved.length > 3 ? ` +${unserved.length - 3} more` : '';
-  // "every run fails" is only true when the pin cannot carry the provider
-  // either — otherwise the provider still runs, and only a stage that pinned one
-  // of these ids dies.
+  // "every run fails" is only true when the pin cannot carry the provider either; otherwise only a stage that
+    // pinned one of these ids dies.
   const nothingDispatchable = unserved.length === offered.length && !(pinned && served.includes(pinned));
   const page = managePage(runtime);
   const detail = nothingDispatchable
@@ -368,15 +303,12 @@ function catalogCheck(runtime, offered, served, probeError = null, { weights = '
 }
 
 /**
- * The requirements checklist for one provider, or `null` when the provider does
- * not depend on a local daemon.
+ * The requirements checklist for one provider, or `null` when it does not depend on a local daemon.
  *
- * Deps are injectable so the suite can drive every combination without a daemon
- * or a real PATH on the host.
+ * Deps are injectable so the suite can drive every combination without a daemon or a real PATH.
  *
- * @param {object} provider - the RAW provider record (endpoint + envVars intact;
- *   a sanitized copy has its secret env values redacted, which would hide a
- *   custom base URL)
+ * @param {object} provider - the RAW provider record (endpoint + envVars intact; a sanitized copy redacts secret
+ *   env values, which would hide a custom base URL)
  * @param {{findCommand?:Function, probe?:Function}} [deps]
  */
 export async function getProviderReadiness(provider, deps = {}) {
@@ -386,25 +318,20 @@ export async function getProviderReadiness(provider, deps = {}) {
   const findCommand = deps.findCommand || findCommandCached;
   const probe = deps.probe || probeOpenAiModelsCached;
 
-  // The wrapper's own key: a vLLM container is started behind `VLLM_API_KEY`
-  // and 401s an unauthenticated `/v1/models`, which would leave the model check
-  // permanently unknown on an otherwise-healthy stack.
+  // The wrapper's own key: a vLLM container behind `VLLM_API_KEY` 401s an unauthenticated `/v1/models`, which
+    // would leave the model check permanently unknown on a healthy stack.
   const result = await probe(runtime.endpoint, provider?.apiKey || '');
   // A daemon that answers is installed, whatever PATH says — Ollama's macOS app
   // and LM Studio both serve without putting a CLI on PortOS's PATH.
   const onPath = Boolean(runtime.command && findCommand(runtime.command));
-  // LM Studio ships as a macOS app bundle whose `lms` shim the user opts into
-  // separately, so PATH alone says "not installed" for a perfectly installed
-  // copy. The Models → LLMs page already counts the bundle (`localLlm.getStatus`);
-  // without the same signal here the card would render "LM Studio installed"
-  // and "install LM Studio" two lines apart, and send the user after the wrong
-  // fix — the real one is "start its server".
+  // LM Studio ships as a macOS app bundle whose `lms` shim is opt-in, so PATH alone says "not installed" for an
+    // installed copy. Count the bundle as Models → LLMs does (`localLlm.getStatus`), or the card contradicts itself
+    // and sends the user after the wrong fix.
   const appInstalled = runtime.kind === 'lmstudio' && (deps.isAppInstalled || isLmStudioAppInstalled)();
   const installed = onPath || appInstalled || result.reachable;
 
-  // What the runtime's own model cache holds. Only worth asking when the daemon
-  // is installed and NOT answering: a running server's `/v1/models` is the
-  // better answer, and an uninstalled runtime has no cache to read.
+  // Only worth asking when the daemon is installed and NOT answering: a running server's `/v1/models` is the
+    // better answer, and an uninstalled runtime has no cache to read.
   const weights = installed && !result.reachable
     ? await (deps.readWeights || readWeightsStateCached)(runtime.kind)
     : 'unknown';
@@ -436,51 +363,37 @@ export async function getProviderReadiness(provider, deps = {}) {
     // `ready` is strict: a check that could not be evaluated (`ok: null`) is not
     // a pass, so the card never claims a provider is good to go on unknowns.
     ready: checks.every((check) => check.ok === true),
-    // Standby is deliberately separate from `ready`: no endpoint is currently
-    // available, but an installed model-selecting runtime is not missing setup
-    // merely because no model was chosen to occupy resources right now.
+    // Standby is separate from `ready`: no endpoint is available now, but an installed model-selecting runtime is
+        // not missing setup merely because no model was chosen to occupy resources.
     standby,
     standbyDetail: standby ? expandPageToken(runtime.standbyDetail, runtime) : null,
     checks,
-    // What this daemon is SERVING right now. It rides the readiness payload
-    // BECAUSE it is observed runtime state and must never reach `providers.json`
-    // (#7441) — this is the channel the provider card budgets its meter from, so
-    // the card shows the window the dispatch gate would actually enforce.
+    // What this daemon is SERVING right now. Observed runtime state, so it rides the readiness payload and must
+        // never reach `providers.json`; the provider card budgets its meter from it.
     contextWindows: aliasServedContextWindows(provider, runtime, result.contextWindows),
-    // The window PortOS holds this daemon at, resolved from BOTH rungs — the
-    // provider's `numCtx` and the ambient `OLLAMA_CONTEXT_LENGTH` this install
-    // launches Ollama with. It rides the same payload for the same reason the
-    // served windows do: it is runtime state, not configuration, and the card's
-    // meter must show the ceiling the dispatch gate enforces. The browser cannot
-    // read server env, so without this the card stayed on the `numCtx`-only rung
-    // and promised a window a run would then be refused for (#7472).
+    // The window PortOS holds this daemon at, from BOTH rungs (the provider's `numCtx` and the ambient
+        // `OLLAMA_CONTEXT_LENGTH`). Runtime state like the served windows; the browser cannot read server env, so
+        // without it the meter would promise a window a run is then refused for.
     runtimeContextWindow: managedOllamaContextLength(provider),
-    // What a one-click "set this up for me" button can do about the unmet
-    // checks, or `null` when nothing here is auto-fixable (see
-    // `localRuntimeSetup.js`). Carried on the readiness payload so the card
-    // offers the ACTION next to the failing check instead of sending the user
-    // out of the app.
+    // What a one-click setup button can do about the unmet checks, or `null` when nothing is auto-fixable (see
+        // `localRuntimeSetup.js`); lets the card offer the ACTION beside the failing check.
     setup,
   };
 }
 
 /**
- * Readiness for every ENABLED provider that needs a local daemon, keyed by
- * provider id. Providers with no local dependency are omitted entirely, so the
- * client can treat "absent" as "nothing to report".
+ * Readiness for every ENABLED provider that needs a local daemon, keyed by provider id. Providers with no local
+ * dependency are omitted, so the client can treat "absent" as "nothing to report".
  *
- * Disabled providers are skipped: a stock install ships most of the local
- * presets disabled, and probing daemons for providers the user switched off
- * spends most of every poll on cards that would show the checklist for a
- * provider they cannot run anyway.
+ * Disabled providers are skipped: a stock install ships most local presets disabled, and probing them would spend
+ * most of every poll on cards for providers the user cannot run.
  *
  * @param {object[]} providers - RAW provider records
  */
 export async function getProviderReadinessMap(providers, deps = {}) {
   const list = (Array.isArray(providers) ? providers : []).filter((provider) => provider?.enabled !== false);
-  // One PATH scan per distinct binary and one probe per distinct endpoint for
-  // the whole batch — including when the caller injects its own probe, which
-  // would otherwise bypass the module-level caches that normally collapse them.
+  // One PATH scan per distinct binary and one probe per distinct endpoint per batch, including when the caller
+    // injects its own probe (which would bypass the module-level caches).
   const findCommand = memoize(deps.findCommand || findCommandCached);
   const probe = memoize(deps.probe || probeOpenAiModelsCached);
   // Same reasoning as the two above: one `mtplx models` subprocess per batch,
@@ -497,11 +410,8 @@ export async function getProviderReadinessMap(providers, deps = {}) {
 }
 
 /**
- * Per-batch memo (the returned promise is shared, not awaited). EVERY argument
- * is forwarded and folded into the key — a memo that keyed on the first argument
- * alone silently dropped the probe's API key, so the batch path (which is what
- * `GET /api/providers/readiness` uses) probed a key-gated container
- * unauthenticated while the single-provider path authenticated fine.
+ * Per-batch memo (the returned promise is shared, not awaited). EVERY argument is folded into the key: keying on
+ * the first alone dropped the probe's API key, so the batch path probed a key-gated container unauthenticated.
  */
 function memoize(fn) {
   const seen = new Map();
@@ -513,16 +423,13 @@ function memoize(fn) {
 }
 
 /**
- * Drops the probe caches so the next read reflects a daemon that was just
- * started, stopped, or installed — called by the llama-server lifecycle routes,
- * which change exactly what these caches remember.
+ * Drops the probe caches so the next read reflects a daemon just started, stopped, or installed — called by the
+ * llama-server lifecycle routes.
  */
 export function resetProviderReadinessCache() {
   invalidateModelObservation('provider-readiness');
-  // The endpoint listing cache lives in `lib/openAiModelsProbeCache.js` — the
-  // dispatch path's context gate shares it, and a daemon relaunched at a
-  // different context size must invalidate BOTH readers or a run is gated on
-  // the old window.
+  // The endpoint listing cache lives in `lib/openAiModelsProbeCache.js`; the dispatch path's context gate shares
+    // it, so a daemon relaunched at a different context size must invalidate BOTH readers.
   resetOpenAiModelsProbeCache();
   binaryCache.clear();
   weightsCache.clear();

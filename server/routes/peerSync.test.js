@@ -547,7 +547,7 @@ describe('peer-sync routes', () => {
       const res = await request(buildApp())
         .delete('/api/peer-sync/subscriptions/peer-universe-u1-peer-a');
       expect(res.status).toBe(200);
-      expect(res.body.removed).toBe(true);
+      expect(svc.unsubscribePeer.mock.calls[0][0]).toBe('peer-universe-u1-peer-a');
     });
 
     it('404 when the id is unknown', async () => {
@@ -987,7 +987,6 @@ describe('peer-sync routes', () => {
         .post('/api/peer-sync/sync-now')
         .send({ peerId: 'peer-a' });
       expect(res.status).toBe(200);
-      expect(res.body.ok).toBe(true);
       expect(svc.syncNowForPeer).toHaveBeenCalledWith('peer-a');
     });
 

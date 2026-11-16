@@ -7,6 +7,13 @@
  * Trust is a property of the ACCOUNT the operator configured, never of any
  * notification content — later phases compute per-thread trust from it plus
  * repo ownership and actor metadata.
+ *
+ * Storage: `file-primary` (`data/github-accounts.json`) — machine-local, never
+ * federated: which logins a machine is signed into is a property of that machine.
+ * Small configuration with no relations or search, and no credentials. No file
+ * means one implicit github.com account (no seed or migration); a stored empty
+ * list is authoritative. v1; a malformed or other-version file is refused (503)
+ * and left untouched. Rsync backups include it.
  */
 import { join } from 'path';
 import { z } from 'zod';

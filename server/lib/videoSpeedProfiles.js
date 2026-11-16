@@ -1,5 +1,5 @@
 /**
- * Video render speed profiles (issue #4875).
+ * Named video sampler speed profiles: declaration, resolution and registry backfill.
  *
  * Declared video sampler profiles, default sentinel, mode resolution, sampler precedence and registry
  * validation/backfill. Quality preserves stock arguments. Legacy LTX profiles retain their disclosed
@@ -13,7 +13,6 @@
  * levers like TeaCache). Measured claims are separate from experimental profiles.
  * The separately typed H3 LightX2V contract is model/runtime/adapter-bound,
  * overrides the stock lock only as a complete schedule, and refuses mismatches
- * before admission. It has no measured PortOS speed claim (issue #13612).
  *
  * The relationship between a model and its profiles is DECLARED here — not
  * inferred from a runtime name — and attached to registry entries as
@@ -30,9 +29,6 @@
  * the picker has something to show as selected, but it is deliberately a
  * NO-OP — `resolveVideoSpeedProfile` returns `null` for it, so a quality render
  * builds the same spawn args as one with no profile and stamps no extra
- * history fields. Absence and `'quality'` are the
- * same request (`isDefaultSpeedProfile`), exactly as `'stock'` and absence are
- * the same request in lib/videoTextEncoders.js.
  *
  * ## Why compatibility is checked rather than assumed
  *
@@ -55,14 +51,6 @@
  *     schedule; a speed profile would be a second authority over the same
  *     dials, so legacy LTX profiles and locks are mutually exclusive. Only the
  *     complete pinned H3 contract may replace a locked stock schedule.
- *
- * Everything the RUNNER cannot promise ahead of time — is the pinned
- * `ltx_pipelines_mlx` new enough to accept `enable_teacache`? is the distilled
- * adapter actually in the model pack? — is probed by the Python helper at
- * render time, which emits a `SPEEDPROFILE:` line naming what it actually
- * applied. That is what keeps an unavailable lever from becoming a misleading
- * speed claim: the profile still renders (at its step schedule), the missing
- * lever is reported as `degraded`, and the history record says so.
  *
  * Pure module: no I/O or imports out to services.
  */
@@ -119,17 +107,7 @@ export const VIDEO_SPEED_PROFILES = Object.freeze({
     shippedRevision: MINIMAX_H3_LIGHTX2V_PROFILE.model.revision,
     profiles: Object.freeze([MINIMAX_H3_LIGHTX2V_PROFILE]),
   }),
-  // LTX-2.5 Q8. The step schedule here is NOT invented: it is the same
-  // 8 stage-1 / 3 stage-2 / CFG 1.0 configuration the env-gated
-  // PORTOS_T2V_TWO_STAGE experiment measured at ~30-35% off wall time
-  // (resolveT2vTwoStageOverride, server/services/videoGen/local.js), promoted
-  // from a hidden env knob to a user-facing, capability-gated choice.
   //
-  // The 2.5 pack adds the lever 2.3 did not have: its own distilled adapter
-  // (ltx-2.5-22b-distilled-lora-450) plus a pinned runtime whose two-stage
-  // `generate_and_save` accepts `enable_teacache`. TeaCache caches stage-1
-  // residuals between steps against upstream's calibrated coefficients; PortOS
-  // has always left it off on this path because it never passed the kwarg.
   ltx25_mlx_q8: Object.freeze({
     shippedRepo: 'MrMofer/ltx-2.5-mlx-q8',
     shippedRevision: 'f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc',
@@ -138,8 +116,6 @@ export const VIDEO_SPEED_PROFILES = Object.freeze({
         id: 'fast',
         name: 'Fast',
         description: '8+3-step two-stage schedule at CFG 1.0 with experimental TeaCache. Detail and prompt adherence may be reduced; TeaCache is not calibrated for LTX-2.5.',
-        // No numerical speed claim: the new 30-step quality baseline has not
-        // been benchmarked against this profile across representative shots.
         steps: 8,
         stage2Steps: 3,
         guidance: 1.0,

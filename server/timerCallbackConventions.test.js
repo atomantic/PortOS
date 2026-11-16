@@ -1,78 +1,11 @@
 /**
- * Repo-wide guard: an `async` timer callback may not let an `await` reject.
- *
- * ## The bug class
- *
- *   setTimeout(async () => {
- *     const orphaned = await cleanupOrphanedAgents();   // ← rejects on a corrupt state file
- *   }, DELAY);
- *
- * A timer callback runs outside the Express request lifecycle, so there is no
- * `next(err)` for a throw to bubble to and nobody holds the promise the `async`
- * callback returns. A rejection therefore surfaces as an unhandled rejection,
- * which Node >= 15 treats as fatal — the process dies. The CoS runner shipped
- * exactly that at boot (#5668): its orphan-cleanup timer awaited a state-file
- * read/write, so one truncated `agents` file killed the runner seconds after
- * start and PM2 restart-looped it against the same bad file forever.
- *
- * Root `AGENTS.md` already states the rule ("try/catch IS required in … timer
- * callbacks and anything outside the request lifecycle") and
- * `services/mediaJobQueue/index.js` carries the worked example. This test is
- * what makes the rule hold without anyone remembering it.
- *
- * ## The rule
- *
- * Inside the body of a `setTimeout(async …)` / `setInterval(async …)` callback,
- * every `await` must be either
- *
- *   1. lexically inside a `try { … } catch` block (a `try … finally` with no
- *      `catch` re-throws, so it does not count), or
- *   2. applied to an expression whose chain ENDS in `.catch(…)`
- *      (`await save().catch(() => {})`). A `.catch` with another link after it
- *      does not count — `await work().catch(recover).then(rethrow)` can still
- *      reject.
- *
- * Both spellings are load-bearing in the tree today, and both genuinely own the
- * rejection, so neither is preferred over the other. The rule deliberately does
- * NOT demand that `try {` be the callback's FIRST statement: the mediaJobQueue
- * watchdog opens with cheap synchronous re-entrancy guards (`if (inFlight)
- * return;`) before its try, and hoisting those inside the try to satisfy a
- * position-based rule would make correct code worse.
- *
- * ## Allowlist
- *
- * There is none, on purpose. Every site in the tree passes; a new violation is
- * a bug to fix, not an entry to add. If you are reading this because the scan
- * just failed, wrap the body in `try { … } catch (err) { console.error(…); }`.
- *
- * ## What this guard CANNOT see
- *
- * It is a lexer-assisted source scan, not a scope-aware AST pass. Strings,
- * comments, template-literal text, and regex literals are blanked before
- * matching (so an `await` written in a comment does not count, and a `}` inside
- * a string cannot skew the brace walk), but these shapes still slip through:
- *
- *   - A timer whose callback is a named function declared elsewhere
- *     (`setTimeout(sweep, 1000)` where `sweep` is `async`).
- *   - An `await` guarded by a helper the callback calls, rather than by its own
- *     `try` — reads as unguarded, so the guard errs toward flagging.
- *   - A nested `async` callback inside the timer body: its awaits are attributed
- *     to the timer. That is conservative in the right direction — a
- *     fire-and-forget inner async callback has the same ownerless-rejection
- *     problem — but it means the fix may belong on the inner function.
- *   - A promise created but never awaited (`finish(...)` fire-and-forget). Those
- *     are a sibling hazard this rule does not cover.
- *
- * Tightening any of these means moving to an AST pass; the shapes above are
- * rare enough here that the scan earns its keep as-is.
- *
- * ## Where the machinery lives
- *
- * The lexer, bracket matcher, callback parser and the await checker are in
- * `server/lib/sourceScan.js`, shared with `sockets/asyncHandlerGuard.test.js` —
- * the same rule for Socket.IO handlers. Only the `setTimeout`/`setInterval`
- * recognizer below is timer-specific; keeping the rest shared is what stops the
- * two guards drifting on what "owns its rejection" means.
+ * Rule: Every `await` inside an `async` `setTimeout`/`setInterval` callback must be inside a `try { … } catch` block or end in `.catch(…)` (see root `AGENTS.md`, shared lexer in `server/lib/sourceScan.js`).
+ * Fix: Wrap the callback body in `try { … } catch (err) { console.error(…); }` or chain `.catch(…)` on the awaited promise.
+ * What this guard cannot see:
+ *   - Named callback functions declared elsewhere (`setTimeout(sweep, 1000)`).
+ *   - An `await` guarded by a helper rather than its own `try` (errs toward flagging).
+ *   - Nested `async` callbacks inside the timer body (attributed to the timer).
+ *   - Unawaited fire-and-forget promises.
  */
 import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 

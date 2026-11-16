@@ -31,7 +31,7 @@ import { join } from 'path';
 import { normalizeTaskOutcome, resolveTaskOutcome } from '../lib/agentOutcome.js';
 import { execGit } from '../lib/execGit.js';
 import { outsideGitMutationLifetime } from '../lib/gitMutationLifetime.js';
-import { PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { PATHS, safeJSONParse, tryReadFile, readFileTail } from '../lib/fileUtils.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 // The DEFINING module, not a barrel (#3450) — see the note in
 // `agentManagement.js`. This module is a LEAF that both transition modules
@@ -67,7 +67,7 @@ import { formatGoalFidelityFollowUpSummary, goalFidelityFollowUpApplies, isGoalF
 import { getGoalFidelityConfig, runLocalGoalFidelityReview } from './codeReview.js';
 import { SKIP_LEARNING_VERDICT } from '../lib/learningVerdict.js';
 import { detectPrimaryCheckoutDrift } from '../lib/primaryCheckoutGuard.js';
-import { canRunTaskOutputHookWithoutPayload, getTaskOutputPayloadPredicate, isProgrammaticIoTaskType, resolveTaskHookType, declaresNoCommitCriterion, isClaimFlowDispatch } from './taskTypeHooks.js';
+import { canRunTaskOutputHookWithoutPayload, getTaskOutputPayloadPredicate, isProgrammaticIoTaskType, resolveTaskHookType, declaresNoCommitCriterion, isClaimFlowDispatch, getTaskOutputHook } from './taskTypeHooks.js';
 import { processAgentCompletion } from './agentCompletion.js';
 import { extractFinalSummary } from './agentSummaryExtraction.js';
 import { usesCreativeDirectorScratchCwd, removeCreativeDirectorScratchCwd } from '../lib/spawnCwd.js';
@@ -76,6 +76,9 @@ import { issueNumberFromRef } from './issueReconcile.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { isUpdateRepoRepairTask, verifyUpdateRepoRepairCompletion } from './updateRepoRepairCompletion.js';
 import { permitsNoChangeCompletion } from '../lib/noChangeCompletion.js';
+import { getMergeRequestState, execGlab, findMergeRequestForBranch } from './gitlab.js';
+import { getPullRequestState, execGh, findPullRequestForBranch } from './github.js';
+import { resolveRepoForgeTarget } from '../lib/workTracker.js';
 /**
  * Release the execution lane and complete tool-execution tracking for a
  * finishing agent. Pulled OUT of finalizeAgent so callers can fire it
@@ -539,11 +542,9 @@ const prObservation = (outcome, fields = {}) => ({
 async function verifyLandedChangeRequest(refs, forge, workspacePath) {
   for (const ref of refs) {
     if (forge.cli === 'glab') {
-      const { getMergeRequestState } = await import('./gitlab.js');
       const view = await getMergeRequestState(ref, workspacePath).catch(() => ({ status: 'unavailable', state: null }));
       if (view.status === 'known' && view.state === 'MERGED') return { ref, state: view.state };
     } else {
-      const { getPullRequestState } = await import('./github.js');
       const view = await getPullRequestState(ref, { cwd: workspacePath, env: forge.env || null })
         .catch(() => ({ status: 'unavailable', state: null }));
       if (view.status === 'known' && view.state === 'MERGED') return { ref, state: view.state };
@@ -638,8 +639,8 @@ async function observePrClaim({ task, workspacePath, success, prExpected, agentS
   const { cli, env } = forge;
   const draft = task?.metadata?.prCompletion === PR_COMPLETIONS.DRAFT;
   const found = cli === 'glab'
-    ? await (await import('./gitlab.js')).findMergeRequestForBranch(branch, workspacePath, ...(draft ? [{ includeDraft: true }] : []))
-    : await (await import('./github.js')).findPullRequestForBranch(branch, { cwd: workspacePath, env: env || null, ...(draft ? { includeDraft: true } : {}) });
+    ? await findMergeRequestForBranch(branch, workspacePath, ...(draft ? [{ includeDraft: true }] : []))
+    : await findPullRequestForBranch(branch, { cwd: workspacePath, env: env || null, ...(draft ? { includeDraft: true } : {}) });
 
   const noun = cli === 'glab' ? 'merge request' : 'pull request';
   const titleNoun = `${noun[0].toUpperCase()}${noun.slice(1)}`;
@@ -779,7 +780,6 @@ async function claimedIssueObjective(workspacePath) {
   const { resolveForgeForRepo } = await import('./git.js');
   const { cli, env } = await resolveForgeForRepo(workspacePath);
   const tracker = cli === 'gh' ? 'github' : cli === 'glab' ? 'gitlab' : null;
-  const { resolveRepoForgeTarget } = await import('../lib/workTracker.js');
   const target = tracker
     ? await resolveRepoForgeTarget(workspacePath, { preferredForge: tracker }).catch(() => null)
     : null;
@@ -787,10 +787,8 @@ async function claimedIssueObjective(workspacePath) {
     ? `${target.webHost}/${target.fullName}` : null;
   let raw;
   if (cli === 'gh') {
-    const { execGh } = await import('./github.js');
     raw = await execGh(['issue', 'view', String(issueNumber), '--json', 'number,title,body', ...(repo ? ['--repo', repo] : [])], 30000, { cwd: workspacePath, env });
   } else if (cli === 'glab') {
-    const { execGlab } = await import('./gitlab.js');
     raw = await execGlab(['issue', 'view', String(issueNumber), '--output', 'json', ...(repo ? ['--repo', repo] : [])], workspacePath, 30000);
   } else return null;
   const issue = safeJSONParse(raw, null);
@@ -2304,7 +2302,6 @@ async function rescueTranscriptPayload({ agentId, taskType }) {
   try {
     const isPayload = await getTaskOutputPayloadPredicate(taskType);
     if (!isPayload) return null;
-    const { PATHS, readFileTail } = await import('../lib/fileUtils.js');
     const { extractSentinelPayloadFromTranscript } = await import('../lib/agentSentinel.js');
     for (const file of TRANSCRIPT_RESCUE_FILES) {
       const transcript = await readFileTail(join(PATHS.cosAgents, agentId, file), TRANSCRIPT_RESCUE_TAIL_BYTES);
@@ -2330,7 +2327,6 @@ async function rescueTranscriptPayload({ agentId, taskType }) {
 async function recoverBareSentinelPayload(contents, taskType) {
   if (typeof contents !== 'string' || !isProgrammaticIoTaskType(taskType)) return null;
   try {
-    const { safeJSONParse } = await import('../lib/fileUtils.js');
     const candidate = safeJSONParse(contents, null, { allowArray: false, logError: false });
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)
       || Object.hasOwn(candidate, 'summary') || Object.hasOwn(candidate, 'payload')) return null;
@@ -2404,7 +2400,6 @@ function hookPayloadDir({ task, workspacePath, recovery }) {
  */
 async function readHookPayload({ agentId, taskType, cwd }) {
   const { doneSentinelPath, parseSentinelPayload, salvageSentinelPayload } = await import('../lib/agentSentinel.js');
-  const { tryReadFile } = await import('../lib/fileUtils.js');
   // This run's own sentinel (see doneSentinelName) — in a shared workspace a
   // sibling agent's file must not be consumed as this run's deliverable.
   const contents = await tryReadFile(doneSentinelPath(cwd, agentId));
@@ -2504,7 +2499,6 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
     // Assessment telemetry never waives commit/PR success criteria for fix mode.
     return { ran: false, auditAssessment, ...(auditDisposition ? { auditDisposition } : {}), ...(deepAudit ? { deepAudit } : {}) };
   }
-  const { getTaskOutputHook } = await import('./taskTypeHooks.js');
   const hook = await getTaskOutputHook(taskType);
   if (!hook) return { ran: false, ...(deepAudit ? { deepAudit } : {}) };
 

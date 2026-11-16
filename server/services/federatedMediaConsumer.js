@@ -11,6 +11,7 @@ import {
   inspectFederatedMediaStatusFreshness,
   KNOWN_MEDIA_KINDS,
 } from '../lib/federatedMediaWire.js';
+import { isPlainObject as isRecord } from '../lib/objects.js';
 import { peerFetch } from '../lib/peerHttpClient.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
@@ -22,7 +23,6 @@ export const DEFAULT_FEDERATED_MEDIA_PEER_CONFIG = Object.freeze({
   videoModels: Object.freeze([]),
 });
 
-const isRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
 // Exported so the standing-route save gate (federatedMedia/routingPolicy.js)
 // compares an allowlist entry to a requested pair the same way this module
 // does — the two must never disagree about what "allowlisted" means.

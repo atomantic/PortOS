@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { readFileSync } from 'fs';
-import { releaseTitleFromChangelog } from './lib/releaseTitle.js';
+import { releaseNotesProblem, releaseTitleFromChangelog } from './lib/releaseTitle.js';
 
 const [version, changelogPath] = process.argv.slice(2);
 
@@ -10,4 +10,11 @@ if (!version || !changelogPath) {
   process.exit(2);
 }
 
-console.log(releaseTitleFromChangelog(readFileSync(changelogPath, 'utf8'), version));
+const changelog = readFileSync(changelogPath, 'utf8');
+const problem = releaseNotesProblem(changelog, version);
+if (problem) {
+  console.error(`::error::${problem}`);
+  process.exit(1);
+}
+
+console.log(releaseTitleFromChangelog(changelog, version));

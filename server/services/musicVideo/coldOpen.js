@@ -13,7 +13,7 @@ import { mkdir, readdir, rename, rm, stat } from 'fs/promises';
 import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { findFfmpeg, hasAudioStream, runFfmpegProcess, safeUnder } from '../../lib/ffmpeg.js';
+import { findFfmpeg, hasAudioStream, runFfmpegProcess, safeUnder, probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { coldOpenPlan, coldOpenScenes, normalizePreMusic, preMusicEffect } from '../../lib/musicVideoColdOpen.js';
 import { nameShots } from './productionReview.js';
 import { shotSegmentDir } from './shotSegmentPaths.js';
@@ -195,8 +195,8 @@ export async function ensureColdOpenAudio(shots, dir, { ffmpeg = null, signal } 
 export async function prependColdOpen({ project, coldOpen, path, ffmpeg, jobId, signal }) {
   if (!coldOpen?.clips?.length) return 0;
   if (typeof jobId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('Invalid cold open job id');
-  const [{ buildMusicVideoFfmpegArgs }, { probeVideoGeometry }, { filterGraphViaFile }] = await Promise.all([
-    import('./render.js'), import('../../lib/ffmpeg.js'), import('../../lib/ffmpegFilterGraph.js')]);
+  const [{ buildMusicVideoFfmpegArgs }, { filterGraphViaFile }] = await Promise.all([
+    import('./render.js'), import('../../lib/ffmpegFilterGraph.js')]);
   const geometry = await probeVideoGeometry(path);
   if (!geometry) throw new ServerError('The rendered video could not be measured for its cold open', { status: 500, code: 'PRE_MUSIC_PROBE' });
   const { width, height, fps } = geometry;

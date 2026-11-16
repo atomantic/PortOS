@@ -1,16 +1,5 @@
 // Shared lookahead-transport for the synth players (#2493).
 //
-// Shared lookahead-transport state machine for the synth players (#2493) — `createLookaheadTransport({
-// getTotalSec, scheduleWindow, prepare?, seekCursors?, onStop?, onEnded?, onTeardown? })` owns the Web
-// Audio clock + live-node lifecycle (playing / interval / startTime / offsetSec / nodes / playToken,
-// the `resumeAudioContext()` call with the teardown-race guard, the optional `audioSession` claim held
-// for exactly as long as the transport sounds, `track()` node pruning, and the play / pause / stop /
-// seek / position transitions); each player supplies only the scheduling + notify callbacks and stays
-// a thin scheduler over it, so a fix to the token-guard race or teardown lands in one place. Also the
-// single source of the `SYNTH_TIMING` lookahead constants (`LEAD`/`LOOKAHEAD_MS`/`SCHEDULE_AHEAD`)
-// `scorePlayback`/`midiPlayback` share. No React, no score/MIDI concepts — imports only the shared
-// `AudioContext`.
-//
 // The three players — createScorePlayer + createMultiScorePlayer (scorePlayback.js) and
 // createMidiPlayer (midiPlayback.js) — all drive a Web Audio OscillatorNode graph through the same
 // lookahead-scheduler state machine: a not-yet-running context resume with a teardown-race guard, an

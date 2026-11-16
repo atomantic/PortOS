@@ -1,4 +1,12 @@
-/** Machine-local Production film adapter. Explicit actions only; no provider calls. */
+/**
+ * Machine-local Production film adapter. Explicit actions only; no provider calls.
+ *
+ * Storage: `db-primary` (`kind: 'film'` rows in `code_animation_projects`) — machine-local, never
+ * federated; absent `kind` reads as `package`, so no rewrite or seed. Row locks serialize film updates.
+ * Storage: `file-primary` (`data/code-animation/films/<projectId>/src/`) — operator-authored source,
+ * backed up; `manifest.json`/`song.json` are derived, and the anchored `renders/` backup filter excludes
+ * regenerable frames, videos, cuts and logs (accepted finals are copied into `data/videos/`).
+ */
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { PATHS } from '../../lib/paths.js';
@@ -8,7 +16,7 @@ import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import { createFilmSchema, patchFilmSchema, filmAudioSchema } from '../../lib/codeAnimationFilms.js';
-import { blenderRefusal } from '../film/workspace.js';
+import { blenderRefusal, assertInsideWithoutSymlinks } from '../film/workspace.js';
 import { emitCodeAnimationChanged, emitCodeAnimationFilm } from '../socket.js';
 import * as store from './projectStore.js';
 
@@ -137,7 +145,6 @@ export function filmSnapshotOwner(owner, project) {
 async function mutateFilmWithSong(id, change) {
   const owner = await codeAnimationFilmOwner(id);
   const { writeBlenderSong } = await import('../film/song.js');
-  const { assertInsideWithoutSymlinks } = await import('../film/workspace.js');
   await assertInsideWithoutSymlinks(owner.workspaceDir, join(owner.workspaceDir, 'song.json'));
   let wroteSong = false;
   try {

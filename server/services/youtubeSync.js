@@ -35,7 +35,7 @@ import { getUserTimezone } from './userTimezone.js';
 import { getSettings } from './settings.js';
 import { findOrOpenPage, listCdpPages, isAuthPage, evaluateOnPage } from './browserService.js';
 import { withYoutubeTab } from './youtubeBrowserLock.js';
-import { shortSummary } from './humanActivity.js';
+import { shortSummary, recordEvents } from './humanActivity.js';
 import { youtubeVideoIdFromUrl } from '../lib/youtubeUrl.js';
 
 // ---------------------------------------------------------------------------
@@ -357,7 +357,6 @@ async function doRunSync() {
   const candidates = youtubeWatchCandidates(extracted.entries, { today, timezone });
 
   let persistFailed = false;
-  const { recordEvents } = await import('./humanActivity.js');
   const recordResult = await recordEvents(candidates).catch((err) => {
     console.error(`❌ YouTube activity record failed: ${err?.message || err}`);
     persistFailed = true;

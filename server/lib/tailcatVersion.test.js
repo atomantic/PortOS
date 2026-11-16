@@ -1,16 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
-  MIN_TAILCAT_VERSION,
   parseTailcatVersion,
   isTailcatVersionAtLeast,
   tailcatVersionTooOldMessage,
 } from './tailcatVersion.js';
 
 describe('tailcatVersion', () => {
-  it('exposes the PSK-compatible floor', () => {
-    expect(MIN_TAILCAT_VERSION).toBe('0.6.0');
-  });
-
   it.each([
     ['v0.6.0', '0.6.0'],
     ['0.6.0', '0.6.0'],

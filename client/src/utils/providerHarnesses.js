@@ -1,19 +1,6 @@
 /**
  * The agent programs PortOS drives, as the browser needs to name them.
  *
- * `harnessLabel(harnessId)` — the display name for an agent program PortOS drives (Claude Code,
- * OpenCode, Codex, …), used wherever a harness is named (the preset-first pickers, the composition
- * catalog hook), where `null` means Direct API and an unknown id renders verbatim rather than
- * disappearing. Read through `harnessById` from the pure leaf `server/lib/providerHarnesses.js`, so a
- * harness added to the registry is named here without a second edit. Also
- * `providerHarnessId(provider)` (a derived preset's own `harnessId`, else the server's
- * `harnessForProvider` classification) and `groupProvidersByHarness(providers)` — the `{ harnessId,
- * label, providers }` buckets in registry order (Direct API after the agent harnesses, an `Other`
- * bucket last) that the preset-first `ProviderModelSelector` renders as `<optgroup>`s (#7566) and the
- * AI Providers page renders as its preset sections (#7567). `presetEditPath(presetId)` — the preset
- * editor URL (`/ai/presets/:id`), falling back to the kept `/ai/edit/:id` alias for the one id (`new`)
- * the static create route shadows.
- *
  * Read straight off `PROVIDER_HARNESSES` in `server/lib/providerHarnesses.js`
  * through `harnessById`, so a harness added to the registry is named here
  * without a second edit. Only the label is read: the registry's other columns

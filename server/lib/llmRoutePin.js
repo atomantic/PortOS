@@ -3,16 +3,6 @@
  * record so an action run against it uses the provider the user picked there
  * instead of the global active provider.
  *
- * The per-record LLM route pin `{ providerId, model, effort }` — `LLM_ROUTE_PIN_LIMITS` +
- * `llmRoutePinSchema` (door check, `effort` as the shared `EFFORT_LEVELS` enum),
- * `sanitizeLlmRoutePin(raw)` (trim/cap, `null` for an all-empty pin), and `resolveLlmRoutePin(pin,
- * perCall)` → `{ providerId, model, effort, providerMatchesPin }`. Owns the never-cross-providers rule
- * once, in its two shapes: `resolveLlmRoutePin` merges a record pin with an independent per-call pick
- * per FIELD (guarded by a provider-id comparison), while `pickLlmRoutePinLayer(...layers)` +
- * `llmRoutePinNamesProvider(layer)` take the most specific layer WHOLE for pins whose provider and
- * model were chosen together in one control (falling through to the base layer). Consumed by
- * `seriesLlmOverride.js`, FableLoom's play pin, and the Creative Director stage pins.
- *
  * Eight subsystems each hand-rolled this shape (series `llm`, FableLoom
  * `playSettings`, CoS job pins, creative-director stage pins, …), and every
  * copy re-derived the same rule from scratch. This module owns it once:

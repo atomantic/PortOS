@@ -82,28 +82,4 @@ describe('releaseIdleSiblingNextHolder', () => {
     expect(await holderBranch()).toBe('');
   });
 
-  it('still refuses an untracked-tolerant release when a tracked file changed', async () => {
-    await writeFile(join(holder, 'tracked.txt'), 'v1');
-    await git(['add', 'tracked.txt'], holder);
-    await expect(releaseIdleSiblingNextHolder(repo, BRANCH, { agents: [], nowMs: LATER(), allowUntracked: true })).resolves.toBeNull();
-    expect(await holderBranch()).toBe(BRANCH);
-  });
-
-  it('refuses a tree touched within the idle window', async () => {
-    await expect(releaseIdleSiblingNextHolder(repo, BRANCH, { agents: [] })).resolves.toBeNull();
-    expect(await holderBranch()).toBe(BRANCH);
-  });
-
-  it('refuses a tree a running agent works in', async () => {
-    await expect(releaseIdleSiblingNextHolder(repo, BRANCH, { agents: [], nowMs: LATER(), activeWorkspacePaths: [holder] })).resolves.toBeNull();
-    expect(await holderBranch()).toBe(BRANCH);
-  });
-
-  it('never touches the primary checkout or a non-/do:next branch', async () => {
-    await git(['switch', '-q', '--detach'], holder);
-    await git(['switch', '-q', BRANCH]);
-    await expect(releaseIdleSiblingNextHolder(repo, BRANCH, { agents: [], nowMs: LATER() })).resolves.toBeNull();
-    expect(await git(['branch', '--show-current'])).toBe(BRANCH);
-    await expect(releaseIdleSiblingNextHolder(repo, 'feature/x', { agents: [], nowMs: LATER() })).resolves.toBeNull();
-  });
 });

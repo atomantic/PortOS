@@ -41,7 +41,7 @@ export {
 
 // Shared dispatcher (#2909). ensureSchema() runs inside the selector so the
 // backend is self-sufficient regardless of boot ordering.
-const { selectBackend, getBackendName, reset } = createRecordStoreBackendSelector({
+const { selectBackend, getBackendName } = createRecordStoreBackendSelector({
   label: 'Tracks',
   loadFileBackend: () => import('./file.js'),
   loadDbBackend: () => import('./db.js'),
@@ -89,11 +89,6 @@ export { selectBackend as prepareTracksBackend };
 /** Name of the active backend, or null before first call (for diagnostics/tests). */
 export function getTracksBackendName() {
   return getBackendName();
-}
-
-/** Test seam — drop the memoized backend so a suite can re-select. */
-export function _resetTracksBackend() {
-  reset();
 }
 
 export async function listTracks(options = {}) {

@@ -1,7 +1,9 @@
 /**
  * Household subjects + the consent gate (issue #3658, epic #2138).
  *
- * db-primary Postgres per docs/STORAGE.md: one row per person the Privacy
+ * Storage: `db-primary` — machine-local, never federated, by product guarantee (see below).
+ *
+ * One row per person the Privacy
  * Center works on behalf of in `privacy_subjects`, with the consent audit trail
  * in `privacy_consents`. Every other privacy table carries a `subject_id` FK
  * defaulted to the seeded `self` row, so an install that never adds a second

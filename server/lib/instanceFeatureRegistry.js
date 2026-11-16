@@ -2,12 +2,6 @@
 // > Features renders, `server/lib/validation.js` validates against, and
 // `server/lib/navManifest.js` gates navigation on.
 //
-// The registry of optional per-install features (`INSTANCE_FEATURES`, `INSTANCE_FEATURE_IDS`,
-// `APP_FEATURE_IDS`) — pure data, so `validation.js` derives its feature schemas from it and
-// `navManifest.js` can be checked against it without a service→lib inversion. Runtime resolution
-// (stored override → auto-detection → `defaultEnabled`) lives in `services/instanceFeatures.js`. A
-// feature id tagged on a nav entry hides that page from ⌘K and the sidebar when the feature is off.
-//
 // It lives in lib/ (pure data, no I/O) so both a lib and a service can read it
 // without a service→lib inversion. Runtime resolution — stored overrides,
 // auto-detection, the enabled/disabled answer — is
@@ -35,6 +29,8 @@
 // hands each member back to its own normal resolution (detector, then
 // `defaultEnabled`). See resolveOne in services/instanceFeatures.js. An
 // ungrouped feature is completely unaffected — this is additive.
+import { isPlainObject } from './objects.js';
+
 export const INSTANCE_FEATURES = Object.freeze([
   Object.freeze({
     id: 'post',
@@ -219,10 +215,7 @@ export const APP_FEATURE_IDS = Object.freeze(['datadog', 'jira', 'gsd']);
  */
 export const countConfiguredInstances = (config, label = 'instance config') => {
   const instances = config?.instances;
-  const isPlainObject = instances !== null
-    && typeof instances === 'object'
-    && !Array.isArray(instances);
-  if (!isPlainObject) {
+  if (!isPlainObject(instances)) {
     throw new Error(`Malformed ${label}: "instances" must be an object`);
   }
   return Object.keys(instances).length;

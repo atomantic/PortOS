@@ -3,11 +3,12 @@ import { withRetiredDataAccess } from '../lib/retiredLoraTraining.js';
  * LoRA training datasets — collectionStore CRUD + image file management.
  *
  * One dataset per universe bible subject (find-or-create keyed on
- * `(universeId, entryKind, entryId)`), stored machine-locally at
- * `data/lora-datasets/<id>/index.json` with image bytes at
- * `data/lora-datasets/<id>/images/<imageId>.png`. Datasets never federate
- * — like `data/loras/` itself, they organize artifacts tied to this
- * machine's GPU output (see docs/STORAGE.md).
+ * `(universeId, entryKind, entryId)`), at `data/lora-datasets/<id>/index.json`
+ * with image bytes at `data/lora-datasets/<id>/images/<imageId>.png`.
+ *
+ * Storage: `file-primary` — machine-local, never federated: like `data/loras/`, the
+ * record is inseparable from this machine's GPU-output images. Backed up in full
+ * (uploads and hand-edited captions are not re-creatable).
  *
  * Generation (batch renders via the media-job queue) lives in
  * `loraDatasetGenerate.js`; vision captioning in `loraDatasetCaption.js`;

@@ -10,16 +10,8 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import sharp from 'sharp';
-import {
-  pyRound, pyRoundTo, median, sampleBorderKey, validateMeasuredKey,
-  isUsableMeasuredKey, longestUsableSpan,
-  recoverAlphaFrame, despillKeyFrame, imageDistance, estimateMotionPeriod, isPeriodAgreement,
-  selectCycleIndices, selectAmbientLoopIndices, _selectArclengthIndices as selectArclengthIndices,
-  alphaBbox, rootX, robustBottomRow, alignFrames, packStrip, validateFrames, buildContrastSheet,
-  rootBandForManifest, ROOT_BAND_TORSO, ROOT_BAND_HIP, ALIGN_OP_TORSO_X,
-  decodeTransparentSpriteSource, prepareWalkAnchorChromaInput,
-  WALK_PHASES, WALK_CELL_SIZE, WALK_FRAME_COUNT,
-} from './walkPostprocess.js';
+import { pyRound, pyRoundTo, median, sampleBorderKey, validateMeasuredKey, isUsableMeasuredKey, longestUsableSpan, recoverAlphaFrame, despillKeyFrame, imageDistance, estimateMotionPeriod, isPeriodAgreement, selectCycleIndices, selectAmbientLoopIndices, _selectArclengthIndices as selectArclengthIndices, alphaBbox, rootX, robustBottomRow, alignFrames, packStrip, validateFrames, buildContrastSheet, rootBandForManifest, ROOT_BAND_TORSO, ROOT_BAND_HIP, ALIGN_OP_TORSO_X, decodeTransparentSpriteSource, prepareWalkAnchorChromaInput, WALK_PHASES, WALK_CELL_SIZE } from './walkPostprocess.js';
+import { WALK_FRAME_COUNT } from './walkBounds.js';
 import { keyChannelSplit } from './chromaKey.js';
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-walkpp-test-'));
@@ -655,12 +647,3 @@ describe('prepareWalkAnchorChromaInput', () => {
   });
 });
 
-describe('constants', () => {
-  it('exposes the canonical gait phases in order', () => {
-    expect(WALK_PHASES).toEqual([
-      'left-contact', 'left-down', 'left-passing', 'left-up',
-      'right-contact', 'right-down', 'right-passing', 'right-up',
-    ]);
-    expect(WALK_FRAME_COUNT).toBe(8);
-  });
-});

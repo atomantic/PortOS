@@ -8,6 +8,10 @@
  * the storage `schemaVersion`. (Migrated from the legacy monolithic
  * data/media-collections.json by scripts/migrations/059-split-media-collections.js.)
  *
+ * Storage: `file-primary` today (target: `db-primary` link tables pointing at
+ * `asset-file-db-indexed` bytes) — federates through the `mediaCollections` sync
+ * category, which implies the `videoHistory` snapshot for the rows it references.
+ *
  * An item is identified by `{ kind: 'image'|'video', ref: <filename|videoId> }`.
  * A collection's `coverKey` is `null` (auto: newest item) or `"<kind>:<ref>"`
  * to pin a specific item as the cover thumbnail.

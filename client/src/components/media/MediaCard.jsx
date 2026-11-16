@@ -1,5 +1,5 @@
 import { memo, useState } from 'react';
-import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff, Maximize2, Wand2, Star, MessageSquare, Pencil, Box, Timer, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff, Maximize2, Smartphone, Wand2, Star, MessageSquare, Pencil, Box, Timer, ThumbsUp, ThumbsDown } from 'lucide-react';
 import MediaImage from '../MediaImage';
 import AddToCollectionMenu from './AddToCollectionMenu';
 import MediaHostsChip from './MediaHostsChip';
@@ -84,6 +84,7 @@ function MediaCard({
   onFinish,
   finishTitle = 'Re-render this draft on its delivery model',
   onUpscale,
+  onMakeVertical,
   onDelete,
   // A delete waiting on the peer that owns this row (`item.pendingDelete`):
   // the card says where it waits and offers to withdraw it instead of Delete.
@@ -114,6 +115,7 @@ function MediaCard({
   const videoPreviewUrl = isVideo && item.filename ? downloadUrl : undefined;
   const handleTileClick = onClick || (() => onPreview?.(item));
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [pickingVertical, setPickingVertical] = useState(false);
   const pendingDelete = Boolean(item.pendingDelete);
   const canDelete = Boolean(onDelete) && !pendingDelete;
   // Send actions come before Draw so the image-gen card (no annotate handler)
@@ -153,6 +155,10 @@ function MediaCard({
     isVideo && onUpscale && !item.upscaledFrom && {
       key: 'upscale', tone: TONE.neutral, icon: Maximize2, label: '2×',
       title: 'Upscale 2×', ariaLabel: 'Upscale 2×', onClick: () => onUpscale(item),
+    },
+    isVideo && onMakeVertical && !item.verticalFrom && {
+      key: 'vertical', tone: TONE.neutral, icon: Smartphone, label: 'Tall',
+      title: 'Make a vertical copy (blurred fill)', ariaLabel: 'Make vertical', onClick: () => setPickingVertical((open) => !open),
     },
   ].filter(Boolean);
   const fileActionCount = (showCollectionMenu ? 1 : 0)
@@ -307,6 +313,21 @@ function MediaCard({
         )}
         {!hideActions && confirmingDelete && canDelete && (
           <MediaDeleteConfirm item={item} usages={usages} onDelete={onDelete} onCancel={() => setConfirmingDelete(false)} />
+        )}
+        {!hideActions && pickingVertical && onMakeVertical && (
+          <div role="group" aria-label="Vertical ratio" className="flex flex-wrap items-center gap-1 text-[11px]">
+            <span className="text-gray-400">Make vertical:</span>
+            {['9:16', '4:5', '1:1'].map((ratio) => (
+              <button
+                key={ratio}
+                type="button"
+                onClick={() => { setPickingVertical(false); onMakeVertical(item, ratio); }}
+                className="min-h-[44px] px-2 rounded border border-port-border hover:bg-port-border/50 focus:outline-none focus-visible:ring-1 focus-visible:ring-port-accent"
+              >
+                {ratio}
+              </button>
+            ))}
+          </div>
         )}
         {!hideActions && !confirmingDelete && (
           <div className="@container space-y-1.5">

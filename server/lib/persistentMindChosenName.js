@@ -8,6 +8,12 @@
  *
  * Also used to suggest (not force) an Eidoverse CoS join id. Renaming the mind never changes an active
  * Eidoverse presence.
+ *
+ * Storage: `db-primary` (Brain memory: one active `mind:chosen-name` record owned by
+ * `cos-persistent-mind`, protected by `mind:core-identity`) — excluded from memory
+ * federation both ways, and incoming id collisions cannot replace it. A tag convention
+ * on existing records, so no seed, migration or sync version; protection survives
+ * cleanup/decay/expiry and the database backup covers it.
  */
 
 import { z } from 'zod';

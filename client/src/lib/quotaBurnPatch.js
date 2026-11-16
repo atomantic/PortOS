@@ -1,15 +1,6 @@
 /**
  * `mergeQuotaBurnPatch(base, patch)` mirrors the server's quota-burn config merge so the Quota Burn
  * page can apply edits optimistically and batch debounced PUTs.
- *
- * `mergeQuotaBurnPatch(base, patch)` — mirrors the server's quota-burn config merge (top-level +
- * per-family keys merge, a family's `jobs` array replaces) so the Quota Burn page can apply an edit
- * optimistically and accumulate debounced edits into one PUT body. `quotaBurnJobIsSpent(job, ranAt)` —
- * whether a `run once` step has had its one dispatch, gated on the optimistic config's own `runOnce`
- * so a just-ticked checkbox reads as spent before the save round-trips (the client mirror of the
- * server's `jobIsSpent`). `UNLIMITED_DISPATCHES` / `isUnlimitedDispatchCap(cap)` /
- * `dispatchCapInput(value)` — the -1 "no dispatch cap" sentinel (the default), mirrored from the
- * server.
  */
 
 /**

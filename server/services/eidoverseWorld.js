@@ -6,6 +6,12 @@
  * world and how PortOS resources are projected into it. The projection is
  * deterministic and uses the Eidoverse world protocol; it never edits the
  * external checkout or calls an AI provider.
+ *
+ * Storage: `file-primary` (`data/eidoverse/portos-world.json`, and the runtime's
+ * append-only `data/eidoverse/worlds/`) — machine-local, never federated by
+ * PortOS; covered by filesystem backups. The asset lock holds paths, fingerprints
+ * and provenance only, never model bytes; guest travel sessions and chat cursors
+ * are in-memory transport state, not a store.
  */
 
 import { eidoverseWorldEvents } from './eidoverseWorldEvents.js';

@@ -250,3 +250,12 @@ export async function acquireBackupSnapshotCut({ timeoutMs = DEFAULT_DRAIN_TIMEO
     releasePublications();
   };
 }
+
+/**
+ * Test settle signal: how many publications are parked on a closed cut and how
+ * many cuts are parked draining admitted work, so a suite can prove a waiter
+ * reached its wait instead of sleeping.
+ */
+export function _backupSnapshotWaitersForTests() {
+  return { publications: publicationWaiters.length, drains: drainWaiters.length };
+}

@@ -242,7 +242,6 @@ vi.mock('../catalogSync.js', async () => ({
 import {
   PEER_SUBSCRIBABLE_KINDS,
   listPeerSubscriptions,
-  findPeerSubscription,
   getOutboundCoverageForPeer,
   getFullSyncCoverageForPeer,
   subscribePeer,
@@ -252,10 +251,7 @@ import {
   pruneOrphanedPeerSubscriptions,
   pushRecordToPeer,
   applyIncomingPush,
-  diffAssetManifestAgainstLocal,
-  buildAssetManifest,
   assetIntegrityForRecord,
-  collectCollectionAssetReferences,
   autoSubscribeRecordToAllPeers,
   autoSubscribePeerToAllRecords,
   retryPendingPushesForPeer,
@@ -266,8 +262,6 @@ import {
   collectSubscriptionsForUpdate,
   triggerPushForRecord,
   buildMediaLibraryManifest,
-  libraryKindsExcludedByPatterns,
-  syncMediaLibraryFromPeer,
   syncMediaLibraryWithAllPeers,
   peerSyncEvents,
   __resetForTests,
@@ -276,6 +270,9 @@ import {
   uninstallPeerSyncListener,
 } from './peerSync.js';
 
+import { findPeerSubscription } from './peerSubscriptions.js';
+import { diffAssetManifestAgainstLocal, buildAssetManifest, collectCollectionAssetReferences } from './peerSyncAssets.js';
+import { libraryKindsExcludedByPatterns, syncMediaLibraryFromPeer } from './peerMediaLibrarySync.js';
 import { buildPushPayload, __resetPushFailureLogForTests } from './peerSyncPush.js';
 import { DEBOUNCE_MS } from './peerSyncShared.js';
 import { ENVELOPE_EXTENSIONS, ENVELOPE_PENDING_KEYS } from './peerSyncShared.js';

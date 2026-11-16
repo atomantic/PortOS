@@ -120,7 +120,6 @@ import {
   sweepResolvedFailureTasks,
   findTaskWithSource,
   reconcileLegacyForgeMaintenanceTasks,
-  DEFAULT_FAILURE_TASK_MAX_AGE_MS,
   __resetTaskCache
 } from './cosTaskStore.js';
 import { aggregateAutoFixDiagnostics, getAutoFixMetrics } from './autoFixMetrics.js';
@@ -3065,10 +3064,6 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
       await addTask({ description: 'plain pending', id: 'task-p', priority: 'LOW' }, 'user', { now: NOW });
       const res = await sweepResolvedFailureTasks({ now: NOW });
       expect(res).toEqual({ reaped: 0, staleBlocks: 0, investigations: 0 });
-    });
-
-    it('exposes a 14-day default threshold', () => {
-      expect(DEFAULT_FAILURE_TASK_MAX_AGE_MS).toBe(14 * 24 * 60 * 60 * 1000);
     });
   });
 });

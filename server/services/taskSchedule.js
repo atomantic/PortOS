@@ -73,24 +73,10 @@ import {
 } from './taskScheduleBackoff.js';
 
 export { PROMPT_VERSIONS, REFERENCE_WATCH_AUDITED_VERSION } from './taskPromptDefaults.js';
-export {
-  INTERVAL_TYPES, ON_DEMAND_ORIGINS, isRefillRequest, isUserOriginRequest
-} from './taskScheduleConstants.js';
-export {
-  DEFAULT_BRANCHES_PER_AGENT, DEFAULT_TASK_INTERVALS, INSTALL_WIDE_TASK_TYPES,
-  MANAGED_APP_TARGET_TASK_TYPES,
-  MANAGED_AGENT_OPTIONS, PERPETUAL_DRAIN_DISPATCH_CAP, SELF_IMPROVEMENT_TASK_TYPES,
-  TASK_TYPE_DESCRIPTIONS, TASK_TYPE_INVOCATION, TASK_TYPE_PROMPT_INFO,
-  getTaskTypeInvocation, getTaskTypePromptInfo, requiresManagedAppTarget, requiresInstallWideTarget,
-  isProgrammaticScheduledTaskType, PROGRAMMATIC_SCHEDULED_TASK_TYPES,
-  stripManagedAgentOptionsFromOverride
-} from './taskScheduleRegistry.js';
+export { INTERVAL_TYPES, ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
+export { DEFAULT_TASK_INTERVALS, INSTALL_WIDE_TASK_TYPES, SELF_IMPROVEMENT_TASK_TYPES, getTaskTypeInvocation, requiresManagedAppTarget, requiresInstallWideTarget, isProgrammaticScheduledTaskType, stripManagedAgentOptionsFromOverride } from './taskScheduleRegistry.js';
 export { loadSchedule } from './taskScheduleStore.js';
-export {
-  FAILURE_BACKOFF_BASE_MS, FAILURE_BACKOFF_CAP_MS, FAILURE_PARK_THRESHOLD,
-  clearTaskTypeFailurePark, computeFailureBackoffMs, recordTaskTypeFailure,
-  recordTaskTypeSuccess
-} from './taskScheduleBackoff.js';
+export { recordTaskTypeFailure, recordTaskTypeSuccess } from './taskScheduleBackoff.js';
 export { addTemplateTask, deleteTemplateTask, getTemplateTasks } from './taskScheduleTemplates.js';
 
 // Settings whose edit is not an "I've addressed the cause" signal, so saving

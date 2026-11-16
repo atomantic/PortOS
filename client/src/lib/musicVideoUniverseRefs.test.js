@@ -47,11 +47,11 @@ describe('pullUniverseCanonReferences', () => {
     expect(next).toHaveLength(1);
   });
 
-  it('respects the 24-reference cap, reporting the overflow as skipped', () => {
+  it('respects the per-video reference cap, reporting the overflow as skipped', () => {
     const characters = Array.from({ length: 20 }, (_, i) => ({ id: `c${i}`, name: `Char ${i}`, primaryImageRef: `char-${i}.png` }));
     const universe = { characters, places: [], objects: [] };
-    // 20 existing references already fill most of the 24-cap; room for only 4 more.
-    const existing = Array.from({ length: 20 }, (_, i) => ({ id: `x${i}`, imageId: `existing-${i}.png`, role: 'mood', condition: false }));
+    // Existing references already fill most of the cap; room for only 4 more.
+    const existing = Array.from({ length: MUSIC_VIDEO_MAX_REFERENCES - 4 }, (_, i) => ({ id: `x${i}`, imageId: `existing-${i}.png`, role: 'mood', condition: false }));
     const { next, added, skipped } = pullUniverseCanonReferences(universe, existing);
     expect(added).toBe(4);
     expect(skipped).toBe(16);

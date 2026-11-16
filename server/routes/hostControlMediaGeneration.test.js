@@ -2,10 +2,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { EventEmitter } from 'node:events';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { callRoute, expectAuthorizedWorkflows, expectRemoteRefusal, hostControlApp } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
-import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 vi.mock('../lib/paths.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-media-authority-') }));
@@ -13,8 +11,8 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-media-authority-') }));
 afterAll(cleanupTempDataRoots);
 
-// Real routers and authority middleware; upload, store, queue and provider
-// effects are doubled. This catches caller authority failures before effects.
+// Writes are gated by the default-deny policy (#16018); the principal matrix lives
+// in services/authGate.test.js. Upload, store, queue and provider effects are doubled.
 const auth = vi.hoisted(() => ({ enabled: false }));
 const effects = vi.hoisted(() => ({
   upload: vi.fn(), prepare: vi.fn(), enqueue: vi.fn(async () => ({ jobId: 'example-job' })),
@@ -35,18 +33,8 @@ const effects = vi.hoisted(() => ({
   topazStatus: vi.fn(async () => ({ status: 'processing' })),
   topazRecover: vi.fn(async () => ({ jobId: 'example-job' })),
 }));
-vi.mock('../services/auth.js', () => ({
-  isAuthEnabled: vi.fn(async () => auth.enabled),
-  verifyRequestSession: vi.fn(async req => req.headers.authorization === 'Bearer example-session'
-    || req.headers.authorization === 'Bearer example-agent-session'
-    || req.headers.cookie === 'portos_auth=example-session'),
-  verifyPassword: vi.fn(async () => true),
-}));
-vi.mock('../services/instanceIdentity.js', () => ({
-  loadData: vi.fn(async () => ({ peers: [{
-    id: 'example-peer', instanceId: 'example-instance', enabled: true,
-    syncSecret: 'example-pair-secret-for-tests-only-123456',
-  }] })),
+vi.mock('../services/auth.js', async (importOriginal) => ({
+  ...await importOriginal(), isAuthEnabled: vi.fn(async () => auth.enabled),
 }));
 vi.mock('../services/videoGen/trim.js', () => ({ trimHistoryItem: effects.trim }));
 vi.mock('../services/videoGen/metalBufferProfiles.js', () => ({ clearMetalBufferProfiles: effects.clearMetal }));
@@ -145,7 +133,6 @@ vi.mock('../services/federatedMedia/inputAssets.js', () => ({}));
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PATHS } from '../lib/fileUtils.js';
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import imageRoutes from './imageGen.js';
 import videoRoutes from './videoGen.js';
 import spriteRoutes from './sprites.js';
@@ -172,34 +159,19 @@ const operations = [
   ['post', '/api/video-gen/last-frame/22222222-2222-4222-8222-222222222222', {}, effects.lastFrame, 200],
   ['post', '/api/video-gen/upscale/22222222-2222-4222-8222-222222222222/topaz/quote', {}, effects.topazQuote, 200],
   ['post', '/api/video-gen/upscale/22222222-2222-4222-8222-222222222222/topaz', { token: '33333333-3333-4333-8333-333333333333' }, effects.topazStart, 200],
-  ['get', '/api/video-gen/upscale/topaz/jobs/33333333-3333-4333-8333-333333333333/status', {}, effects.topazStatus, 200],
+  ['get', '/api/video-gen/upscale/topaz/jobs/33333333-3333-4333-8333-333333333333/status', undefined, effects.topazStatus, 200],
   ['post', '/api/video-gen/upscale/topaz/jobs/33333333-3333-4333-8333-333333333333/cancel', {}, effects.topazStatus, 200],
   ['post', '/api/video-gen/upscale/topaz/jobs/33333333-3333-4333-8333-333333333333/recover', {}, effects.topazRecover, 200],
   ['put', `/api/sprites/${id}/publish-binding`, { binding: null }, effects.binding, 200],
   ['post', `/api/sprites/${id}/atlas/publish`, {}, effects.publish, 200],
 ];
-const appFor = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/image-gen', imageRoutes);
-  app.use('/api/video-gen', videoRoutes);
-  app.use('/api/sprites', spriteRoutes);
-  app.use('/api/threejs-models', modelRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
-const call = (app, [method, path, body], headers = {}) => {
-  const pending = request(app)[method](path);
-  for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return method === 'get' ? pending : pending.send(body);
-};
-const expectNoEffects = () => {
-  for (const effect of Object.values(effects)) expect(effect).not.toHaveBeenCalled();
-};
+const mounts = [
+  ['/api/image-gen', imageRoutes],
+  ['/api/video-gen', videoRoutes],
+  ['/api/sprites', spriteRoutes],
+  ['/api/threejs-models', modelRoutes],
+];
+const trimId = '22222222-2222-4222-8222-222222222222';
 
 beforeAll(async () => {
   // The regenerate route resolves its source in the gallery before queueing.
@@ -216,148 +188,47 @@ beforeEach(() => {
   }));
 });
 
-describe('media generation and source publication authority (#9667)', () => {
-  it('refuses remote, proxy-marked and legacy Basic callers before all effects', async () => {
-    for (const operation of operations) {
-      for (const [enabled, address, headers] of [
-        [false, '192.0.2.10', {}],
-        [false, '127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
-        [false, '192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }],
-        [true, '192.0.2.10', { Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }],
-      ]) {
-        auth.enabled = enabled;
-        for (const path of [operation[1], operation[1].toUpperCase() + '/']) {
-          const response = await call(appFor(address), [operation[0], path, operation[2]], headers);
-          expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-        }
-      }
-    }
-    expectNoEffects();
-  });
-
-  it('requires authentication before media authority when a password is enabled', async () => {
-    auth.enabled = true;
-    for (const operation of operations) {
-      const response = await call(appFor(), operation);
-      expect([response.status, response.body.code], operation[1]).toEqual([401, 'AUTH_REQUIRED']);
-    }
-    expectNoEffects();
-  });
-
-  it('retains local and operator workflows, including defaults and API-first Three.js', async () => {
-    for (const [enabled, address, headers] of [
-      [false, '127.0.0.1', {}],
-      [false, '127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '::ffff:127.0.0.1' }],
-      [true, '192.0.2.10', { Authorization: 'Bearer example-session' }],
-    ]) {
-      auth.enabled = enabled;
-      for (const operation of operations) {
-        const previousCalls = operation[3].mock.calls.length;
-        const response = await call(appFor(address), operation, headers);
-        expect(response.status, `${operation[1]}: ${JSON.stringify(response.body)}`).toBe(operation[4]);
-        expect(operation[3]).toHaveBeenCalledTimes(previousCalls + 1);
-      }
-    }
+describe('media generation behind the default-deny gate (#9667, #11418, #16114)', () => {
+  it('still runs every generation and publication route for a local operator and a delegated agent session, including defaults and API-first Three.js', async () => {
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: operations.map(([method, path, body, effect, status]) => [method, path, body, effect, status]) });
     expect(effects.create).toHaveBeenLastCalledWith(expect.objectContaining({ providerId: 'example-api' }));
     expect(effects.refine).toHaveBeenLastCalledWith('example-model', expect.objectContaining({ providerId: 'example-api' }));
     expect(effects.enqueue).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({ mode: 'grok' }) }));
     expect(effects.enqueue).toHaveBeenLastCalledWith(expect.objectContaining({ params: expect.objectContaining({ mode: 'local', regenOf: 'example.png' }) }));
   });
 
-  it('refuses multipart uploads before the upload middleware can stage files', async () => {
-    for (const path of ['/api/image-gen/generate', '/api/video-gen', `/api/sprites/${id}/reference/generate`]) {
-      const response = await request(appFor()).post(path)
-        .set('Content-Type', 'multipart/form-data; boundary=example-boundary')
-        .send('--example-boundary--');
-      expect([response.status, response.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    expectNoEffects();
+  it('refuses a remote caller on the Topaz status read (a HOST_CONTROL_GET_ROUTES surface)', async () => {
+    const status = operations.find(([method]) => method === 'get');
+    await expectRemoteRefusal(mounts, status.slice(0, 4));
   });
 
-  it('runs the light SynthID regen in-process without queueing for host control, and refuses every method remotely (#13055)', async () => {
-    for (const method of ['light', 'flux']) {
-      const refused = await call(appFor(), ['post', '/api/image-gen/example.png/regenerate', { method }]);
-      expect([refused.status, refused.body.code], method).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    expectNoEffects();
-    const response = await call(appFor('127.0.0.1'), ['post', '/api/image-gen/example.png/regenerate', { method: 'light' }]);
-    expect(response.status, JSON.stringify(response.body)).toBe(200);
-    expect(effects.lightRegen).toHaveBeenCalledTimes(1);
+  it('refuses multipart uploads before the upload middleware can stage files', async () => {
+    const app = await hostControlApp('192.0.2.10', mounts);
+    const response = await request(app).post('/api/image-gen/generate')
+      .set('Content-Type', 'multipart/form-data; boundary=example-boundary')
+      .send('--example-boundary--');
+    expect([response.status, response.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect(effects.upload).not.toHaveBeenCalled();
+  });
+
+  it('runs the light SynthID regen in-process without queueing, and refuses every method remotely (#13055)', async () => {
+    const regen = ['post', '/api/image-gen/example.png/regenerate'];
+    await expectRemoteRefusal(mounts, [...regen, { method: 'light' }, effects.lightRegen]);
+    await expectRemoteRefusal(mounts, [...regen, { method: 'flux' }, effects.enqueue]);
+    effects.enqueue.mockClear();
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: [[...regen, { method: 'light' }, effects.lightRegen, 200]] });
     expect(effects.enqueue).not.toHaveBeenCalled();
   });
 
-  it('retains remote reads and refuses remote cancellation, which host control keeps', async () => {
-    expect((await request(appFor()).get('/api/threejs-models')).status).toBe(200);
-    expect((await request(appFor()).get('/api/sprites')).status).toBe(200);
-    const refused = await call(appFor(), ['post', '/api/image-gen/cancel', {}]);
-    expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    expect((await call(appFor('127.0.0.1'), ['post', '/api/image-gen/cancel', {}])).status).toBe(200);
-    expectNoEffects();
-  });
-});
-
-// Uniquely catches start-trim bypassing the shared gate before the ffmpeg
-// consumer, while preserving its intentional local/agent and read workflows.
-describe('video history trim authority (#11418)', () => {
-  const path = '/api/video-gen/history/22222222-2222-4222-8222-222222222222/trim';
-  const body = { startSec: 1.25 };
-  const peerHeaders = {
-    [PEER_INSTANCE_HEADER]: 'example-instance',
-    [PEER_AUTH_HEADER]: derivePeerAuthToken('example-pair-secret-for-tests-only-123456', 'example-instance'),
-  };
-
-  it('refuses remote and forwarded callers before validation or the trim consumer', async () => {
-    for (const [address, headers] of [
-      ['192.0.2.10', {}],
-      ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
-      ['192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }],
-      ['192.0.2.10', peerHeaders],
-    ]) {
-      for (const target of [path, path.toUpperCase() + '/']) {
-        const response = await call(appFor(address), ['post', target, body], headers);
-        expect([response.status, response.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
-    }
-    const invalid = await call(appFor(), ['post', path, { startSec: -1 }]);
-    expect([invalid.status, invalid.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    expect(effects.trim).not.toHaveBeenCalled();
-  });
-
-  it('rejects anonymous, legacy Basic and scoped peer credentials with auth enabled', async () => {
-    auth.enabled = true;
-    for (const [headers, status, code] of [
-      [{}, 401, 'AUTH_REQUIRED'],
-      [{ Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403, 'HOST_CONTROL_FORBIDDEN'],
-      [peerHeaders, 403, 'PEER_SCOPE_FORBIDDEN'],
-    ]) {
-      const response = await call(appFor(), ['post', path, body], headers);
-      expect([response.status, response.body.code]).toEqual([status, code]);
-    }
-    expect(effects.trim).not.toHaveBeenCalled();
-  });
-
-  it('preserves local, operator and delegated-agent trims with validated arguments', async () => {
-    for (const [enabled, address, headers] of [
-      [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Cookie: 'portos_auth=example-session' }],
-      [true, '127.0.0.1', { Authorization: 'Bearer example-agent-session' }],
-    ]) {
-      auth.enabled = enabled;
-      const response = await call(appFor(address), ['post', path, body], headers);
-      expect(response.status, JSON.stringify(response.body)).toBe(200);
-      expect(response.body).toEqual({ ok: true, video: { id: 'example-trim', trimmedFrom: '22222222-2222-4222-8222-222222222222', trimStartSec: 1.25 } });
-      expect(effects.trim).toHaveBeenLastCalledWith('22222222-2222-4222-8222-222222222222', body);
-    }
-    expect(effects.trim).toHaveBeenCalledTimes(3);
-    const invalid = await call(appFor('127.0.0.1'), ['post', path, { startSec: -1 }], { Authorization: 'Bearer example-agent-session' });
+  it('refuses a remote video trim before validation, and runs it with validated arguments for operators and agents (#11418)', async () => {
+    const path = `/api/video-gen/history/${trimId}/trim`;
+    const body = { startSec: 1.25 };
+    await expectRemoteRefusal(mounts, ['post', path, { startSec: -1 }, effects.trim]);
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: [['post', path, body, effects.trim, 200]] });
+    expect(effects.trim).toHaveBeenLastCalledWith(trimId, body);
+    auth.enabled = false;
+    const invalid = await callRoute(await hostControlApp('127.0.0.1', mounts), ['post', path, { startSec: -1 }]);
     expect(invalid.status).toBe(400);
-    expect(effects.trim).toHaveBeenCalledTimes(3);
-  });
-
-  it('keeps history reads available to remote password-free callers', async () => {
-    const response = await request(appFor()).get('/api/video-gen/history/22222222-2222-4222-8222-222222222222');
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual({ id: '22222222-2222-4222-8222-222222222222', filename: 'example.mp4' });
-    expect(effects.trim).not.toHaveBeenCalled();
+    expect(effects.trim).toHaveBeenCalledTimes(2);
   });
 });

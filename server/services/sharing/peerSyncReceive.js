@@ -48,6 +48,9 @@ import {
   ENVELOPE_PENDING_KEYS,
 } from './peerSyncShared.js';
 import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
+import { getLocalIngredientRefOwnership } from '../catalogDB.js';
+import { mergeReviewFromSync } from '../pipeline/manuscriptReview.js';
+import { mergeOutlineFromSync } from '../pipeline/reverseOutline.js';
 
 
 async function isPostgresBackend() {
@@ -134,7 +137,6 @@ async function bindCatalogBundle({ kind, record, catalogBundle, sourceInstanceId
   if (named.length > 0 && (await isPostgresBackend())) {
     let ownership;
     try {
-      const { getLocalIngredientRefOwnership } = await import('../catalogDB.js');
       ownership = await getLocalIngredientRefOwnership(named, kind, record.id);
     } catch (err) {
       console.warn(`⚠️ peerSync: skipped catalog bundle from ${sourceInstanceId} — local ingredient lookup failed: ${err.message}`);
@@ -308,11 +310,9 @@ async function mergeSeriesSidecars({ record, issues, manuscriptReview, reverseOu
   if (!seriesIdValid || !bundlesMergeable) return;
   // Dynamic imports keep the arcPlanner graph off peerSync's load path.
   if (isPlainObject(manuscriptReview)) {
-    const { mergeReviewFromSync } = await import('../pipeline/manuscriptReview.js');
     await mergeReviewFromSync(record.id, manuscriptReview).catch(markPending('manuscriptReview'));
   }
   if (isPlainObject(reverseOutline)) {
-    const { mergeOutlineFromSync } = await import('../pipeline/reverseOutline.js');
     await mergeOutlineFromSync(record.id, reverseOutline).catch(markPending('reverseOutline'));
   }
 }

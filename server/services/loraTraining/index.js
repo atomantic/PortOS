@@ -34,6 +34,7 @@ import { buildTrainedSidecar, trainedLoraFilename } from './sidecar.js';
 
 import { listRunCheckpoints, listRunSamples, resolveCheckpointAdapterBuffer, selectDeployableCheckpoint } from './checkpoints.js';
 import * as runsDb from './db.js';
+import { generateImage } from '../imageGen/local.js';
 
 export { listRuns, getRun, getRunRequired, deleteRun } from './db.js';
 export { trainingEvents } from './events.js';
@@ -765,7 +766,6 @@ async function ensureCheckpointPreview(run, step, loraFilename) {
   const seed = Number.isInteger(run.params?.seed) ? run.params.seed : 42;
   const res = run.params?.resolution || 768;
 
-  const { generateImage } = await import('../imageGen/local.js');
   console.log(`🖼️ training [${shortId(runId)}] rendering preview for promoted step ${step} (${modelId})`);
   const result = await generateImage({
     pythonPath,

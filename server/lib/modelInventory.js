@@ -1,17 +1,6 @@
 /**
  * The identity and durable shape of a downloaded-model inventory row.
  *
- * Identity AND durable shape of a downloaded-model inventory row. `modelInventoryId(backend, key)`
- * mints the `hf:` / `lora:` / `ollama:` / `lmstudio:` id and `parseModelInventoryId` splits it back on
- * the FIRST colon (an Ollama tag like `qwen3:8b` carries one of its own). `hfInventoryRow` /
- * `loraInventoryRow` / `localModelInventoryRow` build the row a backend contributes, and
- * `presentInventoryRow` re-derives the live fields (residency, inventory-verified) that a STORED row
- * can never answer. Shared by the scan that mints rows from disk (`services/systemResources.js`) and
- * the manifest that records them at the install chokepoints (`services/modelManifest.js`) — a drifted
- * copy of a row's risk, manage path or delete action is a delete button pointed at the wrong place.
- * Pure and dependency-free, so the install services reach the builders without pulling the scan's
- * module graph.
- *
  * A row is addressed as `<prefix>:<key>`, where the key is the backend's OWN
  * identifier for the weights — a Hugging Face cache directory (`models--org--repo`),
  * a LoRA filename, an Ollama tag, an LM Studio model id. That pairing is what lets

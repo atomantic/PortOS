@@ -41,9 +41,6 @@ describe('missingSentinelLogMessage', () => {
 });
 
 describe('agentSentinel', () => {
-  it('exposes the sentinel filename', () => {
-    expect(DONE_SENTINEL_NAME).toBe('.agent-done');
-  });
 
   describe('doneSentinelName', () => {
     it('scopes the filename to the agent instance', () => {

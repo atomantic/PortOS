@@ -24,6 +24,7 @@ import { resolveGalleryImageOrThrow } from './universeBuilder/shared.js';
 import { resolveLlmRoutePin } from '../lib/llmRoutePin.js';
 import { attachClient as attachPromptProgressClient, beginPromptProgress, emitPromptProgress, finishPromptProgress } from '../services/deckPromptProgress.js';
 
+import { getUniverse } from '../services/universeBuilder.js';
 // Services load on first request, not at route-module import: the deck graph
 // reaches the DB, the prompt runner and the media queue, none of which a
 // route-only consumer needs instantiated (server/AGENTS.md "Import scoping").
@@ -142,7 +143,6 @@ router.post('/:id/generate-prompts', asyncHandler(async (req, res) => {
   try {
     emit({ type: 'phase', deckId: deck.id, phase: 'preparing', label: 'Preparing prompt generation…' });
     if (deck.universeId) {
-      const { getUniverse } = await import('../services/universeBuilder.js');
       universe = await getUniverse(deck.universeId).catch(() => null);
       if (universe && body.cast && roster.some((c) => targetIds.has(c.id) && !c.canonRef)) {
         emit({ type: 'phase', deckId: deck.id, phase: 'casting', label: 'Casting the universe onto the cards…' });

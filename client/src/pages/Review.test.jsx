@@ -161,6 +161,12 @@ beforeEach(() => {
   api.getReviewCounts.mockResolvedValue(SUMMARY_COUNTS);
 });
 
+// The items and counts resources each register a listener per event; fire all of them like the real socket.
+const socketHandler = event => {
+  const handlers = socket.on.mock.calls.filter(([name]) => name === event).map(([, fn]) => fn);
+  return handlers.length ? payload => handlers.forEach(fn => fn(payload)) : undefined;
+};
+
 const actionQueueBody = () => document.getElementById(`review-item-body-action-queue-${ITEM.id}`);
 
 const GITHUB_NOTIFICATION = {
@@ -719,6 +725,8 @@ describe('Review status request ownership (#9447)', () => {
     await waitFor(() => expect(screen.queryByText('Loading stored review items…')).not.toBeInTheDocument());
     const selector = screen.getByRole('combobox', { name: 'Filter review items by status' });
     fireEvent.change(selector, { target: { value: 'completed' } });
+    // The resource hook starts a read one microtask after the key changes.
+    await act(async () => {});
     fireEvent.change(selector, { target: { value: 'dismissed' } });
     expect(await screen.findByText(dismissedItem.title)).toBeInTheDocument();
 
@@ -742,6 +750,8 @@ describe('Review status request ownership (#9447)', () => {
     await waitFor(() => expect(screen.queryByText('Loading stored review items…')).not.toBeInTheDocument());
     const selector = screen.getByRole('combobox', { name: 'Filter review items by status' });
     fireEvent.change(selector, { target: { value: 'completed' } });
+    // The resource hook starts a read one microtask after the key changes.
+    await act(async () => {});
     fireEvent.change(selector, { target: { value: 'dismissed' } });
 
     await act(async () => {
@@ -763,10 +773,12 @@ describe('Review Hub bulk status updates (#6853)', () => {
     await waitFor(() => expect(actionQueueBody()).toBeTruthy());
     await waitFor(() => expect(document.getElementById(`review-item-body-action-queue-${SHORT_ITEM.id}`)).toBeTruthy());
 
-    const handler = socket.on.mock.calls.findLast(([name]) => name === 'review:items:bulk-updated')?.[1];
+    const handler = socketHandler('review:items:bulk-updated');
     expect(handler).toBeTypeOf('function');
 
-    act(() => {
+    // The event invalidates the stored list; the server's answer is the new truth.
+    api.getReviewItems.mockResolvedValueOnce([{ ...ITEM, status: 'dismissed' }, { ...SHORT_ITEM, status: 'dismissed' }]);
+    await act(async () => {
       handler({ ids: [ITEM.id, SHORT_ITEM.id], status: 'dismissed', updatedAt: new Date().toISOString() });
     });
 
@@ -796,11 +808,11 @@ describe('Review Hub status-filtered socket items (#6925)', () => {
     render(<Review />);
     await waitFor(() => expect(screen.getAllByText(ITEM.title).length).toBeGreaterThan(0));
 
-    const handler = socket.on.mock.calls
-      .findLast(([name]) => name === 'review:item:updated')?.[1];
+    const handler = socketHandler('review:item:updated');
     expect(handler).toBeTypeOf('function');
 
-    act(() => {
+    api.getReviewItems.mockResolvedValueOnce([]);
+    await act(async () => {
       handler({ ...ITEM, status: 'completed' });
     });
 
@@ -817,8 +829,7 @@ describe('Review Hub status-filtered socket items (#6925)', () => {
 
     await waitFor(() => expect(screen.getByText(COMPLETED_ITEM.title)).toBeInTheDocument());
 
-    const handler = socket.on.mock.calls
-      .findLast(([name]) => name === 'review:item:created')?.[1];
+    const handler = socketHandler('review:item:created');
     expect(handler).toBeTypeOf('function');
 
     act(() => {
@@ -858,7 +869,7 @@ describe('Review Hub triage summary (#6926)', () => {
     render(<Review />);
     await waitFor(() => expect(summaryValue('Pending')).toBe('8'));
 
-    const handler = socket.on.mock.calls.findLast(([name]) => name === 'review:item:updated')?.[1];
+    const handler = socketHandler('review:item:updated');
     expect(handler).toBeTypeOf('function');
 
     await act(async () => {
@@ -871,7 +882,7 @@ describe('Review Hub triage summary (#6926)', () => {
     expect(api.getReviewCounts).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps the newest count response when refreshes resolve out of order', async () => {
+  it('discards an obsolete count read when an event invalidates it mid-flight', async () => {
     let resolveInitial;
     let resolveRefresh;
     api.getReviewCounts
@@ -882,19 +893,19 @@ describe('Review Hub triage summary (#6926)', () => {
     render(<Review />);
     await waitFor(() => expect(resolveInitial).toBeTypeOf('function'));
 
-    const handler = socket.on.mock.calls.findLast(([name]) => name === 'review:item:updated')?.[1];
+    const handler = socketHandler('review:item:updated');
     expect(handler).toBeTypeOf('function');
     act(() => handler({ ...ITEM, status: 'completed' }));
+    // Reads are single-flight: the follow-up read starts once the obsolete one settles.
+    await act(async () => {
+      resolveInitial(SUMMARY_COUNTS);
+      await Promise.resolve();
+    });
     await waitFor(() => expect(resolveRefresh).toBeTypeOf('function'));
+    expect(screen.queryByText('8')).not.toBeInTheDocument();
 
     await act(async () => {
       resolveRefresh({ total: 7, alert: 2, todo: 1, briefing: 0, cos: 4 });
-      await Promise.resolve();
-    });
-    expect(summaryValue('Pending')).toBe('7');
-
-    await act(async () => {
-      resolveInitial(SUMMARY_COUNTS);
       await Promise.resolve();
     });
     expect(summaryValue('Pending')).toBe('7');
@@ -911,7 +922,7 @@ describe('Review Hub all-clear Today tab (#13005)', () => {
     render(<Review />);
 
     expect(await screen.findByText('Nothing needs you today')).toBeInTheDocument();
-    expect(screen.getByText(/1 stored item still pending/)).toBeInTheDocument();
+    expect(await screen.findByText(/1 stored item still pending/)).toBeInTheDocument();
     const item = (await screen.findAllByText(SHORT_ITEM.title))[0];
     const details = historyDisclosure();
     expect(details).not.toHaveAttribute('open');

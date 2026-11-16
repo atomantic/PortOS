@@ -10,7 +10,11 @@
  * tombstone path a peer's own delete frame takes. An unreachable owner leaves
  * the command in `data/media-delete-queue.json`, drained on `peer:online`.
  * A row no registered peer can own is deleted here like a local one.
- * The queue describes this machine's own work and never federates.
+ *
+ * Storage: `file-primary` — `data/media-delete-queue.json`, machine-local, never
+ * federated: a bounded record of THIS machine's pending work. Entries drop after
+ * 30 days, on peer removal, or when the row is re-created; an absent file is an
+ * empty queue, so no seed or migration.
  */
 import { join } from 'path';
 import { PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
@@ -24,11 +28,12 @@ import { peerFetch, readPeerBody } from '../lib/peerHttpClient.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { loadHistory, getHistoryItem, mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
-import { readHeldImage, localInstanceId } from './imageGen/imageRecords.js';
+import { readHeldImage, localInstanceId, applyRemoteImageTombstones } from './imageGen/imageRecords.js';
 import { isSafeFilename } from '../lib/pathSafety.js';
 import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
 import { instanceEvents } from './instanceEvents.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
+import { listExportableMediaTombstones } from './mediaTombstones.js';
 
 const QUEUE_FILE = () => join(PATHS.data, 'media-delete-queue.json');
 const SCHEMA_VERSION = 1;
@@ -133,7 +138,7 @@ const MEDIA = {
     setPending: setImagePending,
     hide: async (key) => (await import('./imageGen/local.js')).setImageHidden(key, true),
     deleteHere: async (key, opts) => (await import('./galleryImageDeletion.js')).deleteGalleryImage(key, opts),
-    applyTombstone: async (tombstone, opts) => (await import('./imageGen/imageRecords.js')).applyRemoteImageTombstones([tombstone], opts),
+    applyTombstone: async (tombstone, opts) => applyRemoteImageTombstones([tombstone], opts),
   },
 };
 
@@ -697,7 +702,6 @@ export async function executePeerMediaDelete(senderPeerId, { kind, key }) {
   if (!(await media.getRow(key))) throw notHeld();
   await media.deleteHere(key).catch((err) => { throw err?.code === 'NOT_FOUND' ? notHeld() : err; });
   await dropEntriesFor(kind, key);
-  const { listExportableMediaTombstones } = await import('./mediaTombstones.js');
   const tombstone = (await listExportableMediaTombstones(kind)).find((t) => t.key === key) ?? null;
   console.log(`🗑️ ${media.label} ${key} deleted at the request of ${peerLabel(peer)}`);
   return { ok: true, tombstone };

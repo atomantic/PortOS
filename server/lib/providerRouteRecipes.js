@@ -1,28 +1,6 @@
 /**
  * Minting a FRESH executable route from a connection and a harness command recipe (#6369) — the
  * reverse of `providerConnections.js`, which reads an existing record.
- *
- * `buildRouteRecord({harnessId, mode, providerId, name, connection})` materializes a connection's
- * endpoint, credentials and backend marker into a DISABLED `data/providers.json` record through
- * `PROVIDER_HARNESSES[].recipe`; `mintRouteIds` allocates readable ids keeping the `<stem>` /
- * `<stem>-tui` pairing `providerModeGroups` recognizes; `bindingBlocker` is the pre-write refusal (no
- * recipe, unsupported mode, a transport the backend does not declare, a credential the program
- * requires); `CREATABLE_CONNECTION_KINDS` / `connectionKindLabel` / `connectionKindMarkers` bound the
- * backends a route can honestly describe (`slotstream` and `vendor` deliberately excluded);
- * `bindingProtocol` names the wire a binding needs. `materializeRoute({harness, method,
- * serviceInstance, bootstrap?, selection?, overrides?})` (#7562) generalizes `buildRouteRecord` from a
- * connection to a SERVICE instance: picks the harness's first compatible binding, writes base URL /
- * credential / static env / backend markers / inline OpenCode config / Pi `--provider` per that
- * binding plus the recipe's mode argv, stamps `harnessId` / `method` / `serviceId` / `servicePlan`,
- * and — for a non-`api` method with a bootstrap app — the `credentialBootstrap` object
- * `composeBootstrapSpawn` turns into `<bootstrap> run <harness> -- <args>`; throws typed errors
- * (`HARNESS_SERVICE_INCOMPATIBLE`, `SERVICE_ENDPOINT_REQUIRED`, `SERVICE_CREDENTIAL_REQUIRED`,
- * `SERVICE_CREDENTIAL_BOOTSTRAP_REQUIRED`) rather than minting a route that cannot run.
- * `materializeRouteOutcome(input)` is the same body as a VERDICT (`{ record }` or `{ error }` — the
- * typed 400 without the throw) for the composite resolver (#7564), which reads a refusal as the reason
- * to show beside a saved selection. `routeDescribesService(profile, instance)` is the round-trip
- * contract: fed back through `providerConnectionProfile`, a materialized record classifies onto the
- * service it was built for. Pure: no I/O, no spawn, no provider call.
  */
 
 import { CONNECTION_CREDENTIAL_ENV_VARS, CONNECTION_PROTOCOLS } from './providerConnections.js';

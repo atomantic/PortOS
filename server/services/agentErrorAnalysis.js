@@ -34,6 +34,7 @@ import {
 import { investigationCircuitOpen, noteInvestigationFiled, readAllTasksFlat, recentInvestigationCreations } from './investigationTaskProducer.js';
 import { PRIMARY_CHECKOUT_MUTATED_CATEGORY, PRIMARY_CHECKOUT_MUTATED_ESCALATION, PRIMARY_CHECKOUT_MUTATED_REASON } from '../lib/primaryCheckoutGuard.js';
 import { isPortosSuppliedConfigKey } from '../lib/providerModels.js';
+import { getConfig } from './cosState.js';
 
 // Max retries before blocking a task
 export const MAX_TASK_RETRIES = 3;
@@ -1305,8 +1306,6 @@ const OPEN_INVESTIGATION_STATUSES = new Set(['pending', 'in_progress', 'challeng
 // orphan producers so "how many investigations this hour" is ONE number rather
 // than one per producer. Re-exported here at the address the suites and callers
 // already use.
-export { INVESTIGATION_CIRCUIT_WINDOW_MS, INVESTIGATION_CIRCUIT_MAX_CREATIONS } from '../lib/investigationTasks.js';
-export { __resetInvestigationCircuit } from './investigationTaskProducer.js';
 
 // Find an existing investigation task (user or internal queue) still tracking
 // this fingerprint in a non-terminal status. Pure.
@@ -1391,7 +1390,6 @@ async function doCreateInvestigationTask(agentId, originalTask, errorAnalysis, o
   if (systemRecovery) {
     // Missing configuration never grants unattended system-repair execution.
     // Circuit and repeat-failure refusals above remain independent boundaries.
-    const { getConfig } = await import('./cosState.js');
     const config = await getConfig().catch(() => null);
     if (config?.autoApproveInvestigations !== true) {
       approvalRequired = true;

@@ -13,6 +13,8 @@ import { activeMusicVideoSubjects } from './musicVideoCastSelection.js';
 import { trimTo } from './textUtils.js';
 
 const CONTEXT_MAX = 6000;
+// The bible describes at most this many subjects so its length never grows with the video's roster (the per-video list is far longer).
+const BIBLE_MAX_SUBJECTS = 24;
 const BIBLE_HEADER = 'Production bible (use the subjects relevant to this shot; preserve their identity; descriptions may be abbreviated):';
 
 // The mood board describes a LOOK. Its snapshot can still carry the board's own
@@ -96,7 +98,7 @@ export function musicVideoCreativeContext(concept, { moodBoard = true, look = ''
     moodBoard && directorLook && !sameAsStyle && `Look (palette, light and texture only): ${directorLook}`,
     moodBoard && boardLook && `${MOOD_BOARD_LOOK_LABEL}: ${boardLook}`,
   ].filter(Boolean);
-  const subjects = activeMusicVideoSubjects(concept).slice(0, 24);
+  const subjects = activeMusicVideoSubjects(concept).slice(0, BIBLE_MAX_SUBJECTS);
   if (framingScale === 'wide' && (concept.characterStyle || subjects.some((s) => s.kind === 'character'))) styles.push(WIDE_FRAMING);
   const identities = subjects.map((s) =>
     `${s.kind}${s.kind === 'character' && s.role ? ` (${s.role})` : ''}: ${trimTo(s.name, 120)}`);

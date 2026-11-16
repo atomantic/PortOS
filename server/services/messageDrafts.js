@@ -1,4 +1,11 @@
-
+/**
+ * Messages drafts: create, edit, approve and send drafts with a send-attempt audit trail.
+ *
+ * Storage: `file-primary` — `data/messages/drafts.json`, machine-local, never
+ * federated; covered by the existing backup. Send-attempt history is capped at 20
+ * per draft; startup marks abandoned sends `delivery_unknown` without contacting a
+ * provider, and such a draft stays locked until the operator records the outcome.
+ */
 import { join } from 'path';
 import { isDeepStrictEqual } from 'util';
 import { z } from 'zod';

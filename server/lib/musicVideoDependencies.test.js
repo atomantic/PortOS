@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import * as checksums from './snapshotChecksum.js';
 import { captureImageFrameDependencies, captureMusicVideoEvidence, captureTakeDependencies, musicVideoTakeChanges, presentMusicVideoDependencies } from './musicVideoDependencies.js';
+import { musicVideoSceneCastIds } from './musicVideoConditioning.js';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -167,4 +168,61 @@ it('keeps distinct rendered windows independent when caching composition and sce
 
   project.scenes[0].endSec = 6;
   expect(presentMusicVideoDependencies(project).excerpts.map(excerpt => excerpt.dependencyState.status)).toEqual(['stale', 'stale']);
+});
+
+// #16274: a catalog project's check-in is resolved on read and never stored, so the cast fingerprint
+// must not read it. `presented` is the same record as GET shows it, with its check-in.
+const castProject = () => {
+  const subject = (id, kind, name, ingredientId) => ({ id, kind, name, ingredientId });
+  const subjects = [subject('subj-a', 'character', 'Ada', 'cat-chr-a'), subject('subj-b', 'character', 'Ben', 'cat-chr-b'),
+    subject('subj-p', 'place', 'Harbor', 'cat-plc')];
+  const scene = frameShot({ frameReferenceIds: ['mvr-linked-0000000000000001'] });
+  const stored = { id: 'mv-synthetic', concept: { subjects }, castAndSets: { source: 'catalog' }, scenes: [scene] };
+  const items = subjects.map(({ id, kind, name, ingredientId }) => ({ subjectId: id, kind, name, ingredientId, images: [] }));
+  const presented = { ...stored, castAndSets: { ...stored.castAndSets, catalogCheckin: { items, problems: [] } } };
+  return { stored, presented, scene };
+};
+const confirmedFrame = (project, scene) => ({ kind: 'image', assetId: 'a.png', frameDependencies: captureImageFrameDependencies(project, scene) });
+
+it('fingerprints a frame the same on the stored and the presented record', () => {
+  const { stored, presented, scene } = castProject();
+  // The legacy forms differ on these records, so the check-in really changes the old fingerprint.
+  expect(musicVideoSceneCastIds(presented, scene).sort()).toEqual(['cat-chr-a', 'cat-plc']);
+  expect(musicVideoSceneCastIds(stored, scene).sort()).toEqual(['cat-chr-a', 'cat-chr-b', 'cat-plc']);
+  expect(captureImageFrameDependencies(stored, scene)).toEqual(captureImageFrameDependencies(presented, scene));
+  expect(frameState(presented, scene, confirmedFrame(stored, scene))).toEqual({ status: 'current', reasons: [] });
+  expect(frameState(stored, scene, confirmedFrame(presented, scene))).toEqual({ status: 'current', reasons: [] });
+});
+
+it('keeps a confirmed frame current through the done flag and unrelated edits, and reports a real cast change', () => {
+  const { stored, presented, scene } = castProject();
+  const frame = confirmedFrame(stored, scene);
+  const edited = { ...scene, description: 'Ben waits by the water', shotSheet: { ...scene.shotSheet, checked: true } };
+  expect(frameState(presented, edited, frame)).toEqual({ status: 'current', reasons: [] });
+  expect(frameState(stored, edited, frame)).toEqual({ status: 'current', reasons: [] });
+  const recast = { ...edited, shotSheet: { ...edited.shotSheet, characters: ['Ada', 'Ben'] } };
+  expect(frameState(presented, recast, frame)).toEqual({ status: 'stale', reasons: ['Cast changed'] });
+  expect(frameState(stored, recast, frame)).toEqual({ status: 'stale', reasons: ['Cast changed'] });
+});
+
+it('accepts a frame stamped with either pre-#16274 cast form while nothing changed', () => {
+  const { stored, presented, scene } = castProject();
+  const stampedWith = (ids) => {
+    const frame = confirmedFrame(stored, scene);
+    const revision = checksums.canonicalSnapshotChecksum({ names: ['Ada'], ids: ids.slice().sort() });
+    return { ...frame, frameDependencies: { ...frame.frameDependencies, references: frame.frameDependencies.references
+      .map((ref) => (ref.role === 'frameCast' ? { ...ref, revision } : ref)) } };
+  };
+  const narrowed = stampedWith(musicVideoSceneCastIds(presented, scene));
+  const unnarrowed = stampedWith(musicVideoSceneCastIds(stored, scene));
+  expect(narrowed.frameDependencies).not.toEqual(confirmedFrame(stored, scene).frameDependencies);
+  for (const frame of [narrowed, unnarrowed]) {
+    expect(frameState(presented, scene, frame)).toEqual({ status: 'current', reasons: [] });
+  }
+  expect(frameState(stored, scene, unnarrowed)).toEqual({ status: 'current', reasons: [] });
+  const recast = { ...scene, shotSheet: { ...scene.shotSheet, characters: ['Ada', 'Ben'] } };
+  for (const frame of [narrowed, unnarrowed]) {
+    expect(frameState(presented, recast, frame)).toEqual({ status: 'stale', reasons: ['Cast changed'] });
+  }
+  expect(frameState(presented, scene, stampedWith(['cat-chr-b']))).toEqual({ status: 'stale', reasons: ['Cast changed'] });
 });

@@ -2,6 +2,11 @@
  * Media model registry — single source of truth for image/video model
  * definitions and the text encoder used by the LTX video pipeline.
  *
+ * Storage: `file-primary` (`data/media-models.json`) — install configuration. The
+ * optional per-entry `enabled` flag (absent = true) is additive: no seed change or
+ * backfill, older servers ignore it. Synchronous mutations publish by rename
+ * before replacing the process cache.
+ *
  * Single source of truth for image/video model metadata. `setMediaModelEnabled(id, enabled)` persists
  * availability; `withLiveMediaModelsRestore(transfer)` fences registry mutations and reloads the cache
  * across a live snapshot restore (#9924); getters omit disabled entries unless `includeDisabled` is

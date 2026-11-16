@@ -1,128 +1,93 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
+import { rm, writeFile, mkdir } from 'fs/promises';
+import { join } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-vi.mock('../services/dashboardLayouts.js', () => ({
-  ERR_NOT_FOUND: 'NOT_FOUND',
-  ERR_BUILTIN_PROTECTED: 'BUILTIN_PROTECTED',
-  ID_PATTERN: /^[a-z0-9]+(-[a-z0-9]+)*$/,
-  ID_MAX_LENGTH: 60,
-  NAME_MAX_LENGTH: 80,
-  WIDGETS_MAX: 50,
-  WIDGET_ID_MAX_LENGTH: 80,
-  GRID_COLS: 12,
-  GRID_ORDER_MAX: 49,
-  GRID_LEGACY_Y_MAX: 200,
-  GRID_ITEM_H_MAX: 50,
-  TIME_STRING_RE: /^([01]\d|2[0-3]):[0-5]\d$/,
-  getState: vi.fn(),
-  setActiveLayout: vi.fn(),
-  saveLayout: vi.fn(),
-  deleteLayout: vi.fn(),
-}));
+// Real dashboardLayouts service (JSON file) over a temp data root.
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-dashboard-layouts-') }));
+afterAll(cleanupTempDataRoots);
 
-const svc = await import('../services/dashboardLayouts.js');
+const { PATHS } = await import('../lib/fileUtils.js');
 const { default: routes } = await import('./dashboardLayouts.js');
 
-const makeApp = () => {
-  const app = express();
-  app.use(express.json());
-  app.use('/api/dashboard/layouts', routes);
-  app.use(errorMiddleware);
-  return app;
+const stateFile = () => join(PATHS.data, 'dashboard-layouts.json');
+
+const app = express();
+app.use(express.json());
+app.use('/api/dashboard/layouts', routes);
+app.use(errorMiddleware);
+
+const BASE = '/api/dashboard/layouts';
+const getState = async () => (await request(app).get(BASE)).body;
+const findLayout = (state, id) => state.layouts.find((l) => l.id === id);
+const put = (id, body) => request(app).put(`${BASE}/${id}`).send(body);
+const expectRejectedAndUnsaved = async (res, id) => {
+  expect(res.status).toBe(400);
+  expect(findLayout(await getState(), id)).toBeUndefined();
 };
 
-beforeEach(() => {
-  vi.clearAllMocks();
+beforeEach(async () => {
+  await rm(stateFile(), { force: true });
 });
 
 describe('GET /api/dashboard/layouts', () => {
-  it('returns active layout id + layouts list', async () => {
-    svc.getState.mockResolvedValue({
-      activeLayoutId: 'default',
-      layouts: [{ id: 'default', name: 'Everything', builtIn: true, widgets: ['apps'] }],
-    });
-    const res = await request(makeApp()).get('/api/dashboard/layouts');
+  it('seeds the built-in layouts with the default active and the shared limits', async () => {
+    const res = await request(app).get(BASE);
     expect(res.status).toBe(200);
     expect(res.body.activeLayoutId).toBe('default');
-    expect(res.body.layouts).toHaveLength(1);
+    expect(findLayout(res.body, 'default')).toMatchObject({ name: 'Everything', builtIn: true });
+    expect(res.body.limits).toMatchObject({ gridCols: 12, widgetsMax: 50 });
   });
 });
 
 describe('PUT /api/dashboard/layouts/active', () => {
-  it('switches the active layout', async () => {
-    svc.setActiveLayout.mockResolvedValue({ activeLayoutId: 'focus', layouts: [] });
-    const res = await request(makeApp())
-      .put('/api/dashboard/layouts/active')
-      .send({ id: 'focus' });
+  it('switches the active layout and persists it', async () => {
+    await put('focus-custom', { name: 'Focus', widgets: ['apps'] });
+    const res = await request(app).put(`${BASE}/active`).send({ id: 'focus-custom' });
     expect(res.status).toBe(200);
-    expect(svc.setActiveLayout).toHaveBeenCalledWith('focus');
+    expect((await getState()).activeLayoutId).toBe('focus-custom');
   });
 
-  it('404s on unknown layout', async () => {
-    svc.setActiveLayout.mockRejectedValue(Object.assign(new Error('Unknown layout id: nope'), { code: 'NOT_FOUND' }));
-    const res = await request(makeApp())
-      .put('/api/dashboard/layouts/active')
-      .send({ id: 'nope' });
-    expect(res.status).toBe(404);
+  it('404s on an unknown layout and leaves the active layout alone', async () => {
+    expect((await request(app).put(`${BASE}/active`).send({ id: 'nope' })).status).toBe(404);
+    expect((await getState()).activeLayoutId).toBe('default');
   });
 
-  it('500s (bubbles) on unexpected service errors — does not collapse to 404', async () => {
-    svc.setActiveLayout.mockRejectedValue(new Error('disk full'));
-    const res = await request(makeApp())
-      .put('/api/dashboard/layouts/active')
-      .send({ id: 'default' });
+  it('rejects non-kebab ids with 400 (not 404)', async () => {
+    expect((await request(app).put(`${BASE}/active`).send({ id: 'Not_Kebab' })).status).toBe(400);
+  });
+
+  it('500s (bubbles) when the state file is unreadable — does not collapse to 404', async () => {
+    await mkdir(PATHS.data, { recursive: true });
+    await writeFile(stateFile(), '{ not json');
+    const res = await request(app).put(`${BASE}/active`).send({ id: 'default' });
     expect(res.status).toBe(500);
   });
 });
 
 describe('PUT /api/dashboard/layouts/:id', () => {
-  it('saves a layout', async () => {
-    svc.saveLayout.mockResolvedValue({ activeLayoutId: 'default', layouts: [] });
-    const res = await request(makeApp())
-      .put('/api/dashboard/layouts/my-custom')
-      .send({ name: 'Custom', widgets: ['apps', 'cos'] });
+  it('saves a layout that reads back, defaulting grid to empty', async () => {
+    const res = await put('my-custom', { name: 'Custom', widgets: ['apps', 'cos'] });
     expect(res.status).toBe(200);
-    expect(svc.saveLayout).toHaveBeenCalledWith({
-      id: 'my-custom',
-      name: 'Custom',
-      widgets: ['apps', 'cos'],
-      grid: [],
+    expect(findLayout(await getState(), 'my-custom')).toMatchObject({
+      name: 'Custom', builtIn: false, widgets: ['apps', 'cos'], grid: [], activateWindow: null,
     });
   });
 
-  it('rejects invalid layout ids', async () => {
-    const res = await request(makeApp())
-      .put('/api/dashboard/layouts/NotKebab')
-      .send({ name: 'x', widgets: [] });
-    expect(res.status).toBe(400);
-    expect(svc.saveLayout).not.toHaveBeenCalled();
+  it('replaces an existing layout in place on a second save', async () => {
+    await put('my-custom', { name: 'Custom', widgets: ['apps'] });
+    await put('my-custom', { name: 'Renamed', widgets: ['apps', 'cos'] });
+    const state = await getState();
+    expect(state.layouts.filter((l) => l.id === 'my-custom')).toHaveLength(1);
+    expect(findLayout(state, 'my-custom')).toMatchObject({ name: 'Renamed', widgets: ['apps', 'cos'] });
   });
 
-  it('rejects duplicate widget ids', async () => {
-    const res = await request(makeApp())
-      .put('/api/dashboard/layouts/my-custom')
-      .send({ name: 'Custom', widgets: ['apps', 'cos', 'apps'] });
-    expect(res.status).toBe(400);
-    expect(svc.saveLayout).not.toHaveBeenCalled();
-  });
-
-  it('saves a layout with a grid', async () => {
-    svc.saveLayout.mockResolvedValue({ activeLayoutId: 'default', layouts: [] });
-    const res = await request(makeApp())
-      .put('/api/dashboard/layouts/my-custom')
-      .send({
-        name: 'Custom',
-        widgets: ['apps', 'cos'],
-        grid: [
-          { id: 'apps', x: 0, w: 12, order: 0, h: 4 },
-          { id: 'cos', x: 0, w: 6, order: 1, h: 3 },
-        ],
-      });
-    expect(res.status).toBe(200);
-    expect(svc.saveLayout).toHaveBeenCalledWith({
-      id: 'my-custom',
+  it('saves a layout with a grid and reads it back densely ordered', async () => {
+    const res = await put('my-custom', {
       name: 'Custom',
       widgets: ['apps', 'cos'],
       grid: [
@@ -130,157 +95,116 @@ describe('PUT /api/dashboard/layouts/:id', () => {
         { id: 'cos', x: 0, w: 6, order: 1, h: 3 },
       ],
     });
+    expect(res.status).toBe(200);
+    expect(findLayout(await getState(), 'my-custom').grid).toEqual([
+      { id: 'apps', x: 0, w: 12, order: 0, h: 4 },
+      { id: 'cos', x: 0, w: 6, order: 1, h: 3 },
+    ]);
   });
 
   // A stale client bundle still posts the pre-#4133 `{ x, y, w, h }` shape;
   // the route has to let it through so the service can convert it rather than
   // 400-ing the user's save.
-  it('accepts a legacy grid item that carries `y` instead of `order`', async () => {
-    svc.saveLayout.mockResolvedValue({ activeLayoutId: 'default', layouts: [] });
-    const res = await request(makeApp())
-      .put('/api/dashboard/layouts/my-custom')
-      .send({
-        name: 'Custom',
-        widgets: ['apps'],
-        grid: [{ id: 'apps', x: 0, y: 4, w: 12, h: 4 }],
-      });
+  it('accepts a legacy grid item that carries `y` and converts it to an order', async () => {
+    const res = await put('my-custom', {
+      name: 'Custom',
+      widgets: ['apps', 'cos'],
+      grid: [
+        { id: 'cos', x: 0, y: 8, w: 6, h: 3 },
+        { id: 'apps', x: 0, y: 4, w: 12, h: 4 },
+      ],
+    });
     expect(res.status).toBe(200);
-    expect(svc.saveLayout.mock.calls[0][0].grid)
-      .toEqual([{ id: 'apps', x: 0, y: 4, w: 12, h: 4 }]);
+    expect(findLayout(await getState(), 'my-custom').grid.map(({ id, order }) => [id, order]))
+      .toEqual([['apps', 0], ['cos', 1]]);
+  });
+
+  it('rejects invalid layout ids', async () => {
+    const res = await put('NotKebab', { name: 'x', widgets: [] });
+    expect(res.status).toBe(400);
+    expect((await getState()).layouts.map((l) => l.id)).not.toContain('NotKebab');
+  });
+
+  it('rejects duplicate widget ids', async () => {
+    await expectRejectedAndUnsaved(await put('my-custom', { name: 'Custom', widgets: ['apps', 'cos', 'apps'] }), 'my-custom');
   });
 
   it('rejects grid items that reference unknown widgets', async () => {
-    const res = await request(makeApp())
-      .put('/api/dashboard/layouts/my-custom')
-      .send({
-        name: 'Custom',
-        widgets: ['apps'],
-        grid: [{ id: 'apps', x: 0, w: 4, order: 0, h: 4 }, { id: 'ghost', x: 4, w: 4, order: 1, h: 4 }],
-      });
-    expect(res.status).toBe(400);
-    expect(svc.saveLayout).not.toHaveBeenCalled();
+    await expectRejectedAndUnsaved(await put('my-custom', {
+      name: 'Custom',
+      widgets: ['apps'],
+      grid: [{ id: 'apps', x: 0, w: 4, order: 0, h: 4 }, { id: 'ghost', x: 4, w: 4, order: 1, h: 4 }],
+    }), 'my-custom');
   });
 
   it('rejects grid items where x+w exceeds the column count', async () => {
-    const res = await request(makeApp())
-      .put('/api/dashboard/layouts/my-custom')
-      .send({
-        name: 'Custom',
-        widgets: ['apps'],
-        grid: [{ id: 'apps', x: 6, w: 8, order: 0, h: 4 }],
-      });
-    expect(res.status).toBe(400);
-    expect(svc.saveLayout).not.toHaveBeenCalled();
+    await expectRejectedAndUnsaved(await put('my-custom', {
+      name: 'Custom',
+      widgets: ['apps'],
+      grid: [{ id: 'apps', x: 6, w: 8, order: 0, h: 4 }],
+    }), 'my-custom');
   });
 
   it('rejects duplicate grid ids', async () => {
-    const res = await request(makeApp())
-      .put('/api/dashboard/layouts/my-custom')
-      .send({
-        name: 'Custom',
-        widgets: ['apps'],
-        grid: [
-          { id: 'apps', x: 0, w: 4, order: 0, h: 4 },
-          { id: 'apps', x: 4, w: 4, order: 1, h: 4 },
-        ],
-      });
-    expect(res.status).toBe(400);
-    expect(svc.saveLayout).not.toHaveBeenCalled();
-  });
-
-  it('accepts a layout with no grid (back-compat for unmigrated clients)', async () => {
-    svc.saveLayout.mockResolvedValue({ activeLayoutId: 'default', layouts: [] });
-    const res = await request(makeApp())
-      .put('/api/dashboard/layouts/my-custom')
-      .send({ name: 'Custom', widgets: ['apps'] });
-    expect(res.status).toBe(200);
-    // Default-applied grid is an empty array — defaults inside .refine() chain.
-    expect(svc.saveLayout).toHaveBeenCalledWith({
-      id: 'my-custom',
+    await expectRejectedAndUnsaved(await put('my-custom', {
       name: 'Custom',
       widgets: ['apps'],
-      grid: [],
+      grid: [
+        { id: 'apps', x: 0, w: 4, order: 0, h: 4 },
+        { id: 'apps', x: 4, w: 4, order: 1, h: 4 },
+      ],
+    }), 'my-custom');
+  });
+
+  describe('activateWindow', () => {
+    it('saves a valid window', async () => {
+      const res = await put('morning', { name: 'Morning', widgets: ['upcoming-tasks'], activateWindow: { start: '06:00', end: '11:00' } });
+      expect(res.status).toBe(200);
+      expect(findLayout(await getState(), 'morning').activateWindow).toEqual({ start: '06:00', end: '11:00' });
     });
-  });
 
-  it('accepts a valid activateWindow', async () => {
-    svc.saveLayout.mockResolvedValue({ activeLayoutId: 'default', layouts: [] });
-    const res = await request(makeApp())
-      .put('/api/dashboard/layouts/morning')
-      .send({
-        name: 'Morning',
-        widgets: ['upcoming-tasks'],
-        activateWindow: { start: '06:00', end: '11:00' },
-      });
-    expect(res.status).toBe(200);
-    expect(svc.saveLayout).toHaveBeenCalledWith(expect.objectContaining({
-      activateWindow: { start: '06:00', end: '11:00' },
-    }));
-  });
+    it('preserves the window when a later save omits the key, and clears it on null', async () => {
+      await put('morning', { name: 'Morning', widgets: ['upcoming-tasks'], activateWindow: { start: '06:00', end: '11:00' } });
+      await put('morning', { name: 'Morning', widgets: ['upcoming-tasks', 'apps'] });
+      expect(findLayout(await getState(), 'morning').activateWindow).toEqual({ start: '06:00', end: '11:00' });
 
-  it('accepts activateWindow=null as an explicit clear signal', async () => {
-    svc.saveLayout.mockResolvedValue({ activeLayoutId: 'default', layouts: [] });
-    const res = await request(makeApp())
-      .put('/api/dashboard/layouts/morning')
-      .send({ name: 'Morning', widgets: ['upcoming-tasks'], activateWindow: null });
-    expect(res.status).toBe(200);
-    expect(svc.saveLayout).toHaveBeenCalledWith(expect.objectContaining({
-      activateWindow: null,
-    }));
-  });
+      const cleared = await put('morning', { name: 'Morning', widgets: ['upcoming-tasks'], activateWindow: null });
+      expect(cleared.status).toBe(200);
+      expect(findLayout(await getState(), 'morning').activateWindow).toBeNull();
+    });
 
-  it('rejects activateWindow with off-format time strings', async () => {
-    const res = await request(makeApp())
-      .put('/api/dashboard/layouts/morning')
-      .send({
-        name: 'Morning',
-        widgets: ['upcoming-tasks'],
-        activateWindow: { start: '25:99', end: '11:00' },
-      });
-    expect(res.status).toBe(400);
-    expect(svc.saveLayout).not.toHaveBeenCalled();
-  });
+    it('rejects off-format time strings', async () => {
+      await expectRejectedAndUnsaved(await put('morning', {
+        name: 'Morning', widgets: ['upcoming-tasks'], activateWindow: { start: '25:99', end: '11:00' },
+      }), 'morning');
+    });
 
-  it('rejects activateWindow with start === end', async () => {
-    const res = await request(makeApp())
-      .put('/api/dashboard/layouts/morning')
-      .send({
-        name: 'Morning',
-        widgets: ['upcoming-tasks'],
-        activateWindow: { start: '06:00', end: '06:00' },
-      });
-    expect(res.status).toBe(400);
-    expect(svc.saveLayout).not.toHaveBeenCalled();
-  });
-});
-
-describe('PUT /api/dashboard/layouts/active — id validation', () => {
-  it('rejects non-kebab ids with 400 (not 404)', async () => {
-    const res = await request(makeApp())
-      .put('/api/dashboard/layouts/active')
-      .send({ id: 'Not_Kebab' });
-    expect(res.status).toBe(400);
-    expect(svc.setActiveLayout).not.toHaveBeenCalled();
+    it('rejects start === end', async () => {
+      await expectRejectedAndUnsaved(await put('morning', {
+        name: 'Morning', widgets: ['upcoming-tasks'], activateWindow: { start: '06:00', end: '06:00' },
+      }), 'morning');
+    });
   });
 });
 
 describe('DELETE /api/dashboard/layouts/:id', () => {
-  it('deletes a user layout', async () => {
-    svc.deleteLayout.mockResolvedValue({ activeLayoutId: 'default', layouts: [] });
-    const res = await request(makeApp()).delete('/api/dashboard/layouts/my-custom');
+  it('deletes a user layout and resets the active layout when it was active', async () => {
+    await put('my-custom', { name: 'Custom', widgets: ['apps'] });
+    await request(app).put(`${BASE}/active`).send({ id: 'my-custom' });
+
+    const res = await request(app).delete(`${BASE}/my-custom`);
     expect(res.status).toBe(200);
-    expect(svc.deleteLayout).toHaveBeenCalledWith('my-custom');
+    const state = await getState();
+    expect(findLayout(state, 'my-custom')).toBeUndefined();
+    expect(state.activeLayoutId).toBe('default');
   });
 
-  it('400s when trying to delete a built-in layout', async () => {
-    svc.deleteLayout.mockRejectedValue(Object.assign(new Error('Cannot delete built-in layout: default'), { code: 'BUILTIN_PROTECTED' }));
-    const res = await request(makeApp()).delete('/api/dashboard/layouts/default');
-    expect(res.status).toBe(400);
+  it('400s when trying to delete a built-in layout and keeps it', async () => {
+    expect((await request(app).delete(`${BASE}/default`)).status).toBe(400);
+    expect(findLayout(await getState(), 'default')).toBeDefined();
   });
 
   it('404s when deleting an unknown layout', async () => {
-    svc.deleteLayout.mockRejectedValue(Object.assign(new Error('Unknown layout id: nope'), { code: 'NOT_FOUND' }));
-    const res = await request(makeApp()).delete('/api/dashboard/layouts/nope');
-    expect(res.status).toBe(404);
+    expect((await request(app).delete(`${BASE}/nope`)).status).toBe(404);
   });
 });

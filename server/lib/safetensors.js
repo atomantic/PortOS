@@ -1,16 +1,6 @@
 /**
  * Minimal safetensors header reader + FLUX.2 size-variant detector.
  *
- * `readSafetensorsHeader(path)` reads only the JSON header of a `.safetensors` file (never the tensor
- * payload). `detectFlux2VariantFromHeader(header)` / `detectFlux2Variant(path)` classify a LoRA as
- * FLUX.2 Klein `'4b'` (hidden dim 3072) vs `'9b'` (4096) by transformer-block tensor shapes, so the
- * LoRA picker can hide off-variant weights that would silently fail to load.
- * `classifyLoraKeyLayoutFromHeader(header)` / `classifyLoraKeyLayout(path)` classify the key layout as
- * `LORA_KEY_LAYOUTS` (`bare` / `comfyui` / `diffusers` / `kohya` / `not_a_lora`, `null` = unreadable),
- * `isKnownLoraKeyLayout(layout)` validates a layout read back out of persisted state, and
- * `videoLoraLayoutIssue(layout)` returns the user-facing reason a layout can't fuse into the LTX-2
- * video transformer (or `null` when it can).
- *
  * Used by the LoRA service to tell a Klein-4B LoRA (transformer hidden dim
  * 3072) apart from a Klein-9B LoRA (hidden dim 4096) so the picker can hide
  * weights that diffusers would reject at load time with a tensor-shape

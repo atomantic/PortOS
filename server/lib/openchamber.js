@@ -4,42 +4,28 @@
  * OpenChamber control-CLI identity, `session create` headless argv, `provider/model` gate, and
  * `--dir`/`--prompt` spawn-time delivery.
  *
- * OpenChamber (`@openchamber/web`, MIT) is an agentic development environment
- * built ON TOP of OpenCode: a long-running workspace server with desktop, web,
- * VS Code and mobile surfaces. That makes it a different SHAPE of harness from
- * every other vendor here, and the differences are the whole content of this
- * file:
+ * OpenChamber (`@openchamber/web`) is an agentic dev environment built ON TOP of OpenCode, a
+ * different SHAPE of harness from every other vendor here:
  *
- *   - **It is a control plane, not a one-shot binary.** `openchamber session
- *     create` posts an action to an already-running OpenChamber runtime (the
- *     CLI discovers its port) instead of doing the work in the child PortOS
- *     spawned. The user starts that runtime once (`openchamber`, or
- *     `openchamber startup enable`); an install with nothing running gets a
- *     clear CLI error, the same posture as a local-LLM provider whose daemon is
- *     down. PortOS deliberately does NOT start it — that is a server the user
- *     owns, with its own port, password and network exposure.
+ *   - **A control plane, not a one-shot binary.** `openchamber session create` posts to an
+ *     already-running OpenChamber runtime (the CLI discovers its port). The user starts that runtime
+ *     once; with nothing running the CLI errors clearly, like a local-LLM provider whose daemon is
+ *     down. PortOS deliberately does NOT start it: it is a server the user owns, with its own port,
+ *     password and network exposure.
+ *   - **CLI only, no TUI.** The interactive surface is a web app, so the harness registry declares
+ *     `modes: ['cli']`; bare `openchamber` starts the SERVER, so no TUI argv builder exists.
+ *   - **Prompt and working directory are both argv.** `session create` requires `--dir <path>` (no
+ *     cwd default; the runtime may not share the child's) and takes the prompt as the VALUE of
+ *     `--prompt`. `prepareOpenchamberPrompt` supplies both at spawn time, when the real cwd is known.
  *
- *   - **CLI only, no TUI.** OpenChamber's interactive surface is a web app, not
- *     a terminal UI, so there is nothing for a PTY to attach to and the harness
- *     registry declares `modes: ['cli']`. `openchamber` with no subcommand
- *     starts the SERVER, which is why no TUI argv builder exists here: emitting
- *     one would have PortOS launch a daemon in a PTY and call it an agent.
- *
- *   - **The prompt and the working directory are both argv.** `session create`
- *     requires `--dir <path>` (it has no cwd default — the directory is sent to
- *     the runtime, which may not share the child's) and takes the prompt as the
- *     VALUE of `--prompt`. Both are supplied by `prepareOpenchamberPrompt` at
- *     spawn time, which is the only point where the child's real cwd is known.
- *
- * The headless invocation, from OpenChamber's own `session` help:
+ * Headless invocation:
  *
  *   openchamber session create --dir <path> --prompt <text> \
  *     [--model <provider/model>] --wait --last-assistant --quiet
  *
- * `--wait` blocks until the dispatched activity goes idle (default timeout 600
- * seconds, which is also every shipped PortOS harness timeout), `--last-assistant`
- * appends the final assistant text, and `--quiet` reduces stdout to the session
- * id followed by that text — the closest thing this CLI has to `--print`.
+ * `--wait` blocks until idle (default timeout 600s, matching every shipped PortOS harness timeout),
+ * `--last-assistant` appends the final assistant text, `--quiet` reduces stdout to the session id
+ * plus that text: the closest thing to `--print`.
  *
  * Dependency-light on purpose: imports only `providerModels.js` helpers,
  * mirroring `grok.js`/`kimi.js`/`cursor.js`/`pi.js`/`kilo.js` so it stays
@@ -64,12 +50,9 @@ const HEADLESS_FLAGS = Object.freeze(['--wait', '--last-assistant', '--quiet']);
 const DIR_FLAGS = ['--dir', '--project'];
 
 /**
- * True when a provider command points at the OpenChamber binary — the bare
- * `openchamber` on PATH, an absolute/relative path to it, or an optional
- * Windows `.exe` suffix (same matching rules as `isOpencodeCommand`).
- *
- * Note it can never collide with OpenCode's own matcher despite the shared
- * prefix: both compare the WHOLE basename, not a prefix.
+ * True when a provider command points at the OpenChamber binary (bare, a path, or a Windows `.exe`;
+ * same rules as `isOpencodeCommand`). Compares the WHOLE basename, so it never collides with
+ * OpenCode's matcher.
  * @param {string|null|undefined} command
  * @returns {boolean}
  */
@@ -78,10 +61,8 @@ export function isOpenchamberCommand(command) {
 }
 
 /**
- * True when a PROVIDER is OpenChamber-flavored — the shipped `openchamber-cli`
- * id or any provider whose launch command is the OpenChamber binary. The
- * provider-shaped companion to {@link isOpenchamberCommand}, matching the shape
- * of `isKimiProvider` / `isOpencodeProvider` in `providerModels.js`.
+ * True when a PROVIDER is OpenChamber-flavored: the shipped `openchamber-cli` id or any provider
+ * launching the OpenChamber binary.
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @returns {boolean}
  */
@@ -91,13 +72,8 @@ export function isOpenchamberProvider(provider) {
 }
 
 /**
- * True for a model string OpenChamber will accept.
- *
- * `--model` is validated by the CLI as `provider/model` and a value failing
- * that exits with a usage error BEFORE any work — so a bare id (the shape most
- * other harnesses take) must be dropped rather than passed through, or pinning
- * a model would turn every run into an argv failure. Mirrors the CLI's own
- * check: one `/`, with something on each side.
+ * True for a model string OpenChamber will accept: the CLI requires `provider/model` and exits with
+ * a usage error otherwise, so a bare id must be dropped, not passed through.
  * @param {string|null|undefined} model
  * @returns {boolean}
  */
@@ -108,14 +84,9 @@ export function isOpenchamberModelId(model) {
 }
 
 /**
- * Build the headless argv for an OpenChamber run. Adds the `session create`
- * action and the wait/print flags unless the saved args already pin them, plus
- * `--model <provider/model>` when a usable model id is pinned and the user
- * baked no model flag of their own.
- *
- * Neither `--dir` nor `--prompt` is added here — both are spliced in by
- * {@link prepareOpenchamberPrompt} at spawn time, where the child's real
- * working directory is known.
+ * Build the headless argv: the `session create` action and wait/print flags unless the saved args
+ * pin them, plus `--model <provider/model>` when a usable id is pinned and the user baked no model
+ * flag. `--dir` and `--prompt` come from {@link prepareOpenchamberPrompt} at spawn time.
  *
  * @param {string[]} baseArgs - user/legacy args (already model-flag-sanitized)
  * @param {string|null|undefined} model - defaultModel to pin, or null to omit

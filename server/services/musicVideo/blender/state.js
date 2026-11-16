@@ -1,4 +1,3 @@
-export { BLENDER_NEEDS_TRUSTED_LOCAL } from '../../film/state.js';
 import * as film from '../../film/state.js';
 import { requireProject } from '../requireProject.js';
 import { blenderFinalStale } from './renderIndex.js';

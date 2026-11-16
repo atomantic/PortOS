@@ -1,53 +1,35 @@
 /**
  * The ONE path a quota-burn step takes to run its work.
  *
- * A burn step is a REFERENCE to a scheduled task the user already owns
- * (`lib/quotaBurnTaskRef.js`), so "running" it means invoking that task the way
- * anything else invokes it — never re-implementing it. That is the whole point
- * of the reference model: the retired `quotaBurnJobs/agentPrompt.js` executor
- * called `cosTaskStore.addTask` directly with a synthesized free-form task,
- * which walked past canonical task generation and every gate that lives in it.
- * #6381 converted the plans that used it and removed it, so this is now the ONLY
- * way a burn spends quota — a step still carrying a legacy `jobType` resolves to
- * `LEGACY_UNMIGRATED` here and is refused, never executed.
+ * A burn step REFERENCES a scheduled task the user already owns
+ * (`lib/quotaBurnTaskRef.js`), so running it means invoking that task the way anything
+ * else does, never re-implementing it (which would walk past canonical task generation
+ * and its gates). A step still carrying a legacy `jobType` resolves to
+ * `LEGACY_UNMIGRATED` and is refused, never executed.
  *
- * Three reference shapes, three canonical invocations — and no fourth:
+ * Three reference shapes, three canonical invocations:
  *
- *   built-in AGENT task  → `taskSchedule.triggerOnDemandTask(type, appId,
- *                           { origin: QUOTA_BURN, burn })`. The on-demand
- *                           engines generate the task; acceptance is
- *                           ASYNCHRONOUS, and the burn provenance rides on the
- *                           request (`lib/quotaBurnOrigin.js`).
- *   built-in PROGRAMMATIC → `scheduledHandlers.runScheduledHandler` directly,
- *                           with the burning `family`. That registry documents
- *                           the burn as its second sanctioned caller precisely
- *                           so the render backend stays pinned to the
- *                           subscription being drained; routing it through the
- *                           request queue would drop `family` on the floor
- *                           (`cosTaskGenerator#drainProgrammaticOnDemandRequests`
- *                           passes none) and spend the wrong provider.
- *   CUSTOM app job        → `autonomousJobs.generateTaskFromJob` + `addTask`,
- *                           the same pair the scheduled fire uses.
+ *   built-in AGENT task  -> `taskSchedule.triggerOnDemandTask(type, appId,
+ *                           { origin: QUOTA_BURN, burn })`. Acceptance is
+ *                           ASYNCHRONOUS; burn provenance rides on the request.
+ *   built-in PROGRAMMATIC -> `scheduledHandlers.runScheduledHandler` directly with the
+ *                           burning `family`, so the render backend stays pinned to the
+ *                           subscription being drained (the request queue would drop
+ *                           `family` and spend the wrong provider).
+ *   CUSTOM app job        -> `autonomousJobs.generateTaskFromJob` + `addTask`, the
+ *                           pair the scheduled fire uses.
  *
- * **This is not the manual endpoint.** `routes/cosJobRoutes.js`'s
- * `POST /jobs/:id/trigger` deliberately hands a human three privileges an
- * unattended burn must never inherit — `approvalRequired: false` regardless of
- * the job's autonomy level, `forceSpawnTask` past the autonomous scheduling
- * gates, and `reviveBlockedTask` on a failure-blocked twin. A burn queues the
- * task and stops: the daemon decides when it spawns, a blocked twin stays
- * blocked, and a job that would need a human to approve it is REFUSED rather
- * than parked awaiting approval — parking one would consume the family's
- * dispatch budget for work that spends nothing.
+ * **This is not the manual endpoint.** `POST /jobs/:id/trigger` hands a human three
+ * privileges an unattended burn must never inherit: `approvalRequired: false`,
+ * `forceSpawnTask` past the scheduling gates, and `reviveBlockedTask`. A burn queues the
+ * task and stops, leaves a blocked twin blocked, and REFUSES a job needing human
+ * approval (parking it would consume dispatch budget for work that spends nothing).
  *
- * `force` reaches here already meaning "the user clicked ▶". It bypasses the
- * QUOTA gates in `quotaBurn.js#evaluateFamily`, and it is threaded into a
- * programmatic handler so that handler can relax its OWN in-flight cooldown —
- * which is the whole point of the button on a `universe-bible-images` row whose
- * probe reports zero for entries that are merely already queued. What it never
- * relaxes: task eligibility, approval, target scope, enabled state, the master
- * Improve gate, and the duplicate checks below. Those are facts about whether
- * the work may run at all, not about this window's budget — and a duplicate in
- * particular is not "declined because of a gate", it is the same work twice.
+ * `force` means "the user clicked play": it bypasses the QUOTA gates in
+ * `quotaBurn.js#evaluateFamily` and lets a programmatic handler relax its own in-flight
+ * cooldown. It never relaxes task eligibility, approval, target scope, enabled state,
+ * the master Improve gate or the duplicate checks: those decide whether the work may run
+ * at all, and a duplicate is the same work twice.
  */
 
 import {
@@ -68,8 +50,7 @@ const declined = (reason) => ({ dispatched: false, reason });
 /** What a log line calls the thing being spent — a family, or nothing at all. */
 const burnLabel = (family) => family?.id || 'no subscription family';
 const noWork = (detail) => ({ count: 0, detail });
-// `Object.hasOwn`, not a truthiness check, so a reference naming an inherited
-// key like `constructor` cannot resolve to anything.
+// `Object.hasOwn` so a reference naming an inherited key like `constructor` resolves to nothing.
 const entryOf = (map, key) => (map && Object.hasOwn(map, key) ? map[key] : null);
 
 /**
@@ -78,31 +59,18 @@ const entryOf = (map, key) => (map && Object.hasOwn(map, key) ? map[key] : null)
  * eligible, appIds } }, custom: { [jobId]: { enabled, eligible, appId } },
  * improvementEnabled }`.
  *
- * The built-in entry is exactly the `entry` shape `evaluateOnDemandEligibility`
- * reads, so the page's verdict is produced by the same ladder that decides the
- * dispatch — every rung is filled here and judged there, never re-derived. That
- * is why the instance-FEATURE gate is a field of its own rather than folded into
- * `enabled`: the ladder can then say which of the two switches is off.
- * `eligible` is the picker restriction: a type another automation owns
- * (`userInvokable: false`) and a custom job that is not an agent job — a shell
- * command or a built-in script handler — are not things a burn may invoke.
+ * The built-in entry is the `entry` shape `evaluateOnDemandEligibility` reads, so the
+ * page's verdict comes from the ladder that decides dispatch. The instance-FEATURE gate
+ * is its own field so the ladder can say which switch is off. `eligible` excludes a type
+ * another automation owns (`userInvokable: false`) and non-agent custom jobs.
+ * `appIds` is the ACTIVE apps with the type on, so a removed app resolves as wrong-scope.
+ * `improvementEnabled` is the master Improve switch, `null` when unreadable (fails
+ * CLOSED).
  *
- * `appIds` per built-in type is the set of ACTIVE managed apps that have the
- * type switched on, so a reference to an app that was removed (or had the type
- * turned off) resolves as wrong-scope instead of silently dispatching nothing.
- *
- * `improvementEnabled` is the master CoS Improve switch, `null` when the state
- * could not be read — which fails CLOSED, because "we could not check" is not
- * "it is on".
- *
- * Each entry also carries the record it was derived from — the task's schedule
- * config, the custom job — and the catalog carries the `queued` set of on-demand
- * requests already waiting, all read off the SAME schedule/app/job snapshot.
- * `loadSchedule()` is uncached (a disk read plus a deep merge over every default
- * interval), so going back to the stores per step made the status page's probe
- * pay that whole cost once per configured step. The pure resolver ignores every
- * key it does not know. Manual maintenance catalogs bypass built-in cadence
- * switches without changing saved settings or the automatic burn catalog.
+ * Entries also carry their source record and the catalog the `queued` on-demand set, all
+ * from ONE snapshot: `loadSchedule()` is uncached, so per-step reads made the status
+ * probe pay its full cost per step. Manual maintenance catalogs bypass built-in cadence
+ * switches without changing saved settings.
  */
 export async function getQuotaBurnTaskCatalog({ manual = false } = {}) {
   const [{ loadSchedule }, { getTaskTypeInvocation }, { getActiveApps }, { createFeatureGate }, { getAllJobs }, { isImprovementEnabled, loadState }] =
@@ -122,16 +90,12 @@ export async function getQuotaBurnTaskCatalog({ manual = false } = {}) {
     loadState().catch(() => null),
   ]);
 
-  // The overrides come off the app records `getActiveApps` already returned.
-  // `getAppTaskTypeOverrides(id)` would re-enter the app store twice per app to
-  // produce the same answer for this filter — the legacy migration it also runs
-  // only ever synthesizes `{ enabled: false }` entries, which are exactly what
-  // gets discarded here. Other callers still perform that migration.
+  // Overrides come off the app records already loaded; `getAppTaskTypeOverrides` would
+  // re-enter the app store per app, and its legacy migration only synthesizes
+  // `{ enabled: false }` entries that are discarded here.
   const appIdsByTaskType = enabledAppIdsByTaskType(apps);
 
-  // The schedule's own memoized gate, not a second copy: the burn catalog's
-  // feature verdict has to agree with the one `triggerOnDemandTask` applies,
-  // and two implementations of one rule drift silently.
+  // The schedule's own gate, so the verdict agrees with `triggerOnDemandTask`.
   const featureEnabled = createFeatureGate();
   const builtin = {};
   await Promise.all(Object.entries(schedule?.tasks || {}).map(async ([taskType, config]) => {
@@ -165,26 +129,15 @@ const onDemandKey = (taskType, appId) => `${taskType}::${appId ?? ''}`;
 const queuedOnDemandKeys = (schedule) =>
   new Set((schedule?.onDemandRequests || []).map((request) => onDemandKey(request.taskType, request.appId)));
 
-/**
- * Whether a custom app job is something a burn may invoke at all.
- *
- * A `shell` job runs an allowlisted command and a `script` job runs a built-in
- * handler — neither spends provider quota, which is the only thing a burn is
- * for. Everything else is an agent job (`type` is absent on jobs written before
- * the field existed, and those are agent jobs).
- */
+/** Whether a custom app job is something a burn may invoke: `shell` and `script` jobs spend no provider quota. Jobs without `type` are agent jobs. */
 export function isBurnEligibleCustomJob(job) {
   return Boolean(job) && (!job.type || job.type === 'agent');
 }
 
 /**
- * Resolve a step against the live catalog into everything an invocation needs,
- * or the `unavailable` verdict that stops it.
- *
- * `effective` is the settings the invocation will actually run with: the step's
- * per-invocation overrides layered over the referenced task's SAVED settings.
- * An unset override inherits; nothing here writes back to the schedule or the
- * job record.
+ * Resolve a step against the live catalog into everything an invocation needs, or the
+ * `unavailable` verdict. `effective` is the step's overrides layered over the task's SAVED
+ * settings; nothing is written back.
  */
 export async function resolveQuotaBurnStep(step, catalog = null, { explicit = false } = {}) {
   const resolvedCatalog = catalog || await getQuotaBurnTaskCatalog();
@@ -193,10 +146,8 @@ export async function resolveQuotaBurnStep(step, catalog = null, { explicit = fa
 
   const ref = step.taskRef;
   if (ref.kind === QUOTA_BURN_TASK_REF_KIND.CUSTOM) {
-    // An EMPTY catalog (the caller's read failed) answers no existence question,
-    // so the resolver above passed the step through. Display can afford that;
-    // dispatch cannot — with no record to read there are no saved settings to
-    // inherit, and running on the overrides alone would silently change the work.
+    // An EMPTY catalog (failed read) passes the resolver; dispatch can't run on overrides
+    // alone with no saved settings to inherit.
     const job = entryOf(resolvedCatalog.custom, ref.jobId)?.job;
     if (!job) {
       return { unavailable: { code: QUOTA_BURN_UNAVAILABLE.DANGLING_JOB, reason: `custom scheduled job "${ref.jobId}" could not be read` } };
@@ -209,15 +160,12 @@ export async function resolveQuotaBurnStep(step, catalog = null, { explicit = fa
     return { unavailable: { code: QUOTA_BURN_UNAVAILABLE.UNKNOWN_TASK, reason: `scheduled task "${ref.taskType}" could not be read` } };
   }
   const effective = effectiveSettings(step, interval);
-  // Here rather than at invoke, so the status page's probe and the runner agree
-  // that an audit which cannot apply to its app is not ready work, and so a
-  // maintenance run can complete it as skipped from the same verdict.
+  // Here so the probe and the runner agree an inapplicable audit is not ready work.
   const notApplicable = explicit ? null : await notApplicableReason(ref, effective.params);
   if (notApplicable) return { unavailable: { code: QUOTA_BURN_UNAVAILABLE.NOT_APPLICABLE, reason: notApplicable } };
   return {
     kind: isProgrammaticScheduledTaskType(ref.taskType) ? 'programmatic' : 'builtin',
-    // Handed back so a caller that resolved through a catalog keeps reading that
-    // one snapshot instead of going back to the (uncached) schedule store.
+    // Lets callers keep reading one snapshot instead of the uncached schedule store.
     catalog: resolvedCatalog,
     ref,
     interval,
@@ -234,13 +182,8 @@ async function notApplicableReason(ref, params) {
 }
 
 /**
- * Layer a step's overrides over a task's saved settings.
- *
- * Presence, not truthiness: `normalizeQuotaBurnJob` already reduces an unset
- * override to `null`, so `??` is the correct join — a step that pins nothing
- * inherits, and a step that pins something wins. `params` MERGE key-by-key
- * rather than replacing the bag, so overriding one run parameter does not blank
- * every other saved one.
+ * Layer a step's overrides over saved settings. `??` is correct because an unset override
+ * is already `null`; `params` MERGE key-by-key.
  */
 export function effectiveSettings(step, saved) {
   const overrides = step?.overrides || {};
@@ -254,19 +197,14 @@ export function effectiveSettings(step, saved) {
 }
 
 /**
- * `countPending(reference) → { count, detail, context? }` — the shared probe
- * contract the runner's ordered selection and the status page both read.
+ * `countPending(reference) -> { count, detail, context? }`: the probe contract the runner
+ * and the status page share. Side-effect free: no writes, no enqueues, no AI provider call
+ * (the status page calls it per step on every load).
  *
- * Side-effect free, always: it writes nothing, enqueues nothing, and makes no
- * AI provider call (AGENTS.md — no cold-bootstrap LLM calls; the status page
- * calls this for every configured step on every load).
- *
- *   - an eligible AI agent task (built-in or custom) reports ONE ready unit —
- *     a task is one unit of work, and there is no backlog to count;
- *   - an ineligible, disabled, dangling or ALREADY-ACTIVE task reports zero
- *     with the reason, so the runner skips it and the page can say why;
- *   - a programmatic handler reports its own domain backlog count, and may hand
- *     back the opaque `context` its scan produced for `run` to reuse.
+ *   - an eligible AI agent task reports ONE ready unit;
+ *   - an ineligible, disabled, dangling or ALREADY-ACTIVE task reports zero with the reason;
+ *   - a programmatic handler reports its own backlog and may return an opaque `context`
+ *     for `run` to reuse.
  */
 export async function countQuotaBurnStepPending({ step, family, catalog = null } = {}) {
   const resolved = await resolveQuotaBurnStep(step, catalog);
@@ -282,16 +220,13 @@ export async function countQuotaBurnStepPending({ step, family, catalog = null }
     });
   }
 
-  // Approval outranks the provider check, matching the order `runCustomJobStep`
-  // applies — a job the burn may never run at all should say so rather than
+  // Approval outranks the provider check, matching `runCustomJobStep`.
   // report a provider problem the user would then go and "fix".
   const approval = resolved.kind === 'custom' ? unattendedApprovalRefusal(resolved.job) : null;
   if (approval) return noWork(approval);
 
-  // Both agent lanes need a provider in the burning family before they can
-  // report a ready unit — a step whose family has none is not "one unit of work
-  // waiting", it is unrunnable, and the runner has to move to the next step
-  // rather than dispatch onto some other subscription.
+  // Both agent lanes need a provider in the burning family, else the runner must move on
+  // rather than dispatch onto another subscription.
   const picked = await resolveStepProvider(resolved.effective, family);
   if (picked.error) return noWork(picked.error);
 
@@ -307,29 +242,15 @@ export async function countQuotaBurnStepPending({ step, family, catalog = null }
 }
 
 /**
- * The provider a burn will actually spend, or a refusal.
+ * The provider a burn will actually spend, or a refusal. Without this a step whose family
+ * has no enabled CLI/TUI provider would queue on the daemon's pick and spend another
+ * subscription. `providerForFamily` honors a pin WITHOUT re-checking its family, so the
+ * check is made here against the resolved record (the command basename identifies a
+ * family: `antigravity-cli` is `agy`; an id-substring rule strands whole families).
  *
- * A burn exists to draw down ONE family's window, so this is not optional
- * plumbing: without it a step whose family has no enabled CLI/TUI provider would
- * queue on whatever the daemon picks and spend a different subscription
- * entirely, and a pin naming another family's provider would do the same on
- * purpose. `providerForFamily` honors an explicit pin WITHOUT re-checking its
- * family (by design — the pin is how you name a specific binary), so the family
- * check is made here, against the resolved provider record rather than its id:
- * the command basename is what identifies a family (`antigravity-cli` is
- * `agy`), and an id-substring rule strands whole families.
- *
- * Programmatic handlers do NOT come through here — each resolves its own
- * backend from the `family` it is handed (`prefer: 'cli'`, and the render
- * backend is not always a provider at all).
- *
- * An UNFAMILIED run is the one case with no family to check against, and it is
- * not an exception to the rule above so much as the absence of its premise: a
- * manual maintenance run pinned to a provider outside every subscription family
- * spends no window, so there is no wrong window for it to spend. Only
- * `maintenanceRun.js` can construct that identity, and `providerForFamily`
- * still requires the pin to name an ENABLED, process-capable provider — so the
- * resolved provider is always exactly the one the user picked.
+ * Programmatic handlers don't come through here: each resolves its backend from `family`.
+ * An UNFAMILIED run (only `maintenanceRun.js` makes one) has no window to misspend, and
+ * `providerForFamily` still requires an ENABLED, process-capable provider.
  */
 async function resolveStepProvider(effective, family) {
   const { noProviderReason, matchesFamily, isUnfamiliedBurn, resolveBurnProvider } = await import('./scheduledHandlers/providerPick.js');
@@ -348,14 +269,8 @@ async function resolveStepProvider(effective, family) {
 }
 
 /**
- * Why an unattended burn may not run this custom job, or null.
- *
- * `autonomyLevel` is the job's own statement about whether it may run without a
- * human confirming it (`generateTaskFromJob` turns `yolo` into `autoApprove`).
- * Anything below that needs an approval a burn cannot give, and the manual
- * endpoint's `approvalRequired: false` is exactly the bypass this path must not
- * inherit — so it refuses instead, with the level named so the row is
- * actionable.
+ * Why an unattended burn may not run this custom job, or null. Below `yolo` the job needs an
+ * approval a burn cannot give, and the manual endpoint's bypass must not be inherited.
  */
 function unattendedApprovalRefusal(job) {
   return job.autonomyLevel === UNATTENDED_AUTONOMY_LEVEL
@@ -364,12 +279,9 @@ function unattendedApprovalRefusal(job) {
 }
 
 /**
- * Whether an equivalent invocation of this custom job is already in flight.
- *
- * `cosJobScheduler.isJobFireInFlight` is the scheduler's OWN admission check,
- * shared rather than copied: half of it (`spawningJobIds`) is process-local
- * state a re-implementation here could not see at all, which would leave the
- * whole spawn window open for a burn to double-queue a job the clock just fired.
+ * Whether an equivalent invocation of this custom job is already in flight. Reuses
+ * `cosJobScheduler.isJobFireInFlight`: part of it (`spawningJobIds`) is process-local state
+ * a copy could not see.
  */
 async function activeCustomJobReason(job) {
   const [{ loadState }, { isJobFireInFlight }] = await Promise.all([
@@ -382,19 +294,13 @@ async function activeCustomJobReason(job) {
 }
 
 /**
- * Whether this built-in task already has an on-demand request waiting.
- *
- * Two burn cycles can otherwise stack requests for the same task faster than the
- * engines drain them: the second would spend the family's budget on a task the
- * first already asked for. `addTask`'s duplicate detection catches the collision
- * one step later, but only after the cap was already charged.
+ * Whether this built-in task already has an on-demand request waiting; otherwise two burn
+ * cycles stack requests and `addTask` dedup only catches it after the cap was charged.
  */
 async function queuedOnDemandReason(queued, taskType, appId) {
   const pending = queued instanceof Set
     ? queued.has(onDemandKey(taskType, appId))
-    // No snapshot (a caller passed a bare catalog, or the read failed): ask the
-    // schedule directly rather than reporting "nothing queued", which would let
-    // a second cycle stack a duplicate request onto the family's budget.
+    // No snapshot: ask the schedule directly rather than reporting "nothing queued".
     : (await import('./taskSchedule.js')
       .then(({ getOnDemandRequests }) => getOnDemandRequests())
       .catch(() => []))
@@ -403,27 +309,19 @@ async function queuedOnDemandReason(queued, taskType, appId) {
 }
 
 /**
- * Invoke one burn step. Returns the registry's dispatch shape —
- * `{ dispatched, summary?, reason?, detail?, awaiting? }` — so the runner's
- * accounting, run log and skip reporting read identically whichever reference
- * shape ran.
+ * Invoke one burn step. Returns the registry's dispatch shape
+ * `{ dispatched, summary?, reason?, detail?, awaiting? }`.
  *
- * A decline is reported, never thrown: work that failed to start must not
- * charge the window's cap. `awaiting` says the opposite thing about a dispatch
- * that DID go out: the work is not accepted yet, so the runner reserves the
- * step's place instead of charging it (see `quotaBurnAcceptance.js`).
- *
- * The master Improve switch is refused HERE, in the shared resolution, for all
- * three lanes: the catalog carries the switch, so the page reports it on the
- * same step the dispatch would refuse — and a burn cannot be the one path that
- * spends a subscription while the user has CoS improvement switched off.
+ * A decline is reported, never thrown: work that failed to start must not charge the cap.
+ * `awaiting` marks a dispatch not yet accepted, so the runner reserves instead of charging
+ * (`quotaBurnAcceptance.js`). The master Improve switch is refused HERE for all three lanes
+ * so a burn can't spend while CoS improvement is off.
  */
 export async function invokeQuotaBurnStep({ step, family, candidate, context, force = false, catalog = null, maintenanceRunId = null } = {}) {
   // A forced run is the user clicking this one step: like a manual Run, it is an
-  // explicit choice and is not refused as not-applicable.
+  // A forced run is an explicit choice; not refused as not-applicable.
   const resolved = await resolveQuotaBurnStep(step, catalog, { explicit: force });
-  // The code rides along so a caller can tell "does not apply" (a maintenance
-  // run completes that step as skipped) from a refusal it must hold on.
+  // The code lets a caller tell "does not apply" (skipped) from a refusal to hold on.
   if (resolved.unavailable) return { ...declined(resolved.unavailable.reason), code: resolved.unavailable.code };
 
   if (resolved.kind === 'programmatic') return runProgrammaticStep({ resolved, family, context, force });
@@ -431,12 +329,7 @@ export async function invokeQuotaBurnStep({ step, family, candidate, context, fo
   return runBuiltinTaskStep({ resolved, step, family, candidate, maintenanceRunId });
 }
 
-/**
- * A programmatic handler runs INLINE — PortOS performs the work itself, spawns
- * no agent and consumes no slot, so there is nothing to generate and nothing to
- * wait for. `family` is what keeps the render backend pinned to the window being
- * drained (see `scheduledHandlers/index.js`).
- */
+/** A programmatic handler runs INLINE: no agent, no slot. `family` pins the render backend (see `scheduledHandlers/index.js`). */
 async function runProgrammaticStep({ resolved, family, context, force }) {
   const { runScheduledHandler } = await import('./scheduledHandlers/index.js');
   return runScheduledHandler({
@@ -450,23 +343,13 @@ async function runProgrammaticStep({ resolved, family, context, force }) {
 }
 
 /**
- * A built-in agent task goes through the schedule's own on-demand lane, so the
- * master Improve gate, the enabled + instance-feature gates, target scope, the
- * per-app switch and invocation eligibility are all enforced by
- * `triggerOnDemandTask` itself rather than restated here — and it reaches them
- * through `evaluateOnDemandEligibility`, the same ladder `resolveQuotaBurnStep`
- * already ran against the catalog. One ladder, two consumers.
- *
- * `force` is NOT passed through: it means "past the quota gates", and the
- * schedule's gates are not quota gates.
+ * A built-in agent task goes through the schedule's on-demand lane, so every gate is
+ * enforced by `triggerOnDemandTask` via `evaluateOnDemandEligibility`, the same ladder
+ * `resolveQuotaBurnStep` ran. `force` is NOT passed: it means "past the quota gates".
  */
 async function runBuiltinTaskStep({ resolved, step, family, candidate, maintenanceRunId }) {
-  // Re-checked HERE, not left to the probe: a forced run of a named step skips
-  // the probe entirely (the click IS the selection), and `triggerOnDemandTask`
-  // appends unconditionally — so without this, two forced clicks queue the same
-  // task twice and charge the window's cap twice for one piece of work. The
-  // legacy executor never had this hole because `addTask` deduplicated one step
-  // further down; a request has no such backstop.
+  // Re-checked HERE: a forced run skips the probe and `triggerOnDemandTask` appends
+  // unconditionally, so two forced clicks would double-queue and double-charge.
   const queued = await queuedOnDemandReason(resolved.catalog?.queued, resolved.ref.taskType, resolved.ref.appId);
   if (queued) return declined(queued);
 
@@ -478,56 +361,38 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate, maintenan
   const request = await triggerOnDemandTask(resolved.ref.taskType, resolved.ref.appId, {
     origin: ON_DEMAND_ORIGINS.QUOTA_BURN,
     burn: {
-      // Omitted, not null, when the run spends no subscription window at all —
-      // `normalizeQuotaBurnProvenance` accepts `maintenanceRunId` as the
-      // attribution instead, and a placeholder here would credit this run's
-      // refusals to a family it never touched.
+      // Omitted, not null, when no subscription window is spent (`maintenanceRunId` attributes).
       ...(family.id ? { family: family.id } : {}),
       stepId: step.id,
       limitingResetAt: candidate?.limitingResetAt ?? null,
-      // Set only by a MANUAL maintenance run (`maintenanceRun.js`): the mark
-      // that keeps the quota-burn loop from walking its plan on this agent's
-      // completion. Omitted, not null, on an automatic burn.
+      // Set only by a MANUAL maintenance run: keeps the quota-burn loop from walking its plan
+      // on this agent's completion.
       ...(maintenanceRunId ? { maintenanceRunId } : {}),
       overrides: {
-        // The RESOLVED provider, not the step's pin: an unpinned step must still
-        // land on this family's provider rather than the daemon's active one, or
-        // the burn spends a window nobody asked it to.
+        // The RESOLVED provider, not the step's pin, so an unpinned step lands on this family.
         providerId: picked.provider.id,
         model: resolved.effective.model,
         effort: resolved.effective.effort,
         ...(resolved.effective.executionOptions !== undefined ? { executionOptions: resolved.effective.executionOptions } : {}),
-        // The step's run params, which the on-demand engines hand to the
-        // generator as `runOverrides` — layered over the task's saved
-        // `taskMetadata` BEFORE the mode banner and the prompt are built. This
-        // is what carries a migrated issues-only burn's explicit
-        // `fileIssues: true` (#6381); without it the burn would run the
-        // referenced task's SAVED mode and start writing code.
-        // The canonical generator merges saved global and app metadata itself.
-        // Re-sending the global defaults here would overwrite app-specific claim filters.
+        // Run params, handed to the generator as `runOverrides` before the mode banner and
+        // prompt are built (carries a migrated issues-only burn's `fileIssues: true`). The
+        // generator merges saved global/app metadata itself; resending defaults here would
+        // overwrite app-specific claim filters.
         params: step.overrides?.params || {},
       },
     },
   });
   if (request?.error) return declined(request.error);
 
-  // Attribution, not decoration: this shared path serves BOTH the quota-burn
-  // loop and MANUAL maintenance runs (`maintenanceRunId` is set only by
-  // maintenanceRun.js). An unconditional 🔥 line makes a maintenance dispatch
-  // read as quota-burn activity on an install where quota burn is disabled —
-  // the operator cannot tell a feature they turned off from the maintenance
-  // ladder they clicked. Key the wording on the provenance, and name the run.
+  // Shared by the quota-burn loop and MANUAL maintenance runs; key the wording on provenance
+  // so a maintenance dispatch doesn't read as quota-burn activity.
   console.log(maintenanceRunId
     ? `🧹 Maintenance run ${maintenanceRunId} requested scheduled task ${resolved.ref.taskType} (${request.id})`
     : `🔥 Quota-burn requested scheduled task ${resolved.ref.taskType} for ${burnLabel(family)} (${request.id})`);
   return {
     dispatched: true,
-    // The ONLY lane whose acceptance is asynchronous: the request is recorded
-    // now and an on-demand engine generates the task later — or refuses it. The
-    // runner reserves against this instead of charging, and settles the charge
-    // when the request is joined to the task it produced
-    // (`quotaBurnAcceptance.js`). The two synchronous lanes below return no
-    // `awaiting`, because their work is accepted the moment they return.
+    // The only lane with asynchronous acceptance: the runner reserves instead of charging and
+    // settles when the request joins its task (`quotaBurnAcceptance.js`).
     awaiting: { requestId: request.id },
     summary: `Requested "${resolved.ref.taskType}"${resolved.ref.appId ? ` for ${resolved.ref.appId}` : ''}`,
     detail: {
@@ -543,20 +408,14 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate, maintenan
 }
 
 /**
- * A custom app job is generated by the job's own generator and queued with
- * `addTask` — the same pair the scheduled fire uses — carrying the step's
- * provider/model/effort overrides and the burn provenance.
- *
- * `approvalRequired` follows the job's autonomy level (already gated to `yolo`
- * above, so it lands `false` legitimately rather than by bypass); no
- * `forceSpawnTask`, and a blocked twin is reported as a decline instead of
- * revived. See this module's header for why each of those matters.
+ * A custom app job is generated by the job's generator and queued with `addTask`, carrying
+ * the step's overrides and burn provenance. `approvalRequired` follows the job's autonomy
+ * level (already gated to `yolo`); no `forceSpawnTask`, no reviving a blocked twin.
  */
 async function runCustomJobStep({ resolved, step, family, candidate, maintenanceRunId }) {
   const approval = unattendedApprovalRefusal(resolved.job);
   if (approval) return declined(approval);
-  // `addTask`'s duplicate detection catches an identical QUEUED twin below, but
-  // not one already mid-spawn — and a forced run reaches here with no probe.
+  // `addTask` dedup catches a QUEUED twin but not one mid-spawn; a forced run has no probe.
   const active = await activeCustomJobReason(resolved.job);
   if (active) return declined(active);
   const picked = await resolveStepProvider(resolved.effective, family);
@@ -568,30 +427,21 @@ async function runCustomJobStep({ resolved, step, family, candidate, maintenance
   ]);
   const generated = await generateTaskFromJob(resolved.job);
   const persisted = await addTask({
-    // The generator's own field projection, shared with the manual endpoint so
-    // a key added to `generateTaskFromJob` cannot reach one lane and not the
-    // other. Everything below OVERRIDES it — that is where the two legitimately
-    // differ.
+    // Shared field projection with the manual endpoint; what follows deliberately overrides it.
     ...generatedJobTaskFields(generated),
-    // The queued task's context names who asked for it — a maintenance run's
-    // dispatch must not read as a quota-burn spend on the task card.
+    // Names who asked for it, so a maintenance dispatch doesn't read as a quota-burn spend.
     context: maintenanceRunId
       ? `Maintenance run ${maintenanceRunId}: ${resolved.job.name}`
       : `Quota burn (${burnLabel(family)}): ${resolved.job.name}`,
     approvalRequired: !generated.autoApprove,
-    // The step's overrides win over the job's saved pins (see effectiveSettings),
-    // and an unpinned step still lands on THIS family's provider.
+    // Step overrides win over the job's saved pins; an unpinned step lands on THIS family.
     provider: picked.provider.id,
     model: resolved.effective.model || undefined,
     effort: resolved.effective.effort || undefined,
     ...(resolved.effective.executionOptions !== undefined ? { executionOptions: resolved.effective.executionOptions } : {}),
-    // The attribution keys the built-in lane stamps via its request, so
-    // `isCooldownExemptTask`, the completion continuation and the denial ledger
-    // cannot tell the two lanes apart. There is deliberately no
-    // `quotaBurnRequestId`: this lane queues the task synchronously, so no
-    // request ever exists to name — that key records the ASYNC hop, and minting
-    // a fake one would make a join over it silently wrong.
-    // Same "omit, never placeholder" rule as the built-in lane's burn block.
+    // Same attribution keys the built-in lane stamps via its request. No
+    // `quotaBurnRequestId`: that records the ASYNC hop and a fake one would corrupt a join.
+    // Omit, never placeholder.
     ...(family.id ? { quotaBurnFamily: family.id } : {}),
     quotaBurnLimitingResetAt: candidate?.limitingResetAt ?? null,
     quotaBurnStepId: step.id,
@@ -599,12 +449,10 @@ async function runCustomJobStep({ resolved, step, family, candidate, maintenance
   }, 'internal', { suppressDequeue: true });
 
   if (!persisted?.id) return declined(`"${resolved.job.name}" was not queued`);
-  // A blocked twin stays blocked: reviving it is the manual endpoint's explicit
-  // retry, and an unattended burn has no such intent to express.
+  // A blocked twin stays blocked: reviving is the manual endpoint's explicit retry.
   if (persisted.duplicate) return declined(`an identical "${resolved.job.name}" task is already ${persisted.status}`);
 
-  // Same attribution rule as the built-in lane above: a maintenance run's
-  // custom-job dispatch must not wear the 🔥 quota-burn wording.
+  // Same attribution rule as the built-in lane.
   console.log(maintenanceRunId
     ? `🧹 Maintenance run ${maintenanceRunId} queued custom job ${resolved.job.id} as task ${persisted.id}`
     : `🔥 Quota-burn queued custom job ${resolved.job.id} as task ${persisted.id} for ${burnLabel(family)}`);

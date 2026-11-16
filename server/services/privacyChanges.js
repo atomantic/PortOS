@@ -1,7 +1,9 @@
 /**
  * Change-of-address inventory workflow (issue #2143, epic #2138).
  *
- * db-primary Postgres per docs/STORAGE.md: one row per declared change in
+ * Storage: `db-primary` — machine-local, never federated, by product guarantee (see below).
+ *
+ * One row per declared change in
  * `privacy_change_events`. The workflow is: the user declares "field X changed
  * from A to B" — the OLD vault record is marked `previous` (+ `valid_to`), a
  * replacement record is created/linked, and EVERY `current` holding of the old

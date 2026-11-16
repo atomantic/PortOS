@@ -112,3 +112,13 @@ describe('framing-aware creative bible', () => {
     expect(text).toContain('Wide framing:');
   });
 });
+
+describe('musicVideoCreativeContext with a roster above the old 24 cap (#16196)', () => {
+  it('stays within the bible bound however many subjects the video holds', () => {
+    const subjects = Array.from({ length: 80 }, (_, i) => ({ id: `s${i}`, kind: 'place', name: `Place ${i}`, description: 'x'.repeat(400) }));
+    const small = musicVideoCreativeContext({ subjects: subjects.slice(0, 24) });
+    const big = musicVideoCreativeContext({ subjects });
+    expect(big.length).toBeLessThanOrEqual(6000);
+    expect(big).toBe(small);
+  });
+});

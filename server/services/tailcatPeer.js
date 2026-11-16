@@ -11,6 +11,10 @@
  * forwards file for restart and retry; never log the full value, never put it on
  * the peer record that clients or peers can scrape, never return it from an API
  * response, and never ship it in docs/tests.
+ *
+ * Storage: `file-primary` (`data/tailcat-forwards.json`) — machine-local, never
+ * federated: rows hold bearer `tc…` capabilities. A row is written before the
+ * forward starts so a failed add stays retryable.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -39,13 +43,8 @@ import {
 import { ensureTailcatInstalled, primeDerpMapCache } from './tailcatRuntime.js';
 import { isValidTcAddress, redactTcAddress, redactTailcatDiagnostics } from '../lib/tailcatAddress.js';
 
-// Compatibility for existing callers; shared implementations live with their owners.
-export { MIN_TAILCAT_VERSION } from '../lib/tailcatVersion.js';
-export {
-  listCandidateTailcatBins, readTailcatBinaryVersion, detectTailcat, findTooOldTailcat,
-  manualInstallHint, listTailcatInstallers, ensureTailcatInstalled, derpMapCachePath, primeDerpMapCache,
-} from './tailcatRuntime.js';
-export { isValidTcAddress, redactTcAddress, redactTailcatDiagnostics } from '../lib/tailcatAddress.js';
+// Shared implementations live with their owners (tailcatAddress.js).
+export { isValidTcAddress } from '../lib/tailcatAddress.js';
 
 const FORWARDS_FILE = dataPath('tailcat-forwards.json');
 const FORWARD_READY_MS = 8_000;

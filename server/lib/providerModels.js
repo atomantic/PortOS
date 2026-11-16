@@ -1,61 +1,5 @@
 /**
  * Shared sentinel and helpers for provider model resolution.
- *
- * Provider model resolution sentinels + helpers (`CODEX_CONFIGURED_DEFAULT` /
- * `ANTIGRAVITY_CONFIGURED_DEFAULT` / `GROK_CONFIGURED_DEFAULT` / `KIMI_CONFIGURED_DEFAULT`,
- * `resolveCliModel`, `filterSelectableModels`, Bedrock/OpenCode model mappers,
- * `localRuntimeNamespace(provider)` — the OpenCode namespace only when it names a LOCAL daemon, i.e.
- * the composed "namespace and not a hosted gateway" test that `cliChildEnv.js`,
- * `localProviderRuntime.js` and `providerVendors.js` all key on, `CODEX_OSS_LOCAL_PROVIDERS` /
- * `CODEX_OSS_MIN_VERSION` / `codexOssLocalProvider` / `codexUnsupportedLocalRuntime` — the codex half
- * of that same axis: which local runtimes Codex's `--local-provider` can serve, and which marked
- * runtime it cannot, kept here beside the namespace they wrap so `providerPrerequisites.js` classifies
- * a codex record without importing `codex.js` (the argv emitter, `buildCodexOssArgs`, stays there),
- * `OPENCODE_PUBLIC_REVIEW_AGENT` — the read-only OpenCode agent a no-tool public-review stage runs as,
- * kept in this leaf because `providerVendors.js` must not import `opencodeConfig.js`,
- * `parseOpencodeConfigContent` — the shared "is this stored OPENCODE_CONFIG_CONTENT usable?" read —
- * plus `opencodeConfigIsLocalOnly` / `opencodeProviderIsLocalOnly`, the ONE locality rule
- * `providerVendors.js` (gate eligibility) and `cliChildEnv.js` (public-review env allowlist) must not
- * disagree about: if eligibility says yes where the allowlist strips the config, the stage spawns
- * against the user's own ~/.config/opencode with tools intact while still reporting an enforced
- * tool-free gate, `normalizeClaudeModelId` / `resolveClaudeCliModel` — the Claude-argv chokepoint that
- * rewrites a dotted first-party version (`claude-fable-5.1`) to the dashed id Claude Code actually
- * serves before the Bedrock mapping runs, model-flag scan helpers incl. `stripBrokenModelFlags` and
- * `stripProviderPinArgs` (explicit per-run selections override baked CLI pins), `isCodexProvider`,
- * `isKimiProvider`, `isAntigravityProvider`, `isCursorProvider`) plus the agy catalog family, which
- * reads an `agy models` list as base ids paired with effort tiers (`splitAntigravityModel`,
- * `antigravityBaseModels`, `antigravityModelEffortLevels`, `antigravityCatalogListsModel` — is a
- * stored pin still served? — and `pickAntigravityRelayModel` — the cheapest tier to relay one tool
- * call on when a vendor retires the pin PortOS shipped) plus reasoning-effort helpers for the
- * claude/codex/agy/cursor CLIs (`CLAUDE_EFFORT_LEVELS` / `CODEX_EFFORT_LEVELS` /
- * `ANTIGRAVITY_EFFORT_LEVELS` / `CURSOR_EFFORT_LEVELS` / `EFFORT_LEVELS`, `effortLevelsForProvider`,
- * `resolveCliEffort` — clamps an out-of-range effort to the nearest level the target CLI accepts
- * rather than dropping it, so a value saved against a wider ladder survives a provider switch —
- * `clampEffortToLadder` (that clamp over an explicit ladder; the client's own `resolveCliEffort` runs
- * its published-field ladder through it), `hasEffortFlag`, `buildEffortArgs` — the one emitter of
- * `--effort <level>` / `-c model_reasoning_effort=<level>`, and deliberately silent for cursor — and
- * `foldCursorEffortIntoModel`, which carries a cursor level inside `--model` as Cursor’s own variant
- * syntax (`gpt-5[effort=max]`) because `cursor-agent` has no `--effort` flag) plus codex startup-arg
- * helpers (`CODEX_EFFORT_KEY`, `CODEX_UPDATE_CHECK_KEY`, `hasCodexUpdateCheckConfig`,
- * `buildCodexStartupArgs` — the one emitter of `-c check_for_update_on_startup=false`, spread by every
- * codex spawn builder to disable the blocking startup update modal) plus `PORTOS_CLI_CONFIG_KEYS` /
- * `isPortosSuppliedConfigKey` — the exhaustive list of `-c <key>=<value>` config keys PortOS injects,
- * read by the `cli-config-invalid` error analyzer to tell a rejected PortOS override apart from a bad
- * line in the user's own CLI config file.; `isOpencodeLocalProvider` (the
- * OpenCode-on-a-local-backend-or-gateway gate behind the OpenCode effort ladder) and
- * `isCodexSubscriptionProvider` (the ChatGPT-subscription readiness key, housed here so the browser
- * re-export skips `codexAccount.js`'s protocol tables)
- *
- * Pure leaf (no Node built-ins, nothing outside server/lib), so the browser
- * imports it: client/src/utils/providerModels.js re-exports the sentinels,
- * effort ladders and the Antigravity split, and delegates its own ladder
- * resolution to `effortLevelsForProvider` / `clampEffortToLadder`;
- * client/src/utils/providerTypes.js re-exports the `isXProvider` predicates,
- * `commandBasename`, `localRuntimeNamespace`, `isOpencodeLocalProvider` and
- * `isCodexSubscriptionProvider`. One caveat the purity guard
- * cannot see: the Bedrock / Claude-argv resolvers below default to
- * `process.env`, so they are server-only — never call them from the browser
- * (they tree-shake out unless something does).
  */
 
 import { gatewayIdForProvider, isGatewayNamespace } from './providerGateways.js';
@@ -64,12 +8,11 @@ import { isPlainObject } from './objects.js';
 
 export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
-// Legacy opt-in sentinel: shipped Grok Build providers now pin a concrete model
-// so displayed model, execution, and planner attribution agree.
+// Legacy opt-in sentinel: shipped Grok Build providers now pin a concrete model so displayed
+// model, execution, and planner attribution agree.
 export const GROK_CONFIGURED_DEFAULT = 'grok-configured-default';
-// Kimi Code CLI/TUI: same posture as Grok/Antigravity — PortOS does not select a
-// model; the local `kimi` binary uses its own configured default. Stored as a
-// sentinel so pickers hide the model dropdown.
+// Kimi Code CLI/TUI: same posture as Grok/Antigravity — PortOS does not select a model; the local
+// `kimi` binary uses its own configured default.
 export const KIMI_CONFIGURED_DEFAULT = 'kimi-configured-default';
 
 const CONFIGURED_DEFAULT_SENTINELS = new Set([
@@ -85,12 +28,8 @@ export const isCodexConfiguredDefault = (model) => model === CODEX_CONFIGURED_DE
 export const isConfiguredDefaultModel = (model) => CONFIGURED_DEFAULT_SENTINELS.has(model);
 
 /**
- * Normalize a provider `command` to its lowercase binary basename, stripping any
- * directory prefix and a Windows `.exe` suffix — e.g. `/opt/homebrew/bin/Grok.exe`
- * → `grok`. Returns `''` for empty/non-string input. The shared primitive behind
- * `isClaudeCommand`/`isOpencodeCommand`/`isGrokCommand` so the split/pop/case/.exe
- * rule lives in exactly one place. (Only `.exe` is stripped, matching the runner's
- * `shell:false` spawn path — a `.cmd`/`.bat` shim isn't directly spawnable.)
+ * Normalize a provider `command` to its lowercase binary basename, stripping any directory prefix
+ * and a Windows `.exe` suffix — e.g. `/opt/homebrew/bin/Grok.exe` → `grok`. Returns `''` for empty/non-string input.
  * @param {string|null|undefined} command
  * @returns {string}
  */
@@ -100,13 +39,8 @@ export function commandBasename(command) {
 }
 
 /**
- * True when argv contains any of `flags`, in either separated (`--flag`) or
- * joined (`--flag=value`) form. The generic scan behind the per-vendor argv
- * builders (`grok.js`, `kimi.js`, `cursor.js`), which each carried a private
- * byte-identical copy until the third one made it a rule. Lives here next to
- * its siblings `hasModelFlag` / `hasEffortFlag` / `hasCodexUpdateCheckConfig`,
- * so a fix to the matching rule is one edit rather than an N-file sweep.
- * Non-string argv entries are skipped.
+ * True when argv contains any of `flags`, in either separated (`--flag`) or joined
+ * (`--flag=value`) form.
  * @param {unknown[]} args
  * @param {string[]} flags
  * @returns {boolean}
@@ -116,19 +50,7 @@ export function argvHasFlag(args = [], flags = []) {
 }
 
 /**
- * Put a POSITIONAL subcommand at the head of an argv unless it is already
- * there. Several vendors select headless mode with a bare word rather than a
- * flag — `opencode run`, `kilo run`, `openchamber session create` — and every
- * one of them has the same failure when it is missing: the bare binary opens an
- * interactive session that never consumes the piped prompt and hangs until the
- * provider timeout fires (issue #2190's shape for OpenCode).
- *
- * Presence is tested on the FIRST token only, so a record that pinned
- * `session send` keeps the subcommand the user chose instead of being rewritten
- * to `session create`. The check is `includes` rather than `args[0] ===` to
- * match what the three hand-written copies of this did before it became a rule:
- * a legacy record may carry a leading global flag ahead of the subcommand.
- *
+ * Put a POSITIONAL subcommand at the head of an argv unless it is already there.
  * @param {unknown[]} args
  * @param {string|string[]} subcommand - one word, or the words of a nested one
  * @returns {string[]} a new array; `args` is never mutated
@@ -139,36 +61,18 @@ export function ensureLeadingSubcommand(args = [], subcommand) {
 }
 
 /**
- * Returns the model string to pass to a CLI's --model flag, or null if the
- * caller should omit --model entirely (configured-default sentinels — the CLI
- * uses its own default: Codex via ~/.codex/config.toml, Antigravity/Grok Build
- * via the binary's built-in latest model).
+ * Returns the model string to pass to a CLI's --model flag, or null if the caller should omit
+ * --model entirely (configured-default sentinels — the CLI uses its own default: Codex via
+ * ~/.codex/config.toml, Antigravity/Grok Build via the binary's built-in latest model).
  * @param {string|null|undefined} model
  * @returns {string|null}
  */
 export const resolveCliModel = (model) => isConfiguredDefaultModel(model) ? null : (model || null);
 
-// ---------------------------------------------------------------------------
-// Reasoning-effort levels — Claude Code (`--effort <level>`), Antigravity
-// (`--effort <level>`) and Codex (`-c model_reasoning_effort=<level>`) all
-// accept a per-invocation override of how hard the model thinks. Value sets
-// verified against claude CLI v2.1.x (`--help`), current Codex CLI config
-// values (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, plus
-// model-gated `ultra`). agy 1.5.7 advertises low|medium|high|xhigh|max;
-// its model catalog currently exposes tiers through xhigh (Hydrogen).
-// Re-exported by client/src/utils/providerModels.js, whose own
-// `effortLevelsForProvider` layers the server-published `effortLevels` /
-// `effortLevelsByModel` fields on top of these ladders.
-//
-// Codex Ultra adds automatic task delegation on the models that advertise it.
-// Keep it model-gated: older Codex models and Luna top out at `max`.
-//
-// `minimal` is model-gated the other way — it is a gpt-5-era rung that the
-// gpt-6 family dropped. See CODEX_NO_MINIMAL_MODEL_RE below.
-//
-// `none` is a real codex variant but is deliberately NOT offered: it means "do
-// not reason at all", which no PortOS effort control should be able to select.
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Reasoning-effort
+// levels — Claude Code (`--effort <level>`), Antigravity (`--effort <level>`) and Codex (`-c
+// model_reasoning_effort=<level>`) all accept a per-invocation override of how hard the model
+// thinks.
 
 export const CLAUDE_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 export const CODEX_EFFORT_LEVELS = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
@@ -176,33 +80,19 @@ export const CODEX_ULTRA_EFFORT_LEVELS = Object.freeze([...CODEX_EFFORT_LEVELS, 
 export const ANTIGRAVITY_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh']);
 // Preserve older CLI defaults when no concrete catalog/model proves xhigh support.
 const ANTIGRAVITY_FALLBACK_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']);
-// OpenCode forwards this narrow OpenAI-compatible ladder as `reasoningEffort`
-// to whichever local backend it is wired to (Ollama, llama.cpp, MTPLX,
-// OrcaRouter). Keep it separate from vendor-CLI-only levels.
+// OpenCode forwards this narrow OpenAI-compatible ladder as `reasoningEffort` to whichever local
+// backend it is wired to (Ollama, llama.cpp, MTPLX, OrcaRouter).
 export const OPENCODE_LOCAL_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']);
 
-// A model behind that gateway can still refuse a rung of the ladder above: the
-// value is forwarded verbatim to the upstream vendor, whose own contract
-// decides. NVIDIA NIM answers Moonshot's Kimi K3 with HTTP 400
-// `Unsupported Kimi K3 thinking_effort="medium"; supported values are low,
-// high, and max` — so an effort the picker offered wedged the agent at launch
-// with the prompt still sitting in the TUI (the same failure shape as codex's
-// `minimal` rejection above, and handled the same way).
-//
-// Keyed on the MODEL, not the gateway: the rejection is Moonshot's contract,
-// so it holds for Kimi K3 behind NIM, OpenRouter, or any other front end.
-// Matched as a family prefix for the reason CODEX_NO_MINIMAL_MODEL_RE is —
-// missing a new spelling reships the 400, while over-matching a build that
-// would have taken `medium` only clamps it one rung down to `low`.
+// A model behind that gateway can still refuse a rung of the ladder above: the value is forwarded
+// verbatim to the upstream vendor, whose own contract decides.
 const OPENCODE_MODEL_EFFORT_LEVELS = Object.freeze([
   Object.freeze([/(^|\/)kimi-k3([.-]|$)/, Object.freeze(['low', 'high', 'max'])]),
 ]);
 
 /**
- * The effort ladder an OpenCode run offers for one model — the portable
- * low/medium/high set, narrowed for the models whose upstream vendor rejects a
- * rung of it. A blank/unknown model gets the full ladder (never an empty one:
- * "we do not know this model" must not read as "this model has no effort").
+ * The effort ladder an OpenCode run offers for one model — the portable low/medium/high set,
+ * narrowed for the models whose upstream vendor rejects a rung of it.
  * @param {string|null|undefined} model - bare or namespace-prefixed id
  * @returns {readonly string[]}
  */
@@ -212,20 +102,9 @@ export function opencodeEffortLevelsForModel(model) {
   return OPENCODE_MODEL_EFFORT_LEVELS.find(([re]) => re.test(id))?.[1] ?? OPENCODE_LOCAL_EFFORT_LEVELS;
 }
 
-// Cursor Agent's ladder. Cursor has NO `--effort` flag — the level is a
-// parameter of the model id itself (`gpt-5[effort=max]`), folded in by
-// `foldCursorEffortIntoModel` — so `buildEffortArgs` deliberately emits nothing
-// for cursor while this ladder still drives every picker. The tier NAMES are
-// slashdo's documented `~effort=<level>` set (`low|medium|high|xhigh|max`), which
-// is what `--review-with cursor[gpt-5]~effort=max` parses; keeping them
-// identical is the point, since the same pin has to survive a round trip
-// through slashdo.
+// Cursor Agent's ladder.
 export const CURSOR_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
-// Grok Build CLI. `--reasoning-effort <EFFORT>` (aliased `--effort`, which is what
-// `buildEffortArgs` emits). The ladder is grok's own, read off its rejection
-// message rather than guessed: `grok --reasoning-effort bogus` answers
-// `use one of: xhigh, high, medium, low` — so there is no `max`/`minimal` here,
-// and `resolveCliEffort` clamps a stored `max`/`ultra` down to `xhigh`.
+// Grok Build CLI.
 export const GROK_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh']);
 
 /** Union of every accepted effort value across effort-capable CLIs, low→high. */
@@ -238,16 +117,7 @@ export const EFFORT_LEVELS = Object.freeze([...new Set([
 
 const CODEX_ULTRA_MODELS = new Set(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra']);
 
-// Models that REJECT `minimal`. The gpt-6 family dropped the rung: codex
-// against `gpt-6-astra` answers HTTP 400 `unsupported_value` — "'minimal' is
-// not supported with the 'gpt-6-astra' model. Supported values are: 'low',
-// 'medium', 'high', 'xhigh', and 'max'." — so a picker that offers it hands the
-// user a level whose only outcome is a failed run.
-//
-// Matched as a FAMILY prefix rather than an id list, deliberately: the two
-// failure directions are not symmetric. Missing a new gpt-6/7 model ships that
-// 400 again, while over-matching a model that does still accept `minimal` costs
-// it only its weakest rung (a stored `minimal` clamps up to `low`).
+// Models that REJECT `minimal`.
 const CODEX_NO_MINIMAL_MODEL_RE = /^gpt-[6-9]([.-]|$)/;
 
 const withoutMinimal = (levels) => Object.freeze(levels.filter((l) => l !== 'minimal'));
@@ -263,30 +133,14 @@ export const codexEffortLevelsForModel = (model) => {
   return ultra ? CODEX_ULTRA_EFFORT_LEVELS : CODEX_EFFORT_LEVELS;
 };
 
-// ---------------------------------------------------------------------------
-// Antigravity base-model ↔ effort-suffix split.
-//
-// `agy models` enumerates the effort tiers as separate model ids
-// (`gemini-3.6-flash-low|-medium|-high`), which forces the user to pick their
-// reasoning effort *inside* the model dropdown. agy also accepts the BASE id
-// with a separate `--effort` flag (`--model gemini-3.6-flash --effort high`) —
-// verified against the real binary — so PortOS lists base models and carries
-// effort as its own control.
-//
-// agy validates the PAIR, though: `--model gemini-3.1-pro --effort medium`
-// errors with `gemini-3.1-pro has no "medium" effort (available: low, high)`.
-// So the tiers a base model offers are derived from the provider's own model
-// catalog rather than assumed to be the full harness ladder.
-// Re-exported by client/src/utils/providerModels.js.
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------- Antigravity
+// base-model ↔ effort-suffix split.
 
 const ANTIGRAVITY_EFFORT_SUFFIX_RE = new RegExp(`-(${ANTIGRAVITY_EFFORT_LEVELS.join('|')})$`);
 
 /**
  * Split an Antigravity model id into its base id and baked-in effort tier —
  * `gemini-3.6-flash-high` → `{ base: 'gemini-3.6-flash', effort: 'high' }`.
- * Ids with no effort suffix (`claude-sonnet-4-6`), configured-default sentinels,
- * and non-strings come back as `{ base: <input>, effort: null }`.
  * @param {string|null|undefined} id
  * @returns {{base: string|null|undefined, effort: string|null}}
  */
@@ -301,10 +155,8 @@ export function splitAntigravityModel(id) {
 }
 
 /**
- * The user-selectable view of an Antigravity model list: effort suffixes
- * stripped, duplicates collapsed, original order preserved. Configured-default
- * sentinels and non-string entries (`{ id, name }` objects some pickers pass)
- * ride through untouched so callers can hand this any `provider.models`.
+ * The user-selectable view of an Antigravity model list: effort suffixes stripped, duplicates
+ * collapsed, original order preserved.
  * @param {unknown[]} models
  * @returns {unknown[]}
  */
@@ -325,17 +177,13 @@ export function antigravityBaseModels(models) {
 }
 
 /**
- * The effort tiers an Antigravity base model actually offers, read off the
- * provider's own model catalog:
- *   - `['low','high']` — the suffixed variants present for that base.
- *   - `[]`             — the base is in the catalog with no suffixed variants
- *                        (`claude-sonnet-4-6`): agy has no effort knob for it.
- *   - `null`           — the model is UNKNOWN (blank, the configured-default
- *                        sentinel, or an empty catalog), so the caller should
- *                        fall back to the legacy ladder rather than assume none.
- *                        The sentinel case matters: it is the shipped agy
- *                        `defaultModel`, and reporting `[]` for it would hide
- *                        the effort control on every freshly-opened picker.
+ * The effort tiers an Antigravity base model actually offers, read off the provider's own model
+ * catalog:
+ * - `['low','high']`: the suffixed variants present for that base.
+ * - `[]`: the base is in the catalog with no suffixed variants (`claude-sonnet-4-6`); agy has no
+ *   effort knob for it.
+ * - `null`: the model is UNKNOWN (blank, the configured-default sentinel, or an empty catalog), so
+ *   the caller should fall back to the legacy ladder rather than assume none.
  * @param {string|null|undefined} model - base or suffixed model id
  * @param {unknown[]} models - the provider's model list
  * @returns {readonly string[]|null}
@@ -351,17 +199,6 @@ export function antigravityModelEffortLevels(model, models) {
 
 /**
  * Is `id` a model the install's agy catalog still lists?
- *
- * Compared on BASE ids: once `--effort` carries the tier, `gemini-3.6-flash`
- * and `gemini-3.6-flash-low` are the same `--model` value, and a tier the base
- * does not offer is clamped by `antigravityModelEffortLevels` rather than being
- * a different model.
- *
- * An EMPTY catalog answers `true`. "We have no catalog" must never read as "the
- * model is gone" — the list is empty on a fresh install, when the provider
- * service isn't initialized, and whenever the `agy models` probe failed — and a
- * false negative there would swap out a model that works.
- *
  * @param {string} id - base or suffixed model id (a blank one reads as unlisted;
  *   callers ask this about a pin they already hold)
  * @param {unknown[]|null|undefined} models - the provider's model catalog
@@ -373,27 +210,9 @@ export function antigravityCatalogListsModel(id, models) {
 }
 
 /**
- * The cheapest catalog entry that can drive an unattended agy relay — the tier
- * to pick on the user's behalf when an agent is needed only to issue one tool
- * call and does no creative work of its own. Today's caller is image gen's
- * shipped pin, `AGY_IMAGEGEN_DEFAULT_MODEL`, whose comment carries the whole
- * rationale and the incident that made a frozen id untenable.
- *
- * Re-derives that choice from whatever the catalog currently holds, in agy's
- * own listed order (newest first):
- *
- *   1. a flash model at the weakest effort tier — cheapest, and empirically
- *      enough to relay a tool call;
- *   2. any model at that tier, when no flash model is listed at all;
- *   3. any flash model, when the catalog exposes no effort suffixes;
- *   4. `null` — nothing cheap is listed, so the caller keeps what it had rather
- *      than escalating onto a reasoning-heavy tier (`claude-opus-4-6-thinking`)
- *      behind the user's back.
- *
- * The tier is read off `ANTIGRAVITY_EFFORT_LEVELS` rather than spelled `low`,
- * so a renamed ladder moves this with it. "flash" stays a literal: it is
- * Google's own family name, not something PortOS derives.
- *
+ * The cheapest catalog entry that can drive an unattended agy relay — the tier to pick on the
+ * user's behalf when an agent is needed only to issue one tool call and does no creative work of
+ * its own.
  * @param {unknown[]|null|undefined} models - the provider's model catalog
  * @returns {string|null}
  */
@@ -409,10 +228,8 @@ export function pickAntigravityRelayModel(models) {
 }
 
 /**
- * True when a provider is codex-flavored — the shipped `codex`/`codex-tui`
- * provider ids or any provider whose launch command basename is `codex`
- * (path/exe tolerant). The single home for the codex signature, same posture
- * as `isClaudeCommand`/`isOpencodeCommand`.
+ * True when a provider is codex-flavored — the shipped `codex`/`codex-tui` provider ids or any
+ * provider whose launch command basename is `codex` (path/exe tolerant).
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @returns {boolean}
  */
@@ -422,25 +239,9 @@ export function isCodexProvider(provider) {
 }
 
 /**
- * True when a CLI/TUI record runs on Codex's ChatGPT subscription — what the
- * account half of the Codex providers (`codexAccount.js`, #5589) keys its
- * readiness on.
- *
- * Keyed on the COMMAND, not the id: a user who cloned `codex` into
- * `codex-review` still runs the same binary against the same ChatGPT sign-in,
- * and hard-coding two ids would leave that card blank. API providers are
- * excluded — an OpenAI API-key provider authenticates with its own stored key
- * and has nothing to do with a subscription. So is a local-runtime-backed codex
- * record (`codex --oss --local-provider ollama`): it generates its tokens on
- * this machine and authenticates against nothing, and without that exclusion
- * the card would paint "No ChatGPT account is signed in" on a provider that
- * needs no account and sit in UNKNOWN until an account read that will never
- * matter answers.
- *
- * Lives here rather than in `codexAccount.js` so the browser, which re-exports
- * it through client/src/utils/providerTypes.js, does not also carry that
- * module's frozen protocol tables — top-level `Object.freeze` calls the bundler
- * cannot shake.
+ * Keyed on the COMMAND, not the id: a user who cloned `codex` into `codex-review` still runs the
+ * same binary against the same ChatGPT sign-in, and hard-coding two ids would leave that card
+ * blank.
  * @param {{type?:string, command?:string}|null|undefined} provider
  * @returns {boolean}
  */
@@ -453,13 +254,8 @@ export function isCodexSubscriptionProvider(provider) {
 }
 
 /**
- * True when a provider is Grok-Build-flavored — the shipped `grok-cli`/`grok-tui`
- * ids or any provider whose launch command basename is `grok`. Same posture as
- * `isCodexProvider`, and deliberately defined here rather than imported from
- * `grok.js`: that module imports THIS one, so importing back would cycle.
- *
- * The bare `grok` id is the HTTP API provider, which has no CLI to pass a flag
- * to — it is excluded so it gets no effort ladder.
+ * True when a provider is Grok-Build-flavored — the shipped `grok-cli`/`grok-tui` ids or any
+ * provider whose launch command basename is `grok`.
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @returns {boolean}
  */
@@ -469,13 +265,8 @@ export function isGrokProvider(provider) {
 }
 
 /**
- * True when a provider is Claude-Code-flavored — a `claude-code*` provider id or
- * any provider whose launch command basename is `claude` (path/exe tolerant).
- *
- * Unlike `isClaudeCommand`, a BLANK command does not count: this identifies a
- * provider positively, and callers that gate a Claude-only capability on it must
- * not treat "unknown" as Claude. Same posture as `effortLevelsForProvider`, which
- * this replaces the inline copy of.
+ * True when a provider is Claude-Code-flavored — a `claude-code*` provider id or any provider
+ * whose launch command basename is `claude` (path/exe tolerant).
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @returns {boolean}
  */
@@ -486,10 +277,8 @@ export function isClaudeProvider(provider) {
 }
 
 /**
- * True when a provider is OpenCode-flavored — the shipped `opencode`/`opencode-tui`
- * ids or any provider whose launch command basename is `opencode`. The
- * provider-shaped companion to `isOpencodeCommand`, same posture as
- * `isCodexProvider`.
+ * True when a provider is OpenCode-flavored — the shipped `opencode`/`opencode-tui` ids or any
+ * provider whose launch command basename is `opencode`.
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @returns {boolean}
  */
@@ -499,10 +288,8 @@ export function isOpencodeProvider(provider) {
 }
 
 /**
- * True when a provider is Kimi-Code-flavored — the shipped `kimi-cli`/`kimi-tui`
- * ids or any provider whose launch command basename is `kimi` (path/exe tolerant).
- * The single home for the kimi signature, same posture as `isCodexProvider`.
- * Re-exported by client/src/utils/providerTypes.js, so it stays browser-safe.
+ * True when a provider is Kimi-Code-flavored — the shipped `kimi-cli`/`kimi-tui` ids or any
+ * provider whose launch command basename is `kimi` (path/exe tolerant).
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @returns {boolean}
  */
@@ -512,20 +299,13 @@ export function isKimiProvider(provider) {
 }
 
 /**
- * True when a provider is Antigravity-flavored — the shipped
- * `antigravity-cli`/`antigravity-tui` ids or any provider whose launch command
- * basename is `agy`/`antigravity` (path/exe tolerant). The provider-shaped
- * companion to `isAntigravityCommand` in antigravity.js; lives here (rather
- * than there) so `effortLevelsForProvider` can key on it without this
- * dependency-light module importing a sibling. Re-exported by
- * client/src/utils/providerTypes.js, so it stays browser-safe.
+ * True when a provider is Antigravity-flavored — the shipped `antigravity-cli`/`antigravity-tui`
+ * ids or any provider whose launch command basename is `agy`/`antigravity` (path/exe tolerant).
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @returns {boolean}
  */
 export function isAntigravityProvider(provider) {
   if (!provider) return false;
-  // A composite/derived record names its harness outright (#7564) and may
-  // carry no command at all, so the harness id is the first word.
   if (provider.harnessId === 'antigravity') return true;
   const id = String(provider.id || '').toLowerCase();
   if (id === 'antigravity-cli' || id === 'antigravity-tui') return true;
@@ -534,17 +314,8 @@ export function isAntigravityProvider(provider) {
 }
 
 /**
- * True when a provider is Cursor-Agent-flavored — the shipped `cursor-cli` /
- * `cursor-tui` ids or any provider whose launch command basename is
- * `cursor-agent` (path/exe tolerant). The provider-shaped companion to
- * `isCursorCommand` in cursor.js; lives here (rather than there) for the same
- * reason `isAntigravityProvider` does — so `effortLevelsForProvider` and
- * `buildEffortArgs` can key on it without this dependency-light module importing
- * a sibling vendor file that already imports IT.
- *
- * Deliberately never matches a bare `cursor` command: that is Cursor's GUI
- * editor launcher, not the agent binary (see cursor.js).
- * Re-exported by client/src/utils/providerTypes.js, so it stays browser-safe.
+ * True when a provider is Cursor-Agent-flavored — the shipped `cursor-cli` / `cursor-tui` ids or
+ * any provider whose launch command basename is `cursor-agent` (path/exe tolerant).
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @returns {boolean}
  */
@@ -555,20 +326,8 @@ export function isCursorProvider(provider) {
 }
 
 /**
- * Fold a reasoning-effort level into a Cursor model id using Cursor's own
- * model-variant syntax, because `cursor-agent` has NO `--effort` flag and exits
- * non-zero when passed one. Three cases, matching slashdo's fold in
- * `lib/local-agent-review-loop.md` exactly (the same pin has to mean the same
- * invocation whether PortOS or slashdo builds it):
- *
- *   - `gpt-5` + `max`                       → `gpt-5[effort=max]`
- *   - `claude-opus-4-7[thinking=true]` + `high` → `claude-opus-4-7[thinking=true,effort=high]`
- *   - a model that ALREADY names `effort=`  → returned unchanged (the explicit
- *     variant the user typed wins over the ladder pin)
- *
- * Returns the model unchanged when there is no effort, and `null` when there is
- * no model — an effort with nothing to attach to is dropped rather than emitted
- * as a flag Cursor would reject.
+ * Fold a reasoning-effort level into a Cursor model id using Cursor's own model-variant syntax,
+ * because `cursor-agent` has NO `--effort` flag and exits non-zero when passed one.
  * @param {string|null|undefined} model
  * @param {string|null|undefined} effort
  * @returns {string|null}
@@ -584,35 +343,14 @@ export function foldCursorEffortIntoModel(model, effort) {
 }
 
 /**
- * The effort levels a provider's CLI accepts, or null when the provider has no
- * effort control (opencode, grok, kimi, HTTP API providers). Keyed on the
- * launch command basename (plus the shipped provider ids) so path-configured or
- * renamed claude/codex/agy providers still qualify — same detection posture as
- * `isClaudeCommand`/`isOpencodeCommand`. A blank command does NOT default to
- * Claude here (unlike `isClaudeCommand`): effort is an opt-in enhancement, and
- * only a provider we can positively identify should advertise levels.
- *
- * `model` narrows the Antigravity ladder to the tiers that base model actually
- * offers (agy rejects `gemini-3.1-pro --effort medium`), read off
- * `provider.models`. It ALSO narrows the OpenCode ladder for a model whose
- * upstream vendor rejects a rung (NVIDIA NIM 400s Kimi K3 on `medium` — see
- * `opencodeEffortLevelsForModel`). Omit it — or leave the catalog empty — to retain the
- * legacy Antigravity ladder (xhigh requires an advertised model tier). Returns null for an Antigravity model the catalog
- * says has no tiers at all (`claude-sonnet-4-6`), so no `--effort` is emitted.
- *
- * A ladder here does NOT imply an `--effort` flag: cursor advertises levels but
- * carries them inside `--model` (`foldCursorEffortIntoModel`), so
- * `buildEffortArgs` returns `[]` for it. Ask this function "can the user pick a
- * level?", and `buildEffortArgs` "what argv does that level become?".
+ * The effort levels a provider's CLI accepts, or null when the provider has no effort control
+ * (opencode, grok, kimi, HTTP API providers).
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
  * @param {string|null} [model]
  * @returns {readonly string[]|null}
  */
 export function effortLevelsForProvider(provider, model = null) {
   if (!provider) return null;
-  // A record materialized from a composite id names its harness (#7564); each
-  // arm honors that before sniffing the command, so a path-configured binary or
-  // a bootstrap-wrapped spawn still offers its rungs.
   const harness = provider.harnessId ?? null;
   if (harness === 'opencode' || isOpencodeLocalProvider(provider)) {
     return isOpencodeLocalProvider(provider) ? opencodeEffortLevelsForModel(model) : null;
@@ -633,21 +371,13 @@ export function effortLevelsForProvider(provider, model = null) {
 /** Pi's reasoning ladder (`pi --effort`). */
 const PI_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 
-// Every effort value any CLI accepts, ordered weakest→strongest. The clamp
-// below walks this so an effort saved against one provider survives a switch to
-// a provider with a narrower ladder (claude has no `minimal`/`ultra`) instead
-// of vanishing.
+// Every effort value any CLI accepts, ordered weakest→strongest.
 const EFFORT_RANK = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
 /**
- * Resolve a stored effort override to the value the provider's CLI actually
- * accepts, or null when the flag should be omitted entirely (no override set,
- * provider has no effort control, or the value isn't a known effort at all).
- * An out-of-range value is clamped to the nearest supported level at or below
- * it (`ultra`→`max` on claude and Codex models without Ultra,
- * `xhigh`/`max`/`ultra`→`high` on agy), falling back to the provider's weakest
- * level when nothing sits below it (`minimal`→`low`) — rather than being
- * dropped.
+ * Resolve a stored effort override to the value the provider's CLI actually accepts, or null when
+ * the flag should be omitted entirely (no override set, provider has no effort control, or the
+ * value isn't a known effort at all).
  * @param {string|null|undefined} effort
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
  * @param {string|null} [model] - narrows the Antigravity ladder (see effortLevelsForProvider)
@@ -658,12 +388,9 @@ export function resolveCliEffort(effort, provider, model = null) {
 }
 
 /**
- * The clamp behind `resolveCliEffort`, over an explicit ladder: the effort
- * itself when `levels` has it, else the nearest supported level below it, else
- * the ladder's weakest — or null when there is no effort, no ladder, or the
- * value is not an effort at all. The client's `resolveCliEffort` clamps its own
- * ladder (which can come from the server-published fields) through this, so
- * the two ends can't rank the rungs differently.
+ * The clamp behind `resolveCliEffort`, over an explicit ladder: the effort itself when `levels`
+ * has it, else the nearest supported level below it, else the ladder's weakest — or null when
+ * there is no effort, no ladder, or the value is not an effort at all.
  * @param {string|null|undefined} effort
  * @param {readonly string[]|null|undefined} levels
  * @returns {string|null}
@@ -679,26 +406,13 @@ export function clampEffortToLadder(effort, levels) {
   return EFFORT_RANK[below.length ? below[below.length - 1] : supported[0]];
 }
 
-// Codex's config key (set via `-c <key>=<value>`) that carries the reasoning
-// effort. Named for the same reason as CODEX_UPDATE_CHECK_KEY below: the string
-// is matched in one place, emitted in another, and read back by the error
-// analyzer when a config rejection has to be blamed on PortOS or on the user.
+// Codex's config key (set via `-c <key>=<value>`) that carries the reasoning effort.
 export const CODEX_EFFORT_KEY = 'model_reasoning_effort';
 
-// Every spelling of the effort flag a provider CLI accepts as a VALUE-taking
-// argument. `--reasoning-effort` is grok's canonical long form (`--effort` is its
-// documented alias, and the alias is what buildEffortArgs emits) — it has to be
-// recognized here or a user who baked `--reasoning-effort high` into their
-// provider args gets a SECOND, injected `--effort <level>` appended. Grok's
-// parser accepts the duplicate and takes the last one, so their explicit pin
-// would be silently overridden — the exact opposite of the contract below.
-// Pi's --thinking is also a value-taking effort pin; shared stripping keeps
-// per-run overrides consistent when switching providers.
+// Every spelling of the effort flag a provider CLI accepts as a VALUE-taking argument.
 const EFFORT_FLAG_NAMES = Object.freeze(['--effort', '--reasoning-effort', '--thinking']);
 
-/** Remove saved model/effort pins only when a caller explicitly owns those selections.
- * Preserve transport, account, permission and unrelated config arguments.
- */
+/** Remove saved model/effort pins only when a caller explicitly owns those selections. */
 export function stripProviderPinArgs(args, { model = false, effort = false } = {}) {
   const flags = [...(model ? ['--model', '-m'] : []), ...(effort ? EFFORT_FLAG_NAMES : [])];
   const configPin = value => typeof value === 'string' && ((model && value.startsWith('model=')) || (effort && value.startsWith(`${CODEX_EFFORT_KEY}=`)));
@@ -718,11 +432,9 @@ export function stripProviderPinArgs(args, { model = false, effort = false } = {
 }
 
 /**
- * True when the user has already baked an effort override into the provider's
- * args — claude/agy/grok's `--effort <level>` / `--effort=<level>`, grok's
- * `--reasoning-effort` long form, or a codex `-c model_reasoning_effort=…`
- * config pair. Mirrors `hasModelFlag`: a baked pin wins and the
- * runner-injected effort is suppressed.
+ * True when the user has already baked an effort override into the provider's args —
+ * claude/agy/grok's `--effort <level>` / `--effort=<level>`, grok's `--reasoning-effort` long
+ * form, or a codex `-c model_reasoning_effort=…` config pair.
  * @param {unknown[]} args
  * @returns {boolean}
  */
@@ -742,17 +454,10 @@ export function hasEffortFlag(args) {
 }
 
 /**
- * The argv fragment that applies an effort override to an effort-capable CLI:
- * `['--effort', <level>]` for claude and agy, `['-c', 'model_reasoning_effort=<level>']`
- * for codex, `[]` when the flag should be omitted (no override, provider has no
- * effort control, or a user-baked pin already sits in `existingArgs`). The one
- * home for both the detection AND the arg shape, so the two can't drift — spawn
- * builders just spread the result.
- *
- * **Cursor always gets `[]`, even though it HAS a ladder.** `cursor-agent`
- * exposes no `--effort` flag and exits non-zero when handed one; its effort is a
- * model-variant parameter, so cursor spawn builders fold the level into
- * `--model` with `foldCursorEffortIntoModel` instead of spreading this.
+ * The argv fragment that applies an effort override to an effort-capable CLI: `['--effort',
+ * <level>]` for claude and agy, `['-c', 'model_reasoning_effort=<level>']` for codex, `[]` when
+ * the flag should be omitted (no override, provider has no effort control, or a user-baked pin
+ * already sits in `existingArgs`).
  * @param {string|null|undefined} effort
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
  * @param {unknown[]} [existingArgs]
@@ -769,13 +474,9 @@ export function buildEffortArgs(effort, provider, existingArgs = [], model = nul
     : ['--effort', effectiveEffort];
 }
 
-// Codex's config key (set via `-c <key>=<value>`) that gates its startup
-// update check. Kept as a named constant so a codex-side rename is a one-line
-// edit rather than a four-builder grep.
+// Codex's config key (set via `-c <key>=<value>`) that gates its startup update check.
 export const CODEX_UPDATE_CHECK_KEY = 'check_for_update_on_startup';
 export const CODEX_AGENT_THREADS_KEY = 'agents.max_concurrent_threads_per_session';
-// Forced off/empty for autofixer repairs (#12487): no network or writes outside
-// the cwd in the workspace-write sandbox, and no plugin/app tools beside it.
 export const CODEX_WORKSPACE_NETWORK_KEY = 'sandbox_workspace_write.network_access';
 export const CODEX_WORKSPACE_WRITABLE_ROOTS_KEY = 'sandbox_workspace_write.writable_roots';
 export const CODEX_PLUGINS_FEATURE_KEY = 'features.plugins';
@@ -783,14 +484,8 @@ export const CODEX_APPS_FEATURE_KEY = 'features.apps';
 export const CODEX_HOOKS_FEATURE_KEY = 'features.hooks';
 
 /**
- * Give a Codex swarm enough session threads for its root orchestrator plus
- * every configured worker. The CLI counts the root against this limit, so a
- * six-worker claim run needs seven threads rather than six.
- *
- * Callers deliberately supply this only for cloud-backed Codex agents. Local
- * inference stays bounded by its runtime-specific concurrency posture instead
- * of turning one CoS task into an unbounded fan-out against a single GPU.
- *
+ * Give a Codex swarm enough session threads for its root orchestrator plus every configured
+ * worker.
  * @param {unknown} maxConcurrentThreads
  * @returns {string[]}
  */
@@ -801,13 +496,8 @@ export function buildCodexAgentThreadArgs(maxConcurrentThreads) {
 }
 
 /**
- * True when the codex argv already pins the startup-update-check config, so a
- * caller-supplied value wins over the injected default. Null-safe. Recognizes
- * every codex override syntax for the key: the separate-arg value element of
- * `-c <key>=<v>` / `--config <key>=<v>` (which arrives as a standalone
- * `<key>=<v>` token), AND the joined forms `--config=<key>=<v>` / `-c=<key>=<v>`
- * (a single token). Missing the joined form would inject a second, conflicting
- * `-c <key>=false` that silently overrides the user's explicit value.
+ * True when the codex argv already pins the startup-update-check config, so a caller-supplied
+ * value wins over the injected default.
  * @param {unknown[]} args
  * @returns {boolean}
  */
@@ -824,16 +514,9 @@ export function hasCodexUpdateCheckConfig(args) {
 }
 
 /**
- * The argv fragment that disables codex's interactive startup update check:
- * `['-c', 'check_for_update_on_startup=false']`, or `[]` when a user-baked pin
- * already sits in `existingArgs`. Codex checks GitHub for a newer release on
- * every startup and, if one exists, an interactive run renders a BLOCKING
- * "Update available! → 1. Update now" modal — a headless agent's submit-Enter
- * lands on "Update now", triggering a ~100MB `brew upgrade` it can't complete,
- * and the session dies without processing the prompt. Non-interactive `codex
- * exec` runs never render the modal but still pay the check's network cost (and
- * can trip an unattended upgrade), so every codex spawn builder spreads this.
- * The one home for both the detection and the arg shape, so they can't drift.
+ * The argv fragment that disables codex's interactive startup update check: `['-c',
+ * 'check_for_update_on_startup=false']`, or `[]` when a user-baked pin already sits in
+ * `existingArgs`.
  * @param {unknown[]} [existingArgs]
  * @returns {string[]}
  */
@@ -842,20 +525,7 @@ export function buildCodexStartupArgs(existingArgs = []) {
   return ['-c', `${CODEX_UPDATE_CHECK_KEY}=false`];
 }
 
-/**
- * Every CLI config key PortOS itself injects as a `-c <key>=<value>` override.
- * Exhaustive by construction — `buildEffortArgs` and `buildCodexStartupArgs`
- * above are the only two builders that emit `-c`, and both key off the
- * constants listed here.
- *
- * Read by the `cli-config-invalid` error analyzer (`agentErrorAnalysis.js`) to
- * answer the only question that matters when a CLI refuses to start: did PortOS
- * hand it that value, or was it already sitting in the user's own config file?
- * Getting this wrong sends the user grepping PortOS source for a key PortOS
- * never emits — the 2026-08-18 `service_tier` incident, where a newer install
- * of the same CLI had written a variant the CLI on PATH rejects into the shared
- * config file.
- */
+/** Every CLI config key PortOS itself injects as a `-c <key>=<value>` override. */
 export const PORTOS_CLI_CONFIG_KEYS = Object.freeze([
   CODEX_AGENT_THREADS_KEY,
   CODEX_EFFORT_KEY,
@@ -869,9 +539,7 @@ export const PORTOS_CLI_CONFIG_KEYS = Object.freeze([
 
 /**
  * True when `key` is a startup/effort config key PortOS supplies via `-c` (see
- * PORTOS_CLI_CONFIG_KEYS). Conditional speed overrides are handled separately
- * by the error analyzer; a key alone cannot prove their origin. Null-safe; comparison is exact, so a lookalike key
- * from the user's config file is correctly reported as not-ours.
+ * PORTOS_CLI_CONFIG_KEYS).
  * @param {unknown} key
  * @returns {boolean}
  */
@@ -880,13 +548,9 @@ export function isPortosSuppliedConfigKey(key) {
 }
 
 /**
- * True when a provider command points at the OpenCode binary — matching the bare
- * `opencode` on PATH OR an absolute/relative path to it (`/opt/homebrew/bin/opencode`,
- * common when the service PATH can't resolve the CLI), with an optional Windows `.exe`
- * suffix. The OpenCode arg-builder branches key on this rather than `command === 'opencode'`
- * so a path-configured provider isn't misrouted into the Claude-style invocation. Only
- * `.exe` is stripped (not `.cmd`/`.bat`), matching the runner allowlist and the
- * `shell: false` spawn path — a batch shim isn't directly spawnable.
+ * True when a provider command points at the OpenCode binary — matching the bare `opencode` on
+ * PATH OR an absolute/relative path to it (`/opt/homebrew/bin/opencode`, common when the service
+ * PATH can't resolve the CLI), with an optional Windows `.exe` suffix.
  * @param {string|null|undefined} command
  * @returns {boolean}
  */
@@ -894,43 +558,18 @@ export function isOpencodeCommand(command) {
   return commandBasename(command) === 'opencode';
 }
 
-/**
- * The OpenCode agent a `no-tool` public-review stage runs as (`opencode run
- * --agent …`). `plan` is OpenCode's OWN built-in read-only agent, chosen over a
- * PortOS-declared one so the stage never depends on a custom agent definition
- * being accepted by whatever OpenCode version is installed.
- *
- * It is a belt, not the braces: `hardenOpencodeConfigForNoTool`
- * (`opencodeConfig.js`) still empties this agent's tool map, so a future
- * OpenCode that widens `plan` cannot widen the stage. Lives HERE rather than
- * beside that function because `providerVendors.js` — which passes the flag —
- * must not import `opencodeConfig.js`; doing so pulls `ports.js` in behind it
- * and breaks a suite that partially mocks it.
- */
+/** The OpenCode agent a `no-tool` public-review stage runs as (`opencode run --agent …`). */
 export const OPENCODE_PUBLIC_REVIEW_AGENT = 'plan';
 
 /**
- * OpenCode's built-in tool-enabled agent — the one an attachable Stage 3
- * session runs as (`providerVendors.js`) and the one `hardenOpencodeConfigForNoTool`
- * must still empty. Homed here for the same import-graph reason as above.
+ * OpenCode's built-in tool-enabled agent — the one an attachable Stage 3 session runs as
+ * (`providerVendors.js`) and the one `hardenOpencodeConfigForNoTool` must still empty.
  */
 export const OPENCODE_BUILD_AGENT = 'build';
 
 /**
- * OpenCode addresses models as `provider/model` (e.g. `ollama/qwen2.5:7b`). The
- * OpenCode Ollama provider declares its local daemon under the config-provider
- * key `ollama` (via OPENCODE_CONFIG_CONTENT), so the bare Ollama model id stored
- * in `defaultModel` must be namespaced with `ollama/` before it's passed to
- * `opencode run -m` / `opencode --model`. Idempotent — an id that already starts
- * with `ollama/` is returned untouched, and a `/`-bearing Ollama id
- * (`hf.co/user/model:tag`) is namespaced as `ollama/hf.co/...` since OpenCode
- * splits provider/model on the FIRST slash only.
- *
- * Gated on a local-runtime marker, NOT just `command === 'opencode'`: a
- * user-configured OpenCode provider pointed at a different backend stores an
- * already-qualified id (`openai/gpt-4o`, `anthropic/claude-sonnet`), and blindly
- * prefixing `ollama/` would route it to the wrong backend. No-op for
- * non-local / non-OpenCode providers and empty models.
+ * OpenCode addresses models as `provider/model` (e.g. `ollama/qwen2.5:7b`); the bare Ollama id stored in `defaultModel` must be namespaced
+ * with `ollama/` before it is passed to `opencode -m`. Idempotent.
  * @param {{command?:string, ollamaBacked?:boolean, lmstudioBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, orcarouterBacked?:boolean}} provider
  * @param {string|null|undefined} model
  * @returns {string|null|undefined}
@@ -941,35 +580,17 @@ export function prefixOpencodeModel(provider, model) {
   const id = String(model);
   if (isGatewayNamespace(namespace)) {
     // A gateway model id is ALREADY `vendor/model` (`anthropic/claude-sonnet-4`,
-    // `orcarouter/auto`), and OpenCode splits provider/model on the FIRST slash
-    // only — so the namespaced form is legitimately doubled
-    // (`openrouter/anthropic/claude-sonnet-4`, `openrouter/openrouter/auto`).
-    // Guard on the DOUBLED prefix, never the single one: a single-prefix check
-    // would read OpenRouter's own auto-router id `openrouter/auto` as
-    // already-namespaced and emit it unchanged, which OpenCode resolves to the
-    // model `auto` — a model that does not exist.
+    // `orcarouter/auto`), and OpenCode splits provider/model on the FIRST slash only — so the
+    // namespaced form is legitimately doubled (`openrouter/anthropic/claude-sonnet-4`,
+    // `openrouter/openrouter/auto`).
     return id.startsWith(`${namespace}/${namespace}/`) ? id : `${namespace}/${id}`;
   }
   return id.startsWith(`${namespace}/`) ? id : `${namespace}/${id}`;
 }
 
 /**
- * The inverse of {@link prefixOpencodeModel} for a KNOWN runtime kind: one model
- * id as the daemon's own listing spells it, with the `<kind>/` namespace
- * stripped. That namespace addresses the OpenCode provider entry and never
- * reaches the daemon, so a provider offering `llama/dflash` and a server serving
- * `dflash` are naming one model — and anything keyed on only one of the two
- * spellings answers "unknown" for half the providers.
- *
- * `null` for anything that does not name a model: blank, non-string, or a "use
- * the CLI's own default" sentinel. Callers that must keep the sentinel should
- * test it themselves before calling.
- *
- * Takes the kind rather than the provider because both callers
- * (`services/providerReadiness.js`'s checklist and
- * `services/observedContextWindows.js`'s dispatch gate) have already resolved
- * the runtime and would otherwise re-derive it per model id.
- *
+ * The inverse of {@link prefixOpencodeModel} for a KNOWN runtime kind: one model id as the
+ * daemon's own listing spells it, with the `<kind>/` namespace stripped.
  * @param {string|null|undefined} model
  * @param {string} kind - the local runtime kind (`llama`, `vllm`, `ollama`, …)
  * @returns {string|null}
@@ -981,10 +602,7 @@ export function bareLocalModelId(model, kind) {
 }
 
 /**
- * OpenCode's local OpenAI-compatible provider namespace, if this provider has
- * opted into one. Structural markers avoid deriving a backend from an editable
- * display name or endpoint and preserve the legacy Ollama outcome if a malformed
- * record carries both markers.
+ * OpenCode's local OpenAI-compatible provider namespace, if this provider has opted into one.
  * @param {{ollamaBacked?:boolean, lmstudioBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, gatewayBacked?:string, orcarouterBacked?:boolean}|null|undefined} provider
  * @returns {'ollama'|'lmstudio'|'mtplx'|'llama'|'vllm'|'sglang'|string|null}
  */
@@ -995,25 +613,16 @@ export function getOpencodeLocalProviderNamespace(provider) {
   if (provider?.llamaBacked === true) return 'llama';
   if (provider?.vllmBacked === true) return 'vllm';
   if (provider?.sglangBacked === true) return 'sglang';
-  // Hosted gateways (`providerGateways.js`) come LAST so a malformed record
-  // carrying both a local marker and a gateway marker keeps its legacy local
-  // outcome, exactly as the old if-chain did with `orcarouterBacked`.
+  // Hosted gateways (`providerGateways.js`) come LAST so a malformed record carrying both a local
+  // marker and a gateway marker keeps its legacy local outcome, exactly as the old if-chain did
+  // with `orcarouterBacked`.
   return gatewayIdForProvider(provider);
 }
 
 /**
  * The namespace above, but only when it names a LOCAL daemon — a hosted gateway
- * (`providerGateways.js`) is an OpenCode namespace and a remote API, so every
- * consumer asking "is there a daemon on this machine behind this provider?"
- * has to exclude it.
- *
- * That exclusion was hand-written at three sites (`isLocalBackedClaude` in
- * `cliChildEnv.js`, `localRuntimeKind` in `localProviderRuntime.js`, and the
- * OpenCode public-review recipe in `providerVendors.js`), which is one more
- * than the `orcarouterBacked` → `providerGateways.js` sweep was meant to leave
- * behind — so the composed predicate lives here, beside the namespace resolver
- * it wraps.
- *
+ * (`providerGateways.js`) is an OpenCode namespace and a remote API, so every consumer asking "is
+ * there a daemon on this machine behind this provider?" has to exclude it.
  * @param {object|null|undefined} provider
  * @returns {'ollama'|'lmstudio'|'mtplx'|'llama'|'vllm'|'sglang'|null}
  */
@@ -1023,11 +632,9 @@ export function localRuntimeNamespace(provider) {
 }
 
 /**
- * True when an OpenCode process provider runs against a local OpenAI-compatible
- * backend or a hosted gateway — any namespace `getOpencodeLocalProviderNamespace`
- * resolves — rather than a vendor cloud model. This is the gate on the OpenCode
- * effort ladder, and the browser re-exports it so the effort picker and the run
- * agree on which records get one (#4765).
+ * True when an OpenCode process provider runs against a local OpenAI-compatible backend or a
+ * hosted gateway — any namespace `getOpencodeLocalProviderNamespace` resolves — rather than a
+ * vendor cloud model.
  * @param {object|null|undefined} provider
  * @returns {boolean}
  */
@@ -1036,38 +643,17 @@ export function isOpencodeLocalProvider(provider) {
 }
 
 /**
- * The Codex CLI's own `--local-provider` values, mapped from PortOS's
- * local-runtime marker axis (`localRuntimeNamespace` in providerModels.js).
- *
- * Codex 0.153.0+ ships `--oss` / `--local-provider <lmstudio|ollama>`, so
- * running the Codex harness on a local model is a pair of flags rather than a
- * rewrite of the user's `~/.codex/config.toml` — the flags are per-invocation
- * and leave every other `codex` run on the machine untouched.
- *
- * Deliberately a TABLE, not a passthrough: PortOS's marker axis carries five
- * local runtimes (ollama / mtplx / llama / vllm / sglang) and Codex serves two
- * of them by name. Forwarding an unmapped namespace would hand codex a value it
- * rejects, and forwarding nothing would silently run the record against the
- * OpenAI cloud — which is why `codexUnsupportedLocalRuntime` below exists.
- *
- * Both of Codex's values are mapped: `lmstudio` joined the axis with the
- * `lmstudioBacked` marker (#6309). The remaining three (mtplx / vllm / sglang)
- * have no Codex spelling at all, which is what `codexUnsupportedLocalRuntime`
- * below is for.
+ * The Codex CLI's own `--local-provider` values, mapped from PortOS's local-runtime marker axis
+ * (`localRuntimeNamespace` in providerModels.js).
  */
 export const CODEX_OSS_LOCAL_PROVIDERS = Object.freeze({ ollama: 'ollama', lmstudio: 'lmstudio' });
 
-/**
- * The first Codex CLI release that ships `--oss` / `--local-provider`. Used
- * only to NAME the requirement in a prerequisite finding — the gate itself is a
- * `codex exec --help` flag probe (`services/codexOssSupport.js`), because a
- * version string is a proxy for the contract and the help text IS the contract.
- */
+/** The first Codex CLI release that ships `--oss` / `--local-provider`. */
 export const CODEX_OSS_MIN_VERSION = '0.153.0';
 
 /**
- * The `--local-provider` value for `provider`, or `null` when this record is not
- * backed by a local runtime Codex can serve.
+ * The `--local-provider` value for `provider`, or `null` when this record is not backed by a local
+ * runtime Codex can serve.
  * @param {object|null|undefined} provider
  * @returns {string|null}
  */
@@ -1077,11 +663,8 @@ export function codexOssLocalProvider(provider) {
 }
 
 /**
- * The local runtime this codex record is marked with but Codex cannot serve
- * (`vllm`, `sglang`, …), or `null`. A definite negative: the marker is on the
- * record, and no credential or config makes `--local-provider vllm` exist. The
- * prerequisite layer turns it into a finding rather than letting the row spawn
- * against the OpenAI cloud while the card claims it is local.
+ * The local runtime this codex record is marked with but Codex cannot serve (`vllm`, `sglang`, …),
+ * or `null`.
  * @param {object|null|undefined} provider
  * @returns {string|null}
  */
@@ -1091,15 +674,9 @@ export function codexUnsupportedLocalRuntime(provider) {
 }
 
 /**
- * Parse a stored `OPENCODE_CONFIG_CONTENT` value, or null when it is absent or
- * no longer valid JSON (a hand-edited config tells us nothing, so every caller
- * falls back to its own default rather than guessing).
- *
- * Shared because four call sites read the same variable and must agree on what
- * counts as unusable: `opencodeConfig.js`'s merge base, `localProviderRuntime.js`'s
- * endpoint lookup, `cliChildEnv.js`'s public-review allowlist, and the locality
- * predicate below.
- *
+ * Shared because four call sites read the same variable and must agree on what counts as unusable:
+ * `opencodeConfig.js`'s merge base, `localProviderRuntime.js`'s endpoint lookup,
+ * `cliChildEnv.js`'s public-review allowlist, and the locality predicate below.
  * @param {unknown} value
  * @returns {object|null}
  */
@@ -1115,37 +692,6 @@ export function parseOpencodeConfigContent(value) {
 
 /**
  * Every provider endpoint an OpenCode config object declares is on this machine.
- *
- * This is the ONE rule two public-review sites must not disagree about, which is
- * why it lives here rather than being spelled out at each of them:
- *
- *   - `providerVendors.js` decides whether an OpenCode wrapper may run the
- *     tool-free gate at all;
- *   - `cliChildEnv.js` decides whether `OPENCODE_CONFIG_CONTENT` survives the
- *     public-review env allowlist.
- *
- * If the first says yes and the second says no, the stage still spawns — but
- * with the hardened config stripped, so OpenCode falls back to reading the
- * user's own `~/.config/opencode`, tools and MCP servers and all, while every
- * signal still reports an enforced tool-free gate. A remote `baseURL` inside an
- * otherwise `ollamaBacked` provider is exactly that shape, and the marker alone
- * cannot see it.
- *
- * `requireDeclaration` is the one place the two callers legitimately differ, and
- * it is about PROVENANCE, not locality:
- *
- *   - A provider RECORD storing a config with no `provider` entry has relocated
- *     nothing — the builder still adds the canonical per-namespace entry, all of
- *     which are loopback — so that is vacuously local (the default).
- *   - The env allowlist sees a bare string that may be ambient rather than the
- *     config PortOS just built for this spawn. A value declaring no endpoint is
- *     not one we produced for an eligible provider, so it passes
- *     `requireDeclaration: true` and is dropped with every other inherited var.
- *
- * The locality rule itself — every declared endpoint is on this machine — is
- * identical for both, which is what keeps eligibility and the allowlist in step.
- * Absent config (`null`) is never local: there is nothing to keep.
- *
  * @param {object|null|undefined} config - a parsed OpenCode config
  * @param {{requireDeclaration?: boolean}} [options]
  * @returns {boolean}
@@ -1158,10 +704,7 @@ export function opencodeConfigIsLocalOnly(config, { requireDeclaration = false }
 }
 
 /**
- * The same question asked of a PROVIDER RECORD, before its config has been
- * built. A record storing no config — or an unparseable one, which the builder
- * discards too — runs against those same canonical defaults.
- *
+ * The same question asked of a PROVIDER RECORD, before its config has been built.
  * @param {object|null|undefined} provider
  * @returns {boolean}
  */
@@ -1171,19 +714,11 @@ export function opencodeProviderIsLocalOnly(provider) {
 }
 
 /**
- * Claude Code on AWS Bedrock wants region-prefixed model ids
- * (`global.anthropic.claude-opus-5`, `us.anthropic.claude-opus-4-1-...-v1:0`).
- * When `CLAUDE_CODE_USE_BEDROCK` is set on the box, passing a bare
- * `claude --model claude-opus-5` is rejected ("provided model identifier is
- * invalid") — which is exactly how a bare-id `claude-code` provider config
- * breaks autopilot/pipeline runs on a Bedrock host. The helpers below map a
- * bare id to its Bedrock form just-in-time at CLI-argv build time; the stored
- * provider config stays bare (so a box can move in/out of Bedrock mode freely).
+ * Claude Code on AWS Bedrock wants region-prefixed model ids (`global.anthropic.claude-opus-5`,
+ * `us.anthropic.claude-opus-4-1-...-v1:0`).
  */
 
-// Family → the env var Claude Code reads for that tier's resolved model. A
-// Bedrock wrapper sets these to the exact region-prefixed id it wants, so when
-// present they are preferred over a blind prefix-rewrite.
+// Family → the env var Claude Code reads for that tier's resolved model.
 const BEDROCK_FAMILY_ENV = {
   opus: 'ANTHROPIC_DEFAULT_OPUS_MODEL',
   sonnet: 'ANTHROPIC_DEFAULT_SONNET_MODEL',
@@ -1191,11 +726,7 @@ const BEDROCK_FAMILY_ENV = {
   fable: 'ANTHROPIC_DEFAULT_FABLE_MODEL',
 };
 
-/**
- * True when the box is in Claude-Code-on-Bedrock mode. Treats the documented
- * `CLAUDE_CODE_USE_BEDROCK=1` plus the usual truthy spellings as enabled;
- * `0`/`false`/`no`/empty/unset are off.
- */
+/** True when the box is in Claude-Code-on-Bedrock mode. */
 export const isBedrockEnabled = (env = process.env) => {
   const v = env?.CLAUDE_CODE_USE_BEDROCK;
   if (v == null) return false;
@@ -1204,9 +735,8 @@ export const isBedrockEnabled = (env = process.env) => {
 };
 
 /**
- * True when an id already carries a Bedrock region prefix
- * (`global.anthropic.…`, `us.anthropic.…`, `eu.anthropic.…`, `apac.anthropic.…`)
- * or the bare `anthropic.…` form. Such ids are left untouched.
+ * True when an id already carries a Bedrock region prefix (`global.anthropic.…`, `us.anthropic.…`,
+ * `eu.anthropic.…`, `apac.anthropic.…`) or the bare `anthropic.…` form.
  */
 export const hasBedrockRegionPrefix = (id) =>
   typeof id === 'string' && (/^[a-z]+\.anthropic\./i.test(id) || /^anthropic\./i.test(id));
@@ -1218,19 +748,7 @@ const detectClaudeFamily = (id) => {
 };
 
 /**
- * Map a bare Claude model id to its Bedrock form when (and only when) Bedrock
- * mode is on. Pure — no logging, no env mutation.
- *
- *  - No-op when Bedrock mode is off, the id is empty/non-string, or it already
- *    carries a region/`anthropic.` prefix.
- *  - No-op for any id that doesn't contain `claude` (codex `gpt-5`, gemini, a
- *    custom local alias like `my-sonnet-lora`, etc.) — only Claude ids are
- *    Bedrock-mappable, so applying this at a shared argv chokepoint can't
- *    corrupt another vendor's model.
- *  - Prefers the matching `ANTHROPIC_DEFAULT_<FAMILY>_MODEL` env value when it
- *    is itself a region-prefixed Bedrock id (the wrapper's exact choice); else
- *    falls back to a `global.anthropic.<id>` prefix-rewrite.
- *
+ * Map a bare Claude model id to its Bedrock form when (and only when) Bedrock mode is on.
  * @param {string|null|undefined} id
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {string|null|undefined} the mapped id (or the input unchanged)
@@ -1248,15 +766,13 @@ export function toBedrockModelId(id, env = process.env) {
   return `global.anthropic.${id}`;
 }
 
-// Dedup so the auto-correction notice prints once per (provider, model) per
-// process rather than on every run.
+// Dedup so the auto-correction notice prints once per (provider, model) per process rather than on
+// every run.
 const _warnedBareBedrockModels = new Set();
 
 /**
- * One-time (per process, per provider+model) notice that a stored Claude-Code
- * model id reads non-Bedrock while the box is in Bedrock mode and is being
- * auto-corrected for this run. Surfaces via the emoji-prefixed console.error
- * path so the config stays self-explanatory.
+ * One-time (per process, per provider+model) notice that a stored Claude-Code model id reads
+ * non-Bedrock while the box is in Bedrock mode and is being auto-corrected for this run.
  */
 export function warnBareBedrockModel(providerId, originalId, mappedId) {
   const key = `${providerId || 'claude-code'}::${originalId}`;
@@ -1268,9 +784,8 @@ export function warnBareBedrockModel(providerId, originalId, mappedId) {
 }
 
 /**
- * Side-effecting convenience used at CLI-argv build time: map a bare Claude id
- * to its Bedrock form and emit the one-time auto-correction notice when the map
- * actually changed the id. Returns the id to pass to `--model`.
+ * Side-effecting convenience used at CLI-argv build time: map a bare Claude id to its Bedrock form
+ * and emit the one-time auto-correction notice when the map actually changed the id.
  */
 export function resolveBedrockCliModel(id, { env = process.env, providerId } = {}) {
   const mapped = toBedrockModelId(id, env);
@@ -1279,21 +794,8 @@ export function resolveBedrockCliModel(id, { env = process.env, providerId } = {
 }
 
 /**
- * Claude Code's first-party model ids spell a version with DASHES
- * (`claude-fable-5-1`, `claude-opus-4-8`), while the release is spoken and
- * written with a dot ("Fable 5.1"). A stored `claude-fable-5.1` therefore looks
- * right in the picker and is rejected by the CLI at spawn time — the run dies
- * with "model not found", the task blocks, and nothing about the id says why.
- *
- * This canonicalizes the dotted spelling to the dashed one, and ONLY that:
- *
- *  - the id must start with a first-party family prefix (`claude-opus-`,
- *    `claude-sonnet-`, `claude-haiku-`, `claude-fable-`), so a vendor id that
- *    merely mentions Claude (cursor's `claude-4.6-sonnet-medium`) is untouched;
- *  - only a dot BETWEEN DIGITS is rewritten, leaving any other dot alone;
- *  - a Bedrock region-prefixed id (`global.anthropic.…`) is left alone, since
- *    its prefix dots are structural.
- *
+ * Claude Code's first-party model ids spell a version with DASHES (`claude-fable-5-1`,
+ * `claude-opus-4-8`), while the release is spoken and written with a dot ("Fable 5.1").
  * @param {string|null|undefined} id
  * @returns {string|null|undefined} the canonical id (or the input unchanged)
  */
@@ -1304,22 +806,13 @@ export function normalizeClaudeModelId(id) {
   return id.replace(/(\d)\.(?=\d)/g, '$1-');
 }
 
-// Dedup so the canonicalization notice prints once per (provider, model) per
-// process rather than on every run, matching `warnBareBedrockModel`.
+// Dedup so the canonicalization notice prints once per (provider, model) per process rather than
+// on every run, matching `warnBareBedrockModel`.
 const _warnedDottedClaudeModels = new Set();
 
 /**
- * The model string a Claude Code spawn should pass to `--model`: canonicalize a
- * dotted first-party id, then map it to its Bedrock form when the box is in
- * Bedrock mode. The single home for both corrections, called from every
- * Claude-command argv builder (`claudeCliArgs`, `claudeSpawnArgs`,
- * `resolveInjectedTuiModel`) so a fix in one is a fix in all.
- *
- * Deliberately NOT folded into `resolveBedrockCliModel`: that helper is also the
- * documented Bedrock-only mapper, and the dot rewrite is gated on the caller
- * already having resolved a Claude *Code* command — cursor and friends label
- * Anthropic models under their own dotted ids and must not be rewritten.
- *
+ * The model string a Claude Code spawn should pass to `--model`: canonicalize a dotted first-party
+ * id, then map it to its Bedrock form when the box is in Bedrock mode.
  * @param {string|null|undefined} id
  * @param {{env?:NodeJS.ProcessEnv, providerId?:string}} [opts]
  * @returns {string|null|undefined}
@@ -1339,33 +832,8 @@ export function resolveClaudeCliModel(id, { env = process.env, providerId } = {}
 }
 
 /**
- * The model string a TUI spawn should actually pass to `--model`, given the
- * resolved launch command. The single home for a decision that used to be
- * open-coded in TWO parallel ladders — `tuiHandshake.js#buildTuiInvocation`
- * (one-shot TUI prompt runs) and `agentTuiSpawning.js#appendModelArgs` (CoS
- * agent / TUI-session spawns) — which is exactly how cursor's exemption landed
- * in one and not the other. Callers keep their own `hasModelFlag` gating; this
- * only answers "which id".
- *
- *  - OpenCode: namespace a bare Ollama id (`ollama/<id>`); never Bedrock-mapped.
- *  - Claude Code: canonicalize a dotted first-party id (`claude-fable-5.1` →
- *              `claude-fable-5-1`), then map a bare Claude id to its
- *              region-prefixed Bedrock form when the box is in Bedrock mode
- *              (no-op off Bedrock / for non-Claude ids).
- *  - Anything else: passed through verbatim.
- *
- * The Bedrock arm is deliberately OPT-IN on the launch command rather than the
- * default. Bedrock is a Claude *Code* transport, but `toBedrockModelId` gates
- * only on the model id matching `/claude/i` — so as the default it silently
- * captured any vendor that labels Anthropic models under its own ids. Cursor is
- * exactly that case (`claude-opus-5-thinking-high`), and on a Bedrock box it was
- * being rewritten to `global.anthropic.claude-opus-5-thinking-high`, an id
- * cursor's router has never heard of. Opting out per-vendor meant every future
- * vendor had to remember to; keying on `isClaudeCommand` inverts that default so
- * they don't. (`isClaudeCommand` treats a blank command as Claude, matching both
- * callers' blank→`claude` spawn fallback, so this is behavior-preserving for
- * every shipped provider.)
- *
+ * The model string a TUI spawn should actually pass to `--model`, given the resolved launch
+ * command.
  * @param {string} model - the already-resolved (non-sentinel) model id
  * @param {{id?:string, command?:string, ollamaBacked?:boolean, mtplxBacked?:boolean, envVars?:Record<string,string>}|null|undefined} provider
  * @param {string} [command] - resolved launch command (may differ from provider.command)
@@ -1388,19 +856,7 @@ export function resolveInjectedTuiModel(model, provider, command = provider?.com
 export const filterSelectableModels = (models) =>
   (models || []).filter(m => !isConfiguredDefaultModel(m));
 
-/**
- * Detects whether the provider's stored argv already pins a model with a
- * usable value. Checks both flag forms (`--model` / `-m`) and both styles
- * (separated `--model x` and joined `--model=x`). A separated flag with no
- * value following (`['--model']` at end of argv, or `['--model', '--other']`)
- * is treated as NOT a baked-in pin — the CLI would reject the argv at
- * runtime anyway, and pretending it's a pin would also make refiners report
- * `null` (from extractBakedModel) and skip injecting our own model.
- *
- * Used to gate runner-injected `--model` flags: when the user has hard-coded
- * a model in args, the runner-injected one is suppressed and the args-baked
- * model wins.
- */
+/** Detects whether the provider's stored argv already pins a model with a usable value. */
 export function hasModelFlag(args) {
   if (!Array.isArray(args)) return false;
   for (let i = 0; i < args.length; i++) {
@@ -1417,13 +873,8 @@ export function hasModelFlag(args) {
 }
 
 /**
- * Strip dangling/empty `--model` / `-m` tokens (no value follows, or the joined
- * form has an empty value). Those would survive into the spawned argv unchanged
- * and cause the CLI to reject the invocation — see the comment on `hasModelFlag`
- * for the full reasoning (it deliberately reports such a token as NOT a pin, so
- * the injection path fires; without this strip the CLI would then see two
- * `--model` occurrences). Pinned-with-value tokens are preserved untouched so
- * user-baked model selections still win.
+ * Strip dangling/empty `--model` / `-m` tokens (no value follows, or the joined form has an empty
+ * value).
  * @param {unknown[]} args
  * @returns {unknown[]}
  */
@@ -1446,30 +897,23 @@ export function stripBrokenModelFlags(args) {
 }
 
 /**
- * True when a provider command points at the Claude Code binary — the bare
- * `claude` on PATH, an absolute/relative path to it, or an optional Windows
- * `.exe` suffix (same matching rules as `isOpencodeCommand`). An empty/null
- * command also counts as Claude: `buildCliSpawnConfig`'s default branch and
- * the TUI `inferTuiCommand` fallback both resolve a blank command to `claude`.
+ * True when a provider command points at the Claude Code binary — the bare `claude` on PATH, an
+ * absolute/relative path to it, or an optional Windows `.exe` suffix (same matching rules as
+ * `isOpencodeCommand`).
  * @param {string|null|undefined} command
  * @returns {boolean}
  */
 export function isClaudeCommand(command) {
-  // An empty/blank command also counts as Claude: `buildCliSpawnConfig`'s default
-  // branch and the TUI `inferTuiCommand` fallback both resolve a blank command to
-  // `claude` — a policy that differs from the other predicates, so it stays here.
+  // An empty/blank command also counts as Claude: `buildCliSpawnConfig`'s default branch and the
+  // TUI `inferTuiCommand` fallback both resolve a blank command to `claude` — a policy that
+  // differs from the other predicates, so it stays here.
   if (command == null || command === '') return true;
   return commandBasename(command) === 'claude';
 }
 
 /**
- * True for an Ollama-backed provider that launches the Claude Code binary
- * (`claude-ollama` / `claude-ollama-tui`). These sessions run a small local
- * model that drowns in Claude Code's full personal environment — hooks,
- * plugins, MCP servers, the global ~/.claude/CLAUDE.md — so the spawners put them in lean
- * mode (see `applyLeanClaudeArgs`). Keyed on the `ollamaBacked` marker + the
- * launch command, not provider ids, so renamed/custom local providers get the
- * same treatment.
+ * True for an Ollama-backed provider that launches the Claude Code binary (`claude-ollama` /
+ * `claude-ollama-tui`).
  * @param {{command?:string, ollamaBacked?:boolean}|null|undefined} provider
  * @param {string} [command] - resolved launch command when it differs from
  *   `provider.command` (the TUI path may infer it from the provider id)
@@ -1480,12 +924,8 @@ export function isOllamaClaudeProvider(provider, command = provider?.command) {
 }
 
 /**
- * True when a provider explicitly configures its own GitHub credential
- * (`GH_TOKEN` or `GITHUB_TOKEN`) in `envVars`. Agent-spawn paths that would
- * otherwise inject a repo-owner-pinned `GH_TOKEN` skip that injection when this
- * returns true, so the provider's explicit credential wins — `gh` prefers
- * `GH_TOKEN` over `GITHUB_TOKEN`, so an injected `GH_TOKEN` would silently
- * shadow a provider's configured `GITHUB_TOKEN` otherwise.
+ * True when a provider explicitly configures its own GitHub credential (`GH_TOKEN` or
+ * `GITHUB_TOKEN`) in `envVars`.
  * @param {{envVars?: Record<string,unknown>}} provider
  * @returns {boolean}
  */
@@ -1495,18 +935,15 @@ export function providerSuppliesGithubToken(provider) {
 }
 
 /**
- * Lean-context flags for local-model Claude Code sessions:
- * - `--bare` — skip hooks, plugin sync, auto-memory, and AGENTS.md
- *   auto-discovery (the user's personal environment derails small models).
- * - `--strict-mcp-config` — with no `--mcp-config` given, load zero MCP
- *   servers (their tool schemas alone can blow a small Ollama context).
+ * Lean-context flags for local-model Claude Code sessions: - `--bare` — skip hooks, plugin sync,
+ * auto-memory, and AGENTS.md auto-discovery (the user's personal environment derails small
+ * models). - `--strict-mcp-config` — with no `--mcp-config` given, load zero MCP servers (their
+ * tool schemas alone can blow a small Ollama context).
  */
 export const LEAN_CLAUDE_ARGS = ['--bare', '--strict-mcp-config'];
 
 /**
- * Append the lean-context flags for Ollama-backed Claude providers. No-op for
- * every other provider, and idempotent when the user already baked either
- * flag into `provider.args`.
+ * Append the lean-context flags for Ollama-backed Claude providers.
  * @param {{command?:string, ollamaBacked?:boolean, args?:string[]}} provider
  * @param {string[]} args - argv built so far
  * @param {string} [command] - resolved launch command (see isOllamaClaudeProvider)
@@ -1517,12 +954,7 @@ export function applyLeanClaudeArgs(provider, args, command = provider?.command)
   return [...args, ...LEAN_CLAUDE_ARGS.filter(flag => !args.includes(flag))];
 }
 
-/**
- * Extract the pinned model id from provider.args when a model flag is baked
- * in. Supports separated form (`--model X` / `-m X`) and joined form
- * (`--model=X` / `-m=X`). Returns null when no model flag is present or the
- * separated form has no value following the flag.
- */
+/** Extract the pinned model id from provider.args when a model flag is baked in. */
 export function extractBakedModel(args) {
   if (!Array.isArray(args)) return null;
   for (let i = 0; i < args.length; i++) {

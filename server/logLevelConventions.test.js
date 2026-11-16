@@ -1,95 +1,10 @@
 /**
- * Long-running Node process guard: a failure line may not be logged through
- * `console.log`, and every log line carries a leading marker emoji and never a
- * bare error object (#9951).
- *
- * ## The bug class
- *
- *   console.log(`FAILMARK npm install exit=${code}: ${output}`);
- *
- * `console.log` writes to stdout. Every stderr-based monitor — PM2's error log,
- * a `2>` redirect, a log shipper splitting streams, a human running
- * `npm start 2>errors.log` — is blind to that line, so the one message that
- * explains a failure is filed next to ordinary progress chatter.
- *
- * The defect kept coming back because every fix so far was file-scoped:
- * #6935 converted the media-generation pipeline, and by the time it merged the
- * same shape was live again in other domains (#7945). Nothing failed CI when
- * the next one landed. This scan is what makes the rule hold without anyone
- * remembering it.
- *
- * ## The rule
- *
- * A `console.log(…)` call whose ARGUMENT TEXT carries a failure marker is a
- * violation. Route it by what actually happened:
- *
- *   - a genuine failure          → `console.error`
- *   - a recoverable defect worth tracing → `console.warn`
- *   - a deliberate refusal/skip  → `console.log` with a non-failure marker
- *     (stderr means "investigate" — root `AGENTS.md`)
- *   - a mixed success/failure line (a ternary status message) → pick the sink
- *     first and log through it: `const log = ok ? console.log : console.error;`
- *
- * Only the two FAILURE markers are scanned. The warning marker is deliberately
- * out of scope: plenty of its uses are legitimate information (an intentional
- * version-refusal notice in `services/sharing/importer.js`, for one), and
- * re-leveling those is per-domain judgment, not a tree-wide rule.
- *
- * ## Marker and error-object rule (#9951)
- *
- * The single-line-logging convention (root `AGENTS.md`) is an emoji prefix plus
- * string interpolation, and the stream rule above only works because the marker
- * is there to read. Two further shapes defeat it:
- *
- *   - A `console.log|warn|error|info|debug` whose first argument is a literal
- *     with NO leading marker emoji — it cannot be grepped by marker and the
- *     failure-level scan never sees it.
- *   - A bare error object as an argument (`console.error('❌ …', err)`) — it
- *     prints a multi-line stack and every enumerable property, breaking
- *     one-line-per-event. Interpolate `${err.message}` instead.
- *
- * Judged only where the text is visible to a lexer: a literal whose body starts
- * with `${` (the marker may live in an interpolated `LOG_PREFIX` / icon
- * variable) and an indented continuation line (body starts with two spaces,
- * the follow-on lines of a multi-line notice) are accepted, and a first
- * argument that is not a literal is never judged. `server/scripts/` (one-shot
- * operator CLIs whose output is human-formatted, not a log stream) and
- * `server/test/` (fixtures) are exempt from this second rule.
- *
- * ## Allowlist
- *
- * There is none for the failure-stream rule, on purpose. Every site in the tree passes; a new violation is
- * a bug to fix, not an entry to add. If you are reading this because the scan
- * just failed, either the line reports a fault — change `console.log` to
- * `console.error` — or it reports a deliberate refusal/skip, and the fix is to
- * replace the failure marker, not the stream. An `emitLog` hit is the level
- * argument, not the wrapper: `'error'` for a failure (#12576).
- *
- * ## What this guard CANNOT see
- *
- * The guard intentionally covers only the long-running Node process trees
- * (`server/` and `autofixer/`). One-shot operator/CI scripts (`scripts/`) and
- * the browser tree (`client/`) do not feed the stderr-based process monitors
- * this rule protects, so they stay outside this inventory. Within the covered
- * trees, this is a lexer-assisted source scan, not a scope-aware AST pass. It
- * reads the ARGUMENT TEXT (comment bodies blanked) of a literal `console.log(`
- * call, which means:
- *
- *   - A message built into a variable first (`const line = `FAILMARK …`;
- *     console.log(line);`) is invisible. That is the same shape the mixed-sink
- *     fix produces on purpose, so the guard cannot distinguish the fix from an
- *     evasion — it is a convention backstop, not a sandbox.
- *   - An aliased logger (`const log = console.log; log(…)`) is invisible.
- *   - `emitLog` with a non-literal level, or a message built before the call,
- *     is invisible. A literal `info` / `debug` / `success` message is scanned
- *     (#12576); `warn` and `error` are the routed fix, not violations.
- *   - A failure phrased without a marker emoji is invisible. The markers are
- *     the repo's own single-line-logging convention (root `AGENTS.md`), so they
- *     are the signal available to a text scan.
- *
- * Widening any of these means an AST pass plus a semantic notion of "this
- * message describes a failure", which no scan can have. The shapes above are
- * rare, and the marker convention is what makes the cheap version worth having.
+ * Rule: Failure-marker logs in `server/` and `autofixer/` must use `console.error`/`console.warn` (not `console.log`), every literal log needs a leading marker emoji, and never pass a bare error object (see root `AGENTS.md`).
+ * Fix: Route failures to `console.error`, warnings to `console.warn`, or non-failure skips to `console.log` with a non-failure marker; interpolate `${err.message}` instead of passing `err`.
+ * What this guard cannot see:
+ *   - Messages built into a variable before the call, aliased loggers (`const log = console.log`), or `emitLog` with a non-literal level.
+ *   - Failures phrased without a marker emoji, or non-literal first arguments.
+ *   - `scripts/`, `client/`, `server/scripts/` (marker rule), and `server/test/` (marker rule) are out of scope.
  */
 import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 

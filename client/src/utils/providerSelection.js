@@ -2,42 +2,14 @@
  * Filters for which providers and models a picker may offer: hardware-compatibility filters,
  * agent-harness runnability and fail-closed selection policy.
  *
- * Which providers and models a picker may OFFER on this install: `isProviderHardwareCompatible` /
- * `isProviderModelHardwareCompatible` / `filterHardwareCompatibleProviderModels` (server-annotated,
- * fail-open), `selectableProviders` (the single rule `ProviderModelSelector` renders from),
- * `filterRunnableProviders` (agent jobs need a CLI/TUI harness), `supportsToolFreeOneShot` /
- * `toolFreeOneShotSelectionPolicy` (API or server-verified tool-free CLI authoring; excludes TUI and
- * unverified composite routes), `supportsStrictToolFreeOneShot` /
- * `strictToolFreeOneShotSelectionPolicy` (the same without read-only-sandboxed authoring CLIs,
- * mirroring the server's `isToolFreeOneShotProvider`), the fail-closed tool-free local policy
- * (`TOOL_FREE_LOCAL_PROVIDER_IDS`, `TOOL_FREE_LOCAL_TEXT_CAPABILITIES`, `isToolFreeLocalProvider`,
- * `isToolFreeLocalModel`, `toolFreeLocalSelectionPolicy`) used by security-sensitive pickers, and the
- * pr-reviewer postures (`PUBLIC_REVIEW_NO_TOOL_POSTURE` / `PUBLIC_REVIEW_ACTIONS_POSTURE`,
- * `supportsPublicReviewPosture`, `enforcesPublicReviewPosture`, `publicReviewSelectionPolicy` — mirror
- * of `server/lib/agentExecutionProfiles.js`: a pipeline stage names a POSTURE, the server publishes
- * each provider's `publicReviewPostures` and `publicReviewEnforcedPostures` on `GET /api/providers`,
- * and the picker offers exactly the providers this install can run the stage on, so no vendor is named
- * on either side). Also the caller EXECUTION-MODE picker rule (`callerModeList`,
- * `providerModeSelectionPolicy` — whose `modes` also bound the selector's compose flow) and
- * `COMPOSE_OPTION_VALUE`, the "Custom combination…" action sentinel outside both provider-id grammars
- * (#7566), over `server/lib/callerModePolicy.js` — the server enforces the policy on the pin, on
- * `activeProvider` inheritance and on every fallback candidate; this only lets a picker SHOW the rule,
- * keeping an ineligible saved value visible-but-disabled instead of hidden or silently replaced — read
- * off `CALLER_MODE_POLICIES` in that pure leaf, so it cannot drift).
+ * Covers the hardware filters (server-annotated, fail-open), the agent-harness
+ * runnability filter, and the fail-closed policies security-sensitive pickers
+ * apply (tool-free local, and pr-reviewer public-review postures).
  *
- * Which PROVIDERS and MODELS a picker may offer on this install: the
- * hardware-compatibility filters (server-annotated, fail-open), the
- * agent-harness runnability filter, and the fail-closed selection policies
- * security-sensitive pickers apply — the tool-free local policy and the
- * pr-reviewer public-review postures.
- *
- * The posture half is a browser MIRROR of `server/lib/agentExecutionProfiles.js`:
- * a pipeline stage names a POSTURE, the server publishes each provider's
- * `publicReviewPostures` / `publicReviewEnforcedPostures` on
- * `GET /api/providers`, and the picker offers exactly the providers this
- * install can run the stage on — no vendor is named on either side.
- *
- * Re-exported by `./providers.js` for existing `utils/providers` imports.
+ * The posture half MIRRORS `server/lib/agentExecutionProfiles.js`: a stage names a
+ * POSTURE, the server publishes each provider's `publicReviewPostures` /
+ * `publicReviewEnforcedPostures` on `GET /api/providers`, and the picker offers
+ * what this install can run; no vendor is named on either side.
  */
 
 import { isLocalInstanceProvider, localBackendForProvider } from './providerEndpoints.js';
@@ -45,21 +17,17 @@ import { isProcessProvider, isApiProvider } from './providerTypes.js';
 import { isHardwareCompatible } from './systemCapabilities.js';
 import { CALLER_MODE_POLICIES } from '../../../server/lib/callerModePolicy.js';
 
-// Direct local HTTP providers are the only provider class that can be made
-// tool-free by construction. CLI/TUI providers may be pointed at a local model,
-// but the harness still has filesystem/process authority, so they do not belong
-// in a tool-free security-review picker.
+// Only direct local HTTP providers can be tool-free by construction; a CLI/TUI
+// harness keeps filesystem/process authority even on a local model.
 export const TOOL_FREE_LOCAL_PROVIDER_IDS = Object.freeze(['ollama', 'lmstudio']);
 
 export const TOOL_FREE_LOCAL_TEXT_CAPABILITIES = Object.freeze(['chat', 'completion']);
 
 /**
- * True only for PortOS's canonical local HTTP backends on this machine.
- *
- * The explicit ids keep a custom provider from inheriting a security-sensitive
- * policy merely because its endpoint happens to mention Ollama or LM Studio.
- * `isLocalInstanceProvider` keeps a renamed canonical record pointed at another
- * machine out of the same policy.
+ * True only for PortOS's canonical local HTTP backends on this machine. Explicit
+ * ids keep a custom provider from inheriting a security policy because its
+ * endpoint mentions Ollama; `isLocalInstanceProvider` keeps a renamed canonical
+ * record pointed at another machine out.
  */
 export const isToolFreeLocalProvider = (provider) =>
   isApiProvider(provider)
@@ -67,14 +35,11 @@ export const isToolFreeLocalProvider = (provider) =>
   && isLocalInstanceProvider(provider);
 
 /**
- * Whether a local model has an authoritative, explicit text capability report
- * that excludes native tool use. Embedding-only models cannot review a diff;
- * unknown capability state is unsafe for a security scan and therefore returns
- * false rather than falling back to model-name heuristics.
- *
- * `capabilitiesByBackend` is the shape returned by `useLocalModels`; object
- * model entries are accepted too so callers with a richer model catalog can use
- * the same predicate without rebuilding a map.
+ * Whether a local model has an authoritative, explicit capability report that
+ * excludes native tool use (embedding-only models can't review a diff). Unknown
+ * capability state is unsafe for a security scan and returns false, never a
+ * model-name heuristic. `capabilitiesByBackend` is the `useLocalModels` shape;
+ * object model entries with their own `capabilities` are accepted too.
  */
 const isToolFreeLocalModelForProvider = (model, provider, capabilitiesByBackend, providerPredicate) => {
   if (!providerPredicate(provider)) return false;
@@ -92,11 +57,7 @@ const isToolFreeLocalModelForProvider = (model, provider, capabilitiesByBackend,
 export const isToolFreeLocalModel = (model, provider, capabilitiesByBackend = {}) =>
   isToolFreeLocalModelForProvider(model, provider, capabilitiesByBackend, isToolFreeLocalProvider);
 
-/**
- * Build the shared selection policy used by security-sensitive AI pickers.
- * ProviderModelSelector owns applying all three predicates consistently; a
- * caller supplies only the policy-specific capability source.
- */
+/** Shared selection policy for security-sensitive AI pickers; `ProviderModelSelector` applies all three predicates, the caller supplies the capability source. */
 export const toolFreeLocalSelectionPolicy = (
   capabilitiesByBackend = {},
   { providerPredicate = isToolFreeLocalProvider } = {},
@@ -120,8 +81,7 @@ export const supportsToolFreeOneShot = (provider) => provider?.enabled !== false
 export const supportsImageReview = (provider) => provider?.enabled !== false && provider?.imageReview === true;
 
 // No compose modes: an unmaterialized CLI combination has no server capability
-// annotation yet. Existing pins still render through the selector's saved-value
-// path, with incompatible records visible but disabled.
+// annotation yet; existing pins still render, incompatible ones visible but disabled.
 export const toolFreeOneShotSelectionPolicy = Object.freeze({ provider: supportsToolFreeOneShot });
 
 /** Strictly tool-free: a direct API or a server-verified tool-free CLI, never a
@@ -133,18 +93,16 @@ export const supportsStrictToolFreeOneShot = (provider) => provider?.enabled !==
 
 export const strictToolFreeOneShotSelectionPolicy = Object.freeze({ provider: supportsStrictToolFreeOneShot });
 
-// The two enforceable public-review postures. MIRROR of
-// `server/lib/agentExecutionProfiles.js`; a pr-reviewer stage names a posture
-// and the server publishes each provider's `publicReviewPostures` on
-// `GET /api/providers`, so no vendor is ever named on either side.
+// The two enforceable public-review postures (MIRROR of
+// `server/lib/agentExecutionProfiles.js`); the server publishes each provider's
+// `publicReviewPostures`.
 export const PUBLIC_REVIEW_NO_TOOL_POSTURE = 'no-tool';
 
 export const PUBLIC_REVIEW_ACTIONS_POSTURE = 'sandboxed-actions';
 
 /**
- * Whether the SERVER says this provider can enforce `posture`. Falls back to
- * the older per-posture booleans so a browser talking to a peer/older server
- * still renders a correct picker instead of an empty one.
+ * Whether the SERVER says this provider can enforce `posture`. Falls back to the
+ * older per-posture booleans so an older server still renders a correct picker.
  */
 export const supportsPublicReviewPosture = (provider, posture) => {
   if (Array.isArray(provider?.publicReviewPostures)) return provider.publicReviewPostures.includes(posture);
@@ -154,11 +112,10 @@ export const supportsPublicReviewPosture = (provider, posture) => {
 };
 
 /**
- * Whether the SERVER runs `posture` on this provider through a vendor-enforced
- * recipe (an OS sandbox for the actions stage), as opposed to merely allowing
- * it. `publicReviewEnforcedPostures` is the server's subset; an older server
- * that does not publish it only ever offered enforced providers, so its
- * eligible set is taken as enforced.
+ * Whether the SERVER runs `posture` through a vendor-enforced recipe (e.g. an OS
+ * sandbox), not merely allows it. An older server that doesn't publish
+ * `publicReviewEnforcedPostures` only offered enforced providers, so its eligible
+ * set is taken as enforced.
  */
 export const enforcesPublicReviewPosture = (provider, posture) => {
   if (Array.isArray(provider?.publicReviewEnforcedPostures)) return provider.publicReviewEnforcedPostures.includes(posture);
@@ -166,14 +123,11 @@ export const enforcesPublicReviewPosture = (provider, posture) => {
 };
 
 /**
- * Selection policy for a pr-reviewer stage.
- *
- * Provider eligibility is entirely server-derived. Model eligibility adds the
- * authoritative no-tool capability check only where PortOS can actually probe
- * it — a LOCAL runtime behind the provider. A cloud model is not probeable, so
- * the vendor's enforced argv (`--restricted --tools ''`, `--sandbox read-only`,
- * `--permission-mode plan`) is what denies it tools, and every model the
- * provider lists stays selectable.
+ * Selection policy for a pr-reviewer stage. Provider eligibility is server-derived.
+ * Model eligibility adds the no-tool capability check only where PortOS can probe
+ * it (a LOCAL runtime); a cloud model isn't probeable, so the vendor's enforced
+ * argv (`--restricted --tools ''`, `--sandbox read-only`, `--permission-mode
+ * plan`) denies tools and every listed model stays selectable.
  */
 export const publicReviewSelectionPolicy = (posture, capabilitiesByBackend = {}) => ({
   provider: (provider) => supportsPublicReviewPosture(provider, posture),
@@ -189,10 +143,7 @@ export const publicReviewSelectionPolicy = (posture, capabilitiesByBackend = {})
   },
 });
 
-/**
- * Retain an existing non-runnable pin so a saved job can still be edited and
- * cleared, while limiting new agent-job selections to runnable providers.
- */
+/** Retain an existing non-runnable pin so a saved job can be edited and cleared, while limiting new selections to runnable providers. */
 export const filterRunnableProviders = (providers, selectedProviderIds = []) => {
   const preservedIds = new Set(
     (Array.isArray(selectedProviderIds) ? selectedProviderIds : [selectedProviderIds]).filter(Boolean)
@@ -202,21 +153,15 @@ export const filterRunnableProviders = (providers, selectedProviderIds = []) => 
   );
 };
 
-/**
- * Server-side hardware metadata is advisory for unknown probe results and
- * definitive only when `state` is `unavailable`. Keep this helper fail-open so
- * older servers and custom providers remain selectable.
- */
+/** Hardware metadata is advisory for unknown probes and definitive only at `state: 'unavailable'`; fail-open so older servers and custom providers stay selectable. */
 export const isProviderHardwareCompatible = (provider) =>
   isHardwareCompatible(provider?.hardwareCompatibility);
 
 /**
- * The providers a picker may offer: enabled, runnable on this hardware, and
- * allowed by the caller's policy — plus the currently-selected id whatever its
- * state, so a saved pin still renders instead of silently blanking. This is
- * the single rule `ProviderModelSelector` renders from; a caller that lists
- * "eligible" providers beside such a picker must derive the list from here so
- * the note and the dropdown cannot disagree.
+ * The providers a picker may offer: enabled, hardware-runnable and policy-allowed,
+ * plus the currently-selected id whatever its state so a saved pin still renders.
+ * The single rule `ProviderModelSelector` renders from; a list of "eligible"
+ * providers beside such a picker must derive from here so they cannot disagree.
  */
 export const selectableProviders = (providers, { selectedId = '', allowed = null } = {}) =>
   (Array.isArray(providers) ? providers : []).filter((provider) => (
@@ -235,47 +180,35 @@ export const filterHardwareCompatibleProviderModels = (models, provider) =>
   });
 
 /**
- * The allowed execution modes for a caller policy name, or the array itself
- * when given one — read off the server's `CALLER_MODE_POLICIES` (the pure leaf
- * `server/lib/callerModePolicy.js`), so the picker can never offer a mode the
- * server refuses, nor hide one it would run. An unknown name yields `[]`
- * (permits nothing) where the server's own `allowedModesFor` throws.
- *
- * The server is the authority — it enforces the same policy on the explicit
- * pin, on `activeProvider` inheritance and on every fallback candidate. This
- * exists only so a picker can SHOW the rule rather than let a user save a
- * route the server will refuse at run time. `providerModeSelectionPolicy`
- * feeds `ProviderModelSelector`'s `selectionPolicy`, which keeps an ineligible
- * saved value visible-but-disabled with a reason instead of hiding or silently
- * replacing it.
+ * The allowed execution modes for a caller policy name (or the array itself),
+ * read off `CALLER_MODE_POLICIES` (`server/lib/callerModePolicy.js`) so the picker
+ * can't offer a mode the server refuses. An unknown name yields `[]` (permits
+ * nothing) where the server's `allowedModesFor` throws. The server stays the
+ * authority; this lets a picker SHOW the rule, keeping an ineligible saved value
+ * visible-but-disabled with a reason.
  */
 export const callerModeList = (policy) =>
   (Array.isArray(policy) ? policy : CALLER_MODE_POLICIES[policy]?.allowedModes) || [];
 
 /**
  * A `selectionPolicy` restricting the provider select to one caller's allowed
- * execution modes. An unknown policy name yields an empty allowed list, which
- * permits nothing — the same fail-closed direction the server takes, so a typo
- * surfaces as a visibly blocked picker rather than a silently permissive one.
+ * modes. An unknown policy name permits nothing (the server's fail-closed
+ * direction), so a typo shows a blocked picker, not a permissive one.
  */
 export const providerModeSelectionPolicy = (policy) => {
   const allowed = callerModeList(policy);
   return {
     provider: (provider) => allowed.includes(provider?.type),
-    // The same list, exposed so the preset-first selector restricts the
-    // "Custom combination…" compose flow to the modes this caller may run
-    // (#7566) — a policy that filters presets but not compose would let the
-    // user build exactly the route the server refuses.
+    // Exposed so the preset-first selector restricts "Custom combination…" compose
+    // to the same modes, or the user could build a route the server refuses.
     modes: allowed,
   };
 };
 
 /**
  * The value of the "Custom combination…" option in the preset-first
- * `ProviderModelSelector` (#7566). Deliberately outside BOTH provider
- * reference grammars (`_` is not in the preset alphabet and there is no
- * `.`/`@`), so it can never collide with a stored id, and a caller that
- * somehow received it would fail `providerRefSchema` loudly rather than
- * persist it.
+ * `ProviderModelSelector`. Outside BOTH provider reference grammars (`_` is not in
+ * the preset alphabet; no `.`/`@`), so it can't collide with a stored id and fails
+ * `providerRefSchema` loudly if persisted.
  */
 export const COMPOSE_OPTION_VALUE = '__compose__';

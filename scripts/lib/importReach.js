@@ -46,7 +46,7 @@ export function importSpecifiersFromSource(src) {
   return { static: staticImportSpecifiersFromSource(code), dynamic };
 }
 
-function resolveSpecifier(fromRel, spec, known) {
+export function resolveSpecifier(fromRel, spec, known) {
   if (!spec.startsWith('.')) return null;
   const base = posix.normalize(posix.join(posix.dirname(fromRel), spec.split(/[?#]/)[0]));
   if (base === '..' || base.startsWith('../')) return null;
@@ -187,3 +187,12 @@ function main() {
 }
 
 if (isDirectlyInvoked(import.meta.url)) main();
+
+const MOCK_CALL_RE = /\bvi\s*\.\s*(?:mock|doMock|unmock|importActual|importMock)\s*\(\s*(['"`])([^'"`]+?)\1/g;
+
+/** Every specifier a test names: static, `import()` and the `vi.mock` family. */
+export function testReferenceSpecifiers(src) {
+  const { static: staticSpecs, dynamic } = importSpecifiersFromSource(src);
+  const mocked = [...src.matchAll(MOCK_CALL_RE)].map((match) => match[2]);
+  return [...new Set([...staticSpecs, ...dynamic, ...mocked])];
+}

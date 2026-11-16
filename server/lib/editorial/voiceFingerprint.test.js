@@ -339,10 +339,6 @@ describe('computeVoiceDrift baseline modes (#2179)', () => {
     expect(drift.baselineMode).toBe('drafted');
   });
 
-  it('exposes the three valid modes', () => {
-    expect(VOICE_BASELINE_MODES).toEqual(['drafted', 'exemplars', 'blended']);
-  });
-
   it('gates off below minIssues regardless of baseline mode', () => {
     const ms = manuscriptOf([issueBlock(3, 20), issueBlock(3, 20)]);
     const drift = computeVoiceDrift(ms, { baselineMode: 'exemplars', voiceExemplars: shortExemplars });

@@ -44,7 +44,7 @@ import usePlanStageWiring from './stages/usePlanStageWiring.js';
 import useProduceStageWiring from './stages/useProduceStageWiring.js';
 import useReviewStageWiring from './stages/useReviewStageWiring.js';
 import usePublishStageWiring, { publishProgress } from './stages/usePublishStageWiring.js';
-import { wordAnchoredShots } from './useMusicVideoJobSlots.js';
+import { ownWrite } from '../../services/socketWriteOrigin.js';
 import { videoPosterForJob } from '../../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../../lib/musicVideoTakes.js';
 import { formatCount } from '../../utils/formatters.js';
@@ -93,7 +93,7 @@ const STAGE_VIEWS = {
 export default function ProjectWorkspace({
   selected, tracks, trackLibrary, trackName, youtube, separation, lyricAlign, midi, renderJob, videoSettings, publishing, analyzing, cloning,
   replaceProject, patchProject, patchScene, openProject, prepareSong, onAnalyze, onClone, onTrackImported,
-  onRename, renameForm, deletion, unsavedSceneFields, takesRef, mergeFetchedProject,
+  onRename, renameForm, deletion, unsavedSceneFields, takesRef, mergeFetchedProject, applyEdit, reloadOpenProject,
 }) {
   const { projectId: routeProjectId, artifactId: routeArtifactId, stage: routeStage, sceneId: routeSceneId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -101,7 +101,7 @@ export default function ProjectWorkspace({
   const selectedId = selected.id;
   const previzRunning = usePrevizJobs(selected).running.length > 0;
 
-  const productionReview = useMusicVideoProductionReview({ project: selected, replaceProject });
+  const productionReview = useMusicVideoProductionReview({ project: selected, replaceProject, applyEdit, reloadOpenProject, takesRef });
   // A Blender film's renders live in its workspace, not on the record: one read per open project,
   // kept current over the socket. Held here so the step list knows how far the shots are and unsaved
   // edits in its panel survive a change of step.
@@ -158,26 +158,29 @@ export default function ProjectWorkspace({
   const [compositionSavePending, setCompositionSavePending] = useState(0);
   const timedTextSaveChain = useRef(Promise.resolve());
   const editProjectLocal = (patch) => patchProject(selected.id, patch);
-  // The finishing film look, saved whole from the image viewer's editor ("Use on project").
-  const saveFilmLook = (filmLook) => {
-    const projectId = selected.id;
-    return updateMusicVideoProject(projectId, { filmLook }, { silent: true })
-      .then((saved) => patchProject(projectId, { filmLook: saved.filmLook ?? null }));
-  };
-  const saveProjectFields = (patch, { applyComposition = false } = {}) => {
+  // Sent with its origin and asking for the edit result: a reply with one patches the board and its
+  // own change broadcast is skipped. Any other reply (a cast or reference change), or a take decision
+  // that started meanwhile, reloads instead.
+  const saveProjectFields = (patch) => {
     const projectId = selected.id;
     setCompositionSavePending((count) => count + 1);
     timedTextSaveChain.current = timedTextSaveChain.current
-      .then(() => updateMusicVideoProject(projectId, patch, { silent: true }))
-      .then((saved) => {
-        if (applyComposition) patchProject(projectId, { composition: saved.composition });
-        // The server moves markers with their cues when lines are removed or merged.
-        if (patch.lyricCues) patchProject(projectId, { lyricMarkers: saved.lyricMarkers, ...wordAnchoredShots(saved) });
+      .then(() => {
+        const mark = takesRef.current?.writeMark();
+        return updateMusicVideoProject(projectId, patch, ownWrite({ edit: true })).then((saved) => {
+          if (saved?.edit && (!takesRef.current || takesRef.current.settledSince(mark))) applyEdit(projectId, saved.edit);
+          else void reloadOpenProject(projectId);
+        }, (err) => {
+          if (err?.status === 409) void reloadOpenProject(projectId);
+          throw err;
+        });
       })
       .catch((err) => { toast.error(err?.message || 'Failed to save changes'); return false; })
       .finally(() => setCompositionSavePending((count) => count - 1));
     return timedTextSaveChain.current;
   };
+  // The finishing film look, saved whole from the image viewer's editor ("Use on project").
+  const saveFilmLook = (filmLook) => saveProjectFields({ filmLook });
 
   // The render slot is page-wide; it gates this project's track change and header only while it renders this project.
   const renderTargetsSelected = !!(renderJob.active && selected && renderJob.context === selected.id);
@@ -187,7 +190,7 @@ export default function ProjectWorkspace({
     selected, tracks, midi, lyricAlign, renderTargetsSelected, replaceProject, patchProject, openProject, prepareSong, navigate, onClone,
   });
   const produce = useProduceStageWiring({
-    selected, videoSettings, renderJob, productionReview, excerpts: review.excerpts, unsavedSceneFields, takesRef, mergeFetchedProject,
+    selected, videoSettings, renderJob, productionReview, excerpts: review.excerpts, unsavedSceneFields, takesRef, mergeFetchedProject, applyEdit, reloadOpenProject,
     replaceProject, patchProject, patchScene, editProjectLocal, saveProjectFields, seekToScene, routeSceneId, navigate,
   });
   const castSetsStage = useCastSetsStageWiring({ selected, replaceProject, patchProject, productionReview });
@@ -195,6 +198,7 @@ export default function ProjectWorkspace({
   const story = useStoryStageWiring({ selected, patchProject, replaceProject });
   const plan = usePlanStageWiring({
     selected, replaceProject, patchProject, analyzing, onAnalyze, separation, lyricAlign, castSets, creativeSetupPending, styleReferencesPending,
+    applyEdit, reloadOpenProject,
   });
   const { kickoff, autonomous, planning, planningDraft, autopilotBlockedReason } = plan;
   const { sceneMedia, takes, revisions, production } = produce;
@@ -500,9 +504,7 @@ export default function ProjectWorkspace({
     replaceProject,
     editProjectLocal,
     saveProjectFields,
-    saveMediaMode: (mediaMode) => updateMusicVideoProject(selected.id, { mediaMode }, { silent: true })
-      .then((project) => patchProject(project.id, { mediaMode: project.mediaMode, updatedAt: project.updatedAt }))
-      .catch((err) => toast.error(err?.message || 'Failed to save the media mode')),
+    saveMediaMode: (mediaMode) => saveProjectFields({ mediaMode }),
     setPickerTarget,
     onAddReference: () => setPickerTarget({ type: 'reference' }),
     onAnalyze: () => onAnalyze(),
@@ -571,6 +573,7 @@ export default function ProjectWorkspace({
           onClose={() => setContactSheetOpen(false)}
           project={selected}
           busy={takes.busy}
+          saving={takes.pending}
           onSelectTake={takes.selectTake}
           onReviewTake={takes.reviewTake}
           onOpenPreview={openPreview}

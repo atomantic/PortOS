@@ -27,9 +27,7 @@ import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 import { isStr } from '../../lib/textUtils.js';
 
 // Preserve the existing validation export for callers on the project-store surface.
-export { validateVideoShot } from '../../lib/creativeDirectorVideoCompiler.js';
 
-export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
 // Per-project AI model override (per-project CD provider/model pins). Stored on
 // the project record as `modelOverrides.{treatment,plan,evaluation}` — each an

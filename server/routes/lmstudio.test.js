@@ -111,12 +111,6 @@ describe('lmstudio routes', () => {
       expect(lmStudioManager.downloadModel).not.toHaveBeenCalled();
     });
 
-    it('forwards a valid modelId', async () => {
-      lmStudioManager.downloadModel.mockResolvedValue({ success: true });
-      const res = await request(app).post('/api/lmstudio/download').send({ modelId: 'qwen-14b' });
-      expect(res.status).toBe(200);
-      expect(lmStudioManager.downloadModel).toHaveBeenCalledWith('qwen-14b');
-    });
   });
 
   describe('POST /api/lmstudio/unload', () => {

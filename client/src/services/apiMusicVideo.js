@@ -43,7 +43,9 @@ export const createMusicVideoProject = (data, options = {}) => request('/music-v
 export const cloneMusicVideoProject = (id, data = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/clone`, {
   method: 'POST', body: JSON.stringify(data), ...options,
 });
-export const updateMusicVideoProject = (id, patch, options = {}) => request(`/music-video/${encodeURIComponent(id)}`, {
+// `edit: true` asks for the board edit result (`{ edit }`) where the patch allows it; the reply
+// is otherwise the whole project, so check `reply.edit` before relying on either.
+export const updateMusicVideoProject = (id, patch, { edit = false, ...options } = {}) => request(`/music-video/${encodeURIComponent(id)}${edit ? '?edit=1' : ''}`, {
   method: 'PATCH', body: JSON.stringify(patch), ...options,
 });
 export const measureMusicVideoColorMatch = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/color-match/measure`, {
@@ -818,6 +820,8 @@ export const applyMusicVideoAudioTiming = (id, data, options = {}) => request(`/
 
 // Human-reviewed production planning and proof. These never accept approval state in a project PATCH.
 export const getMusicVideoProductionReview = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review`, options);
+// `{ readiness }` alone, for a board holding the project without it.
+export const getMusicVideoProductionReadiness = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/readiness`, options);
 export const checkMusicVideoOverlayText = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/text-check`, { method: 'POST', ...options });
 export const reverifyMusicVideoAlignment = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/alignment`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const saveMusicVideoProductionDraft = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review`, { method: 'PUT', body: JSON.stringify(body), ...options });

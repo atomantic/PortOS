@@ -6,6 +6,13 @@
  * body or linked page is read and no model sees any of it. Triage decides from
  * metadata; only an account switched to Assist has its undecided threads'
  * text screened and sorted (githubNotificationAssist.js).
+ *
+ * Storage: `db-primary` (`github_notifications`, `github_notification_sync`,
+ * `github_notification_events`, `github_notification_rules`,
+ * `github_notification_audit_changes`, `github_notification_audit_reports`) —
+ * machine-local, never federated, like the accounts they describe. Queried by
+ * account, state and recency and joined to triage results, so Postgres. Only
+ * metadata and enum verdicts are stored; thread bodies never are.
  */
 import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';

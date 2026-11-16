@@ -1,41 +1,6 @@
 /**
  * Physical-conformance audit gate for an already-validated Three.js scene spec.
  *
- * `evaluateThreejsPhysicalAudit(spec)` — pure bounds and pose audit gate over an already-validated
- * Three.js spec: inspects static resting poses and animated clip poses to detect floating parts
- * (`floating-part`), swallowed geometry (`buried-geometry`), z-fighting coplanar surfaces
- * (`coplanar-surface`), unprovenanced appearing geometry (`unprovenanced-transition`), non-uniform
- * parent scale cascading into descendants (`nonuniform-parent-scale`), attachments declared with
- * nothing to hang from (`unanchored-attachment`, warning), and attachments measured further from their
- * declared anchor than `maxOffset` allows (`attachment-far-from-anchor`, error — the spec asserted the
- * relationship itself), across the resting pose and the sampled clip poses so a clip that carries an
- * attachment away from its anchor is caught too — interior times (each sequence midpoint, plus a
- * subdivision per 90° of large rotations) as well as boundaries, under a 48-pose budget dealt
- * round-robin across clips; `poseCoverage` records which clip times were measured and which the budget
- * omitted, and an omission is a `clip-poses-unsampled` note rather than a clean pass. Named left/right
- * pairs are additionally audited for handedness in the resting pose — measured in the frame of the
- * pair’s nearest common ancestor, since the lateral plane a pair mirrors across is the one their
- * shared parent defines and not world `x = 0` — which no bounds check can see — a limb mirrored by a
- * 180° yaw about the vertical axis rather than a lateral reflection (`bilateral-chirality`), by a
- * negated scale component (`bilateral-mirror-scale`), or not mirrored at all so both halves sit on one
- * side of the lateral plane (`bilateral-pair-same-side`), all warnings. An attachment whose anchor
- * geometry could not be measured is listed in `unmeasuredAttachments` rather than counted as passing.
- * `buildThreejsPhysicalAuditFeedback(physicalAudit)` turns actionable findings into default refinement
- * feedback.
- *
- * Checks static assemblies and animated clips across key poses for:
- * 1. `floating-part`: Parts touching no parent, sibling, joint, attachment, or ground surface.
- * 2. `buried-geometry`: Parts swallowed completely or heavily inside another part without hierarchy/attachment exemption.
- * 3. `coplanar-surface`: Sibling or unrelated part pairs sharing a near-coplanar surface (z-fighting).
- * 4. `unprovenanced-transition`: Animated parts that pop into existence in open space without emerging from a parent or ground level.
- * 5. `nonuniform-parent-scale`: A non-relief child inherits a parent's anisotropic scale and may be distorted.
- * 6. `unanchored-attachment`: A part declared as carried that names nothing it is carried by.
- * 7. `attachment-far-from-anchor`: A declared attachment measured away from the anchor the spec says it hangs from.
- * 8. `bilateral-mirror-scale`: One half of a named left/right pair mirrored by negating a scale component.
- * 9. `bilateral-pair-same-side`: A named left/right pair that never crosses the lateral plane.
- * 10. `bilateral-chirality`: A named left/right pair mirrored by a 180-degree yaw instead of a lateral reflection.
- * 11. `straight-swept-path`: A part declared as a curved form built from a sweep that never bends.
- *
  * Checks 6 and 7 exist because `floating-part` and `buried-geometry` both miss
  * the same defect: a hat that belongs behind the shoulders but is authored at
  * hip height touches its neighbours, so nothing calls it floating, and it is not

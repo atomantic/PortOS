@@ -1,21 +1,6 @@
 /**
  * Antigravity (`agy`) CLI provider helpers: id and sentinel constants plus `isAntigravityCommand` and
  * `isAntigravityCliProvider` predicates.
- *
- * Antigravity (`agy`) CLI provider helpers — id/sentinel constants (`ANTIGRAVITY_CLI_ID`,
- * `ANTIGRAVITY_CONFIGURED_DEFAULT`, `LEGACY_GEMINI_*`),
- * `isAntigravityCommand`/`isAntigravityCliProvider` predicates, and `ensureAntigravityPrintArgs(args,
- * {model, effort})`/`ensureAntigravityTuiArgs(args, {model,
- * effort})`/`stripAntigravityUnsupportedArgs` argv normalizers. `parseAntigravityModelList(stdout)`
- * parses `agy models` rows — accepts both the modern `<id>\t<Label>` shape and the older
- * bare-id-per-line one, deduped, sentinel dropped (mirrored in the vendored toolkit's
- * `internal/antigravity.js`; used by both the provider-catalog refresh and Image Gen's agy model
- * picker). `isAntigravityModelId(id)` is the same id shape as a bare predicate, for spawn sites
- * building an `agy --model` argv from a value no route schema bounded. The strip drops legacy Gemini
- * `--yolo`/`-m`/`--output-format` but PRESERVES the long `--model` (agy accepts it as a per-session
- * flag, so a user-baked pin is a real selection and suppresses the injected one); the two builders
- * inject `--model`/`--effort` from the per-run overrides, always ahead of the trailing `--print`
- * marker whose value is the prompt.
  */
 
 import { buildEffortArgs, commandBasename, extractBakedModel, hasModelFlag, resolveCliEffort, resolveCliModel, splitAntigravityModel, stripBrokenModelFlags } from './providerModels.js';

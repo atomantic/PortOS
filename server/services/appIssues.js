@@ -340,9 +340,9 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker) {
     : await execGlab(withGlabJson(['mr', 'list', '--per-page', '100']), app.repoPath, undefined, { rejectOnError: true });
   const changes = safeJSONParse(rawChanges, null);
   const changeNumbers = tracker === 'github'
-    ? await collectGithubPrIssueNumbers(githubPrRowsFromPages(changes), async number => {
+    ? await collectGithubPrIssueNumbers(githubPrRowsFromPages(changes), async path => {
       const raw = await execGh(['api', '--hostname', target.apiHost, '--paginate', '--slurp',
-        `repos/${target.fullName}/pulls/${number}/commits?per_page=100`], undefined, { cwd, env }).catch(() => null);
+        `repos/${target.fullName}/${path}`], undefined, { cwd, env }).catch(() => null);
       return safeJSONParse(raw, null);
     })
     : collectGitlabMrIssueNumbers(changes);

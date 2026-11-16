@@ -1,38 +1,6 @@
 /**
  * Shared formatting utilities for the client
  * These functions are used across multiple pages and components
- *
- * Date/time/duration/byte formatters (`clamp`, `shortClaudeModelName` (Claude model id → display name;
- * strips `claude-` and only an 8-digit date suffix, so `sonnet-5-5` survives), `formatBytes`,
- * `formatDownloadGb` (decimal-GB model download size, "~29 GB"), `formatCompactCount`,
- * `formatCompactCountOrDash` (same, but an ABSENT count renders "—" rather than "0"), `formatCount`
- * (thousands-separated EXACT count, "2,762" — for a total the user is meant to read as a number, where
- * "2.8K" would throw away the precision that is the point of showing it), `timeAgo`, `formatAgeDays`
- * (age in whole DAYS — "412 days ago" — where `timeAgo` would collapse to "1y ago"; model-download
- * lists), `localDateKey` (browser-local `YYYY-MM-DD`), `shiftISODate` (DST-safe calendar-day shifts),
- * `formatTimecode`, `formatDurationMs`, `formatDateShort`, `formatContextTokens` (suffix-less context
- * length, "4K"), `throughputLabel` (a measured model's speed as one label — tok/s where the runtime
- * reported token counts, `~` prefixed when frame-counted, else chars/s; never both), `parseTimeoutMs`,
- * `formatCooldown`, `recommendedRamGb`, `nameFromImageFilename`, `formatUsd` — one USD renderer
- * (`signed` puts the minus outside the `$`; `trimWhole` drops `.00` on a typed round price; thousands
- * are grouped, "$4,610.09") — `formatLoudness` (a mastered render's measured audio as one line, "-14.1
- * LUFS, peak -1.6 dB (was -27.3 LUFS)"), `formatWeight` / `formatPercent` — round unit-converted
- * floats (`170.35000000000002` → `170.4 lbs`) so raw binary precision never reaches a tile —
- * `middleTruncate` — clip a long string from the MIDDLE so its distinguishing tail survives, where CSS
- * `line-clamp`/`text-overflow` always eats the end — …) plus timeout-input bounds and `getAppName`. Do
- * not re-define formatters inside components. **Never write `new Date(x).toLocaleDateString()`
- * inline** — pick the helper for the shape you want: `formatDateNumeric` ("3/5/2026", compact cells),
- * `formatDateShort` ("Mar 5, 2026"), `formatDate` ("March 5, 2026"), `formatDateFull` ("Saturday,
- * March 5, 2026"), `formatWeekdayDate` ("Monday, Mar 5", `{ weekday, year }`), `formatMonthDay` ("Mar
- * 5"), `formatMonthYear` ("March 2026"), `formatWeekdayShort` ("Mon"), `formatWeekdayTime` ("Mon, 7:00
- * AM"), `formatTimeOfDay` ("1:30 PM"), `formatTimeOfDaySeconds` ("1:30:45 PM", log/queue rows),
- * `formatClockTime` ("02:30:45 PM"; `{ seconds, hour12, timeZone }`), `formatDateTime`.
- * `formatHourOfDay` renders a bare hour-of-day number (0-23) as a 12-hour label in one of four styles
- * (`long` "3 PM", `compact` "3PM", `tiny` "3p", `lower` "3pm") — the canonical home for what five
- * components each hand-rolled, so the same 3pm no longer renders four ways across screens. Date
- * display helpers anchor a bare `YYYY-MM-DD` at LOCAL midnight (a naive `new Date('2026-03-05')` is
- * UTC midnight and renders as the previous day west of Greenwich) and take a fallback instead of
- * rendering the literal "Invalid Date".
  */
 
 /**
@@ -157,6 +125,7 @@ export function formatDate(dateStr) {
  * @param {string|number|Date|null} value - ISO timestamp, `YYYY-MM-DD`, epoch ms, or Date
  * @param {string} [fallback=''] - Rendered for missing/invalid input
  * @returns {string} Formatted numeric date
+  * Never write `new Date(x).toLocaleDateString()` inline; pick the helper for the shape you want, and do not re-define formatters inside components.
  */
 export function formatDateNumeric(value, fallback = '') {
   return localized('date', value, undefined, fallback);

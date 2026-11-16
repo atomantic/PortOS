@@ -47,12 +47,6 @@ beforeEach(() => {
   readDailyLogIfEnabled.mockResolvedValue(null);
 });
 
-describe('DAILY_LOG_FILE', () => {
-  it('points at daily-log.json under the meatspace data dir', () => {
-    expect(DAILY_LOG_FILE).toBe(EXPECTED_LOG_PATH);
-  });
-});
-
 describe('readLocalDailyLog', () => {
   it('reads the local mirror without consulting MortalLoom', async () => {
     readJSONFile.mockResolvedValue({ entries: [{ date: '2024-03-02' }], lastEntryDate: '2024-03-02' });

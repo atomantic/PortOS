@@ -151,7 +151,7 @@ async function stageHiggsfieldInputs(ctx) {
   try {
     buildHiggsfieldVideoRequest({
       modelId: body.higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL, prompt: body.prompt, negativePrompt: body.negativePrompt,
-      imageUrl: sourceImagePath && !pickedReferences.length && !body.musicVideo?.songAudio ? 'pending:image' : null, endImageUrl: hasEndFrame ? 'pending:end-image' : null,
+      imageUrl: sourceImagePath ? 'pending:image' : null, endImageUrl: hasEndFrame ? 'pending:end-image' : null,
       referenceImageUrls: pickedReferences.map((_, i) => `pending:reference-${i + 1}`),
     });
   } catch (err) {

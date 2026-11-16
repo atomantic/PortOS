@@ -17,6 +17,7 @@ vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 const { default: storyboardRoutes } = await import('../../routes/storyboards.js');
 const { default: musicVideoRoutes } = await import('../../routes/musicVideo.js');
 const projects = await import('../musicVideo/projects.js');
+const { applyMusicVideoEdit } = await import('../../lib/musicVideoEditResult.js');
 
 const app = express();
 app.use(express.json());
@@ -176,6 +177,27 @@ describe('sync a music video\'s shots to its storyboard', () => {
     await request(app).put(`/api/storyboards/sync-music-video/${project.id}/auto`).send({ on: false });
     await projects.moveProjectSceneEnd(project.id, first.sceneId, { endSec: 5 });
     expect((await panelSeconds())[0][1]).toBe(6);
+  });
+
+  // Uniquely catches a board edit's reply taken before the storyboard write synced the shots back:
+  // the board would keep showing what a reload no longer does (#16247).
+  it('answers each shot edit on a followed board with what a reload shows after the board write', async () => {
+    const { project, board } = await linkedProject();
+    const synced = await request(app).post(`/api/storyboards/sync-music-video/${project.id}`).send({ boardUpdatedAt: board.updatedAt });
+    const [first, second] = synced.body.project.scenes;
+    const base = `/api/music-video/${project.id}`;
+    const read = async () => (await request(app).get(base)).body;
+    for (const [path, body] of [
+      [`scenes/${first.sceneId}/end`, { endSec: 7.5 }],
+      [`scenes/${second.sceneId}/start`, { startSec: 6 }],
+      [`scenes/${second.sceneId}/split`, { atSec: 8 }],
+      [`scenes/${second.sceneId}/merge-next`, {}],
+    ]) {
+      const before = await read();
+      const reply = await request(app).post(`${base}/${path}`).send(body);
+      expect(reply.status).toBe(200);
+      expect(applyMusicVideoEdit(before, reply.body.edit)).toEqual(await read());
+    }
   });
 
   it('links existing shots in place on the first sync, keeping their words and media', async () => {

@@ -1,5 +1,5 @@
 import { musicVideoMediaMode, musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
-import { prepareProductionReview } from './productionReviewService.js';
+import { prepareProductionReview, approveProductionReview, reverifyProductionAlignment, addProductionFeedback, closeProductionFeedback, reviseProductionFromFeedback } from './productionReviewService.js';
 import { ALIGNMENT_UNVERIFIED_PROBLEM, assertProductionApproval, carryProductionApprovals, nameShots, productionAlignmentBasis, productionReadiness, productionReviewBasis } from './productionReview.js';
 import { CAST_SETS_WORKING } from './castAndSets.js';
 import { SONG_CHANGED_DURING_RENDER } from './renderSettlement.js';
@@ -94,13 +94,18 @@ import {
   sunoSongFields,
 } from '../../lib/musicVideoAutonomous.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { getProject, mutateProjectRecord as mutateRecord } from './projects.js';
+import { getProject, mutateProjectRecord as mutateRecord, createProject, updateProject } from './projects.js';
 import { ensureSceneTakes } from './takes.js';
 import { requireProject } from './requireProject.js';
 const mutateProjectRecord = (id, transform) => mutateRecord(id, transform, { source: 'orchestrator' });
 import { musicVideoEvents } from './events.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 import { isPerformanceScene, performanceCapability } from '../../lib/musicVideoShotTiming.js';
+import { applyProjectPatch } from './projectsLogic.js';
+import { openAttemptRevisionId } from './autoReview.js';
+import { getTrack } from '../tracks/index.js';
+import { resolveGalleryImage } from '../../lib/pathSafety.js';
+import { supportsSourceAudioWindow } from '../federatedMedia/sourceAudio.js';
 
 const PROCESS_ID = `proc-${randomUUID()}`;
 const inflight = new Map();
@@ -111,8 +116,8 @@ const short = (id) => String(id).slice(0, 8);
 // route table and the scheduled handler, and each dependency below pulls a
 // whole subtree (LLM runner, mood board store, browser driver, production).
 const defaults = {
-  createProject: async (input) => (await import('./projects.js')).createProject(input),
-  updateProject: async (id, patch) => (await import('./projects.js')).updateProject(id, patch),
+  createProject: async (input) => createProject(input),
+  updateProject: async (id, patch) => updateProject(id, patch),
   resolveLlm: async (pin) => (await import('./llmRoute.js')).resolveMusicVideoLlm(pin),
   recordRoute: async (projectId, stage, route) => (await import('./llmRoute.js')).recordLlmRoute(projectId, stage, route),
   draftCreativeBrief: async (args) => (await import('./autonomousBrief.js')).draftCreativeBrief(args),
@@ -123,7 +128,7 @@ const defaults = {
   submitSunoSong: async (fields, opts) => (await import('./autonomousSuno.js')).submitSunoSongOnly(fields, opts),
   generateLocalSong: async (args) => (await import('./autonomousLocalSong.js')).generateLocalSong(args),
   cancelLocalSong: async (jobId) => (await import('../mediaJobQueue/index.js')).cancelJob(jobId),
-  getTrack: async (id) => (await import('../tracks/index.js')).getTrack(id).catch(() => null),
+  getTrack: async (id) => getTrack(id).catch(() => null),
   createTrack: async (input) => (await import('../trackAlbumMembership.js')).createTrackWithAlbum(input).then((r) => r.track),
   attachAudio: async (trackId, filename, take) => (await import('../trackAudioAttach.js')).attachAudioAsRender(trackId, filename, take),
   probeDuration: (filename) => probeVideoDuration(join(PATHS.music, filename)).catch(() => null),
@@ -147,23 +152,22 @@ const defaults = {
     return true;
   },
   // The review persistence path; session authority was checked on start/resume.
-  approveProductionReview: async (...args) => (await import('./productionReviewService.js')).approveProductionReview(...args),
+  approveProductionReview: async (...args) => approveProductionReview(...args),
   // Orchestrated mode: the reviewer call, and the edits a reviewer makes by hand.
   orchestrate: async (args) => (await import('./orchestratorReview.js')).askOrchestrator(args),
   alignLyrics: async (projectId) => (await import('./lyricAlign.js')).alignProjectLyrics(projectId),
-  verifyAlignment: async (...args) => (await import('./productionReviewService.js')).reverifyProductionAlignment(...args),
-  addFeedback: async (...args) => (await import('./productionReviewService.js')).addProductionFeedback(...args),
-  closeFeedback: async (...args) => (await import('./productionReviewService.js')).closeProductionFeedback(...args),
-  reviseFromFeedback: async (...args) => (await import('./productionReviewService.js')).reviseProductionFromFeedback(...args),
+  verifyAlignment: async (...args) => reverifyProductionAlignment(...args),
+  addFeedback: async (...args) => addProductionFeedback(...args),
+  closeFeedback: async (...args) => closeProductionFeedback(...args),
+  reviseFromFeedback: async (...args) => reviseProductionFromFeedback(...args),
   guideImagePath: async (artifact) => (await import('./devArtifactStore.js')).resolveDevArtifactFile(artifact.file),
   // A gallery image (a Cast & Sets plate, a production still) the orchestrator looks at.
   // Can this local video model take a shot's song window (an LTX a2v model)?
   localVideoTakesSongAudio: async (modelId) => {
-    const [{ resolveVideoModelSelection }, { supportsSourceAudioWindow }] = await Promise.all([
-      import('../videoGen/modelSelection.js'), import('../federatedMedia/sourceAudio.js')]);
+    const { resolveVideoModelSelection } = await import('../videoGen/modelSelection.js');
     return supportsSourceAudioWindow((await resolveVideoModelSelection(modelId || undefined)).model);
   },
-  galleryImagePath: async (filename) => (await import('../../lib/pathSafety.js')).resolveGalleryImage(filename),
+  galleryImagePath: async (filename) => resolveGalleryImage(filename),
   finalReviewFrames: async (jobId) => (await import('./orchestratorReview.js')).captureFinalReviewFrames(jobId),
   // The overlay text pass before a final render: resolves the finished check.
   checkOverlayText: async (projectId) => (await import('./overlayTextService.js')).startOverlayTextCheck(projectId).then((started) => started.done),
@@ -1543,7 +1547,6 @@ function advanceInBackground(projectId) {
  * lyrics. A failed unlink is not fatal: that same link replaces the old one.
  */
 async function unlinkRunTrack(projectId, runId, trackId) {
-  const { applyProjectPatch } = await import('./projectsLogic.js');
   // The track and run ownership must be checked in the same write as the unlink.
   await mutateProjectRecord(projectId, (project) => ({ project: project.trackId === trackId && ownsRunningRun(projectAutonomousRun(project), { id: runId })
     ? applyProjectPatch(project, { trackId: null }) : project }))
@@ -1840,7 +1843,6 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
       return { project: parked.project, run: presentAutonomousRun(parked.run) };
     }
     // A hand-off the director has not finished yet still holds its revision open.
-    const { openAttemptRevisionId } = await import('./autoReview.js');
     if (openAttemptRevisionId(await getProject(projectId), resume.id)) {
       const parked = await park(projectId, 'needs-human', { error: 'Finish or cancel the open revision of the final video first, then Resume.', errorCode: 'FINAL_REVISION_NEEDS_HUMAN' });
       return { project: parked.project, run: presentAutonomousRun(parked.run) };

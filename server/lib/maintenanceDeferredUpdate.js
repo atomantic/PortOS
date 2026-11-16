@@ -1,5 +1,9 @@
 /**
  * Automatic/manual update ownership, stop-first shutdown and process settlement in the shared journal.
+ *
+ * Storage: `file-primary` (`deferred-update` operation in `data/workflow-maintenance/state.json`, plus
+ * `update-result.json`) — machine-local, never federated, protected by the journal's backup/restore rule.
+ * Unknown liveness stays held, never aged out; absent operations mean no deferred update (no seed/migration).
  */
 
 import { join } from 'node:path';

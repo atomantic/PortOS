@@ -15,6 +15,7 @@
  */
 import { SUNO_LEGACY_CLASSES } from '../sunoControls.js';
 import { pickSongRow } from '../../../lib/sunoSongPicker.js';
+import { clamp } from '../../../lib/vectorMath.js';
 import { PUBLISH_STEP_TIMEOUT_MS as T, clickVisibleText, loginRequired, step } from './browser.js';
 
 const CREATE_URL = 'https://suno.com/hooks/create';
@@ -51,7 +52,6 @@ const parseClock = (text) => {
   const m = String(text).match(/(\d+):(\d{2})/);
   return m ? Number(m[1]) * 60 + Number(m[2]) : null;
 };
-const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 
 function searchResultContainsSong(value, songId) {
   if (!value || typeof value !== 'object') return false;

@@ -1,14 +1,6 @@
 /**
  * Beat grid measurement for library music tracks (#8958).
  *
- * Beat grid measurement for library music tracks (#8958): `getBeatGrid(absoluteAudioPath)` decodes via
- * ffmpeg and returns `{ bpm, beats, downbeats, hits } | null`, cached in memory per (path, mtime) so
- * repeated calls against the same track don't re-decode. The DSP core (decode, onset envelope, tempo
- * incl. windowed fallback, beat/downbeat fitting) comes from `audioBeatDsp.js`; this module adds onset
- * "hit" peak-picking and the per-file cache, and re-exports `decodeAudioToPcm` for direct testing. It
- * is unit-tested directly against a synthetic click track via the `__analyzeBeatGridPcm` test seam (no
- * production caller needs raw-PCM access; every real caller goes through `getBeatGrid`).
- *
  * Launch videos that use an existing Music-library track only had the
  * filename — nothing measured the track's real tempo, so cuts drifted
  * against the music instead of landing on it. This decodes a track with

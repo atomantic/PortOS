@@ -1,31 +1,8 @@
 /**
- * Cross-module contract guards for an untyped client.
- *
- * PortOS's client is plain JavaScript, so nothing checks that a call site and
- * the module it imports agree. `toast.info(...)` shipped at ~30 call sites
- * while the shared Toast API had no `info` member: every one threw
- * `toast.info is not a function` at runtime, and the component tests stayed
- * green because 54 of them mocked Toast WITH an `info` the real module lacked.
- * No scheduled audit owned that class — `typing` requires typed-language sources,
- * `ui-bugs` needs a live reproduction, and `api-contract` stops at HTTP.
- *
- * Three rules, each cheap and deterministic:
- *
- * 1. Every `<local>.<member>` read on an imported object-API module names a
- *    member the real export has. `CONTRACT_MODULES` lists the modules whose
- *    default export is a member-bag; add a row when another shared module
- *    takes that shape.
- * 2. A test's `vi.mock` factory for one of those modules defines only members
- *    the real export has, so a mock cannot paper over a missing member again.
- * 3. Every other literal `vi.mock` factory (notably `services/api*.js` and
- *    `services/socket.js`) defines only members its target exports, via the
- *    static scanner in scripts/lib/mockContractScan.js shared with the server.
- *    `MOCK_ADAPTERS` allowlists deliberate fixture adapters, with a reason.
- * 4. No browser `alert`/`confirm`/`prompt` (client/src/AGENTS.md: inline
- *    confirmations or toasts instead). Blocking dialogs freeze the tab and are
- *    unusable from a PWA or a remote session.
- *
- * Scoped to git-tracked sources under `client/src`; comments are masked first.
+ * Rule: Member reads on `CONTRACT_MODULES` and literal `vi.mock` factories must only reference real exports (via `scripts/lib/mockContractScan.js`), and no browser `alert`/`confirm`/`prompt` (`client/src/AGENTS.md`).
+ * Fix: Fix the missing export/member name, update the mock factory, or replace `alert`/`confirm`/`prompt` with inline confirmations or toasts.
+ * What this guard cannot see:
+ *   - Scoped to git-tracked sources under `client/src` (comments masked); non-literal `vi.mock` factories are not checked.
  */
 
 import { describe, it, expect } from 'vitest';

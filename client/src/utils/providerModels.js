@@ -1,44 +1,15 @@
 /**
  * Which MODEL and EFFORT a run resolves to, and what a picker may list.
  *
- * `sortProviderModels` alphabetizes display options by name/id without mutating the catalog. The
- * configured-default sentinels (`CODEX_CONFIGURED_DEFAULT` …, `isConfiguredDefaultModel`,
- * `configuredDefaultIn` — so a picker can render an option matching a sentinel-valued tier instead of
- * a blank select) and `filterSelectableModels`; the per-CLI effort ladders, `effortLevelsForProvider`,
- * `resolveCliEffort` (what a stored effort actually runs as, so the picker can name a clamped level),
- * `effortSurvivingModel` and `seedModelEffort`; the Antigravity base-model ↔ effort-suffix split
- * (`splitAntigravityModel`, `antigravityBaseModels`, `antigravityModelEffortLevels`,
- * `withStaleAntigravityPin`); the account-aware option list (`providerModelList`,
- * `resolveProviderModelOptions`, `effortAwareModelOptions`, `MODEL_SOURCE` — the one place a
- * Codex-subscription account catalog enters a picker); `effectiveModelFor`; `mergeModelLists` /
- * `mergeProviderUpdate`; and `generationControlsFor` (which temperature / top-p / thinking controls a
- * provider forwards at all). The sentinels, effort ladders and the Antigravity split are re-exported
- * from the pure leaf `server/lib/providerModels.js`; `effortLevelsForProvider` / `resolveCliEffort`
- * delegate to the server's and add the ladder a sanitized provider inventory publishes, clamped
- * through the server's `clampEffortToLadder`. The generation-control tables still mirror
- * `server/lib/opencodeConfig.js`.
+ * Covers CLI-default sentinels, effort ladders and clamp, the Antigravity
+ * base-model/effort-suffix split, account-aware Codex options, model-list merges,
+ * and which generation controls a provider forwards.
  *
- * Which MODEL and EFFORT a provider actually runs, and what a picker may offer:
- * the "use the CLI's own default" sentinels, the per-CLI reasoning-effort
- * ladders and the clamp a stored effort resolves through, the Antigravity
- * base-model ↔ effort-suffix split, the account-aware option list for a
- * Codex-subscription provider, the model-list merge used when a refresh lands,
- * and which generation controls (temperature / top-p / thinking) a provider
- * forwards at all.
- *
- * The sentinels, effort ladders and the Antigravity split are re-exported from
- * the pure leaf `server/lib/providerModels.js`; `effortLevelsForProvider` /
- * `resolveCliEffort` delegate to the server's and add the one rung the browser
- * needs — the ladder the server publishes on a sanitized provider inventory.
- * Whether a stored pin is still SERVED is likewise the server's own
- * `modelPinIsOffered` (`server/lib/modelPinMembership.js`), not a second rule:
- * a picker that flagged a pin the spawner would happily run — or stayed silent
- * on one it would reject — is worse than not flagging at all.
- * The generation-control tables still mirror `server/lib/opencodeConfig.js` /
- * `server/lib/aiToolkit/internal/generationOptions.js`. Helpers marked
- * CLIENT-ONLY are rendering concerns with no server twin.
- *
- * Re-exported by `./providers.js` for existing `utils/providers` imports.
+ * Sentinels, ladders and the Antigravity split re-export `server/lib/providerModels.js`;
+ * pin membership is the server's `modelPinIsOffered` (`server/lib/modelPinMembership.js`),
+ * never a second rule. Generation-control tables mirror `server/lib/opencodeConfig.js`
+ * and `server/lib/aiToolkit/internal/generationOptions.js`. CLIENT-ONLY helpers have
+ * no server twin. Re-exported by `./providers.js`.
  */
 
 import { isGatewayBackedProvider } from './providerGateways.js';
@@ -51,9 +22,7 @@ import {
   isConfiguredDefaultModel,
   splitAntigravityModel,
 } from '../../../server/lib/providerModels.js';
-// THE model-pin membership rule, shared with the spawner and the retired-pin
-// audit. Taken from the browser-safe leaf, not `localProviderRuntime.js`, whose
-// endpoint half reaches `opencodeConfig.js` → `zod` (not a client dependency).
+// Taken from the browser-safe leaf: `localProviderRuntime.js` reaches `zod` (not a client dependency).
 import { modelPinIsOffered } from '../../../server/lib/modelPinMembership.js';
 
 export {
@@ -76,10 +45,9 @@ export {
 } from '../../../server/lib/providerModels.js';
 
 /**
- * Alphabetize model options by their displayed name (or id), without changing
- * the provider's catalog or the caller's array. Accepts strings and { id, name }
- * entries, matching the shared picker and custom-combination model options.
- * CLIENT-ONLY — presentation order must not change default-model resolution.
+ * Alphabetize model options (strings or `{ id, name }`) by displayed name without
+ * mutating the catalog. CLIENT-ONLY — presentation order must not change
+ * default-model resolution.
  */
 export const sortProviderModels = (models) => [...models].sort((a, b) => {
   const label = (model) => typeof model === 'string' ? model : model?.name || model?.id || '';
@@ -88,15 +56,9 @@ export const sortProviderModels = (models) => [...models].sort((a, b) => {
 
 /**
  * The configured-default sentinel carried in a provider's model list, or null.
- *
- * `filterSelectableModels` strips sentinels from every picker, which is right
- * for a *task's* model choice ("no override" is the empty option there). But a
- * provider whose `defaultModel`/`lightModel`/… IS the sentinel while its
- * `models` also holds real ids (Antigravity: `agy` has a real catalog AND its
- * own configured default) would otherwise drive a `<select>` whose value
- * matches no `<option>` — the field renders blank and reads as "unset" when the
- * CLI's own default is in fact what's configured. The provider-edit form uses
- * this to render an explicit option for it.
+ * `filterSelectableModels` strips sentinels, so a provider whose `defaultModel`
+ * IS the sentinel (agy) would render a `<select>` matching no `<option>`; the
+ * provider-edit form uses this to render an explicit option.
  * @param {string[]|null|undefined} models
  * @returns {string|null}
  */
@@ -105,11 +67,9 @@ export const configuredDefaultIn = (models) =>
 
 
 /**
- * The provider's selectable model list as the pickers should show it. Today that
- * only rewrites Antigravity (base models instead of one row per effort tier);
- * every other provider's list passes through untouched. The single place the
- * normalization lives, so `useProviderModels` and any caller that reads
- * `provider.models` directly agree.
+ * The provider's selectable model list as pickers show it. Only rewrites
+ * Antigravity (base models instead of one row per effort tier); the single place
+ * the normalization lives.
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @param {unknown[]} models
  * @returns {unknown[]}
@@ -118,30 +78,15 @@ export const selectableModelsForProvider = (provider, models) =>
   isAntigravityProvider(provider) ? antigravityBaseModels(models) : (models || []);
 
 /**
- * Keeps a stored-but-no-longer-listed Antigravity id visible as its own option.
+ * Keeps a stored-but-no-longer-listed Antigravity id visible as its own option:
+ * a record saved before the model/effort split holds e.g. `gemini-3.6-flash-high`,
+ * which would render the select blank though the server still splits it and runs it.
  *
- * A record saved before Antigravity split model from effort still holds
- * `gemini-3.6-flash-high`, which matches no base-model option and would render
- * the select BLANK (reading as "no model"). The server splits such an id back
- * into base + `--effort`, so the pin still runs — it just has to stay selectable.
- * Same posture as `EffortSelect`'s out-of-ladder option.
- *
- * Deliberately narrow: only an Antigravity id carrying an effort SUFFIX
- * qualifies. A bare "not in the list" test would also re-surface the
- * configured-default sentinel (the shipped agy `defaultModel`, which
- * `filterSelectableModels` exists to hide) and any typo'd/stale pin.
- *
- * Deliberately NOT layered on the generic `withUnlistedOption` helper
- * (client/src/lib/): that helper's contract is "present under `key`, else
- * prepend" over a list of `{id, ...}` objects, while `models` here is a flat
- * array of model-id STRINGS with no `key` to match on, the extra Antigravity
- * effort-suffix gate above narrows staleness to more than mere absence, and
- * this appends (kept last, after the real catalog) rather than prepends —
- * flipping either would change which option a picker shows first for no
- * behavioral gain. The same reasoning applies to `unlistedSelection` in
- * `resolveProviderModelOptions` below, over the Codex account catalog.
- *
- * CLIENT-ONLY (no server mirror) — this is a rendering concern.
+ * Deliberately narrow (only an id with an effort SUFFIX): a bare "not in the list"
+ * test would re-surface the hidden default sentinel and typo'd pins. Not built on
+ * `withUnlistedOption` (client/src/lib/): this list is flat id strings, gated by
+ * the suffix, and appends rather than prepends. Same for `unlistedSelection` in
+ * `resolveProviderModelOptions`. CLIENT-ONLY.
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @param {unknown[]} models - the already-filtered option list
  * @param {string|null|undefined} selectedModel
@@ -157,18 +102,11 @@ export const withStaleAntigravityPin = (provider, models, selectedModel) => {
 
 /**
  * The model ids in a signed-in ChatGPT account's catalog, or `null` when the
- * catalog is not a SUCCESSFUL read.
- *
- * The server ships `{ models, fetchedAt, error }` on a Codex-subscription
- * provider (`codexModelCatalog`), and all three states are distinct:
- * `models: null` = never fetched, a set `error` = the last read failed (the
- * list, if any, is only last-known-good), and `[]` = this account genuinely
- * exposes no models. Only the last two of those are answers about the account,
- * so a never-fetched or failed read collapses to `null` here and the caller
- * keeps its shipped list — an offline or signed-out user must never be handed
- * an empty dropdown.
- *
- * CLIENT-ONLY (no server mirror).
+ * catalog is not a SUCCESSFUL read. `codexModelCatalog` states are distinct:
+ * `models: null` never fetched, set `error` last read failed (last-known-good
+ * only), `[]` the account genuinely exposes none. Never-fetched/failed collapse
+ * to `null` so an offline user keeps the shipped list, never an empty dropdown.
+ * CLIENT-ONLY.
  * @param {{codexModelCatalog?:{models?:unknown, error?:unknown}}|null|undefined} provider
  * @returns {string[]|null}
  */
@@ -182,20 +120,12 @@ export const codexCatalogModelIds = (provider) => {
 };
 
 /**
- * The RAW model list a picker should read for a provider, before any
- * sentinel/effort/hardware filtering: the signed-in ChatGPT account's own
- * catalog when one has been fetched, otherwise the provider's configured
- * `models` — falling back to its `defaultModel` when that list is empty (a
- * cloud/manual provider configured with only a default; `[]` is truthy, so a
- * bare `||` would leave such a picker empty).
- *
- * This is the single place the account catalog enters a picker, so a caller
- * that reads `provider.models` directly is the one bug this exists to prevent
- * (#6306). A successfully-read EMPTY catalog is returned as `[]` and must not
- * fall through to `defaultModel`: the account really has no models, and
- * offering its default would put back the un-runnable option.
- *
- * CLIENT-ONLY (no server mirror).
+ * The RAW model list a picker should read, before sentinel/effort/hardware
+ * filtering: the account catalog when fetched, else `models`, else `defaultModel`
+ * when that list is empty (`[]` is truthy, so a bare `||` would leave it empty).
+ * The single place the account catalog enters a picker (#6306). A successfully-read
+ * EMPTY catalog stays `[]`: offering the default would restore an un-runnable option.
+ * CLIENT-ONLY.
  * @param {{models?:unknown[], defaultModel?:string}|null|undefined} provider
  * @returns {unknown[]}
  */
@@ -216,36 +146,16 @@ export const MODEL_SOURCE = Object.freeze({
 });
 
 /**
- * The option list for a picker, plus WHERE it came from.
+ * The option list for a picker, plus WHERE it came from. For a Codex-subscription
+ * provider with a fetched account catalog the options are the account's models;
+ * otherwise the shipped list.
  *
- * For a Codex-subscription provider whose account catalog has been fetched, the
- * options are that account's real models — so a tier the plan cannot run is not
- * selectable and cannot be queued against a worktree that would only fail later.
- * Every other state (never fetched, failed read, non-Codex provider) falls back
- * to the shipped list unchanged.
- *
- * ADDITIVE in BOTH branches: a stored `selectedModel` the list no longer offers
- * is retained as its own option and reported via `unlistedSelection`, so an
- * existing task template renders what it actually holds instead of silently
- * changing model — and the picker can say so.
- *
- * The shipped branch's FLAG asks `modelPinIsOffered` (server/lib/modelPinMembership.js),
- * the SAME rule the spawner and the retired-pin audit use, rather than a bare
- * `includes`. That rule is what makes the flag honest here instead of noisy:
- * it passes an empty catalog and a local-daemon provider (whose `models` is a
- * cached snapshot while the daemon is the authority), and it tolerates the two
- * same-model-spelled-differently forms, so a legacy agy `-high` pin whose BASE
- * is still listed reads as offered and only a genuinely retired one is
- * flagged. Until #7327 this branch hardcoded `false`, so the flag only ever
- * fired for a Codex account catalog and every OTHER picker rendered a rotted
- * pin as a perfectly normal option.
- *
- * The ACCOUNT branch deliberately keeps its own bare membership test: a
- * successfully-read EMPTY account catalog means the account really exposes no
- * models, so a pin there IS unavailable — while `modelPinIsOffered` reads an
- * empty catalog as "nothing to validate against" and would pass it.
- *
- * CLIENT-ONLY (no server mirror).
+ * ADDITIVE in both branches: a stored `selectedModel` the list no longer offers
+ * stays as its own option and is reported via `unlistedSelection`. The shipped
+ * branch asks `modelPinIsOffered` (the spawner's rule: passes an empty catalog
+ * and local-daemon providers, tolerates spelling variants). The ACCOUNT branch
+ * keeps a bare membership test: an empty account catalog means the pin IS
+ * unavailable, which `modelPinIsOffered` would pass. CLIENT-ONLY.
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
  * @param {string|null|undefined} selectedModel
  * @returns {{models: unknown[], source: string, unlistedSelection: boolean}}
@@ -258,15 +168,9 @@ export const resolveProviderModelOptions = (provider, selectedModel) => {
   );
   const catalog = codexCatalogModelIds(provider);
   if (!catalog) {
-    // SELECTABLE and FLAGGED are decided separately, because they answer
-    // different questions. Anything stored and not already an option has to
-    // become one or the select renders BLANK and reads as "no model" — that
-    // covers a retired pin, and equally a pin the rule ACCEPTS that the list
-    // still lacks (an installed Ollama model absent from the record's cached
-    // snapshot, a bare OpenCode pin against a namespaced catalog). Only the
-    // flag asks whether the pin is dead. Coupling the two would have hidden
-    // every working-but-unlisted pin, which is the failure
-    // `withStaleAntigravityPin` already exists to prevent for one narrow case.
+    // SELECTABLE and FLAGGED are decided separately: anything stored and not
+    // already an option must become one (or the select renders blank); only the
+    // flag asks whether the pin is dead.
     const stored = !!selectedModel && !isConfiguredDefaultModel(selectedModel);
     return {
       models: stored && !shipped.includes(selectedModel) ? [...shipped, selectedModel] : shipped,
@@ -287,14 +191,9 @@ export const resolveProviderModelOptions = (provider, selectedModel) => {
 
 /**
  * The option list for a picker that renders an effort control but reads
- * `provider.models` directly (no `useProviderModels`): base models, sentinels
- * stripped, plus any legacy suffixed pin so the stored value stays visible.
- * The hook's own list is assembled from the same two primitives, so the two
- * paths can't drift. Codex-subscription providers resolve through
- * `resolveProviderModelOptions`, so every picker offers the same account-aware
- * answer without each one reimplementing the fallback.
- *
- * CLIENT-ONLY (no server mirror).
+ * `provider.models` directly: base models, sentinels stripped, plus any legacy
+ * suffixed pin. Codex-subscription providers resolve via `resolveProviderModelOptions`.
+ * CLIENT-ONLY.
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
  * @param {string|null|undefined} selectedModel
  * @returns {unknown[]}
@@ -303,12 +202,8 @@ export const effortAwareModelOptions = (provider, selectedModel) =>
   resolveProviderModelOptions(provider, selectedModel).models;
 
 /**
- * The model a run will ACTUALLY use: the explicit pin, else the provider's own
- * default. A blank model isn't a no-op — the resolver falls through to
- * `defaultModel` — so anything keyed on the model (Antigravity's effort tiers,
- * the local tool-use warning) has to evaluate this, not the raw selection.
- *
- * CLIENT-ONLY (no server mirror).
+ * The model a run will ACTUALLY use: the explicit pin, else the provider default
+ * (a blank model falls through to `defaultModel`). CLIENT-ONLY.
  * @param {{defaultModel?:string}|null|undefined} provider
  * @param {string|null|undefined} model
  * @returns {string}
@@ -316,13 +211,9 @@ export const effortAwareModelOptions = (provider, selectedModel) =>
 export const effectiveModelFor = (provider, model) => model || provider?.defaultModel || '';
 
 /**
- * Seeds a picker's two controls from a record that may predate the split.
- * `{ model: 'gemini-3.6-flash-high', effort: '' }` reads back as
- * `{ model: 'gemini-3.6-flash', effort: 'high' }`; a stored `effort` always
- * wins over the suffix, and a non-Antigravity provider is left alone so a model
- * that merely ends in `-high` isn't truncated.
- *
- * CLIENT-ONLY (no server mirror) — the server reads the suffixed id directly.
+ * Seeds a picker's model and effort controls from a record that may predate the
+ * split (`gemini-3.6-flash-high` → model + `high`). A stored `effort` wins; a
+ * non-Antigravity provider is left alone. CLIENT-ONLY.
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @param {string|null|undefined} model
  * @param {string|null|undefined} effort
@@ -335,17 +226,10 @@ export const seedModelEffort = (provider, model, effort) => {
 };
 
 /**
- * The effort levels a provider's CLI accepts, or null when the provider has no
- * effort control. The server's `effortLevelsForProvider` answers for every
- * provider it can positively identify; a sanitized provider inventory — which
- * omits command/path/env so a renamed custom CLI leaks no machine detail — is
- * answered from the ladder the server published on it instead. Drives the
- * "Effort (optional)" select in task/schedule forms.
- *
- * `model` narrows the Antigravity ladder to the tiers that base model actually
- * offers (see above). The server's null is FINAL for Antigravity: it means the
- * catalog names no tier for this model, and the published provider-level ladder
- * must not resurrect an effort agy would reject.
+ * The effort levels a provider's CLI accepts, or null when it has no effort
+ * control. A sanitized provider inventory (no command/path/env) is answered from
+ * the ladder the server published on it. `model` narrows the Antigravity ladder;
+ * the server's null is FINAL there (the catalog names no tier for this model).
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
  * @param {string|null} [model]
  * @returns {readonly string[]|null}
@@ -361,22 +245,10 @@ export const effortLevelsForProvider = (provider, model = null) => {
 };
 
 /**
- * The effort a picker should keep after its MODEL changed under a fixed provider:
- * the current one, or `''` when the new model has no effort control at all.
- *
- * Antigravity's tiers are per-model, and a model with NO tiers hides the select
- * entirely (`effortLevelsForProvider` → null — `claude-sonnet-4-6` in the shipped
- * agy catalog has no `-low|-medium|-high` siblings). Without this the previous
- * effort stays in state with no UI left to clear it, and every submit path still
- * sends it: an invocation agy rejects (`--model claude-sonnet-4-6 --effort high`)
- * and, on the records that persist it, a stored level the run never used.
- *
- * A merely NARROWED ladder is deliberately left alone — `EffortSelect` renders an
- * explicit `medium (runs as low)` option there, so the clamp stays visible rather
- * than silently discarding the user's choice.
- *
- * CLIENT-ONLY (no server mirror) — the server clamps what it is sent; this keeps
- * the UI from sending something it stopped showing.
+ * The effort a picker keeps after its MODEL changed: the current one, or `''` when
+ * the new model has no effort control (an Antigravity model with no tiers hides the
+ * select, leaving a stale effort that submit paths would still send). A merely
+ * NARROWED ladder is left alone; `EffortSelect` shows the clamp. CLIENT-ONLY.
  * @param {{id?:string, command?:string, models?:unknown[], defaultModel?:string}|null|undefined} provider
  * @param {string|null|undefined} model - the NEWLY selected model
  * @param {string|null|undefined} effort - the currently selected effort
@@ -386,15 +258,9 @@ export const effortSurvivingModel = (provider, model, effort) =>
   (effortLevelsForProvider(provider, effectiveModelFor(provider, model)) ? (effort || '') : '');
 
 /**
- * The level a stored effort will ACTUALLY run at on this provider, or null when
- * no flag is emitted: the server's clamp, over the ladder resolved here (which
- * can come from the server-published fields).
- *
- * The UI needs this because the server clamps an out-of-ladder effort rather
- * than dropping it: a stage pinned to claude `max` and switched to Antigravity
- * (whose ladder stops at `high`) still runs, at `high`. Without this the select
- * holds a value matching no option, renders blank — reading as "Default effort"
- * — while the run silently uses the clamped level.
+ * The level a stored effort will ACTUALLY run at, or null when no flag is emitted:
+ * the server's clamp over the ladder resolved here. The server clamps rather than
+ * drops an out-of-ladder effort, so the select needs this or it renders blank.
  * @param {string|null|undefined} effort
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
  * @param {string|null} [model] - narrows the Antigravity ladder (see effortLevelsForProvider)
@@ -404,9 +270,7 @@ export const resolveCliEffort = (effort, provider, model = null) =>
   clampEffortToLadder(effort, effortLevelsForProvider(provider, model));
 
 /**
- * Union of one or more model-id lists, de-duplicated, order-preserving, falsy
- * values dropped. Used to merge a provider's stored `models` with the live
- * installed list for local backends.
+ * Union of model-id lists, de-duplicated, order-preserving, falsy dropped.
  * @param {...(string[]|undefined)} lists
  * @returns {string[]}
  */
@@ -423,11 +287,9 @@ export const mergeModelLists = (...lists) => {
 
 /**
  * Merge a partial-update payload onto an existing provider record in place, so
- * repointing a provider at a new backend (e.g. a fleet host) doesn't clobber
- * fields the payload didn't set out to change. A raw PATCH replaces whichever
- * top-level keys it names wholesale — without this, pointing an OpenCode TUI
- * provider at a new endpoint would silently drop its other env vars and reset
- * its served-model history to just the one new model id.
+ * repointing a provider doesn't clobber fields the payload didn't set (a raw PATCH
+ * replaces named top-level keys wholesale, dropping env vars and model history).
+ *
  *
  * @param {object|null|undefined} target - the existing provider being updated
  * @param {object} payload - field values about to be written; mutated in place
@@ -444,24 +306,14 @@ export const mergeProviderUpdate = (target, payload) => {
 };
 
 /**
- * Which default generation controls the provider editor should offer, or null
- * when the provider has none.
- *
- * Only the local OpenAI-compatible backends qualify — Ollama, llama.cpp, MTPLX
- * and vLLM (the first three reached directly as an `api` provider or through an
- * OpenCode CLI/TUI wrapper; vLLM ships only the wrappers), plus the hosted
- * gateways (OrcaRouter, OpenRouter). A hosted cloud provider is deliberately excluded: PortOS sends it no
- * sampling fields at all, so offering a stored temperature there would be a
- * control that silently does nothing.
- *
- * Each control is reported separately because the forwarding is uneven:
- * A gateway's upstream models own their own reasoning switch, so it has no
- * thinking toggle; and the Claude Code harness pointed at Ollama takes ONLY a
- * thinking signal (`MAX_THINKING_TOKENS=0` in server/lib/cliChildEnv.js) — it
- * owns its own sampling, so a temperature or top-p stored on one of those
- * records would never reach the daemon. MIRROR of `THINKING_STYLE` /
- * `buildAgentGeneration` in server/lib/opencodeConfig.js and
- * `apiGenerationOptions` in server/lib/aiToolkit/internal/generationOptions.js;
+ * Which default generation controls the provider editor should offer, or null.
+ * Only local OpenAI-compatible backends (Ollama, llama.cpp, MTPLX, vLLM, direct or
+ * via an OpenCode wrapper) and hosted gateways (OrcaRouter, OpenRouter) qualify;
+ * a hosted cloud provider is sent no sampling fields, so a control would do nothing.
+ * Controls are reported separately because forwarding is uneven (gateways have no
+ * thinking toggle; the Claude harness on Ollama takes ONLY a thinking signal).
+ * MIRROR of `THINKING_STYLE` / `buildAgentGeneration` in server/lib/opencodeConfig.js
+ * and `apiGenerationOptions` in server/lib/aiToolkit/internal/generationOptions.js;
  * keep in lockstep.
  * @param {object|null|undefined} provider
  * @returns {{temperature:boolean, topP:boolean, thinking:boolean}|null}
@@ -482,14 +334,10 @@ export const generationControlsFor = (provider) => {
     || provider?.sglangBacked === true;
   if (!local && !gateway) return null;
   if (isClaudeCommandProvider(provider)) {
-    // A Claude harness owns its own sampling, so only the thinking signal is
-    // ever forwardable — and only on Ollama, whose Anthropic endpoint maps an
-    // omitted `thinking` field to non-thinking mode (`MAX_THINKING_TOKENS=0`
-    // in server/lib/cliChildEnv.js). Every other local backend takes
-    // `chat_template_kwargs.enable_thinking`, which the Anthropic wire cannot
-    // carry — on SGLang the omitted field falls through to Qwen3.8's
-    // chat-template default (thinking ON), so offering the toggle there would
-    // pin a value nothing reads. No control at all is the honest answer.
+    // A Claude harness owns its sampling; only a thinking signal is forwardable,
+    // and only on Ollama (`MAX_THINKING_TOKENS=0` in server/lib/cliChildEnv.js).
+    // Other backends need `chat_template_kwargs.enable_thinking`, which the
+    // Anthropic wire cannot carry, so a toggle there would pin a value nothing reads.
     return isOllamaBackedProvider(provider)
       ? { temperature: false, topP: false, thinking: true }
       : null;

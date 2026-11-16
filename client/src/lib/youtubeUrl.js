@@ -1,5 +1,5 @@
 /**
- * `isYoutubeVideoUrl(text)` / `youtubeVideoId(url)` re-exported from `server/lib/youtubeUrl.js`, so
+ * `isYoutubeVideoUrl(text)` re-exported from `server/lib/youtubeUrl.js`, so
  * Quick Capture can only offer the ingest path for a URL the server accepts.
  *
  * Also the client-only `INGEST_OPTIONS` — the single table of the three ingest artifacts (`key` /
@@ -12,14 +12,14 @@
  * The YouTube ingest options Quick Capture offers, over the canonical
  * single-video URL rule in `server/lib/youtubeUrl.js`.
  *
- * `isYoutubeVideoUrl` / `youtubeVideoId` are re-exported from that leaf rather
+ * `isYoutubeVideoUrl` is re-exported from that leaf rather
  * than copied. Quick Capture swaps its whole submit path (brain capture →
  * YouTube ingest) on the predicate and reveals the options panel from it, so a
  * looser client answer would offer options for a URL the server refuses. The
  * throwing form the routes use lives in `server/lib/youtubeUrlAssert.js`, which
  * this deliberately does not reach for.
  */
-export { isYoutubeVideoUrl, youtubeVideoId } from '../../../server/lib/youtubeUrl.js';
+export { isYoutubeVideoUrl } from '../../../server/lib/youtubeUrl.js';
 
 /**
  * The three artifacts an ingest can produce, as ONE table.

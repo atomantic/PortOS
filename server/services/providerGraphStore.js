@@ -5,12 +5,11 @@ import { toPgJson } from '../lib/pgJson.js';
  * Postgres adapter for the provider connection graph — `ai_connections`,
  * `ai_harness_bindings`, `ai_route_bindings` (#6367).
  *
- * db-primary per `docs/STORAGE.md`: app-native relational identities with real
- * foreign keys, not an externally edited file. **Machine-local — never
- * federated**: every row names this host's endpoints, credentials and execution
- * environment (ADR `docs/decisions/2026-08-08-privacy-records-machine-local.md`).
- * No `sync_sequence`, no tombstones, no `PORTOS_SCHEMA_VERSIONS` entry. Covered
- * by the normal Postgres dump in backup, like every other db-primary table.
+ * Storage: `db-primary` — machine-local, never federated: rows name this host's endpoints,
+ * credentials and execution environment (no `sync_sequence`, tombstones or schema-version
+ * entry; hard deletes refused while referenced). db-primary because the uniqueness rules are
+ * graph integrity constraints JSON files cannot hold; `data/providers.json` stays the fully
+ * materialized execution contract, so a downgrade runs with these tables idle.
  *
  * This module is only row I/O and revision checks. The projection engine, the
  * reconciliation policy and the serialization against legacy provider writes

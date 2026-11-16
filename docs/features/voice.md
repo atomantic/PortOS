@@ -193,7 +193,7 @@ the message, never inside voice quiet hours, at most 3 calls per rolling 24
 hours and at least 30 minutes apart, counted in durable state so a restart
 cannot reset them. Escalation additionally fires only for a `critical`
 notification that is *still unread* after `escalateAfterMinutes`. See
-[Chief of Staff enhancement → Persistent Mind phone calls](./cos-enhancement.md#persistent-mind-phone-calls).
+[Persistent Mind continuous play → Persistent Mind phone calls](./persistent-mind-continuous-play.md#persistent-mind-phone-calls).
 
 **Calling PortOS back.** Turn on **Automatically answer incoming calls** in
 Settings → Voice → FaceTime Audio (`facetime.autoAnswer`, off by default) to

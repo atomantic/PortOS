@@ -11,7 +11,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, musicVideoPublishCopyPatchSchema, musicVideoPublishCopyDraftSchema, musicVideoPromotionPlanSchema, musicVideoPublishThumbnailSchema, musicVideoPublishFrameSchema, musicVideoCoverArtComposeSchema, musicVideoYoutubeThumbnailComposeSchema, musicVideoYoutubeThumbnailPaintSchema, musicVideoYoutubeThumbnailPaintPreviewSchema, musicVideoCoverArtGenerateSchema, musicVideoCoverDesignSaveSchema, musicVideoArtistStyleSaveSchema, musicVideoArtistStyleDeleteSchema, musicVideoCoverArtDesignSchema, musicVideoPublishTargetSchema, musicVideoPublishPrepareSchema, musicVideoPublishPlatformsPatchSchema, musicVideoPublishPostSchema, musicVideoPublishCrossLinksSchema, musicVideoCrossLinkTargetSchema, musicVideoCrossLinkEditSchema } from '../lib/validation.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
-import { startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, selectPublishKitThumbnail } from '../services/musicVideo/publishKit.js';
+import { startPublishKitBuild, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, selectPublishKitThumbnail, finalRenderFile, capturePublishKitFrame } from '../services/musicVideo/publishKit.js';
 import { preparePublishDraft, previewPublishPost, discardPublishDraft, listPublishDrafts, recordPublishPost, removePublishPost, prepareCrossLinkEdit, setPublishCrossLinks } from '../services/musicVideo/publish/index.js';
 import { getPublishPlatforms, updatePublishPlatforms, publishHistory } from '../services/musicVideo/publish/platforms.js';
 import { listArtistStyles, saveArtistStyle, removeArtistStyle } from '../services/musicVideo/publish/artistStyles.js';
@@ -23,14 +23,12 @@ const router = Router();
 // Platform encodes, thumbnails, captions and chapters from the final render
 // (an SSE job), plus per-platform copy: one user-triggered draft, then edits.
 router.get('/:id/publish-kit/video', asyncHandler(async (req, res) => {
-  const { finalRenderFile } = await import('../services/musicVideo/publishKit.js');
   const { path } = await finalRenderFile(await requireProject(req.params.id));
   res.sendFile(path);
 }));
 
 router.post('/:id/publish-kit/frame', asyncHandler(async (req, res) => {
   const { atSec } = validateRequest(musicVideoPublishFrameSchema, req.body ?? {});
-  const { capturePublishKitFrame } = await import('../services/musicVideo/publishKit.js');
   const { project } = await capturePublishKitFrame(req.params.id, atSec);
   res.json({ project });
 }));

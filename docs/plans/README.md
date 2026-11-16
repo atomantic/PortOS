@@ -20,6 +20,11 @@ Index of plans other docs point at:
   table that replaced them (and the interim archive), and the migrations that
   bring existing installs to it.
 
+**Retention rule.** A plan stays only while a living doc, ADR or source file links
+it (this index counts), and is deleted together with its feature. Unlinked plans
+are removed; git history keeps them. Specs and implementation plans from
+superpowers-driven builds live here too, not in a separate directory.
+
 These are point-in-time design records, not living docs — they are not updated
 to track implementation drift. For current behavior, see the code, `CLAUDE.md`,
 and the topic docs elsewhere under `docs/`.

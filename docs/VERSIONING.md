@@ -41,9 +41,8 @@ before every push and again after rebasing onto a moved base, as required by
 
 1. Release workflow triggers
 2. Creates git tag with current version (e.g., `v1.31.0`)
-3. Generates GitHub release with changelog (priority: exact `.changelog/v{version}.md` → pattern `.changelog/v{major}.{minor}.x.md` → fallback commit log) and uses the changelog's named first heading as the release title
-4. If a pattern changelog file (`.changelog/v{major}.{minor}.x.md`) was used, archives it by renaming to the exact version file on `main`
-5. If the archive step ran, only `main` advances; `release` stays on the CI-verified commit until the next promotion
+3. Generates the GitHub release from `.changelog/RELEASE.md` (commit-log fallback only when the file is missing) and uses its named first heading as the release title. The step fails when that heading's version differs from `package.json` or the notes exceed 100 KB; the body is never truncated
+4. Nothing is archived or renamed afterwards: GitHub Releases and the version tags are the archive
 
 ### Regular Development
 
@@ -179,8 +178,11 @@ merge in the candidate ledger.
 
 #### 2. Prepare and validate only this candidate
 
-Choose the version and synthesize `.changelog/v{version}.md` from the previous
-published tag through the pinned candidate. Count only substantive changes in
+Choose the version and synthesize `.changelog/RELEASE.md` (the one notes file,
+overwritten each release; this is the stated convention the shared release recipe
+follows, and the previous release's notes are not kept in the tree) from the previous
+published tag through the pinned candidate. The heading's version must equal the
+new `package.json` version and the file must stay under 100 KB. Count only substantive changes in
 that range for readiness (at least two); exclude metadata-only commits. Update
 all version-bearing package/lock files according to their existing conventions.
 Keep the named first heading described in [the changelog guide](../.changelog/README.md).
@@ -501,4 +503,4 @@ remain unreleased until the next candidate is captured.
 
 ## CI Skip
 
-Use `[skip ci]` in commit messages to prevent CI from running (used by automation for changelog archives).
+Use `[skip ci]` in commit messages to prevent CI from running (used by automation commits).

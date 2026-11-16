@@ -1,7 +1,6 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { assertA2vLoraStageRequest, isDefaultA2vLoraStages } from '../../lib/videoLoraStageValidation.js';
 
-export { assertA2vLoraStageRequest } from '../../lib/videoLoraStageValidation.js';
 
 export async function validateA2vLoraStages(options) {
   assertA2vLoraStageRequest(options);

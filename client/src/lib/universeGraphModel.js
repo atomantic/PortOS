@@ -1,13 +1,6 @@
 /**
  * Vocabulary + derivations for the Universe Builder's Graph tab.
  *
- * Vocabulary + derivations for the Universe Builder Graph tab: `GRAPH_KINDS`/`GRAPH_KIND_ORDER`,
- * `GRAPH_EDGE_TYPES`/`GRAPH_EDGE_GROUPS` (the seven `RELATIONSHIP_LINK_TYPES` plus the derived
- * attachment/appearance/membership/imageref groups), `indexGraph` (node map + adjacency +
- * degree/storyDegree), `computeUniverseGaps` (isolated / empty place / one-directional / no render /
- * co-appearance + lens suggestions — all pure derivations, never an LLM call), `evolutionStageRows`,
- * `neighbourIds`, `nodeInitials`, `hexToRgba`.
- *
  * The server hands back `{ nodes, edges, series, issues, totalIssues, appear }`
  * (see `server/services/universeGraph.js`); everything the view needs on top of
  * that — the palette, an adjacency index, and the "gaps & enrichment" findings

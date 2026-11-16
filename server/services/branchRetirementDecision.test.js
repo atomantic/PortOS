@@ -1,7 +1,8 @@
 /**
  * Hold/retire permutations for checkout retirement, decided over inspected
  * state (#16115, #16153). The real-git contract for each outcome stays in
- * branchReconcile.ownership.test.js and heldCheckoutRecovery.test.js; these pin
+ * branchReconcile.ownership.test.js, heldCheckoutRecovery.test.js,
+ * worktreeReap.test.js and worktreeExternalCleanup.test.js; these pin
  * every combination of holder, head, merge, dirt, lock, owner and completion
  * evidence, plus the order facts are read in (a hold must not pay for a later,
  * costlier read).
@@ -9,7 +10,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   decideBranchRetirement, decideDetachedRetirement, decideHeldCheckoutRetirement, decideInventoriedBranchRetirement, decideMergedCheckoutOwner,
-  decideMergedDelivery, decidePendingMergeReceipt, gatheredHoldReason, recoveryWorktreeReason, supersededPolicyHold,
+  decideCleanPushedDetach, decideForceRemoval, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideIdleNextHolderRelease, decideMergedDelivery, decideMergedWorktreeReap, decideMergedWorktreeRemoval, decidePendingMergeReceipt, decideWith, gatheredHoldReason,
+  recoveryWorktreeReason, supersededPolicyHold,
   SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS,
 } from './branchRetirementDecision.js';
 import { classifyBranches } from './branchReconcile.js';
@@ -466,5 +468,316 @@ describe('decideInventoriedBranchRetirement', () => {
     expect(inventoried().admit).toEqual({ missing: false });
     expect(inventoried({ delivered: true }).asked).not.toContain('mergeEvidence');
     expect(inventoried({ facts: { presence: false } }).asked).toEqual(['inventoryRow', 'defaultBranch', 'holders', 'presence']);
+  });
+});
+
+// The early merged-worktree reaper (#16153). Every row was a real-git case in
+// worktreeReap.test.js; that suite keeps one real-git contract per outcome and
+// destructive refusal.
+describe('decideMergedWorktreeReap', () => {
+  const COS = '/data/cos/worktrees';
+  const tree = (name, branch, extra = {}) => ({ path: `${MANAGED}/${name}`, branch: `refs/heads/${branch}`, head: HEAD, locked: false, ...extra });
+  const reap = ({ tree: t = tree('merged', 'merged-br'), facts = {}, ...input } = {}) => drive(decideMergedWorktreeReap, {
+    tree: t, defaultBranch: 'main', currentBranch: 'main', worktreesDir: COS, claudeTreesRoot: MANAGED, includeClaudeTrees: true,
+    activeAgentIds: new Set(), ...input,
+  }, { dirty: false, disposableHead: false, mergeEvidence: true, ...facts });
+
+  it.each([
+    // [removed real-git case, overrides, verdict]
+    ['a merged clean .claude tree is reaped', {}, 'retire'],
+    ['a merged branch whose checkout vanished (its status reads empty) is reaped', { facts: { dirty: false } }, 'retire'],
+    ['an unmerged tree is preserved', { facts: { mergeEvidence: false } }, 'unmerged'],
+    ['a merged tree with uncommitted changes is preserved', { facts: { dirty: true } }, 'uncommitted'],
+    ['a dirty tree whose PR merged at its exact head is reaped', { facts: { dirty: true, disposableHead: true } }, 'retire'],
+    ['a dirty tree whose PR merged at another head is preserved', { facts: { dirty: true, disposableHead: false } }, 'uncommitted'],
+    ['a fresh-from-main tree with uncommitted changes is preserved', { facts: { dirty: true, mergeEvidence: false } }, 'uncommitted'],
+    ['a locked merged tree is preserved', { tree: tree('locked', 'locked-br', { locked: true }) }, 'worktree-locked'],
+    ['an active agent\'s merged tree is skipped', { tree: tree('agent-active', 'active-br'), activeAgentIds: new Set(['agent-active']) }, 'worktree-active-agent'],
+    ['an agent tree holds while liveness is unknown', { tree: tree('agent-abc12345', 'cos/task-1/agent-abc12345'), activeAgentIds: null }, 'worktree-agent-liveness-unknown'],
+    ['a merged clean agent tree is reaped', { tree: tree('agent-abc12345', 'cos/task-1/agent-abc12345') }, 'retire'],
+    ['a human /claim tree is never reaped, even merged and clean', { tree: tree('claim-issue-42', 'claim/issue-42') }, 'worktree-human-claim'],
+    ['a claim-shaped tree in the CoS root lacks an agent id', { tree: { ...tree('x', 'claim/issue-42'), path: `${COS}/claim-issue-42` } }, 'worktree-missing-agent-id'],
+    ['a merged tree outside the managed roots is preserved', { tree: { ...tree('x', 'loose-br'), path: '/work/elsewhere/loose' } }, 'worktree-unmanaged-location'],
+    ['a merged clean gh-pages tree is protected', { tree: tree('pages', 'gh-pages') }, 'protected'],
+    ['a custom default branch is protected', { tree: tree('trunk', 'trunk'), defaultBranch: 'trunk' }, 'protected'],
+    ['the source workspace\'s checked-out branch is protected', { currentBranch: 'merged-br' }, 'protected'],
+    ['.claude trees are excluded on request', { includeClaudeTrees: false }, 'claude-tree-excluded'],
+    ['a CoS agent tree is still reaped when .claude trees are excluded', { tree: { ...tree('x', 'cos/task-1/agent-abc12345'), path: `${COS}/agent-abc12345` }, includeClaudeTrees: false }, 'retire'],
+    ['an unreadable status holds', { facts: { dirty: null } }, 'status-failed'],
+    ['a detached checkout has no branch', { tree: tree('detached', 'x', { branch: undefined, detached: true }) }, 'no-branch'],
+    ['a bare entry has no branch', { tree: tree('bare', 'x', { bare: true }) }, 'no-branch'],
+  ])('%s', (_name, overrides, expected) => {
+    expect(verdict(reap(overrides))).toBe(expected);
+  });
+
+  it('names the held branch only when the entry has one, and admits dirt only at an exact merged head', () => {
+    expect(reap({ tree: tree('detached', 'x', { branch: undefined, detached: true }) }).branch).toBeNull();
+    expect(reap({ tree: tree('locked', 'locked-br', { locked: true }) }).branch).toBe('locked-br');
+    expect(reap().admit).toEqual({ branch: 'merged-br', disposable: false });
+    expect(reap({ facts: { dirty: true, disposableHead: true } }).admit).toEqual({ branch: 'merged-br', disposable: true });
+  });
+
+  it('reads facts lazily: a lock or live owner reads nothing, a clean tree asks no forge, dirt reads no merge evidence', () => {
+    expect(reap({ tree: tree('locked', 'locked-br', { locked: true }) }).asked).toEqual([]);
+    expect(reap({ tree: tree('agent-active', 'active-br'), activeAgentIds: new Set(['agent-active']) }).asked).toEqual([]);
+    expect(reap().asked).toEqual(['dirty', 'mergeEvidence']);
+    expect(reap({ facts: { dirty: true } }).asked).toEqual(['dirty', 'disposableHead']);
+    expect(reap({ facts: { dirty: null } }).asked).toEqual(['dirty']);
+  });
+
+  it('counts lockfile-only churn as uncommitted work', () => {
+    // The reaper never discards lockfiles the way removeWorktree() does.
+    expect(classifyWorktreeDirt(' M package-lock.json\n').clean).toBe(false);
+  });
+});
+
+describe('decideMergedWorktreeRemoval', () => {
+  const PATH = `${MANAGED}/merged`;
+  const scanned = { path: PATH, branch: 'refs/heads/merged-br', head: HEAD };
+  const remove = ({ holder = { ...scanned, locked: false }, disposable = false, facts = {} } = {}) => drive(decideMergedWorktreeRemoval, {
+    tree: scanned, holder, sourceWorkspace: REPO, disposable, worktreesDir: '/data/cos/worktrees', claudeTreesRoot: MANAGED,
+  }, { agents: [], policyHold: null, activeAgentIds: new Set(), dirty: false, mergeEvidence: true, ...facts });
+
+  it.each([
+    ['the scanned holder still merged and clean is removed', {}, 'retire'],
+    ['a holder Git no longer lists', { holder: null }, 'worktree-holder-changed'],
+    ['a holder that switched branch', { holder: { ...scanned, branch: 'refs/heads/other' } }, 'worktree-holder-changed'],
+    ['a run registered in the checkout', { facts: { agents: [{ id: 'agent-live', status: 'running', workspacePath: PATH }] } }, 'claim-owner-active'],
+    ['a live claim bound to the branch', { facts: { agents: [live('new-owner', { claimBranches: ['merged-br'] })] } }, 'claim-owner-active'],
+    ['an unreadable owner registry', { facts: { agents: null } }, 'claim-ownership-unreadable'],
+    ['a completion handoff', { facts: { policyHold: 'pr-completion-human-handoff' } }, 'pr-completion-human-handoff'],
+    ['a lock taken since the scan', { holder: { ...scanned, locked: true } }, 'worktree-locked'],
+    ['an agent dispatched into the tree since the scan', { facts: { activeAgentIds: new Set(['merged']) } }, 'worktree-active-agent'],
+    ['fresh status that cannot be read', { facts: { dirty: null } }, 'worktree-status-unavailable'],
+    ['a clean tree that became dirty', { facts: { dirty: true } }, 'worktree-dirty'],
+    ['disposable dirt while the holder is still at the merged head', { disposable: true, facts: { dirty: true } }, 'retire'],
+    ['disposable dirt at the merged head spelled in another case', { disposable: true, holder: { ...scanned, head: HEAD.toUpperCase() }, facts: { dirty: true } }, 'retire'],
+    ['disposable dirt after the holder\'s head moved', { disposable: true, holder: { ...scanned, head: 'e'.repeat(40) }, facts: { dirty: true } }, 'worktree-dirty'],
+    ['merge evidence that no longer holds', { facts: { mergeEvidence: false } }, 'unmerged'],
+  ])('%s', (_name, overrides, expected) => {
+    expect(verdict(remove(overrides))).toBe(expected);
+  });
+
+  it('reads facts lazily: a changed holder reads nothing, an owner reads no policy, a lock reads no status', () => {
+    expect(remove({ holder: null }).asked).toEqual([]);
+    expect(remove({ facts: { agents: null } }).asked).toEqual(['agents']);
+    expect(remove({ holder: { ...scanned, locked: true } }).asked).toEqual(['agents', 'policyHold', 'activeAgentIds']);
+    expect(remove().asked).toEqual(['agents', 'policyHold', 'activeAgentIds', 'dirty', 'mergeEvidence']);
+    expect(remove({ facts: { dirty: true } }).asked).not.toContain('mergeEvidence');
+  });
+});
+
+// The external (managed-app) orphan cleanup (#16153). Every row was a real-git
+// case in worktreeExternalCleanup.test.js; that suite keeps one real-git
+// contract per outcome and destructive refusal.
+describe('decideExternalWorktreeCleanup', () => {
+  const COS = '/data/cos/worktrees';
+  const APP = '/work/managed-app';
+  const dir = name => `${COS}/${name}`;
+  const registered = (name, extra = {}) => ({ path: dir(name), branch: `refs/heads/${name}-br`, head: HEAD, locked: false, ...extra });
+  const primary = { path: APP, branch: 'refs/heads/main', head: MAIN_HEAD };
+  /** One agent checkout of a managed app with every fact clean and merged. */
+  const scan = ({ name = 'agent-merged', facts = {}, registrations, ...input } = {}) => drive(decideExternalWorktreeCleanup, {
+    path: dir(name), worktreesDir: COS, activeAgentIds: new Set(), retainedPaths: new Set(), ...input,
+  }, {
+    gitFile: true, commonDir: `${APP}/.git`, topLevel: dir(name), registrations: registrations ?? [primary, registered(name)],
+    parentCommonDir: `${APP}/.git`, defaultBranch: 'main', dirty: false, disposableHead: false, mergeEvidence: true, ...facts,
+  });
+
+  it.each([
+    // [removed real-git case, overrides, verdict]
+    ['a merged clean agent checkout is reclaimed', {}, 'retire'],
+    ['a dirty checkout is retained', { facts: { dirty: true } }, 'uncommitted'],
+    ['a dirty checkout whose PR merged at its exact head is reclaimed', { facts: { dirty: true, disposableHead: true } }, 'retire'],
+    ['an unmerged checkout is retained', { facts: { mergeEvidence: false } }, 'unmerged'],
+    ['a failed cherry probe is not merge evidence', { facts: { mergeEvidence: null } }, 'unmerged'],
+    ['a locked checkout is retained', { registrations: [primary, registered('agent-merged', { locked: true })] }, 'worktree-locked'],
+    ['a detached checkout is retained', { registrations: [primary, registered('agent-merged', { branch: undefined, detached: true })] }, 'not-a-branch-registration'],
+    ['a prunable registration is retained', { registrations: [primary, registered('agent-merged', { prunable: true })] }, 'not-a-branch-registration'],
+    ['a checkout Git does not list is retained', { registrations: [primary] }, 'not-a-branch-registration'],
+    ['an unreadable registry is retained', { facts: { registrations: null } }, 'not-a-branch-registration'],
+    ['the parent repository\'s own checkout is never reclaimed', { registrations: [registered('agent-merged'), primary] }, 'primary-checkout'],
+    ['an active agent\'s checkout is retained', { activeAgentIds: new Set(['agent-merged']) }, 'worktree-active-agent'],
+    ['liveness that cannot be established retains every checkout', { activeAgentIds: null }, 'worktree-agent-liveness-unknown'],
+    ['a claim-shaped checkout in the CoS root lacks an agent id', { name: 'claim-issue-42' }, 'worktree-missing-agent-id'],
+    ['a non-agent directory is retained', { name: 'other-work' }, 'worktree-missing-agent-id'],
+    ['gh-pages is protected even when clean and merged', { registrations: [primary, registered('agent-pages', { branch: 'refs/heads/gh-pages' })], name: 'agent-pages' }, 'protected'],
+    ['the parent\'s default branch is protected', { facts: { defaultBranch: 'agent-merged-br' } }, 'protected'],
+    ['a parent repository that disappeared is retained', { facts: { parentCommonDir: null } }, 'foreign-common-dir'],
+    ['a parent with another common directory is retained', { facts: { parentCommonDir: '/work/other/.git' } }, 'foreign-common-dir'],
+    ['an unreadable default branch is retained', { facts: { defaultBranch: null } }, 'default-branch-unreadable'],
+    ['an unreadable git pointer is retained', { facts: { commonDir: null } }, 'git-common-dir-unreadable'],
+    ['a failed top-level read is retained', { facts: { topLevel: null } }, 'git-toplevel-unreadable'],
+    ['a plain directory (no .git file) is retained', { facts: { gitFile: false } }, 'not-a-linked-checkout'],
+    ['a checkout kept by an earlier phase of the sweep', { retainedPaths: new Set([dir('agent-merged')]) }, 'retained-by-sweep'],
+    ['an unreadable status is retained', { facts: { dirty: null } }, 'status-failed'],
+  ])('%s', (_name, overrides, expected) => {
+    expect(verdict(scan(overrides))).toBe(expected);
+  });
+
+  it('matches Git\'s registration spelling through the injected path comparison', () => {
+    const alias = registered('agent-merged', { path: 'C:/DATA~1/agent-merged' });
+    const samePath = (a, b) => a === b || [a, b].sort().join() === [dir('agent-merged'), 'C:/DATA~1/agent-merged'].sort().join();
+    expect(verdict(scan({ samePath, registrations: [primary, alias] }))).toBe('retire');
+    expect(verdict(scan({ registrations: [primary, alias] }))).toBe('not-a-branch-registration');
+  });
+
+  it('admits the registration, its repository and whether dirt is disposable', () => {
+    expect(scan().admit).toEqual({ tree: registered('agent-merged'), repoPath: APP, branch: 'agent-merged-br', disposable: false });
+    expect(scan({ facts: { dirty: true, disposableHead: true } }).admit.disposable).toBe(true);
+  });
+
+  it('reads facts lazily: a lock or live owner reads nothing, dirt reads no merge evidence, a clean tree asks no forge', () => {
+    expect(scan({ activeAgentIds: new Set(['agent-merged']) }).asked).toEqual([]);
+    expect(scan({ name: 'claim-issue-42' }).asked).toEqual([]);
+    expect(scan({ registrations: [primary, registered('agent-merged', { locked: true })] }).asked)
+      .toEqual(['gitFile', 'commonDir', 'topLevel', 'registrations']);
+    expect(scan().asked).toEqual(['gitFile', 'commonDir', 'topLevel', 'registrations', 'parentCommonDir', 'defaultBranch', 'dirty', 'mergeEvidence']);
+    expect(scan({ facts: { dirty: true } }).asked).toEqual(['gitFile', 'commonDir', 'topLevel', 'registrations', 'parentCommonDir', 'defaultBranch', 'dirty', 'disposableHead']);
+    expect(scan({ facts: { dirty: null } }).asked).not.toContain('mergeEvidence');
+  });
+
+  it('names the parent repository, branch and head on the reads that need them', () => {
+    const base = { path: dir('agent-merged'), worktreesDir: COS, activeAgentIds: new Set(), retainedPaths: new Set() };
+    const facts = { gitFile: true, commonDir: `${APP}/.git`, topLevel: dir('agent-merged'), registrations: [primary, registered('agent-merged')] };
+    expect(decideExternalWorktreeCleanup({ ...base, facts })).toEqual({ need: 'parentCommonDir', repo: APP });
+    Object.assign(facts, { parentCommonDir: `${APP}/.git` });
+    expect(decideExternalWorktreeCleanup({ ...base, facts })).toEqual({ need: 'defaultBranch', repo: APP });
+    Object.assign(facts, { defaultBranch: 'main', dirty: true });
+    expect(decideExternalWorktreeCleanup({ ...base, facts })).toEqual({ need: 'disposableHead', repo: APP, branch: 'agent-merged-br', head: HEAD });
+    Object.assign(facts, { disposableHead: true });
+    expect(decideExternalWorktreeCleanup({ ...base, facts })).toEqual({ need: 'mergeEvidence', repo: APP, branch: 'agent-merged-br' });
+  });
+});
+
+describe('decideExternalWorktreeRemoval', () => {
+  const COS = '/data/cos/worktrees';
+  const PATH = `${COS}/agent-merged`;
+  const scanned = { path: '/private/data/cos/worktrees/agent-merged', branch: 'refs/heads/agent-merged-br', head: HEAD };
+  const remove = ({ holder = { ...scanned, locked: false }, disposable = false, facts = {} } = {}) => drive(decideExternalWorktreeRemoval, {
+    tree: scanned, path: PATH, holder, repoPath: '/work/managed-app', disposable, worktreesDir: COS,
+  }, { agents: [], policyHold: null, activeAgentIds: new Set(), dirty: false, mergeEvidence: true, ...facts });
+
+  it.each([
+    ['the scanned registration still merged and clean is removed', {}, 'retire'],
+    ['a registration Git no longer lists', { holder: null }, 'worktree-holder-changed'],
+    ['a holder that switched branch', { holder: { ...scanned, branch: 'refs/heads/other' } }, 'worktree-holder-changed'],
+    ['a holder whose head moved since the scan', { holder: { ...scanned, head: 'e'.repeat(40) } }, 'worktree-holder-changed'],
+    ['a run registered in the checkout', { facts: { agents: [{ id: 'agent-live', status: 'running', workspacePath: PATH, sourceWorkspace: '/work/managed-app' }] } }, 'claim-owner-active'],
+    ['an unreadable owner registry', { facts: { agents: null } }, 'claim-ownership-unreadable'],
+    ['an unreadable durable completion policy', { facts: { policyHold: 'completion-policy-unreadable' } }, 'completion-policy-unreadable'],
+    ['a lock taken since the scan', { holder: { ...scanned, locked: true } }, 'worktree-locked'],
+    ['an agent dispatched into the tree since the scan', { facts: { activeAgentIds: new Set(['agent-merged']) } }, 'worktree-active-agent'],
+    ['liveness lost since the scan', { facts: { activeAgentIds: null } }, 'worktree-agent-liveness-unknown'],
+    ['fresh status that cannot be read', { facts: { dirty: null } }, 'worktree-status-unavailable'],
+    ['a clean tree that became dirty', { facts: { dirty: true } }, 'worktree-dirty'],
+    ['disposable dirt while the registration is still at the merged head', { disposable: true, facts: { dirty: true } }, 'retire'],
+    ['merge evidence that no longer holds', { facts: { mergeEvidence: false } }, 'unmerged'],
+  ])('%s', (_name, overrides, expected) => {
+    expect(verdict(remove(overrides))).toBe(expected);
+  });
+
+  it('judges ownership by the directory under the worktrees root, not Git\'s spelling of it', () => {
+    // The registration's own path is outside the root's spelling; the managed directory is not.
+    expect(verdict(remove({ facts: { agents: [{ id: 'agent-live', status: 'running', workspacePath: scanned.path, sourceWorkspace: '/work/managed-app' }] } }))).toBe('retire');
+  });
+});
+
+describe('decideIdleNextHolderRelease', () => {
+  const WT = '/data/cos/worktrees';
+  const HOLDER = '/work/next-issue-1';
+  const IDLE = 10 * 60 * 1000;
+  const holder = (extra = {}) => ({ path: HOLDER, locked: false, prunable: false, exists: true, ...extra });
+  /** An idle, clean, pushed sibling `/do:next` checkout unless overridden. */
+  const release = ({ facts = {}, ...input } = {}) => drive(decideIdleNextHolderRelease, {
+    branchName: 'next/issue-1', holderIndex: 1, holder: holder(), worktreesDir: WT, idleMs: IDLE, nowMs: 100 * IDLE, ...input,
+  }, { lastTouchMs: 0, porcelain: '', remoteRef: 'origin/next/issue-1', pushed: true, ...facts });
+
+  it.each([
+    // [removed real-git case, overrides, verdict]
+    ['an idle, clean, pushed sibling tree is released', {}, 'retire'],
+    ['a tree touched within the idle window', { facts: { lastTouchMs: 99.5 * IDLE } }, 'recently-touched'],
+    ['a tree touched exactly at the idle boundary is released', { facts: { lastTouchMs: 99 * IDLE } }, 'retire'],
+    ['an unreadable git directory', { facts: { lastTouchMs: null } }, 'git-dir-unreadable'],
+    ['a tree a running agent works in', { activeWorkspacePaths: [HOLDER] }, 'worktree-active-agent'],
+    ['a tree containing a running agent\'s workspace', { activeWorkspacePaths: [`${HOLDER}/sub`] }, 'worktree-active-agent'],
+    ['the primary checkout', { holderIndex: 0 }, 'primary-checkout'],
+    ['a branch with no holder', { holderIndex: -1 }, 'primary-checkout'],
+    ['a non-/do:next branch', { branchName: 'feature/x' }, 'not-a-next-branch'],
+    ['a locked tree', { holder: holder({ locked: true }) }, 'worktree-locked'],
+    ['a prunable registration', { holder: holder({ prunable: true }) }, 'worktree-missing'],
+    ['a directory that is gone', { holder: holder({ exists: false }) }, 'worktree-missing'],
+    ['a tree under the managed root', { holder: holder({ path: `${WT}/agent-1` }) }, 'managed-worktree'],
+    ['an untracked file', { facts: { porcelain: '?? notes.txt' } }, 'uncommitted'],
+    ['an untracked file when untracked is allowed', { allowUntracked: true, facts: { porcelain: '?? notes.txt' } }, 'retire'],
+    ['a staged file when untracked is allowed', { allowUntracked: true, facts: { porcelain: '?? a.txt\nA  tracked.txt' } }, 'uncommitted'],
+    ['an unreadable status', { facts: { porcelain: null } }, 'status-failed'],
+    ['a branch with no remote ref', { facts: { remoteRef: null } }, 'no-remote-ref'],
+    ['a commit that exists only locally', { facts: { pushed: false } }, 'unpushed'],
+    ['a failed ancestry probe', { facts: { pushed: null } }, 'unpushed'],
+  ])('%s', (_name, overrides, expected) => {
+    expect(verdict(release(overrides))).toBe(expected);
+  });
+
+  it('reads the idle clock before status, and nothing when an earlier gate holds', () => {
+    expect(release().asked).toEqual(['lastTouchMs', 'porcelain', 'remoteRef', 'pushed']);
+    expect(release({ holder: holder({ locked: true }) }).asked).toEqual([]);
+    expect(release({ facts: { lastTouchMs: 99.5 * IDLE } }).asked).toEqual(['lastTouchMs']);
+    expect(release({ facts: { porcelain: 'M a' } }).asked).toEqual(['lastTouchMs', 'porcelain']);
+  });
+
+  it('shares the clean-and-pushed gate with the ownerless release', () => {
+    expect(decideCleanPushedDetach({ facts: {} })).toEqual({ need: 'porcelain' });
+    expect(decideCleanPushedDetach({ facts: { porcelain: '', remoteRef: 'r', pushed: true } })).toEqual({ admit: true });
+  });
+});
+
+describe('decideForceRemoval', () => {
+  const reg = (extra = {}) => ({ holder: { locked: false, branch: 'refs/heads/b', head: 'h1', ...extra } });
+  const force = ({ guarded = true, facts = {} } = {}) => drive(decideForceRemoval, { guarded }, {
+    listing: reg(), identity: 'inc-1', guardReason: false, fresh: reg(), identityAfter: 'inc-1', ...facts,
+  });
+
+  it.each([
+    // [removed real-git case, overrides, verdict]
+    ['a clean registered worktree', {}, 'retire'],
+    ['an unguarded clean worktree', { guarded: false }, 'retire'],
+    ['an already-removed directory with no registration', { facts: { listing: { holder: null }, fresh: { holder: null } } }, 'retire'],
+    ['an unreadable registry', { facts: { listing: null } }, 'worktree-ownership-unreadable'],
+    ['a locked worktree', { facts: { listing: reg({ locked: true }) } }, 'worktree-locked'],
+    ['a lock acquired during the guard', { facts: { fresh: reg({ locked: true }) } }, 'worktree-locked'],
+    ['a guard that declines', { facts: { guardReason: 'unmerged' } }, 'unmerged'],
+    ['a registry that becomes unreadable after the guard', { facts: { fresh: null } }, 'worktree-ownership-unreadable'],
+    ['a head moved during the guard', { facts: { fresh: reg({ head: 'h2' }) } }, 'worktree-holder-changed'],
+    ['a branch switched during the guard', { facts: { fresh: reg({ branch: 'refs/heads/c' }) } }, 'worktree-holder-changed'],
+    ['a registration that vanished during the guard', { facts: { fresh: { holder: null } } }, 'worktree-holder-changed'],
+    ['a checkout recreated at the same path and head', { facts: { identityAfter: 'inc-2' } }, 'worktree-holder-changed'],
+    ['a recreated checkout without a guard (nothing captured)', { guarded: false, facts: { identityAfter: 'inc-2' } }, 'retire'],
+  ])('%s', (_name, overrides, expected) => {
+    expect(verdict(force(overrides))).toBe(expected);
+  });
+
+  it('asks nothing further once a lock, an unreadable registry or a declining guard holds', () => {
+    expect(force({ facts: { listing: reg({ locked: true }) } }).asked).toEqual(['listing']);
+    expect(force({ facts: { listing: null } }).asked).toEqual(['listing']);
+    expect(force({ facts: { guardReason: 'x' } }).asked).toEqual(['listing', 'identity', 'guardReason']);
+    expect(force().asked).toEqual(['listing', 'identity', 'guardReason', 'fresh', 'identityAfter']);
+    expect(force({ guarded: false }).asked).toEqual(['listing', 'fresh']);
+  });
+});
+
+describe('decideWith', () => {
+  it('reads each asked fact once, in order, and records a failed read as null', async () => {
+    const reads = [];
+    const step = await decideWith(facts => {
+      if (facts.first === undefined) return { need: 'first' };
+      if (facts.second === undefined) return { need: 'second' };
+      return { done: [facts.first, facts.second] };
+    }, {
+      first: async () => { reads.push('first'); return undefined; },
+      second: (facts, asking) => { reads.push(`${asking.need}:${facts.first}`); return false; },
+    });
+    expect(step).toEqual({ done: [null, false] });
+    expect(reads).toEqual(['first', 'second:null']);
   });
 });

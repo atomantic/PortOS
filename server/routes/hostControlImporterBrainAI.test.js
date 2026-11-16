@@ -1,10 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
+import { expectAuthorizedWorkflows, expectRemoteRefusal } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-importer-brain-ai-') }));
@@ -64,8 +60,6 @@ vi.mock('../services/goalScorecard.js', async (importOriginal) => ({
   refreshScorecardNarrative: vi.fn(async () => ({})),
 }));
 
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
-import { createSession } from '../services/auth.js';
 import importerRoutes from './importer.js';
 import brainCaptureRoutes from './brainCapture.js';
 import brainDigestRoutes from './brainDigest.js';
@@ -101,123 +95,32 @@ const operations = [
   ['post', '/api/model-personality/run', { providerId: 'example-cli', includeAlignment: true }, runPersonalityTest, 200],
   ['post', '/api/insights/goal-scorecard/narrative', { providerId: 'example-cli' }, refreshScorecardNarrative, 200],
 ];
-// Distinct services touched by the table, so the "never ran" check covers each once.
-const sinks = [...new Set(operations.map(([, , , service]) => service))];
-
-const appFor = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/importer', importerRoutes);
-  app.use('/api/brain', brainCaptureRoutes, brainDigestRoutes, brainDailyLogRoutes);
-  app.use('/api/model-personality', modelPersonalityRoutes);
-  app.use('/api/insights', insightsRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
-const send = (app, [method, path, body], headers = {}) => {
-  const pending = request(app)[method](path);
-  for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return pending.send(body);
-};
-const expectNoEffects = () => {
-  for (const service of sinks) expect(service).not.toHaveBeenCalled();
-};
+const mounts = [
+  ['/api/importer', importerRoutes],
+  ['/api/brain', brainCaptureRoutes],
+  ['/api/brain', brainDigestRoutes],
+  ['/api/brain', brainDailyLogRoutes],
+  ['/api/model-personality', modelPersonalityRoutes],
+  ['/api/insights', insightsRoutes],
+];
 
 beforeEach(() => {
   vi.clearAllMocks();
   auth.enabled = false;
 });
 
-describe('Importer, Brain and analytics AI operator authority (#11036)', () => {
-  it('refuses a remote password-free caller, including spoofed-proxy variants, before any effect', async () => {
-    for (const operation of operations) {
-      for (const [address, headers] of [
-        ['192.0.2.10', {}],
-        ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
-        ['192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }],
-      ]) {
-        const response = await send(appFor(address), operation, headers);
-        expect([response.status, response.body.code], operation[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
-    }
-    expectNoEffects();
+// The refusal/principal matrix lives in services/authGate.test.js and
+// hostControlCoverage.test.js; this keeps one refusal and every authorized workflow.
+describe('Importer, Brain and analytics AI behind the default-deny gate (#11036, #16114)', () => {
+  it('refuses a remote caller before any effect', async () => {
+    const [method, path, body, effect] = operations[0];
+    await expectRemoteRefusal(mounts, [method, path, body, effect]);
   });
 
-  it('requires authentication with a password, denies legacy Basic and scoped-peer credentials', async () => {
-    auth.enabled = true;
-    for (const operation of operations) {
-      for (const [headers, status] of [
-        [{}, 401],
-        [{ Authorization: 'Bearer invalid-session' }, 401],
-        [{ Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403],
-        [{
-          [PEER_AUTH_HEADER]: derivePeerAuthToken('a'.repeat(32), 'example-instance'),
-          [PEER_INSTANCE_HEADER]: 'example-instance',
-        }, 403],
-      ]) {
-        const response = await send(appFor(), operation, headers);
-        expect(response.status, operation[1]).toBe(status);
-        if (status === 401) expect(response.body.code, operation[1]).toBe('AUTH_REQUIRED');
-      }
-    }
-    expectNoEffects();
-  });
-
-  it('matches case and trailing-slash variants before any effect', async () => {
-    for (const [method, path, body] of operations) {
-      const response = await send(appFor(), [method, path.toUpperCase() + '/', body]);
-      expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    expectNoEffects();
-  });
-
-  it('keeps working for local callers, operator sessions and delegated agent sessions', async () => {
-    const operator = await createSession();
-    const agent = await createSession({ label: 'agent' });
-    for (const [enabled, address, headers] of [
-      [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Authorization: `Bearer ${operator.token}` }],
-      [true, '192.0.2.10', { Cookie: `portos_auth=${agent.token}` }],
-      [true, '192.0.2.10', { Authorization: `Bearer ${agent.token}` }],
-    ]) {
-      auth.enabled = enabled;
-      for (const operation of operations) {
-        const response = await send(appFor(address), operation, headers);
-        expect(response.status, `${operation[1]}: ${JSON.stringify(response.body)}`).toBe(operation[4]);
-      }
-    }
-    for (const service of sinks) expect(service).toHaveBeenCalled();
-  });
-
-  it('gates every Importer commit body for a remote caller and commits without cleanup for a local one', async () => {
-    const bodies = [commitBody, { ...commitBody, cleanupFormatting: false }];
-    for (const body of bodies) {
-      const refused = await send(appFor('192.0.2.10'), ['post', '/api/importer/commit', body]);
-      expect([refused.status, refused.body.code], JSON.stringify(body)).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    expect(commitImport).not.toHaveBeenCalled();
-
-    for (const body of bodies) {
-      const response = await send(appFor('127.0.0.1'), ['post', '/api/importer/commit', body]);
-      expect(response.status, JSON.stringify(body)).toBe(200);
-    }
-    expect(commitImport).toHaveBeenCalledTimes(2);
-  });
-
-  it('leaves record reads open remotely and runs Brain daily-log CRUD for host control without AI', async () => {
-    expect((await request(appFor()).get('/api/importer/config')).status).toBe(200);
-    const appendOp = ['post', '/api/brain/daily-log/2026-01-02/append', { text: 'Example entry' }];
-    const refused = await send(appFor(), appendOp);
-    expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    expect(appendJournal).not.toHaveBeenCalled();
-
-    const append = await send(appFor('127.0.0.1'), appendOp);
-    expect(append.status).toBe(200);
-    expect(appendJournal).toHaveBeenCalledTimes(1);
-    expectNoEffects();
+  it('keeps every AI operation and Brain daily-log write working for local callers and agent sessions', async () => {
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: [
+      ...operations,
+      ['post', '/api/brain/daily-log/2026-01-02/append', { text: 'Example entry' }, appendJournal, 200],
+    ] });
   });
 });

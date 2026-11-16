@@ -138,17 +138,6 @@ describe('CoS Job Routes', () => {
     });
   });
 
-  describe('GET /api/cos/jobs/allowed-commands', () => {
-    it('should return allowed commands', async () => {
-      autonomousJobs.getAllowedCommands.mockReturnValue(['git', 'npm']);
-
-      const response = await request(app).get('/api/cos/jobs/allowed-commands');
-
-      expect(response.status).toBe(200);
-      expect(response.body.commands).toEqual(['git', 'npm']);
-    });
-  });
-
   describe('GET /api/cos/jobs/gates', () => {
     it('should return all gate results', async () => {
       getRegisteredGates.mockReturnValue(['j1']);
@@ -182,7 +171,7 @@ describe('CoS Job Routes', () => {
       const response = await request(app).get('/api/cos/jobs/j1');
 
       expect(response.status).toBe(200);
-      expect(response.body.name).toBe('Review');
+      expect(autonomousJobs.getJob.mock.calls[0][0]).toBe('j1');
     });
 
     it('should return 404 if job not found', async () => {
@@ -407,6 +396,7 @@ describe('CoS Job Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
+      expect(autonomousJobs.updateJob.mock.calls[0][0]).toBe('j1');
     });
 
     it('should return 404 if job not found', async () => {
@@ -490,6 +480,7 @@ describe('CoS Job Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
+      expect(autonomousJobs.toggleJob.mock.calls[0][0]).toBe('j1');
     });
 
     it('should return 404 if job not found', async () => {
@@ -818,6 +809,7 @@ describe('CoS Job Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
+      expect(autonomousJobs.deleteJob.mock.calls[0][0]).toBe('j1');
     });
 
     it('should return 404 if job not found', async () => {

@@ -20,12 +20,6 @@ export function _testChromeCaptureArgs(profile) {
   ];
 }
 
-// First existing candidate wins, as before, but the winner's source is an enum
-// that startup diagnostics can report without printing any path.
-export function _selectTestChrome(candidates) {
-  return candidates.find(({ path }) => path && existsSync(path));
-}
-
 // Failure-only observations of this owned child and its current worker: Linux
 // procfs samples, or bounded lifecycle categories on macOS.
 // Never read cmdline, environ, links, stacks, or arbitrary process output.

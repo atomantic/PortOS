@@ -27,7 +27,7 @@ import { VOICE_TEXT_MAX_CHARS } from '../../lib/apiContractSchemas.js';
 // with the dashboard's time-window validator). Re-exported here so the
 // route-level Zod schema in `routes/voice.js` validates the same lenient
 // HH:MM shape and tests can exercise the parser directly.
-export { HHMM_RE, parseHHMM } from '../../lib/timezone.js';
+export { HHMM_RE } from '../../lib/timezone.js';
 
 // Maximum spoken-text length for proactive lines. The /api/voice/speak Zod
 // schema already caps HTTP payloads at 4000 chars, but `speakProactive` is

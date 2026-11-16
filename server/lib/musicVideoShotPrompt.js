@@ -2,21 +2,6 @@
  * The model input for a Music Video shot's clip and its start and end frames (#11317): the director's
  * own text, then each block PortOS adds as a labeled addition the UI lists as a chip.
  *
- * The model input for a Music Video shot's clip and stills (#11317):
- * `musicVideoShotModelInput(project, scene, opts)` → `{ prompt, promptAdditions }`, the director's
- * text plus each block PortOS adds (project look, bible, palette/camera rules, shot direction,
- * lighting continuity, camera move, shot actions, Grok phrase timing, audio-reactive guard, song audio
- * reference, repair notes) as a labeled addition; a take that hears no audio is composed without the
- * look, song timing or on-beat camera clause, and a local render leaves out the production bible (its
- * start frame carries identity and LTX-2's text encoder takes 1024 tokens).
- * `musicVideoFrameModelInput(project, scene, { slot, fromFrame, refine, repairs, fixes, references })`
- * does the same for a start or end frame (look, frame direction, plate actions, rework line,
- * keep-the-shot line, refine wrapper). Its `reference-map` block identifies sent character, set, prop
- * and wardrobe references by position. `authoredShotPrompt` (a shot's own prompt, else its storyboard
- * panel's direction via `storyboardShotDirection`, else its frame prompt), `authoredFramePromptText`
- * and `visualDirection`. Shared by the shot card, the board, the production run and the image and
- * video submits.
- *
  * Shared by the shot card (its "Sent to the model" view), the board's renders and the server's video
  * submit, so what the card shows is what the submit sends.
  *
@@ -261,6 +246,14 @@ function musicVideoReferenceMapText(references = []) {
     if (!ref || ref.panelArt) return [];
     const label = typeof ref.label === 'string' && ref.label.trim() ? ref.label : 'a reference';
     const note = typeof ref.note === 'string' ? ref.note : '';
+    // A shared comparison sheet (musicVideoLinkedCastReferences `comparison`) shows two people side by side.
+    const pair = ref.role === 'character' && Array.isArray(ref.comparison?.names) && ref.comparison.names.length > 1 ? ref.comparison : null;
+    if (pair) {
+      const who = pair.sides && pair.names.length === 2
+        ? `${pair.names[0]} on its left half and ${pair.names[1]} on its right half`
+        : `${pair.names.slice(0, -1).join(', ')} and ${pair.names.at(-1)}`;
+      return [`Reference image ${n} is a comparison sheet of ${who}: these exact people side by side at their true relative height. Match each person's face, hair, skin, build and age exactly to their own figures on it; never blend one person's face with another's. It is a likeness sheet, not a layout: show only the people this shot calls for.`];
+    }
     if (ref.role === 'character') {
       return [`Reference image ${n} is ${label}: this exact person. Match their face, hair, skin, build and age exactly${note ? ` (${note})` : ''}; never blend their face with anyone else's.`];
     }

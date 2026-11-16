@@ -213,6 +213,7 @@ import { createModelComparisonRoutes } from './routes/modelComparison.js';
 import { createModelPerformanceBenchmarkRoutes } from './routes/modelPerformanceBenchmarks.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
 import { createPortOSPromptsRoutes } from './routes/prompts.js';
+import { startNativeUsageRefresh } from './services/nativeUsageHistory.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -623,6 +624,6 @@ if (!isSmokeBoot()) {
   // Local file scan only (no provider calls): keeps each provider app's own usage
   // history (Claude Code, Codex, Grok) current for the Usage report and peers
   // even when the usage page is never opened.
-  import('./services/nativeUsageHistory.js').then(({ startNativeUsageRefresh }) => startNativeUsageRefresh())
+  Promise.resolve().then(() => startNativeUsageRefresh())
     .catch((err) => console.error(`❌ Native usage history refresh could not start: ${err.message}`));
 }

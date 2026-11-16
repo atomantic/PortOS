@@ -1,10 +1,6 @@
 /**
  * FableLoom production batch planning and topological orchestration.
  *
- * FableLoom production batch planning and topological orchestration: shared still/video render-format
- * presets and story-level image/video provider preferences (16:9 default), ordered episode storyboard
- * gates, DAG resolution, asset enumeration, execution stages, and exact-input provenance verification.
- *
  * Pure, side-effect-free helpers for enumerating planned production assets
  * across reachable graph nodes, computing topological execution batches,
  * evaluating readiness gates, and verifying exact-input provenance.
@@ -16,6 +12,7 @@ import { EFFORT_LEVELS } from './providerModels.js';
 import { validateAudioOccupancy } from './fableLoomPlayback.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import { isNonBlankStr } from './textUtils.js';
+import { isPlainObject } from './objects.js';
 
 export const FABLELOOM_PRODUCTION_MODES = Object.freeze(['current_canon', 'exact_inputs']);
 export const FABLELOOM_PRODUCTION_MODE_DEFAULT = 'current_canon';
@@ -45,7 +42,6 @@ export const FABLELOOM_RENDER_PREFERENCE_KEYS = Object.freeze([
   'imageMode', 'imageModel', 'videoMode', 'videoModel', 'effort',
 ]);
 
-const isRecord = (value) => value != null && typeof value === 'object' && !Array.isArray(value);
 const hasOwn = (value, key) => Object.hasOwn(value, key);
 const trimModelId = (value) => (typeof value === 'string' && value.trim()
   ? value.trim().slice(0, 64)
@@ -95,7 +91,7 @@ const exactVoiceProfileIssues = ({ characterId, universeId, recordedVersion, rec
  * local model rather than presenting a misleading pin to the planner.
  */
 export function asFableLoomRenderPreferences(raw) {
-  const source = isRecord(raw) ? raw : {};
+  const source = isPlainObject(raw) ? raw : {};
   const imageMode = QUEUEABLE_IMAGE_MODES.includes(source.imageMode) ? source.imageMode : null;
   const videoMode = VIDEO_GEN_MODES.includes(source.videoMode) ? source.videoMode : null;
   return {
@@ -113,7 +109,7 @@ export function asFableLoomRenderPreferences(raw) {
  */
 export function sanitizeFableLoomRenderSettings(raw) {
   const geometry = asFableLoomRenderSettings(raw);
-  if (!isRecord(raw) || !FABLELOOM_RENDER_PREFERENCE_KEYS.some((key) => hasOwn(raw, key))) {
+  if (!isPlainObject(raw) || !FABLELOOM_RENDER_PREFERENCE_KEYS.some((key) => hasOwn(raw, key))) {
     return geometry;
   }
   return { ...geometry, ...asFableLoomRenderPreferences(raw) };
@@ -121,8 +117,8 @@ export function sanitizeFableLoomRenderSettings(raw) {
 
 /** Merge a partial format/preferences PATCH before the record is re-sanitized. */
 export function mergeFableLoomRenderSettings(current, patch) {
-  if (!isRecord(patch)) return patch;
-  return { ...(isRecord(current) ? current : {}), ...patch };
+  if (!isPlainObject(patch)) return patch;
+  return { ...(isPlainObject(current) ? current : {}), ...patch };
 }
 
 export function asFableLoomRenderSettings(raw) {

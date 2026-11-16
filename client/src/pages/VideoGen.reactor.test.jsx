@@ -12,9 +12,9 @@ import {
   videoGenStatus,
 } from '../test/videoGenPageMocks.jsx';
 import {
-  REACTOR_MAX_PROMPT_LENGTH, REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS,
-  REACTOR_ASPECTS,
+  REACTOR_MAX_PROMPT_LENGTH,
 } from '../lib/reactorVideoClip.js';
+import { REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS, REACTOR_ASPECTS } from '../../../server/lib/reactorVideoClip.js';
 
 // A local model that DOES take a negative prompt, so "the box is gone" can only
 // be explained by the reactor lane rather than by the model's own gate.

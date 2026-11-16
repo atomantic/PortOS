@@ -1,4 +1,4 @@
-import { EXECUTION_OPTIONS_ERROR, resolveExecutionOptions } from '../lib/executionOptions.js';
+import { EXECUTION_OPTIONS_ERROR, resolveExecutionOptions, executionOptionsError } from '../lib/executionOptions.js';
 import { awaitWithAbort } from '../lib/abortTimeout.js';
 /**
  * Shared AI provider utilities for LLM calls.
@@ -362,7 +362,6 @@ async function callCodexSubscription(provider, model, prompt, {
   statusOp, doneLabel, elapsedSec, throughput, timeout, responseSchema, signal,
 }) {
   if (Object.keys(provider.executionOptions || {}).length && ['CODEX_HOME', 'CODEX_API_KEY', 'OPENAI_API_KEY', 'OPENAI_BASE_URL'].some((key) => provider.envVars?.[key])) {
-    const { executionOptionsError } = await import('../lib/executionOptions.js');
     throw executionOptionsError('This provider has a separate authentication environment; use its native Codex route for speed options.');
   }
   const {
@@ -516,7 +515,6 @@ async function callProviderAISimpleImpl(provider, model, prompt, options = {}) {
   } = options;
   if (signal?.aborted || (Number.isFinite(deadlineMs) && Date.now() >= deadlineMs)) return { error: 'Provider request deadline expired.' };
   if (Object.keys(provider.executionOptions || {}).length && !isSubscriptionText(provider)) {
-    const { executionOptionsError } = await import('../lib/executionOptions.js');
     throw executionOptionsError('Execution speed is unsupported on this API route.');
   }
   if (provider.type !== 'api' && !isSubscriptionText(provider)) {

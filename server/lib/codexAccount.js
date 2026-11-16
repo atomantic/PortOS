@@ -1,18 +1,6 @@
 /**
  * The ChatGPT-subscription half of the Codex providers, as PortOS models it.
  *
- * The ChatGPT-subscription half of the Codex providers (#5589), pure. The fixed `codex app-server`
- * invocation, the `account/*` method + notification names, `CODEX_ACCOUNT_STATUS` (`runtime-missing` /
- * `unknown` / `signed-out` / `login-pending` / `ready` / `quota-exhausted` / `reauth-required`) and
- * `CODEX_ERROR_CODES`, `isCodexSubscriptionProvider` (re-exported from `providerModels.js`; keyed on
- * the `codex` COMMAND, so a renamed clone still resolves), the `normalizeCodexAccount` /
- * `normalizeCodexRateLimits` / `normalizeCodexLoginStart` payload normalizers, `redactCodexPayload`
- * (every log/error/response path runs through it, so "PortOS never writes down a Codex token" is one
- * function rather than a rule per call site), and `deriveCodexAccountStatus`. Sentinels are
- * load-bearing: `runtimeInstalled: null` = NOT PROBED, `accountFetched: false` ≠ signed out,
- * `rateLimits: null` (failed fetch) ≠ a fetched window with nothing to report. The process half is
- * `services/codexAppServer.js`.
- *
  * PortOS already ships `codex` (CLI) and `codex-tui` provider records, and
  * `providerPrerequisites.js` can tell you whether the `codex` binary is on
  * PATH. That is only half of "can this provider run": Codex authenticates

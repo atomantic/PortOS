@@ -2,16 +2,6 @@
  * i2v reference-mode contract (#4874) — what a supplied conditioning image
  * PROMISES about the render.
  *
- * The i2v reference-mode contract (#4874) — what a supplied conditioning image PROMISES.
- * `I2V_REFERENCE_MODES` (`anchor` | `inspire`) + `I2V_REFERENCE_MODE_OPTIONS` (the label + the promise
- * sentence the UI prints), `I2V_REFERENCE_MODE_RUNTIMES` (only `ltx25` can honor `inspire` — it needs
- * per-image conditioning strength), `INSPIRE_DEFAULT_IMAGE_STRENGTH`, plus `normalizeI2vReferenceMode`
- * / `isDefaultI2vReferenceMode` / `isKnownI2vReferenceMode` / `runtimeSupportsI2vReferenceMode` /
- * `i2vReferenceModeLabel` / `resolveI2vReferenceStrength` and the one rule
- * `i2vReferenceModeViolation({ model, mode, referenceMode, hasFirstImage })` → `{ code, message }` or
- * null. Pure (no `ServerError`) because it is MIRRORED to `client/src/lib/videoReferenceModes.js`;
- * `videoGen/modeContract.js#videoReferenceModeError` wraps it for the route + render boundaries.
- *
  * PortOS already had an "image strength" slider, but a bare scalar says nothing
  * about the *semantic* the user is buying. Two very different promises hid
  * behind the same dial:

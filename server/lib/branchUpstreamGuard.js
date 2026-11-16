@@ -1,19 +1,6 @@
 /**
  * Agent-branch upstream guard (#4172).
  *
- * `enforceSafeBranchUpstream(repo, branch)` / `readBranchUpstream` / `isSafeBranchUpstream` — the
- * agent-branch upstream invariant (#4172): a branch handed to a CoS agent tracks either NOTHING or its
- * OWN ref, never `refs/heads/main`. `git worktree add -b <b> <path> origin/main` does not leave the
- * branch untracked — `branch.autoSetupMerge` records `merge=refs/heads/main` — and `/do:pr` derives
- * its push destination from that config (`git push <remote> HEAD:<merge>`), so the agent's work lands
- * straight on the default branch with no PR. Prevention is `--no-track` at the `worktreeManager.js`
- * creation sites; this is the backstop that also REPAIRS branches created before the fix (drops the
- * bogus upstream, logs it) and throws only if the repair doesn't take. Fails CLOSED:
- * `readBranchUpstream` returns `null` for could-not-read (distinct from `''` = genuinely unset), and
- * an unverifiable upstream is refused rather than waved through — `worktreeManager.js` undoes the
- * `worktree add` on refusal so the throw can't strand a tree. Pairs with `primaryCheckoutGuard.js`,
- * which catches the other way agent work reaches `main`.
- *
  * `git worktree add -b <branch> <path> origin/main` does NOT leave the new
  * branch untracked. With git's default `branch.autoSetupMerge=true`, branching
  * off a REMOTE-TRACKING ref records:
@@ -73,6 +60,7 @@ const GIT_TIMEOUT_MS = 10_000;
  * @param {string} repo - repository (or worktree) path to read config from
  * @param {string} branchName
  * @returns {Promise<{remote: string|null, merge: string|null}>}
+  * `null` means the upstream could not be read; `''` means genuinely unset. Keep the two apart.
  */
 export async function readBranchUpstream(repo, branchName) {
   if (!repo || !branchName) return { remote: '', merge: '' };
@@ -131,6 +119,7 @@ export function isSafeBranchUpstream(branchName, merge) {
  * @param {string} branchName
  * @param {{remoteBranch?: string}} options - explicit PR head when the local name is namespaced
  * @returns {Promise<{safe: boolean, repaired: boolean, upstream: string}>}
+  * A throw here makes worktreeManager.js undo the `worktree add`, so a refusal cannot strand a tree.
  */
 export async function enforceSafeBranchUpstream(repo, branchName, { remoteBranch = branchName } = {}) {
   if (!repo || !branchName) return { safe: true, repaired: false, upstream: '' };

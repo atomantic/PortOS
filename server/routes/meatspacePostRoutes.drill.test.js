@@ -9,7 +9,6 @@ import { request } from '../lib/testHelper.js';
 // the services themselves already have dedicated unit coverage elsewhere.
 vi.mock('../services/meatspacePostDrillCache.js', () => ({
   // postValidation.js's postDrillCacheFillSchema enum-validates against this.
-  CACHEABLE_TYPES: ['compound-chain', 'bridge-word', 'double-meaning', 'idiom-twist'],
   getCacheStats: vi.fn(() => ({})),
   requestCacheFill: vi.fn(),
   getCachedDrill: vi.fn(() => null),

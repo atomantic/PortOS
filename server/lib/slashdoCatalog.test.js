@@ -175,7 +175,6 @@ describe('client mirror of the launchable-workflow catalog', () => {
 
   it('agrees on the app-type vocabulary and the per-app filter', async () => {
     const client = await import('../../client/src/lib/slashdoCatalog.js');
-    expect(client.SLASHDO_APP_TYPES).toEqual(SLASHDO_APP_TYPES);
     for (const isSwift of [false, true]) {
       expect(client.slashdoWorkflowsForApp(isSwift).map(w => w.command))
         .toEqual(slashdoWorkflowsForApp(isSwift).map(w => w.command));

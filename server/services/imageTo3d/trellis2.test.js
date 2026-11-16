@@ -115,11 +115,6 @@ describe('buildGenerateArgs', () => {
     expect(args.slice(0, 6)).toEqual([...head(BASE), 'in.png', '--output', '/out/model']);
   });
 
-  it('defaults direct command building to the proven 2K atlas', () => {
-    expect(TRELLIS2_DEFAULT_TEXTURE_SIZE).toBe(2048);
-    expect(TRELLIS2_TEXTURE_SIZES).toContain(TRELLIS2_DEFAULT_TEXTURE_SIZE);
-  });
-
   it('honors an explicit texture size', () => {
     const { args } = buildGenerateArgs({ imagePath: 'in.png', base: BASE, textureSize: 1024 });
     expect(args).toEqual([

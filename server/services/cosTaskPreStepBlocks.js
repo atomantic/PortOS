@@ -30,7 +30,7 @@ import { FORGE_MAINTENANCE_VERSION } from '../lib/forgeMaintenanceTasks.js';
 import { resolveClaimReviewerConfig, reviewerConfigMetadata, SWARM_COUNT_MIN, ISSUE_AUTHOR_FILTERS, RELEASE_OPTION_KEYS } from '../lib/validation.js';
 import { emitLog } from './cosEvents.js';
 import { DEFAULT_ISSUE_MIN_AGE_MINUTES } from '../lib/issueClaimEvidence.js';
-import { getActiveApps } from './apps.js';
+import { getActiveApps, getAppById } from './apps.js';
 import { getCodeReviewDefaults } from './codeReview.js';
 import { preflightClaimReviewers } from './claimReviewerPreflight.js';
 import { NON_ACTIONABLE_ISSUE_LABELS } from './perpetualWork.js';
@@ -44,6 +44,9 @@ import {
   buildLocalReviewerInstructions,
   buildTargetWorkItemBlock,
 } from './cosTaskPrompts.js';
+import { resolveAppWorkTracker, githubApiHost } from '../lib/workTracker.js';
+import { getOriginInfo } from '../lib/gitRemote.js';
+import { listProviders } from './providers.js';
 
 // gh api defaults to github.com, so collaborator identity and member probes
 // must carry the host parsed from this checkout's origin for GitHub Enterprise.
@@ -305,7 +308,7 @@ ${DISPATCH_HINT_FANOUT_GUIDANCE}
 
 **Each fan-out agent gets its OWN scratch subdirectory — the scratchpad root is off-limits.** Every agent in this run shares one session scratchpad path, and every agent runs these byte-identical instructions, so left to themselves two agents pick the same obvious filename (\`pr-body.md\`) and silently clobber each other — last writer wins, the command still exits 0, and the wrong text lands on the wrong ${pr}. So: **each fan-out agent writes ALL temp files under \`<scratchpad>/issue-<num>/\` (its own issue number), and NEVER writes to the scratchpad root** (the root stays the orchestrator's). That covers ${pr} body drafts, review notes, diff dumps, test output — every scratch artifact, not just the body file. Create the directory before first use (\`mkdir -p\`). Filenames inside it may be as obvious as you like; the directory is what makes them unique. **If your environment gives you no scratchpad path at all**, use \`$(mktemp -d)/issue-<num>\` instead — never a path inside the source repo or inside your worktree, where it would show up as untracked cruft or get swept into a commit.
 
-**Verify the ${pr} body's issue trailer after create AND after every edit.** The ${pr}-body flow is create-then-edit — the file is written once, then re-read minutes later during the review loop — which is a wide window for a stale or foreign body to land. Belt to the namespacing's braces: immediately after \`create\` and after each body \`edit\`, re-read the published body with \`${bodyCmd}\` — **note it takes no number: both CLIs resolve the ${pr} from your checked-out \`claim/issue-<num>\` branch, and passing an ISSUE number where a ${pr} number belongs is how you end up reading (and then "correcting") someone else's ${pr}** — and confirm the body carries this agent's own trailer. A full-scope ship MUST carry \`Closes #<num>\` for this issue; \`Refs #<num>\` is permitted ONLY for a deliberate partial ship that also records the required \`Done ✓ / Remaining ▢\` reconciliation comment. If it does not, rewrite the body from this agent's own scratch file and re-verify. **Cap this at 2 rewrites:** if the trailer still doesn't match, the scratch file itself is suspect — re-derive the body from your own branch's commits/diff for one final attempt, and if that also fails, STOP, leave the ${pr} open, and say so in the result you hand back. Never loop on it: Phase C waits for every agent to finish, so one agent stuck re-publishing blocks the whole batch's merges. And never assume a zero exit code means the right body was published.
+**Verify the ${pr} body's issue trailer after create AND after every edit.** The ${pr}-body flow is create-then-edit — the file is written once, then re-read minutes later during the review loop — which is a wide window for a stale or foreign body to land. Belt to the namespacing's braces: immediately after \`create\` and after each body \`edit\`, re-read the published body with \`${bodyCmd}\` — **note it takes no number: both CLIs resolve the ${pr} from your checked-out \`claim/issue-<num>\` branch, and passing an ISSUE number where a ${pr} number belongs is how you end up reading (and then "correcting") someone else's ${pr}** — and confirm the body carries this agent's own trailer. A full-scope ship MUST carry \`Closes #<num>\` for this issue; \`Refs #<num>\` is permitted ONLY for a deliberate earlier slice whose body lists the Remaining scope; the orchestrator's Phase 7 ships the rest under the same claim. If it does not, rewrite the body from this agent's own scratch file and re-verify. **Cap this at 2 rewrites:** if the trailer still doesn't match, the scratch file itself is suspect — re-derive the body from your own branch's commits/diff for one final attempt, and if that also fails, STOP, leave the ${pr} open, and say so in the result you hand back. Never loop on it: Phase C waits for every agent to finish, so one agent stuck re-publishing blocks the whole batch's merges. And never assume a zero exit code means the right body was published.
 
 ## Phase C — Serialize only the merge instant (orchestrator, after all agents finish)
 Bring every ready ${pr} to a CI-verified head CONCURRENTLY, without merge admission: re-sync each onto the latest default branch, run pregate, push, and gate on **required** CI on that exact head (one re-run on a flaky required check, then proceed; a real failure or an irreconcilable conflict leaves that ${pr} OPEN and recorded — move to the next). Then merge them ONE AT A TIME: for each green ${pr}, the parent orchestrator acquires the repository merge admission described in the Claim Workflow Handoff, re-reads the ${pr}, merges with \`${mergeCmd} ${mergePin}\` when the forge still reports it mergeable, and releases its own lease immediately (outcome merged). A ${pr} the forge no longer reports mergeable releases with outcome resync and goes back through the concurrent sync/pregate/CI step outside the lease; a base that moved while the ${pr} stays mergeable needs no resync. After all merges, run Phase 7 cleanup once per merged worktree.
@@ -454,7 +457,6 @@ async function readPendingMergeBranches(app, metadata) {
   const nudged = metadata.autoMerge !== false
     ? await nudgeLocalPendingMergePrs(app.id).catch(() => ({ ok: false, reason: 'pending-merge-nudge-unavailable' }))
     : { ok: true };
-  const { getAppById } = await import('./apps.js');
   const current = await getAppById(app.id).catch(() => null);
   if (!nudged?.ok) emitLog('warn', `branch-reconcile pending merge held for ${app.name}: ${nudged?.reason || 'unavailable'}`, { appId: app.id });
   return current ? new Set(readPendingMergePrs(current).map(entry => entry.prBranch)) : null;
@@ -747,7 +749,6 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     branchAttempts
   });
   if (!dispatch) return { skip: true };
-  const { getOriginInfo } = await import('../lib/gitRemote.js');
   const origin = await getOriginInfo(app.repoPath).catch(() => null);
   metadata.reconcileAssignment = buildReconcileAssignment(app, origin, actionable, actions);
   metadata.perpetual = true;
@@ -867,7 +868,6 @@ export async function resolveIssueReconcileBlock(app, taskType, metadata, taskSc
   const autoClose = metadata.autoClose !== false;
   // Routing mirrors resolveAppWorkTracker: JIRA is NEVER auto-selected from the
   // git host — it needs explicit per-app config.
-  const { resolveAppWorkTracker } = await import('../lib/workTracker.js');
   const wt = await resolveAppWorkTracker(app).catch(() => null);
   const jira = (wt?.resolved === 'jira' && app.jira?.enabled && app.jira?.instanceId && app.jira?.projectKey)
     ? { instanceId: app.jira.instanceId, projectKey: app.jira.projectKey }
@@ -1041,8 +1041,6 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
 
   let screeningError = null;
   if (!check.firstRun && check.newPrs.length) {
-    const { getOriginInfo } = await import('../lib/gitRemote.js');
-    const { githubApiHost } = await import('../lib/workTracker.js');
     const origin = await getOriginInfo(app.repoPath);
     const { screenForgeMaintenance } = await import('./forgeMaintenanceEvidence.js');
     const { execGh } = await import('./github.js');
@@ -1131,7 +1129,7 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
   // receive it without needing a new placeholder.
   const [codeReviewDefaults, providers] = await Promise.all([
     getCodeReviewDefaults().catch(() => null),
-    import('./providers.js').then(m => m.listProviders()).catch(() => [])
+    Promise.resolve().then(() => listProviders()).catch(() => [])
   ]);
   const claimReviewers = resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers, providers);
   const rendersReviewers = /\{reviewers\}/.test(promptTemplate);

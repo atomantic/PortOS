@@ -1,14 +1,6 @@
 /**
  * `applyTaskGenerationOverrides(provider, metadata)` layers a run's temperature, thinking and effort
  * overrides onto a copy of the provider record.
- *
- * `applyTaskGenerationOverrides(provider, metadata)` — the per-RUN `temperature` / `thinking` /
- * `effort` a task form or schedule entry pins, layered onto a COPY of the provider record (the saved
- * record is shared by every other run; the child-env composer turns the copy into OpenCode’s dynamic
- * `agent.build` config downstream). Every value arrives untrusted — a COS-TASKS.md round-trip hands
- * back strings — so each override applies only when it validates, and an empty temperature field is
- * absent rather than `0`, which would otherwise pin greedy decoding on a task whose author just
- * cleared the box.
  */
 
 import { resolveExecutionOptions } from './executionOptions.js';

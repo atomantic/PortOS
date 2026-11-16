@@ -1,20 +1,6 @@
 /**
  * The Quota Burn page's view of the SHARED scheduled-task catalog.
  *
- * `MAINTENANCE_TASK_ORDER` / `MAINTENANCE_ORDER_GUIDANCE` document the default ladder;
- * `maintenanceSequence` populates audit and claim-drain references; `maintenancePrerequisites` lists
- * missing saved settings and scoped setup patches for the selected mode and claim policy. The Quota
- * Burn page's view of the SHARED scheduled-task catalog. `buildQuotaBurnTaskCatalog({ schedule, jobs,
- * apps })` groups PortOS built-in task types and app custom jobs into the picker's two groups
- * (dropping what a burn may never invoke, and stamping a `blockedReason` on what is merely disabled or
- * untargetable); `searchTaskCatalog` / `flattenTaskCatalog` / `findTaskEntry` query it. `taskRefKey` /
- * `stepFromTaskEntry` / `taskEntryNeedsApp` build and address a step's `taskRef`.
- * `effectiveQuotaBurnSettings(step, saved)` mirrors the server's `effectiveSettings` (overrides
- * layered over the task's saved settings, params merged key-by-key). `quotaBurnStepPayload(job)`
- * reduces a step to what the strict PUT schema accepts, dropping the top-level override mirrors that
- * would otherwise outrank the `overrides` bag. `taskSourceHref(entry)` / `CREATE_TASK_HREF` link out
- * to the source task.
- *
  * A burn step no longer carries its own copied prompt: it REFERENCES a scheduled
  * task the user already owns (`server/lib/quotaBurnTaskRef.js`) and layers
  * per-invocation overrides on top. So the page's picker is a view over the same
@@ -274,7 +260,7 @@ export const CREATE_TASK_HREF = '/cos/jobs';
  * there, and this page saves the same steps into a family plan. Re-exported so
  * the guidance banner and the prerequisite check read the same list.
  */
-export { MAINTENANCE_TASK_ORDER, MAINTENANCE_ORDER_GUIDANCE } from '../../../server/lib/maintenanceSequence.js';
+export { MAINTENANCE_ORDER_GUIDANCE } from '../../../server/lib/maintenanceSequence.js';
 
 /** Saved settings required by the maintenance ladder, including actionable patches. */
 export function maintenancePrerequisites(groups, appId, options = {}) {

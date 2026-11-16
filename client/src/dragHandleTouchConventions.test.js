@@ -1,20 +1,8 @@
 /**
- * Repo-wide touch rule for dnd-kit drag handles.
- *
- * dnd-kit's PointerSensor reads pointer events, and on a touch screen the
- * browser claims any finger movement as a pan unless the element under the
- * finger says `touch-action: none`. The browser then fires `pointercancel` and
- * dnd-kit announces "Dragging was cancelled" — so a handle without
- * `touch-none` cannot be dragged on a phone or tablet at all. Measured over
- * CDP touch emulation on the universe style chips and the Brain Links chip and
- * bucket handles before this guard landed; GoalsListView, LibraryPane,
- * ReviewerGroupsEditor and TaskItem already carried the class.
- *
- * The rule: a JSX element that spreads dnd-kit `listeners` carries
- * `touch-none` in its own opening tag. A drag source that must keep native
- * panning (it sits inside a scrolling lane and is itself the whole block)
- * instead goes in TOUCH_SENSOR_EXEMPT, naming the file that registers a
- * delayed TouchSensor for it; the test checks that registration still exists.
+ * Rule: A JSX element spreading dnd-kit `listeners` must carry `touch-none` in its opening tag (or be in `TOUCH_SENSOR_EXEMPT` with a delayed `TouchSensor`).
+ * Fix: Add `touch-none` to the drag handle's `className`.
+ * What this guard cannot see:
+ *   - Scoped to git-tracked non-test sources (comments masked); only checks JSX elements spreading `listeners` directly.
  */
 
 import { describe, it, expect } from 'vitest';

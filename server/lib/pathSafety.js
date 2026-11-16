@@ -15,11 +15,6 @@ import { escapeRegExp } from './textUtils.js';
  * allowed extensions — refuses path-traversal, null bytes, separators, and
  * exact `.` / `..`. Throws a 400 ServerError with code VALIDATION_ERROR
  * so calling routes don't have to repeat the check.
- *
- * Consolidates the two near-identical assertions that used to live in
- * `services/loras.js#assertSafeLoraFilename` (`.safetensors` only) and
- * `services/imageGen/local.js#assertGalleryFilename` (`.png` only).
- *
  * Substring `..` is intentionally allowed (e.g. `foo..bar.png` is fine);
  * only the exact-string traversal cases are rejected. Path separators (`/`
  * and `\`) are rejected on every platform — the same input gets posted
@@ -35,12 +30,8 @@ import { escapeRegExp } from './textUtils.js';
  *   - `subject`: optional noun for the error message ("LoRA filename" →
  *     "Invalid LoRA filename"). Defaults to "filename".
  *   - `requiredMessage`: optional exact message used when `filename` is
- *     missing/empty — preserves backward-compat for wrappers that used to
- *     throw a specific phrase. The gallery wrapper passes `'Invalid filename'`
- *     (its pre-refactor implementation threw that for every failure, including
- *     missing-input); the LoRA wrapper passes `'Filename required'` to match
- *     its historical wording. When omitted, the message is derived from
- *     `subject` (e.g. `'Filename required'` / `'LoRA filename required'`).
+ *     missing/empty. When omitted, derived from `subject` (e.g.
+ *     `'LoRA filename required'`).
  */
 export function assertSafeFilename(filename, { extensions, subject = 'filename', requiredMessage } = {}) {
   if (!Array.isArray(extensions) || extensions.length === 0) {
@@ -71,10 +62,8 @@ export function assertSafeFilename(filename, { extensions, subject = 'filename',
 
 /**
  * `assertSafeFilename`'s non-throwing twin: the same rule as a predicate, for
- * callers that must report a bad name as *data* rather than fail the request —
- * e.g. a read-only preflight that names one corrupt record as a blocked row
- * instead of 400-ing the whole sweep. Both share this implementation so the
- * thrown gate and the reported verdict can never disagree.
+ * callers that must report a bad name as *data* rather than fail the request.
+ * Both share this implementation so the gate and the verdict can never disagree.
  *
  * Rejects: empty/non-string, null bytes (they terminate C strings, so some
  * POSIX syscalls treat the prefix as a separate path), `.`/`..`, any path
@@ -96,16 +85,11 @@ export function isSafeFilename(filename, extensions) {
  * `isSafeFilename`'s traversal half, without the extension gate: true when
  * `name` addresses exactly one entry directly inside some directory.
  *
- * For callers that legitimately cannot allowlist extensions — an arbitrary
- * user asset, or a directory entry — but must still refuse traversal. Naming
- * a single entry is what makes a subsequent `join(dir, name)` safe *in the
- * filesystem sense* and not just lexically: with no separator there is no
- * intermediate component left for a symlink to redirect, which a
- * `resolve`/`relative` containment check cannot see. The Data Manager's
- * per-item purge (`purgeCategory`) is the reference caller.
- *
- * `isSafeFilename` is layered on top of this, so the two can never disagree
- * about what "a single entry" means.
+ * For callers that cannot allowlist extensions but must still refuse traversal.
+ * Naming a single entry makes a subsequent `join(dir, name)` safe in the
+ * filesystem sense, not just lexically: with no separator there is no
+ * intermediate component for a symlink to redirect, which a `resolve`/`relative`
+ * containment check cannot see. `isSafeFilename` is layered on this.
  */
 export function isTopLevelEntryName(name) {
   if (!name || typeof name !== 'string') return false;

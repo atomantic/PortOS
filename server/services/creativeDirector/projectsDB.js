@@ -1,4 +1,16 @@
-/** Creative Director PostgreSQL project store. */
+/**
+ * Creative Director PostgreSQL project store.
+ *
+ * Storage: `db-primary` (`creative_director_projects` JSONB) — federated through
+ * the version-gated `creativeDirectorProjects` sync category. Video workspace
+ * drafts (`workspace: 'video'`) add optional fields to the same record (draft,
+ * treatment script/artifact/history, planning context, reviews, cuts) rather than
+ * a new store, so legacy records keep prior behavior with no backfill; each
+ * semantic step bumps the sync version so older peers cannot discard or bypass
+ * it. Synced Video copies are read-only replicas of `videoOwnerInstanceId`;
+ * `videoExecution` receipts and the replica flag are machine-local and never
+ * ride the wire. Rendered media stays in its existing asset stores.
+ */
 
 import { query } from '../../lib/db.js';
 import { createCollection } from '../mediaCollections.js';

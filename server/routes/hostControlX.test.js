@@ -1,11 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { callRoute, expectAuthorizedWorkflows, expectRemoteRefusal, hostControlApp } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
-import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-x-authority-') }));
@@ -15,18 +11,11 @@ const auth = vi.hoisted(() => ({ enabled: false }));
 vi.mock('../services/auth.js', async (importOriginal) => ({
   ...await importOriginal(),
   isAuthEnabled: vi.fn(async () => auth.enabled),
-  verifyPassword: vi.fn(async () => true),
 }));
 
 vi.mock('../services/settings.js', () => ({
   settingsEvents: new EventEmitter(),
   getSettings: vi.fn(async () => ({})),
-}));
-
-vi.mock('../services/instanceIdentity.js', () => ({
-  loadData: vi.fn(async () => ({ peers: [{
-    id: 'example-peer', instanceId: 'example-instance', enabled: true, syncSecret: 'a'.repeat(32),
-  }] })),
 }));
 
 const openXHandoff = vi.hoisted(() => vi.fn());
@@ -48,8 +37,6 @@ vi.mock('../lib/db.js', () => ({
   withTransaction: async (callback) => callback({ query: storage.query }),
 }));
 
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
-import { createSession } from '../services/auth.js';
 import xRoutes from './x.js';
 
 const account = {
@@ -123,6 +110,7 @@ beforeEach(() => {
       return { rows: [draft], rowCount: 1 };
     }
     if (sql.includes('UPDATE x_drafts SET state=$2,review_note')) {
+      reviewed();
       if (draft.state !== params[3]) return { rows: [], rowCount: 0 };
       draft = {
         ...draft,
@@ -158,6 +146,9 @@ beforeEach(() => {
   });
 
   executeXBrowserRead.mockImplementation(async (target) => {
+    // Sync ends each authorized pass; rearm the draft for the next principal.
+    draft = seedDraft();
+    if (target === 'profile') synced();
     if (target === 'profile') return { profile: { username: account.username }, posts: [] };
     if (target === 'latest') return { posts: [] };
     if (target === 'people') return { exactMatch: true, handles: [account.username] };
@@ -165,130 +156,34 @@ beforeEach(() => {
   });
 });
 
-const appFor = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/x', xRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
+const reviewed = vi.hoisted(() => vi.fn());
+const synced = vi.hoisted(() => vi.fn());
+const mounts = [['/api/x', xRoutes]];
 
-const post = (app, path, body = {}, headers = {}) => {
-  const pending = request(app).post(path);
-  for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return pending.send(body);
-};
-
+// Writes are plain writes under the default-deny gate (#16018); the principal
+// matrix lives in services/authGate.test.js. This suite keeps one remote refusal
+// for the browser handoff and an authorized review -> open -> sync workflow
+// through the real route, with the browser and storage doubled.
 describe('X (Twitter) review, browser handoff and sync authority', () => {
-  it.each([
-    ['remote without auth', false, '192.0.2.10', {}, 403, 'HOST_CONTROL_FORBIDDEN'],
-    ['forwarded remote without auth', false, '127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }, 403, 'HOST_CONTROL_FORBIDDEN'],
-    ['anonymous with auth', true, '192.0.2.10', {}, 401, 'AUTH_REQUIRED'],
-    ['Basic password', true, '192.0.2.10', { Authorization: `Basic ${Buffer.from(':example-password').toString('base64')}` }, 403, 'HOST_CONTROL_FORBIDDEN'],
-    ['scoped peer', true, '192.0.2.10', {
-      [PEER_AUTH_HEADER]: derivePeerAuthToken('a'.repeat(32), 'example-instance'), [PEER_INSTANCE_HEADER]: 'example-instance',
-    }, 403, 'PEER_SCOPE_FORBIDDEN'],
-  ])('refuses %s for draft review, compose open, destination open and sync', async (_name, enabled, address, headers, status, code) => {
-    auth.enabled = enabled;
-    const app = appFor(address);
-
-    const review = await post(app, `/api/x/drafts/${draft.id}/review`, { state: 'approved' }, headers);
-    expect(review.status, JSON.stringify(review.body)).toBe(status);
-    expect(review.body.code).toBe(code);
-    expect(draft.state).toBe('pending_review');
-
+  it('refuses a remote caller before the browser handoff', async () => {
     draft = seedDraft('approved', new Date().toISOString());
-    const openDraft = await post(app, `/api/x/drafts/${draft.id}/open`, {}, headers);
-    expect(openDraft.status, JSON.stringify(openDraft.body)).toBe(status);
-    expect(openDraft.body.code).toBe(code);
-
-    const openAccount = await post(app, `/api/x/accounts/${account.id}/open`, { kind: 'profile' }, headers);
-    expect(openAccount.status, JSON.stringify(openAccount.body)).toBe(status);
-    expect(openAccount.body.code).toBe(code);
-
-    const sync = await post(app, `/api/x/accounts/${account.id}/sync`, {}, headers);
-    expect(sync.status, JSON.stringify(sync.body)).toBe(status);
-    expect(sync.body.code).toBe(code);
-
-    expect(openXHandoff).not.toHaveBeenCalled();
-    expect(executeXBrowserRead).not.toHaveBeenCalled();
-  });
-
-  it('protects Express case and trailing-slash aliases and rejected reviews too', async () => {
-    const app = appFor();
-    const review = await post(app, `/API/X/DRAFTS/${draft.id}/REVIEW/`, { state: 'rejected' });
-    const openDraft = await post(app, `/API/X/DRAFTS/${draft.id}/OPEN/`);
-    const openAccount = await post(app, `/API/X/ACCOUNTS/${account.id}/OPEN/`, { kind: 'profile' });
-    const sync = await post(app, `/API/X/ACCOUNTS/${account.id}/SYNC/`);
-
-    expect(review.status).toBe(403);
-    expect(openDraft.status).toBe(403);
-    expect(openAccount.status).toBe(403);
-    expect(sync.status).toBe(403);
-    expect(openXHandoff).not.toHaveBeenCalled();
-    expect(executeXBrowserRead).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['local'], ['operator session'], ['delegated agent'],
-  ])('preserves %s review, compose open, destination open and sync through real consumer', async (principal) => {
-    const headers = {};
-    if (principal !== 'local') {
-      const session = await createSession({ label: principal === 'delegated agent' ? 'agent' : 'operator' });
-      auth.enabled = true;
-      if (principal === 'delegated agent') headers.Authorization = `Bearer ${session.token}`;
-      else headers.Cookie = `portos_auth=${session.token}`;
-    }
-    const app = appFor(principal === 'operator session' ? '192.0.2.10' : '127.0.0.1');
-
-    // 1. Approve review
-    const review = await post(app, `/api/x/drafts/${draft.id}/review`, { state: 'approved' }, headers);
-    expect(review.status, JSON.stringify(review.body)).toBe(200);
-    expect(review.body.state).toBe('approved');
+    await expectRemoteRefusal(mounts, ['post', `/api/x/drafts/${draft.id}/open`, {}, openXHandoff]);
     expect(draft.state).toBe('approved');
-
-    // 2. Open approved draft
-    const openDraft = await post(app, `/api/x/drafts/${draft.id}/open`, {}, headers);
-    expect(openDraft.status, JSON.stringify(openDraft.body)).toBe(200);
-    expect(openDraft.body.state).toBe('opened');
-    expect(openXHandoff).toHaveBeenCalledWith({ kind: 'compose', value: draft.body });
-
-    // 3. Open account destination
-    const openAccount = await post(app, `/api/x/accounts/${account.id}/open`, { kind: 'profile' }, headers);
-    expect(openAccount.status, JSON.stringify(openAccount.body)).toBe(200);
-    expect(openXHandoff).toHaveBeenCalledWith({ kind: 'profile', value: account.username });
-
-    // 4. Sync account
-    const sync = await post(app, `/api/x/accounts/${account.id}/sync`, {}, headers);
-    expect(sync.status, JSON.stringify(sync.body)).toBe(200);
-    expect(executeXBrowserRead).toHaveBeenCalledTimes(3);
   });
 
-  it('keeps remote reads open, refuses remote draft creation, and creates a pending-review draft locally without execution or approval', async () => {
-    const app = appFor();
+  it('preserves local and delegated-agent review, open and sync', async () => {
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: [
+      ['post', `/api/x/drafts/${draftId}/review`, { state: 'approved' }, reviewed, 200],
+      ['post', `/api/x/drafts/${draftId}/open`, {}, openXHandoff, 200],
+      ['post', `/api/x/accounts/${account.id}/open`, { kind: 'profile' }, openXHandoff, 200],
+      ['post', `/api/x/accounts/${account.id}/sync`, {}, synced, 200],
+    ] });
+  });
 
-    const capabilities = await request(app).get('/api/x/capabilities');
-    expect(capabilities.status).toBe(200);
-
-    const accounts = await request(app).get('/api/x/accounts');
-    expect(accounts.status).toBe(200);
-
-    const drafts = await request(app).get(`/api/x/accounts/${account.id}/drafts`);
-    expect(drafts.status).toBe(200);
-
-    const remoteDraft = await post(app, '/api/x/drafts', { accountId: account.id, body: 'New proposed post' });
-    expect([remoteDraft.status, remoteDraft.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    expect(storage.query.mock.calls.some(([sql]) => sql.includes('INSERT INTO x_drafts'))).toBe(false);
-
-    const createdDraft = await post(appFor('127.0.0.1'), '/api/x/drafts', { accountId: account.id, body: 'New proposed post' });
-    expect(createdDraft.status, JSON.stringify(createdDraft.body)).toBe(201);
-    expect(createdDraft.body.state).toBe('pending_review');
-
-    expect(openXHandoff).not.toHaveBeenCalled();
-    expect(executeXBrowserRead).not.toHaveBeenCalled();
+  it('keeps remote reads open', async () => {
+    const app = await hostControlApp('192.0.2.10', mounts);
+    for (const path of ['/api/x/capabilities', '/api/x/accounts', `/api/x/accounts/${account.id}/drafts`]) {
+      expect((await callRoute(app, ['get', path])).status, path).toBe(200);
+    }
   });
 });

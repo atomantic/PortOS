@@ -35,7 +35,7 @@ import * as cosTaskStore from './cosTaskStore.js';
 import * as messageDrafts from './messageDrafts.js';
 import { HEALTH_RESOLUTION_PREFIX } from './healthAlertResolutions.js';
 import { buildHealthAlertInvestigation } from './healthAlertAgentTask.js';
-import { generateNonProductAlerts } from './proactiveAlertSources.js';
+import { generateNonProductAlerts, resolveHealthAlert } from './proactiveAlertSources.js';
 import * as identity from './identity.js';
 import * as reviewService from './review.js';
 import * as notifications from './notifications.js';
@@ -51,6 +51,8 @@ import * as reviewQueueTriageStore from './reviewQueueTriageStore.js';
 import { anchorLocalMidnightUtc, todayInTimezone } from '../lib/timezone.js';
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import { isTerminalThreadStatus, threadNextLine } from '../lib/brainThreads.js';
+import { getSettings } from './settings.js';
+import { getAppById } from './apps.js';
 
 // Producers are read with a bounded upper limit. The queue reports a lower
 // bound, rather than pretending that a full count is known, when a producer
@@ -293,13 +295,10 @@ const PRODUCERS = [
         .filter(Boolean))];
       const appNames = new Map();
       if (appIds.length) {
-        const appService = await import('./apps.js').catch(() => null);
-        if (appService?.getAppById) {
-          await Promise.all(appIds.map(async appId => {
-            const app = await appService.getAppById(appId).catch(() => null);
-            if (typeof app?.name === 'string' && app.name.trim()) appNames.set(appId, app.name.trim());
-          }));
-        }
+        await Promise.all(appIds.map(async appId => {
+          const app = await getAppById(appId).catch(() => null);
+          if (typeof app?.name === 'string' && app.name.trim()) appNames.set(appId, app.name.trim());
+        }));
       }
       return {
         items: matching.map(({ thread, task }) => {
@@ -832,7 +831,6 @@ const PRODUCERS = [
     },
     async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
       // Disabling backups makes a past failure moot.
-      const { getSettings } = await import('./settings.js');
       if (resolveBackupConfig((await getSettings())?.backup).enabled === false) return [];
       const { getState } = await import('./backup.js');
       // A backup needing acknowledgement is either a full failure (status
@@ -1248,7 +1246,6 @@ const SOURCE_ACTIONS = Object.freeze({
   }),
   health: Object.freeze({
     complete: async (id) => {
-      const { resolveHealthAlert } = await import('./proactiveAlertSources.js');
       const result = await resolveHealthAlert(id);
       if (result) __resetAlertsCache();
       return result;

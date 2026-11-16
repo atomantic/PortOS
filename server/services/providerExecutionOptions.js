@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { getProviderById, createProvider } from './providers.js';
 import { resolveExecutionOptions, executionOptionsError } from '../lib/executionOptions.js';
 import { prepareExecutionOptions } from '../lib/providerExecutionOptions.js';
-export { getExecutionOptionCapabilities, prepareExecutionOptions } from '../lib/providerExecutionOptions.js';
+export { getExecutionOptionCapabilities } from '../lib/providerExecutionOptions.js';
 
 let selectionWriteTail = Promise.resolve();
 

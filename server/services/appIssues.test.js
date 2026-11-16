@@ -427,9 +427,12 @@ describe('listAppIssues — the list must match the tracker a claim would use', 
   });
 });
 
-const prPages = rows => JSON.stringify([{ data: { repository: { pullRequests: {
-  nodes: rows.map((pr, index) => ({ ...pr, number: pr.number || index + 1, commits: {
-    nodes: (pr.commits || []).map(commit => ({ commit: { message: `${commit.messageHeadline || ''}\n${commit.messageBody || ''}` } })),
+const prPages = rows => JSON.stringify([{ data: { repository: {
+  defaultBranchRef: { name: 'main', target: { oid: 'a'.repeat(40) } }, pullRequests: {
+  nodes: rows.map((pr, index) => ({ baseRefName: 'main', baseRefOid: 'c'.repeat(40), headRefOid: 'b'.repeat(40), ...pr, number: pr.number || index + 1, commits: {
+    nodes: (pr.commits || []).map((commit, index) => ({ commit: {
+      oid: commit.oid || (index + 1).toString(16).padStart(40, '0'), message: `${commit.messageHeadline || ''}\n${commit.messageBody || ''}`,
+    } })),
     pageInfo: { hasNextPage: (pr.commits || []).length >= 100 },
   } })), pageInfo: { hasNextPage: false, endCursor: null },
 } } } }]);
@@ -508,14 +511,96 @@ describe('prepareAppIssueClaim', () => {
 
   it('reads all commits on large PRs and finds issue references beyond the first page', async () => {
     const pr = { number: 23, headRefName: 'large-change', body: '', commits: Array.from({ length: 100 }, () => ({ messageHeadline: 'other work' })) };
-    const firstPage = pr.commits.map(() => ({ commit: { message: 'other work' } }));
+    const firstPage = pr.commits.map((_, index) => ({ sha: (index + 1).toString(16).padStart(40, '0'), commit: { message: 'other work' } }));
     execGh.mockResolvedValueOnce(issue()).mockResolvedValueOnce(prs(pr))
-      .mockResolvedValueOnce(JSON.stringify([firstPage, [{ commit: { message: 'fix: remaining work (#42)' } }]]));
+      .mockResolvedValueOnce(JSON.stringify([
+        { total_commits: 101, commits: firstPage },
+        { total_commits: 101, commits: [{ sha: 'f'.repeat(40), commit: { message: 'fix: remaining work (#42)' } }] },
+      ]));
     await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toMatchObject({ code: 'ISSUE_IN_FLIGHT' });
     expect(execGh).toHaveBeenLastCalledWith(
-      ['api', '--hostname', 'github.com', '--paginate', '--slurp', 'repos/acme/widget/pulls/23/commits?per_page=100'],
+      ['api', '--hostname', 'github.com', '--paginate', '--slurp', `repos/acme/widget/compare/${'c'.repeat(40)}...${'b'.repeat(40)}?per_page=100`],
       undefined, expect.any(Object),
     );
+  });
+
+  it.each([{ commits: [] }, { commits: [{ sha: '2'.repeat(40), commit: { message: 'chore: prepare release' } }] }])(
+    'allows remaining issue scope while a release promotes commits already on the default branch: %j', async ({ commits }) => {
+      execGh.mockResolvedValueOnce(issue()).mockResolvedValueOnce(prs({
+        number: 23, baseRefName: 'release', headRefName: 'candidate/release', body: '',
+        commits: [{ messageHeadline: 'test: shipped first slice (#42)' }],
+      })).mockResolvedValueOnce(JSON.stringify([{ total_commits: commits.length, commits }]));
+      await expect(prepareAppIssueClaim(APP, '42', 'github')).resolves.toEqual({ epic: false });
+      expect(execGh).toHaveBeenLastCalledWith(
+        ['api', '--hostname', 'github.com', '--paginate', '--slurp', `repos/acme/widget/compare/${'a'.repeat(40)}...${'b'.repeat(40)}?per_page=100`],
+        undefined, expect.any(Object),
+      );
+    }
+  );
+
+  it('does not claim inherited target-branch fixes absent from the default branch', async () => {
+    execGh.mockResolvedValueOnce(issue()).mockResolvedValueOnce(prs({
+      number: 23, baseRefName: 'release', headRefName: 'feature/release-fix', body: '',
+      commits: [{ oid: '2'.repeat(40), messageHeadline: 'fix: current change (#43)' }],
+    })).mockResolvedValueOnce(JSON.stringify([{ total_commits: 2, commits: [
+      { sha: '1'.repeat(40), commit: { message: 'fix: earlier target-branch change (#42)' } },
+      { sha: '2'.repeat(40), commit: { message: 'fix: current change (#43)' } },
+    ] }]));
+    await expect(prepareAppIssueClaim(APP, '42', 'github')).resolves.toEqual({ epic: false });
+  });
+
+  it.each([42, 43])('filters a large promotion to its unpublished commits beyond commit 250 (issue %i)', async number => {
+    const commits = Array.from({ length: 300 }, (_, index) => ({
+      oid: (index + 1).toString(16).padStart(40, '0'), messageHeadline: 'test: shipped slice (#42)',
+    }));
+    const unpublished = { sha: 'f'.repeat(40), commit: { message: 'fix: outstanding work (#43)' } };
+    execGh.mockResolvedValueOnce(issue()).mockResolvedValueOnce(prs({
+      number: 23, baseRefName: 'release', headRefName: 'candidate/release', body: '', commits: commits.slice(0, 100),
+    })).mockResolvedValueOnce(JSON.stringify([
+      ...[0, 100, 200].map(start => ({ total_commits: 301, commits: commits.slice(start, start + 100)
+        .map(commit => ({ sha: commit.oid, commit: { message: commit.messageHeadline } })) })),
+      { total_commits: 301, commits: [unpublished] },
+    ])).mockResolvedValueOnce(JSON.stringify([{ total_commits: 1, commits: [unpublished] }]));
+    const claim = prepareAppIssueClaim(APP, String(number), 'github');
+    if (number === 42) await expect(claim).resolves.toEqual({ epic: false });
+    else await expect(claim).rejects.toMatchObject({ status: 409, code: 'ISSUE_IN_FLIGHT' });
+    expect(execGh.mock.calls[2][0]).toContain(`repos/acme/widget/compare/${'c'.repeat(40)}...${'b'.repeat(40)}?per_page=100`);
+    expect(execGh.mock.calls[3][0]).toContain(`repos/acme/widget/compare/${'a'.repeat(40)}...${'b'.repeat(40)}?per_page=100`);
+  });
+
+  it('withholds a claim when expanded PR evidence ends before its reported commit count', async () => {
+    const commits = Array.from({ length: 250 }, (_, index) => ({
+      sha: (index + 1).toString(16).padStart(40, '0'), commit: { message: 'other work' },
+    }));
+    execGh.mockResolvedValueOnce(issue()).mockResolvedValueOnce(prs({
+      headRefName: 'large-change', body: '', commits: commits.slice(0, 100).map(commit => ({ messageHeadline: commit.commit.message })),
+    })).mockResolvedValueOnce(JSON.stringify([{ total_commits: 301, commits }]));
+    await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toMatchObject({ status: 502, code: 'CLAIM_PRS_UNAVAILABLE' });
+  });
+
+  it.each([
+    { headRefName: 'candidate/release', body: '', message: 'fix: outstanding work (#42)' },
+    { headRefName: 'claim/issue-42', body: '', message: 'chore: prepare release' },
+    { headRefName: 'candidate/release', body: 'Closes #42', message: 'chore: prepare release' },
+  ])('preserves live non-default PR ownership: %j', async ({ message, ...pr }) => {
+    execGh.mockResolvedValueOnce(issue(['help wanted'])).mockResolvedValueOnce(prs({
+      number: 23, baseRefName: 'release', commits: [{ oid: '1'.repeat(40), messageHeadline: message }], ...pr,
+    })).mockResolvedValueOnce(JSON.stringify([{ total_commits: 1, commits: [{ sha: '1'.repeat(40), commit: { message } }] }]));
+    await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toMatchObject({ status: 409, code: 'ISSUE_IN_FLIGHT' });
+    expect(execGh.mock.calls.some(([args]) => args[1] === 'edit')).toBe(false);
+  });
+
+  it.each([
+    null,
+    [],
+    [{ total_commits: 2, commits: [{ commit: { message: 'chore: prepare release' } }] }],
+    [{ total_commits: 1, commits: [{}] }],
+  ].map(pages => ({ pages })))('withholds claims when default-branch comparison is unavailable or incomplete: %j', async ({ pages }) => {
+    execGh.mockResolvedValueOnce(issue(['help wanted'])).mockResolvedValueOnce(prs({
+      number: 23, baseRefName: 'release', headRefName: 'candidate/release', body: '', commits: [],
+    })).mockResolvedValueOnce(JSON.stringify(pages));
+    await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toMatchObject({ status: 502, code: 'CLAIM_PRS_UNAVAILABLE' });
+    expect(execGh.mock.calls.some(([args]) => args[1] === 'edit')).toBe(false);
   });
 
   it('rejects unreadable state, failed edits, and labels that remain after an edit', async () => {

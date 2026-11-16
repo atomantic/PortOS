@@ -20,7 +20,6 @@ vi.mock('../services/meatspacePost.js', () => ({
   getPostReviewReps: vi.fn(),
 }));
 vi.mock('../services/meatspacePostDrillCache.js', () => ({
-  CACHEABLE_TYPES: ['compound-chain'],
   getCacheStats: vi.fn(() => ({})),
   requestCacheFill: vi.fn(),
   getCachedDrill: vi.fn(() => null),
@@ -29,7 +28,6 @@ vi.mock('../services/meatspacePostDrillCache.js', () => ({
 
 import { getPostStats } from '../services/meatspacePostStats.js';
 import { getPostRecommendations } from '../services/meatspacePostRecommendations.js';
-import { getAdaptivePreview } from '../services/meatspacePostAdaptive.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import meatspacePostRoutes from './meatspacePostRoutes.js';
 
@@ -90,16 +88,5 @@ describe('GET /api/meatspace/post/recommendations', () => {
     expect(getPostRecommendations).toHaveBeenCalledWith({ limit: 10 });
     await request(app).get('/api/meatspace/post/recommendations?limit=0');
     expect(getPostRecommendations).toHaveBeenCalledWith({ limit: 1 });
-  });
-});
-
-describe('GET /api/meatspace/post/adaptive-preview', () => {
-  it('delegates to the adaptive policy module', async () => {
-    vi.clearAllMocks();
-    getAdaptivePreview.mockResolvedValue({ enabled: true, drills: {} });
-    const res = await request(makeApp()).get('/api/meatspace/post/adaptive-preview');
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ enabled: true, drills: {} });
-    expect(getAdaptivePreview).toHaveBeenCalledTimes(1);
   });
 });

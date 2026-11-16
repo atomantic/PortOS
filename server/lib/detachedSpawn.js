@@ -1,28 +1,6 @@
 // Spawn a long-running media-job child that SURVIVES a `pm2 restart
 // portos-server`.
 //
-// `spawnDatabaseMaintenanceWorker(id, token)` launches only the fixed, one-use fenced offline-transfer
-// worker and retains its supervisor evidence; it grants no ordinary launch bypass. `spawnDetached(bin,
-// args, {controlDir,env,cwd,killProcessGroup?})` → ChildProcess-like handle for a long media job that
-// SURVIVES `pm2 restart portos-server`. A pure-`sh` double-fork reparents the job to init (escaping
-// pm2's PPID-based TreeKill — `detached:true` alone doesn't, since it only changes the process group);
-// the server tails on-disk log files for `stdout`/`stderr`/`close`. Group-kill mode persists a marker
-// so cancel, reattach, and orphan reaping terminate a group-leader wrapper plus every runtime child
-// together. Windows reaches the same place through a powershell supervisor started by a launcher that
-// exits (never `detached:true`, which there means DETACHED_PROCESS and leaves a console host no
-// console to run in), writing the same control files — so both platforms survive the restart AND take
-// the runner's children down on cancel (`taskkill /T /F` there, the process group on POSIX). Used by
-// loraTraining + videoGen. Also exports `reattachDetached(controlDir)` / `isReattachable(controlDir)`
-// to RE-ATTACH a survivor after a restart, `isDetachedRunning(controlDir, expectedProcess?)` with
-// optional executable/argument validation for fixed-command control dirs, and `reapDetached` to
-// checkpoint-kill one when re-attach isn't possible. `snapshotProcesses()` (POSIX
-// pid/pgid/start/command table, fails closed on unreadable rows), `signalProcessGroup(pgid, signal)`
-// and `isDetachedSupervisorCommand(command)` back database-maintenance descendant reconciliation;
-// completed POSIX launches retire their registry record once two snapshots prove the launcher group
-// empty. Also provides `snapshotMaintenanceProcesses()` for cross-platform maintenance and
-// surviving-job checks: the POSIX process table or Windows CIM process identities, start times and
-// command lines, rejecting incomplete inventories.
-//
 // pm2's TreeKill walks the parent→child process tree (`ps -e -o pid=,ppid=`)
 // and SIGINTs every descendant of portos-server on restart/stop — and
 // portos-server restarts routinely (memory ceiling). A multi-hour LoRA trainer
@@ -86,6 +64,8 @@ import { safeChildProcessOptions } from './processEnv.js';
 import { quoteForShell } from './shellCd.js';
 import { withSpawnCwdEnv } from './spawnCwd.js';
 import { classifyWriterQuiescence, reserveDatabaseWriter } from './databaseWriterRegistry.js';
+import { createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
+import { PATHS } from './paths.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -706,9 +686,6 @@ export async function spawnDetached(bin, args = [], options = {}) {
  * that receipt before recovery (see databaseMaintenanceTransfer.js).
  */
 export async function spawnDatabaseMaintenanceWorker(id, token) {
-  const [{ createDatabaseMaintenanceJournal }, { PATHS }] = await Promise.all([
-    import('./databaseMaintenanceJournal.js'), import('./paths.js'),
-  ]);
   const journal = createDatabaseMaintenanceJournal();
   const controlDir = journal.reserveCoordinatorWorker(id, token);
   return spawnDetachedWithReservation(process.execPath,

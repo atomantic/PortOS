@@ -1,6 +1,18 @@
 import { parse } from '@babel/parser';
 import { posix } from 'node:path';
 
+// The wrapper registry and the per-file scan both parse every JSON-reading
+// source; parse each distinct source once (the AST is only ever read).
+const astCache = new Map();
+function parseSource(source) {
+  let ast = astCache.get(source);
+  if (!ast) {
+    ast = parse(source, { sourceType: 'module', tokens: true });
+    astCache.set(source, ast);
+  }
+  return ast;
+}
+
 // A cheap, conservative caller gate: aliases retain the imported helper name.
 // Unicode escapes may spell an identifier without its literal name, so those
 // sources still get parsed. Comments/strings are harmless false positives.
@@ -123,7 +135,7 @@ export function buildJsonReadWrapperRegistry(modules) {
   const registry = new Map();
   for (const [module, source] of modules) {
     if (!mayReadJsonFile(source) && !source.includes('tryReadFile')) continue;
-    const ast = parse(source, { sourceType: 'module' });
+    const ast = parseSource(source);
     const names = helperNames(ast);
     const functions = new Map();
     const constants = new Set();
@@ -195,7 +207,7 @@ export function buildJsonReadWrapperRegistry(modules) {
 
 /** Same-path syntax equality plus one imported wrapper hop; no control-flow proof. */
 export function scanJsonWriteback(source, { module = '', registry = new Map() } = {}) {
-  const ast = parse(source, { sourceType: 'module', tokens: true });
+  const ast = parseSource(source);
   const names = helperNames(ast);
   const wrappers = new Map();
   const importedPaths = new Map();

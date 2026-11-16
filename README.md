@@ -85,7 +85,7 @@ Ports are listed in [docs/PORTS.md](./docs/PORTS.md) and the full design in [doc
 
 The author builds PortOS by directing AI coding agents rather than typing the code, and PortOS in turn manages those agents, its own development, and the author's digital twin.
 
-> **Opinionated and personal.** PortOS assumes one person, one private network, and the author's workflow. Pull requests are welcome, but updates can break things. If one does, ask your coding agent: `"Read .changelog/vX.Y.Z.md and fix any migration issues in my PortOS data/ directory."`
+> **Opinionated and personal.** PortOS assumes one person, one private network, and the author's workflow. Pull requests are welcome, but updates can break things. If one does, ask your coding agent: `"Read the vX.Y.Z notes on the PortOS GitHub Releases page and fix any migration issues in my PortOS data/ directory."`
 
 ---
 
@@ -169,7 +169,7 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 
 ### Architecture & Operations
 - [Architecture Overview](./docs/ARCHITECTURE.md) — System design, data flow, and service diagram
-- [API Reference](./docs/API.md) — REST endpoints, full route-domain index, and WebSocket events
+- [API Reference](./docs/API.md) — API conventions, route-domain index, and WebSocket events (endpoint reference: the API Explorer)
 - [API Tool Contract](./docs/API_TOOL_CONTRACT.md) — Unified semantic tool, Persistent Mind, and Agent Tools MCP contract
 - [Companion App API](./docs/COMPANION_APP_API.md) — PortDeck native mobile client discovery and HTTP API contract
 - [Setup Guide](./docs/SETUP.md) — Tailscale, MagicDNS, trusted HTTPS, launch URLs, and AI-provider readiness
@@ -203,7 +203,6 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 - [Claude on Ollama](./docs/features/claude-ollama.md) — Run agent tasks on a local model
 - [Fleet LLM Host](./docs/features/fleet-llm-host.md) — Dedicated GPU host serving OpenAI-compatible models to a PortOS fleet
 - [CoS Agent Runner](./docs/features/cos-agent-runner.md) — Isolated agent process architecture
-- [CoS Enhancement](./docs/features/cos-enhancement.md) — Hybrid search, proactive execution, error recovery
 - [MTPLX](./docs/features/mtplx.md) — Native multi-token-prediction Qwen runtime on Apple Silicon, managed as a PM2 process from Models → Runtimes
 - [DFlash 2 / DSpark](./docs/features/dflash2.md) — Speculative drafting acceleration for local llama-server
 - [vLLM RTX 3090](./docs/features/qwen38-rtx3090.md) — Docker compose setup for Qwen 27B on NVIDIA RTX 3090 GPUs
@@ -219,7 +218,6 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 - [Autofixer](./docs/features/autofixer.md) — Autonomous crash detection and repair
 - [Browser](./docs/features/browser.md) — Headless browser automation
 - [Eidoverse Worlds](./docs/features/eidoverse.md) — private 3D systems world and PortOS resource projection
-- [OpenWorld historical reference](./docs/features/openworld.md) — retired compatibility surface
 - [Prompt Manager](./docs/features/prompt-manager.md) — Customizable AI prompt templates
 - [JIRA Sprint Manager](./docs/features/jira-sprint-manager.md) — Autonomous JIRA triage and implementation
 - [Writers Room](./docs/features/writers-room.md) — Prose-to-media writing environment with explicit AI passes
@@ -241,8 +239,8 @@ labeled `in-progress` or already assigned are not up for grabs.
 
 Pull requests are welcome. This is a personal project, so:
 
-- **Breakage happens.** Major version bumps (e.g. v2.0.0) may rename pages, reorganize data directories, or change schemas in ways that require a migration pass on your local data. Check the relevant `.changelog/vX.Y.Z.md` for what changed.
-- **Data migration.** If something stops working after an update, the fastest fix is to point your coding agent at the changelog: `"Read .changelog/vX.Y.Z.md and fix any migration issues in my PortOS data/ directory."` Most data issues are trivially auto-fixable this way.
+- **Breakage happens.** Major version bumps (e.g. v2.0.0) may rename pages, reorganize data directories, or change schemas in ways that require a migration pass on your local data. Check the relevant version on the [GitHub Releases](https://github.com/atomantic/PortOS/releases) page for what changed.
+- **Data migration.** If something stops working after an update, the fastest fix is to point your coding agent at the release notes: `"Read the vX.Y.Z notes on the PortOS GitHub Releases page and fix any migration issues in my PortOS data/ directory."` Most data issues are trivially auto-fixable this way.
 - **Opinionated by design.** Architecture decisions (single-user, auth optional and off by default, PostgreSQL + flat files over a heavy ORM, Tailscale-only networking) are intentional and will not change. PRs that add multi-user support or general-purpose hardening — CORS restrictions, rate limiting, request-level concurrency controls — will not be merged. See the Security Model section of [AGENTS.md](./AGENTS.md) for what that trust model does and does not assume.
 - **Style.** Match the existing conventions in [AGENTS.md](./AGENTS.md) before opening a PR — especially the no-try/catch route convention, emoji-prefixed logging, and Zod validation on all inputs.
 

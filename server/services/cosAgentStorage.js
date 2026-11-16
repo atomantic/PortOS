@@ -1,4 +1,16 @@
-/** Machine-local maintenance of raw terminal recordings. History is never deleted. */
+/**
+ * Machine-local maintenance of raw terminal recordings. History is never deleted.
+ *
+ * Storage: `file-primary` — `raw.txt.gz` is a lossless local asset alternative to
+ * `raw.txt`, and its same-directory `raw-storage.json` is asset lifecycle metadata
+ * (pin, checksum, disposition), not a relational history store. Both stay
+ * machine-local; peer CoS sync keeps its metadata/output/prompt allowlist.
+ * Filesystem backups include them and restore needs no conversion. History has no
+ * age expiry: maintenance only compresses raw recordings (default after seven days)
+ * and deletes them only when opted in; parsed output, prompts and metadata are never
+ * removed. Policy lives in
+ * the machine-local CoS config (`agentStorage`, `lastAgentStorageJob`).
+ */
 import { createReadStream } from 'node:fs';
 import { lstat, readdir, readFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';

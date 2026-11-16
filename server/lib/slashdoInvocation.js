@@ -1,58 +1,18 @@
 /**
  * Slashdo invocation resolver (#3089).
  *
- * Resolves how a bundled slashdo workflow is invoked on a given host CLI.
- * `resolveSlashdoInvocation({command, args, providerId, providerCommand, leanMode})` → `{command,
- * args, style, invocation, skillName}` for the three shapes slashdo's installer produces
- * (`slash-namespaced` `/do:x` for Claude Code, `slash-flat` `/do-x` for OpenCode, `skill` — an Agent
- * Skill selected by name — for codex/grok/antigravity and any unidentified provider). Plus
- * `buildSlashdoSection(resolved, body, {bodyPath, reviewWith})` (pure renderer; the caller loads the
- * body via `loadSlashdoFile`. With a staged `bodyPath` it emits a filesystem pointer for deferred
- * bundles or bodies over `SLASHDO_INLINE_BUDGET_CHARS` (24,000)),
- * `unreachableReviewerIncludes({reviewers, usernames})` → the reviewer-variant lib includes a run can
- * never reach (the `skipIncludes` set for `loadSlashdoFile`; defaults to pruning NOTHING for an
- * unresolved/unrecognized reviewer set, since an over-pruned prompt is worse than a fat one),
- * `SLASHDO_REVIEWER_INCLUDES`/`SLASHDO_REVIEWER_INCLUDE_NAMES`, `slashdoSkillName`,
- * `isValidSlashdoCommand` (the one definition of the safe bare-command shape, also gating the Zod
- * schemas), `agentOwnsPrWorkflow({providerType, leanMode})` — a strictly WEAKER question than typing a
- * slash command: any local `cli`/`tui` harness that is not a lean `--bare` session drives its own
- * commit → push → PR → review → merge (#3733), with `PR_OPENED_BY` (`agent-slashdo` / `agent-inline` /
- * `portos`) naming WHO opens a run’s PR per the prompt it was given (stamped as `metadata.prOpenedBy`
- * by `promptOpensOwnPr`, services/promptSections/completion.js) and
- * `resolvePrOpenedBy({persistedPrOpenedBy, persistedOwnsPrWorkflow, …})` reading it back for a
- * completed agent — mapping both the legacy #3733 `ownsPrWorkflow` boolean and a pre-#3733 record with
- * no stamp at all; `oversizedBodyPointer(bodyPath, body)` (the shared "it is on disk, go read it"
- * line); `resolvePrOwnership({task, isTruthyMeta, persistedPrOpenedBy, persistedOwnsPrWorkflow,
- * providerId, providerCommand, leanMode})` → `{taskOpenPR, prOpenedBy, agentOpensOwnPr,
- * prClaimExpected}` — the persisted-first, task-shape-aware ownership verdict plus provider descriptor
- * that both in-process spawners (TUI `finish()`, direct-CLI `close`) hand to
- * `runSpawnerCompletionCleanup`, so the ownership question and the cleanup acting on it cannot
- * disagree; and `canTypeSlashCommands()` — the single predicate behind `agentPromptBuilder.js`'s
- * completion-workflow gates (can this session TYPE `/do:pr` / `/simplify`?), which reads
- * `resolveSlashdoStyle`'s `assumeClaudeWhenUnknown` posture because the spawners resolve a blank
- * command to `claude`. Provider is only known at spawn time, so a task persists the BARE command name
- * — never a rendered `/do:x` string.
- *
- * A CoS task can name a bundled slashdo workflow (`plan-task`, `next`, `review`,
- * …) instead of hand-written prose. How an agent actually *invokes* that workflow
- * is NOT a prefix swap — slashdo installs itself differently per host CLI
- * (`lib/slashdo/src/environments.js`), so the same command lands in three shapes:
- *
+ * A CoS task can name a bundled slashdo workflow (`plan-task`, `next`, …). Invoking
+ * it is NOT a prefix swap: slashdo installs per host CLI (`lib/slashdo/src/environments.js`):
  * | Host CLI                 | namespacing   | invocation                     |
  * |--------------------------|---------------|--------------------------------|
  * | Claude Code              | `subdirectory`| `/do:<cmd> <args>`             |
  * | OpenCode                 | `flat`        | `/do-<cmd> <args>`             |
  * | Codex / Grok / Antigravity | `directory` | Agent Skill, selected by NAME  |
  *
- * There is no `$do:<cmd>` form. Because the provider is only known at spawn
- * time (the task form's provider select defaults to "Auto"), a task persists the
- * bare command name in `metadata.slashdoCommand` and this module resolves the
- * concrete invocation when the prompt is built.
- *
- * Every host receives the bundled procedure independently of a global install.
- * File-tool hosts read an entrypoint and phase-specific supporting files; API
- * providers receive a self-contained body. Explicitly pinned reviewer choices
- * prune unreachable variants before either form is rendered.
+ * There is no `$do:<cmd>` form. The provider is only known at spawn time, so a task
+ * persists the bare name in `metadata.slashdoCommand` and this module resolves the
+ * invocation when the prompt is built. Every host gets the bundled procedure
+ * regardless of a global install; pinned reviewer choices prune unreachable variants.
  */
 import { isTruthyMeta } from './metadataFlags.js';
 import { isClaudeProvider, isOpencodeProvider } from './providerModels.js';
@@ -63,15 +23,9 @@ import { PROVIDER_TYPES } from './aiToolkit/constants.js';
 export const SLASHDO_NAMESPACE = 'do';
 
 /**
- * Inline budget for a resolved command body, in characters (issue #3110).
- *
- * Under it the body is inlined as before — the section stays self-contained and
- * the agent needs no extra file read. Over it, a host with file tools gets a
- * pointer at a resolved copy on disk instead (see `buildSlashdoSection`).
- *
- * 24,000 chars is approximately 6k tokens. Deferred bundles are always staged
- * because their relative references need a filesystem base, even when the
- * entrypoint is under this limit. Small self-contained commands stay inline.
+ * Inline budget for a resolved command body, in characters (~6k tokens). Under it
+ * the body is inlined; over it, file-tool hosts get a pointer to a resolved copy on
+ * disk. Deferred bundles are always staged (relative references need a filesystem base).
  */
 export const SLASHDO_INLINE_BUDGET_CHARS = 24000;
 
@@ -93,43 +47,25 @@ export const SLASHDO_REVIEWER_INCLUDE_NAMES = Object.freeze(Object.values(SLASHD
 
 /**
  * Reviewer slugs that drive slashdo's shared local-agent (spawnable CLI) loop.
+ * PortOS-only CLI reviewers (`opencode`, `kilo`, `kimi`) are members too: pruning
+ * their include would leave PortOS's inlined CLI Reviewer Procedure with nothing to point at.
  *
- * PortOS-only CLI reviewers (`opencode`, `kilo`, `kimi`) are members too: slashdo has no
- * slug for them, but the include they'd need is the same generic spawn-a-CLI
- * review procedure, and pruning it would leave PortOS's own inlined CLI Reviewer
- * Procedure with nothing to point at. `lmstudio`/`mtplx` sit in
- * LOCAL_MODEL_REVIEWERS for the same reason.
- *
- * Kept here rather than imported from reviewerConfig.js, whose importer
- * cosValidation.js imports THIS module — an import back would be a cycle.
- * Exported so reviewerConfig.test.js can pin it against `REVIEWER_CLI_BINARIES`
- * (whose keys are the same roster); a reviewer added to one and not the other
- * is a drift the test catches.
+ * Kept here, not imported from reviewerConfig.js (its importer cosValidation.js
+ * imports THIS module: cycle). Exported so reviewerConfig.test.js can pin it
+ * against `REVIEWER_CLI_BINARIES`.
  */
 export const LOCAL_AGENT_REVIEWERS = new Set(['claude', 'codex', 'antigravity', 'grok', 'cursor', 'pi', 'opencode', 'kilo', 'kimi']);
 /** Reviewer slugs that drive slashdo's local-model (Ollama-style) loop. */
 const LOCAL_MODEL_REVIEWERS = new Set(['ollama', 'lmstudio', 'mtplx']);
 /**
- * slashdo's own `--review-with` reviewer vocabulary, mapped to the PortOS slug
- * `unreachableReviewerIncludes` is keyed by. slashdo spells antigravity `agy`
- * and accepts `gemini`/`antigravity` as aliases for it; `cursor-agent` is an
- * alias for `cursor`. PortOS stores the long names.
+ * slashdo's `--review-with` vocabulary mapped to PortOS slugs (slashdo spells
+ * antigravity `agy`, with `gemini` an alias; `cursor-agent` aliases `cursor`).
  *
- * Kept local rather than imported from `reviewerConfig.js` for the same reason
- * `LOCAL_AGENT_REVIEWERS` is: `cosValidation.js` (which re-exports that module)
- * imports THIS one, so the arrow can only point one way.
- *
- * Deliberately NOT the full `REVIEWER_VALUES` roster — a `PORTOS_ONLY_REVIEWERS`
- * slug (`lmstudio`/`mtplx`/`kilo`/`kimi`) has no slashdo counterpart and
- * aborts the command, so seeing one in an explicit flag means the argument was
- * hand-written against a grammar we don't own. That falls through to the
- * unresolvable branch, which prunes nothing.
- *
- * slashdo's `cmd[<invocation>]` escape hatch is likewise absent, and deliberately:
- * an arbitrary shell command maps to no PortOS reviewer, so it resolves as
- * unreadable and the run keeps every reviewer include. `splitReviewerEntries` is
- * already bracket-aware, so a comma inside the invocation does not split the
- * entry — the flag reaches slashdo verbatim, which is the whole contract here.
+ * Local for the same cycle reason as LOCAL_AGENT_REVIEWERS. Deliberately NOT the
+ * full `REVIEWER_VALUES`: a PORTOS_ONLY slug has no slashdo counterpart and aborts
+ * the command, so it means a hand-written argument and falls to the unresolvable
+ * branch. `cmd[<invocation>]` is likewise absent: it maps to no PortOS reviewer,
+ * so the run keeps every include.
  */
 const SLASHDO_REVIEWER_SLUGS = Object.freeze({
   copilot: 'copilot',
@@ -153,10 +89,7 @@ const BRACKET_FREE_SLASHDO_REVIEWERS = new Set(['copilot']);
 const REVIEW_WITH_FLAG = '--review-with';
 /** slashdo's explicit "no external reviewer this run" tombstone. */
 const REVIEW_WITH_NONE = 'none';
-/**
- * Shell constructs whose expansion we cannot see. A value carrying one is not a
- * reviewer list we can resolve — the agent's shell decides what it becomes.
- */
+/** Shell constructs whose expansion we can't see; such a value is unresolvable. */
 const UNEXPANDABLE_VALUE_RE = /[$`\\]/;
 /** GitHub login charset plus the optional `[bot]` App suffix, per slashdo. */
 const REVIEWER_LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9-]*(?:\[bot\])?$/;
@@ -167,11 +100,10 @@ const ENTRY_EFFORT_RE = /^effort=(?:low|medium|high|xhigh|max)$/;
 const UNRESOLVED_REVIEW_WITH = Object.freeze({ explicit: true, unresolved: true, reviewers: Object.freeze([]), usernames: Object.freeze([]) });
 
 /**
- * Split a free-form argument string into argv-style tokens, honoring single and
- * double quotes so a bracketed model id with spaces (`agy[Gemini 3.5 Flash]`)
- * survives as one token.
+ * Split into argv-style tokens honoring quotes, so `agy[Gemini 3.5 Flash]` stays
+ * one token. Null when a quote is left open.
  * @param {string} args
- * @returns {string[]|null} null when a quote is left open (nothing safe to read)
+ * @returns {string[]|null}
  */
 function tokenizeSlashdoArgs(args) {
   const tokens = [];
@@ -198,10 +130,10 @@ function tokenizeSlashdoArgs(args) {
 }
 
 /**
- * Split a `--review-with` value on the commas BETWEEN entries — never on one
- * inside a `[<model>]` bracket, whose value is free-form.
+ * Split a `--review-with` value on commas BETWEEN entries, not inside a
+ * `[<model>]` bracket. Null when a bracket is left open.
  * @param {string} value
- * @returns {string[]|null} null when a bracket is left open
+ * @returns {string[]|null}
  */
 function splitReviewerEntries(value) {
   const entries = [];
@@ -219,17 +151,12 @@ function splitReviewerEntries(value) {
 }
 
 /**
- * Strip slashdo's per-entry `~` suffixes (`~opt`, `~max=<n>`, `~effort=<level>`)
- * off an entry and return the bare slug/login. Suffixes are matched only OUTSIDE
- * the outermost brackets, because a model id may itself contain a `~`.
- *
- * The suffix VALUES are deliberately discarded: they ride the explicit argument
- * verbatim into the invocation, so PortOS never re-emits them. This only has to
- * decide whether the entry is one slashdo would accept.
- *
+ * Strip per-entry `~` suffixes (`~opt`, `~max=<n>`, `~effort=<level>`), matched only
+ * OUTSIDE the outermost brackets (a model id may contain `~`). Values are
+ * discarded: they ride the explicit argument verbatim; this only decides whether
+ * slashdo would accept the entry.
  * @param {string} entry
- * @returns {string|null} the suffix-free token, or null when a suffix is one
- *   slashdo would reject (unknown, repeated, or malformed)
+ * @returns {string|null} suffix-free token, or null when a suffix would be rejected
  */
 function stripEntrySuffixes(entry) {
   const open = entry.indexOf('[');
@@ -249,11 +176,10 @@ function stripEntrySuffixes(entry) {
 }
 
 /**
- * Resolve one suffix-free `--review-with` entry to the PortOS reviewer slug (or
- * `@login`) it names.
+ * Resolve one suffix-free entry to a PortOS reviewer slug or `@login`.
  * @param {string} token
- * @returns {{reviewer: string}|{username: string}|null} null when slashdo itself
- *   would reject the entry, or when it names something PortOS can't map
+ * @returns {{reviewer: string}|{username: string}|null} null when slashdo would
+ *   reject it or PortOS can't map it
  */
 function resolveReviewerEntry(token) {
   if (!token) return null;
@@ -272,29 +198,21 @@ function resolveReviewerEntry(token) {
 }
 
 /**
- * The reviewer contract an EXPLICIT `--review-with` in a task's `slashdoArgs`
- * declares (#6261).
+ * The reviewer contract an EXPLICIT `--review-with` in `slashdoArgs` declares (#6261).
+ * slashdo's precedence puts a typed flag above every saved default and PortOS
+ * passes `slashdoArgs` verbatim, so this flag, not `resolveReviewerConfig`,
+ * governs the run; pruning or pinning from metadata instead yields a prompt that
+ * requests one reviewer but carries another's loop.
  *
- * slashdo's own precedence puts a typed flag above every saved or inherited
- * default (`lib/review-config-defaults.md`), and PortOS passes `slashdoArgs`
- * through verbatim — so when that flag is present it, not `resolveReviewerConfig`,
- * is what the run will actually use. Pruning the body or pinning a `--review-with`
- * from task metadata instead is how a prompt ends up requesting one reviewer,
- * omitting its loop, and instructing the agent to use another.
+ * Outcomes:
+ * - `null` — no explicit flag; the metadata/defaults contract governs.
+ * - `{ unresolved: true }` — flag present but unsafely readable (open quote or
+ *   bracket, shell expansion, slug/suffix outside slashdo's grammar, conflicting
+ *   repeats). Prune and pin NOTHING.
+ * - `{ none: true }` or resolved `{ reviewers, usernames }` — the explicit selection.
  *
- * Three outcomes, and the caller must treat them differently:
- * - `null` — no explicit flag; the metadata/defaults contract governs as before.
- * - `{ unresolved: true }` — a flag is there but this parser can't safely read it
- *   (an open quote or bracket, a shell expansion, a slug or suffix outside
- *   slashdo's grammar, conflicting repeats). Preserve the arguments and prune and
- *   pin NOTHING: a grammar we don't fully own is exactly the case where guessing
- *   drops the loop the run needs.
- * - `{ none: true }` or a resolved `{ reviewers, usernames }` — the explicit
- *   selection, already mapped to PortOS slugs.
- *
- * Suffix values (`~opt` / `~max=<n>` / `~effort=<level>`) and `[<model>]` brackets
- * are validated but not returned: they travel in the verbatim argument, so
- * re-emitting them would state the same pin twice.
+ * Suffix values and `[<model>]` brackets are validated but not returned: they
+ * travel in the verbatim argument.
  *
  * @param {unknown} args - the task's raw `metadata.slashdoArgs`
  * @returns {{explicit: true, unresolved?: true, none?: true, reviewers: string[],
@@ -310,15 +228,14 @@ export function parseExplicitReviewWith(args) {
     const token = tokens[i];
     if (token === REVIEW_WITH_FLAG) {
       const next = tokens[i + 1];
-      // A missing value, or the next flag where the value should be.
+      // A missing value, or the next flag.
       if (next === undefined || next.startsWith('-')) return UNRESOLVED_REVIEW_WITH;
       values.push(next);
       i += 1;
     } else if (token.startsWith(`${REVIEW_WITH_FLAG}=`)) {
       values.push(token.slice(REVIEW_WITH_FLAG.length + 1));
     }
-    // Anything else starting with the same prefix (`--review-with-foo`) is a
-    // different flag — not ours to read.
+    // `--review-with-foo` is a different flag.
   }
   if (!values.length) return null;
   // Repeats are outside slashdo's documented grammar unless they agree.
@@ -347,14 +264,9 @@ export function parseExplicitReviewWith(args) {
 
 
 /**
- * Which reviewer-variant includes a run can never reach, given its resolved
- * reviewers — the `skipIncludes` set for `loadSlashdoFile` (#3110).
- *
- * **Defaults to pruning NOTHING** whenever the reviewer set isn't a resolved,
- * recognized list: no array, an empty array, or a list naming a slug this
- * mapping doesn't know. An over-pruned prompt that drops the loop the agent
- * actually needs is far worse than a fat one, so every uncertain case keeps
- * everything.
+ * Which reviewer-variant includes a run can never reach — the `skipIncludes` set
+ * for `loadSlashdoFile`. Prunes NOTHING for any uncertain set (non-array, empty,
+ * unknown slug): an over-pruned prompt is worse than a fat one.
  *
  * @param {Object} [opts]
  * @param {string[]|null} [opts.reviewers] - resolved keyed reviewer slugs
@@ -371,94 +283,56 @@ export function unreachableReviewerIncludes({ reviewers = null, usernames = [] }
     if (slug === 'copilot') keep.add(SLASHDO_REVIEWER_INCLUDES.copilot);
     else if (LOCAL_AGENT_REVIEWERS.has(slug)) keep.add(SLASHDO_REVIEWER_INCLUDES.localAgent);
     else if (LOCAL_MODEL_REVIEWERS.has(slug)) keep.add(SLASHDO_REVIEWER_INCLUDES.localModel);
-    // An unrecognized slug means this mapping is behind the reviewer enum —
-    // keep everything rather than guess which loop it needs.
+    // Unrecognized slug: this mapping is behind the enum; keep everything.
     else return [];
   }
   if (users.length) keep.add(SLASHDO_REVIEWER_INCLUDES.username);
-  // Always kept: slashdo's commands dispatch EVERY non-empty reviewer list
-  // through the wrapper, single-entry lists included (see SLASHDO_REVIEWER_INCLUDES).
+  // Always kept: every non-empty reviewer list dispatches through the wrapper.
   keep.add(SLASHDO_REVIEWER_INCLUDES.multi);
 
   return SLASHDO_REVIEWER_INCLUDE_NAMES.filter(name => !keep.has(name));
 }
 
-/**
- * The three invocation shapes slashdo's installer produces. `slash-namespaced`
- * and `slash-flat` are typed as a slash command by the host CLI; `skill` is an
- * Agent Skill the model selects by name/description (no prefix, nothing to type).
- */
+/** The shapes slashdo's installer produces: two typed slash commands and an Agent Skill selected by name. */
 export const SLASHDO_INVOCATION_STYLES = Object.freeze({
   SLASH_NAMESPACED: 'slash-namespaced',
   SLASH_FLAT: 'slash-flat',
   SKILL: 'skill',
 });
 
-/** Bare slashdo command names are file-path segments — keep them inert. */
+/** Bare command names are file-path segments — keep them inert. */
 const COMMAND_NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 
-/**
- * True when `name` is a well-formed bare slashdo command (`plan-task`, `pr-better`).
- * Rejects anything that could escape `commands/do/` — the value reaches
- * `loadSlashdoFile`, which joins it into a path.
- * @param {unknown} name
- * @returns {boolean}
- */
+/** True for a well-formed bare command name; rejects anything that could escape `commands/do/` (the value is joined into a path). */
 export function isValidSlashdoCommand(name) {
   return typeof name === 'string' && COMMAND_NAME_RE.test(name);
 }
 
-/**
- * The flat/skill name slashdo's installer gives a command in `flat` and
- * `directory` environments: `do/plan-task` → `do-plan-task`. Mirrors
- * `getSkillName` in `lib/slashdo/src/transformer.js`.
- * @param {string} command - bare command name (`plan-task`)
- * @returns {string}
- */
+/** Flat/skill name (`do/plan-task` → `do-plan-task`); mirrors `getSkillName` in lib/slashdo/src/transformer.js. */
 export function slashdoSkillName(command) {
   return `${SLASHDO_NAMESPACE}-${command}`;
 }
 
 /**
- * Which invocation shape a provider gets — the single home for the
- * provider→slashdo-shape decision (`agentPromptBuilder.js`'s
- * `canTypeSlashCommands` capability flag, and the completion `mode` it feeds,
- * derive from this rather than re-deriving it).
+ * Which invocation shape a provider gets: the single home for the provider→shape
+ * decision (`canTypeSlashCommands` and the completion `mode` derive from it).
  *
- * Detection reuses the shared provider predicates, so a path-configured or
- * renamed binary is recognised. An unidentified provider falls through to
- * `skill`; guessing `/do:<cmd>` for an unknown host would hand it a line of
- * prose it can't run, while `skill` always works because the caller inlines the
- * procedure.
+ * Uses the shared provider predicates, so renamed/path-configured binaries are
+ * recognised. Unidentified providers get `skill` (the caller inlines the
+ * procedure, so it always works). `leanMode` (`claude --bare`) also gets `skill`:
+ * it skips project command discovery.
  *
- * `leanMode` (small local models behind `claude --bare`) also resolves to
- * `skill`: the lean session skips project command discovery, so `/do:<cmd>`
- * would resolve to nothing.
- *
- * **Unknown-command posture (`assumeClaudeWhenUnknown`).** A provider with no
- * launch command is genuinely ambiguous, and the two kinds of caller want
- * opposite answers:
- * - **Rendering an invocation for a task** (default, `false`): stay strict, like
- *   `isClaudeProvider`. Printing `/do:next` for a host that turns out not to be
- *   Claude hands the agent an uninvokable line; `skill` + the inlined body works
- *   everywhere, so "unknown" must not read as Claude.
- * - **Deciding whether a spawned agent may TYPE `/do:pr`** (`true`): the answer
- *   must match the command the spawners will ACTUALLY launch, which for a blank
- *   `provider.command` is `inferTuiCommand(provider.id)` — the same fallback
- *   `agentTuiSpawning.js` and `buildCliSpawnConfig` both apply. So this posture
- *   resolves the command the spawner would pick rather than guessing: a custom
- *   provider id with no command launches `claude` and IS slashdo-capable, while
- *   `codex-tui` with no command launches `codex` and is not.
- * Only the blank-command case is affected — a provider that names its command
- * resolves the same under either posture.
+ * `assumeClaudeWhenUnknown`, for a provider with no launch command:
+ * - `false` (rendering a task invocation): strict; "unknown" must not read as Claude.
+ * - `true` (may a spawned agent TYPE `/do:pr`): resolve `inferTuiCommand(provider.id)`,
+ *   the fallback the spawners actually apply, so a custom id launches `claude` and
+ *   is capable while `codex-tui` is not.
  *
  * @param {Object} [opts]
  * @param {string|null} [opts.providerId]
  * @param {string|null} [opts.providerCommand]
  * @param {boolean} [opts.leanMode]
- * @param {boolean} [opts.assumeClaudeWhenUnknown=false] - when the provider names
- *   no command, resolve the one the spawners would infer from its id instead of
- *   falling through to `skill`.
+ * @param {boolean} [opts.assumeClaudeWhenUnknown=false]
  * @returns {string} one of SLASHDO_INVOCATION_STYLES
  */
 export function resolveSlashdoStyle({
@@ -467,8 +341,7 @@ export function resolveSlashdoStyle({
   leanMode = false,
   assumeClaudeWhenUnknown = false,
 } = {}) {
-  // A blank command is only resolved for the spawner posture; the strict default
-  // deliberately leaves it blank so `isClaudeProvider` won't read it as Claude.
+  // Only the spawner posture infers a blank command; strict leaves it blank (not Claude).
   const command = (assumeClaudeWhenUnknown && !providerCommand)
     ? inferTuiCommand(providerId)
     : providerCommand;
@@ -476,31 +349,20 @@ export function resolveSlashdoStyle({
   if (isOpencodeProvider(provider)) return SLASHDO_INVOCATION_STYLES.SLASH_FLAT;
   if (leanMode) return SLASHDO_INVOCATION_STYLES.SKILL;
   if (isClaudeProvider(provider)) return SLASHDO_INVOCATION_STYLES.SLASH_NAMESPACED;
-  // Codex / Grok / Antigravity install Agent Skills, not slash commands — as
-  // does anything we can't positively identify.
+  // Codex / Grok / Antigravity install Agent Skills; so does anything unidentified.
   return SLASHDO_INVOCATION_STYLES.SKILL;
 }
 
 /**
- * True when a session can be handed a typed Claude Code slash command — both the
- * slashdo ones (`/do:pr`, `/do:push`) and Claude's own built-ins (`/simplify`).
- * `SLASH_NAMESPACED` is exactly the Claude-Code-with-project-commands case, so
- * one predicate answers both: OpenCode gets `SLASH_FLAT` (no `/do:pr`, no
- * `/simplify`), codex/grok/antigravity get `SKILL`, and a lean `--bare` session
- * gets `SKILL` because it skips command discovery entirely.
+ * True when a session can be handed a typed Claude Code slash command (slashdo
+ * `/do:pr` and built-ins like `/simplify`). `SLASH_NAMESPACED` is exactly that
+ * case: OpenCode gets `SLASH_FLAT`; codex/grok/antigravity and lean `--bare`
+ * sessions get `SKILL`.
  *
- * This is the single home for the completion-workflow gates in
- * `agentPromptBuilder.js` (formerly three inline provider-id allowlists, and
- * later a trio of per-shape capability flags the completion sections
- * re-derived; both collapsed to this predicate plus the resolved completion
- * `mode` — see #6873). It uses the `assumeClaudeWhenUnknown` posture because
- * those gates describe a session the spawners are about to launch, and every
- * spawner resolves a blank command to `claude`.
- *
- * `assumeClaudeWhenUnknown` defaults to `true` here (unlike `resolveSlashdoStyle`)
- * because the callers are describing a CLI/TUI session about to be spawned. An
- * HTTP-API provider is never spawned as a local CLI, so the API path passes
- * `false` — a blank provider there is not a latent `claude`.
+ * Single home for the completion-workflow gates in `agentPromptBuilder.js`.
+ * Defaults `assumeClaudeWhenUnknown` to `true` (unlike `resolveSlashdoStyle`)
+ * because callers describe a CLI/TUI session about to be spawned, where every
+ * spawner resolves a blank command to `claude`; the HTTP-API path passes `false`.
  *
  * @param {Object} [opts] - same shape as `resolveSlashdoStyle`
  * @returns {boolean}
@@ -516,41 +378,23 @@ export function canTypeSlashCommands({
 }
 
 /**
- * Provider types spawned as a local coding harness — a real shell, real file
- * tools, and a PATH that has `git` / `gh` / the reviewer CLIs on it. An HTTP
- * `api` provider has none of that, so it can never drive its own PR.
- *
- * Built from `PROVIDER_TYPES` rather than string literals: a typo'd literal here
- * silently returns `false` and PortOS starts double-driving the PR.
+ * Provider types spawned as a local coding harness (shell, file tools, git/gh on
+ * PATH); an HTTP `api` provider can never drive its own PR. Built from
+ * `PROVIDER_TYPES`: a typo'd literal silently returns false and PortOS would double-drive the PR.
  */
 const HARNESS_PROVIDER_TYPES = new Set([PROVIDER_TYPES.CLI, PROVIDER_TYPES.TUI]);
 
 /**
- * True when a spawned session can drive the WHOLE change-request lifecycle
- * itself — commit, push, open the PR, run the configured review loop, merge
- * (#3733).
+ * True when a spawned session can drive the WHOLE change-request lifecycle itself
+ * (commit, push, PR, review loop, merge).
  *
- * This is a strictly weaker question than `canTypeSlashCommands`, and
- * conflating the two is what stranded every agy / grok / codex run in a
- * two-agent handoff. Those hosts can't TYPE `/do:pr` (slashdo installs there as
- * Agent Skills, not slash commands), so they used to be told "commit and stop"
- * — PortOS then opened the PR after the run and queued a separate `sys-rl-*`
- * follow-up agent just to run the review loop. But not typing a slash command
- * says nothing about running `gh pr create`: these are full coding harnesses,
- * and the follow-up agent they hand off TO is routinely one of them driving the
- * exact same inlined slashdo procedure. So the split bought nothing and cost a
- * whole extra agent, a cold context, and a queue hop per task.
+ * Weaker than `canTypeSlashCommands`: Agent-Skills hosts can't TYPE `/do:pr` but
+ * are full harnesses that can run `gh pr create`; telling them to stop cost an
+ * extra agent and queue hop. `leanMode` is excluded: a small `--bare` model
+ * fumbles multi-step flows and a half-run merge is worse than a clean handoff.
  *
- * `leanMode` is the one local harness excluded: a small Ollama-backed model
- * behind `claude --bare` fumbles multi-step flows, and a half-run merge
- * procedure is worse than a clean handoff.
- *
- * This is the HOST half of the question only. Whether a given run's prompt
- * actually handed it the PR depends on the task shape too, and that combined
- * answer is stamped on the agent record as `metadata.prOpenedBy` — see
- * `promptOpensOwnPr` in `services/promptSections/completion.js`, which is the
- * predicate the prompt itself is rendered from, and `resolvePrOpenedBy` below,
- * which reads the stamp back at cleanup time.
+ * HOST half only; the combined per-run answer is stamped as `metadata.prOpenedBy`
+ * (see `promptOpensOwnPr` in services/promptSections/completion.js, and `resolvePrOpenedBy`).
  *
  * @param {Object} [opts]
  * @param {string|null} [opts.providerType] - `'tui' | 'cli' | 'api'`
@@ -563,20 +407,13 @@ export function agentOwnsPrWorkflow({ providerType = null, leanMode = false } = 
 }
 
 /**
- * WHO opens a run's pull request, per the prompt that run was actually given.
- * Stamped on the agent record at spawn time as `metadata.prOpenedBy` and read
- * back by cleanup; `promptOpensOwnPr` (services/promptSections/completion.js)
- * is the single producer.
- *
- * Three values rather than a boolean because the two agent-owned cases behave
- * differently downstream and a boolean kept collapsing them:
- * - `agent-slashdo` — the completion section handed it `/do:pr`, which pushes,
- *   opens, reviews and merges the PR in one command.
- * - `agent-inline`  — the completion section handed it the plain `git`/`gh`
- *   steps plus the inline Review Loop / **Merge Gate** section. Only this value
- *   owes the #5876 merge-gate check, because only this prompt has that section.
- * - `portos`        — the prompt told the agent NOT to open a PR; the
- *   post-completion cleanup opens it.
+ * WHO opens a run's pull request, per the prompt the run was given. Stamped on the
+ * agent record at spawn as `metadata.prOpenedBy`; `promptOpensOwnPr`
+ * (services/promptSections/completion.js) is the single producer.
+ * - `agent-slashdo` — handed `/do:pr` (push, open, review, merge in one command).
+ * - `agent-inline` — handed plain `git`/`gh` steps plus the inline Review Loop /
+ *   **Merge Gate**; only this value owes the merge-gate check (#5876).
+ * - `portos` — told NOT to open a PR; post-completion cleanup does.
  */
 export const PR_OPENED_BY = Object.freeze({
   AGENT_SLASHDO: 'agent-slashdo',
@@ -587,37 +424,22 @@ export const PR_OPENED_BY = Object.freeze({
 const PR_OPENED_BY_VALUES = new Set(Object.values(PR_OPENED_BY));
 
 /**
- * The stamp for a COMPLETED agent, read off its record — accepting every shape
- * a record can carry, because other installs upgrade on their own schedule and
- * their older records keep arriving here.
+ * The stamp for a COMPLETED agent, read off its record, accepting every shape a
+ * record can carry (other installs upgrade on their own schedule).
  *
- * 1. `metadata.prOpenedBy` (this version) is authoritative: cleanup must act on
- *    what the prompt actually said, not on a fresh derivation that could
- *    disagree with it. An unrecognized value — a record from a NEWER install —
- *    is not trusted as an agent; it falls through to the legacy rules below.
- * 2. The #3733 boolean `metadata.ownsPrWorkflow`, when the record has one,
- *    still answers exactly as it did: `true` → `agent-inline` (a slashdo-free
- *    harness told to run `gh pr create` itself), `false` → `portos`.
- * 3. Otherwise `portos`, or `agent-slashdo` for a slashdo-capable host — the
- *    pre-#3733 fallback, unchanged, since those runs were prompted by the old
- *    builder whose gate was exactly `canTypeSlashCommands`.
- *
- * **The #6869 fix is deliberately NOT retro-applied to rule 2**, even though
- * that boolean is the one this issue retires. It answered "did the prompt
- * render the INLINE PR section", so `false` is ambiguous on a slashdo-capable
- * host between the defect (a `/do:pr` run PortOS then re-created a PR for) and
- * a correct exclusion (a read-only / no-code-output / discard-worktree /
- * leave-open run PortOS really does own). Overriding it to `agent-slashdo`
- * would fix the first and break the second — and only the task, which this
- * leaf deliberately does not see, tells them apart. Every legacy record
- * therefore resolves exactly as it did before this change; only records
- * stamped by `promptOpensOwnPr` (rule 1) carry the corrected answer, and an
- * in-flight legacy run is over within one upgrade window.
+ * 1. `metadata.prOpenedBy` is authoritative: cleanup acts on what the prompt said.
+ *    An unrecognized value (newer install) falls through to the legacy rules.
+ * 2. Legacy boolean `metadata.ownsPrWorkflow`: `true` → `agent-inline`, `false` →
+ *    `portos`. Deliberately NOT mapped to `agent-slashdo`: on a slashdo-capable host
+ *    `false` is ambiguous between a defect and a correct exclusion (read-only /
+ *    discard-worktree runs PortOS owns), and only the task, which this leaf
+ *    doesn't see, tells them apart.
+ * 3. Otherwise `portos`, or `agent-slashdo` for a slashdo-capable host (the old
+ *    builder's gate was `canTypeSlashCommands`).
  *
  * @param {Object} opts
  * @param {string|undefined} opts.persistedPrOpenedBy - `metadata.prOpenedBy`
- * @param {boolean|undefined} [opts.persistedOwnsPrWorkflow] - the legacy
- *   `metadata.ownsPrWorkflow` boolean (#3733)
+ * @param {boolean|undefined} [opts.persistedOwnsPrWorkflow] - legacy boolean
  * @param {string|null} [opts.providerId]
  * @param {string|null} [opts.providerCommand]
  * @param {boolean} [opts.leanMode]
@@ -640,30 +462,21 @@ export function resolvePrOpenedBy({
 }
 
 /**
- * The PR answers a spawned run needs, from ONE reading of the task, the
- * persisted prompt verdict and the provider descriptor. Both in-process spawners
- * call this once — the TUI `finish()` path up front, because its merge-gate contract check (#5876)
- * reads the ownership answer before the run completes; the direct-CLI `close` handler
- * at exit — and hand the result to `runSpawnerCompletionCleanup`, so the
- * ownership question and the cleanup that acts on it can never read different
- * answers (#3733).
+ * The PR answers a spawned run needs, from ONE reading of the task, persisted
+ * prompt verdict and provider. Both in-process spawners call it once and pass the
+ * result to `runSpawnerCompletionCleanup`, so ownership and the cleanup acting on
+ * it can't disagree.
  *
- * `agentOpensOwnPr` (did the prompt hand this run its own push → PR → merge?)
- * and `prClaimExpected` (does finalize verify a PR claim for it?) are
- * deliberately two predicates: a harness that owns the workflow but cannot TYPE
- * `/do:pr` is backstopped by cleanup, which re-checks the forge and opens the PR
- * itself when the agent skipped it — failing it at finalize for a PR that is
- * about to exist would turn a recovered hand-off into a false needs-attention
- * (#3358). `prClaimExpected` therefore stays the raw slash-command capability,
- * matching the runner path's own derivation in `agentLifecycle.js`; it asks
- * "will a PR already be there when finalize looks?", not "who was told to open
- * one".
+ * `agentOpensOwnPr` and `prClaimExpected` are deliberately separate: a harness that
+ * owns the workflow but can't TYPE `/do:pr` is backstopped by cleanup, which opens
+ * the PR if skipped, so finalize must not fail it for a PR about to exist (#3358).
+ * `prClaimExpected` stays the raw slash-command capability, matching
+ * agentLifecycle.js: "will a PR already exist when finalize looks?".
  *
  * @param {Object} opts
  * @param {Object} opts.task
  * @param {string|undefined} opts.persistedPrOpenedBy - `metadata.prOpenedBy`
- * @param {boolean|undefined} [opts.persistedOwnsPrWorkflow] - the legacy
- *   `metadata.ownsPrWorkflow` boolean (#3733)
+ * @param {boolean|undefined} [opts.persistedOwnsPrWorkflow] - legacy boolean
  * @param {string|null} [opts.providerId]
  * @param {string|null} [opts.providerCommand]
  * @param {boolean} [opts.leanMode]
@@ -691,16 +504,14 @@ export function resolvePrOwnership({
 
 /**
  * Resolve the concrete invocation for a slashdo-backed task.
- *
  * @param {Object} opts
  * @param {string} opts.command - bare command name (`plan-task`)
- * @param {string} [opts.args] - free-form arguments (the task description)
+ * @param {string} [opts.args] - free-form arguments
  * @param {string|null} [opts.providerId]
- * @param {string|null} [opts.providerCommand] - the provider's launch command
+ * @param {string|null} [opts.providerCommand]
  * @param {boolean} [opts.leanMode]
  * @returns {{ command: string, skillName: string, style: string, args: string,
- *   invocation: string }|null} null when `command` is missing or not a
- *   well-formed slashdo command name.
+ *   invocation: string }|null} null when `command` is missing or malformed
  */
 export function resolveSlashdoInvocation({
   command,
@@ -725,59 +536,37 @@ export function resolveSlashdoInvocation({
   return { command, skillName, style, args: trimmedArgs, invocation };
 }
 
-/**
- * The "it's on disk, go read it" line for a procedure body too large to paste
- * (#3110). Shared so every pointer an agent meets reads the same — a second
- * hand-typed copy is how one caller ends up omitting the read-it-in-sections
- * instruction that makes a 40KB file usable.
- *
- * @param {string} bodyPath - absolute path to the resolved copy
- * @param {string} body - the body itself, for its size
- * @returns {string}
- */
+/** The "read it on disk" line for a body too large to paste; shared so every pointer carries the read-in-sections instruction. */
 export function oversizedBodyPointer(bodyPath, body) {
   return `The procedure entrypoint is on disk at \`${bodyPath}\` (${Math.round(body.length / 1000)}KB). READ THAT FILE before you start. Follow its phase order and required reads; read long procedures in sections as needed.`;
 }
 
 /**
- * Render the prompt section for a resolved slashdo invocation. Pure — the
- * caller loads `body` (via `loadSlashdoFile`) and passes it in, so this module
- * stays side-effect free.
+ * Render the prompt section for a resolved slashdo invocation. Pure: the caller
+ * loads `body` (via `loadSlashdoFile`).
  *
- * The procedure accompanies every invocation style: managed apps need no global
- * slashdo install or PortOS project-command symlinks.
+ * The procedure accompanies every invocation style, so managed apps need no global
+ * install. A staged body always renders as a pointer (supporting files resolve
+ * relative to that entrypoint); `bodyPath` is passed only for hosts with file
+ * tools, API providers inline a self-contained body.
  *
- * A staged body always renders as a pointer, including a short entrypoint with
- * deferred references. Supporting files resolve relative to that entrypoint.
- * `bodyPath` is only passed for hosts with file tools; API providers inline an
- * eager, self-contained body.
- *
- * **`reviewWith` is mandatory whenever the body was pruned.** A pruned body has
- * only the reviewer loop(s) the caller pruned FOR; if the run then resolved some
- * other reviewer from slashdo's own saved defaults, that loop would be missing
- * and the agent would improvise it. Emitting the pin makes the body and the run
- * agree. Callers that prune nothing pass nothing.
+ * `reviewWith` is mandatory whenever the body was pruned: otherwise a run that
+ * resolves another reviewer from saved defaults would lack its loop and the agent
+ * would improvise it.
  *
  * @param {ReturnType<typeof resolveSlashdoInvocation>} resolved
  * @param {string|null} [body] - the command's markdown
  * @param {Object} [opts]
- * @param {string|null} [opts.bodyPath=null] - absolute path to a resolved copy of
- *   `body`. Pass only when the host has file tools.
- * @param {string} [opts.reviewWith=''] - reviewer CSV to pin (`codex,copilot`).
- *   Required when `body` had reviewer variants pruned out of it AND the invocation
- *   does not already carry its own `--review-with` (see `explicitReviewWith`).
- * @param {boolean} [opts.explicitReviewWith=false] - the invocation's own arguments
- *   carry an explicit `--review-with`, and `body` was pruned to match it (#6261).
- *   Mutually exclusive with `reviewWith`: restating the value PortOS already passes
- *   verbatim would emit every `~opt` / `~max=` / `~effort=` suffix twice.
- * @param {string} [opts.reviewerEffortNote=''] - the per-reviewer reasoning-effort
- *   instruction (`buildReviewerEffortNote`). Non-empty only when `reviewWith` is
- *   NOT emitted: a pinned CSV carries each effort as slashdo's `~effort=<level>`
- *   suffix, so the prose would just have the agent pass the flag twice. Unpinned,
- *   the workflow resolves reviewers itself and this is the pin's only route to the
- *   CLI it spawns.
+ * @param {string|null} [opts.bodyPath=null] - resolved on-disk copy; file-tool hosts only
+ * @param {string} [opts.reviewWith=''] - reviewer CSV to pin; required when pruned
+ *   unless `explicitReviewWith`
+ * @param {boolean} [opts.explicitReviewWith=false] - invocation already carries
+ *   `--review-with` and body was pruned to match; exclusive with `reviewWith`
+ *   (restating would duplicate every suffix)
+ * @param {string} [opts.reviewerEffortNote=''] - per-reviewer effort prose; non-empty
+ *   only when `reviewWith` is NOT emitted (its `~effort=` suffix carries it otherwise)
  * @param {boolean} [opts.includeTaskContext=false] - keep the task-context bridge
- *   even when the invocation has explicit flags instead of a free-text target
+ *   even with explicit flags
  * @returns {string} markdown section, or '' when `resolved` is null
  */
 export function buildSlashdoSection(resolved, body = null, {
@@ -789,8 +578,7 @@ export function buildSlashdoSection(resolved, body = null, {
 } = {}) {
   if (!resolved) return '';
 
-  // Without explicit args the workflow operates on the task described above —
-  // say so rather than re-printing the whole description inside the invocation.
+  // Without explicit args the workflow operates on the task described above.
   const target = resolved.args && !includeTaskContext ? '' : ' Apply it to the task described above.';
 
   const lines = ['### Slashdo Workflow'];
@@ -809,10 +597,7 @@ export function buildSlashdoSection(resolved, body = null, {
     );
   }
   if (explicitReviewWith) {
-    // The invocation above already carries the flag verbatim, so the pin points AT
-    // it rather than repeating it: slashdo's own precedence puts an explicit flag
-    // above every saved default, and restating the value would emit each
-    // per-reviewer suffix a second time.
+    // Point AT the verbatim flag; restating it would duplicate each per-reviewer suffix.
     lines.push(
       '',
       'The `--review-with` value in the invocation above is authoritative for this run: the procedure you were given carries ONLY the reviewer loops that value can reach (the rest were omitted as unreachable). Do not substitute a different reviewer from a saved slashdo default.'

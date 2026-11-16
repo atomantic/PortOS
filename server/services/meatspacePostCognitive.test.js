@@ -88,9 +88,6 @@ describe('cognitive drill generators', () => {
     expect(generateCognitiveDrill('nope')).toBeNull();
   });
 
-  it('exposes exactly the nine shipped cognitive types', () => {
-    expect(COGNITIVE_DRILL_TYPES).toEqual(['n-back', 'digit-span', 'stroop', 'schulte-table', 'mental-rotation', 'reaction-time', 'task-switching', 'go-no-go', 'flanker']);
-  });
 
   it('schulte-table shuffles 1..size*size into every cell exactly once', () => {
     const drill = generateSchulteTable({ size: 4 });

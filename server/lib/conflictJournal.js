@@ -1,56 +1,28 @@
 /**
  * Non-blocking conflict journal.
  *
- * Non-blocking edit-conflict journal for cross-install LWW merges.
- * `maybeJournalBeforeOverwrite({kind,id,local,remote,source})` (call right before a merge overwrite)
- * archives the losing local version when a true 3-way divergence is detected (`detectConflict` via
- * per-record `syncBaseHash` + `contentHashForRecord`), then advances the base hash;
- * `flushBaseHashes()` persists the batched base-hash side store; `withBaseHashFlushBatch(fn)` defers
- * every interior flush so an await-separated multi-record loop — the peer:online convergence push and
- * every base-hash-evicting `pruneTombstoned*` loop — collapses N `sync_base_hashes.json` rewrites into
- * one terminal write (depth-counted, so concurrent batches merge too; flushes in `finally`).
- * `deleteSyncBaseHash(kind,id)` evicts a record's base hash when its tombstone is hard-pruned, so
- * those paths don't let the side store grow without bound; `pruneOrphanedBaseHashes(resolves)` is the
- * backstop sweep (`resolves(kind,id) => bool`; unknown kinds kept) that drops keys whose record no
- * longer resolves, wired into the tombstone GC sweep. `conflictJournalStore()` is the
- * `pending`/`resolved` entry store (discard resolves an entry; DELETE hard-removes it — there is no
- * `dismissed` status). The base-hash file is read STRICT (`readJSONFileStrict`): a
- * present-but-unreadable `sync_base_hashes.json` latches `_persistBlocked` — `flushBaseHashes()`
- * no-ops so the file is preserved, `maybeJournalBeforeOverwrite` journals every overwrite fail-closed,
- * `detectConflict` reports `baseUnavailable`, and `isBaseHashPersistBlocked()` exposes the latch to
- * the conflict-journal status payload (#7260). Local-only — never crosses the wire.
+ * Cross-install merges are last-write-wins by `updatedAt`. When LWW would
+ * OVERWRITE a local record but BOTH sides edited it since they were last in sync
+ * (a true 3-way divergence), the losing local version is archived here BEFORE
+ * the overwrite: peers still converge on the LWW winner and no edit is silently
+ * lost (restorable from Sharing → Conflicts).
  *
- * All cross-install merges are last-write-wins by `updatedAt`. When LWW would
- * OVERWRITE a local record but BOTH sides edited it independently since the
- * last time they were in sync (a true 3-way divergence), the losing local
- * version is archived here BEFORE the overwrite — so convergence is preserved
- * (peers still agree on the LWW winner, sync never wedges) AND no edit is
- * silently lost (the user can review and restore from the Sharing → Conflicts
- * tab).
+ * Divergence signal — per-record `syncBaseHash` (content hash when this instance
+ * and a peer last held the same content):
  *
- * Divergence signal — per-record `syncBaseHash` (the content hash as of the
- * last time this instance and a peer demonstrably held the same content):
+ *     conflict := base != null && hLocal !== base && hRemote !== base && hLocal !== hRemote
  *
- *     conflict := base != null
- *              && hLocal !== base    // local diverged from the common base
- *              && hRemote !== base   // remote also diverged from it
- *              && hLocal !== hRemote  // and they actually differ
+ * `base == null` is a clean update (conservative: misses at most the first
+ * divergence per record, never false-positives) — UNLESS the base-hash store is
+ * untrustworthy: a present-but-unreadable `sync_base_hashes.json` latches
+ * `_persistBlocked`, under which every overwrite journals fail-closed and
+ * nothing writes back over the unreadable file.
  *
- * `base == null` ⇒ treat as a clean update (conservative: we only ever MISS
- * journaling the first divergence after this feature ships for a given record,
- * never wedge and never false-positive on routine sequential updates) — UNLESS
- * the base-hash store itself is untrustworthy: a present-but-unreadable
- * `sync_base_hashes.json` latches `_persistBlocked` (#7260), under which every
- * overwrite journals fail-closed (an unknown baseline is a possible
- * divergence) and nothing ever writes back over the unreadable file.
+ * The base hash advances to the remote's hash on EVERY accepted overwrite, else
+ * the 60s snapshot loop would re-journal the same divergence each cycle.
  *
- * The base hash advances to the remote's hash on EVERY accepted overwrite
- * (clean OR conflicting) — without that, the 60s snapshot loop would re-journal
- * the same unresolved divergence every cycle.
- *
- * This store + the base-hash side store are LOCAL-ONLY: they are never enrolled
- * in PEER_SUBSCRIBABLE_KINDS / snapshot categories / sanitizeStateForWire, so
- * they can never cross the wire (no schema-version bump needed).
+ * This store and the base-hash store are LOCAL-ONLY: never enrolled in
+ * PEER_SUBSCRIBABLE_KINDS / snapshot categories / sanitizeStateForWire.
  */
 
 import { join } from 'path';
@@ -80,89 +52,41 @@ export const conflictJournalStore = () => store();
 
 // ---- content hashing (matches the sender/receiver wire convention) ----
 
-// mediaCollection divergence is detected over a SCALAR SUBSET, not the whole
-// wire record. The merge (`mergeMediaCollectionsFromSync`) union-merges `items`
-// — neither side ever loses a render it knows about — and bumps `updatedAt` on
-// every `addItem`. So hashing the full record would false-positive whenever two
-// peers independently added different items to the same collection (items +
-// updatedAt differ, yet NOTHING was overwritten). The journal only cares about
-// the LWW-overwritten scalars; we hash exactly those so an item-only divergence
-// is invisible to detection while a real name/description/cover/link overwrite
-// still trips it. `updatedAt` is the LWW *key*, not content, so it's excluded
-// too. Soft-delete fields stay in (a remote delete that erases a diverged local
-// edit is a real conflict — mirrors the universe/series delete-vs-edit case).
+// mediaCollection divergence hashes a SCALAR SUBSET: the merge union-merges `items`
+// and bumps `updatedAt` on addItem, so hashing the full record would
+// false-positive on independent item adds that overwrote nothing. `updatedAt` is
+// the LWW key, excluded. Soft-delete fields stay (a remote delete over a
+// diverged local edit is a real conflict).
 const MEDIA_COLLECTION_SCALAR_FIELDS = Object.freeze(['name', 'description', 'coverKey', 'universeId', 'seriesId']);
 
-// Fields dropped from the conflict-detection hash, per kind. These are
-// server-managed values that mutate WITHOUT a user edit (and without bumping
-// `updatedAt`), so leaving them in the hash would read as a false divergence
-// and journal a spurious conflict. Issue `number` is renumber-managed:
-// `applyVolumeOrderedNumbers` shifts it in place when a *sibling* issue is
-// added/removed, so a local sibling-delete would otherwise make this issue's
-// `localHash !== base` even though no restorable content changed (the resulting
-// conflict card would have an empty diffSummary, since `number` isn't
-// restorable). Excluding it keeps the hash aligned with the restorable-field
-// set the UI actually shows. (mediaCollection narrows via its own scalar
-// projection below; universe/series exclude nothing, so their already-seeded
-// base hashes stay valid across upgrade.)
-// Fields dropped from the CONTENT HASH (not the wire payload — they still
-// replicate). `issue.number` is renumber-managed. `track.renders` is an additive
-// field synthesized (backfilled) onto every existing track on first read: hashing
-// it would invalidate every pre-upgrade `sync_base_hash` and journal a one-time
-// FALSE 3-way conflict on the first cross-peer edit after both peers upgrade
-// (local and remote both differ from a base computed without renders). Excluding
-// it from the hash keeps base-hash compatibility; render-only divergences are
-// LWW-ordered by `updatedAt` regardless, and renders stays restorable (below).
-// This is for fields that are GENUINELY server-managed (mutate without a user
-// edit) and must NEVER participate in conflict detection — contrast with
-// HASH_FIELDS below, for user-authored additive fields that SHOULD eventually
-// participate once it's safe to.
+// Fields dropped from the CONTENT HASH (they still replicate). Server-managed
+// values that mutate without a user edit would read as false divergence:
+// `issue.number` shifts on sibling renumbering; `track.renders` is backfilled onto
+// existing tracks, so hashing it would invalidate every pre-upgrade base hash.
+// Both remain restorable. Contrast HASH_FIELDS, for user-authored additive fields.
 const HASH_EXCLUDED_FIELDS = Object.freeze({ issue: ['number'], track: ['renders'] });
 
-// User-authored fields that were added to a kind's wire shape at a later
-// point, keyed by a LOCAL version number (this mechanism's own — deliberately
-// independent of PORTOS_SCHEMA_VERSIONS in schemaVersions.js, which gates
-// cross-peer WIRE compatibility, a different concern from "which fields does
-// the local base-hash store already know about"). Unlike HASH_EXCLUDED_FIELDS
-// these DO belong in conflict detection — the problem #2912 solves isn't
-// "never hash this," it's "don't let adding it retroactively invalidate every
-// base hash stamped before it existed." `contentHashForRecord`'s `maxVersion`
-// option drops any field introduced after that version; `setSyncBaseHash`
-// always stamps at the CURRENT (highest defined) version for the kind, and
-// `detectConflict` recomputes local/remote at the STORED base's version so
-// the comparison is apples-to-apples. A base hash predating the field will
-// therefore MISS a divergence limited to that field until the next successful
-// sync re-stamps it at the current version — the same one-time-miss tradeoff
-// this file already accepts for `baseHash == null` (see the module doc
-// comment above).
+// User-authored fields added to a kind's wire shape later, keyed by a LOCAL
+// version (independent of PORTOS_SCHEMA_VERSIONS, which gates wire compat). They
+// DO belong in conflict detection, but adding one must not invalidate base
+// hashes stamped before it existed: `contentHashForRecord`'s `maxVersion` drops
+// later fields, `setSyncBaseHash` stamps the current version, and
+// `detectConflict` recomputes at the STORED base's version. A base predating a
+// field misses divergence limited to it until the next sync re-stamps it.
 const HASH_FIELDS = Object.freeze({
-  // v3 (#2911): chiptuneScore/chiptunePrompt. Previously permanently excluded
-  // via HASH_EXCLUDED_FIELDS; migrated here by #2912 so two peers that both
-  // understand the field (base stamped at v3+) get real conflict detection on
-  // it instead of silent LWW. The version number "3" is chosen to match
-  // PORTOS_SCHEMA_VERSIONS.tracks for a human reading both files side by side
-  // — nothing enforces the two staying in lockstep; it's fine for them to
-  // diverge (a wire-compat bump doesn't always change what the local hash
-  // cares about, and vice versa).
-  // v4: concept, the user-authored creative brief used by resumable music
-  // designer drafts.
-  // v7 (#8376): waveSketch/waveSketchPrompt, the Music Designer's drawn wave
-  // sketch — hashed only for bases stamped at v7+.
+  // v3: chiptuneScore/chiptunePrompt; v4: concept; v7: waveSketch/waveSketchPrompt.
   track: Object.freeze({
     3: Object.freeze(['chiptuneScore', 'chiptunePrompt']),
     4: Object.freeze(['concept']),
     7: Object.freeze(['waveSketch', 'waveSketchPrompt']),
   }),
-  // v2: the press & submission profile (credit name, bios, statements, links),
-  // matching PORTOS_SCHEMA_VERSIONS.artists.
+  // v2: press & submission profile (matches PORTOS_SCHEMA_VERSIONS.artists).
   artist: Object.freeze({
     2: ARTIST_SUBMISSION_FIELDS,
   }),
 });
 
-// Precomputed field→version lookup per kind, inverted from HASH_FIELDS once
-// at module load (HASH_FIELDS is static, so rebuilding this per hash call —
-// on every record write in the system — would be pure waste).
+// field→version lookup per kind, inverted once at load.
 const HASH_FIELD_VERSION_BY_KIND = Object.freeze(Object.fromEntries(
   Object.entries(HASH_FIELDS).map(([kind, versioned]) => {
     const byField = new Map();
@@ -173,10 +97,7 @@ const HASH_FIELD_VERSION_BY_KIND = Object.freeze(Object.fromEntries(
   }),
 ));
 
-// The highest HASH_FIELDS version defined for `kind` — the version
-// `setSyncBaseHash` stamps new base hashes at. Kinds with no HASH_FIELDS
-// entry have nothing to gate; the fallback of 1 is inert for them (no field
-// is ever excluded by a maxVersion check that never finds a match).
+// Highest HASH_FIELDS version for `kind`, which `setSyncBaseHash` stamps; 1 is inert for kinds with no entry.
 function currentHashVersionForKind(kind) {
   const versioned = HASH_FIELDS[kind];
   if (!versioned) return 1;
@@ -184,21 +105,14 @@ function currentHashVersionForKind(kind) {
 }
 
 /**
- * sha256 of the canonical content projection. Reuses sanitizeRecordForWire +
- * canonicalStringify so the sender hashing what it pushes and the receiver
- * hashing its local copy agree byte-for-byte. For mediaCollection the wire form
- * is further narrowed to its overwritable scalars (see
- * MEDIA_COLLECTION_SCALAR_FIELDS); for issue the renumber-managed `number` is
- * dropped (see HASH_EXCLUDED_FIELDS) — both sides apply the same narrowing, so
- * the base hash stays consistent across peers. Returns null when the record has
- * no wire form (ephemeral non-tombstone, or invalid) — callers treat a null
- * hash as "cannot compare".
+ * sha256 of the canonical content projection, via sanitizeRecordForWire +
+ * canonicalStringify so sender and receiver agree byte-for-byte. mediaCollection
+ * narrows to MEDIA_COLLECTION_SCALAR_FIELDS and some kinds drop
+ * HASH_EXCLUDED_FIELDS; both sides apply the same narrowing. Returns null when
+ * the record has no wire form (callers treat as "cannot compare").
  *
- * `maxVersion` (see HASH_FIELDS above) restricts the hash to fields introduced
- * at or below that version — pass the STORED base hash's version when
- * recomputing for comparison so an old base isn't compared against a
- * differently-shaped hash. Omitted (the default, used when stamping a NEW base
- * hash) means "include every field at the current version."
+ * `maxVersion` restricts to fields introduced at or below it — pass the STORED
+ * base's version when comparing. Omitted (stamping a new base) means current.
  */
 export function contentHashForRecord(kind, record, { maxVersion } = {}) {
   const wire = sanitizeRecordForWire(kind, record);
@@ -221,10 +135,7 @@ export function contentHashForRecord(kind, record, { maxVersion } = {}) {
   return createHash('sha256').update(canonicalStringify(hashInput)).digest('hex');
 }
 
-// Narrow a wire-form collection to the scalars whose overwrite the journal
-// tracks, plus the (already-normalized) soft-delete pair. `items`/`updatedAt`/
-// `id` and all other fields are dropped. canonicalStringify sorts keys, so the
-// insertion order here is irrelevant to the resulting hash.
+// Narrow a wire-form collection to the tracked scalars plus the normalized soft-delete pair.
 function projectCollectionScalars(wire) {
   const out = {};
   for (const f of MEDIA_COLLECTION_SCALAR_FIELDS) if (f in wire) out[f] = wire[f];
@@ -233,31 +144,19 @@ function projectCollectionScalars(wire) {
   return out;
 }
 
-// ---- base-hash side store (in-memory cache, batched write-through) ----
-
-// Map<`${kind}:${id}`, sha256 | { h: sha256, v: number }>. A bare string is a
-// legacy entry written before #2912 (or a v1 entry — the two are equivalent,
-// see readBaseEntry's "absent = v1" fallback); new entries are always written
-// as `{ h, v }` so the hash-fields version travels with the hash it was
-// computed under.
+// Map<`${kind}:${id}`, sha256 | { h, v }>. A bare string is a legacy/v1 entry (see
+// readBaseEntry); new entries are `{ h, v }` so the version travels with the hash.
 let _baseHashes = null;
 let _loadPromise = null;
 let _baseDirty = false;
 let _flushTail = Promise.resolve();
-// >0 while a `withBaseHashFlushBatch` scope is active. Defers the disk write so
-// an await-separated multi-record push loop (peer:online convergence) collapses
-// N `sync_base_hashes.json` rewrites into one at the batch's terminal flush.
+// >0 inside `withBaseHashFlushBatch`: defers the disk write so await-separated loops collapse into one flush.
 let _flushBatchDepth = 0;
-// Latched when the base-hash file was present-but-unreadable at load (#7260 —
-// the `persistBlocked` shape from services/mediaJobQueue). flushBaseHashes()
-// whole-file-REPLACES sync_base_hashes.json with the in-memory map, so
-// persisting on top of a baseline we failed to read would discard every entry
-// the process didn't happen to stamp — and unlike a rebuildable cache, the map
-// records what the two machines last agreed on, which no longer exists
-// anywhere once it is gone. While latched: nothing flushes (the file survives
-// for the user to repair), and maybeJournalBeforeOverwrite fails CLOSED —
-// "baseline unknown" is treated as "possible conflict" and journaled. The
-// latch is process-lifetime; nothing in production calls __reset.
+// Latched when the base-hash file was present-but-unreadable at load.
+// flushBaseHashes() whole-file-REPLACES the file, so persisting over an unread
+// baseline would destroy entries that exist nowhere else. While latched nothing
+// flushes and maybeJournalBeforeOverwrite fails CLOSED. Process-lifetime; only
+// __reset clears it.
 let _persistBlocked = false;
 
 const baseKey = (kind, id) => `${kind}:${id}`;
@@ -266,22 +165,16 @@ async function ensureBaseLoaded() {
   if (_baseHashes) return _baseHashes;
   if (!_loadPromise) {
     _loadPromise = (async () => {
-      // Strict (#7260): a present-but-unreadable file (EACCES, EIO,
-      // truncated/partial bytes, a cloud-sync conflict copy) must NOT read as
-      // a genuine empty — that silently disabled conflict detection and let
-      // the next flush destroy every stored baseline. ENOENT is the only
-      // trustworthy empty (first sync). `allowArray: false` makes an
-      // array-shaped file unreadable; a non-object scalar parses `ok` but
-      // still isn't a baseline map, so it latches too.
+      // Strict: a present-but-unreadable file must NOT read as empty (that disabled
+      // detection and let the next flush destroy baselines). ENOENT is the only
+      // trustworthy empty; non-object/array shapes latch too.
       const { ok, value } = await readJSONFileStrict(BASE_HASH_FILE(), {}, { allowArray: false });
       if (ok && isPlainObject(value)) {
         _baseHashes = new Map(Object.entries(value));
       } else {
         _persistBlocked = true;
         _baseHashes = new Map();
-        // Name the recovery step: the latch is process-lifetime, so without
-        // this the user has conflict detection that silently stops persisting
-        // and no indication that repairing or deleting one file restores it.
+        // Name the recovery step: the latch is process-lifetime.
         console.error(`❌ conflictJournal: ${BASE_HASH_FILE()} is present but unreadable — base hashes are preserved on disk (persistence latched off) and overwrites journal fail-closed; repair or delete it and restart to re-enable persistence`);
       }
       return _baseHashes;
@@ -290,9 +183,7 @@ async function ensureBaseLoaded() {
   return _loadPromise;
 }
 
-// Normalize a raw map value (legacy bare string, or `{ h, v }`) to
-// `{ hash, version }`. Absent version defaults to 1 — the pre-#2912 hash
-// never included any HASH_FIELDS-versioned field, so it's the correct floor.
+// Normalize a raw value (bare string or `{ h, v }`) to `{ hash, version }`; absent version is 1, the floor before versioned fields.
 function readBaseEntry(raw) {
   if (raw == null) return null;
   if (typeof raw === 'string') return { hash: raw, version: 1 };
@@ -300,26 +191,20 @@ function readBaseEntry(raw) {
   return { hash: raw.h ?? null, version };
 }
 
-/** Shared lookup behind getSyncBaseHash and detectConflict — one place that
- *  loads the map and normalizes the stored entry. */
+/** Shared lookup behind getSyncBaseHash and detectConflict. */
 async function readStoredBaseEntry(kind, id) {
   const map = await ensureBaseLoaded();
   return readBaseEntry(map.get(baseKey(kind, id)));
 }
 
-/** The stored base hash for (kind, id), or null. String-only for backward
- *  compatibility with every existing caller/test — use detectConflict (which
- *  reads the paired version internally) when the version matters. */
+/** The stored base hash, or null. Use detectConflict when the version matters. */
 export async function getSyncBaseHash(kind, id) {
   return (await readStoredBaseEntry(kind, id))?.hash ?? null;
 }
 
 /**
- * Set the base hash in memory (write-through deferred to flushBaseHashes).
- * Stamps the CURRENT hash-fields version for `kind` (see
- * currentHashVersionForKind) unless `version` is explicitly given — tests use
- * the override to plant a hash computed at an older version, simulating a
- * base stamped before an additive HASH_FIELDS entry existed.
+ * Set the base hash in memory (disk write deferred to flushBaseHashes). Stamps
+ * the current version for `kind` unless `version` is given (tests plant older-version hashes).
  */
 export async function setSyncBaseHash(kind, id, hash, { version } = {}) {
   const map = await ensureBaseLoaded();
@@ -332,11 +217,7 @@ export async function setSyncBaseHash(kind, id, hash, { version } = {}) {
   _baseDirty = true;
 }
 
-/**
- * Remove the base hash for a pruned record (idempotent — no-op if already
- * absent). Call when a tombstone is force-pruned so the entry doesn't grow
- * without bound on long-lived federated installs.
- */
+/** Remove the base hash for a pruned record (idempotent) so entries don't grow unbounded. */
 export async function deleteSyncBaseHash(kind, id) {
   const map = await ensureBaseLoaded();
   const key = baseKey(kind, id);
@@ -347,22 +228,11 @@ export async function deleteSyncBaseHash(kind, id) {
 }
 
 /**
- * Sweep base-hash entries whose record no longer resolves to a live record.
+ * Sweep base-hash entries whose record no longer resolves — a BACKSTOP for keys
+ * that escaped the per-record prune paths (hand-deleted records, older versions).
  *
- * The per-record prune paths that own base hashes already evict them when they
- * hard-delete tombstones. This is the BACKSTOP for keys that escaped those
- * paths: a record hand-deleted on disk, a key left behind by an older version
- * before the prune paths evicted, or any future kind that seeds a base hash
- * without a matching eviction. Without it the side store accumulates dead keys
- * forever on a long-lived federated install.
- *
- * `resolves` is an async predicate `(kind, id) => boolean` — return true if the
- * key still maps to a record we want to keep a base hash for. Keys whose kind
- * the caller doesn't recognize are LEFT ALONE (the predicate should return true
- * for unknown kinds) so a partial resolver can never strip live entries it
- * simply didn't know how to check. Coalesces into one disk write via the dirty
- * flag + a single trailing flush.
- *
+ * `resolves` is an async `(kind, id) => boolean`; return true to keep. Unknown
+ * kinds must return true so a partial resolver never strips live entries.
  * Returns `{ pruned }`.
  */
 export async function pruneOrphanedBaseHashes(resolves) {
@@ -384,24 +254,13 @@ export async function pruneOrphanedBaseHashes(resolves) {
   return { pruned };
 }
 
-/** Persist the base-hash map if dirty. Serialized so concurrent flushes can't
- *  interleave file writes. Call once after a merge's write loop.
- *
- *  Inside a `withBaseHashFlushBatch` scope the write is deferred: the in-memory
- *  stamps stay coalesced (`_baseDirty`) and the single disk write fires when the
- *  outermost batch closes. Callers still get a thenable (`_flushTail`) so any
- *  `await flushBaseHashes()` resolves immediately rather than blocking inside
- *  the batch.
- *
- *  No-ops while `_persistBlocked` is latched (#7260): the read that seeded the
- *  map was untrustworthy, so persisting it back would replace a file that may
- *  hold the real baselines with whatever this process stamped since boot.
- *  `deleteSyncBaseHash` / `pruneOrphanedBaseHashes` still evict in memory (the
- *  session map stays coherent) but their flush is refused for the same reason. */
+/** Persist the base-hash map if dirty, serialized so flushes can't interleave.
+ *  Inside a `withBaseHashFlushBatch` scope the write is deferred to the outermost
+ *  close; callers still get the `_flushTail` thenable. No-ops while
+ *  `_persistBlocked` is latched: persisting would replace a file that may hold
+ *  the real baselines. Evictions still apply in memory. */
 export function flushBaseHashes() {
-  // Defer while inside a batch, refuse while the store is untrustworthy, and
-  // no-op when nothing is dirty — each way the outstanding `_flushTail`
-  // thenable is the right thing to await.
+  // Defer in a batch, refuse when untrustworthy, no-op when clean.
   if (_persistBlocked || _flushBatchDepth > 0 || !_baseDirty) return _flushTail;
   _flushTail = _flushTail.then(async () => {
     if (!_baseDirty) return;
@@ -419,37 +278,17 @@ export function flushBaseHashes() {
 /**
  * Run `fn` with base-hash disk writes coalesced into ONE flush at the end.
  *
- * The base-hash map already coalesces SYNCHRONOUS bursts (the `_baseDirty` flag
- * means a run of `setSyncBaseHash` calls before a single `flushBaseHashes` pays
- * one write). What it can't collapse on its own is an AWAIT-SEPARATED loop that
- * stamps + flushes per iteration: each flush lands on the previous one's settled
- * `_flushTail`, so an N-iteration loop rewrites `sync_base_hashes.json` N times.
- * Wrapping the loop in this scope defers every interior flush; the single
- * terminal write captures all N stamps.
+ * Collapses an AWAIT-SEPARATED loop that stamps + flushes per iteration
+ * (peer:online convergence, `pruneTombstoned*` loops) from N rewrites into one.
+ * Eviction only marks `_baseDirty` for a key actually held, so a no-op prune
+ * costs zero writes.
  *
- * Two caller shapes use it: the `peer:online` convergence walk
- * `retryPendingPushesForPeer` (pushes — and stamps — every subscribed record in
- * sequence), and every base-hash-evicting `pruneTombstoned*` hard-prune loop.
- * Eviction only marks `_baseDirty` for a key the map actually held, so a prune
- * that removed nothing still costs zero writes.
+ * Re-entrant (depth-counted); the terminal flush runs in `finally` so a thrown
+ * `fn` still persists earlier stamps. Scope-bound, not a timer (a debounce timer
+ * leaked into peerSync test settle-waits).
  *
- * Re-entrant (depth-counted) so nested scopes collapse to the outermost batch,
- * and the terminal flush runs in `finally` so a thrown/rejected `fn` still
- * persists whatever stamps landed before it failed. Unlike a `setTimeout`
- * debounce (tried and reverted — the unref'd timer leaked into `peerSync.test.js`'s
- * settle-waits and made the suite flaky), this is deterministic: the flush is
- * tied to the scope boundary, not a wall-clock timer, so tests just `await` it.
- *
- * Contract note: stamps performed inside the scope must have settled (the
- * in-memory `setSyncBaseHash` awaited) before `fn` returns, or the terminal
- * flush won't see `_baseDirty` for them. Every caller awaits its stamps/evictions.
- *
- * Depth is module-level, not per-async-context, so CONCURRENT batches merge
- * rather than nest. The tombstone GC fans its `pruneTombstoned*` calls out
- * through one `Promise.all`, so their scopes overlap: the last scope to close
- * flushes every eviction they accumulated. An unbatched concurrent flush that
- * lands while the depth is still positive rides along in that same write.
- * Nothing is dropped — a deferred flush leaves `_baseDirty` set.
+ * Stamps must be awaited before `fn` returns. Depth is module-level, so
+ * CONCURRENT batches merge: the last to close flushes everything accumulated.
  */
 export async function withBaseHashFlushBatch(fn) {
   _flushBatchDepth += 1;
@@ -465,13 +304,9 @@ export async function withBaseHashFlushBatch(fn) {
 
 /**
  * Detect a true 3-way divergence for a record about to be overwritten.
- * Returns `{ isConflict, baseHash, localHash, remoteHash }`.
- *
- * local/remote are recomputed at the STORED base's hash-fields version (see
- * HASH_FIELDS), not the current one — so a base stamped before an additive
- * field existed is compared apples-to-apples against the same field set it
- * was originally built from, instead of unconditionally mismatching the
- * moment the field starts appearing in the wire shape.
+ * Returns `{ isConflict, baseHash, localHash, remoteHash, baseUnavailable }`.
+ * local/remote are recomputed at the STORED base's version (see HASH_FIELDS) so
+ * the comparison is apples-to-apples.
  */
 export async function detectConflict({ kind, id, local, remote }) {
   const base = await readStoredBaseEntry(kind, id);
@@ -481,175 +316,91 @@ export async function detectConflict({ kind, id, local, remote }) {
   const remoteHash = contentHashForRecord(kind, remote, { maxVersion });
   const isConflict = baseHash != null && localHash != null && remoteHash != null
     && localHash !== baseHash && remoteHash !== baseHash && localHash !== remoteHash;
-  // `baseUnavailable` (#7260): the stored baseline file could not be read, so
-  // `isConflict === false` here means "no base to compare against," NOT
-  // "proven clean". Callers that journal must branch on this flag — the merge
-  // path treats it as fail-closed (see maybeJournalBeforeOverwrite).
+  // `baseUnavailable`: the baseline file was unreadable, so `isConflict === false`
+  // means "no base", NOT "proven clean"; the merge path fails closed.
   return { isConflict, baseHash, localHash, remoteHash, baseUnavailable: _persistBlocked };
 }
 
-// Restorable fields whose ABSENCE from a wire snapshot is meaningful state
-// rather than "not captured". `sanitizeTemplate` persists universe `factual`
-// only when true, so a fiction snapshot simply omits the key — and a restore
-// that picks fields with a plain `in` check would skip it, silently turning
-// "restore this universe to fiction" into a no-op while the true-direction
-// restore worked. The resolver fills in the explicit `false`, which
-// `sanitizeTemplate` then drops back to absent.
+// Restorable fields whose ABSENCE from a snapshot is meaningful: universe `factual`
+// is persisted only when true, so restoring to fiction needs the resolver to
+// fill in an explicit `false`.
 export const ABSENT_MEANS_FALSE_FIELDS = Object.freeze({
   universe: Object.freeze(['factual']),
 });
 
-// User-authored content fields a restore/merge may write back, per kind. This
-// is the SINGLE SOURCE OF TRUTH — the resolver imports it for its merge-fields
-// allowlist, and diffSummary filters to it so the Conflicts UI only ever offers
-// fields the resolver will accept (server-owned fields like id/createdAt/
-// schemaVersion/locked/origin/deleted are neither restorable nor shown).
+// User-authored fields a restore/merge may write back, per kind. SINGLE SOURCE OF
+// TRUTH: the resolver's merge allowlist and diffSummary both use it, so the UI
+// never offers fields the resolver rejects (server-owned fields are neither).
 export const RESTORABLE_FIELDS = Object.freeze({
-  // `factual` (#7616) is here because it is FEDERATED and therefore hashed by
-  // contentHashForRecord — a peer flipping the factual/fiction axis is a real
-  // 3-way divergence. Omitting it would journal that conflict with a diff that
-  // cannot mention the field (the phantom-divergence trap `styleImageRefs`
-  // avoids by being stripped from the wire instead) and leave the user no way
-  // to restore it. See ABSENT_MEANS_FALSE_FIELDS for the clear direction.
+  // `factual` is federated and hashed, so it must be restorable or its conflict
+  // would journal a diff that can't mention it. See ABSENT_MEANS_FALSE_FIELDS.
   universe: ['name', 'starterPrompt', 'logline', 'premise', 'styleNotes', 'categories', 'compositeSheets', 'influences', 'characters', 'places', 'objects', 'factual'],
   series: ['name', 'logline', 'premise', 'styleNotes', 'styleGuide', 'titleLogo', 'author', 'stylePromptOverride', 'stylePromptOverrideMode', 'targetFormat', 'issueCountTarget', 'arc', 'seasons'],
-  // mediaCollection restores only the user-authored content scalars. `items`
-  // are union-merged (never lost, nothing to restore); `universeId`/`seriesId`
-  // are structural links managed by the link/unlink helpers, not `updateCollection`
-  // patches — so they're hashed for DETECTION but not offered for restore.
+  // Only content scalars: `items` are union-merged; `universeId`/`seriesId` are
+  // structural links, hashed for detection but not restorable.
   mediaCollection: ['name', 'description', 'coverKey'],
-  // Author personas: all user-authored text scalars are restorable. `id`, the
-  // LWW/tombstone trio, and `createdAt` are server-owned/structural. Mirrors the
-  // PATCHABLE field set in services/authors/logic.js. The author wire form is
-  // LWW-overwritten whole (no field-union like mediaCollection's items), so it
-  // is hashed in full by contentHashForRecord — no scalar-narrowing branch.
+  // Mirrors PATCHABLE in services/authors/logic.js; hashed in full (no scalar narrowing).
   author: ['name', 'writingStyle', 'bio', 'physicalDescription', 'headshotStyle', 'headshotImageUrl'],
   artist: ['name', 'genre', 'bio', 'musicalStyle', 'physicalDescription', 'portraitStyle', 'portraitImageUrl', ...ARTIST_SUBMISSION_FIELDS],
   album: ['title', 'artistId', 'artist', 'description', 'genre', 'releaseYear', 'coverImageUrl', 'trackIds'],
-  // `renders` IS restorable (a conflict restore must bring back the local render
-  // history) but is EXCLUDED FROM THE CONTENT HASH — see HASH_EXCLUDED_FIELDS for
-  // why (base-hash compatibility for this additive backfilled field).
-  // `chiptuneScore`/`chiptunePrompt` (#2911) are also restorable and, as of
-  // #2912, DO participate in the content hash via the version-gated HASH_FIELDS
-  // mechanism (see above) — a base hash predating the field just compares at
-  // its own stored version until the next sync re-stamps it. Same for
-  // `waveSketch`/`waveSketchPrompt` (#8376, hashed from v7).
+  // `renders` is restorable but excluded from the hash (see HASH_EXCLUDED_FIELDS);
+  // chiptune*/waveSketch* are restorable and hashed via HASH_FIELDS.
   track: ['title', 'albumId', 'artistId', 'artist', 'concept', 'lyrics', 'prompt', 'engine', 'modelId', 'durationSec', 'audioFilename', 'renders', 'chiptuneScore', 'chiptunePrompt', 'waveSketch', 'waveSketchPrompt'],
-  // Issue: the user-authored content the merge can restore. `stages` carries
-  // the bulk of the work (prose, comic pages, render metadata). Server-owned /
-  // structural fields are excluded deliberately — `number` is renumber-managed,
-  // `seriesId` is the immutable parent link, `origin` is share provenance —
-  // and `mergeIssuePatch` accepts every field listed here.
+  // `stages` carries the bulk of the work. `number` (renumber-managed), `seriesId`
+  // and `origin` are excluded; `mergeIssuePatch` accepts every field listed.
   issue: ['title', 'status', 'seasonId', 'arcPosition', 'arcRole', 'lengthProfile', 'pageTarget', 'minutesTarget', 'stages'],
-  // Creative Director projects (#1564): the user-authored config + creative
-  // content the merge can restore. `treatment` (logline/synopsis/scenes) carries
-  // the bulk of the work. Server-owned / machine-managed fields are excluded —
-  // `id`/`createdAt`/the LWW-tombstone trip are structural, `collectionId`/
-  // `timelineProjectId`/`finalVideoId` are derived output pointers, and `runs[]`
-  // is render history (regenerated, not hand-authored). The whole record is
-  // hashed for DETECTION by contentHashForRecord (no scalar narrowing); this set
-  // is what the Conflicts UI offers for restore. `creativeDirectorProject`
-  // matches the record kind and mergeProjectRecord accepts every field here.
+  // `treatment` carries the bulk. Excluded: structural id/createdAt/tombstone trio,
+  // derived output pointers (`collectionId`/`timelineProjectId`/`finalVideoId`)
+  // and `runs[]` render history.
   creativeDirectorProject: ['name', 'status', 'styleSpec', 'userStory', 'treatment', 'aspectRatio', 'quality', 'modelId', 'targetDurationSeconds', 'disableAudio', 'autoAcceptScenes', 'startingImageFile'],
-  // Mood boards (#1564): the user-authored fields the merge can restore. `items[]`
-  // (the pinned image/text references) carries the bulk of the work, alongside
-  // name/description. `style` is the composite board prompt and `posterImageRef`
-  // is the canonical poster filename — both user-triggered, so a restore must
-  // be able to bring them back. Server-owned / structural fields are excluded —
-  // `id`/`createdAt`/the LWW-tombstone trio. The whole record is hashed for
-  // DETECTION by contentHashForRecord (no scalar narrowing); this set is what
-  // the Conflicts UI offers for restore. `moodBoard` matches the record kind,
-  // and the resolver routes restore through restoreBoard → applyBoardRestore
-  // (which accepts items, unlike the route's applyBoardPatch).
+  // `items[]` carries the bulk; `style`/`posterImageRef` are user-triggered so must
+  // be restorable. Restore routes through restoreBoard → applyBoardRestore
+  // (which, unlike applyBoardPatch, accepts items).
   moodBoard: ['name', 'description', 'items', 'style', 'posterImageRef', 'collageImageRef'],
-  // Writers Room works (#1565): the user-authored manifest fields the merge can
-  // restore through `updateWork` (which accepts exactly this set + the liveMode
-  // partial-merge). Server-owned / structural fields are excluded — `id`/
-  // `createdAt`/the LWW-tombstone trio, the draft-version structure
-  // (`drafts`/`activeDraftVersionId`, file-primary + lineage-managed), and the
-  // bridge links (`pipelineSeriesId`/`cdProjectId`/`mediaCollectionId`, set by
-  // their own helpers). The whole manifest is hashed for DETECTION by
-  // contentHashForRecord (no scalar narrowing); this set is what the Conflicts UI
-  // offers for restore. `writersRoomWork` matches the record kind.
+  // Restored via `updateWork`. Excluded: structural fields, draft-version structure
+  // (lineage-managed) and bridge links set by their own helpers.
   writersRoomCharacters: ['characters'],
   writersRoomPlaces: ['places'],
   writersRoomObjects: ['objects'],
   writersRoomWork: ['title', 'kind', 'status', 'folderId', 'imageStyle', 'liveMode'],
-  // Writers Room folders (#1645): the user-authored structural fields the merge
-  // can restore through `restoreFolder`. Server-owned / structural fields are
-  // excluded — `id`/`createdAt`/the LWW-tombstone trio. The whole folder is
-  // hashed for DETECTION by contentHashForRecord (no scalar narrowing); this set
-  // is what the Conflicts UI offers for restore. `writersRoomFolder` matches the
-  // record kind.
+  // Restored via `restoreFolder`.
   writersRoomFolder: ['name', 'parentId', 'sortOrder'],
-  // A commissionFeedback (#2686) is one taste reaction — the user-authored fields
-  // the Conflicts UI may restore are the rating + its note/tags. `commissionId`/
-  // `runId` are structural keys (they address the reaction) and are excluded.
+  // One taste reaction: rating + note/tags; `commissionId`/`runId` are structural keys.
   commissionFeedback: ['rating', 'note', 'tags'],
-  // A creativeCommission (#2686) restores its federated BRIEF fields; the
-  // machine-local schedule/runs/assignment/enabled are never in a snapshot
-  // (stripped from the wire) so they're excluded.
+  // Federated BRIEF fields only; machine-local schedule/runs/assignment/enabled are stripped from the wire.
   creativeCommission: ['name', 'targetAbility', 'brief', 'generation', 'feedbackWindow'],
-  // A deck (#decks) restores its authored style guide + identity. `kind` is
-  // structural (the roster is minted from it and a CHECK constrains the
-  // column), `cards[]` is the roster itself (restored with the deck row by
-  // `restoreDeck`, not offered as an individually-overlayable field), and the
-  // install-capability pins never reach a snapshot (stripped from the wire).
+  // `kind` is structural (roster minted from it, CHECK-constrained); `cards[]`
+  // restores with the deck row via `restoreDeck`; capability pins never reach a snapshot.
   deck: ['name', 'description', 'styleNotes', 'influences', 'layoutPrompt', 'cardOrientation', 'cardOrientationPrompt', 'samples', 'cardSize', 'universeId'],
-  // A storyboard restores its authored plan: identity fields, the panel-maker
-  // recipe, the plot, the temp track and the beats → panels → takes tree. `tempTrack`
-  // restores with `beats` so sanitizeStoryboard re-resolves each beat pin against
-  // the restored markers. `plotLlm` is a per-user provider pick and stays local;
-  // id and timestamps stay structural.
+  // `tempTrack` restores with `beats` so sanitizeStoryboard re-resolves beat pins
+  // against restored markers. `plotLlm` is a per-user provider pick and stays local.
   storyboard: ['name', 'logline', 'aspectRatio', 'artStyle', 'universeId', 'moodBoardId', 'recipe', 'plot', 'tempTrack', 'beats'],
-  // FableLoom restores the authored story graph, playback configuration, and
-  // story-level render preferences.
-  // Universe/series ids are structural links and stay on the live record.
+  // Authored story graph, playback config and render prefs; universe/series ids are structural links.
   fableLoom: ['name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'renderSettings', 'seriesPlan', 'productionStatus', 'protagonistCharacterId', 'protagonistWardrobeId', 'protagonistWardrobeLocked', 'participationMode', 'audienceCommunicationMedium', 'episodes'],
-  // Writers Room exercises (#1645): the user-authored sprint fields the merge can
-  // restore through `restoreExercise` — the appended prose + the sprint config.
-  // Server-owned / structural fields are excluded (`id`/`createdAt`/`startedAt`/
-  // the LWW-tombstone trio). `writersRoomExercise` matches the record kind.
+  // Restored via `restoreExercise`.
   writersRoomExercise: ['workId', 'prompt', 'durationSeconds', 'startingWords', 'endingWords', 'wordsAdded', 'appendedText', 'status', 'finishedAt'],
-  // Music Video projects (#1770): the user-authored config + creative content the
-  // merge can restore. `scenes[]` (the beat-aligned director board with prompts)
-  // carries the bulk of the work, alongside name/status/mode/trackId/
-  // uploadedAudioFilename/vocalStemFilename/concept. Server-owned / machine-managed fields are
-  // excluded — `id`/`createdAt`/the LWW-tombstone trio are structural,
-  // `renderHistoryId` is a derived output pointer, and `audioAnalysis` is the
-  // machine-derived beat cache (regenerated from the audio, not hand-authored).
-  // The whole record is hashed for DETECTION by contentHashForRecord (no scalar
-  // narrowing); this set is what the Conflicts UI offers for restore.
-  // `musicVideoProject` matches the record kind and updateProject (via
-  // applyProjectPatch's wholesale spread) accepts every field here.
+  // `scenes[]` carries the bulk. Excluded: structural fields, derived
+  // `renderHistoryId` and the machine-derived `audioAnalysis` beat cache.
   musicVideoProject: ['name', 'status', 'mode', 'trackId', 'uploadedAudioFilename', 'vocalStemFilename', 'concept', 'scenes'],
 });
 
 const present = (v) => v !== undefined;
 const changedFlag = (lv, rv) => (present(lv) && present(rv) ? 'both' : (present(rv) ? 'remote-only' : 'local-only'));
 
-// First non-empty string among `fields`, in order — used both to pick a stable
-// PAIR key for an array element and to pick a human display LABEL for it.
+// First non-empty string among `fields`: used for both pair keys and display labels.
 const firstStringField = (el, fields) => {
   for (const k of fields) {
     if (typeof el?.[k] === 'string' && el[k].trim()) return el[k];
   }
   return null;
 };
-// Stable key used to PAIR two array elements across the local/remote sides
-// (prefer an explicit id so a reorder/insert doesn't cascade). Null ⇒ the
-// element carries no identity and the array isn't deep-diffable by identity.
+// Stable key pairing array elements across sides (prefer id so reorder/insert doesn't cascade); null means no identity.
 const entryMatchKey = (el) => firstStringField(el, ['id', 'key', 'slug', 'name']);
-// Human-friendly LABEL for a changed sub-entry (a uuid id is a poor label, so a
-// name/title is preferred for display even when the match used the id).
+// Display label (prefer name/title over a uuid).
 const entryLabel = (el, fallback) => firstStringField(el, ['name', 'title', 'label', 'key', 'slug', 'id']) ?? fallback;
 
-// Diff two key→value maps: one part per key whose value differs. Each part
-// carries a STABLE, unique `path` (the map key — used as the React render key)
-// and a human `label(key, lv, rv)` for display; for an object map the two are
-// the same, but for an identity-paired array the path is the (unique) match key
-// while the label is a friendly name that may collide. Returns the parts array,
-// or null when nothing differs.
+// Diff two key→value maps, one part per differing key. `path` is the unique map
+// key (React key); `label` is display-only and may collide. Null when nothing differs.
 const diffEntryMaps = (lMap, rMap, label) => {
   const parts = [];
   for (const key of new Set([...lMap.keys(), ...rMap.keys()])) {
@@ -661,11 +412,8 @@ const diffEntryMaps = (lMap, rMap, label) => {
   return parts.length ? parts : null;
 };
 
-// Build a Map keyed by each element's stable match key. Returns null — so the
-// caller falls back to the whole-field diff — when ANY element is identity-less
-// (null key) OR two elements share a key (a duplicate id, or two entries that
-// both fall back to the same name): identity pairing isn't reliable, and a
-// last-wins Map would silently drop the collided element from the diff.
+// Map elements by match key. Null (caller falls back to whole-field diff) on an
+// identity-less or duplicate-key element, since a last-wins Map would drop one.
 const buildKeyedMap = (arr) => {
   const map = new Map();
   for (const el of arr) {
@@ -677,20 +425,14 @@ const buildKeyedMap = (arr) => {
 };
 
 /**
- * One-level structural diff of a single restorable field, used to render the
- * Conflicts tab as "which sub-entry changed" instead of one giant JSON blob.
- * Returns an array of changed sub-entries `[{ path, label, localValue,
- * remoteValue, changed }]`, or `null` when the field isn't deepenable — a
- * scalar, an array of scalars, an array of objects without unique stable
- * identities, or a shape-mismatch (object vs array) — in which case the caller
- * keeps the whole-field diff. Only entries that actually differ are emitted.
+ * One-level structural diff of a restorable field, so the Conflicts tab shows
+ * "which sub-entry changed" rather than one JSON blob. Returns changed entries
+ * `[{ path, label, localValue, remoteValue, changed }]`, or `null` when not
+ * deepenable (scalar, scalar array, arrays without unique identities, shape
+ * mismatch) so the caller keeps the whole-field diff.
  *
- * - Object map / structured object (`categories`, `stages`, `arc`): one part
- *   per key whose value differs (path = label = key).
- * - Array of identity-bearing objects (`characters`, `places`, `seasons`):
- *   paired by `entryMatchKey`; one part per identity that differs (a side
- *   missing ⇒ added/removed). The `path` is the unique match key; the `label`
- *   is a human name.
+ * Objects diff per key; arrays of identity-bearing objects pair by
+ * `entryMatchKey` (path = match key, label = human name).
  */
 export function deepFieldDiff(localVal, remoteVal) {
   if (isPlainObject(localVal) && isPlainObject(remoteVal)) {
@@ -706,12 +448,8 @@ export function deepFieldDiff(localVal, remoteVal) {
   return null;
 }
 
-// Per-field diff over the kind's restorable content fields. A scalar field
-// carries its whole-field `localValue`/`remoteValue` for InlineDiff; an
-// object-map or array-of-objects field instead carries `parts` (the changed
-// sub-entries) so the UI renders one focused diff per entry rather than a
-// single giant JSON blob. The merge-fields selection stays at FIELD granularity
-// (the resolver applies whole snapshot fields) — `parts` is display-only.
+// Per-field diff over restorable fields. Object-map/array fields carry display-only
+// `parts`; merge selection stays at FIELD granularity.
 const diffSummary = (kind, local, remote) => {
   const fields = RESTORABLE_FIELDS[kind] || [];
   const out = [];
@@ -771,23 +509,13 @@ export async function maybeJournalBeforeOverwrite({ kind, id, local, remote, sou
   try {
     const { isConflict, baseHash, localHash, remoteHash, baseUnavailable } = await detectConflict({ kind, id, local, remote });
     const localIsTombstone = local?.deleted === true;
-    // Fail CLOSED while the baseline store is untrustworthy (#7260): with the
-    // base hashes unreadable we cannot prove this merge ISN'T a divergence, so
-    // "baseline unknown" is treated as "possible conflict" and journaled. A
-    // spurious journal entry costs the user one dismissal; a missed one costs
-    // their edit. The nothing-to-lose guards still apply — an ephemeral local
-    // (no hashable wire form) or a local tombstone has no content to preserve.
+    // Fail CLOSED when baselines are unreadable: a spurious entry costs one
+    // dismissal, a missed one costs an edit. Nothing-to-lose guards still apply.
     if ((isConflict || baseUnavailable) && localHash != null && !localIsTombstone) {
       await journalConflict({ kind, id, local, remote, source, hashes: { baseHash, localHash, remoteHash } });
     }
-    // Advance the base to an UNRESTRICTED (current-version) hash of `remote`,
-    // never the version-restricted `remoteHash` used for the comparison above.
-    // setSyncBaseHash tags whatever it's given with the CURRENT version (see
-    // its own doc comment) — stamping the restricted hash would mislabel it:
-    // the tag would claim current-version field coverage the hash bytes don't
-    // actually have, so every later comparison trusts a version the stored
-    // hash never earned and can never match again once a HASH_FIELDS field is
-    // added (guaranteed permanent churn — the exact bug #2912 exists to fix).
+    // Stamp an UNRESTRICTED hash: setSyncBaseHash tags the current version, so a
+    // version-restricted hash would be mislabeled and never match once a HASH_FIELDS field is added.
     const stampHash = contentHashForRecord(kind, remote);
     if (stampHash != null) await setSyncBaseHash(kind, id, stampHash);
   } catch (err) {
@@ -796,15 +524,9 @@ export async function maybeJournalBeforeOverwrite({ kind, id, local, remote, sou
 }
 
 /**
- * True while the `_persistBlocked` latch is held (#7260): the base-hash file
- * was present-but-unreadable at load, so persistence is latched off (the file
- * is preserved for repair) and overwrites journal fail-closed. Surfaced in
- * the conflict-journal status payload so an empty Conflicts list can't be
- * mistaken for "no conflicts" while detection is degraded.
- *
- * Awaits the memoized load so the flag reflects the file's actual state even
- * when no merge has touched the store yet this process — a status poll must
- * not report healthy just because nothing has read the file.
+ * True while the `_persistBlocked` latch is held: persistence is off and
+ * overwrites journal fail-closed. Awaits the load so a status poll can't report
+ * healthy before the file was ever read.
  */
 export async function isBaseHashPersistBlocked() {
   await ensureBaseLoaded();

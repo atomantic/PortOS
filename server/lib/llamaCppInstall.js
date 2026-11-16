@@ -2,23 +2,6 @@
  * Where a llama.cpp install comes from on this host, and how to read what the
  * platform's package manager knows about it.
  *
- * Where a llama.cpp install comes from on this host, for `services/llamaServerManager.js`.
- * `llamaCppInstallPlan(platform)` → the frozen descriptor for that platform's package manager —
- * Homebrew on macOS/Linux (`brew install llama.cpp`), winget on Windows (`winget install
- * ggml.llamacpp`) — carrying `manager`, `managerLabel`, `packageId`, `installCommand`, the
- * install/upgrade (and, for winget, list/upgrade-check) argv, and the three refusal strings a caller
- * would otherwise hardcode: `missingManagerError`, `notInstalledError`, `pathRepairHint`. The LLMs
- * page renders `installCommand` out of the llama-server status payload, which is what stopped a
- * Windows install prompt from telling the user to run Homebrew. Also the winget-side readers Homebrew
- * needs no equivalent for: `parseWingetPackageFields(stdout, id)` (winget has NO machine-readable
- * output mode and LOCALIZED table headers, so fields are read positionally from the tokens after the
- * id token — `Version [Available] [Source]`; `null` = not installed), `wingetLinkDirs(env)` (the
- * portable-shim directories winget adds to the USER PATH, which an already-running server has not
- * inherited) and `isWingetManagedPath` (counterpart of the manager's `isHomebrewLlamaServer`: a source
- * build earlier on PATH must not be offered a `winget upgrade`). Every WinGet path is reasoned about
- * with `path.win32` regardless of host, so both branches are coverable from a macOS/Linux checkout.
- * Pure.
- *
  * llama.cpp publishes an official package for both managers PortOS can drive:
  * Homebrew on macOS/Linux (`brew install llama.cpp`) and winget on Windows
  * (`winget install ggml.llamacpp`, a portable zip whose shims land in WinGet's

@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildQuotaBurnTaskCatalog,
-  MAINTENANCE_TASK_ORDER,
   maintenanceSequence,
   effectiveQuotaBurnSettings,
   findTaskEntry,
@@ -12,6 +11,7 @@ import {
   taskRefKey,
   taskSourceHref,
 } from './quotaBurnTasks';
+import { MAINTENANCE_TASK_ORDER } from '../../../server/lib/maintenanceSequence.js';
 
 const schedule = {
   tasks: {

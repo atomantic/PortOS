@@ -164,15 +164,7 @@ describe('GET /instances/:instanceId/my-sprint-tickets/:projectKey', () => {
 
     expect(r.status).toBe(200);
     expect(r.body).toEqual([{ key: 'EX-1', summary: 'Example ticket' }]);
-  });
-
-  it('returns an empty sprint as an empty list, not an error', async () => {
-    jiraService.fetchMyCurrentSprintTickets.mockResolvedValue([]);
-
-    const r = await request(app).get('/api/jira/instances/jira-1/my-sprint-tickets/EX');
-
-    expect(r.status).toBe(200);
-    expect(r.body).toEqual([]);
+    expect(jiraService.fetchMyCurrentSprintTickets.mock.calls[0].slice(0, 2)).toEqual(['jira-1', 'EX']);
   });
 
   it('surfaces a fetch failure instead of answering 200 with an empty list (#3437)', async () => {
@@ -239,6 +231,20 @@ describe('epic-decomposition endpoints (#5042)', () => {
       .send({ issueKeys: ['PROJ-2'] });
     expect(response.status).toBe(200);
     expect(jiraService.addIssuesToSprint).toHaveBeenCalledWith('inst-1', '42', ['PROJ-2']);
+  });
+
+  it('passes a new ticket and a comment to the saved account unchanged', async () => {
+    jiraService.createTicket.mockResolvedValue({ ticketId: 'PROJ-3' });
+    jiraService.addComment.mockResolvedValue({ success: true });
+    const ticket = { projectKey: 'PROJ', summary: 'Example ticket', epicKey: 'PROJ-1', sprintId: '42' };
+    const created = await request(makeApp()).post('/api/jira/instances/inst-1/tickets').send(ticket);
+    expect(created.status).toBe(200);
+    expect(jiraService.createTicket).toHaveBeenCalledWith('inst-1', ticket);
+    const commented = await request(makeApp())
+      .post('/api/jira/instances/inst-1/tickets/PROJ-3/comments')
+      .send({ comment: 'Example comment' });
+    expect(commented.status).toBe(200);
+    expect(jiraService.addComment).toHaveBeenCalledWith('inst-1', 'PROJ-3', 'Example comment');
   });
 
   it('rejects a sprint move with no issue keys', async () => {

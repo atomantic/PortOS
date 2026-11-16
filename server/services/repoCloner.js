@@ -4,6 +4,9 @@
  * Handles cloning repositories (github.com / gitlab.com — see `REPO_HOSTS` in
  * lib/repoUrl.js) to a local directory for reference. Supports shallow clones to
  * save space and provides progress tracking.
+ *
+ * Storage: `file-primary` (`data/repos/`) — machine-local, never federated. Cloned
+ * repos are inherently filesystem-oriented and re-cloneable.
  */
 
 import { spawn } from '../lib/childProcess.js';

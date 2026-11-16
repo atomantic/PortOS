@@ -14,65 +14,12 @@ import { withTransaction } from '../lib/db.js';
 import { changedMusicVideoDescriptionOverLimit, MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../lib/musicVideoSubjectLimits.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, parsePagination } from '../lib/validation.js';
-import {
-  catalogScrapCreateSchema,
-  catalogScrapPatchSchema,
-  catalogIngredientCreateRouteSchema,
-  catalogIngredientPatchSchema,
-  catalogIngredientLinkSchema,
-  catalogRelationLinkSchema,
-  catalogMediaAttachSchema,
-  catalogMediaLibraryPatchSchema,
-  catalogMediaFromMoodBoardSchema,
-  catalogMediaLibraryQuerySchema,
-  catalogMediaDetachSchema,
-  catalogMediaFileUploadSchema,
-  catalogMediaVoiceMemoSchema,
-  catalogPortraitSetSchema,
-  catalogGeneratedImageAttachSchema,
-  catalogIngredientQuerySchema,
-  catalogIngredientDetailQuerySchema,
-  catalogIngredientCardsQuerySchema,
-  catalogIngredientLockSchema,
-  catalogTagQuerySchema,
-  catalogScrapCommitSchema,
-  catalogExtractRequestSchema,
-  catalogPruneRequestSchema,
-  catalogEmbeddingsBackfillSchema,
-  catalogMigrationRerunSchema,
-  catalogMusicVideoImportSchema,
-  catalogBulkImportSchema,
-  catalogBulkEntrySchema,
-  catalogExportQuerySchema,
-  catalogRevisionQuerySchema,
-  catalogRelatedImagesQuerySchema,
-  catalogRevisionRestoreSchema,
-  catalogUrlIngestSchema,
-  catalogFileIngestSchema,
-  catalogVoiceIngestSchema,
-  catalogBrainIngestSchema,
-  catalogUserTypeSchema,
-  catalogUserTypesSettingsSchema,
-  catalogStoryListQuerySchema,
-  catalogStoryParamsSchema,
-  catalogStoryJoinSchema,
-  catalogStoryDraftSchema,
-  catalogVideoSubjectsQuerySchema,
-  catalogVideoSubjectLinksSchema,
-  catalogVideoSubjectSaveSchema,
-  catalogVideoDescriptionRestoreSchema,
-  REF_KINDS,
-  catalogBatchMediaQuerySchema,
-  catalogLookAroundRenderSchema,
-  catalogLookAroundClipParamsSchema,
-  catalogLookAroundFramesSchema,
-  catalogLookAroundAnglesSchema,
-} from '../lib/catalogValidation.js';
+import { catalogScrapCreateSchema, catalogScrapPatchSchema, catalogIngredientCreateRouteSchema, catalogIngredientPatchSchema, catalogIngredientLinkSchema, catalogRelationLinkSchema, catalogMediaAttachSchema, catalogMediaLibraryPatchSchema, catalogMediaFromMoodBoardSchema, catalogMediaLibraryQuerySchema, catalogMediaDetachSchema, catalogMediaFileUploadSchema, catalogMediaVoiceMemoSchema, catalogPortraitSetSchema, catalogGeneratedImageAttachSchema, catalogIngredientQuerySchema, catalogIngredientDetailQuerySchema, catalogIngredientCardsQuerySchema, catalogIngredientLockSchema, catalogTagQuerySchema, catalogScrapCommitSchema, catalogExtractRequestSchema, catalogPruneRequestSchema, catalogEmbeddingsBackfillSchema, catalogMigrationRerunSchema, catalogMusicVideoImportSchema, catalogBulkImportSchema, catalogBulkEntrySchema, catalogExportQuerySchema, catalogRevisionQuerySchema, catalogRelatedImagesQuerySchema, catalogRevisionRestoreSchema, catalogUrlIngestSchema, catalogFileIngestSchema, catalogVoiceIngestSchema, catalogBrainIngestSchema, catalogUserTypeSchema, catalogUserTypesSettingsSchema, catalogStoryListQuerySchema, catalogStoryParamsSchema, catalogStoryJoinSchema, catalogStoryDraftSchema, catalogVideoSubjectsQuerySchema, catalogVideoSubjectLinksSchema, catalogVideoSubjectSaveSchema, catalogVideoDescriptionRestoreSchema, REF_KINDS, catalogBatchMediaQuerySchema, catalogLookAroundRenderSchema, catalogLookAroundClipParamsSchema, catalogLookAroundFramesSchema, catalogLookAroundAnglesSchema, catalogMergeSchema, catalogMergeHistoryQuerySchema, catalogMergeRecoverSchema } from '../lib/catalogValidation.js';
 import { getActiveCatalogTypes, setUserCatalogTypes } from '../lib/catalogTypes.js';
 import { updateUserTypes } from '../services/catalogUserTypes/store.js';
 import { parseBulkPayload, bundleToMarkdown, toYamlString } from '../lib/catalogBulkParsers.js';
 import { resolveImageInputPath } from '../lib/fileUtils.js';
-import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
+import { embedIngredient, embedBatch, ingredientEmbedSeed, getEmbeddingsConfig } from '../services/embeddings.js';
 import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
 import { listPrevizJobs, startPrevizJob, finishPrevizJob } from '../services/previzJobs.js';
 import { captureGreyboxShot, draftGreybox, previewGreyboxPrompt, renderGreyboxShot, saveGreybox, saveWorld } from '../services/catalogGreybox.js';
@@ -95,6 +42,7 @@ import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import catalogIdentityRouter from './catalogIdentity.js';
 import catalogPrimitivesRouter from './catalogPrimitives.js';
 
+import { getPrimitiveContext, createOwnedPrimitive, withUserCreatedLock, addPrimitiveToUniverse, removePrimitiveFromUniverse } from '../services/catalogPrimitives.js';
 const router = Router();
 router.use('/identity', catalogIdentityRouter);
 router.use('/ingredients/:id', catalogPrimitivesRouter);
@@ -378,7 +326,6 @@ router.get('/ingredients/:id/details', asyncHandler(async (req, res) => {
     return res.json({ media, missingMedia: await catalogDB.getMissingMediaForIngredient(req.params.id, { media }) });
   }
   const full = projection.view === 'full';
-  const { getPrimitiveContext } = await import('../services/catalogPrimitives.js');
   const [context, sources, relations, revisions, media, sharedIdentity, coverMedia] = await Promise.all([
     getPrimitiveContext(req.params.id, { includeDerived: full }),
     catalogDB.listSourcesForIngredient(req.params.id),
@@ -413,14 +360,12 @@ router.get('/ingredients/:id/related-images', asyncHandler(async (req, res) => {
 
 // Merge is preview-first and never unlocks either record.
 router.post('/ingredients/merge', asyncHandler(async (req, res) => {
-  const { catalogMergeSchema } = await import('../lib/catalogValidation.js');
   const body = validateRequest(catalogMergeSchema, req.body);
   const { mergeIngredients } = await import('../services/catalogDB/merge.js');
   res.json(await mergeIngredients(body));
 }));
 
 router.get('/ingredients/:id/merge-history', asyncHandler(async (req, res) => {
-  const { catalogMergeHistoryQuerySchema } = await import('../lib/catalogValidation.js');
   const params = validateRequest(catalogMergeHistoryQuerySchema, req.query);
   const { getIngredientMergeHistory } = await import('../services/catalogDB/merge.js');
   res.json(await getIngredientMergeHistory(req.params.id, params));
@@ -432,7 +377,6 @@ router.get('/ingredient-merges/:id', asyncHandler(async (req, res) => {
 }));
 
 router.post('/ingredient-merges/:id/recover', asyncHandler(async (req, res) => {
-  const { catalogMergeRecoverSchema } = await import('../lib/catalogValidation.js');
   validateRequest(catalogMergeRecoverSchema, req.body ?? {});
   const { recoverIngredientMerge } = await import('../services/catalogDB/merge.js');
   res.json(await recoverIngredientMerge(req.params.id));
@@ -451,7 +395,6 @@ router.post('/ingredients', asyncHandler(async (req, res) => {
     tags: body.tags || [],
     ...(await embedIngredient(body)),
   };
-  const { createOwnedPrimitive, withUserCreatedLock } = await import('../services/catalogPrimitives.js');
   const ing = body.universeId ? await createOwnedPrimitive(input, body.universeId, body.operationKey) : await catalogDB.createIngredient(withUserCreatedLock(input));
   for (const relation of relations) await catalogDB.linkIngredientRelation(ing.id, relation.toId, relation.kind);
   res.status(201).json(ing);
@@ -569,7 +512,6 @@ router.post('/ingredients/:id/link', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogIngredientLinkSchema, req.body);
   if (body.refKind === 'universe') {
     if (body.role === 'owner') throw new ServerError('Use the explicit ownership action', { status: 409 });
-    const { addPrimitiveToUniverse } = await import('../services/catalogPrimitives.js');
     res.status(201).json(await addPrimitiveToUniverse(req.params.id, body.refId, body.role));
     return;
   }
@@ -581,7 +523,6 @@ router.delete('/ingredients/:id/link', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogIngredientLinkSchema, req.body);
   if (body.refKind === 'universe' && body.role === 'owner') throw new ServerError('Ownership is separate from container membership', { status: 409 });
   if (body.refKind === 'universe' && body.role.startsWith('canon-')) {
-    const { removePrimitiveFromUniverse } = await import('../services/catalogPrimitives.js');
     await removePrimitiveFromUniverse(req.params.id, body.refId, body.role);
     res.status(204).end();
     return;
@@ -1236,7 +1177,6 @@ router.post('/embeddings/backfill', asyncHandler(async (req, res) => {
   // current settings.
   let staleModel = null;
   if (body.includeStale === true) {
-    const { getEmbeddingsConfig } = await import('../services/embeddings.js');
     const cfg = await getEmbeddingsConfig();
     staleModel = cfg.model || null;
   }

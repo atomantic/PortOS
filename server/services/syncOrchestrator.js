@@ -30,6 +30,7 @@ import { isManifestEnvelope, diffManifestSlots, MAX_MANIFEST_SLOTS } from '../li
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
+import { pullMissingAssetsFromPeer } from './sharing/peerSyncAssets.js';
 
 const CURSORS_FILE = dataPath('instances_sync_cursors.json');
 const SYNC_INTERVAL_MS = 60000;
@@ -217,7 +218,6 @@ async function syncImageFromPeer(peer, avatarPath) {
   // The shared asset pull owns the tombstone check, sidecar + supplier
   // recording, extension/manifest/hash guards, size caps and in-flight dedup.
   // Dynamic import keeps peerSyncAssets' graph out of orchestrator load.
-  const { pullMissingAssetsFromPeer } = await import('./sharing/peerSyncAssets.js');
   await pullMissingAssetsFromPeer(peer.instanceId, [{ kind: 'image', filename }]);
 }
 

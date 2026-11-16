@@ -1,15 +1,16 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, htmlCompositionRenderSchema, htmlCompositionBeatsQuerySchema } from '../lib/validation.js';
-import { MOTION_SKILL_PACKS } from '../lib/motionSkills.js';
+import { MOTION_SKILL_PACKS, detectMotionSkills, skillInstallCommand } from '../lib/motionSkills.js';
 import { enqueueJob, attachSseClient, cancelJob } from '../services/mediaJobQueue/index.js';
 
+import { execFile } from '../lib/childProcess.js';
 const router = Router();
 
 // What the optional motion toolkit (`npm run setup:motion`) has installed, so
 // the launch-video form can offer only components that are actually present.
 router.get('/toolkit', asyncHandler(async (req, res) => {
-  const [{ findFfmpeg }, { detectMotionSkills }] = await Promise.all([import('../lib/ffmpeg.js'), import('../lib/motionSkills.js')]);
+  const { findFfmpeg } = await import('../lib/ffmpeg.js');
   res.json({ ffmpeg: Boolean(await findFfmpeg()), skillPacks: detectMotionSkills() });
 }));
 
@@ -19,8 +20,6 @@ router.get('/toolkit', asyncHandler(async (req, res) => {
 let skillInstall = null;
 router.post('/toolkit/skills/install', asyncHandler(async (req, res) => {
   if (skillInstall) throw new ServerError('A motion skills install is already running', { status: 409, code: 'INSTALL_IN_PROGRESS' });
-  const { detectMotionSkills, skillInstallCommand } = await import('../lib/motionSkills.js');
-  const { execFile } = await import('../lib/childProcess.js');
   const packs = detectMotionSkills().filter(pack => !pack.installed);
   const sources = new Map(MOTION_SKILL_PACKS.map(pack => [pack.id, pack]));
   const failed = [];

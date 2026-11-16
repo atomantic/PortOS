@@ -39,6 +39,11 @@
  * a task mutation has committed catch and log that rejection so a successful
  * task response does not imply that its diagnostic ledger row also landed.
  * No fire-and-forget layer.
+ *
+ * Storage: `db-primary` — machine-local, never federated (no cross-machine merge contract).
+ * `user_action_events` is db-primary because its value is querying by type/actor/target/time,
+ * which a JSONL log cannot do; capped at 20,000 rows and 90 days, and kept out of
+ * `auditedTables` so auditing the audit log does not double every row.
  */
 
 import { join } from 'path';
@@ -393,7 +398,3 @@ export async function listUserActions(options = {}) {
   return backend.list(filters);
 }
 
-/** Test seam — drop the memoized backend selection so a suite can re-select. */
-export function _resetUserActionsBackend() {
-  facade.reset();
-}

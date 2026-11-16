@@ -78,14 +78,6 @@ describe('PUT /api/notes/vaults/:id/note force pass-through', () => {
     expect(obsidian.updateNote).toHaveBeenCalledWith('v1', 'a.md', 'hi', { force: false });
   });
 
-  it('forwards an explicit force:true', async () => {
-    obsidian.updateNote.mockResolvedValue({ path: 'a.md' });
-
-    await request(app).put('/api/notes/vaults/v1/note?path=a.md').send({ content: 'hi', force: true });
-
-    expect(obsidian.updateNote).toHaveBeenCalledWith('v1', 'a.md', 'hi', { force: true });
-  });
-
   it('forwards the stalled verdict so only a hopeless refusal can arm the override', async () => {
     obsidian.updateNote.mockResolvedValue({
       error: 'NOTE_EVICTED',

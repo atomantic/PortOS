@@ -19,10 +19,6 @@ describe('execution-failure taxonomy vocabulary', () => {
     expect(EXECUTION_FAILURE_VALUES).toEqual([...EXECUTION_FAILURE_CATEGORIES, UNKNOWN_EXECUTION_FAILURE]);
   });
 
-  it('carries exactly the five #2764 §1 categories', () => {
-    expect(EXECUTION_FAILURE_CATEGORIES).toEqual(['planning', 'execution', 'testing', 'context', 'scope']);
-  });
-
   it('has no duplicate tokens', () => {
     expect(new Set(EXECUTION_FAILURE_VALUES).size).toBe(EXECUTION_FAILURE_VALUES.length);
   });

@@ -1,8 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
+import { callRoute, expectAuthorizedWorkflows, expectRemoteRefusal, hostControlApp } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
@@ -57,9 +54,8 @@ vi.mock('../services/githubAccounts.js', () => accounts);
 vi.mock('../services/githubNotifications.js', () => inbox);
 vi.mock('../services/githubNotificationAudit.js', () => audit);
 
-const { authGate, hostControlRouteGate } = await import('../services/authGate.js');
-const { createSession } = await import('../services/auth.js');
 const { default: githubRoutes } = await import('./github.js');
+const mounts = [['/api/github', githubRoutes]];
 
 // [method, path, body, the service the request must not reach when refused]
 const writes = [
@@ -74,89 +70,38 @@ const writes = [
   ['put', '/api/github/accounts/acct-example', { mode: 'autopilot' }, accounts.updateAccount],
 ];
 
-const appFor = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/github', githubRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
-const send = (app, [method, path, body], headers = {}) => {
-  const pending = request(app)[method](path);
-  for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return pending.send(body);
-};
+const localApp = () => hostControlApp('127.0.0.1', mounts);
+const send = async (app, write) => callRoute(await app, write);
 
 beforeEach(() => {
   vi.clearAllMocks();
   auth.enabled = false;
 });
 
-describe('GitHub inbox writes require operator authority (#12952)', () => {
-  it('refuses a remote password-free caller, direct or proxied, before any gh write, CoS job or account change', async () => {
-    for (const write of writes) {
-      for (const [address, headers] of [
-        ['192.0.2.10', {}],
-        ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
-      ]) {
-        const response = await send(appFor(address), write, headers);
-        expect([response.status, response.body.code], write[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
-      expect(write[3], write[1]).not.toHaveBeenCalled();
-    }
+describe('GitHub inbox writes behind the default-deny gate (#12952, #16114)', () => {
+  it('refuses a remote caller before any gh write, CoS job or account change', async () => {
+    const [method, path, body, effect] = writes[0];
+    await expectRemoteRefusal(mounts, [method, path, body, effect]);
   });
 
-  it('keeps every write working for local callers, operator sessions and delegated agent sessions', async () => {
-    const operator = await createSession();
-    const agent = await createSession({ label: 'agent' });
-    for (const [enabled, address, headers] of [
-      [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Authorization: `Bearer ${operator.token}` }],
-      [true, '192.0.2.10', { Authorization: `Bearer ${agent.token}` }],
-    ]) {
-      auth.enabled = enabled;
-      for (const write of writes) {
-        const response = await send(appFor(address), write, headers);
-        expect(response.status, `${write[1]}: ${JSON.stringify(response.body)}`).toBeLessThan(300);
-      }
-    }
-    for (const write of writes) expect(write[3], write[1]).toHaveBeenCalledTimes(3);
-  });
-
-  it('runs the refresh, deletions and the read-only audit for host control, with automation, and refuses them remotely', async () => {
-    const others = [
-      ['delete', '/api/github/accounts/acct-example', undefined, accounts.deleteAccount],
-      ['delete', '/api/github/automations/rules/7', undefined, inbox.deleteLearnedRule],
-      ['post', '/api/github/audit/example-account', {}, audit.runAccountAudit],
-      ['post', '/api/github/notifications/sync', { accountId: 'example-account' }, inbox.syncAccountNotifications],
-      ['post', '/api/github/notifications/sync', {}, inbox.syncAllNotifications],
-    ];
-    for (const write of others) {
-      const response = await send(appFor(), write);
-      expect([response.status, response.body.code], write[1]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      expect(write[3], write[1]).not.toHaveBeenCalled();
-    }
-    for (const write of others.slice(0, 3)) {
-      expect((await send(appFor('127.0.0.1'), write)).status, write[1]).toBe(200);
-      expect(write[3]).toHaveBeenCalledTimes(1);
-    }
-
-    await send(appFor('127.0.0.1'), ['post', '/api/github/notifications/sync', { accountId: 'example-account' }]);
+  it('keeps every write, deletion, audit and refresh working for local callers and agent sessions', async () => {
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: [
+      ...writes.map(([method, path, body, effect]) => [method, path, body, effect, path.endsWith('/accounts') ? 201 : 200]),
+      ['delete', '/api/github/accounts/acct-example', undefined, accounts.deleteAccount, 200],
+      ['delete', '/api/github/automations/rules/7', undefined, inbox.deleteLearnedRule, 200],
+      ['post', '/api/github/audit/example-account', {}, audit.runAccountAudit, 200],
+      ['post', '/api/github/notifications/sync', { accountId: 'example-account' }, inbox.syncAccountNotifications, 200],
+      ['post', '/api/github/notifications/sync', {}, inbox.syncAllNotifications, 200],
+    ] });
+    // Refresh from a host-control caller runs the automation pass.
     expect(inbox.syncAccountNotifications).toHaveBeenLastCalledWith('example-account', { automate: true });
-    auth.enabled = true;
-    const agent = await createSession({ label: 'agent' });
-    await send(appFor(), ['post', '/api/github/notifications/sync', {}], { Authorization: `Bearer ${agent.token}` });
     expect(inbox.syncAllNotifications).toHaveBeenLastCalledWith({ automate: true });
   });
 });
 
 describe('Resolve with agent run choice (#13191)', () => {
   it('passes a validated per-run provider/model/effort, null as Auto, and no keys as "use the defaults"', async () => {
-    const app = appFor('127.0.0.1');
+    const app = localApp();
     const path = '/api/github/notifications/example-account/123/agent';
     expect((await send(app, ['post', path, { provider: 'example-provider', title: 'injected' }])).status).toBe(400);
     expect((await send(app, ['post', path, { effort: 'ludicrous' }])).status).toBe(400);
@@ -170,7 +115,7 @@ describe('Resolve with agent run choice (#13191)', () => {
 
 describe('GitHub notification PR actions', () => {
   it('validates action and merge choices before reaching the service', async () => {
-    const app = appFor('127.0.0.1');
+    const app = localApp();
     const path = '/api/github/notifications/example-account/123/pull-request';
     for (const body of [{ action: 'shell' }, { action: 'merge', method: 'force' }, { action: 'merge', deleteBranch: 'yes' }, { action: 'do-review', url: 'https://outside.example/pull/1' }]) {
       expect((await send(app, ['post', path, body])).status).toBe(400);

@@ -16,13 +16,15 @@ import {
   composeSequenceTakePrompt, defaultSequenceTakeModelId, sequenceTakeModelProblem, sequenceTakeRun, unionSequenceTakeReferences,
 } from '../../lib/musicVideoSequenceTake.js';
 import { SEQUENCE_PROMPT_EXPANSION } from '../../lib/musicVideoSequenceCoverage.js';
+import { MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../lib/musicVideoConditioning.js';
+import { assertShotActionContract } from '../../lib/musicVideoActionContract.js';
 
 const refuse = (status, code, message, context) => { throw new ServerError(message, { status, code, ...(context ? { context } : {}) }); };
 
 /** Each shot's frame, then its clip references, as resolved files. Refuses a shot with no frame. */
 async function gatherReferences(project, members, model) {
-  const [{ resolveGalleryImage }, { musicVideoClipReferences }, { MUSIC_VIDEO_MAX_REFERENCE_CHOICES }] = await Promise.all([
-    import('../../lib/pathSafety.js'), import('./clipCastReferences.js'), import('../../lib/musicVideoConditioning.js'),
+  const [{ resolveGalleryImage }, { musicVideoClipReferences }] = await Promise.all([
+    import('../../lib/pathSafety.js'), import('./clipCastReferences.js'),
   ]);
   const frames = members.map((scene) => {
     const path = scene.referenceImageId ? resolveGalleryImage(scene.referenceImageId) : null;
@@ -32,7 +34,7 @@ async function gatherReferences(project, members, model) {
   const extras = [];
   for (const [i, scene] of members.entries()) {
     const refs = await musicVideoClipReferences({ projectId: project.id, sceneId: scene.sceneId }, MUSIC_VIDEO_MAX_REFERENCE_CHOICES, { project, excludePath: frames[i].key });
-    extras.push(refs.map((ref) => ({ key: ref.path, label: ref.label, role: ref.role || 'character', imageId: basename(ref.path) })));
+    extras.push(refs.map((ref) => ({ key: ref.path, label: ref.label, role: ref.role || 'character', imageId: basename(ref.path), ...(ref.comparison ? { comparison: ref.comparison } : {}) })));
   }
   return unionSequenceTakeReferences({ frames, extras, max: model.referenceImages.max });
 }
@@ -98,8 +100,8 @@ export async function sequenceTake(projectId, { sceneIds, modelId: requestedMode
   };
   if (dryRun) return { dryRun: true, ...plan };
 
-  const [{ assertShotActionContract }, { captureTakeDependencies }, { musicVideoAspect }, { enqueueJob }] = await Promise.all([
-    import('../../lib/musicVideoActionContract.js'), import('../../lib/musicVideoDependencies.js'),
+  const [{ captureTakeDependencies }, { musicVideoAspect }, { enqueueJob }] = await Promise.all([
+    import('../../lib/musicVideoDependencies.js'),
     import('../../lib/musicVideoAspect.js'), import('../mediaJobQueue/index.js'),
   ]);
   members.forEach((scene) => assertShotActionContract(scene));

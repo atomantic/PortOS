@@ -2,7 +2,7 @@ import { currentPlateEvidence, renderQualityAcknowledged } from '../../../../ser
 import { musicVideoRenderTierLabel } from '../../../../server/lib/musicVideoRenderTier.js';
 import { useRef, useState } from 'react';
 import { Ban, Check, Loader2, RotateCcw, Eye, X, MessageSquare, PencilLine } from 'lucide-react';
-import { sceneTakeList, takePreviewKey, takeThumbUrl, takeClipUrl, takeProvenance, TAKE_SLOT } from '../../lib/musicVideoTakes.js';
+import { sceneTakeList, takePreviewKey, takeThumbUrl, takeClipUrl, takeProvenance, takeControl, TAKE_SLOT } from '../../lib/musicVideoTakes.js';
 import { plateVerdict } from './PlateComparison.jsx';
 import TakeExtend from './TakeExtend.jsx';
 import AssetReferenceActions from '../media/AssetReferenceActions.jsx';
@@ -40,9 +40,11 @@ async function videoTakeUrl(take) {
  * each shows as a "Rendering grok…" placeholder after the takes until its take lands.
  * `onCheck(take)` runs a vision check of a start or end frame take against its shot; `checking` holds
  * the take ids in flight. A checked take wears its verdict, which opens to the misses.
+ * `saving` holds the take controls waiting on a reply (useMusicVideoTakes `pending`, keys from `takeControl`):
+ * each shows it is saving and stays disabled until the reply, so a slow reply is not pressed twice.
  */
 export default function SceneTakeStrip({
-  scene, project = null, kind, busy = false, large = false, grid = false, onSelect, onReview, onOpenPreview, marks = null, onMark = null, pending = [],
+  scene, project = null, kind, busy = false, saving = null, large = false, grid = false, onSelect, onReview, onOpenPreview, marks = null, onMark = null, pending = [],
   onCheck = null, checking = null, onRefine = null, refineDisabled = false,
 }) {
   const [noteFor, setNoteFor] = useState(null);
@@ -79,6 +81,13 @@ export default function SceneTakeStrip({
           const takeChecking = Boolean(take.takeId && checking?.has(take.takeId));
           const playKey = take.takeId || take.assetId;
           const playing = kind === 'video' && playingId === playKey;
+          const savingSelect = Boolean(take.takeId && saving?.has(takeControl.select(scene, take)));
+          const savingReject = Boolean(take.takeId && saving?.has(takeControl.status(scene, take, 'rejected')));
+          const savingRestore = Boolean(take.takeId && saving?.has(takeControl.status(scene, take, 'candidate')));
+          const savingDecision = savingSelect || savingReject || savingRestore;
+          const savingMark = Boolean(saving?.has(takeControl.mark(take)));
+          const savingAcknowledge = Boolean(take.takeId && saving?.has(takeControl.acknowledge(scene, take)));
+          const savingConfirm = Boolean(take.takeId && saving?.has(takeControl.confirm(scene, take)));
           return (
             <li key={take.takeId || `legacy-${take.assetId}`} className={`${thumbClass} space-y-1`}
               onPointerDownCapture={(event) => { copyPointer.current = Boolean(event.target.closest('[data-asset-copy-trigger]')); }}
@@ -153,33 +162,39 @@ export default function SceneTakeStrip({
                   <PencilLine size={11} /> Refine take
                 </button>
               )}
+              {/* Use, Reject and Restore change the take at once, so the take itself says its decision is saving. */}
+              {savingDecision && (
+                <p role="status" className="inline-flex items-center gap-1 text-[10px] text-port-text-muted">
+                  <Loader2 size={10} className="animate-spin" aria-hidden="true" /> Saving…
+                </p>
+              )}
               {take.takeId && (
                 <div className="flex flex-wrap gap-1">
                   {!isSelected && (
-                    <button type="button" disabled={busy} onClick={() => onSelect?.(take)}
+                    <button type="button" disabled={busy || savingSelect} onClick={() => onSelect?.(take)}
                       className="inline-flex items-center gap-0.5 rounded bg-port-accent/20 text-port-accent px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 min-h-[32px] sm:min-h-0 disabled:opacity-50"
                       title="Use this take for the scene">
                       <Check size={11} /> Use
                     </button>
                   )}
                   {rejected ? (
-                    <button type="button" disabled={busy} onClick={() => onReview?.(take, { status: 'candidate' })}
+                    <button type="button" disabled={busy || savingRestore} onClick={() => onReview?.(take, { status: 'candidate' })}
                       className="inline-flex items-center gap-0.5 rounded bg-port-border px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 min-h-[32px] sm:min-h-0 disabled:opacity-50"
                       title="Restore this take as a candidate">
                       <RotateCcw size={11} /> Restore
                     </button>
                   ) : (
-                    <button type="button" disabled={busy} onClick={() => { onReview?.(take, { status: 'rejected' }); openNote(take); }}
+                    <button type="button" disabled={busy || savingReject} onClick={() => { onReview?.(take, { status: 'rejected' }); openNote(take); }}
                       className="inline-flex items-center gap-0.5 rounded bg-port-border px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 min-h-[32px] sm:min-h-0 disabled:opacity-50"
                       title={isSelected ? 'Not for this shot: clears the selection so the next render fills it. Other shots can still use it.' : 'Not for this shot. Other shots can still use it.'}>
                       <X size={11} /> Reject
                     </button>
                   )}
                   {onMark && (
-                    <button type="button" disabled={busy} onClick={() => onMark(take, bad ? null : 'bad')} aria-pressed={bad}
+                    <button type="button" disabled={busy || savingMark} onClick={() => onMark(take, bad ? null : 'bad')} aria-pressed={bad}
                       className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 min-h-[32px] sm:min-h-0 disabled:opacity-50 ${bad ? 'bg-port-error/20 text-port-error' : 'bg-port-border'}`}
                       title={bad ? 'Clear the bad mark' : 'Mark this file bad, to clean up when the project is done. It is also rejected on every shot not using it, and stays counted in the stats.'}>
-                      <Ban size={11} /> Bad
+                      {savingMark ? <Loader2 size={11} className="animate-spin" aria-hidden="true" /> : <Ban size={11} />} {savingMark ? 'Saving…' : 'Bad'}
                     </button>
                   )}
                   {onCheck && frameTake && !rejected && (
@@ -208,9 +223,10 @@ export default function SceneTakeStrip({
                 <div key={check.id} className="space-y-1 text-xs text-port-warning">
                   <p className="break-words">Rendering defect: {check.note}</p>
                   {renderQualityAcknowledged(scene, take, project) ? <p>Explicitly acknowledged for this image.</p> : onReview && take.takeId && (
-                    <button type="button" disabled={busy} className="min-h-11 rounded border border-port-warning px-2 py-1 disabled:opacity-50"
+                    <button type="button" disabled={busy || savingAcknowledge} className="inline-flex min-h-11 items-center gap-1 rounded border border-port-warning px-2 py-1 disabled:opacity-50"
                       onClick={() => onReview(take, { acknowledgeRenderQuality: { basis: take.plateEvidence.basis, note: check.note } })}>
-                      Acknowledge rendering defect
+                      {savingAcknowledge && <Loader2 size={12} className="animate-spin" aria-hidden="true" />}
+                      {savingAcknowledge ? 'Saving…' : 'Acknowledge rendering defect'}
                     </button>
                   )}
                 </div>
@@ -218,10 +234,11 @@ export default function SceneTakeStrip({
               {frameTake && isSelected && take.dependencyState?.status === 'stale' && onReview && take.takeId && (
                 <div className="space-y-1 text-xs text-port-warning">
                   <p className="break-words">Made for an earlier version of this shot{take.dependencyState.reasons?.length ? `: ${take.dependencyState.reasons.join(' · ')}` : ''}</p>
-                  <button type="button" disabled={busy} className="min-h-11 rounded border border-port-warning px-2 py-1 disabled:opacity-50"
+                  <button type="button" disabled={busy || savingConfirm} className="inline-flex min-h-11 items-center gap-1 rounded border border-port-warning px-2 py-1 disabled:opacity-50"
                     title="Keep this picture: record that it matches the shot as it now reads, so the clips made from it can render"
                     onClick={() => onReview(take, { confirmFrame: true })}>
-                    Still matches
+                    {savingConfirm && <Loader2 size={12} className="animate-spin" aria-hidden="true" />}
+                    {savingConfirm ? 'Saving…' : 'Still matches'}
                   </button>
                 </div>
               )}

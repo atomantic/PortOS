@@ -1,24 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import {
-  buildProjectRecord,
-  cloneProjectRecord,
-  applyProjectPatch,
-  setAudioAnalysis,
-  setMidiTranscription,
-  addScene,
-  addScenes,
-  applySceneUpdate,
-  removeScene,
-  reorderScenes,
-  afterLoad,
-  mergeNextScene,
-  mergePreviousScene,
-  splitScene,
-  replaceScenes,
-  mirrorStatus,
-  sanitizeProjectForSync,
-  mergeProjectRecord,
-} from './projectsLogic.js';
+import { buildProjectRecord, cloneProjectRecord, applyProjectPatch, setAudioAnalysis, setMidiTranscription, addScene, addScenes, applySceneUpdate, removeScene, reorderScenes, afterLoad, mergeNextScene, mergePreviousScene, splitScene, replaceScenes, mirrorStatus, mergeProjectRecord } from './projectsLogic.js';
+import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
 import { productionReviewBasis } from './productionReview.js';
 import { treatmentBasis } from './treatment.js';

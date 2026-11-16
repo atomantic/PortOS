@@ -8,6 +8,9 @@
  * admission boundary. `classifyWriterQuiescence(row, processes)` classifies a row against a
  * process-table snapshot (quiescent / running / orphaned / pending / ambiguous) without probing PIDs.
  * Legacy compacted history and Windows completions stay unresolved.
+ *
+ * Storage: `file-primary` — machine-local detached launch evidence under `data/database-writers/<launch-id>/`,
+ * never federated; it must survive the database being fenced or offline during maintenance cutover.
  */
 
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, writeFileSync, linkSync, rmSync } from 'node:fs';

@@ -1,7 +1,9 @@
 /**
  * Trusted Organizations registry (issue #2141, epic #2138).
  *
- * db-primary Postgres per docs/STORAGE.md: `privacy_orgs` (one row per
+ * Storage: `db-primary` — machine-local, never federated, by product guarantee (see below).
+ *
+ * `privacy_orgs` (one row per
  * organization that has or had the user's PII) and `privacy_org_holdings`
  * (which vault records each org holds, with a per-holding status). Machine-
  * local: NO federation, NO tombstones — NEVER federated, by decision rather

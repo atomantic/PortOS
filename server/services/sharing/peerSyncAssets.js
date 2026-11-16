@@ -45,6 +45,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { ASSET_PULL_MAX_BYTES } from './assetLimits.js';
 import { mediaTombstoneStamps } from '../mediaTombstones.js';
 import { parseTsMs } from '../../lib/lwwTimestamp.js';
+import { clearImageTombstoneSupersededByOwner } from '../imageGen/imageRecords.js';
 
 // Bound file hashing to avoid starving unrelated filesystem work when a
 // large record (especially a deck) advertises hundreds of images.
@@ -1274,8 +1275,7 @@ async function commitPulledAsset(peer, base, entry, localDir, fullPath, safeName
     // its file time is then never mistaken for this machine making it.
     if (isNewHere) await recordImageSupplier(safeName, peer.instanceId).catch((err) => console.error(`❌ peerSync: supplier record for ${safeName} failed: ${err.message}`));
     // The owner restored an image deleted here (#14099): its copy outlives the delete.
-    await import('../imageGen/imageRecords.js')
-      .then((m) => m.clearImageTombstoneSupersededByOwner(safeName, peer.instanceId))
+    await clearImageTombstoneSupersededByOwner(safeName, peer.instanceId)
       .catch((err) => console.error(`❌ peerSync: delete record check for ${safeName} failed: ${err.message}`));
     await import('../mediaAssetIndex/index.js').then(m => m.indexImage({ filename: safeName })).catch(err => console.error(`❌ Media index peer asset refresh: ${err.message}`));
   }

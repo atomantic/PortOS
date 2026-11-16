@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { posixPath } from './testHelper.js';
 
 import { join } from 'path';
-import { MAX_REPO_PATH_DEPTH, parseRepoUrl, isRepoUrl, repoCloneUrl, repoBrowseUrl, parseGitHubUrl, isGitHubRepoUrl } from './repoUrl.js';
+import { parseRepoUrl, isRepoUrl, repoCloneUrl, repoBrowseUrl, parseGitHubUrl, isGitHubRepoUrl } from './repoUrl.js';
 
 const REPOS_ROOT = '/data/repos';
 const clonePath = (url) => {
@@ -181,11 +181,6 @@ describe('parseRepoUrl across hosts', () => {
   it('refuses a backslash that would spoof the host past the anchor', () => {
     expect(parseRepoUrl(String.raw`https://evil.example.com\@github.com/example-owner/example-repo`)).toBeNull();
     expect(parseRepoUrl(String.raw`https://github.com\evil.example.com/o/r`)).toBeNull();
-  });
-
-  it('derives the clone-path depth bound from the host table', () => {
-    // repos/<host>/<group>/<subgroup>/<subsubgroup>/<repo>
-    expect(MAX_REPO_PATH_DEPTH).toBe(5);
   });
 
   it('refuses an unsupported host and a path-unsafe GitLab namespace', () => {

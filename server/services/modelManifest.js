@@ -1,37 +1,28 @@
 /**
  * The persisted record of which model weights this machine has on disk.
  *
- * The downloaded-model inventory used to exist only for as long as a page was
- * open: Models → Status ran a multi-store disk scan (the Hugging Face cache,
- * `data/loras/`, Ollama's blob store, LM Studio's model tree) and threw the
- * result away on navigation, so the answer to "what have I downloaded?" cost a
- * fresh walk over tens of gigabytes every single time. PortOS already knows the
- * answer, though — it is the side that performs the installs and the deletes.
- * This manifest is that knowledge written down, so the page can render instantly
- * from `data/model-manifest.json` and a scan becomes a RECONCILIATION the user
- * asks for rather than the only way to see anything.
+ * The downloaded-model inventory used to exist only while a page was open (Models → Status ran
+ * a multi-store disk scan of the HF cache, `data/loras/`, Ollama's blob store and LM Studio's
+ * tree). PortOS performs the installs and deletes, so this manifest records that knowledge in
+ * `data/model-manifest.json`: the page renders instantly and a scan becomes a user-requested
+ * RECONCILIATION.
  *
- * Two write paths, and they are deliberately different:
+ * Two deliberately different write paths:
  *
- *  - **Recording.** `recordModelInstall` / `recordModelUninstall` are called from
- *    the install and delete chokepoints (one per backend — see the comment at
- *    each call site). They are best-effort and never fail their caller: a
- *    manifest entry is worth strictly less than the install it describes.
- *  - **Reconciliation.** `reconcileModelManifest` folds a real scan back in,
- *    adopting weights that arrived outside PortOS and dropping entries whose
- *    files are gone. Every full system-resource report reconciles as a side
- *    effect, so the Refresh button and the Dev Tools storage report both heal the
- *    manifest without a second code path.
+ *  - **Recording.** `recordModelInstall` / `recordModelUninstall` are called from the install
+ *    and delete chokepoints (one per backend). Best-effort, never failing their caller: an
+ *    entry is worth less than the install it describes.
+ *  - **Reconciliation.** `reconcileModelManifest` folds a real scan back in, adopting weights
+ *    that arrived outside PortOS and dropping entries whose files are gone. Every full
+ *    system-resource report reconciles as a side effect.
  *
- * **Reconciliation prunes only backends the scan could actually see.** An Ollama
- * server that is down, or a backend the user disabled in settings, reports zero
- * models — pruning on that would erase a correct manifest and silently tell the
- * user their weights are gone. Untrusted backends are left exactly as they were.
+ * **Reconciliation prunes only backends the scan could actually see.** A down Ollama or a
+ * backend disabled in settings reports zero models; pruning on that would erase a correct
+ * manifest. Untrusted backends are left exactly as they were.
  *
- * Storage class: `ephemeral-file` (docs/STORAGE.md). It is machine-local and
- * fully re-derivable by scanning, which is also why it is excluded from backup:
- * restoring one machine's model inventory onto another describes weights that
- * machine does not have.
+ * Storage: `ephemeral-file` — machine-local, never federated, re-derivable by scanning (absent
+ * = nothing tracked, no seed), and a non-overridable backup exclude: restoring one machine's
+ * inventory onto another describes weights it does not have.
  */
 
 import { join } from 'path';
@@ -47,24 +38,18 @@ const MODEL_MANIFEST_SCHEMA_VERSION = 1;
 const EMPTY_MANIFEST = { schemaVersion: MODEL_MANIFEST_SCHEMA_VERSION, reconciledAt: null, models: {} };
 
 /**
- * The shared single-JSON-document store: one write tail, a short read cache, and
- * — the part that matters here — a STRICT load.
+ * The shared single-JSON-document store: one write tail, a short read cache, and a STRICT load.
  *
- * `mutate` is load → modify → persist, so a present-but-unreadable manifest must
- * reject rather than read as "no models installed": the very next write would
- * otherwise stamp that emptiness over the record. An ABSENT file still yields the
- * default, which is the pre-first-install state and the state of every install
- * upgrading into this feature.
+ * `mutate` is load → modify → persist, so a present-but-unreadable manifest must reject rather
+ * than read as "no models installed" (the next write would stamp that emptiness over the
+ * record). An ABSENT file yields the default.
  *
- * The single tail matters because the writers genuinely overlap — a reconcile
- * walks four backends while a queued LM Studio download finishes and records
- * itself — and this module is the only writer of the file.
+ * The single tail matters because writers overlap (a reconcile walks four backends while a
+ * queued LM Studio download records itself) and this module is the file's only writer.
  *
- * Built on FIRST USE rather than at module load. The install chokepoints import
- * this module, so it is reached transitively by a long tail of suites that mock
- * `fileUtils.js` partially — and constructing the store in module scope turns a
- * missing mock export into an import-time crash in a file that has nothing to do
- * with models. Lazily, the same suites simply never touch it.
+ * Built on FIRST USE, not at module load: the install chokepoints import this module, which a
+ * long tail of suites reach while partially mocking `fileUtils.js`; module-scope construction
+ * would turn a missing mock export into an import-time crash.
  */
 let store = null;
 const manifestStore = () => (store ??= createCachedStore(
@@ -86,15 +71,13 @@ const normalize = (raw) => ({
 /**
  * Serialized read-modify-write over the normalized manifest.
  *
- * `fn` returns `{ document, value }`, where a null `document` leaves the file
- * untouched and `value` is what the caller wanted to learn from the write — the
- * counts a reconcile produced, or whether an entry was really there to remove.
- * The value rides out of the mutation rather than being decoded from the persisted
- * document, which cannot distinguish "wrote nothing because nothing changed" from
- * "wrote nothing because the write failed".
+ * `fn` returns `{ document, value }`: a null `document` leaves the file untouched and `value`
+ * is what the caller wanted to learn (reconcile counts, whether an entry was there to remove).
+ * It rides out of the mutation because the persisted document cannot distinguish "nothing
+ * changed" from "the write failed".
  *
- * Every mutator is best-effort: a failed write logs and yields `fallback` rather
- * than failing the install or delete that triggered it.
+ * Every mutator is best-effort: a failed write logs and yields `fallback` rather than failing
+ * the install or delete that triggered it.
  */
 const mutateManifest = async (label, fn, fallback) => {
   let value = fallback;
@@ -113,15 +96,13 @@ const mutateManifest = async (label, fn, fallback) => {
 /**
  * The stored shape of one inventory row: the durable facts only.
  *
- * Residency, and whether the on-disk folder could be verified, are LIVE facts a
- * stored row can never answer — `presentInventoryRow` re-derives them on read, so
- * changing that rule fixes every existing row instead of only newly written ones.
- * `key` is not stored either: it is the second half of `id` by construction.
+ * Residency and on-disk verification are LIVE facts; `presentInventoryRow` re-derives them on
+ * read so a rule change fixes every existing row. `key` is not stored: it is the second half
+ * of `id`.
  *
- * `installedAt` + `source` are the pair the page renders. `source` matters because
- * a row adopted by the first reconcile has an `installedAt` of "when we first
- * looked", not when the weights actually landed — the UI says "tracked since"
- * for those and "installed" for the ones PortOS performed itself.
+ * `installedAt` + `source` are what the page renders: a row adopted by a reconcile has an
+ * `installedAt` of "when we first looked", so the UI says "tracked since" for those and
+ * "installed" for ones PortOS performed.
  */
 function storedEntry(row, { installedAt, source }) {
   const entry = { id: row.id, backend: row.backend, installedAt, source };
@@ -133,8 +114,8 @@ function storedEntry(row, { installedAt, source }) {
 }
 
 /**
- * The manifest as the API and the Status page consume it: rows sorted largest
- * first, matching the scan's own ordering so the two views do not reshuffle.
+ * The manifest as the API and Status page consume it: rows sorted largest first, matching the
+ * scan's ordering.
  *
  * @returns {Promise<{ reconciledAt: string|null, models: Array<Object> }>}
  */
@@ -150,18 +131,16 @@ export async function getModelManifest() {
 /**
  * Record that weights are now on disk.
  *
- * Idempotent on re-install: the original `installedAt` and `source` survive a
- * re-download, so a repair pass over a corrupt shard does not make a year-old
- * model look newly installed.
+ * Idempotent on re-install: the original `installedAt` and `source` survive a re-download, so a
+ * repair pass doesn't make an old model look new.
  *
  * @param {Object} row An inventory row from `lib/modelInventory.js`'s builders
  * @param {string} [row.source] How PortOS learned about it ('install' by default)
  * @returns {Promise<boolean>} Whether the manifest now holds the entry
  */
 export function recordModelInstall({ source = 'install', ...row } = {}) {
-  // Guards the whole contract, not just a typo: a row builder answers `id: null`
-  // for a backend or key it could not use, and this function promises never to
-  // fail the install it is describing.
+  // Guards the whole contract: a row builder answers `id: null` for a backend or key it could
+  // not use, and this function promises never to fail the install it describes.
   if (!row.id) return Promise.resolve(false);
   return mutateManifest(`Could not record model install ${row.id}`, (manifest) => {
     const previous = manifest.models[row.id];
@@ -202,12 +181,9 @@ export function recordModelUninstall({ backend, key } = {}) {
 /**
  * Which backends a scan actually observed, and may therefore be pruned against.
  *
- * A disabled or unreachable backend contributes zero rows, which is
- * indistinguishable from "you have no models there" — and acting on that reading
- * would delete a correct manifest. The scan's own `sourceErrors` / `disabledSources`
- * are the honest signal, so the mapping from those ids to backends lives here next
- * to the pruning that depends on it. A *residency* probe failure is deliberately
- * not disqualifying: it says nothing about what is on disk.
+ * A disabled or unreachable backend contributes zero rows, indistinguishable from "no models";
+ * the scan's `sourceErrors` / `disabledSources` are the honest signal. A *residency* probe
+ * failure is not disqualifying: it says nothing about what is on disk.
  *
  * @param {Object} [options]
  * @param {Array<string>} [options.sourceErrors]
@@ -233,12 +209,9 @@ export function trustedInventoryBackends({ sourceErrors = [], disabledSources = 
 }
 
 /**
- * Fold a real disk scan back into the manifest.
- *
- * Adopts rows PortOS never saw installed (weights pulled by another tool, or by a
- * PortOS old enough to predate this manifest) and drops rows whose files are gone
- * (deleted outside the app). Both directions are scoped to the backends the scan
- * could see — see `trustedInventoryBackends`.
+ * Fold a real disk scan back into the manifest: adopt rows PortOS never saw installed and drop
+ * rows whose files are gone, both scoped to the backends the scan could see (see
+ * `trustedInventoryBackends`).
  *
  * @param {Array<Object>} downloadedModels Rows from the system-resource scan
  * @param {Object} [options]
@@ -250,14 +223,10 @@ export function reconcileModelManifest(downloadedModels, { sourceErrors = [], di
   const trusted = trustedInventoryBackends({ sourceErrors, disabledSources });
   return mutateManifest('Could not reconcile model manifest', (manifest) => {
     const now = new Date().toISOString();
-    // A row the backend listed but whose on-disk folder could not be verified is
-    // not evidence of anything: it must neither be adopted as a tracked install
-    // NOR counted as absent when pruning. Those are two separate exclusions, and
-    // filtering such a row out of `scanned` alone only buys the first — it makes
-    // the row look like it was never reported at all, so the pruning loop reads a
-    // model the backend positively listed as deleted and drops its manifest entry.
-    // `unverified` is what keeps the second half: the id was seen, just not
-    // corroborated on disk, so the existing row stands unchanged.
+    // A row the backend listed but whose on-disk folder could not be verified is neither adopted
+    // as a tracked install NOR counted as absent when pruning. Filtering it out of `scanned` alone
+    // handles only the first (the pruning loop would read a listed model as deleted); `unverified`
+    // keeps the second: seen, not corroborated, so the existing row stands.
     const reported = (downloadedModels || []).filter((row) => trusted.has(row.backend));
     const scanned = new Map(reported.filter((row) => !row.inventoryUnknown).map((row) => [row.id, row]));
     const unverified = new Set(reported.filter((row) => row.inventoryUnknown).map((row) => row.id));
@@ -272,10 +241,9 @@ export function reconcileModelManifest(downloadedModels, { sourceErrors = [], di
     for (const [id, row] of scanned) {
       const previous = models[id];
       if (!previous) added += 1;
-      // A row PortOS installed itself keeps its real install date and provenance;
-      // one the scan found first is dated "when we first looked", which is what
-      // `source: 'scan'` tells the page so it does not claim a year-old model was
-      // installed this afternoon.
+      // A row PortOS installed keeps its real install date and provenance; one the scan found
+      // first is dated "when we first looked" (`source: 'scan'`) so the page doesn't claim an old
+      // model was installed this afternoon.
       models[id] = storedEntry(row, {
         installedAt: previous?.installedAt || now,
         source: previous?.source || 'scan',

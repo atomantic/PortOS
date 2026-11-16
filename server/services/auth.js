@@ -1,3 +1,11 @@
+/**
+ * Optional instance password, sessions and password-risk acknowledgement state.
+ *
+ * Storage: `passwordRiskRevision` is `file-primary` (`data/settings.json`) —
+ * machine-local, never federated. Password changes rotate it so offline browser
+ * acknowledgements expire; absence means the initial revision (no seed or
+ * migration), and generic settings updates cannot replace it.
+ */
 import { join } from 'path';
 import { EventEmitter } from 'events';
 import { randomBytes } from 'crypto';

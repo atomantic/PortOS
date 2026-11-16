@@ -24,6 +24,7 @@ import {
   describeStageCommand,
   downgradeFullPlan,
   focusedLocalPlan,
+  RELATED_SUITE_CAP,
   parseArgs,
   pregateWorkerEnv,
   stageSpawnEnv,
@@ -1773,6 +1774,37 @@ describe('focused local policy', () => {
     expect(local.server).toEqual({ mode: 'files', files: ['server/lib/a.test.js', 'scripts/tool.test.js'], sources: [] });
     expect(local.client.files).toContain('client/src/Card.test.jsx');
     expect(resolvePlanStages(local, { skip: { db: true, browser: true, build: true, smoke: true } }).every(stage => !['db', 'browser', 'build', 'smoke'].includes(stage.suite))).toBe(true);
+  });
+});
+
+describe('focused local policy: one-hop referencing suites', () => {
+  const plan = () => planWith({ browser: { files: [] }, server: { mode: 'related', files: [], sources: [] } });
+  const reader = files => path => files[path] ?? null;
+
+  it('selects a differently named suite that mocks or imports a changed source, but not a transitive one', () => {
+    const files = {
+      'server/routes/x.test.js': "vi.mock('../services/x.js', () => ({}));",
+      'server/routes/lazy.test.js': "const m = await import('../services/x');",
+      'server/routes/direct.test.js': "import { a } from '../services/x.js';",
+      'server/routes/twoHops.test.js': "import { r } from './routeUsingX.js';",
+      'server/routes/lookalike.test.js': "import { a } from '../other/x.js';",
+    };
+    const tracked = ['server/services/x.js', 'server/other/x.js', ...Object.keys(files)];
+    const local = focusedLocalPlan(plan(), tracked, ['server/services/x.js'], reader(files));
+    expect(local.server.files.sort()).toEqual(['server/routes/direct.test.js', 'server/routes/lazy.test.js', 'server/routes/x.test.js']);
+    expect(local.relatedOverflow).toEqual([]);
+  });
+
+  it('caps suites per changed source and reports the overflow as skipped', () => {
+    const files = Object.fromEntries(Array.from({ length: RELATED_SUITE_CAP + 3 }, (_, i) => [`server/routes/s${String(i).padStart(2, '0')}.test.js`, "vi.mock('../services/x.js');"]));
+    const tracked = ['server/services/x.js', ...Object.keys(files)];
+    const local = focusedLocalPlan(plan(), tracked, ['server/services/x.js'], reader(files));
+    expect(local.server.files).toHaveLength(RELATED_SUITE_CAP);
+    expect(local.relatedOverflow).toEqual([{ source: 'server/services/x.js', count: 3 }]);
+    const skipped = uncoveredSuites(local);
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]).toMatchObject({ suite: 'related tests' });
+    expect(skipped[0].reason).toContain('3 suite(s) referencing server/services/x.js');
   });
 });
 

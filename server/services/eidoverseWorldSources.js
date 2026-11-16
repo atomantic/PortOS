@@ -33,7 +33,7 @@ import { fetchMyCurrentSprintTickets } from './jira.js';
 import { buildEidoverseWorldSignals, projectedJiraTickets } from '../lib/eidoverseWorldSignals.js';
 
 // Preserve the historical collector import paths.
-export { eidoversePeerId, eidoverseHostId, projectedStorage, projectedJiraTickets } from '../lib/eidoverseWorldSignals.js';
+export { eidoverseHostId, projectedStorage, projectedJiraTickets } from '../lib/eidoverseWorldSignals.js';
 
 const abortError = (signal) => signal?.reason instanceof Error
   ? signal.reason

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { authoredShotPrompt, musicVideoFrameModelInput, musicVideoShotModelInput } from './musicVideoShotPrompt.js';
+import { musicVideoLinkedCastReferences } from './musicVideoConditioning.js';
 
 const project = {
   concept: {
@@ -457,5 +458,31 @@ describe('clip motion guards', () => {
     const reactive = musicVideoShotModelInput(null, music, { audioReactive: true });
     expect(ids(reactive)).toContain('audio-reactive-guard');
     expect(ids(reactive)).not.toContain('mouth-lock');
+  });
+});
+
+// A shared comparison sheet shows two people: the map must name both, and the bible must describe both (#16185).
+describe('reference map for a shared comparison sheet', () => {
+  const pair = [
+    { id: 'alpha', ingredientId: 'chr-alpha', kind: 'character', name: 'Example alpha', description: 'Red scarf' },
+    { id: 'beta', ingredientId: 'chr-beta', kind: 'character', name: 'Example beta', description: 'Green cap' },
+  ];
+  const castMedia = {
+    'chr-alpha': [{ kind: 'reference', role: 'sheet:comparison', mediaKey: 'pair.png', library: { comparedWith: 'chr-beta' } }],
+    'chr-beta': [{ kind: 'reference', role: 'sheet:comparison', mediaKey: 'pair.png' }],
+  };
+
+  it('names both people on their halves and keeps both in the production bible, whichever record is read first', () => {
+    for (const subjects of [pair, [...pair].reverse()]) {
+      const pairProject = { ...project, concept: { ...project.concept, subjects } };
+      const references = musicVideoLinkedCastReferences(pairProject, castMedia);
+      const input = musicVideoFrameModelInput(pairProject, scene, { references });
+      const text = input.promptAdditions.find((item) => item.id === 'reference-map').text;
+      expect(text).toContain('Reference image 1 is a comparison sheet of Example alpha on its left half and Example beta on its right half');
+      expect(text).toContain('show only the people this shot calls for');
+      const bible = input.promptAdditions.find((item) => item.id === 'creative-context').text;
+      expect(bible).toContain('Red scarf');
+      expect(bible).toContain('Green cap');
+    }
   });
 });

@@ -50,6 +50,9 @@ import {
   CODE_ANIMATION_RENDERERS,
   CODE_ANIMATION_RESOLUTIONS,
 } from './prompt.js';
+import { assertProvider, assertVisionRunUsedImages, resolveProviderAndModel, runPromptThroughProvider } from '../promptRunner.js';
+import { getProviderById } from '../providers.js';
+import { moveToNativeTrash } from '../../lib/nativeTrash.js';
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
 const resolveUploadImage = makePathResolver(() => PATHS.uploads, { extensions: IMAGE_EXTENSIONS });
@@ -312,7 +315,6 @@ export async function generateCodeAnimationBrief(input) {
   if (!input.universeId && !input.seedIdea && !concept && !title) {
     throw new ServerError('Pick a universe or describe a starting idea to write a brief from', { status: 400, code: 'BRIEF_INPUT_REQUIRED' });
   }
-  const { assertProvider, resolveProviderAndModel, runPromptThroughProvider } = await import('../promptRunner.js');
   const { buildCodeAnimationBriefPrompt, extractBriefIdea } = await import('./brief.js');
   // Resolving the provider and loading the universe are independent — only the
   // board depends on which universe came back. No image slots: the brief is
@@ -401,7 +403,7 @@ export async function deleteCodeAnimationJob(id, { moveToTrash } = {}) {
   await withBackupAssetPublication(async () => {
     files = await codeAnimationJobFiles(id);
     if (files.length) {
-      const trash = moveToTrash || (await import('../../lib/nativeTrash.js')).moveToNativeTrash;
+      const trash = moveToTrash || moveToNativeTrash;
       await trash(files).catch((error) => {
         throw new ServerError(`Could not move the animation files to the Trash (${error.code || error.message}). Nothing was deleted.`, {
           status: 500, code: 'CODE_ANIMATION_TRASH_FAILED',
@@ -475,8 +477,6 @@ const codeAnimationRunTimeout = (provider) => (provider?.type === 'api'
   : 0);
 
 async function runGeneration({ provider, model, effort, prompt, referencePaths }) {
-  const promptRunner = await import('../promptRunner.js');
-  const { runPromptThroughProvider } = promptRunner;
   const result = await runPromptThroughProvider({
     provider,
     model: model || undefined,
@@ -497,7 +497,7 @@ async function runGeneration({ provider, model, effort, prompt, referencePaths }
     absoluteTimeoutMs: 0,
   });
   // A fallback to a non-vision provider must not silently drop the references.
-  if (referencePaths.length && canAttachImages(provider)) promptRunner.assertVisionRunUsedImages(result, provider);
+  if (referencePaths.length && canAttachImages(provider)) assertVisionRunUsedImages(result, provider);
   const html = extractAnimationHtml(result.text);
   if (!html) throw new Error('The model response did not contain an HTML document');
   return { html, provider: result.provider?.id || provider.id, model: result.model || null, runId: result.runId || null };
@@ -509,7 +509,6 @@ async function runGeneration({ provider, model, effort, prompt, referencePaths }
  * request), then runs the model in the background and returns the job.
  */
 export async function startCodeAnimationGeneration(input) {
-  const { getProviderById } = await import('../providers.js');
   const provider = await getProviderById(input.providerId);
   if (!provider || provider.enabled === false) {
     throw new ServerError('Choose an enabled AI provider', { status: 400, code: 'PROVIDER_UNAVAILABLE' });

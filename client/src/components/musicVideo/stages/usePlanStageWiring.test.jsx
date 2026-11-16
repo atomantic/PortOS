@@ -20,10 +20,11 @@ import {
   openCreateForm,
   LocationProbe,
   installMusicVideoPageHooks,
+  savedSceneReplies,
 } from '../../../test/musicVideoPageMocks.jsx';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { listMusicVideoProjects, createMusicVideoProject, planMusicVideoProject, updateMusicVideoProject, analyzeMusicVideoProject, importMusicVideoTrackLyrics, separateMusicVideoVocals, alignMusicVideoLyrics, linkMusicVideoCastAndSetsToCatalog, approveMusicVideoCastAndSets } from '../../../services/apiMusicVideo.js';
+import { getMusicVideoProject, updateMusicVideoScene, listMusicVideoProjects, createMusicVideoProject, planMusicVideoProject, updateMusicVideoProject, analyzeMusicVideoProject, importMusicVideoTrackLyrics, separateMusicVideoVocals, alignMusicVideoLyrics, linkMusicVideoCastAndSetsToCatalog, approveMusicVideoCastAndSets } from '../../../services/apiMusicVideo.js';
 
 installMusicVideoPageHooks();
 
@@ -44,6 +45,23 @@ describe('MusicVideo autonomous shot planner (#1855)', () => {
 
     fireEvent.click(planBtn);
     await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith('mv-3', { seedPrompts: true }, { silent: true }));
+  });
+});
+
+// #16210: auto-arrange PATCHes every shot; each used to reload the whole project from its own broadcast.
+describe('MusicVideo auto-arrange', () => {
+  // Uniquely catches an arrangement whose per-shot writes reload the project instead of applying their replies.
+  it('saves each shot as this tab\'s own write and reads the project no more', async () => {
+    (await import('../../../services/socket.js')).default.id = 'tab-socket';
+    const board = { ...PROJECT_ANALYZED, updatedAt: '2026-01-01T00:00:00.000Z', scenes: [{ sceneId: 's1', order: 0, prompt: 'p', startSec: 0, endSec: 2 }, { sceneId: 's2', order: 1, prompt: 'q', startSec: 2, endSec: 3 }] };
+    updateMusicVideoScene.mockImplementation(savedSceneReplies(board));
+    await openProject(board, 'produce');
+    const loaded = getMusicVideoProject.mock.calls.length;
+    fireEvent.click(await screen.findByRole('button', { name: /Auto-arrange/ }));
+    await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledTimes(2));
+    for (const [, , , options] of updateMusicVideoScene.mock.calls) expect(options).toEqual({ silent: true, headers: { 'X-PortOS-Origin': 'tab-socket' } });
+    await settle();
+    expect(getMusicVideoProject.mock.calls.length).toBe(loaded);
   });
 });
 
@@ -275,7 +293,7 @@ describe('stage checklist and project options', () => {
     expect(within(drawer).getByRole('tab', { name: /^Project/ })).toHaveAttribute('aria-selected', 'true');
     expect(within(drawer).getByLabelText('Design and composition media')).toHaveValue('code-images-video');
     fireEvent.change(screen.getByLabelText('Design and composition media'), { target: { value: 'code-only' } });
-    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(project.id, { mediaMode: 'code-only' }, { silent: true }));
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(project.id, { mediaMode: 'code-only' }, expect.objectContaining({ edit: true })));
     fireEvent.click(screen.getByLabelText('Local video gen'));
     await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(project.id, expect.objectContaining({
       mode: 'autonomous', automation: expect.objectContaining({ tools: ['image:local', 'video:local'], guidance: 'g', budgetUsd: 5 }),

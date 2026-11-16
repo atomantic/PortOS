@@ -1,48 +1,19 @@
 /**
  * Retired-model-pin reconciliation (#7315).
  *
- * Retired-model-pin AUDIT over the shared membership rule (#7315) —
- * `providerCatalogListsModel(provider, modelId)` (is a stored pin still served? `modelPinIsOffered`
- * from `modelPinMembership.js` verbatim, plus the one case a retirement check answers differently from
- * a spawn-time one: nothing is pinned at all. The agy base-id and OpenCode namespace tolerances used
- * to be layered HERE above a stricter rule, which made the audit and the three spawn-time callers
- * disagree about the same pin; they moved down into the rule in #7327), `catalogOfferings` (the listed
- * ids with sentinels dropped, agy collapsed to base ids for a picker), `reconcileModelPins(pins,
- * providers)` — which pin descriptors name a model their provider no longer lists — and, since #7339,
- * the two helpers that make a pin's provider field singular-or-plural-agnostic: `pinProviderIds(pin)`
- * (THE coercion from `providerId` / `providerIds` to a trimmed id list, called by the audit's
- * descriptor builder too so the two layers cannot drift) and `pinProviderNames(pin, providers)` (how a
- * surface names those records — shared by the warnings panel and the notification card so they cannot
- * describe one pin differently). A reviewer pin names a BINARY several records front, so it is stale
- * only when EVERY named record stops listing the model. Every UNKNOWN case (no pin, empty catalog,
- * unresolved provider) answers "still listed": a false "your pin is gone" tells the user to change a
- * setting that works. Derived on read, never persisted — see `services/modelPinAudit.js`.
+ * A pin PortOS does not own cannot be healed by substitution (that would render
+ * under a different model's name and bury the vendor's "unknown model" error),
+ * so a stale pin can only be SURFACED. This leaf is the membership half: given
+ * a pin and the provider record(s) that serve it (several for a reviewer pin),
+ * is the id still listed by ANY of them?
  *
- * A vendor retires a model id, the install's catalog refresh picks that up, and
- * every stored pin still naming the retired id keeps sitting in settings —
- * rotting silently until a render or a scheduled run dies with a raw vendor
- * error naming a model the user no longer remembers choosing. That already
- * happened once to the ONE pin PortOS owns (`AGY_IMAGEGEN_DEFAULT_MODEL`, fixed
- * in #7314 by a render-time re-point gated on `modelIsShippedDefault`).
- *
- * A pin PortOS does NOT own cannot be healed the same way. Substituting a
- * user's pin would render something different under their chosen model's name
- * and bury the vendor's own "unknown model" error, so such a pin can only be
- * SURFACED. This leaf is the membership half of that: given a pin and the
- * provider record — or records, for a reviewer pin (#7339) — that serve it, is
- * the id still listed by ANY of them?
- *
- * The comparison is deliberately STATE-BASED ("is this pin in today's
- * catalog?") rather than a diff of one refresh against the previous one. The
- * diff form only ever notices retirements that happen after it ships, so every
- * pin that rotted before — including the ones this issue was filed about — stays
- * invisible until the vendor happens to retire something else. It is also
- * idempotent: clearing a pin makes its warning disappear immediately instead of
- * waiting for the next refresh, and nothing has to be persisted, migrated, or
- * kept from federating.
+ * The comparison is STATE-BASED ("is this pin in today's catalog?") rather than
+ * a diff of one refresh against the previous one: a diff never notices pins that
+ * rotted earlier, and the state form is idempotent, so clearing a pin removes
+ * its warning immediately with nothing persisted, migrated or federated.
  *
  * Pure leaf (nothing outside `server/lib`, no Node built-ins) so the audit
- * service, the route, and the suite can all share one membership rule.
+ * service, the route, and the suite share one membership rule.
  */
 
 import { modelPinIsOffered } from './modelPinMembership.js';
@@ -102,13 +73,6 @@ export function catalogOfferings(provider) {
  * more — nothing is pinned, the sentinel above, and no provider record could be
  * resolved to compare against.
  *
- * Those tolerances used to be layered HERE, above a stricter
- * `modelPinIsOffered`, which meant the audit and the three spawn-time callers
- * disagreed about the same pin: `cliProviderRun` rejected a bare agy base id
- * against a suffix-only catalog and silently fell back to the provider default
- * — for a model it would itself have spawned. They moved down into the rule
- * (#7327), so there is now one answer and the browser can mirror it.
- *
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
  * @param {string|null|undefined} modelId
  * @returns {boolean}
@@ -130,9 +94,7 @@ export function providerCatalogListsModel(provider, modelId) {
  * `reviewerProviderMatchers.js` for which records, and why collapsing them to
  * one would produce a false retirement for a model another still lists.
  *
- * Exported because the audit's own descriptor builder normalizes with it too:
- * one definition, applied at both layers, rather than two spellings that drift
- * on whitespace the first time somebody touches one of them.
+ * Exported so the audit's descriptor builder normalizes with the same definition.
  *
  * @param {{providerId?: unknown, providerIds?: unknown}} pin
  * @returns {string[]}

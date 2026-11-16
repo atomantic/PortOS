@@ -18,6 +18,12 @@
  * and applies `sanitizeTemplate` on read, so reads here return `data` verbatim
  * (the columns are a queryable mirror, never read back). The facade serializes
  * the run RMWs, so the run ops here are single atomic statements/transactions.
+ *
+ * Storage: `db-primary` — `universes` federate via the `dataSync` snapshot/push model
+ * (LWW on `updatedAt`, no `sync_sequence`); the store's mutation epoch feeds the dataSync
+ * fingerprint because DB writes no longer touch `data/universes/`. `universe_runs` is
+ * never federated. The built-in Reality universe is seeded by a migration gated on the id's
+ * absence (tombstone included), not `data.reference/`, so a user delete is never undone.
  */
 
 import { query, withTransaction } from '../../lib/db.js';

@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { X } from 'lucide-react';
-import { TAKE_SLOT } from '../../lib/musicVideoTakes.js';
+import { Loader2, X } from 'lucide-react';
+import { takeControl, TAKE_SLOT } from '../../lib/musicVideoTakes.js';
 
 const BTN = 'inline-flex min-h-[44px] items-center gap-1 rounded px-2 py-1 text-xs disabled:opacity-50 pointer-fine:sm:min-h-0';
 
@@ -12,15 +12,21 @@ export const unusedTakeCount = (scene) => (Array.isArray(scene?.takes) ? scene.t
  * Finalize a shot's takes: one tap, then a confirm, rejects every take that is
  * not in use from this shot. That is not a bad mark: the files stay, other
  * shots can still swap them in, and Use or Restore brings any back.
+ * `pending` (useMusicVideoTakes): while its request waits on the reply the button says so and stays disabled.
  */
-export default function SceneRejectUnused({ scene, busy = false, onReject }) {
+export default function SceneRejectUnused({ scene, busy = false, pending = null, onReject }) {
   const [confirming, setConfirming] = useState(false);
   const count = unusedTakeCount(scene);
+  const saving = Boolean(pending?.has(takeControl.rejectUnused(scene)));
   if (!count || !onReject) return null;
   const takes = `${count} unused take${count === 1 ? '' : 's'}`;
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
-      {confirming ? (
+      {saving ? (
+        <button type="button" disabled aria-busy="true" className={`${BTN} border border-port-border`}>
+          <Loader2 size={12} className="animate-spin" aria-hidden="true" /> Rejecting {takes}…
+        </button>
+      ) : confirming ? (
         <>
           <span className="text-port-text-muted">Reject {takes} from this shot? Other shots can still use them.</span>
           <button type="button" disabled={busy} onClick={() => { setConfirming(false); onReject(scene); }}

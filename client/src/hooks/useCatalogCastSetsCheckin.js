@@ -2,13 +2,19 @@
  * Reads live catalog-only Cast & Sets items, blockers and approval basis.
  *
  * Refreshes on catalog changes/reconnect and keeps whole-project reference pickers in sync without
- * persisting copied images. Use when: Catalog-only Look check-in.
+ * persisting copied images. A project edit re-reads only when it changes an input of the check
+ * (musicVideoCatalogCheckinInputs), once a burst of such edits settles, so a take decision, Done or a
+ * timing move sends no read (#16306). Use when: Catalog-only Look check-in.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import socket from '../services/socket.js';
 import { getMusicVideoCastAndSets, repairMusicVideoShotReference } from '../services/apiMusicVideo.js';
+import { musicVideoCatalogCheckinInputs } from '../lib/musicVideoCatalogCheckinInputs.js';
 import { useVisibilityEvent } from './useVisibilityEvent.js';
+
+// A burst of edits (typing a prompt that names a subject, several reference picks) makes one read.
+export const CHECKIN_INPUT_SETTLE_MS = 400;
 
 /** An approval always describes the currently resolved catalog, never a cached sheet. */
 export default function useCatalogCastSetsCheckin(project, onResolved, onRepair) {
@@ -21,7 +27,18 @@ export default function useCatalogCastSetsCheckin(project, onResolved, onRepair)
   const repairPending = useRef(false);
   const enabled = project.castAndSets?.source === 'catalog';
   const ids = JSON.stringify([...new Set((project.concept?.subjects || []).map((s) => s.ingredientId).filter(Boolean))].sort());
-  const key = JSON.stringify([project.id, project.updatedAt, project.castAndSets?.revision, project.castAndSets?.status, project.concept?.subjects, refresh]);
+  // Not `updatedAt`: every applied edit reply advances it, and most edits cannot change this check.
+  const inputs = useMemo(() => (enabled ? musicVideoCatalogCheckinInputs(project) : ''), [enabled, project]);
+  // An explicit refresh (Retry, a repair, a catalog event, reconnect, tab return) reads the current inputs at
+  // once and absorbs a pending input change, so a repair whose picks land with its refresh reads once.
+  const [settled, setSettled] = useState({ inputs, refresh });
+  useEffect(() => {
+    if (settled.refresh !== refresh) { setSettled({ inputs, refresh }); return undefined; }
+    if (inputs === settled.inputs) return undefined;
+    const timer = setTimeout(() => setSettled({ inputs, refresh }), CHECKIN_INPUT_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [inputs, refresh, settled]);
+  const key = JSON.stringify([project.id, settled.inputs, settled.refresh]);
   useVisibilityEvent((state) => { if (enabled && state === 'visible') setRefresh((n) => n + 1); });
   useEffect(() => {
     if (!enabled) return undefined;

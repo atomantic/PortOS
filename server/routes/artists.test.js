@@ -1,143 +1,91 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
-
-vi.mock('../services/artists/index.js', async () => ({
-  SUBMISSION_FIELD_SPECS: (await vi.importActual('../services/artists/logic.js')).SUBMISSION_FIELD_SPECS,
-  buildSubmissionProfile: (await vi.importActual('../services/artists/logic.js')).buildSubmissionProfile,
-  NAME_MAX: 120,
-  GENRE_MAX: 120,
-  BIO_MAX: 4000,
-  MUSICAL_STYLE_MAX: 4000,
-  PHYSICAL_DESCRIPTION_MAX: 2000,
-  PORTRAIT_STYLE_MAX: 2000,
-  PORTRAIT_IMAGE_URL_MAX: 1000,
-  ARTIST_ID_RE: /^artist-/,
-  listArtists: vi.fn(async () => [{ id: 'artist-1', name: 'Nova' }]),
-  getArtist: vi.fn(),
-  createArtist: vi.fn(async (input) => ({ id: 'artist-new', ...input })),
-  updateArtist: vi.fn(async (id, patch) => ({ id, ...patch })),
-  deleteArtist: vi.fn(async (id) => ({ id })),
-}));
-
-import * as artists from '../services/artists/index.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import artistsRoutes from './artists.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-function makeApp() {
-  const app = express();
-  app.use(express.json());
-  app.use('/api/artists', artistsRoutes);
-  app.use(errorMiddleware);
-  return app;
-}
+// Real artists service (file backend under the test runner) over a temp data root.
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-artists-routes-') }));
+afterAll(cleanupTempDataRoots);
+
+const { default: artistsRoutes } = await import('./artists.js');
+
+const app = express();
+app.use(express.json());
+app.use('/api/artists', artistsRoutes);
+app.use(errorMiddleware);
+
+const api = (method, path = '', body) => request(app)[method](`/api/artists${path}`).send(body);
 
 describe('artists routes', () => {
-  let app;
-  beforeEach(() => {
-    app = makeApp();
-    vi.clearAllMocks();
-  });
+  it('creates an artist that reads back by id and in the list, then patches and soft-deletes it', async () => {
+    const created = await api('post', '', { name: 'Nova', genre: 'indie folk' });
+    expect(created.status).toBe(201);
+    const { id } = created.body;
 
-  it('GET / returns the artist list', async () => {
-    const r = await request(app).get('/api/artists');
-    expect(r.status).toBe(200);
-    expect(r.body).toEqual([{ id: 'artist-1', name: 'Nova' }]);
+    expect((await api('get', `/${id}`)).body).toMatchObject({ id, name: 'Nova', genre: 'indie folk' });
+    expect((await api('get')).body.map((a) => a.id)).toContain(id);
+
+    const patched = await api('patch', `/${id}`, { name: 'Nova Star' });
+    expect(patched.status).toBe(200);
+    expect((await api('get', `/${id}`)).body).toMatchObject({ name: 'Nova Star', genre: 'indie folk' });
+
+    expect((await api('delete', `/${id}`)).status).toBe(200);
+    expect((await api('get', `/${id}`)).status).toBe(404);
+    expect((await api('get')).body.map((a) => a.id)).not.toContain(id);
   });
 
   // Regression guard: every client caller (ArtistsManager, ArtistPicker) calls
   // listArtists() with no query params. If this ever returns an envelope instead
   // of a bare array, those lists silently render empty.
-  it('GET / without pagination params returns the unbounded bare array', async () => {
-    artists.listArtists.mockResolvedValueOnce(
-      Array.from({ length: 120 }, (_, i) => ({ id: `artist-${i}`, name: `N${i}` }))
-    );
-    const r = await request(app).get('/api/artists');
-    expect(r.status).toBe(200);
-    expect(Array.isArray(r.body)).toBe(true);
-    expect(r.body).toHaveLength(120);
+  it('lists a bare unbounded array by default and a bounded envelope when pagination is requested', async () => {
+    for (let i = 0; i < 4; i++) await api('post', '', { name: `Paged ${i}` });
+
+    const bare = await api('get');
+    expect(Array.isArray(bare.body)).toBe(true);
+    const total = bare.body.length;
+    expect(total).toBeGreaterThanOrEqual(4);
+
+    const page = await api('get', '?limit=2&offset=1');
+    expect(page.status).toBe(200);
+    expect(page.body).toMatchObject({ total, limit: 2, offset: 1 });
+    expect(page.body.items.map((a) => a.id)).toEqual(bare.body.slice(1, 3).map((a) => a.id));
   });
 
-  it('GET / returns a bounded envelope when pagination is requested', async () => {
-    artists.listArtists.mockResolvedValueOnce(
-      Array.from({ length: 5 }, (_, i) => ({ id: `artist-${i}`, name: `N${i}` }))
-    );
-    const r = await request(app).get('/api/artists?limit=2&offset=1');
-    expect(r.status).toBe(200);
-    expect(r.body.items).toHaveLength(2);
-    expect(r.body.items[0].id).toBe('artist-1');
-    expect(r.body.total).toBe(5);
-    expect(r.body.limit).toBe(2);
-    expect(r.body.offset).toBe(1);
-  });
-
-  it('POST / creates an artist', async () => {
-    const r = await request(app).post('/api/artists').send({ name: 'Nova', genre: 'indie folk' });
-    expect(r.status).toBe(201);
-    expect(artists.createArtist).toHaveBeenCalledWith(expect.objectContaining({ name: 'Nova', genre: 'indie folk' }));
-    expect(r.body.id).toBe('artist-new');
-  });
-
-  it('POST / rejects a missing name', async () => {
-    const r = await request(app).post('/api/artists').send({ genre: 'no name' });
-    expect(r.status).toBe(400);
-    expect(artists.createArtist).not.toHaveBeenCalled();
-  });
-
-  it('GET /:id returns 404 when absent', async () => {
-    artists.getArtist.mockResolvedValueOnce(null);
-    const r = await request(app).get('/api/artists/artist-missing');
-    expect(r.status).toBe(404);
-  });
-
-  it('GET /:id returns the artist when found', async () => {
-    artists.getArtist.mockResolvedValueOnce({ id: 'artist-1', name: 'Nova' });
-    const r = await request(app).get('/api/artists/artist-1');
-    expect(r.status).toBe(200);
-    expect(r.body.name).toBe('Nova');
-  });
-
-  it('PATCH /:id rejects an empty patch', async () => {
-    const r = await request(app).patch('/api/artists/artist-1').send({});
-    expect(r.status).toBe(400);
-    expect(artists.updateArtist).not.toHaveBeenCalled();
-  });
-
-  it('PATCH /:id updates an artist', async () => {
-    const r = await request(app).patch('/api/artists/artist-1').send({ name: 'Nova Star' });
-    expect(r.status).toBe(200);
-    expect(artists.updateArtist).toHaveBeenCalledWith('artist-1', { name: 'Nova Star' });
-  });
-
-  it('PATCH /:id saves press & submission fields and refuses an over-long bio', async () => {
-    const ok = await request(app).patch('/api/artists/artist-1').send({ bioShort: '  Makes songs.  ', sunoUrl: 'https://suno.com/@nova' });
+  it('saves press and submission fields (trimmed) and refuses an over-long one without persisting it', async () => {
+    const { body: { id } } = await api('post', '', { name: 'Press Kit' });
+    const ok = await api('patch', `/${id}`, { bioShort: '  Makes songs.  ', sunoUrl: 'https://suno.com/@nova' });
     expect(ok.status).toBe(200);
-    expect(artists.updateArtist).toHaveBeenCalledWith('artist-1', { bioShort: 'Makes songs.', sunoUrl: 'https://suno.com/@nova' });
-    const tooLong = await request(app).patch('/api/artists/artist-1').send({ bioOneLine: 'x'.repeat(301) });
-    expect(tooLong.status).toBe(400);
-    expect(artists.updateArtist).toHaveBeenCalledTimes(1);
+    expect((await api('get', `/${id}`)).body).toMatchObject({ bioShort: 'Makes songs.', sunoUrl: 'https://suno.com/@nova' });
+
+    expect((await api('patch', `/${id}`, { bioOneLine: 'x'.repeat(301) })).status).toBe(400);
+    expect((await api('get', `/${id}`)).body.bioOneLine).toBe('');
   });
 
-  it('GET /:id/submission-profile returns the curated profile with its gaps', async () => {
-    artists.getArtist.mockResolvedValueOnce({ id: 'artist-1', name: 'Nova', bioShort: 'Makes songs.', spotifyUrl: 'https://open.spotify.com/artist/x', updatedAt: '2026-10-28T00:00:00.000Z' });
-    const r = await request(app).get('/api/artists/artist-1/submission-profile');
+  it('builds the submission profile from the stored artist, listing what is still missing', async () => {
+    const { body: { id } } = await api('post', '', { name: 'Nova', bioShort: 'Makes songs.', spotifyUrl: 'https://open.spotify.com/artist/x' });
+    const r = await api('get', `/${id}/submission-profile`);
     expect(r.status).toBe(200);
     expect(r.body.profile).toMatchObject({ name: 'Nova', bioShort: 'Makes songs.', creditName: '' });
     expect(r.body.missing).toContain('Name for credits');
     expect(r.body.missing).not.toContain('Links');
     expect(r.body.markdown).toContain('- Spotify: https://open.spotify.com/artist/x');
     expect(r.body.markdown).toContain('- Short bio: Makes songs.');
+    expect((await api('get', '/artist-missing/submission-profile')).status).toBe(404);
   });
 
-  it('GET /:id/submission-profile returns 404 when absent', async () => {
-    artists.getArtist.mockResolvedValueOnce(null);
-    const r = await request(app).get('/api/artists/artist-missing/submission-profile');
-    expect(r.status).toBe(404);
+  it('rejects a missing name and an empty patch without persisting anything', async () => {
+    const before = (await api('get')).body.length;
+    expect((await api('post', '', { genre: 'no name' })).status).toBe(400);
+    expect((await api('get')).body).toHaveLength(before);
+
+    const { body } = await api('post', '', { name: 'Stable' });
+    expect((await api('patch', `/${body.id}`, {})).status).toBe(400);
+    expect((await api('get', `/${body.id}`)).body.name).toBe('Stable');
   });
 
-  it('DELETE /:id soft-deletes an artist', async () => {
-    const r = await request(app).delete('/api/artists/artist-1');
-    expect(r.status).toBe(200);
-    expect(r.body).toEqual({ id: 'artist-1' });
+  it('returns 404 for an unknown artist', async () => {
+    expect((await api('get', '/artist-missing')).status).toBe(404);
   });
 });

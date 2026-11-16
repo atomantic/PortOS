@@ -310,3 +310,15 @@ it('marks completed scene cards without hiding attention or the selected shot', 
   rerender(<MemoryRouter><BoardStage board={board([{ ...done, shotSheet: { checked: false } }, scene(2)])} /></MemoryRouter>);
   expect(screen.getByRole('button', { name: 'Open Shot 1 · Part 1' })).not.toHaveClass('border-port-success');
 });
+
+describe('BoardStage board panels', () => {
+  it('keeps one one-take panel and distinct sibling panel keys when the board re-renders', () => {
+    const duplicateKeys = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const b = board([scene(1), scene(2)], { approveFinal: vi.fn() });
+    const { rerender } = renderBoard(b);
+    for (let pass = 0; pass < 3; pass += 1) rerender(<MemoryRouter><BoardStage board={{ ...b }} /><Search /></MemoryRouter>);
+    expect(screen.getAllByTestId('sequence-take-panel')).toHaveLength(1);
+    expect(duplicateKeys.mock.calls.filter(([message]) => String(message).includes('same key'))).toHaveLength(0);
+    duplicateKeys.mockRestore();
+  });
+});

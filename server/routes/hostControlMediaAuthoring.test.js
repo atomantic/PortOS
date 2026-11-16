@@ -1,29 +1,18 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER, SESSION_TTL_MS } from '../../lib/portosAuthCore.js';
+import { expectAuthorizedWorkflows, expectRemoteRefusal } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-media-authority-') }));
 afterAll(cleanupTempDataRoots);
-afterEach(() => vi.restoreAllMocks());
-vi.mock('../services/instanceIdentity.js', () => ({
-  loadData: vi.fn(async () => ({ peers: [{
-    id: 'example-peer', instanceId: 'example-instance', enabled: true, syncSecret: 'a'.repeat(32),
-  }] })),
-}));
-
-// Mount the production routers behind the real gates. Service boundaries are
-// doubled so authoring, persistence, background jobs and processes cannot run.
+// Authoring writes are gated by the default-deny policy (#16018); the principal
+// matrix lives in services/authGate.test.js. This suite keeps one authorized
+// workflow per router plus the per-request splits. Service boundaries are doubled.
 const auth = vi.hoisted(() => ({ enabled: false }));
 vi.mock('../services/auth.js', async (importOriginal) => ({
   ...await importOriginal(),
   isAuthEnabled: vi.fn(async () => auth.enabled),
-  verifyPassword: vi.fn(async () => true),
 }));
 vi.mock('../services/settings.js', () => ({
   settingsEvents: new EventEmitter(),
@@ -144,7 +133,6 @@ vi.mock('../services/musicVideo/castAndSetsService.js', () => ({
   applyCastAndSetsFeedback: vi.fn(async () => ({ status: 'running' })),
 }));
 
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import codeAnimationRoutes from './codeAnimation.js';
 import musicRoutes from './music.js';
 import tracksRoutes from './tracks.js';
@@ -152,12 +140,11 @@ import musicVideoRoutes from './musicVideo.js';
 import { buildCodeAnimationRequest, generateCodeAnimationBrief, startCodeAnimationGeneration } from '../services/codeAnimation/index.js';
 import { startProductionStageRun } from '../services/codeAnimation/stages.js';
 import { describeMusic, writeLyrics } from '../services/musicDesigner.js';
-import { drawWaveSketch, drawWaveSketchForTrack } from '../services/musicWaveform.js';
+import { drawWaveSketchForTrack } from '../services/musicWaveform.js';
 import { writeMusicCode } from '../services/musicCode.js';
 import { startCodeAnimationSoundtrack } from '../services/codeAnimation/soundtrack.js';
 import { startAutonomousVideo, resumeAutonomousVideo } from '../services/musicVideo/autonomousService.js';
 
-import { createSession, revokeSessionById } from '../services/auth.js';
 import { generateSongRevision, resolveSongRevisionScenes } from '../services/musicVideo/songRevision.js';
 import { reviseProductionFromFeedback } from '../services/musicVideo/productionReviewService.js';
 import { planProject } from '../services/musicVideo/planner.js';
@@ -169,262 +156,62 @@ import { startAutoReview, resumeAutoReview } from '../services/musicVideo/autoRe
 import { startProduction, resumeProduction } from '../services/musicVideo/productionService.js';
 import { startCastAndSets, regenerateCastAndSets, editCastAndSetsDirection, resumeCastAndSets, applyCastAndSetsFeedback } from '../services/musicVideo/castAndSetsService.js';
 
-let ownerSession;
 const id = '00000000-0000-4000-8000-000000000001';
 const picker = { providerId: 'example-provider', model: 'example-model' };
-const authoring = [
-  ['/api/code-animation/brief', { seedIdea: 'Example scene', ...picker }, generateCodeAnimationBrief, 200],
-  ['/api/code-animation/generate', { concept: 'Example scene', ...picker }, startCodeAnimationGeneration, 202],
-  [`/api/code-animation/projects/${id}/stage-runs`, {}, startProductionStageRun, 202],
-  [`/api/code-animation/${id}/soundtrack`, { prompt: 'Example score', engine: 'example-engine' }, startCodeAnimationSoundtrack, 202],
-  ['/api/music/describe', { concept: 'Example song', ...picker }, describeMusic, 200],
-  ['/api/music/lyrics', { description: 'Example song', ...picker }, writeLyrics, 200],
-  ['/api/music/waveform', { description: 'Example song', ...picker }, drawWaveSketch, 200],
-  ['/api/music/code', { description: 'Example song', ...picker }, writeMusicCode, 200],
-  [`/api/tracks/${id}/waveform/draw`, { description: 'Example song', ...picker }, drawWaveSketchForTrack, 200],
-  ['/api/music-video/autonomous', { prompt: 'Example video', ...picker }, startAutonomousVideo, 202],
-  [`/api/music-video/${id}/autonomous/resume`, {}, resumeAutonomousVideo, 200],
+const mounts = [
+  ['/api/code-animation', codeAnimationRoutes],
+  ['/api/music', musicRoutes],
+  ['/api/tracks', tracksRoutes],
+  ['/api/music-video', musicVideoRoutes],
 ];
-const musicVideoAuthoring = [
-  [`/api/music-video/${id}/song-revision/scenes`, { revisionId: 'example-revision', action: 'replan', ...picker }, resolveSongRevisionScenes, 200, 'post'],
-  // Drives the signed-in browser to submit a Suno song (#13055).
-  [`/api/music-video/${id}/song-revision/generate`, { revisionId: 'example-revision' }, generateSongRevision, 202, 'post'],
-  [`/api/music-video/${id}/production-review/revise`, { stage: 'storyboard', ...picker }, reviseProductionFromFeedback, 200, 'post'],
-  [`/api/music-video/${id}/plan`, { ...picker }, planProject, 200, 'post'],
-  [`/api/music-video/${id}/treatment/compile`, { baseRevision: 0, ...picker }, compileTreatment, 200, 'post'],
-  [`/api/music-video/${id}/publish-kit/copy`, { notes: 'Example copy', ...picker }, draftPublishKitCopy, 200, 'post'],
-  [`/api/music-video/${id}/cast-and-sets`, { ...picker }, startCastAndSets, 202, 'post'],
-  [`/api/music-video/${id}/cast-and-sets/regenerate`, { ...picker }, regenerateCastAndSets, 202, 'post'],
-  [`/api/music-video/${id}/cast-and-sets/direction`, { protagonist: { movement: 'Example movement' } }, editCastAndSetsDirection, 202, 'patch'],
-  [`/api/music-video/${id}/cast-and-sets/resume`, { ...picker }, resumeCastAndSets, 202, 'post'],
-  [`/api/music-video/${id}/cast-and-sets/feedback`, { text: 'Fewer light sources', ...picker }, applyCastAndSetsFeedback, 202, 'post'],
-  [`/api/music-video/${id}/code/generate`, { ...picker }, generateMusicVideoCode, 200, 'post'],
-  [`/api/music-video/${id}/code/sections/example-section/regenerate`, { ...picker }, regenerateMusicVideoCodeSection, 200, 'post'],
-  [`/api/music-video/${id}/composition/document/generate`, { ...picker }, generateMixedMediaDocument, 201, 'post'],
-  [`/api/music-video/${id}/composition/document/events/revise`, { expectedDraft: 'music-video/example/composition/example-draft', ...picker }, reviseMixedMediaEvents, 201, 'post'],
-  [`/api/music-video/${id}/composition/document/sections/example-section/regenerate`, { expectedDraft: 'music-video/example/composition/example-draft', ...picker }, regenerateMixedMediaSection, 201, 'post'],
-  [`/api/music-video/${id}/production-runs`, { pool: [], limits: { maxGenerations: 2, maxReviewAttempts: 1 }, ...picker }, startProduction, 201, 'post'],
-  [`/api/music-video/${id}/production-runs/example-run/resume`, {}, resumeProduction, 200, 'post'],
-  [`/api/music-video/${id}/auto-reviews`, { startSec: 0, endSec: 2, limits: { maxAttempts: 1, maxGenerations: 2 }, ...picker }, startAutoReview, 201, 'post'],
-  [`/api/music-video/${id}/auto-reviews/example-run/resume`, {}, resumeAutoReview, 200, 'post'],
-];
-const allAuthoring = [...authoring, ...musicVideoAuthoring];
-const appFor = (address = '192.0.2.10') => {
-  const app = express();
-  app.use((req, _res, next) => {
-    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
-    next();
-  });
-  app.use(authGate, hostControlRouteGate, express.json());
-  app.use('/api/code-animation', codeAnimationRoutes);
-  app.use('/api/music', musicRoutes);
-  app.use('/api/tracks', tracksRoutes);
-  app.use('/api/music-video', musicVideoRoutes);
-  app.use(errorMiddleware);
-  return app;
-};
-const call = (app, [path, body, , , method = 'post'], headers = {}) => {
-  const pending = request(app)[method](path);
-  for (const [name, value] of Object.entries(headers)) pending.set(name, value);
-  return pending.send(body);
-};
-const expectNoAuthoring = () => {
-  for (const [, , service] of allAuthoring) expect(service).not.toHaveBeenCalled();
-};
 
-beforeEach(async () => {
+beforeEach(() => {
   vi.clearAllMocks();
   auth.enabled = false;
-  ownerSession = await createSession();
 });
 
-describe('media authoring operator authority (#9512, #9869)', () => {
-  it('refuses every direct and deferred authoring entry point before any service effects', async () => {
-    for (const operation of allAuthoring) {
-      for (const [address, headers] of [
-        ['192.0.2.10', {}],
-        ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
-        ['192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }],
-      ]) {
-        const response = await call(appFor(address), operation, headers);
-        expect([response.status, response.body.code], operation[0]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
-    }
-    expectNoAuthoring();
+describe('media authoring behind the default-deny gate (#9512, #9869, #16114)', () => {
+  it('still runs one authoring entry point per router for a local operator and a delegated agent session', async () => {
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: [
+      ['post', '/api/code-animation/brief', { seedIdea: 'Example scene', ...picker }, generateCodeAnimationBrief, 200],
+      ['post', '/api/music/lyrics', { description: 'Example song', ...picker }, writeLyrics, 200],
+      ['post', `/api/tracks/${id}/waveform/draw`, { description: 'Example song', ...picker }, drawWaveSketchForTrack, 200],
+      ['post', `/api/music-video/${id}/plan`, { ...picker }, planProject, 200],
+    ] });
+    // The provider/model selection reaches the service unchanged.
+    expect(writeLyrics.mock.lastCall.find(value => value && typeof value === 'object')).toEqual(expect.objectContaining(picker));
   });
 
-  it('requires authentication with a password and denies legacy Basic authoring', async () => {
-    auth.enabled = true;
-    for (const operation of allAuthoring) {
-      for (const [headers, status, code] of [
-        [{}, 401, 'AUTH_REQUIRED'],
-        [{ Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403, 'HOST_CONTROL_FORBIDDEN'],
-      ]) {
-        const response = await call(appFor(), operation, headers);
-        expect([response.status, response.body.code], operation[0]).toEqual([status, code]);
-      }
-    }
-    expectNoAuthoring();
-  });
-
-  it('retains local and operator authoring without changing provider/model selections', async () => {
-    const agentSession = await createSession({ label: 'agent' });
-    for (const [enabled, address, headers] of [
-      [false, '127.0.0.1', {}],
-      [false, '127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '::ffff:127.0.0.1' }],
-      [true, '192.0.2.10', { Authorization: `Bearer ${ownerSession.token}` }],
-      [true, '192.0.2.10', { Cookie: `portos_auth=${ownerSession.token}` }],
-      [true, '192.0.2.10', { Authorization: `Bearer ${agentSession.token}` }],
-      [true, '192.0.2.10', { Cookie: `portos_auth=${agentSession.token}` }],
-    ]) {
-      auth.enabled = enabled;
-      for (const operation of allAuthoring) {
-        const response = await call(appFor(address), operation, headers);
-        expect(response.status, `${operation[0]}: ${JSON.stringify(response.body)}`).toBe(operation[3]);
-      }
-    }
-    for (const [, body, service] of allAuthoring) {
-      expect(service).toHaveBeenCalledTimes(6);
-      if (body.providerId) {
-        const args = service.mock.lastCall;
-        const options = args.find(value => value && typeof value === 'object' && (value.providerId || value.reviewer));
-        expect(options.reviewer || options).toEqual(expect.objectContaining(picker));
-      }
+  it('refuses a remote caller before authoring and keeps the pinned or default reviewer choice for an agent', async () => {
+    await expectRemoteRefusal(mounts, ['post', `/api/music-video/${id}/cast-and-sets`, { ...picker }, startCastAndSets]);
+    for (const provider of [{ providerId: 'example-tui', model: 'example-model' }, {}]) {
+      await expectAuthorizedWorkflows({ auth, mounts, workflows: [
+        ['post', `/api/music-video/${id}/auto-reviews`, { startSec: 0, endSec: 2, limits: { maxAttempts: 1, maxGenerations: 2 }, ...provider }, startAutoReview, 201],
+      ] });
+      const options = startAutoReview.mock.lastCall.find(value => value && typeof value === 'object' && (value.providerId || value.reviewer));
+      const choice = options?.reviewer || options;
+      expect(choice?.providerId).toBe(provider.providerId);
+      expect(choice?.model).toBe(provider.model);
     }
   });
 
-  it('gates the code-animation prompt with or without a reference video, and studies it for host control (#13055)', async () => {
-    const withVideo = ['/api/code-animation/prompt', { concept: 'Example scene', referenceVideo: { filename: 'example.mp4' } }];
-    const withoutVideo = ['/api/code-animation/prompt', { concept: 'Example scene', referenceVideo: null }];
-    for (const operation of [withVideo, withoutVideo]) {
-      for (const [address, headers] of [
-        ['192.0.2.10', {}],
-        ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
-      ]) {
-        const refused = await call(appFor(address), operation, headers);
-        expect([refused.status, refused.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
-    }
-    expect(buildCodeAnimationRequest).not.toHaveBeenCalled();
-
-    expect((await call(appFor('127.0.0.1'), withoutVideo)).status).toBe(200);
-    const agentSession = await createSession({ label: 'agent' });
-    for (const [enabled, address, headers] of [
-      [false, '127.0.0.1', {}],
-      [true, '192.0.2.10', { Authorization: `Bearer ${ownerSession.token}` }],
-      [true, '192.0.2.10', { Authorization: `Bearer ${agentSession.token}` }],
-    ]) {
-      auth.enabled = enabled;
-      expect((await call(appFor(address), withVideo, headers)).status).toBe(200);
-    }
-    expect(buildCodeAnimationRequest).toHaveBeenCalledTimes(4);
+  it('gates the code-animation prompt with or without a reference video (#13055)', async () => {
+    const withVideo = { concept: 'Example scene', referenceVideo: { filename: 'example.mp4' } };
+    await expectRemoteRefusal(mounts, ['post', '/api/code-animation/prompt', withVideo, buildCodeAnimationRequest]);
+    await expectRemoteRefusal(mounts, ['post', '/api/code-animation/prompt', { concept: 'Example scene', referenceVideo: null }, buildCodeAnimationRequest]);
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: [
+      ['post', '/api/code-animation/prompt', withVideo, buildCodeAnimationRequest, 200],
+    ] });
     expect(buildCodeAnimationRequest).toHaveBeenLastCalledWith(expect.objectContaining({ referenceVideo: expect.objectContaining({ filename: 'example.mp4' }) }));
   });
 
-  it('resolves song-revision remove and dismiss for host control without authoring, and refuses them remotely', async () => {
-    for (const action of ['remove', 'dismiss']) {
-      const body = { revisionId: 'example-revision', action };
-      const refused = await request(appFor()).post(`/api/music-video/${id}/song-revision/scenes`).send(body);
-      expect([refused.status, refused.body.code], action).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      expect(resolveSongRevisionScenes).not.toHaveBeenCalled();
-    }
-    for (const action of ['remove', 'dismiss']) {
-      const body = { revisionId: 'example-revision', action };
-      const response = await request(appFor('127.0.0.1')).post(`/api/music-video/${id}/song-revision/scenes`).send(body);
-      expect(response.status).toBe(200);
-      expect(resolveSongRevisionScenes).toHaveBeenLastCalledWith(id, body);
-    }
+  it('resolves song-revision remove and dismiss locally without authoring, refusing them remotely', async () => {
+    const body = { revisionId: 'example-revision', action: 'remove' };
+    await expectRemoteRefusal(mounts, ['post', `/api/music-video/${id}/song-revision/scenes`, body, resolveSongRevisionScenes]);
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: [
+      ['post', `/api/music-video/${id}/song-revision/scenes`, body, resolveSongRevisionScenes, 200],
+    ] });
+    expect(resolveSongRevisionScenes).toHaveBeenLastCalledWith(id, body);
     expect(reviseProductionFromFeedback).not.toHaveBeenCalled();
-  });
-
-  it('preserves pinned and default authoring/reviewer choices for delegated agents', async () => {
-    auth.enabled = true;
-    const session = await createSession({ label: 'agent' });
-    const headers = { Authorization: `Bearer ${session.token}` };
-    for (const provider of [{ providerId: 'example-tui', model: 'example-model' }, {}]) {
-      for (const operation of musicVideoAuthoring.filter(([, body]) => body.providerId)) {
-        const selected = [...operation];
-        const { providerId: _provider, model: _model, ...body } = selected[1];
-        selected[1] = { ...body, ...provider };
-        expect((await call(appFor(), selected, headers)).status, selected[0]).toBe(selected[3]);
-        const options = selected[2].mock.lastCall.find(value => value && typeof value === 'object');
-        const choice = options.reviewer || options;
-        expect(choice.providerId).toBe(provider.providerId);
-        expect(choice.model).toBe(provider.model);
-      }
-    }
-  });
-
-  it('fails closed for invalid, expired, revoked and scoped-peer credentials', async () => {
-    auth.enabled = true;
-    const expired = await createSession({ label: 'agent' });
-    const revoked = await createSession({ label: 'agent' });
-    await revokeSessionById(revoked.id);
-    // Advance the verifier's clock without timers or production sleeps.
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + SESSION_TTL_MS + 1);
-    for (const operation of musicVideoAuthoring) {
-      for (const [headers, status, code] of [
-        [{ Authorization: 'Bearer invalid-session' }, 401, 'AUTH_REQUIRED'],
-        [{ Authorization: `Bearer ${expired.token}` }, 401, 'AUTH_REQUIRED'],
-        [{ Cookie: `portos_auth=${revoked.token}` }, 401, 'AUTH_REQUIRED'],
-        [{
-          [PEER_AUTH_HEADER]: derivePeerAuthToken('a'.repeat(32), 'example-instance'),
-          [PEER_INSTANCE_HEADER]: 'example-instance',
-        }, 403, 'PEER_SCOPE_FORBIDDEN'],
-      ]) {
-        const response = await call(appFor(), operation, headers);
-        expect([response.status, response.body.code], operation[0]).toEqual([status, code]);
-      }
-    }
-    clock.mockRestore();
-    expectNoAuthoring();
-  });
-
-  it('matches case and trailing-slash variants before any service effects', async () => {
-    for (const operation of musicVideoAuthoring) {
-      const variant = [...operation];
-      variant[0] = operation[0].toUpperCase() + '/';
-      const response = await call(appFor(), variant);
-      expect([response.status, response.body.code], operation[0]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    expectNoAuthoring();
-  });
-
-  it('keeps deterministic plan/compile under the same operation authority', async () => {
-    const operations = [
-      [`/api/music-video/${id}/plan`, { seedPrompts: false }, planProject, 200],
-      [`/api/music-video/${id}/treatment/compile`, { baseRevision: 0, useAi: false }, compileTreatment, 200],
-    ];
-    for (const operation of operations) {
-      expect((await call(appFor(), operation)).status).toBe(403);
-      expect(operation[2]).not.toHaveBeenCalled();
-      expect((await call(appFor('127.0.0.1'), operation)).status).toBe(200);
-      auth.enabled = true;
-      const session = await createSession({ label: 'agent' });
-      expect((await call(appFor(), operation, { Authorization: `Bearer ${session.token}` })).status).toBe(200);
-      expect(operation[2].mock.lastCall).toEqual([id, expect.objectContaining(operation[1])]);
-      auth.enabled = false;
-    }
-  });
-
-  it('keeps reads remote and runs previews, cancellation and contained rendering for host control without authoring', async () => {
-    const app = appFor();
-    for (const path of [`/api/code-animation/generate/${id}`, `/api/music-video/${id}/autonomous`]) {
-      expect((await request(app).get(path)).status, path).toBe(200);
-    }
-    const writes = [
-      ['/api/code-animation/prompt', { concept: 'Example scene' }, 200],
-      [`/api/code-animation/projects/${id}/stage-runs/${id}/cancel`, {}, 200],
-      [`/api/tracks/${id}/waveform/render`, {}, 200],
-      [`/api/music-video/${id}/autonomous/stop`, {}, 200],
-      [`/api/music-video/${id}/autonomous/cancel`, {}, 200],
-    ];
-    for (const [path, body] of writes) {
-      const refused = await call(app, [path, body]);
-      expect([refused.status, refused.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    }
-    const local = appFor('127.0.0.1');
-    for (const [path, body, status] of writes) expect((await call(local, [path, body])).status, path).toBe(status);
-    expectNoAuthoring();
   });
 });

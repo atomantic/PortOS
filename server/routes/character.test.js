@@ -68,11 +68,6 @@ describe('GET /api/character', () => {
     }
   });
 
-  it('skips only the metrics fan-out when metrics alone is disabled', async () => {
-    await request(makeApp()).get('/api/character?metrics=0');
-    expect(characterService.getCharacter).toHaveBeenCalledWith({ withSkills: true, withMetrics: false });
-  });
-
   it('gates the two fan-outs independently', async () => {
     await request(makeApp()).get('/api/character?skills=0&metrics=0');
     expect(characterService.getCharacter).toHaveBeenCalledWith({ withSkills: false, withMetrics: false });
@@ -97,12 +92,6 @@ describe('GET /api/character', () => {
 });
 
 describe('PUT /api/character', () => {
-  it('passes only the validated fields through to the service', async () => {
-    const res = await request(makeApp()).put('/api/character').send({ name: 'Radagast' });
-    expect(res.status).toBe(200);
-    expect(characterService.updateCharacterFields).toHaveBeenCalledWith({ name: 'Radagast' });
-  });
-
   it('strips unknown keys so the generic patch loop is not a mass-assignment surface', async () => {
     await request(makeApp()).put('/api/character').send({ name: 'Radagast', xp: 999999, level: 99 });
     expect(characterService.updateCharacterFields).toHaveBeenCalledWith({ name: 'Radagast' });

@@ -4,6 +4,10 @@
  * This intentionally does not use brainStorage: native Brain entity types are
  * federated and memory-bridgeable, while IdeaLoom list records and vault sync
  * metadata must remain on the machine that owns the configured vault.
+ *
+ * Storage: `file-primary` (`data/brain/idealoom-lists/`) — machine-local, never
+ * federated, reconciled or memory-bridged: vault ids, note paths and content hashes
+ * mean nothing elsewhere. Backed up with `data/brain/`; vault notes are outside it.
  */
 
 import { join } from 'path';

@@ -1,18 +1,5 @@
 /**
  * Music Video posting (#9282): per-platform drafts filled in the PortOS Browser.
- *
- * `prepare` returns the filled draft's summary and screenshot (a sign-in-required refusal is kept as
- * the platform's error with its login URL), `submit` posts that reviewed draft and applies the
- * returned project, `discard` closes it. Platforms are opt-in (#9287): it loads the saved `platforms`
- * (enabled + optional account each; `null` until loaded, with `platformsError` set and
- * `retryPlatforms()` to retry when the read failed, so a failure never reads as "none on") and
- * per-platform `history` (posts, reception tally, recent notes across projects); `setPlatform` toggles
- * one optimistically and `recordPost` saves a hand-made post's link or a post's reception and notes. A
- * failed draft rehydrate sets `draftsError` (scoped to the open project) with `retryDrafts()`. Returns
- * `{ drafts, draftsError, retryDrafts(), busy, errors, prepare(target, options), submit(target),
- * discard(target), platforms, platformsError, retryPlatforms(), history, enabledTargets (`null` until
- * platforms load), setPlatform(target, change), recordPost(target, body) }`. Use when: The Music Video
- * Publish stage's posting panel.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';

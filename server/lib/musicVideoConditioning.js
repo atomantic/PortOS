@@ -350,7 +350,7 @@ export const musicVideoLinkedCastIds = (project) => [...new Set(activeMusicVideo
  */
 export function musicVideoLinkedCastReferences(project, castMedia) {
   const seen = new Set();
-  return activeMusicVideoSubjects(project?.concept).flatMap((subject) => {
+  const offers = activeMusicVideoSubjects(project?.concept).flatMap((subject) => {
     const kind = LINKED_KINDS[subject?.kind];
     const media = kind && castMedia?.[subject.ingredientId];
     if (!Array.isArray(media)) return [];
@@ -361,21 +361,69 @@ export function musicVideoLinkedCastReferences(project, castMedia) {
       && !rejected.has(m.mediaKey) && !String(m.role || '').startsWith('archive:')
       && (m.library?.variant?.formId || sheet?.[2] || null) === formId
       && (sheet || m.kind === 'portrait' || m.library?.guide === true || isGoodReference(m) || Boolean(m.library?.angle)));
+    return [{ subject, kind, assets }];
+  });
+  const shared = comparisonSheetOwners(offers);
+  return offers.flatMap(({ subject, kind, assets }) => {
     const rank = ({ m, sheet }) => (m.kind === 'portrait' ? 0 : sheet ? 1 : 2);
     return [...assets].sort((a, b) => rank(a) - rank(b)).filter(({ m }) => !seen.has(m.mediaKey) && seen.add(m.mediaKey))
-      .map(({ m, sheet }) => ({
-        id: musicVideoLinkedReferenceId(m.mediaKey),
-        imageId: m.mediaKey,
-        role: kind.role,
-        label: `${subject.name || kind.fallback} · ${linkedAssetDetail(m, sheet, kind)}`.slice(0, 120),
-        // Only a cast member's images are recorded as cast guides on the take.
-        ...(kind.role === 'character' ? { castGuide: true } : {}),
-        // A look-around angle plate (#16145): which clip's geometry it shares, for the shot reference check.
-        ...(m.library?.angle ? { angle: lookAroundRefAngle(m.library.angle) } : {}),
-        linkedCast: true,
-        subjectId: subject.id,
-      }));
+      .map(({ m, sheet }) => {
+        const comparison = shared.get(m.mediaKey);
+        const owners = comparison?.owners || [subject];
+        const names = owners.map((owner) => owner.name || kind.fallback);
+        return {
+          id: musicVideoLinkedReferenceId(m.mediaKey),
+          imageId: m.mediaKey,
+          role: kind.role,
+          label: `${names.join(' and ')} · ${linkedAssetDetail(m, sheet, kind)}`.slice(0, 120),
+          // Only a cast member's images are recorded as cast guides on the take.
+          ...(kind.role === 'character' ? { castGuide: true } : {}),
+          // A look-around angle plate (#16145): which clip's geometry it shares, for the shot reference check.
+          ...(m.library?.angle ? { angle: lookAroundRefAngle(m.library.angle) } : {}),
+          linkedCast: true,
+          // `subjectId` keeps one owner for single-owner readers; `subjectIds` names everyone a shared sheet shows
+          // (musicVideoReferenceSubjectIds), so cast coverage, the reference map and prompt subjects all count each of them.
+          subjectId: owners[0].id,
+          ...(comparison ? { subjectIds: owners.map((owner) => owner.id), comparison: { names, sides: comparison.sides } } : {}),
+        };
+      });
   }).filter((ref) => !isLegacyCatalogReference(project, ref));
+}
+
+// catalogComparisonSheet.js COMPARISON_SHEET_ROLE is `sheet:comparison`: one image filed on both records.
+// Its halves (`sheet:comparison-solo`) each sit on one record and keep that single owner.
+const COMPARISON_SHEET_KIND = 'comparison';
+
+/**
+ * The shared comparison sheets the active linked cast offers, by media key: `{ owners, sides }`, the
+ * active characters whose records offer it as `sheet:comparison`. A shared sheet is one media key on
+ * both records, so its reference id (musicVideoLinkedReferenceId) is the same whichever record is read
+ * first; the owners are gathered across all records before any reference is built. The left half's
+ * record leads when the records say which is which (its copy names the partner in
+ * `library.comparedWith`; `sides` true), else cast order. Only active subjects are read, so an
+ * inactive alternate holding the same sheet never becomes an owner. A sheet only one active
+ * character offers is left out and keeps its single owner.
+ */
+function comparisonSheetOwners(offers) {
+  const byKey = new Map();
+  for (const { subject, assets } of offers) {
+    if (subject.kind !== 'character') continue;
+    for (const { m, sheet } of assets) {
+      if (sheet?.[1] !== COMPARISON_SHEET_KIND) continue;
+      const owners = byKey.get(m.mediaKey) || [];
+      if (!owners.some((owner) => owner.subject.id === subject.id)) owners.push({ subject, partner: m.library?.comparedWith || null });
+      byKey.set(m.mediaKey, owners);
+    }
+  }
+  const out = new Map();
+  for (const [key, owners] of byKey) {
+    if (owners.length < 2) continue;
+    const lefts = owners.filter((owner) => owners.some((other) => other !== owner && other.subject.ingredientId === owner.partner));
+    const sides = owners.length === 2 && lefts.length === 1;
+    const ordered = sides ? [lefts[0], ...owners.filter((owner) => owner !== lefts[0])] : owners;
+    out.set(key, { owners: ordered.map((owner) => owner.subject), sides });
+  }
+  return out;
 }
 
 /** A saved pick of a catalog asset, which only resolves once its cast member's media loads. */
@@ -416,6 +464,24 @@ export function musicVideoSceneCastIds(project, scene) {
       .filter((subject) => named.has(subject.id) && all.includes(subject.ingredientId)).map((subject) => subject.ingredientId);
     linked = narrowed.length ? narrowed : all;
   }
+  return [...new Set([...(variant ? [variant.ingredientId] : []), ...linked])];
+}
+
+/**
+ * The catalog cast a shot names, from stored fields only: its look variant plus the linked
+ * active characters its shot sheet lists. A fingerprint input (a frame's `frameCast`), never a
+ * conditioning set: unlike musicVideoSceneCastIds it must not read the read-time catalog check-in,
+ * or the same shot fingerprints differently on the stored and the presented record (#16274).
+ */
+export function musicVideoShotSheetCastIds(project, scene) {
+  const variant = sceneCastVariant(scene);
+  const listed = (Array.isArray(scene?.shotSheet?.characters) ? scene.shotSheet.characters : [])
+    .map((name) => (typeof name === 'string' ? name.trim().toLowerCase() : '')).filter(Boolean);
+  // Same identity rule as sceneCatalogSubjectIds' character match: an id or a name, case-insensitive.
+  const linked = listed.length ? activeMusicVideoSubjects(project?.concept)
+    .filter((subject) => subject?.kind === 'character' && subject.ingredientId
+      && [subject.id, subject.ingredientId, subject.name].some((value) => typeof value === 'string' && listed.includes(value.trim().toLowerCase())))
+    .map((subject) => subject.ingredientId) : [];
   return [...new Set([...(variant ? [variant.ingredientId] : []), ...linked])];
 }
 

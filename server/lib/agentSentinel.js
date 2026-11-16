@@ -1,43 +1,15 @@
 /**
  * The `.agent-done` completion sentinel — shared naming + parser.
  *
- * The `.agent-done` completion sentinel: `DONE_SENTINEL_NAME`, `doneSentinelName(agentId)` → the
- * per-instance filename `.agent-done-<agentId>` (worktree-less agents share one workspace, so a shared
- * name lets concurrent runs clobber — and finalize on — each other's signal),
- * `doneSentinelCandidateNames(agentId)` → the canonical name plus the bounded one-character truncation
- * recovery candidate for generated ids, `doneSentinelPath(workspacePath, agentId)` → the canonical
- * path every producer resolves, `doneSentinelAgentId(filename)` → its inverse (`''` for the bare
- * unscoped name, `null` for a non-sentinel), so the stale-sentinel sweep in
- * `services/agentSentinelSweep.js` matches leftovers to runs the same way the producer named them, +
- * pure `parseSentinelPayload(contents)` → `{ summary, payload }`. Back-compat — a plain-markdown
- * sentinel yields `payload: null`; a JSON object yields its structured `payload` for a
- * programmatic-I/O task type's `processTaskOutput` hook. `salvageSentinelPayload(contents)` (async) is
- * the lenient second tier — runs `jsonExtract` over a fenced/prose-trailed/control-char-corrupted
- * envelope so a less-capable model's near-valid output still surfaces its `payload` instead of being
- * dropped. `extractSentinelPayloadFromTranscript(transcript, isPayload)` (async) is the third tier for
- * programmatic-I/O types ONLY — scans the ANSI-stripped PTY transcript, newest balanced JSON block
- * first, for a payload the model PRINTED instead of writing, and adopts it only if the owning hook's
- * shape predicate accepts it (#3640). `PROGRAMMATIC_OUTPUT_COMPLETION_HEADING` names the briefing
- * section that prints this run's absolute sentinel path — a task-type hook renders its prompt before
- * spawn, so it points the agent at that section by name rather than at a filename it cannot know.
+ * A finishing agent writes this file into its workspace (see agentTuiSpawning's sentinel watcher),
+ * named per agent instance (`.agent-done-<agentId>`) because worktree-less runs share one workspace.
  *
- * A finishing agent writes this file into its workspace to signal completion
- * (see agentTuiSpawning's sentinel watcher). The file is named per agent instance
- * (`.agent-done-<agentId>`, see `doneSentinelName`) because worktree-less runs
- * share one workspace and would otherwise clobber each other's signal.
+ * It holds a markdown summary, or for programmatic-I/O task types
+ * (docs/plans/2026-07-09-programmatic-io-scheduled-tasks.md) a JSON `{ summary, payload }` whose
+ * `payload` a `processTaskOutput` hook consumes.
  *
- * Historically it held a plain-markdown
- * task summary that gets appended to the agent's output. Programmatic-I/O task
- * types (see docs/plans/2026-07-09-programmatic-io-scheduled-tasks.md) also need
- * a STRUCTURED result back — e.g. Layered Intelligence's reasoner JSON — so the
- * sentinel may instead be a JSON object `{ summary, payload }` where `payload`
- * is the machine-readable result a `processTaskOutput` hook consumes.
- *
- * `parseSentinelPayload` is pure and back-compat: a plain-text sentinel yields
- * `{ summary: <text>, payload: null }`; a JSON object yields its `summary`
- * (string, if present) plus its `payload`. Anything that fails to shape up
- * (empty, non-object JSON like a bare array/number) degrades to text so an
- * existing markdown sentinel is never misread as structured.
+ * `parseSentinelPayload` is pure: plain text yields `{ summary: <text>, payload: null }`; anything
+ * not a JSON object (empty, array, number) degrades to text so markdown is never misread as structured.
  */
 
 import { join } from 'path';
@@ -48,34 +20,18 @@ import { safeJSONParse, sanitizeFilename } from './fileUtils.js';
 export const DONE_SENTINEL_NAME = '.agent-done';
 
 /**
- * Heading of the briefing section that prints this run's absolute sentinel path
- * for a reasoning-only (programmatic-output) task — see
- * `buildProgrammaticOutputCompletionSection` in agentPromptBuilder.
- *
- * A task-type hook renders its prompt BEFORE spawn, so it cannot know the
- * per-instance filename (`.agent-done-<agentId>`) and must point the agent at
- * the briefing instead. That pointer only works if both sides agree on the
- * heading, hence one exported constant rather than the string typed twice.
- * Pointing POSITIVELY at this section is also the whole contract: a prompt that
- * warns against some other filename is the only place the agent would learn
- * that filename exists.
+ * Heading of the briefing section printing this run's absolute sentinel path for a reasoning-only
+ * task (`buildProgrammaticOutputCompletionSection` in agentPromptBuilder). A task-type hook renders
+ * its prompt BEFORE spawn and cannot know the per-instance filename, so it points at this section.
+ * Point POSITIVELY: a prompt warning against another filename is where the agent would learn it exists.
  */
 export const PROGRAMMATIC_OUTPUT_COMPLETION_HEADING = 'Completion (Reasoning-Only Task)';
 
 /**
  * The sentinel filename for one agent instance: `.agent-done-<agentId>`.
  *
- * Agents that run WITHOUT a worktree (`useWorktree: false` — e.g. the
- * issue-filing and reasoning task types) all share the primary checkout as
- * their workspace, so a single shared `.agent-done` is a cross-run hazard: two
- * concurrent agents overwrite each other's summary, and whichever poll fires
- * first finalizes the *other* agent's run on a sentinel it never wrote. Scoping
- * the filename to the agent id keeps each run's done-signal its own file.
- *
- * The id goes through the shared `sanitizeFilename` (not a private charset
- * regex) so this filename answers "is this token safe on disk" the same way the
- * rest of the repo does. Falls back to the bare name when no usable id is
- * available, so a caller without one still resolves to something readable.
+ * Worktree-less agents share the primary checkout, so a shared `.agent-done` would let concurrent
+ * agents finalize the *other* run. Falls back to the bare name without a usable id.
  */
 export function doneSentinelName(agentId) {
   const slug = typeof agentId === 'string' ? sanitizeFilename(agentId.trim()).slice(0, 64) : '';
@@ -85,11 +41,9 @@ export function doneSentinelName(agentId) {
 /**
  * The names a run-scoped watcher may inspect, in canonical-first order.
  *
- * Producers have exactly one name: `doneSentinelName(agentId)`. The second
- * name is a deliberately narrow recovery for a generated agent id whose final
- * hexadecimal character was dropped while a terminal copied the path. It is
- * not a second producer contract: runtime consumers must still require a
- * fresh, unambiguous file before accepting it.
+ * Producers have one name: `doneSentinelName(agentId)`. The second is a narrow recovery for an agent
+ * id whose final hex character was dropped by a terminal copy; consumers must still require a fresh,
+ * unambiguous file.
  */
 export function doneSentinelCandidateNames(agentId) {
   const canonical = doneSentinelName(agentId);
@@ -103,14 +57,11 @@ export function doneSentinelCandidateNames(agentId) {
 /**
  * The agent id encoded in a done-sentinel filename.
  *
- * The inverse of `doneSentinelName`, and the only place that reverses it:
- * a sweep deciding whether a leftover `.agent-done-*` belongs to a run that is
- * still alive has to get the SAME answer the producer got, or it deletes a live
- * run's completion signal.
+ * The only inverse of `doneSentinelName`: a sweep checking whether a leftover `.agent-done-*` belongs
+ * to a live run must agree with the producer or it deletes a live completion signal.
  *
- * Returns the id for a scoped sentinel, `''` for the bare unscoped
- * `.agent-done` (a real sentinel, attributable to no run), and `null` when the
- * name is not a sentinel at all.
+ * Returns the id for a scoped sentinel, `''` for the bare `.agent-done` (attributable to no run), and
+ * `null` when the name is not a sentinel.
  */
 export function doneSentinelAgentId(name) {
   if (typeof name !== 'string') return null;
@@ -124,14 +75,12 @@ const STARTUP_SENTINEL_REASONS = new Set(['paste-not-rendered', 'tui-not-ready',
 /**
  * The operator line for a TUI that ended without its completion sentinel.
  *
- * A startup failure never received the prompt, so the missing file is a
- * consequence, not a second fault. Naming it as "finalized with no sentinel"
- * reads as an agent that finished the task and skipped the done-signal.
+ * A startup failure never received the prompt, so the missing file is a consequence, not a second
+ * fault; "finalized with no sentinel" would read as an agent that skipped the done-signal.
  */
 export function missingSentinelLogMessage({ agentId, reason, sentinelPath, mergeGateReprompted = false, command, providerId }) {
   if (STARTUP_SENTINEL_REASONS.has(reason)) {
-    // The TUI identity lets a stderr fingerprint separate one provider's
-    // handshake stall from another's (#12877).
+    // TUI identity separates one provider's handshake stall from another's in stderr fingerprints.
     const tui = [command && `tui=${command}`, providerId && `provider=${providerId}`].filter(Boolean).join(' ');
     return `${agentId} startup failed (${reason}${tui ? ` ${tui}` : ''}) before a completion sentinel could be written`;
   }
@@ -142,12 +91,9 @@ export function missingSentinelLogMessage({ agentId, reason, sentinelPath, merge
 }
 
 /**
- * The one canonical path this run's sentinel lives at — `null` without a
- * workspace. Producers and normal consumers resolve it here: the prompt the
- * agent is given, the canonical TUI watcher, the CLI exit check, and the
- * output-hook payload read. The TUI runtime may additionally use
- * `doneSentinelCandidateNames` for its bounded terminal-copy recovery; this
- * function remains the producer's one canonical path and is pure.
+ * The one canonical sentinel path for this run (`null` without a workspace), used by the agent
+ * prompt, TUI watcher, CLI exit check and output-hook read. The TUI runtime may also use
+ * `doneSentinelCandidateNames` for terminal-copy recovery.
  */
 export function doneSentinelPath(workspacePath, agentId) {
   if (!workspacePath || typeof workspacePath !== 'string') return null;
@@ -166,11 +112,8 @@ export function parseSentinelPayload(contents) {
   const trimmed = typeof contents === 'string' ? contents.trim() : '';
   if (!trimmed) return { summary: '', payload: null };
 
-  // Only a JSON OBJECT counts as structured. `safeJSONParse` with allowArray:false
-  // rejects a root array and returns null for malformed content, but still parses
-  // a bare scalar (`"42"`, `"true"`) — so guard for a genuine object here too, or
-  // a legacy sentinel that happens to be a lone number/string/bool would crash on
-  // the `'payload' in parsed` check below instead of round-tripping as text.
+  // `safeJSONParse` with allowArray:false still parses a bare scalar, so also require an object or the
+  // `'payload' in parsed` check below would throw on a legacy lone number/string/bool sentinel.
   const parsed = safeJSONParse(trimmed, null, { allowArray: false });
   if (parsed && typeof parsed === 'object') {
     const summary = typeof parsed.summary === 'string' ? parsed.summary : '';
@@ -184,23 +127,13 @@ export function parseSentinelPayload(contents) {
 
 /**
  * Lenient fallback for a STRUCTURED sentinel that the strict
- * `parseSentinelPayload` couldn't read. A less-capable model (notably a local
- * one) commonly emits an almost-valid `{ summary, payload }` envelope — wrapped
- * in ```json fences, trailed by prose, or with raw newlines/tabs pasted into
- * the long markdown `body` string — which `JSON.parse` rejects, silently
- * dropping a real proposal as "unparseable-response". This runs the shared
- * robust LLM-JSON extractor (`jsonExtract.extractJson`: strips fences, walks
- * balanced blocks, repairs trailing commas / orphan braces / raw control
- * chars) over the raw contents and, ONLY when it recovers the documented
- * envelope shape (a `{ ..., "payload": ... }` object), surfaces its payload.
- *
- * Deliberately narrow: it requires the `payload` key so a legacy plain-markdown
- * sentinel that merely happens to contain a `{...}` block is never misread as
- * structured — that stays text (payload null). Async + a LAZY import of
- * jsonExtract so the barrel re-export of this module doesn't statically pull
- * jsonExtract's transitive services chain into every lib consumer / mocked
- * suite. Callers use it as a second tier after `parseSentinelPayload` returns a
- * null payload (see agentLifecycle's dispatchTaskOutputHook).
+ * `parseSentinelPayload` couldn't read. Weaker (local) models emit almost-valid envelopes (code
+ * fences, trailing prose, raw newlines in `body`) that `JSON.parse` rejects, dropping a real proposal
+ * as "unparseable-response". Runs `jsonExtract.extractJson` over the contents and surfaces a payload
+ * ONLY when it recovers the `{ ..., "payload": ... }` envelope, so a markdown sentinel merely
+ * containing a `{...}` block stays text. Async with a LAZY jsonExtract import so the barrel
+ * re-export doesn't pull its services chain into every lib consumer. Second tier after
+ * `parseSentinelPayload` returns a null payload (agentLifecycle's dispatchTaskOutputHook).
  *
  * @param {string|null|undefined} contents — raw `.agent-done` contents
  * @returns {Promise<{ summary: string, payload: unknown }>}
@@ -212,16 +145,11 @@ export async function salvageSentinelPayload(contents) {
   // The documented sentinel envelope: a plain object carrying a `payload` key.
   const isEnvelope = (v) => v && typeof v === 'object' && !Array.isArray(v) && 'payload' in v;
 
-  // skipInnerFence: the reasoner's `payload.proposal.body` is markdown that
-  // routinely contains its own ```code``` fence; without this, extractJson's
-  // inner-fence heuristic would lock onto that body fence and discard the whole
-  // envelope. Balanced-block walking is string-aware, so a fence inside the
-  // JSON string value can't derail it.
+  // skipInnerFence: `payload.proposal.body` is markdown with its own code fences, which would otherwise
+  // capture extractJson's inner-fence heuristic and discard the envelope.
   const { extractJson } = await import('./jsonExtract.js');
   const { value } = extractJson(trimmed, { shapePredicate: isEnvelope, skipInnerFence: true });
-  // Re-verify the shape: extractJson falls back to the first block that merely
-  // PARSED (ignoring the predicate) when none matched, so an incidental
-  // non-envelope object must not be adopted as a payload.
+  // extractJson falls back to the first block that merely parsed, so re-verify the shape.
   if (!isEnvelope(value)) return { summary: trimmed, payload: null };
 
   const summary = typeof value.summary === 'string' ? value.summary : '';
@@ -232,36 +160,20 @@ export async function salvageSentinelPayload(contents) {
  * Last-resort rescue for a programmatic-I/O deliverable the agent PRINTED into
  * its terminal instead of writing to `.agent-done` (#3640).
  *
- * For these task types the sentinel JSON *is* the product of the run — a
- * Layered Intelligence proposal becomes a filed tracker issue. A weaker model
- * (typically a local one) commonly answers in the TUI rather than through the
- * tool call, and the run is then discarded with `payload: undefined` even
- * though the reasoning completed. Scanning the transcript recovers it.
+ * For these task types the sentinel JSON *is* the run's product, and a weaker model often answers
+ * in the TUI instead of the tool call. Scanning the transcript recovers it.
  *
- * Deliberately predicate-gated and scoped to programmatic-I/O callers: for
- * every other task type the sentinel is a COMPLETION SIGNAL, not a deliverable,
- * and scraping a transcript for one would let an agent that merely *discussed*
- * finishing be treated as finished. `isPayload` is the owning hook's own shape
- * check (see taskTypeHooks' `getTaskOutputPayloadPredicate`), so a transcript
- * that only contains chatter, a schema example, or partial JSON yields nothing
- * rather than a garbage payload.
+ * Predicate-gated and scoped to programmatic-I/O callers: elsewhere the sentinel is a COMPLETION
+ * SIGNAL, and scraping a transcript would treat an agent that merely *discussed* finishing as
+ * finished. `isPayload` is the owning hook's shape check (taskTypeHooks'
+ * `getTaskOutputPayloadPredicate`), so chatter, a schema example or partial JSON yields nothing.
  *
- * Blocks are walked in REVERSE closing order — the model's final answer wins
- * over an earlier prompt echo of the same schema, and an enclosing object wins
- * over its own nested children. Each candidate goes through
- * `tryParseWithRepair` rather than a bare strict parse: for a tool-free
- * programmatic-I/O stage (e.g. pr-reviewer's no-filesystem-access review role),
- * the transcript print IS the committed deliverable — there is no `.agent-done`
- * file to fall back to — so it deserves the same trailing-comma / orphan-brace
- * repair tolerance `salvageSentinelPayload` already applies to a written
- * sentinel. The repairs are conservative and string-aware (never touch content
- * that already parses, never fix unquoted keys or other non-JSON prose), so a
- * genuinely non-JSON block (an object-literal echo, truncated prose) still
- * fails to parse and is skipped.
+ * Blocks are walked in REVERSE closing order: the final answer wins over an earlier prompt echo of
+ * the schema, and an enclosing object over its nested children. Candidates use `tryParseWithRepair`
+ * because for a tool-free stage the transcript print IS the deliverable (no `.agent-done` fallback);
+ * its repairs are conservative and string-aware, so non-JSON blocks still fail and are skipped.
  *
- * Async + LAZY imports for the same reason as `salvageSentinelPayload` — the
- * barrel re-export of this module must not statically pull jsonExtract's
- * transitive chain into every lib consumer / mocked suite.
+ * Async + LAZY imports for the same reason as `salvageSentinelPayload`.
  *
  * @param {string|null|undefined} transcript — ANSI-bearing raw PTY text
  * @param {(payload:unknown)=>boolean} isPayload — the hook's shape predicate
@@ -278,16 +190,10 @@ export async function extractSentinelPayloadFromTranscript(transcript, isPayload
 
   for (let i = blocks.length - 1; i >= 0; i -= 1) {
     const { value: parsed, error } = tryParseWithRepair(blocks[i]);
-    // `typeof` guard, not just truthiness: the `in` check below throws on a
-    // primitive, and a best-effort salvage must never be the thing that breaks
-    // finalize.
+    // `typeof` guard: the `in` check below throws on a primitive, and salvage must never break finalize.
     if (error || !parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
-    // Two shapes reach a transcript: the documented `{ summary, payload }`
-    // envelope the agent should have written to the sentinel, and the BARE
-    // payload object — what a model answering in the terminal actually prints.
-    // Unwrap only when the inner value is ITSELF a valid payload: a bare
-    // deliverable that merely happens to carry a `payload` key would otherwise
-    // be discarded in favour of a nested value the hook can't use.
+    // Either the `{ summary, payload }` envelope or a BARE payload. Unwrap only when the inner value is
+    // itself a valid payload, or a bare deliverable carrying a `payload` key would be discarded.
     const unwrap = 'payload' in parsed && isPayload(parsed.payload);
     const candidate = unwrap ? parsed.payload : parsed;
     if (!isPayload(candidate)) continue;

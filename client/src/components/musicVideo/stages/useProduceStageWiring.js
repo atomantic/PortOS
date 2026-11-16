@@ -14,6 +14,7 @@ import {
   updateMusicVideoScene,
   varyMusicVideoWipes,
 } from '../../../services/apiMusicVideo.js';
+import { ownWrite } from '../../../services/socketWriteOrigin.js';
 import useMusicVideoSceneMedia from '../../../hooks/useMusicVideoSceneMedia.js';
 import useMusicVideoTakes from '../../../hooks/useMusicVideoTakes.js';
 import useMusicVideoRevisions from '../../../hooks/useMusicVideoRevisions.js';
@@ -28,9 +29,13 @@ import { formatTimecode } from '../../../utils/formatters.js';
  * Shots step (Produce): per-shot media and takes, the board's shot edits
  * (add, split, merge, move, reorder, field saves), selective revisions and the
  * server production run.
+ *
+ * Shot edits name this tab on their request and patch the open project from the reply's edit
+ * result (#16247), so neither the edit nor its change broadcast reads the whole project again.
  */
 export default function useProduceStageWiring({
   selected, videoSettings, renderJob, productionReview, excerpts, unsavedSceneFields, takesRef, mergeFetchedProject,
+  applyEdit, reloadOpenProject,
   replaceProject, patchProject, patchScene, editProjectLocal, saveProjectFields, seekToScene, routeSceneId, navigate,
 }) {
   const sceneMedia = useMusicVideoSceneMedia({
@@ -40,13 +45,32 @@ export default function useProduceStageWiring({
     // Renders that finished while the socket was down missed their attach events.
     onReconciled: (projectId) => getMusicVideoProject(projectId, { silent: true }).then(replaceProject).catch(() => {}),
   });
-  const takes = useMusicVideoTakes({ project: selected, applyScenePatch: patchScene, patchProject, reloadProject: mergeFetchedProject });
+  const takes = useMusicVideoTakes({ project: selected, applyScenePatch: patchScene, patchProject, reloadProject: mergeFetchedProject, applyEdit });
   // The page's change listener reads through it; the workspace remounts per project.
   takesRef.current = takes;
   // Selective section revision (#8987): regenerate only a draft's flagged
   // sections, resumable from the server's checkpoint.
   const revisions = useMusicVideoRevisions({ project: selected, replaceProject, sceneMedia, attachRender: excerpts.attachRender });
   const production = useMusicVideoProduction({ project: selected, replaceProject });
+
+  // One shot edit from this tab: sent with its origin, so its own change broadcast is skipped, and
+  // its reply's edit result patched in. A take decision that started while it was in flight may be
+  // newer than the reply, and a refused (409) edit may leave the board behind: both reload instead.
+  // Resolves to the reply.
+  const boardEdit = (send) => {
+    const projectId = selected.id;
+    const mark = takes.writeMark();
+    return send(projectId, ownWrite()).then((reply) => {
+      if (reply?.edit && takes.settledSince(mark)) applyEdit(projectId, reply.edit);
+      else void reloadOpenProject(projectId);
+      return reply;
+    }, (err) => {
+      if (err?.status === 409) void reloadOpenProject(projectId);
+      throw err;
+    });
+  };
+  // A field save's PATCH: the saved scene, with the edit result beside its fields.
+  const saveSceneFields = (sceneId, patch) => boardEdit((projectId, options) => updateMusicVideoScene(projectId, sceneId, patch, options));
 
   const handleToggleSceneExpand = (sceneId, isExpanded) => {
     if (!selected) return;
@@ -59,8 +83,7 @@ export default function useProduceStageWiring({
   };
 
   const handleAddScene = () => {
-    addMusicVideoScene(selected.id, { prompt: '' }, { silent: true })
-      .then((scene) => replaceProject({ ...selected, scenes: [...(selected.scenes || []), scene] }))
+    boardEdit((projectId, options) => addMusicVideoScene(projectId, { prompt: '' }, options))
       .catch((err) => toast.error(err?.message || 'Failed to add scene'));
   };
 
@@ -72,7 +95,7 @@ export default function useProduceStageWiring({
     const ids = new Set(sceneIds);
     replaceProject({ ...selected, scenes: selected.scenes.map((s) => (ids.has(s.sceneId) ? { ...s, ...patch } : s)) });
     return (async () => {
-      for (const sceneId of sceneIds) await updateMusicVideoScene(selected.id, sceneId, patch, { silent: true });
+      for (const sceneId of sceneIds) await saveSceneFields(sceneId, patch);
     })()
       .then(() => {
         renderJob.clearFailure();
@@ -93,7 +116,7 @@ export default function useProduceStageWiring({
     patchProject(selected.id, (project) => ({ scenes: project.scenes?.map((s) => (s.sceneId === sceneId ? { ...s, ...patch } : s)) }));
   };
   const saveScene = (sceneId, patch) => {
-    return updateMusicVideoScene(selected.id, sceneId, patch, { silent: true })
+    return saveSceneFields(sceneId, patch)
       .then(() => { Object.keys(patch).forEach((k) => unsavedSceneFields.current.get(sceneId)?.delete(k)); return true; })
       .catch((err) => { toast.error(err?.message || 'Failed to save scene'); return false; });
   };
@@ -101,21 +124,13 @@ export default function useProduceStageWiring({
   const setSceneDone = (sceneId, checked) => {
     const scene = selected.scenes?.find((entry) => entry.sceneId === sceneId);
     if (!scene) return Promise.resolve(false);
-    return saveScene(sceneId, { shotSheet: { checked } }).then((saved) => {
-      if (saved) patchProject(selected.id, (project) => ({ scenes: project.scenes?.map((entry) => entry.sceneId === sceneId
-        ? { ...entry, shotSheet: { ...entry.shotSheet, checked } } : entry) }));
-      return saved;
-    });
+    // The reply's edit result carries the ticked shot and the "Needs attention" counts it changes.
+    return saveScene(sceneId, { shotSheet: { checked } });
   };
 
   // #16136: tick or clear shots for the final upgrade. Only `finalApproval` changes here, from the server's reply.
-  const approveFinal = (sceneIds, approved) => approveMusicVideoFinal(selected.id, { sceneIds, approved }, { silent: true })
-    .then(({ scenes }) => {
-      const byId = new Map(scenes.map((scene) => [scene.sceneId, scene.finalApproval ?? null]));
-      patchProject(selected.id, (project) => ({ scenes: project.scenes?.map((entry) => (byId.has(entry.sceneId)
-        ? { ...entry, finalApproval: byId.get(entry.sceneId) } : entry)) }));
-      return true;
-    })
+  const approveFinal = (sceneIds, approved) => boardEdit((projectId, options) => approveMusicVideoFinal(projectId, { sceneIds, approved }, options))
+    .then(() => true)
     .catch((err) => { toast.error(err?.message || 'Could not change the final approval'); return false; });
 
   // BeatTimeline drag commit — same optimistic-local + silent-PATCH pattern as
@@ -126,8 +141,7 @@ export default function useProduceStageWiring({
   };
 
   const handleDeleteScene = (sceneId) => {
-    deleteMusicVideoScene(selected.id, sceneId, { silent: true })
-      .then((proj) => replaceProject(proj))
+    boardEdit((projectId, options) => deleteMusicVideoScene(projectId, sceneId, options))
       .catch((err) => toast.error(err?.message || 'Failed to delete scene'));
   };
 
@@ -135,50 +149,40 @@ export default function useProduceStageWiring({
   // boundaries. `backend` is the lane the card measured against.
   // `atSec` cuts the shot in two at that song time instead (the card's "Split shot").
   const handleSplitScene = (sceneId, backend, atSec = null) => {
-    splitMusicVideoScene(selected.id, sceneId, backend, { atSec, silent: true })
-      .then(({ project, scenes }) => {
-        replaceProject(project);
+    boardEdit((projectId, options) => splitMusicVideoScene(projectId, sceneId, backend, { atSec, ...options }))
+      .then(({ scenes }) => {
         toast.success(`Split into ${pluralize(scenes.length, 'shot')}`);
       })
       .catch((err) => toast.error(err?.message || 'Failed to split scene'));
   };
 
   // Cut the board on sung words over a run of lyric lines (#14820).
-  const handleCutOnLyrics = ({ cueIds, mode }) => cutMusicVideoScenesOnLyrics(selected.id, { cueIds, mode }, { silent: true })
-    .then(({ project, scenes, skipped, laidOut }) => {
-      replaceProject(project);
+  const handleCutOnLyrics = ({ cueIds, mode }) => boardEdit((projectId, options) => cutMusicVideoScenesOnLyrics(projectId, { cueIds, mode }, options))
+    .then(({ scenes, skipped, laidOut }) => {
       toast.success(`${laidOut ? 'Laid out' : 'Cut'} ${pluralize(scenes.length, 'shot')} on the words${skipped ? ` (${pluralize(skipped, 'word')} skipped: ${laidOut ? '' : 'outside a shot or '}too close to a cut)` : ''}`);
     })
     .catch((err) => toast.error(err?.message || 'Failed to cut on the lyric words'));
 
   // Join a scene with the next one (the inverse of the split above).
   const handleMergeNextScene = (sceneId, backend) => {
-    mergeMusicVideoNextScene(selected.id, sceneId, backend, { silent: true })
-      .then(({ project }) => {
-        replaceProject(project);
-        toast.success('Merged with the next shot');
-      })
+    boardEdit((projectId, options) => mergeMusicVideoNextScene(projectId, sceneId, backend, options))
+      .then(() => toast.success('Merged with the next shot'))
       .catch((err) => toast.error(err?.message || 'Failed to merge scenes'));
   };
 
   // Extend a scene back over the previous one, which is removed (the mirror of the merge above).
   const handleMergePreviousScene = (sceneId, backend) => {
-    mergeMusicVideoPreviousScene(selected.id, sceneId, backend, { silent: true })
-      .then(({ project }) => {
-        replaceProject(project);
-        toast.success('Merged over the previous shot');
-      })
+    boardEdit((projectId, options) => mergeMusicVideoPreviousScene(projectId, sceneId, backend, options))
+      .then(() => toast.success('Merged over the previous shot'))
       .catch((err) => toast.error(err?.message || 'Failed to merge scenes'));
   };
 
   // Move the cut before a shot: it starts at `startSec` and the shot before it ends there.
-  const handleMoveSceneStart = (sceneId, startSec) => moveMusicVideoSceneStart(selected.id, sceneId, startSec, { silent: true })
-    .then(({ project }) => replaceProject(project))
+  const handleMoveSceneStart = (sceneId, startSec) => boardEdit((projectId, options) => moveMusicVideoSceneStart(projectId, sceneId, startSec, options))
     .catch((err) => toast.error(err?.message || 'Failed to move the shot start'));
 
   // Move the cut after a shot: it ends at `endSec` and the next shot starts there, growing or shrinking.
-  const handleMoveSceneEnd = (sceneId, endSec) => moveMusicVideoSceneEnd(selected.id, sceneId, endSec, { silent: true })
-    .then(({ project }) => replaceProject(project))
+  const handleMoveSceneEnd = (sceneId, endSec) => boardEdit((projectId, options) => moveMusicVideoSceneEnd(projectId, sceneId, endSec, options))
     .catch((err) => toast.error(err?.message || 'Failed to change the shot length'));
 
   const moveScene = (idx, dir) => {
@@ -191,10 +195,10 @@ export default function useProduceStageWiring({
     // between them, so the moved shot now plays at its neighbor's time.
     const moved = scenes[idx];
     const wasApproved = !!productionReview.readiness?.storyboard?.approved;
-    reorderMusicVideoScenes(selected.id, ids, { silent: true })
-      .then((proj) => {
-        replaceProject(proj);
-        const now = (proj.scenes || []).find((s) => s.sceneId === moved.sceneId);
+    boardEdit((projectId, options) => reorderMusicVideoScenes(projectId, ids, options))
+      .then(({ edit }) => {
+        // Reordering keeps each slot's timing: the moved shot's new time is in the reply.
+        const now = edit?.scenes?.find((s) => s.sceneId === moved.sceneId);
         if (now) seekToScene(now);
         const at = typeof now?.startSec === 'number' ? ` to ${formatTimecode(now.startSec)}` : '';
         toast.success(`Moved ${moved.label || 'shot'}${at}${wasApproved ? '; re-approve the storyboard' : ''}`);
@@ -220,7 +224,7 @@ export default function useProduceStageWiring({
       takes,
       revisions,
       canContinueShot,
-      saveCompositionGrade: (patch) => saveProjectFields(patch, { applyComposition: true }),
+      saveCompositionGrade: (patch) => saveProjectFields(patch),
       applyShotReferenceRepair: ({ sceneId, patch, updatedAt }) => patchProject(selected.id, (project) => {
         if (project.updatedAt > updatedAt) return {};
         const unsaved = unsavedSceneFields.current.get(sceneId);
@@ -234,13 +238,8 @@ export default function useProduceStageWiring({
         ...(updatedAt ? { updatedAt } : {}),
       })),
       // "Vary wipes": a wipe out of each of `count` shots from this one; only their cut-out fields change here.
-      varyWipes: (fromSceneId, count) => varyMusicVideoWipes(selected.id, { fromSceneId, count, seed: Math.floor(Math.random() * 2147483646) }, { silent: true })
-        .then(({ scenes, updatedAt }) => {
-          const byId = new Map(scenes.map((scene) => [scene.sceneId, scene]));
-          patchProject(selected.id, (p) => ({
-            scenes: p.scenes.map((scene) => (byId.has(scene.sceneId) ? { ...scene, ...byId.get(scene.sceneId) } : scene)),
-            ...(updatedAt ? { updatedAt } : {}),
-          }));
+      varyWipes: (fromSceneId, count) => boardEdit((projectId, options) => varyMusicVideoWipes(projectId, { fromSceneId, count, seed: Math.floor(Math.random() * 2147483646) }, options))
+        .then(({ scenes }) => {
           toast.success(`Wipes on ${scenes.length} cut${scenes.length === 1 ? '' : 's'}`);
         })
         .catch((err) => toast.error(err?.message || 'Failed to vary the wipes')),
@@ -260,6 +259,8 @@ export default function useProduceStageWiring({
         saveProjectFields({ composition });
       },
       editSceneLocal,
+      // A shot change a route already saved: patched in without marking the fields as typed and unsaved.
+      applySavedScene: (sceneId, patch) => patchScene(selected.id, sceneId, patch),
       saveScene,
       setSceneDone,
       approveFinal,

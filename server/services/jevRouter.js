@@ -12,6 +12,11 @@
  * install needs to decide whether the answers are trustworthy. It never
  * screens (the ladder above it does), never persists a premise, and never
  * decides what a caller does with an abstention.
+ *
+ * Storage: `ephemeral-file` — `data/local-llm/jev-shadow.json` agreement counters,
+ * machine-local, never federated, holding only decision ids and integer counters.
+ * Written via `createCachedStore`'s serialized `mutate` because two schedules fold
+ * into it; absent is the empty state, so no seed or migration.
  */
 
 import { notifyJevChanged } from './jevEvents.js';

@@ -271,8 +271,8 @@ Without this the sidecar simply skips capture — training is unaffected.
 ## Phosphene cross-reference (2026-06-14)
 
 Reviewed the `mrbizarro/phosphene` reference repo (it also trains LoRAs
-MLX-natively on Apple Silicon) for a watchdog fix. Full write-up:
-`docs/plans/2026-06-14-lora-watchdog-phosphene-review.md`. Key takeaways:
+MLX-natively on Apple Silicon) for a watchdog fix. The full write-up was removed with the retired LoRA training
+feature (git history). Key takeaways:
 
 - **Negative result — do NOT add an `mx.eval`-cadence "fix" to the trainer.**
   Phosphene's `LTX2_DIT_EVAL_EVERY` flush bounds the Metal command buffer on the
@@ -309,10 +309,9 @@ pins `mlx==0.31.0`), mflux → **0.18.0**.
 A **ready-to-run bisect harness** (reuses run `15cfeed1…` — 25 img × 24 ep, bf16,
 the most panic-prone config; runs with `--segment-steps 0` to reproduce the
 sustained condition) is written up in
-`docs/plans/2026-06-14-lora-watchdog-phosphene-review.md` → "Ready-to-run bisect
-procedure". **Not yet run** — it can hard-reboot the box, so it waits for an
-explicit go. Upstream issue drafted at
-`docs/research/2026-06-14-upstream-issue-draft-m5-watchdog.md`.
+the removed phosphene review plan (git history). **Not yet run** — it can hard-reboot the box, so it waits for an
+explicit go. The upstream issue draft was removed (git history); the
+findings already live in mlx #3267 and #3186.
 
 ## Bisect log (live — survives session-killing reboots)
 
@@ -418,6 +417,6 @@ The 0.31.2 trio is now pinned (see "Verdict & pin" under the bisect table above)
 
 ## References
 
-- `docs/TROUBLESHOOTING.md` → "GPU watchdog kernel panic during LoRA training"
+- `docs/TROUBLESHOOTING.md` → "GPU watchdog kernel panic during local MLX video renders"
 - `scripts/train_mflux_lora.py` (`TelemetrySidecar`)
 - `server/services/loraTraining/runtimes.js` (`MFLUX_MIN_CHECKPOINTS`)

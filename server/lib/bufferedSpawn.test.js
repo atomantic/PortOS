@@ -78,10 +78,6 @@ describe('needsShell / constants', () => {
     expect(needsShell('npm')).toBe(IS_WIN32);
     expect(needsShell('git')).toBe(false);
   });
-
-  it('caps buffered output at 64KiB', () => {
-    expect(MAX_OUTPUT_BYTES).toBe(64 * 1024);
-  });
 });
 
 describe('killProcessTree', () => {

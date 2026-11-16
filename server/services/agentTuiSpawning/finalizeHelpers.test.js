@@ -25,7 +25,6 @@ import {
   commitsSince,
   captureWorktreeDiff,
   resolveErrorAnalysis,
-  RAW_TAIL_ANALYSIS_BYTES,
 } from './finalizeHelpers.js';
 
 describe('finalizeHelpers', () => {
@@ -61,10 +60,6 @@ describe('finalizeHelpers', () => {
       const p = join(dir, 'big.txt');
       await writeFile(p, 'abcdefghij'); // 10 bytes
       expect(await readFileTail(p, 4)).toBe('ghij');
-    });
-
-    it('RAW_TAIL_ANALYSIS_BYTES is a sane 1MB bound', () => {
-      expect(RAW_TAIL_ANALYSIS_BYTES).toBe(1024 * 1024);
     });
   });
 

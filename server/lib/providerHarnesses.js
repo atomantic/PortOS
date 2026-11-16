@@ -1,27 +1,6 @@
 /**
  * `PROVIDER_HARNESSES`: one row per agent program PortOS drives (claude, codex, opencode, etc.) for
  * the provider connection graph.
- *
- * Provider HARNESS identity for the connection graph (#6366) — `PROVIDER_HARNESSES` (one row per agent
- * program PortOS drives: claude/opencode/codex/antigravity/cursor/grok/kimi/pi, plus `direct` —
- * PortOS's own HTTP client, the harness of an `api` record (#7562) — each with its supported `modes`,
- * wire `protocol`, the existing `is*Provider` predicate as its matcher, and its capability `bindings`:
- * every way the program can be pointed at a service definition — subscription,
- * protocol+baseUrl+credential, static-env service (Bedrock), `codexOss`, `piProvider`),
- * `PROVIDER_HARNESS_IDS`, `harnessById`, `harnessForProvider` (`direct` for an `api` record, null only
- * for an UNKNOWN harness), `normalizeHarnessId` / `graphHarnessId` (the one `direct` ↔ `NULL`
- * translation for the graph's nullable column), `compatibleBindings(harness, serviceInstance)` /
- * `firstCompatibleBinding` / `isCompatible` (which bindings reach a resolved service instance),
- * `CREATABLE_HARNESS_IDS` (mintable from a bare connection) and `harnessConnectionBlocker` (the row's
- * `connectionBlocker`: why not — no recipe at all, or a subscription/Pi row that composes onto named
- * services only), `harnessSupportsMode`, `ROUTE_MODES`, plus the model-name adapters
- * `toExecutableModelName` / `toCanonicalModelName` (the verified inverse of `prefixOpencodeModel`: a
- * stored alias is canonicalized only when it maps back to the exact stored string, so import never
- * rewrites a saved model by heuristically stripping a prefix). Distinct from `providerVendors.js`
- * (argv-shaped), `providerFamilies.js` (subscription quota) and `serviceDefinitions.js` (the
- * backends). Pure leaf — `client/src/utils/providerHarnesses.js` names a binding's harness through
- * `harnessById`; the `direct` ↔ `NULL` translation is mirrored in `aiToolkit/internal/harnesses.js`
- * behind `providerHarnesses.parity.test.js`.
  */
 
 import {
@@ -53,8 +32,8 @@ import { isOpenchamberProvider } from './openchamber.js';
  *
  * A harness answers only: which program runs, which execution modes it can be
  * driven in, which wire protocol it speaks to a backend connection, how a
- * canonical backend model name becomes the string that program accepts — and,
- * since #7562, every WAY it can be pointed at a service (`bindings`, below).
+ * canonical backend model name becomes the string that program accepts, and
+ * every WAY it can be pointed at a service (`bindings`, below).
  *
  * The `direct` row is the one harness that is not a program: a direct API
  * record is PortOS's own HTTP client speaking the OpenAI wire. Giving it a row
@@ -88,17 +67,12 @@ const CLI_ONLY_MODES = Object.freeze(['cli']);
  * endpoint), as the clause the create endpoint refuses with (`bindingBlocker`
  * in `providerRouteRecipes.js`). `connectionBlocker` on the row.
  *
- * This is DATA on the row rather than prose in a comment because the refusal
- * quotes it. Until three reasons existed, `bindingBlocker` hardcoded the first
- * one — so adding a row for a different reason told the user their harness
- * "reaches only its own vendor service", which is both wrong and points at the
- * wrong remedy.
+ * This is DATA on the row because the refusal quotes it, so each reason points
+ * at the right remedy.
  *
- * Two of these rows have no recipe at all (Kilo, OpenChamber: nothing can be
- * composed onto them, so they carry no `bindings` either). The others DO carry
- * a recipe and compose onto the services their bindings name through
- * `materializeRoute`; they just cannot be pointed at an endpoint they were
- * not built to know.
+ * Kilo and OpenChamber have no recipe and no `bindings`. The others carry a
+ * recipe and compose onto the services their bindings name through
+ * `materializeRoute`; they just cannot be pointed at an arbitrary endpoint.
  */
 const CONNECTION_BLOCKER = Object.freeze({
   /** The backend lives in a config file PortOS does not write (Kilo). */
@@ -108,29 +82,20 @@ const CONNECTION_BLOCKER = Object.freeze({
   /** A subscription program: it signs into its own vendor service and nothing else. */
   VENDOR_SERVICE: 'reaches only its own vendor service',
   /**
-   * Verified against the installed CLI (`pi --help`, its `docs/models.md`): Pi
-   * reaches a backend by `--provider <name>` / `--model provider/id` plus that
-   * provider's env key, and a CUSTOM endpoint only through
-   * `~/.pi/agent/models.json`, a user-owned file PortOS does not write. So a
-   * Pi route can be materialized for any service Pi ships a provider name for
-   * (`piProvider` on the definition) — nvidia, openrouter, anthropic, … — but
-   * not for an arbitrary local daemon or endpoint.
+   * Pi reaches a backend by `--provider <name>` / `--model provider/id` plus that
+   * provider's env key; a CUSTOM endpoint only through `~/.pi/agent/models.json`,
+   * a user-owned file PortOS does not write. So a Pi route materializes only for
+   * services Pi ships a provider name for (`piProvider` on the definition).
    */
   PI_BUILTIN_PROVIDERS: 'reaches only the services Pi ships a provider name for (a custom endpoint lives in Pi\'s own models.json, which PortOS does not write)',
 });
 
 /**
- * The COMMAND RECIPE half of a harness row (#6369).
+ * The COMMAND RECIPE half of a harness row: **how do you spawn a fresh
+ * provider?**, which minting a new executable route needs.
  *
- * Everything above classifies a provider record that already exists. A recipe
- * answers the opposite question — **how do you spawn a fresh one?** — which is
- * what minting a new executable route for a connection needs and what this
- * registry could not describe before.
- *
- * Each recipe is the shipped, proven configuration for that program, lifted
- * from its `defaults/providers.sample.json` entry rather than invented here;
- * `providerRouteRecipes.sampleParity.test.js` fails when the two drift, so a
- * minted route can never quietly become one the harness will not run.
+ * Each recipe is lifted from its `defaults/providers.sample.json` entry;
+ * `providerRouteRecipes.sampleParity.test.js` fails when the two drift.
  *
  * Columns:
  *
@@ -142,13 +107,12 @@ const CONNECTION_BLOCKER = Object.freeze({
  *     record's own `endpoint`, or `{ via: 'opencodeConfig' }` the inline
  *     provider JSON OpenCode reads.
  *   - `credential` — the key the connection must carry for this program, and
- *     whether it REFUSES to start without one. Claude Code does (it sends an
- *     Anthropic auth token even to a local daemon that ignores it), which is why
- *     the create endpoint refuses rather than minting a route that cannot run.
+ *     whether it REFUSES to start without one (Claude Code does, even against a
+ *     local daemon), so the create endpoint refuses rather than mint a dead route.
  *
- * A harness with **no** recipe is not an oversight — it means this program has
- * no backend PortOS can point at from a connection, and its row says WHICH of
- * the {@link CONNECTION_BLOCKER} reasons applies. Adding one of those stays `/ai/new`.
+ * A harness with **no** recipe has no backend PortOS can point at from a
+ * connection; its row says WHICH {@link CONNECTION_BLOCKER} applies. Adding one
+ * of those stays `/ai/new`.
  */
 
 /** Claude Code's headless argv, shared by every Claude recipe mode. */
@@ -180,7 +144,7 @@ const recipe = ({ command, cli, tui, headlessArgs = [], tuiPromptDelayMs = TUI_P
 });
 
 /**
- * The CAPABILITY BINDINGS of a harness row (#7562): one entry per way the
+ * The CAPABILITY BINDINGS of a harness row: one entry per way the
  * program can be pointed at a service definition (`serviceDefinitions.js`).
  * `compatibleBindings` matches them against a resolved service instance, and
  * `materializeRoute` (`providerRouteRecipes.js`) writes the record each one
@@ -204,9 +168,8 @@ const recipe = ({ command, cli, tui, headlessArgs = [], tuiPromptDelayMs = TUI_P
  *   `{via:'field', required}` (the record's `apiKey`) or `{via:'gatewayEnv'}`
  *   (the gateway's own key var). `env` is static.
  *
- * Codex's local-runtime binding writes nothing Codex-specific: `--oss
- * --local-provider <x>` is emitted at spawn from the runtime marker the record
- * carries (`buildCodexOssArgs`), so the binding only constrains WHICH runtimes.
+ * Codex's local-runtime binding writes nothing Codex-specific (`--oss
+ * --local-provider <x>` comes from `buildCodexOssArgs`); it only constrains WHICH runtimes.
  *
  * A row with NO bindings is exactly a row nothing composes onto, and it says
  * why in `connectionBlocker`. `providerHarnesses.test.js` pins that.
@@ -280,13 +243,10 @@ export const PROVIDER_HARNESSES = Object.freeze([
     label: 'Kilo Code',
     modes: CLI_TUI_MODES,
     protocol: 'openai',
-    // Kilo is an OpenCode fork, so its backend is declared in a config file
-    // rather than an environment variable — and PortOS has not verified which
-    // config surface this fork reads (OpenCode's own `OPENCODE_CONFIG_CONTENT`
-    // is the one PortOS writes, and Kilo renames its environment under
-    // `KILO_*`). Minting a route on a guess would produce one that points at
-    // nothing while reporting a backend, so Kilo stays classifiable and
-    // installable but not creatable from a connection.
+    // Kilo is an OpenCode fork that renames its environment under `KILO_*`, and
+    // PortOS has not verified which config surface it reads; a guessed route
+    // would point at nothing while reporting a backend, so Kilo stays
+    // classifiable and installable but not creatable from a connection.
     recipe: null,
     connectionBlocker: CONNECTION_BLOCKER.UNWRITTEN_CONFIG,
     bindings: Object.freeze([]),
@@ -447,11 +407,9 @@ export const harnessRecipe = (id) => harnessById(id)?.recipe || null;
 /**
  * The harness a provider record is driven by, or `null` for an UNKNOWN one.
  *
- * An `api`-type record resolves to the `direct` row (#7562); it used to be
- * `null`, which conflated "no program" with "a program this build does not
- * know" — a `cli`/`tui` record with no matching row, which must stay an
- * unlinked legacy route. Graph code that stores the id passes it through
- * {@link graphHarnessId} so a direct binding still lands as `NULL`.
+ * An `api`-type record resolves to the `direct` row, so `null` unambiguously
+ * means a program this build does not know (a legacy route that stays unlinked).
+ * Graph code that stores the id passes it through {@link graphHarnessId}.
  *
  * @param {{id?:string, type?:string, command?:string}|null|undefined} provider
  * @returns {{id:string,label:string,modes:readonly string[],protocol:string}|null}

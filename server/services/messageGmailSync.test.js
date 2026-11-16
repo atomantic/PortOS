@@ -112,9 +112,6 @@ describe('collectMessageIds — full pagination', () => {
     expect(items.map((m) => m.id)).toEqual(['a', 'b', 'c']);
   });
 
-  it('SENT_INGEST_MAX is a generous ceiling well past the old first-page limit of 100', () => {
-    expect(SENT_INGEST_MAX).toBeGreaterThanOrEqual(1000);
-  });
 });
 
 // Owner send-as alias fetch (#2831). Received 1:1 mail delivered to an alias must be

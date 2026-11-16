@@ -8,6 +8,11 @@
  *   - catalog_ingredient_relations: directed ingredient ↔ ingredient edges.
  *
  * Unlink is a soft-delete so the tombstone propagates to peers.
+ *
+ * Storage: `db-primary` — all three tables federate through the catalog peer sync
+ * (`sync_feed` streams). Explicit primitive ownership is the `universe`/`owner` ref role;
+ * no legacy owner is inferred, and missing/conflicting owners stay visible for review.
+ * Relations written by scrap commits are only the reviewed edges, atomic with the batch.
  */
 
 import { query } from '../../lib/db.js';

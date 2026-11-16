@@ -1,15 +1,6 @@
 /**
  * Music Video scene takes (#8965) — client-side view helpers.
  *
- * Music-video scene takes view helpers (#8965): `sceneTakeList(scene, kind)` lists a scene's
- * image/video takes with an un-materialized pre-takes selection appended as a read-only `legacy` take;
- * `takePreviewKey`, `takeThumbUrl`, `takeClipUrl` (hover-preview clip), `sceneHasPendingDecision`
- * (contact-sheet filter), `takeProvenance`; `mergeTakeColorMatch` merges measured color fields without
- * replacing newer take decisions; `TAKE_SLOT` maps a take kind to its selection field;
- * `selectTakePatch` / `reviewTakePatch` / `markTakeAssetMarks` mirror the server's take transforms for
- * optimistic Use/Reject/Bad. Used by `components/musicVideo/SceneTakeStrip.jsx` and
- * `components/musicVideo/ProjectWorkspace.jsx`.
- *
  * A scene slot (`referenceImageId` / `videoHistoryId`) is the director's
  * selection among the scene's immutable `takes`. A pre-#8965 record has a
  * selection but no takes list yet (the server materializes it on the scene's
@@ -116,3 +107,21 @@ export function markTakeAssetMarks(assetMarks, take, mark) {
   else delete next[key];
   return next;
 }
+
+/**
+ * The control a take decision waits on, the key of useMusicVideoTakes `pending` (#16306): pressing it again
+ * before its reply sends nothing. Use and Reject of one take stay separate controls, so a Reject right after
+ * Use still queues behind it. A note is not a control: it follows its Reject on the chain and is always sent.
+ */
+export const takeControl = {
+  select: (scene, take) => `select:${scene.sceneId}:${take.takeId}`,
+  status: (scene, take, status) => `status:${status}:${scene.sceneId}:${take.takeId}`,
+  acknowledge: (scene, take) => `acknowledge:${scene.sceneId}:${take.takeId}`,
+  confirm: (scene, take) => `confirm:${scene.sceneId}:${take.takeId}`,
+  mark: (take) => `mark:${take.kind === 'video' ? 'video' : 'image'}:${take.assetId}`,
+  rejectUnused: (scene) => `reject-unused:${scene.sceneId}`,
+};
+/** The control a review waits on, or null for a note alone. */
+export const reviewTakeControl = (scene, take, review) => (review.acknowledgeRenderQuality ? takeControl.acknowledge(scene, take)
+  : review.confirmFrame ? takeControl.confirm(scene, take)
+    : review.status ? takeControl.status(scene, take, review.status) : null);

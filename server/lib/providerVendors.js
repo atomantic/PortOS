@@ -1,26 +1,6 @@
 /**
  * `PROVIDER_VENDORS` table of coding-agent CLI/TUI vendors (claude, codex, opencode, grok, kimi,
  * cursor and others) so dispatch sites avoid hand-rolled vendor if-chains.
- *
- * `PROVIDER_VENDORS` — one row per coding-agent CLI/TUI vendor
- * (claude/codex/antigravity/opencode/grok/kimi/cursor, plus a deliberately-incomplete legacy
- * `gemini-cli` row), consumed by every dispatch site that used to hand-roll its own vendor if-chain
- * across ~8 branches in 5 files (#3618): `applyCommandDefaults`/`prepareCliPrompt` (re-exported from
- * `tuiHandshake.js`/`cliProviderArgs.js`), `buildVendorCliArgs`/`buildVendorSpawnConfig` (consumed by
- * `cliProviderArgs.js#buildCliArgs` / `agentCliSpawning.js#buildCliSpawnConfig`), `inferTuiCommand`
- * (re-exported from `tuiHandshake.js`), and `injectTuiModelAndEffort` — the shared
- * antigravity-validates-the-pair-vs-everyone-else `--model`/`--effort` injection used by both
- * `tuiHandshake.js#buildTuiInvocation` and `agentTuiSpawning.js#buildTuiSpawnConfig`, replacing a
- * second copy of that split that had already drifted once before this file existed. Doesn't rewrite
- * any vendor's argv-building logic — that stays in
- * `antigravity.js`/`grok.js`/`kimi.js`/`cursor.js`/`codex.js`. Also `toolFreeOneShotArgs` /
- * `isToolFreeOneShotProvider` / `toolFreeOneShotRefusal` (#9008): the one-shot-over-caller-text
- * posture Ask and AI app detection run — every approval-bypass flag stripped, the vendor tool-disable
- * switch applied where one exists (claude, grok, pi), and host control required for every other CLI.
- * `restrictedRepairArgs` (#12487) is the autofixer repair posture: claude with Bash/web tools denied
- * and edits auto-accepted only in the cwd, or codex in its network-denied workspace-write sandbox
- * without user config, plugins or apps, built from fixed arguments so saved options cannot restore
- * host tools; null for any other CLI. Dependency-light on purpose, mirroring those files.
  */
 
 import { EXECUTION_OPTION_DEFINITIONS, validateExecutionOptions, executionOptionsError } from './executionOptions.js';
@@ -170,12 +150,10 @@ import {
 export {
   isPublicReviewNoToolProfile,
   publicReviewPostureForProfile,
-  PUBLIC_REVIEW_EXECUTION_PROFILE,
   PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
   PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
   PUBLIC_REVIEW_NO_TOOL_POSTURE,
   PUBLIC_REVIEW_ACTIONS_POSTURE,
-  PUBLIC_REVIEW_POSTURES,
 } from './agentExecutionProfiles.js';
 
 /**

@@ -1,175 +1,70 @@
 /**
  * Swappable text-encoder (prompt conditioner) registry for local video runtimes.
  *
- * Swappable prompt conditioners for local video runtimes. MiniMax H3 reads the *unnormalized* hidden
- * state after Qwen3-VL language layer 49 (layers 50-63, the final norm and `lm_head` are never
- * evaluated), so any checkpoint carrying the same embedding + layers 0-49 + vision tower is a drop-in
- * conditioner — swapping it changes how the model reads a prompt without touching the diffusion
- * weights. `TEXT_ENCODERS_BY_RUNTIME` declares the shipped options per runtime (pinned repo/revision
- * plus an explicit `files` LIST — one repackaged safetensors, or just the shards of an upstream
- * checkpoint that carry parameters the loader actually builds; in code rather than the media-models
- * registry so a stale `data/media-models.json` can't name a file the runner can't map);
- * `videoTextEncoderOptions(model)` returns the TRUE list stock-first (it deliberately does NOT
- * collapse a one-entry runtime to `[]` — that is a presentation rule, and folding it in here would
- * change what the server believes a model supports and empty the "offers …" list in the error;
- * `TextEncoderPicker` owns the hide-when-there-is-no-real-choice check), `isStockTextEncoder(id)`
- * makes absence and the `stock` sentinel the same request, `resolveVideoTextEncoder(model, id)`
- * returns `null` for the stock choice or throws `VIDEO_TEXT_ENCODER_UNSUPPORTED` (with the
- * non-throwing `supportsVideoTextEncoder` + `videoTextEncoderUnsupportedError` split out so the
- * request path can reject before staging uploads), and `downloadableVideoTextEncoders()` (deduped by
- * id — the table is keyed by RUNTIME, so one conditioner can be offered by two) /
- * `downloadableVideoTextEncoder(id)` feed the `/api/video-gen/text-encoders/:id/(download|repair)`
- * lane. Two loader-mechanics fields exist because a ComfyUI-packaged conditioner is namespaced
- * differently from the HF checkpoint the MLX port matches: `keyPrefixMap` (`model.` →
- * `model.language_model.`, `visual.` → `model.visual.`) is applied to every checkpoint key by
- * `scripts/generate_minimax_h3.py` BEFORE the pinned loader sees it — no fork of the pinned runtime —
- * and `finalNormKey` names where the runner synthesizes a ones-filled `norm.weight` for a checkpoint
- * published without one (correct upstream, since H3 reads the state *before* the norm, but the pinned
- * loader refuses to load with any parameter missing). Both are absent for an UPSTREAM Qwen3-VL-32B
- * checkpoint, which already uses the loader namespace and ships its own norm. A candidate must BE
- * Qwen3-VL-32B (the shim reuses upstream's config/tokenizer/processor) — a different Qwen generation
- * is not a substitute however close its conditioning width looks; see
- * docs/features/video-text-encoders.md. `publicTextEncoderOption(entry)` is the client projection and
- * deliberately drops both, so the UI can't reimplement the remap. The `ltx25` table (#4320) uses a
- * third mechanic, `configOverrides`, because an LTX-2.5 pack's OWN Gemma 4 tower wins over `--gemma`
- * inside the pinned fork: the substitution is a standalone shim directory whose generated
- * `config.json` is the substitute's own with these keys merged over it (only ever the `model_type`
- * label a unified checkpoint gets wrong — never `text_config`/`quantization`), and a candidate must BE
- * Gemma 4 12B at 48 layers / hidden 3840 / vocab 262144 / `k_eq_v`. `verified` gates a substitute out
- * of BOTH lanes (picker AND download) until it has been A/B-rendered against its runtime's stock
- * conditioner — required on every non-built-in entry and fail-closed on absence, so a new entry is
- * unreachable until someone states a verdict; both ltx25 substitutes are `verified: false` today.
- * `declaredVideoTextEncoders()` is the UNFILTERED table for shape/invariant checks only — never the
- * render or download path, and `videoTextEncoderRuntimes()` enumerates the table's runtime keys so
- * parity/shape tests cover every runtime rather than the one that happened to exist when they were
- * written.
+ * MiniMax H3 reads the **unnormalized** hidden state after language layer 49 of its Qwen3-VL-32B conditioner and
+ * feeds it to `condition_proj`; layers 50-63, the final norm and `lm_head` are never evaluated. Any checkpoint
+ * carrying the same Qwen3-VL embedding + layers 0-49 + vision tower is therefore a drop-in substitute.
  *
- * MiniMax H3 does not use its Qwen3-VL-32B conditioner as a language model: the
- * DiT reads the **unnormalized** hidden state after language layer 49 and feeds
- * it straight into `condition_proj`. Layers 50-63, the final norm and `lm_head`
- * are never evaluated. That makes the conditioner unusually easy to substitute —
- * any checkpoint carrying the same Qwen3-VL embedding + layers 0-49 + vision
- * tower produces a drop-in conditioning signal, and swapping it changes how the
- * model *reads* a prompt without touching the diffusion weights at all.
+ * Entries are pinned upstream artifacts living in code (mirroring `lib/icLoraWeights.js`), not the media-models
+ * registry, so no seed/migration is needed and a stale `data/media-models.json` can't reference an unmappable file.
  *
- * This module is the single source of truth for which substitutions PortOS
- * ships. Entries are pinned upstream artifacts rather than user-tunable config,
- * so they live in code (mirroring `lib/icLoraWeights.js`) instead of the
- * media-models registry — no seed file, no migration, and no way for a stale
- * `data/media-models.json` to reference a file the runner can't map.
+ * `keyPrefixMap`: a ComfyUI-packaged conditioner flattens the transformers namespace (`model.layers.N.`,
+ * `visual.`) while the MLX loader matches the HF one (`model.language_model.layers.N.`, `model.visual.`).
+ * scripts/generate_minimax_h3.py applies it to every key BEFORE the pinned loader sees them.
  *
- * The one non-obvious field is `keyPrefixMap`. A ComfyUI-packaged conditioner
- * flattens the transformers namespace (`model.layers.N.…` / `visual.…`) while
- * the MLX port's loader matches the HF namespace (`model.language_model.layers.N.…`
- * / `model.visual.…`). The map is applied by scripts/generate_minimax_h3.py to
- * every checkpoint key BEFORE the pinned loader sees it, so a repackaged file
- * loads with no change to (and no fork of) the pinned runtime source.
+ * `finalNormKey`: the pinned loader builds the full module tree (including the never-applied `norm`) and refuses
+ * any missing parameter, so for a checkpoint published without the final norm the runner synthesizes a
+ * ones-filled `norm.weight` under this key. Absent means the checkpoint ships its own norm.
  *
- * `finalNormKey` exists for the same reason: the pinned loader instantiates the
- * full module tree (including `norm`, which it deliberately never applies) and
- * refuses to load with any parameter missing. A conditioner published without
- * the final norm — correct, since H3 reads the state before it — would trip
- * that check, so the runner synthesizes a ones-filled `norm.weight` under this
- * key. Absent means "the checkpoint ships its own norm".
+ * `files` is always a LIST (one repackaged safetensors or the subset of shards carrying the 903 parameters the
+ * loader builds). The runner symlinks each into the shim's `text_encoder/` and the loader globs `*.safetensors`.
+ * It must stay an explicit pin, not a repo snapshot: these repos also publish quantizations, generation tails and
+ * layers past the conditioning depth.
  *
- * `files` is always a LIST, because a substitute is either one repackaged
- * safetensors or the subset of an upstream model's shards that actually carries
- * the 903 parameters the loader builds. The runner symlinks every entry into the
- * shim's `text_encoder/` and the loader globs `*.safetensors` there, so a
- * multi-shard checkpoint needs no index file and no loader change — but the list
- * must stay an explicit pin rather than a repo snapshot, since these repos also
- * publish quantizations, generation tails and (for a full upstream checkpoint)
- * the layers past the conditioning depth that H3 never evaluates.
- *
- * COMPATIBILITY RULE for a new entry: the checkpoint must be Qwen3-VL-32B —
- * same `text_config` (hidden 5120, 64 layers, vocab 151936, head_dim 128) and
- * the same vision geometry, because the shim reuses UPSTREAM's config,
- * tokenizer and processor. A different Qwen generation is not a substitute
- * however similar its conditioning width looks: Qwen3.5's linear-attention
- * layers, 248320-token vocabulary and separate tokenizer have no mapping onto
- * the module tree this loader builds, and no key remap can create one.
+ * COMPATIBILITY RULE (H3): the checkpoint must be Qwen3-VL-32B (hidden 5120, 64 layers, vocab 151936, head_dim
+ * 128, same vision geometry), because the shim reuses UPSTREAM's config, tokenizer and processor. Another Qwen
+ * generation (e.g. Qwen3.5's linear attention, 248320-token vocab) has no mapping onto this module tree.
  *
  * ---------------------------------------------------------------------------
  * LTX-2.5 (#4320)
  *
- * The 2.5 packs condition through a Gemma 4 12B tower that ships INSIDE the
- * pack under `text_encoder/`, and the pinned fork's
- * `PromptEncoder._text_encoder_source` prefers that local directory
- * UNCONDITIONALLY whenever its `config.json` reports `model_type: "gemma4"` —
- * `gemma_model_id` (the `--gemma` flag the 2.3 runtime uses) is ignored. So a
- * 2.5 substitution overrides that RESOLUTION rather than passing a repo id,
- * which is why `ltx2` and `ltx25` share a runner but not a mechanism.
+ * The 2.5 packs ship a Gemma 4 12B tower under `text_encoder/`, which the pinned fork's
+ * `PromptEncoder._text_encoder_source` prefers UNCONDITIONALLY when its `config.json` reports
+ * `model_type: "gemma4"`, ignoring `gemma_model_id`. A 2.5 substitution therefore overrides that RESOLUTION
+ * rather than passing a repo id (why `ltx2` and `ltx25` share a runner but not a mechanism).
  *
- * The substitution is again a shim directory, but of a different shape than
- * H3's: the runner links the substitute's shards, its
- * `model.safetensors.index.json` and its tokenizer/generation configs into one
- * flat directory and writes `config.json` itself, then points the pinned
- * loader at that directory. Nothing comes from the pack, because unlike H3
- * (where the vision geometry and processor must stay upstream's) a Gemma 4
- * tower is self-describing.
+ * The runner links the substitute's shards, `model.safetensors.index.json` and tokenizer/generation configs into
+ * one flat directory, writes `config.json` itself and points the pinned loader there. Nothing comes from the
+ * pack: a Gemma 4 tower is self-describing.
  *
- * `configOverrides` is the one field this runtime adds: the shim's generated
- * `config.json` is the SUBSTITUTE's own config with these keys merged over it
- * (`vision_config` / `audio_config` are dropped either way, so what remains is
- * the `model_type` + `text_config` + `quantization` triple the fork's
- * `convert_ltx25_to_mlx.py --step text-encoder` emits). It exists because a
- * *unified* Gemma 4 checkpoint publishes `model_type: "gemma4_unified"`, which
- * `Gemma4LanguageModel.load()` hard-rejects. mlx-lm's
- * `gemma4.Model.sanitize()` already discards the `vision_tower.*` /
- * `audio_tower.*` / `multi_modal_projector.*` towers at load; the runner adds
- * one exact-prefix filter for the eleven residual `vision_embedder.*` tensors
- * found by the real strict-load gate. Omit the field entirely for a text-only
- * checkpoint that already reports `gemma4`; the `quantization` block is NEVER
- * overridden, because per-layer group-size overrides are part of how the
- * weights were packed and a mismatched group size dequantizes to noise.
+ * `configOverrides`: the generated `config.json` is the SUBSTITUTE's own config with these keys merged over it
+ * (`vision_config` / `audio_config` dropped). Needed because a *unified* Gemma 4 checkpoint publishes
+ * `model_type: "gemma4_unified"`, which `Gemma4LanguageModel.load()` hard-rejects. mlx-lm's sanitizer already
+ * drops the vision/audio/projector towers; the runner adds one exact-prefix filter for the eleven residual
+ * `vision_embedder.*` tensors. Omit it for a text-only checkpoint already reporting `gemma4`. The `quantization`
+ * block is NEVER overridden: per-layer group sizes are part of how the weights were packed.
  *
- * COMPATIBILITY RULE for a new ltx25 entry: the checkpoint must be Gemma 4 12B
- * at the LTX-2.5 tower's exact geometry — 48 layers, hidden 3840, vocab 262144,
- * head_dim 256, `attention_k_eq_v: true` — because `Gemma4LanguageModel`
- * hard-validates `model_type`, the layer count and the hidden size on load, and
- * the pack's connector was trained against a 49-hidden-state stack of that
- * width. A different Gemma generation is not a substitute: Gemma 3's tokenizer,
- * vocabulary and layer count have no mapping onto the module tree mlx-lm's
- * `gemma4` builds.
+ * COMPATIBILITY RULE (ltx25): Gemma 4 12B at the tower's exact geometry (48 layers, hidden 3840, vocab 262144,
+ * head_dim 256, `attention_k_eq_v: true`), since `Gemma4LanguageModel` hard-validates `model_type`, layer count
+ * and hidden size and the connector was trained on a 49-hidden-state stack of that width. Gemma 3 has no mapping
+ * onto mlx-lm's `gemma4` module tree.
  *
- * `verified` — COHERENCE GATE COMPLETED 2026-08-16 (#4320). Both initial candidates
- * strict-loaded and produced finite connector inputs on the pinned runtime,
- * then rendered a fixed-seed matrix at 512x320 / 33 frames / 24 fps / 8+3
- * steps / CFG 3: one benign motion prompt plus staged-bite, explicit-gesture
- * and prop-cigarette challenges. The 4-bit tower stayed broadly coherent but
- * did not improve the target behavior: stock described the staged bite and
- * cigarette more literally, while both produced an index finger for the
- * requested middle-finger gesture. The 8-bit tower was likewise stock-like on
- * all three challenges, still produced an index finger, and fragmented the
- * benign prompt's single kite into several red objects.
+ * `verified`: the coherence gate (2026-08-16, #4320) ran a fixed-seed matrix at 512x320 / 33 frames / 24 fps /
+ * 8+3 steps / CFG 3. Both initial candidates (4-bit, 8-bit) stayed broadly coherent but did not improve the
+ * target behavior (still an index finger for the requested gesture; the 8-bit fragmented the benign prompt). A
+ * third candidate (#4470, Heretic backbone with the stock connector, MXFP8) strict-loaded and produced finite
+ * connector inputs but its repeated-seed matrix did not pass, so that is technical evidence, not a behavioral pass.
  *
- * Both therefore remain `verified: false`, hidden from
- * `videoTextEncoderOptions` and the download lane (see
- * `isOfferedTextEncoder`). They stay declared as pinned failure records so a
- * later candidate search does not repeat either download or gate.
- *
- * #4470 adds a third, still-gated candidate from the exact Heretic language
- * backbone used by DeepNeuralNerd's LTX-2.5-specific ComfyUI conversion. That
- * conversion keeps LTX's projection weights; PortOS already loads the pinned
- * pack's connector separately, so the equivalent MLX artifact is the same
- * language tower paired with that stock connector. Its three-shard MXFP8 export
- * preserves all 48 language layers and the checkpoint's quantization metadata,
- * while the existing narrow unified-checkpoint sanitizer removes only its
- * residual `vision_embedder.*` tensors. The 2026-08-17 production preflight
- * removed exactly ten such tensors, strict-loaded with zero missing or extra
- * language keys, and produced finite connector inputs for all four controlled
- * prompts. The full repeated-seed visual matrix did not complete, so this is
- * technical compatibility evidence, not a behavioral pass. It remains
- * unreachable until that matrix proves BOTH benign structural coherence and a
- * repeatable target-behavior improvement.
+ * All remain `verified: false`, hidden from `videoTextEncoderOptions` and the download lane (see
+ * `isOfferedTextEncoder`), kept as pinned failure records so a later search does not repeat a download or gate.
+ * Reachable only once a matrix proves BOTH benign structural coherence and a repeatable improvement.
  */
 
 import { ServerError } from './errorHandler.js';
 import { APACHE_2, GEMMA_TERMS } from './videoDisclosure.js';
 
-// Every runtime's built-in conditioner option. Selected by default and always
-// present, so the picker never renders a single-option select and a render that
-// omits `textEncoderId` behaves exactly as it did before this feature existed.
+// Every runtime's built-in conditioner option: always present, so the picker never renders a single-option
+// select and an omitted `textEncoderId` behaves as stock.
 export const STOCK_TEXT_ENCODER_ID = 'stock';
 
 const STOCK_MINIMAX_H3 = Object.freeze({
@@ -186,8 +81,7 @@ const STOCK_LTX25 = Object.freeze({
   builtIn: true,
 });
 
-// Substitutable conditioners, keyed by the runtime whose loader can consume
-// them. A runtime absent from this table has no picker at all.
+// Substitutable conditioners, keyed by the runtime whose loader can consume them; absent = no picker.
 const TEXT_ENCODERS_BY_RUNTIME = Object.freeze({
   minimax_h3: Object.freeze([
     STOCK_MINIMAX_H3,
@@ -197,30 +91,21 @@ const TEXT_ENCODERS_BY_RUNTIME = Object.freeze({
       description:
         'Abliterated Qwen3-VL-32B conditioner (Heretic v1.2.0, attention-targeted) repackaged for H3. '
         + 'Reads prompts the stock conditioner refuses or waters down; the diffusion weights are unchanged.',
-      // A/B-rendered against the stock conditioner at fixed seed in #4081.
       verified: true,
       repo: 'ethanfel/Qwen3-VL-32B-Ultra-Heretic-H3-ComfyUI-INT8-ConvRot',
       revision: 'e8967f6a39ea5b4939a1aff81be3e8706490c0e8',
       files: Object.freeze(['qwen3vl_32b_h3_ultra_uncensored_heretic_bf16.safetensors']),
-      // ComfyUI namespace -> the HF namespace the pinned MLX loader matches.
-      // Longest-prefix-first is applied at the runner, so these two disjoint
-      // rules can be declared in any order.
+      // ComfyUI namespace -> the HF namespace the pinned loader matches; applied longest-prefix-first at the runner.
       keyPrefixMap: Object.freeze({
         'model.': 'model.language_model.',
         'visual.': 'model.visual.',
       }),
-      // Published without the final norm (`minimax_h3_final_norm: "false"` in
-      // its safetensors metadata) — synthesized by the runner in THIS file's
-      // own namespace, so the prefix map above rewrites it like any other key.
+      // Published without the final norm (`minimax_h3_final_norm: "false"`); synthesized by the runner in THIS
+      // file's namespace, so the prefix map rewrites it like any other key.
       finalNormKey: 'model.norm.weight',
-      // The exact published size of THIS file. Single source of truth for every
-      // size the UI shows — the picker formats it rather than carrying a second,
-      // driftable "~N GB" literal.
+      // Exact published size; the one size source for the UI, which formats it.
       sizeBytes: 51506295440,
-      // Same shape as VIDEO_MODEL_DISCLOSURES, and rendered by the same
-      // FactLink affordance — reusing that module's license descriptor rather
-      // than restating the Apache text URL. `estimatedDownloadGb` is omitted on
-      // purpose: `sizeBytes` above is the one size, and the UI formats it.
+      // Same shape as VIDEO_MODEL_DISCLOSURES (reuses its license descriptor); `estimatedDownloadGb` omitted because `sizeBytes` is the one size.
       disclosure: Object.freeze({
         modelCardUrl: 'https://huggingface.co/ethanfel/Qwen3-VL-32B-Ultra-Heretic-H3-ComfyUI-INT8-ConvRot',
         weightsLicense: APACHE_2,
@@ -236,13 +121,8 @@ const TEXT_ENCODERS_BY_RUNTIME = Object.freeze({
       verified: true,
       repo: 'huihui-ai/Huihui-Qwen3-VL-32B-Instruct-abliterated',
       revision: '5e88d9b37e5dca1e95d434f5c4ddfa9b51b1591c',
-      // The upstream shard layout, minus the two shards that hold ONLY language
-      // layers 50-63 — parameters the loader never builds (H3 conditions on the
-      // state after layer 49). Verified against this revision's
-      // model.safetensors.index.json: the 12 shards below carry all 903
-      // parameters the port instantiates, and shards 12 + 13 carry none of them.
-      // Pinned by name rather than snapshotted so a repo re-shard can't silently
-      // change what gets pulled — it fails the cache check instead.
+      // Upstream shards minus the two holding ONLY layers 50-63 (never built): the 12 below carry all 903
+      // parameters. Pinned by name so a repo re-shard fails the cache check instead of changing the pull.
       files: Object.freeze([
         'model-00001-of-00014.safetensors',
         'model-00002-of-00014.safetensors',
@@ -257,10 +137,8 @@ const TEXT_ENCODERS_BY_RUNTIME = Object.freeze({
         'model-00011-of-00014.safetensors',
         'model-00014-of-00014.safetensors',
       ]),
-      // No keyPrefixMap and no finalNormKey: this is the upstream Hugging Face
-      // namespace the pinned loader already matches, and it ships its own
-      // `model.language_model.norm.weight` (in shard 14, which is why that shard
-      // is pulled for one tensor rather than synthesized).
+      // No keyPrefixMap/finalNormKey: upstream HF namespace, and it ships its own
+      // `model.language_model.norm.weight` (in shard 14, pulled for that one tensor).
       sizeBytes: 56962931632,
       disclosure: Object.freeze({
         modelCardUrl: 'https://huggingface.co/huihui-ai/Huihui-Qwen3-VL-32B-Instruct-abliterated',
@@ -269,16 +147,9 @@ const TEXT_ENCODERS_BY_RUNTIME = Object.freeze({
       }),
     }),
   ]),
-  // LTX-2.5 (#4320). Unlike H3's, an ltx25 shim takes EVERYTHING from the
-  // substitute — a Gemma 4 tower is self-describing — so `files` pins the
-  // tokenizer, the shard index and the generation config alongside the shards
-  // themselves. All of them are inputs to the shim the runner builds, and
-  // `sizeBytes` is their exact published total.
-  //
-  // The first two substitutes failed the 2026-08-16 coherence/behavior gate
-  // described in the docblock. The LTX-specific follow-up failed the two-seed
-  // gate in #4470. All remain pinned provenance records, while
-  // `verified: false` keeps every non-passing entry out of both public lanes.
+  // LTX-2.5 (#4320). An ltx25 shim takes EVERYTHING from the substitute, so `files` pins the tokenizer, shard
+  // index and generation config alongside the shards; `sizeBytes` is their exact total. All entries are pinned
+  // provenance records; `verified: false` keeps non-passing ones out of both public lanes.
   ltx25: Object.freeze([
     STOCK_LTX25,
     Object.freeze({
@@ -292,10 +163,8 @@ const TEXT_ENCODERS_BY_RUNTIME = Object.freeze({
       verified: false,
       repo: 'divinetribe/gemma-4-12B-it-abliterated-4bit-mlx-text',
       revision: '3f123973331780c8702344dad62445ab09436ef3',
-      // Already the exact shape convert_ltx25_to_mlx.py emits — its config.json
-      // reports `model_type: "gemma4"` — so no `configOverrides`. Every shard is
-      // pinned: this is a text-only export with no tower the loader skips, so
-      // there is no shard to leave out the way the huihui H3 entry does.
+      // Already the shape convert_ltx25_to_mlx.py emits (`model_type: "gemma4"`), so no `configOverrides`. Every
+      // shard is pinned: a text-only export has no tower to skip.
       files: Object.freeze([
         'config.json',
         'generation_config.json',
@@ -325,16 +194,10 @@ const TEXT_ENCODERS_BY_RUNTIME = Object.freeze({
       verified: false,
       repo: 'culturerevolt/gemma-4-12b-heretic-abliterated-8bit-mlx',
       revision: '86c60c34eb11613fbaae0353e2bfac83a32ce8a3',
-      // Published as `gemma4_unified`, which Gemma4LanguageModel.load()
-      // hard-rejects. The shim rewrites the type, mlx-lm's sanitizer discards
-      // its main vision/audio towers, and the runner removes the eleven residual
-      // `vision_embedder.*` tensors found by the strict-load gate. It keeps the
-      // substitute's own `quantization` block (group 32 with per-layer 64
-      // overrides on the MLP projections) verbatim.
+      // Published as `gemma4_unified`, which Gemma4LanguageModel.load() hard-rejects; the shim rewrites the type and
+      // keeps the substitute's own `quantization` block (group 32, per-layer 64 on MLP projections) verbatim.
       configOverrides: Object.freeze({ model_type: 'gemma4' }),
-      // All three shards, none skippable: shard 3 interleaves 233 language keys
-      // with 17 audio/vision keys, so dropping it to save the towers would take
-      // the tail of the language stack with it.
+      // All three shards, none skippable: shard 3 interleaves 233 language keys with 17 audio/vision keys.
       files: Object.freeze([
         'config.json',
         'generation_config.json',
@@ -366,10 +229,8 @@ const TEXT_ENCODERS_BY_RUNTIME = Object.freeze({
       verified: false,
       repo: 'nightmedia/gemma-4-12B-it-uncensored-heretic-mxfp8-mlx',
       revision: '20c9f4b167e56f3f749ea3e428188a5e7a35318a',
-      // Exact MLX quantization of llmfan46's Heretic backbone — the same source
-      // named by DeepNeuralNerd's LTX-2.5 conversion. The unified checkpoint
-      // carries ten visual-only `vision_embedder.*` tensors; the runner's
-      // narrow sanitizer drops those while strict-loading every language key.
+      // Exact MLX quantization of llmfan46's Heretic backbone (the source of DeepNeuralNerd's LTX-2.5 conversion);
+      // its ten visual-only `vision_embedder.*` tensors are dropped by the runner's sanitizer.
       configOverrides: Object.freeze({ model_type: 'gemma4' }),
       files: Object.freeze([
         'config.json',
@@ -393,27 +254,16 @@ const TEXT_ENCODERS_BY_RUNTIME = Object.freeze({
 });
 
 /**
- * `true` when an entry may be offered to a render at all.
- *
- * A substitute is only shippable once it has been A/B-rendered against the
- * runtime's stock conditioner (see the `verified` note in the docblock), and
- * "not yet checked" must not collapse into "fine" — so the flag is REQUIRED on
- * every non-built-in entry and absence fails closed. Applied to both lanes:
- * an unverified entry is neither offered to the picker (so route validation
- * rejects its id) nor listed as a download target (so its tens of GB can't be
- * pulled for something no render can select).
+ * `true` when an entry may be offered to a render at all. Only A/B-verified substitutes ship, and "not yet
+ * checked" must not collapse into "fine", so `verified` is REQUIRED on every non-built-in entry (absence fails
+ * closed). Applies to both lanes: an unverified entry is neither a picker option nor a download target.
  */
 const isOfferedTextEncoder = (entry) => !!entry.builtIn || entry.verified === true;
 
 /**
- * Every conditioner option a model can render with, stock first — `[]` for a
- * runtime this build has no conditioner table for.
- *
- * Deliberately NOT filtered down to "more than one option": that is a
- * presentation rule, and folding it in here would quietly change what the
- * SERVER believes a model supports (and empty the "offers …" list in the error
- * below) for a reason that is only about how a `<select>` looks. The picker
- * owns the hide-when-there-is-no-real-choice check.
+ * Every conditioner option a model can render with, stock first (`[]` for a runtime with no table). Deliberately
+ * NOT filtered to "more than one option": that is a presentation rule, and folding it in would change what the
+ * SERVER believes a model supports; the picker owns hide-when-no-choice.
  */
 export const videoTextEncoderOptions = (model) =>
   (TEXT_ENCODERS_BY_RUNTIME[model?.runtime] || []).filter(isOfferedTextEncoder);
@@ -471,9 +321,8 @@ export const resolveVideoTextEncoder = (model, id) => {
  * /models/status lane and the download/repair routes enumerate. The built-in
  * options are excluded: they ride the model's own download.
  */
-// Deduped by id, not merely flattened: the table is keyed by RUNTIME, so one
-// conditioner can legitimately be offered by two of them — and a duplicate here
-// would mean two download targets and two status rows for one file.
+// Deduped by id: the table is keyed by RUNTIME, so one conditioner can be offered by two, and a duplicate would
+// mean two download targets for one file.
 export const downloadableVideoTextEncoders = () => [...new Map(
   Object.values(TEXT_ENCODERS_BY_RUNTIME).flat()
     .filter((entry) => !entry.builtIn && isOfferedTextEncoder(entry))
@@ -481,14 +330,9 @@ export const downloadableVideoTextEncoders = () => [...new Map(
 ).values()];
 
 /**
- * Every substitute this build DECLARES, verified or not — the unfiltered table,
- * flattened.
- *
- * Exists so the shape invariants (pinned 40-hex revision, safe repo-relative
- * file list, exact `sizeBytes`, model card) are enforced on an entry the moment
- * it is written down, rather than only once someone flips `verified`. The render
- * and download paths must NOT use this: they go through `videoTextEncoderOptions`
- * / `downloadableVideoTextEncoders`, which apply the gate.
+ * Every substitute this build DECLARES, verified or not, so the shape invariants (pinned 40-hex revision, safe
+ * repo-relative files, exact `sizeBytes`, model card) are enforced when an entry is written, not only when
+ * `verified` flips. Render and download paths must NOT use this; they apply the gate.
  */
 export const declaredVideoTextEncoders = () => Object.values(TEXT_ENCODERS_BY_RUNTIME)
   .flat().filter((entry) => !entry.builtIn);
@@ -498,16 +342,9 @@ export const downloadableVideoTextEncoder = (id) =>
   downloadableVideoTextEncoders().find((entry) => entry.id === id) || null;
 
 /**
- * The client-facing projection of an option — exactly what the picker renders,
- * nothing more.
- *
- * An allowlist, not a blocklist, so a new loader-mechanics field is invisible to
- * the client by default. It deliberately drops `keyPrefixMap` / `finalNormKey` /
- * `configOverrides` (mechanics that would only invite a client-side
- * reimplementation), `verified` (an entry that isn't offered never reaches the
- * client at all), `revision`, and `files`: the client never addresses the weight
- * by path — it passes the option's `id` and the server resolves the rest. `repo`
- * stays because the download badge names it in its tooltip.
+ * The client-facing projection of an option: an allowlist, so a new loader-mechanics field is invisible to the
+ * client by default. Drops `keyPrefixMap` / `finalNormKey` / `configOverrides`, `verified`, `revision` and
+ * `files` (the client passes the option's `id`; the server resolves the rest). `repo` stays for the badge tooltip.
  */
 export const publicTextEncoderOption = (entry) => ({
   id: entry.id,

@@ -1,4 +1,12 @@
-/** Machine-local Reactor runtime, provisioned only by an authorized render. */
+/**
+ * Machine-local Reactor runtime, provisioned only by an authorized render.
+ *
+ * Storage: `ephemeral-file` (`data/venvs/reactor/`) — machine-local, never
+ * federated. A regenerable runtime environment, not app records: the pinned SDK,
+ * private Python and checksum-verified uv are provisioned on the first authorized
+ * render (or `npm run setup:reactor`), so no seed, migration or table. Data Manager
+ * lists it but does not purge it while renders may use it.
+ */
 import { promisify } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';

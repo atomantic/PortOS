@@ -5,13 +5,11 @@ import {
   buildScoreText,
   barPitchClasses,
   diffScoreBars,
-  REFERENCE_CLARITY_THRESHOLD,
   magnitudeSpectrum,
   averageMagnitudeSpectrum,
   estimateSpectralF0,
   extractSpectralDiffTrack,
   proposeStackedSegmentScore,
-  STACKED_CLARITY_THRESHOLD,
   DEFAULT_FFT_SIZE,
 } from './referenceAnalysis.js';
 
@@ -131,10 +129,6 @@ describe('proposeSegmentScore', () => {
     expect(text).toBe('');
   });
 
-  it('defaults the clarity gate to the reference threshold', () => {
-    expect(REFERENCE_CLARITY_THRESHOLD).toBeGreaterThan(0);
-    expect(REFERENCE_CLARITY_THRESHOLD).toBeLessThan(1);
-  });
 });
 
 describe('barPitchClasses / diffScoreBars', () => {
@@ -254,9 +248,5 @@ describe('proposeStackedSegmentScore', () => {
     expect(text).toContain('tempo: 60');
   });
 
-  it('exposes a stacked clarity gate in (0, 1)', () => {
-    expect(STACKED_CLARITY_THRESHOLD).toBeGreaterThan(0);
-    expect(STACKED_CLARITY_THRESHOLD).toBeLessThan(1);
-  });
 });
 // @vitest-environment node

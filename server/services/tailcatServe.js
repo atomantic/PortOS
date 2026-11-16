@@ -12,6 +12,10 @@
  * machine-locally, returned by the status API so the Instances UI can offer a
  * Copy control, and always redacted in logs. It is never placed on a peer
  * record, never federated, and never committed.
+ *
+ * Storage: `file-primary` (`data/tailcat-serve.json`) — machine-local, never
+ * federated: host-local transport authority (capability plus approved/revoked
+ * device identities). Excluded from backups; readers of a future version fail closed.
  */
 
 import { createHash } from 'node:crypto';

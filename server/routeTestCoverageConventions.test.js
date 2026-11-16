@@ -1,22 +1,8 @@
 /**
- * Repo-wide guard: every route module `server/index.js` mounts is imported by
- * at least one test (#12048).
- *
- * A router no test imports ships green with a handler that returns the wrong
- * shape or 500s on an edge path, and the CI planner's related-test selection has
- * nothing to select when the file changes. The fix is a contract test at the
- * HTTP boundary (`request(app)` from `lib/testHelper.js`, success path plus the
- * materially different failure path), not an entry here.
- *
- * `UNTESTED_ALLOWLIST` is the burn-down of mounted modules that no test imports
- * yet. It only SHRINKS: a module that gains a test must leave the list (the
- * stale-entry assertion fails otherwise), and a newly mounted untested module
- * fails outright.
- *
- * "Imported" means a relative specifier in a tracked test file (a static or
- * dynamic import, or a `vi.mock` path) resolves to the module. A route reached
- * only through another module (a sub-router mounted by a barrel) is covered by
- * the barrel's test and is not itself listed.
+ * Rule: Every route module mounted by `server/index.js` must be imported (or `vi.mock`ed) by at least one tracked test; a router with no validation or derivation may sit in `UNTESTED_ALLOWLIST` when its entry names the service suite that covers it.
+ * Fix: Add an HTTP-boundary contract test (`request(app)` from `lib/testHelper.js`) that asserts what the route owns, or, for a pure pass-through, allowlist it naming the covering service suite.
+ * What this guard cannot see:
+ *   - Sub-routers reached only through a barrel module are covered by the barrel's test.
  */
 import { existingPaths } from '../scripts/lib/trackedFiles.js';
 
@@ -73,7 +59,7 @@ describe('mounted route modules are reached by a test (#12048)', () => {
     const offenders = untested.filter((m) => !UNTESTED_ALLOWLIST.has(m));
     expect(
       offenders,
-      'add a route contract test (request(app) at the mounted path: success plus the materially different failure). Do NOT add to UNTESTED_ALLOWLIST — it only shrinks.',
+      'add a route contract test (request(app) at the mounted path: refusals, derived arguments, error mapping), or for a router with no validation and no derivation add it to UNTESTED_ALLOWLIST with a reason naming the service suite that covers it.',
     ).toEqual([]);
   });
 

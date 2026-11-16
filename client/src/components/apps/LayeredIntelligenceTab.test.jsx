@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { LAYERED_INTELLIGENCE_SOURCE_KEYS } from '../../lib/layeredIntelligenceSources.js';
+import { LAYERED_INTELLIGENCE_SOURCE_KEYS } from '../../../../server/lib/layeredIntelligenceSourceKeys.js';
 import LayeredIntelligenceTab, { LI_SOURCE_FIELDS, buildLayeredIntelligenceUpdate, buildLayeredIntelligenceScheduleUpdate, intervalFieldsFromMs, describeLastRun } from './LayeredIntelligenceTab';
 
 const baseline = {

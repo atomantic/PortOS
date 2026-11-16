@@ -84,6 +84,8 @@ import {
   persistentMindUsageLimitRetryAt,
 } from '../services/persistentMindSupervisor.js';
 
+import { getCosToolCatalog, readCosToolRecipeCatalog } from '../services/cosToolRegistry.js';
+import { readPersistentMindManagedApps } from '../services/persistentMindManagedApps.js';
 const router = Router();
 router.use('/mind/recipes', mindToolRecipeRoutes);
 
@@ -346,14 +348,12 @@ router.post('/mind/journal/:journalEventId/correct', asyncHandler(async (req, re
 router.get('/mind/tools', asyncHandler(async (_req, res) => {
   const root = await loadState();
   const capabilities = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
-  const { getCosToolCatalog, readCosToolRecipeCatalog } = await import('../services/cosToolRegistry.js');
   // The allowlist is shared by the task and issue grants, so the page gets ONE
   // roster carrying what each grant needs — `planOnly` for tasks, `forge` for
   // issues, `granted` for both. Loading it per grant would let either editor
   // narrow the list from a partial view and silently revoke the other's apps.
   const managedApps = capabilities.createTasks || capabilities.fileIssues
-    ? import('../services/persistentMindManagedApps.js')
-      .then(({ readPersistentMindManagedApps }) => readPersistentMindManagedApps())
+    ? readPersistentMindManagedApps()
     : null;
   const [recipes, roster, reportAccess] = await Promise.all([
     readCosToolRecipeCatalog({ scope: 'mind' }),

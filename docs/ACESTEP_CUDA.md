@@ -43,79 +43,28 @@ generation, never during install.
 
 ## Regenerating locks
 
-Edit `scripts/requirements-acestep-cuda.txt` with exact direct pins. Use
-hash-verified uv **0.13.7**. The CUDA index is explicit and scoped to **Torch**
-during resolution: its mirrors of unrelated packages can lack publication dates,
-which correctly makes a global multi-index resolve fail the cooldown. Keep all
-other packages on PyPI rather than dropping the cooldown.
-
-Run from the repository root in Bash, setting `UV` to that verified executable:
+Edit `scripts/requirements-acestep-cuda.txt` with exact direct pins, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks) with these values:
 
 ```bash
-set -euo pipefail
-CUTOFF=2026-11-05T00:00:00Z  # advance to a UTC date at least seven days old
-TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
-python3 - "$TMP/pyproject.toml" <<'PYPROJECT'
-import json
-import pathlib
-import sys
-
-lines = pathlib.Path("scripts/requirements-acestep-cuda.txt").read_text().splitlines()
-deps = [line for line in lines if line and not line.startswith("#")]
-pathlib.Path(sys.argv[1]).write_text(
-    '[project]\nname="portos-acestep-cuda"\nversion="0.0.0"\n'
-    'requires-python=">=3.11"\ndependencies=' + json.dumps(deps) + '\n'
-    '[tool.uv.sources]\ntorch={index="pytorch"}\n'
-    '[[tool.uv.index]]\nname="pytorch"\n'
-    'url="https://download.pytorch.org/whl/cu126"\nexplicit=true\n'
+SLUG=acestep-cuda
+LABEL="ACE-Step CUDA"
+DOC=docs/ACESTEP_CUDA.md
+CUDA_SCOPED="torch"
+COMPILE_EXTRA=(
+  --upgrade-package filelock==4.2.9 --upgrade-package typing-inspection==0.4.5
+  --no-binary docopt --no-binary unidic-lite
+  --preview-features build-dependency-hashes --require-build-hashes
+  --build-constraints "$PWD/scripts/requirements-acestep-mlx-build.lock.txt"
 )
-PYPROJECT
-for target in windows linux; do
-  case "$target" in
-    windows) platform=x86_64-pc-windows-msvc ;;
-    linux) platform=x86_64-manylinux_2_28 ;;
-  esac
-  out="scripts/requirements-acestep-cuda-${target}.lock.txt"
-  cp "$out" "$TMP/$target.lock" # retain unrelated pins during resolution
-  "$UV" --no-config pip compile "$TMP/pyproject.toml" \
-    --upgrade-package filelock==4.2.9 --upgrade-package typing-inspection==0.4.5 \
-    --python-version 3.11 --python-platform "$platform" \
-    --generate-hashes --only-binary :all: --no-binary docopt --no-binary unidic-lite \
-    --preview-features build-dependency-hashes --require-build-hashes \
-    --build-constraints "$PWD/scripts/requirements-acestep-mlx-build.lock.txt" \
-    --no-header --no-annotate \
-    --index-url https://pypi.org/simple --emit-index-url \
-    --exclude-newer "$CUTOFF" -o "$TMP/$target.lock"
-  {
-    printf '# ACE-Step CUDA: CPython 3.11, x86_64 %s, CUDA 12.6.\n' "$target"
-    printf '# uv 0.13.7; exclude-newer %s; regenerate: docs/ACESTEP_CUDA.md.\n' "$CUTOFF"
-    # pip-format locks cannot encode uv's named explicit index. Installation
-    # retains the CUDA index, but versions and allowed artifact hashes are fixed.
-    printf '%s\n' '--extra-index-url https://download.pytorch.org/whl/cu126'
-    cat "$TMP/$target.lock"
-  } > "$out"
-done
 ```
 
-The temporary project derives its pins from the source requirements rather than
-maintaining a second dependency list. `--no-annotate` keeps temporary filesystem
-paths out of the committed locks. Torch's official simple-index entries carry
-SHA-256 values and upload timestamps; verify those against the lock and cutoff.
-The preserved Triton entry also contains official PyTorch build hashes; verify
-those against the CUDA index's `triton/` entries and their upload timestamps.
-They are part of the unchanged native baseline, not new artifacts introduced
-by this refresh. Verify all remaining artifacts against PyPI metadata. Never
-hand-edit generated hashes.
+The CUDA index is scoped to **Torch** during resolution. The build constraints file is relative to the repository root.
 
-Query OSV for **every resolved package**, including `MAL-` records,
-immediately before merge, using the script in
-[AudioLDM2's regeneration section](./AUDIOLDM2_CUDA.md#regenerating-locks) with
-`requirements-acestep-cuda-{target}.lock.txt` as the lock path. Any advisory or
-unreadable response blocks the merge.
+Run the [OSV audit](./RUNTIME_LOCKS.md#osv-audit) with `acestep-cuda` before merge.
 
 ## Fresh install and readiness evidence
 
+Follow the [shared evidence procedure](./RUNTIME_LOCKS.md#fresh-install-and-readiness-evidence).
 Needs an NVIDIA CUDA host for a meaningful probe. Use an isolated home:
 
 ```bash
@@ -127,8 +76,4 @@ INSTALL_ACESTEP=1 INSTALL_MFLUX=0 INSTALL_VIDEO=0 INSTALL_FLUX2=0 \
 "$HOME/.portos/venv-acestep/bin/python3" -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
 ```
 
-(`Scripts/python.exe` on Windows.) The installer's own probe imports
-`ACEStepPipeline`. Record OS, GPU, driver/CUDA, Python/torch versions, the
-selected lock and redacted probe output; run `uv pip check --python` with the
-venv interpreter and confirm Repair leaves versions unchanged. A Windows probe
-does not certify Linux. Import evidence does not claim generation quality.
+The installer's own probe imports `ACEStepPipeline`.

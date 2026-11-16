@@ -1,29 +1,8 @@
 /**
- * Repo-wide touch fallback for hover-revealed controls.
- *
- * Tailwind v4 wraps every `hover:` / `group-hover:` / `peer-hover:` rule in
- * `@media (hover: hover)`, so on a touch tablet the reveal never fires. A row
- * action written `sm:opacity-0 sm:group-hover:opacity-100` is therefore
- * invisible at every width ≥640px on an iPad: the delete button still takes a
- * tap at opacity 0 (an unseen destructive target), and a `md:hidden
- * md:group-hover:flex` control cannot be reached at all. This was fixed one site
- * at a time in #9899, #13923, #13924 and #13925 before the rest of the tree was
- * swept.
- *
- * The rule: a class string that hides a control (`opacity-0`, `hidden`,
- * `invisible`, at any breakpoint) and reveals it with a hover-family variant
- * must scope the hide to hover-capable devices — the canonical form is
- * `[@media(hover:hover)]:sm:opacity-0` (`components/Layout.jsx`), which hides
- * exactly where the reveal can run. A string that instead restores the control
- * on touch (`pointer-coarse:opacity-100`, `[@media(hover:none)]:opacity-100`)
- * also passes; `pages/Ask.jsx` uses that form to show its action at full
- * opacity on touch.
- *
- * Deliberately NOT flagged: state hides such as `disabled:opacity-0`, and hover
- * effects that never hide anything (`opacity-70 group-hover:opacity-100`).
- *
- * Scoped to git-tracked non-test sources; comments are masked first so a doc
- * block quoting an example class string is documentation, not markup.
+ * Rule: A class string that hides a control (`opacity-0`, `hidden`, `invisible`) and reveals it on hover must scope the hide to hover-capable devices (`[@media(hover:hover)]:…`) or restore it on touch (`pointer-coarse:opacity-100`).
+ * Fix: Prefix the hide with `[@media(hover:hover)]:` or add `[@media(hover:none)]:opacity-100` / `pointer-coarse:opacity-100`.
+ * What this guard cannot see:
+ *   - Scoped to git-tracked non-test sources (comments masked); state hides like `disabled:opacity-0` and non-hiding hovers are not flagged.
  */
 
 import { describe, it, expect } from 'vitest';

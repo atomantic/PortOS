@@ -16,6 +16,8 @@
 // emoji) keep the following text column-aligned; a cell with zero code points
 // (the right half of a wide character) emits nothing.
 
+import { clamp } from './vectorMath.js';
+
 const ESC = '\x1b[';
 
 const sgrColor = (base, rgb, standard) => {
@@ -90,7 +92,6 @@ const renderLine = (line, cols) => {
   return out;
 };
 
-const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
 /**
  * @param {object} frame

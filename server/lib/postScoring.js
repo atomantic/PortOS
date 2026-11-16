@@ -2,13 +2,6 @@
  * Scoring and accuracy helpers for post-training drill types shared between
  * server (`services/meatspacePost.js`) and client (drill UI, via
  * `components/meatspace/post/constants.js`).
- *
- * Scoring and accuracy helpers for post-training drill types shared between server
- * (`services/meatspacePost.js`) and client (`components/meatspace/post/constants.js`) —
- * `nBackBalancedAccuracy` (balanced signal-detection accuracy for n-back questions), plus
- * `DEFAULT_ESTIMATION_TOLERANCE_PCT` / `resolveEstimationTolerancePct(pct)` — the single estimation
- * band that server grading, the client's optimistic check, and the on-screen "within N%" copy all
- * read, so the number shown and the number graded cannot drift.
  */
 
 // Balanced (signal-detection) accuracy for n-back questions, derived from only

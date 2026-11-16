@@ -29,7 +29,7 @@ import { join, resolve } from 'node:path';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { getBranches, getDefaultBranch, hasBranchMergeEvidence, deleteMergedRemoteBranches } from './git.js';
 import { execGit } from '../lib/execGit.js';
-import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, reapMergedWorktrees, readWorktreeStatus } from './worktreeManager.js';
+import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, reapMergedWorktrees, readWorktreeStatus, deleteCompletedLocalBranch } from './worktreeManager.js';
 import { isHumanClaimWorktree, knownAgentIds, worktreeAgentId, worktreeOwnershipReason, worktreeHoldExpiresAt } from '../lib/worktreeOwnership.js';
 import { execGh, ensureForgeReachable, getIssueDispatchHint } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
@@ -1359,7 +1359,6 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
   let removal = null;
   let checkoutIdentity = null;
   if (b.worktreePath) {
-    const { readRetirementCheckoutIdentity } = await import('../lib/retirementCheckoutObservation.js');
     checkoutIdentity = await readRetirementCheckoutIdentity(b.worktreePath).catch(() => null);
     const verifyRemoval = async (holder, worktrees) => {
       if (!holder || holder.branch !== `refs/heads/${b.branch}` || holder.head !== expectedHead) return 'worktree-holder-changed';
@@ -1409,7 +1408,6 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
     const backup = await execGit(['update-ref', backupRef, expectedHead], repoPath, { ignoreExitCode: true }).catch(() => null);
     if (backup?.exitCode !== 0) return { ok: false, reason: 'recovery-ref-failed' };
   }
-  const { deleteCompletedLocalBranch } = await import('./worktreeManager.js');
   if (appId && !b.worktreePath) {
     const { getAppById } = await import('./apps.js');
     const app = await getAppById(appId);

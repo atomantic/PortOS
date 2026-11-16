@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import { spawn } from '../lib/childProcess.js';
-import { atomicWrite, ensureDir, writeFileGuarded } from '../lib/fileCore.js';
+import { atomicWrite, ensureDir, writeFileGuarded, appendFileGuarded } from '../lib/fileCore.js';
 import { killProcessTree } from '../lib/bufferedSpawn.js';
 import { createContentRefusalDetector, isContentRefusalError } from '../lib/aiToolkit/errorDetection.js';
 import { initialSecurityScanEvidence, securityScanGrantSchema, securityScanRequestSchema } from '../lib/securityScanEvidence.js';
@@ -189,7 +189,6 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
           // The complete private log is an artifact; only bounded typed fields
           // are sent to PortOS or kept in the agent card.
           logWrites = logWrites.then(async () => {
-            const { appendFileGuarded } = await import('../lib/fileCore.js');
             await appendFileGuarded(logPath, text, { mode: 0o600 });
           }).catch(err => { logError = err; entry.stopReason ||= 'interrupted'; cancel(); });
           const envelopes = [...logTail.split('\n'), logTail.slice(Math.max(0, logTail.lastIndexOf('\n{') + 1))];

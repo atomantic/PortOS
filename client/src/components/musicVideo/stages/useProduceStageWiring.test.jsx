@@ -21,15 +21,17 @@ import {
   LocationProbe,
   showFrames,
   installMusicVideoPageHooks,
+  editResult,
+  savedSceneReplies,
 } from '../../../test/musicVideoPageMocks.jsx';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { findEnabledByRole } from '../../../test/enabledBarrier.js';
 import { MemoryRouter } from 'react-router';
 import toast from '../../ui/Toast';
 import { createTestPhaseDiagnostics } from '../../../../../server/test/testPhaseDiagnostics.js';
-import { approveMusicVideoFinal, listMusicVideoProjects, renderMusicVideoProject, updateMusicVideoProject, updateMusicVideoScene, proposeMusicVideoShotSheet, splitMusicVideoScene, moveMusicVideoSceneStart, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff, addMusicVideoSceneTake, getMusicVideoHandoffBundle, getMusicVideoProject, startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision, renderMusicVideoSceneFrame, getMusicVideoBlender } from '../../../services/apiMusicVideo.js';
+import { addMusicVideoScene, approveMusicVideoFinal, rejectUnusedMusicVideoSceneTakes, measureMusicVideoColorMatch, listMusicVideoProjects, renderMusicVideoProject, reorderMusicVideoScenes, updateMusicVideoProject, updateMusicVideoScene, proposeMusicVideoShotSheet, splitMusicVideoScene, moveMusicVideoSceneStart, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff, addMusicVideoSceneTake, getMusicVideoHandoffBundle, getMusicVideoProject, startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision, renderMusicVideoSceneFrame, getMusicVideoBlender, getMusicVideoCastAndSets } from '../../../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../../../services/apiSystem.js';
-import { generateVideo, getVideoGenStatus, getVideoHistoryItem, previewVideoPrompt, trimVideo } from '../../../services/apiImageVideo.js';
+import { generateVideo, getVideoGenStatus, getVideoHistoryItem, previewImagePrompt, previewVideoPrompt, trimVideo } from '../../../services/apiImageVideo.js';
 import { downloadBlob } from '../../../lib/downloadBlob.js';
 import { blenderFilmProject, blenderFilmState } from '../../../test/blenderFilmFixture.js';
 import { finalApprovalPatch } from '../../../../../server/lib/musicVideoFinalApproval.js';
@@ -460,10 +462,11 @@ describe('MusicVideo project video renderer', () => {
     it('approves a draft clip for final from the shot card and badges its board thumbnail', async () => {
       const take = { takeId: 'tk1', kind: 'video', assetId: 'h1', tier: 'draft', status: 'candidate' };
       const project = { ...PROJECT_WITH_CLIP, scenes: [{ ...PROJECT_WITH_CLIP.scenes[0], label: 'Opening', takes: [take] }] };
-      approveMusicVideoFinal.mockImplementation(async (_id, { sceneIds, approved }) => ({
-        scenes: sceneIds.map((sceneId) => ({ sceneId, finalApproval: approved ? finalApprovalPatch(project.scenes[0], true).patch.finalApproval : null })),
-        counts: { draft: 1, approved: approved ? 1 : 0, final: 0, missing: 0 },
-      }));
+      approveMusicVideoFinal.mockImplementation(async (_id, { sceneIds, approved }) => {
+        const scenes = project.scenes.map((scene) => (sceneIds.includes(scene.sceneId)
+          ? { ...scene, finalApproval: approved ? finalApprovalPatch(project.scenes[0], true).patch.finalApproval : null } : scene));
+        return { scenes: scenes.filter((scene) => sceneIds.includes(scene.sceneId)), counts: { draft: 1, approved: approved ? 1 : 0, final: 0, missing: 0 }, edit: editResult(scenes, sceneIds) };
+      });
       await openProject(project, 'produce');
       fireEvent.click(within(await screen.findByLabelText('Storyboard thumbnails')).getByRole('button', { name: /Opening/ }));
       fireEvent.click(await screen.findByLabelText(/Approve for final/));
@@ -491,7 +494,7 @@ describe('MusicVideo project video renderer', () => {
         { ...longShot, label: 'Verse · 1/2', endSec: 21 },
         { ...longShot, sceneId: 's1b', order: 1, label: 'Verse · 2/2', startSec: 21, videoHistoryId: null },
       ];
-      splitMusicVideoScene.mockResolvedValue({ project: { ...project, scenes: pieces }, scenes: pieces });
+      splitMusicVideoScene.mockResolvedValue({ scenes: pieces, edit: editResult(pieces) });
       await openProject(project, 'produce');
 
       // The too-long refusal stays, now with a way out that never loops or stretches.
@@ -507,7 +510,7 @@ describe('MusicVideo project video renderer', () => {
     it('splits a shot in two at the time picked on its slider', async () => {
       const scene = { ...PROJECT_NO_CLIP.scenes[0], startSec: 10, endSec: 14 };
       const pieces = [{ ...scene, endSec: 11.5, label: 'Shot · 1/2' }, { ...scene, sceneId: 's1b', order: 1, startSec: 11.5, label: 'Shot · 2/2' }];
-      splitMusicVideoScene.mockResolvedValue({ project: { ...PROJECT_NO_CLIP, scenes: pieces }, scenes: pieces });
+      splitMusicVideoScene.mockResolvedValue({ scenes: pieces, edit: editResult(pieces) });
       await openProject({ ...PROJECT_NO_CLIP, scenes: [scene] }, 'produce');
 
       fireEvent.click(await screen.findByRole('button', { name: /Split shot/ }));
@@ -524,7 +527,7 @@ describe('MusicVideo project video renderer', () => {
       const first = { ...PROJECT_NO_CLIP.scenes[0], startSec: 0, endSec: 10 };
       const second = { ...first, sceneId: 's2', order: 1, startSec: 10, endSec: 14, label: 'Second' };
       const moved = [{ ...first, endSec: 10.042 }, { ...second, startSec: 10.042 }];
-      moveMusicVideoSceneStart.mockResolvedValue({ project: { ...PROJECT_NO_CLIP, scenes: moved }, scene: moved[1], previous: moved[0] });
+      moveMusicVideoSceneStart.mockResolvedValue({ scene: moved[1], previous: moved[0], edit: editResult(moved) });
       await openProject({ ...PROJECT_NO_CLIP, scenes: [first, second] }, 'produce');
 
       await act(async () => fireEvent.click(await screen.findByRole('button', { name: /^Open Shot 2/ })));
@@ -595,7 +598,7 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
         { sceneId: 's2', order: 1, prompt: 'b', referenceImageId: 'img1', videoHistoryId: 'h2', beatAligned: true, startSec: 12, endSec: 30 },
       ],
     };
-    updateMusicVideoScene.mockResolvedValue({});
+    updateMusicVideoScene.mockImplementation(savedSceneReplies(project));
     await openProject(project, 'produce');
     // The card's summary row and its editor both quote the lyric.
     expect(screen.getAllByText(/first line/).length).toBeGreaterThan(0);
@@ -653,16 +656,17 @@ describe('MusicVideo typography composition (#8984)', () => {
       { id: 'lc-1', text: 'first line', startSec: 1, endSec: 3 },
       { id: 'lc-2', text: 'untimed line', startSec: null, endSec: null },
     ];
-    updateMusicVideoProject.mockResolvedValue({});
+    let saves = 0;
+    updateMusicVideoProject.mockImplementation(async (_id, patch) => ({ edit: editResult([], [], { updatedAt: `2026-01-01T00:00:0${++saves}.000Z`, project: patch }) }));
     await openProject({ ...PROJECT_ANALYZED, lyricCues }, 'compose');
 
-    fireEvent.click(screen.getByRole('button', { name: /Copy timed lyrics \(1\)/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Copy timed lyrics \(1\)/ }));
     const text = await screen.findByLabelText('Text cue 1 text');
     expect(text).toHaveValue('first line');
     expect(screen.queryByLabelText('Text cue 2 text')).toBeNull();
     await waitFor(() => expect(updateMusicVideoProject).toHaveBeenLastCalledWith('mv-3', {
       composition: expect.objectContaining({ mode: 'concat', textCues: [expect.objectContaining({ text: 'first line', startSec: 1, endSec: 3, template: 'fade' })] }),
-    }, { silent: true }));
+    }, { silent: true, edit: true }));
 
     expect(document.getElementById('mv-typo-mode')).toBeNull(); // render style is chosen in Setup only
     fireEvent.change(screen.getByLabelText('Text cue 1 motion'), { target: { value: 'typewriter' } });
@@ -673,7 +677,7 @@ describe('MusicVideo typography composition (#8984)', () => {
         mode: 'concat',
         textCues: [expect.objectContaining({ text: 'first line, typed', template: 'typewriter' })],
       }),
-    }, { silent: true }));
+    }, { silent: true, edit: true }));
   });
 });
 
@@ -685,7 +689,7 @@ describe('MusicVideo section layers (#8985)', () => {
   const composition = (mode) => ({ version: 1, mode, textCues: [], style: { color: '#ffffff', font: 'sans' }, posterSec: null });
 
   it('makes a footage-less scene a title card so a composed project can render', async () => {
-    updateMusicVideoScene.mockResolvedValue({});
+    updateMusicVideoScene.mockImplementation(savedSceneReplies({ ...PROJECT_WITH_CLIP, scenes }));
     await openProject({ ...PROJECT_WITH_CLIP, scenes, composition: composition('composed') }, 'review');
     const renderBtn = await screen.findByRole('button', { name: /^Render final$/ });
     expect(renderBtn).toBeDisabled();
@@ -1135,12 +1139,12 @@ it('waits for a grade save before rendering and keeps the saved look when a late
   const project = { ...PROJECT_WITH_CLIP, composition: { mode: 'composed', textCues: [], style: { color: '#ffffff', font: 'sans' } } };
   let finishSave;
   updateMusicVideoProject.mockImplementationOnce((_id, patch) => new Promise((resolve) => {
-    finishSave = () => resolve({ ...project, ...patch });
+    finishSave = () => resolve({ edit: editResult(project.scenes || [], [], { updatedAt: '2026-01-01T00:00:01.000Z', project: patch }) });
   }));
   await openProject(project, 'compose');
   fireEvent.change(screen.getByLabelText('Default section look'), { target: { value: 'teal-night' } });
   await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(project.id,
-    { composition: expect.objectContaining({ grade: expect.objectContaining({ preset: 'teal-night' }) }) }, { silent: true }));
+    { composition: expect.objectContaining({ grade: expect.objectContaining({ preset: 'teal-night' }) }) }, { silent: true, edit: true }));
   expect(screen.getByLabelText('Default section look')).toBeDisabled();
   expect(screen.getByLabelText('Default section look').value).toBe('neutral');
   await openStage('review');
@@ -1361,7 +1365,7 @@ it('shares Done between editor, board and sheet, and accepts remote changes afte
   await openProject(project, 'produce');
   fireEvent.click(screen.getByRole('checkbox', { name: 'Done', exact: true }));
   expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-1', project.scenes[0].sceneId, { shotSheet: { checked: true } }, { silent: true });
-  await act(async () => settle({}));
+  await act(async () => settle(await savedSceneReplies(project)(project.id, project.scenes[0].sceneId, { shotSheet: { checked: true } })));
   expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).toBeChecked();
   expect(within(screen.getByLabelText('Storyboard thumbnails')).getByRole('button', { name: 'Open Shot 1' })).toHaveClass('border-port-success');
   fireEvent.click(screen.getByRole('button', { name: 'Close shot' }));
@@ -1376,4 +1380,495 @@ it('shares Done between editor, board and sheet, and accepts remote changes afte
   await pushSocket('music-video:project:changed', { id: project.id });
   await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).not.toBeChecked());
   expect(screen.getByRole('combobox', { name: 'Location' })).toHaveValue('Station');
+});
+
+// #16247: a shot edit from this tab patches the board from its reply and never reads the whole project again.
+describe('shot edits apply their reply without a project read', () => {
+  const first = { ...PROJECT_NO_CLIP.scenes[0], label: 'First', startSec: 0, endSec: 10 };
+  const second = { ...first, sceneId: 's2', order: 1, startSec: 10, endSec: 14, label: 'Second' };
+  const board = { ...PROJECT_NO_CLIP, updatedAt: '2026-01-01T00:00:00.000Z', scenes: [first, second] };
+  const ownOrigin = { silent: true, headers: { 'X-PortOS-Origin': 'tab-socket' } };
+  const asThisTab = async () => { (await import('../../../services/socket.js')).default.id = 'tab-socket'; };
+  const reads = () => getMusicVideoProject.mock.calls.length;
+
+  // Uniquely catches an own edit that still reloads the project, from its reply or from its own broadcast.
+  it('moves a cut from the reply, skips its own broadcast and still reloads for another tab', async () => {
+    await asThisTab();
+    const moved = [{ ...first, endSec: 10.042 }, { ...second, startSec: 10.042 }];
+    moveMusicVideoSceneStart.mockResolvedValue({ scene: moved[1], previous: moved[0], edit: editResult(moved, ['s1', 's2'], { updatedAt: '2026-01-01T00:00:01.000Z' }) });
+    await openProject(board, 'produce');
+    const loaded = reads();
+    await act(async () => fireEvent.click(await screen.findByRole('button', { name: /^Open Shot 2/ })));
+    fireEvent.click(screen.getByRole('button', { name: 'Start one frame later' }));
+    await waitFor(() => expect(moveMusicVideoSceneStart).toHaveBeenCalledWith('mv-2', 's2', 10.042, ownOrigin));
+    await waitFor(() => expect(screen.getByLabelText('Start frame').value).toBe('241'));
+    await pushSocket('music-video:project:changed', { id: 'mv-2', origin: 'tab-socket' });
+    await settle();
+    expect(reads()).toBe(loaded);
+    getMusicVideoProject.mockResolvedValue({ ...board, updatedAt: '2026-01-01T00:00:03.000Z', scenes: moved });
+    await pushSocket('music-video:project:changed', { id: 'mv-2', origin: 'another-tab' });
+    await waitFor(() => expect(reads()).toBe(loaded + 1));
+  });
+
+  it('marks a shot done from the reply alone', async () => {
+    await asThisTab();
+    updateMusicVideoScene.mockImplementation(savedSceneReplies(board));
+    await openProject(board, 'produce');
+    const loaded = reads();
+    await act(async () => fireEvent.click(await screen.findByRole('button', { name: /^Open Shot 1/ })));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Done', exact: true }));
+    await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', { shotSheet: { checked: true } }, ownOrigin));
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).toBeChecked());
+    await settle();
+    expect(reads()).toBe(loaded);
+  });
+
+  // Uniquely catches a project-field save that applies the whole project reply, or reloads on its own broadcast.
+  it('saves a project field from its edit result alone', async () => {
+    await asThisTab();
+    updateMusicVideoProject.mockResolvedValue({ edit: editResult([first, second], ['s1', 's2'], { updatedAt: '2026-01-01T00:00:01.000Z', project: { pacing: { minShotSec: 2 } } }) });
+    await openProject(board, 'produce');
+    const loaded = reads();
+    const field = await screen.findByLabelText('Shortest shot (s)');
+    fireEvent.change(field, { target: { value: '2' } });
+    fireEvent.blur(field);
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith('mv-2', { pacing: { minShotSec: 2 } }, { ...ownOrigin, edit: true }));
+    await pushSocket('music-video:project:changed', { id: 'mv-2', origin: 'tab-socket' });
+    await settle();
+    expect(reads()).toBe(loaded);
+    updateMusicVideoProject.mockResolvedValue({ id: 'mv-2' });
+    const again = await screen.findByLabelText('Shortest shot (s)');
+    fireEvent.change(again, { target: { value: '3' } });
+    fireEvent.blur(again);
+    await waitFor(() => expect(reads()).toBeGreaterThan(loaded));
+  });
+
+  // Uniquely catches an added shot that is appended unpresented and then reloaded by its own broadcast.
+  it('adds a shot from the reply alone', async () => {
+    await asThisTab();
+    const added = { ...first, sceneId: 's3', order: 2, startSec: 14, endSec: 18, label: 'Third' };
+    addMusicVideoScene.mockResolvedValue({ ...added, edit: editResult([first, second, added], ['s3'], { updatedAt: '2026-01-01T00:00:01.000Z' }) });
+    await openProject(board, 'produce');
+    const loaded = reads();
+    fireEvent.click(await screen.findByRole('button', { name: /Add scene/ }));
+    await waitFor(() => expect(addMusicVideoScene).toHaveBeenCalledWith('mv-2', { prompt: '' }, ownOrigin));
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^Open Shot \d+ · / })).toHaveLength(3));
+    await pushSocket('music-video:project:changed', { id: 'mv-2', origin: 'tab-socket' });
+    await settle();
+    expect(reads()).toBe(loaded);
+  });
+
+  // Uniquely catches a gallery clip import that keeps only the shot patched, so its broadcast or the next board edit reloads the project.
+  it('imports a gallery clip take from the reply alone', async () => {
+    await asThisTab();
+    const imported = { ...first, videoHistoryId: 'rh-9', takes: [{ takeId: 't1', kind: 'video', assetId: 'rh-9', status: 'candidate' }] };
+    addMusicVideoSceneTake.mockResolvedValueOnce({ scene: imported, take: imported.takes[0], edit: editResult([imported, second], ['s1'], { updatedAt: '2026-01-01T00:00:01.000Z' }) });
+    await openProject(board, 'produce');
+    const loaded = reads();
+    fireEvent.click(await screen.findByRole('button', { name: /^Import clip take$/ }));
+    const dialog = await screen.findByRole('dialog', { name: /Pick a video from your gallery/i });
+    const galleryItem = await within(dialog).findByText('(no prompt)');
+    fireEvent.click(galleryItem.closest('.bg-port-card').querySelector('button'));
+    await waitFor(() => expect(addMusicVideoSceneTake).toHaveBeenCalledWith('mv-2', 's1', { kind: 'video', assetId: 'rh-9', source: 'imported' }, ownOrigin));
+    await pushSocket('music-video:project:changed', { id: 'mv-2', origin: 'tab-socket' });
+    await settle();
+    expect(reads()).toBe(loaded);
+  });
+
+  // Uniquely catches a trimmed clip whose two writes leave the board a revision behind: the select's diff would be refused and reload.
+  it('trims a clip from the two replies alone', async () => {
+    await asThisTab();
+    const clipped = { ...first, referenceImageId: 'img1', videoHistoryId: 'h1',
+      takes: [{ takeId: 't-v', kind: 'video', assetId: 'h1', source: 'generated', provider: 'portos', sourceImageId: 'img1', status: 'selected', note: null }] };
+    const trimmedTake = { takeId: 't-trim', kind: 'video', assetId: 'h1-trim', source: 'trimmed', provider: null, status: 'candidate', note: null };
+    const added = { ...clipped, takes: [...clipped.takes, trimmedTake] };
+    const selected = { ...clipped, videoHistoryId: 'h1-trim', takes: [{ ...clipped.takes[0], status: 'candidate' }, { ...trimmedTake, status: 'selected' }] };
+    trimVideo.mockResolvedValueOnce({ video: { id: 'h1-trim' } });
+    addMusicVideoSceneTake.mockResolvedValueOnce({ scene: added, take: trimmedTake, edit: editResult([added, second], ['s1'], { updatedAt: '2026-01-01T00:00:01.000Z' }) });
+    selectMusicVideoSceneTake.mockResolvedValueOnce({ ...selected, edit: { ...editResult([selected, second], ['s1'], { updatedAt: '2026-01-01T00:00:02.000Z' }), baseUpdatedAt: '2026-01-01T00:00:01.000Z' } });
+    await openProject({ ...board, scenes: [clipped, second] }, 'produce');
+    const loaded = reads();
+    const render = within(await screen.findByRole('region', { name: 'Render' }));
+    for (let i = 0; i < 12; i += 1) fireEvent.click(render.getByRole('button', { name: 'Next frame' }));
+    fireEvent.click(render.getByRole('button', { name: /Start clip here/ }));
+    await waitFor(() => expect(selectMusicVideoSceneTake).toHaveBeenCalledWith('mv-2', 's1', 't-trim', ownOrigin));
+    await pushSocket('music-video:project:changed', { id: 'mv-2', origin: 'tab-socket' });
+    await settle();
+    expect(reads()).toBe(loaded);
+  });
+
+  // Uniquely catches readiness or approval staying as it was before an edit that changed it.
+  it('takes readiness from the reply: a reorder that stales the storyboard approval stops asking to re-approve', async () => {
+    await asThisTab();
+    const readiness = (approved) => ({ readyForProduction: approved, basis: {}, art: { approved: true, problems: [] }, storyboard: { approved, problems: [] }, proof: { approved: false, problems: [] } });
+    const approvedBoard = { ...board, productionReadiness: readiness(true) };
+    const success = vi.spyOn(toast, 'success');
+    reorderMusicVideoScenes.mockImplementation(async (_id, ids) => {
+      const order = ids.map((id) => board.scenes.find((scene) => scene.sceneId === id));
+      const retimed = order.map((scene, i) => ({ ...scene, order: i, startSec: board.scenes[i].startSec, endSec: board.scenes[i].endSec }));
+      return { edit: editResult(retimed, ids, { updatedAt: '2026-01-01T00:00:02.000Z', project: { productionReadiness: readiness(false) } }) };
+    });
+    await openProject(approvedBoard, 'produce');
+    const loaded = reads();
+    await act(async () => fireEvent.click(await screen.findByRole('button', { name: /^Open Shot 1/ })));
+    fireEvent.click(await screen.findByRole('button', { name: /Move later/ }));
+    await waitFor(() => expect(success).toHaveBeenLastCalledWith(expect.stringMatching(/re-approve the storyboard/)));
+    fireEvent.click(await findEnabledByRole('button', { name: /Move earlier/ }));
+    await waitFor(() => expect(success).toHaveBeenCalledTimes(2));
+    expect(success.mock.calls.at(-1)[0]).not.toMatch(/re-approve/);
+    expect(reads()).toBe(loaded);
+  });
+
+  // Uniquely catches a take decision that patches only its shot, leaving a following board edit to reload the project.
+  it('a take decision applies its edit result, so the next board edit still needs no project read', async () => {
+    await asThisTab();
+    const takes = [
+      { takeId: 't-a', kind: 'image', assetId: 'take-a.png', source: 'generated', provider: 'portos', status: 'candidate', note: null },
+      { takeId: 't-b', kind: 'image', assetId: 'take-b.png', source: 'imported', provider: 'midjourney', status: 'candidate', note: null },
+    ];
+    const withTakes = { ...first, referenceImageId: 'take-a.png', videoHistoryId: null, takes };
+    const takeBoard = { ...board, scenes: [withTakes, second] };
+    const chosen = { ...withTakes, referenceImageId: 'take-b.png' };
+    selectMusicVideoSceneTake.mockResolvedValueOnce({ ...chosen, edit: editResult([chosen, second], ['s1', 's2'], { updatedAt: '2026-01-01T00:00:01.000Z' }) });
+    const moved = [{ ...chosen, endSec: 10.042 }, { ...second, startSec: 10.042 }];
+    moveMusicVideoSceneStart.mockResolvedValue({ scene: moved[1], previous: moved[0], edit: editResult(moved, ['s1', 's2'], { updatedAt: '2026-01-01T00:00:02.000Z' }) });
+    await openProject(takeBoard, 'produce');
+    const loaded = reads();
+    await act(async () => fireEvent.click(await screen.findByRole('button', { name: /^Open Shot 1/ })));
+    await showFrames();
+    const strip = screen.getByRole('list', { name: /Frame takes/ });
+    fireEvent.click(within(strip).getByRole('button', { name: /Use/ }));
+    await waitFor(() => expect(selectMusicVideoSceneTake).toHaveBeenCalledWith('mv-2', 's1', 't-b', ownOrigin));
+    await waitFor(() => expect(within(strip).getAllByText('In use', { selector: 'button > span' })).toHaveLength(1));
+    await act(async () => fireEvent.click(await screen.findByRole('button', { name: /^Open Shot 2/ })));
+    fireEvent.click(screen.getByRole('button', { name: 'Start one frame later' }));
+    await waitFor(() => expect(moveMusicVideoSceneStart).toHaveBeenCalled());
+    await settle();
+    expect(reads()).toBe(loaded);
+  });
+
+  it('reloads after a refused (409) edit, and after a reply older than the board', async () => {
+    await asThisTab();
+    const conflict = Object.assign(new Error('The shot changed'), { status: 409 });
+    moveMusicVideoSceneStart.mockRejectedValueOnce(conflict);
+    await openProject(board, 'produce');
+    const loaded = reads();
+    await act(async () => fireEvent.click(await screen.findByRole('button', { name: /^Open Shot 2/ })));
+    fireEvent.click(screen.getByRole('button', { name: 'Start one frame later' }));
+    await waitFor(() => expect(reads()).toBe(loaded + 1));
+    // A reply computed before the record the board already shows is a diff against an older base.
+    moveMusicVideoSceneStart.mockResolvedValueOnce({ edit: editResult(board.scenes, ['s2'], { updatedAt: '2025-12-31T00:00:00.000Z' }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Start one frame later' }));
+    await waitFor(() => expect(reads()).toBe(loaded + 2));
+  });
+});
+
+// #16275 / #16270: a take decision's reply carries the edit result, so the board is on the server's
+// revision afterwards and the next shot edit applies its own reply over the takes as decided.
+describe('take decisions then shot edits keep the takes as the server holds them', () => {
+  const image = (takeId, assetId, extra = {}) => ({ takeId, kind: 'image', assetId, source: 'generated', provider: 'portos', status: 'candidate', note: null, ...extra });
+  const first = { ...PROJECT_NO_CLIP.scenes[0], label: 'First', startSec: 0, endSec: 10, referenceImageId: 'a.png', shotSheet: { checked: false },
+    takes: [image('t-a', 'a.png'), image('t-b', 'b.png'), image('t-c', 'c.png')] };
+  const second = { ...PROJECT_NO_CLIP.scenes[0], sceneId: 's2', order: 1, label: 'Second', startSec: 10, endSec: 14, referenceImageId: null, takes: [] };
+  const board = { ...PROJECT_NO_CLIP, updatedAt: '2026-01-01T00:00:00.000Z', scenes: [first, second] };
+  const asThisTab = async () => { (await import('../../../services/socket.js')).default.id = 'tab-socket'; };
+  const reads = () => getMusicVideoProject.mock.calls.length;
+  const unusedControl = () => screen.queryByRole('button', { name: /^Reject unused/ });
+
+  // A stand-in for the server: every write moves the revision and answers with the edit result of
+  // the record before it (server/services/musicVideo/editResult.js), as the routes do.
+  const fakeServer = (start = board) => {
+    let record = start;
+    let writes = 0;
+    const write = (touches, change) => {
+      const before = record;
+      writes += 1;
+      const scenes = before.scenes.map((scene) => (touches(scene) ? change(scene) : scene));
+      record = { ...before, scenes, updatedAt: `2026-01-01T00:00:${String(writes).padStart(2, '0')}.000Z` };
+      const changed = scenes.filter((scene) => JSON.stringify(scene) !== JSON.stringify(before.scenes.find((s) => s.sceneId === scene.sceneId)));
+      return { edit: { updatedAt: record.updatedAt, baseUpdatedAt: before.updatedAt, sceneIds: scenes.map((scene) => scene.sceneId), scenes: changed, project: {}, removed: [] },
+        scene: (id) => scenes.find((scene) => scene.sceneId === id) };
+    };
+    const only = (id) => (scene) => scene.sceneId === id;
+    const takeReply = (sceneId, change) => { const { edit, scene } = write(only(sceneId), change); return { ...scene(sceneId), edit }; };
+    getMusicVideoProject.mockImplementation(async () => record);
+    rejectUnusedMusicVideoSceneTakes.mockImplementation(async (_id, sceneId) => {
+      const { edit, scene } = write(only(sceneId), (shot) => ({ ...shot, takes: shot.takes.map((take) => (take.assetId === shot.referenceImageId ? take : { ...take, status: 'rejected' })) }));
+      return { scene: scene(sceneId), rejected: 2, edit };
+    });
+    selectMusicVideoSceneTake.mockImplementation(async (_id, sceneId, takeId) => takeReply(sceneId, (shot) => ({ ...shot,
+      referenceImageId: shot.takes.find((take) => take.takeId === takeId).assetId })));
+    reviewMusicVideoSceneTake.mockImplementation(async (_id, sceneId, takeId, review) => takeReply(sceneId, (shot) => ({ ...shot, takes: shot.takes.map((take) => (take.takeId !== takeId ? take
+      : review.confirmFrame ? { ...take, dependencyState: { status: 'current', reasons: [] } } : { ...take, status: review.status })) })));
+    updateMusicVideoScene.mockImplementation(async (_id, sceneId, patch) => {
+      const { edit, scene } = write(only(sceneId), (shot) => ({ ...shot, ...patch, ...(patch.shotSheet ? { shotSheet: { ...shot.shotSheet, ...patch.shotSheet } } : {}) }));
+      return { ...scene(sceneId), edit };
+    });
+    moveMusicVideoSceneStart.mockImplementation(async (_id, sceneId, startSec) => {
+      const { edit, scene } = write((shot) => shot.sceneId === sceneId || shot.endSec === record.scenes.find((s) => s.sceneId === sceneId).startSec,
+        (shot) => (shot.sceneId === sceneId ? { ...shot, startSec } : { ...shot, endSec: startSec }));
+      return { scene: scene(sceneId), edit };
+    });
+    return { record: () => record };
+  };
+  const openShot = async (name, project = board) => {
+    await asThisTab();
+    await openProject(project, 'produce');
+    await act(async () => fireEvent.click(await screen.findByRole('button', { name })));
+  };
+  const markDone = async () => {
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Done', exact: true }));
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).toBeChecked());
+    await settle();
+  };
+
+  // Uniquely catches #16275: Done bringing back takes the director already rejected, or reading the whole project to get there.
+  it('reject unused, then Done: the unused count stays 0 with no project read', async () => {
+    fakeServer();
+    await openShot(/^Open Shot 1/);
+    const loaded = reads();
+    fireEvent.click(screen.getByRole('button', { name: 'Reject unused (2)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reject 2' }));
+    await waitFor(() => expect(unusedControl()).toBeNull());
+    await markDone();
+    expect(unusedControl()).toBeNull();
+    expect(reads()).toBe(loaded);
+  });
+
+  it('select a take, then edit the prompt: the selection stays with no project read', async () => {
+    const server = fakeServer();
+    await openShot(/^Open Shot 1/);
+    const loaded = reads();
+    await showFrames();
+    const strip = screen.getByRole('list', { name: /Frame takes/ });
+    fireEvent.click(within(within(strip).getAllByRole('listitem')[1]).getByRole('button', { name: /Use/ }));
+    await waitFor(() => expect(selectMusicVideoSceneTake).toHaveBeenCalledWith('mv-2', 's1', 't-b', expect.anything()));
+    await settle();
+    const prompt = screen.getByLabelText(/^(Clip|Shot) prompt$/);
+    fireEvent.change(prompt, { target: { value: 'waves, at dusk' } });
+    fireEvent.blur(prompt);
+    await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', { prompt: 'waves, at dusk' }, expect.anything()));
+    await settle();
+    expect(server.record().scenes[0].referenceImageId).toBe('b.png');
+    const items = within(screen.getByRole('list', { name: /Frame takes/ })).getAllByRole('listitem');
+    expect(within(items[1]).queryByRole('button', { name: /Use/ })).toBeNull();
+    expect(within(items[0]).getByRole('button', { name: /Use/ })).toBeTruthy();
+    expect(reads()).toBe(loaded);
+  });
+
+  it('reject one take, then move the shot start: the take stays rejected and both cuts move, with no project read', async () => {
+    const project = { ...board, scenes: [first, { ...second, takes: [image('t-x', 'x.png'), image('t-y', 'y.png')], referenceImageId: 'x.png' }] };
+    fakeServer(project);
+    await openShot(/^Open Shot 2/, project);
+    const loaded = reads();
+    await showFrames();
+    const items = within(screen.getByRole('list', { name: /Frame takes/ })).getAllByRole('listitem');
+    fireEvent.click(within(items[1]).getByRole('button', { name: /Reject/ }));
+    await waitFor(() => expect(within(items[1]).getByRole('button', { name: /Restore/ })).toBeTruthy());
+    await settle();
+    fireEvent.click(screen.getByRole('button', { name: 'Start one frame later' }));
+    await waitFor(() => expect(screen.getByLabelText('Start frame').value).toBe('241'));
+    await settle();
+    expect(within(within(screen.getByRole('list', { name: /Frame takes/ })).getAllByRole('listitem')[1]).getByRole('button', { name: /Restore/ })).toBeTruthy();
+    expect(unusedControl()).toBeNull();
+    expect(reads()).toBe(loaded);
+  });
+
+  it('Still matches, then Done: the frame stays confirmed with no project read', async () => {
+    const stale = { status: 'stale', reasons: ['Frame prompt changed'] };
+    const project = { ...board, scenes: [{ ...first, takes: [image('t-a', 'a.png', { dependencyState: stale })] }, second] };
+    fakeServer(project);
+    await openShot(/^Open Shot 1/, project);
+    const loaded = reads();
+    await showFrames();
+    fireEvent.click(screen.getByRole('button', { name: 'Still matches' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Still matches' })).toBeNull());
+    await markDone();
+    expect(screen.queryByRole('button', { name: 'Still matches' })).toBeNull();
+    expect(reads()).toBe(loaded);
+  });
+
+  // #16270: what a take decision changes elsewhere on the board (here readiness) comes with its reply.
+  it('takes readiness from a take decision reply', async () => {
+    const readiness = (approved) => ({ readyForProduction: approved, basis: {}, art: { approved: true, problems: [] }, storyboard: { approved, problems: [] }, proof: { approved: false, problems: [] } });
+    const success = vi.spyOn(toast, 'success');
+    const approvedBoard = { ...board, productionReadiness: readiness(true) };
+    fakeServer(approvedBoard);
+    rejectUnusedMusicVideoSceneTakes.mockImplementationOnce(async () => {
+      const scene = { ...first, takes: first.takes.map((take) => (take.takeId === 't-a' ? take : { ...take, status: 'rejected' })) };
+      return { scene, rejected: 2, edit: { updatedAt: '2026-01-01T00:00:01.000Z', baseUpdatedAt: board.updatedAt, sceneIds: ['s1', 's2'], scenes: [scene], project: { productionReadiness: readiness(false) }, removed: [] } };
+    });
+    reorderMusicVideoScenes.mockImplementation(async (_id, ids) => ({ edit: { updatedAt: '2026-01-01T00:00:02.000Z', baseUpdatedAt: '2026-01-01T00:00:01.000Z',
+      sceneIds: ids, scenes: ids.map((id, i) => ({ ...(id === 's1' ? first : second), order: i, startSec: board.scenes[i].startSec, endSec: board.scenes[i].endSec })), project: {}, removed: [] } }));
+    await openShot(/^Open Shot 1/, approvedBoard);
+    const loaded = reads();
+    fireEvent.click(screen.getByRole('button', { name: 'Reject unused (2)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reject 2' }));
+    await waitFor(() => expect(unusedControl()).toBeNull());
+    fireEvent.click(await findEnabledByRole('button', { name: /Move later/ }));
+    await waitFor(() => expect(success).toHaveBeenCalled());
+    expect(success.mock.calls.at(-1)[0]).not.toMatch(/re-approve/);
+    expect(reads()).toBe(loaded);
+  });
+
+  // Uniquely catches a color match pinning the shot's takes as typed text: every later reply and reload
+  // then kept that copy over the server's, so takes rejected elsewhere still showed as unused.
+  it('a color match keeps no copy of the takes: a rejection made elsewhere shows after the reload', async () => {
+    const shot = { ...first, shotSheet: { checked: false, cameraId: 'cam', location: 'Set', timeOfDay: 'Day' } };
+    const project = { ...board, composition: { mode: 'document' }, cameras: [{ id: 'cam', name: 'Main' }], scenes: [shot, second] };
+    fakeServer(project);
+    measureMusicVideoColorMatch.mockResolvedValue({ scenes: [{ ...shot, takes: [{ ...shot.takes[0], colorMatch: { enabled: true, strength: 0.5 } }] }] });
+    await openShot(/^Open Shot 1/, project);
+    fireEvent.click(await screen.findByRole('button', { name: 'Measure this shot' }));
+    await waitFor(() => expect(measureMusicVideoColorMatch).toHaveBeenCalled());
+    await settle();
+    getMusicVideoProject.mockResolvedValue({ ...project, updatedAt: '2026-01-01T00:00:05.000Z',
+      scenes: [{ ...shot, takes: shot.takes.map((take) => (take.takeId === 't-a' ? take : { ...take, status: 'rejected' })) }, second] });
+    await pushSocket('music-video:project:changed', { id: project.id, origin: 'another-tab' });
+    await waitFor(() => expect(unusedControl()).toBeNull());
+  });
+
+  // The overlap rule still holds: a shot edit whose reply arrives while a take decision runs may predate it.
+  it('reloads when a shot edit answers while a take decision is in flight', async () => {
+    fakeServer();
+    await openShot(/^Open Shot 1/);
+    const loaded = reads();
+    let answerReject;
+    rejectUnusedMusicVideoSceneTakes.mockImplementationOnce(() => new Promise((resolve) => { answerReject = resolve; }));
+    let answerDone;
+    const saved = updateMusicVideoScene.getMockImplementation();
+    updateMusicVideoScene.mockImplementationOnce((...args) => new Promise((resolve) => { answerDone = () => resolve(saved(...args)); }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Done', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reject unused (2)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reject 2' }));
+    await act(async () => answerDone());
+    await act(async () => answerReject(await rejectUnusedMusicVideoSceneTakes.getMockImplementation()('mv-2', 's1')));
+    // The Done reply may predate the rejection, and the rejection's reply was taken after a Done the board never applied.
+    await waitFor(() => expect(reads()).toBeGreaterThan(loaded));
+    await waitFor(() => expect(unusedControl()).toBeNull());
+    expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).toBeChecked();
+  });
+
+  // #16306: the Cast & Sets check re-reads only after an edit that can change it, once, after the reply applied.
+  describe('Cast & Sets reads', () => {
+    const catalogBoard = {
+      ...board,
+      castAndSets: { source: 'catalog', status: 'approved' },
+      concept: { subjects: [{ id: 'c1', kind: 'character', name: 'Lead', ingredientId: 'ing-1' }] },
+      visualSpec: { references: [
+        { id: 'r1', imageId: 'mood.png', role: 'character', label: 'Lead', note: '', condition: true },
+        { id: 'r2', imageId: 'set.png', role: 'set', label: 'Pier', note: '', condition: false },
+      ] },
+      scenes: [{ ...first, frameReferenceIds: ['r1', 'r2'] }, second],
+    };
+    const checkinReads = () => getMusicVideoCastAndSets.mock.calls.length;
+    // Past the read's settle window (useCatalogCastSetsCheckin CHECKIN_INPUT_SETTLE_MS), so a read it would send has been sent.
+    const pastSettle = () => act(() => new Promise((resolve) => { setTimeout(resolve, 700); }));
+    const deferredReply = (mock) => {
+      const real = mock.getMockImplementation();
+      let answer;
+      mock.mockImplementationOnce((...args) => new Promise((resolve) => { answer = () => resolve(real(...args)); }));
+      // The take chain starts the request a microtask after the click.
+      return async () => {
+        await waitFor(() => expect(answer).toBeTypeOf('function'));
+        await act(async () => answer());
+      };
+    };
+
+    // Uniquely catches a take decision or Done re-reading the whole-video check, and Reject unused looking unchanged while it waits.
+    it('Reject unused shows it is saving, ignores a second press, and with Done sends no cast and sets read', async () => {
+      fakeServer(catalogBoard);
+      await openShot(/^Open Shot 1/, catalogBoard);
+      await waitFor(() => expect(checkinReads()).toBe(1));
+      const answer = deferredReply(rejectUnusedMusicVideoSceneTakes);
+      fireEvent.click(screen.getByRole('button', { name: 'Reject unused (2)' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Reject 2' }));
+      const saving = screen.getByRole('button', { name: 'Rejecting 2 unused takes…' });
+      expect(saving).toBeDisabled();
+      await waitFor(() => expect(rejectUnusedMusicVideoSceneTakes).toHaveBeenCalledTimes(1));
+      fireEvent.click(saving);
+      await settle();
+      expect(rejectUnusedMusicVideoSceneTakes).toHaveBeenCalledTimes(1);
+      await answer();
+      await waitFor(() => expect(unusedControl()).toBeNull());
+      await markDone();
+      await pastSettle();
+      expect(checkinReads()).toBe(1);
+    });
+
+    it('Use shows the take saving until its reply, and sends no cast and sets read', async () => {
+      fakeServer(catalogBoard);
+      await openShot(/^Open Shot 1/, catalogBoard);
+      await waitFor(() => expect(checkinReads()).toBe(1));
+      await showFrames();
+      const answer = deferredReply(selectMusicVideoSceneTake);
+      const take = () => within(screen.getByRole('list', { name: /Frame takes/ })).getAllByRole('listitem')[1];
+      fireEvent.click(within(take()).getByRole('button', { name: /Use/ }));
+      expect(within(take()).getByRole('status')).toHaveTextContent('Saving…');
+      await answer();
+      await waitFor(() => expect(within(take()).queryByRole('status')).toBeNull());
+      await pastSettle();
+      expect(selectMusicVideoSceneTake).toHaveBeenCalledTimes(1);
+      expect(checkinReads()).toBe(1);
+    });
+
+    // The clip prompt is text the check reads (a subject it names), so its edit reads once, after the reply.
+    it('a clip prompt edit reads the check once, after its reply', async () => {
+      fakeServer(catalogBoard);
+      await openShot(/^Open Shot 1/, catalogBoard);
+      await waitFor(() => expect(checkinReads()).toBe(1));
+      const prompt = screen.getByLabelText(/^(Clip|Shot) prompt$/);
+      fireEvent.change(prompt, { target: { value: 'Lead waves, at dusk' } });
+      fireEvent.blur(prompt);
+      await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', { prompt: 'Lead waves, at dusk' }, expect.anything()));
+      await waitFor(() => expect(checkinReads()).toBe(2));
+      await pastSettle();
+      expect(checkinReads()).toBe(2);
+    });
+
+    it('a reference pick reads the check once', async () => {
+      fakeServer(catalogBoard);
+      await openShot(/^Open Shot 1/, catalogBoard);
+      await waitFor(() => expect(checkinReads()).toBe(1));
+      await showFrames();
+      fireEvent.click(within(screen.getByRole('group', { name: 'References selected for the frames' })).getByRole('button', { name: "Don't send Pier" }));
+      await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', { frameReferenceIds: ['r1'] }, expect.anything()));
+      await waitFor(() => expect(checkinReads()).toBe(2));
+      await pastSettle();
+      expect(checkinReads()).toBe(2);
+    });
+
+    it('a shot sheet cast change reads the check once', async () => {
+      fakeServer(catalogBoard);
+      await openShot(/^Open Shot 1/, catalogBoard);
+      await waitFor(() => expect(checkinReads()).toBe(1));
+      fireEvent.click(within(screen.getByRole('group', { name: 'Who' })).getByRole('button', { name: 'Lead' }));
+      await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', { shotSheet: expect.objectContaining({ characters: ['Lead'] }) }, expect.anything()));
+      await waitFor(() => expect(checkinReads()).toBe(2));
+      await pastSettle();
+      expect(checkinReads()).toBe(2);
+    });
+
+    // Uniquely catches the check or a hidden frame prompt preview starting before the project is on screen.
+    it('opening a shot reads the check only once the project shows, and previews no frame prompt while the clip view shows', async () => {
+      fakeServer(catalogBoard);
+      await asThisTab();
+      let answerProject;
+      getMusicVideoProject.mockImplementationOnce(() => new Promise((resolve) => { answerProject = () => resolve(catalogBoard); }));
+      listMusicVideoProjects.mockResolvedValue([catalogBoard]);
+      renderMV('/music-video/mv-2/produce/scene/s1');
+      await waitFor(() => expect(getMusicVideoProject).toHaveBeenCalled());
+      await pastSettle();
+      expect(checkinReads()).toBe(0);
+      expect(previewImagePrompt).not.toHaveBeenCalled();
+      await act(async () => answerProject());
+      await screen.findByRole('heading', { level: 2, name: catalogBoard.name });
+      await waitFor(() => expect(checkinReads()).toBe(1));
+      await screen.findByRole('group', { name: 'Show' });
+      await pastSettle();
+      expect(previewImagePrompt).not.toHaveBeenCalled();
+      await showFrames();
+      await waitFor(() => expect(previewImagePrompt).toHaveBeenCalled());
+    });
+  });
 });

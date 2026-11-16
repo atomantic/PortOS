@@ -390,7 +390,7 @@ export async function checkHealth() {
   // `if (!health.connected)` branch — instead of running DELETE FROM against the
   // developer's real universes/series/writing. Keyed on isTestRunner() (not bare
   // NODE_ENV) so a worktree run that left NODE_ENV unset is still gated. The
-  // mocked checkHealth in memoryBackend.test.js / backup.test.js is unaffected
+  // mocked checkHealth in memoryBackend.test.js / backup.*.test.js is unaffected
   // (it replaces this fn).
   if (isTestRunner() && !isTestDatabase()) {
     return {

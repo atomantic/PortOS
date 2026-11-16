@@ -7,7 +7,7 @@ import { isDefaultA2vLoraStages } from '../../lib/videoLoraStageValidation.js';
 
 import { unlink } from 'fs/promises';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
-import { discardSourceAudioWindow } from '../federatedMedia/sourceAudio.js';
+import { discardSourceAudioWindow, prepareSourceAudioWindow, sourceAudioVideoRequest, supportsSourceAudioWindow } from '../federatedMedia/sourceAudio.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { buildFederatedMediaRequest } from '../../lib/federatedMediaRequest.js';
 import { asFableLoomRenderSettings } from '../../lib/fableLoomProduction.js';
@@ -35,11 +35,14 @@ import { cleanupMultipartTemp, prepareVideoGenParams } from './prepareParams.js'
 import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES } from './requestFields.js';
 
 import { isTruthyMeta } from '../../lib/metadataFlags.js';
+import { resolveGalleryImage } from '../../lib/pathSafety.js';
+import { getProject } from '../musicVideo/projects.js';
+import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
+import { resolveVideoModelSelection } from './modelSelection.js';
+import { isPerformanceScene } from '../../lib/musicVideoShotTiming.js';
+import { localModelRendersPerformance } from '../../lib/musicVideoLocalModels.js';
 
 const musicVideoProjectAspect = async (projectId) => {
-  const [{ getProject }, { musicVideoAspect }] = await Promise.all([
-    import('../musicVideo/projects.js'), import('../../lib/musicVideoAspect.js'),
-  ]);
   return musicVideoAspect(await getProject(projectId));
 };
 
@@ -126,7 +129,6 @@ async function prepareVideoSubmissionInputs(body, uploads, inputs) {
       );
     }
 
-    const { resolveGalleryImage } = await import('../../lib/pathSafety.js');
     const request = buildFederatedMediaRequest({ kind: 'video', params: body });
     // Negotiate dimensions/frames before slicing audio. Audio is never padded,
     // truncated, or silently dropped to fit a different peer after submission.
@@ -135,9 +137,6 @@ async function prepareVideoSubmissionInputs(body, uploads, inputs) {
     const sourceImagePath = body.sourceImageFile ? resolveGalleryImage(body.sourceImageFile) : null;
     let audio = null;
     if (body._suppliedAudio) {
-      const [{ getProject }, { prepareSourceAudioWindow, sourceAudioVideoRequest }] = await Promise.all([
-        import('../musicVideo/projects.js'), import('../federatedMedia/sourceAudio.js'),
-      ]);
       const project = await getProject(body.musicVideo.projectId);
       const scene = project?.scenes?.find((entry) => entry.sceneId === body.musicVideo.sceneId);
       selected.request = negotiateVideoConstraints(sourceAudioVideoRequest(scene, selected.capability, selected.request), selected.capability);
@@ -150,10 +149,6 @@ async function prepareVideoSubmissionInputs(body, uploads, inputs) {
     prepared = { backend: 'remote', sourceImagePath, remoteMedia: selected.remoteMedia, audio };
   } else {
     if (body._suppliedAudio && body.backend !== VIDEO_GEN_MODE.HIGGSFIELD) {
-      const [{ getProject }, { resolveVideoModelSelection }, { sourceAudioVideoRequest, supportsSourceAudioWindow }, { isPerformanceScene }] = await Promise.all([
-        import('../musicVideo/projects.js'), import('./modelSelection.js'), import('../federatedMedia/sourceAudio.js'),
-        import('../../lib/musicVideoShotTiming.js'),
-      ]);
       const project = await getProject(body.musicVideo.projectId);
       const scene = project?.scenes?.find((entry) => entry.sceneId === body.musicVideo.sceneId);
       // A performance shot cuts its own song window (performanceShot.js), so
@@ -173,9 +168,6 @@ async function prepareVideoSubmissionInputs(body, uploads, inputs) {
     inputs.own(prepared.cleanupStaged);
   }
   if (body._suppliedAudio && ['local', VIDEO_GEN_MODE.HIGGSFIELD].includes(prepared.backend)) {
-    const [{ getProject }, { prepareSourceAudioWindow, supportsSourceAudioWindow }] = await Promise.all([
-      import('../musicVideo/projects.js'), import('../federatedMedia/sourceAudio.js'),
-    ]);
     if (prepared.backend === 'local' && !supportsSourceAudioWindow(prepared.effectiveModel)) {
       throw new ServerError('Supplied song windows currently require an LTX MLX model with audio conditioning', { status: 400, code: 'MUSIC_VIDEO_AUDIO_UNSUPPORTED' });
     }
@@ -256,9 +248,6 @@ async function applyFableLoomConditioning({ body, prepared, backend, renderSetti
  * points trim it).
  */
 async function localPerformanceRequest({ body, prepared, performance }) {
-  const [{ sourceAudioVideoRequest }, { localModelRendersPerformance }] = await Promise.all([
-    import('../federatedMedia/sourceAudio.js'), import('../../lib/musicVideoLocalModels.js'),
-  ]);
   const fail = (message, code) => { throw new ServerError(message, { status: 400, code }); };
   if (!localModelRendersPerformance(prepared.effectiveModel)) {
     fail(`${prepared.effectiveModel?.name || 'This local model'} cannot lip-sync; choose LTX-2.5, LTX-2.3 dgrauet or MiniMax H3 Ref2VA for performance shots`, 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED');
@@ -412,7 +401,9 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
     ? getRunwayVideoModel(body.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL) : null;
   const higgsfieldModel = backend === VIDEO_GEN_MODE.HIGGSFIELD ? getHiggsfieldVideoModel(body.higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL) : null;
   const clipReferenceModel = falModel || runwayModel || higgsfieldModel;
-  const useClipReferences = Boolean((clipReferenceModel?.referenceImages || higgsfieldModel?.maxReferenceImages) && !(higgsfieldModel && body.referenceImageFiles?.length) && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath);
+  // A shot set to frameRoute 'image' renders plain image-to-video from its frame, leaving the sheets out.
+  const frameOnly = higgsfieldModel && body.musicVideo?.frameRoute === 'image';
+  const useClipReferences = Boolean(!frameOnly && (clipReferenceModel?.referenceImages || higgsfieldModel?.maxReferenceImages) && !(higgsfieldModel && body.referenceImageFiles?.length) && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath);
   const clipReferences = useClipReferences
     ? await (await import('../musicVideo/clipCastReferences.js')).musicVideoClipReferences(body.musicVideo,
       (higgsfieldModel ? Infinity : musicVideoClipReferenceCapacity(backend, clipReferenceModel, { endFrame: backend === VIDEO_GEN_MODE.RUNWAY && !!prepared.lastImagePath })), { excludePath: sourceImagePath })

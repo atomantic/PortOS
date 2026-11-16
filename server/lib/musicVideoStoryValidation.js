@@ -3,6 +3,7 @@
  */
 
 import { z } from 'zod';
+import { MUSIC_VIDEO_MAX_SUBJECTS } from './musicVideoLimits.js';
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 import { musicVideoPrevizSchema, musicVideoShotSheetSchema, musicVideoTreatmentBriefSchema } from './musicVideoValidation.js';
@@ -24,7 +25,7 @@ const beat = z.object({ id, title: text(STORYBOARD_LIMITS.beatTitle).optional(),
 export const storyProposalSchema = z.object({
   concept: z.object({ prompt: text(8000).optional(), style: text(2000).optional(), songStyle: text(2000).optional() }).strict().optional(),
   brief: musicVideoTreatmentBriefSchema.omit({ referenceNotes: true }).optional(),
-  subjects: z.array(subject).max(24).optional(),
+  subjects: z.array(subject).max(MUSIC_VIDEO_MAX_SUBJECTS).optional(),
   beats: z.array(beat).max(40).optional(),
 }).strict();
 export const storySummarySchema = z.object({ summary: text(20000), baseSummary: text(20000) }).strict();
@@ -78,7 +79,7 @@ export const previzCutPatchSchema = z.object({
   turnToAim: z.boolean().optional(),
   selfie: z.boolean().optional(),
   actionPath: z.string().min(1).max(64).nullable().optional(),
-  visibleSubjectIds: z.array(previzSubjectRef).max(24).nullable().optional(),
+  visibleSubjectIds: z.array(previzSubjectRef).max(MUSIC_VIDEO_MAX_SUBJECTS).nullable().optional(),
   storyMin: z.number().finite().min(0).max(2880).nullable().optional(),
   cameraSpot: z.tuple([z.number().finite().min(-5000).max(5000), z.number().finite().min(-5000).max(5000)]).nullable().optional(),
 }).strip();

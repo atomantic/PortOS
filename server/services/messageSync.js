@@ -1,3 +1,10 @@
+/**
+ * Message account sync: provider fetches into the per-account cache and timeline ingestion.
+ * 
+ * Storage: `ephemeral-file` (`data/messages/cache/<account-id>.json`) — machine-local provider cache,
+ * never federated; timeline events stay in PostgreSQL. Browser rows carry additive identity fields that
+ * retain established timeline keys; older caches stay readable and are reconciled lazily.
+ */
 import { messageLogError } from '../lib/messageLogError.js';
 
 import { browserSummaryId, browserDetailIdentities, messageIngestionIdentity, matchBrowserMessage, createBrowserMessageMatcher, retainLegacyActivityIdentities } from '../lib/messageBrowserIdentity.js';

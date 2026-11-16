@@ -1,4 +1,10 @@
-/** Fixed receiver-side actions. Peer input never selects commands, paths or URLs. */
+/**
+ * Fixed receiver-side actions. Peer input never selects commands, paths or URLs.
+ *
+ * Storage: `file-primary` (`data/peer-execution/<operation-uuid>/`) — machine-local, never federated.
+ * Detached launch/exit evidence that must survive a restart, keyed by the ledger operation; it never
+ * authorizes a launch. Restores preserve it and unresolved evidence is never deleted.
+ */
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { z } from 'zod';

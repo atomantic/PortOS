@@ -1,18 +1,6 @@
 /**
  * CoS run event envelope — pure schema, redaction, and projection.
  *
- * CoS run lifecycle-event envelope (#4540) — pure half of the append-only ledger in
- * `services/agentRunEventLog.js`. `AGENT_RUN_EVENT_KINDS` (closed vocabulary: spawned, handoff,
- * output, reconnected, paused, resumed, interrupted, pr-verified, orphan-recovered, runner-recovered,
- * finalized), `agentRunEventSchema` (Zod, `.strict()`), `buildRunEvent()` which redacts then mints a
- * CONTENT-derived `eventId` (sha256 of the canonicalized envelope) so a redelivered lifecycle
- * transition dedupes instead of double-counting, `redactRunEventData()` (drops
- * prompt/description/output/result-class keys to a `{ redacted, chars }` stub, scrubs the home-dir
- * prefix out of every remaining string via `scrubHomePath`, runs `redactOutput`, and caps
- * string/array/key/depth per `RUN_EVENT_LIMITS`), and `projectRunStates()` — the clock-free fold that
- * derives current run status from the ordered stream, so replay-after-restart and read-current-status
- * are one code path. Unknown kinds fold as no-ops so a newer install's ledger replays on an older one.
- *
  * The append-only ledger this describes is the *ordered* record of how a CoS
  * agent run reached its current state. It exists alongside the mutable run
  * record (`data/runs/{id}/metadata.json`), never instead of it: the record says
@@ -35,9 +23,8 @@
  *   I/O and no clock, so "replay after restart" is the same code path as "read
  *   the current status", and a test can assert both with one call.
  *
- * The ledger is machine-local and never federated (see `docs/STORAGE.md`).
- * I/O, rotation, and the seen-id sets live in
- * `server/services/agentRunEventLog.js`.
+ * The ledger is machine-local and never federated. I/O, rotation, the seen-id
+ * sets and the storage classification live in `server/services/agentRunEventLog.js`.
  */
 
 import { z } from 'zod';

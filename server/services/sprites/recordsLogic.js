@@ -28,7 +28,6 @@ import { recordRenderPin } from '../../lib/renderTargets.js';
 // them strict kebab-case so a record id can never traverse the filesystem.
 // Moved to lib/spriteVocabulary.js in #4901 so route schemas can read it
 // without importing this module. Re-exported so existing imports are unchanged.
-export { SPRITE_ID_PATTERN } from '../../lib/spriteVocabulary.js';
 import { SPRITE_ID_PATTERN } from '../../lib/spriteVocabulary.js';
 
 export function isValidSpriteId(id) {

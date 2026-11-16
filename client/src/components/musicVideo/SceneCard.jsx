@@ -190,9 +190,9 @@ function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImage
 export default function SceneCard({
   scene, posterSrc, index, shotName = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null, videoJobs = null,
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
-  onMove, onDelete, onEditLocal, onSave, onSetDone = null, onApproveFinal = null,
+  onMove, onDelete, onEditLocal, onSave, onApplySaved = null, onSetDone = null, onApproveFinal = null,
   project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
-  onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onCheckTake = null, checkingTakes = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, onHandheldClip = null, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false, manifestOwnsShots = false,
+  onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onCheckTake = null, checkingTakes = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, onHandheldClip = null, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, pendingTakes = null, layered = false, documentComposition = false, manifestOwnsShots = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, onMoveEnd = null, nextEndSec = null, falVideoSettings = null, performanceReview = null, onRepairPerformance, repairBusy = false,
   onClose = null, locked = false, stepShot = null, footageOptional = false, failedScenes = null, songReview = null, shotOrderOwner = 'the composition document',
   storyboardId = null, storyboardShot = null, onStoryboardBoard = null, onApplyCameos = null, onVaryWipes = null,
@@ -240,6 +240,9 @@ export default function SceneCard({
       .finally(() => { doneSavePending.current = false; setDoneSaving(false); });
   };
   const applyPatch = (patch) => { onEditLocal(scene.sceneId, patch); saveShot(scene.sceneId, patch).catch(() => {}); };
+  // A change a route already saved (a color match's takes): shown as saved, never kept as typed text, or
+  // every later reply and reload would keep this copy of the shot's takes over the server's (#16275).
+  const applySaved = (patch) => (onApplySaved ? onApplySaved(scene.sceneId, patch) : onEditLocal(scene.sceneId, patch));
   const moveCut = (move) => move && ((...args) => {
     const pending = move(...args);
     if (!pending || typeof pending.then !== 'function' || !project?.id || !clipPlayback.clipId) return pending;
@@ -348,6 +351,8 @@ export default function SceneCard({
   // Grok can take the start frame as a layout reference instead of the locked opening frame,
   // so the people it shows can take the clip references' likeness.
   const startFrameLayout = referenceBackend === 'grok' && !storyboardDefault && renderInputs.startFrameLayout === true;
+  // Higgsfield sends a frame plus sheets as the first reference image; ticking this renders plain image-to-video instead.
+  const higgsfieldFrameOnly = referenceBackend === 'higgsfield' && renderInputs.frameRoute === 'image';
   const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn, startFrameLayout });
   const guidesPending = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined);
   // A failed read (null) would otherwise send the clip without the member's guides.
@@ -398,6 +403,7 @@ export default function SceneCard({
       ...(useLtxReferences ? { ltxReferences: true, songAudio: false, endFrame: false, expectedClipReferenceLabels: referenceLabels }
         : canUseLtxReferences && ltxReferencesProjectDefault ? { ltxReferences: false } : {}),
       ...(startFrameLayout ? { startFrameLayout: true } : {}),
+      ...(higgsfieldFrameOnly ? { frameRoute: 'image' } : {}),
     };
     onGenerateVideo?.(scene, { ...(renderOverrides ? { target: renderOverrides } : {}), card, ...(tier ? { tier } : {}) });
   };
@@ -775,13 +781,13 @@ export default function SceneCard({
         <>
         <TabPills variant="filter" size="xs" ariaLabel="Show" tabs={views.map(([id, label]) => ({ id, label }))} activeTab={view} onChange={setView} />
         {/* Finalize the shot: only the frames and clip in use stay candidates. */}
-        <SceneRejectUnused scene={scene} busy={takeBusy} onReject={onRejectUnusedTakes} />
+        <SceneRejectUnused scene={scene} busy={takeBusy} pending={pendingTakes} onReject={onRejectUnusedTakes} />
         {/* Frames: the still this shot starts from and, optionally, the one it ends on (#11173),
             each with its prompt and Render under it, then the tapped frame's takes. */}
         <div hidden={view !== 'frames'}>
         <SceneFrames project={project} castMedia={castMedia} onReloadCastMedia={onReloadCastMedia} greyboxPlaces={greyboxPlaces} greyboxSaving={greyboxSaving} onGreyboxSaving={setGreyboxSaving} scene={scene} index={index} endFrames={endFrames || (Boolean(onGenerateEndFrame) && plainStill)} plainStill={plainStill} endFrameToggle={layer === 'footage' || endFrameEffect || plainStill} generatingFrame={!!generatingFrame} generatingEndFrame={!!generatingEndFrame}
           onGenerateFrame={sourceWindow ? undefined : onGenerateFrame} onGenerateEndFrame={sourceWindow ? undefined : onGenerateEndFrame} onImageTargetChange={onFrameImageTarget} onEditLocal={onEditLocal} onSave={onSave}
-          onOpenPreview={onOpenPreview} takeBusy={takeBusy} onSelectTake={onSelectTake} onReviewTake={onReviewTake}
+          onOpenPreview={onOpenPreview} shown={view === 'frames'} takeBusy={takeBusy} pendingTakes={pendingTakes} onSelectTake={onSelectTake} onReviewTake={onReviewTake}
           onSwap={onPlacePoolItem ? setSwapKind : null} onSwapFrames={onSwapFrames ? () => onSwapFrames(scene) : null} onImportTake={onImportTake}
           onContinueFromPrevious={layer === 'footage' && index > 0 ? onContinueFromPrevious : null} previousHasClip={previousHasClip}
           assetMarks={project?.assetMarks} onMarkTake={onMarkTake} onCheckTake={onCheckTake} checkingTakes={checkingTakes} onApplyCameos={onApplyCameos} />
@@ -836,7 +842,7 @@ export default function SceneCard({
               <span className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">{(scene.referenceImageId || sourceWindow?.referenceImageId) ? 'Still · no clip yet' : 'No clip yet'}</span>
             </div>
           )}
-          <SceneTakeStrip project={project} scene={scene} kind="video" busy={takeBusy} grid pending={clipJobs}
+          <SceneTakeStrip project={project} scene={scene} kind="video" busy={takeBusy} saving={pendingTakes} grid pending={clipJobs}
             onSelect={(take) => onSelectTake?.(scene, take)}
             onReview={(take, review) => onReviewTake?.(scene, take, review)}
             onOpenPreview={onOpenPreview} marks={project?.assetMarks} onMark={onMarkTake} />
@@ -867,6 +873,15 @@ export default function SceneCard({
               Start frame for layout only (its people take the clip references' looks; the clip may not open on it exactly)
             </label>
           )}
+          {layer === 'footage' && referenceBackend === 'higgsfield' && scene.referenceImageId && (
+            <label className="flex items-center gap-2 text-xs text-port-text-muted">
+              <input type="checkbox" checked={higgsfieldFrameOnly}
+                onChange={(event) => setRenderInputs((prev) => ({ ...prev, frameRoute: event.target.checked ? 'image' : undefined }))} />
+              {higgsfieldFrameOnly
+                ? 'Image-to-video from the start frame (clip references left out)'
+                : 'Route: start frame sent as the first reference image when the shot has clip references; tick for plain image-to-video'}
+            </label>
+          )}
           {layer === 'footage' && <SceneClipReferences project={project} scene={scene} castMedia={castMedia} startFrameLayout={startFrameLayout}
             backend={referenceBackend} model={referenceModel} songAudio={cardRequest.songAudio.state === 'on'} capacityOverride={useLtxReferences ? 8 : runwayEndFrameOn ? referenceCapacity : undefined} endFrameBlocksReferences={endFrameBlocksReferences} ltxReferencesOff={canUseLtxReferences && !useLtxReferences} onEditLocal={onEditLocal} onSave={onSave}
             saveState={clipReferenceSaveState} onSaveState={setClipReferenceSaveState} />}
@@ -879,7 +894,7 @@ export default function SceneCard({
           )}
           {timingPlan}
           {layer === 'footage' && (
-            <SceneRenderInputs id={fieldId('inputs')} request={previewRequest} onChange={(patch) => setRenderInputs((prev) => ({ ...prev, ...patch,
+            <SceneRenderInputs id={fieldId('inputs')} request={previewRequest} shown={view === 'clip'} onChange={(patch) => setRenderInputs((prev) => ({ ...prev, ...patch,
               ...(patch.songAudio === true || patch.endFrame === true ? { ltxReferences: false } : {}) }))}
               grokPreview={(!renderSettings?.backend || renderSettings.backend === 'grok') && project?.id && scene.referenceImageId ? {
                 ...(renderSettings?.backend ? { backend: renderSettings.backend } : {}), prompt: cardRequest.authored, mode: 'image', sourceImageFile: scene.referenceImageId,
@@ -973,11 +988,11 @@ export default function SceneCard({
         {/* This shot's piece of the composed final render: cached or not, Render shot, its film look. */}
         {project?.composition?.mode === 'document' && (
           <>
-            <ShotColorMatch project={project} scene={scene} fieldId={fieldId} onApplied={(patch) => onEditLocal(scene.sceneId, patch)} />
+            <ShotColorMatch project={project} scene={scene} fieldId={fieldId} onApplied={applySaved} />
             <ShotFilmLook project={project} scene={scene} onChange={applyPatch} fieldId={fieldId} />
           </>
         )}
-        {project?.composition?.mode === 'composed' && <ShotFinalRender project={project} scene={scene} onChange={applyPatch} onLocal={(patch) => onEditLocal(scene.sceneId, patch)} fieldId={fieldId} />}
+        {project?.composition?.mode === 'composed' && <ShotFinalRender project={project} scene={scene} onChange={applyPatch} onLocal={applySaved} fieldId={fieldId} />}
         {(scene.visualIntent || scene.direction || scene.direction?.actionContract) && (
           <ShotEditorGroup title="Direction" summary={scene.visualIntent} defaultOpen={false} testId="shot-group-direction">
             <div className="space-y-2 text-[11px] text-port-text-muted">
@@ -1013,7 +1028,8 @@ export default function SceneCard({
         </span>
         <button type="button"
           onClick={() => {
-            if (failure.lane === 'video') { generateVideo(); return; }
+            // #16178: repeat the failed tier; a failure with none recorded retries the cheap draft on a tiered lane.
+            if (failure.lane === 'video') { generateVideo(tierChoices ? failure.tier || 'draft' : null); return; }
             if (sourceWindow) return;
             const options = withFrameTarget(null);
             if (options) onGenerateFrame?.(scene, options);

@@ -36,7 +36,8 @@ vi.mock('./firstPassGen.js', () => ({
 vi.mock('../catalogDB/ingredients.js', () => ({ getIngredient: vi.fn() }));
 import { getIngredient } from '../catalogDB/ingredients.js';
 
-const { setTreatment, setPlan, recordRun, updateRun, trimRuns, getProjectsByIds } = await import('./local.js');
+const { setTreatment, setPlan, recordRun, updateRun, getProjectsByIds } = await import('./local.js');
+const { trimRuns } = await import('./projectsLogic.js');
 import * as firstPassGen from './firstPassGen.js';
 
 const VALID_TREATMENT = {

@@ -2,27 +2,6 @@
  * `PROVIDER_GATEWAYS` — one row per hosted OpenAI-compatible gateway an OpenCode
  * CLI/TUI wrapper can front-end (OrcaRouter, OpenRouter, NVIDIA NIM).
  *
- * `PROVIDER_GATEWAYS` — one row per hosted OpenAI-compatible gateway an OpenCode CLI/TUI wrapper can
- * front-end (`orcarouter`, `openrouter`, `nvidia-nim`), plus `PROVIDER_GATEWAY_IDS`, `gatewayById`,
- * `isGatewayNamespace(ns)`, `gatewayForProvider(config)` → row or null,
- * `isGatewayBackedProvider(config)`, and `attachGatewaySiblingKey(provider, providers)` — the
- * synchronous twin of the toolkit's `withGatewayApiKey` for callers holding an already-loaded (RAW,
- * keyless) collection: a fallback pick armed from such a map executes with its sibling's key instead
- * of going out with no Authorization header. Each row's `id` is simultaneously the OpenCode provider
- * namespace, the `gatewayBacked` marker value, and the id of the sibling `api` record that owns the
- * key — so the sibling lookup is `providers[gateway.id]` and an OrcaRouter key can never satisfy an
- * OpenRouter wrapper. Replaces the `orcarouterBacked` boolean + literal `'orcarouter'` that had been
- * hand-copied across ~15 server and client files (namespace resolution, the OpenCode config builder,
- * both zod schemas, the model-fetcher table, the sibling-key attach, the prerequisite check, and the
- * two "not a local runtime" carve-outs in `cliChildEnv.js`/`localProviderRuntime.js`). Reads the
- * legacy per-gateway boolean FOREVER, so stored records are never rewritten. Distinct from a local
- * runtime (`ollamaBacked`, `vllmBacked`, …): remote, always authenticating, and no thinking toggle.
- * Deliberately mirrored in `aiToolkit/internal/gateways.js` (the vendored toolkit may not import out)
- * — `providerGateways.parity.test.js` fails when the two drift; `client/src/utils/providerGateways.js`
- * re-exports this leaf rather than copying it. DERIVED (#7562) from the `serviceDefinitions.js` rows
- * carrying a `gateway` column, so a gateway is one row in that table; the projected shape is
- * unchanged. Dependency-light: imports only that leaf.
- *
  * Before this file, OrcaRouter wasn't *a* gateway — it was *the* gateway: the
  * boolean `orcarouterBacked` and the literal id `'orcarouter'` were hand-copied
  * across ~15 server and client files (namespace resolution, the OpenCode config

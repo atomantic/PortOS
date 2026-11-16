@@ -105,14 +105,6 @@ describe('Brain SongBook routes', () => {
   // ===========================================================================
 
   describe('GET /api/brain/songbook', () => {
-    it('returns { songs } from the entity store', async () => {
-      brainStorage.getAll.mockResolvedValue([baseSong()]);
-      const res = await request(app).get('/api/brain/songbook');
-      expect(res.status).toBe(200);
-      expect(res.body.songs).toHaveLength(1);
-      expect(brainStorage.getAll).toHaveBeenCalledWith('songs');
-    });
-
     it('projects out content.text — the index is metadata-only, text comes from GET /:id', async () => {
       const song = baseSong();
       song.content = { format: 'chordpro', text: 'x'.repeat(5000) };

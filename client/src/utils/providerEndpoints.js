@@ -1,15 +1,6 @@
 /**
  * WHERE a provider's endpoint points.
  *
- * `isLocalEndpoint` (loopback), `isPrivateNetworkEndpoint` (RFC1918 / tailnet address, or a `.local` /
- * `.ts.net` / single-label host — somewhere an unauthenticated OpenAI-compatible server is a normal
- * setup rather than a missing API key), `isLocalInstanceProvider` (talks to a daemon on THIS machine;
- * mirror of `server/lib/localProviderRuntime.js#isLocalInstanceEndpoint` — gate anything that explains
- * a provider by inspecting the host PortOS runs on), `isFleetProvider` / `isFleetHostConfigured`
- * (another machine inside the private network), and `localBackendForProvider` (`'ollama'` /
- * `'lmstudio'` / `null` by id, endpoint or name — it matches by NAME, so pair it with
- * `isLocalInstanceProvider` before claiming this machine's install state).
- *
  * WHERE a provider's endpoint points: this machine (loopback), another host
  * inside the private network (LAN / tailnet / `.local` — a "fleet" provider), or
  * the public internet — and which local daemon (Ollama / LM Studio) a record
@@ -50,6 +41,7 @@
  *
  * @param {{id?:string,endpoint?:string,name?:string}} provider
  * @returns {'ollama'|'lmstudio'|null}
+  * Matches by NAME as well, so pair it with isLocalInstanceProvider before claiming this machine's install state.
  */
 export const localBackendForProvider = (provider) => {
   if (!provider) return null;

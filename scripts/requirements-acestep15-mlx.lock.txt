@@ -21,10 +21,10 @@
 #     --exclude-newer <UTC date at least 7 days ago> -o "$LOCK")
 # then check the result against OSV (including MAL- malicious-package records).
 # The bounded AnyIO refresh uses uv 0.13.7 and cutoff 2026-11-05T00:00:00Z;
-# preserve all other versions, markers and hash blocks. See the bounded Wan/ACE
-# helper section in docs/PYTHON_RUNTIME_REFRESH.md for the selective recipe.
+# preserve all other versions, markers and hash blocks. See
+# docs/PYTHON_RUNTIME_REFRESH.md#selective-regeneration for the selective recipe.
 # For the bounded dateutil 4 refresh, constrain all companion versions and
-# preserve their existing hash blocks; see docs/PYTHON_RUNTIME_REFRESH.md.
+# preserve their existing hash blocks; see docs/PYTHON_RUNTIME_REFRESH.md#selective-regeneration.
 absl-py==2.5.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:286e71c82c1a38e75bbcf185f9b37d0305ad7786535107cb49bf4df9ff2e1f95 \
     --hash=sha256:721200f2f0e9960f2ca9dc3a2a706b201f5f75d812c158f059cbbe29eeafbdb8

@@ -163,10 +163,3 @@ describe('assessSynopsisScope — padding-risk signal (#1513)', () => {
     expect(result.paddingRisk).toBe(false);
   });
 });
-
-describe('LENGTH_PROFILE_NAMES contract', () => {
-  it('always includes the default profile and the custom sentinel', () => {
-    expect(LENGTH_PROFILE_NAMES).toContain(DEFAULT_LENGTH_PROFILE);
-    expect(LENGTH_PROFILE_NAMES).toContain('custom');
-  });
-});

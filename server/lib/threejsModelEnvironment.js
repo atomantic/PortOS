@@ -2,17 +2,6 @@
  * The image-based-lighting and render-profile half of the procedural sculpt
  * contract (`threejsModel.js`), kept in its own DEPENDENCY-FREE module.
  *
- * The image-based-lighting and render-profile half of the procedural sculpt contract, kept
- * **dependency-free** so the client suite can import it to assert parity with
- * `client/src/lib/threejsEnvironment.js` (`threejsModel.js` pulls in zod, which the client CI job does
- * not install). `THREEJS_ENVIRONMENT_PRESETS` (`none`/`neutral`/`studio`) is the bounded preset list
- * the spec schema builds its enum from; `resolveThreejsEnvironment(spec)` normalizes a spec's `{
- * preset, intensity }` block, reading an absent, partial, or unrecognized one as
- * `DEFAULT_THREEJS_ENVIRONMENT` per field — a record stored before the block shipped has no key and
- * was rendered with no environment, so `none` is the honest reading of it. `THREEJS_RENDER_PROFILE` is
- * the output-colour-space / tone-mapping / exposure contract `buildThreejsFactorySource()` stamps onto
- * every export.
- *
  * `spec.lights` alone are punctual: they light a surface but give it nothing to
  * REFLECT, and every reflective PBR channel the material schema accepts —
  * `metalness`, `transmission`, `clearcoat`, `iridescence` — reads off an

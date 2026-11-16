@@ -4,19 +4,8 @@ import * as os from 'os';
 vi.mock('os', async (importOriginal) => ({ ...(await importOriginal()), release: vi.fn(() => '23.0.0') }));
 import { join } from 'path';
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import {
-  getMtplxServerStatus,
-  startMtplxServer,
-  stopMtplxServer,
-  relaunchMtplxServerWithTuning,
-  installMtplx,
-  _resetMtplxServerStateForTests,
-  ensureMtplxRunning,
-  ensureMtplxProviderReady,
-  isMtplxProvider,
-  mtplxCachedModelIds,
-  MTPLX_APP,
-} from './mtplxServerManager.js';
+import { getMtplxServerStatus, startMtplxServer, stopMtplxServer, relaunchMtplxServerWithTuning, installMtplx, _resetMtplxServerStateForTests, ensureMtplxRunning, ensureMtplxProviderReady, isMtplxProvider, MTPLX_APP } from './mtplxServerManager.js';
+import { mtplxCachedModelIds } from './localCachedModels.js';
 import * as processEnv from '../lib/processEnv.js';
 import * as platform from '../lib/platform.js';
 import * as openAiModelsProbe from '../lib/openAiModelsProbe.js';

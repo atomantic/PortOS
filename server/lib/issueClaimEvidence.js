@@ -5,6 +5,8 @@
 
 import { extractSlugFromRef } from './planIds.js';
 
+const COMMIT_OID_RE = /^[a-f0-9]{40}$/;
+
 // `issueMinAgeMinutes` (claim-issue / claim-work task metadata): autonomous
 // claiming skips an issue younger than this. The agent that files an issue
 // usually claims it moments later; a scheduled run that raced it would snipe the
@@ -51,9 +53,10 @@ function githubPrIssueNumbers(pr) {
 // GitHub's node limit at 100 PRs. Request only the evidence the claim gate uses.
 const CLAIM_PR_QUERY = `query($owner:String!, $repo:String!, $endCursor:String) {
   repository(owner:$owner, name:$repo) {
+    defaultBranchRef { name target { oid } }
     pullRequests(first:100, states:OPEN, after:$endCursor) {
-      nodes { number headRefName body commits(first:100) {
-        nodes { commit { message } } pageInfo { hasNextPage }
+      nodes { number headRefName headRefOid baseRefName baseRefOid body commits(first:100) {
+        nodes { commit { oid message } } pageInfo { hasNextPage }
       } }
       pageInfo { hasNextPage endCursor }
     }
@@ -69,19 +72,35 @@ export function githubPrRowsFromPages(pages) {
   if (!Array.isArray(pages) || !pages.length) return null;
   const rows = [];
   for (const [index, page] of pages.entries()) {
-    const connection = page?.data?.repository?.pullRequests;
+    const repository = page?.data?.repository;
+    const connection = repository?.pullRequests;
     if (!Array.isArray(connection?.nodes) || connection.pageInfo?.hasNextPage !== (index < pages.length - 1)) return null;
+    const defaultBranch = repository.defaultBranchRef;
     for (const pr of connection.nodes) {
-      if (!Array.isArray(pr?.commits?.nodes) || typeof pr.commits.pageInfo?.hasNextPage !== 'boolean'
-        || pr.commits.nodes.some(node => typeof node?.commit?.message !== 'string')) return null;
-      rows.push({ ...pr, commits: pr.commits.nodes.map(node => ({ messageHeadline: node.commit.message })),
+      if (typeof defaultBranch?.name !== 'string' || !COMMIT_OID_RE.test(defaultBranch.target?.oid)
+        || typeof pr?.baseRefName !== 'string' || !COMMIT_OID_RE.test(pr.baseRefOid) || !COMMIT_OID_RE.test(pr.headRefOid)
+        || !Array.isArray(pr.commits?.nodes) || typeof pr.commits.pageInfo?.hasNextPage !== 'boolean'
+        || pr.commits.nodes.some(node => !COMMIT_OID_RE.test(node?.commit?.oid) || typeof node.commit.message !== 'string')) return null;
+      rows.push({ ...pr, defaultBranchName: defaultBranch.name, defaultBranchOid: defaultBranch.target.oid,
+        commits: pr.commits.nodes.map(node => ({ oid: node.commit.oid, messageHeadline: node.commit.message })),
         commitsComplete: !pr.commits.pageInfo.hasNextPage });
     }
   }
   return rows;
 }
 
-/** Collect complete PR evidence, expanding only full nested commit pages. */
+async function readComparisonCommits(base, head, readCommitPages) {
+  const pages = await readCommitPages(`compare/${base}...${head}?per_page=100`);
+  if (!Array.isArray(pages) || !pages.length || pages.some(page => !Array.isArray(page?.commits)
+    || !Number.isSafeInteger(page.total_commits) || page.total_commits < 0
+    || page.total_commits !== pages[0].total_commits)) return null;
+  const full = pages.flatMap(page => page.commits);
+  if (full.length !== pages[0].total_commits || full.some(row => !COMMIT_OID_RE.test(row?.sha)
+    || typeof row?.commit?.message !== 'string')) return null;
+  return full.map(row => ({ oid: row.sha, messageHeadline: row.commit.message }));
+}
+
+/** Collect PR ownership and unpublished commit evidence, expanding incomplete pages. */
 export async function collectGithubPrIssueNumbers(rows, readCommitPages) {
   if (!Array.isArray(rows)) return null;
   const numbers = new Set();
@@ -90,15 +109,21 @@ export async function collectGithubPrIssueNumbers(rows, readCommitPages) {
       || !Array.isArray(pr.commits)
       || pr.commits.some(commit => typeof commit?.messageHeadline !== 'string')) return null;
     let commits = pr.commits;
-    // gh caps its nested connection at 100; ask the paginated REST endpoint
-    // only when the first response cannot establish exhaustion.
+    // The PR commits endpoint stops at 250. A pinned, paginated comparison
+    // expands the PR's own range without silently losing later issue references.
     if (pr.commitsComplete !== true && commits.length >= 100) {
-      if (!Number.isSafeInteger(pr.number) || pr.number < 1) return null;
-      const pages = await readCommitPages(pr.number);
-      if (!Array.isArray(pages) || !pages.length || pages.some(page => !Array.isArray(page))) return null;
-      const full = pages.flat();
-      if (full.length < commits.length || full.some(row => typeof row?.commit?.message !== 'string')) return null;
-      commits = full.map(row => ({ messageHeadline: row.commit.message }));
+      const full = await readComparisonCommits(pr.baseRefOid, pr.headRefOid, readCommitPages);
+      if (!full || full.length < commits.length) return null;
+      commits = full;
+    }
+    // Promotion/backport PRs carry development history that has already shipped.
+    // Intersect their own commits with default-absent work, excluding inherited target history too.
+    if (pr.baseRefName !== pr.defaultBranchName) {
+      if (commits.some(commit => !COMMIT_OID_RE.test(commit.oid))) return null;
+      const full = await readComparisonCommits(pr.defaultBranchOid, pr.headRefOid, readCommitPages);
+      if (!full) return null;
+      const unpublished = new Set(full.map(commit => commit.oid));
+      commits = commits.filter(commit => unpublished.has(commit.oid));
     }
     for (const number of githubPrIssueNumbers({ ...pr, commits })) numbers.add(number);
   }

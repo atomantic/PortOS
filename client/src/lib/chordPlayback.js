@@ -1,22 +1,6 @@
 // Chord-sheet play-along for the SongBook `tab`/`chordpro` formats (#4104) — the chord-sheet sibling
 // of `drumPlayback.js` and the fourth consumer of `lookaheadTransport.js`.
 //
-// `sheetChordOccurrences(lines)` flattens `parseTabSheet(text).lines` into the ordered chord tokens,
-// each addressed `{ lineIndex, chordIndex }` so `<TabSheetView>` can light exactly the token that is
-// sounding; `chordMidiNotes(name)` voices one chord (bass note + chord tones, via
-// `chordShapes.chordTones`); `buildChordSchedule(lines, { bpm, beatsPerBar, countInBars })` is the
-// PURE chord→`[{ index, name, lineIndex, chordIndex, midis, startSec, durSec, rest }]` mapping (a
-// chord sheet writes no rhythm, so ONE chord token = ONE bar, and a dash-joined "Am-Am7" splits its
-// bar between its segments) plus the count-in clicks; `resolveChordPlayhead(schedule, posSec)`
-// converts an audio-clock position to `{ countIn, index, beat }`; `createChordPlayer(lines, …)` strums
-// it through `scorePlayback`'s `scheduleTone` with a live metronome toggle.
-//
-// Chord-sheet play-along for the SongBook `tab` / `chordpro` formats (#4104) —
-// the MIDI/score preview `<TabSheetView>` embeds, and the chord-sheet sibling of
-// `drumPlayback.js`. Turns the chord tokens a sheet already carries into a
-// strummed, tempo-adjustable backing you can practice against, with the sounding
-// chord lit in the sheet.
-//
 // Like every other synth player in this tree it is a thin scheduler over the
 // shared `lookaheadTransport.js` (clock, node lifecycle, teardown) and sounds
 // through `scheduleTone` from `scorePlayback.js`, so the preview has the same

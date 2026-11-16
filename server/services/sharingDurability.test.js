@@ -27,7 +27,7 @@ vi.mock('./instanceIdentity.js', () => mockTestIdentity());
 vi.mock('./sharing/peerSync.js', () => mockNoPeerSync({}, {
   getOutboundCoverageForPeer: async () => ({ universe: new Set(), pipeline: new Set(), mediaCollections: new Set() }),
 }));
-// The queue owns data/media-jobs.json (its unreadable-snapshot latch is pinned in mediaJobQueue/index.test.js).
+// The queue owns data/media-jobs.json (its unreadable-snapshot latch is pinned in mediaJobQueue/index.lanes.test.js).
 vi.mock('./mediaJobQueue/index.js', () => ({ getJob: () => null, importArchivedJobs: async () => 0 }));
 vi.mock('./sharing/annotationIdentity.js', () => ({ resolveBucketSourceName: async () => 'Test' }));
 vi.mock('../lib/peerHttpClient.js', () => ({ peerFetch: vi.fn(() => { throw new Error('Unexpected network request'); }) }));

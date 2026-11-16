@@ -254,13 +254,14 @@ describe('Agenda provider sync', () => {
     expect(api.syncCalendarAccount).toHaveBeenCalledExactlyOnceWith('outlook', { silent: true });
     expect(api.apiSyncGoogleCalendar).toHaveBeenCalledExactlyOnceWith('google', { silent: true });
     expect(api.mcpSyncGoogleCalendar).toHaveBeenCalledExactlyOnceWith('mcp', { silent: true });
-    expect(api.getCalendarEvents).toHaveBeenCalledTimes(4);
+    // The three completion refreshes arrive in one burst and coalesce into one read.
+    expect(api.getCalendarEvents).toHaveBeenCalledTimes(2);
     expect(toast.success).toHaveBeenCalledTimes(3);
     expect(screen.getByRole('button', { name: 'Sync' })).not.toBeDisabled();
     const completed = socketMock.on.mock.calls.find(([name]) => name === 'calendar:sync:completed')[1];
     await act(async () => completed({ accountId: 'google', status: 'success', newEvents: 1 }));
     expect(toast.success).toHaveBeenCalledTimes(3);
-    expect(api.getCalendarEvents).toHaveBeenCalledTimes(4);
+    expect(api.getCalendarEvents).toHaveBeenCalledTimes(2);
   });
 
   it('keeps a mixed batch busy until HTTP settles and identifies failed and partial accounts', async () => {
@@ -272,7 +273,7 @@ describe('Agenda provider sync', () => {
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Sync' })));
     expect(screen.getByRole('button', { name: 'Sync' })).toBeDisabled();
     expect(toast.warning).toHaveBeenCalledWith('Example Google: Calendar sync incomplete: One calendar unavailable');
-    expect(api.getCalendarEvents).toHaveBeenCalledTimes(3);
+    expect(api.getCalendarEvents).toHaveBeenCalledTimes(2);
     await act(async () => rejectOutlook(new Error('Provider unavailable')));
     expect(toast.error).toHaveBeenCalledWith('Example Outlook: Calendar sync failed: Provider unavailable');
     expect(toast.success).toHaveBeenCalledExactlyOnceWith('Example MCP: Calendar sync complete: 1 events');
@@ -308,7 +309,8 @@ it('reconciles configuration and reconnect without resurrecting a superseded eve
   await act(async () => { changed(); });
   expect(screen.getByText('Old meeting')).toBeTruthy();
   await act(async () => { reconnect(); });
-  expect(screen.queryByText('Old meeting')).toBeNull();
+  // Reads are single-flight: the newer read runs once the obsolete one settles, and the obsolete result is dropped.
   await act(async () => resolveOld({ events: [oldEvent], total: 1 }));
+  await act(async () => {});
   expect(screen.queryByText('Old meeting')).toBeNull();
 });

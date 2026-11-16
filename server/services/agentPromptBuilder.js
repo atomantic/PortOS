@@ -75,28 +75,8 @@ import {
 } from './promptSections/completion.js';
 import { buildLocalReviewLoopSection, buildReviewLoopFollowUpSection, isMergeOnlyFollowUp, prepareLocalReviewLoopBody, prepareSandboxedReviewLoopBody } from './promptSections/reviewLifecycle.js';
 
-export {
-  detectDomainSkillTemplate,
-  detectSkillTemplate,
-  detectSkillTemplates,
-  getAgentInstructionsContext,
-  loadSkillTemplate,
-  loadSkillTemplates,
-} from './promptSections/instructions.js';
-export { buildOrchestrationDoctrineSection } from './promptSections/orchestrationDoctrine.js';
-export { buildPlannerAttributionSection } from './promptSections/plannerAttribution.js';
-export { buildCompactionSection, buildTaskBlock, reconcileSplitContext } from './promptSections/taskContext.js';
-export {
-  buildActionOutputCompletionSection,
-  buildCompletionGuidelineBullet,
-  buildProgrammaticOutputCompletionSection,
-  buildReadOnlyCompletionSection,
-  buildResumeSection,
-  inlinePrLifecycleSection,
-  promptOpensOwnPr,
-} from './promptSections/completion.js';
-export { buildReviewLoopFollowUpSection } from './promptSections/reviewLifecycle.js';
-export { createJiraTicketForTask, generateJiraTitle, getAppDataForTask, getAppWorkspace } from './promptSections/appContext.js';
+export { promptOpensOwnPr } from './promptSections/completion.js';
+export { getAppWorkspace } from './promptSections/appContext.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
 

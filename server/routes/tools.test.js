@@ -1,241 +1,70 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
-import toolsRoutes from './tools.js';
+import { errorMiddleware } from '../lib/errorHandler.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-vi.mock('../services/tools.js', () => ({
-  getTools: vi.fn(),
-  getEnabledTools: vi.fn(),
-  getTool: vi.fn(),
-  registerTool: vi.fn(),
-  updateTool: vi.fn(),
-  deleteTool: vi.fn(),
-  getToolsSummaryForPrompt: vi.fn()
-}));
+// Real tools registry (one JSON file per tool) over a temp data root.
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-tools-routes-') }));
+afterAll(cleanupTempDataRoots);
 
-import * as toolsService from '../services/tools.js';
+const { default: toolsRoutes } = await import('./tools.js');
 
-describe('Tools Routes', () => {
-  let app;
+const app = express();
+app.use(express.json());
+app.use('/api/tools', toolsRoutes);
+app.use(errorMiddleware);
 
-  beforeEach(() => {
-    app = express();
-    app.use(express.json());
-    app.use('/api/tools', toolsRoutes);
-    vi.clearAllMocks();
+const api = (method, path = '', body) => request(app)[method](`/api/tools${path}`).send(body);
+
+describe('tools routes', () => {
+  it('registers a tool that reads back by id and in the list, then updates, disables and deletes it', async () => {
+    const created = await api('post', '', { id: 'sd-api', name: 'Stable Diffusion', category: 'image-generation', description: 'SD API tool', promptHints: 'use for pictures' });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({ id: 'sd-api', enabled: true });
+
+    expect((await api('get', '/sd-api')).body).toMatchObject({ name: 'Stable Diffusion', category: 'image-generation' });
+    expect((await api('get')).body.map((t) => t.id)).toContain('sd-api');
+    expect((await api('get', '/enabled')).body.map((t) => t.id)).toContain('sd-api');
+    expect((await api('get', '/summary')).body.summary).toContain('**Stable Diffusion** (image-generation): SD API tool — use for pictures');
+
+    const updated = await api('put', '/sd-api', { name: 'Updated SD', enabled: false });
+    expect(updated.status).toBe(200);
+    expect((await api('get', '/sd-api')).body).toMatchObject({ id: 'sd-api', name: 'Updated SD', category: 'image-generation', enabled: false });
+    expect((await api('get', '/enabled')).body.map((t) => t.id)).not.toContain('sd-api');
+    expect((await api('get', '/summary')).body.summary).not.toContain('Updated SD');
+
+    expect((await api('delete', '/sd-api')).status).toBe(204);
+    expect((await api('get', '/sd-api')).status).toBe(404);
+    expect((await api('get')).body.map((t) => t.id)).not.toContain('sd-api');
   });
 
-  describe('GET /api/tools', () => {
-    it('should return all tools', async () => {
-      toolsService.getTools.mockResolvedValue([
-        { id: 'sd-api', name: 'Stable Diffusion' }
-      ]);
-
-      const response = await request(app).get('/api/tools');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveLength(1);
-      expect(response.body[0].id).toBe('sd-api');
-    });
+  it('auto-generates an id when none is supplied and the tool is retrievable under it', async () => {
+    const created = await api('post', '', { name: 'Auto Generated Tool', category: 'test' });
+    expect(created.status).toBe(201);
+    expect(created.body.id).toEqual(expect.any(String));
+    expect((await api('get', `/${created.body.id}`)).body.name).toBe('Auto Generated Tool');
   });
 
-  describe('GET /api/tools/enabled', () => {
-    it('should return only enabled tools', async () => {
-      toolsService.getEnabledTools.mockResolvedValue([
-        { id: 'sd-api', name: 'Stable Diffusion', enabled: true }
-      ]);
-
-      const response = await request(app).get('/api/tools/enabled');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveLength(1);
-      expect(response.body[0].id).toBe('sd-api');
-      expect(response.body[0].enabled).toBe(true);
-      expect(toolsService.getEnabledTools).toHaveBeenCalledTimes(1);
-    });
-
-    it('returns an empty array when no tools are enabled', async () => {
-      toolsService.getEnabledTools.mockResolvedValue([]);
-
-      const response = await request(app).get('/api/tools/enabled');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toEqual([]);
-    });
+  it('answers 404 for an unknown tool on read and update, without creating it', async () => {
+    expect((await api('get', '/nonexistent')).status).toBe(404);
+    expect((await api('put', '/nonexistent', { name: 'Test' })).status).toBe(404);
+    expect((await api('get', '/nonexistent')).status).toBe(404);
   });
 
-  describe('GET /api/tools/summary', () => {
-    it('should return prompt summary', async () => {
-      toolsService.getToolsSummaryForPrompt.mockResolvedValue('## Available Tools\n...');
-
-      const response = await request(app).get('/api/tools/summary');
-
-      expect(response.status).toBe(200);
-      expect(response.body.summary).toContain('Available Tools');
-    });
-  });
-
-  describe('GET /api/tools/:id', () => {
-    it('should return a tool by id', async () => {
-      toolsService.getTool.mockResolvedValue({ id: 'sd-api', name: 'Stable Diffusion' });
-
-      const response = await request(app).get('/api/tools/sd-api');
-
-      expect(response.status).toBe(200);
-      expect(response.body.name).toBe('Stable Diffusion');
-    });
-
-    it('should return 404 if not found', async () => {
-      toolsService.getTool.mockResolvedValue(null);
-
-      const response = await request(app).get('/api/tools/nonexistent');
-
-      expect(response.status).toBe(404);
-    });
-
-    it('should reject path traversal in id', async () => {
-      const response = await request(app).get('/api/tools/..%2F..%2Fetc');
-
-      expect(response.status).toBe(400);
-      expect(toolsService.getTool).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('POST /api/tools', () => {
-    it('should register a new tool', async () => {
-      const toolData = {
-        id: 'sd-api',
-        name: 'Stable Diffusion',
-        category: 'image-generation',
-        description: 'SD API tool'
-      };
-      toolsService.registerTool.mockResolvedValue({ ...toolData, createdAt: '2026-01-01' });
-
-      const response = await request(app)
-        .post('/api/tools')
-        .send(toolData);
-
-      expect(response.status).toBe(201);
-      expect(toolsService.registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: 'Stable Diffusion' }));
-    });
-
-    it('should return 400 if name is missing', async () => {
-      const response = await request(app)
-        .post('/api/tools')
-        .send({ category: 'test' });
-
-      expect(response.status).toBe(400);
-    });
-
-    it('should reject path traversal in body id', async () => {
-      const response = await request(app)
-        .post('/api/tools')
-        .send({ id: '../etc/passwd', name: 'Bad', category: 'test' });
-
-      expect(response.status).toBe(400);
-      expect(toolsService.registerTool).not.toHaveBeenCalled();
-    });
-
-    it('should reject reserved route slug "enabled"', async () => {
-      const response = await request(app)
-        .post('/api/tools')
-        .send({ id: 'enabled', name: 'Bad Tool', category: 'test' });
-
-      expect(response.status).toBe(400);
-      expect(response.body.code).toBe('VALIDATION_ERROR');
-      expect(toolsService.registerTool).not.toHaveBeenCalled();
-    });
-
-    it('should reject reserved route slug "summary"', async () => {
-      const response = await request(app)
-        .post('/api/tools')
-        .send({ id: 'summary', name: 'Bad Tool', category: 'test' });
-
-      expect(response.status).toBe(400);
-      expect(response.body.code).toBe('VALIDATION_ERROR');
-      expect(toolsService.registerTool).not.toHaveBeenCalled();
-    });
-
-    it('should accept valid custom IDs that are not reserved', async () => {
-      const toolData = {
-        id: 'my-tool',
-        name: 'My Tool',
-        category: 'custom',
-        description: 'A custom tool'
-      };
-      toolsService.registerTool.mockResolvedValue({ ...toolData, createdAt: '2026-01-01' });
-
-      const response = await request(app)
-        .post('/api/tools')
-        .send(toolData);
-
-      expect(response.status).toBe(201);
-      expect(toolsService.registerTool).toHaveBeenCalledWith(expect.objectContaining({ id: 'my-tool' }));
-    });
-
-    it('should accept tools with auto-generated IDs', async () => {
-      const toolData = {
-        name: 'Auto Generated Tool',
-        category: 'test'
-      };
-      toolsService.registerTool.mockResolvedValue({ ...toolData, id: 'auto-id-123', createdAt: '2026-01-01' });
-
-      const response = await request(app)
-        .post('/api/tools')
-        .send(toolData);
-
-      expect(response.status).toBe(201);
-      expect(toolsService.registerTool).toHaveBeenCalledWith(expect.objectContaining(toolData));
-    });
-  });
-
-  describe('PUT /api/tools/:id', () => {
-    it('should update an existing tool', async () => {
-      toolsService.updateTool.mockResolvedValue({ id: 'sd-api', name: 'Updated SD', category: 'image-generation' });
-
-      const response = await request(app)
-        .put('/api/tools/sd-api')
-        .send({ name: 'Updated SD' });
-
-      expect(response.status).toBe(200);
-      expect(response.body.name).toBe('Updated SD');
-    });
-
-    it('should return 404 if not found', async () => {
-      toolsService.updateTool.mockResolvedValue(null);
-
-      const response = await request(app)
-        .put('/api/tools/nonexistent')
-        .send({ name: 'Test' });
-
-      expect(response.status).toBe(404);
-    });
-
-    it('should reject path traversal in id', async () => {
-      const response = await request(app)
-        .put('/api/tools/..%2Fhack')
-        .send({ name: 'Test' });
-
-      expect(response.status).toBe(400);
-      expect(toolsService.updateTool).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('DELETE /api/tools/:id', () => {
-    it('should delete a tool', async () => {
-      toolsService.deleteTool.mockResolvedValue(undefined);
-
-      const response = await request(app).delete('/api/tools/sd-api');
-
-      expect(response.status).toBe(204);
-      expect(toolsService.deleteTool).toHaveBeenCalledWith('sd-api');
-    });
-
-    it('should reject path traversal in id', async () => {
-      const response = await request(app).delete('/api/tools/..%2Fhack');
-
-      expect(response.status).toBe(400);
-      expect(toolsService.deleteTool).not.toHaveBeenCalled();
-    });
+  it('refuses a missing name, path-traversal ids and reserved route slugs without persisting anything', async () => {
+    const before = (await api('get')).body.length;
+    expect((await api('post', '', { category: 'test' })).status).toBe(400);
+    expect((await api('post', '', { id: '../etc/passwd', name: 'Bad', category: 'test' })).status).toBe(400);
+    for (const id of ['enabled', 'summary']) {
+      const reserved = await api('post', '', { id, name: 'Bad Tool', category: 'test' });
+      expect(reserved.status).toBe(400);
+      expect(reserved.body.code).toBe('VALIDATION_ERROR');
+    }
+    expect((await api('get', '/..%2F..%2Fetc')).status).toBe(400);
+    expect((await api('put', '/..%2Fhack', { name: 'Test' })).status).toBe(400);
+    expect((await api('delete', '/..%2Fhack')).status).toBe(400);
+    expect((await api('get')).body).toHaveLength(before);
   });
 });

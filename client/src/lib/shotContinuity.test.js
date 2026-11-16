@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { findAxisReversals, findShotTypeMonotony, sceneShotWarnings } from './shotContinuity.js';
+import { findAxisReversals, findShotTypeMonotony } from '../../../server/lib/editorial/shotContinuity.js';
+import { sceneShotWarnings } from './shotContinuity.js';
 
 // The two detectors are byte-for-byte mirrors of
 // server/lib/editorial/shotContinuity.js (exhaustively tested there). These are

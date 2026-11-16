@@ -12,6 +12,7 @@
  */
 
 import { LOOM_LIMITS } from './fableLoomLimits.js';
+import { clamp } from './vectorMath.js';
 import { isNonBlankStr, trimTo } from './textUtils.js';
 import { FILM_LOOK_CONTROLS, FILM_LOOK_PRESET_IDS } from './filmLook.js';
 import { PHOTOGRAPHY_FIELDS, VISUAL_PROFILE_TEXT_MAX } from './universeVisualProfile.js';
@@ -64,7 +65,6 @@ export const asFableLoomPlaybackMode = (value) => (
 export const isSafeVideoHistoryId = (value) =>
   typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(value);
 
-const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 const SAFE_PRODUCTION_PARAMETER_KEYS = new Set([
   'width', 'height', 'numFrames', 'fps', 'steps', 'guidance', 'guidanceScale',
   'seed', 'imageStrength', 'quantize', 'effort', 'mode', 'videoMode',

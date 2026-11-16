@@ -6,9 +6,6 @@ import {
 } from './changeToken.js';
 
 describe('changeToken registry', () => {
-  it('exposes the known domains', () => {
-    expect(CHANGE_TOKEN_DOMAINS).toEqual(['universe', 'pipeline', 'storyBuilder']);
-  });
 
   it('starts at 0 for an un-bumped domain', () => {
     // storyBuilder is not bumped by any other case in this file

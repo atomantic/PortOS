@@ -3,15 +3,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-import {
-  assessPersistentMindWorkspaceReadiness,
-  PERSISTENT_MIND_WORKSPACE_PREFLIGHT_LIMITS,
-  PERSISTENT_MIND_WORKSPACE_PREFLIGHT_TTL_MS,
-  readPersistentMindWorkspacePreflight,
-  readPersistentMindWorkspacePreflights,
-  resetPersistentMindWorkspacePreflightCache,
-  satisfiesVersionRequirement,
-} from './persistentMindWorkspacePreflight.js';
+import { assessPersistentMindWorkspaceReadiness, PERSISTENT_MIND_WORKSPACE_PREFLIGHT_LIMITS, PERSISTENT_MIND_WORKSPACE_PREFLIGHT_TTL_MS, readPersistentMindWorkspacePreflight, readPersistentMindWorkspacePreflights, resetPersistentMindWorkspacePreflightCache } from './persistentMindWorkspacePreflight.js';
+import { satisfiesVersionRequirement } from '../../scripts/checkNodeVersion.js';
 
 const appFor = (repoPath, overrides = {}) => ({
   id: 'fixture-app',

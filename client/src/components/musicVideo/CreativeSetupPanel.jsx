@@ -12,8 +12,11 @@ import CharacterStylePicker from './CharacterStylePicker.jsx';
 import IngredientPicker from '../IngredientPicker.jsx';
 import { ingredientPath } from '../../lib/creativeLibraries.js';
 import { VideoCastLinksDisclosure } from './VideoCastLinks.jsx';
+import { MUSIC_VIDEO_MAX_SUBJECTS } from '../../lib/musicVideoUniverseRefs.js';
 
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
+// Past this many choices a plain select stops being scannable, so a name filter appears.
+const PICKER_FILTER_THRESHOLD = 12;
 const kinds = [['character', 'Cast'], ['place', 'Places'], ['object', 'Objects']];
 const fields = { character: 'characters', place: 'places', object: 'objects' };
 // Unchecked subjects are saved to these catalog pages on Cast & Sets approval
@@ -47,6 +50,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [selectedCanon, setSelectedCanon] = useState([]);
+  const [pickFilter, setPickFilter] = useState({});
   const [descriptionBases, setDescriptionBases] = useState({});
   const [catalogKind, setCatalogKind] = useState(null);
   const universeId = draft?.universeId ?? project.concept?.universeId ?? '';
@@ -97,7 +101,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
     setEditing(true);
   };
   const add = (kind, name, description, canon) => {
-    if (!name.trim() || subjects.length >= 24) return;
+    if (!name.trim() || subjects.length >= MUSIC_VIDEO_MAX_SUBJECTS) return;
     const subject = { id: `mvc-${uuidv4()}`, kind, name: name.trim().slice(0, 120), description: description || '', ...(kind === 'character' ? { role: subjects.some((s) => s.kind === 'character') ? 'supporting' : 'protagonist' } : {}), ...(canon?.id ? { canonId: canon.id } : {}), ...(canon?.ingredientId ? { ingredientId: canon.ingredientId } : {}) };
     setDraft((d) => ({ ...d, subjects: [...d.subjects, subject] }));
     if (subject.ingredientId) setDescriptionBases((bases) => ({ ...bases, [subject.id]: subject.description }));
@@ -164,16 +168,22 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
         </div>
       </div>
       {loading && <p className="text-xs">Loading canon…</p>}
-      {universeReady && universe && <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">{kinds.map(([kind, label]) => <div key={kind}>
-        <label htmlFor={idFor(`pick-${kind}`)} className="text-xs">Select {label.toLowerCase()}</label>
-        <select id={idFor(`pick-${kind}`)} value="" className={inputClass} disabled={subjects.length >= 24} onChange={(e) => {
-          const entry = (universe[fields[kind]] || []).find((item) => item.id === e.target.value);
-          if (entry) add(kind, entry.name, entry.physicalDescription || entry.description, entry);
-        }}><option value="">Add from universe…</option>{(universe[fields[kind]] || []).filter((entry) => !subjects.some((s) => s.kind === kind && (s.canonId === entry.id || (entry.ingredientId && s.ingredientId === entry.ingredientId)))).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>
-      </div>)}</div>}
+      {universeReady && universe && <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">{kinds.map(([kind, label]) => {
+        const available = (universe[fields[kind]] || []).filter((entry) => !subjects.some((s) => s.kind === kind && (s.canonId === entry.id || (entry.ingredientId && s.ingredientId === entry.ingredientId))));
+        const query = (pickFilter[kind] || '').trim().toLowerCase();
+        const shown = query ? available.filter((entry) => (entry.name || '').toLowerCase().includes(query)) : available;
+        return <div key={kind}>
+          <label htmlFor={idFor(`pick-${kind}`)} className="text-xs">Select {label.toLowerCase()}</label>
+          {available.length > PICKER_FILTER_THRESHOLD && <input type="search" aria-label={`Filter ${label.toLowerCase()} by name`} placeholder={`Filter ${available.length} by name…`} value={pickFilter[kind] || ''} onChange={(e) => setPickFilter((f) => ({ ...f, [kind]: e.target.value }))} className={`${inputClass} mb-1`} />}
+          <select id={idFor(`pick-${kind}`)} value="" className={inputClass} disabled={subjects.length >= MUSIC_VIDEO_MAX_SUBJECTS} onChange={(e) => {
+            const entry = (universe[fields[kind]] || []).find((item) => item.id === e.target.value);
+            if (entry) add(kind, entry.name, entry.physicalDescription || entry.description, entry);
+          }}><option value="">{query ? `${shown.length} of ${available.length} match…` : 'Add from universe…'}</option>{shown.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>
+        </div>;
+      })}</div>}
       <div className="flex flex-wrap items-center gap-x-3" role="group" aria-label="Add from catalog">
         <span className="text-xs text-port-text-muted">From the catalog:</span>
-        {kinds.map(([kind, label]) => <button key={kind} type="button" disabled={subjects.length >= 24} onClick={() => setCatalogKind(kind)} className="text-sm text-port-accent min-h-[44px] rounded border border-port-border px-3 py-2 hover:bg-port-accent/10 disabled:opacity-50">Add {label.toLowerCase()}</button>)}
+        {kinds.map(([kind, label]) => <button key={kind} type="button" disabled={subjects.length >= MUSIC_VIDEO_MAX_SUBJECTS} onClick={() => setCatalogKind(kind)} className="text-sm text-port-accent min-h-[44px] rounded border border-port-border px-3 py-2 hover:bg-port-accent/10 disabled:opacity-50">Add {label.toLowerCase()}</button>)}
       </div>
       <IngredientPicker
         open={!!catalogKind}
@@ -188,7 +198,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
           add(kind, ingredient.name || '', payload.physicalDescription || payload.description || '', catalogEntry(ingredient));
         }}
       />
-      <p className="text-xs text-port-text-muted">Cast entries with the same name are alternates; choose one to use. Up to 24 subjects. Selected canon images are added as look references when space is available; enable “Condition frames” in Look references to use their pixels.</p>
+      <p className="text-xs text-port-text-muted">Cast entries with the same name are alternates; choose one to use. Up to {MUSIC_VIDEO_MAX_SUBJECTS} subjects. Selected canon images are added as look references when space is available; enable “Condition frames” in Look references to use their pixels.</p>
       <ul className="space-y-2">{subjects.map((subject) => <li key={subject.id} className="border border-port-border rounded p-2 space-y-1">
         <div className="flex flex-wrap items-center gap-2"><span className="text-sm min-w-0 flex-1 break-words">{subject.name} · {subject.kind}</span>
           {subject.kind === 'character' && <><label htmlFor={idFor(subject.id)} className="sr-only">Role for {subject.name}</label><select id={idFor(subject.id)} className="bg-port-bg border border-port-border rounded text-xs" value={subject.role || 'supporting'} onChange={(e) => setDraft((d) => ({ ...d, subjects: d.subjects.map((s) => s.id === subject.id ? { ...s, role: e.target.value } : s) }))}><option value="protagonist">Protagonist</option><option value="band">Band</option><option value="supporting">Supporting</option></select></>}
@@ -220,7 +230,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
       <p id={idFor('description-count')} className={`text-xs ${newDescription.length > SUBJECT_DESCRIPTION_MAX ? 'text-port-error' : 'text-port-text-muted'}`}>
         {formatCount(newDescription.length)} / {formatCount(SUBJECT_DESCRIPTION_MAX)} characters{newDescription.length > SUBJECT_DESCRIPTION_MAX ? ' — shorten before adding' : ''}
       </p>
-      <button type="button" className="text-port-accent text-sm min-h-[44px] rounded border border-port-border px-3 py-2 hover:bg-port-accent/10 disabled:opacity-50" disabled={!newName.trim() || subjects.length >= 24 || newDescription.length > SUBJECT_DESCRIPTION_MAX} onClick={() => { add(newKind, newName, newDescription); setNewName(''); setNewDescription(''); }}>Add to production</button>
+      <button type="button" className="text-port-accent text-sm min-h-[44px] rounded border border-port-border px-3 py-2 hover:bg-port-accent/10 disabled:opacity-50" disabled={!newName.trim() || subjects.length >= MUSIC_VIDEO_MAX_SUBJECTS || newDescription.length > SUBJECT_DESCRIPTION_MAX} onClick={() => { add(newKind, newName, newDescription); setNewName(''); setNewDescription(''); }}>Add to production</button>
       {(newName.trim() || newDescription.trim()) && <p className="text-xs text-port-text-muted">Add the new subject to the production before saving.</p>}
       <div className="flex flex-wrap gap-3"><button type="button" onClick={save} disabled={!universeReady || !!refusal || !!newName.trim() || !!newDescription.trim() || !!overlongSubjects.length} className="bg-port-accent text-white rounded px-3 py-2 text-sm disabled:opacity-50">{saving ? 'Saving…' : 'Save creative setup'}</button><button type="button" onClick={() => setEditing(false)} className="text-sm">Cancel</button></div>
     </fieldset>}

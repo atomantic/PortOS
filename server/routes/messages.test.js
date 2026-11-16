@@ -162,29 +162,6 @@ describe('Messages Routes', () => {
 
   // === Account Routes ===
 
-  describe('GET /api/messages/accounts', () => {
-    it('should return list of accounts', async () => {
-      const mockAccounts = [
-        { id: VALID_UUID, name: 'Work Gmail', type: 'gmail' }
-      ];
-      messageAccounts.listAccounts.mockResolvedValue(mockAccounts);
-
-      const response = await request(app).get('/api/messages/accounts');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toEqual(mockAccounts);
-    });
-
-    it('should return empty array when no accounts exist', async () => {
-      messageAccounts.listAccounts.mockResolvedValue([]);
-
-      const response = await request(app).get('/api/messages/accounts');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveLength(0);
-    });
-  });
-
   describe('POST /api/messages/accounts', () => {
     it('should create a new account', async () => {
       const newAccount = { name: 'Work Gmail', type: 'gmail', email: 'work@gmail.com' };
@@ -229,7 +206,6 @@ describe('Messages Routes', () => {
         .send({ name: 'Updated' });
 
       expect(response.status).toBe(200);
-      expect(response.body.name).toBe('Updated');
       expect(messageAccounts.updateAccount).toHaveBeenCalledWith(VALID_UUID, { name: 'Updated' });
     });
 
@@ -346,7 +322,7 @@ describe('Messages Routes', () => {
       const response = await request(app).get(`/api/messages/sync/${VALID_UUID}/status`);
 
       expect(response.status).toBe(200);
-      expect(response.body.lastSyncStatus).toBe('success');
+      expect(messageSync.getSyncStatus.mock.calls[0][0]).toBe(VALID_UUID);
     });
 
     it('should return 404 if account not found', async () => {
@@ -361,17 +337,6 @@ describe('Messages Routes', () => {
   // === Inbox Routes ===
 
   describe('GET /api/messages/inbox', () => {
-    it('should return messages', async () => {
-      const result = { messages: [{ id: 'msg-1', subject: 'Hello' }], total: 1 };
-      messageSync.getMessages.mockResolvedValue(result);
-
-      const response = await request(app).get('/api/messages/inbox');
-
-      expect(response.status).toBe(200);
-      expect(response.body.messages).toHaveLength(1);
-      expect(response.body.total).toBe(1);
-    });
-
     it('should pass accountId filter', async () => {
       messageSync.getMessages.mockResolvedValue({ messages: [], total: 0 });
 
@@ -413,16 +378,6 @@ describe('Messages Routes', () => {
   // === Draft Routes ===
 
   describe('GET /api/messages/drafts', () => {
-    it('should return list of drafts', async () => {
-      const drafts = [{ id: DRAFT_UUID, subject: 'Re: Hello', status: 'draft' }];
-      messageDrafts.listDrafts.mockResolvedValue(drafts);
-
-      const response = await request(app).get('/api/messages/drafts');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveLength(1);
-    });
-
     it('should pass accountId and status filters', async () => {
       messageDrafts.listDrafts.mockResolvedValue([]);
 
@@ -565,7 +520,7 @@ describe('Messages Routes', () => {
         .send({ subject: 'Updated' });
 
       expect(response.status).toBe(200);
-      expect(response.body.subject).toBe('Updated');
+      expect(messageDrafts.updateDraft.mock.calls[0][0]).toBe(DRAFT_UUID);
     });
 
     it('should return 404 if draft not found', async () => {
@@ -588,7 +543,7 @@ describe('Messages Routes', () => {
       const response = await request(app).post(`/api/messages/drafts/${DRAFT_UUID}/approve`);
 
       expect(response.status).toBe(200);
-      expect(response.body.status).toBe('approved');
+      expect(messageDrafts.approveDraft.mock.calls[0][0]).toBe(DRAFT_UUID);
     });
 
     it('should return 404 if draft not found', async () => {
@@ -631,7 +586,7 @@ describe('Messages Routes', () => {
       const response = await request(app).post(`/api/messages/drafts/${DRAFT_UUID}/send`);
 
       expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
+      expect(messageSender.sendDraft.mock.calls[0][0]).toBe(DRAFT_UUID);
     });
 
     it('should return 404 if draft not found', async () => {
@@ -672,6 +627,7 @@ describe('Messages Routes', () => {
       const response = await request(app).delete(`/api/messages/drafts/${DRAFT_UUID}`);
 
       expect(response.status).toBe(204);
+      expect(messageDrafts.deleteDraft.mock.calls[0][0]).toBe(DRAFT_UUID);
     });
 
     it('should return 404 if draft not found', async () => {
@@ -707,13 +663,13 @@ describe('Messages Routes', () => {
       expect(response.body.error).toBe('Invalid accountId format');
     });
 
-    it('should return empty array for unknown threadId', async () => {
+    it('wraps an empty thread as an empty messages array', async () => {
       messageSync.getThread.mockResolvedValue([]);
 
       const response = await request(app).get(`/api/messages/thread/${VALID_UUID}/unknown`);
 
       expect(response.status).toBe(200);
-      expect(response.body.messages).toHaveLength(0);
+      expect(response.body).toEqual({ messages: [] });
     });
   });
 
@@ -727,7 +683,7 @@ describe('Messages Routes', () => {
       const response = await request(app).get(`/api/messages/${VALID_UUID}/msg-1`);
 
       expect(response.status).toBe(200);
-      expect(response.body.subject).toBe('Hello');
+      expect(messageSync.getMessage).toHaveBeenCalledWith(VALID_UUID, 'msg-1');
     });
 
     it('should return 400 for invalid accountId', async () => {

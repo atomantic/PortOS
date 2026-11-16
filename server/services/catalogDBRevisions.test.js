@@ -95,8 +95,8 @@ const {
   createIngredient,
   updateIngredient,
   recordIngredientRevision,
-  CATALOG_REVISION_RETENTION,
 } = await import('./catalogDB.js');
+const { CATALOG_REVISION_RETENTION } = await import('./catalogDB/shared.js');
 
 const revisionInserts = () => calls.filter((c) => /^INSERT INTO catalog_ingredient_revisions/i.test(c.sql.trim()));
 const revisionDeletes = () => calls.filter((c) => /^DELETE FROM catalog_ingredient_revisions/i.test(c.sql.trim()));
@@ -175,7 +175,4 @@ describe('recordIngredientRevision — retention prune', () => {
     expect(revisionInserts()[0].params[6].length).toBe(120);
   });
 
-  it('defaults retention to 50', () => {
-    expect(CATALOG_REVISION_RETENTION).toBe(50);
-  });
 });

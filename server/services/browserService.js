@@ -2,6 +2,9 @@
  * Browser Service - manages the portos-browser CDP instance
  * Communicates with the portos-browser process (port 5557 health, port 5556 CDP)
  * Stores config in data/browser-config.json
+ *
+ * Storage: `file-primary` (`data/browser-profile/`) — machine-local, never
+ * federated. A Chrome profile is inherently filesystem-oriented.
  */
 
 import { readdir, stat, unlink } from 'fs/promises';

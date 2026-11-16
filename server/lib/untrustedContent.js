@@ -13,7 +13,7 @@ import { PRIVATE_UNTRUSTED_CONTENT_SOURCES, UNTRUSTED_CONTENT_SOURCES } from './
 
 // Re-exported so every existing importer keeps working; the lists live in
 // their own browser-importable leaf (see untrustedContentSources.js).
-export { PRIVATE_UNTRUSTED_CONTENT_SOURCES, UNTRUSTED_CONTENT_SOURCES } from './untrustedContentSources.js';
+export { PRIVATE_UNTRUSTED_CONTENT_SOURCES } from './untrustedContentSources.js';
 export const DEFAULT_UNTRUSTED_CONTENT_POLICY = Object.freeze({
   classifierMode: 'required', minBenignScore: 0.9,
   maxInputChars: MODEL_ABUSE_GUARD_MAX_INPUT_CHARS, maxOutputChars: 32_000,

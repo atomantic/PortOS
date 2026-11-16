@@ -48,7 +48,6 @@ import { execPm2, getAppStatusStrict, clearJlistCache, getSavedProcessNames } fr
 
 export { MTPLX_APP };
 // Compatibility export; provider cache discovery owns no daemon lifecycle state.
-export { mtplxCachedModelIds } from './localCachedModels.js';
 
 const PROBE_TIMEOUT_MS = 1500;
 /**
@@ -861,11 +860,6 @@ export function _resetMtplxServerStateForTests({
   portReleaseTimeoutMs = Number.isFinite(portRelease) ? portRelease : 30_000;
   relaunchReadyTimeoutMs = Number.isFinite(relaunchReadyTimeout) ? relaunchReadyTimeout : 300_000;
   relaunchPollMs = Number.isFinite(relaunchPoll) ? relaunchPoll : 1000;
-}
-
-// Test hook for pinning
-export function _setMtplxKeepLoadedOverrideForTests(val) {
-  onDemand.setKeepLoadedOverrideForTests(val);
 }
 
 // =============================================================================

@@ -116,7 +116,7 @@ describe('pipeline series service', () => {
     // Phase B.4: canon (characters/settings/objects) no longer lives on the
     // series — it lives on the linked universe. This test exercises only
     // the series-owned fields; canon round-tripping is covered by
-    // universeBuilder.test.js + promoteToPipeline.test.js.
+    // universeBuilder/*.test.js + promoteToPipeline.test.js.
     const s = await svc.createSeries({
       name: 'Salt Run',
       logline: 'A foundry city goes silent.',
@@ -334,7 +334,7 @@ describe('pipeline series service', () => {
   });
 
   // Mutator-form coverage (issue #8453) — mirrors updateUniverse's mutator
-  // tests in server/services/universeBuilder.test.js. commitImport needs this
+  // tests in server/services/universeBuilder/crud.test.js. commitImport needs this
   // overload so a read-modify-write that straddles a slow LLM call (the
   // importer's cleanupFormatting pass) merges against the freshest persisted
   // series instead of a snapshot taken before the call.

@@ -102,7 +102,6 @@ export const LOCAL_VIDEO_PROVIDER_ID = 'minimax-h3-local';
 
 /** The provider ids a generate REQUEST may carry. */
 // Moved to lib/spriteVocabulary.js in #4901; re-exported for existing callers.
-export { ANIMATION_PROVIDER_IDS } from '../../lib/spriteVocabulary.js';
 import { ANIMATION_PROVIDER_IDS } from '../../lib/spriteVocabulary.js';
 
 /**

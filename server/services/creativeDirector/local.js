@@ -30,7 +30,7 @@ import { resolveIngredientsByIds, linkIngredientsToCreativeDirector } from '../c
 import { buildCastFromIngredients } from './catalogSeed.js';
 import { enqueueFirstPassSceneFrames } from './firstPassGen.js';
 
-export { trimRuns, startingImageFilename } from './projectsLogic.js';
+export { startingImageFilename } from './projectsLogic.js';
 
 // Shared dispatcher (#2899). The boot DB gate in server/index.js fail-fasts when
 // Postgres is required but missing, but the boot RECOVERY scan

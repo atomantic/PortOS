@@ -2,16 +2,6 @@
  * Music Video automation brief — the tool catalog an automation-first project
  * is allowed to spend on, plus the brief normalizer.
  *
- * Music Video automation brief: `MUSIC_VIDEO_AUTOMATION_TOOLS` (image/video backends derived from
- * `generationModes.js` plus `code:render`, each flagged `metered`), `MUSIC_VIDEO_AUTOMATION_TOOL_IDS`,
- * and `normalizeMusicVideoAutomation(patch, current)` (per-sub-field merge, catalog-ordered tools,
- * `budgetUsd: null` = no cap, `llm: null` clears the direction-LLM pin, `llmStages` merges per stage
- * with `null` clearing one, server-written `routes` survive but are never patch-settable). Also
- * `normalizeMusicVideoLlm` / `normalizeMusicVideoEffort` / `musicVideoLlmRouteLabel` for that pin and
- * the effective route a stage ran on (#9545), and `MUSIC_VIDEO_LLM_STAGES` /
- * `MUSIC_VIDEO_LLM_STAGE_LABELS` / `normalizeMusicVideoLlmStages` for the per-stage pins.
- * Dependency-light; the client create drawer imports it.
- *
  * A dependency-free leaf (the client's create drawer and automation panel
  * import it directly, like navManifest.js) so the tool alphabet cannot drift
  * between the picker and the server schema. Image/video tool ids derive from

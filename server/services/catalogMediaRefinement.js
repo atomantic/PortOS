@@ -20,6 +20,7 @@ import { previewImagePrompt } from './imageGen/promptPreview.js';
 import { readImageDimensions } from './imageGen/regen.js';
 import { enqueueJob } from './mediaJobQueue/index.js';
 import { CATALOG_COMPARISON_VARIANT_ID } from '../lib/catalogValidation.js';
+import { getUniverse } from './universeBuilder/crud.js';
 
 const COMPARISON_SHEET_ROLE = `sheet:${CATALOG_COMPARISON_VARIANT_ID}`;
 
@@ -102,7 +103,6 @@ export async function readEditSourceDimensions(filename) {
 export async function resolveCatalogImageTarget(id) {
   const ownership = await getPrimitiveContext(id, { includeDerived: false });
   if (ownership.status === 'conflict') throw new ServerError('Resolve universe ownership before refining', { status: 409 });
-  const { getUniverse } = await import('./universeBuilder/crud.js');
   const universe = ownership.owner ? await getUniverse(ownership.owner.refId) : null;
   const settings = await getSettings();
   const pin = recordRenderPin(universe || {});

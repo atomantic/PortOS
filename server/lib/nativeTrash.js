@@ -2,15 +2,6 @@
  * OS recycling adapters PortOS owns — no third-party package, no bundled
  * binary (ADR docs/decisions/2026-10-18-native-trash-without-dependency.md).
  *
- * `moveToNativeTrash(paths, { signal }?)` recycles through OS facilities PortOS owns — one hidden,
- * deadline-bound `osascript` (`NSFileManager.trashItemAtURL`, exported `MACOS_TRASH_SCRIPT`) per file
- * on macOS so each gets Finder Put Back; one Windows PowerShell 5.1 `-EncodedCommand` run (shell32
- * `SHFileOperationW` with `FOF_ALLOWUNDO`, exported `WINDOWS_TRASH_SCRIPT`, paths in
- * `PORTOS_TRASH_PATHS`, fixed-drive pre-flight) per batch; `trashXdg` per file on Linux. Refusals
- * reject with a coded error (`TRASH_REFUSED` + per-file `report`, `TRASH_DEADLINE`, `TRASH_ABORTED`
- * for canceled macOS/Windows children, `TRASH_UNPARSABLE`, `TRASH_UNSUPPORTED_PLATFORM`); no
- * local-directory or permanent-delete fallback.
- *
  * `moveToNativeTrash(paths)` dispatches on `process.platform`:
  * - darwin: `/usr/bin/osascript -l JavaScript` running `MACOS_TRASH_SCRIPT`
  *   (`NSFileManager.trashItemAtURL`), ONE process per file — the OS writes a

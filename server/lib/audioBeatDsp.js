@@ -1,24 +1,7 @@
 /**
  * Shared beat/tempo DSP core (#9424).
  *
- * Shared beat/tempo DSP core (#9424) used by both `beatGrid.js` and
- * `services/musicVideo/audioAnalysis.js`: `decodeAudioToPcm` (ffmpeg → mono f32 PCM, capped at
- * `MAX_ANALYSIS_SEC`), Hann/FFT helpers, `onsetEnvelope` (spectral flux + RMS energy), `estimateTempo`
- * (full-track autocorrelation over 70-180 BPM with a windowed, clustered fallback for tracks with a
- * variable intro/outro), `trackBeatGrid` (dynamic onset tracking, contrast-gated octave rescue and
- * tracked tempo), `pickDownbeats` (onset phase with an optional confident section-energy/quiet-intro
- * low-band entry vote; returns `{ downbeats, source }`), and the beat-grid trust gate (#14240:
- * `measureBeatGrid`, `stereoPhaseCancellation`, `decideBeatGrid`).
- *
- * The ffmpeg-decode + pure-JS spectral-flux pipeline that both the Music Video
- * analyzer (`services/musicVideo/audioAnalysis.js`) and the launch-video beat
- * grid (`lib/beatGrid.js`) build on: Hann/FFT helpers, `decodeAudioToPcm`,
- * `onsetEnvelope`, windowed-fallback `estimateTempo`, `trackBeatGrid` and
- * `pickDownbeats`. It lives in `server/lib/` so both callers import one copy
- * instead of forking it (a fork had already drifted — only one side had the
- * windowed tempo fallback). Callers keep their own concerns: sections,
- * waveform, features and manual tempo in audioAnalysis; hit peak-picking and
- * the per-file cache in beatGrid.
+ * Decodes through ffmpeg; the Music Video analyzer and the launch-video beat grid share this one copy.
  */
 
 import { spawn } from './childProcess.js';

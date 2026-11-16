@@ -3,6 +3,7 @@ import { callProviderAISimple, parseLLMJSON } from './aiProvider.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { loadJSON, mutateGoals, GOALS_FILE, DEFAULT_GOALS } from './identity/store.js';
 import { userLocalToday } from './userTimezone.js';
+import { getActiveProvider } from './providers.js';
 
 function computeExpectedProgress(goal) {
   const start = new Date(goal.createdAt);
@@ -37,7 +38,6 @@ Respond with JSON only (no markdown fences): { "assessment": "string", "recommen
 }
 
 export async function runGoalCheckIn({ background = false } = {}) {
-  const { getActiveProvider } = await import('./providers.js');
   // This initial load is only to decide WHICH goals to prompt for and to build
   // the LLM prompts — it is never the snapshot that gets saved. The slow LLM
   // calls below can take seconds to minutes, during which the user can add a

@@ -43,11 +43,16 @@ import {
 import { suggestCastForBrief, applyAutoCastToProject, toSuggestionView } from '../services/creativeDirector/autoCast.js';
 import { enqueueFirstPassPortraits } from '../services/creativeDirector/firstPassGen.js';
 import { enqueueFirstPassMusicBed } from '../services/creativeDirector/firstPassMusicGen.js';
-import { startCreativeDirectorProject } from '../services/creativeDirector/completionHook.js';
+import { startCreativeDirectorProject, advanceAfterSceneSettled } from '../services/creativeDirector/completionHook.js';
 import { createSmokeTestProject } from '../services/creativeDirector/smokeTest.js';
 import { stopProject } from '../services/creativeDirector/stopProject.js';
 import { resolveCreativeDirectorProjectCommand } from '../services/creativeDirector/projectCommands.js';
 
+import { getCommissionPlanError, getAllCreativeToolMetadata } from '../services/creative/toolRegistry.js';
+import { advanceAfterPlanStepSettled } from '../services/creativeDirector/planAdvance.js';
+import { getCreativeAutonomyMode } from '../lib/domainAutonomy.js';
+import { getDomainBudgetStatus } from '../services/domainUsage.js';
+import { loadState } from '../services/cosState.js';
 const router = Router();
 
 function assertVideoDispatchAvailable(project) {
@@ -85,15 +90,6 @@ router.get('/', asyncHandler(async (req, res) => {
 // the gate would block (over budget). Registered before `/:id` so the literal
 // path can't be shadowed by the param route. Pure read — no LLM, no mutation.
 router.get('/tools', asyncHandler(async (_req, res) => {
-  // Dynamic-imported (like the /plan advance-loop nudge below) so the heavy tool
-  // graph + cos state modules aren't pulled at route module-load — keeps the
-  // route unit test fast and free of those services' import-time side effects.
-  const [{ getAllCreativeToolMetadata }, { getCreativeAutonomyMode }, { getDomainBudgetStatus }, { loadState }] = await Promise.all([
-    import('../services/creative/toolRegistry.js'),
-    import('../lib/domainAutonomy.js'),
-    import('../services/domainUsage.js'),
-    import('../services/cosState.js'),
-  ]);
   const state = await loadState().catch(() => ({ config: {} }));
   const mode = getCreativeAutonomyMode(state.config);
   const budget = await getDomainBudgetStatus('cos').catch(() => ({ withinBudget: true, exceeded: null }));
@@ -300,13 +296,11 @@ router.patch('/:id/plan', asyncHandler(async (req, res) => {
   const plan = validateRequest(creativeDirectorPlanSchema, req.body);
   const project = await getProject(req.params.id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  const { getCommissionPlanError } = await import('../services/creative/toolRegistry.js');
   const commissionPlanError = getCommissionPlanError(plan, project.directive);
   if (commissionPlanError) {
     throw new ServerError(commissionPlanError, { status: 400, code: 'INVALID_COMMISSION_PLAN' });
   }
   const updated = await setPlan(req.params.id, plan);
-  const { advanceAfterPlanStepSettled } = await import('../services/creativeDirector/planAdvance.js');
   advanceAfterPlanStepSettled(req.params.id)
     .catch((e) => logFailureWithStack(`❌ CD plan advance failed for ${req.params.id}`, e));
   res.json(updated);
@@ -331,7 +325,6 @@ router.post('/:id/directive', asyncHandler(async (req, res) => {
     ...(parked ? {} : { status: 'planning', failureReason: null }),
   });
   if (!parked) {
-    const { advanceAfterPlanStepSettled } = await import('../services/creativeDirector/planAdvance.js');
     advanceAfterPlanStepSettled(req.params.id)
       .catch((e) => logFailureWithStack(`❌ CD directive advance failed for ${req.params.id}`, e));
   }
@@ -347,7 +340,6 @@ router.post('/:id/replan', asyncHandler(async (req, res) => {
   assertVideoDispatchAvailable(project);
   if (!project.directive) throw new ServerError('Project has no directive to re-plan', { status: 400, code: 'NO_DIRECTIVE' });
   const updated = await updateProject(req.params.id, { plan: null, status: 'planning', failureReason: null });
-  const { advanceAfterPlanStepSettled } = await import('../services/creativeDirector/planAdvance.js');
   advanceAfterPlanStepSettled(req.params.id)
     .catch((e) => logFailureWithStack(`❌ CD replan advance failed for ${req.params.id}`, e));
   res.json(updated);
@@ -376,7 +368,6 @@ router.post('/:id/plan/step/:stepId', asyncHandler(async (req, res) => {
   if (project.status === 'paused') {
     await updateProject(req.params.id, { status: 'rendering', failureReason: null });
   }
-  const { advanceAfterPlanStepSettled } = await import('../services/creativeDirector/planAdvance.js');
   advanceAfterPlanStepSettled(req.params.id)
     .catch((e) => logFailureWithStack(`❌ CD plan step ${action} advance failed for ${req.params.id}`, e));
   res.json(await getProject(req.params.id));
@@ -396,7 +387,6 @@ router.patch('/:id/scene/:sceneId', asyncHandler(async (req, res) => {
   if (data.status === 'accepted' || data.status === 'failed') {
     // Fire-and-forget — agent or user just settled a scene; nudge the
     // orchestrator so the next scene (or stitch) starts.
-    const { advanceAfterSceneSettled } = await import('../services/creativeDirector/completionHook.js');
     advanceAfterSceneSettled(req.params.id).catch((e) => logFailureWithStack(`❌ CD scene advance failed for ${req.params.id}`, e));
   }
   res.json(updated);

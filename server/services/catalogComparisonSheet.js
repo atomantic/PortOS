@@ -32,6 +32,7 @@ import { resolveImageInputPath } from '../lib/pathSafety.js';
 import { CATALOG_COMPARISON_VARIANT_ID } from '../lib/catalogValidation.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { DEFAULT_PHOTOGRAPHIC_SHEET_STYLE, extractCharacterPromptCommon } from './universeCharacterSheet.js';
+import { promptAddition } from '../lib/modelInput.js';
 
 export const COMPARISON_SHEET_VARIANT_ID = CATALOG_COMPARISON_VARIANT_ID;
 export const COMPARISON_SHEET_ROLE = `sheet:${COMPARISON_SHEET_VARIANT_ID}`;
@@ -245,7 +246,6 @@ export async function refineComparisonSheet(item, source, input, { preview = fal
   }
   const dimensions = await refine.readEditSourceDimensions(source.mediaKey);
   const target = await refine.resolveCatalogImageTarget(left.id);
-  const { promptAddition } = await import('../lib/modelInput.js');
   const additions = [
     promptAddition('reference-guidance-heading', 'Editing guidance heading', 'Editing guidance:'),
     promptAddition('comparison-edit', 'Comparison sheet refinement', `Refine the attached two-character comparison sheet as a new version: ${left.name} on the LEFT half, ${right.name} on the RIGHT half. Change only what the editing guidance asks. Keep everything else exactly as it is: both people's faces, hair, bodies, clothes and relative heights, the mirrored layout of the two halves, and the empty strip of plain backdrop down the exact vertical centre that nothing crosses, so the page still cuts cleanly into two halves. Keep any rulers' intervals equal and every head level with its own height on its ruler. No watermark.`),

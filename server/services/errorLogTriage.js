@@ -19,8 +19,12 @@
  *   4. investigate — an unmapped fingerprint seen `minOccurrences` times files
  *      one investigation task through the shared producer, capped per run.
  *
- * Only redacted text leaves this module. State is machine-local (cursors name
- * this machine's log files) in `data/cos/error-log-triage.json`.
+ * Only redacted text leaves this module.
+ *
+ * Storage: `file-primary` (`data/cos/error-log-triage.json`) — machine-local, never
+ * federated: cursors name this machine's PM2 logs. Read and rewritten whole under
+ * one mutex; fingerprints capped at 2,000. No seed or migration — deleting it only
+ * re-reads each log tail once (tracker search and daily limits stop duplicates).
  */
 
 import { createHash } from 'node:crypto';

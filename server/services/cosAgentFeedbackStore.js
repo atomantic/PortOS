@@ -5,6 +5,11 @@
  * for the documented development/test escape hatch, mirroring the other
  * machine-local stores without making file storage a supported deployment mode.
  * The record deliberately contains no task prose or rating.
+ *
+ * Storage: `db-primary` — machine-local, never federated. `cos_pending_agent_feedback` is a
+ * bounded index of `agent_id` + archive date; the agent archive owns the record, and a ref
+ * leaves only after the archive carries the durable rating. Input-gated migration 008
+ * derives existing refs from live state (no seed); the DB dump backs it up.
  */
 
 import { join } from 'node:path';
