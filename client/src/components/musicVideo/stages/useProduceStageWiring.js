@@ -186,17 +186,12 @@ export default function useProduceStageWiring({
   const handleMoveSceneEnd = (sceneId, endSec) => boardEdit((projectId, options) => moveMusicVideoSceneEnd(projectId, sceneId, endSec, options))
     .catch((err) => toast.error(err?.message || 'Failed to change the shot length'));
 
-  const moveScene = (idx, dir) => {
-    const scenes = selected.scenes || [];
-    const target = idx + dir;
-    if (target < 0 || target >= scenes.length) return;
-    const ids = scenes.map((s) => s.sceneId);
-    [ids[idx], ids[target]] = [ids[target], ids[idx]];
-    // The server keeps each slot's song timing and lyric and moves the shots
-    // between them, so the moved shot now plays at its neighbor's time.
-    const moved = scenes[idx];
+  // Reorder the board to `ids` (every scene id once); `moved` is the shot the director moved.
+  // The server keeps each slot's song timing and lyric and moves the shots
+  // between them, so the moved shot now plays at the time of the slot it took.
+  const reorderShots = (ids, moved) => {
     const wasApproved = !!productionReview.readiness?.storyboard?.approved;
-    boardEdit((projectId, options) => reorderMusicVideoScenes(projectId, ids, options))
+    return boardEdit((projectId, options) => reorderMusicVideoScenes(projectId, ids, options))
       .then(({ edit }) => {
         // Reordering keeps each slot's timing: the moved shot's new time is in the reply.
         const now = edit?.scenes?.find((s) => s.sceneId === moved.sceneId);
@@ -205,6 +200,14 @@ export default function useProduceStageWiring({
         toast.success(`Moved ${moved.label || 'shot'}${at}${wasApproved ? '; re-approve the storyboard' : ''}`);
       })
       .catch((err) => toast.error(err?.message || 'Failed to reorder'));
+  };
+  const moveScene = (idx, dir) => {
+    const scenes = selected.scenes || [];
+    const target = idx + dir;
+    if (target < 0 || target >= scenes.length) return;
+    const ids = scenes.map((s) => s.sceneId);
+    [ids[idx], ids[target]] = [ids[target], ids[idx]];
+    reorderShots(ids, scenes[idx]);
   };
 
   const canContinueShot = videoSettings.settings.backend === 'local'
@@ -266,6 +269,7 @@ export default function useProduceStageWiring({
       setSceneDone,
       approveFinal,
       moveScene,
+      reorderShots,
       commitSceneTiming,
     },
   };

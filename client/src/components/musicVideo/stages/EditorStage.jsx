@@ -1,6 +1,10 @@
+import { useMemo } from 'react';
 import { MousePointerClick } from 'lucide-react';
 import ShotTimeline from '../ShotTimeline.jsx';
 import ShotCardHost, { blenderShotPosters, shotNamer, useLinkedStoryboard } from '../ShotCardHost.jsx';
+import { reorderedSceneIds, timelineShots } from '../../../lib/musicVideoTimeline.js';
+import { plannedTransitions } from '../../../lib/musicVideoCutEffects.js';
+import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 
 /**
  * The editor: the shots on a timeline under the preview player, with the open
@@ -18,6 +22,12 @@ export default function EditorStage({ board }) {
   const [storyboard, setStoryboard] = useLinkedStoryboard(project.storyboardId);
   const { shotName } = shotNamer(project);
   const scenes = project.scenes || [];
+  // What the Shots board's effect badges read, so the timeline's effects track shows the same effects.
+  const storyboardRows = project.productionReview?.draft?.storyboard;
+  const layered = isLayeredComposition(project);
+  const effectOptions = useMemo(() => ({ layered, planned: plannedTransitions(storyboardRows), cameras: project.cameras }),
+    [layered, storyboardRows, project.cameras]);
+  const editShot = (sceneId, patch) => { board.editSceneLocal(sceneId, patch); return board.saveScene(sceneId, patch); };
   const openShot = (scene) => {
     board.seekToScene?.(scene);
     onToggleSceneExpand?.(scene.sceneId, true);
@@ -33,13 +43,24 @@ export default function EditorStage({ board }) {
     );
   }
   const open = scenes.some((scene) => scene.sceneId === activeSceneId);
+  const mode = project.composition?.mode;
+  // A Blender film's or a composition document's shots take their order from that source, not the board.
+  const orderOwned = mode === 'blender' || (mode === 'document' && project.productionReview?.draft?.storyboardSource === 'document');
+  const reorder = (fromIndex, toIndex) => {
+    const { shots } = timelineShots(project);
+    const ids = reorderedSceneIds(scenes, shots, fromIndex, toIndex);
+    if (ids) board.reorderShots(ids, shots[fromIndex].scene);
+  };
   return (
     <div className="grid min-w-0 items-start gap-3 xl:grid-cols-[minmax(0,3fr)_minmax(22rem,2fr)]">
       <div className="min-w-0 space-y-3 xl:sticky xl:top-[calc(var(--mv-header-h,9rem)-0.75rem)]">
         {board.previewDock}
         <ShotTimeline project={project} activeSceneId={activeSceneId} songClock={board.songClock} shotName={shotName}
           posters={blenderShotPosters(project, board.blender)}
-          onSeek={(t) => board.seekToScene?.({ startSec: t })} onOpenShot={openShot} />
+          onSeek={(t) => board.seekToScene?.({ startSec: t })} onOpenShot={openShot}
+          onMoveCut={board.locked ? null : (sceneId, edge, t) => (edge === 'end' ? board.onMoveSceneEnd(sceneId, t) : board.onMoveSceneStart(sceneId, t))}
+          onReorder={board.locked || orderOwned ? null : reorder}
+          effectOptions={effectOptions} onEditShot={board.locked ? null : editShot} />
       </div>
       <section aria-label="Shot" className="min-w-0 rounded-lg border border-port-border bg-port-card">
         {open ? (

@@ -85,4 +85,101 @@ describe('ShotTimeline', () => {
     await waitFor(() => expect(clips()[1]).toHaveAttribute('aria-current', 'true'));
     expect(clips()[0]).not.toHaveAttribute('aria-current');
   });
+
+  // Uniquely catches a dragged cut saving the wrong shot, edge or time, or snapping back before its save lands.
+  it('drags a cut to a frame, shows both shots meeting there, and saves it', async () => {
+    let settle;
+    const onMoveCut = vi.fn(() => new Promise((resolve) => { settle = resolve; }));
+    const onSeek = vi.fn();
+    render(<ShotTimeline project={project} shotName={shotName} onOpenShot={() => {}} onSeek={onSeek} onMoveCut={onMoveCut} />);
+    // At the fit zoom (20 px a second) both shots are wide enough to grab the cut between them.
+    const cut = screen.getByRole('slider', { name: 'Cut after Shot s1' });
+    expect(cut).toHaveAttribute('aria-valuenow', '4');
+    fireEvent.pointerDown(cut, { clientX: 80, pointerId: 1, button: 0 });
+    fireEvent.pointerMove(cut, { clientX: 101, pointerId: 1 });
+    expect(screen.getByText('Cut 0:05.04 (+1.04s)')).toBeInTheDocument();
+    expect(clips().map(widthOf)).toEqual([100.84, 139.16]);
+    fireEvent.pointerUp(cut, { pointerId: 1 });
+    expect(onMoveCut).toHaveBeenCalledWith('s1', 'end', 5.042);
+    expect(onSeek).toHaveBeenLastCalledWith(5.042);
+    // Until the save lands the cut stays where it was dropped.
+    expect(widthOf(clips()[0])).toBe(100.84);
+    settle();
+    await waitFor(() => expect(widthOf(clips()[0])).toBe(80));
+  });
+
+  it('nudges a focused cut a frame with the arrow keys, and offers no cut handles without a save action', () => {
+    const onMoveCut = vi.fn(() => Promise.resolve());
+    const { unmount } = render(<ShotTimeline project={project} shotName={shotName} onOpenShot={() => {}} onSeek={() => {}} onMoveCut={onMoveCut} />);
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Cut after Shot s1' }), { key: 'ArrowLeft' });
+    expect(onMoveCut).toHaveBeenCalledWith('s1', 'end', 3.958);
+    unmount();
+    render(<ShotTimeline project={project} shotName={shotName} onOpenShot={() => {}} onSeek={() => {}} />);
+    expect(screen.queryByRole('slider', { name: /^Cut after/ })).not.toBeInTheDocument();
+  });
+
+  // Uniquely catches reorder sending the wrong song-order indexes, and a drag's release opening the clip.
+  it('moves the open shot earlier or later, and a clip dragged onto another with a mouse', () => {
+    const onReorder = vi.fn();
+    const onOpenShot = vi.fn();
+    render(<ShotTimeline project={project} activeSceneId="s2" shotName={shotName} onOpenShot={onOpenShot} onSeek={() => {}} onReorder={onReorder} />);
+    expect(screen.getByRole('button', { name: 'Move shot later' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Move shot earlier' }));
+    expect(onReorder).toHaveBeenLastCalledWith(1, 0);
+    const [first] = clips();
+    fireEvent.pointerDown(first, { clientX: 40, pointerId: 3, button: 0, pointerType: 'mouse' });
+    fireEvent.pointerMove(first, { clientX: 200, pointerId: 3, pointerType: 'mouse' });
+    fireEvent.pointerUp(first, { clientX: 200, pointerId: 3, pointerType: 'mouse' });
+    fireEvent.click(first);
+    expect(onReorder).toHaveBeenLastCalledWith(0, 1);
+    expect(onOpenShot).not.toHaveBeenCalled();
+    // A touch press never starts a reorder: it pans the view, and a tap still opens the shot.
+    fireEvent.pointerDown(first, { clientX: 40, pointerId: 4, button: 0, pointerType: 'touch' });
+    fireEvent.pointerMove(first, { clientX: 200, pointerId: 4, pointerType: 'touch' });
+    fireEvent.pointerUp(first, { clientX: 200, pointerId: 4, pointerType: 'touch' });
+    expect(onReorder).toHaveBeenCalledTimes(2);
+  });
+
+  // Uniquely catches an effect drawn off its moment, a drag saving song seconds or losing the shot's other effects, and a tap that stops opening the controls.
+  it('shows each shot\'s effects on a track, drags an in-shot effect along its shot, and configures them in place', () => {
+    const onEditShot = vi.fn();
+    const withEffects = { ...project, scenes: project.scenes.map((scene) => (scene.sceneId === 's2'
+      ? { ...scene, transitionIn: 'light-leak', glitches: [{ atSec: 2, style: 'gate-jump' }, { atSec: 6, style: 'color-block', strength: 0.5 }] } : scene)) };
+    render(<ShotTimeline project={withEffects} shotName={shotName} onOpenShot={() => {}} onSeek={() => {}} effectOptions={{}} onEditShot={onEditShot} />);
+    const track = screen.getByRole('group', { name: 'Effects' });
+    expect(within(track).getByRole('button', { name: 'Effects of Shot s1: none' })).toBeInTheDocument();
+    const lane = within(track).getByRole('button', { name: /^Effects of Shot s2: start .+; mid-shot .+, .+$/ });
+    const [first] = within(track).getAllByRole('slider');
+    // Shot s2 starts at 0:04, so its effect 2 s in sits at 0:06: 120 px at 20 px a second.
+    expect(first.style.left).toBe('120px');
+    fireEvent.pointerDown(first, { clientX: 120, pointerId: 1, button: 0 });
+    fireEvent.pointerMove(first, { clientX: 150, pointerId: 1 });
+    expect(first.style.left).toBe('150px');
+    fireEvent.pointerUp(first, { clientX: 150, pointerId: 1 });
+    expect(onEditShot).toHaveBeenLastCalledWith('s2', { glitches: [{ atSec: 3.5, style: 'gate-jump' }, { atSec: 6, style: 'color-block', strength: 0.5 }] });
+    expect(screen.queryByRole('region', { name: 'Effects of Shot s2' })).not.toBeInTheDocument();
+    // A press that never moves is a tap: it opens the shot's effect controls under the timeline.
+    fireEvent.pointerDown(first, { clientX: 120, pointerId: 2, button: 0 });
+    fireEvent.pointerUp(first, { clientX: 120, pointerId: 2 });
+    // Tapping a marker again keeps them open; only the lane closes them.
+    fireEvent.pointerDown(first, { clientX: 120, pointerId: 3, button: 0 });
+    fireEvent.pointerUp(first, { clientX: 120, pointerId: 3 });
+    const panel = screen.getByRole('region', { name: 'Effects of Shot s2' });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Remove effect 1' }));
+    expect(onEditShot).toHaveBeenLastCalledWith('s2', { glitches: [{ atSec: 6, style: 'color-block', strength: 0.5 }] });
+    fireEvent.click(lane);
+    expect(screen.queryByRole('region', { name: 'Effects of Shot s2' })).not.toBeInTheDocument();
+  });
+
+  // Uniquely catches a new effect landing on the wrong shot or at song time instead of shot time.
+  it('adds an effect at the playhead to the shot on screen', async () => {
+    const onEditShot = vi.fn();
+    render(<ShotTimeline project={project} shotName={shotName} onOpenShot={() => {}} onSeek={() => {}} effectOptions={{}} onEditShot={onEditShot}
+      songClock={() => ({ t: 7, playing: false })} />);
+    const add = screen.getByRole('button', { name: 'Add an effect at the playhead' });
+    await waitFor(() => expect(add).toBeEnabled());
+    fireEvent.click(add);
+    expect(onEditShot).toHaveBeenCalledWith('s2', { glitches: [{ atSec: 3, style: 'color-block' }] });
+    expect(screen.getByRole('region', { name: 'Effects of Shot s2' })).toBeInTheDocument();
+  });
 });
