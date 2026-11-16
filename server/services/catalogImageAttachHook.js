@@ -6,7 +6,7 @@ import { assertCatalogIdentityWritable } from './catalogDB/identityAccess.js';
  * Subscribes to mediaJobEvents and, for each completed image job that carries
  * `params.catalogAttach.ingredientId`, attaches the rendered filename onto that
  * catalog ingredient — server-side, independent of any mounted client. This is
- * the durable counterpart to CatalogIngredient.jsx's mounted `onFilename`
+ * the durable counterpart to the catalog ingredient editor's mounted `onFilename`
  * callback: a long-running local/Codex render that completes after the user has
  * navigated away, refreshed, or switched ingredients still lands a portrait or
  * reference row (previously the image reached the media library but no row was

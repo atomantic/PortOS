@@ -1,7 +1,8 @@
 /**
  * GenericIngredientFields — the detail/edit renderer for USER-DEFINED catalog
  * ingredient types. System types (character/place/object/idea/scene/concept)
- * keep their hand-built editor sections in CatalogIngredient.jsx; a user type
+ * keep their hand-built editor sections in
+ * components/catalog/ingredient/IngredientProfileTab.jsx; a user type
  * has no per-type React file, so this generic renderer maps each declared field
  * `{ key, label, widget, maxLength? }` to a widget and reads/writes
  * `payload[key]` through `onChange(key, value)`.
