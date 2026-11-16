@@ -375,7 +375,9 @@ describe('human-reviewed Music Video workflow', () => {
       await store.mutateProjectRecord(project.id, () => ({ project: revised }));
       const readiness = (await read()).body.readiness;
       expect(readiness.art.approved, label).toBe(true);
-      expect(readiness.storyboard.problems.join(' '), label).toContain('Lyric alignment is provisional or changed');
+      // Only the applied timing map moves word times; analysis edits restale the storyboard and proof but not the lyric verification.
+      expect(readiness.alignment.status, label).toBe(label === 'timingMap' ? 'stale' : 'verified');
+      expect(readiness.storyboard.problems.join(' ').includes('Lyric alignment is provisional or changed'), label).toBe(label === 'timingMap');
       expect(readiness.basis.storyboard, label).not.toBe(acceptedStatus.basis.storyboard);
       expect(readiness.basis.proof, label).not.toBe(acceptedStatus.basis.proof);
       expect(readiness.readyForProduction, label).toBe(false);

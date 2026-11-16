@@ -26,7 +26,21 @@ const source = p => {
     audioTiming: timing ? { version: timing.version, basis: timing.basis, input: timing.input } : null,
     lyrics: p.lyricCues, markers: p.lyricMarkers, phrases: p.phrases };
 };
-export const productionAlignmentBasis = project => hash(source(project));
+// Lyric timing is verified against the master audio and the word times only. Section names, lyric
+// markers and the beat grid are storyboard inputs (source()); editing them moves no word.
+const alignmentSource = p => {
+  const timing = p.audioTimingRevisions?.at(-1);
+  return { trackId: p.trackId, uploadedAudioFilename: p.uploadedAudioFilename, duration: p.audioAnalysis?.durationSec,
+    audioTiming: timing ? { version: timing.version, basis: timing.basis, input: timing.input } : null,
+    lyrics: (p.lyricCues || []).map(c => ({ text: c.text, startSec: c.startSec ?? null, endSec: c.endSec ?? null,
+      words: (c.words || []).map(w => ({ w: w.w, startSec: w.startSec, endSec: w.endSec })) })) };
+};
+export const productionAlignmentBasis = project => hash({ alignment: alignmentSource(project) });
+/** Verification stored before alignment had its own basis hashed the whole storyboard source; it stays valid. */
+const legacyAlignmentBasis = project => hash(source(project));
+/** True when a stored or supplied basis names this project's current timing, under either formula. */
+export const alignmentBasisMatches = (project, basis) => !!basis
+  && (basis === productionAlignmentBasis(project) || basis === legacyAlignmentBasis(project));
 
 /** The storyboard problem raised while the lyric timing is unverified for the current master. */
 export const ALIGNMENT_UNVERIFIED_PROBLEM = 'Lyric alignment is provisional or changed. Listen and verify the current word timings.';
@@ -588,11 +602,11 @@ function artDirectionProblems(project, review, draft) {
 
 // Lyric timing: an instrumental has no sung lines; a song with lyrics needs them imported, aligned
 // to the current master, and every line's words bounded inside the song.
-function lyricTimingProblems(review, draft, cues, duration, alignmentBasis) {
+function lyricTimingProblems(review, draft, cues, duration, alignmentVerified) {
   if (draft.lyricsMode === 'instrumental') return cues.length ? ['This song has lyrics. Remove the instrumental exception or correct the song data.'] : [];
   const problems = [];
   if (!cues.length) problems.push('Import lyrics and align them to the current vocal; missing lyrics are not an instrumental.');
-  if (draft.timingStatus !== 'verified' || review.alignmentBasis !== alignmentBasis) problems.push(ALIGNMENT_UNVERIFIED_PROBLEM);
+  if (draft.timingStatus !== 'verified' || !alignmentVerified) problems.push(ALIGNMENT_UNVERIFIED_PROBLEM);
   // A line is judged on the span its words give it (lyricCueSpan), the span the renderer shows:
   // forced-aligned words may run a little past a line window taken from the song's line timestamps.
   if (cues.some(c => !c.words?.length || c.words.some(w => !(Number.isFinite(w.startSec) && w.endSec > w.startSec))
@@ -711,14 +725,15 @@ function proofReadiness(project, review, basis, storyboardApproved) {
   return { approved, problems, excerptId: excerpt?.id || null };
 }
 
-const alignmentStatus = (review, draft, alignmentBasis) => draft.lyricsMode === 'instrumental' ? 'instrumental'
-  : draft.timingStatus !== 'verified' ? 'provisional' : review.alignmentBasis === alignmentBasis ? 'verified' : 'stale';
+const alignmentStatus = (draft, alignmentVerified) => draft.lyricsMode === 'instrumental' ? 'instrumental'
+  : draft.timingStatus !== 'verified' ? 'provisional' : alignmentVerified ? 'verified' : 'stale';
 
 export function productionReadiness(project) {
   const review = project.productionReview || {};
   const draft = review.draft || {};
   const basis = productionReviewBasis(project);
   const alignmentBasis = productionAlignmentBasis(project);
+  const alignmentVerified = alignmentBasisMatches(project, review.alignmentBasis);
   const inputs = productionApprovalInputs(project);
   const artProblems = artDirectionProblems(project, review, draft);
   const artApproved = !artProblems.length && review.approvals?.art?.basis === basis.art;
@@ -727,7 +742,7 @@ export function productionReadiness(project) {
   const duration = project.audioAnalysis?.durationSec;
   if (!(duration > 0)) boardProblems.push('Analyze the current master song.');
   const cues = (project.lyricCues || []).filter(c => text(c.text));
-  boardProblems.push(...lyricTimingProblems(review, draft, cues, duration, alignmentBasis));
+  boardProblems.push(...lyricTimingProblems(review, draft, cues, duration, alignmentVerified));
   const documentShots = draft.storyboardSource === 'document';
   // Each row left from a deleted shot, by its span and action, so the checklist can name it and remove them all.
   const staleRows = documentShots ? [] : staleStoryboardRows(project)
@@ -757,7 +772,7 @@ export function productionReadiness(project) {
   )));
   const camera = storyboardCameraReport(scenes, documentShots ? null : boardStoryboard(project));
   const proof = proofReadiness(project, review, basis, storyboardApproved);
-  return { basis, inputs, alignment: { basis: alignmentBasis, status: alignmentStatus(review, draft, alignmentBasis) }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, problems: [...new Set(artProblems)], stale: artApproved ? null : staleApproval(project, 'art', basis.art, inputs) },
+  return { basis, inputs, alignment: { basis: alignmentBasis, status: alignmentStatus(draft, alignmentVerified) }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, problems: [...new Set(artProblems)], stale: artApproved ? null : staleApproval(project, 'art', basis.art, inputs) },
     // The overlay text check is advice on the storyboard, like camera variety; it never blocks approval.
     storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], camera, selectedTakeMarkedBad,
       // Board shots as reviewed, derived rows included, so the editor and approval card show what the gate checked.

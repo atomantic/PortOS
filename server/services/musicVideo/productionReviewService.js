@@ -5,7 +5,7 @@ import { mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { musicVideoEvents } from './events.js';
 import { shotCameraLabel } from '../../lib/cameraMovements.js';
-import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput, anchorShotsToSungLyrics, dropStaleStoryboardRows, carryStoryboardApproval } from './productionReview.js';
+import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, alignmentBasisMatches, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput, anchorShotsToSungLyrics, dropStaleStoryboardRows, carryStoryboardApproval } from './productionReview.js';
 import { sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 
 import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
@@ -91,7 +91,7 @@ export async function importProductionPlanning(id, source) {
 export async function importDocumentShots(id, input, { edit: answerEdit = false } = {}) {
   const before = await requireProject(id);
   if (!before.productionReview?.draft) throw new ServerError('Save a planning draft before importing document shots.', { status: 409, code: 'PLANNING_DRAFT_REQUIRED' });
-  if (before.composition?.mode !== 'document' || before.composition.document?.directory !== input.documentDirectory || productionAlignmentBasis(before) !== input.audioBasis) {
+  if (before.composition?.mode !== 'document' || before.composition.document?.directory !== input.documentDirectory || !alignmentBasisMatches(before, input.audioBasis)) {
     throw new ServerError('The composition version changed. Export its source and import a matching shot manifest.', { status: 409, code: 'DOCUMENT_STORYBOARD_STALE' });
   }
   const { resolveDocumentFile } = await import('./compositionDocument.js');
@@ -180,12 +180,12 @@ export async function saveProductionDraft(id, draft, { edit: answerEdit = false 
 /** Only the explicit authenticated action can rebind already-verified timings. */
 export async function reverifyProductionAlignment(id, { basis, notes, reviewer }, { edit: answerEdit = false } = {}) {
   const { reply } = await reviewWrite(id, current => {
-    if (basis !== productionAlignmentBasis(current)) throw new ServerError('The word timings changed while you were reviewing. Inspect them again.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
+    if (!alignmentBasisMatches(current, basis)) throw new ServerError('The word timings changed while you were reviewing. Inspect them again.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
     const draft = current.productionReview?.draft;
     if (!draft || draft.lyricsMode !== 'vocal') throw new ServerError('Save a vocal planning draft before verifying alignment.', { status: 409, code: 'PLANNING_DRAFT_REQUIRED' });
     return { project: { ...current, productionReview: { ...current.productionReview,
-      draft: { ...draft, timingStatus: 'verified', timingNotes: notes }, alignmentBasis: basis,
-      alignmentReview: { basis, reviewer, reviewedAt: new Date().toISOString() } } } };
+      draft: { ...draft, timingStatus: 'verified', timingNotes: notes }, alignmentBasis: productionAlignmentBasis(current),
+      alignmentReview: { basis: productionAlignmentBasis(current), reviewer, reviewedAt: new Date().toISOString() } } } };
   }, { answerEdit });
   return reply;
 }
