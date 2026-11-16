@@ -17,9 +17,7 @@ export const SONG_STAGE_COLORS = {
   memorized: 'bg-port-success/20 text-port-success border-port-success/30',
 };
 
-// =============================================================================
-// PRACTICE (spaced repetition, #4102)
-// =============================================================================
+// ===== PRACTICE (spaced repetition, #4102) =====
 
 // The grades offered for a practice run, in the order the buttons render.
 // `quality` is the SM-2 self-grade the server schedules on (0..5); the four
@@ -75,9 +73,7 @@ export const instrumentLabel = (id) => INSTRUMENTS.find((i) => i.id === id)?.lab
 
 export const SONG_FORMATS = ['chordpro', 'tab', 'plain', 'drum'];
 
-// =============================================================================
-// CROSS-LINKS to other music records (#4103)
-// =============================================================================
+// ===== CROSS-LINKS to other music records (#4103) =====
 
 // The record kinds a song can link to. Mirrors `songLinkTypeEnum` in
 // server/lib/brainValidation.js; `path` is the detail route the chip navigates

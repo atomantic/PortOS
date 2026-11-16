@@ -7,46 +7,22 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useBlocker } from 'react-router';
 
 // Guards an editor's unsaved draft against BOTH exit doors (#3958):
+//   1. In-app router navigation (sidebar link, ⌘K jump, voice `ui_navigate`, Back), which a page-local handler can't see; react-router's `useBlocker` parks it and hands back `proceed()` / `reset()`.
+//   2. Tab close / reload via `beforeunload`, which the browser owns.
 //
-//   1. In-app router navigation — a sidebar link, a ⌘K palette jump, a voice
-//      `ui_navigate`, or the browser Back button. These never touch the page's
-//      own controls, so a page-local handler can't see them; react-router's
-//      `useBlocker` parks the navigation instead and hands back `proceed()` /
-//      `reset()`.
-//   2. Tab close / reload — `beforeunload`, which the browser owns.
-//
-// REQUIRES a data router (`createBrowserRouter` + `<RouterProvider>`, wired in
-// `client/src/main.jsx`); `useBlocker` throws under a plain `<BrowserRouter>`.
-// Tests rendering a page that uses this hook must mount it under
-// `createMemoryRouter` + `<RouterProvider>`, not `<MemoryRouter>`.
-//
-// The caller renders its OWN confirm UI from `blocked` — an `InlineConfirmRow`,
-// never `window.confirm` (see client/src/AGENTS.md).
-//
+// REQUIRES a data router (`createBrowserRouter` + `<RouterProvider>`, wired in `client/src/main.jsx`); `useBlocker` throws under `<BrowserRouter>`, so tests must mount under `createMemoryRouter` + `<RouterProvider>`.
+// The caller renders its OWN confirm UI from `blocked` (an `InlineConfirmRow`, never `window.confirm`; see client/src/AGENTS.md) and discarding is its job: reset the draft, then call `proceed()`.
 //   const { blocked, proceed, reset } = useUnsavedChangesGuard(isDirty);
 //   {blocked && <InlineConfirmRow onConfirm={discardAndProceed} onCancel={reset} … />}
 //
-// Discarding is the CALLER's job — only it knows how to reset its draft — so a
-// discard handler resets local state and then calls `proceed()`.
-// `scopePath` — the path prefix this editor OWNS, for an editor whose own
-// in-page moves change the pathname. A splat route like
-// `/pipeline/series/:id/manuscript/*` swaps the issue segment without leaving
-// (or remounting) the editor, so the default pathname comparison would raise a
-// discard confirm on every issue tab click. A navigation that stays under the
-// prefix is an in-editor move and passes through unguarded; leaving it is a
-// real exit and still parks. A plain string (not a predicate) so a caller can't
-// re-register the blocker every render with an unmemoized inline function.
+// `scopePath`: the path prefix this editor OWNS, for an editor whose in-page moves change the pathname (a splat route like `/pipeline/series/:id/manuscript/*` swaps the issue segment without remounting, so a
+// plain pathname comparison would confirm on every issue tab click). Navigation under the prefix passes through; leaving it parks. A plain string, not a predicate, so an unmemoized inline function can't re-register the blocker every render.
 export default function useUnsavedChangesGuard(isDirty, { beforeUnload = true, scopePath } = {}) {
-  // Same-location navigations (a re-click on the link you're already on, a
-  // search-param tweak on the current page) don't unmount the editor, so
-  // there's nothing to guard — let them through rather than raising a confirm
-  // the user can't explain.
+  // Same-location navigations (re-clicking the current link, a search-param tweak) don't unmount the editor, so there's nothing to guard.
   const shouldBlock = useCallback(({ currentLocation, nextLocation }) => {
     if (!isDirty) return false;
     if (currentLocation.pathname === nextLocation.pathname) return false;
-    // Segment-aware, not a bare `startsWith`: a sibling route that merely
-    // shares the prefix (`/…/manuscript-export` against `/…/manuscript`) is a
-    // real exit, and letting it through would discard the draft silently.
+    // Segment-aware, not a bare `startsWith`: a sibling that merely shares the prefix (`/…/manuscript-export`) is a real exit, and letting it through would discard the draft silently.
     const inScope = !!scopePath && (
       nextLocation.pathname === scopePath || nextLocation.pathname.startsWith(`${scopePath}/`)
     );
@@ -54,9 +30,7 @@ export default function useUnsavedChangesGuard(isDirty, { beforeUnload = true, s
   }, [isDirty, scopePath]);
   const blocker = useBlocker(shouldBlock);
   const blocked = blocker.state === 'blocked';
-  // A caller's discard handler and the clean-draft effect below can both run
-  // in one commit. The effect retains the old blocker object, so its state
-  // alone cannot prevent a second proceed() after React Router has moved on.
+  // A caller's discard handler and the clean-draft effect can both run in one commit; the effect retains the old blocker object, so its state alone can't prevent a second proceed().
   const proceededRef = useRef(null);
   const proceed = useCallback(() => {
     if (blocker.state !== 'blocked' || proceededRef.current === blocker) return;
@@ -64,10 +38,7 @@ export default function useUnsavedChangesGuard(isDirty, { beforeUnload = true, s
     blocker.proceed();
   }, [blocker]);
 
-  // Once the draft settles while a navigation is parked — the user hit Save
-  // with the confirm up, or typed the value back to what's stored — the
-  // navigation they asked for RUNS. Dropping it would swallow the click: the
-  // confirm hides and nothing ever navigates.
+  // Once the draft settles while a navigation is parked (Save with the confirm up, or typed back to the stored value) the navigation RUNS; dropping it would swallow the click.
   useEffect(() => {
     if (!isDirty) proceed();
   }, [isDirty, proceed]);

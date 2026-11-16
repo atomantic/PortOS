@@ -2,25 +2,13 @@
  * Resolves a provider/model context window for planning and its source (override, reported, or assumed
  * ladder guess) via `KNOWN_MODEL_CONTEXT_WINDOWS` and `knownModelContextWindow`.
  *
- * How large a context window a provider/model gets for planning, and where that
- * number came from (a user override, a reported window, or a ladder guess the
- * card must label as assumed) — plus the "(32K ctx)" option label built on it.
+ * The rungs (vendor constants, known-model table, per-provider fallback, catalog read, live-daemon merge) are re-exported from the pure leaf
+ * `server/lib/providerContextWindows.js`, the ones the server's `effectiveContextWindow` budgets with. `resolveModelContextWindow` is the client's
+ * own walk because the UI also needs the SOURCE; it and `isLikelyLargeContextProvider` can drift from their server twins in `stageRunner.js`, so keep them together.
  *
- * The rungs — the vendor constants, the known-model table, the per-provider
- * fallback, the catalog read and the live-daemon merge — are re-exported from the pure leaf
- * `server/lib/providerContextWindows.js`, the same ones the server's
- * `effectiveContextWindow` budgets with. `resolveModelContextWindow` is the
- * client's own walk over them, because the UI also needs to know WHERE the
- * number came from; it and `isLikelyLargeContextProvider` are what can still
- * drift from the server (the walk order, and the client's own local-endpoint
- * test), so keep both beside their server twins in `stageRunner.js`.
- *
- * The Ollama `num_ctx` ceiling is shared with the SERVER's dispatch gate too,
- * so the meter cannot promise a window a run would then be refused for (#7466).
- * Its second rung — the ambient `OLLAMA_CONTEXT_LENGTH` the server launched the
- * daemon with — is server env the browser cannot read, so it arrives as
- * `runtimeContextWindow` on the readiness payload and is folded in with
- * `withRuntimeContextWindow` at the two call sites that budget (#7472).
+ * The Ollama `num_ctx` ceiling is shared with the server's dispatch gate so the meter cannot promise a window a run would be refused for (#7466). Its
+ * second rung, the ambient `OLLAMA_CONTEXT_LENGTH` the daemon launched with, is server env the browser cannot read: it arrives as `runtimeContextWindow` on the
+ * readiness payload and is folded in via `withRuntimeContextWindow` (#7472).
  *
  * Re-exported by `./providers.js` for existing `utils/providers` imports.
  */
@@ -34,18 +22,11 @@ import {
   knownModelContextWindow,
   knownProviderContextWindow,
 } from '../../../server/lib/providerContextWindows.js';
-// The Ollama `num_ctx` ceiling, from the module the server's budgeter and its
-// pre-dispatch gate resolve it through (#7466). Reached at the toolkit's
-// dependency-free `internal/` leaf for the same reason `providerTypes.js`
-// already takes `isOllamaBackedProvider` from there.
+// The Ollama `num_ctx` ceiling, resolved as the server's budgeter and pre-dispatch gate do (#7466), via the toolkit's dependency-free `internal/` leaf.
 import { clampToRuntimeContextWindow } from '../../../server/lib/aiToolkit/internal/ollamaBacked.js';
 
 export {
-  // Stamps the window PortOS holds a local Ollama daemon at onto a provider
-  // projection, so the clamp above sees the rung the browser cannot resolve for
-  // itself: the ambient `OLLAMA_CONTEXT_LENGTH` this install launched the daemon
-  // with. The number arrives as `runtimeContextWindow` on the readiness payload,
-  // beside the served windows `mergeObservedContextWindows` folds in (#7472).
+  // Stamps the window PortOS holds a local Ollama daemon at (`runtimeContextWindow` on the readiness payload, #7472) onto a provider projection so the clamp sees the rung the browser can't resolve.
   withRuntimeContextWindow,
 } from '../../../server/lib/aiToolkit/internal/ollamaBacked.js';
 
@@ -58,9 +39,7 @@ export {
   knownModelContextWindow,
   knownProviderContextWindow,
   catalogModelContextWindow,
-  // Folds a daemon's live `/v1/models` windows (off the readiness payload) onto
-  // the catalog rung, exactly as the server's budgeter does — shared rather than
-  // re-walked so the card cannot rank the observation differently.
+  // Folds a daemon's live `/v1/models` windows onto the catalog rung exactly as the server's budgeter does, so the card can't rank the observation differently.
   mergeObservedContextWindows,
 } from '../../../server/lib/providerContextWindows.js';
 
@@ -70,17 +49,10 @@ export const isLikelyLargeContextProvider = (provider) => {
 };
 
 /**
- * Where a resolved context window came from — three states, because that is
- * what the UI actually distinguishes:
- *
- * - `REPORTED` — a real window for this model/provider (catalog, known-model
- *   table, vendor default, or Ollama's num_ctx). Which of those it was does not
- *   change what the card says, so they collapse into one state rather than
- *   growing an enum member per rung.
- * - `OVERRIDE` — a number the user typed; worth labelling as theirs.
- * - `ASSUMED` — nobody reported one, so the ladder GUESSED. This is the state
- *   that has to be visible: a card printing "128K ctx" for a model whose real
- *   window is 1M reads as a measured fact with nothing to say otherwise.
+ * Where a resolved context window came from; three states, because that is what the UI distinguishes:
+ * - `REPORTED`: a real window (catalog, known-model table, vendor default, or Ollama's num_ctx); the rung doesn't change what the card says.
+ * - `OVERRIDE`: a number the user typed.
+ * - `ASSUMED`: nobody reported one and the ladder GUESSED; this must be visible, or "128K ctx" for a 1M model reads as a measured fact.
  */
 export const CONTEXT_WINDOW_SOURCE = Object.freeze({
   OVERRIDE: 'override',
@@ -89,11 +61,8 @@ export const CONTEXT_WINDOW_SOURCE = Object.freeze({
 });
 
 /**
- * Which window this provider/model CLAIMS, before the runtime ceiling.
- * Walks the same rungs, in the same order, as `claimedContextWindow` in
- * server/services/stageRunner.js — the rungs are shared, so the order and the
- * local-endpoint test are what could drift, and the card would then promise a
- * budget the budgeter won't use.
+ * Which window this provider/model CLAIMS, before the runtime ceiling. Walks the same rungs in the same order as `claimedContextWindow` in
+ * server/services/stageRunner.js; the order and local-endpoint test could drift and make the card promise a budget the budgeter won't use.
  */
 const claimedModelContextWindow = (provider, model) => {
   const explicit = Number(provider?.contextWindow);
@@ -116,12 +85,8 @@ const claimedModelContextWindow = (provider, model) => {
 };
 
 /**
- * The planning context window for a provider/model AND where it came from —
- * the claimed window held to what an Ollama daemon was LAUNCHED with, exactly
- * as the server's budgeter and its pre-dispatch gate resolve it.
- *
- * `{ tokens: null, source: null }` means nothing is known (an unrecognized model
- * on a local backend); the budgeter applies its own conservative floor there.
+ * The planning context window for a provider/model AND where it came from: the claimed window held to what an Ollama daemon was LAUNCHED with,
+ * as the server's budgeter resolves it. `{ tokens: null, source: null }` means nothing is known; the budgeter applies its own floor there.
  *
  * @param {object|null|undefined} provider
  * @param {string|null|undefined} model
@@ -130,9 +95,7 @@ const claimedModelContextWindow = (provider, model) => {
 export const resolveModelContextWindow = (provider, model) => {
   const claimed = claimedModelContextWindow(provider, model);
   const tokens = clampToRuntimeContextWindow(provider, claimed.tokens);
-  // A clamped window is no longer whichever rung claimed it — what the card is
-  // now printing is the daemon's own `num_ctx`, which is a REPORTED window even
-  // when the number it replaced was a user override or a guess.
+  // A clamped window is the daemon's own `num_ctx`, a REPORTED window even when the replaced number was an override or guess.
   return tokens === claimed.tokens
     ? claimed
     : { tokens, source: CONTEXT_WINDOW_SOURCE.REPORTED };
@@ -142,26 +105,13 @@ export const effectiveModelContextWindow = (provider, model) =>
   resolveModelContextWindow(provider, model).tokens;
 
 /**
- * Display label for a model `<option>`: the id plus a "(32K ctx)" parenthetical
- * when the model's context window is known. The option's `value` stays the raw
- * id — only the label carries the annotation.
+ * Display label for a model `<option>`: the id plus a "(32K ctx)" parenthetical when known; the option's `value` stays the raw id.
  *
- * Resolution is deliberately narrower than {@link resolveModelContextWindow}:
- * only rungs that describe THIS model — the live local probe (`ctxById` from
- * `useLocalModels`), the window `provider`'s catalog reported for it, then the
- * known-model table. The provider-level and assumed rungs are excluded on
- * purpose: they would stamp the same guessed number onto every option in the
- * list, which says nothing and reads as fact.
+ * Narrower than {@link resolveModelContextWindow}: only rungs describing THIS model (live local probe `ctxById`, the provider's catalog window,
+ * the known-model table). Provider-level and assumed rungs would stamp one guessed number on every option. The daemon's launch ceiling applies to
+ * every option alike and the picker is where someone decides what "fits", so it is clamped (#7466).
  *
- * The daemon's launch ceiling is NOT one of those guesses — it applies to every
- * option alike, and the picker is exactly where someone decides which model
- * "fits", so a `(40K ctx)` option beside a card promising 8K is two numbers
- * presented as fact in one form. Clamped for that reason (#7466).
- *
- * Take `provider` rather than a pre-merged map so every picker gets catalog
- * windows for free — merging at the call site is what left the fallback-model
- * and manuscript-override selects labelling a 1M model as if it were unknown.
- *
+ * Takes `provider` rather than a pre-merged map so every picker gets catalog windows for free.
  * @param {string} id
  * @param {Record<string, number>} [ctxById] — live windows for local models
  * @param {object} [provider] — the provider whose catalog lists this model

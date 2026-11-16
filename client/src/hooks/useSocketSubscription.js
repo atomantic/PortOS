@@ -7,18 +7,9 @@ import { useEffect, useRef } from 'react';
 import socket from '../services/socket';
 
 /**
- * Module-level refcount registry, keyed by namespace, backing the server's
- * refcount-FREE subscriber Set (`registerSubscriber` in
- * `server/services/socket.js`) with a correct client-side refcount.
- *
- * The server keeps room membership per server-side socket OBJECT — a Set that
- * `disconnect` clears entirely (server/services/socket.js:167). When the
- * shared client socket reconnects (server restart, PM2 reload, self-update,
- * laptop sleep, a Wi-Fi/Tailscale blip), the server sees a brand new socket
- * belonging to no subscriber set, so every namespace has to be re-subscribed.
- * This registry does that once per namespace, for as long as at least one
- * consumer is mounted, instead of every hook re-implementing its own
- * `socket.on('connect', subscribe)`.
+ * Module-level refcount registry, keyed by namespace, backing the server's refcount-FREE subscriber Set (`registerSubscriber` in `server/services/socket.js`). Room membership is per server-side socket OBJECT
+ * and `disconnect` clears it (server/services/socket.js:167), so after a reconnect (restart, PM2 reload, self-update, sleep, network blip) every namespace must be re-subscribed; this does it once per namespace
+ * while any consumer is mounted instead of each hook re-implementing `socket.on('connect', subscribe)`.
  */
 const registry = new Map();
 
@@ -40,15 +31,8 @@ function getEntry(namespace) {
  *   and re-emits it on every socket `connect` (initial connect and every
  *   reconnect) for as long as any consumer holds the namespace.
  * - The LAST consumer to unmount emits `<namespace>:unsubscribe`.
- * - `onResubscribe`, if given, runs after every `<namespace>:subscribe`
- *   re-emission triggered by a socket `connect` event — so a consumer can
- *   refetch whatever it may have missed while disconnected. This INCLUDES the
- *   first `connect` a mount observes: a component can mount while the socket
- *   is still connecting (or reconnecting after an outage that also broke its
- *   own initial HTTP fetch), and skipping that first connect would leave
- *   stale data uncorrected until some later reconnect. The trade-off is one
- *   redundant refetch in the common case (mount while already-connecting,
- *   HTTP fetch already fresh) — cheap next to silently missing a real miss.
+ * - `onResubscribe`, if given, runs after every socket-`connect`-triggered `<namespace>:subscribe` re-emission so a consumer can refetch what it missed while disconnected. This INCLUDES the first `connect` a mount
+ *   observes (it can mount while the socket is still connecting, after an outage that also broke its initial HTTP fetch); the cost is one redundant refetch in the common case.
  *
  * - `payload` / `releasePayload`: a consumer that changes how the server
  *   serves the room (ChiefOfStaff's `{ taskLists: 'invalidate' }` mode, which
@@ -62,7 +46,6 @@ function getEntry(namespace) {
  *   subscription.
  *
  * Pass no namespace for broadcast-only consumers; no room is acquired.
- *
  * @param {string} namespace - a namespace registered server-side via
  *   `registerSubscriber` (e.g. 'notifications', 'errors', 'instances', 'loops').
  * @param {{ onResubscribe?: () => void, enabled?: boolean, payload?: object, releasePayload?: object }} [options]

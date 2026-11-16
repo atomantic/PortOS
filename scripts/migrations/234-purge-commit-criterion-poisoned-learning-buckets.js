@@ -1,54 +1,19 @@
 /**
- * Purge the learning buckets poisoned by the unsatisfiable `[task-<id>]` commit
- * criterion (#3637) — the general case of migrations 197 and 198.
+ * Purge the learning buckets poisoned by the unsatisfiable `[task-<id>]` commit criterion (#3637), the general case of migrations 197 and 198.
  *
- * Background:
- *   `evaluateSuccessCriteria` decided a run's `validationPassed` by grepping the
- *   repo for a commit whose subject contained `[task-<id>]`. NOTHING ever emitted
- *   that marker — no prompt, template, or slashdo command asked an agent to stamp
- *   a task id into a commit subject, and the root CLAUDE.md forbids exactly that
- *   shape of subject line. So the criterion was unsatisfiable.
+ * `evaluateSuccessCriteria` decided `validationPassed` by grepping for a commit whose subject contained `[task-<id>]`, which NOTHING ever emitted (no prompt or slashdo command stamps a task id into a
+ * subject, and the root CLAUDE.md forbids that shape). In `taskLearning/metrics.js` a declared boolean OVERRIDES the runner's exit code (`outcomeSuccess = validationPassed ?? success`), so every autonomous,
+ * commit-expecting run recorded a FAILURE, feeding the CoS Learning card, routing, duration estimates and the scope-awareness classifier.
  *
- *   That verdict is not inert: in `taskLearning/metrics.js`, a declared boolean
- *   OVERRIDES the runner's exit code (`outcomeSuccess = validationPassed ?? success`).
- *   Every autonomous, commit-expecting run therefore recorded a FAILURE no matter
- *   how well it went, and those fabricated failures feed the CoS Learning card,
- *   routing, duration estimates, and the scope-awareness classifier.
+ * 197/198 purged the first two affected buckets and #3637 replaced the criterion with the run-window commit probe (`server/lib/gitCommitProbe.js`), but that fix is PROSPECTIVE: every other autonomous bucket on an existing
+ * install still carries fabricated failures. `withoutStaleCoordinatorVerdict` in `taskLearning/lifecycle.js` does NOT cover them (it only drops the fossil for `declaresNoCommitCriterion` types, i.e. the ones 197/198 handled).
  *
- *   197 and 198 purged the two buckets where the artifact was first noticed
- *   (layered-intelligence, the gh/git coordinators). #3637 replaces the criterion
- *   itself with the run-window commit probe (`server/lib/gitCommitProbe.js`), which
- *   is satisfiable — but that fix is PROSPECTIVE. Every other autonomous bucket on
- *   an existing install still carries the fabricated failures.
+ * DELETE each affected bucket rather than repair it (`validationPassed:false` overwrote the real verdict at record time); `removeTaskTypeFromLearningData` unwinds every aggregate the bucket touched.
  *
- *   `taskLearning/lifecycle.js`'s `withoutStaleCoordinatorVerdict` does NOT cover
- *   them: it drops the fossil only for tasks where `declaresNoCommitCriterion` is
- *   true, i.e. exactly the exempt types 197/198 already handled. Ordinary
- *   code-editing runs were never in its scope, so a migration is required.
+ * KEPT (never poisoned): `user-task` (`evaluateSuccessCriteria` returns the null sentinel for `taskType === 'user'`), and the buckets 197/198 already purged (layered-intelligence + the
+ * NON_COMMITTING_COORDINATOR_TASK_TYPES set, derived from the runtime source of truth so a new coordinator type can't drift out); they declare no commit criterion since #2696/#2700, so re-purging would delete earned data.
  *
- * Approach:
- *   DELETE each affected bucket rather than repair it — `validationPassed:false`
- *   overwrote the runner's real verdict at record time, so the truth of each
- *   historical run is not on disk. Deleting resets each type to an honest "no runs
- *   recorded yet". `removeTaskTypeFromLearningData` unwinds the contribution from
- *   every aggregate the bucket touched, not just `byTaskType`.
- *
- *   KEPT (never poisoned, so purging them would destroy real history):
- *     - `user-task` — `evaluateSuccessCriteria` returns the null sentinel for
- *       `taskType === 'user'`, so those runs were always exit-code-judged.
- *     - the buckets 197/198 already purged (layered-intelligence + the
- *       NON_COMMITTING_COORDINATOR_TASK_TYPES set). They have declared no commit
- *       criterion since #2696/#2700, so everything recorded after those purges is
- *       honest — re-purging would delete legitimately-earned data.
- *
- *   Derived from the runtime sources of truth (`NON_COMMITTING_COORDINATOR_TASK_TYPES`)
- *   so a coordinator type added there can't drift out of this exemption list.
- *
- *   No-op by construction on installs with no learning store or no purgeable bucket.
- *
- *   Destructive-rerun guard (#2770): opts into the runner's PURGE class
- *   (`purge: true`) so a rerun against a lost/rebuilt applied-list is recorded
- *   without executing, rather than dropping post-fix history.
+ * No-op without a learning store or purgeable bucket. Destructive-rerun guard (#2770): opts into the runner's PURGE class (`purge: true`) so a rerun against a lost/rebuilt applied-list is recorded without executing.
  */
 
 import { readFile } from 'fs/promises';

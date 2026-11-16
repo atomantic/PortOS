@@ -1,29 +1,14 @@
 // Search / sort ordering for the Media Collections grid (#3283).
 //
-// The grid is dominated by collections nothing created on purpose: every
-// Creative Director project, Writers Room render batch, and universe/series
-// render bucket auto-files itself as a collection, so a user with a handful of
-// real collections scrolls past dozens of empty auto-generated ones to find
-// them. These helpers give the page one definition of "auto-generated" and the
-// display ordering that keeps real collections on top.
-//
-// Pure — no React, no I/O. The page and its tests share them.
+// Every Creative Director project, Writers Room render batch and universe/series render bucket auto-files itself
+// as a collection, so these pure helpers (no React, no I/O) give the page one definition of "auto-generated" and an ordering that keeps real collections on top.
 
 import { tokenizeQuery, matchHaystack } from './mediaSearch.js';
 
-// Shared name prefixes that auto-creators stamp onto every collection they
-// make, paired with the badge label the card renders above the title instead
-// of inside it — otherwise every auto-generated card shows the same clipped
-// prefix and the trailing project name/date that tells them apart is what gets
-// cut. This list drives PRESENTATION (the badge) plus the provenance fallback
-// for records an older peer sent without a `source` stamp — the classification
-// itself comes from `collection.source` now (#3311), so a new auto-creator only
-// has to stamp `source: 'auto'` server-side, not extend this list (it should
-// still add its prefix here if it wants the badge). Keep in sync with the
-// server-side creators: `universeCollectionNameFor`
-// / `seriesCollectionNameFor` in `server/services/mediaCollections.js`,
-// `server/services/creativeDirector/projects{DB,File}.js`, and
-// `server/services/writersRoom/local.js`.
+// Shared name prefixes auto-creators stamp onto collections, paired with the badge label the card renders above the title (otherwise every card shows the same clipped
+// prefix). Drives PRESENTATION plus the provenance fallback for records an older peer sent without `source`; classification itself comes from `collection.source` (#3311).
+// Keep in sync with the server-side creators: `universeCollectionNameFor` / `seriesCollectionNameFor` in `server/services/mediaCollections.js`,
+// `server/services/creativeDirector/projects{DB,File}.js` and `server/services/writersRoom/local.js`.
 export const AUTO_NAME_PREFIXES = [
   'Creative Director: ',
   'Writers Room: ',
@@ -63,23 +48,11 @@ export function splitCollectionName(name) {
 }
 
 /**
- * True when a collection was created by an automated flow rather than by the
- * user.
+ * True when a collection was created by an automated flow. The server stamps `source: 'auto' | 'user'` at mint time (#3311; migration 220 backfilled), authoritative when present.
  *
- * The server stamps provenance at mint time (`source: 'auto' | 'user'`, #3311)
- * and migration 220 backfilled existing records, so the stamp is authoritative
- * whenever it is present — a new auto-creator no longer has to remember to
- * extend a client-side list.
- *
- * An ABSENT `source` is a third state, NOT a synonym for `'user'`. The stamp is
- * local to each install (it is stripped from the sync wire — see
- * `sanitizeRecordForWire`), so an unstamped record is one this install received
- * from a peer after its own migration ran, or restored from a pre-migration
- * backup. Those fall back to the marker heuristic below, which is what
- * classified every collection before #3311 — so the fallback is never worse
- * than the old behavior. Any ONE of the four independent markers is sufficient
- * — an install can hold records from before a given marker existed, so this
- * must not require all of them to agree.
+ * An ABSENT `source` is a third state, NOT `'user'`: the stamp is local to each install (stripped from the sync wire by `sanitizeRecordForWire`), so an unstamped record came from a peer
+ * or a pre-migration backup. Those fall back to the marker heuristic below (what classified everything before #3311). Any ONE of the four markers suffices, since an install can
+ * hold records from before a given marker existed.
  * @param {object} collection
  * @returns {boolean}
  */

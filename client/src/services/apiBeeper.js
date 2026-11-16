@@ -1,24 +1,15 @@
 /**
  * Beeper Desktop bridge: saved conversation scopes (list/create/update/delete).
  *
- * Status card and live connectivity check (#30), the connect flow (#31) — OAuth start,
- * paste-a-token, disconnect — the mirrored chat surface (#35): conversations, thread pages, rail
- * networks, archive/low-priority — the durable send outbox (#36): create an entry, send it (with the
- * first-contact confirmation), list a conversation's entries, clear the runaway breaker; write paths
- * never retry — and the attachment byte mirror (#37): `beeperAttachmentUrl` (a relative `/api/...`
- * src, so an `<img loading="lazy">` IS the fetch-on-view), `fetchBeeperAttachment` ("fetch anyway"),
- * `setBeeperAttachmentKeep`, the backfill census + run, and the per-conversation mirror purge.
+ * Covers the status card and live connectivity check, the connect flow (OAuth start, paste-a-token, disconnect), the mirrored chat surface (conversations, thread pages,
+ * rail networks, archive/low-priority), the durable send outbox (write paths never retry) and the attachment byte mirror: `beeperAttachmentUrl` (a relative `/api/...`
+ * src, so an `<img loading="lazy">` IS the fetch-on-view), `fetchBeeperAttachment`, `setBeeperAttachmentKeep`, the backfill census + run, and the per-conversation purge.
  */
 
 import { API_BASE, request, queryString } from './apiCore.js';
 
-// Beeper Desktop bridge — status card (#30). Read-only connection status
-// (token-configured flag, never the token; tri-state reachability; the
-// account roster mirrored from beeper_accounts) plus a live "Retry" check.
-// Ingestion + connection settings (enabled/intervalMinutes/baseUrl/
-// attachmentBudgetGb) go through the generic getSettings/updateSettings pair
-// in apiSystem.js, same as iMessage/Signal — this file covers only what
-// those don't.
+// Status card: read-only connection status (token-configured flag, never the token; tri-state reachability; the account roster) plus a live "Retry" check.
+// Ingestion + connection settings go through the generic getSettings/updateSettings pair in apiSystem.js; this file covers only what those don't.
 export const getBeeperStatus = (options = {}) => request('/beeper/status', options);
 export const checkBeeperConnection = (options = {}) => request('/beeper/status/check', { method: 'POST', ...options });
 
@@ -79,21 +70,11 @@ export const markBeeperConversationSeen = (conversationId, options = {}) =>
     ...options,
   });
 
-// Connect flow (#31). PortOS runs OAuth itself (PKCE S256, dynamic client
-// registration); `startBeeperOAuth` returns the authorization URL for the
-// browser to open, and the redirect lands on the server callback, never here.
-// Pasting a token is a first-class alternative — Beeper's own UI can mint a
-// no-expiry token and the OAuth surface accepts no lifetime at all. None of
-// these ever return a token value: the client only ever sees `tokenConfigured`,
-// `tokenExpiresAt` and `tokenSource`.
+// Connect flow (#31). PortOS runs OAuth itself (PKCE S256, dynamic client registration); `startBeeperOAuth` returns the authorization URL for the browser to open and the
+// redirect lands on the server callback. Pasting a token is a first-class alternative. None of these return a token value: the client only sees `tokenConfigured`, `tokenExpiresAt`, `tokenSource`.
 //
-// The browser sends its OWN origin, because the server cannot derive it: under
-// the Vite dev proxy (`changeOrigin: true`, no `x-forwarded-*`) the request
-// arrives carrying the API's origin on the API port, so the consent redirect
-// went to a host the TLS certificate does not cover and the user landed on a
-// certificate error. The server validates the value against the hosts this
-// install answers on and falls back to the request origin when it does not
-// recognize it.
+// The browser sends its OWN origin because the server cannot derive it: under the Vite dev proxy (`changeOrigin: true`, no `x-forwarded-*`) the request carries the API's origin
+// and the consent redirect would land on a host the TLS certificate does not cover. The server validates it against the hosts this install answers on, else uses the request origin.
 export const startBeeperOAuth = (options = {}) => request('/beeper/oauth/start', {
   method: 'POST',
   body: JSON.stringify({ origin: window.location.origin }),

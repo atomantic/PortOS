@@ -27,7 +27,6 @@ export const TAP_SLOP_PX = 8;
 /**
  * Project a world-space point to canvas-local screen pixels (y grows downward,
  * matching `clientY - rect.top`).
- *
  * @param {{x:number,y:number,z:number}} point world position
  * @param {ArrayLike<number>} viewProjection 16 column-major matrix elements
  * @param {number} width canvas CSS width
@@ -57,7 +56,6 @@ export const projectToScreen = (point, viewProjection, width, height) => {
  * Ranking is by projected-centre distance; an exact tie goes to the node nearer
  * the camera (smaller NDC depth), then to the earlier entry — so the same tap on
  * the same layout always resolves to the same node.
- *
  * @returns {object|null} the picked node from `nodes`, or null when nothing is
  *   within the threshold (the caller treats that as "tapped empty space").
  */

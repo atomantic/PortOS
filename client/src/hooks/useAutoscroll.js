@@ -12,23 +12,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import useMounted from './useMounted';
 
 /**
- * Smooth autoscroll for a scrollable container (SongBook play view, or any
- * "teleprompter" surface): a requestAnimationFrame loop advances
- * `container.scrollTop` by `pxPerSec`. Behavior contract:
+ * Smooth autoscroll for a scrollable container (SongBook play view, any "teleprompter" surface): a requestAnimationFrame loop advances `container.scrollTop` by `pxPerSec`. Contract:
+ * - Auto-stops at the bottom; a user wheel/touchmove pauses playback (manual scrolling wins; the user resumes explicitly).
+ * - Speed changes apply live via a ref without restarting the loop; rAF is cancelled and listeners detach on pause/unmount, and `mountedRef` makes a frame after unmount inert.
+ * - `fitToDuration(seconds)` solves the speed for a target run time instead of asking the user to guess px/s.
  *
- * - Auto-stops (pauses) when the container reaches the bottom.
- * - A user wheel or touchmove on the container pauses playback — manual
- *   scrolling always wins; the user resumes explicitly.
- * - Speed changes apply live (read through a ref) without restarting the loop.
- * - rAF is cancelled and listeners detach on pause/unmount; a `mountedRef`
- *   guards the auto-stop setState so a frame that lands after unmount is inert.
- * - `fitToDuration(seconds)` solves the speed for a target run time instead of
- *   asking the user to guess px/s (see below).
- *
- * containerRef — ref to the scrollable element (must have overflow-y-auto).
- * minPxPerSec / maxPxPerSec bound what `fitToDuration` may set — pass the same
- * bounds the caller's speed control uses, so a fitted speed is always a value
- * that control can also represent.
+ * containerRef must be the scrollable element (overflow-y-auto). minPxPerSec / maxPxPerSec bound what `fitToDuration` may set; pass the speed control's bounds so a fitted speed is representable.
  *
  * Returns { playing, toggle, stop, pxPerSec, setPxPerSec, fitToDuration }.
  */
@@ -94,22 +83,9 @@ export default function useAutoscroll(
   const stop = useCallback(() => setPlaying(false), []);
 
   /**
-   * "Fit to duration": set the speed so the container scrolls from its current
-   * TOP to its bottom in `durationSec`.
-   *
-   * The distance is `scrollHeight - clientHeight` — the scrollable travel — not
-   * the raw `scrollHeight`: the loop stops when `scrollTop` reaches the bottom,
-   * so pricing the visible viewport into the trip would finish early by exactly
-   * one screenful (a short sheet on a tall screen, badly).
-   *
-   * Measured at call time, so it reflects the CURRENT layout (font size,
-   * transpose re-wrap, window size, an orientation flip). Callers re-fit after
-   * anything that reflows the sheet rather than caching the result.
-   *
-   * Rounded to whole px/s and clamped into [minPxPerSec, maxPxPerSec] so the
-   * value is one the caller's speed control can display and step; a clamped fit
-   * therefore takes longer/shorter than asked, which the caller can detect by
-   * comparing the return value against its own bounds.
+   * "Fit to duration": set the speed so the container scrolls from its current TOP to its bottom in `durationSec`. The distance is `scrollHeight - clientHeight` (scrollable travel), since the loop stops at
+   * the bottom and pricing in the viewport would finish a screenful early. Measured at call time (font size, transpose re-wrap, orientation flip), so callers re-fit after anything that reflows rather than caching.
+   * Rounded to whole px/s and clamped into [minPxPerSec, maxPxPerSec] so the caller's speed control can display it; a clamped fit takes longer/shorter than asked, which the caller detects by comparing against its bounds.
    *
    * @param {number} durationSec target seconds for the full scroll
    * @returns {number|null} the applied px/s, or null when there is nothing to

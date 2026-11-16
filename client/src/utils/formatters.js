@@ -1,7 +1,4 @@
-/**
- * Shared formatting utilities for the client
- * These functions are used across multiple pages and components
- */
+/** Shared formatting utilities for the client. */
 
 /**
  * Format a timestamp as a relative time string
@@ -49,12 +46,9 @@ export function shiftISODate(dateKey, days) {
 }
 
 /**
- * Coerce a Date / ISO timestamp / epoch ms into a Date for display.
- *
- * A bare calendar date ("2026-03-05") is parsed by `new Date(...)` as UTC
- * midnight, which renders as the PREVIOUS day everywhere west of Greenwich.
- * Anchor it at LOCAL midnight instead — exactly what the call sites used to
- * do by hand with `new Date(value + 'T00:00:00')`.
+ * Coerce a Date / ISO timestamp / epoch ms into a Date. A bare calendar date
+ * ("2026-03-05") is anchored at LOCAL midnight; `new Date` parses it as UTC and
+ * renders the previous day west of Greenwich.
  * @param {string|number|Date|null|undefined} value
  * @returns {Date} A Date (possibly Invalid — callers validate)
  */
@@ -95,10 +89,7 @@ export function formatTimeOfDay(dateStr, { timeZone } = {}) {
 }
 
 /**
- * Format a timestamp as a localized time-of-day string WITH seconds
- * (e.g., "1:30:45 PM") — the shape log/queue rows want, where the second
- * matters for ordering. Pair with `formatTimeOfDay` when seconds are noise
- * and `formatClockTime` when the zero-padded 24h-capable clock shape is wanted.
+ * Like `formatTimeOfDay` but WITH seconds (e.g., "1:30:45 PM"), for log/queue rows.
  * @param {string|number|Date|null} value - ISO timestamp, epoch ms, or Date
  * @param {string} [fallback=''] - Rendered for missing/invalid input
  * @returns {string} Formatted time of day with seconds
@@ -118,14 +109,10 @@ export function formatDate(dateStr) {
 }
 
 /**
- * Format a date in the browser's short numeric locale form (e.g., "3/5/2026").
- * This is the canonical home for what used to be a bare
- * `new Date(x).toLocaleDateString()` scattered across components — compact
- * list/table cells where a spelled-out month would not fit.
+ * Format a date in the browser's short numeric locale form (e.g., "3/5/2026") for compact cells.
  * @param {string|number|Date|null} value - ISO timestamp, `YYYY-MM-DD`, epoch ms, or Date
  * @param {string} [fallback=''] - Rendered for missing/invalid input
  * @returns {string} Formatted numeric date
-  * Never write `new Date(x).toLocaleDateString()` inline; pick the helper for the shape you want, and do not re-define formatters inside components.
  */
 export function formatDateNumeric(value, fallback = '') {
   return localized('date', value, undefined, fallback);
@@ -153,8 +140,7 @@ export function formatMonthYear(value, fallback = '') {
 }
 
 /**
- * Format an abbreviated weekday plus time-of-day (e.g., "Mon, 7:00 AM") — a
- * week-scale schedule timeline, where the day matters but the date does not.
+ * Abbreviated weekday plus time-of-day (e.g., "Mon, 7:00 AM").
  * @param {string|number|Date|null} value
  * @param {object} [options]
  * @param {string} [options.timeZone] - Render in a specific IANA timezone
@@ -168,8 +154,7 @@ export function formatWeekdayTime(value, { timeZone } = {}) {
 }
 
 /**
- * Format a date as an abbreviated weekday only (e.g., "Mon") — calendar
- * column headers and timeline axis ticks.
+ * Abbreviated weekday only (e.g., "Mon") for calendar headers and timeline ticks.
  * @param {string|number|Date|null} value
  * @param {object} [options]
  * @param {string} [options.timeZone] - Render the weekday in a specific IANA timezone
@@ -180,9 +165,7 @@ export function formatWeekdayShort(value, { timeZone } = {}) {
 }
 
 /**
- * Format a weekday-led date with a short month (e.g., "Monday, Mar 5", or
- * "Mon, Mar 5, 2026" with `{ weekday: 'short', year: true }`). Distinct from
- * `formatDateFull` (long month, always with year).
+ * Weekday-led date with a short month (e.g., "Monday, Mar 5"); distinct from `formatDateFull` (long month, always with year).
  * @param {string|number|Date|null} value
  * @param {object} [options]
  * @param {'long'|'short'} [options.weekday='long'] - Weekday width
@@ -231,11 +214,7 @@ const HOUR_MERIDIEM = {
 };
 
 /**
- * Format a bare hour-of-day number (0-23) as a 12-hour clock label.
- * The canonical home for what five components each hand-rolled, which is why
- * the same 3pm used to render as "3 PM", "3PM", "3p" and "3pm" on four screens.
- * One helper with a `style` option rather than four helpers: every caller wants
- * the same noon/midnight arithmetic and differs only in separator and case.
+ * Format a bare hour-of-day number (0-23) as a 12-hour clock label; `style` picks separator and case.
  * @param {number|string|null} hour - Hour of day, 0-23 (numeric strings accepted)
  * @param {object} [options]
  * @param {'long'|'compact'|'tiny'|'lower'} [options.style='long'] - `3 PM` / `3PM` / `3p` / `3pm`
@@ -253,7 +232,6 @@ export function formatHourOfDay(hour, { style = 'long', fallback = '—' } = {})
 
 /**
  * Format a duration in milliseconds as a human-readable string
- * @param {number} ms - Duration in milliseconds
  * @returns {string|null} Formatted duration (e.g., "500ms", "1.5s", "2.0m")
  */
 export function formatRuntime(ms) {
@@ -265,7 +243,6 @@ export function formatRuntime(ms) {
 
 /**
  * Format a timestamp as relative time (e.g., "just now", "5m ago", "2d ago")
- * Handles null/missing values with configurable fallback.
  * @param {string|Date|null} dateStr - ISO timestamp, Date object, or null
  * @param {string} fallback - Text to show for null/missing dates (default: 'never')
  * @returns {string} Relative time string
@@ -288,20 +265,13 @@ export function timeAgo(dateStr, fallback = 'never') {
 }
 
 /**
- * Age in whole DAYS — "today", "1 day ago", "412 days ago".
- *
- * Distinct from `timeAgo`, which collapses anything past a month into "3mo ago"
- * / "2y ago". Model-download lists want the day count itself: it is the number
- * that says how current a checkpoint is, and a bucket label hides the difference
- * between a 40-day-old release and a 400-day-old one.
+ * Age in whole DAYS ("today", "1 day ago", "412 days ago"); `timeAgo` collapses anything past a month into buckets.
  * @param {string|number|Date|null} value - ISO timestamp, epoch ms, or Date
  * @param {string} fallback - Text for null/missing/unparseable values
  * @returns {string} Day-count label
  */
 export function formatAgeDays(value, fallback = '') {
   if (value === null || value === undefined || value === '') return fallback;
-  // toDisplayDate, not `new Date`: a bare "2026-03-05" parses as UTC midnight and
-  // would read a day older than it is everywhere west of Greenwich.
   const time = toDisplayDate(value).getTime();
   if (!Number.isFinite(time)) return fallback;
   const days = Math.floor((Date.now() - time) / 86400000);
@@ -311,10 +281,7 @@ export function formatAgeDays(value, fallback = '') {
 }
 
 /**
- * Format a future timestamp as a relative "in X" string, mirroring timeAgo's
- * bucket thresholds. Returns `fallback` for null/missing or past dates (use
- * timeAgo for past-relative display). Example outputs: "in 5s", "in 3m",
- * "in 2h", "in 4d".
+ * Future timestamp as a relative "in X" string mirroring timeAgo's buckets; `fallback` for null or past dates.
  * @param {string|Date|null} dateStr - ISO timestamp or Date object
  * @param {string} fallback - Text to show for null/missing/past dates (default: 'now')
  * @returns {string} Future-relative time string
@@ -338,7 +305,6 @@ export function timeUntil(dateStr, fallback = 'now') {
 
 /**
  * Compact decimal count: 950 → "950", 1200 → "1.2K", 3400000 → "3.4M".
- * @param {number} n - Count to abbreviate
  * @returns {string} Abbreviated count
  */
 export function formatCompactCount(n) {
@@ -349,10 +315,7 @@ export function formatCompactCount(n) {
 }
 
 /**
- * `formatCompactCount` for a count that may legitimately be absent: renders an
- * em-dash instead of "0", so "no data" and "measured zero" read differently on
- * a stat tile. `formatCompactCount` itself can't take this on — a real 0 must
- * still render as "0".
+ * `formatCompactCount` for a possibly-absent count: em-dash instead of "0", so "no data" and "measured zero" differ.
  * @param {number|null|undefined} n
  * @returns {string}
  */
@@ -360,22 +323,14 @@ export function formatCompactCountOrDash(n) {
   return n == null ? '—' : formatCompactCount(n);
 }
 
-// Grouping is pinned to en-US rather than the browser locale. The UI is
-// English-only, and `$` is a US currency mark — rendering "$4.610,09" next to
-// English copy reads as a typo, not as localization. Counts use the same
-// separator so a total and its cost line up — `formatAgeDays` above formats its
-// day count through the same instance for that reason. The date/time DISPLAY
-// helpers keep the browser locale on purpose: a rendered date carries no
-// currency anchor, so there is nothing for its separators to contradict.
+// Grouping is pinned to en-US: the UI is English-only and `$` is a US mark, so "$4.610,09" reads as a typo.
+// Date/time helpers keep the browser locale on purpose.
 const GROUPED_INTEGER = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const USD_CENTS = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const USD_COMPACT = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
 
 /**
- * Thousands-separated count for a number the user is meant to read exactly:
- * 2762 → "2,762". Use this for a total, a record count, or a token count —
- * anywhere `formatCompactCount`'s "2.8K" would lose the precision that is the
- * point of showing the number at all.
+ * Thousands-separated count the user reads exactly: 2762 → "2,762" (`formatCompactCount`'s "2.8K" loses precision).
  * @param {number|string|null|undefined} n
  * @param {object} [options]
  * @param {number} [options.maximumFractionDigits=0] - Optional precision for scores and other fractional values
@@ -386,23 +341,18 @@ export function formatCount(n, { fallback = '—', maximumFractionDigits = 0 } =
   const precision = Number.isInteger(maximumFractionDigits) ? Math.max(0, Math.min(8, maximumFractionDigits)) : 0;
   const value = roundForDisplay(n, precision);
   if (precision && value !== null) return new Intl.NumberFormat('en-US', { maximumFractionDigits: precision }).format(value + 0);
-  // `+ 0` folds the -0 that a negative fraction rounds to (-0.4 → -0), which
-  // Intl would render as the nonsense "-0".
+  // `+ 0` folds the -0 that a negative fraction rounds to, which Intl renders as "-0".
   return value === null ? fallback : GROUPED_INTEGER.format(value + 0);
 }
 
 /**
- * Round a number to `decimals` places and drop trailing zeros
- * (170.35000000000002 → 170.4, 170.0 → 170). Returns null for
- * non-finite input so callers can render their own fallback.
+ * Round to `decimals` places and drop trailing zeros (170.35000000000002 → 170.4); null for non-finite input.
  * @param {number|string|null|undefined} value
  * @param {number} decimals
  * @returns {number|null}
  */
 function roundForDisplay(value, decimals) {
-  // `Number(null)`, `Number('')`, `Number('   ')` and `Number(false)` are all 0,
-  // which would render a missing measurement as a real "0 lbs" — accept only a
-  // number or a non-blank numeric string before coercing.
+  // Number(null|''|'   '|false) are all 0 and would render a missing measurement as "0 lbs"; accept only a number or non-blank numeric string.
   const isNumeric = typeof value === 'number'
     || (typeof value === 'string' && value.trim() !== '');
   if (!isNumeric) return null;
@@ -425,9 +375,7 @@ export function formatLoudness(loudness) {
 }
 
 /**
- * Format a body weight for display. Unit-converted weights arrive as raw
- * binary floats (e.g. 170.35000000000002), which read as false precision and
- * blow out a tile's line — round to one decimal by default and suffix the unit.
+ * Format a body weight: unit-converted raw floats (170.35000000000002) read as false precision, so round to one decimal by default.
  * @param {number|string|null|undefined} value - Weight in `unit`
  * @param {object} [options]
  * @param {string} [options.unit='lbs'] - Unit suffix
@@ -442,8 +390,7 @@ export function formatWeight(value, { unit = 'lbs', decimals = 1, fallback = '�
 }
 
 /**
- * Format a percentage for display, rounding away float noise the same way
- * `formatWeight` does (18.400000000000002 → "18.4%").
+ * Format a percentage, rounding away float noise like `formatWeight` (18.400000000000002 → "18.4%").
  * @param {number|string|null|undefined} value - Percentage (already 0–100)
  * @param {object} [options]
  * @param {number} [options.decimals=1] - Decimal places to keep
@@ -458,28 +405,17 @@ export function formatPercent(value, { decimals = 1, fallback = '—' } = {}) {
 
 /**
  * Format a USD amount for display: `$12.34`, `$4,610.09`.
+ * `signed` keeps the minus OUTSIDE the dollar sign (`-$5.00`); `trimWhole` drops `.00` on a round typed price;
+ * amounts past a thousand are grouped; `compact` abbreviates (`$9.4K`) for chart axes.
  *
- * `signed` keeps the minus sign OUTSIDE the dollar sign (`-$5.00`), so a
- * negative saving reads as a loss rather than as a strange currency string.
- * `trimWhole` drops the `.00` on a round figure — for a price the user typed
- * ($200/mo), not for a computed total, where aligned cents are the point.
- * Amounts past a thousand are grouped (`$4,610.09`) — an unseparated `$4610.09`
- * is read as the wrong order of magnitude at a glance. `compact` abbreviates
- * (`$9.4K`) for chart axes and labels where width is tight.
- *
- * @param {number} value - Dollar amount (nullish renders as $0.00; a non-nullish
- *   value that fails to parse as a finite number — NaN, a broken calc — renders
- *   `fallback` instead, so a computation failure never masquerades as "$0.00")
+ * @param {number} value - Dollar amount (nullish renders $0.00; a non-finite non-nullish value renders `fallback`, never "$0.00")
  * @param {{ signed?: boolean, trimWhole?: boolean, compact?: boolean, fallback?: string, maximumFractionDigits?: number }} [options]
  * @returns {string} e.g. "$12.34", "-$5.00", "$200"
  */
 export function formatUsd(value, { signed = false, trimWhole = false, compact = false, fallback = '—', maximumFractionDigits = 2 } = {}) {
   const n = value === null || value === undefined ? 0 : Number(value);
   if (!Number.isFinite(n)) return fallback;
-  // Anything under half a cent renders as zero, and Intl signs it (`-$0.00`)
-  // where the old `toFixed(2)` did not. A saving that rounds away to nothing
-  // must not read as a loss, so snap it onto a true zero and drop the sign with
-  // it — `signed && n < 0` alone would still print the minus.
+  // Under half a cent Intl renders `-$0.00`; snap to a true zero and drop the sign so a vanished saving doesn't read as a loss.
   const raw = signed ? Math.abs(n) : n;
   const precision = Number.isInteger(maximumFractionDigits) ? Math.max(2, Math.min(8, maximumFractionDigits)) : 2;
   const magnitude = Math.abs(raw) < 0.5 * 10 ** -precision ? 0 : raw;
@@ -491,8 +427,6 @@ export function formatUsd(value, { signed = false, trimWhole = false, compact = 
 
 /**
  * Format bytes as a human-readable string
- * @param {number} bytes - Size in bytes
- * @param {number} decimals - Number of decimal places
  * @returns {string} Formatted size (e.g., "1.5 KB", "2.3 MB", "4.2 TB")
  */
 export function formatBytes(bytes, decimals = 1) {
@@ -500,20 +434,15 @@ export function formatBytes(bytes, decimals = 1) {
 
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB'];
-  // Clamp the unit index so values larger than the largest defined unit
-  // still render with a known suffix (e.g. multi-PB import archives) rather
-  // than `undefined`.
+  // Clamp the unit index so oversized values still get a known suffix, not `undefined`.
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
 
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(decimals))} ${sizes[i]}`;
 }
 
 /**
- * Format a model's decimal-GB (10^9 bytes) download footprint as "~29 GB".
- * Returns null for missing/zero/invalid values so callers can omit the label
- * entirely rather than render "~undefined GB". Deliberately decimal, not the
- * binary units `formatBytes` uses: these values come from HuggingFace repo
- * sizes, which are quoted in decimal GB.
+ * Format a model's decimal-GB (10^9 bytes, as HuggingFace quotes sizes) download footprint as "~29 GB";
+ * null for missing/zero/invalid values.
  * @param {number|null|undefined} gb
  * @returns {string|null}
  */
@@ -522,23 +451,13 @@ export function formatDownloadGb(gb) {
 }
 
 /**
- * Format a model context window (in tokens) compactly, e.g. 32768 → "32K ctx",
- * 131072 → "128K ctx", 1000000 → "1M ctx". Returns null for missing/invalid
- * values so callers can omit the label entirely.
+ * Format a model context window (tokens) compactly, e.g. 32768 → "32K ctx", 1000000 → "1M ctx"; null for missing/invalid.
  *
- * Two unit systems, picked per value, because model context windows are quoted
- * in both and neither divisor is right for the other: local runtimes report
- * BINARY windows (131072, 32768 — "128K", "32K"), while cloud vendors quote
- * DECIMAL ones (128000, 1000000 — "128K", "1M"). Dividing a decimal window by
- * 1024 is what rendered a 128,000-token provider as "125K ctx", a number no
- * vendor publishes and which reads as a PortOS-imposed cap rather than the
- * model's own spec. So: a value that divides evenly by 1000 is decimal, and
- * everything else is binary.
+ * Two unit systems, picked per value: local runtimes report BINARY windows (131072 → "128K"), cloud vendors DECIMAL
+ * ones (128000 → "128K"). A value that divides evenly by 1000 is decimal, everything else binary; dividing a
+ * decimal window by 1024 would render 128,000 as "125K".
  *
- * `suffix` is what follows the number. The default reads as a standalone badge;
- * pass `''` when the surrounding prose already supplies the noun ("up to 32K
- * tokens of context"), so the two spellings stay one implementation instead of
- * a near-copy per caller.
+ * `suffix` follows the number; pass `''` when surrounding prose already supplies the noun.
  *
  * @param {number|null|undefined} tokens
  * @param {{ suffix?: string }} [options]
@@ -556,28 +475,15 @@ export function formatContextLength(tokens, { suffix = ' ctx' } = {}) {
   return `${n}${suffix}`;
 }
 
-/**
- * Context length with NO unit suffix — `4096` → `"4K"` — for prose that
- * already says "tokens of context" around it.
- *
- * Three surfaces in the Models section had each declared this same one-line
- * alias privately; it lives here, beside `formatContextLength`, so a change to
- * the K/M thresholds reaches all of them.
- */
+/** Context length with NO unit suffix (`4096` → `"4K"`) for prose that already says "tokens of context". */
 export function formatContextTokens(tokens) {
   return formatContextLength(tokens, { suffix: '' });
 }
 
 /**
- * How fast a measured model generated, as one label: `"58.5 tok/s"`,
- * `"~58.5 tok/s"` for a frame-counted estimate, or `"240 chars/s"` when the
- * runtime reported no token counts at all. `null` when neither was measured.
- *
- * Tokens/s leads because it is the figure people compare local models on, and
- * the two are never shown together — one row carrying both units reads as a
- * contradiction. The `~` is not decoration: PortOS has no tokenizer, so a count
- * derived from counting streamed frames must never be presented as one the
- * daemon's tokenizer produced.
+ * How fast a measured model generated: `"58.5 tok/s"`, `"~58.5 tok/s"` for a frame-counted estimate, or
+ * `"240 chars/s"` when no token counts were reported; null when neither was measured.
+ * The `~` is not decoration: PortOS has no tokenizer, so frame-derived counts must not look tokenizer-produced.
  *
  * @param {{meanTokensPerSecond?: number|null, meanCharsPerSecond?: number|null, tokensEstimated?: boolean|null}} perf
  */
@@ -591,9 +497,7 @@ export function throughputLabel(perf) {
 }
 
 /**
- * Format a number of seconds as MM:SS (e.g. 75 → "01:15"), or H:MM:SS once the
- * total reaches an hour (e.g. 3661 → "1:01:01"). Used for sprint timers and
- * other countdowns. Negative and non-finite values clamp to 0.
+ * Format seconds as MM:SS (75 → "01:15"), or H:MM:SS from an hour up. Negative and non-finite clamp to 0.
  */
 export function formatCountdown(seconds) {
   const safe = Number.isFinite(seconds) ? Math.max(0, Math.round(seconds)) : 0;
@@ -619,10 +523,7 @@ export function formatDateTime(value, fallback = 'Unknown time') {
 }
 
 /**
- * Format a number of seconds as M:SS (e.g. 75 → "1:15"). For coarse durations
- * like a stitched video's runtime or a piano-roll ruler tick. Returns `'—'`
- * for missing/invalid/negative input; a genuine zero renders as `"0:00"` (not
- * `'—'`) so callers can distinguish "unknown" from "zero seconds".
+ * Format seconds as M:SS (75 → "1:15"). Returns `'—'` for missing/invalid/negative input; a genuine zero is "0:00".
  */
 export function formatDurationSec(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return '—';
@@ -643,42 +544,25 @@ export function formatTimecode(seconds, digits = 2) {
 }
 
 /**
- * Format a date with a short month label (e.g., "Mar 5, 2026"). Returns
- * `'—'` for missing/invalid input — pair with `formatDate` (long month, null
- * fallback) depending on the surrounding UI.
+ * Format a date with a short month label (e.g., "Mar 5, 2026"); `'—'` for missing/invalid input.
  */
 export function formatDateShort(value) {
   return localized('date', value, { year: 'numeric', month: 'short', day: 'numeric' }, '—');
 }
 
-// Per-call LLM timeout bounds. Client-side mirror of the canonical
-// MIN_TIMEOUT / MAX_TIMEOUT in server/lib/aiToolkit/constants.js — the
-// client can't import across the server boundary (Vite vs Node, plus the
-// aiToolkit directory is kept self-contained per AGENTS.md). The server
-// validators (validation.js, stageRunner.js) and aiToolkit's own
-// provider/run schemas all import from constants.js; this file is the
-// only known mirror. Bumping these here without the server constants —
-// or vice versa — would let a value through one validator that the
-// other rejects.
+// Per-call LLM timeout bounds: client-side mirror of MIN_TIMEOUT / MAX_TIMEOUT in server/lib/aiToolkit/constants.js (the client
+// can't import across the server boundary). Keep both in lockstep or one validator accepts what the other rejects.
 export const TIMEOUT_INPUT_MIN_MS = 1000;
 export const TIMEOUT_INPUT_MAX_MS = 43_200_000;
 export const TIMEOUT_INPUT_STEP_MS = 1000;
 
 /**
- * Parse a raw string from a timeout (ms) input into a stored value.
- * Returns `null` for blank input (caller treats as "clear override") and
- * for anything outside the validated [TIMEOUT_INPUT_MIN_MS,
- * TIMEOUT_INPUT_MAX_MS] integer range — the caller is then responsible for
- * snapping the input back to the persisted value. Clamping here keeps the
- * client from emitting PUTs the server's Zod schema would 400 (e.g. a
- * stray `1` that "looks positive" but is below the 1s floor).
+ * Parse a raw string from a timeout (ms) input. Returns `null` for blank input (caller clears the override) and for
+ * anything outside the integer [TIMEOUT_INPUT_MIN_MS, TIMEOUT_INPUT_MAX_MS] range, so the client never emits PUTs the
+ * server's Zod schema would 400.
  *
- * Accepts only digit-only strings (`^\d+$`), then parses via `Number(...)`
- * + `Number.isInteger`. The digit-only gate is stricter than `Number(v)`
- * alone — `Number("1e3")` is 1000 and `Number("1000.5")` is 1000.5 — and
- * is mirrored in `stageConfigUpdateSchema`'s preprocess in
- * server/lib/validation.js so client/server reject the same shapes. If
- * you loosen this rule, loosen the server preprocess in lockstep.
+ * Digit-only strings (`^\d+$`) only: stricter than `Number(v)` ("1e3", "1000.5"); mirrored in `stageConfigUpdateSchema`'s
+ * preprocess in server/lib/validation.js, so loosen both in lockstep.
  */
 export function parseTimeoutMs(raw) {
   if (raw == null) return null;
@@ -693,10 +577,7 @@ export function parseTimeoutMs(raw) {
 }
 
 /**
- * Format a duration in milliseconds as a human-readable string. Buckets down
- * from days so multi-day uptimes read as "2d 3h" rather than an unbounded
- * hours count ("51h 0m").
- * @param {number} ms - Duration in milliseconds
+ * Format a duration in milliseconds; buckets down from days ("2d 3h") rather than an unbounded hour count.
  * @returns {string} Formatted duration (e.g., "45s", "3m 12s", "2h 5m", "2d 3h")
  */
 export function formatDurationMs(ms) {
@@ -732,16 +613,8 @@ export function formatDurationMin(minutes, options = {}) {
 }
 
 /**
- * Format a calendar event's date+time, with a distinct all-day rendering.
- * Tuned for the event-detail panel: timed events show a short weekday plus
- * time (e.g. "Sat, Apr 1, 1:30 PM"); all-day events show a full weekday and
- * year (e.g. "Saturday, April 1, 2026"). Kept separate from `formatDateTime`
- * because the weekday-led shape is event-specific.
- * Missing/unparseable input renders '' — the same fallback contract every
- * other helper here follows. (It used to pass the raw `Invalid Date` string
- * through "for migration fidelity"; once the all-day branch started routing
- * through `formatDateFull`'s guard, that left one branch guarded and one not.
- * Both call sites pass a real event time, so nothing visible changes.)
+ * Format a calendar event's date+time with a distinct all-day rendering: timed events show a short weekday plus time
+ * ("Sat, Apr 1, 1:30 PM"), all-day events a full weekday and year. Missing/unparseable input renders ''.
  * @param {string|Date|null} dateStr - ISO timestamp or Date object
  * @param {object} [options]
  * @param {boolean} [options.allDay=false] - Render date-only (all-day event).
@@ -771,10 +644,8 @@ export function getAppName(appId, apps, fallback = null) {
 }
 
 /**
- * Derive a human-friendly default record name from a gallery-image filename:
- * drop the path + extension, turn `-`/`_` separators into spaces, title-case,
- * and cap at 120 chars (the server-side name limit). Shared by the "image → 3D
- * model" pages (Three.js Models and image-to-3D) so their defaults don't drift.
+ * Derive a default record name from a gallery-image filename: drop path + extension, `-`/`_` to spaces, title-case, cap at
+ * 120 chars (the server-side name limit).
  * @param {string} filename
  * @param {string} [fallback='Untitled 3D model'] - used when the filename is empty
  * @returns {string}
@@ -786,11 +657,8 @@ export function nameFromImageFilename(filename, fallback = 'Untitled 3D model') 
 }
 
 /**
- * Truncate from the MIDDLE so the distinguishing tail of a long string stays
- * readable — the failure mode of CSS `line-clamp`/`text-overflow`, which always
- * eats the end. Use it wherever a list renders many strings that share a long
- * prefix (auto-generated names, dated run labels, deep paths), where clipping
- * the end collapses every row to the same visible text.
+ * Truncate from the MIDDLE so the distinguishing tail of a long string stays readable (CSS `line-clamp` eats the end);
+ * for lists of strings sharing a long prefix.
  * @param {string} value - Source string (non-strings coerce; nullish → '')
  * @param {number} [max=48] - Maximum length of the RESULT in CODE POINTS, ellipsis included.
  *   A non-finite cap returns the string whole rather than discarding it.
@@ -798,14 +666,10 @@ export function nameFromImageFilename(filename, fallback = 'Untitled 3D model') 
  */
 export function middleTruncate(value, max = 48) {
   const str = value == null ? '' : String(value);
-  // A cap that isn't a real number can't middle-truncate anything — return the
-  // string untouched. (`Math.max(0, NaN)` is NaN, so a naive slice would
-  // silently return '' and swallow the value.)
+  // A non-numeric cap can't truncate anything; `Math.max(0, NaN)` is NaN and a slice would return ''.
   if (!Number.isFinite(max)) return str;
   const cap = Math.floor(max);
-  // Slice on CODE POINTS, not UTF-16 code units: cutting through a surrogate
-  // pair (any emoji / astral character) emits a lone surrogate that renders as
-  // the replacement glyph.
+  // Slice on CODE POINTS: cutting a surrogate pair emits a lone surrogate that renders as the replacement glyph.
   const chars = Array.from(str);
   // A cap that can't fit the ellipsis plus one char on each side has no
   // meaningful middle-truncation; fall back to a plain head slice.
@@ -858,8 +722,6 @@ export function recommendedRamGb(sizeBytes, sizeStr) {
 /**
  * Clamp a numeric value `n` into the inclusive range `[min, max]`.
  * @param {number} n - Value to clamp
- * @param {number} min - Lower bound
- * @param {number} max - Upper bound
  * @returns {number} Clamped value
  */
 export function clamp(n, min, max) {

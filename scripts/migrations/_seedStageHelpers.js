@@ -23,20 +23,10 @@
  * across every seed migration); pass it only for the rare template whose basename
  * diverges from its stage key.
  *
- * `makeSeedMigrations(stageSpecs)` is the multi-stage form: it runs the same
- * copy-if-missing + merge-if-absent body for each stage but writes the installed
- * `stage-config.json` exactly once with an `N added` summary log. It is behaviour-
- * identical to the hand-rolled `for (const stageKey of STAGES)` loops the genuine
- * multi-stage seed migrations (091/094/095/107) used to carry — the on-disk
- * results (templates copied only when missing, config entries merged only when
- * absent, single pretty-printed write) match byte-for-byte. Each spec is either a
- * bare `stageKey` string (filename derived as `${stageKey}.md`) or a
- * `{ stageKey, filename }` object for the rare diverging basename. `makeSeedMigration`
- * is the single-stage convenience wrapper over the same machinery.
+ * `makeSeedMigrations(stageSpecs)` is the multi-stage form: the same copy-if-missing + merge-if-absent body per stage, writing the installed `stage-config.json` once with an `N added` summary.
+ * Each spec is a bare `stageKey` string (filename `${stageKey}.md`) or `{ stageKey, filename }` for a diverging basename; `makeSeedMigration` is the single-stage wrapper.
  *
- * The data effects above are what these migrations are responsible for — the
- * console log copy is incidental and not preserved verbatim from the pre-refactor
- * files (all now log under `stageKey`).
+ * Log copy is incidental (all log under `stageKey`); the data effects are what these migrations own.
  */
 
 import { access, copyFile, mkdir, readFile, constants } from 'fs/promises';

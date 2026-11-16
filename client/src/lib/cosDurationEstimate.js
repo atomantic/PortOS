@@ -64,7 +64,6 @@ export function describeEstimateBasis(estimate) {
 
 /**
  * Resolve a duration estimate for one task/agent from the `/durations` payload.
- *
  * @param {Object} args
  * @param {Object|null} args.durations - the `/api/cos/learning/durations` payload
  * @param {Object|null} args.task - task-shaped input for `extractCosTaskType`

@@ -1,42 +1,17 @@
 /**
  * Pin a 128K context window on the Ollama-backed Claude harness records (#6191).
  *
- * `claude-ollama` / `claude-ollama-tui` shipped with no `numCtx`, so
- * `ensureOllamaAgentContext` (server/services/ollamaAgentContext.js) never
- * reloaded the daemon and Ollama's VRAM-based auto-pick stood. On a large-VRAM
- * machine that resolves to a 262144-token window, and prefill throughput decays
- * as the KV cache grows: a ~98K-token pr-reviewer Stage 3 prompt was measured
- * at 88 tok/s early and 48 tok/s by the end — roughly half an hour of prefill
- * before the first token. Halving the window halves the KV bandwidth that
- * causes the decay while still clearing the ~100K-token Stage 3 envelope with
- * headroom. 32768 (what the `ollama` api-type provider defaults to) is SMALLER
- * than that envelope and would turn a slow run into a refused one.
+ * `claude-ollama` / `claude-ollama-tui` shipped with no `numCtx`, so `ensureOllamaAgentContext` (server/services/ollamaAgentContext.js) never reloaded the daemon and Ollama's VRAM-based auto-pick stood: on a large-VRAM
+ * machine 262144 tokens, where prefill throughput decays as the KV cache grows (a ~98K-token pr-reviewer Stage 3 prompt measured 88 tok/s early, 48 tok/s late). Halving the window halves the KV bandwidth while still clearing
+ * the ~100K-token Stage 3 envelope; 32768 (the `ollama` api-type default) is SMALLER than that envelope and would turn a slow run into a refused one.
  *
- * What this migration deliberately does NOT do:
+ * Deliberately NOT done:
+ *   - **Never overwrites a window the user picked.** Only a record with no usable `numCtx` is stamped, and the migration stands down when `OLLAMA_CONTEXT_LENGTH` is set (`resolveOllamaContextLength` ranks a
+ *     record's `numCtx` ABOVE that env var), since stamping over a deliberately small machine-wide window could make an install worse (past what VRAM allows, Ollama offloads layers to CPU).
+ *   - **Never touches a record repointed at another binary.** Keyed on the `ollamaBacked` marker plus the `claude` command (as `isOllamaBackedProvider` + the harness), so a renamed clone is covered and a wrapper is not.
  *
- *   - **It never overwrites a window the user picked.** Only a record with no
- *     usable `numCtx` is stamped — and the whole migration stands down when
- *     `OLLAMA_CONTEXT_LENGTH` is set, because `resolveOllamaContextLength`
- *     ranks a record's `numCtx` ABOVE that env var. Stamping over a
- *     deliberately small machine-wide window is the one way this migration
- *     could make an install worse: past what VRAM allows Ollama does not fail,
- *     it offloads layers to CPU. For the same reason a small-VRAM install
- *     should lower this value rather than inherit it.
- *   - **It never touches a record repointed at another binary.** Keyed on the
- *     `ollamaBacked` marker plus the `claude` command, matching
- *     `isOllamaBackedProvider` + the harness these defaults describe, so a
- *     renamed clone of the shipped record is covered and a record now running
- *     someone's wrapper is not.
- *
- * `numCtx: null` counts as UNSET, not as "the user asked for Ollama's
- * auto-pick": `createProvider` in server/lib/aiToolkit/providers.js normalizes
- * every absent value to `null` on write, so a stored `null` is indistinguishable
- * from never having been set and is the state essentially every real install is
- * in. Treating it as user intent would make this migration a no-op exactly
- * where it is needed.
- *
- * Kept in lockstep with data.reference/providers.json. Later default changes
- * require a new migration.
+ * `numCtx: null` counts as UNSET: `createProvider` (server/lib/aiToolkit/providers.js) normalizes every absent value to `null` on write, so treating it as user intent would make this a no-op exactly where needed.
+ * Kept in lockstep with data.reference/providers.json; later default changes require a new migration.
  */
 
 import { readProvidersDoc, writeJsonAtomic } from './_lib.js';
