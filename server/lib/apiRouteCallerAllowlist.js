@@ -18,7 +18,6 @@ export const ROUTE_CALLER_CLASSES = Object.freeze({
   'client-service-unscanned': 'Named in a client service module whose request shape the parity scan cannot fold to this route.',
   'server-reference': 'Referenced by a server module (a loopback or provider-compatible request path); the reference was found by text search and not individually traced.',
   'legacy-client-compat': 'Kept for a client build that predates the current routes: a deployed client/dist can lag the server across an upgrade.',
-  unclassified: 'No caller found outside the API Explorer. Seeded from the reverse scan; each entry is a deletion candidate tracked in #16446.',
 });
 
 export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
@@ -343,7 +342,5 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/image-to-3d/trellis2/install',
     '/api/providers/opencode/install',
     '/api/providers/opencode/installation',
-  ]),
-  unclassified: Object.freeze([
   ]),
 });
