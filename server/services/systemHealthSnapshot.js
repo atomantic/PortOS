@@ -16,7 +16,6 @@ import { checkGhHealth } from './github.js';
 import { getMediaCapacity } from './mediaCapacity.js';
 import { runningAgentsByTaskId, unclaimedTaskIds } from '../lib/cosSpawnWindow.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
-import { getReviewerConfigHealth } from './codeReview.js';
 
 // Disk capacity remains actionable. Memory thresholds are retained on the wire
 // for older clients, but no longer generate warnings or degrade health.
@@ -128,7 +127,8 @@ function probeHealthInputs() {
     // Media-lane capacity never fails the health report: an unreadable GPU probe
     // degrades to `null`, which the UI renders as unknown rather than as idle.
     getMediaCapacity().catch(() => null),
-    Promise.resolve().then(() => getReviewerConfigHealth())
+    import('../services/codeReview.js')
+      .then(({ getReviewerConfigHealth }) => getReviewerConfigHealth())
       .catch(() => ({ status: 'unknown', configFaults: {} }))
   ]).then(([pm2Processes, appStatusSummary, cosStatus, cosPendingTaskIds, cosAgents, self, dbHealth, version, diskStats, dataDiskStats, filesystemDevices, memStats, healthSettings, forgeHealth, mediaCapacity, reviewerConfigHealth]) => ({
     pm2Processes, appStatusSummary, cosStatus, cosPendingTaskIds, cosAgents, self, dbHealth, version, diskStats, dataDiskStats, filesystemDevices, memStats, healthSettings, forgeHealth, mediaCapacity, reviewerConfigHealth

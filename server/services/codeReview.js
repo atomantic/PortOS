@@ -1368,7 +1368,8 @@ async function loadGoalFidelityScreenshots(references) {
   }
 
   try {
-    const [fs, path, sharpModule] = await Promise.all([
+    const [{ PATHS }, fs, path, sharpModule] = await Promise.all([
+      import('../lib/fileUtils.js'),
       import('node:fs/promises'),
       import('node:path'),
       import('sharp'),
