@@ -9,7 +9,7 @@
  * patch to merge via `cosTaskStore.updateTask`, a boolean, or a number. Persistence, the status transition and
  * the escalation task live in cosTaskStore.js.
  *
- * The challenge record round-trips the TASKS.md store (JSON sentinel, see taskParser.js) and is part of the
+ * The challenge record is kept as nested metadata by the stored form (lib/cosTaskRows.js) and is part of the
  * merge's content signature, so it federates across peers with no bespoke wire field (#1712).
  */
 

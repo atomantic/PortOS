@@ -48,7 +48,7 @@ import { canChallenge, getChallengeCount, buildChallengePatch, buildChallengeRes
 import { runLocalCodeReview, getCodeReviewDefaults } from './codeReview.js';
 
 // First non-empty line of a string — used by addTask's dedup, since stored
-// descriptions are flattened to a single line by generateTasksMarkdown. Declared
+// descriptions are flattened to a single line by storedForm (lib/cosTaskRows.js). Declared
 // in the dependency-free text leaf and re-exported here at the address this
 // module's callers already import it from.
 import { firstLine } from '../lib/textUtils.js';
@@ -63,9 +63,9 @@ const DESCRIPTION_OVERFLOW_HEADING = '(from description)';
 /**
  * Normalize a multi-line `description` on the UPDATE path, preserving the body.
  *
- * Markdown task rows are ONE-LINE records: `generateTasksMarkdown` emits the
- * description into `- [ ] #id | PRIORITY | <description>` and
- * `parseTasksMarkdown` reads only that first line. `addTask` has collapsed a
+ * A stored task's description is ONE line (`storedForm` in lib/cosTaskRows.js
+ * keeps the old Markdown row's rule; the task files once held it as
+ * `- [ ] #id | PRIORITY | <description>` and read only that first line). `addTask` has collapsed a
  * multi-line description for exactly that reason since #4153 — `writeTaskUpdate`
  * did not, so saving a multi-line edit from the task editor's textarea wrote the
  * extra lines into the file as free text. Reparsing then silently truncated the

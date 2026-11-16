@@ -39,7 +39,8 @@ import { isPerpetualRefillCandidate, perpetualRefillPlan, resetOrphanedTasks } f
 import { firstLine } from './cosTaskStore.js';
 import { canQueueImprovementTasks, DEFAULT_STATE } from './cosState.js';
 import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible, isUserTaskRunnableUnattended } from './cosDequeue.js';
-import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
+import { parseTasksMarkdown } from '../lib/legacyTaskMarkdown.js';
+import { storedForm } from '../lib/cosTaskRows.js';
 import {
   createLocalEndpointSlotContext,
   cloudSwarmThreadCapacity,
@@ -1343,12 +1344,12 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(fnBody).toMatch(/if\s*\(\s*availableSlots\s*<=\s*0\s*\)/);
   });
 
-  // Parse a legacy row, write it back the way the USER queue writes it, and read
-  // the result — the approval flags a real row carries after one heal cycle.
+  // Read a legacy row the way migration 018 does, store it in the USER queue, and
+  // return the approval flags the stored row carries.
   const healedUserRow = (line) => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const parsed = parseTasksMarkdown(`# Tasks\n\n## Pending\n${line}\n`);
-    const [healed] = parseTasksMarkdown(generateTasksMarkdown(parsed, false));
+    const [parsed] = parseTasksMarkdown(`# Tasks\n\n## Pending\n${line}\n`);
+    const healed = storedForm(parsed, 'user');
     warn.mockRestore();
     return { approvalRequired: healed.approvalRequired, autoApproved: healed.autoApproved };
   };
@@ -2250,7 +2251,7 @@ describe('addTask — first-line dedup', () => {
 
   it('multi-line and single-line descriptions with the same first line collide', () => {
     // Repro: handleOrphanedTask builds a multi-line description, but
-    // generateTasksMarkdown flattens it to one line. Without first-line
+    // the stored form flattens it to one line. Without first-line
     // normalization, addTask's dedup compares the full multi-line input to
     // the stored single line and never matches — producing N duplicate
     // [Auto-Fix] tasks, each spawning its own agent.

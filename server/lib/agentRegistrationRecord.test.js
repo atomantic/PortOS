@@ -1,5 +1,5 @@
 import { buildQueuedTask } from '../services/cosTaskIntake.js';
-import { generateTasksMarkdown, parseTasksMarkdown } from './taskParser.js';
+import { storedForm } from './cosTaskRows.js';
 import { describe, it, expect } from 'vitest';
 import { buildAgentRegistration } from './agentRegistrationRecord.js';
 
@@ -48,12 +48,11 @@ describe('buildAgentRegistration — resume provenance', () => {
   });
 });
 
-it('retains recovery lineage and the persisted boolean marker through task markdown', () => {
+it('retains recovery lineage and the persisted boolean marker through the stored task form', () => {
   const recoveryOrigin = { parentAgentId: 'agent-parent', parentTaskId: 'task-parent', subsystem: 'repository-cleanup',
     attempt: 2, observation: 'a'.repeat(64), noProgress: true };
   const queued = buildQueuedTask({ description: 'Synthetic cleanup', isRecovery: true, metadata: { recoveryOrigin } }, 'user');
-  const parsed = parseTasksMarkdown(generateTasksMarkdown([queued]));
-  const task = parsed[0];
+  const task = storedForm(queued, 'user');
   expect(task.metadata.isRecovery).toBe('true');
   const record = buildAgentRegistration({ ...args({}), task });
   expect(record).toMatchObject({ isRecovery: true, recoveryOrigin });
@@ -93,7 +92,7 @@ it('preserves scheduled reconciliation identity through persistence and registra
   const queued = buildQueuedTask({ description: 'Reconcile named branches', metadata: {
     analysisType: 'branch-reconcile', useWorktree: false, openPR: false,
   } }, 'internal');
-  const [task] = parseTasksMarkdown(generateTasksMarkdown([queued]));
+  const task = storedForm(queued, 'user');
   const record = buildAgentRegistration({ ...args({}), task });
   expect(task.metadata.analysisType).toBe('branch-reconcile');
   expect(record.taskAnalysisType).toBe('branch-reconcile');

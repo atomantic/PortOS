@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
+import { storedForm } from '../lib/cosTaskRows.js';
 import { forkLocalBranch } from '../lib/forkHead.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
 
@@ -14,7 +14,7 @@ vi.mock('./cosState.js', () => ({
 }));
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
 vi.mock('./cosTaskStore.js', () => ({
-  addTask: async task => { f.tasks[task.id] = { ...parseTasksMarkdown(generateTasksMarkdown([task]))[0], taskType: 'internal' }; return task; }, updateTask: vi.fn(),
+  addTask: async task => { f.tasks[task.id] = { ...storedForm(task, 'user'), taskType: 'internal' }; return task; }, updateTask: vi.fn(),
   getTaskById: async id => f.tasks[id],
 }));
 vi.mock('./cos.js', () => ({

@@ -50,13 +50,13 @@ import { atomicWrite } from '../../server/lib/fileUtils.js';
 import { readCosConfig } from './_lib.js';
 import { isPromptPayload, TASK_PROMPT_KEY, TASK_CONTEXT_KEY } from '../../server/lib/cosTaskPrompt.js';
 
-// The task header line, per `server/lib/taskParser.js`. Both spellings — with
+// The task header line, per `server/lib/legacyTaskMarkdown.js`. Both spellings — with
 // and without the AUTO/APPROVAL flag — since internal tasks carry it and the
 // legacy shape does not.
 const TASK_LINE = /^-\s*\[([ x~!?])\]\s*#([\w-]+)\s*\|\s*(?:CRITICAL|HIGH|MEDIUM|LOW)\s*\|\s*(?:(?:AUTO|APPROVAL)\s*\|\s*)?(.+)$/i;
 const METADATA_LINE = /^(\s+)-\s*(\w+):\s*(.*)$/;
 
-// Sentinel prefix `taskParser.js#escapeNewlines` writes in front of a
+// Sentinel prefix `legacyTaskMarkdown.js#escapeNewlines` writes in front of a
 // JSON-encoded metadata value. Every multi-line value written since that
 // encoding landed carries it; older ones use bare `\n` escapes.
 const JSON_SENTINEL = '__json__:';
@@ -68,7 +68,7 @@ const QUEUE_FILES = [
 
 /**
  * Decode a persisted metadata value back to the string a reader would see.
- * Mirrors `unescapeNewlines` in `server/lib/taskParser.js` — the sentinel form
+ * Mirrors `unescapeNewlines` in `server/lib/legacyTaskMarkdown.js` — the sentinel form
  * first, then the legacy bare-`\n` form. Returns null for anything that does not
  * decode to a string, so a JSON-encoded array/object can never be reclassified.
  */

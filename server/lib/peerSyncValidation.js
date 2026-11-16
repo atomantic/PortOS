@@ -323,11 +323,11 @@ export const peerCosHistoryManifestSchema = z.object({
 // per-task LWW merge (cosTaskStore.mergePeerTasks) that respects `leaseExpiresAt`, so a peer's fresh claim is
 // never clobbered. Not byte replication: both peers mutate live.
 //
-// Each entry mirrors a parsed task plus a `taskType` discriminator. `metadata` is permissive and re-escaped on
-// the receiver's next file read, so only key length + entry count are bounded. `.strict()` on the entry rejects
+// Each entry mirrors a stored task plus a `taskType` discriminator. `metadata` is permissive and normalized by
+// the receiver's stored form (`cosTaskRows.storedForm`), so only key length + entry count are bounded. `.strict()` on the entry rejects
 // extra top-level fields. `challenged` rides like any status (case + resolution live in `metadata`).
-// Vocabularies come from taskParser.js: a wire value the markdown store cannot represent would be dropped on
-// the receiver's next file write, so the lists must not drift.
+// Vocabularies come from taskParser.js: a wire value the receiver's queue cannot represent would be repaired
+// on arrival, so the lists must not drift.
 const peerCosTaskEntrySchema = z.object({
   id: z.string().trim().min(1).max(200),
   taskType: z.enum(['user', 'internal']),
@@ -336,10 +336,10 @@ const peerCosTaskEntrySchema = z.object({
   description: z.string().max(20_000),
   approvalRequired: z.boolean().optional(),
   autoApproved: z.boolean().optional(),
-  // `.default({})`: a sender omitting metadata yields `{}`, since the receiver's markdown generator does
-  // Object.entries(metadata) and would throw, failing the whole file merge.
+  // `.default({})`: a sender omitting metadata yields `{}`, since the receiver's stored form does
+  // Object.entries(metadata) and would throw, failing the whole merge.
   //
-  // The newest-edit-wins stamp (`metadata.updatedAt`) rides here so it survives the TASKS.md round-trip.
+  // The newest-edit-wins stamp (`metadata.updatedAt`) rides here so it survives the stored form.
   metadata: z.record(z.string().min(1).max(120), z.any()).optional().default({}),
 }).strict();
 export const peerCosTasksSchema = z.object({

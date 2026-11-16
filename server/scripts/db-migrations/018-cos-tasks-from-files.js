@@ -17,7 +17,7 @@
  * The files are retired separately by 019, only after this one has committed.
  */
 import { readFile } from 'node:fs/promises';
-import { parseTasksMarkdown } from '../../lib/taskParser.js';
+import { parseTasksMarkdown } from '../../lib/legacyTaskMarkdown.js';
 import { resolveCosTaskFiles } from './_cosTaskFiles.js';
 
 const POSITION_STEP = 1024;

@@ -1296,7 +1296,7 @@ export function analyzeAgentFailure(output, task, model, options = {}) {
 // An investigation in any of these states means the failure cause is already
 // being tracked — a repeat failure with the same fingerprint is the SAME cause,
 // not new work. `completed` is the only terminal status in the task vocabulary
-// (see taskParser.js STATUS_MAP); everything else — including `challenged`,
+// (see taskParser.js TASK_STATUS_VALUES); everything else — including `challenged`,
 // where a task can park for days awaiting user arbitration — stays open, so a
 // fresh task is only allowed once the prior cause was actually dealt with.
 const OPEN_INVESTIGATION_STATUSES = new Set(['pending', 'in_progress', 'challenged', 'blocked']);

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import migration, { reviveStrandedFollowUps } from './262-revive-null-app-blocked-merge-followups.js';
-import { parseTasksMarkdown } from '../../server/lib/taskParser.js';
+import { parseTasksMarkdown } from '../../server/lib/legacyTaskMarkdown.js';
 
 const STAMP = '2026-08-12T12:00:00.000Z';
 const PR_URL = 'https://github.com/example-org/example-repo/pull/9';

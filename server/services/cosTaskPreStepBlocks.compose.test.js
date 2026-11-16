@@ -24,7 +24,7 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createCosTaskSchema } from '../lib/cosValidation.js';
 import { buildQueuedTask } from './cosTaskIntake.js';
 import { buildAgentRegistration } from '../lib/agentRegistrationRecord.js';
-import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
+import { storedForm } from '../lib/cosTaskRows.js';
 
 const BRANCH_RECONCILE_TEMPLATE = [
   '# Branch reconcile for {appName}',
@@ -534,8 +534,8 @@ describe('scheduled reconciliation registration through handoff ownership', () =
   };
   const owner = () => admissionFixture.state.agents['agent-reconcile'];
   const register = async task => {
-    admissionFixture.task = { ...parseTasksMarkdown(generateTasksMarkdown([{ ...task, description: task.description.split('\n')[0],
-      metadata: { ...task.metadata, prompt: task.description } }], true))[0], taskType: 'internal' };
+    admissionFixture.task = { ...storedForm({ ...task, description: task.description.split('\n')[0],
+      metadata: { ...task.metadata, prompt: task.description } }, 'internal'), taskType: 'internal' };
     await registerAgent('agent-reconcile', task.id, buildAgentRegistration({ task: admissionFixture.task,
       provider: { id: 'example-provider' }, workspacePath: APP.repoPath, sourceWorkspace: APP.repoPath,
       modelSelection: { tier: 'heavy', reason: 'test' }, prOpenedBy: 'portos', claimFlowTask: false }));
