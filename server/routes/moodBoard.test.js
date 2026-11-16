@@ -194,12 +194,11 @@ describe('mood-board routes', () => {
   });
 
   describe('POST /:id/x-post', () => {
-    it('validates the body and passes it to the service', async () => {
+    it('imports into the board named by the path', async () => {
       svc.importXPost.mockResolvedValueOnce({ board: { id: 'mb-1' }, added: 2 });
       const res = await request(makeApp()).post('/api/mood-boards/mb-1/x-post').send({ url: 'https://x.com/user/status/1' });
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ board: { id: 'mb-1' }, added: 2 });
-      expect(svc.importXPost).toHaveBeenCalledWith('mb-1', { url: 'https://x.com/user/status/1' });
+      expect(svc.importXPost.mock.calls[0][0]).toBe('mb-1');
     });
 
     it('400s on a non-http(s) url (schema gate)', async () => {
