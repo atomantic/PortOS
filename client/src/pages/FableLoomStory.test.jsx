@@ -34,8 +34,10 @@ vi.mock('../services/api', () => ({
 // Keep the graph lightweight while exposing its page-owned scene-media action
 // and state. The canvas component itself covers preview/button rendering.
 vi.mock('../components/fableloom/LoomCanvas', () => ({
-  default: ({ episode, mediaJobs, onGenerateImage, onAutomateFalVideo, generationDisabled }) => (
+  default: ({ episode, mediaJobs, onGenerateImage, onAutomateFalVideo, generationDisabled, onMoveNode }) => (
     <div>
+      <button type="button" onClick={() => onMoveNode(episode.nodes[0].id, { x: 500, y: 600 })}>Canvas move node</button>
+      <span data-testid="canvas-node-pos">{JSON.stringify(episode.nodes[0].pos ?? null)}</span>
       <button
         type="button"
         disabled={generationDisabled}
@@ -414,6 +416,36 @@ describe('FableLoomStory episode expansion safety', () => {
       expect.objectContaining({ replace: true, expandFromOutline: true, providerId: 'writer', model: 'example-model', effort: 'low' }),
       { silent: true },
     ));
+  });
+});
+
+describe('FableLoomStory node moves', () => {
+  it('returns the node to its saved position and shows the error when the save fails', async () => {
+    const real = await vi.importActual('../services/apiFableLoom');
+    api.updateLoomNode.mockImplementation(real.updateLoomNode);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: 'Loom save failed' }) }));
+    const savedEpisode = episode({ nodes: [{ id: 'node-1', title: 'Threshold', prose: 'x', transitions: [], pos: { x: 10, y: 20 } }] });
+    api.getLoom.mockResolvedValue(loom({ episodes: [savedEpisode] }));
+    const user = userEvent.setup();
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    expect(await screen.findByTestId('canvas-node-pos')).toHaveTextContent('{"x":10,"y":20}');
+    await user.click(screen.getByRole('button', { name: 'Canvas move node' }));
+
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalledWith('Loom save failed'));
+    await waitFor(() => expect(screen.getByTestId('canvas-node-pos')).toHaveTextContent('{"x":10,"y":20}'));
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the dragged position when the save succeeds', async () => {
+    api.updateLoomNode.mockResolvedValue({});
+    api.getLoom.mockResolvedValue(loom({ episodes: [episode({ nodes: [{ id: 'node-1', title: 'Threshold', prose: 'x', transitions: [], pos: { x: 10, y: 20 } }] })] }));
+    const user = userEvent.setup();
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    await user.click(await screen.findByRole('button', { name: 'Canvas move node' }));
+    await waitFor(() => expect(api.updateLoomNode).toHaveBeenCalledWith('loom-1', 'ep-1', 'node-1', { pos: { x: 500, y: 600 } }));
+    expect(screen.getByTestId('canvas-node-pos')).toHaveTextContent('{"x":500,"y":600}');
   });
 });
 

@@ -180,7 +180,7 @@ describe('AutopilotPanel', () => {
     expect(toggle).not.toBeChecked();
     fireEvent.click(toggle);
     await waitFor(() => expect(patchSettingsSlice).toHaveBeenCalledWith(
-      'pipelineEditorialChecks', { autoSelectModels: true }, { silent: true },
+      'pipelineEditorialChecks', { autoSelectModels: true },
     ));
     expect(await screen.findByText(/6 attributed runs, 4 quality-reviewed/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
@@ -208,13 +208,26 @@ describe('AutopilotPanel', () => {
     expect(patchSettingsSlice).toHaveBeenCalledWith(
       'pipelineEditorialChecks',
       expect.objectContaining({ maxArcVerifyRounds: 9 }),
-      { silent: true },
     );
     expect(patchSettingsSlice).not.toHaveBeenCalledWith(
       'pipelineEditorialChecks',
       expect.objectContaining({ maxEditorialRounds: expect.anything() }),
       expect.anything(),
     );
+  });
+
+  it('shows the server error when saving a round setting fails', async () => {
+    const real = await vi.importActual('../../services/apiSystem');
+    patchSettingsSlice.mockImplementation(real.patchSettingsSlice);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: 'Server refused the save' }) }));
+    renderPanel({ id: 's1', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: /options/i }));
+    fireEvent.change(screen.getByLabelText('Arc verify rounds'), { target: { value: '9' } });
+    fireEvent.blur(screen.getByLabelText('Arc verify rounds'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Server refused the save'));
+    vi.unstubAllGlobals();
   });
 
   it('sends unlockForRun as a per-run override and never persists it', async () => {
@@ -968,7 +981,7 @@ describe('AutopilotPanel', () => {
       expect(toggle).not.toBeChecked();
       fireEvent.click(toggle);
       await waitFor(() => expect(patchSettingsSlice).toHaveBeenCalledWith(
-        'pipelineEditorialChecks', { selfImprove: true }, { silent: true },
+        'pipelineEditorialChecks', { selfImprove: true },
       ));
       // The filed task is always approval-gated — there is no auto-start knob.
       expect(await screen.findByText(/waiting in your CoS approval queue/i)).toBeInTheDocument();
@@ -1033,7 +1046,7 @@ describe('AutopilotPanel', () => {
       expect(toggle).not.toBeChecked();
       fireEvent.click(toggle);
       await waitFor(() => expect(patchSettingsSlice).toHaveBeenCalledWith(
-        'pipelineEditorialChecks', { observer: true }, { silent: true },
+        'pipelineEditorialChecks', { observer: true },
       ));
       // The explainer must say the quiet part out loud: fixes dispatch and
       // merge without an approval step, and enabling this is the consent.
