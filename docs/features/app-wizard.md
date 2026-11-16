@@ -59,8 +59,8 @@ Scaffold a new project from template:
 | GET /api/scaffold/templates | List available templates |
 | GET /api/scaffold/directories | Browse directories for the location picker (host control — operator session, or a local connection when no password is set) |
 | POST /api/scaffold/templates/create | Create an app from a template (user-friendly wrapper around POST /api/scaffold) |
-| POST /api/detect/port | Detect process on port |
-| POST /api/detect/repo | Validate repo path, detect type |
+
+The wizard detects an existing repo over the `detect:start` Socket.IO event (`server/sockets/apps.js`, streamed by `server/services/streamingDetect.js`); there is no REST detection or standardization route. Standardizing an app likewise runs over the `app:standardize` and `standardize:start` socket events.
 
 ## Related Features
 

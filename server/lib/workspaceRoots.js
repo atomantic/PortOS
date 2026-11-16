@@ -8,14 +8,10 @@ import { homedir, tmpdir } from 'os';
 
 // Allowed workspace roots shared by routes that accept a caller-supplied
 // filesystem path: command execution (`routes/commands.js`), scaffolding
-// (`routes/scaffold.js`), submodule reads (`routes/git.js`), and detection
-// (`routes/detect.js`).
+// (`routes/scaffold.js`) and submodule reads (`routes/git.js`).
 //
 // Coverage is per-HANDLER, not per-file — a route module listed here does not
-// imply every handler in it is scoped. In `routes/detect.js` the two handlers
-// that take a path (`POST /repo`, `POST /ai`) both go through one shared
-// `checkWorkspacePathAllowed` helper; its other handlers (`POST /port`,
-// `POST /pm2`) take no path at all.
+// imply every handler in it is scoped.
 //
 // Repos legitimately live on secondary volumes, so the defaults cover home plus
 // the places each platform mounts them: /Volumes (macOS), /mnt + /media (Linux),

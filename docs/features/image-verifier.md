@@ -337,11 +337,7 @@ Verification results are saved alongside the image in its `.metadata.json` sidec
      * Detected hands table with verified digit counts.
      * Bounding region locator indicating where the defect is located.
      * Manual Override: "Mark as False Positive" or "Force Pass", allowing operator corrections to feed back into model calibration.
-4. **Settings Page (`/settings/media` or `/settings/image-verifier`):**
-   * Global enable/disable switches for generation and import verification.
-   * Profile builder: add, edit, or delete verification profiles.
-   * Vision reviewer selection (e.g. choose local Qwen 2.5-VL for zero-token local verification, or Claude 3.7 Sonnet for critical production art).
-   * Re-roll budget limits (default: 2 retries).
+4. **Settings:** there is no settings page or REST surface yet. Verification reads the stored `imageVerification` settings (generation/import opt-ins, default profile, reviewer, reroll budget, custom profiles); only `POST /api/image-verifier/verify` and `POST /api/image-verifier/override` are served.
 
 ---
 

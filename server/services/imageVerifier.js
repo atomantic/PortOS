@@ -8,7 +8,7 @@ import { existsSync } from 'fs';
 import { ServerError } from '../lib/errorHandler.js';
 import { resolveGalleryImage } from '../lib/pathSafety.js';
 import { assertGalleryFilename } from './imageGen/local.js';
-import { getSettings, saveSettings } from './settings.js';
+import { getSettings } from './settings.js';
 import { editImageSidecar } from './imageGen/sidecarStore.js';
 import { isOllamaBackedProvider } from '../lib/aiToolkit/internal/ollamaBacked.js';
 import {
@@ -40,17 +40,6 @@ export async function getVerifierSettings() {
 }
 
 /**
- * Updates Image Verifier settings.
- */
-export async function updateVerifierSettings(updates) {
-  const current = await getSettings();
-  const existing = current.imageVerification || {};
-  const merged = { ...existing, ...updates };
-  await saveSettings({ ...current, imageVerification: merged });
-  return getVerifierSettings();
-}
-
-/**
  * Lists all available verification profiles (built-in + user custom).
  */
 export async function getVerificationProfiles() {
@@ -70,31 +59,6 @@ export async function getVerificationProfiles() {
 export async function getVerificationProfile(id) {
   const profiles = await getVerificationProfiles();
   return profiles[id] || DEFAULT_VERIFICATION_PROFILES[id] || DEFAULT_VERIFICATION_PROFILES.strict_anatomy;
-}
-
-/**
- * Creates or updates a custom verification profile.
- */
-export async function saveCustomProfile(profileData) {
-  const validated = verificationProfileSchema.parse(profileData);
-  const settings = await getVerifierSettings();
-  const existingProfiles = settings.customProfiles.filter((p) => p.id !== validated.id);
-  existingProfiles.push(validated);
-  await updateVerifierSettings({ customProfiles: existingProfiles });
-  return validated;
-}
-
-/**
- * Deletes a custom verification profile.
- */
-export async function deleteCustomProfile(id) {
-  if (DEFAULT_VERIFICATION_PROFILES[id]) {
-    throw new ServerError(`Cannot delete built-in profile "${id}"`, { status: 400, code: 'CANNOT_DELETE_BUILTIN' });
-  }
-  const settings = await getVerifierSettings();
-  const filtered = settings.customProfiles.filter((p) => p.id !== id);
-  await updateVerifierSettings({ customProfiles: filtered });
-  return { deleted: true, id };
 }
 
 /**

@@ -8,7 +8,7 @@ import { isDeepStrictEqual } from 'node:util';
 import * as catalogDB from '../services/catalogDB.js';
 import { catalogEvents } from '../services/catalogEvents.js';
 import * as catalogSync from '../services/catalogSync.js';
-import { resolveRefs, listDanglingRefs } from '../services/catalogRefResolver.js';
+import { resolveRefs } from '../services/catalogRefResolver.js';
 import { projectToCanon } from '../services/catalogCanonProjection.js';
 import { withTransaction } from '../lib/db.js';
 import { changedMusicVideoDescriptionOverLimit, MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../lib/musicVideoSubjectLimits.js';
@@ -29,12 +29,11 @@ import { draftPhotorealLook, previewPhotorealLookPrompt, savePhotorealLook } fro
 import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
 import { readImageGenerationMetadata, uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
 import { getBoard as getMoodBoard } from '../services/moodBoard/index.js';
-import { MAX_CAST_GUIDES, filterLibraryMedia, pickGuideMedia, parseLibraryMediaKey, inferAgeFromText } from '../lib/catalogMediaLibrary.js';
+import { MAX_CAST_GUIDES, filterLibraryMedia, parseLibraryMediaKey, inferAgeFromText } from '../lib/catalogMediaLibrary.js';
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { previewCatalogCastImport, commitCatalogCastImport } from '../services/musicVideo/catalogCast.js';
 import { draftStoryMember, joinStory, listCatalogStories } from '../services/catalogStories.js';
 import { linkVideoSubjects, listVideoSubjectLinks, restoreVideoSubjectDescription, saveVideoSubjectToCatalog } from '../services/musicVideo/catalogCast.js';
-import { fileCatalogImagesIntoUniverses } from '../services/catalogUniverseFiling.js';
 import { catalogFamilyRenderContext, familyImagesAddition } from '../services/catalogFamily.js';
 import { resolveGalleryImage } from '../lib/pathSafety.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
@@ -548,15 +547,6 @@ router.get('/refs/:refKind/:refId/resolve', asyncHandler(async (req, res) => {
   res.json(resolved);
 }));
 
-// Integrity surface (#1018): every LIVE ref whose target record no longer
-// resolves (deleted, or never arrived after a federated ref). Mirrors the media
-// `metadata-missing` check — a dangling ref isn't an error (the target may sync
-// in later), just a report. `count` is handy for a badge.
-router.get('/refs/dangling', asyncHandler(async (req, res) => {
-  const dangling = await listDanglingRefs();
-  res.json({ count: dangling.length, dangling });
-}));
-
 // --- Ingredient↔ingredient relations -----------------------------------
 
 // What a character's family adds to an image render: one labeled addition per
@@ -623,15 +613,6 @@ router.get('/ingredients/:id/media', asyncHandler(async (req, res) => {
   res.json(Object.keys(filters).length ? filterLibraryMedia(media, { ...filters, guide: filters.guide === 'true' ? true : undefined }) : media);
 }));
 
-// Casting reference library: the up-to-4 images a render of this cast member
-// should condition on for the requested variant (?age=&era=&wardrobeId=).
-router.get('/ingredients/:id/media/guides', asyncHandler(async (req, res) => {
-  const ing = await catalogDB.getIngredient(req.params.id);
-  if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
-  const want = validateRequest(catalogMediaLibraryQuerySchema, req.query);
-  res.json({ guides: pickGuideMedia(await catalogDB.listMediaForIngredient(req.params.id), want) });
-}));
-
 // Edit a media row's Casting library fields (variant/tags/guide). 409 past 4 guides.
 router.patch('/ingredients/:id/media/library', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogMediaLibraryPatchSchema, req.body);
@@ -673,14 +654,6 @@ router.post('/ingredients/:id/media/from-mood-board', asyncHandler(async (req, r
     attached.push(Object.keys(patch).length ? await catalogDB.updateMediaLibrary(req.params.id, parsed.mediaKey, parsed.kind, patch) : { mediaKey: parsed.mediaKey, kind: parsed.kind });
   }
   res.status(201).json({ attached, skipped });
-}));
-
-// Integrity surface: media keys on this ingredient that don't resolve against
-// the local library (typically arrived via federation before their asset did).
-router.get('/ingredients/:id/media/missing', asyncHandler(async (req, res) => {
-  const ing = await catalogDB.getIngredient(req.params.id);
-  if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
-  res.json({ missing: await catalogDB.getMissingMediaForIngredient(req.params.id) });
 }));
 
 router.post('/ingredients/:id/media', asyncHandler(async (req, res) => {
@@ -1231,18 +1204,6 @@ router.get('/import/music-videos', asyncHandler(async (req, res) => {
 router.post('/import/music-videos', asyncHandler(async (req, res) => {
   const { selections } = validateRequest(catalogMusicVideoImportSchema, req.body || {});
   res.json(await commitCatalogCastImport(selections));
-}));
-
-// Universe collection integrity: every image on a record that belongs to a
-// universe (directly or through a story in it) sits in that universe's
-// collection. GET reports what is missing; POST files it. Never removes, and
-// skips images the user took out of the collection.
-router.get('/universe-filing', asyncHandler(async (req, res) => {
-  res.json(await fileCatalogImagesIntoUniverses({ dryRun: true }));
-}));
-
-router.post('/universe-filing', asyncHandler(async (req, res) => {
-  res.json(await fileCatalogImagesIntoUniverses());
 }));
 
 // --- User-defined ingredient types --------------------------------------

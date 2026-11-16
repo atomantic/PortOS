@@ -8,6 +8,10 @@
  * prefix — or moving a handler between routers — left the whole client suite
  * green while the feature 404'd in the browser (#5716).
  *
+ * The reverse direction is checked too (#16393): a mounted route that no client
+ * wrapper reaches must sit in `apiRouteCallerAllowlist.js` under the caller class
+ * that justifies it, so an uncalled route is a decision rather than an accident.
+ *
  * This closes that boundary by diffing two static scans of the real tree:
  * `apiRouteGraph.js` for the mounted server routes (the inventory the API
  * Explorer serves) and `clientApiPaths.js` for the paths the client wrappers
@@ -19,7 +23,8 @@ import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildApiRouteCatalog } from './apiRouteGraph.js';
-import { findUnmountedClientPaths, scanClientApiPaths } from './clientApiPaths.js';
+import { findUncalledServerRoutes, findUnmountedClientPaths, scanClientApiPaths } from './clientApiPaths.js';
+import { ROUTE_CALLER_CLASSES, UNCALLED_ROUTE_ALLOWLIST } from './apiRouteCallerAllowlist.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -41,6 +46,13 @@ const CALLER_SUPPLIED_PATH_SITES = [
   // block body, so its `path` parameter is only bound at its own call sites.
   { file: 'client/src/services/apiTimeline.js', expression: 'path' },
 ];
+
+/** Allowlisted `unclassified` routes: deletion candidates tracked in #16446; this count may only fall. */
+const UNCLASSIFIED_CEILING = 152;
+
+const allowlistClassOf = new Map(Object.entries(UNCALLED_ROUTE_ALLOWLIST)
+  .flatMap(([callerClass, paths]) => paths.map((route) => [route, callerClass])));
+const describeRoute = (route) => `${route.methods.join('/')} ${route.path}`;
 
 const describeSite = (site) => `${site.file}: ${site.expression}`;
 
@@ -77,6 +89,26 @@ describe('client ↔ server API route parity', () => {
     expect(stranded.every((site) => site.path.startsWith('/api/games'))).toBe(true);
   });
 
+  // ── reverse direction: mounted routes with no client caller ────────────────
+
+  it('has a client caller or a justified allowlist entry for every mounted route', () => {
+    const uncalled = findUncalledServerRoutes(catalog.routes, clientPaths);
+    expect(
+      uncalled.filter((route) => !allowlistClassOf.has(route.path)).map(describeRoute),
+      'mounted routes nothing calls: delete the route, or add it to apiRouteCallerAllowlist.js under the class of its caller',
+    ).toEqual([]);
+  });
+
+  it('keeps the allowlist honest: every entry is mounted, still uncalled, unique and in a known class', () => {
+    const uncalled = new Set(findUncalledServerRoutes(catalog.routes, clientPaths).map((route) => route.path));
+    const entries = Object.values(UNCALLED_ROUTE_ALLOWLIST).flat();
+    expect(entries.filter((route, index) => entries.indexOf(route) !== index), 'duplicate entries').toEqual([]);
+    expect(Object.keys(UNCALLED_ROUTE_ALLOWLIST).filter((callerClass) => !ROUTE_CALLER_CLASSES[callerClass])).toEqual([]);
+    expect(entries.filter((route) => !serverPaths.includes(route)), 'entries for routes that are no longer mounted').toEqual([]);
+    expect(entries.filter((route) => !uncalled.has(route)), 'entries whose route a client now calls').toEqual([]);
+    expect(UNCALLED_ROUTE_ALLOWLIST.unclassified.length).toBeLessThanOrEqual(UNCLASSIFIED_CEILING);
+  });
+
   // ── bypass probes ─────────────────────────────────────────────────────────
   // Each proves the matcher still reports a real mismatch. Stub either scanner
   // to return nothing and its probe goes red, so neither extractor can degrade
@@ -108,5 +140,21 @@ describe('client ↔ server API route parity', () => {
     expect(serverPaths).toContain('/api/sync/:category/checksum');
     // An empty table must strand every client path rather than pass silently.
     expect(findUnmountedClientPaths(clientPaths, []).length).toBe(clientPaths.length);
+  });
+
+  it('reports a mounted route with no client caller and no allowlist entry (reverse bypass probe)', () => {
+    const probe = [
+      { method: 'GET', path: '/api/definitely-uncalled-probe' },
+      { method: 'POST', path: '/api/definitely-uncalled-probe' },
+      { method: 'GET', path: '/api/probe-called/:id' },
+      { method: 'GET', path: '/api/probe-docs/*docPath' },
+    ];
+    const probeClient = [{ path: '/api/probe-called/:p' }, { path: '/api/probe-docs/:p/:p' }];
+    const uncalled = findUncalledServerRoutes(probe, probeClient);
+    expect(uncalled).toEqual([{ path: '/api/definitely-uncalled-probe', methods: ['GET', 'POST'] }]);
+    expect(uncalled.filter((route) => !allowlistClassOf.has(route.path)).map(describeRoute))
+      .toEqual(['GET/POST /api/definitely-uncalled-probe']);
+    // An empty client scan must leave every mounted route uncalled rather than pass silently.
+    expect(findUncalledServerRoutes(catalog.routes, []).length).toBeGreaterThan(1000);
   });
 });

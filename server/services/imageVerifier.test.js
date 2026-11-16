@@ -88,15 +88,13 @@ vi.mock('./promptRunner.js', () => ({
 
 import {
   getVerifierSettings,
-  updateVerifierSettings,
   getVerificationProfiles,
   getVerificationProfile,
-  saveCustomProfile,
-  deleteCustomProfile,
   verifyImage,
   overrideVerification,
 } from './imageVerifier.js';
 import { runPromptThroughProvider } from './promptRunner.js';
+import { getSettings, saveSettings } from './settings.js';
 
 describe('imageVerifier service settings and profiles', () => {
   it('reads verifier settings with defaults', async () => {
@@ -107,11 +105,6 @@ describe('imageVerifier service settings and profiles', () => {
     expect(s.maxRerolls).toBe(2);
   });
 
-  it('updates verifier settings', async () => {
-    const updated = await updateVerifierSettings({ maxRerolls: 3 });
-    expect(updated.maxRerolls).toBe(3);
-  });
-
   it('lists built-in verification profiles', async () => {
     const profiles = await getVerificationProfiles();
     expect(profiles).toHaveProperty('strict_anatomy');
@@ -120,30 +113,15 @@ describe('imageVerifier service settings and profiles', () => {
     expect(profiles).toHaveProperty('quick_screen');
   });
 
-  it('saves and deletes custom profiles', async () => {
-    const custom = {
-      id: 'custom_portrait',
-      name: 'Custom Portrait',
-      description: 'My custom profile',
-      dimensions: {
-        hands_and_fingers: { enabled: true, severity: 'critical' },
-      },
-      generationPolicy: { actionOnFail: 'reroll', maxRerolls: 1 },
-      importPolicy: { actionOnFail: 'flag' },
-    };
-
-    const saved = await saveCustomProfile(custom);
-    expect(saved.id).toBe('custom_portrait');
-
-    const fetched = await getVerificationProfile('custom_portrait');
-    expect(fetched.name).toBe('Custom Portrait');
-
-    const del = await deleteCustomProfile('custom_portrait');
-    expect(del.deleted).toBe(true);
-  });
-
-  it('refuses to delete built-in profile', async () => {
-    await expect(deleteCustomProfile('strict_anatomy')).rejects.toThrow('Cannot delete built-in profile');
+  it('resolves a custom profile stored in settings by an earlier install', async () => {
+    const before = await getSettings();
+    await saveSettings({ ...before, imageVerification: { ...before.imageVerification, customProfiles: [{ id: 'custom_portrait', name: 'Custom Portrait' }] } });
+    try {
+      expect((await getVerificationProfile('custom_portrait')).name).toBe('Custom Portrait');
+      expect(await getVerificationProfile('unknown_profile')).toMatchObject({ id: 'strict_anatomy' });
+    } finally {
+      await saveSettings(before);
+    }
   });
 });
 
