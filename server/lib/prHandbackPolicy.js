@@ -1,14 +1,6 @@
 /**
  * Who owns a public PR after the pr-reviewer coordinator has finished with it.
  *
- * Whose turn it is on a public PR the pr-reviewer coordinator reviewed but did not merge.
- * `resolvePullRequestWriteAccess(pr)` reads `isCrossRepository`/`maintainerCanModify` into a
- * `PR_WRITE_ACCESS` reason, failing closed on an unknown head-repository relationship;
- * `resolveHandbackDisposition({requestedChanges, notMergeReady, downgraded, deferred, canEdit,
- * remediationExhausted})` returns a `PR_HANDBACK` verdict — `remediate` (PortOS pushes the fixes and
- * lands it), `assign-opener` (the PR goes to its author queue), or `none`. A deferred or unanchorable
- * review never becomes an agent work order. Pure.
- *
  * Stage 3 posts the review and, when everything lines up, merges. What was
  * missing is the OTHER half: a PR that came back with blockers, or that is
  * approved but not merge-ready (red CI, conflict, a rebase the forge refused),

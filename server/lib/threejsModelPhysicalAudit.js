@@ -1,19 +1,6 @@
 /**
  * Physical-conformance audit gate for an already-validated Three.js scene spec.
  *
- * Checks static assemblies and animated clips across key poses for:
- * 1. `floating-part`: Parts touching no parent, sibling, joint, attachment, or ground surface.
- * 2. `buried-geometry`: Parts swallowed completely or heavily inside another part without hierarchy/attachment exemption.
- * 3. `coplanar-surface`: Sibling or unrelated part pairs sharing a near-coplanar surface (z-fighting).
- * 4. `unprovenanced-transition`: Animated parts that pop into existence in open space without emerging from a parent or ground level.
- * 5. `nonuniform-parent-scale`: A non-relief child inherits a parent's anisotropic scale and may be distorted.
- * 6. `unanchored-attachment`: A part declared as carried that names nothing it is carried by.
- * 7. `attachment-far-from-anchor`: A declared attachment measured away from the anchor the spec says it hangs from.
- * 8. `bilateral-mirror-scale`: One half of a named left/right pair mirrored by negating a scale component.
- * 9. `bilateral-pair-same-side`: A named left/right pair that never crosses the lateral plane.
- * 10. `bilateral-chirality`: A named left/right pair mirrored by a 180-degree yaw instead of a lateral reflection.
- * 11. `straight-swept-path`: A part declared as a curved form built from a sweep that never bends.
- *
  * Checks 6 and 7 exist because `floating-part` and `buried-geometry` both miss
  * the same defect: a hat that belongs behind the shoulders but is authored at
  * hip height touches its neighbours, so nothing calls it floating, and it is not

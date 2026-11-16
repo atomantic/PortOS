@@ -1,23 +1,6 @@
 /**
  * Degenerate-frame classifier (issue #4173).
  *
- * Degenerate-frame classifier (#4173) — `describeFrameStats(bufferOrPath)` runs one `sharp` `.stats()`
- * decode and returns `{ ok, reason, perChannel }`, rejecting `solid-fill` (every colour channel stdev
- * under `SOLID_FILL_STDEV_EPSILON`), `fully-transparent` (alpha max 0) and `near-empty` (greyscale
- * entropy under `NEAR_EMPTY_ENTROPY_FLOOR`), except when a non-opaque alpha channel carries a
- * substantial silhouette itself. Deliberately NOT a quality judge: a legitimately dark or minimalist
- * render keeps real per-channel variance and is accepted. `ok` is three-valued —
- * `true`/`false`/`null`, where `null` means could-not-measure (undecodable buffer, or under
- * `MIN_JUDGEABLE_PIXELS`) and must never read as degenerate; gate on `isDegenerateFrame(stats)` / `ok
- * === false`, never `!ok`. Called by the Image Gen provider completion seams, sprite reference
- * normalization, and `visionTest.js` (so a paid vision call is never spent on a blank frame). A
- * **buffer** verdict is memoized on the sha256 of its bytes (#6004) — the probe costs ~4ms regardless
- * of pixel count and the sprite compiler re-probes identical frames dozens of times per run; a
- * **path** is never memoized (the file behind it can change), so hand it bytes you already read.
- * `stats-unavailable` is never memoized either — that branch catches transient probe failures too, and
- * pinning `ok: null` on valid bytes would disable the gate for them. `__resetFrameStatsCache()` drops
- * the memo in tests.
- *
  * PortOS validates that a generated image *decodes*, never that it has
  * *content*. A decodable but degenerate frame — a solid-black render from a
  * local run that produced nothing, a fully-transparent sheet from a failed

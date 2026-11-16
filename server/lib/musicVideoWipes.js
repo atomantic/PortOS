@@ -2,15 +2,6 @@
  * Music-video wipe transitions between shots, defined per style as expression trees (shape, pattern,
  * move) with compilation helpers for rendering the outgoing-under-incoming blend.
  *
- * Music Video wipes: image-to-image transitions on a cut (`scene.wipeIn`/`wipeOut`: shape, pattern and
- * move styles, a length and a shape's edge color) where the outgoing shot holds under the incoming
- * one. One definition per style as an expression tree: `compileWipeNode` (JavaScript),
- * `wipeDefinition`, `wipeCuts` (the render's cuts), `musicVideoWipeFilter` (low-res `geq` masks and
- * maps scaled up for the final render), `musicVideoWipeHeldMask` (where a painted wipe frame still
- * shows the outgoing shot, for grading a captured document), `createMusicVideoWipePainter` /
- * `musicVideoWipeRuntime` (canvas painter for the animatic and composition documents) and `varyWipes`
- * (a non-repeating run). Browser-safe.
- *
  * Music Video wipes: image-to-image transitions on a cut between two shots,
  * where the outgoing picture stays on screen while the incoming one takes over
  * (an iris, a heart, venetian blinds, a push, a DVE card flip...). A wipe never

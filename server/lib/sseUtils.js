@@ -1,16 +1,5 @@
 // Shared helpers for the per-job SSE streams used by imageGen/local.js and videoGen/local.js.
 //
-// Per-job SSE stream helpers (imageGen + others) plus `createSseRunner` — the shared batch-runner
-// lifecycle (runs map, terminal-frame replay, cancel, fire-and-forget coordinator) used by the
-// pipeline completeness/analysis/checks runners. `dispatchTerminalEvent(jobId, sseSend, emitEvent)` —
-// dispatches a job's terminal SSE frame and its lifecycle event independently, each in its own
-// try/catch, so a throw in one (a dead client's `res.write`, a throwing listener) can't suppress the
-// other. `createJobFailureFinalizer({ jobs, activeJobs, activeSlots, label, events, failedPayload? })`
-// — the shared job-failure finalizer (idempotency guard w/ `force` escape hatch, slot-owner clear,
-// `dispatchTerminalEvent`-backed SSE error frame + `failed` event, `closeJobAfterDelay`, plus a
-// `.canceled(job, jobId, slotOwner?)` convenience) behind all six media-generation backends
-// (`imageGen/{agy,codex,grok}.js`, `videoGen/{grok,fal,reactor}.js`).
-//
 // Both providers attach a list of `res` clients to a per-jobId record and broadcast diffuser progress
 // as SSE frames; this module keeps the wire format and the response headers in one place.
 //

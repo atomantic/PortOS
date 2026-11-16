@@ -1,22 +1,5 @@
 // Pure helpers for the Editorial Checks page (`/pipeline/editorial-checks`, #1285):
 // `groupChecksByScope(checks)` buckets catalog rows into ordered Noun/Scene/Issue/Series sections.
-//
-// `groupFindingsByCheck(comments, rowsById)` groups check-sourced review comments per check with
-// open/total + severity counts; `openFindingsTotal(groups)` sums open findings;
-// `findingManuscriptLink(seriesId, comment)` builds the `?comment=` deep-link into the manuscript
-// editor; the triage filter/sort helpers (#1600) `deriveFindingFacets(groups)` (enumerate present
-// severities/statuses/scopes/checks/issues), `applyFindingsView(groups, filters, sort)` (filter +
-// recount + sort findings and groups), `normalizeFindingSort`, `findingIssueKey`, and the
-// `FINDING_SORT_OPTIONS` table; the per-check maturity/quality helpers (#1629)
-// `checkDismissalRate(group)` and `checkMaturity(group)` (→ `{ findings, dismissalRate,
-// falsePositiveRate, level }`, `level` ∈ new/unproven/noisy/reliable) plus the
-// `CHECK_MATURITY_MIN_SAMPLE`/`CHECK_NOISY_DISMISSAL_RATE` thresholds; plus `scopeLabel` and the
-// `CHECK_SCOPE_ORDER`/`CHECK_SCOPE_LABELS` tables. No React/window — the page and its tests share
-// them.
-//
-// Pure helpers for the Editorial Checks page (#1285) — catalog grouping,
-// findings triage grouping, and manuscript deep-link building. No React, no
-// window: the page component and its unit tests both consume these.
 import { descriptorForCanonEntry } from './canonPrompt.js';
 import { escapeRegExp } from './textUtils.js';
 

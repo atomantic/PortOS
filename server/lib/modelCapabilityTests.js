@@ -1,19 +1,6 @@
 /**
  * Capability test catalog and scoring — pure.
  *
- * Catalog + scoring for the CAPABILITY tests on `/models/performance` (run by
- * `services/modelCapabilityTests.js`): `CAPABILITY_TESTS` (sandbox repair / image analysis / story
- * outline / fiction scene / rhetoric evaluator, each gated on the capability badges the install
- * catalog already shows), `applicabilityFor` + `applicableTests` (`applicable` / `not-applicable` /
- * `unknown` — an UNCLAIMED capability is never a failure, and `null` capabilities mean the runtime
- * reported none, which is distinct from `[]`), `scoreKeywords` + `VISION_FIXTURE_KEYWORDS` (required
- * vs bonus terms, word-boundary matched with a negation guard so "no dog" doesn't score a dog),
- * `scoreStoryBeats` + `HEROS_JOURNEY_BEATS` (coverage AND ordering, judged only over the beats
- * present), `scoreSandboxRepair` (verdict from observed disk facts — editing the test instead of the
- * module fails outright), `formatAgentEvent` (one agent stream frame → a transcript line),
- * `rollUpVerdict`, and the verbatim `CAPABILITY_TEST_PROMPTS` / `SANDBOX_TASK_PROMPT` the consent gate
- * shows. Pure, so any stored transcript can be re-scored with no provider call.
- *
  * The Performance page answers "how FAST is this model here". This module backs
  * the other half: "can it actually DO the thing its badges claim". Each test is
  * bound to the capability badges the install catalog already shows

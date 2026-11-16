@@ -1,17 +1,6 @@
 /**
  * `CREATIVE_LIBRARIES` defining the Casting, Environments and Objects pages as catalog views, with
  * `libraryById`, `libraryForType` and `libraryForPathname` lookups.
- *
- * `CREATIVE_LIBRARIES` — the Casting / Environments / Objects pages as views over the catalog's
- * character / place / object ingredients, with `libraryById` / `libraryForType` /
- * `libraryForPathname`, `ingredientPath(ingredient)` (library detail route, else
- * `/catalog/:type/:id`), `ingredientCoverUrl(ingredient)` (attached media, else the canon
- * starred/first render, both under `/data/images`) `usageSummary(usage)` ("1 universe · 2 videos" from
- * the list endpoint's link counts), per-library `detailTabs` with `resolveDetailTab` / `detailTabPath`
- * (record page sections at `/casting/:id/:tab`), media-role predicates `isSheetMedia` / `isPlateMedia`
- * / `isDesignMedia` / `isPhotorealMedia` (`photoreal:*`, Photoreal tab) / `isReferenceTabMedia(m,
- * liveLookIds?)` (`sheet:*`, `plate`, `design:*`, `look:*`; a look whose wardrobe is gone counts as a
- * reference), `isGoodReference(m)` and `lookIdOf(m)`.
  */
 
 import { Sparkles, Drama, Mountain, Package } from 'lucide-react';

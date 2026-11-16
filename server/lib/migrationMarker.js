@@ -1,11 +1,6 @@
 /**
  * Shared marker-file helpers for one-time migration / repair / reconcile scripts.
  *
- * Shared marker-file helpers for one-time migration/repair/reconcile scripts —
- * `markerExists(filename)` (boolean gate), `readMarker(filename)` (parsed payload or null),
- * `writeMarker(filename, payload)` (atomic write). All anchor `filename` under `PATHS.data` and use
- * `tryReadFile`/`atomicWrite` so a crash can't leave a truncated marker.
- *
  * ~11 boot-time scripts under server/scripts/ gate their idempotent walk on a
  * small JSON "applied" / "migrated" marker under data/. They used to hand-roll
  * three near-identical helpers each — `markerExists` / `readMarker` /

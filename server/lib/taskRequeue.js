@@ -2,13 +2,6 @@
  * The REQUEUE stamp (#3376) — pure metadata helpers for the one backward step in
  * the CoS task lifecycle.
  *
- * The REQUEUE stamp (#3376) — pure metadata helpers for the one BACKWARD lifecycle step (`in_progress
- * → pending`, performed by the orphan sweep and the retry-hold release). `REQUEUED_AT_KEY` /
- * `LAST_SPAWNED_AT_KEY` name the two stamps; `isPostSpawnRequeue(pendingTask, inProgressTask)` answers
- * whether the requeue happened strictly AFTER that spawn, which is how the federated merge tells a
- * real requeue apart from an ordinary edit landing on a peer's stale `pending` copy. Returns false
- * when either stamp is missing, so callers fall back to the lifecycle rank.
- *
  * A task normally advances `pending → in_progress → (challenged) → terminal`, and
  * the federated merge leans on that (higher status = newer truth). Two paths move
  * it BACKWARD on purpose: the orphan sweep's requeue (`handleOrphanedTask`) and

@@ -2,19 +2,6 @@
  * Tell a PERMANENT `gh` no-access failure apart from a transient one, and log it
  * at most once per scope+repo.
  *
- * `isForgeNoAccessError(err)` / `isForgeNoAccessMessage(text)` / `logForgeNoAccessOnce(scope,
- * repoSpec, detail)` / `forgeNoAccessRemedy(repoSpec)` — tells a PERMANENT `gh` no-access 404 (`Could
- * not resolve to a Repository`, `HTTP 404`) apart from a transient blip. `execGh` stamps `ghNoAccess`
- * on the rejection and keeps it OUT of the consecutive-failure backoff (which caps at 15 min and then
- * re-fires forever), and the polling jobs (`branchReconcile`, `prWatcher`) narrate it exactly once per
- * scope+repo per process with a remedy line instead of once per tick. `__resetForgeNoAccessLog()` is
- * the test seam. The same file classifies a MISSING OAuth scope (`parseForgeMissingScopes(text)` /
- * `forgeMissingScopesOf(err)` — GraphQL ``without `workflow` scope``, REST `needs the "x" scope`, gh's
- * `missing required scopes [x]`; never `Resource not accessible by integration`): `execGh` stamps
- * `ghMissingScopes` and keeps it out of backoff, `forgeScopeRefreshCommand(host, scopes)` builds the
- * hand-run `gh auth refresh` fix, and `REFRESHABLE_FORGE_SCOPES` is the closed set PortOS will drive
- * itself (`services/forgeScopeRefresh.js`).
- *
  * `Could not resolve to a Repository` is GitHub's 404-for-no-access: the repo
  * exists, the credential in use cannot see it. That does not heal on its own the
  * way a network blip or a rate limit does — it stays broken until the credential

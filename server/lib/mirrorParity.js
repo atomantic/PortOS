@@ -1,15 +1,6 @@
 /**
  * Shared source-comparison helpers for server↔client "mirror" parity tests.
  *
- * Source-extraction and comparison primitives for declaration-level contract tests: the vendored
- * `aiToolkit/` copy of `TOOL_USE_RE` (`localModelHeuristics.mirror.test.js`), and the bootstrap
- * sequence's body assertions (`bootstrap*.test.js`). A pure module the browser needs is imported by
- * the client rather than mirrored, so no client↔server copy test should need these:
- * `stripCommentsAndNormalize` (so per-side commentary may diverge but logic may not),
- * `extractDeclaration(src, name)` (balanced `{}`/`()`/`[]` walk over `function` / `async function` /
- * `const`), and `compareDeclaration(serverSrc, clientSrc, name)`. Use these instead of hand-rolling a
- * brace-walker per mirror. Pure — no `vitest` import — so callers own the assertions.
- *
  * A shared PURE module is imported, not copied — the client re-exports the
  * `server/lib` leaf (see "One pure module, one definition" in
  * client/src/lib/README.md), so it needs no parity test at all. What is left are

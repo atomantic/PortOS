@@ -2,14 +2,6 @@
  * Fit to song — places a storyboard's beats on a music video's analyzed song and turns each panel into
  * a shot.
  *
- * Fit to song: `fitStoryboardToSong` places a storyboard's beats on a music video's analyzed song
- * (snapped to sections, sung lines or downbeats; picked starts win) and returns one shot per panel
- * with its `panelId`/`panelRev`; `storyboardFitSong` reads the song from a project;
- * `storyboardPanelRev` fingerprints a panel, `storyboardPanelArt` gives its selected art as a gallery
- * image (the shot's frame reference), and `storyboardShotPanel` reads a fitted shot's panel as
- * current, changed or missing; `storyboardPreludeShotSec` is a before-the-song panel's shot length;
- * `STORYBOARD_FIT_MIN_SHOT_SEC`. Shared by the Plan step preview and the write. Browser-safe.
- *
  * Shared by the Plan step's preview (in the browser) and the write (on the server), so the shots
  * written are the ones previewed.
  *

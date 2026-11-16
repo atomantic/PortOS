@@ -2,15 +2,6 @@
  * Client mirror of the image-to-3D unavailable-reason labels in
  * `server/services/imageTo3d/targets.js`.
  *
- * Client mirror of the image-to-3D unavailable-reason labels in
- * `server/services/imageTo3d/targets.js`: `UNAVAILABLE_REASONS` (reason code → user-facing label),
- * `UNAVAILABLE_REASON_FALLBACK`, and `unavailableReasonLabel(code, fallback?)`, plus
- * `isTargetReady(target)` — the shared readiness predicate (`installed` is tri-state: `null` = a
- * hosted lane with no install concept, ready as soon as it is available). Use these anywhere a
- * target's `unavailableReason` or readiness is rendered — never re-declare the codes or re-derive
- * readiness from `target.installed` truthiness. Parity + code coverage enforced by
- * `server/services/imageTo3d/unavailableReasons.parity.test.js`.
- *
  * The server registry returns stable kebab-case reason codes (`requires-cuda`, `cuda-probe-failed`, …)
  * on every target it reports as unavailable; this is the label side the UI renders.
  *

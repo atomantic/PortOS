@@ -1,17 +1,6 @@
 /**
  * LoRA training dataset — pure helpers (no I/O, no service imports).
  *
- * Pure helpers for character LoRA training datasets (`data/lora-datasets/`): `sanitizeLoraDataset`
- * (collectionStore sanitizer), `deriveTriggerWord` (name → single-token slug with collision suffix),
- * `prefixCaption` (idempotent trigger-word prefixing), `buildVariationMatrix` (deterministic
- * view/pose/expression/outfit tuples for batch generation), `computeDatasetReadiness` (trainable gate:
- * ≥`MIN_TRAINING_IMAGES` ready+captioned images, plus an advisory `recommended`/`quality` tier via
- * `datasetQualityTier` nudging toward `RECOMMENDED_TRAINING_IMAGES`), `analyzeCaptionInvariants`
- * (flags identity fragments repeated across ≥`INVARIANT_SHARE_THRESHOLD` of captions — those bind to
- * the caption phrases instead of the trigger token, issue #1320) + `stripSharedFragments` (rewrite one
- * caption with those fragments removed, trigger preserved). Prompt building + I/O live in
- * `services/loraDatasetGenerate.js` / `services/loraDatasets.js`.
- *
  * A dataset is the curated set of captioned reference images for ONE
  * universe bible subject, stored machine-locally at
  * `data/lora-datasets/<id>/index.json` (+ `images/*.png`) via

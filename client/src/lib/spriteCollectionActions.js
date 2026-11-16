@@ -1,19 +1,6 @@
 /**
  * Sprite asset-collection action resolvers (#2931).
  *
- * Gating for the Sprite Manager asset collection's inline actions (#2931). `buildCollectionActions({
- * detail, walkPending, referencePending, generateWalk, generateAnchor, onRequestTrim })` → `{
- * regenerateFor(asset), trimFor(asset) }`, each returning `null` for an asset it can't act on.
- * Regenerate mirrors the authoritative workflow surfaces exactly — a walk direction is regenerable
- * only when its anchor is locked, the direction isn't approved, the walk set isn't finalized and no
- * render is in flight; a reference anchor only while it's an unlocked candidate (`south`/main is
- * excluded, since it needs a design prompt or upload). Trim is offered only for a run that actually
- * packed a strip (the trim endpoint 409s otherwise). Each actionable regenerate also names the
- * `correctionKey` (#3134) the card binds its inline correction note to — `walk:<dir>` for a walk
- * output, the bare direction for an anchor — so the card can never write a still-image note into a
- * video re-roll. Pure — takes callbacks, performs no I/O. Consumes the facets from `spriteFacets.js`
- * and the key vocabulary from `spriteCorrections.js`.
- *
  * Decides, for one classified asset row, whether the collection card gets a
  * **Regenerate** button (and whether it is enabled) and an **Edit in Loop
  * Trimmer** button. Split out of the page so the gating — which is the whole

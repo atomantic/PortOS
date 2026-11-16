@@ -1,19 +1,6 @@
 /**
  * Timezone utilities for scheduling
  *
- * Timezone utilities for scheduling. `getLocalParts(utcDate, timezone)` / `getUtcOffsetMs(utcDate,
- * timezone)` are the primitives; `nextLocalTime(afterMs, hours, minutes, timezone)` finds the next UTC
- * instant matching a local HH:MM; `addLocalDays(ms, days, timezone)` moves an instant by whole local
- * calendar days keeping its local HH:MM across DST (never add `days * 24h`).
- * `anchorLocalMidnightUtc(dayStr, tz)` resolves the first UTC instant belonging to a local date,
- * including zones whose DST transition skips 00:00; `localDayWindowUtc(timezone, atDate?)` exposes an
- * inclusive ISO-string window, while `localDayRangeUtc(dateStr, timezone)` returns a validated
- * half-open `{ start, end }` `Date` pair ending at the next local-date boundary so 23h/25h transition
- * days remain exact. Also owns `HHMM_RE`/`HHMM_STRICT_RE`, `parseHHMM`, `dailyCronFromHHMM(time)` (the
- * one strict "HH:MM" → `"M H * * *"` conversion every daily-reminder scheduler registers through, null
- * on malformed input so the caller cancels rather than firing in some other slot), and
- * `isWithinTimeWindow` (mirrored client-side in `client/src/utils/timeWindow.js`).
- *
  * All scheduling runs in the user's configured timezone.
  * The server process uses TZ=UTC, so all Date operations are UTC internally.
  * These helpers convert between UTC and the user's local timezone.

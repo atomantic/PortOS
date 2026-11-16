@@ -1,19 +1,6 @@
 /**
  * Parsers for coding-agent harness output: `parseHarnessVersion` extracts a semver from a version
  * banner and `compareHarnessVersions` compares versions null-safely.
- *
- * Parsers for what a coding-agent HARNESS prints about itself: `parseHarnessVersion(stdout)` (the one
- * semver run in a `--version` banner, `null` when unparseable), `compareHarnessVersions(a, b)` (the
- * null-guarding wrapper around `versionUtils.js#compareSemver` — `null` when either side is
- * unparseable, so a version that did not parse never reads as "out of date"),
- * `parseHarnessModels(harnessId, stdout)` + `HARNESS_MODEL_PARSER_IDS` (OpenCode's `provider/model`
- * lines and Grok's bulleted list are parsed here; Antigravity and Cursor DELEGATE to
- * `antigravity.js#parseAntigravityModelList` / `aiToolkit/internal/cursor.js#parseCursorModelList`,
- * which the provider-card refresh has used for far longer), `MAX_MODELS`, and `parseNpmLatestVersion`.
- * Pure: the service layer runs the child and hands the captured stdout here, so the vendor output
- * shapes are pinned by table-driven tests instead of by running six real binaries in CI. Model ids
- * come back in the exact spelling `--model` takes — namespaces kept where the vendor keeps them.
- * Consumed by `services/providerRuntimeInstaller.js` and `services/harnesses.js`.
  */
 
 import { parsePiModelList } from './aiToolkit/internal/pi.js';

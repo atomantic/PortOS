@@ -2,10 +2,6 @@
  * Pure voice-echo detection helpers — tokenization, trigram building, thresholds shared by server and
  * client echo gates.
  *
- * Pure voice-echo detection helpers — tokenization, trigram building, and
- * thresholds shared between server echo filtering (`server/services/voice/echo.js`)
- * and client STT echo cancellation (`client/src/services/voiceClient.js`).
- *
  * Both implementations apply the same algorithm:
  *   1. Length gate: utterances shorter than MIN_TOKENS_FOR_ECHO_CHECK words
  *      are NEVER classified as echo (preserves user interrupts).

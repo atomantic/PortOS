@@ -1,11 +1,6 @@
 /**
  * `renderOrPrependSection(prompt, token, heading, block)` replaces a template token with a block, or
  * prepends it with a heading when the token is absent.
- *
- * `renderOrPrependSection(prompt, token, heading, block)` — replace a token in a prompt template (with
- * a function replacer for `$` safety), or prepend the block with an optional heading when the token is
- * absent; a fallback for customized prompts that dropped the token. Shared by the CoS user-action
- * section renderers.
  */
 
 import { escapeRegExp } from './textUtils.js';

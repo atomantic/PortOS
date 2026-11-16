@@ -2,14 +2,6 @@
  * Beeper message bodies: entity decoding, and the small HTML subset some
  * networks deliver (fork issue #1, final live pass).
  *
- * Beeper message bodies: `decodeHtmlEntities` (the five predefined entities plus `&nbsp;`, using the
- * shared `server/lib/xmlEntities.js` decoder), `looksLikeHtmlBody`, `parseMessageBody(body)` → blocks
- * of marked spans (`p`/`div`/`br`/`blockquote`/`strong`/`b`/`em`/`i`/`a[href]`, `null` when the body
- * carries none of them) and `messagePreviewText(body)` for the one-line rail row. Some networks
- * deliver HTML (Discord, Matrix) and the mirror stores it verbatim, so the thread and the preview
- * parse it into a data model and render React elements — never `dangerouslySetInnerHTML`; a
- * non-http(s) `href` degrades to plain text.
- *
  * Beeper hands PortOS a message body verbatim, and on a real install 26% of
  * them are HTML — Discord and Matrix mostly, with paragraphs, line breaks,
  * blockquotes, bold, italic and links. `normalizeMessageRow` persists that

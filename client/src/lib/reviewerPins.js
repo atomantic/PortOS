@@ -1,17 +1,6 @@
 /**
  * Client mirror of the reviewer vocabulary: `REVIEWER_VALUES`, aliases, defaults,
  * `normalizeReviewers`, and `resolveTaskOptionalReviewers`.
- *
- * Client mirror of the whole reviewer vocabulary — the roster (`REVIEWER_VALUES`), `REVIEWER_ALIASES`,
- * `DEFAULT_REVIEWER(S)`, `normalizeReviewers`, `resolveTaskOptionalReviewers` (a task's `~opt` set
- * scoped to the reviewers it pins), the review-username pattern/cap (`MAX_REVIEW_USERNAMES` /
- * `cleanReviewUsername` / `normalizeReviewUsernames`), `MAX_REVIEWER_MAX_ROUNDS`, `REVIEW_STOP_MODES`
- * / `DEFAULT_REVIEW_STOP_MODE`, plus the per-reviewer pin vocabularies (`MODEL_SELECTABLE_REVIEWERS` /
- * `EFFORT_SELECTABLE_REVIEWERS` / `REVIEWER_EFFORT_LEVELS` / `reviewerEffortLevels` /
- * `normalizeReviewerSlug` / `sanitizeReviewerModelInput`) and their bounds. Dependency-free on
- * purpose: the server suite imports it to pin the mirror against `server/lib/reviewerConfig.js`, so it
- * must not reach for a client-only package. Re-exported by `components/cos/constants.js`.
- * `isProviderReviewer` recognizes the shared `provider:<id>` identity alongside legacy harness slugs.
  */
 
 import {

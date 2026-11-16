@@ -2,15 +2,6 @@
  * The previz timeline: one story clock for a music video set in a world map (lib/worldMap.js), so the
  * people's whole journey is simulated over story time and shots later sample moments of it.
  *
- * The previz timeline (`project.previz.timeline`): a story clock (`startClock`, `lengthMin`) over any
- * stretch of time and beats (stay at a world set, or travel between two along the paths on foot at
- * walk or run pace, or by a vehicle: a cast object listed in `previz.vehicles` with its own speed)
- * that simulate each person's whole journey over the world map. `timelineActorsAt` (where everyone is
- * at a story minute, travelling the shortest way over the path network),
- * `draftTimelineFromShots(project, world, { placeOfShot, newId })` (stays in shot order joined by
- * travels), `timelineBeatProblems`, `timelineClockAt`, `timelineMinuteOfClock`, `previzVehicles`,
- * `suggestPrevizVehicles` and `previzVehicleInText`. Pure, browser-safe.
- *
  * It can span any stretch of time: an evening, a day, several days.
  *
  * `project.previz.timeline` is `{ startClock, lengthMin, beats: [...] }`:

@@ -2,14 +2,6 @@
  * Path containment and canonicalization — the questions "is this path inside
  * that directory" and "what path would the filesystem really act on".
  *
- * Dependency-free leaf holding `isPathAtOrInsideDir(dir, path)` (containment where the root itself
- * counts as inside — what a guard policing a whole tree wants, as opposed to `pathSafety.js`'s strict
- * `isPathInsideDir`; case-folded on Windows/macOS) and `canonicalizePath(path)` (realpath of the
- * deepest EXISTING ancestor plus the not-yet-created tail, so a target that does not exist yet still
- * resolves through symlinked ancestors). Split out so `fileCore.js`'s #6176 guard can reach them
- * without dragging `errorHandler.js`/`paths.js` into the closure of every server suite — see the
- * budget in `importScoping.test.js`. Keep it free of non-builtin imports.
- *
  * A dependency-free LEAF on purpose. The #6176 data-root guard reaches these
  * from `fileCore.js`, which essentially every server suite imports — taking
  * them from `pathSafety.js` instead would drag `errorHandler.js` and `paths.js`
