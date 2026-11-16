@@ -42,6 +42,7 @@ import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { updateClaimOwnership } from './cosClaimOwnership.js';
+import { getTaskDurationEstimate } from './taskLearning.js';
 
 const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
@@ -232,12 +233,11 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       ? planLocalPromptBudget({
         prompt,
         endpoint: localEndpoint,
-        baseDurationMs: await import('./taskLearning.js')
-          .then((tl) => tl.getTaskDurationEstimate(task.description, {
+        baseDurationMs: await getTaskDurationEstimate(task.description, {
             providerId: provider.id,
             model: selectedModel,
             effort: taskEffort,
-          }))
+          })
           .then((estimate) => estimate?.estimatedDurationMs ?? null)
           .catch(() => null),
       })

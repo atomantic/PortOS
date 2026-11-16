@@ -67,6 +67,7 @@ import { safeJSONLParse } from '../lib/jsonIo.js';
 import { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
 import { PATHS } from '../lib/paths.js';
 import { getAIToolkitInstance } from '../lib/aiToolkitState.js';
+import { createProviderService } from '../lib/aiToolkit/providers.js'
 
 export const REVIEWER_PAUSE_MS = 24 * 60 * 60 * 1000
 const QUOTA_FAILURE = /quota|rate.?limit|usage.?limit|too many requests|\b(?:HTTP(?:\/[\d.]+)?|status[_ ]?code|status|code|error)\W{0,3}(?:429|402)\b|payment required|limit for the day|daily.?limit|session.?limit|plan.?limit|free.?limit|free.?tier|FreeTierError|err_free_used|allowance is used up|is used up|top up your balance|wallet billing|out of credits|credit balance (?:is )?too low|insufficient.?(?:credits|funds|balance)|exceeded (?:your )?(?:daily |current )?(?:quota|limit|allowance)|upgrade (?:your )?subscription|Upgrade to Pro/i
@@ -937,9 +938,7 @@ async function loadReviewProvider(backend) {
   // provider-store reader there without starting a server or creating runners.
   return getAIToolkitInstance()
     ? await getProviderById(providerId)
-    : await import('../lib/aiToolkit/providers.js').then(async ({ createProviderService }) => {
-      return createProviderService({ dataDir: PATHS.data }).getProviderById(providerId)
-    })
+    : await createProviderService({ dataDir: PATHS.data }).getProviderById(providerId)
 }
 
 // A rejected reviewer call never reaches the verdict parser. An execution-options

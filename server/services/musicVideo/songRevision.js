@@ -7,12 +7,13 @@ import { applyProjectPatch, addScenes } from './projectsLogic.js';
 import { parseLyricCues } from './timedText.js';
 import { musicVideoEvents } from './events.js';
 import { diffLyricLines, songBaseline, remapSongTimeline, remapStoryboardShots } from './songRemap.js';
+import { getTrack } from '../tracks/index.js';
 
 const inflight = new Map();
 const fail = (message, code = 'SONG_REVISION_CONFLICT') => { throw new ServerError(message, { status: 409, code }); };
 const defaults = {
   generate: async (...args) => (await import('./autonomousSuno.js')).generateSunoSong(...args),
-  getTrack: async (...args) => (await import('../tracks/index.js')).getTrack(...args),
+  getTrack: async (...args) => getTrack(...args),
   cloneProject,
   proposeShotRevisions: async (...args) => (await import('./planner.js')).proposeShotRevisions(...args),
   startRetime: async (id) => (await import('./lyricAlignJob.js')).startLyricAlign(id, { retimeSong: true }),
