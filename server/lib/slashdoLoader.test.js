@@ -80,12 +80,14 @@ describe.skipIf(!hasSubmodule)('slashdo rendering adapter', () => {
     expect(body.indexOf('## Select the Project Release Procedure')).toBeGreaterThanOrEqual(0);
     expect(body.indexOf('## Select the Project Release Procedure')).toBeLessThan(body.indexOf('## Detect Release Workflow'));
     expect(body).toContain('temporary `release/vX.Y.Z` branch into `main`');
-    expect(body).toContain('automation owns tag creation for this project');
-    expect(body).toContain('never pre-create it here');
+    // The documented-delivery procedure is a deferred read, staged beside the entrypoint.
+    const delivery = readFileSync(join(dirname(staged), 'lib/release-documented.md'), 'utf8').replace(/\s+/g, ' ');
+    expect(delivery).toContain('When automation creates the tag or release, wait for it; do not pre-create its tag');
     expect(body).toContain('wins over the generic promotion recipe below');
     expect(body).toContain('`~opt` exclusion');
     expect(body).toContain('`capped` vs `guardrail`');
     expect(body).toContain('apply its verdict as-is');
+    expect(readFileSync(join(dirname(staged), 'lib/local-cli-runner.sh'), 'utf8')).toContain('launch');
   });
 
   it('keeps inline reviewer recipes limited to explicit reads', async () => {
