@@ -1,34 +1,20 @@
 /**
- * One-time importer: data/settings.json `catalogUserTypes` → PostgreSQL
- * (catalog_user_types), for Phase 4 lead-in / issue #1001.
+ * One-time importer: data/settings.json `catalogUserTypes` → PostgreSQL (catalog_user_types), #1001.
+ * Runs on the first PG-backed access (services/catalogUserTypes/store.js) BEFORE the boot registry
+ * warm reads any type.
  *
- * User-defined ingredient types used to live in the settings blob. As of #1001
- * they live one-row-per-type in Postgres. On the first PG-backed access (from
- * services/catalogUserTypes/store.js, BEFORE the boot registry warm reads any
- * type), this importer copies each legacy type into the table.
+ *   - The MARKER is the absence of the legacy `catalogUserTypes` key in settings.json; a fresh
+ *     install no-ops immediately.
+ *   - INSERT … ON CONFLICT (id) DO NOTHING: the DB row is authoritative, so a partial prior run is
+ *     never clobbered.
+ *   - The legacy slice is RENAMED to `catalogUserTypes_imported` (not deleted) as a recovery
+ *     source; nothing reads that key, so it can't resurrect stale types via settings:updated.
+ *   - The rename happens only after every insert succeeded, so a crash leaves the live key and
+ *     the next boot retries safely.
  *
- * Idempotency / safety:
- *   - The MARKER is the absence of the legacy `catalogUserTypes` key in
- *     settings.json. Reading settings is already cheap + done at boot, so no
- *     separate marker file is needed (unlike the CD import, whose legacy state
- *     was a standalone file). A fresh install (no key) no-ops immediately.
- *   - INSERT … ON CONFLICT (id) DO NOTHING — a type already in the table (a
- *     partial prior run that crashed before the key was renamed) is never
- *     clobbered. The DB row is authoritative once it exists.
- *   - The legacy slice is RENAMED in place to `catalogUserTypes_imported` (not
- *     deleted) so it survives as a read-only recovery source for at least one
- *     release (Phase 5 note) — mirroring the CD import's `.imported` file
- *     rename. No live consumer reads the renamed key, so it can't drift or
- *     resurrect stale types via the settings:updated registry refresh.
- *   - The rename happens AFTER all rows land, so a crash mid-import leaves the
- *     live key in place → next boot retries (ON CONFLICT DO NOTHING makes the
- *     retry safe). The key is renamed ONLY if every insert succeeded.
- *
- * NOT marker-gated via data/migrations.applied.json: that list is the
- * prompt-replace runner under scripts/migrations/ and runs before the DB gate.
- * This import must run only when Postgres is the confirmed-healthy backend, so
- * it's gated on the settings-key presence and invoked from the backend selector
- * (mirrors migrateCreativeDirectorToDB).
+ * NOT gated via data/migrations.applied.json: that list runs before the DB gate, while this must
+ * run only when Postgres is the confirmed-healthy backend (invoked from the backend selector,
+ * like migrateCreativeDirectorToDB).
  */
 
 import { query } from '../lib/db.js';
@@ -39,12 +25,8 @@ import { toPgJson } from '../lib/pgJson.js';
 const LEGACY_KEY = 'catalogUserTypes';
 const IMPORTED_KEY = 'catalogUserTypes_imported';
 
-// Remove the live legacy key, parking its value under the recovery key — but
-// NEVER overwrite an existing recovery copy. The original (pre-migration) slice
-// is the one worth keeping for a release; a later re-introduced legacy key (a
-// restore bundle / hand-edit landing after the migration already ran) is just
-// dropped, not promoted over the original recovery copy it would otherwise
-// clobber. The DB rows are authoritative regardless.
+// Park the legacy key's value under the recovery key but NEVER overwrite an existing recovery
+// copy (the original slice is the one worth keeping); a re-introduced legacy key is dropped.
 const renameLegacyAside = (cur) => {
   const { [LEGACY_KEY]: old, ...rest } = cur;
   if (rest[IMPORTED_KEY] !== undefined) return rest; // keep the original recovery copy
@@ -86,9 +68,7 @@ export async function migrateCatalogUserTypesToDB() {
     else skipped += 1;
   }
 
-  // Rename the legacy key aside AFTER all rows land (so a crash mid-import
-  // leaves the live key in place → next boot retries the idempotent import).
-  // Preserves the original recovery copy if one already exists (see helper).
+  // Rename AFTER all rows land so a crash mid-import leaves the live key and the next boot retries.
   await updateSettingsWith(renameLegacyAside);
 
   console.log(`🧩 catalog-user-types→DB import: imported ${imported} type(s) into catalog_user_types (${skipped} skipped); settings.${LEGACY_KEY} renamed to ${IMPORTED_KEY}`);

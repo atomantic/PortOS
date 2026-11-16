@@ -1,50 +1,31 @@
 /**
- * CoS Task Challenge — bounded worker↔reviewer dispute protocol (#2441)
+ * CoS Task Challenge: bounded worker-reviewer dispute protocol (#2441).
  *
- * When a review-loop reviewer REJECTS a sub-agent's work, the agent's only prior
- * outcomes were "silently fix whatever was flagged" or "get blocked" — a wrong
- * rejection (common with noisy local/CLI reviewers) burned budget on an unneeded
- * fix or false-blocked good work. This module is the safety primitive for the
- * alternative: a worker may DISPUTE a rejection exactly once per task, parking it
- * in the `challenged` status with its full case attached, and the dispute either
- * resolves back to work (`upheld`) or escalates to the single PortOS user
- * (`escalated`) — never an unbounded fix/challenge loop.
+ * A worker may DISPUTE a review-loop rejection exactly once per task, parking it in `challenged` status with
+ * its case attached; it resolves back to work (`upheld`) or escalates to the single PortOS user (`escalated`),
+ * never an unbounded fix/challenge loop. `canChallenge` refuses a second dispute and shares the retry budget.
  *
- * Bounded by design (Conductor's challenge protocol shares the retry budget so an
- * agent can't loop forever disputing): `MAX_CHALLENGES_PER_TASK` caps disputes at
- * one; `canChallenge` refuses a second. Single-user trust model — "escalate to the
- * user" = surface a decision to the one operator, not multi-actor arbitration.
+ * Pure + side-effect-free (like cosTaskClaim.js): functions take a plain task-metadata object and return a
+ * patch to merge via `cosTaskStore.updateTask`, a boolean, or a number. Persistence, the status transition and
+ * the escalation task live in cosTaskStore.js.
  *
- * Pure + side-effect-free (mirrors cosTaskClaim.js): every function operates on a
- * plain task-metadata object and returns a partial-metadata patch to merge via
- * `cosTaskStore.updateTask`, a boolean, or a number. Persistence, the status
- * transition, and the escalation task live in the caller (cosTaskStore.js).
- *
- * The challenge record round-trips the TASKS.md markdown store like any other
- * metadata (objects/numbers via the JSON sentinel — see taskParser.js), and is
- * part of the merge's content signature, so a challenge federates + converges
- * across peers with no bespoke wire field (#1712 cosTasks federation).
+ * The challenge record round-trips the TASKS.md store (JSON sentinel, see taskParser.js) and is part of the
+ * merge's content signature, so it federates across peers with no bespoke wire field (#1712).
  */
 
-// One dispute per task. Sized as a hard cap (not a knob) so the acceptance
-// contract — "a worker can dispute exactly one rejection per task; further
-// disputes are refused" — is enforced in one place.
+// Hard cap, not a knob: one dispute per task, enforced in one place.
 export const MAX_CHALLENGES_PER_TASK = 1;
 
-// Resolution outcomes. `upheld` overturns the rejection (work re-queues);
-// `escalated` hands an unresolved/failed dispute to the user rather than
-// silently fixing or blocking. Mirrored by the route enum in cosValidation.js
-// (`resolveChallengeSchema`) — a parity test keeps the two in lockstep.
+// `upheld` overturns the rejection (work re-queues); `escalated` hands the dispute to the user.
+// Mirrored by `resolveChallengeSchema` in cosValidation.js; a parity test keeps them in lockstep.
 export const CHALLENGE_OUTCOMES = Object.freeze(['upheld', 'escalated']);
 
-// The metadata keys this module owns on a task. Exported so callers/tests can
-// reason about (or strip) the challenge trio in one place.
+// The metadata keys this module owns on a task, exported so callers/tests can strip them in one place.
 export const CHALLENGE_METADATA_KEYS = Object.freeze(['challengeCount', 'challenge', 'challengeResolution']);
 
 /**
- * How many challenges a task has already consumed. Coerces the value defensively:
- * after a TASKS.md round-trip the number arrives as the string `"1"`, so parse it
- * and treat anything non-positive/unparseable as 0 ("never challenged").
+ * How many challenges a task has consumed. After a TASKS.md round-trip the number arrives as the string
+ * `"1"`, so parse it and treat non-positive/unparseable as 0.
  */
 export function getChallengeCount(metadata) {
   const raw = metadata?.challengeCount;
@@ -53,17 +34,10 @@ export function getChallengeCount(metadata) {
 }
 
 /**
- * May this task still be challenged? Bounded by BOTH the one-shot per-task cap
- * AND — when `maxTotalSpawns` is supplied — the task's shared retry budget (#2471).
- *
- * The one-shot cap (`max`) is the acceptance contract: exactly one dispute per task.
- * The retry-budget bound makes the module's "shares the retry budget so an agent
- * can't loop forever disputing" promise real: a challenge that succeeds re-queues
- * the task, so once it has burned its total-spawn budget (`totalSpawnCount` ≥
- * `maxTotalSpawns`) a further dispute is pointless — the re-queued task would only
- * be re-blocked by agentLifecycle's spawn-cap gate. Callers pass `maxTotalSpawns`
- * (the shared `MAX_TOTAL_SPAWNS` from validation.js) to opt into that bound; when
- * omitted only the one-shot cap applies, so this stays a pure, import-free module.
+ * May this task still be challenged? Bounded by the one-shot per-task cap AND, when `maxTotalSpawns` is
+ * supplied (the shared `MAX_TOTAL_SPAWNS`), the shared retry budget (#2471): a successful challenge re-queues
+ * the task, which agentLifecycle's spawn-cap gate would just re-block once the budget is spent.
+ * Omitted, only the cap applies, keeping this module pure and import-free.
  */
 export function canChallenge(metadata, { max = MAX_CHALLENGES_PER_TASK, maxTotalSpawns } = {}) {
   if (getChallengeCount(metadata) >= max) return false;
@@ -75,14 +49,9 @@ export function canChallenge(metadata, { max = MAX_CHALLENGES_PER_TASK, maxTotal
 }
 
 /**
- * Build the metadata patch that RECORDS a worker's dispute and consumes a
- * challenge slot. Increments `challengeCount`, stores the worker's case under
- * `challenge` ({ reason, evidence?, reviewer?, challengedAt }), and clears any
- * prior `challengeResolution` (undefined → updateTask strips it) so a re-dispute
- * doesn't carry a stale verdict. Merge over the task's existing metadata.
- *
- * The caller is responsible for the `canChallenge` guard + the `challenged`
- * status transition; this only shapes the metadata.
+ * Build the metadata patch that RECORDS a worker's dispute and consumes a challenge slot. Clears any prior
+ * `challengeResolution` (undefined -> updateTask strips it) so a re-dispute carries no stale verdict.
+ * The caller owns the `canChallenge` guard and the `challenged` status transition.
  */
 export function buildChallengePatch(metadata, { reason, evidence, reviewer, now = Date.now() } = {}) {
   const challenge = {
@@ -94,16 +63,14 @@ export function buildChallengePatch(metadata, { reason, evidence, reviewer, now 
   return {
     challengeCount: getChallengeCount(metadata) + 1,
     challenge,
-    // A fresh dispute is unresolved — drop any prior verdict.
+    // A fresh dispute is unresolved: drop any prior verdict.
     challengeResolution: undefined,
   };
 }
 
 /**
- * Build the metadata patch that RESOLVES a dispute. Returns null for an unknown
- * outcome so the caller can reject it. `challengeResolution` records the verdict
- * ({ outcome, resolvedAt, note?, resolvedBy? }); the caller maps the outcome to
- * the next task status (`upheld` → pending, `escalated` → blocked + user surface).
+ * Build the metadata patch that RESOLVES a dispute; `null` for an unknown outcome so the caller can reject it.
+ * The caller maps the outcome to the next status (`upheld` -> pending, `escalated` -> blocked + user surface).
  */
 export function buildChallengeResolutionPatch({ outcome, note, resolvedBy, now = Date.now() } = {}) {
   if (!CHALLENGE_OUTCOMES.includes(outcome)) return null;
@@ -118,38 +85,25 @@ export function buildChallengeResolutionPatch({ outcome, note, resolvedBy, now =
 
 /**
  * Classify a re-check reviewer's fresh findings into a resolution outcome (#2471).
- *
- * When a challenge is resolved by re-running a reviewer against the current diff
- * (rather than a human verdict), the merge-gating signal is the reviewer's
- * `## Blocking` section — a `## Recommended` finding never blocks a merge, so only a
- * surviving blocking finding sustains the original rejection. The local-LLM
- * reviewer emits the exact `No findings.` sentinel for a fully clean diff
- * (see codeReview.js CODE_REVIEW_SYSTEM_PROMPT) and a `## Blocking` header only
- * when it still has a blocking objection.
- *
- * - `upheld`   → the rejection is overturned (no blocking finding survives) → work re-queues.
- * - `escalated` → a blocking finding still stands → surface the dispute to the user.
- *
- * Returns `null` for unusable input (non-string / empty) so the caller can treat
- * a failed re-check as an error rather than silently escalating (or overturning)
- * on no signal — the sentinel-vs-empty rule, not `.length` truthiness.
+ * Only a `## Blocking` section gates a merge (`## Recommended` never does); the local-LLM reviewer emits the
+ * exact `No findings.` sentinel for a clean diff (codeReview.js CODE_REVIEW_SYSTEM_PROMPT).
+ *   - `upheld`: no blocking finding survives, so the rejection is overturned and work re-queues.
+ *   - `escalated`: a blocking finding still stands, so surface the dispute to the user.
+ * Returns `null` for unusable input so a failed re-check is an error, not a silent escalation/overturn on no signal.
  */
 export function classifyRecheckOutcome(findings) {
   if (typeof findings !== 'string') return null;
   const trimmed = findings.trim();
   if (!trimmed) return null;
-  // Exact clean sentinel — the diff is clean across all severities.
+  // Exact clean sentinel: the diff is clean across all severities.
   if (/^no findings\.?$/i.test(trimmed)) return 'upheld';
-  // A `## Blocking` section only sustains the rejection when it actually carries a
-  // finding. A noisy reviewer (the very case this protocol guards against) that
-  // emits a bare/empty Blocking header must NOT trigger the expensive user
-  // escalation on the header alone — require non-empty body text under it.
+  // A `## Blocking` section only sustains the rejection when it carries a finding: a noisy reviewer's bare
+  // Blocking header must NOT trigger the expensive user escalation, so require non-empty body text.
   const blockingMatch = trimmed.match(/^\s*#{1,6}\s*blocking\b[^\n]*\n?([\s\S]*)$/im);
   if (blockingMatch) {
     // Body = text after the Blocking header up to the next heading (or EOF).
     const body = blockingMatch[1].split(/^\s*#{1,6}\s/m)[0];
     if (body.trim()) return 'escalated';
   }
-  // Findings present, but nothing blocking — nothing gates the merge.
   return 'upheld';
 }

@@ -1,47 +1,29 @@
 /**
  * Creative Director — agent-deliverable gate (#4146).
  *
- * A CD `plan` / `treatment` agent's real deliverable is the HTTP PATCH its
- * prompt describes (`PATCH /api/creative-director/:id/plan` or `/treatment`),
- * NOT a commit and NOT its exit code. A non-tool-calling local model can narrate
- * a done-message, signal completion, and exit 0 having PATCHed nothing — the
- * completion hook then marked the run `completed`, the re-dispatch guard in
- * `enqueuePlannerOnce` / `advanceAfterSceneSettled` saw no in-flight run, and the
- * SAME incapable model was handed the SAME task forever. Only boot recovery ever
- * reaped it.
+ * A CD `plan` / `treatment` agent's real deliverable is the HTTP PATCH its prompt
+ * describes, not its exit code: a non-tool-calling model can exit 0 having PATCHed
+ * nothing, and the same model would be re-dispatched forever. Two pure decisions:
  *
- * This module supplies the two pure decisions that close that loop:
+ *   1. `deliverableMark` + `deliverableLanded` — a mark stamped at DISPATCH is
+ *      compared once the run settles. `plan` carries `replanRounds` because a
+ *      bounded RE-plan runs against a project that already has a plan.
+ *   2. `countConsecutiveMissedDeliverables` — the empty streak, so the caller stops
+ *      re-dispatching and surfaces a blocked stage.
  *
- *   1. `deliverableMark` + `deliverableLanded` — did the PATCH actually land
- *      during this run? A mark is stamped onto the run row at DISPATCH time
- *      (agentBridge) and compared against the project's mark once the run
- *      settles. Presence alone is not enough for `plan`: a bounded RE-plan runs
- *      against a project that already has one, so the mark carries
- *      `replanRounds` (bumped by every accepted PATCH) to tell "the planner
- *      rewrote it" from "the planner did nothing".
- *
- *   2. `countConsecutiveMissedDeliverables` — how many times in a row the stage
- *      has come back empty, so the caller can stop re-dispatching and surface a
- *      blocked stage instead of burning the provider indefinitely.
- *
- * Sentinel discipline (root AGENTS.md): `undefined` = no baseline recorded (a run
- * enqueued before this change) and `null` = recorded-and-absent are DISTINCT.
- * Collapsing them would either mis-fail every legacy run or mis-pass every empty
- * one.
+ * Sentinels: `undefined` = no baseline recorded (legacy run), `null` = recorded and
+ * absent; collapsing them mis-fails legacy runs or mis-passes empty ones.
  */
 
 import { updateRun } from './local.js';
 import { MAX_CONSECUTIVE_MISSED_DELIVERABLES } from '../../lib/creativeDirectorPresets.js';
 
-// The CD agent kinds whose deliverable is a project-record PATCH we can verify.
-// `evaluate` is deliberately absent: its deliverable is a per-scene verdict, and
-// an evaluate run that writes nothing is already reaped by the orphaned-
-// `evaluating` scene path in completionHook.
+// Kinds whose deliverable is a verifiable project-record PATCH. `evaluate` is absent:
+// its deliverable is a per-scene verdict, reaped by completionHook's orphaned-`evaluating` path.
 export const DELIVERABLE_KINDS = new Set(['plan', 'treatment']);
 
 /**
- * A comparable fingerprint of the deliverable `kind` on `project`, or `null` when
- * the deliverable is absent. Pure.
+ * A comparable fingerprint of the deliverable `kind` on `project`, or `null` when absent. Pure.
  *
  * @param {object|null} project
  * @param {string} kind — 'plan' | 'treatment'
@@ -51,9 +33,7 @@ export function deliverableMark(project, kind) {
   if (kind === 'plan') {
     const plan = project?.plan;
     if (!Array.isArray(plan?.steps)) return null;
-    // `replanRounds` is bumped by applyPlan on EVERY accepted PATCH, so it
-    // separates a rewrite from a no-op even when two plans have the same shape
-    // (and, unlike a timestamp, can't collide inside one millisecond).
+    // `replanRounds` (bumped by applyPlan on every accepted PATCH) separates a rewrite from a no-op; a timestamp could collide.
     return `plan:${plan.replanRounds ?? 0}`;
   }
   if (kind === 'treatment') {
@@ -69,30 +49,22 @@ export function deliverableMark(project, kind) {
  *
  * @param {object|null} project — the project AFTER the run settled.
  * @param {string} kind
- * @param {string|null|undefined} markBefore — the mark stamped on the run row at
- *   dispatch. `undefined` means no baseline was recorded (a run enqueued by an
- *   older build); we cannot prove a miss, so presence alone counts as landed
- *   rather than manufacturing a false failure.
+ * @param {string|null|undefined} markBefore — mark stamped at dispatch. `undefined`
+ *   means no baseline (older build): presence alone counts as landed rather than a false failure.
  */
 export function deliverableLanded(project, kind, markBefore) {
   const after = deliverableMark(project, kind);
   if (after === null) return false;
   if (markBefore === undefined) return true;
-  // An in-flight run from an older version recorded no artifact revision.
-  // Adding that suffix on read is not evidence that the run wrote anything.
+  // A run from an older version recorded no artifact revision; the suffix added on read is not evidence of a write.
   if (kind === 'treatment' && project.workspace === 'video'
       && markBefore === `treatment:${project.treatment.scenes.length}:${project.treatment.logline || ''}`) return false;
   return after !== markBefore;
 }
 
 /**
- * How many of the MOST RECENT runs of `kind` settled without their deliverable —
- * the consecutive-empty streak. Walks backwards over runs of that kind and stops
- * at the first one that either delivered or belongs to an already-closed streak.
- * Pure.
- *
- * @param {Array<object>|undefined} runs
- * @param {string} kind
+ * How many of the MOST RECENT runs of `kind` settled without their deliverable.
+ * Stops at the first that delivered or belongs to an already-closed streak. Pure.
  * @returns {number}
  */
 export function countConsecutiveMissedDeliverables(runs, kind) {
@@ -109,9 +81,7 @@ export function countConsecutiveMissedDeliverables(runs, kind) {
 
 /**
  * The streak length when the stage has exhausted its budget of consecutive empty
- * completions and must be surfaced to the user instead of re-dispatched, else 0.
- * Pure. Returns the count (not a boolean) so a caller can name the number in the
- * reason it shows the user without walking `runs` a second time.
+ * completions (to be surfaced, not re-dispatched), else 0. Pure.
  */
 export function exhaustedDeliverableStreak(runs, kind) {
   const streak = countConsecutiveMissedDeliverables(runs, kind);
@@ -119,19 +89,10 @@ export function exhaustedDeliverableStreak(runs, kind) {
 }
 
 /**
- * Stamp the current empty streak as CLOSED once the stage has been surfaced as
- * blocked. Without this the streak would still be at the bound the moment the
- * user hits Resume, so the project would re-pause immediately and stay dead even
- * after they switched to a tool-capable model. Closing it hands the next attempt
- * a fresh budget while the run ledger keeps the honest `deliverableMissing`
- * record of what happened.
- *
- * Runs outside the request lifecycle (completion hooks / event bus) — never
- * throws out.
- *
- * @param {string} projectId
- * @param {Array<object>|undefined} runs
- * @param {string} kind
+ * Stamp the current empty streak CLOSED once the stage is surfaced as blocked, so
+ * Resume (e.g. after switching model) gets a fresh budget instead of re-pausing
+ * at once; the run ledger keeps `deliverableMissing`. Runs in completion hooks,
+ * so it never throws out.
  */
 export async function closeDeliverableStreak(projectId, runs, kind) {
   if (!Array.isArray(runs)) return;
@@ -144,11 +105,7 @@ export async function closeDeliverableStreak(projectId, runs, kind) {
   }
 }
 
-/**
- * The user-facing reason shown on a project parked by the gate. Names the stage
- * and the concrete remedy (pick a tool-capable model) rather than a bare
- * "failed", so the CD failure banner is actionable.
- */
+/** The user-facing reason on a project parked by the gate; names the remedy. */
 export function blockedStageReason(kind, streak) {
   return `The ${kind} agent finished ${streak} time(s) in a row without writing a ${kind}. `
     + `The model assigned to the Creative Director "${kind}" stage is not performing the required PATCH — `

@@ -1,22 +1,18 @@
 /**
- * Scheduler registration for the Beeper attachment mirror sweep (#37).
+ * Scheduler registration for the Beeper attachment mirror sweep.
  *
- * ONE sweep does both jobs #13 asked for, because they read the same two
- * lists: the disk budget (least-recently-viewed eviction, guarded by a HEAD so
- * a file Beeper can no longer supply is never the one thrown away) and the
- * orphan backstop (a file no row points at, a row whose file is gone, an
- * abandoned `.partial`). Splitting them would mean enumerating the store
- * twice on every tick for no behavioural gain.
+ * ONE sweep does both the disk budget (least-recently-viewed eviction, guarded by
+ * a HEAD so a file Beeper can no longer supply is never the one evicted) and the
+ * orphan backstop (file with no row, row with no file, abandoned `.partial`);
+ * they read the same two lists.
  *
- * `createSweepScheduler` rather than `createSyncScheduler`: this is local
- * housekeeping over the mirror, not an ingestion pass, and it must run whether
- * or not `settings.beeper.enabled` is on — bytes already on disk still count
- * against the budget after a user turns scheduled sync off. It is gated only
- * by having a store at all: with no `data/beeper/attachments` and no rows the
- * sweep is two cheap queries and a failed `readdir`.
+ * `createSweepScheduler`, not `createSyncScheduler`: this is local housekeeping
+ * that must run even when `settings.beeper.enabled` is off, since bytes on disk
+ * still count against the budget. With no store it is two cheap queries and a
+ * failed `readdir`.
  *
- * The handler owns its rejections. A sweep runs outside the request lifecycle,
- * where an escaping rejection takes the process down (root AGENTS.md).
+ * The handler owns its rejections: an escaping rejection outside the request
+ * lifecycle takes the process down.
  */
 
 import { createSweepScheduler } from './sweepScheduler.js';

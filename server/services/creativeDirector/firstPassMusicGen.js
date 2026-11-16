@@ -1,35 +1,18 @@
 /**
- * Creative Director — first-pass music-bed generation (#1928, split from
- * #1867's portrait/video first-pass work).
+ * Creative Director — first-pass music-bed generation (#1928).
  *
- * Reuse, not a new pipeline (same constraint firstPassGen.js documents for
- * portraits). The actual generation call is the SAME generator-agnostic
- * `generateMusic` the Pipeline Audio stage already uses
- * (server/services/pipeline/musicGen.js) — this module only decides whether to
- * render, derives the prompt, and enqueues it onto the media job queue's new
- * `'audio'` kind so it runs as a background job instead of blocking the
- * auto-cast request.
- *
- * Unlike the portrait path, there is no catalog ingredient to attach the
- * result to — the issue explicitly calls this out ("no catalog-attach
- * equivalent yet"). The finished track attaches directly onto the Creative
- * Director PROJECT record's `musicBed` field via the durable
- * `creativeDirectorMusicBedHook` (mirrors catalogImageAttachHook, but for a
- * project instead of a catalog ingredient), so a render that completes after
- * the user has navigated away still lands.
+ * Decides whether to render, derives the prompt, and enqueues it on the media job
+ * queue's `'audio'` kind (generation is the Pipeline Audio stage's `generateMusic`).
+ * The track attaches to the project's `musicBed` via `creativeDirectorMusicBedHook`,
+ * so it lands even if the user navigated away.
  */
 
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { ENGINES, DEFAULT_ENGINE_ID, isEngineHealthy } from '../pipeline/musicGen.js';
 
-// First provisioned engine in ENGINES' declared order (musicgen, audioldm2,
-// acestep), so a project where only a non-default local backend is installed
-// (e.g. AudioLDM2 but not MusicGen) still gets a first-pass bed instead of
-// silently skipping on a hardcoded DEFAULT_ENGINE_ID check. Returns null when
-// nothing is provisioned.
-// Sequential on purpose: ENGINES' declared order IS the preference order, so
-// the first healthy backend wins and the rest are never probed. isEngineHealthy
-// caches its verdict, so the spawn cost is paid once per engine per process.
+// First provisioned engine in ENGINES' declared (preference) order, so a project with
+// only a non-default backend still gets a bed; null when none. Sequential on
+// purpose: the first healthy one wins and isEngineHealthy caches its verdict.
 async function firstReadyEngineId() {
   for (const id of Object.keys(ENGINES)) {
     if (await isEngineHealthy(id)) return id;
@@ -37,11 +20,8 @@ async function firstReadyEngineId() {
   return null;
 }
 
-// Keep the derived prompt bounded — a music-gen prompt is a short mood/style
-// brief, not the full treatment. Mirrors PORTRAIT_PROMPT_CHARS' "enough
-// descriptive text, not the whole payload" posture.
+// A music-gen prompt is a short mood/style brief, not the full treatment.
 export const MUSIC_BED_PROMPT_CHARS = 400;
-
 /**
  * Pure: derive a music-gen prompt for a project's first-pass bed. The project
  * name anchors the subject; the treatment logline (once auto-compose has run)
@@ -63,29 +43,21 @@ export function buildMusicBedPrompt(project) {
 }
 
 /**
- * Enqueue a first-pass music-bed render for the given project, or report why
- * it was skipped. Best-effort and self-contained — never throws, mirrors
- * enqueueFirstPassPortraits' "side-effect of auto-cast, must not fail the
- * seeding it follows" contract.
- *
- * Returns `{ mode, enqueued, jobId? , reason? }`. `mode` echoes the resolved
- * engine id (even when skipped) so the response shape stays predictable.
+ * Enqueue a first-pass music-bed render, or report why it was skipped. Never
+ * throws: it must not fail the auto-cast seeding it follows.
+ * Returns `{ mode, enqueued, jobId? , reason? }`; `mode` echoes the resolved engine.
  */
 export async function enqueueFirstPassMusicBed(project, { engine } = {}) {
   if (!project || typeof project !== 'object' || !project.id) {
     return { mode: engine || DEFAULT_ENGINE_ID, enqueued: false, reason: 'no-project' };
   }
-  // Never clobber an existing bed — re-running auto-cast with the toggle on
-  // stays idempotent, same posture as firstPassGen's portrait-exists check.
+  // Never clobber an existing bed (idempotent re-run).
   if (project.musicBed && typeof project.musicBed.filename === 'string' && project.musicBed.filename) {
     return { mode: engine || DEFAULT_ENGINE_ID, enqueued: false, reason: 'has-music-bed' };
   }
-  // Resolve the engine once the project is known to need a render. An
-  // explicit `engine` wins; otherwise prefer any provisioned local backend
-  // over assuming the default (musicgen) is the one installed.
+  // An explicit `engine` wins; otherwise prefer any provisioned local backend.
   const resolvedEngine = engine || await firstReadyEngineId() || DEFAULT_ENGINE_ID;
-  // Health, not mere presence: a half-built venv would otherwise pass this gate
-  // and the enqueued job would die at render with a Python ImportError.
+  // Health, not presence: a half-built venv would die at render with an ImportError.
   if (!await isEngineHealthy(resolvedEngine)) {
     return { mode: resolvedEngine, enqueued: false, reason: 'engine-not-ready' };
   }
@@ -98,9 +70,7 @@ export async function enqueueFirstPassMusicBed(project, { engine } = {}) {
     params: {
       prompt,
       engine: resolvedEngine,
-      // Tag the job so the durable creativeDirectorMusicBedHook files the
-      // finished track onto this project's `musicBed` field — no mounted
-      // client required.
+      // Tag so creativeDirectorMusicBedHook files the track onto `musicBed`.
       creativeDirectorMusicBed: { projectId: project.id },
     },
   });

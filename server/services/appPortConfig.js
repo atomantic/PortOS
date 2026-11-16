@@ -31,23 +31,18 @@ const LABEL_BY_KEY = { apiPort: 'api', uiPort: 'ui', devUiPort: 'devUi' };
  * @param {object} data      the validated PUT body (mutated? no — read-only here)
  */
 export async function applyEcosystemPortEdits(existing, data) {
-  // Diff the submitted ports against the ACTUAL config values (not apps.json,
-  // whose top-level fields may be stale or absent for derived ports). This is
-  // the single source of truth for both "did it change" and "what's the old
-  // literal to rewrite": EditAppModal submits every field even on a rename, so
-  // a value equal to the config's current port is a no-op echo, and a value
-  // that differs is a genuine edit to persist.
+  // Diff against the ACTUAL config values (apps.json fields may be stale). The
+  // edit modal submits every field even on a rename, so a value equal to the
+  // config's port is a no-op echo and a differing one is a genuine edit.
   const { processes: cfgProcs, portsEditable } = await parseEcosystemFromPath(existing.repoPath);
   if (portsEditable === false) {
     const changedKeys = PORT_KEYS.filter(key => Number.isInteger(data[key]) && data[key] !== existing[key]);
     return { persistFailed: changedKeys.length > 0, changedKeys, portCollision: null };
   }
-  // Attribute each label to the process that belongs to THIS app, not to
-  // whichever process declares the label first (#7357): one ecosystem config
-  // routinely describes several product surfaces, and a sibling daemon's
-  // `ports.ui` is not the app's UI port. A label with no attributable process
-  // stays undefined, which is what lets the served-by-API derivation below take
-  // over instead of the config edit landing on the sibling's literal.
+  // Attribute each label to the process belonging to THIS app, not the first
+  // declarer (#7357): a sibling daemon's `ports.ui` is not the app's UI port. An
+  // unattributable label stays undefined so the served-by-API derivation below
+  // takes over.
   const { ports: attributedPorts, processNames: procNameByLabel } = attributeProcessPorts(cfgProcs, existing);
   const currentPort = {};
   const procNameByKey = {}; // which process block owns each label (for targeted rewrites)
@@ -55,24 +50,16 @@ export async function applyEcosystemPortEdits(existing, data) {
     currentPort[key] = attributedPorts[label];
     procNameByKey[key] = procNameByLabel[label];
   }
-  // A port is "changed" when the submitted value differs from the config's
-  // current value for that label. A field the config doesn't define has no
-  // literal to rewrite, so it isn't treated as a config edit here.
+  // A field the config doesn't define has no literal to rewrite, so it isn't a config edit.
   const changedKeys = PORT_KEYS.filter(key =>
     Number.isInteger(currentPort[key]) && Number.isInteger(data[key]) && data[key] !== currentPort[key]);
 
-  // Served-by-API detection. When an app has an API process plus a Vite dev UI
-  // but no literal `ports.ui`, the prod UI is served by the API server, so the
-  // `uiPort` is *derived* (= apiPort) and CANNOT be set independently — there's
-  // no separate UI port literal in the config to rewrite. The edit drawer always
-  // submits every port field and never syncs the UI field to a changed API
-  // field, so an API-only edit arrives as `{ apiPort: <new>, uiPort: <old
-  // derived> }`. We can't distinguish that stale echo from a deliberate
-  // (impossible) independent UI change, so the only coherent behavior is to
-  // IGNORE the submitted uiPort entirely and pin the stored value to the derived
-  // port (= the post-edit API port). That tracks the API port on every save,
-  // never reverts, and never spuriously 422s the common API-edit path. The user
-  // changes this UI port by changing the API port.
+  // Served-by-API detection. With an API process plus a Vite dev UI but no literal
+  // `ports.ui`, the prod UI is served by the API, so `uiPort` is *derived*
+  // (= apiPort) and cannot be set independently. The drawer submits every field,
+  // so an API-only edit arrives as `{ apiPort: <new>, uiPort: <old derived> }`,
+  // indistinguishable from an (impossible) independent UI change. So IGNORE the
+  // submitted uiPort and pin the stored value to the post-edit API port.
   const effectiveApiPort = Number.isInteger(data.apiPort) ? data.apiPort : currentPort.apiPort;
   const derivedUiPort = deriveUiPort(undefined, effectiveApiPort, currentPort.devUiPort);
   const uiIsDerived = currentPort.uiPort === undefined && Number.isInteger(derivedUiPort);

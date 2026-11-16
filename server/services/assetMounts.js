@@ -2,17 +2,12 @@
  * The server's static asset mounts, as data, plus the terminator that stops a
  * server-owned path from being answered with the SPA index.
  *
- * `server/index.js` used to spell each `app.use('/data/…', express.static(…))`
- * out inline, so nothing could enumerate what was served without regexing the
- * source. This is the `server/lib/navManifest.js` pattern the root AGENTS.md
- * recommends for exactly that drift problem: one table, iterated by the thing
- * that mounts and read as data by the guard. The route strings themselves live
- * one level down in `assetRoutePrefixes.js`, alongside the namespaces the
- * terminator closes, so a new server prefix is one edit rather than two.
+ * One table iterated by the mounter and read as data by the guard. The route
+ * strings live in `assetRoutePrefixes.js` beside the namespaces the terminator
+ * closes, so a new server prefix is one edit.
  *
- * `dir` is a thunk, not a string: `wrWorksDir()` derives its path at call time,
- * and a test that re-roots `PATHS.data` at a temp tree needs every entry to
- * resolve after the mock, not at import.
+ * `dir` is a thunk: `wrWorksDir()` derives its path at call time, and a test that
+ * re-roots `PATHS.data` needs every entry to resolve after the mock, not at import.
  */
 import express from 'express';
 import { join } from 'path';
@@ -28,12 +23,8 @@ import { escapeRegExp } from '../lib/textUtils.js';
 import { ensureImageThumbnail } from '../lib/imageThumbnail.js';
 import { hostedAssetFallback } from './peerHostedMedia.js';
 
-// `acceptRanges: true` is the serve-static default already, but we set it
-// explicitly because the federated peer-sync receiver
-// (services/sharing/peerSync.js) background-pulls missing assets from these
-// URLs and relies on HTTP Range to resume partial downloads over flaky
-// Tailnet links — losing range support here would silently force every
-// retry to restart from byte 0 on a multi-MB PNG / video.
+// `acceptRanges` is set explicitly: the peer-sync receiver (services/sharing/peerSync.js)
+// relies on HTTP Range to resume partial asset downloads.
 const ASSET_STATIC_OPTS = {
   acceptRanges: true,
   setHeaders: (res, filePath) => {
@@ -55,20 +46,12 @@ const markDownloadRequest = (req, res, next) => {
   next();
 };
 
-// Vite names every chunk, entry, stylesheet and imported asset it emits under
-// `dist/assets/` by content hash (`index-B5J1S4I5.js`), so the bytes behind one
-// of those URLs can never change — a rebuild produces new names, and the
-// `no-cache` index.html (served by the SPA fallback in `server/index.js`) is
-// what points the browser at them. Say so with `immutable` and the one-year
-// ceiling, and the browser stops asking. Without it serve-static's default
-// `max-age=0` made every hashed chunk stale the moment it landed: measured on
-// the dashboard with no service worker (the default plain-HTTP tailnet posture,
-// where none can register), a warm page load re-sent all 186 chunks as
-// conditional GETs and got 186 `304`s back — pure round trips, at HTTP/1.1's
-// six-per-host, before the app could start. The rest of `dist/` is
-// `client/public/` copied verbatim under STABLE names (`sw.js`, `manifest.json`,
-// `fonts/`, `sky/`, `hdri/`), whose bytes do change under the same URL, so
-// those keep the default and revalidate by ETag per load.
+// Vite names everything under `dist/assets/` by content hash, so those bytes
+// never change under a URL (the `no-cache` index.html points at new names after a
+// rebuild): `immutable` plus a one-year ceiling avoids a conditional GET per chunk
+// per load. The rest of `dist/` is `client/public/` copied under STABLE names
+// (`sw.js`, `manifest.json`, `fonts/`...), whose bytes can change, so those keep
+// the default and revalidate by ETag.
 const IMMUTABLE_MAX_AGE_MS = 365 * 24 * 60 * 60 * 1000;
 const CLIENT_ASSET_STATIC_OPTS = { immutable: true, maxAge: IMMUTABLE_MAX_AGE_MS, index: false };
 
@@ -82,46 +65,25 @@ const writersRoomAssetsOnly = (req, res, next) => {
   next();
 };
 
-// Keyed by route so the mount ORDER stays owned by `ASSET_ROUTE_PREFIXES` rather
-// than being restated here. A key present here but missing there would never be
-// mounted at all — silently — so `assetMounts.test.js` pins the two together.
+// Keyed by route so the mount ORDER stays owned by `ASSET_ROUTE_PREFIXES`. A key
+// missing there would never be mounted, so `assetMounts.test.js` pins the two together.
 const ASSET_DIRS = {
   '/data/images': () => PATHS.images,
   '/data/image-thumbnails': () => PATHS.imageThumbnails,
-  // Reference images (multi-ref upload inputs + generated character reference
-  // sheets) — served read-only so the UI can render thumbnails by URL.
   '/data/image-refs': () => PATHS.imageRefs,
-  // LoRA training dataset images (lora-datasets/<id>/images/*.png).
   '/data/lora-datasets': () => PATHS.loraDatasets,
-  // Generated videos + thumbnails, so the Media UI and tailnet clients can pull
-  // them by URL without going through an explicit download route.
   '/data/videos': () => PATHS.videos,
   '/data/video-thumbnails': () => PATHS.videoThumbnails,
-  // Sprite Manager library previews (anchors, strips, atlases) render inline
-  // via <img src="/data/sprites/<id>/<rel>"> (#2895).
   '/data/sprites': () => PATHS.sprites,
-  // Image-to-3D GLB meshes (#2952) — the /3d R3F viewer loads them inline
-  // via drei useGLTF from <model.assetPath> (/data/image-to-3d/<id>/model.glb).
   '/data/image-to-3d': () => PATHS.imageTo3d,
-  // Voice-over WAVs rendered by the pipeline audio stage — the AudioStage UI
-  // pulls them inline via <audio src="/data/audio/<filename>">.
   '/data/audio': () => PATHS.audio,
   '/data/models': () => PATHS.models,
-  // Machine-local voice-profile benchmarks and managed engine artifacts. The
-  // character editor exposes benchmark WAVs only; profile metadata remains
-  // behind its authenticated API.
+  // Character editor exposes benchmark WAVs only; profile metadata stays behind
+  // its authenticated API.
   '/data/voice-profiles': () => PATHS.voiceProfiles,
-  // Background-music tracks (uploaded today, generated locally tomorrow). The
-  // AudioStage music picker plays them inline via <audio src="/data/music/...">.
   '/data/music': () => PATHS.music,
-  // Extracted third-party import assets (ChatGPT export images/audio/PDFs). The
-  // Brain Memory conversation viewer renders these inline (`![](/data/brain-
-  // imports/...)`) and as asset links. Read-only; range support for large PDFs.
   '/data/brain-imports': () => PATHS.brainImportAssets,
-  // Writers Room file-primary draft prose bodies (works/<workId>/drafts/<draftId>.md).
-  // Federation (#1565) pulls them peer→peer from this mount: a receiver that merged
-  // a work record GETs each missing body's bytes by its nested path. Read-only;
-  // range support for large drafts. (Tailnet-only per the project's threat model.)
+  // Federation pulls draft prose bodies peer→peer by nested path from this mount.
   '/data/writers-room/works': wrWorksDir,
 };
 
@@ -185,13 +147,8 @@ export const ASSET_MOUNTS = ASSET_ROUTE_PREFIXES.map((route) => ({
 }));
 
 /**
- * A `spaPaths` entry as a predicate over a REQUEST path.
- *
- * Not a string compare: an entry is a route PATTERN, and the client router's own
- * convention produces parameterized ones (`/data/:category`). Comparing literals
- * would 404 every concrete `/data/images` while the declaration sat in the list
- * looking correct — and `scripts/dev-proxy-drift.test.js` points people at this
- * list when it fails, so it has to mean what it appears to mean.
+ * A `spaPaths` entry as a predicate over a REQUEST path. An entry is a route
+ * PATTERN (`/data/:category`), so literal comparison would 404 concrete paths.
  */
 function toRouteMatcher(pattern) {
   const source = pattern
@@ -209,17 +166,12 @@ function toRouteMatcher(pattern) {
 /**
  * Mount every asset route, then close each server-owned namespace with a 404.
  *
- * The terminators are the point. The SPA fallback skips a request only when its
- * path carries a file extension (`/\.\w+$/`), so an EXTENSIONLESS server path —
- * `/data/image-to-3d/<id>/model`, or a mistyped `/api/…` — used to fall through
- * to the stamped index.html with a 200. A binary loader then parses HTML and
- * dies on a JSON syntax error naming a `<` token, nowhere near the real cause
- * (#4688); an API client gets HTML where it expects JSON, with a success
- * status. The envelope comes from `sendErrorResponse` so this 404 is the same
- * shape as every other one PortOS emits.
+ * The SPA fallback skips a request only when its path carries a file extension,
+ * so an EXTENSIONLESS server path (`/data/image-to-3d/<id>/model`, a mistyped
+ * `/api/…`) would otherwise get index.html with a 200 (#4688). The 404 uses
+ * `sendErrorResponse` for the standard envelope.
  *
- * `ownedPrefixes` defaults to the real list; a test overrides it to exercise a
- * `spaPaths` shape the app does not happen to use yet.
+ * `ownedPrefixes` is overridable so a test can exercise other `spaPaths` shapes.
  */
 export function mountAssetRoutes(app, ownedPrefixes = SERVER_OWNED_PREFIXES) {
   ASSET_MOUNTS.forEach(({ route, dir, gate }) => {
@@ -231,10 +183,8 @@ export function mountAssetRoutes(app, ownedPrefixes = SERVER_OWNED_PREFIXES) {
   ownedPrefixes.forEach(({ prefix, spaPaths }) => {
     const spaMatchers = spaPaths.map(toRouteMatcher);
     app.use(prefix, (req, res, next) => {
-      // `app.use('/data', …)` reduces the page's own request to `req.path === '/'`.
-      // The trailing slash is stripped because `express.static` 301s a directory
-      // request to one (`/data/images` → `/data/images/`), and the redirect lands
-      // back here — an entry that matched the first form would miss the second.
+      // Trailing slash stripped: `express.static` 301s a directory request to
+      // `/data/images/`, which lands back here.
       const path = (prefix + (req.path === '/' ? '' : req.path)).replace(/\/+$/, '') || prefix;
       if (spaMatchers.some((matches) => matches(path))) return next();
       return sendErrorResponse(res, new ServerError('Not found', { status: 404 }));
@@ -247,13 +197,10 @@ export function mountAssetRoutes(app, ownedPrefixes = SERVER_OWNED_PREFIXES) {
  * `CLIENT_ASSET_STATIC_OPTS`: the content-hashed `/assets/**` as immutable, and
  * everything else in `dist/` with serve-static's revalidate-per-load default.
  *
- * `index: false` on both keeps express.static from short-circuiting `/` (and
- * any bare directory) with the raw index.html — that request has to reach the
- * SPA fallback in `server/index.js`, which serves the build-id-stamped copy
- * with `Cache-Control: no-cache`. A chunk the current build no longer ships
- * (a browser reloading across a rebuild) misses both tiers and falls through
- * to that fallback's extension guard, which 404s it rather than answering with
- * HTML — the stale-chunk reload in the client relies on that 404.
+ * `index: false` keeps `/` reaching the SPA fallback in `server/index.js`, which
+ * serves the build-id-stamped index.html with `no-cache`. A chunk the current
+ * build no longer ships falls through to that fallback's extension guard, which
+ * 404s; the client's stale-chunk reload relies on that 404.
  */
 export function mountClientDist(app, distDir) {
   app.use('/assets', express.static(join(distDir, 'assets'), CLIENT_ASSET_STATIC_OPTS));

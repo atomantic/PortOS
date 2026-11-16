@@ -1,22 +1,12 @@
 /**
- * The install-local visit marker behind observation-first discovery (#7457,
- * epic #7453) — the persistence, clock, and collection shell around the pure
- * report builder in `server/lib/eidoverseObservation.js`.
+ * The install-local visit marker behind observation-first discovery (#7457, epic
+ * #7453): persistence, clock and collection around the pure report builder in
+ * `server/lib/eidoverseObservation.js`. The marker must persist because each mind
+ * wake is a new process, and the in-memory cursors do not survive that boundary.
  *
- * **Why a marker has to persist at all.** "What is new since I last looked" is
- * the stigmergic half of the slice: a mind wakes, observes, acts, and ends its
- * turn, and the next wake is a different process with no memory of the last
- * one. The in-memory things that already resemble this are not substitutes —
- * the world chat cursor lives in a 100-entry ring buffer that a restart
- * empties, and `lastOfferingListHash` in the peer sync is content-change
- * detection for a background sweep, per-peer and also in memory. Neither
- * survives a wake boundary, which is exactly the boundary this has to cross.
- *
- * Storage: `file-primary` (`data/eidoverse/observation.json`) — machine-local,
- * never federated: it records this install's own mind's behavior (machine-local
- * privacy ADR). No `data.reference/` seed or migration — an absent file (or one
- * from a newer PortOS) is the "never observed" state, distinct from an empty one:
- * a first observation reports `firstObservation: true`.
+ * Storage: `file-primary` (`data/eidoverse/observation.json`), machine-local, never
+ * federated. No seed or migration: an absent file (or one from a newer PortOS) is
+ * "never observed", reported as `firstObservation: true`.
  */
 
 import { join } from 'node:path';
@@ -29,33 +19,20 @@ import {
   buildEidoverseObservation,
 } from '../lib/eidoverseObservation.js';
 
-// Read through `PATHS` per call rather than `dataPath()`, for the same reason
-// the foundation ledger does: a suite redirects the data root by proxying this
-// module's `fileUtils` import, and `dataPath()` resolves against `paths.js`'s
-// own binding, which that proxy never sees.
+// Read through `PATHS` per call, not `dataPath()`: suites redirect the data root by proxying this module's `fileUtils` import, which `dataPath()` never sees.
 const markerFile = () => join(PATHS.data, 'eidoverse', 'observation.json');
 
-// A re-entrancy guard, NOT a defense against competing actors (AGENTS.md's
-// trust model rules those out): one turn can call `eidoverse.observe` more
-// than once, and read-marker → diff → write-marker is a read-modify-write that
-// must not interleave with itself or the second call would diff against a
-// marker the first already replaced.
+// Re-entrancy guard: one turn can call `eidoverse.observe` twice, and read-marker → diff → write-marker must not interleave.
 const withMarkerLock = createMutex();
 
 /**
- * Strict read: an `observation.json` this process cannot parse must NOT read
- * as "never observed", because the next observation would then report a whole
- * settled world as new. `strict: true` throws on unreadable bytes, while a
- * genuinely ABSENT file still reads as the `null` marker it is.
+ * Strict read: an unparseable `observation.json` must NOT read as "never observed"
+ * (the next observation would report the whole world as new); an ABSENT file is `null`.
  */
 async function readMarker() {
   const raw = await readJSONFile(markerFile(), null, { allowArray: false, strict: true });
   if (!raw || typeof raw !== 'object' || !raw.marker || typeof raw.marker !== 'object') return null;
-  // A marker written by a NEWER PortOS is not something this build can diff
-  // against safely, so it degrades to "never observed" (one honest
-  // `firstObservation`) instead of silently diffing against fields it does not
-  // understand. Older markers stay readable: every field added since is
-  // optional in the differ.
+  // A marker from a NEWER PortOS degrades to "never observed"; older markers stay readable (new fields are optional in the differ).
   if (Number(raw.marker.schemaVersion) > EIDOVERSE_OBSERVATION_SCHEMA_VERSION) return null;
   return raw.marker;
 }
@@ -65,12 +42,8 @@ async function writeMarker(marker) {
 }
 
 /**
- * The install's resolved design, so the report names the districts the world
- * actually renders. Resolving the stored recipe (rather than reaching for the
- * shipped constant) is what keeps a mind from describing a V2 "Federation
- * Harbor" that V3 renamed to the Federation Terminal, or a district a user's
- * overrides moved. A recipe that cannot be read falls back to the shipped
- * default design, never to an older one.
+ * The install's resolved design, so the report names the districts the world actually
+ * renders. An unreadable recipe falls back to the shipped default design.
  */
 async function resolveDesign() {
   const recipe = await import('./eidoverseWorld.js')
@@ -81,31 +54,15 @@ async function resolveDesign() {
 }
 
 /**
- * Observe the world: collect the live PortOS signals a projection would place,
- * the foundation ledger, the installed controllers, and the install's resolved
- * design; diff them against the last visit marker; and commit a new one.
+ * Observe the world: collect live PortOS signals, the foundation ledger, installed
+ * controllers and the resolved design; diff against the last visit marker; commit a new one.
  *
- * **Observing advances the marker**, which is the whole point — the trail a
- * mind leaves is what makes the NEXT observation's `changes` mean anything. So
- * this is not idempotent, and the tool is declared a `write` rather than a
- * read. Pass `{ commit: false }` to look without stamping.
- *
- * Pass a `source` when the caller has ALREADY collected the world-signal
- * projection this turn (the playbook phase picker does, #7630):
- * `collectEidoverseWorldSources()` fans out across ~20 service reads, and
- * collecting it twice in one wake doubles that for a projection already in
- * hand.
- *
- * Travel destinations are deliberately NOT collected here:
- * `collectEidoverseWorldSources()` already resolves them and folds the result
- * into `source.peers[].travelAvailable`, and `listEidoverseDestinations()`
- * probes `/capabilities` on every online peer — asking again would double that
- * outbound fan-out to recompute a field already in hand.
- *
- * Every collection failure degrades to an unavailable section rather than
- * failing the observation: a mind that cannot read its controller list should
- * still get to see its districts. `null` sections are reported as unavailable,
- * never as empty (`readSource` in the pure lib).
+ * Observing advances the marker (so it is not idempotent, and the tool is a `write`);
+ * pass `{ commit: false }` to look without stamping. Pass `source` when the caller
+ * already collected the world-signal projection this turn (#7630): collecting fans
+ * out across ~20 service reads. Travel destinations are not collected here (they are
+ * already in `source.peers[].travelAvailable`). A collection failure degrades to an
+ * unavailable section, never an empty one (`readSource` in the pure lib).
  */
 export async function observeEidoverseWorld({ signal, commit = true, source: collectedSource = null, now = () => new Date().toISOString() } = {}) {
   const [source, ledger, controllers, design] = await Promise.all([
@@ -127,16 +84,10 @@ export async function observeEidoverseWorld({ signal, commit = true, source: col
       source,
       districts: design.districts,
       includes: design.includes,
-      // `null`, NOT `[]`, when the collection failed: an empty list would report
-      // every foundation as gone and then as new again next time, because the
-      // marker is rewritten from the same list. The builder carries an
-      // unavailable section forward instead.
+      // `null`, NOT `[]`, on a failed collection: `[]` would report every foundation gone then new; the builder carries an unavailable section forward.
       foundations: Array.isArray(ledger?.foundations) ? ledger.foundations : null,
       foundationCounts: ledger?.counts ?? null,
-      // Summarized, never raw: the pure lib reads `lastTickOk`/`lastTickReason`,
-      // which only exist on this projection — a raw record carries them inside
-      // `lastOutcome`, so handing one over would silently report every
-      // controller as never-ticked.
+      // Summarized: the pure lib reads `lastTickOk`/`lastTickReason`, which only exist on this projection.
       controllerInstalls: Array.isArray(controllers?.installs)
         ? controllers.installs.map((install) => summarizeControllerInstall(install))
         : null,

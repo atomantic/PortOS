@@ -1,32 +1,17 @@
 /**
- * Creative Commission — output surfacing (#2657, Phase 2 — Autonomous Creation
- * Engine feedback loop).
+ * Creative Commission output surfacing (#2657): tell the user a scheduled commission fired and can be rated
+ * once it lands. BEST-EFFORT and MUST NOT throw into the scheduler's fire handler, which runs outside the
+ * Express request lifecycle.
  *
- * When a scheduled commission fires and mints a run, surface it so the user
- * knows a new piece is being created and can rate it once it lands. Surfacing is
- * BEST-EFFORT and MUST NOT throw into the scheduler's fire handler — that handler
- * runs outside the Express request lifecycle, where an uncaught throw crashes
- * Node.
+ * Notification-only, not the brain inbox: commissions are machine-local (see store.js) and the
+ * `notifications` store never federates, whereas the inbox does, so a reminder there would put a
+ * `needs_review` item for a nonexistent commission on every peer. Inbox surfacing rejoins once commissions
+ * federate (#2686).
  *
- * WHY NOTIFICATION-ONLY (not the brain inbox). Commissions are machine-local in
- * Phase 1/2 (a synced schedule would double-run on every peer — see store.js).
- * The `notifications` store is a local file (never federated), so a
- * commission-scoped, machine-local `/creative-commission/:id` deep link belongs
- * there. The brain inbox, by contrast, IS federated (`inbox` ∈
- * `BRAIN_ENTITY_TYPES`) — writing a reminder there would propagate a
- * `needs_review` item pointing at a commission that doesn't exist on the peer,
- * polluting its backlog. Brain-inbox surfacing rejoins once commissions
- * themselves federate (the split-record follow-up, #2686).
+ * Wording is "fired / generating": at fire time the CD project has just been created and generation is
+ * asynchronous, so the copy must not claim a finished artifact exists.
  *
- * WHY "fired / generating" wording (not "created a result"). Surfacing happens
- * at fire time — the CD project has only just been created; generation runs
- * asynchronously afterward. The copy therefore describes a run that is *being
- * created* and invites the user to rate it once it lands, rather than claiming a
- * finished artifact already exists. (Completion-triggered surfacing + catalog
- * seeding is the Phase 3 completion flow.)
- *
- * The notifications module is lazy-imported so this stays a light leaf a mocked
- * test suite can stub without dragging its graph in.
+ * The notifications module is lazy-imported so this stays a light leaf a mocked suite can stub.
  */
 
 /**
@@ -36,10 +21,7 @@
  */
 export async function surfaceCommissionRun(commission, run) {
   if (!commission?.id || !run) return;
-  // Scope the deep link to THIS run (`?run=<runId>`) so the detail page focuses
-  // the render this notification announced — the gallery is newest-first, so
-  // without the param a later run would have pushed the announced render down by
-  // the time the user opens it.
+  // Scope the deep link to THIS run (`?run=<runId>`): the gallery is newest-first, so a later run would push the announced render down.
   const link = run.id
     ? `/creative-commission/${encodeURIComponent(commission.id)}?run=${encodeURIComponent(run.id)}`
     : `/creative-commission/${encodeURIComponent(commission.id)}`;
@@ -62,29 +44,16 @@ export async function surfaceCommissionRun(commission, run) {
 }
 
 /**
- * Surface a run-history write that FAILED (#7529) — the degraded twin of
- * surfaceCommissionRun above.
+ * Surface a run-history write that FAILED (#7529), the degraded twin of surfaceCommissionRun.
+ * A cron tick has no HTTP response to carry `historyWarning`, so for the unattended case a log line would be
+ * the only signal. MEDIUM priority (not LOW): nothing retries and the run row is gone, so the deep link to
+ * the Creative Director project is the only route to the running work.
  *
- * Why this exists rather than the console line alone: a cron tick has no HTTP
- * response to carry the outcome's `historyWarning` home in, so for the
- * unattended case this fix is actually about, a log entry nobody reads would be
- * the only signal. `surfaceCommissionRun` is already the persisted, machine-local
- * channel for "your commission did something while you weren't looking" — it is
- * just gated on a real run, which is precisely what a lost write does not have.
+ * Best-effort: never throws into the scheduler's fire handler. The notification names the commission (the
+ * store is machine-local and never federates) but must NOT carry the directive, prompt or feedback; the
+ * metadata is local ids plus the bounded classification.
  *
- * MEDIUM rather than the fired-run LOW: this one needs a human. Nothing will
- * retry it and the run row is gone for good, so the deep link to the Creative
- * Director project is the only remaining route to work that is genuinely running.
- *
- * Same best-effort contract: never throws into the scheduler's fire handler. It
- * names the commission exactly as surfaceCommissionRun above does — the
- * notifications store is a machine-local file that never federates, so the name
- * is what makes the alert identifiable to the one user who sees it. What it
- * still must NOT carry, on this path or any other, is the directive, the prompt
- * or any feedback: the metadata is local ids plus the bounded classification.
- *
- * @param {object} commission sanitized commission record, or `{ id }` when the
- *   record itself could not be read (a pre-fire storage failure)
+ * @param {object} commission sanitized commission record, or `{ id }` when the record could not be read
  * @param {object} warning the `historyWarning` persistRun produced
  */
 export async function surfaceCommissionHistoryLoss(commission, warning) {
