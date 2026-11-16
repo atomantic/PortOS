@@ -1,86 +1,49 @@
 import { EventEmitter } from 'events';
 
-// Event bus for Music Video async side effects that need to reach the client
-// after the originating HTTP request has returned. It carries:
+// Event bus for Music Video async side effects that must reach the client after
+// the originating HTTP request returned. socket.js bridges client-facing events
+// to `music-video:<name>` on Socket.IO; "server-only" ones never leave the process.
 //
-//   'scene-image' → { projectId, sceneId, referenceImageId, endImageId, takes, takeId }
-//   'scene-video' → { projectId, sceneId, videoHistoryId, takes, takeId }
-//
-// emitted by `musicVideoSceneImageHook` / `musicVideoSceneVideoHook` once an
-// async (local/Codex) reference-frame render or i2v scene clip has been durably
-// appended to the project scene's takes (#8965). `referenceImageId` /
-// `videoHistoryId` carry the scene's CURRENT selection (a new take only fills
-// an empty slot), `takes` the full candidate list. socket.js bridges them to `music-video:scene-image` /
-// `music-video:scene-video` on Socket.IO so the director scene board updates
-// reactively without a refetch — the durable, hook-driven counterpart to the
-// synchronous external-SD-API lane (which returns the image filename inline and
-// lets the client add it as a take through the takes route; video renders
-// always ride the queue, so the clip attach is hook-only).
-//   'shot-render' → { projectId, sceneId, state: 'rendering'|'rendered'|'failed'|'canceled', progress?, error?, startedAt?, failedAt? }
-//     — a shot's cached render segment advancing (shotSegments.js), bridged to
-//     `music-video:shot-render` so the shot card shows it without a refetch.
-//     `startedAt` (ms) identifies one render attempt on every 'rendering' event,
-//     so a client can tell a replacement render from progress of the one it saw.
-//     `failedAt` (ISO time) and `error` ride on 'failed'. GET /shot-renders
-//     returns that same failure until the shot renders or is started again.
-//   'scene-failure' → { projectId, sceneId, lastFailure: { lane, error, at } | null }
-//
-// `scene-image` / `scene-video` also carry the scene's `lastFailure` (null once a
-// take lands for that lane). 'scene-failure' is emitted by the same hooks when a
-// render FAILS (#10154) after the failure is persisted on the scene, bridged to
-// `music-video:scene-failure`, so the board's "Frame failed: <reason> · Retry"
-// chip appears without a refetch and survives a reload.
-//
-// #8988 adds two more:
-//   'excerpt-render' → { projectId, excerptId, status } — a draft excerpt
-//     render reached a terminal state and its record write landed; an opt-in
-//     auto-review run waiting on that draft continues from it (server-only).
-//   'auto-review'    → { projectId, runId, run, action, project } — an
-//     auto-review run advanced; socket.js bridges it to
-//     `music-video:auto-review` so an open board can submit the sections the
-//     run hands out for generation and show the run's progress. A run a
-//     production owns (`run.productionRunId`) is dispatched server-side instead.
-//
-// #9066 adds:
-//   'production' → { projectId, runId, run, action, project } — a server-owned
-//     production run advanced (steps, route choices, spend, halts); socket.js
-//     bridges it to `music-video:production`.
-//
-// A fully-autonomous run (autonomousService.js) adds:
-//   'autonomous' → { projectId, runId, run } — the run changed stage or status
-//     (a stage settled, a checkpoint is waiting, it needs the director, it
-//     finished); bridged to `music-video:autonomous`.
-//
-// A final render adds:
-//   'render' → { projectId, jobId, status: 'completed'|'failed'|'canceled', error }
-//     — a final music-video render job settled and its project write landed
-//     (server-only; an autonomous run waiting on its final render finishes or
-//     fails from it).
-//   'audio-changed' → { projectId, project } — a project write changed the
-//     song (its `audioRevision`); render.js cancels this instance's render of
-//     the old song (server-only, #15154).
-//
-// The Cast & Sets check-in adds:
-//   'cast-and-sets' → { projectId, stage, project } — the check-in stage
-//     advanced (direction, an image landed, the sheet is ready, approved);
-//     bridged to `music-video:cast-and-sets`. productionService.js listens so
-//     a production run waiting on the check-in continues once it settles.
-//   'dev-artifact'  → { projectId, artifactId, project } — a development
-//     artifact was added, versioned, noted, reviewed or deleted; bridged to
-//     `music-video:dev-artifact`.
-//   'publish-draft' → { projectId, draftId, target, state } — a publish draft's
-//     tab was filled ('open'), closed by hand ('closed') or discarded; bridged
-//     to `music-video:publish-draft`. 'posted' adds `url` and `project`: the
-//     director posted from the filled tab and PortOS recorded the link.
-//     'queued' / 'filling' carry no draftId, only a `message`: what a fill
-//     still in progress waits on (another fill holding the browser) or is doing.
-//   'cover-art'     → { projectId, project } — the release cover art was
-//     composed, or a cover source image was queued, landed or failed; bridged
-//     to `music-video:cover-art`.
-//
-// A Blender film (services/musicVideo/blender/) adds:
-//   'blender' → { projectId, kind: 'job', job } — a sync, shot render or cut job was queued,
-//     advanced (at most four frames a second per job) or ended; or { projectId, kind: 'state' }
-//     — settings, source, the synced manifest, a note or a cut changed outside a job.
-//     Bridged to `music-video:blender`.
+//   'scene-image' -> { projectId, sceneId, referenceImageId, endImageId, takes, takeId, lastFailure }
+//   'scene-video' -> { projectId, sceneId, videoHistoryId, takes, takeId, lastFailure }
+//     Emitted by `musicVideoSceneImageHook` / `musicVideoSceneVideoHook` once an
+//     async render is appended to the scene's takes. `referenceImageId` /
+//     `videoHistoryId` carry the CURRENT selection (a new take only fills an empty
+//     slot), `takes` the full candidate list, `lastFailure` is null once a take lands.
+//   'scene-failure' -> { projectId, sceneId, lastFailure: { lane, error, at } | null }
+//     A render FAILED and the failure is persisted on the scene (#10154).
+//   'shot-render' -> { projectId, sceneId, state: 'rendering'|'rendered'|'failed'|'canceled', progress?, error?, startedAt?, failedAt? }
+//     A shot's cached render segment advancing (shotSegments.js). `startedAt` (ms)
+//     identifies one render attempt on every 'rendering' event; `failedAt` (ISO)
+//     and `error` ride on 'failed'. GET /shot-renders returns that failure until
+//     the shot renders or restarts.
+//   'excerpt-render' -> { projectId, excerptId, status }   (server-only)
+//     A draft excerpt render settled; an auto-review run waiting on it continues.
+//   'auto-review' -> { projectId, runId, run, action, project }
+//     An auto-review run advanced. A run a production owns (`run.productionRunId`)
+//     is dispatched server-side instead.
+//   'production' -> { projectId, runId, run, action, project }
+//     A server-owned production run advanced (steps, route choices, spend, halts).
+//   'autonomous' -> { projectId, runId, run }
+//     An autonomous run (autonomousService.js) changed stage or status.
+//   'render' -> { projectId, jobId, status: 'completed'|'failed'|'canceled', error }   (server-only)
+//     A final render job settled and its project write landed.
+//   'audio-changed' -> { projectId, project }   (server-only)
+//     A project write changed the song (`audioRevision`); render.js cancels this
+//     instance's render of the old song (#15154).
+//   'cast-and-sets' -> { projectId, stage, project }
+//     The Cast & Sets check-in advanced; productionService.js also listens so a
+//     waiting production run continues once it settles.
+//   'dev-artifact' -> { projectId, artifactId, project }
+//     A development artifact was added, versioned, noted, reviewed or deleted.
+//   'publish-draft' -> { projectId, draftId, target, state }
+//     A publish draft's tab was filled ('open'), closed ('closed') or discarded.
+//     'posted' adds `url` and `project`. 'queued' / 'filling' carry no draftId,
+//     only a `message` (what the fill waits on or is doing).
+//   'cover-art' -> { projectId, project }
+//     Release cover art was composed, or a cover source image was queued, landed or failed.
+//   'blender' -> { projectId, kind: 'job', job } | { projectId, kind: 'state' }
+//     (services/musicVideo/blender/) A sync, shot render or cut job was queued,
+//     advanced (at most four frames a second per job) or ended; 'state' means
+//     settings, source, manifest, a note or a cut changed outside a job.
 export const musicVideoEvents = new EventEmitter();

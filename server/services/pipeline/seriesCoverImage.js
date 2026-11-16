@@ -1,22 +1,14 @@
 /**
  * Pipeline — derive a series' cover thumbnail.
  *
- * The pipeline series list (client/src/pages/Pipeline.jsx) shows a small cover
- * thumbnail on each series card, mirroring the reference-image thumbnail on the
- * universe list. Rather than scan every issue at read time, the chosen cover
- * filename is persisted onto `series.coverImage` (see series.setSeriesCoverImage)
- * so the list endpoint stays cheap — this module owns the *recompute*.
+ * The pipeline series list shows a cover thumbnail per series card. The chosen
+ * filename is persisted onto `series.coverImage` (see series.setSeriesCoverImage) so
+ * the list stays cheap; this module owns the *recompute*.
  *
- * Priority: the first rendered VOLUME (season) cover, else the earliest rendered
- * ISSUE cover. Volume covers win because they're the trade-paperback "graphic
- * novel" cover; per-issue covers are the fallback for series that haven't
- * assembled a volume yet. Back covers never count — the thumbnail is the front.
- *
- * `refreshSeriesCoverImage` is called from the two cover filename hooks
- * (comicPagesFilenameHook, seasonCoverFilenameHook) on render completion, and
- * from the one-time boot backfill (server/scripts/backfillSeriesCoverImages.js).
- * Season covers live on the series record itself, so a series that has any
- * rendered volume cover never pays the issue scan.
+ * Priority: first rendered VOLUME (season) cover (the trade-paperback front, already
+ * on the series record), else earliest rendered ISSUE cover. Back covers never count.
+ * Called from the cover filename hooks (comicPagesFilenameHook,
+ * seasonCoverFilenameHook) and the boot backfill (server/scripts/backfillSeriesCoverImages.js).
  */
 
 import { pickRenderedFilename } from '../../lib/renderSlot.js';
@@ -53,22 +45,18 @@ export function pickIssueCoverFilename(issues) {
 }
 
 /**
- * Pure derivation over already-loaded data: volume cover wins, else earliest
- * issue cover, else null. Used by the boot backfill, which loads every issue
- * once and groups by series. The runtime `refreshSeriesCoverImage` does NOT use
- * this — it short-circuits the issue load when a volume cover exists, so it
- * composes the pickers directly.
+ * Pure derivation over loaded data: volume cover, else earliest issue cover, else
+ * null. Used by the boot backfill; the runtime refresh composes the pickers directly
+ * to skip the issue load.
  */
 export function deriveSeriesCoverImage({ seasons, issues } = {}) {
   return pickVolumeCoverFilename(seasons) || pickIssueCoverFilename(issues) || null;
 }
 
 /**
- * Recompute and persist a series' cover thumbnail. Cheap when a volume cover
- * exists (no issue scan); otherwise scans the series' issues for the earliest
- * rendered cover. setSeriesCoverImage no-ops when the value is unchanged, so a
- * repeat render on an already-decorated series writes nothing. Best-effort —
- * a cosmetic thumbnail must never fail the user's render.
+ * Recompute and persist a series' cover thumbnail; skips the issue scan when a
+ * volume cover exists. setSeriesCoverImage no-ops on an unchanged value.
+ * Best-effort: a cosmetic thumbnail must never fail the user's render.
  */
 export async function refreshSeriesCoverImage(seriesId) {
   if (!seriesId) return;

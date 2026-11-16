@@ -1,22 +1,11 @@
 /**
- * Critical-health notifier.
+ * Critical-health notifier: turns the CoS monitor's `health:critical` into a persistent
+ * bell card (the socket bridge only reaches an open CoS view). The monitor re-emits every
+ * interval, so the card is deduped on the issue SET: unchanged raises nothing, changed
+ * replaces, and a `health:check` with no error-level issues retracts. Machine-local.
  *
- * The CoS health monitor emits `health:critical` with the error-level issues it
- * found (a failed PM2 restart, an unreadable process list). The socket bridge
- * only reaches an open CoS view, so a transition nobody was watching vanished.
- * This turns it into a persistent notification card in the bell.
- *
- * The monitor re-emits on every interval while the condition persists, so the
- * card is deduped on the issue SET: an unchanged set raises nothing, a changed
- * set replaces the old card, and a `health:check` with no error-level issues
- * retracts it. Machine-local — `data/notifications.json` is never federated.
- *
- * The notification store locks each individual write, but a transition here is
- * several awaits (exists → remove → add), and cos.js launches the two entry
- * points from independent event listeners without awaiting either. One
- * module-owned queue runs each whole transition in the order it was received, so
- * two identical events cannot both pass the exists check and a stale failure
- * cannot land its card after a newer recovery.
+ * A transition is several awaits (exists, remove, add) and cos.js fires both entry points
+ * unawaited, so one module-owned queue runs whole transitions in receipt order.
  */
 
 import { createMutex } from '../lib/asyncMutex.js';

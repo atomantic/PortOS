@@ -54,16 +54,13 @@ function renderFileListField(header, items, formatItem, formatInline, asList) {
 }
 
 /**
- * Build the shared task block — the description plus optional
- * `**Screenshots**` and `**Attachments**` fields. Used by BOTH the light and
- * full prompt paths so a new task-metadata field gets surfaced in both without
- * drift.
+ * Build the shared task block (description plus optional `**Screenshots**` and
+ * `**Attachments**`), used by BOTH the light and full prompt paths so a new metadata
+ * field surfaces in both.
  *
- * Returns pre-rendered slots (`description`, `screenshots`,
- * `attachments`). Absent fields come back as empty strings so the full path's
- * template literal can interpolate them in fixed positions and preserve
- * byte-identical line spacing. The light path filters out the empty strings
- * and joins what remains.
+ * Returns pre-rendered slots; absent fields are empty strings so the full path's
+ * template literal keeps byte-identical spacing and the light path filters them out.
+ *
  *
  * @param {Object} task
  * @param {Object} [opts]
@@ -105,16 +102,10 @@ const TASK_REF_ROOTS = {
 };
 
 /**
- * Resolve a stored screenshot/attachment reference to an absolute filesystem
- * path the CoS agent can open with its filesystem tools.
- *
- * Uploads now return API-relative URLs (`/api/screenshots/<file>`) instead of
- * absolute paths (issue #2518 — absolute paths leaked the install layout in the
- * HTTP response), so tasks created after that change store the relative URL.
- * Convert those back to an absolute path here, at prompt-build time, where the
- * absolute path is local-only and never persisted or published. Legacy tasks
- * that stored an absolute path (or any non-`/api/` value) are passed through
- * unchanged so existing queues keep rendering the same path.
+ * Resolve a stored screenshot/attachment reference to an absolute path the CoS agent
+ * can open. Uploads store API-relative URLs (`/api/screenshots/<file>`, #2518:
+ * absolute paths leaked the install layout), converted here at prompt-build time so
+ * the absolute path stays local. Legacy absolute paths pass through unchanged.
  */
 function resolveTaskFileRef(ref) {
   if (typeof ref !== 'string' || !ref) return ref;
@@ -128,36 +119,24 @@ function resolveTaskFileRef(ref) {
 
 /**
  * Undo the COS-TASKS.md round-trip split before rendering. The queue path in
- * `cosTaskGenerator.js` persists a generated multi-line prompt by moving the
- * full body into `metadata.prompt` (`metadata.context` before the #4153 split)
- * and keeping only its first line as
- * `description`, so the markdown stays one-line-per-task. Coming back out, the
- * payload therefore *leads with a verbatim copy* of `description` — and every
- * render path emits both (the task block, then the full body again under a
- * `### Context` header). For a swarm task that surfaces as the reported
- * double `# ⚡ SWARM MODE …` header; the same duplication hits any other
- * generated/scheduled/system task that round-trips through the queue.
+ * `cosTaskGenerator.js` moves a generated multi-line prompt into `metadata.prompt`
+ * (`metadata.context` before #4153) and keeps only its first line as `description`,
+ * so the payload leads with a verbatim copy of `description` and every render path
+ * would emit both (the reported double `# SWARM MODE` header).
  *
- * When the split signature is present (the payload's first non-empty line
- * equals `description`), fold it back into `description` so the prompt renders
- * once, as one clean body with no spurious header. The split `prompt` key stays
- * available to customized briefing templates; the legacy `context` payload key
- * is dropped because it is already represented by `description`. A genuinely-
- * separate user-supplied note (first line differs from `description`) is left
- * untouched.
+ * When the payload's first non-empty line equals `description`, fold it into
+ * `description` so the prompt renders once. The `prompt` key stays for customized
+ * templates; the legacy `context` key is dropped. A user note with a different first
+ * line is untouched.
  *
- * Pure and idempotent: returns the same task when nothing matched, otherwise a
- * shallow clone (never mutates the caller's task, so the stored task keeps its
- * one-line `description` for the task-list UI).
+ * Pure and idempotent: returns the same task when nothing matched, else a shallow
+ * clone (the stored task keeps its one-line `description` for the task-list UI).
  */
 export function reconcileSplitContext(task) {
   if (typeof task?.description !== 'string') return task;
   const description = task.description.trim();
-  // `prompt` first: that is where the payload lives on a task written by
-  // current code (#4153). `context` stays in the loop so a task written before
-  // the split — or synced from a peer still on the old code — reconciles too.
-  // Keep the new prompt key available to customized templates. Drop only the
-  // legacy context key, whose payload is already represented by description.
+  // `prompt` first (where current code writes the payload, #4153); `context` stays so
+  // pre-split or peer-synced tasks reconcile. Only the legacy context key is dropped.
   for (const key of [TASK_PROMPT_KEY, TASK_CONTEXT_KEY]) {
     const payload = task.metadata?.[key];
     if (typeof payload !== 'string') continue;
