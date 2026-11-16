@@ -26,24 +26,7 @@ export const AUTONOMOUS_SONG_SOURCE_LABELS = Object.freeze({
   local: 'Local engine (Music Studio)',
 });
 
-export {
-  AUTONOMOUS_AUTO_APPROVE_STAGES,
-  AUTONOMOUS_LIMIT_BOUNDS,
-  ORCHESTRATOR_CHECKPOINTS,
-  isOrchestratedRun,
-  AUTONOMOUS_CHECKPOINT_IDS,
-  AUTONOMOUS_SONG_SOURCES,
-  LOCAL_MUSIC_CODE_LANGUAGES,
-  LOCAL_MUSIC_CODE_LANGUAGE_LABELS,
-  LOCAL_MUSIC_TYPES,
-  LOCAL_MUSIC_TYPE_LABELS,
-  SUNO_LIMITS,
-  SUNO_VOCAL_GENDERS,
-  autonomousAttentionLink,
-  autonomousMedium,
-  describeAutonomousWait,
-  normalizeLocalMusicOptions,
-} from '../../../server/lib/musicVideoAutonomous.js';
+export { AUTONOMOUS_AUTO_APPROVE_STAGES, AUTONOMOUS_LIMIT_BOUNDS, ORCHESTRATOR_CHECKPOINTS, isOrchestratedRun, AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_SONG_SOURCES, LOCAL_MUSIC_CODE_LANGUAGES, LOCAL_MUSIC_CODE_LANGUAGE_LABELS, LOCAL_MUSIC_TYPES, LOCAL_MUSIC_TYPE_LABELS, SUNO_LIMITS, SUNO_VOCAL_GENDERS, autonomousMedium, describeAutonomousWait } from '../../../server/lib/musicVideoAutonomous.js';
 
 export const AUTONOMOUS_CHECKPOINT_LABELS = Object.freeze({
   ...Object.fromEntries(AUTONOMOUS_STAGES.map((stage) => [stage.id, stage.label])),

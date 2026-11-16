@@ -11,34 +11,7 @@ import { stillMoveForCamera } from '../../../server/lib/cameraMovements.js';
  * `server/lib/musicVideoLayers.js`, so the board's layer picker and Render
  * readiness follow the same rules as the server's render preflight.
  */
-export {
-  MUSIC_VIDEO_VISUAL_LAYERS,
-  MUSIC_VIDEO_STILL_MOVES,
-  MUSIC_VIDEO_FRAME_FITS,
-  MUSIC_VIDEO_TEXT_ZONES,
-  MUSIC_VIDEO_LYRIC_ROLES,
-  MUSIC_VIDEO_LYRIC_SIZES,
-  composedDrawsLyrics,
-  isSelfDrawnLayer,
-  sceneVisualLayer,
-  sceneHasAuthoredSpan,
-  sceneUsesAuthoredTiming,
-  sceneRenderReady,
-  isLayeredComposition,
-  LAYERED_COMPOSITION_MODES,
-  CLIP_TIMING_FPS,
-  CLIP_SPEED_FPS_RANGE,
-  CLIP_OFFSET_FRAMES_RANGE,
-  clipSpeedRate,
-  clipOffsetSec,
-  clipReversed,
-  COVERAGE_TOLERANCE_SEC,
-  clipCanLoop,
-  clipLoops,
-  clipPlaybackWindow,
-  clipNeedsMoreFootage,
-  sharedTakeExtraSec,
-} from '../../../server/lib/musicVideoLayers.js';
+export { MUSIC_VIDEO_VISUAL_LAYERS, MUSIC_VIDEO_FRAME_FITS, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, composedDrawsLyrics, isSelfDrawnLayer, sceneVisualLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming, sceneRenderReady, isLayeredComposition, CLIP_TIMING_FPS, CLIP_SPEED_FPS_RANGE, CLIP_OFFSET_FRAMES_RANGE, clipSpeedRate, clipOffsetSec, clipReversed, clipCanLoop, clipLoops, clipPlaybackWindow, clipNeedsMoreFootage, sharedTakeExtraSec } from '../../../server/lib/musicVideoLayers.js';
 
 /** The composed render's cover-fitted still move at a song time, clamped to its last frame. */
 export function stillFrameTransform(scene, time, { fps = 24, startSec = scene.startSec, endSec = scene.endSec } = {}) {

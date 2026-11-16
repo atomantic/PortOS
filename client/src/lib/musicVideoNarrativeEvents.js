@@ -3,4 +3,4 @@
  * state for composition documents.
  */
 
-export { NARRATIVE_EVENT_KINDS, resolveNarrativeEvents, narrativeFrameState } from '../../../server/lib/musicVideoNarrativeEvents.js';
+export { NARRATIVE_EVENT_KINDS, resolveNarrativeEvents } from '../../../server/lib/musicVideoNarrativeEvents.js';
