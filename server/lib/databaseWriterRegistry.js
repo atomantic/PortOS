@@ -7,7 +7,8 @@
  * archiveDir?)` for proven-quiescent records; `reserveDatabaseWriter` is the mandatory `spawnDetached`
  * admission boundary. `classifyWriterQuiescence(row, processes)` classifies a row against a
  * process-table snapshot (quiescent / running / orphaned / pending / ambiguous) without probing PIDs.
- * Legacy compacted history and Windows completions stay unresolved.
+ * `retireQuiescentWriters` is the boot sweep that retires records a restart stranded, on two consecutive
+ * quiescent snapshots. Legacy compacted history and Windows completions stay unresolved.
  *
  * Storage: `file-primary` — machine-local detached launch evidence under `data/database-writers/<launch-id>/`,
  * never federated; it must survive the database being fenced or offline during maintenance cutover.
@@ -230,4 +231,49 @@ export function classifyWriterQuiescence(row, allProcesses) {
     return { verdict: 'running', groups };
   }
   return { verdict: processes.some(proc => groups.includes(proc.pgid)) ? 'orphaned' : 'quiescent', groups };
+}
+
+const SWEEP_INTERVAL_MS = 200;
+
+/**
+ * Boot-time retirement of detached-writer records that outlived the process
+ * which launched them (the launcher retires only its own completions, so a
+ * restart strands the rest). Applies the same rule as `retireQuiescentWriter`
+ * in detachedSpawn.js: a record is retired only when two consecutive process
+ * snapshots, each taken AFTER re-reading the record, both classify it
+ * `quiescent`. Classification itself is unchanged. Skipped on win32 (no
+ * process-group proof; completions compact instead) and under a maintenance
+ * fence (the cutover owns reconciliation of the inventory then).
+ *
+ * `snapshot` is the injected `snapshotProcesses`; returns `{ retired, skipped? }`.
+ */
+export async function retireQuiescentWriters({ snapshot, dataDir = PATHS.data, platform = process.platform,
+  intervalMs = SWEEP_INTERVAL_MS, wait = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
+  if (platform === 'win32') return { retired: 0, skipped: 'win32' };
+  const registry = createDatabaseWriterRegistry(dataDir);
+  const journal = createDatabaseMaintenanceJournal(dataDir);
+  if (journal.isFenced()) return { retired: 0, skipped: 'maintenance fence' };
+  // Read BEFORE each snapshot: a recorded process then already existed when the
+  // table was taken, so a just-launched writer cannot look gone.
+  const quiescentIds = async () => {
+    let rows;
+    try { rows = registry.read(); } catch { return null; }
+    const processes = await snapshot();
+    return new Set(rows.filter(row => row.id && classifyWriterQuiescence(row, processes).verdict === 'quiescent')
+      .map(row => row.id));
+  };
+  const first = await quiescentIds();
+  if (!first) return { retired: 0, skipped: 'unreadable inventory' };
+  if (!first.size) return { retired: 0 };
+  await wait(intervalMs);
+  const second = await quiescentIds();
+  if (!second) return { retired: 0, skipped: 'unreadable inventory' };
+  let retired = 0;
+  for (const id of first) {
+    if (!second.has(id)) continue;
+    if (journal.isFenced()) return { retired, skipped: 'maintenance fence' };
+    // A concurrent completion retiring the same record is not an error.
+    try { registry.retire(id); retired += 1; } catch { /* already gone or unreadable: keep */ }
+  }
+  return { retired };
 }
